@@ -7,6 +7,7 @@ import { generateFleetReport, uploadReportToSupabase } from './reports.js';
 import { sendReportByEmail, sendMfaEmail } from './src/services/mailer.js';
 import { processSakaMessage } from './sakaAi.js';
 import { runHealthCheck, runConversationRefinement, logSystemError, logChatTranscript, ensureSentinelTables } from './src/workers/sentinel.js';
+import { ensureSuperadminTables, handleSuperadminFlow } from './src/services/superadmin.js';
 import {
   SUBSCRIPTION_TIERS,
   getTierLocalPrice,
@@ -804,6 +805,16 @@ async function handleWhatsAppWebhook(request, reply) {
 
       fastify.log.info(`Incoming Meta WhatsApp message from ${senderPhone}: "${messageText}"`);
       logChatTranscript(supabase, senderPhone, 'user', messageText);
+
+      // Superadmin Intercept Middleware
+      const superadminRes = await handleSuperadminFlow(supabase, senderPhone, messageText);
+      if (superadminRes.isSuperadmin) {
+        if (superadminRes.reply) {
+          await sendMetaWhatsAppMessage(senderPhone, superadminRes.reply);
+          logChatTranscript(supabase, senderPhone, 'assistant', superadminRes.reply);
+        }
+        return reply.status(200).send({ status: 'superadmin_handled' });
+      }
 
       let session = chatSessions.get(senderPhone) || { history: [], lastActive: Date.now() };
       session.lastActive = Date.now();
@@ -1919,8 +1930,9 @@ const start = async () => {
     }
     console.log('✅ Supabase connected successfully.');
 
-    // Ensure Sentinel Worker Tables exist
+    // Ensure Sentinel Worker & Superadmin Feature Set Tables exist
     await ensureSentinelTables(supabase);
+    await ensureSuperadminTables(supabase);
 
     const port = process.env.PORT || 3000;
     await fastify.listen({ port: Number(port), host: '0.0.0.0' });

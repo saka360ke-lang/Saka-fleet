@@ -144,4 +144,33 @@ CREATE TABLE IF NOT EXISTS public.chat_transcripts (
 CREATE INDEX IF NOT EXISTS idx_error_logs_status ON public.error_logs(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_chat_transcripts_created ON public.chat_transcripts(created_at);
 
+-- 15. Superadmin Feature Set Tables
+CREATE TABLE IF NOT EXISTS public.superadmin_sessions (
+    phone_number text PRIMARY KEY,
+    is_active boolean DEFAULT false,
+    last_active_at timestamp with time zone DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.coupons (
+    id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+    code text UNIQUE,
+    discount_value text,
+    assigned_to_phone text,
+    is_redeemed boolean DEFAULT false,
+    created_by text DEFAULT 'SUPERADMIN_WHATSAPP',
+    created_at timestamp with time zone DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.admin_audit_logs (
+    id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+    admin_phone text,
+    action text,
+    details jsonb,
+    created_at timestamp with time zone DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_coupons_code ON public.coupons(code);
+CREATE INDEX IF NOT EXISTS idx_admin_audit_admin ON public.admin_audit_logs(admin_phone, created_at);
+
+
 

@@ -1,3 +1,37 @@
+import { createClient } from '@supabase/supabase-js';
+import { handleSuperadminFlow } from '../services/superadmin.js';
+
+let supabaseClient = null;
+if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY) {
+  supabaseClient = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+}
+
+// Helper function to dispatch WhatsApp message via Meta Cloud API
+async function sendWhatsAppReply(toPhone, messageBody) {
+  const phoneNumberId = process.env.META_PHONE_NUMBER_ID;
+  const token = process.env.META_WHATSAPP_TOKEN;
+  if (!phoneNumberId || !token) return;
+
+  try {
+    const cleanPhone = toPhone.startsWith('+') ? toPhone.slice(1) : toPhone;
+    await fetch(`https://graph.facebook.com/v17.0/${phoneNumberId}/messages`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        to: cleanPhone,
+        type: 'text',
+        text: { body: messageBody }
+      })
+    });
+  } catch (err) {
+    console.error('[WhatsApp Service Error]:', err.message);
+  }
+}
+
 export default async function whatsappRoutes(fastify, options) {
   const verifyWebhook = async (request, reply) => {
     const mode = request.query['hub.mode'];
@@ -36,6 +70,17 @@ export default async function whatsappRoutes(fastify, options) {
                 const msgBody = message.text ? message.text.body : '';
 
                 fastify.log.info(`Incoming WhatsApp message from ${from}: ${msgBody}`);
+
+                // Superadmin Intercept Middleware
+                if (supabaseClient) {
+                  const superadminRes = await handleSuperadminFlow(supabaseClient, from, msgBody);
+                  if (superadminRes.isSuperadmin) {
+                    if (superadminRes.reply) {
+                      await sendWhatsAppReply(from, superadminRes.reply);
+                    }
+                    return reply.status(200).send({ status: 'superadmin_handled' });
+                  }
+                }
               }
             }
           }
