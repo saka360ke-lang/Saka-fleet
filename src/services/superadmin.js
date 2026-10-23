@@ -436,7 +436,7 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
     };
   }
 
-  // 3. Verify Active Session
+  // 3. Verify Active Session & Enforce 30-Minute Inactivity TTL
   const { data: sessionData } = await supabase
     .from('superadmin_sessions')
     .select('*')
@@ -447,6 +447,30 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
     return {
       isSuperadmin: true,
       reply: "Please type 'adminstart' to begin your admin session."
+    };
+  }
+
+  // Enforce automatic 30-minute inactivity timeout (30 minutes = 1,800,000 ms)
+  const SESSION_TTL_MS = 30 * 60 * 1000;
+  const lastActiveTime = sessionData.last_active_at ? new Date(sessionData.last_active_at).getTime() : 0;
+  const nowTime = Date.now();
+
+  if (nowTime - lastActiveTime > SESSION_TTL_MS) {
+    // Session timed out due to 30+ minutes of inactivity! Deactivate session in DB
+    await supabase
+      .from('superadmin_sessions')
+      .update({ is_active: false })
+      .eq('phone_number', formattedPhone);
+
+    await logAdminAudit(supabase, formattedPhone, 'SESSION_TIMEOUT', {
+      reason: 'Inactivity timeout exceeded 30 minutes',
+      last_active_at: sessionData.last_active_at,
+      timestamp: new Date().toISOString()
+    });
+
+    return {
+      isSuperadmin: true,
+      reply: "🔒 Your superadmin session has expired due to 30 minutes of inactivity. Please type 'adminstart' to re-authenticate."
     };
   }
 
@@ -485,6 +509,12 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
       reply: reportRes.reply
     };
   }
+
+  await logAdminAudit(supabase, formattedPhone, 'COMMAND_HELP_REQUESTED', {
+    raw_message: messageText,
+    intent: parsedCommand.intent || 'UNKNOWN',
+    timestamp: new Date().toISOString()
+  });
 
   const defaultReply = `🔒 *Saka Superadmin Command Center*\n\n` +
     `Your admin session is active. You can issue the following commands:\n\n` +
