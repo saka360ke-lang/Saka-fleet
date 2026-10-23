@@ -724,23 +724,26 @@ fastify.post('/api/paystack/webhook', handlePaystackWebhook);
 // 8. Meta WhatsApp Webhook Integration
 // ==========================================
 
-fastify.get('/api/whatsapp/webhook', async (request, reply) => {
+async function handleWhatsAppWebhookVerification(request, reply) {
   const mode = request.query['hub.mode'];
   const token = request.query['hub.verify_token'];
   const challenge = request.query['hub.challenge'];
 
-  if (mode && token) {
-    if (mode === 'subscribe' && token === process.env.META_VERIFY_TOKEN) {
-      fastify.log.info('Meta webhook verified successfully.');
-      return reply.status(200).send(challenge);
-    } else {
-      return reply.status(403).send('Verification token mismatch.');
-    }
-  }
-  return reply.status(400).send('Invalid verification request.');
-});
+  const expectedToken = process.env.WHATSAPP_VERIFY_TOKEN || process.env.META_VERIFY_TOKEN;
 
-fastify.post('/api/whatsapp/webhook', async (request, reply) => {
+  if (mode === 'subscribe' && token === expectedToken) {
+    fastify.log.info('Meta WhatsApp webhook verified successfully.');
+    return reply.status(200).send(challenge);
+  } else {
+    return reply.status(403).send('Forbidden');
+  }
+}
+
+fastify.get('/webhook', handleWhatsAppWebhookVerification);
+fastify.get('/webhook/whatsapp', handleWhatsAppWebhookVerification);
+fastify.get('/api/whatsapp/webhook', handleWhatsAppWebhookVerification);
+
+async function handleWhatsAppWebhook(request, reply) {
   try {
     const body = request.body || {};
 
@@ -1845,7 +1848,11 @@ fastify.post('/api/whatsapp/webhook', async (request, reply) => {
     fastify.log.error('Meta Webhook error:', err);
     return reply.status(500).send({ error: 'Internal server error handling webhook.' });
   }
-});
+}
+
+fastify.post('/webhook', handleWhatsAppWebhook);
+fastify.post('/webhook/whatsapp', handleWhatsAppWebhook);
+fastify.post('/api/whatsapp/webhook', handleWhatsAppWebhook);
 
 // 9. Start the Fastify Server
 let serverStarted = false;

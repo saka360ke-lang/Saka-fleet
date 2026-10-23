@@ -1,24 +1,26 @@
 export default async function whatsappRoutes(fastify, options) {
-  // 1. Webhook Verification Handshake (GET)
-  fastify.get('/webhook/whatsapp', async (request, reply) => {
+  const verifyWebhook = async (request, reply) => {
     const mode = request.query['hub.mode'];
     const token = request.query['hub.verify_token'];
     const challenge = request.query['hub.challenge'];
 
-    if (mode && token) {
-      if (mode === 'subscribe' && token === process.env.META_VERIFY_TOKEN) {
-        fastify.log.info('WhatsApp webhook verified successfully!');
-        return reply.code(200).send(challenge);
-      } else {
-        return reply.code(403).send({ error: 'Verification failed: Token mismatch' });
-      }
-    }
+    const expectedToken = process.env.WHATSAPP_VERIFY_TOKEN || process.env.META_VERIFY_TOKEN;
 
-    return reply.code(400).send({ error: 'Missing parameters' });
-  });
+    if (mode === 'subscribe' && token === expectedToken) {
+      fastify.log.info('WhatsApp webhook verified successfully!');
+      return reply.status(200).send(challenge);
+    } else {
+      return reply.status(403).send('Forbidden');
+    }
+  };
+
+  // 1. Webhook Verification Handshake (GET)
+  fastify.get('/webhook', verifyWebhook);
+  fastify.get('/webhook/whatsapp', verifyWebhook);
+  fastify.get('/api/whatsapp/webhook', verifyWebhook);
 
   // 2. Incoming Messages & Event Listener (POST)
-  fastify.post('/webhook/whatsapp', async (request, reply) => {
+  const handleWebhookEvent = async (request, reply) => {
     const body = request.body;
 
     if (body.object === 'whatsapp_business_account') {
@@ -34,18 +36,21 @@ export default async function whatsappRoutes(fastify, options) {
                 const msgBody = message.text ? message.text.body : '';
 
                 fastify.log.info(`Incoming WhatsApp message from ${from}: ${msgBody}`);
-                // TODO: Route to Gemini AI & Supabase persistence
               }
             }
           }
         }
-        return reply.code(200).send({ status: 'EVENT_RECEIVED' });
+        return reply.status(200).send({ status: 'EVENT_RECEIVED' });
       } catch (err) {
         fastify.log.error(err);
-        return reply.code(500).send({ error: 'Internal Server Error' });
+        return reply.status(500).send({ error: 'Internal Server Error' });
       }
     }
 
-    return reply.code(404).send({ error: 'Not Found' });
-  });
+    return reply.status(404).send({ error: 'Not Found' });
+  };
+
+  fastify.post('/webhook', handleWebhookEvent);
+  fastify.post('/webhook/whatsapp', handleWebhookEvent);
+  fastify.post('/api/whatsapp/webhook', handleWebhookEvent);
 }
