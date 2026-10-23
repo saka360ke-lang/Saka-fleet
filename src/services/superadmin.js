@@ -1,5 +1,6 @@
 import { GoogleGenAI } from '@google/genai';
 import { runHealthCheck } from '../workers/sentinel.js';
+import { sendAdminNotificationEmail } from './mailer.js';
 import crypto from 'crypto';
 
 function getGeminiClient() {
@@ -14,6 +15,12 @@ export function isSuperadminPhone(senderPhone) {
   const clean = (p) => p.toString().replace(/[^\d]/g, '');
   return clean(senderPhone) === clean(superadminPhone);
 }
+export function isSuperadminEmail(email) {
+  const superadminEmail = process.env.SUPERADMIN_EMAIL;
+  if (!superadminEmail || !email) return false;
+  return email.trim().toLowerCase() === superadminEmail.trim().toLowerCase();
+}
+
 
 export async function logAdminAudit(supabase, adminPhone, action, details = {}) {
   try {
@@ -395,6 +402,9 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
     if (error) console.error('[Superadmin Session Start Error]:', error.message);
 
     await logAdminAudit(supabase, formattedPhone, 'SESSION_START', { command: 'adminstart' });
+    if (process.env.SUPERADMIN_EMAIL) {
+      sendAdminNotificationEmail('🔒 Superadmin Session Started', `<p>Superadmin session was started via WhatsApp from <strong>${formattedPhone}</strong> at ${nowIso}.</p>`).catch(() => {});
+    }
 
     return {
       isSuperadmin: true,
@@ -416,6 +426,9 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
     if (error) console.error('[Superadmin Session Stop Error]:', error.message);
 
     await logAdminAudit(supabase, formattedPhone, 'SESSION_STOP', { command: 'adminstop' });
+    if (process.env.SUPERADMIN_EMAIL) {
+      sendAdminNotificationEmail('🔓 Superadmin Session Closed', `<p>Superadmin session was closed via WhatsApp from <strong>${formattedPhone}</strong> at ${nowIso}.</p>`).catch(() => {});
+    }
 
     return {
       isSuperadmin: true,

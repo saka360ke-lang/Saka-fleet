@@ -1,10 +1,14 @@
 import { Resend } from 'resend';
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+function getResendClient() {
+    const key = process.env.RESEND_API_KEY;
+    if (!key) throw new Error('RESEND_API_KEY is missing in environment');
+    return new Resend(key);
+}
 
 export async function sendReportByEmail(targetEmail, plateNumber, pdfBuffer) {
     try {
-        const { data, error } = await resend.emails.send({
+        const { data, error } = await getResendClient().emails.send({
             from: 'Saka Assistant <reports@reports.sakafleet.com>', 
             to: [targetEmail],
             subject: `Vehicle Audit Report - ${plateNumber}`,
@@ -39,7 +43,7 @@ export async function sendReportByEmail(targetEmail, plateNumber, pdfBuffer) {
 
 export async function sendMfaEmail(targetEmail, code) {
     try {
-        const { data, error } = await resend.emails.send({
+        const { data, error } = await getResendClient().emails.send({
             from: 'Saka Security <security@reports.sakafleet.com>',
             to: [targetEmail],
             subject: 'Saka Security Alert: Account Deactivation Verification Code',
@@ -66,5 +70,37 @@ export async function sendMfaEmail(targetEmail, code) {
     } catch (err) {
         console.error('Resend MFA Mailer Exception:', err.message);
         throw err;
+    }
+}
+
+export async function sendAdminNotificationEmail(subject, htmlContent) {
+    const targetEmail = process.env.SUPERADMIN_EMAIL;
+    if (!targetEmail || !process.env.RESEND_API_KEY) return false;
+
+    try {
+        const { data, error } = await getResendClient().emails.send({
+            from: 'Saka Admin Alert <security@reports.sakafleet.com>',
+            to: [targetEmail],
+            subject: subject,
+            html: `
+                <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto; border: 1px solid #e2e8f0; padding: 20px; border-radius: 8px;">
+                    <h2 style="color: #0f172a;">🔒 Saka Fleet Superadmin Notification</h2>
+                    <div>${htmlContent}</div>
+                    <hr style="border: none; border-top: 1px solid #e2e8f0; margin-top: 20px;">
+                    <p style="font-size: 12px; color: #64748b;">This notification was dispatched automatically by Saka Fleet Backend Sentinel.</p>
+                </div>
+            `
+        });
+
+        if (error) {
+            console.error('[Resend Admin Email Error]:', error.message);
+            return false;
+        }
+
+        console.log(`[Resend Admin Notification] Email sent to ${targetEmail}. ID: ${data.id}`);
+        return true;
+    } catch (err) {
+        console.error('[Resend Admin Email Exception]:', err.message);
+        return false;
     }
 }
