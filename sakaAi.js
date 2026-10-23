@@ -120,10 +120,18 @@ You MUST return a valid JSON object (and nothing else) matching this exact schem
     { role: 'user', parts: userParts }
   ];
 
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  const candidateModels = Array.from(new Set([
+    process.env.GEMINI_MODEL,
+    'gemini-1.5-flash',
+    'gemini-flash-latest',
+    'gemini-1.5-pro',
+    'gemini-pro-latest'
+  ].filter(Boolean)));
+
+  for (const selectedModel of candidateModels) {
     try {
       const response = await ai.models.generateContent({
-        model: 'gemini-1.5-pro-vision',
+        model: selectedModel,
         contents: contents,
         config: {
           responseMimeType: 'application/json',
@@ -141,9 +149,7 @@ You MUST return a valid JSON object (and nothing else) matching this exact schem
         return parsed;
       }
     } catch (err) {
-      console.warn(`Saka AI parse attempt ${attempt} failed:`, err.message);
-      if (attempt === 2) return SAKA_FALLBACK_RESPONSE;
-      await new Promise(resolve => setTimeout(resolve, 400 * attempt));
+      console.warn(`Saka AI generation attempt with model '${selectedModel}' failed:`, err.message);
     }
   }
 
