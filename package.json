@@ -1,0 +1,19 @@
+{
+  "name": "sakafleet-backend",
+  "type": "module",
+  "version": "1.0.0",
+  "description": "Saka Fleet Backend",
+  "main": "index.js",
+  "dependencies": {
+    "@fastify/formbody": "^9.0.1",
+    "@google/genai": "^2.29.0",
+    "@sendgrid/mail": "^8.1.6",
+    "@supabase/supabase-js": "^2.49.1",
+    "dotenv": "^16.4.7",
+    "fastify": "^5.12.7",
+    "pdfkit": "^0.20.2",
+    "resend": "^6.34.1",
+    "supabase": "^2.122.0",
+    "twilio": "^6.2.0"
+  }
+}
