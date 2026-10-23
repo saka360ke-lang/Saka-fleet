@@ -106,6 +106,42 @@ CREATE TABLE IF NOT EXISTS public.exchange_rates_cache (
 CREATE INDEX IF NOT EXISTS idx_profiles_subscription ON public.profiles(subscription_tier, subscription_status);
 CREATE INDEX IF NOT EXISTS idx_profiles_country ON public.profiles(country_code);
 
+-- 14. Saka Sentinel Worker & Self-Healing Telemetry Tables
+CREATE TABLE IF NOT EXISTS public.system_config (
+    key text PRIMARY KEY,
+    value text,
+    updated_by text,
+    updated_at timestamp with time zone DEFAULT now()
+);
 
+CREATE TABLE IF NOT EXISTS public.error_logs (
+    id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+    error_message text,
+    stack_trace text,
+    route text,
+    status text DEFAULT 'unresolved',
+    ai_diagnosis text,
+    created_at timestamp with time zone DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.conversation_analytics (
+    id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+    period_start timestamp with time zone,
+    period_end timestamp with time zone,
+    insights jsonb,
+    prompt_adjustments text,
+    created_at timestamp with time zone DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.chat_transcripts (
+    id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+    phone_number text,
+    sender text,
+    message_text text,
+    created_at timestamp with time zone DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_error_logs_status ON public.error_logs(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_chat_transcripts_created ON public.chat_transcripts(created_at);
 
 

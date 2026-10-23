@@ -6,6 +6,7 @@ import crypto from 'crypto';
 import { generateFleetReport, uploadReportToSupabase } from './reports.js';
 import { sendReportByEmail, sendMfaEmail } from './src/services/mailer.js';
 import { processSakaMessage } from './sakaAi.js';
+import { runHealthCheck, runConversationRefinement, logSystemError, logChatTranscript, ensureSentinelTables } from './src/workers/sentinel.js';
 import {
   SUBSCRIPTION_TIERS,
   getTierLocalPrice,
@@ -15,6 +16,16 @@ import {
 
 // 1. Initialize Fastify Server
 const fastify = Fastify({ logger: true });
+
+// Attach Sentinel Error Handler
+fastify.setErrorHandler(async (error, request, reply) => {
+  fastify.log.error(error);
+  await logSystemError(supabase, error, request.raw.url || request.routerPath || 'unknown');
+  reply.status(error.statusCode || 500).send({
+    error: error.name || 'InternalServerError',
+    message: error.message || 'An unexpected error occurred.'
+  });
+});
 
 // Enable raw body string retention for HMAC webhooks
 fastify.addContentTypeParser('application/json', { parseAs: 'buffer' }, (req, body, done) => {
@@ -792,6 +803,7 @@ async function handleWhatsAppWebhook(request, reply) {
       }
 
       fastify.log.info(`Incoming Meta WhatsApp message from ${senderPhone}: "${messageText}"`);
+      logChatTranscript(supabase, senderPhone, 'user', messageText);
 
       let session = chatSessions.get(senderPhone) || { history: [], lastActive: Date.now() };
       session.lastActive = Date.now();
@@ -1840,6 +1852,7 @@ async function handleWhatsAppWebhook(request, reply) {
       chatSessions.set(senderPhone, session);
 
       await sendMetaWhatsAppMessage(senderPhone, sanitizedReply);
+      logChatTranscript(supabase, senderPhone, 'assistant', sanitizedReply);
       return reply.status(200).send({ status: 'success' });
     }
 
@@ -1854,7 +1867,46 @@ fastify.post('/webhook', handleWhatsAppWebhook);
 fastify.post('/webhook/whatsapp', handleWhatsAppWebhook);
 fastify.post('/api/whatsapp/webhook', handleWhatsAppWebhook);
 
-// 9. Start the Fastify Server
+// 9. Saka Sentinel Worker Protected API Endpoint
+fastify.post('/api/sentinel/run', async (request, reply) => {
+  const sentinelSecret = process.env.SENTINEL_SECRET || 'saka_sentinel_secret_2026';
+  const authHeader = request.headers.authorization;
+  const token = authHeader && authHeader.startsWith('Bearer ')
+    ? authHeader.slice(7)
+    : (request.headers['x-sentinel-secret'] || request.body?.secret);
+
+  if (!token || token !== sentinelSecret) {
+    return reply.status(401).send({
+      status: 'error',
+      error: 'Unauthorized: Invalid or missing SENTINEL_SECRET'
+    });
+  }
+
+  try {
+    fastify.log.info('Running Saka Sentinel Worker (Health Check + Conversation Refinement)...');
+    const healthCheckResult = await runHealthCheck(supabase);
+    const refinementResult = await runConversationRefinement(supabase);
+
+    return reply.status(200).send({
+      status: 'success',
+      timestamp: new Date().toISOString(),
+      actions: {
+        health_check: healthCheckResult,
+        conversation_refinement: refinementResult
+      }
+    });
+  } catch (err) {
+    fastify.log.error('Sentinel execution failed:', err);
+    await logSystemError(supabase, err, '/api/sentinel/run');
+    return reply.status(500).send({
+      status: 'error',
+      message: 'Sentinel execution failed',
+      error: err.message
+    });
+  }
+});
+
+// 10. Start the Fastify Server
 let serverStarted = false;
 const start = async () => {
   if (serverStarted) return;
@@ -1866,6 +1918,9 @@ const start = async () => {
       process.exit(1);
     }
     console.log('✅ Supabase connected successfully.');
+
+    // Ensure Sentinel Worker Tables exist
+    await ensureSentinelTables(supabase);
 
     const port = process.env.PORT || 3000;
     await fastify.listen({ port: Number(port), host: '0.0.0.0' });
