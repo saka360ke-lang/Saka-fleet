@@ -106,18 +106,26 @@ async function runTests() {
     throw new Error('Expected state step 2 with plate KDA 999Z');
   }
 
-  // Turn 4: User sends "Toyota Fielder - Owner" -> Step 3 completion & summary menu
-  console.log('Turn 4: User sends "Toyota Fielder - Owner"');
-  const turn4 = createMockReqReply('Toyota Fielder - Owner');
+  // Turn 4: User sends core vehicle specs -> Stage 1 Core Capture completion
+  console.log('Turn 4: User sends core specs: "Toyota Fielder 2018 petrol, mileage 45000, email fielder@test.com - Owner"');
+  const turn4 = createMockReqReply('Toyota Fielder 2018 petrol, mileage 45000, email fielder@test.com - Owner');
   await handleWhatsAppWebhook(turn4.req, turn4.reply, mockFastify);
   const stateTurn4 = onboardingStore.get(testPhone);
   console.log('State after Turn 4:', stateTurn4);
-  if (stateTurn4 !== undefined) throw new Error('Expected onboarding state to be cleared after Step 3');
+  if (!stateTurn4 || stateTurn4.stage !== 2) throw new Error('Expected Stage 1 completion and transition to Stage 2');
 
-  // Direct Onboarding Flow Test: Starting directly with plate "KBC 456X"
-  console.log('\nDirect Onboarding Flow: User starts directly with "KBC 456X"');
+  // Turn 5: User sends "Skip" -> Stage 2 optional weaving skipped, user transitions to ACTIVE
+  console.log('Turn 5: User sends "Skip" to Stage 2');
+  const turn5 = createMockReqReply('Skip');
+  await handleWhatsAppWebhook(turn5.req, turn5.reply, mockFastify);
+  const stateTurn5 = onboardingStore.get(testPhone);
+  console.log('State after Turn 5:', stateTurn5);
+  if (stateTurn5 !== undefined) throw new Error('Expected onboarding state to be cleared after Stage 2 Skip');
+
+  // Direct Onboarding Flow Test: Starting directly with plate "KBC 456X" and unstructured input
+  console.log('\n--- Direct Onboarding Flow with Natural Unstructured Input ---');
   onboardingStore.delete(testPhone);
-  const directTurn1 = createMockReqReply('KBC 456X');
+  const directTurn1 = createMockReqReply('Register KBC 456X');
   await handleWhatsAppWebhook(directTurn1.req, directTurn1.reply, mockFastify);
   const directState1 = onboardingStore.get(testPhone);
   console.log('State after direct plate input:', directState1);
@@ -125,13 +133,45 @@ async function runTests() {
     throw new Error('Expected direct plate input to jump directly to Step 2 with plate KBC 456X');
   }
 
+  // Direct Turn 2: Unstructured natural input with 5 core attributes
+  console.log('Direct Turn 2: User sends "It\'s a 1991 diesel 80 series, mileage 366700, email user@mail.com"');
+  const directTurn2 = createMockReqReply("It's a 1991 diesel 80 series, mileage 366700, email user@mail.com");
+  await handleWhatsAppWebhook(directTurn2.req, directTurn2.reply, mockFastify);
+  const directState2 = onboardingStore.get(testPhone);
+  console.log('State after unstructured input:', directState2);
+  if (!directState2 || directState2.stage !== 2) {
+    throw new Error('Expected unstructured multi-field input to complete Stage 1 and transition to Stage 2');
+  }
+
+  // Direct Turn 3: User shares optional compliance specs in Stage 2
+  console.log('Direct Turn 3: User sends optional specs: "Insurance expires 2027-05-15, automatic, color White, VIN JT111UJ800012345"');
+  const directTurn3 = createMockReqReply('Insurance expires 2027-05-15, automatic, color White, VIN JT111UJ800012345');
+  await handleWhatsAppWebhook(directTurn3.req, directTurn3.reply, mockFastify);
+  const directState3 = onboardingStore.get(testPhone);
+  console.log('State after optional specs input:', directState3);
+  if (directState3 !== undefined) {
+    throw new Error('Expected onboarding state to be cleared after optional specs are saved in Stage 2');
+  }
+
   // Test 3: Post-Onboarding Input Routing & Feedback Safeguards
   console.log('\n--- Test 3: Post-Onboarding Input Routing & Feedback Safeguards ---');
 
   // Complete onboarding for test user to transition state to 'ACTIVE'
-  onboardingStore.set(testPhone, { step: 2, plate_number: 'KDA 777X', make_model: null, role: 'Owner' });
-  const completeTurn = createMockReqReply('Toyota Axio - Owner');
+  onboardingStore.set(testPhone, {
+    stage: 1,
+    step: 2,
+    core: { plate_number: 'KDA 777X', make_model: null, yom: null, owner_email: null, fuel_type: null, current_mileage: null },
+    optional: {},
+    registered_plate: null,
+    token: null,
+    role: 'Owner',
+    plate_number: 'KDA 777X',
+    make_model: null
+  });
+  const completeTurn = createMockReqReply('Toyota Axio 2019 petrol, mileage 30000, email axio@test.com - Owner');
   await handleWhatsAppWebhook(completeTurn.req, completeTurn.reply, mockFastify);
+  const skipTurn = createMockReqReply('Done');
+  await handleWhatsAppWebhook(skipTurn.req, skipTurn.reply, mockFastify);
   console.log('Post-Onboarding State:', onboardingStore.get(testPhone));
   if (onboardingStore.get(testPhone) !== undefined) {
     throw new Error('State Transition Failed: Onboarding state was not cleared after vehicle registration');

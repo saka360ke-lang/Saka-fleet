@@ -9,6 +9,7 @@ import { sendReportByEmail, sendMfaEmail } from './src/services/mailer.js';
 import { processSakaMessage } from './sakaAi.js';
 import { runHealthCheck, runConversationRefinement, logSystemError, logChatTranscript, ensureSentinelTables } from './src/workers/sentinel.js';
 import { ensureSuperadminTables } from './src/services/superadmin.js';
+import { ensureVehicleTableColumns } from './src/services/vehicles.js';
 import whatsappRoutes, { handleWhatsAppWebhook as handleWhatsAppWebhookRoute } from './src/routes/whatsapp.js';
 import {
   SUBSCRIPTION_TIERS,
@@ -861,6 +862,7 @@ const start = async () => {
     // Ensure Sentinel Worker & Superadmin Feature Set Tables exist
     await ensureSentinelTables(supabase);
     await ensureSuperadminTables(supabase);
+    await ensureVehicleTableColumns(supabase);
 
     const port = process.env.PORT || 3000;
     await fastify.listen({ port: Number(port), host: '0.0.0.0' });

@@ -1,0 +1,275 @@
+import crypto from 'crypto';
+import { onboardingStore, chatSessions } from '../routes/whatsapp.js';
+
+export async function handleStage2OptionalWeaving({
+  obState,
+  mergedExt,
+  messageText,
+  senderPhone,
+  session,
+  countryInfo,
+  supabaseClient
+}) {
+  const cleanText = messageText.trim().toLowerCase();
+  const isSkipOrDone = mergedExt.skip_or_done || /^(skip|done|later|no|finish|not now|no thanks|exit)$/i.test(cleanText);
+  const regPlate = obState.registered_plate || obState.core?.plate_number || obState.plate_number;
+
+  if (isSkipOrDone) {
+    onboardingStore.delete(senderPhone);
+    session.state = 'ACTIVE';
+    session.onboardingStep = null;
+    session.onboardingStage = null;
+    chatSessions.set(senderPhone, session);
+
+    return `🎉 *Your Vehicle Asset Record is Active!* 🚀\n\n🚘 *Vehicle:* ${regPlate}\n\n📋 *What would you like to do next?*\n1️⃣ *Log Expense / Fuel* (e.g. "Logged fuel KES 3000")\n2️⃣ *Update Mileage* (e.g. "Odometer 366700 km")\n3️⃣ *Set Service Reminder* (e.g. "Remind oil change in 5000 km")\n4️⃣ *Log Earnings* (e.g. "Earned KES 5000 today")\n5️⃣ *View Reports & Summary*\n\nReply with a number or type what you want to do!`;
+  }
+
+  const optUpdates = {};
+  if (mergedExt.insurance_expiry) optUpdates.insurance_expiry = mergedExt.insurance_expiry;
+  if (mergedExt.insurance_policy) optUpdates.insurance_policy = mergedExt.insurance_policy;
+  if (mergedExt.vin) optUpdates.vin = mergedExt.vin;
+  if (mergedExt.engine_number) optUpdates.engine_number = mergedExt.engine_number;
+  if (mergedExt.color) optUpdates.color = mergedExt.color;
+  if (mergedExt.transmission) optUpdates.transmission = mergedExt.transmission;
+  if (mergedExt.tire_size) optUpdates.tire_size = mergedExt.tire_size;
+  if (mergedExt.inspection_expiry) optUpdates.inspection_expiry = mergedExt.inspection_expiry;
+  if (mergedExt.purchase_cost) optUpdates.purchase_cost = mergedExt.purchase_cost;
+
+  if (supabaseClient && Object.keys(optUpdates).length > 0 && regPlate) {
+    const { data: updatedVeh } = await supabaseClient
+      .from('vehicles')
+      .update(optUpdates)
+      .eq('plate_number', regPlate)
+      .select()
+      .maybeSingle();
+
+    if (optUpdates.insurance_expiry && updatedVeh) {
+      await supabaseClient.from('reminders').insert([{
+        vehicle_id: updatedVeh.id,
+        reminder_type: 'Insurance Renewal',
+        due_date: optUpdates.insurance_expiry,
+        status: 'active'
+      }]);
+    }
+  }
+
+  const bullets = [];
+  if (optUpdates.insurance_expiry) bullets.push(`• *Insurance Expiry:* ${optUpdates.insurance_expiry}`);
+  if (optUpdates.inspection_expiry) bullets.push(`• *Inspection Expiry:* ${optUpdates.inspection_expiry}`);
+  if (optUpdates.vin) bullets.push(`• *VIN/Chassis:* ${optUpdates.vin}`);
+  if (optUpdates.transmission) bullets.push(`• *Transmission:* ${optUpdates.transmission}`);
+  if (optUpdates.color) bullets.push(`• *Color:* ${optUpdates.color}`);
+  if (optUpdates.tire_size) bullets.push(`• *Tire Size:* ${optUpdates.tire_size}`);
+  if (optUpdates.purchase_cost) bullets.push(`• *Purchase Cost:* ${countryInfo.currency} ${Number(optUpdates.purchase_cost).toLocaleString()}`);
+
+  const bulletsText = bullets.length > 0 ? bullets.join('\n') + '\n\n' : '';
+
+  onboardingStore.delete(senderPhone);
+  session.state = 'ACTIVE';
+  session.onboardingStep = null;
+  session.onboardingStage = null;
+  chatSessions.set(senderPhone, session);
+
+  return `🛡️ *Compliance & Mechanical Specs Saved!* ✅\n\n• *Vehicle:* ${regPlate}\n${bulletsText}Proactive compliance & service alerts are now active!\n\n📋 *What would you like to do next?*\n1️⃣ *Log Expense / Fuel* (e.g. "Logged fuel KES 3000")\n2️⃣ *Update Mileage* (e.g. "Odometer 366700 km")\n3️⃣ *Set Service Reminder* (e.g. "Remind oil change in 5000 km")\n4️⃣ *Log Earnings* (e.g. "Earned KES 5000 today")\n5️⃣ *View Reports & Summary*\n\nReply with a number or type what you want to do!`;
+}
+
+
+export async function saveVehicleAssetRecord({
+  obState,
+  profileData,
+  countryInfo,
+  supabaseClient,
+  formattedPhone
+}) {
+  const token = `SK-PASSBOOK-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+  const coreYom = parseInt(obState.core.yom, 10);
+  const coreMileage = parseInt(obState.core.current_mileage, 10) || 0;
+  const coreEmail = (obState.core.owner_email || profileData?.email || '').toLowerCase().trim();
+  const coreFuel = (obState.core.fuel_type || 'Petrol').trim();
+  const corePlate = obState.core.plate_number.toUpperCase().trim();
+  const coreModel = obState.core.make_model.trim();
+
+  const vehRecord = {
+    owner_id: profileData?.id,
+    plate_number: corePlate,
+    make_model: coreModel,
+    yom: coreYom,
+    year_of_manufacture: coreYom,
+    owner_email: coreEmail,
+    fuel_type: coreFuel,
+    current_mileage: coreMileage,
+    odometer_reading: coreMileage,
+    owner_phone: formattedPhone,
+    status: 'ACTIVE',
+    asset_type: (/electric|ev/i.test(coreFuel)) ? 'EV' : (/hybrid/i.test(coreFuel) ? 'HYBRID' : 'ICE'),
+    unit_system: profileData?.unit_system || countryInfo?.default_units || 'metric',
+    qr_passbook_token: token,
+    metadata: {
+      role: obState.role || 'Owner',
+      onboarding_completed_at: new Date().toISOString()
+    }
+  };
+
+  if (obState.optional?.vin) vehRecord.vin = obState.optional.vin;
+  if (obState.optional?.engine_number) vehRecord.engine_number = obState.optional.engine_number;
+  if (obState.optional?.color) vehRecord.color = obState.optional.color;
+  if (obState.optional?.transmission) vehRecord.transmission = obState.optional.transmission;
+  if (obState.optional?.tire_size) vehRecord.tire_size = obState.optional.tire_size;
+  if (obState.optional?.insurance_policy) vehRecord.insurance_policy = obState.optional.insurance_policy;
+  if (obState.optional?.insurance_expiry) vehRecord.insurance_expiry = obState.optional.insurance_expiry;
+  if (obState.optional?.inspection_expiry) vehRecord.inspection_expiry = obState.optional.inspection_expiry;
+  if (obState.optional?.purchase_cost) vehRecord.purchase_cost = obState.optional.purchase_cost;
+
+  if (supabaseClient && profileData) {
+    const { error: insErr } = await supabaseClient.from('vehicles').insert([vehRecord]);
+    if (insErr) {
+      if (insErr.code === '23505') {
+        await supabaseClient.from('vehicles').update(vehRecord).eq('plate_number', corePlate);
+      } else {
+        console.error('[saveVehicleAssetRecord Error]:', insErr);
+      }
+    }
+    await supabaseClient.from('profiles').update({
+      email: coreEmail || profileData.email,
+      updated_at: new Date().toISOString()
+    }).eq('id', profileData.id);
+  }
+
+  return { token, coreYom, coreMileage, coreEmail, coreFuel, corePlate, coreModel };
+}
+
+export async function handleStage1CoreCapture({
+  obState,
+  mergedExt,
+  messageText,
+  senderPhone,
+  session,
+  profileData,
+  countryInfo,
+  supabaseClient,
+  formattedPhone
+}) {
+  if (!obState.core) {
+    obState.core = {
+      plate_number: obState.plate_number || null,
+      make_model: obState.make_model || null,
+      yom: null,
+      owner_email: profileData?.email || null,
+      fuel_type: null,
+      current_mileage: null
+    };
+  }
+  if (!obState.optional) {
+    obState.optional = {};
+  }
+  if (mergedExt.plate_number && !obState.core.plate_number) {
+    obState.core.plate_number = mergedExt.plate_number.toUpperCase().trim();
+  }
+  if (mergedExt.make_model) {
+    const isPlate = /\b([A-Z]{1,4}\s?\d{1,4}[A-Z]{0,2}|\d[A-Z]{3}\d{3})\b/i.test(mergedExt.make_model);
+    const cleanPlate = (obState.core.plate_number || '').replace(/\s+/g, '').toUpperCase();
+    if (!isPlate && (!cleanPlate || mergedExt.make_model.replace(/\s+/g, '').toUpperCase() !== cleanPlate)) {
+      obState.core.make_model = mergedExt.make_model.trim();
+    }
+  }
+  if ((mergedExt.yom || mergedExt.year) && !obState.core.yom) {
+    obState.core.yom = parseInt(mergedExt.yom || mergedExt.year, 10);
+  }
+  if (mergedExt.owner_email && !obState.core.owner_email) {
+    obState.core.owner_email = mergedExt.owner_email.toLowerCase().trim();
+  }
+  if (mergedExt.fuel_type && !obState.core.fuel_type) {
+    obState.core.fuel_type = mergedExt.fuel_type;
+  }
+  if (mergedExt.current_mileage !== null && mergedExt.current_mileage !== undefined && obState.core.current_mileage === null) {
+    obState.core.current_mileage = parseInt(mergedExt.current_mileage, 10);
+  }
+  if (mergedExt.role) obState.role = mergedExt.role;
+
+  if (mergedExt.vin) obState.optional.vin = mergedExt.vin;
+  if (mergedExt.engine_number) obState.optional.engine_number = mergedExt.engine_number;
+  if (mergedExt.color) obState.optional.color = mergedExt.color;
+  if (mergedExt.transmission) obState.optional.transmission = mergedExt.transmission;
+  if (mergedExt.tire_size) obState.optional.tire_size = mergedExt.tire_size;
+  if (mergedExt.insurance_policy) obState.optional.insurance_policy = mergedExt.insurance_policy;
+  if (mergedExt.insurance_expiry) obState.optional.insurance_expiry = mergedExt.insurance_expiry;
+  if (mergedExt.inspection_expiry) obState.optional.inspection_expiry = mergedExt.inspection_expiry;
+  if (mergedExt.purchase_cost) obState.optional.purchase_cost = mergedExt.purchase_cost;
+
+  obState.plate_number = obState.core.plate_number;
+  obState.make_model = obState.core.make_model;
+
+  if (!obState.core.plate_number) {
+    const rawPlateMatch = messageText.match(/\b([A-Z]{1,4}\s?\d{1,4}[A-Z]{0,2}|\d[A-Z]{3}\d{3})\b/i);
+    if (rawPlateMatch && !/^(register|onboard|add car|help|cancel|exit|stop|reset)$/i.test(rawPlateMatch[0])) {
+      obState.core.plate_number = rawPlateMatch[0].toUpperCase().trim();
+      obState.plate_number = obState.core.plate_number;
+    }
+  }
+
+  const hasPlate = !!obState.core.plate_number;
+  const hasModel = !!obState.core.make_model;
+  const hasYom = !!obState.core.yom;
+  const hasEmail = !!(obState.core.owner_email || profileData?.email);
+  const hasFuel = !!obState.core.fuel_type;
+  const hasMileage = obState.core.current_mileage !== null && obState.core.current_mileage !== undefined;
+
+  if (hasPlate && hasModel && hasYom && hasEmail && hasFuel && hasMileage) {
+    try {
+      const saved = await saveVehicleAssetRecord({
+        obState,
+        profileData,
+        countryInfo,
+        supabaseClient,
+        formattedPhone
+      });
+
+      obState.stage = 2;
+      obState.step = 3;
+      obState.registered_plate = saved.corePlate;
+      obState.token = saved.token;
+      onboardingStore.set(senderPhone, obState);
+      session.state = 'ONBOARDING_STAGE_2';
+      chatSessions.set(senderPhone, session);
+
+      return `🎉 *Core Registration Complete!* 🚀\n\n🚘 *Vehicle Asset Record:*\n• *Plate Number:* ${saved.corePlate}\n• *Make & Model:* ${saved.coreModel} (${saved.coreYom})\n• *Fuel:* ${saved.coreFuel} | *Odometer:* ${saved.coreMileage.toLocaleString()} km\n• *Email:* ${saved.coreEmail}\n• *Passbook Token:* \`${saved.token}\`\n\n🛡️ *Unlock Proactive Compliance & Maintenance Reminders:*\nWould you like to optionally add details like **Insurance Expiry Date**, **Inspection/NTAC Date**, **VIN/Chassis Number**, **Color**, or **Transmission** (Auto/Manual)?\n\nAdding your insurance expiry enables Saka to send proactive renewal alerts before expiration!\n\n💡 *Reply with any details (e.g. "Insurance expires 2027-05-15, automatic, color White"), or simply type **'Skip'** or **'Done'** to finish.*`;
+    } catch (regErr) {
+      onboardingStore.delete(senderPhone);
+      session.state = 'IDLE';
+      session.onboardingStep = null;
+      return `Failed to complete registration. Please try typing **'Register'** again.`;
+    }
+  }
+
+  if (!hasPlate) {
+    obState.step = 1;
+    onboardingStore.set(senderPhone, obState);
+    return `🚘 *Step 1 of 2: Vehicle Registration Plate*\n\nPlease reply with your vehicle's registration plate number (e.g. *KDA 123A* or *KBC 456X*).`;
+  }
+
+  obState.step = 2;
+  onboardingStore.set(senderPhone, obState);
+
+  const missing = [];
+  if (!hasModel) missing.push("Make & Model (e.g. 80 series / Fielder)");
+  if (!hasYom) missing.push("Year of Manufacture [YOM] (e.g. 1991 / 2018)");
+  if (!hasFuel) missing.push("Fuel Type (Diesel, Petrol, Hybrid, EV)");
+  if (!hasMileage) missing.push("Current Mileage (e.g. 366700 km)");
+  if (!hasEmail) missing.push("Email Address for reports");
+
+  if (missing.length >= 3) {
+    return `🚘 *Step 2 of 2: Vehicle Core Details* 📝\n\nGot registration plate *${obState.core.plate_number}*!\n\nCould you share the **Make & Model**, **Year of Manufacture (YOM)**, **Fuel Type (Diesel/Petrol/Hybrid/EV)**, **Current Mileage**, and your **Email**?\n\n💡 *Tip: You can send them all together in one message (e.g., "1991 diesel 80 series, mileage 366700, email user@mail.com")!*`;
+  } else if (!hasEmail) {
+    return `Almost done! 📧 What email address should we send your automated passbook and monthly reports to?`;
+  } else if (!hasMileage) {
+    return `What is the vehicle's current mileage/odometer reading (e.g. 366,700 km)?`;
+  } else if (!hasFuel) {
+    return `What fuel type does this vehicle use (Diesel, Petrol, Hybrid, or Electric)?`;
+  } else if (!hasYom) {
+    return `What year was the vehicle manufactured (e.g. 1991, 2018)?`;
+  } else {
+    return `Please specify the make and model of your vehicle (e.g., *Toyota Land Cruiser 80 series*).`;
+  }
+}
+
+

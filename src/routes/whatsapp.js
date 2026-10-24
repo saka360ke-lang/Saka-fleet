@@ -1,9 +1,11 @@
 import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 import { handleSuperadminFlow } from '../services/superadmin.js';
-import { processSakaMessage } from '../../sakaAi.js';
+import { processSakaMessage, extractVehicleAttributes } from '../../sakaAi.js';
 import { logChatTranscript } from '../workers/sentinel.js';
 import { SUBSCRIPTION_TIERS, initializePaystackCheckout } from '../services/paystack.js';
+import { ensureVehicleTableColumns } from '../services/vehicles.js';
+import { handleStage1CoreCapture, handleStage2OptionalWeaving } from '../services/onboarding.js';
 
 let supabaseClient = null;
 if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY) {
@@ -188,6 +190,7 @@ export async function handleWhatsAppWebhook(request, reply, fastify) {
             const { data: newProfile } = await supabaseClient
               .from('profiles')
               .insert([{
+                id: crypto.randomUUID(),
                 phone_number: formattedPhone,
                 full_name: 'WhatsApp User',
                 country: countryInfo.country,
@@ -232,10 +235,20 @@ export async function handleWhatsAppWebhook(request, reply, fastify) {
         let intent = aiResult.intent;
         let customReply = aiResult.reply_message;
 
-        // --- BRANCH A: ONBOARDING FLOW ---
+        // Extract and merge structured vehicle attributes
+        const regexAttrs = extractVehicleAttributes(messageText);
+        const mergedExt = {
+          ...regexAttrs,
+          ...(aiResult.extracted_data || {})
+        };
+
+        const isRegisterCommand = /^\s*(register|onboard|add car|add vehicle|new vehicle)\b/i.test(messageText);
+        const hasVehicleAttributes = !!(mergedExt.plate_number || (mergedExt.yom && (mergedExt.fuel_type || mergedExt.make_model)) || (mergedExt.fuel_type && mergedExt.current_mileage));
+
+        // --- BRANCH A: TWO-STAGE PROGRESSIVE ONBOARDING FLOW ---
         if (
           isCurrentlyOnboarding ||
-          (!hasVehicleRegistered && (intent === 'REGISTER_VEHICLE' || /^\s*(register|onboard|add car|add vehicle)\b/i.test(messageText)))
+          (!hasVehicleRegistered && (intent === 'REGISTER_VEHICLE' || intent === 'ONBOARDING_INPUT' || isRegisterCommand || hasVehicleAttributes))
         ) {
           session.state = 'ONBOARDING';
           const userTierKey = profileData?.subscription_tier || 'free';
@@ -249,10 +262,22 @@ export async function handleWhatsAppWebhook(request, reply, fastify) {
             onboardingStore.delete(senderPhone);
             session.state = hasVehicleRegistered ? 'ACTIVE' : 'IDLE';
             session.onboardingStep = null;
-            customReply = `Vehicle onboarding cancelled. ${hasVehicleRegistered ? "You are back in active menu mode." : "Type **'Register'** or reply with a plate number whenever you're ready!"}`;
+            session.onboardingStage = null;
+            customReply = `Vehicle onboarding cancelled. ${hasVehicleRegistered ? "You are back in active menu mode." : "Type **'Register'** whenever you're ready!"}`;
           } else if (/^(reset|start over)$/i.test(cleanText)) {
-            onboardingStore.set(senderPhone, { step: 1, plate_number: null, make_model: null, role: 'Owner' });
+            onboardingStore.set(senderPhone, {
+              stage: 1,
+              step: 1,
+              core: { plate_number: null, make_model: null, yom: null, owner_email: profileData?.email || null, fuel_type: null, current_mileage: null },
+              optional: { vin: null, engine_number: null, color: null, transmission: null, tire_size: null, insurance_policy: null, insurance_expiry: null, inspection_expiry: null, purchase_cost: null },
+              registered_plate: null,
+              token: null,
+              role: 'Owner',
+              plate_number: null,
+              make_model: null
+            });
             session.onboardingStep = 1;
+            session.onboardingStage = 1;
             customReply = `🔄 *Onboarding Reset*\n\nPlease reply with your vehicle's registration plate number (e.g. *KDA 123A* or *KBC 456X*).`;
           } else if (isNewRegistrationStart && currentVehicleCount >= currentTier.vehicleLimit) {
             const checkout = await initializePaystackCheckout({
@@ -270,105 +295,70 @@ export async function handleWhatsAppWebhook(request, reply, fastify) {
             session.onboardingStep = null;
           } else {
             let obState = onboardingStore.get(senderPhone) || {
+              stage: 1,
               step: 1,
+              core: {
+                plate_number: null,
+                make_model: null,
+                yom: null,
+                owner_email: profileData?.email || null,
+                fuel_type: null,
+                current_mileage: null
+              },
+              optional: {
+                vin: null,
+                engine_number: null,
+                color: null,
+                transmission: null,
+                tire_size: null,
+                insurance_policy: null,
+                insurance_expiry: null,
+                inspection_expiry: null,
+                purchase_cost: null
+              },
+              registered_plate: null,
+              token: null,
+              role: 'Owner',
               plate_number: null,
-              make_model: null,
-              role: 'Owner'
+              make_model: null
             };
             onboardingStore.set(senderPhone, obState);
 
             const isFeedbackOrUnrelated = checkIsConversationalFeedback(messageText, obState.step);
 
             if (isFeedbackOrUnrelated) {
-              if (obState.step === 1) {
+              if (obState.stage === 2) {
+                customReply = `I noticed your message ("${messageText.trim()}").\n\nYou can optionally share specs like insurance expiry, VIN, transmission, or simply reply **'Skip'** or **'Done'** to finish.`;
+              } else if (!obState.core.plate_number) {
                 customReply = `I noticed your message. If you want to cancel, reply **'cancel'**.\n\nOtherwise, please reply with your vehicle's registration plate number (e.g. *KDA 123A*).`;
               } else {
-                customReply = `I noticed your message ("${messageText.trim()}").\n\nIf you want to restart or cancel onboarding, reply **'reset'** or **'cancel'**.\nOtherwise, please reply with your vehicle's make and model (e.g. *Toyota Fielder - Owner*).`;
+                customReply = `I noticed your message ("${messageText.trim()}").\n\nIf you want to restart or cancel onboarding, reply **'reset'** or **'cancel'**.\nOtherwise, please share your vehicle's details (e.g. *"1991 diesel 80 series, mileage 366700, email user@mail.com"*).`;
               }
+            } else if (obState.stage === 2) {
+              customReply = await handleStage2OptionalWeaving({
+                obState,
+                mergedExt,
+                messageText,
+                senderPhone,
+                session,
+                countryInfo,
+                supabaseClient
+              });
             } else {
-              if (obState.step === 1) {
-                const ext = aiResult.extracted_data || {};
-                const plateMatch = messageText.match(/\b([A-Z]{1,4}\s?\d{1,4}[A-Z]{0,2}|\d[A-Z]{3}\d{3})\b/i);
-                let candidatePlate = ext.plate_number || (plateMatch ? plateMatch[0] : null);
-
-                if (!candidatePlate && !/^(register|onboard|add car|add vehicle|new vehicle|help|cancel|exit|stop|reset|start over)$/i.test(messageText.trim())) {
-                  if (messageText.trim().length >= 3 && messageText.trim().length <= 12) {
-                    candidatePlate = messageText.trim();
-                  }
-                }
-
-                if (candidatePlate && candidatePlate.length >= 3 && candidatePlate.length <= 12) {
-                  obState.plate_number = candidatePlate.toUpperCase();
-                  obState.step = 2;
-                  onboardingStore.set(senderPhone, obState);
-                  session.onboardingStep = 2;
-                  customReply = `🚘 *Step 2 of 2: Vehicle Details & Role* 📝\n\nGot registration plate *${obState.plate_number}*!\n\nWhat is the **make and model** of your vehicle, and are you the **Owner** or **Driver**? (e.g. *"Toyota Fielder - Owner"* or *"Nissan Note Driver"*).`;
-                } else {
-                  customReply = `🚘 *Step 1 of 2: Vehicle Registration Plate*\n\nPlease reply with your vehicle's registration plate number (e.g. *KDA 123A* or *KBC 456X*).`;
-                }
-              }
-
-            // Step 2: Prompt for make/model & role -> Save vehicle to Supabase & Transition to ACTIVE
-            else if (obState.step === 2) {
-              if (/driver/i.test(messageText)) obState.role = 'Driver';
-              else if (/owner/i.test(messageText)) obState.role = 'Owner';
-
-              let modelCandidate = obState.make_model;
-              if (!modelCandidate) {
-                const cleanedModel = messageText.replace(/owner|driver/gi, '').replace(/[-–,]/g, ' ').trim();
-                modelCandidate = cleanedModel.length >= 2 ? cleanedModel : messageText.trim();
-              }
-
-              if (!modelCandidate || modelCandidate.length < 2) {
-                customReply = `Please specify the make and model of your vehicle (e.g., *Toyota Fielder - Owner*).`;
-              } else {
-                obState.make_model = modelCandidate;
-
-                try {
-                  const token = `SK-PASSBOOK-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
-                  let newVeh = null;
-
-                  if (supabaseClient && profileData) {
-                    const { data: vCreated } = await supabaseClient.from('vehicles').insert([{
-                      owner_id: profileData.id,
-                      plate_number: obState.plate_number.toUpperCase(),
-                      make_model: obState.make_model,
-                      year_of_manufacture: new Date().getFullYear(),
-                      asset_type: 'ICE',
-                      unit_system: profileData.unit_system || countryInfo.default_units || 'metric',
-                      odometer_reading: 0,
-                      operating_hours: 0,
-                      qr_passbook_token: token,
-                      metadata: { role: obState.role }
-                    }]).select().single();
-                    newVeh = vCreated;
-
-                    await supabaseClient.from('profiles').update({
-                      updated_at: new Date().toISOString()
-                    }).eq('id', profileData.id);
-                  }
-
-                  // STATE TRANSITION AFTER ONBOARDING (Fix 1)
-                  onboardingStore.delete(senderPhone);
-                  session.state = 'ACTIVE';
-                  session.onboardingStep = null;
-                  chatSessions.set(senderPhone, session);
-
-                  const finalPlate = newVeh?.plate_number || obState.plate_number;
-                  const finalModel = newVeh?.make_model || obState.make_model;
-
-                  customReply = `🎉 *Vehicle Registered Successfully!* 🚀\n\n🚘 *Vehicle Details:*\n• *Plate Number:* ${finalPlate}\n• *Make & Model:* ${finalModel}\n• *Role:* ${obState.role}\n• *Passbook Token:* \`${token}\`\n\n📋 *What would you like to do next?*\n1️⃣ *Log Expense / Fuel* (e.g. "Logged fuel KES 3000")\n2️⃣ *Update Mileage* (e.g. "Odometer 45000 km")\n3️⃣ *Set Service Reminder* (e.g. "Remind oil change in 5000 km")\n4️⃣ *Log Earnings* (e.g. "Earned KES 5000 today")\n5️⃣ *View Reports & Summary*\n\nReply with a number or type what you want to do!`;
-                } catch (regErr) {
-                  onboardingStore.delete(senderPhone);
-                  session.state = hasVehicleRegistered ? 'ACTIVE' : 'IDLE';
-                  session.onboardingStep = null;
-                  customReply = `Failed to complete registration. Please try typing **'Register'** again.`;
-                }
-              }
+              customReply = await handleStage1CoreCapture({
+                obState,
+                mergedExt,
+                messageText,
+                senderPhone,
+                session,
+                profileData,
+                countryInfo,
+                supabaseClient,
+                formattedPhone
+              });
             }
           }
         }
-      }
 
         // --- BRANCH B: ACTIVE USER FLOW (POST-ONBOARDING INPUT ROUTING - Fix 2) ---
         else if (hasVehicleRegistered || session.state === 'ACTIVE') {
@@ -400,10 +390,43 @@ export async function handleWhatsAppWebhook(request, reply, fastify) {
                 activeIntent = 'GENERAL_CHAT';
               }
             } else {
-              onboardingStore.set(senderPhone, { step: 1, plate_number: null, make_model: null, role: 'Owner' });
+              const initPlate = mergedExt.plate_number ? mergedExt.plate_number.toUpperCase().trim() : null;
+              onboardingStore.set(senderPhone, {
+                stage: 1,
+                step: initPlate ? 2 : 1,
+                core: {
+                  plate_number: initPlate,
+                  make_model: null,
+                  yom: null,
+                  owner_email: profileData?.email || null,
+                  fuel_type: null,
+                  current_mileage: null
+                },
+                optional: {
+                  vin: null,
+                  engine_number: null,
+                  color: null,
+                  transmission: null,
+                  tire_size: null,
+                  insurance_policy: null,
+                  insurance_expiry: null,
+                  inspection_expiry: null,
+                  purchase_cost: null
+                },
+                registered_plate: null,
+                token: null,
+                role: 'Owner',
+                plate_number: initPlate,
+                make_model: null
+              });
               session.state = 'ONBOARDING';
-              session.onboardingStep = 1;
-              customReply = `🚘 *Step 1 of 2: Vehicle Registration Plate*\n\nPlease reply with the registration plate number for your new vehicle (e.g. *KDA 123A* or *KBC 456X*).`;
+              session.onboardingStep = initPlate ? 2 : 1;
+              session.onboardingStage = 1;
+              if (initPlate) {
+                customReply = `🚘 *Step 2 of 2: Vehicle Core Details* 📝\n\nGot registration plate *${initPlate}*!\n\nCould you share the **Make & Model**, **Year of Manufacture (YOM)**, **Fuel Type (Diesel/Petrol/Hybrid/EV)**, **Current Mileage**, and your **Email**?\n\n💡 *Tip: You can send them all together in one message (e.g., "1991 diesel 80 series, mileage 366700, email user@mail.com")!*`;
+              } else {
+                customReply = `🚘 *Step 1 of 2: Vehicle Registration Plate*\n\nPlease reply with the registration plate number for your new vehicle (e.g. *KDA 123A* or *KBC 456X*).`;
+              }
             }
           }
 
@@ -435,6 +458,7 @@ export async function handleWhatsAppWebhook(request, reply, fastify) {
                 if (supabaseClient && targetVeh) {
                   await supabaseClient.from('vehicles').update({
                     odometer_reading: extOdometer,
+                    current_mileage: extOdometer,
                     updated_at: new Date().toISOString()
                   }).eq('id', targetVeh.id);
                 }

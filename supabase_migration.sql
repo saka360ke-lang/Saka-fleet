@@ -1,6 +1,21 @@
 -- Migration: Saka Fleet Complete Schema Sync & Performance Indexes
 
--- 1. Vehicle Table Extensions
+-- 1. Vehicle Table Extensions & Comprehensive Asset Record
+ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS yom integer;
+ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS owner_email text;
+ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS fuel_type text;
+ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS current_mileage integer DEFAULT 0;
+ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS owner_phone text;
+ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS status text DEFAULT 'ACTIVE';
+ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS vin text;
+ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS engine_number text;
+ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS color text;
+ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS transmission text;
+ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS tire_size text;
+ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS insurance_policy text;
+ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS insurance_expiry date;
+ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS inspection_expiry date;
+ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS purchase_cost numeric;
 ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS year_of_manufacture integer;
 ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS other_details text;
 ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS is_business boolean DEFAULT false;
