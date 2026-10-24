@@ -18,7 +18,7 @@ if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY) {
 export const SAKA_FALLBACK_RESPONSE = {
   intent: "GENERAL_CHAT",
   extracted_data: {},
-  reply_message: "I am your Saka Fleet WhatsApp assistant. Reply with your vehicle's plate number (e.g. *KDA 123A*) or type **'Register'** to start onboarding!"
+  reply_message: "I am your Saka Fleet WhatsApp assistant. How can I help with your vehicle or fleet today? You can log expenses, update odometer readings, set service reminders, or view reports."
 };
 
 export const DEFAULT_SAKA_CORE_PROMPT = `You are Saka, an intelligent, warm, and professional WhatsApp assistant for Saka Fleet, an international intelligent vehicle and asset management system.
@@ -101,7 +101,95 @@ export function classifyIntentWithRegex(messageText = '') {
     return {
       intent: 'GREETING',
       extracted_data: {},
-      reply_message: "👋 Welcome to Saka Fleet! I'm your intelligent WhatsApp vehicle & asset management assistant.\n\nSaka Fleet tracks vehicle processes, compliance, expenses, and maintenance directly on WhatsApp.\n\nTo start onboarding, reply with your vehicle's registration number (e.g. *KDA 123A*) or type **'Register'**."
+      reply_message: "👋 Welcome to Saka Fleet! I'm your intelligent WhatsApp vehicle & asset management assistant."
+    };
+  }
+
+  // Numeric menu choices (1-5)
+  if (/^(1|1️⃣)$/.test(clean)) {
+    return {
+      intent: 'LOG_EXPENSE',
+      extracted_data: {},
+      reply_message: "⛽ *Log Expense / Fuel*\n\nPlease reply with your expense details (e.g. *\"Logged fuel KES 3000\"*)."
+    };
+  }
+  if (/^(2|2️⃣)$/.test(clean)) {
+    return {
+      intent: 'UPDATE_MILEAGE',
+      extracted_data: {},
+      reply_message: "📈 *Update Mileage / Odometer*\n\nPlease reply with your updated odometer reading (e.g. *\"Odometer 45000 km\"*)."
+    };
+  }
+  if (/^(3|3️⃣)$/.test(clean)) {
+    return {
+      intent: 'SET_REMINDER',
+      extracted_data: {},
+      reply_message: "🔔 *Set Service Reminder*\n\nPlease reply with your service reminder details (e.g. *\"Remind oil change in 5000 km\"*)."
+    };
+  }
+  if (/^(4|4️⃣)$/.test(clean)) {
+    return {
+      intent: 'LOG_EARNINGS',
+      extracted_data: {},
+      reply_message: "💰 *Log Earnings*\n\nPlease reply with your revenue details (e.g. *\"Earned KES 5000 today\"*)."
+    };
+  }
+  if (/^(5|5️⃣)$/.test(clean)) {
+    return {
+      intent: 'REQUEST_REPORT',
+      extracted_data: {},
+      reply_message: "📊 *View Reports & Summary*\n\nRequesting your fleet report summary..."
+    };
+  }
+
+  // Odometer / Mileage Update
+  if (/odometer|mileage|\bkm\b|\bmiles\b|reading|clocked/i.test(clean)) {
+    const odoMatch = clean.match(/[\d,]+/);
+    const odoVal = odoMatch ? parseInt(odoMatch[0].replace(/,/g, ''), 10) : null;
+    return {
+      intent: 'UPDATE_MILEAGE',
+      extracted_data: { odometer: odoVal },
+      reply_message: `Updated odometer reading to ${odoVal ? odoVal.toLocaleString() : 'new reading'}.`
+    };
+  }
+
+  // Expense / Fuel Logging
+  if (/fuel|expense|spent|kes|usd|gbp|eur|cost|paid|refuel|liter|litres|receipt|repair|oil change|maintenance/i.test(clean)) {
+    const amtMatch = clean.match(/[\d,]+(?:\.\d+)?/);
+    const amtVal = amtMatch ? parseFloat(amtMatch[0].replace(/,/g, '')) : null;
+    return {
+      intent: 'LOG_EXPENSE',
+      extracted_data: { amount: amtVal },
+      reply_message: `Logged expense of ${amtVal ? amtVal.toLocaleString() : 'amount'}.`
+    };
+  }
+
+  // Earnings Logging
+  if (/earned|earnings|revenue|income|fare|trip/i.test(clean)) {
+    const amtMatch = clean.match(/[\d,]+(?:\.\d+)?/);
+    const amtVal = amtMatch ? parseFloat(amtMatch[0].replace(/,/g, '')) : null;
+    return {
+      intent: 'LOG_EARNINGS',
+      extracted_data: { amount: amtVal },
+      reply_message: `Logged earnings of ${amtVal ? amtVal.toLocaleString() : 'amount'}.`
+    };
+  }
+
+  // Reminders
+  if (/remind|reminder|service in|due in|alert/i.test(clean)) {
+    return {
+      intent: 'SET_REMINDER',
+      extracted_data: {},
+      reply_message: "Service reminder set."
+    };
+  }
+
+  // Reports
+  if (/report|summary|statement|audit/i.test(clean)) {
+    return {
+      intent: 'REQUEST_REPORT',
+      extracted_data: {},
+      reply_message: "Generating report summary..."
     };
   }
 
@@ -120,7 +208,7 @@ export function classifyIntentWithRegex(messageText = '') {
     return {
       intent: 'APP_HELP',
       extracted_data: {},
-      reply_message: "🚗 *Saka Fleet Features:*\n\n• Track Fuel & Expenses\n• Odometer & Maintenance Reminders\n• Earnings Tracking & Monthly PDF Reports\n\nTo onboard your vehicle, reply with your plate number (e.g. *KDA 123A*) or type **'Register'**!"
+      reply_message: "🚗 *Saka Fleet Features:*\n\n• Track Fuel & Expenses\n• Odometer & Maintenance Reminders\n• Earnings Tracking & Monthly PDF Reports"
     };
   }
 
@@ -132,23 +220,25 @@ export function classifyIntentWithRegex(messageText = '') {
     };
   }
 
-  // Check if text looks like a standalone plate number e.g. "KDA 123A" or "KBC 456X"
-  const plateCandidate = messageText.match(/\b([A-Z]{1,4}\s?\d{1,4}[A-Z]{0,2}|\d[A-Z]{3}\d{3})\b/i);
-  if (plateCandidate && plateCandidate[0].length >= 3 && /[A-Z]/i.test(plateCandidate[0]) && /[0-9]/.test(plateCandidate[0])) {
-    const formattedPlate = plateCandidate[0].toUpperCase().trim();
-    return {
-      intent: 'REGISTER_VEHICLE',
-      extracted_data: {
-        plate_number: formattedPlate
-      },
-      reply_message: `Got registration plate ${formattedPlate}!`
-    };
+  // Check if text looks like a standalone short plate number e.g. "KDA 123A" or "KBC 456X"
+  if (clean.length <= 15) {
+    const plateCandidate = messageText.match(/\b([A-Z]{1,4}\s?\d{1,4}[A-Z]{0,2}|\d[A-Z]{3}\d{3})\b/i);
+    if (plateCandidate && plateCandidate[0].length >= 3 && /[A-Z]/i.test(plateCandidate[0]) && /[0-9]/.test(plateCandidate[0])) {
+      const formattedPlate = plateCandidate[0].toUpperCase().trim();
+      return {
+        intent: 'REGISTER_VEHICLE',
+        extracted_data: {
+          plate_number: formattedPlate
+        },
+        reply_message: `Got registration plate ${formattedPlate}!`
+      };
+    }
   }
 
   return {
     intent: 'GENERAL_CHAT',
     extracted_data: {},
-    reply_message: "I am your Saka Fleet WhatsApp assistant. Reply with your vehicle's plate number (e.g. *KDA 123A*) or type **'Register'** to start onboarding, or type **'Help'** to see what I can do!"
+    reply_message: "I am your Saka Fleet WhatsApp assistant. How can I help with your vehicle or fleet today? You can log expenses, update odometer readings, set service reminders, or view reports."
   };
 }
 
@@ -186,11 +276,8 @@ RUNTIME DYNAMIC CONTEXT:
 
   const candidateModels = Array.from(new Set([
     'gemini-3.8-flash',
-    'gemini-2.5-flash',
-    'gemini-flash-latest',
-    'gemini-2.0-flash',
-    'gemini-1.5-flash',
-    process.env.GEMINI_MODEL
+    process.env.GEMINI_MODEL,
+    'gemini-flash-latest'
   ].filter(Boolean)));
 
   for (const selectedModel of candidateModels) {

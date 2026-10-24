@@ -125,6 +125,83 @@ async function runTests() {
     throw new Error('Expected direct plate input to jump directly to Step 2 with plate KBC 456X');
   }
 
+  // Test 3: Post-Onboarding Input Routing & Feedback Safeguards
+  console.log('\n--- Test 3: Post-Onboarding Input Routing & Feedback Safeguards ---');
+
+  // Complete onboarding for test user to transition state to 'ACTIVE'
+  onboardingStore.set(testPhone, { step: 2, plate_number: 'KDA 777X', make_model: null, role: 'Owner' });
+  const completeTurn = createMockReqReply('Toyota Axio - Owner');
+  await handleWhatsAppWebhook(completeTurn.req, completeTurn.reply, mockFastify);
+  console.log('Post-Onboarding State:', onboardingStore.get(testPhone));
+  if (onboardingStore.get(testPhone) !== undefined) {
+    throw new Error('State Transition Failed: Onboarding state was not cleared after vehicle registration');
+  }
+
+  // A. Numeric Choice "1" (Log Expense) Post-Onboarding
+  console.log('Post-Onboarding Input: Numeric Choice "1"');
+  const postTurn1 = createMockReqReply('1');
+  await handleWhatsAppWebhook(postTurn1.req, postTurn1.reply, mockFastify);
+  if (onboardingStore.get(testPhone) !== undefined) {
+    throw new Error('Routing Failure: Numeric choice "1" triggered onboarding loop!');
+  }
+
+  // B. Natural Text "Odometer 366700km" Post-Onboarding
+  console.log('Post-Onboarding Input: Natural Text "Odometer 366700km"');
+  const postTurn2 = createMockReqReply('Odometer 366700km');
+  await handleWhatsAppWebhook(postTurn2.req, postTurn2.reply, mockFastify);
+  if (onboardingStore.get(testPhone) !== undefined) {
+    throw new Error('Routing Failure: Natural text "Odometer 366700km" triggered onboarding loop!');
+  }
+
+  // C. Natural Text "Logged fuel KES 3000" Post-Onboarding
+  console.log('Post-Onboarding Input: Natural Text "Logged fuel KES 3000"');
+  const postTurn3 = createMockReqReply('Logged fuel KES 3000');
+  await handleWhatsAppWebhook(postTurn3.req, postTurn3.reply, mockFastify);
+  if (onboardingStore.get(testPhone) !== undefined) {
+    throw new Error('Routing Failure: Natural text "Logged fuel KES 3000" triggered onboarding loop!');
+  }
+
+  // D. Safeguard Against Literal Feedback During Onboarding
+  console.log('Onboarding Feedback Safeguard: User sends "You are looping" during Step 2');
+  const feedbackPhone = '254711223344';
+  onboardingStore.set(feedbackPhone, { step: 2, plate_number: 'KDA 888Y', make_model: null, role: 'Owner' });
+  
+  const rawBodyFeedback = {
+    object: 'whatsapp_business_account',
+    entry: [{
+      changes: [{
+        value: {
+          messages: [{
+            from: feedbackPhone,
+            text: { body: 'You are looping' }
+          }]
+        }
+      }]
+    }]
+  };
+  const feedbackReq = {
+    headers: {},
+    body: rawBodyFeedback,
+    rawBody: JSON.stringify(rawBodyFeedback)
+  };
+  const feedbackReply = {
+    status: (code) => feedbackReply,
+    send: (data) => {
+      feedbackReply.data = data;
+      return feedbackReply;
+    }
+  };
+
+  await handleWhatsAppWebhook(feedbackReq, feedbackReply, mockFastify);
+  const feedbackState = onboardingStore.get(feedbackPhone);
+  console.log('State after feedback input:', feedbackState);
+  
+  if (!feedbackState || feedbackState.step !== 2 || feedbackState.make_model === 'You are looping') {
+    throw new Error('Safeguard Failure: Conversational feedback "You are looping" was saved as vehicle make/model!');
+  }
+
+  console.log('✅ Feedback safeguard verified: "You are looping" was not saved as vehicle make/model.');
+
   console.log('\n=== ALL CONVERSATIONAL FLOW TESTS PASSED SUCCESSFULLY ===');
 }
 
