@@ -269,7 +269,9 @@ export function generateRoleBasedActionDiscovery({ profileData, vehicles = [], s
       `• \`admin alerts\` — System warnings & friction logs\n` +
       `• \`adminrules reset\` — Dynamic micro-rules management\n` +
       `• \`adminstop\` — Terminate admin session\n\n` +
-      `💡 *Fleet Management:* You also have full access to owner and driver tools for personal vehicles.`;
+      `💡 *Fleet Management:* You also have full access to owner and driver tools for personal vehicles.` +
+      (isOwner ? `\n\n👑 *Your Owner Tools (${activePlate}):* my vehicles · switch to [plate] · register · assign driver [phone] to [plate]` : '') +
+      (isDriver ? `\n\n🚙 *Your Driver Tools (${activePlate}):* Odometer [km] · Logged [L] fuel · Earned [amount] today` : '');
   }
 
   if (isOwner && isDriver) {
