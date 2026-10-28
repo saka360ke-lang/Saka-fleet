@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.7.5  
+**Version:** 1.7.6  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -49,13 +49,15 @@ All LLM traffic flows through **`src/services/aiClient.js`**. No service talks t
   - Superadmin → static telemetry summary
 - Gemini (`@google/genai`, `GEMINI_API_KEY`, `gemini-3.8-flash`, `gemini-flash-latest`) has been **fully removed** from code, dependencies, and environment.
 - **Null-safe attribute merge:** DeepSeek always emits every schema key (usually as explicit `null`). `processSakaMessage` therefore only lets **non-empty** AI values override the regex heuristic — otherwise a bare plate like `KBC 456X` would be wiped to `null` and onboarding would never start.
+- **Fail-fast AI:** the OpenAI SDK is called with `maxRetries: 0` and `AI_TIMEOUT_MS` (12 s default); slow or empty completions fall through to the deterministic fallbacks above instead of blocking the message queue.
 - **Verify connectivity** any time with `node scripts/test_deepseek_connection.js` (plain text + JSON mode + conversation history).
 
 ### 1.2 Conversational Engine (v1.7 — pure AI, quiz-first)
 
-- **`src/services/conversationEngine.js`** — every user-facing reply is rendered by DeepSeek-V3 from a structured FACTS payload (`composeMessage`, `renderQuizQuestion`, `renderConfirmationSummary`, `renderOutcome`, `renderActionDiscovery`). Hard-coded conversational prose has been removed from the WhatsApp route; deterministic fallbacks remain only for provider outages.
-- **`src/services/quizEngine.js`** — one-piece-at-a-time wizard engine: declarative flow definitions, per-field validators/extractors, multi-field fast-forward (users may answer several fields at once), Cancel/Restart/Help navigation, and a **mandatory confirmation summary before any database write**. VIN and passbook token are never editable.
+- **`src/services/conversationEngine.js`** — every user-facing reply is rendered by DeepSeek-V3 from a structured FACTS payload (`composeMessage`, `renderQuizQuestion`, `renderConfirmationSummary`, `renderOutcome`, `renderActionDiscovery`). Hard-coded conversational prose has been removed from the WhatsApp route; deterministic fallbacks remain only for provider outages. Quiz questions are cached per field/language (`seedQuizQuestions`, `isQuizQuestionCacheWarm`) and prefetched in one batch per flow.
+- **`src/services/quizEngine.js`** — one-piece-at-a-time wizard engine: declarative flow definitions, per-field validators/extractors, deterministic multi-field fast-forward (`applyTextExtraction`), two-pass conditional extraction (`applyExtraction`), background question prefetch, Cancel/Restart/Help navigation, and a **mandatory confirmation summary before any database write**. VIN and passbook token are never editable.
 - **`src/services/globalization.js`** — single source of truth for country detection (E.164), metric/imperial conversion, currency + locale formatting, plate examples and unit labels. Every AI prompt and quiz question receives this context.
+- **`src/services/ocrService.js`** — Meta media download + Google Cloud Vision `DOCUMENT_TEXT_DETECTION`, with deterministic receipt hints (`extractReceiptHints`). See §24.
 - **`src/services/messageQueue.js`** — per-phone serialization + bounded global concurrency + retry/backoff + graceful drain on shutdown.
 - **`src/services/sessionStore.js`** — durable `chat_sessions` snapshots (session + onboarding + active quiz + OTP state), hydrated at the start of every message and persisted write-through.
 - **`src/services/supabaseClient.js`** — cached Supabase client with a 15-second per-request timeout (`SUPABASE_TIMEOUT_MS`).
@@ -262,13 +264,15 @@ Driver-centric feature blueprints synthesized weekly by Sentinel from live conve
    - **Explicit Attribution Safeguard:** Every data submission confirmation explicitly states the vehicle plate and make/model under which data was recorded, preventing cross-vehicle misattribution.
 
 3. **Persistent History Logging & Context Window:**
-   - All incoming user WhatsApp messages are stored immediately to `chat_history` (`role: 'user'`).
-   - Outgoing assistant responses are stored to `chat_history` (`role: 'assistant'`).
-   - The last 10 messages from `chat_history` are fetched and injected as turns (`{ role: 'user' | 'model', parts: [{ text }] }`).
+   - All incoming user WhatsApp messages are stored to `chat_history` (`role: 'user'`) and `chat_transcripts`; both writes run in parallel and overlap AI processing.
+   - Outgoing assistant responses are stored to both tables after the WhatsApp send completes, in the same `Promise.all` as the durable session snapshot.
+   - The last ~10 turns are injected as `{ role: 'user' | 'model', parts: [{ text }] }`. Warm sessions use the in-memory `session.history` directly; the `chat_history` fetch happens only when the session is cold or empty.
+   - **Quiz fast path:** while a quiz is active (except PIN/OTP phases), the DeepSeek intent call is skipped entirely — the instant regex classifier plus deterministic field parsing drive the turn (see §25).
 
 4. **Intent Classification & Autonomous Actions:**
    - Supported intents (single source of truth: `sakaAi.js` `DEFAULT_SAKA_CORE_PROMPT`): `GREETING`, `ACTION_DISCOVERY`, `TRANSFER_PASSBOOK`, `APPLY_COUPON`, `REGISTER_VEHICLE`, `ONBOARDING_INPUT`, `ONBOARDING_SKIP`, `VERIFY_OTP`, `RESEND_OTP`, `UPDATE_EMAIL`, `APP_HELP`, `MANAGE_VEHICLE`, `LIST_VEHICLES`, `SWITCH_VEHICLE`, `QUERY_FUEL_EFFICIENCY`, `QUERY_FLEET_SUMMARY`, `LOG_EXPENSE`, `UPDATE_MILEAGE`, `LOG_EARNINGS`, `SET_REMINDER`, `COMPLETE_REMINDER`, `REQUEST_REPORT`, `CONTACT_SUPPORT`, `REACTIVATE_ACCOUNT`, `EDIT_VEHICLE`, `DELETE_VEHICLE`, `EDIT_PROFILE`, `DELETE_ACCOUNT`, `GENERAL_CHAT`, `ASSIGN_DRIVER`, `UNASSIGN_DRIVER`.
    - Hybrid extraction merges DeepSeek structured JSON with smart regex heuristics (including currency exclusion to prevent false plate matches, phone-vs-VIN disambiguation, and odometer-safe OTP parsing).
+   - **Active-quiz extraction is deterministic and AI-free:** `applyTextExtraction` captures safe volunteered fields from the same message (year, odometer only with a km/mi marker, fuel type, volume only with a litre/gallon marker), and `applyExtraction` runs two passes so conditional fields (e.g. fuel volume once `expense_type = Fuel`) fill from one payload.
    - **Expense-vs-Odometer disambiguation:** messages containing fuel/expense wording (`fuel`, `liters`, `refuel`, `paid`, `cost`, `receipt`, `maintenance`) are classified as `LOG_EXPENSE` even when an odometer value is also present (e.g. *"Logged 30L fuel at 50350 km for KES 5500"*).
 
 5. **Fleet Analytics Engine (`src/services/analytics.js`):**
@@ -297,7 +301,7 @@ Sentinel executes an autonomous 4-stage optimization loop to detect conversation
    - Upserts micro-rule patches into `saka_dynamic_rules` (`rule_key`, `rule_description`, `patch_instruction`, `is_active: true`).
 
 4. **Runtime Injection:**
-   - In `sakaAi.js`, `getSakaCorePrompt()` retrieves active rules (`is_active = TRUE`) and appends them to the DeepSeek system instruction as real-time behavioral guidance.
+   - In `sakaAi.js`, `getSakaCorePrompt()` retrieves active rules (`is_active = TRUE`) and appends them as real-time behavioral guidance. The assembled prompt is cached for 60 s (`SAKA_PROMPT_CACHE_MS`) and the two reads run in parallel; call `clearSakaPromptCache()` after changing prompt config or rules (e.g. after `adminrules reset`).
 
 ### Function Boundary Lock & Admin Kill Switch
 - **Function Boundary Lock:** Sentinel is strictly restricted to tone, phrasing, clarification flows, and entity hints. It cannot alter core hardcoded logic, database schemas, VIN locks, OTP verification, or security rules.
@@ -422,10 +426,10 @@ Owners exceeding tier limits are prompted to upgrade via Paystack checkout.
 
 ---
 
-## 10. Database Slate Reset Utility & Token Efficiency
+## 10. Token Efficiency Directive
 
-- **Reset Slate Script:** `scripts/reset_db_slate.js`
-- **Token Efficiency Directive:** Consult `SAKA_FLEET_ARCHITECTURE.md` and `.clinerules` first on every prompt. Target reads/writes and batch all independent operations.
+- **Token Efficiency:** Consult `SAKA_FLEET_ARCHITECTURE.md` and `.clinerules` first on every prompt. Target reads/writes and batch all independent operations.
+- The database slate reset utility is documented once in **§15** (`npm run reset:db` / `reset:slate` → `scripts/reset-db.js`).
 
 ---
 
@@ -540,26 +544,23 @@ Owners exceeding tier limits are prompted to upgrade via Paystack checkout.
 
 ---
 
-## 16. First-Time User Conversational Flow (Progressive Onboarding)
+## 16. First-Time User Conversational Flow (Quiz-Based Onboarding)
 
-### 16.1 Shared First-Time Guide (`buildFirstTimeWelcome`)
-- `src/routes/whatsapp.js` exports `buildFirstTimeWelcome({ swahili, senderPhone })` — the single source of truth for brand-new / unregistered users; it auto-renders the user's country plate format, metric/imperial unit hint, and currency from `detectCountryFromPhone`.
-- Provides a numbered, ~2-minute walkthrough: (1) plate → (2) make/model + year + fuel + mileage → (3) email OTP → (4) VIN-locked passbook, then optional Stage 2 specs.
-- Always surfaces recovery affordances: **Help**, **What can I do?**, **Restart**, **Cancel**, and buyer **ACCEPT**.
-- Reused by `generateRoleBasedActionDiscovery` (unregistered branch) and the idle/greeting branches (English + Swahili), so every entry point is consistent.
-- **AI language auto-translation:** `detectMessageLanguage` (in `src/routes/whatsapp.js`) auto-detects the user's language per turn, persists it to `profiles.preferred_language`, and injects it into the DeepSeek runtime context; the core prompt instructs Saka to always reply in the user's language (global multilingual support).
+### 16.1 AI-Rendered First-Time Introduction
+- `src/routes/whatsapp.js` still exports `buildFirstTimeWelcome(...)` and `generateRoleBasedActionDiscovery(...)` as offline/legacy helpers (covered by `test_first_time_flow.js`), but the live greeting / idle / help branches now call Saka AI via `composeMessage(..., purpose: 'first_time_welcome')` and `renderRoleActions(...)`.
+- The first-time introduction is one short paragraph followed by **exactly ONE question** (the plate number); it renders the user's plate example, units and currency from `globalization.js`.
+- Recovery affordances remain available at every turn: **Help**, **What can I do?**, **Restart**, **Cancel**, buyer **ACCEPT**.
 
-### 16.2 Accurate Progressive Stage Labels
-- **Stage 1 of 2 · Step 1 of 4** — Registration Plate (offers *Cancel*).
-- **Stage 1 of 2 · Step 2 of 4** — Vehicle Core Details (offers *Cancel* / *Restart*).
-- **Stage 1 of 2 · Step 3 of 4** — Email Verification (invalid/expired codes offer **resend** or **cancel**).
-- **Stage 1 of 2 · Step 4 of 4** — Passbook Issued (transitions into **Stage 2 of 2 — Optional Specs**).
-- Onboarding completion returns a numbered quick-action menu (1–5) plus a **Help** hint.
+### 16.2 One-Piece-at-a-Time Registration (quiz engine)
+- Registration is a `vehicle_registration` quiz (§20): plate → make/model → YOM → fuel → odometer → VIN → email → OTP → optional specs → **confirmation summary** → save.
+- No mega-prompt and no fixed "Step X of 4" labels; progress is conversational and each turn asks exactly one question.
+- Email OTP is generated/verified inside the quiz (10-minute TTL, `resend` supported); VIN remains permanently locked to the passbook.
+- Optional specs (insurance, inspection, colour, transmission, engine, tires, purchase cost, custom mods) are asked one at a time and can be skipped as a group with `Skip`/`Done`.
 
 ### 16.3 Help & Action Discovery Routing
-- `Help` → `APP_HELP` and `What can I do?` → `ACTION_DISCOVERY`; both route through the special-flow handler to `generateRoleBasedActionDiscovery`.
-- Unregistered users receive the first-time guide; active users receive their role-specific command center (Owner / Driver / Owner+Driver / Superadmin).
-- `Restart` / `Reset` / `Start over` restarts onboarding; `Cancel` / `Exit` / `Stop` aborts cleanly.
+- `Help` / `What can I do?` → role-aware command overview rendered by Saka AI from `buildRoleContext()` (permissions) via `renderRoleActions`.
+- Mid-quiz help pauses the quiz, answers helpfully, then returns to the pending question (§20.1).
+- `Restart` / `Reset` / `Start over` restarts the quiz; `Cancel` / `Exit` / `Stop` aborts cleanly.
 
 ---
 
@@ -569,7 +570,7 @@ Owners exceeding tier limits are prompted to upgrade via Paystack checkout.
    - `src/services/paystack.js` → `SUBSCRIPTION_TIERS.solo_pro.vehicleLimit = 2`.
    - `src/services/vehicles.js` → `TIER_LIMITS.solo_pro = 3` (and this document specifies 3).
    - `whatsapp.js` gates pre-registration capacity via `SUBSCRIPTION_TIERS` (2), while `onboarding.js` gates final capacity via `checkOwnerVehicleTierLimit` (3). Recommend converging on a single source (3 per this document).
-2. **Intermittent DeepSeek empty completions:** Under high-frequency test runs, `deepseek-chat` occasionally returns an empty completion; `aiClient.chatCompletion` retries and callers deterministically fall back to `classifyIntentWithRegex`, so flows remain functional with no data loss observed.
+2. **Intermittent DeepSeek empty completions:** Under high-frequency test runs, `deepseek-chat` occasionally returns an empty completion. `aiClient.chatCompletion` now calls the SDK with `maxRetries: 0` and a 12 s timeout, so callers deterministically fall back to `classifyIntentWithRegex` / template-free fallback text instead of retrying and stalling the queue.
 3. **Test isolation:** Root-level `test_*.js` suites depend on live Supabase + Resend + DeepSeek. Per the permanent rule (§19), every run must clear its own data via `runWithCleanup` / `npm test`. A transient Supabase `fetch failed` can still leave stale rows; run `node scripts/reset-db.js --phone <number> --confirm` for an ad-hoc targeted reset.
 4. **Test runner & cleanup:** All suites are standalone `node test_*.js` scripts (no Jest/Mocha/Vitest). Use `npm test` (`scripts/run_tests.js`) for targeted runs — it always performs a final auto-cleanup sweep. `npm run test:cleanup` clears test data without running tests. `test_first_time_flow.js` is the offline first-time-flow suite; `test_edit_delete.js` covers edit/delete handlers, VIN immutability, vehicle-deletion cascade, and cleanup.
 
@@ -661,10 +662,11 @@ Navigation: `Cancel` aborts, `Restart` resets the flow, `Skip` is accepted only 
 While a quiz is active, Saka must still hold a normal conversation. `shouldPauseQuizForChat()` in `quizEngine.js` decides every turn:
 
 - **Engine-owned (never paused):** `Cancel`, `Restart`, `Skip`, `CONFIRM/YES/NO`, 6-digit OTP / release-PIN entry, `resend`.
+- **No AI intent call during a quiz:** the route classifies with the instant regex classifier and the quiz owns extraction, so an active quiz turn never pays a second model call for classification.
 - **Paused for conversation:** greetings, questions (`?` or openers like "what/how/tell me/brief me/I want to know"), `Help`, and clearly non-quiz intents (action discovery, support, analytics queries).
 - On a paused turn the quiz state is **untouched**; the route answers via Saka AI (or role-aware action discovery) and appends ONE AI-rendered resume nudge pointing at the pending question (`getCurrentQuizField`).
 - If a field fails validation but the text reads like conversation, the engine returns `pausedForChat: true` instead of nagging.
-- `Restart` never re-ingests the control word as data, and question rendering acknowledges ONLY the immediately accepted answer — eliminating fabricated acknowledgments ("Reset noted for make and model").
+- `Restart` never re-ingests the control word as data, and question rendering is data-free and cached — previously collected values are never echoed back as stale acknowledgments.
 
 ---
 
@@ -697,9 +699,9 @@ Saka Fleet serves a **global audience**. Every feature, quiz flow and AI prompt 
 ## 23. Known Gaps (next iteration)
 
 - `request_report` and `complete_reminder` still use the legacy handlers (not yet quiz-based).
-- `test_reliability.js` assertions predate AI-rendered breaker copy and may need loosening.
+- `test_reliability.js` is a legacy suite outside the targeted runner; its breaker assertions were loosened for AI-rendered copy.
 - `chat_sessions` pruning is manual (`pruneSessionSnapshots`) until scheduled in the Sentinel worker.
-- AI-rendered replies add one model call for quiz questions/summaries (intent classification remains a single call per message).
+- Free-form chat replies still require one DeepSeek call (~2–4 s); quiz question turns are served from the question cache. PDF OCR is not supported in v1 (images only).
 
 
 ---
@@ -745,6 +747,8 @@ Saka Fleet serves a **global audience**. Every feature, quiz flow and AI prompt 
 | **Fail-fast AI** | SDK `maxRetries: 0` plus `AI_TIMEOUT_MS` (12s default) — slow requests fall back deterministically instead of stalling the queue. |
 | **Parallel DB I/O** | Vehicles + history fetched with `Promise.all`; user log writes overlap AI processing; assistant logs + session snapshot persisted in one `Promise.all`. History query skipped entirely on warm sessions. |
 | **Cache-safe questions** | Cached question text is deliberately data-free (no collected values), preventing stale acknowledgments (e.g. an old plate) from leaking across sessions. |
+| **Deterministic fast-forward** | `applyTextExtraction` captures safe volunteered values (year, odometer with a km/mi marker, fuel type, volume with a litre/gallon marker) from the same message without an AI call; `applyExtraction` runs two passes so conditional fields fill from one payload. |
+| **Null-reply guard** | Fast-path turns that produce no flow reply fall back to a minimal AI-rendered response, preventing empty sends. |
 
 **Measured live (real DeepSeek):** quiz answer turns dropped from ~3.3–3.7 s to **~2.0–2.4 s** (~40% faster). Remaining time is DB round trips + the Meta send; the first turn of a flow also pays the one-time question render + prefetch.
 
