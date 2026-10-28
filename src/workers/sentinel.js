@@ -1,5 +1,6 @@
 import { GoogleGenAI } from '@google/genai';
 import { createClient } from '@supabase/supabase-js';
+import { fetchCloudRunLogs } from '../services/sentinelCloudLogs.js';
 
 function getSupabase(providedSupabase) {
   if (providedSupabase) return providedSupabase;
@@ -425,6 +426,99 @@ export async function logChatTranscript(providedSupabase, phoneNumber, sender, m
     console.error('[Sentinel Helper] Failed to log chat transcript:', err.message);
   }
 }
+
+
+// In-memory deduplication cache for Cloud Run alerts to avoid flooding Superadmin
+const recentlyAlertedLogHashes = new Map();
+const CLOUD_RUN_ALERT_TTL = 15 * 60 * 1000; // 15 minutes
+
+export async function scanCloudRunAnomalies(providedSupabase) {
+  const superadminPhone = process.env.SUPERADMIN_PHONE;
+  if (!superadminPhone) return;
+
+  const logs = await fetchCloudRunLogs(5);
+  if (!logs || logs.length === 0) return;
+
+  const supabase = getSupabase(providedSupabase);
+  await ensureSentinelTables(supabase);
+
+  // Clean up old deduplication entries
+  const now = Date.now();
+  for (const [hash, timestamp] of recentlyAlertedLogHashes.entries()) {
+    if (now - timestamp > CLOUD_RUN_ALERT_TTL) {
+      recentlyAlertedLogHashes.delete(hash);
+    }
+  }
+
+  for (const log of logs) {
+    // Generate a simple hash of the log text and status to deduplicate
+    const hashStr = `${log.severity}-${log.httpRequest?.status || 'no-status'}-${(log.text || '').substring(0, 50)}`;
+    
+    if (recentlyAlertedLogHashes.has(hashStr)) continue;
+
+    const isError = log.severity === 'ERROR' || log.severity === 'CRITICAL';
+    const isTimeoutRisk = (log.httpRequest?.latency >= 5) || (log.httpRequest?.status >= 500);
+
+    if (isError || isTimeoutRisk) {
+      recentlyAlertedLogHashes.set(hashStr, now);
+
+      const snippet = `[Cloud Run Alert] Severity: ${log.severity} | Status: ${log.httpRequest?.status || 'N/A'} | Latency: ${log.httpRequest?.latency || 0}s\nMessage: ${log.text || 'No message'}`;
+      
+      // Log to chat_friction_logs
+      try {
+        await supabase.from('chat_friction_logs').insert([{
+          user_phone: superadminPhone,
+          session_id: 'cloud_run_saka_fleet',
+          friction_type: 'SYSTEM_ERROR',
+          transcript_snippet: snippet,
+          detected_at: new Date().toISOString()
+        }]);
+      } catch (e) {
+        console.warn('[scanCloudRunAnomalies] Could not insert to chat_friction_logs:', e.message);
+      }
+
+      // Log to error_logs
+      try {
+        await supabase.from('error_logs').insert([{
+          error_message: log.text || 'Cloud Run Log Alert',
+          stack_trace: JSON.stringify(log),
+          route: log.httpRequest?.requestUrl || 'system',
+          status: 'unresolved',
+          created_at: new Date().toISOString()
+        }]);
+      } catch (e) {
+        console.warn('[scanCloudRunAnomalies] Could not insert to error_logs:', e.message);
+      }
+
+      // Send WhatsApp Alert
+      const metaPhoneId = process.env.META_PHONE_NUMBER_ID;
+      const metaToken = process.env.META_WHATSAPP_TOKEN;
+      if (metaPhoneId && metaToken) {
+        const cleanPhone = superadminPhone.replace(/[^\d]/g, '');
+        const waMessage = `🚨 *Sentinel Cloud Run Error Alert* ⚠️\n\n• *Service:* saka-fleet\n• *Severity:* ${log.severity}\n• *Latency / Status:* ${log.httpRequest?.status || 'N/A'} (${log.httpRequest?.latency || 0}s)\n• *Timestamp:* ${new Date(log.timestamp).toLocaleString()}\n• *Snippet:* "${(log.text || '').substring(0, 200)}"\n\n_Logged to chat_friction_logs. Text 'admin alerts' for full diagnostic._`;
+        
+        try {
+          await fetch(`https://graph.facebook.com/v17.0/${metaPhoneId}/messages`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${metaToken}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              messaging_product: 'whatsapp',
+              to: cleanPhone,
+              type: 'text',
+              text: { body: waMessage }
+            })
+          });
+        } catch (waErr) {
+          console.error('[scanCloudRunAnomalies] WhatsApp alert failed:', waErr.message);
+        }
+      }
+    }
+  }
+}
+
 
 /**
  * Sentinel Autonomous Conversational Optimization Loop:

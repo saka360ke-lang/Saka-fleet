@@ -7,7 +7,7 @@ import crypto from 'crypto';
 import { generateFleetReport, uploadReportToSupabase } from './reports.js';
 import { sendReportByEmail, sendMfaEmail } from './src/services/mailer.js';
 import { processSakaMessage } from './sakaAi.js';
-import { runHealthCheck, runConversationRefinement, evaluateConversationalFriction, logSystemError, logChatTranscript, ensureSentinelTables } from './src/workers/sentinel.js';
+import { runHealthCheck, runConversationRefinement, evaluateConversationalFriction, logSystemError, logChatTranscript, ensureSentinelTables, scanCloudRunAnomalies } from './src/workers/sentinel.js';
 import { ensureSuperadminTables, isSuperadminPhone, sendMorningExecutiveBriefing } from './src/services/superadmin.js';
 import { ensureVehicleTableColumns } from './src/services/vehicles.js';
 import whatsappRoutes, { handleWhatsAppWebhook as handleWhatsAppWebhookRoute } from './src/routes/whatsapp.js';
@@ -738,6 +738,15 @@ setInterval(async () => {
   }
 }, 10 * 60 * 1000); // Run friction evaluation every 10 minutes
 
+// Sentinel Cloud Run Log Polling (Anomalies & Timeouts)
+setInterval(async () => {
+  try {
+    await scanCloudRunAnomalies(supabase);
+  } catch (err) {
+    console.warn('[Sentinel Cloud Run Anomaly Loop Warning]:', err.message);
+  }
+}, 2 * 60 * 1000); // Run anomaly evaluation every 2 minutes
+
 
 // ==========================================
 // PAYSTACK WEBHOOK HANDLERS
@@ -904,6 +913,7 @@ fastify.post('/api/sentinel/run', async (request, reply) => {
     const healthCheckResult = await runHealthCheck(supabase);
     const frictionResult = await evaluateConversationalFriction(supabase);
     const refinementResult = await runConversationRefinement(supabase);
+    await scanCloudRunAnomalies(supabase);
 
     return reply.status(200).send({
       status: 'success',
@@ -947,6 +957,18 @@ const start = async () => {
     await fastify.listen({ port: Number(port), host: '0.0.0.0' });
     serverStarted = true;
     console.log(`🚀 Saka Fleet Meta-Native Backend is live and listening on port ${port}`);
+    // Cloud Run Startup Self-Announcement
+    const isProduction = process.env.NODE_ENV === 'production' || process.env.K_SERVICE;
+    const currentRevision = process.env.K_REVISION;
+    if (isProduction && currentRevision && process.env.SUPERADMIN_PHONE) {
+      const { data: config } = await supabase.from('system_config').select('value').eq('key', 'last_deployed_revision').maybeSingle();
+      if (!config || config.value !== currentRevision) {
+        await supabase.from('system_config').upsert([{ key: 'last_deployed_revision', value: currentRevision }]);
+        const waMsg = `🚀 *Saka Fleet Live on Cloud Run!* 🛠️\n\n• *Revision:* \`${currentRevision}\`\n• *Status:* Healthy & Listening\n• *Timestamp:* ${new Date().toLocaleString()}\n\n_Automated startup hook dispatched to Superadmin._`;
+        await sendMetaWhatsAppMessage(process.env.SUPERADMIN_PHONE, waMsg).catch(() => {});
+        console.log(`[Deployment Alert] Startup announcement sent to Superadmin for revision: ${currentRevision}`);
+      }
+    }
   } catch (err) {
     fastify.log.error(err);
     process.exit(1);

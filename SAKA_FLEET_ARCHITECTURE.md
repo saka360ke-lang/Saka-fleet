@@ -202,6 +202,20 @@ Cluster-wide message deduplication store tracking Meta message IDs (`wamid`) to 
 1. **Agent-in-the-Middle Architecture:**
    - Saka (powered by Gemini `gemini-3.8-flash`) sits directly between the WhatsApp user and the Supabase database.
    - Saka parses user requests, writes data (expenses, fuel, mileage, earnings, reminders) with explicit vehicle attribution, and queries analytics (e.g. km/L fuel consumption, fleet summaries) on demand.
+### 5.4 Google Cloud Logging Integration & Telemetry Polling
+- **Log Ingestion:** `saka-fleet` on Google Cloud Run auto-ingests access logs, stdout/stderr, and HTTP status codes (500, 504) to Google Cloud Logging.
+- **Sentinel Background Worker (`scanCloudRunAnomalies`):**
+  - Uses `@google-cloud/logging` to poll recent logs for `resource.type="cloud_run_revision"` every 2 minutes.
+  - Filters for `severity >= ERROR` or high latency (`latency >= "5.000s"`).
+  - Deduplicates events using a strict 15-minute sliding window cache (`recentlyAlertedLogHashes`) to prevent alert flooding.
+  - Logs critical anomalies into `public.chat_friction_logs` (with `friction_type: 'SYSTEM_ERROR'`) and `public.error_logs`.
+  - Immediately pushes real-time diagnostic alerts to `SUPERADMIN_PHONE` via WhatsApp with timestamp, severity, HTTP status, and log snippet.
+
+### 5.5 Automated Cloud Run Deployment Self-Announcement
+- On Fastify server boot, the process checks if it is running in production (`process.env.K_REVISION` is present).
+- It compares the current revision ID with `last_deployed_revision` cached in `system_config`.
+- If a new revision is detected, it broadcasts a deployment notification via WhatsApp to the Superadmin: *"🚀 Saka Fleet Live on Cloud Run! Revision: [K_REVISION]..."*
+
    - When required data points are missing (e.g., need second fill-up with odometer reading to compute exact km/L), Saka conversational prompts the user to supply them.
 
 2. **Active Vehicle Context & Vehicle Switching:**
