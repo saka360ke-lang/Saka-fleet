@@ -87,7 +87,9 @@ export async function renderQuizQuestion({
   countryInfo = null,
   profile = null,
   isFirst = false,
-  isLast = false
+  isLast = false,
+  lastAcceptedAnswer = null,
+  turnNote = null
 }) {
   const facts = {
     flow: flowLabel,
@@ -95,8 +97,16 @@ export async function renderQuizQuestion({
     questionHint: hint,
     alreadyCollected: collectedLabels,
     answers,
+    lastAcceptedAnswer,
+    turnNote,
     progress: `${collectedLabels.length + 1}${isLast ? ' (final question)' : ''}`,
-    instruction: 'Ask ONLY the current question. Briefly acknowledge the previous answer if one exists. Do not ask for anything else. Do not list future questions.'
+    instruction: [
+      'Ask ONLY the current question.',
+      lastAcceptedAnswer
+        ? `You may briefly acknowledge this accepted answer: ${lastAcceptedAnswer}.`
+        : 'Do NOT acknowledge or praise any answer — none was accepted this turn. Never invent an acknowledgment.',
+      'Do not ask for anything else. Do not list future questions.'
+    ].join(' ')
   };
 
   const fallback = `${fieldLabel}: ${hint}`;

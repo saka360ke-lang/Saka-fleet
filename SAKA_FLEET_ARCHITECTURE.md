@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.7.0  
+**Version:** 1.7.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -617,7 +617,7 @@ Every stateful test or check MUST clear the data it created from the database af
   - `runWithCleanup({ testFn, phones, vins })` wraps a suite in `try/finally` so cleanup always runs.
   - `KNOWN_TEST_PHONES` / `KNOWN_TEST_VINS` cover the identifiers used by the repository's suites.
 - `scripts/run_tests.js` (exposed as `npm test`) runs the targeted suite(s) and always performs a final cleanup sweep. `npm run test:cleanup` clears test data without running tests.
-- `test_quiz_flow.js` — stateless suite for the one-piece-at-a-time quiz engine, multi-field fast-forward, confirmation gate, corrections, Cancel/Restart (23 assertions).
+- `test_quiz_flow.js` — stateless suite for the one-piece-at-a-time quiz engine, multi-field fast-forward, confirmation gate, corrections, Cancel/Restart, and quiz↔conversation arbitration (35 assertions).
 - `test_concurrency.js` — stateless suite for per-phone serialization, global concurrency cap, retry/backoff, dead-letter rejection and graceful drain (8 assertions).
 
 ### 19.3 Conventions
@@ -651,6 +651,16 @@ All multi-field flows run through `src/services/quizEngine.js`. Each asks exactl
 | `reactivate_account` | confirm | — | `profiles.is_active = true` |
 
 Navigation: `Cancel` aborts, `Restart` resets the flow, `Skip` is accepted only on optional fields (skips the whole optional group).
+
+### 20.1 Quiz ↔ Conversation Arbitration (v1.7.1)
+
+While a quiz is active, Saka must still hold a normal conversation. `shouldPauseQuizForChat()` in `quizEngine.js` decides every turn:
+
+- **Engine-owned (never paused):** `Cancel`, `Restart`, `Skip`, `CONFIRM/YES/NO`, 6-digit OTP / release-PIN entry, `resend`.
+- **Paused for conversation:** greetings, questions (`?` or openers like "what/how/tell me/brief me/I want to know"), `Help`, and clearly non-quiz intents (action discovery, support, analytics queries).
+- On a paused turn the quiz state is **untouched**; the route answers via Saka AI (or role-aware action discovery) and appends ONE AI-rendered resume nudge pointing at the pending question (`getCurrentQuizField`).
+- If a field fails validation but the text reads like conversation, the engine returns `pausedForChat: true` instead of nagging.
+- `Restart` never re-ingests the control word as data, and question rendering acknowledges ONLY the immediately accepted answer — eliminating fabricated acknowledgments ("Reset noted for make and model").
 
 ---
 

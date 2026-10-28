@@ -2,7 +2,9 @@ import 'dotenv/config';
 import {
   detectQuizStart,
   handleQuizTurn,
-  getFlowDefinition
+  getFlowDefinition,
+  getCurrentQuizField,
+  shouldPauseQuizForChat
 } from './src/services/quizEngine.js';
 
 /**
@@ -31,6 +33,7 @@ function baseCtx(overrides = {}) {
     senderPhone: '+254700000001',
     formattedPhone: '+254700000001',
     language: 'English',
+    intent: 'GENERAL_CHAT',
     aiExtracted: {},
     sendWhatsApp: async () => {},
     ...overrides
@@ -95,6 +98,41 @@ async function run() {
   assert(session.quiz.answers.fuel_type === 'Diesel', 'Fuel captured from a multi-field answer');
   assert(session.quiz.answers.current_mileage === 366700, 'Odometer captured from a multi-field answer');
   assert(session.quiz.answers.vin === undefined, 'Fast-forward still asks only the next missing item');
+
+  console.log('\n--- Test 6: quiz ↔ conversation arbitration ---');
+  const currentField = getCurrentQuizField(session.quiz, ctx);
+  assert(currentField && /vin/i.test(currentField.label), 'Current pending field is VIN');
+
+  assert(shouldPauseQuizForChat({ messageText: 'Hello', intent: 'GREETING', quiz: session.quiz }), 'Greeting pauses the quiz');
+  assert(shouldPauseQuizForChat({ messageText: 'What is Saka Fleet?', intent: 'GENERAL_CHAT', quiz: session.quiz }), 'Question pauses the quiz');
+  assert(shouldPauseQuizForChat({
+    messageText: 'I want to know more about saka fleet before I give you my details',
+    intent: 'GENERAL_CHAT',
+    quiz: session.quiz
+  }), 'Informational request pauses the quiz');
+  assert(!shouldPauseQuizForChat({ messageText: '1HGCR2F83HA123456', intent: 'GENERAL_CHAT', quiz: session.quiz }), 'A real answer does NOT pause the quiz');
+  assert(shouldPauseQuizForChat({ messageText: 'GENERAL_CHAT', intent: 'GENERAL_CHAT', quiz: session.quiz }) === false, 'Short answers are not mistaken for conversation');
+  assert(!shouldPauseQuizForChat({ messageText: 'Reset', intent: 'GENERAL_CHAT', quiz: session.quiz }), 'Reset remains engine-owned');
+  assert(!shouldPauseQuizForChat({ messageText: '123456', intent: 'GENERAL_CHAT', quiz: { ...session.quiz, phase: 'pin' } }), 'Release PIN phase never pauses');
+
+  const answersBeforePause = JSON.stringify(session.quiz.answers);
+  const pausedTurn = await handleQuizTurn({
+    session,
+    messageText: 'What is Saka Fleet?',
+    aiExtracted: {},
+    ctx
+  });
+  assert(pausedTurn.handled === false && pausedTurn.pausedForChat === true, 'Engine hands conversational turns back to the route');
+  assert(JSON.stringify(session.quiz.answers) === answersBeforePause && session.quiz.phase === 'question', 'Quiz state is untouched while paused');
+
+  const resumedTurn = await handleQuizTurn({
+    session,
+    messageText: '1HGCR2F83HA123456',
+    aiExtracted: { vin: '1HGCR2F83HA123456' },
+    ctx
+  });
+  assert(resumedTurn.handled && session.quiz.answers.vin === '1HGCR2F83HA123456', 'Quiz resumes and accepts the next answer');
+  assert(session.quiz.answers.owner_email === undefined, 'Resume advances exactly one question');
 
   console.log('\n--- Test 4: expense quiz + confirmation before write ---');
   const expenseSession = {};

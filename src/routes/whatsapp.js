@@ -30,7 +30,7 @@ import {
 } from '../services/transfers.js';
 import { applyTrialExtensionCoupon } from '../services/coupons.js';
 import { detectCountryFromPhone as detectCountryGlobal } from '../services/globalization.js';
-import { handleQuizTurn, detectQuizStart } from '../services/quizEngine.js';
+import { handleQuizTurn, detectQuizStart, shouldPauseQuizForChat, getCurrentQuizField } from '../services/quizEngine.js';
 import { renderActionDiscovery, composeMessage } from '../services/conversationEngine.js';
 import { enqueueUserMessage } from '../services/messageQueue.js';
 import { loadSessionSnapshot, persistSessionSnapshot } from '../services/sessionStore.js';
@@ -790,25 +790,94 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           hasVehicleAttributes
         });
 
-        const quizTurn = await handleQuizTurn({
-          session,
-          messageText,
+        const quizCtx = {
+          supabase: supabaseClient,
+          profile: profileData,
+          vehicles: existingVehicles,
+          countryInfo,
+          senderPhone,
+          formattedPhone,
+          language: targetLang,
+          intent,
           aiExtracted: mergedExt,
-          startFlow: quizStartFlow,
-          ctx: {
-            supabase: supabaseClient,
-            profile: profileData,
-            vehicles: existingVehicles,
-            countryInfo,
-            senderPhone,
-            formattedPhone,
-            language: targetLang,
-            aiExtracted: mergedExt,
-            sendWhatsApp: sendWhatsAppReply
-          }
-        });
+          sendWhatsApp: sendWhatsAppReply
+        };
 
-        if (quizTurn.handled) {
+        // Quiz ↔ Conversation arbitration — a greeting/question mid-quiz is
+        // answered conversationally and the quiz resumes where it paused.
+        const activeQuiz = session.quiz || null;
+        const pauseQuizForChat = activeQuiz && shouldPauseQuizForChat({ messageText, intent, quiz: activeQuiz });
+
+        const buildPausedQuizReply = async (quizState) => {
+          const isHelp = intent === 'ACTION_DISCOVERY' || intent === 'APP_HELP' ||
+            /^(help|hint|what can i do|what do i do next|guide me)$/i.test(messageText.trim());
+
+          const field = getCurrentQuizField(quizState, quizCtx);
+
+          if (isHelp) {
+            const discovery = await renderRoleActions({
+              profileData,
+              vehicles: existingVehicles,
+              senderPhone,
+              language: targetLang,
+              countryInfo
+            });
+            if (!field) return discovery;
+            const nudge = await composeMessage({
+              purpose: 'quiz_resume_nudge',
+              facts: {
+                currentQuestion: field.label,
+                questionHint: field.hint,
+                instruction: 'In ONE short sentence, invite the user back to the pending question.'
+              },
+              language: targetLang,
+              countryInfo,
+              profile: profileData,
+              fallbackText: `When you're ready: ${field.label} — ${field.hint}`
+            });
+            return `${discovery}\n\n${nudge}`;
+          }
+
+          // Single AI call: answer the interruption, then end with the pending
+          // question exactly once (no duplicate questions).
+          return composeMessage({
+            purpose: 'quiz_pause_conversation',
+            facts: {
+              userMessage: messageText,
+              quizFlow: quizState?.flow,
+              collectedSoFar: quizState?.answers || {},
+              pendingQuestion: field ? { label: field.label, hint: field.hint } : null,
+              instruction: field
+                ? 'Answer the user conversationally and helpfully, then end with EXACTLY ONE short sentence asking the pending question. Ask nothing else. Do not claim anything was saved.'
+                : 'Answer the user conversationally and helpfully. Do not claim anything was saved.'
+            },
+            language: targetLang,
+            countryInfo,
+            profile: profileData,
+            fallbackText: field
+              ? `Happy to help.\n\nWhen you're ready: ${field.label} — ${field.hint}`
+              : 'Happy to help — ask me anything about Saka Fleet.'
+          });
+        };
+
+        let quizTurn = { handled: false };
+        if (pauseQuizForChat) {
+          isSpecialFlowHandled = true;
+          customReply = await buildPausedQuizReply(activeQuiz);
+        } else {
+          quizTurn = await handleQuizTurn({
+            session,
+            messageText,
+            aiExtracted: mergedExt,
+            startFlow: quizStartFlow,
+            ctx: quizCtx
+          });
+        }
+
+        if (quizTurn.pausedForChat) {
+          isSpecialFlowHandled = true;
+          customReply = await buildPausedQuizReply(session.quiz);
+        } else if (quizTurn.handled) {
           isSpecialFlowHandled = true;
           customReply = quizTurn.reply;
 

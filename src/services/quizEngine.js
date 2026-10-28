@@ -730,7 +730,9 @@ export function startQuiz({ session, flowKey, ctx, prefill = {} }) {
     startedAt: Date.now(),
     otp: null,
     transfer: null,
-    lastNote: null
+    lastNote: null,
+    lastAcceptedAnswer: null,
+    turnNote: 'This is the first question of the flow. Do not acknowledge any prior answer.'
   };
 
   applyExtraction(session.quiz, def, ctx.aiExtracted || {}, ctx);
@@ -772,7 +774,7 @@ async function askCurrent(state, ctx, note = null) {
   state.lastNote = note;
   const rows = buildSummaryRows(def, state.answers, ctx);
   const upcoming = activeFields(def, state.answers).filter((f) => !(f.key in state.answers) || answersValueMissing(state.answers, f));
-  return renderQuizQuestion({
+  const reply = await renderQuizQuestion({
     flowLabel: def.label,
     fieldLabel: field.label,
     hint: note ? `${field.hint} (${note})` : field.hint,
@@ -782,8 +784,12 @@ async function askCurrent(state, ctx, note = null) {
     countryInfo: ctx.countryInfo,
     profile: ctx.profile,
     isFirst: rows.length === 0,
-    isLast: upcoming.length === 1 && upcoming[0].key === field.key
+    isLast: upcoming.length === 1 && upcoming[0].key === field.key,
+    lastAcceptedAnswer: state.lastAcceptedAnswer || null,
+    turnNote: state.turnNote || null
   });
+  state.turnNote = null;
+  return reply;
 }
 
 function answersValueMissing(answers, f) {
@@ -885,6 +891,59 @@ function applyCorrections(state, def, ext, ctx) {
   return [...new Set(changed)];
 }
 
+const NON_QUIZ_INTENTS = new Set([
+  'GREETING', 'APP_HELP', 'ACTION_DISCOVERY', 'CONTACT_SUPPORT',
+  'QUERY_FUEL_EFFICIENCY', 'QUERY_FLEET_SUMMARY', 'LIST_VEHICLES', 'SWITCH_VEHICLE', 'REQUEST_REPORT'
+]);
+
+/**
+ * Quiz ↔ Conversation arbitration.
+ * A greeting, a question or an unrelated conversation must NEVER be consumed as
+ * a quiz answer. Returns true when the turn should be answered conversationally
+ * while the quiz stays paused exactly where it is.
+ */
+export function shouldPauseQuizForChat({ messageText = '', intent = '', quiz = null } = {}) {
+  if (!quiz) return false;
+  const clean = String(messageText || '').trim();
+  if (!clean) return false;
+
+  // Security steps always consume the raw input
+  if (quiz.phase === 'pin' || quiz.phase === 'account_otp') return false;
+
+  // Control words are owned by the engine
+  if (/^(cancel|exit|stop|quit|abort|restart|start over|reset|yes|no|confirm|save|correct|skip|later|done|resend|resend code|new code|send again)$/i.test(clean)) {
+    return false;
+  }
+
+  // Help is a conversational request
+  if (/^(help|hint|what can i do|what do i do next|guide me)$/i.test(clean)) return true;
+
+  // Greetings
+  if (/^(hi|hello|hey|hiya|habari|mambo|jambo|hujambo|salama|good (morning|afternoon|evening))\b/i.test(clean)) {
+    return true;
+  }
+
+  // Questions / requests for information
+  const isQuestion = /\?/.test(clean) ||
+    /^\s*(what|how|why|who|whom|whose|where|when|which|can you|could you|would you|will you|do you|did you|does saka|is saka|are you|tell me|explain|brief me|describe|show me|i want to know|i'd like to know|i need to know)\b/i.test(clean) ||
+    /\b(tell me|explain|brief me|describe|what is|what's|how does|how do)\b/i.test(clean);
+  if (isQuestion) return true;
+
+  // An intent that is clearly not about answering the current quiz field
+  if (NON_QUIZ_INTENTS.has(intent)) return true;
+
+  return false;
+}
+
+/** Current question of an active quiz (for pause/resume nudges). */
+export function getCurrentQuizField(quiz, ctx = {}) {
+  if (!quiz) return null;
+  const def = getFlowDefinition(quiz.flow, ctx);
+  if (!def) return null;
+  const f = nextField(def, quiz.answers);
+  return f ? { key: f.key, label: f.label, hint: f.hint, optional: !!f.optional } : null;
+}
+
 /**
  * Main entry point used by the WhatsApp route for every inbound message.
  * Returns { handled, reply } â€” handled=false means the message is not a quiz turn.
@@ -925,10 +984,19 @@ export async function handleQuizTurn({
   if (/^(restart|start over|reset)$/i.test(clean)) {
     const flowKey = state.flow;
     session.quiz = null;
-    startQuiz({ session, flowKey, ctx });
+    // Do NOT re-ingest the control word ("Reset") as quiz data.
+    startQuiz({ session, flowKey, ctx: { ...ctx, aiExtracted: {} } });
     state = session.quiz;
     const reply = await askCurrent(state, ctx);
     return { handled: true, reply, flow: flowKey, active: true };
+  }
+
+  // Quiz ↔ Conversation arbitration: greetings, questions and help are NOT
+  // quiz answers. Pause here; the route answers conversationally and nudges
+  // the user back to the pending question.
+  if ((state.phase === 'question' || state.phase === 'confirm') &&
+      shouldPauseQuizForChat({ messageText: clean, intent: ctx.intent, quiz: state })) {
+    return { handled: false, pausedForChat: true, flow: state.flow };
   }
 
   const def = getFlowDefinition(state.flow, ctx);
@@ -963,12 +1031,6 @@ export async function handleQuizTurn({
     return { handled: true, reply, flow: state.flow, active: true };
   }
 
-  // Help/hint mid-quiz: re-ask only the current question
-  if (/^(help|hint|what can i do|what do i do next|guide me)$/i.test(clean)) {
-    const reply = await askCurrent(state, vctx, 'Here is the current question again.');
-    return { handled: true, reply, flow: state.flow, active: true };
-  }
-
   // OTP resend request
   if (current.kind === 'otp' && /^(resend|resend code|new code|send again)$/i.test(clean)) {
     await sendQuizOtp(state, def, vctx);
@@ -985,6 +1047,7 @@ export async function handleQuizTurn({
     } else {
       state.answers[current.key] = null;
     }
+    state.lastAcceptedAnswer = `${current.label}: skipped`;
     const reply = await askCurrent(state, vctx);
     return { handled: true, reply, flow: state.flow, active: true };
   }
@@ -1003,6 +1066,13 @@ export async function handleQuizTurn({
   if (parsed === null || parsed === undefined) parsed = current.parse(clean, vctx, state.answers);
 
   if (parsed === null || parsed === undefined) {
+    // If the message reads like conversation rather than an answer, hand the
+    // turn back to the conversational engine instead of nagging.
+    if (shouldPauseQuizForChat({ messageText: clean, intent: ctx.intent, quiz: state })) {
+      return { handled: false, pausedForChat: true, flow: state.flow };
+    }
+    state.lastAcceptedAnswer = null;
+    state.turnNote = 'The last message was not a valid answer for this question. Do not pretend it was answered; ask again clearly.';
     const reply = await askCurrent(state, vctx, current.optional
       ? 'That answer was not understood — try again or reply Skip.'
       : 'That answer was not understood — please try again.');
@@ -1011,6 +1081,11 @@ export async function handleQuizTurn({
 
   const check = current.validate(parsed, vctx, state.answers);
   if (!check.ok) {
+    if (shouldPauseQuizForChat({ messageText: clean, intent: ctx.intent, quiz: state })) {
+      return { handled: false, pausedForChat: true, flow: state.flow };
+    }
+    state.lastAcceptedAnswer = null;
+    state.turnNote = 'The last message was not a valid answer for this question. Do not pretend it was answered; ask again clearly.';
     const reply = await askCurrent(state, vctx, check.message);
     return { handled: true, reply, flow: state.flow, active: true };
   }
@@ -1019,17 +1094,23 @@ export async function handleQuizTurn({
   if (current.kind === 'otp') {
     if (!state.otp || state.otp.expiresAt < Date.now()) {
       await sendQuizOtp(state, def, vctx);
+      state.lastAcceptedAnswer = null;
+      state.turnNote = 'The previous code expired. Do not acknowledge it; ask for the new code.';
       const reply = await askOtp(state, vctx, 'That code expired — a new one has been sent.');
       return { handled: true, reply, flow: state.flow, active: true };
     }
     if (String(parsed) !== String(state.otp.code)) {
+      state.lastAcceptedAnswer = null;
+      state.turnNote = 'The code did not match. Do not acknowledge it as accepted; ask the user to retry or resend.';
       const reply = await askOtp(state, vctx, 'That code did not match. Please re-check your inbox or reply "resend".');
       return { handled: true, reply, flow: state.flow, active: true };
     }
     state.answers[current.key] = true;
     state.otpVerified = true;
+    state.lastAcceptedAnswer = 'Email verification code confirmed';
   } else {
     state.answers[current.key] = parsed;
+    state.lastAcceptedAnswer = `${current.label}: ${current.summary(parsed, vctx, state.answers)}`;
   }
 
   // Fast-forward any other values carried in the same message
@@ -1808,6 +1889,8 @@ export default {
   getActiveQuiz,
   clearQuiz,
   getFlowDefinition,
+  getCurrentQuizField,
+  shouldPauseQuizForChat,
   QUIZ_FLOW_KEYS
 };
 
