@@ -6,8 +6,11 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
+    "test": "node scripts/run_tests.js",
+    "test:cleanup": "node scripts/run_tests.js --cleanup-only",
     "reset:db": "node scripts/reset-db.js",
     "reset:slate": "node scripts/reset_db_slate.js",
+    "migrate:vin": "node scripts/run_vin_immutability_migration.js",
     "notify:deploy": "node scripts/notify_git_push.js",
     "postinstall": "node scripts/notify_git_push.js || true"
   },

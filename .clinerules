@@ -7,3 +7,9 @@
 4. **Tool Call Batching:** Always combine independent searches, reads, commands, or edits into parallel tool calls in a single turn.
 5. **No Blind Full Scans:** Rely on the architecture file for schema definitions, routing rules, and design patterns instead of searching through `node_modules` or executing unfocused filesystem walks.
 6. **Non-Interactive Windows CLI:** Commands execute in Windows PowerShell. Always use `--no-pager` for git or other paginated commands to prevent terminal hangs.
+
+## EDIT/DELETE, VIN & DATA-INTEGRITY RULES
+7. **VIN Immutability (Absolute):** The vehicle VIN (`vehicles.vin`) and `qr_passbook_token` are permanent asset identifiers. They must never be editable or deletable by any handler, service, migration, or direct SQL. Enforced by `sanitizeVehicleUpdates`, `updateVehicleDetails`, and the Postgres trigger `trg_prevent_vin_mutation` (`npm run migrate:vin`).
+8. **Owner-Authorized Vehicle Deletion:** Only `vehicles.owner_id` may delete a vehicle. Deletion is a soft-delete (`deleted_at`, `status='DELETED'`) that unassigns the driver, cancels pending passbook transfers, retires active reminders, and PRESERVES historical logs + the `vin_registry` trial ledger.
+9. **Automatic Test Data Cleanup (Permanent Rule):** Every test or stateful check MUST clear the data it created from the database after it runs — pass or fail. Use `runWithCleanup` (`scripts/testCleanup.js`) inside `test_*.js` and run suites via `npm test` (`scripts/run_tests.js`), which always performs a final cleanup sweep. `npm run test:cleanup` clears test data without running tests. Never leave garbage rows behind.
+10. **Targeted Testing Only:** Run only the tests directly related to the change (e.g. `test_edit_delete.js` for edit/delete/VIN work). Do not run or add redundant full-suite bloat.

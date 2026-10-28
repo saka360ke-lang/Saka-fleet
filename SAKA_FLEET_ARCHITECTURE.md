@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.5.0  
+**Version:** 1.6.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -82,7 +82,7 @@ Vehicle asset records tied to owners or assigned drivers.
 - `current_mileage` / `odometer_reading`: `integer`
 - `owner_email`: `text` (Verified owner email)
 - `owner_phone`: `text`
-- `vin`: `text` (**Immutable Core Identifier**, permanently tied to passbook)
+- `vin`: `text` (**Immutable Core Identifier**, permanently tied to passbook — protected by `trg_prevent_vin_mutation`; see §18.2)
 - `qr_passbook_token`: `varchar` (e.g. `SK-PASSBOOK-9B3E2F1A`, tied to VIN)
 - `trial_start_at`: `timestamptz` (One-time 30-day trial start)
 - `trial_end_at`: `timestamptz` (One-time 30-day trial end, extensible via coupons)
@@ -259,7 +259,7 @@ Driver-centric feature blueprints synthesized weekly by Sentinel from live conve
    - The last 10 messages from `chat_history` are fetched and injected as turns (`{ role: 'user' | 'model', parts: [{ text }] }`).
 
 4. **Intent Classification & Autonomous Actions:**
-   - Supported intents (single source of truth: `sakaAi.js` `DEFAULT_SAKA_CORE_PROMPT`): `GREETING`, `ACTION_DISCOVERY`, `TRANSFER_PASSBOOK`, `APPLY_COUPON`, `REGISTER_VEHICLE`, `ONBOARDING_INPUT`, `ONBOARDING_SKIP`, `VERIFY_OTP`, `RESEND_OTP`, `UPDATE_EMAIL`, `APP_HELP`, `MANAGE_VEHICLE`, `LIST_VEHICLES`, `SWITCH_VEHICLE`, `QUERY_FUEL_EFFICIENCY`, `QUERY_FLEET_SUMMARY`, `LOG_EXPENSE`, `UPDATE_MILEAGE`, `LOG_EARNINGS`, `SET_REMINDER`, `COMPLETE_REMINDER`, `REQUEST_REPORT`, `CONTACT_SUPPORT`, `REACTIVATE_ACCOUNT`, `GENERAL_CHAT`, `ASSIGN_DRIVER`, `UNASSIGN_DRIVER`.
+   - Supported intents (single source of truth: `sakaAi.js` `DEFAULT_SAKA_CORE_PROMPT`): `GREETING`, `ACTION_DISCOVERY`, `TRANSFER_PASSBOOK`, `APPLY_COUPON`, `REGISTER_VEHICLE`, `ONBOARDING_INPUT`, `ONBOARDING_SKIP`, `VERIFY_OTP`, `RESEND_OTP`, `UPDATE_EMAIL`, `APP_HELP`, `MANAGE_VEHICLE`, `LIST_VEHICLES`, `SWITCH_VEHICLE`, `QUERY_FUEL_EFFICIENCY`, `QUERY_FLEET_SUMMARY`, `LOG_EXPENSE`, `UPDATE_MILEAGE`, `LOG_EARNINGS`, `SET_REMINDER`, `COMPLETE_REMINDER`, `REQUEST_REPORT`, `CONTACT_SUPPORT`, `REACTIVATE_ACCOUNT`, `EDIT_VEHICLE`, `DELETE_VEHICLE`, `EDIT_PROFILE`, `DELETE_ACCOUNT`, `GENERAL_CHAT`, `ASSIGN_DRIVER`, `UNASSIGN_DRIVER`.
    - Hybrid extraction merges DeepSeek structured JSON with smart regex heuristics (including currency exclusion to prevent false plate matches, phone-vs-VIN disambiguation, and odometer-safe OTP parsing).
    - **Expense-vs-Odometer disambiguation:** messages containing fuel/expense wording (`fuel`, `liters`, `refuel`, `paid`, `cost`, `receipt`, `maintenance`) are classified as `LOG_EXPENSE` even when an odometer value is also present (e.g. *"Logged 30L fuel at 50350 km for KES 5500"*).
 
@@ -510,8 +510,10 @@ Owners exceeding tier limits are prompted to upgrade via Paystack checkout.
 
 ### 15.2 Production & Execution Safeguards
 - **Production Block:** If `NODE_ENV === 'production'` or `APP_ENV === 'production'`, the script aborts immediately unless `--force-production-wipe` is explicitly supplied.
-- **Confirmation Flag:** Requires `--confirm` flag (e.g. `node scripts/reset-db.js --all --confirm`). Without `--confirm`, execution is safely aborted with an informational warning.
-- **Targeted Reset:** Supports phone-specific data clearing: `node scripts/reset-db.js --phone +254712345678 --confirm`.
+- **Confirmation Flag:** Requires `--confirm` (e.g. `node scripts/reset-db.js --all --confirm`). Without `--confirm`, execution is safely aborted with an informational warning.
+- **Explicit Scope Required:** The script now also requires either `--all` (global slate wipe) or `--phone <number>` (targeted). A bare `--confirm` can no longer wipe the database.
+- **Targeted Reset:** Supports phone-specific clearing: `node scripts/reset-db.js --phone +254712345678 --confirm`. It resolves vehicles by `owner_phone` **and** `owner_id`, releases any driver assignment held by the phone, and clears dependent logs/transfers/notifications.
+- **Fallback Safety:** The Supabase-JS fallback uses per-table primary keys (`processed_webhooks.wamid`, `vin_registry.vin`, otherwise `id`).
 - **Post-Reset Verification:** Queries and outputs a clean verification summary table confirming zero residual records across all primary operational tables.
 
 ---
@@ -546,6 +548,59 @@ Owners exceeding tier limits are prompted to upgrade via Paystack checkout.
    - `src/services/vehicles.js` → `TIER_LIMITS.solo_pro = 3` (and this document specifies 3).
    - `whatsapp.js` gates pre-registration capacity via `SUBSCRIPTION_TIERS` (2), while `onboarding.js` gates final capacity via `checkOwnerVehicleTierLimit` (3). Recommend converging on a single source (3 per this document).
 2. **Intermittent DeepSeek empty completions:** Under high-frequency test runs, `deepseek-chat` occasionally returns an empty completion; `aiClient.chatCompletion` retries and callers deterministically fall back to `classifyIntentWithRegex`, so flows remain functional with no data loss observed.
-3. **Test isolation:** Root-level `test_*.js` suites depend on live Supabase + Resend + DeepSeek and clear data by hard-coded test phones. A transient Supabase `fetch failed` can leave stale rows and make an "unregistered" test user appear registered; run `node scripts/reset-db.js --phone <number> --confirm` before re-running.
-4. **Test runner:** All suites are standalone `node test_*.js` scripts (no Jest/Mocha/Vitest, no `npm test` script). `test_first_time_flow.js` is the offline suite covering the redesigned first-time flows.
+3. **Test isolation:** Root-level `test_*.js` suites depend on live Supabase + Resend + DeepSeek. Per the permanent rule (§19), every run must clear its own data via `runWithCleanup` / `npm test`. A transient Supabase `fetch failed` can still leave stale rows; run `node scripts/reset-db.js --phone <number> --confirm` for an ad-hoc targeted reset.
+4. **Test runner & cleanup:** All suites are standalone `node test_*.js` scripts (no Jest/Mocha/Vitest). Use `npm test` (`scripts/run_tests.js`) for targeted runs — it always performs a final auto-cleanup sweep. `npm run test:cleanup` clears test data without running tests. `test_first_time_flow.js` is the offline first-time-flow suite; `test_edit_delete.js` covers edit/delete handlers, VIN immutability, vehicle-deletion cascade, and cleanup.
+
+---
+
+## 18. Edit, Delete & VIN Immutability
+
+### 18.1 Supported Edits
+- **Vehicle edits (`EDIT_VEHICLE`)** — owners only. `src/services/vehicles.js` → `updateVehicleDetails()` whitelists: `plate_number`, `make_model`, `yom`/`year_of_manufacture`, `fuel_type`, `current_mileage`/`odometer_reading`, `color`, `transmission`, `engine_number`, `tire_size`, `insurance_policy`, `insurance_expiry`, `inspection_expiry`, `purchase_cost`, `custom_attributes`, `owner_email`, `owner_phone`, `status`, `metadata`, `other_details`, `is_business`, `opt_in_earnings`, `audit_report_frequency`.
+- **Profile / contact / settings edits (`EDIT_PROFILE`)** — `full_name`, `preferred_language`, `unit_system`; email changes continue through the OTP-gated `UPDATE_EMAIL` flow.
+- **Drivers** may edit their own profile/settings; vehicle-level edits and deletions are owner-only.
+
+### 18.2 VIN Immutability (three-layer defence)
+1. `sanitizeVehicleUpdates()` rejects `vin` and `qr_passbook_token`, returning them in `rejected[]`.
+2. `updateVehicleDetails()` refuses to apply a VIN change and surfaces the locked-field message.
+3. PostgreSQL `BEFORE UPDATE` trigger `trg_prevent_vin_mutation` (`WHEN OLD.vin IS NOT NULL`) raises `VIN is immutable and cannot be changed once registered` for any VIN mutation — even via direct SQL.
+- Apply/refresh the trigger with `npm run migrate:vin` (`scripts/run_vin_immutability_migration.js`).
+
+### 18.3 Owner Vehicle Deletion (`DELETE_VEHICLE`)
+- **Confirmation gate:** `session.pendingDeleteVehicle` requires a `YES` reply; `Cancel` aborts.
+- **Authorization:** `vehicles.owner_id === requesterProfile.id`; drivers receive an explicit "Owner Authorization Required" reply.
+- **Cascading cleanup** (`deleteVehicle()`):
+  - Soft-deletes the row (`deleted_at = now()`, `status = 'DELETED'`).
+  - Unassigns `assigned_driver_id` (preserves the strict 1-to-1 driver invariant).
+  - Cancels in-flight `passbook_transfers` (`status = 'CANCELLED'`).
+  - Retires active `reminders` (`status = 'cancelled'`).
+  - **Preserves** historical `expense_logs`, `expenses`, `private_earnings`, and `chat_history` for audit.
+  - **Preserves** the `vin_registry` ledger entry (one 30-day trial per VIN forever).
+- **Account deletion (`DELETE_ACCOUNT`)**: OTP via `sendMfaEmail`, then soft-deletes all owned vehicles + the profile and clears `chat_history` / `chat_transcripts` / `processed_webhooks`.
+
+### 18.4 WhatsApp Command Examples
+- `edit vehicle KDA 123A color to White`
+- `change mileage for KDA 123A to 52000`
+- `delete vehicle KDA 123A` → reply `YES` to confirm
+- `edit profile` / `update my name to Jane Doe` / `change my language to Swahili`
+- `delete my account`
+
+---
+
+## 19. Automatic Test Data Cleanup (Permanent Rule)
+
+### 19.1 Rule
+Every stateful test or check MUST clear the data it created from the database after it runs — pass or fail. No exceptions.
+
+### 19.2 Implementation
+- `scripts/testCleanup.js`
+  - `cleanupTestData({ phones, vins, vehicleIds })` deletes dependent rows first (`expenses`, `expense_logs`, `private_earnings`, `reminders`, `passbook_transfers`, `pending_owner_notifications`, `coupons`), releases driver assignments, then removes `vehicles`, `vin_registry`, chat tables, `superadmin_sessions`, and `profiles`.
+  - `runWithCleanup({ testFn, phones, vins })` wraps a suite in `try/finally` so cleanup always runs.
+  - `KNOWN_TEST_PHONES` / `KNOWN_TEST_VINS` cover the identifiers used by the repository's suites.
+- `scripts/run_tests.js` (exposed as `npm test`) runs the targeted suite(s) and always performs a final cleanup sweep. `npm run test:cleanup` clears test data without running tests.
+
+### 19.3 Conventions
+- New tests must import `runWithCleanup` and declare every phone/VIN/vehicle they create.
+- Never rely on "clean at start" only; cleanup must also run at the end.
+- Use `node scripts/reset-db.js --phone <number> --confirm` for ad-hoc targeted resets.
 

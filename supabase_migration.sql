@@ -288,3 +288,24 @@ CREATE TABLE IF NOT EXISTS public.processed_webhooks (
 
 CREATE INDEX IF NOT EXISTS idx_processed_webhooks_processed_at ON public.processed_webhooks(processed_at);
 
+
+-- 19. VIN Immutability Guard
+-- The VIN / chassis number is the permanent asset identifier bound to the
+-- digital passbook. It must never change once registered, even via direct SQL.
+CREATE OR REPLACE FUNCTION public.prevent_vin_mutation()
+RETURNS trigger AS $$
+BEGIN
+  IF NEW.vin IS DISTINCT FROM OLD.vin THEN
+    RAISE EXCEPTION 'VIN is immutable and cannot be changed once registered (vehicle id: %)', OLD.id;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_prevent_vin_mutation ON public.vehicles;
+CREATE TRIGGER trg_prevent_vin_mutation
+BEFORE UPDATE ON public.vehicles
+FOR EACH ROW
+WHEN (OLD.vin IS NOT NULL)
+EXECUTE FUNCTION public.prevent_vin_mutation();
+

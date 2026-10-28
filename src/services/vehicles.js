@@ -396,3 +396,252 @@ export function findVehicleByCandidate(vehicles = [], candidate = '') {
   return null;
 }
 
+/**
+ * Columns that may be edited after registration.
+ * VIN and the passbook token are intentionally excluded — they are immutable.
+ */
+export const EDITABLE_VEHICLE_FIELDS = [
+  'plate_number',
+  'make_model',
+  'yom',
+  'year_of_manufacture',
+  'fuel_type',
+  'current_mileage',
+  'odometer_reading',
+  'status',
+  'owner_email',
+  'owner_phone',
+  'engine_number',
+  'color',
+  'transmission',
+  'tire_size',
+  'insurance_policy',
+  'insurance_expiry',
+  'inspection_expiry',
+  'purchase_cost',
+  'custom_attributes',
+  'metadata',
+  'other_details',
+  'is_business',
+  'opt_in_earnings',
+  'audit_report_frequency'
+];
+
+/** Permanently locked fields — VIN + passbook token never change. */
+export const IMMUTABLE_VEHICLE_FIELDS = ['vin', 'qr_passbook_token'];
+
+export const PENDING_TRANSFER_STATUSES = [
+  'PENDING_TARGET_DETAILS',
+  'PENDING_OWNER_RELEASE_OTP',
+  'PENDING_BUYER_ACCEPTANCE',
+  'PENDING_BUYER_OTP',
+  'PENDING'
+];
+
+/**
+ * Strip immutable/unknown keys from an update payload.
+ * Returns { updates, rejected } where rejected lists immutable keys the caller tried to change.
+ */
+export function sanitizeVehicleUpdates(updates = {}) {
+  const safe = {};
+  const rejected = [];
+
+  for (const [key, value] of Object.entries(updates || {})) {
+    if (IMMUTABLE_VEHICLE_FIELDS.includes(key)) {
+      rejected.push(key);
+      continue;
+    }
+    if (!EDITABLE_VEHICLE_FIELDS.includes(key)) continue;
+    safe[key] = value;
+  }
+
+  // Keep alias pairs in sync so downstream analytics stay consistent.
+  if (safe.yom !== undefined && safe.year_of_manufacture === undefined) safe.year_of_manufacture = safe.yom;
+  if (safe.year_of_manufacture !== undefined && safe.yom === undefined) safe.yom = safe.year_of_manufacture;
+  if (safe.current_mileage !== undefined && safe.odometer_reading === undefined) safe.odometer_reading = safe.current_mileage;
+  if (safe.odometer_reading !== undefined && safe.current_mileage === undefined) safe.current_mileage = safe.odometer_reading;
+
+  return { updates: safe, rejected };
+}
+
+/**
+ * Confirm that requesterId is the registered owner of an active vehicle.
+ */
+export async function isVehicleOwner({ vehicleId, requesterId, supabase }) {
+  if (!vehicleId || !requesterId || !supabase) return false;
+  const { data } = await supabase
+    .from('vehicles')
+    .select('id, owner_id')
+    .eq('id', vehicleId)
+    .is('deleted_at', null)
+    .maybeSingle();
+  return !!(data && data.owner_id === requesterId);
+}
+
+/**
+ * Update editable vehicle details.
+ * VIN is rejected at the service layer in addition to the database trigger,
+ * guaranteeing it remains immutable once registered.
+ */
+export async function updateVehicleDetails({ vehicleId, requesterId, updates = {}, supabase }) {
+  if (!supabase) return { success: false, error: 'Database client unavailable.' };
+  if (!vehicleId) return { success: false, error: 'Vehicle ID is required.' };
+  if (!requesterId) return { success: false, error: 'Requester identity is required.' };
+
+  const { data: vehicle, error: fetchErr } = await supabase
+    .from('vehicles')
+    .select('*')
+    .eq('id', vehicleId)
+    .is('deleted_at', null)
+    .maybeSingle();
+
+  if (fetchErr) return { success: false, error: fetchErr.message };
+  if (!vehicle) return { success: false, error: 'Vehicle not found or already deleted.' };
+  if (vehicle.owner_id !== requesterId) {
+    return { success: false, error: 'Only the registered vehicle owner can edit these details.', reason: 'NOT_OWNER' };
+  }
+
+  const { updates: safeUpdates, rejected } = sanitizeVehicleUpdates(updates);
+
+  // Block plate collisions with another active vehicle.
+  if (safeUpdates.plate_number) {
+    const nextPlate = String(safeUpdates.plate_number).toUpperCase().trim();
+    safeUpdates.plate_number = nextPlate;
+    const { data: clash } = await supabase
+      .from('vehicles')
+      .select('id, plate_number')
+      .eq('plate_number', nextPlate)
+      .neq('id', vehicleId)
+      .is('deleted_at', null)
+      .maybeSingle();
+    if (clash) {
+      return {
+        success: false,
+        error: `Plate ${nextPlate} is already registered to another active vehicle.`,
+        reason: 'PLATE_CONFLICT'
+      };
+    }
+  }
+
+  if (Object.keys(safeUpdates).length === 0) {
+    return {
+      success: false,
+      error: rejected.length
+        ? 'The VIN and passbook token are permanently immutable and cannot be edited.'
+        : 'No editable vehicle fields were supplied.',
+      reason: rejected.length ? 'IMMUTABLE_FIELD' : 'NO_EDITABLE_FIELDS',
+      rejected
+    };
+  }
+
+  safeUpdates.updated_at = new Date().toISOString();
+
+  const { data: updated, error } = await supabase
+    .from('vehicles')
+    .update(safeUpdates)
+    .eq('id', vehicleId)
+    .is('deleted_at', null)
+    .select()
+    .maybeSingle();
+
+  if (error) return { success: false, error: error.message, rejected };
+
+  // Keep the owner profile email in sync when the contact email changes.
+  if (safeUpdates.owner_email && vehicle.owner_id) {
+    try {
+      await supabase
+        .from('profiles')
+        .update({ email: safeUpdates.owner_email, updated_at: new Date().toISOString() })
+        .eq('id', vehicle.owner_id);
+    } catch {}
+  }
+
+  return { success: true, vehicle: updated, applied: safeUpdates, rejected };
+}
+
+/**
+ * Delete a vehicle for its owner.
+ * - Soft-deletes the vehicle row (deleted_at + status = 'DELETED')
+ * - Unassigns any linked driver (keeps the strict 1-to-1 invariant intact)
+ * - Cancels in-flight passbook transfers
+ * - Retires active reminders
+ * - Preserves historical logs and the permanent VIN trial ledger
+ */
+export async function deleteVehicle({ vehicleId, requesterId, supabase }) {
+  if (!supabase) return { success: false, error: 'Database client unavailable.' };
+  if (!vehicleId) return { success: false, error: 'Vehicle ID is required.' };
+  if (!requesterId) return { success: false, error: 'Requester identity is required.' };
+
+  const { data: vehicle, error: fetchErr } = await supabase
+    .from('vehicles')
+    .select('*')
+    .eq('id', vehicleId)
+    .is('deleted_at', null)
+    .maybeSingle();
+
+  if (fetchErr) return { success: false, error: fetchErr.message };
+  if (!vehicle) return { success: false, error: 'Vehicle not found or already deleted.' };
+  if (vehicle.owner_id !== requesterId) {
+    return { success: false, error: 'Only the registered vehicle owner can delete this vehicle.', reason: 'NOT_OWNER' };
+  }
+
+  const nowIso = new Date().toISOString();
+  const cleanup = { driverUnassigned: !!vehicle.assigned_driver_id, transfersCancelled: 0 };
+
+  // 1. Cancel in-flight passbook transfers for this vehicle.
+  try {
+    const { data: pending } = await supabase
+      .from('passbook_transfers')
+      .select('id')
+      .eq('vehicle_id', vehicleId)
+      .in('status', PENDING_TRANSFER_STATUSES);
+
+    if (pending && pending.length > 0) {
+      await supabase
+        .from('passbook_transfers')
+        .update({ status: 'CANCELLED' })
+        .eq('vehicle_id', vehicleId)
+        .in('status', PENDING_TRANSFER_STATUSES);
+      cleanup.transfersCancelled = pending.length;
+    }
+  } catch (err) {
+    console.warn('[deleteVehicle] Transfer cleanup skipped:', err.message);
+  }
+
+  // 2. Soft-delete the vehicle and release the driver in a single update.
+  const { data: deleted, error } = await supabase
+    .from('vehicles')
+    .update({
+      assigned_driver_id: null,
+      status: 'DELETED',
+      deleted_at: nowIso,
+      updated_at: nowIso
+    })
+    .eq('id', vehicleId)
+    .is('deleted_at', null)
+    .select()
+    .maybeSingle();
+
+  if (error) return { success: false, error: error.message };
+
+  // 3. Retire active reminders so they stop firing (history is retained).
+  try {
+    await supabase
+      .from('reminders')
+      .update({ status: 'cancelled' })
+      .eq('vehicle_id', vehicleId)
+      .eq('status', 'active');
+  } catch {}
+
+  return {
+    success: true,
+    vehicle: deleted || vehicle,
+    cleanup,
+    preserved: {
+      vin: vehicle.vin,
+      vinLedgerRetained: true,
+      historicalLogsRetained: true
+    }
+  };
+}
+

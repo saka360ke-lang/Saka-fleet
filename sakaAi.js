@@ -30,7 +30,7 @@ You sit directly between the user and the fleet database: collecting, parsing, l
 INTENT CLASSIFICATION & AGENT ACTIONS:
 Analyze the incoming message, conversation context, and user fleet roster to classify the user's intent into a JSON object matching this schema:
 {
-  "intent": "GREETING" | "ACTION_DISCOVERY" | "TRANSFER_PASSBOOK" | "APPLY_COUPON" | "REGISTER_VEHICLE" | "ONBOARDING_INPUT" | "ONBOARDING_SKIP" | "VERIFY_OTP" | "RESEND_OTP" | "UPDATE_EMAIL" | "APP_HELP" | "MANAGE_VEHICLE" | "LIST_VEHICLES" | "SWITCH_VEHICLE" | "QUERY_FUEL_EFFICIENCY" | "QUERY_FLEET_SUMMARY" | "LOG_EXPENSE" | "UPDATE_MILEAGE" | "LOG_EARNINGS" | "SET_REMINDER" | "COMPLETE_REMINDER" | "REQUEST_REPORT" | "CONTACT_SUPPORT" | "REACTIVATE_ACCOUNT" | "GENERAL_CHAT" | "ASSIGN_DRIVER" | "UNASSIGN_DRIVER",
+  "intent": "GREETING" | "ACTION_DISCOVERY" | "TRANSFER_PASSBOOK" | "APPLY_COUPON" | "REGISTER_VEHICLE" | "ONBOARDING_INPUT" | "ONBOARDING_SKIP" | "VERIFY_OTP" | "RESEND_OTP" | "UPDATE_EMAIL" | "APP_HELP" | "MANAGE_VEHICLE" | "LIST_VEHICLES" | "SWITCH_VEHICLE" | "QUERY_FUEL_EFFICIENCY" | "QUERY_FLEET_SUMMARY" | "LOG_EXPENSE" | "UPDATE_MILEAGE" | "LOG_EARNINGS" | "SET_REMINDER" | "COMPLETE_REMINDER" | "REQUEST_REPORT" | "CONTACT_SUPPORT" | "REACTIVATE_ACCOUNT" | "EDIT_VEHICLE" | "DELETE_VEHICLE" | "EDIT_PROFILE" | "DELETE_ACCOUNT" | "GENERAL_CHAT" | "ASSIGN_DRIVER" | "UNASSIGN_DRIVER",
   "extracted_data": {
     "plate_number": string | null,
     "target_vehicle": string | null,
@@ -49,6 +49,10 @@ Analyze the incoming message, conversation context, and user fleet roster to cla
     "notes": string | null,
     "preferred_language": string | null,
     "role": string | null,
+    "full_name": string | null,
+    "unit_system": string | null,
+    "edit_field": string | null,
+    "edit_value": string | null,
     "vin": string | null,
     "otp_code": string | null,
     "engine_number": string | null,
@@ -93,6 +97,13 @@ AGENT ROLES & BEHAVIORAL DIRECTIVES:
    - When the sender has no registered vehicles, NEVER dump a long menu. Give ONE clear next step using the numbered first-time setup: (1) plate, (2) make/model + year + fuel + mileage, (3) email OTP, (4) VIN-locked passbook, then optional Stage 2 specs.
    - Always remind first-time users they can type "Help" or "What can I do?" anytime, "Restart"/"Cancel" to recover, and reply "ACCEPT" to claim a transferred passbook.
    - Keep each onboarding prompt short, friendly, and state the current stage/step.
+
+7. EDIT & DELETE (VIN IS PERMANENTLY IMMUTABLE):
+   - EDIT_VEHICLE: Triggered when an owner asks to update vehicle details, e.g. "update vehicle KDA 123A color to White", "change make and model for KBC 456X to Toyota Fielder", "edit my car". Extract the target plate into "plate_number"/"target_vehicle", the changed field into "edit_field" and the new value into "edit_value" (also populate the matching attribute).
+   - DELETE_VEHICLE: Triggered when an owner asks to delete/remove a vehicle, e.g. "delete vehicle KDA 123A", "remove my car". Extract the plate into "plate_number"/"target_vehicle". Deletion is soft-delete + driver unassignment and preserves historical logs; only the owner may delete.
+   - EDIT_PROFILE: Triggered when a user asks to update their profile, contact details, or settings, e.g. "update my name to Jane Doe", "change my language to Swahili", "switch me to imperial units". Extract "full_name", "preferred_language", "unit_system".
+   - DELETE_ACCOUNT: Triggered when a user asks to delete/deactivate/close their account.
+   - The VIN (chassis number) and passbook token can NEVER be edited or deleted. If a user asks to change the VIN, politely explain that it is permanently locked to the passbook and offer other edits instead.
 
 LANGUAGE & AUTO-TRANSLATION (GLOBAL):
 - Detect the language the user is writing in and ALWAYS reply in that same language.
@@ -359,6 +370,58 @@ export function classifyIntentWithRegex(messageText = '') {
       intent: 'ACTION_DISCOVERY',
       extracted_data: { role: roleMatch ? roleMatch[1].toLowerCase() : null },
       reply_message: 'Displaying available actions and tools for your account...'
+    };
+  }
+
+  // Vehicle Editing (VIN / passbook token are immutable and never editable)
+  if (/^(?:edit|update|change|modify)\s+(?:my\s+)?(?:vehicle|car)\b/i.test(clean) ||
+      /^(?:edit|update|change|modify)\s+(?:the\s+)?(?:make|model|make_model|year|yom|fuel|color|colour|transmission|engine|tire|tyre|insurance|inspection|plate)\b/i.test(clean)) {
+    const attrs = extractVehicleAttributes(messageText);
+    const fieldMatch = messageText.match(/^(?:edit|update|change|modify)\s+(?:my\s+)?(?:vehicle|car)?\s*([a-z_ ]+?)\s+(?:to|as|=)\s+(.+)$/i);
+    return {
+      intent: 'EDIT_VEHICLE',
+      extracted_data: {
+        ...attrs,
+        edit_field: fieldMatch ? fieldMatch[1].trim().toLowerCase().replace(/\s+/g, '_') : null,
+        edit_value: fieldMatch ? fieldMatch[2].trim() : null
+      },
+      reply_message: 'Opening vehicle edit options...'
+    };
+  }
+
+  // Vehicle Deletion (soft-delete + driver unassignment; historical logs + VIN ledger preserved)
+  if (/^(?:delete|remove|discard|scrap|decommission)\s+(?:my\s+)?(?:vehicle|car)\b/i.test(clean) ||
+      /^(?:delete|remove)\s+[A-Z]{1,4}\s?\d{1,4}[A-Z]{0,2}\b/i.test(messageText)) {
+    const attrs = extractVehicleAttributes(messageText);
+    return {
+      intent: 'DELETE_VEHICLE',
+      extracted_data: attrs,
+      reply_message: 'Starting vehicle deletion...'
+    };
+  }
+
+  // Profile / Contact / Settings Editing
+  if (/^(?:edit|update|change|modify)\s+(?:my\s+)?(?:profile|details|name|language|units?|unit\s+system|settings|contact)\b/i.test(clean)) {
+    const nameMatch = messageText.match(/^(?:edit|update|change|modify)\s+(?:my\s+)?(?:full\s+)?name\s+(?:to|as|=)\s+(.+)$/i);
+    const langMatch = clean.match(/\b(english|swahili|french|spanish|german|arabic)\b/i);
+    const unitMatch = clean.match(/\b(metric|imperial)\b/i);
+    return {
+      intent: 'EDIT_PROFILE',
+      extracted_data: {
+        full_name: nameMatch ? nameMatch[1].trim() : null,
+        preferred_language: langMatch ? (langMatch[1][0].toUpperCase() + langMatch[1].slice(1).toLowerCase()) : null,
+        unit_system: unitMatch ? unitMatch[1].toLowerCase() : null
+      },
+      reply_message: 'Opening your profile settings...'
+    };
+  }
+
+  // Account Deletion (soft-delete gated by email OTP)
+  if (/^(?:delete|deactivate|close|remove)\s+(?:my\s+)?account\b/i.test(clean)) {
+    return {
+      intent: 'DELETE_ACCOUNT',
+      extracted_data: {},
+      reply_message: 'Starting account deletion...'
     };
   }
 

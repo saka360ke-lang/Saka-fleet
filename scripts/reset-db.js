@@ -5,6 +5,7 @@ import { createClient } from '@supabase/supabase-js';
 const isProduction = process.env.NODE_ENV === 'production' || process.env.APP_ENV === 'production';
 const hasForceProduction = process.argv.includes('--force-production-wipe');
 const hasConfirm = process.argv.includes('--confirm');
+const hasAll = process.argv.includes('--all');
 const targetPhone = process.argv.find((arg, i, arr) => arr[i - 1] === '--phone') || null;
 
 // 1. Environment & Confirmation Safeguards
@@ -16,6 +17,15 @@ if (isProduction && !hasForceProduction) {
 
 if (!hasConfirm) {
   console.error('⚠️  SAFEGUARD TRIGGERED: Database reset requires explicit confirmation.');
+  console.error('Usage:');
+  console.error('  Global Slate Reset: node scripts/reset-db.js --all --confirm');
+  console.error('  Targeted Phone:     node scripts/reset-db.js --phone +254712345678 --confirm');
+  process.exit(1);
+}
+
+// Require an explicit scope so a bare "--confirm" can never wipe globally.
+if (!hasAll && !targetPhone) {
+  console.error('⚠️  SAFEGUARD TRIGGERED: Specify the reset scope explicitly.');
   console.error('Usage:');
   console.error('  Global Slate Reset: node scripts/reset-db.js --all --confirm');
   console.error('  Targeted Phone:     node scripts/reset-db.js --phone +254712345678 --confirm');
@@ -72,7 +82,14 @@ export async function executeDatabaseReset({ targetPhone = null, verbose = true 
         DELETE FROM public.private_earnings WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_phone IN ('${cleanPhone}', '${altPhone}'));
         DELETE FROM public.passbook_transfers WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_phone IN ('${cleanPhone}', '${altPhone}'));
         DELETE FROM public.pending_owner_notifications WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_phone IN ('${cleanPhone}', '${altPhone}'));
-        DELETE FROM public.vehicles WHERE owner_phone IN ('${cleanPhone}', '${altPhone}');
+        DELETE FROM public.reminders WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}')));
+        DELETE FROM public.expense_logs WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}')));
+        DELETE FROM public.private_earnings WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}')));
+        DELETE FROM public.passbook_transfers WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}')));
+        DELETE FROM public.pending_owner_notifications WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}')));
+        -- Release any driver assignment held by this phone
+        UPDATE public.vehicles SET assigned_driver_id = NULL WHERE assigned_driver_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}'));
+        DELETE FROM public.vehicles WHERE owner_phone IN ('${cleanPhone}', '${altPhone}') OR owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}'));
         DELETE FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}');
       `;
     } else {
@@ -127,9 +144,16 @@ export async function executeDatabaseReset({ targetPhone = null, verbose = true 
       await supabase.from('profiles').delete().eq('phone_number', targetPhone);
       if (verbose) console.log(`✅ Targeted data cleared for ${targetPhone} via Supabase Client.`);
     } else {
+      // Some tables use text primary keys instead of a uuid `id`.
+      const RESET_PRIMARY_KEYS = {
+        processed_webhooks: 'wamid',
+        vin_registry: 'vin'
+      };
       for (const table of RESET_TABLES) {
+        const primaryKey = RESET_PRIMARY_KEYS[table] || 'id';
+        const sentinel = RESET_PRIMARY_KEYS[table] ? '__saka_reset_sentinel__' : '00000000-0000-0000-0000-000000000000';
         try {
-          await supabase.from(table).delete().neq('id', '00000000-0000-0000-0000-000000000000');
+          await supabase.from(table).delete().neq(primaryKey, sentinel);
         } catch {}
       }
       if (verbose) console.log('✅ Core tables cleared via Supabase Client.');

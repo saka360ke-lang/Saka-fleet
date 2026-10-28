@@ -12,12 +12,15 @@ import {
   checkOwnerVehicleTierLimit,
   getActiveVehicle,
   setActiveVehicle,
-  findVehicleByCandidate
+  findVehicleByCandidate,
+  updateVehicleDetails,
+  deleteVehicle,
+  sanitizeVehicleUpdates
 } from '../services/vehicles.js';
 import { calculateFuelConsumption, getVehicleSummaryReport } from '../services/analytics.js';
 import { handleStage1CoreCapture, handleStage2OptionalWeaving } from '../services/onboarding.js';
 import { saveChatMessage, getRecentChatHistory } from '../services/chatHistory.js';
-import { sendEmailOtp, sendSupportEscalationEmail } from '../services/mailer.js';
+import { sendEmailOtp, sendSupportEscalationEmail, sendMfaEmail } from '../services/mailer.js';
 import {
   initiatePassbookTransfer,
   setBuyerDetailsAndSendReleaseOtp,
@@ -282,7 +285,10 @@ export function generateRoleBasedActionDiscovery({ profileData, vehicles = [], s
       `• \`switch to [plate]\` — Change active vehicle\n` +
       `• \`register\` — Add a new vehicle slot\n` +
       `• \`transfer passbook [plate]\` — Securely hand over passbook to buyer\n` +
-      `• \`assign driver [phone] to [plate]\` — Assign driver (Strict 1-to-1)\n\n` +
+      `• \`assign driver [phone] to [plate]\` — Assign driver (Strict 1-to-1)\n` +
+      `• \`edit vehicle [plate]\` — Update details (VIN stays locked)\n` +
+      `• \`delete vehicle [plate]\` — Remove vehicle (logs preserved)\n` +
+      `• \`edit profile\` — Update your name, language & units\n\n` +
       `🚙 *Driver Duties (Assigned Driver):*\n` +
       `• \`Odometer [km]\` — Update vehicle mileage\n` +
       `• \`Logged [L] fuel for [amount]\` — Record fuel expenses\n` +
@@ -307,6 +313,11 @@ export function generateRoleBasedActionDiscovery({ profileData, vehicles = [], s
       `• \`Logged 40L fuel for KES 8500 at 368000 km\` — Log fuel & odometer\n` +
       `• \`Earned KES 6000 today\` — Record daily trip revenue\n` +
       `• \`Remind oil change at 375000 km\` — Set service reminder\n\n` +
+      `🛠️ *Edits & Deletion:*\n` +
+      `• \`edit vehicle [plate]\` — Update vehicle details (VIN stays permanently locked)\n` +
+      `• \`delete vehicle [plate]\` — Remove vehicle (logs preserved, driver unassigned)\n` +
+      `• \`edit profile\` — Update your name, language & units\n` +
+      `• \`delete my account\` — Deactivate your account\n\n` +
       `📊 *Audits & Analytics:*\n` +
       `• \`What is my fuel consumption in km/l?\` — Instant efficiency report\n` +
       `• \`Send monthly report\` — PDF audit statement via email\n` +
@@ -321,7 +332,8 @@ export function generateRoleBasedActionDiscovery({ profileData, vehicles = [], s
       `• \`Logged 30L petrol KES 6000\` — Submit fuel expense\n` +
       `• \`Earned KES 4500 today\` — Submit daily trip income\n` +
       `• \`Oil change needed\` — Notify fleet owner of service issue\n` +
-      `• \`passbook details\` — View compliance & insurance dates\n\n` +
+      `• \`passbook details\` — View compliance & insurance dates\n` +
+      `• \`edit profile\` — Update your name, language & units\n\n` +
       `💡 *Note:* Driver submissions automatically update fleet records and notify your owner.`;
   }
 
@@ -651,7 +663,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           }
         }
         // 3. Buyer Email OTP Verification (Step 5)
-        else if (session.pendingTransferBuyerOtp || (messageText.trim().match(/^\d{6}$/) && !isCurrentlyOnboarding && !session.pendingEmailUpdate && !onboardingStore.has(senderPhone))) {
+        else if (session.pendingTransferBuyerOtp || (messageText.trim().match(/^\d{6}$/) && !isCurrentlyOnboarding && !session.pendingEmailUpdate && !session.pendingDeleteVehicle && !session.pendingAccountDeletion && !onboardingStore.has(senderPhone))) {
           if (supabaseClient) {
             const transferCompleteRes = await completePassbookTransfer({
               buyerPhone: senderPhone,
@@ -668,7 +680,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           }
         }
         // 4. Trial Extension Coupon ("Yes" or coupon code)
-        else if (intent === 'APPLY_COUPON' || /^(yes|yes please|apply coupon|extend trial|extend)$/i.test(messageText.trim()) || /^EXT30-[A-Z0-9]+$/i.test(messageText.trim())) {
+        else if (!session.pendingDeleteVehicle && !session.pendingAccountDeletion && (intent === 'APPLY_COUPON' || /^(yes|yes please|apply coupon|extend trial|extend)$/i.test(messageText.trim()) || /^EXT30-[A-Z0-9]+$/i.test(messageText.trim()))) {
           if (supabaseClient) {
             const extRes = await applyTrialExtensionCoupon({
               phone: senderPhone,
@@ -832,7 +844,16 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           if (activeIntent === 'REGISTER_VEHICLE') {
             const explicitRegPattern = /^\s*(register|onboard|add car|add vehicle|new vehicle)\b/i;
             if (!explicitRegPattern.test(messageText)) {
-              if (/\b(?:fuel\s+consumption|fuel\s+efficiency|km\/l|km\s*per\s*liter|consumption|mpg)\b/i.test(messageText)) {
+              if (/^(?:delete|remove|discard|scrap|decommission)\s+(?:my\s+)?(?:vehicle|car)\b/i.test(messageText)) {
+                activeIntent = 'DELETE_VEHICLE';
+              } else if (/^(?:edit|update|change|modify)\s+(?:my\s+)?(?:vehicle|car)\b/i.test(messageText) ||
+                         /^(?:edit|update|change|modify)\s+(?:the\s+)?(?:make|model|year|yom|fuel|color|colour|transmission|engine|tire|tyre|insurance|inspection|plate)\b/i.test(messageText)) {
+                activeIntent = 'EDIT_VEHICLE';
+              } else if (/^(?:edit|update|change|modify)\s+(?:my\s+)?(?:profile|details|name|language|units?|unit\s+system|settings|contact)\b/i.test(messageText)) {
+                activeIntent = 'EDIT_PROFILE';
+              } else if (/^(?:delete|deactivate|close|remove)\s+(?:my\s+)?account\b/i.test(messageText)) {
+                activeIntent = 'DELETE_ACCOUNT';
+              } else if (/\b(?:fuel\s+consumption|fuel\s+efficiency|km\/l|km\s*per\s*liter|consumption|mpg)\b/i.test(messageText)) {
                 activeIntent = 'QUERY_FUEL_EFFICIENCY';
               } else if (/^(?:switch|manage|select)\s+/i.test(messageText)) {
                 activeIntent = 'SWITCH_VEHICLE';
@@ -917,7 +938,44 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               targetVeh = getActiveVehicle({ senderPhone, vehicles: existingVehicles, chatSessions }) || existingVehicles[0];
             }
 
-            if (activeIntent === 'ASSIGN_DRIVER' || session.pendingDriverAssignment || /^(?:assign\s+driver|assign)\b/i.test(messageText)) {
+            // Owner vehicle-deletion confirmation gate (must run before other intents)
+            if (session.pendingDeleteVehicle) {
+              const cleanConfirmation = messageText.trim().toLowerCase();
+              const pendingDeletion = session.pendingDeleteVehicle;
+
+              if (/^(yes|y|confirm|delete|proceed)$/i.test(cleanConfirmation)) {
+                const deletionResult = await deleteVehicle({
+                  vehicleId: pendingDeletion.vehicleId,
+                  requesterId: profileData?.id,
+                  supabase: supabaseClient
+                });
+                session.pendingDeleteVehicle = null;
+
+                if (deletionResult.success) {
+                  if (session.active_vehicle_id === pendingDeletion.vehicleId) {
+                    session.active_vehicle_id = null;
+                  }
+                  const remaining = existingVehicles.filter(v => v.id !== pendingDeletion.vehicleId);
+                  customReply = `🗑️ *Vehicle Deleted Successfully*\n\n` +
+                    `• *Vehicle:* ${pendingDeletion.plateNumber}\n` +
+                    `• *Driver:* ${deletionResult.cleanup?.driverUnassigned ? 'unassigned ✅' : 'none assigned'}\n` +
+                    `• *Pending transfers:* ${deletionResult.cleanup?.transfersCancelled || 0} cancelled\n` +
+                    `• *Historical logs:* preserved for audit 🔒\n` +
+                    `• *VIN ledger:* retained (one trial per VIN forever) 🔒\n\n` +
+                    (remaining.length > 0
+                      ? `Remaining active vehicles: ${remaining.map(v => v.plate_number).join(', ')}`
+                      : `You have no active vehicles left. Type *Register* to add a new vehicle.`);
+                } else {
+                  customReply = `❌ *Vehicle Deletion Failed*\n\n${deletionResult.error}`;
+                }
+              } else if (/^(cancel|exit|stop|no|abort)$/i.test(cleanConfirmation)) {
+                session.pendingDeleteVehicle = null;
+                customReply = `Deletion cancelled. *${pendingDeletion.plateNumber}* remains in your fleet.`;
+              } else {
+                customReply = `⚠️ Please reply *YES* to confirm deletion of *${pendingDeletion.plateNumber}*, or *Cancel* to abort.`;
+              }
+            }
+            else if (activeIntent === 'ASSIGN_DRIVER' || session.pendingDriverAssignment || /^(?:assign\s+driver|assign)\b/i.test(messageText)) {
               let assignTarget = targetVeh;
               if (mergedExt.plate_number) {
                 const found = findVehicleByCandidate(existingVehicles, mergedExt.plate_number);
@@ -990,6 +1048,102 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               } else {
                 await unassignDriverFromVehicle({ vehicleId: unassignTarget.id, supabase: supabaseClient });
                 customReply = `✅ Driver unassigned from vehicle *${unassignTarget.plate_number}*. Vehicle is now available for a new driver.`;
+              }
+            }
+            else if (activeIntent === 'EDIT_VEHICLE' || /^(?:edit|update|change|modify)\s+(?:my\s+)?(?:vehicle|car)\b/i.test(messageText.trim())) {
+              const editTarget = mergedExt.plate_number
+                ? (findVehicleByCandidate(existingVehicles, mergedExt.plate_number) || targetVeh)
+                : targetVeh;
+
+              if (!editTarget) {
+                customReply = `⚠️ I could not find that vehicle in your registered fleet.`;
+              } else {
+                const fieldAliasMap = {
+                  make: 'make_model', model: 'make_model', make_model: 'make_model', make_and_model: 'make_model',
+                  year: 'yom', yom: 'yom',
+                  fuel: 'fuel_type', fuel_type: 'fuel_type',
+                  color: 'color', colour: 'color',
+                  transmission: 'transmission',
+                  engine: 'engine_number', engine_number: 'engine_number',
+                  tire: 'tire_size', tyre: 'tire_size', tire_size: 'tire_size',
+                  insurance: 'insurance_expiry', insurance_expiry: 'insurance_expiry',
+                  inspection: 'inspection_expiry', inspection_expiry: 'inspection_expiry',
+                  plate: 'plate_number', plate_number: 'plate_number',
+                  mileage: 'current_mileage', odometer: 'current_mileage', current_mileage: 'current_mileage',
+                  email: 'owner_email', owner_email: 'owner_email',
+                  phone: 'owner_phone', owner_phone: 'owner_phone',
+                  vin: 'vin'
+                };
+
+                const candidateUpdates = {};
+                // Note: plate_number is excluded from auto-merge so that mentioning
+                // the target plate never accidentally renames the vehicle.
+                const attrKeys = ['make_model', 'yom', 'year_of_manufacture', 'fuel_type', 'current_mileage', 'color', 'transmission', 'engine_number', 'tire_size', 'insurance_expiry', 'insurance_policy', 'inspection_expiry', 'purchase_cost', 'custom_attributes', 'owner_email', 'owner_phone'];
+                for (const key of attrKeys) {
+                  const value = mergedExt[key];
+                  if (value !== undefined && value !== null && value !== '') candidateUpdates[key] = value;
+                }
+
+                // Flexible "<field> to <value>" parser (tolerates plates/digits in the middle).
+                const explicitFieldMatch = messageText.match(/\b(make(?:\s*(?:&|and|\/)\s*model)?|model|year|yom|fuel(?:\s*type)?|mileage|odometer|color|colour|transmission|engine(?:\s*number)?|tire|tyre|insurance(?:\s*expiry)?|inspection(?:\s*expiry)?|plate(?:\s*number)?|email|owner\s*email|phone|owner\s*phone)\b\s*(?:to|as|=)\s*(.+)$/i);
+                if (explicitFieldMatch) {
+                  const rawFieldName = explicitFieldMatch[1].trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+                  const rawFieldValue = explicitFieldMatch[2].trim().replace(/^["']|["']$/g, '');
+                  const mappedField = fieldAliasMap[rawFieldName] || rawFieldName;
+                  const numericFields = ['current_mileage', 'odometer_reading', 'yom', 'year_of_manufacture', 'purchase_cost'];
+                  if (numericFields.includes(mappedField)) {
+                    const numericValue = Number(rawFieldValue.replace(/[^\d.]/g, ''));
+                    if (!Number.isNaN(numericValue)) candidateUpdates[mappedField] = numericValue;
+                  } else {
+                    candidateUpdates[mappedField] = rawFieldValue;
+                  }
+                }
+
+                // Honour explicit field/value pairs supplied by the AI classifier.
+                if (mergedExt.edit_field && mergedExt.edit_value) {
+                  const aiField = String(mergedExt.edit_field).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+                  candidateUpdates[fieldAliasMap[aiField] || aiField] = mergedExt.edit_value;
+                }
+
+                // VIN is immutable — always reject an attempted VIN change.
+                if (mergedExt.vin || candidateUpdates.vin) {
+                  delete candidateUpdates.vin;
+                  customReply = `🔒 *VIN Is Permanently Locked*\n\nYour VIN / chassis number is permanently tied to your passbook and can never be edited. All other vehicle details can still be updated.`;
+                } else if (Object.keys(candidateUpdates).length === 0) {
+                  const currentList = `• Plate: ${editTarget.plate_number}\n• Make/Model: ${editTarget.make_model || '-'}\n• Year: ${editTarget.yom || editTarget.year_of_manufacture || '-'}\n• Fuel: ${editTarget.fuel_type || '-'}\n• Odometer: ${(editTarget.current_mileage || editTarget.odometer_reading || 0).toLocaleString()} km\n• VIN: ${editTarget.vin || '-'} 🔒`;
+                  customReply = `🛠️ *Edit Vehicle — ${editTarget.plate_number}*\n\n${currentList}\n\nReply with the change, e.g. *"update vehicle ${editTarget.plate_number} color to White"* or *"change fuel for ${editTarget.plate_number} to Diesel"*.\n\n🔒 *Note:* The VIN is permanently immutable.`;
+                } else {
+                  const editRes = await updateVehicleDetails({
+                    vehicleId: editTarget.id,
+                    requesterId: profileData?.id,
+                    updates: candidateUpdates,
+                    supabase: supabaseClient
+                  });
+
+                  if (!editRes.success) {
+                    customReply = `❌ *Vehicle Update Failed*\n\n${editRes.error}`;
+                  } else {
+                    const appliedLines = Object.entries(editRes.applied || {})
+                      .filter(([k]) => k !== 'updated_at')
+                      .map(([k, v]) => `• *${k}:* ${v}`)
+                      .join('\n');
+                    customReply = `✅ *Vehicle Details Updated!* 🚗\n\n• *Vehicle:* *${editRes.vehicle?.plate_number || editTarget.plate_number}*\n${appliedLines ? appliedLines + '\n' : ''}${editRes.rejected?.length ? '\n🔒 VIN / passbook token remain permanently locked and unchanged.' : ''}`;
+                  }
+                }
+              }
+            }
+            else if (activeIntent === 'DELETE_VEHICLE' || /^(?:delete|remove|discard|scrap|decommission)\s+(?:my\s+)?(?:vehicle|car)\b/i.test(messageText.trim())) {
+              const deleteTarget = mergedExt.plate_number
+                ? (findVehicleByCandidate(existingVehicles, mergedExt.plate_number) || targetVeh)
+                : targetVeh;
+
+              if (!deleteTarget) {
+                customReply = `⚠️ I could not identify the vehicle to delete. Please reply with the plate number, e.g. *"delete vehicle KDA 123A"*.`;
+              } else if (deleteTarget.owner_id !== profileData?.id) {
+                customReply = `🔒 *Owner Authorization Required*\n\nOnly the registered owner of *${deleteTarget.plate_number}* can delete this vehicle.`;
+              } else {
+                session.pendingDeleteVehicle = { vehicleId: deleteTarget.id, plateNumber: deleteTarget.plate_number };
+                customReply = `⚠️ *Confirm Vehicle Deletion*\n\nYou are about to delete *${deleteTarget.plate_number}* (${deleteTarget.make_model || 'Vehicle'}) from your active fleet.\n\n• Assigned driver will be unassigned\n• Pending passbook transfers will be cancelled\n• Historical expense / earnings / reminder logs will be preserved for audit\n• The VIN trial ledger entry is permanent and cannot be removed\n\nReply *YES* to confirm, or *Cancel* to abort.`;
               }
             }
             else if (activeIntent === 'SWITCH_VEHICLE') {
@@ -1162,6 +1316,83 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                 return `${i + 1}️⃣ *${v.plate_number}* - ${v.make_model || 'Vehicle'} (${v.fuel_type || 'Fuel'}, ${(v.current_mileage || v.odometer_reading || 0).toLocaleString()} km)${isActive ? ' 👉 *(ACTIVE)*' : ''}`;
               }).join('\n');
               customReply = `🚗 *Your Registered Fleet:*\n\n${vehicleList}\n\n💡 *To switch active vehicle:* Reply *"switch to [plate]"* or *"switch to [number]"*!`;
+            }
+            else if (session.pendingAccountDeletion) {
+              const cleanTrimmed = messageText.trim();
+              const providedOtp = mergedExt.otp_code || (cleanTrimmed.match(/^\d{6}$/) ? cleanTrimmed : null);
+              if (/^(cancel|exit|stop)$/i.test(cleanTrimmed)) {
+                session.pendingAccountDeletion = null;
+                customReply = `Account deletion cancelled. Your account remains active.`;
+              } else if (providedOtp && session.pendingAccountDeletion.code === providedOtp && Date.now() <= session.pendingAccountDeletion.expiresAt) {
+                session.pendingAccountDeletion = null;
+                if (supabaseClient && profileData) {
+                  const nowIso = new Date().toISOString();
+                  await supabaseClient
+                    .from('vehicles')
+                    .update({ deleted_at: nowIso, status: 'DELETED', assigned_driver_id: null, updated_at: nowIso })
+                    .eq('owner_id', profileData.id)
+                    .is('deleted_at', null);
+                  await supabaseClient
+                    .from('profiles')
+                    .update({ is_active: false, deleted_at: nowIso, updated_at: nowIso })
+                    .eq('id', profileData.id);
+                  await supabaseClient.from('chat_history').delete().eq('user_phone', senderPhone);
+                  await supabaseClient.from('chat_transcripts').delete().eq('phone_number', senderPhone);
+                  await supabaseClient.from('processed_webhooks').delete().eq('phone_number', senderPhone);
+                }
+                onboardingStore.delete(senderPhone);
+                session.state = 'IDLE';
+                session.active_vehicle_id = null;
+                session.history = [];
+                customReply = `🗑️ *Account Deleted*\n\nYour Saka Fleet account has been soft-deleted, your vehicles released, and active sessions cleared. Historical audit logs are retained for compliance.\n\nYou can register again anytime by typing *Register*.`;
+              } else {
+                customReply = `❌ *Invalid or Expired Code*\n\nPlease reply with the 6-digit code sent to **${profileData?.email}**, or reply *Cancel* to abort.`;
+              }
+            }
+            else if (activeIntent === 'DELETE_ACCOUNT' || /^(?:delete|deactivate|close|remove)\s+(?:my\s+)?account\b/i.test(messageText.trim())) {
+              if (!profileData?.email) {
+                customReply = `🔒 *Email Required*\n\nPlease add a verified email first (reply *"update email to your@email.com"*) so we can send the account-deletion verification code.`;
+              } else {
+                const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+                session.pendingAccountDeletion = { code: otpCode, expiresAt: Date.now() + 10 * 60 * 1000 };
+                try {
+                  await sendMfaEmail(profileData.email, otpCode);
+                  customReply = `🔒 *Confirm Account Deletion*\n\nWe dispatched a 6-digit verification code to **${profileData.email}**.\n\nReply with the code to soft-delete your account. Your vehicles will be released, active sessions cleared, and historical logs retained for audit.\n\nReply *Cancel* to abort.`;
+                } catch (mailErr) {
+                  session.pendingAccountDeletion = null;
+                  customReply = `⚠️ Could not dispatch the verification code: ${mailErr.message}`;
+                }
+              }
+            }
+            else if (activeIntent === 'EDIT_PROFILE' || /^(?:edit|update|change|modify)\s+(?:my\s+)?(?:profile|details|name|language|units?|unit\s+system|settings|contact)\b/i.test(messageText.trim())) {
+              const profileUpdates = {};
+              const nameMatch = messageText.match(/^(?:edit|update|change|modify)\s+(?:my\s+)?(?:full\s+)?name\s+(?:to|as|=)\s+(.+)$/i);
+              const langMatch = messageText.match(/\b(english|swahili|french|spanish|german|arabic)\b/i);
+              const unitMatch = messageText.match(/\b(metric|imperial)\b/i);
+
+              if (nameMatch) profileUpdates.full_name = nameMatch[1].trim();
+              if (mergedExt.full_name) profileUpdates.full_name = mergedExt.full_name;
+              if (langMatch) profileUpdates.preferred_language = langMatch[1][0].toUpperCase() + langMatch[1].slice(1).toLowerCase();
+              if (mergedExt.preferred_language) profileUpdates.preferred_language = mergedExt.preferred_language;
+              if (unitMatch) profileUpdates.unit_system = unitMatch[1].toLowerCase();
+              if (mergedExt.unit_system) profileUpdates.unit_system = mergedExt.unit_system;
+
+              if (Object.keys(profileUpdates).length === 0) {
+                customReply = `⚙️ *Profile & Settings*\n\n• Name: ${profileData?.full_name || '-'}\n• Email: ${profileData?.email || '-'}\n• Language: ${profileData?.preferred_language || 'English'}\n• Units: ${profileData?.unit_system || 'metric'}\n\nReply with a change, e.g. *"update my name to Jane Doe"*, *"change my language to Swahili"*, or *"change my units to imperial"*.\n\n_(Use "update email to ..." to change your email with OTP verification.)_`;
+              } else if (supabaseClient && profileData) {
+                profileUpdates.updated_at = new Date().toISOString();
+                const { error: profileErr } = await supabaseClient.from('profiles').update(profileUpdates).eq('id', profileData.id);
+                if (profileErr) {
+                  customReply = `❌ *Profile Update Failed*\n\n${profileErr.message}`;
+                } else {
+                  Object.assign(profileData, profileUpdates);
+                  const changed = Object.entries(profileUpdates)
+                    .filter(([k]) => k !== 'updated_at')
+                    .map(([k, v]) => `• *${k}:* ${v}`)
+                    .join('\n');
+                  customReply = `✅ *Profile Updated!* ⚙️\n\n${changed}\n\nThese settings now apply across your whole fleet.`;
+                }
+              }
             }
             else if (session.pendingEmailUpdate) {
               const cleanTrimmed = messageText.trim();
