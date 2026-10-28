@@ -42,8 +42,8 @@ async function runFirstTimeFlowTests() {
     senderPhone: '+254700000000',
     targetVeh: null
   });
-  if (unregistered !== welcome) {
-    throw new Error('Unregistered action discovery should equal the shared first-time welcome');
+  if (unregistered !== buildFirstTimeWelcome({ senderPhone: '+254700000000' })) {
+    throw new Error('Unregistered action discovery should equal the shared first-time welcome for the sender region');
   }
   console.log('✅ Unregistered "What can I do?" uses the shared first-time guide.\n');
 

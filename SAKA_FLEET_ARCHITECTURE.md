@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.4.0  
+**Version:** 1.5.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -324,6 +324,7 @@ Sentinel operates under a **"fix first, escalate last"** doctrine: it autonomous
 
 **A. Guaranteed Deployment Notifications (Cloud Build → Superadmin)**
 - `scripts/notify_git_push.js` now dispatches **dual-channel** alerts (Meta WhatsApp **and** Resend email to `SUPERADMIN_EMAIL`) so a single API outage never silences a deployment announcement.
+- `.github/workflows/deploy_notify.yml` installs dependencies before invoking `node scripts/notify_git_push.js`, and `notify_git_push.js` loads `dotenv`/`resend` lazily so the primary WhatsApp channel can never be blocked by a missing optional SDK.
 - `package.json` runs `notify:deploy` on `postinstall`, so every container build on Cloud Build / GitHub Actions fires the alert.
 - `index.js` boot hook detects the revision from `K_REVISION` || `COMMIT_SHA` || `RENDER_GIT_COMMIT`, compares it to `system_config.last_deployed_revision`, and only announces genuinely new revisions (idempotent, no duplicates).
 
@@ -458,11 +459,12 @@ Owners exceeding tier limits are prompted to upgrade via Paystack checkout.
 - Users can ask Saka at any time: *"What can I do?"*, *"Show my actions"*, *"Show my actions as an owner"*, or *"Show my actions as a driver"*.
 - Saka dynamically detects user permissions:
   - **Superadmin:** Displays executive fleet commands (`admin report`, `admin audit [Plate or VIN]`, `admin alerts`, `adminrules`).
+  - **Superadmin Multi-Role Coexistence:** `handleSuperadminFlow` intercepts only explicit admin directives; all other messages fall through so the superadmin phone can simultaneously register vehicles as an **Owner** and be assigned as a **Driver** without losing admin access.
   - **Owner:** Displays Owner Command Center (`my vehicles`, `switch to [plate]`, `register`, `transfer passbook [plate]`, `assign driver [phone] to [plate]`, fuel/odometer logging, revenue tracking, monthly PDF reports).
   - **Driver:** Displays Driver Hub (`Odometer [km]`, `Logged [L] fuel`, `Earned [amount]`, `Oil change needed`, `passbook details`). Strictly prevents driver from transferring passbooks or deleting vehicles.
   - **Dual Role (Owner + Driver):** Combines both sections with clear visual segregation.
   - **Unregistered:** Provides a quick-start guide to register a vehicle or accept a transferred passbook.
-- **Shared first-time guide:** `buildFirstTimeWelcome()` in `src/routes/whatsapp.js` is the single source of truth for brand-new users; it is reused by `generateRoleBasedActionDiscovery` and the idle/greeting branches (English + Swahili).
+- **Shared first-time guide:** `buildFirstTimeWelcome({ swahili, senderPhone })` in `src/routes/whatsapp.js` is the single source of truth for brand-new users; it renders region-specific plate/unit/currency data via `detectCountryFromPhone` and is reused by `generateRoleBasedActionDiscovery` and the idle/greeting branches.
 - **Help routing:** `Help` (`APP_HELP`) and `What can I do?` (`ACTION_DISCOVERY`) both route through `generateRoleBasedActionDiscovery`, so every user receives a role-aware command center (or the first-time guide when unregistered).
 
 ---
@@ -517,10 +519,11 @@ Owners exceeding tier limits are prompted to upgrade via Paystack checkout.
 ## 16. First-Time User Conversational Flow (Progressive Onboarding)
 
 ### 16.1 Shared First-Time Guide (`buildFirstTimeWelcome`)
-- `src/routes/whatsapp.js` exports `buildFirstTimeWelcome({ swahili })` — the single source of truth for brand-new / unregistered users.
+- `src/routes/whatsapp.js` exports `buildFirstTimeWelcome({ swahili, senderPhone })` — the single source of truth for brand-new / unregistered users; it auto-renders the user's country plate format, metric/imperial unit hint, and currency from `detectCountryFromPhone`.
 - Provides a numbered, ~2-minute walkthrough: (1) plate → (2) make/model + year + fuel + mileage → (3) email OTP → (4) VIN-locked passbook, then optional Stage 2 specs.
 - Always surfaces recovery affordances: **Help**, **What can I do?**, **Restart**, **Cancel**, and buyer **ACCEPT**.
 - Reused by `generateRoleBasedActionDiscovery` (unregistered branch) and the idle/greeting branches (English + Swahili), so every entry point is consistent.
+- **AI language auto-translation:** `detectMessageLanguage` (in `src/routes/whatsapp.js`) auto-detects the user's language per turn, persists it to `profiles.preferred_language`, and injects it into the DeepSeek runtime context; the core prompt instructs Saka to always reply in the user's language (global multilingual support).
 
 ### 16.2 Accurate Progressive Stage Labels
 - **Stage 1 of 2 · Step 1 of 4** — Registration Plate (offers *Cancel*).

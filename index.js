@@ -71,28 +71,8 @@ const onboardingStore = new Map();
 const chatSessions = new Map(); // phone -> { history: [{role, parts}], lastActive: timestamp }
 const deactivationOtpStore = new Map(); // phone -> { otp: string, expiresAt: number }
 
-// Helper: E.164 Phone Country & Regional Format Parser
-function detectCountryFromPhone(phone) {
-  if (!phone) return { country: 'International', country_code: 'GLOBAL', plate_example: 'ABC 1234', default_units: 'metric', currency: 'USD' };
-  const clean = phone.replace(/[^\d+]/g, '');
-  const full = clean.startsWith('+') ? clean : `+${clean}`;
-
-  if (full.startsWith('+254')) return { country: 'Kenya', country_code: 'KE', plate_example: 'KDA 123A', default_units: 'metric', currency: 'KES' };
-  if (full.startsWith('+1')) return { country: 'United States', country_code: 'US', plate_example: '7ABC123', default_units: 'imperial', currency: 'USD' };
-  if (full.startsWith('+44')) return { country: 'United Kingdom', country_code: 'GB', plate_example: 'AB12 CDE', default_units: 'imperial', currency: 'GBP' };
-  if (full.startsWith('+27')) return { country: 'South Africa', country_code: 'ZA', plate_example: 'CA 123-456', default_units: 'metric', currency: 'ZAR' };
-  if (full.startsWith('+234')) return { country: 'Nigeria', country_code: 'NG', plate_example: 'ABC-123XY', default_units: 'metric', currency: 'NGN' };
-  if (full.startsWith('+255')) return { country: 'Tanzania', country_code: 'TZ', plate_example: 'T123 ABC', default_units: 'metric', currency: 'TZS' };
-  if (full.startsWith('+256')) return { country: 'Uganda', country_code: 'UG', plate_example: 'UBD 123A', default_units: 'metric', currency: 'UGX' };
-  if (full.startsWith('+250')) return { country: 'Rwanda', country_code: 'RW', plate_example: 'RAA 123A', default_units: 'metric', currency: 'RWF' };
-  if (full.startsWith('+61')) return { country: 'Australia', country_code: 'AU', plate_example: '1ABC23', default_units: 'metric', currency: 'AUD' };
-  if (full.startsWith('+49')) return { country: 'Germany', country_code: 'DE', plate_example: 'B-MW 1234', default_units: 'metric', currency: 'EUR' };
-  if (full.startsWith('+33')) return { country: 'France', country_code: 'FR', plate_example: 'AB-123-CD', default_units: 'metric', currency: 'EUR' };
-  if (full.startsWith('+91')) return { country: 'India', country_code: 'IN', plate_example: 'MH 12 AB 1234', default_units: 'metric', currency: 'INR' };
-  if (full.startsWith('+971')) return { country: 'United Arab Emirates', country_code: 'AE', plate_example: 'A 12345', default_units: 'metric', currency: 'AED' };
-
-  return { country: 'International', country_code: 'GLOBAL', plate_example: 'ABC 1234', default_units: 'metric', currency: 'USD' };
-}
+// Note: Country/region detection is centralized in src/routes/whatsapp.js
+// (single source of truth) and imported where needed.
 
 // Helper: Queue Delayed Owner Summary Notification (5 minutes)
 async function queueOwnerNotification(ownerId, vehicleId, driverId, actionType, detailsSummary) {

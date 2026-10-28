@@ -92,17 +92,47 @@ export async function checkAndRecordWamid(supabase, wamid, senderPhone) {
 }
 
 export function detectCountryFromPhone(phone) {
-  if (!phone) return { country: 'International', country_code: 'GLOBAL', plate_example: 'KDA 123A', default_units: 'metric', currency: 'USD' };
+  const fallback = { country: 'International', country_code: 'GLOBAL', plate_example: 'ABC 1234', default_units: 'metric', currency: 'USD', default_language: 'English' };
+  if (!phone) return fallback;
   const clean = phone.replace(/[^\d+]/g, '');
   const full = clean.startsWith('+') ? clean : `+${clean}`;
 
-  if (full.startsWith('+254')) return { country: 'Kenya', country_code: 'KE', plate_example: 'KDA 123A', default_units: 'metric', currency: 'KES' };
-  if (full.startsWith('+1')) return { country: 'United States', country_code: 'US', plate_example: '7ABC123', default_units: 'imperial', currency: 'USD' };
-  if (full.startsWith('+44')) return { country: 'United Kingdom', country_code: 'GB', plate_example: 'AB12 CDE', default_units: 'imperial', currency: 'GBP' };
-  if (full.startsWith('+27')) return { country: 'South Africa', country_code: 'ZA', plate_example: 'CA 123-456', default_units: 'metric', currency: 'ZAR' };
-  if (full.startsWith('+234')) return { country: 'Nigeria', country_code: 'NG', plate_example: 'ABC-123XY', default_units: 'metric', currency: 'NGN' };
+  if (full.startsWith('+254')) return { country: 'Kenya', country_code: 'KE', plate_example: 'KDA 123A', default_units: 'metric', currency: 'KES', default_language: 'Swahili' };
+  if (full.startsWith('+1')) return { country: 'United States', country_code: 'US', plate_example: '7ABC123', default_units: 'imperial', currency: 'USD', default_language: 'English' };
+  if (full.startsWith('+44')) return { country: 'United Kingdom', country_code: 'GB', plate_example: 'AB12 CDE', default_units: 'imperial', currency: 'GBP', default_language: 'English' };
+  if (full.startsWith('+27')) return { country: 'South Africa', country_code: 'ZA', plate_example: 'CA 123-456', default_units: 'metric', currency: 'ZAR', default_language: 'English' };
+  if (full.startsWith('+234')) return { country: 'Nigeria', country_code: 'NG', plate_example: 'ABC-123XY', default_units: 'metric', currency: 'NGN', default_language: 'English' };
+  if (full.startsWith('+255')) return { country: 'Tanzania', country_code: 'TZ', plate_example: 'T123 ABC', default_units: 'metric', currency: 'TZS', default_language: 'Swahili' };
+  if (full.startsWith('+256')) return { country: 'Uganda', country_code: 'UG', plate_example: 'UBD 123A', default_units: 'metric', currency: 'UGX', default_language: 'English' };
+  if (full.startsWith('+250')) return { country: 'Rwanda', country_code: 'RW', plate_example: 'RAA 123A', default_units: 'metric', currency: 'RWF', default_language: 'English' };
+  if (full.startsWith('+61')) return { country: 'Australia', country_code: 'AU', plate_example: '1ABC23', default_units: 'metric', currency: 'AUD', default_language: 'English' };
+  if (full.startsWith('+49')) return { country: 'Germany', country_code: 'DE', plate_example: 'B-MW 1234', default_units: 'metric', currency: 'EUR', default_language: 'German' };
+  if (full.startsWith('+33')) return { country: 'France', country_code: 'FR', plate_example: 'AB-123-CD', default_units: 'metric', currency: 'EUR', default_language: 'French' };
+  if (full.startsWith('+34')) return { country: 'Spain', country_code: 'ES', plate_example: '1234 ABC', default_units: 'metric', currency: 'EUR', default_language: 'Spanish' };
+  if (full.startsWith('+39')) return { country: 'Italy', country_code: 'IT', plate_example: 'AB 123 CD', default_units: 'metric', currency: 'EUR', default_language: 'Italian' };
+  if (full.startsWith('+31')) return { country: 'Netherlands', country_code: 'NL', plate_example: 'AB-12-CD', default_units: 'metric', currency: 'EUR', default_language: 'Dutch' };
+  if (full.startsWith('+91')) return { country: 'India', country_code: 'IN', plate_example: 'MH 12 AB 1234', default_units: 'metric', currency: 'INR', default_language: 'English' };
+  if (full.startsWith('+971')) return { country: 'United Arab Emirates', country_code: 'AE', plate_example: 'A 12345', default_units: 'metric', currency: 'AED', default_language: 'English' };
+  if (full.startsWith('+55')) return { country: 'Brazil', country_code: 'BR', plate_example: 'ABC1D23', default_units: 'metric', currency: 'BRL', default_language: 'Portuguese' };
+  if (full.startsWith('+52')) return { country: 'Mexico', country_code: 'MX', plate_example: 'ABC-123-D', default_units: 'metric', currency: 'MXN', default_language: 'Spanish' };
 
-  return { country: 'International', country_code: 'GLOBAL', plate_example: 'KDA 123A', default_units: 'metric', currency: 'USD' };
+  return fallback;
+}
+
+export function detectMessageLanguage(text = '') {
+  const t = (text || '').toLowerCase();
+  if (!t.trim()) return 'English';
+  const score = (kwList) => kwList.reduce((n, kw) => n + (t.includes(kw) ? 1 : 0), 0);
+
+  const swahili = score(['habari', 'mambo', 'jambo', 'hujambo', 'salama', 'nataka', 'tafadhali', 'asante', 'magari', 'gari', 'mafuta', 'karibu', 'sawa', 'niko', 'wewe', 'nini', 'vipi']);
+  const french = score(['bonjour', 'salut', 'merci', 'voiture', 'véhicule', 'carburant', 'kilométrage', 'kilometrage', 'oui', 'besoin', 'comment', 'pouvez', 'svp', 'combien']);
+  const spanish = score(['hola', 'gracias', 'por favor', 'coche', 'vehículo', 'vehiculo', 'combustible', 'kilometraje', 'necesito', 'cómo', 'como', 'quiero', 'cuánto', 'cuanto']);
+  const german = score(['hallo', 'danke', 'bitte', 'auto', 'fahrzeug', 'kraftstoff', 'kilometerstand', 'brauche', 'wie', 'was', 'möchte', 'mochte']);
+  const arabic = score(['مرحبا', 'شكرا', 'سيارة', 'وقود', 'أريد', 'كم', 'مسافة']);
+
+  const best = Object.entries({ Swahili: swahili, French: french, Spanish: spanish, German: german, Arabic: arabic })
+    .sort((a, b) => b[1] - a[1])[0];
+  return best && best[1] >= 2 ? best[0] : 'English';
 }
 
 export function checkIsConversationalFeedback(text = '', step = 1) {
@@ -195,17 +225,24 @@ async function sendWhatsAppReply(toPhone, messageBody) {
  * Shared by role discovery and the idle greeting so every brand-new user
  * receives one consistent, numbered, step-by-step path.
  */
-export function buildFirstTimeWelcome({ swahili = false } = {}) {
+export function buildFirstTimeWelcome({ swahili = false, countryInfo = null, senderPhone = null } = {}) {
+  const region = countryInfo || (senderPhone ? detectCountryFromPhone(senderPhone) : null) || detectCountryFromPhone(null);
+  const plateExample = region.plate_example || 'ABC 1234';
+  const isImperial = (region.default_units || 'metric') === 'imperial';
+  const mileageHint = isImperial ? 'current mileage in miles' : 'current mileage in km';
+  const unitLabel = isImperial ? 'miles/gallons' : 'km/liters';
+
   const opener = swahili
     ? '👋 *Habari! Karibu Saka Fleet!* 🚗'
     : '👋 *Welcome to Saka Fleet!* 🚗';
   return `${opener}\n\n` +
     `Saka tracks your vehicles, fuel, expenses, compliance & maintenance right here on WhatsApp.\n\n` +
     `🚀 *Your First-Time Setup (about 2 minutes):*\n` +
-    `1️⃣ Reply with your plate number (e.g. *KDA 123A*) — or type *Register*.\n` +
-    `2️⃣ Send Make & Model, Year, Fuel Type and current mileage.\n` +
+    `1️⃣ Reply with your plate number (e.g. *${plateExample}*) — or type *Register*.\n` +
+    `2️⃣ Send Make & Model, Year, Fuel Type and ${mileageHint}.\n` +
     `3️⃣ Verify your email with the 6-digit code we send you.\n` +
     `4️⃣ Receive your VIN-locked digital passbook instantly. 🎉\n\n` +
+    `🌍 *Region:* ${region.country} (${region.country_code}) · ${unitLabel} · ${region.currency}\n\n` +
     `💡 *Anytime:* type *Help* or *What can I do?* to see your menu.\n` +
     `🔄 *Mistake?* type *Restart* or *Cancel*.\n` +
     `🤝 *Buying a vehicle with a passbook?* Reply *ACCEPT* once the seller starts the transfer.`;
@@ -286,7 +323,7 @@ export function generateRoleBasedActionDiscovery({ profileData, vehicles = [], s
       `💡 *Note:* Driver submissions automatically update fleet records and notify your owner.`;
   }
 
-  return buildFirstTimeWelcome();
+  return buildFirstTimeWelcome({ senderPhone });
 }
 
 
@@ -455,7 +492,14 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         }
 
         const hasVehicleRegistered = existingVehicles.length > 0;
-        const targetLang = profileData?.preferred_language || 'English';
+        const messageLang = detectMessageLanguage(messageText);
+        const targetLang = messageLang !== 'English' ? messageLang : (profileData?.preferred_language || 'English');
+        if (messageLang !== 'English' && profileData && messageLang !== profileData.preferred_language && supabaseClient) {
+          try {
+            await supabaseClient.from('profiles').update({ preferred_language: messageLang }).eq('id', profileData.id);
+            profileData.preferred_language = messageLang;
+          } catch {}
+        }
 
         let currentActiveVehicle = null;
         if (hasVehicleRegistered) {
@@ -1231,11 +1275,11 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           }
           // 3. Swahili Greetings — first-time guide in Swahili tone
           else if (/^(habari|mambo|jambo|hujambo|salama)\b/i.test(clean)) {
-            customReply = buildFirstTimeWelcome({ swahili: true });
+            customReply = buildFirstTimeWelcome({ swahili: true, countryInfo });
           }
           // 4. English Greetings — first-time progressive guide
           else if (intent === 'GREETING') {
-            customReply = buildFirstTimeWelcome();
+            customReply = buildFirstTimeWelcome({ countryInfo });
           }
           // 5. General informational questions answered via DeepSeek
           else if (aiResult.reply_message && !aiResult.reply_message.includes('I am your Saka Fleet WhatsApp assistant. How can I help with your vehicle')) {
@@ -1243,7 +1287,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           }
           // 6. Default Welcome Prompt
           else {
-            customReply = buildFirstTimeWelcome();
+            customReply = buildFirstTimeWelcome({ countryInfo });
           }
         }
         }

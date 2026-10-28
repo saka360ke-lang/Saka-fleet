@@ -95,6 +95,13 @@ export async function ensureSuperadminTables(supabase) {
   return statusMap;
 }
 
+const ADMIN_INTENTS = new Set([
+  'ADMIN_REPORT', 'ADMIN_AUDIT', 'ADMIN_ALERTS',
+  'ADMIN_RULES_RESET', 'ADMIN_RULES_TOGGLE', 'ADMIN_RULES_LIST',
+  'ADMIN_HORIZON', 'ADMIN_PROPOSALS',
+  'HEALTH_CHECK', 'GENERATE_COUPON', 'PROFILES_REPORT'
+]);
+
 export async function parseSuperadminCommand(messageText) {
   const text = messageText ? messageText.trim() : '';
   const lower = text.toLowerCase();
@@ -143,7 +150,7 @@ Command: "${text}"`;
   }
 
   if (/(health|sentinel|status|system|diagnostic|error logs)/i.test(lower)) return { intent: 'HEALTH_CHECK' };
-  if (/(coupon|discount|generate|create)/i.test(lower)) {
+  if (/(coupon|discount|generate)/i.test(lower)) {
     const discountMatch = text.match(/([0-9]+\s*%|[0-9]+\s*percent|KES\s*[0-9]+|\$[0-9]+)/i);
     const phoneMatch = text.match(/(\+?[0-9]{9,15})/);
     return {
@@ -152,7 +159,7 @@ Command: "${text}"`;
       target_phone: phoneMatch ? phoneMatch[0].trim() : null
     };
   }
-  if (/(profile|profiles|user|users|driver|drivers|owner|owners|stats|summary)/i.test(lower)) {
+  if (/\b(profiles?|users?|drivers?|owners?)\s+(report|stats|summary|list|count)\b/i.test(lower) || /\b(user|driver|owner|profile)\s+(stats|summary|report)\b/i.test(lower)) {
     return { intent: 'PROFILES_REPORT' };
   }
 
@@ -796,7 +803,15 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
     };
   }
 
-  // 3. Verify Active Session & Enforce 30-Minute Inactivity TTL
+  // 3. Parse the admin intent first so non-admin messages can fall through to
+  // the normal Owner/Driver conversational flow (multi-role coexistence).
+  const parsedCommand = await parseSuperadminCommand(messageText);
+
+  if (!ADMIN_INTENTS.has(parsedCommand.intent)) {
+    return { isSuperadmin: false };
+  }
+
+  // 4. Verify Active Session & Enforce 30-Minute Inactivity TTL
   const { data: sessionData } = await supabase
     .from('superadmin_sessions')
     .select('*')
@@ -840,9 +855,7 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
     .update({ last_active_at: new Date().toISOString() })
     .eq('phone_number', formattedPhone);
 
-  // 4. Command Routing
-  const parsedCommand = await parseSuperadminCommand(messageText);
-
+  // 5. Command Routing
   if (parsedCommand.intent === 'ADMIN_REPORT') {
     const reportRes = await handleAdminReportCommand(supabase);
     await logAdminAudit(supabase, formattedPhone, 'ADMIN_REPORT', reportRes.details);

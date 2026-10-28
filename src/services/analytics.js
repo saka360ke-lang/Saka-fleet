@@ -70,7 +70,7 @@ export async function calculateFuelConsumption({ supabase, vehicleId, plateNumbe
       success: true,
       status: 'NO_DATA',
       vehicle: { id: vehicle.id, plate_number: plate, make_model: model },
-      explanation: `📊 *Fuel Analysis for ${plate} (${model})*\n\nNo fuel receipts or logs found for this vehicle yet.\n\n💡 *To get started:* Reply with a fuel log like:\n👉 *"Logged 45L fuel at 368000 km for KES 8500"*`
+      explanation: `📊 *Fuel Analysis for ${plate} (${model})*\n\nNo fuel receipts or logs found for this vehicle yet.\n\n💡 *To get started:* Reply with a fuel log like:\n👉 *"Logged ${unit === 'imperial' ? '12 gallons' : '45L'} fuel at ${unit === 'imperial' ? '45000 miles' : '368000 km'} for [amount]"*`
     };
   }
 
@@ -136,9 +136,9 @@ export async function calculateFuelConsumption({ supabase, vehicleId, plateNumbe
     vehicle: { id: vehicle.id, plate_number: plate, make_model: model },
     missingFields: !lastOdo ? ['odometer'] : ['fuel_liters'],
     explanation: `📊 *Fuel Analysis for ${plate} (${model})*\n\n` +
-      `Found ${fuelLogs.length} fuel entry (${lastAmt > 0 ? `KES ${lastAmt.toLocaleString()}` : ''}${lastLiters > 0 ? `, ${lastLiters}L` : ''}).\n\n` +
-      `🔍 *Calculation Rule:* (Distance traveled ÷ Liters pumped).\n` +
-      `To calculate exact ${effLabel}, please share your latest fill-up with odometer and liters:\n👉 *"Logged [Liters]L at [Odometer] km"*`
+      `Found ${fuelLogs.length} fuel entry (${lastAmt > 0 ? `KES ${lastAmt.toLocaleString()}` : ''}${lastLiters > 0 ? `, ${lastLiters} ${unit === 'imperial' ? 'gal' : 'L'}` : ''}).\n\n` +
+      `🔍 *Calculation Rule:* (Distance traveled ÷ ${volLabel}).\n` +
+      `To calculate exact ${effLabel}, please share your latest fill-up with odometer and ${volLabel}:\n👉 *"Logged [${volLabel}] at [Odometer] ${distLabel}"*`
   };
 }
 

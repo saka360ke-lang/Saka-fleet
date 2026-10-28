@@ -1,7 +1,16 @@
-import dotenv from 'dotenv';
-dotenv.config();
 import { execSync } from 'child_process';
-import { Resend } from 'resend';
+
+// Optional dependencies are loaded lazily so a missing SDK (e.g. in a minimal CI
+// runner) can never block the primary WhatsApp deployment-notification channel.
+let Resend = null;
+try {
+  ({ Resend } = await import('resend'));
+} catch {}
+
+try {
+  const { config } = await import('dotenv');
+  config?.();
+} catch {}
 
 export async function sendAdminDeploymentAlert(customData = {}) {
   const superadminPhone = process.env.SUPERADMIN_PHONE;
@@ -83,7 +92,7 @@ _Automated deployment hook dispatched to Superadmin._`;
   }
 
   let emailSuccess = false;
-  if (resendApiKey && superadminEmail) {
+  if (resendApiKey && superadminEmail && Resend) {
     try {
       const resend = new Resend(resendApiKey);
       const { error } = await resend.emails.send({
