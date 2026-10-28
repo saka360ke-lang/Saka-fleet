@@ -77,6 +77,7 @@ export async function chatCompletion({
   let lastError = null;
 
   const candidateModels = model ? [model] : getModelCandidates();
+  const timeoutMs = Number(process.env.AI_TIMEOUT_MS || 12000);
 
   for (const candidate of candidateModels) {
     try {
@@ -109,7 +110,11 @@ export async function chatCompletion({
         request.response_format = { type: 'json_object' };
       }
 
-      const response = await ai.chat.completions.create(request);
+      const response = await ai.chat.completions.create(request, {
+        timeout: timeoutMs,
+        // Fail fast to the deterministic fallback instead of SDK retries.
+        maxRetries: 0
+      });
       const text = response?.choices?.[0]?.message?.content || '';
 
       if (text && text.trim()) {

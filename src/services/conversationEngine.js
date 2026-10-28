@@ -75,6 +75,52 @@ export async function composeMessage({
 }
 
 /**
+ * Question body cache: quiz questions repeat across turns and users, so the
+ * AI-rendered question is reused instead of paying a model round trip per turn.
+ */
+const QUESTION_CACHE_TTL_MS = Number(process.env.QUIZ_QUESTION_CACHE_MS || 15 * 60 * 1000);
+const QUESTION_CACHE_MAX = Number(process.env.QUIZ_QUESTION_CACHE_MAX || 300);
+const questionCache = new Map();
+
+export function clearQuizQuestionCache() {
+  questionCache.clear();
+}
+
+function normalizeFieldLabel(label) {
+  return String(label || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function questionCacheKey(flowLabel, fieldLabel, language, isFirst) {
+  return `${flowLabel}|${normalizeFieldLabel(fieldLabel)}|${language}|${isFirst ? 'first' : 'next'}`;
+}
+
+/** True when most of a flow's questions are already cached (skip re-prefetch). */
+export function isQuizQuestionCacheWarm(flowLabel, language, minimum = 3) {
+  const prefix = `${flowLabel}|`;
+  const suffix = `|${language}|next`;
+  let count = 0;
+  for (const [key, entry] of questionCache.entries()) {
+    if (key.startsWith(prefix) && key.endsWith(suffix) && entry.expiresAt > Date.now()) {
+      count += 1;
+      if (count >= minimum) return true;
+    }
+  }
+  return false;
+}
+
+/** Seed the cache from a batched prefetch (one AI call for a whole flow). */
+export function seedQuizQuestions(flowLabel, language, questionMap = {}) {
+  for (const [fieldLabel, text] of Object.entries(questionMap || {})) {
+    if (!fieldLabel || !text) continue;
+    const cacheKey = questionCacheKey(flowLabel, fieldLabel, language, false);
+    if (questionCache.size >= QUESTION_CACHE_MAX) {
+      questionCache.delete(questionCache.keys().next().value);
+    }
+    questionCache.set(cacheKey, { text: String(text).trim(), expiresAt: Date.now() + QUESTION_CACHE_TTL_MS });
+  }
+}
+
+/**
  * Quiz question renderer — exactly ONE question per turn.
  */
 export async function renderQuizQuestion({
@@ -91,26 +137,27 @@ export async function renderQuizQuestion({
   lastAcceptedAnswer = null,
   turnNote = null
 }) {
+  const cacheKey = questionCacheKey(flowLabel, fieldLabel, language, isFirst);
+
+  // Serve the cached AI-authored question (no acknowledgment text) when we are
+  // not re-asking after an error.
+  if (!turnNote) {
+    const hit = questionCache.get(cacheKey);
+    if (hit && hit.expiresAt > Date.now()) return hit.text;
+  }
+
   const facts = {
     flow: flowLabel,
     currentQuestion: fieldLabel,
     questionHint: hint,
-    alreadyCollected: collectedLabels,
-    answers,
-    lastAcceptedAnswer,
     turnNote,
-    progress: `${collectedLabels.length + 1}${isLast ? ' (final question)' : ''}`,
-    instruction: [
-      'Ask ONLY the current question.',
-      lastAcceptedAnswer
-        ? `You may briefly acknowledge this accepted answer: ${lastAcceptedAnswer}.`
-        : 'Do NOT acknowledge or praise any answer — none was accepted this turn. Never invent an acknowledgment.',
-      'Do not ask for anything else. Do not list future questions.'
-    ].join(' ')
+    // Deliberately data-free: the cached question must never reference values
+    // from a previous user/session (prevents stale acknowledgments).
+    instruction: 'Ask ONLY the current question. Do not acknowledge or praise any answer — never invent one. Do not ask for anything else. Do not list future questions.'
   };
 
   const fallback = `${fieldLabel}: ${hint}`;
-  return composeMessage({
+  const reply = await composeMessage({
     purpose: isFirst ? 'quiz_intro_question' : 'quiz_next_question',
     facts,
     language,
@@ -119,6 +166,16 @@ export async function renderQuizQuestion({
     maxTokens: 220,
     fallbackText: fallback
   });
+
+  if (!turnNote && reply) {
+    if (questionCache.size >= QUESTION_CACHE_MAX) {
+      const oldestKey = questionCache.keys().next().value;
+      questionCache.delete(oldestKey);
+    }
+    questionCache.set(cacheKey, { text: reply, expiresAt: Date.now() + QUESTION_CACHE_TTL_MS });
+  }
+
+  return reply;
 }
 
 /**

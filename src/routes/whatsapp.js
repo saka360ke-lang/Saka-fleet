@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 import { handleSuperadminFlow, isSuperadminPhone } from '../services/superadmin.js';
-import { processSakaMessage, extractVehicleAttributes } from '../../sakaAi.js';
+import { processSakaMessage, extractVehicleAttributes, classifyIntentWithRegex } from '../../sakaAi.js';
 import { logChatTranscript, logSystemError } from '../workers/sentinel.js';
 import { SUBSCRIPTION_TIERS, initializePaystackCheckout } from '../services/paystack.js';
 import {
@@ -448,6 +448,9 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
       });
     } catch {}
   };
+  // Overlaps the two user-log writes with AI processing; awaited before the
+  // assistant log so transcript ordering stays correct.
+  let userLogPromise = Promise.resolve();
 
   try {
     const senderPhone = messageObj.from;
@@ -496,8 +499,10 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
 
     if (fastify?.log) fastify.log.info(`Incoming WhatsApp message from ${senderPhone}: "${messageText}"`);
     if (supabaseClient) {
-      await logChatTranscript(supabaseClient, senderPhone, 'user', messageText);
-      await saveChatMessage(supabaseClient, senderPhone, 'user', messageText);
+      userLogPromise = Promise.all([
+        logChatTranscript(supabaseClient, senderPhone, 'user', messageText),
+        saveChatMessage(supabaseClient, senderPhone, 'user', messageText)
+      ]).catch(() => {});
     }
 
     // Durable session hydration — restores quiz/onboarding/OTP state from
@@ -521,6 +526,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           await logChatTranscript(supabaseClient, senderPhone, 'assistant', superadminRes.reply);
           await saveChatMessage(supabaseClient, senderPhone, 'assistant', superadminRes.reply);
         }
+        await userLogPromise;
         await persistSnap();
         return { status: 'superadmin_handled' };
       }
@@ -556,6 +562,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           await supabaseClient.from('chat_history').insert([{ user_phone: senderPhone, role: 'assistant', message: recoveryReply }]);
         } catch {}
       }
+      await userLogPromise;
       await persistSnap();
       return { status: 'circuit_breaker_active' };
     }
@@ -593,13 +600,20 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         }
 
         let existingVehicles = [];
+        let dbHistory = [];
         if (supabaseClient && profileData) {
-          const { data: vData } = await supabaseClient
-            .from('vehicles')
-            .select('*')
-            .is('deleted_at', null)
-            .or(`owner_id.eq.${profileData.id},assigned_driver_id.eq.${profileData.id}`);
-          existingVehicles = vData || [];
+          // Parallel reads + skip the history query entirely on warm sessions.
+          const needHistory = !session.history || session.history.length === 0;
+          const [vehiclesRes, historyRes] = await Promise.all([
+            supabaseClient
+              .from('vehicles')
+              .select('*')
+              .is('deleted_at', null)
+              .or(`owner_id.eq.${profileData.id},assigned_driver_id.eq.${profileData.id}`),
+            needHistory ? getRecentChatHistory(supabaseClient, senderPhone, 10) : Promise.resolve([])
+          ]);
+          existingVehicles = vehiclesRes?.data || [];
+          dbHistory = historyRes || [];
         }
 
         const hasVehicleRegistered = existingVehicles.length > 0;
@@ -631,11 +645,8 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         }
 
         let conversationHistory = session.history || [];
-        if (supabaseClient) {
-          const dbHistory = await getRecentChatHistory(supabaseClient, senderPhone, 10);
-          if (dbHistory && dbHistory.length > 0) {
-            conversationHistory = dbHistory;
-          }
+        if (conversationHistory.length === 0 && dbHistory.length > 0) {
+          conversationHistory = dbHistory;
         }
 
         // Pass message through DeepSeek Intent Classifier (sakaAi.js) with Active Fleet Context
@@ -644,7 +655,21 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           allVehicles: existingVehicles
         } : null;
 
-        const aiResult = await processSakaMessage(targetLang, messageText, conversationHistory, [], supabaseClient, activeVehicleContext);
+        // Speed fast-path: an active quiz already owns the conversation state.
+        // Skip the DeepSeek intent call — regex classification is instant and
+        // the quiz's deterministic parsers handle the answer. This removes the
+        // duplicate AI call that previously ran on every quiz turn.
+        const quizForFastPath = session.quiz || null;
+        const quizPhaseLocked = !!quizForFastPath && (quizForFastPath.phase === 'pin' || quizForFastPath.phase === 'account_otp');
+        const fastQuizTurn = !!quizForFastPath && !quizPhaseLocked;
+
+        let aiResult;
+        if (fastQuizTurn) {
+          const quick = classifyIntentWithRegex(messageText);
+          aiResult = { intent: quick.intent, extracted_data: {}, reply_message: null };
+        } else {
+          aiResult = await processSakaMessage(targetLang, messageText, conversationHistory, [], supabaseClient, activeVehicleContext);
+        }
         let intent = aiResult.intent;
         let customReply = aiResult.reply_message;
 
@@ -840,6 +865,8 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           language: targetLang,
           intent,
           aiExtracted: mergedExt,
+          messageText,
+          fastQuiz: fastQuizTurn,
           sendWhatsApp: sendWhatsAppReply
         };
 
@@ -1802,6 +1829,18 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         }
         }
 
+        // Fast-path safety: if no flow produced a reply, render a minimal one.
+        if (!customReply) {
+          customReply = await composeMessage({
+            purpose: 'fallback_reply',
+            facts: { userMessage: messageText },
+            language: targetLang,
+            countryInfo,
+            profile: profileData,
+            fallbackText: 'How can I help with your fleet today?'
+          });
+        }
+
         const sanitizedReply = customReply.trim();
 
         // State Machine Circuit Breaker Check: Track consecutive identical assistant prompts
@@ -1895,15 +1934,21 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         chatSessions.set(senderPhone, session);
 
         await sendWhatsAppReply(senderPhone, finalReply);
+        await userLogPromise;
         if (supabaseClient) {
-          await logChatTranscript(supabaseClient, senderPhone, 'assistant', finalReply);
-          await saveChatMessage(supabaseClient, senderPhone, 'assistant', finalReply);
+          await Promise.all([
+            logChatTranscript(supabaseClient, senderPhone, 'assistant', finalReply),
+            saveChatMessage(supabaseClient, senderPhone, 'assistant', finalReply),
+            persistSnap()
+          ]);
+        } else {
+          await persistSnap();
         }
 
-        await persistSnap();
         return { status: 'success' };
       } catch (err) {
         if (fastify?.log) fastify.log.error(err);
+        await userLogPromise;
         await persistSnap();
         return { status: 'error', error: err?.message };
       }

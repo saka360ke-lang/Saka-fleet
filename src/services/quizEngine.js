@@ -13,8 +13,11 @@ import crypto from 'crypto';
 import {
   renderQuizQuestion,
   renderConfirmationSummary,
-  renderOutcome
+  renderOutcome,
+  seedQuizQuestions,
+  isQuizQuestionCacheWarm
 } from './conversationEngine.js';
+import { chatCompletion, parseJsonSafely } from './aiClient.js';
 import {
   buildGlobalContext,
   userDistanceToKm,
@@ -721,6 +724,81 @@ function isSkipInput(text) {
 }
 
 /**
+ * Deterministic multi-field fast-forward. When the AI intent call is skipped on
+ * quiz turns, this still captures extra values volunteered in the same message
+ * (e.g. "Diesel, 366700 km") without an AI round trip. Only safe, unambiguous
+ * fields are considered; phone/VIN/plate/amount are never guessed.
+ */
+function applyTextExtraction(state, def, text, ctx) {
+  const clean = String(text || '').trim();
+  if (!clean) return;
+
+  const hasVolumeMarker = /\d\s*(?:l\b|lt\b|ltr\b|litre|liter|gal\b)/i.test(clean);
+  const hasDistanceMarker = /(?:km|mi\b|mile|mileage|odo|odometer)/i.test(clean);
+
+  for (const f of activeFields(def, state.answers)) {
+    if (f.key in state.answers && state.answers[f.key] !== undefined) continue;
+
+    let allowed = false;
+    if (f.key === 'fuel_liters') allowed = hasVolumeMarker;
+    else if (f.key === 'current_mileage' || f.key === 'odometer_reading') allowed = hasDistanceMarker;
+    else if (f.key === 'yom' || f.key === 'fuel_type' || f.key === 'transmission') allowed = true;
+    if (!allowed) continue;
+
+    let parsed = null;
+    try {
+      parsed = f.parse(clean, { ...ctx, answers: state.answers }, state.answers);
+    } catch {
+      parsed = null;
+    }
+    if (parsed === null || parsed === undefined) continue;
+
+    const check = f.validate(parsed, { ...ctx, answers: state.answers }, state.answers);
+    if (check.ok) state.answers[f.key] = parsed;
+  }
+}
+
+/**
+ * Background prefetch: renders every remaining question of a flow in ONE AI
+ * call and seeds the question cache, so subsequent turns are instant.
+ * Fire-and-forget — failures are ignored.
+ */
+async function prefetchFlowQuestions(def, ctx, currentKey = null) {
+  if (!process.env.DEEPSEEK_API_KEY) return;
+  if (isQuizQuestionCacheWarm(def.label, ctx.language || 'English')) return;
+
+  const fields = activeFields(def, {}).filter((f) => f.kind !== 'otp');
+  if (fields.length === 0) return;
+
+  const fieldList = fields.map((f) => ({ field: f.label, hint: f.hint }));
+  const prompt = `Return JSON only: {"questions":[{"field":"<exact field label>","text":"<one short WhatsApp question asking for that field, no acknowledgment, no extra questions>"}]}.
+Flow: ${def.label}
+Language: ${ctx.language || 'English'}
+Fields: ${JSON.stringify(fieldList)}`;
+
+  const result = await chatCompletion({
+    system: 'You are Saka, a WhatsApp fleet assistant. You generate concise, single-question prompts. Respond with valid JSON only — no markdown, no commentary, no extra keys.',
+    messages: [{ role: 'user', content: prompt }],
+    jsonMode: true,
+    maxTokens: 1200,
+    temperature: 0.3
+  });
+  if (!result.ok) return;
+
+  const parsed = parseJsonSafely(result.text);
+  const map = {};
+  for (const item of parsed?.questions || []) {
+    if (item?.field && item?.text) map[item.field] = item.text;
+  }
+  if (Object.keys(map).length === 0) {
+    console.warn('[quizEngine] Question prefetch returned no usable questions');
+    return;
+  }
+  seedQuizQuestions(def.label, ctx.language || 'English', map);
+  console.log(`[quizEngine] Prefetched ${Object.keys(map).length} questions for ${def.label}`);
+}
+
+/**
  * Starts a quiz on the session. Returns true when the flow exists.
  */
 export function startQuiz({ session, flowKey, ctx, prefill = {} }) {
@@ -736,10 +814,11 @@ export function startQuiz({ session, flowKey, ctx, prefill = {} }) {
     transfer: null,
     lastNote: null,
     lastAcceptedAnswer: null,
-    turnNote: 'This is the first question of the flow. Do not acknowledge any prior answer.'
+    turnNote: null
   };
 
   applyExtraction(session.quiz, def, ctx.aiExtracted || {}, ctx);
+  applyTextExtraction(session.quiz, def, ctx.messageText || '', ctx);
 
   // Friction reduction: with a single registered vehicle, auto-select it
   // instead of asking the user to confirm an obvious choice.
@@ -749,6 +828,10 @@ export function startQuiz({ session, flowKey, ctx, prefill = {} }) {
     const check = vField.validate(onlyId, { ...ctx, answers: session.quiz.answers }, session.quiz.answers);
     if (check.ok) session.quiz.answers.vehicle_id = onlyId;
   }
+
+  // Warm the question cache for the remaining fields in the background — one
+  // AI call for the whole flow instead of one per turn.
+  prefetchFlowQuestions(def, ctx).catch(() => {});
 
   return true;
 }
@@ -1070,6 +1153,8 @@ export async function handleQuizTurn({
   if (parsed === null || parsed === undefined) parsed = current.parse(clean, vctx, state.answers);
 
   if (parsed === null || parsed === undefined) {
+    // Capture any other safe values volunteered in this message, then re-ask.
+    applyTextExtraction(state, def, clean, vctx);
     // If the message reads like conversation rather than an answer, hand the
     // turn back to the conversational engine instead of nagging.
     if (shouldPauseQuizForChat({ messageText: clean, intent: ctx.intent, quiz: state })) {
@@ -1085,6 +1170,7 @@ export async function handleQuizTurn({
 
   const check = current.validate(parsed, vctx, state.answers);
   if (!check.ok) {
+    applyTextExtraction(state, def, clean, vctx);
     if (shouldPauseQuizForChat({ messageText: clean, intent: ctx.intent, quiz: state })) {
       return { handled: false, pausedForChat: true, flow: state.flow };
     }
@@ -1119,6 +1205,7 @@ export async function handleQuizTurn({
 
   // Fast-forward any other values carried in the same message
   applyExtraction(state, def, aiExtracted || {}, vctx);
+  applyTextExtraction(state, def, clean, vctx);
 
   const reply = await askCurrent(state, vctx);
   return { handled: true, reply, flow: state.flow, active: true };

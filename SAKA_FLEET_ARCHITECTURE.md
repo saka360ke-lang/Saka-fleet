@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.7.4  
+**Version:** 1.7.5  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -730,5 +730,24 @@ Saka Fleet serves a **global audience**. Every feature, quiz flow and AI prompt 
 - OCR failures are warnings only; no database write occurs.
 - Media messages flow through the same per-phone queue, dedupe and durable session store as text.
 - Test coverage: `test_ocr_flow.js` (20 stateless assertions — Meta download, Vision parsing, size/type guards, receipt hints, quiz prefill).
+
+
+---
+
+## 25. Response Speed Optimizations (v1.7.5)
+
+| Optimization | Effect |
+| :--- | :--- |
+| **Quiz fast path** | When a quiz is active (except PIN/OTP phases), the DeepSeek intent call is skipped; regex classification is instant and the quiz's deterministic parsers handle the answer. Removes the duplicate AI call per quiz turn. |
+| **Batched question prefetch** | On quiz start, one background AI call renders all remaining questions and seeds the per-field cache (`seedQuizQuestions`). Subsequent turns reuse the cached AI-authored question — no per-turn model call. |
+| **Core prompt cache** | `getSakaCorePrompt()` caches `system_config` + `saka_dynamic_rules` for 60s, removing 2 DB reads per message. Invalidate with `clearSakaPromptCache()`. |
+| **Output cap** | Intent call `maxTokens` 2048 → 800; shorter generations finish faster. |
+| **Fail-fast AI** | SDK `maxRetries: 0` plus `AI_TIMEOUT_MS` (12s default) — slow requests fall back deterministically instead of stalling the queue. |
+| **Parallel DB I/O** | Vehicles + history fetched with `Promise.all`; user log writes overlap AI processing; assistant logs + session snapshot persisted in one `Promise.all`. History query skipped entirely on warm sessions. |
+| **Cache-safe questions** | Cached question text is deliberately data-free (no collected values), preventing stale acknowledgments (e.g. an old plate) from leaking across sessions. |
+
+**Measured live (real DeepSeek):** quiz answer turns dropped from ~3.3–3.7 s to **~2.0–2.4 s** (~40% faster). Remaining time is DB round trips + the Meta send; the first turn of a flow also pays the one-time question render + prefetch.
+
+Tuning env: `AI_TIMEOUT_MS`, `SAKA_PROMPT_CACHE_MS` (60 s), `QUIZ_QUESTION_CACHE_MS` (15 min), `QUIZ_QUESTION_CACHE_MAX` (300).
 
 

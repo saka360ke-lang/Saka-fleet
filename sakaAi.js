@@ -137,28 +137,37 @@ CRITICAL CONTEXT & TIME-AWARENESS:
  * Check system_config and active dynamic micro-rules in Supabase,
  * dynamically injecting active patches (is_active = TRUE) as behavioral hints.
  */
+const CORE_PROMPT_TTL_MS = Number(process.env.SAKA_PROMPT_CACHE_MS || 60000);
+let corePromptCache = { text: null, expiresAt: 0 };
+
+/** Invalidate after Sentinel prompt/rules changes (admin kill switch, etc.). */
+export function clearSakaPromptCache() {
+  corePromptCache = { text: null, expiresAt: 0 };
+}
+
 export async function getSakaCorePrompt(providedSupabase = null) {
   const client = providedSupabase || defaultSupabase;
   let basePrompt = DEFAULT_SAKA_CORE_PROMPT;
   if (!client) return basePrompt;
 
-  try {
-    const { data: configData } = await client
-      .from('system_config')
-      .select('value')
-      .eq('key', 'saka_core_prompt')
-      .maybeSingle();
+  // Hot-path cache: avoids 2 DB round trips on every single message.
+  if (corePromptCache.text && Date.now() < corePromptCache.expiresAt) {
+    return corePromptCache.text;
+  }
 
+  try {
+    const [configRes, rulesRes] = await Promise.all([
+      client.from('system_config').select('value').eq('key', 'saka_core_prompt').maybeSingle(),
+      client.from('saka_dynamic_rules').select('rule_key, patch_instruction').eq('is_active', true)
+    ]);
+
+    const configData = configRes?.data;
     if (configData && configData.value) {
       basePrompt = `${basePrompt}\n\nSENTINEL PROMPT REFINEMENT:\n${configData.value}`;
     }
 
-    // Inject active dynamic micro-rules at runtime
-    const { data: dynamicRules, error: rulesErr } = await client
-      .from('saka_dynamic_rules')
-      .select('rule_key, patch_instruction')
-      .eq('is_active', true);
-
+    const dynamicRules = rulesRes?.data;
+    const rulesErr = rulesRes?.error;
     if (!rulesErr && dynamicRules && dynamicRules.length > 0) {
       const activePatches = dynamicRules
         .map(r => `• [${r.rule_key}]: ${r.patch_instruction}`)
@@ -166,7 +175,9 @@ export async function getSakaCorePrompt(providedSupabase = null) {
       basePrompt = `${basePrompt}\n\nACTIVE SENTINEL DYNAMIC MICRO-RULES (BEHAVIORAL HINTS):\n${activePatches}`;
     }
 
-    return `${basePrompt}\n\nREMINDER: You MUST output ONLY valid JSON matching the schema.`;
+    const finalPrompt = `${basePrompt}\n\nREMINDER: You MUST output ONLY valid JSON matching the schema.`;
+    corePromptCache = { text: finalPrompt, expiresAt: Date.now() + CORE_PROMPT_TTL_MS };
+    return finalPrompt;
   } catch (err) {
     console.warn('[sakaAi] Failed to fetch saka_core_prompt from Supabase, falling back to default:', err.message);
     return DEFAULT_SAKA_CORE_PROMPT;
@@ -738,7 +749,7 @@ ${fleetContextSection}
       { role: 'user', content: messageText }
     ],
     jsonMode: true,
-    maxTokens: 2048,
+    maxTokens: 800,
     temperature: 0.3
   });
 
