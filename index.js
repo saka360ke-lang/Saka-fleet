@@ -18,6 +18,9 @@ import {
   verifyPaystackSignature
 } from './src/services/paystack.js';
 import { processImpendingTrialReminders } from './src/services/coupons.js';
+import { createResilientClient } from './src/services/supabaseClient.js';
+import { ensureChatSessionsTable } from './src/services/sessionStore.js';
+import { drainQueue, getQueueStats } from './src/services/messageQueue.js';
 
 // 1. Initialize Fastify Server
 const fastify = Fastify({ logger: true });
@@ -59,10 +62,10 @@ fastify.addContentTypeParser('application/json', { parseAs: 'buffer' }, (req, bo
 });
 
 
-// 2. Initialize Supabase Client
+// 2. Initialize Supabase Client (pooled + per-request timeout)
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
+const supabase = createResilientClient(supabaseUrl, supabaseServiceKey);
 
 // Memory Stores with 24-hour expiry cleanup
 const otpStore = new Map();
@@ -962,6 +965,7 @@ const start = async () => {
     await ensureSentinelTables(supabase);
     await ensureSuperadminTables(supabase);
     await ensureVehicleTableColumns(supabase);
+    await ensureChatSessionsTable(supabase);
 
     const port = process.env.PORT || 3000;
     await fastify.listen({ port: Number(port), host: '0.0.0.0' });
@@ -984,5 +988,22 @@ const start = async () => {
     process.exit(1);
   }
 };
+
+
+// Graceful shutdown: flush per-user queues so in-flight onboarding/quiz turns
+// complete before Cloud Run terminates the instance.
+const shutdown = async (signal) => {
+  try {
+    console.log(`[Shutdown] ${signal} received — draining message queue (${JSON.stringify(getQueueStats())})...`);
+    const drained = await drainQueue(12000);
+    if (!drained) console.warn('[Shutdown] Queue drain timed out; exiting.');
+    await fastify.close();
+  } catch (err) {
+    console.error('[Shutdown] Error:', err.message);
+  }
+  process.exit(0);
+};
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 start();

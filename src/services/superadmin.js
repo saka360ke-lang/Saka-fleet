@@ -1,4 +1,4 @@
-import { runHealthCheck } from '../workers/sentinel.js';
+import { runHealthCheck, evaluateConversationalFriction } from '../workers/sentinel.js';
 import { sendAdminNotificationEmail } from './mailer.js';
 import { generateText, parseJsonSafely } from './aiClient.js';
 import crypto from 'crypto';
@@ -99,12 +99,30 @@ const ADMIN_INTENTS = new Set([
   'ADMIN_REPORT', 'ADMIN_AUDIT', 'ADMIN_ALERTS',
   'ADMIN_RULES_RESET', 'ADMIN_RULES_TOGGLE', 'ADMIN_RULES_LIST',
   'ADMIN_HORIZON', 'ADMIN_PROPOSALS',
-  'HEALTH_CHECK', 'GENERATE_COUPON', 'PROFILES_REPORT'
+  'HEALTH_CHECK', 'GENERATE_COUPON', 'PROFILES_REPORT', 'SENTINEL_DIAGNOSE'
 ]);
+
+/**
+ * Only explicit admin directives may be claimed by the superadmin hub.
+ * Everything else from the superadmin phone falls through to the normal
+ * Saka AI conversation (multi-role coexistence).
+ */
+const ADMIN_DIRECTIVE_RE = /^\s*(admin\b|adminrules?\b|check\s+health\b|health\s+check\b|system\s+(status|health|diagnostics?)\b|sentinel\b|superadmin\s+(to\s+)?sentinel\b|profiles?\s+report\b|user\s+stats\b|generate\b[^\n]*\bcoupon\b|coupon\b|horizon\b|proposals?\b)/i;
 
 export async function parseSuperadminCommand(messageText) {
   const text = messageText ? messageText.trim() : '';
   const lower = text.toLowerCase();
+
+  // Gate: general conversation from the superadmin phone is NOT an admin command.
+  if (!ADMIN_DIRECTIVE_RE.test(text)) {
+    return { intent: 'UNKNOWN' };
+  }
+
+  // 0. Sentinel diagnosis from chat
+  if (/^\s*(?:admin\s+|superadmin\s+(?:to\s+)?)?sentinel[\s.:,_-]+(?:diagnose|diagnosis|report|scan)\b/i.test(text) ||
+      /^\s*admin\s+diagnose\b/i.test(text)) {
+    return { intent: 'SENTINEL_DIAGNOSE', query: text };
+  }
 
   // 1. Direct Regex Pre-Matching for high-performance zero-latency commands
   const auditMatch = text.match(/^\s*admin\s+audit\s+(.+)$/i);
@@ -940,6 +958,57 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
     return {
       isSuperadmin: true,
       reply: healthRes.summary
+    };
+  }
+
+  if (parsedCommand.intent === 'SENTINEL_DIAGNOSE') {
+    let health = null;
+    let friction = null;
+    let recentErrors = [];
+    let recentFriction = [];
+
+    try { health = await runHealthCheck(supabase); } catch (err) { health = { error: err.message }; }
+    try { friction = await evaluateConversationalFriction(supabase); } catch (err) { friction = { error: err.message }; }
+
+    try {
+      const { data } = await supabase
+        .from('error_logs')
+        .select('error_message, route, status, ai_diagnosis, created_at')
+        .order('created_at', { ascending: false })
+        .limit(5);
+      recentErrors = data || [];
+    } catch {}
+
+    try {
+      const { data } = await supabase
+        .from('chat_friction_logs')
+        .select('friction_type, transcript_snippet, detected_at')
+        .order('detected_at', { ascending: false })
+        .limit(5);
+      recentFriction = data || [];
+    } catch {}
+
+    const telemetry = { health, friction, recentErrors, recentFriction };
+    const prompt = `You are Saka Sentinel, the autonomous reliability agent for Saka Fleet.
+Diagnose the following live telemetry and produce a short WhatsApp report for the superadmin:
+1. Overall status (healthy / degraded / failing)
+2. Root causes with evidence
+3. Concrete fix proposals (ranked)
+4. Any onboarding friction patterns and how to remove them
+Keep it under 220 words, use WhatsApp formatting, and never invent data.
+
+Telemetry:
+${JSON.stringify(telemetry).slice(0, 6000)}`;
+
+    const summary = await generateText({ prompt, maxTokens: 900, temperature: 0.3 });
+    await logAdminAudit(supabase, formattedPhone, 'SENTINEL_DIAGNOSE', {
+      friction_detected: friction?.friction_detected || 0,
+      health_status: health?.status || 'unknown'
+    });
+
+    return {
+      isSuperadmin: true,
+      reply: summary || '🛠️ Sentinel diagnosis completed. No AI summary was available; type "admin alerts" for raw telemetry.'
     };
   }
 

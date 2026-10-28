@@ -358,9 +358,16 @@ Return strictly a single valid JSON object matching this schema (no markdown ast
  */
 export async function logSystemError(providedSupabase, error, route = 'unknown') {
   try {
+    const message = error?.message || (typeof error === 'string' ? error : '');
+    // Ignore empty/serialized-empty errors and benign status codes — these are
+    // observability noise (e.g. INFO 200 webhook logs) and must not pollute
+    // error_logs or Sentinel AI diagnosis.
+    if (!message || message === '{}' || message === 'undefined' || message === 'null') return;
+    if (error?.statusCode && Number(error.statusCode) < 400) return;
+
     const supabase = getSupabase(providedSupabase);
     await supabase.from('error_logs').insert([{
-      error_message: error.message || String(error),
+      error_message: message,
       stack_trace: error.stack || null,
       route: route,
       status: 'unresolved',
@@ -419,6 +426,16 @@ export async function scanCloudRunAnomalies(providedSupabase) {
 
     const isError = log.severity === 'ERROR' || log.severity === 'CRITICAL';
     const isTimeoutRisk = (log.httpRequest?.latency >= 5) || (log.httpRequest?.status >= 500);
+
+    // Ignore benign INFO/NOTICE traffic (health checks, 200 webhooks) — this is
+    // the noise source that produced false "AI-diagnosed errors".
+    const status = Number(log.httpRequest?.status || 0);
+    const severity = String(log.severity || '').toUpperCase();
+    const isBenign = (severity === 'INFO' || severity === 'NOTICE' || severity === 'DEBUG') &&
+      (status === 0 || status < 400) &&
+      !(log.httpRequest?.latency >= 5);
+
+    if (isBenign) continue;
 
     if (isError || isTimeoutRisk) {
       recentlyAlertedLogHashes.set(hashStr, now);
@@ -594,6 +611,22 @@ export async function evaluateConversationalFriction(providedSupabase) {
     if (fallbackMatches.length >= 3) {
       const snippet = chatList.slice(-6).map(c => `[${c.role}]: ${c.message}`).join('\n');
       detectedFrictions.push({ phone, type: 'INTENT_AMBIGUITY', snippet, reason: 'Assistant fell back to generic greeting 3+ times.' });
+    }
+
+    // Mega-prompt detector: any assistant turn asking 3+ questions at once is
+    // the exact onboarding friction pattern that caused looped mega-prompts.
+    const megaPrompt = chatList.find(c =>
+      (c.role === 'assistant' || c.role === 'model') &&
+      ((c.message || '').match(/\?/g) || []).length >= 3
+    );
+    if (megaPrompt) {
+      const snippet = chatList.slice(-6).map(c => `[${c.role}]: ${c.message}`).join('\n');
+      detectedFrictions.push({
+        phone,
+        type: 'MULTI_QUESTION_PROMPT',
+        snippet,
+        reason: 'Assistant asked 3+ questions in a single message (violates one-piece-at-a-time quiz protocol).'
+      });
     }
   }
 

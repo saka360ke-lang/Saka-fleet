@@ -11,6 +11,7 @@
     "reset:db": "node scripts/reset-db.js",
     "reset:slate": "node scripts/reset_db_slate.js",
     "migrate:vin": "node scripts/run_vin_immutability_migration.js",
+    "migrate:sessions": "node scripts/run_chat_sessions_migration.js",
     "notify:deploy": "node scripts/notify_git_push.js",
     "postinstall": "node scripts/notify_git_push.js || true"
   },

@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.6.0  
+**Version:** 1.7.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -48,6 +48,15 @@ All LLM traffic flows through **`src/services/aiClient.js`**. No service talks t
 - Gemini (`@google/genai`, `GEMINI_API_KEY`, `gemini-3.8-flash`, `gemini-flash-latest`) has been **fully removed** from code, dependencies, and environment.
 - **Null-safe attribute merge:** DeepSeek always emits every schema key (usually as explicit `null`). `processSakaMessage` therefore only lets **non-empty** AI values override the regex heuristic — otherwise a bare plate like `KBC 456X` would be wiped to `null` and onboarding would never start.
 - **Verify connectivity** any time with `node scripts/test_deepseek_connection.js` (plain text + JSON mode + conversation history).
+
+### 1.2 Conversational Engine (v1.7 — pure AI, quiz-first)
+
+- **`src/services/conversationEngine.js`** — every user-facing reply is rendered by DeepSeek-V3 from a structured FACTS payload (`composeMessage`, `renderQuizQuestion`, `renderConfirmationSummary`, `renderOutcome`, `renderActionDiscovery`). Hard-coded conversational prose has been removed from the WhatsApp route; deterministic fallbacks remain only for provider outages.
+- **`src/services/quizEngine.js`** — one-piece-at-a-time wizard engine: declarative flow definitions, per-field validators/extractors, multi-field fast-forward (users may answer several fields at once), Cancel/Restart/Help navigation, and a **mandatory confirmation summary before any database write**. VIN and passbook token are never editable.
+- **`src/services/globalization.js`** — single source of truth for country detection (E.164), metric/imperial conversion, currency + locale formatting, plate examples and unit labels. Every AI prompt and quiz question receives this context.
+- **`src/services/messageQueue.js`** — per-phone serialization + bounded global concurrency + retry/backoff + graceful drain on shutdown.
+- **`src/services/sessionStore.js`** — durable `chat_sessions` snapshots (session + onboarding + active quiz + OTP state), hydrated at the start of every message and persisted write-through.
+- **`src/services/supabaseClient.js`** — cached Supabase client with a 15-second per-request timeout (`SUPABASE_TIMEOUT_MS`).
 
 ---
 
@@ -210,33 +219,30 @@ Driver-centric feature blueprints synthesized weekly by Sentinel from live conve
    - Meta Cloud API sends `x-hub-signature-256`.
    - The server verifies `crypto.createHmac('sha256', META_APP_SECRET)` against raw request body using constant-time comparison (`crypto.timingSafeEqual`).
 
-3. **Message ID Deduplication (Idempotency Cache):**
+3. **Message ID Deduplication (cross-instance idempotency):**
    - Extracts Meta Message ID (`wamid`) from `entry[0].changes[0].value.messages[0].id`.
-   - Primary: In-memory `processedWebhooksCache` map with a strict 10-minute (600,000 ms) TTL for <0.1ms lookups.
-   - Secondary: Distributed `public.processed_webhooks` Supabase table for multi-instance cluster persistence.
-   - If a duplicate `wamid` is received within 10 minutes, the server immediately returns `HTTP 200 OK` (`{ status: 'success', deduplicated: true }`) and aborts execution, completely eliminating Meta webhook retry loops.
+   - The in-memory `processedWebhooksCache` (10-minute TTL, <0.1ms) is backed by a **synchronous** `public.processed_webhooks` upsert check performed **before** any processing begins, closing the multi-instance race that previously allowed duplicate replies.
+   - Duplicate `wamid` → immediate `HTTP 200 OK` (`{ status: 'success', deduplicated: true }`) and no execution.
 
-4. **Immediate Fastify 200 OK Response:**
-   - Fastify immediately sends `HTTP 200 OK` (`{ status: 'success' }`) to Meta upon receiving the webhook (after signature and deduplication checks).
-   - DeepSeek AI generation, vehicle state transitions, WhatsApp reply dispatches, and database logging execute asynchronously in background tasks, eliminating Meta webhook timeout errors.
+4. **Immediate 200 + Per-Phone Message Queue:**
+   - Fastify immediately sends `HTTP 200 OK` to Meta after signature and deduplication checks.
+   - Background work is dispatched through `src/services/messageQueue.js`: **strict per-phone serialization** (no interleaved session writes), a bounded global semaphore (`MESSAGE_MAX_CONCURRENCY`, default 8), retry with exponential backoff for transient failures (`MESSAGE_MAX_ATTEMPTS`, default 3), and `drainQueue()` on SIGTERM/SIGINT.
+   - Durable `chat_sessions` snapshots are hydrated at message start and persisted write-through, so any Cloud Run instance can continue an onboarding/quiz/OTP flow.
 
 5. **Two-Stage Self-Healing Circuit Breaker (Strike-Based):**
    - Sessions track `loopSignature`, `consecutivePromptCount`, `circuitBreakerStage`, `lastAssistantPrompt`.
    - The `loopSignature` is the actual generated reply text; breaker messages never overwrite it, so strikes accumulate correctly across grace retries.
-   - **Strike 3 → `SOFT_TRIP` (Sentinel self-heal window):** logs `LOOPING_PROMPTS` friction, replies *"I've hit a temporary snag processing this step. Kindly try again!"* and grants one clean retry while Sentinel synthesizes a dynamic micro-rule.
-   - **Strike 4 → `HARD_TRIP` (escalation):** logs `SYSTEM_ERROR` friction, emails `support@sakafleet.com` via Resend with the profile, repeated prompt, and last user input, then replies *"I've hit a temporary snag processing this step. I have notified our support team at support@sakafleet.com, and we will update you right here on WhatsApp once this is resolved!"*
-   - **Navigation Freedom (no permanent lockout):** any `cancel|exit|stop|reset|start over|1..5` or `log|update|set|request|help` input clears the breaker stage, strike count, and loop signature instantly.
-   - **Driver assignment parser is order-agnostic:** single-turn `assign <plate> to [driver] <phone>` and `assign <phone> to <plate>` both work; if no phone is supplied the session stores `pendingDriverAssignment` and asks for the driver's number (multi-turn). `UNASSIGN_DRIVER` supports `unassign driver [from] <plate>` / `remove driver`.
-   - **Phone-as-VIN guard:** `extractVehicleAttributes` routes `(?:+?254|0)[17]\d{8}` / `\+?\d{9,15}` into `driver_phone` and never into `vin`.
+   - **Strike 3 → `SOFT_TRIP`:** logs `LOOPING_PROMPTS` friction and sends a short AI-rendered retry invitation (one clean retry while Sentinel synthesizes a micro-rule).
+   - **Strike 4 → `HARD_TRIP`:** logs `SYSTEM_ERROR` friction, emails `support@sakafleet.com` via Resend with the profile, repeated prompt and last user input, then sends an AI-rendered escalation message (deterministic fallback if the provider is down).
+   - **Navigation Freedom (no permanent lockout):** `cancel|exit|stop|reset|restart|start over|start again|1..5` or `log|update|set|request|help` clears the breaker stage, strike count and loop signature instantly. The `restart` variant is explicitly covered (Oct-2026 onboarding incident).
 
-6. **Unregistered / Idle User Conversational Model:**
-   - Swahili greetings (*"Habari"*, *"Mambo"*, *"Jambo"*) are greeted warmly with an introduction to Saka Fleet.
-   - Pausing (*"Stop"*, *"Pause"*, *"Cancel"*) gracefully acknowledges with *"Understood! I'll pause here..."* without spamming registration prompts.
-   - Conversational friction detection: Phrases like *"too many messages"*, *"stop with the many replies"*, *"repeating"*, *"frustrating"* are logged to `chat_friction_logs` and acknowledged empathetically.
-   - Informational questions are answered conversationally via DeepSeek without forcing the registration prompt.
+6. **Unregistered / Idle User Conversational Model (AI-rendered):**
+   - First-time introductions, Swahili greetings, pause acknowledgements, friction apologies and default prompts are all rendered by Saka AI from structured facts; only one next step is requested at a time.
 
-7. **Superadmin Intercept:**
-   - If incoming sender matches `SUPERADMIN_PHONE`, message is routed to `handleSuperadminFlow` for health telemetry, prompt tuning, coupon generation, and fleet diagnosis.
+7. **Superadmin Intercept (multi-role coexistence):**
+   - Only explicit admin directives (`admin*`, `adminrules*`, `check health`, `system status`, `sentinel …`, `profiles report`, `coupon …`, `horizon`, `proposals`) are claimed by `handleSuperadminFlow`.
+   - All other messages from the superadmin phone fall through to the normal Saka AI conversation so the admin can also operate as Owner/Driver.
+   - `admin sentinel diagnose` (also `sentinel diagnose`, `superadmin to sentinel …`) runs live health + friction analysis and returns an AI diagnostic report in chat.
 
 ---
 
@@ -296,6 +302,19 @@ Sentinel executes an autonomous 4-stage optimization loop to detect conversation
 - **Admin Kill Switch:** Superadmin can instantly override Sentinel rules via WhatsApp:
   - `adminrules reset`: Deactivates all dynamic micro-rules (`is_active = FALSE`).
   - `adminrules toggle [key]`: Toggles activation status for a specific rule key.
+
+### 5.1 Onboarding Friction Audit (28 Oct 2026)
+
+**Evidence reviewed:** 24 `chat_friction_logs` rows, 66 `chat_history` messages, 2 `error_logs` rows.
+
+| Finding | Root cause | Resolution (v1.7) |
+| :--- | :--- | :--- |
+| User **KAS 628T** answered Step-2 fields one at a time; the bot re-sent the identical 7-field mega-prompt, then "I already indicated above" → SOFT_TRIP → HARD_TRIP; "Restart" kept returning the snag message | All-or-nothing Step-2 capture + breaker reset regex did not match `restart` | Quiz engine asks ONE field per turn; breaker reset covers `restart|start over|start again` |
+| Superadmin asked a general product question and received the admin hub; "Superadmin to sentinel … diagnose" received support boilerplate | AI intent parser claimed any superadmin message; no Sentinel chat command | Explicit admin-directive gate + `admin sentinel diagnose` |
+| Two identical "message overload" apologies 40s apart; a legitimate question got the canned apology | In-memory-only dedupe raced across instances; loose friction keywords | Synchronous `processed_webhooks` check before processing + tightened friction branch |
+| 2 INFO/200 webhook logs stored as "AI-diagnosed errors" | Empty `{}` errors serialized into `error_logs` | `logSystemError` skips empty/benign errors; Cloud Run poller ignores INFO/2xx |
+
+**Sentinel response:** friction was captured (LOOPING_PROMPTS / USER_FRUSTRATION / SYSTEM_ERROR) and a micro-rule was synthesized, but the Function Boundary Lock prevented it from repairing state-machine logic — hence the structural fixes above. Sentinel now also logs `MULTI_QUESTION_PROMPT` whenever any assistant turn asks 3+ questions.
 
 ---
 
@@ -598,9 +617,74 @@ Every stateful test or check MUST clear the data it created from the database af
   - `runWithCleanup({ testFn, phones, vins })` wraps a suite in `try/finally` so cleanup always runs.
   - `KNOWN_TEST_PHONES` / `KNOWN_TEST_VINS` cover the identifiers used by the repository's suites.
 - `scripts/run_tests.js` (exposed as `npm test`) runs the targeted suite(s) and always performs a final cleanup sweep. `npm run test:cleanup` clears test data without running tests.
+- `test_quiz_flow.js` — stateless suite for the one-piece-at-a-time quiz engine, multi-field fast-forward, confirmation gate, corrections, Cancel/Restart (23 assertions).
+- `test_concurrency.js` — stateless suite for per-phone serialization, global concurrency cap, retry/backoff, dead-letter rejection and graceful drain (8 assertions).
 
 ### 19.3 Conventions
 - New tests must import `runWithCleanup` and declare every phone/VIN/vehicle they create.
 - Never rely on "clean at start" only; cleanup must also run at the end.
 - Use `node scripts/reset-db.js --phone <number> --confirm` for ad-hoc targeted resets.
+
+---
+
+## 20. Quiz Flows & Confirmation Gates (v1.7)
+
+All multi-field flows run through `src/services/quizEngine.js`. Each asks exactly one question per turn, accepts multi-field answers, and displays a summary that the user must confirm before any write.
+
+| Flow | Questions (in order) | Odometer capture | Executor |
+| :--- | :--- | :--- | :--- |
+| `vehicle_registration` | plate → make/model → YOM → fuel → odometer → VIN → email → OTP → optional specs (insurance/inspection/colour/transmission/engine/tires/cost/mods) → confirm | `current_mileage` (canonical km) | inserts `vehicles`, `vin_registry` trial, profile email, coupon, passbook email, reminders |
+| `email_update` | new email → OTP → confirm | — | `profiles.email`, `vehicles.owner_email` |
+| `assign_driver` | vehicle → driver phone → **handover odometer** → confirm | `metadata.odometer_at_assignment` + vehicle odometer | `assignDriverToVehicle` |
+| `unassign_driver` | vehicle → **handback odometer** → confirm | `metadata.odometer_at_release` + distance driven | `unassignDriverFromVehicle` |
+| `transfer_seller` | vehicle → buyer phone → buyer email → **odometer at sale** → confirm → release PIN | `metadata.odometer_at_transfer` | `initiatePassbookTransfer` → `setBuyerDetailsAndSendReleaseOtp` → `verifyOwnerReleaseOtpAndNotifyBuyer` |
+| `log_expense` | vehicle → type → amount → fuel volume → **odometer at fill-up** → notes → confirm | `expense_logs.odometer_reading` + vehicle odometer | `expense_logs` + `expenses` |
+| `log_earnings` | vehicle → amount → **odometer at trip end** → period → confirm | vehicle odometer + `private_earnings.notes` | `private_earnings` |
+| `log_mileage` | vehicle → new odometer → confirm | vehicle odometer | `vehicles` |
+| `edit_vehicle` | vehicle → field → new value → confirm | field-dependent | `updateVehicleDetails` (VIN/token rejected) |
+| `edit_profile` | field (name/language/units) → new value → confirm | — | `profiles` |
+| `delete_vehicle` | vehicle → confirm (cascade notes) | — | `deleteVehicle` (soft delete + cleanup) |
+| `delete_account` | confirm → MFA OTP | — | soft-delete profile/vehicles + clear chat tables |
+| `apply_coupon` | code → confirm | — | `applyTrialExtensionCoupon` |
+| `set_reminder` | vehicle → type → due date or odometer threshold → confirm | optional threshold | `reminders` |
+| `contact_support` | description → confirm | — | Resend escalation |
+| `reactivate_account` | confirm | — | `profiles.is_active = true` |
+
+Navigation: `Cancel` aborts, `Restart` resets the flow, `Skip` is accepted only on optional fields (skips the whole optional group).
+
+---
+
+## 21. High-Concurrency & Durable Session Architecture
+
+- **Per-phone FIFO queue** (`messageQueue.js`) — same-user messages never interleave; global semaphore caps parallel AI/DB work (`MESSAGE_MAX_CONCURRENCY`, default 8).
+- **Retry/backoff** — transient `fetch failed`/timeout/429/5xx retried up to `MESSAGE_MAX_ATTEMPTS` (default 3); exhausted tasks reject to the webhook catcher, which writes to `error_logs`.
+- **Durable `chat_sessions`** — `phone_number` PK, `state jsonb` containing `{ session, onboarding }`; hydrated per message, persisted after every turn and on failure. TTL prune: `pruneSessionSnapshots()` (7 days). Migration: `npm run migrate:sessions`.
+- **Synchronous cross-instance dedupe** — `processed_webhooks` is checked/upserted before processing, so Meta retries cannot double-send.
+- **Supabase timeouts** — `supabaseClient.js` wraps fetch with `AbortSignal` (15s default) and reuses one cached client.
+- **Graceful shutdown** — SIGTERM/SIGINT drains the queue before exit.
+- **Parallel reads** remain safe; session writes are serialized per phone.
+
+---
+
+## 22. Global Audience (Permanent Rule)
+
+Saka Fleet serves a **global audience**. Every feature, quiz flow and AI prompt must honor:
+
+1. Country detection from the WhatsApp number (`globalization.js`, E.164 longest-prefix).
+2. Metric/imperial units for distance and volume (canonical storage: km + litres).
+3. Local currency, number and date formatting (`Intl`, per-country locale).
+4. Regional plate examples and date formats in prompts and summaries.
+5. The AI auto-translator — Saka replies in the user's language, even when no preference is stored.
+
+`buildGlobalContext()` / `describeGlobalContext()` feed this into `sakaAi.js`, `conversationEngine.js` and every quiz question/summary.
+
+---
+
+## 23. Known Gaps (next iteration)
+
+- `request_report` and `complete_reminder` still use the legacy handlers (not yet quiz-based).
+- `test_reliability.js` assertions predate AI-rendered breaker copy and may need loosening.
+- `chat_sessions` pruning is manual (`pruneSessionSnapshots`) until scheduled in the Sentinel worker.
+- AI-rendered replies add one model call for quiz questions/summaries (intent classification remains a single call per message).
+
 

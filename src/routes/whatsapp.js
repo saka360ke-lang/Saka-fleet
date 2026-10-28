@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 import { handleSuperadminFlow, isSuperadminPhone } from '../services/superadmin.js';
 import { processSakaMessage, extractVehicleAttributes } from '../../sakaAi.js';
-import { logChatTranscript } from '../workers/sentinel.js';
+import { logChatTranscript, logSystemError } from '../workers/sentinel.js';
 import { SUBSCRIPTION_TIERS, initializePaystackCheckout } from '../services/paystack.js';
 import {
   ensureVehicleTableColumns,
@@ -29,11 +29,14 @@ import {
   completePassbookTransfer
 } from '../services/transfers.js';
 import { applyTrialExtensionCoupon } from '../services/coupons.js';
+import { detectCountryFromPhone as detectCountryGlobal } from '../services/globalization.js';
+import { handleQuizTurn, detectQuizStart } from '../services/quizEngine.js';
+import { renderActionDiscovery, composeMessage } from '../services/conversationEngine.js';
+import { enqueueUserMessage } from '../services/messageQueue.js';
+import { loadSessionSnapshot, persistSessionSnapshot } from '../services/sessionStore.js';
+import { createResilientClient } from '../services/supabaseClient.js';
 
-let supabaseClient = null;
-if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY) {
-  supabaseClient = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
-}
+let supabaseClient = createResilientClient();
 
 export const onboardingStore = new Map();
 export const chatSessions = new Map();
@@ -95,31 +98,8 @@ export async function checkAndRecordWamid(supabase, wamid, senderPhone) {
 }
 
 export function detectCountryFromPhone(phone) {
-  const fallback = { country: 'International', country_code: 'GLOBAL', plate_example: 'ABC 1234', default_units: 'metric', currency: 'USD', default_language: 'English' };
-  if (!phone) return fallback;
-  const clean = phone.replace(/[^\d+]/g, '');
-  const full = clean.startsWith('+') ? clean : `+${clean}`;
-
-  if (full.startsWith('+254')) return { country: 'Kenya', country_code: 'KE', plate_example: 'KDA 123A', default_units: 'metric', currency: 'KES', default_language: 'Swahili' };
-  if (full.startsWith('+1')) return { country: 'United States', country_code: 'US', plate_example: '7ABC123', default_units: 'imperial', currency: 'USD', default_language: 'English' };
-  if (full.startsWith('+44')) return { country: 'United Kingdom', country_code: 'GB', plate_example: 'AB12 CDE', default_units: 'imperial', currency: 'GBP', default_language: 'English' };
-  if (full.startsWith('+27')) return { country: 'South Africa', country_code: 'ZA', plate_example: 'CA 123-456', default_units: 'metric', currency: 'ZAR', default_language: 'English' };
-  if (full.startsWith('+234')) return { country: 'Nigeria', country_code: 'NG', plate_example: 'ABC-123XY', default_units: 'metric', currency: 'NGN', default_language: 'English' };
-  if (full.startsWith('+255')) return { country: 'Tanzania', country_code: 'TZ', plate_example: 'T123 ABC', default_units: 'metric', currency: 'TZS', default_language: 'Swahili' };
-  if (full.startsWith('+256')) return { country: 'Uganda', country_code: 'UG', plate_example: 'UBD 123A', default_units: 'metric', currency: 'UGX', default_language: 'English' };
-  if (full.startsWith('+250')) return { country: 'Rwanda', country_code: 'RW', plate_example: 'RAA 123A', default_units: 'metric', currency: 'RWF', default_language: 'English' };
-  if (full.startsWith('+61')) return { country: 'Australia', country_code: 'AU', plate_example: '1ABC23', default_units: 'metric', currency: 'AUD', default_language: 'English' };
-  if (full.startsWith('+49')) return { country: 'Germany', country_code: 'DE', plate_example: 'B-MW 1234', default_units: 'metric', currency: 'EUR', default_language: 'German' };
-  if (full.startsWith('+33')) return { country: 'France', country_code: 'FR', plate_example: 'AB-123-CD', default_units: 'metric', currency: 'EUR', default_language: 'French' };
-  if (full.startsWith('+34')) return { country: 'Spain', country_code: 'ES', plate_example: '1234 ABC', default_units: 'metric', currency: 'EUR', default_language: 'Spanish' };
-  if (full.startsWith('+39')) return { country: 'Italy', country_code: 'IT', plate_example: 'AB 123 CD', default_units: 'metric', currency: 'EUR', default_language: 'Italian' };
-  if (full.startsWith('+31')) return { country: 'Netherlands', country_code: 'NL', plate_example: 'AB-12-CD', default_units: 'metric', currency: 'EUR', default_language: 'Dutch' };
-  if (full.startsWith('+91')) return { country: 'India', country_code: 'IN', plate_example: 'MH 12 AB 1234', default_units: 'metric', currency: 'INR', default_language: 'English' };
-  if (full.startsWith('+971')) return { country: 'United Arab Emirates', country_code: 'AE', plate_example: 'A 12345', default_units: 'metric', currency: 'AED', default_language: 'English' };
-  if (full.startsWith('+55')) return { country: 'Brazil', country_code: 'BR', plate_example: 'ABC1D23', default_units: 'metric', currency: 'BRL', default_language: 'Portuguese' };
-  if (full.startsWith('+52')) return { country: 'Mexico', country_code: 'MX', plate_example: 'ABC-123-D', default_units: 'metric', currency: 'MXN', default_language: 'Spanish' };
-
-  return fallback;
+  // Single source of truth: src/services/globalization.js
+  return detectCountryGlobal(phone);
 }
 
 export function detectMessageLanguage(text = '') {
@@ -228,6 +208,47 @@ async function sendWhatsAppReply(toPhone, messageBody) {
  * Shared by role discovery and the idle greeting so every brand-new user
  * receives one consistent, numbered, step-by-step path.
  */
+/**
+ * Role-aware command index consumed by the AI action-discovery renderer.
+ * The AI writes the prose; this function owns the permissions.
+ */
+export function buildRoleContext(profileData, vehicles = [], senderPhone = '') {
+  const roles = [];
+  if (isSuperadminPhone(senderPhone)) roles.push('Superadmin');
+  if (profileData?.id && vehicles.some((v) => v.owner_id === profileData.id)) roles.push('Owner');
+  if (profileData?.id && vehicles.some((v) => v.assigned_driver_id === profileData.id)) roles.push('Driver');
+  if (roles.length === 0) roles.push('Unregistered');
+
+  const commands = [];
+  if (roles.includes('Superadmin')) {
+    commands.push('admin report', 'admin audit <plate or VIN>', 'admin alerts', 'adminrules', 'admin sentinel diagnose', 'adminstart / adminstop');
+  }
+  if (roles.includes('Owner')) {
+    commands.push('register vehicle', 'my vehicles', 'switch vehicle', 'log expense', 'log earnings', 'update odometer',
+      'assign driver', 'unassign driver', 'transfer passbook', 'set reminder', 'request report', 'edit vehicle', 'delete vehicle');
+  }
+  if (roles.includes('Driver')) {
+    commands.push('update odometer', 'log expense', 'log earnings', 'set reminder', 'passbook details');
+  }
+  if (roles.includes('Unregistered')) {
+    commands.push('register vehicle', 'accept passbook transfer', 'help');
+  }
+
+  return { roles, commands };
+}
+
+export async function renderRoleActions({ profileData, vehicles, senderPhone, language, countryInfo }) {
+  const { roles, commands } = buildRoleContext(profileData, vehicles, senderPhone);
+  return renderActionDiscovery({
+    roles,
+    commands,
+    vehicles,
+    language,
+    countryInfo,
+    profile: profileData
+  });
+}
+
 export function buildFirstTimeWelcome({ swahili = false, countryInfo = null, senderPhone = null } = {}) {
   const region = countryInfo || (senderPhone ? detectCountryFromPhone(senderPhone) : null) || detectCountryFromPhone(null);
   const plateExample = region.plate_example || 'ABC 1234';
@@ -385,13 +406,15 @@ export async function handleWhatsAppWebhook(request, reply, fastify) {
     const wamid = messageObj.id;
     const senderPhone = messageObj.from;
 
-    // 1. Message ID Deduplication (Idempotency Cache - 10 min TTL)
+    // 1. Distributed idempotency (in-memory + Supabase) BEFORE any processing.
+    //    This is the cross-instance guard that prevents Meta retries from being
+    //    processed twice when Cloud Run runs multiple containers.
     if (wamid) {
-      if (isMessageProcessed(wamid)) {
-        if (fastify?.log) fastify.log.warn(`[Deduplication] Message ${wamid} already processed within last 10m. Aborting Meta retry.`);
+      const alreadyProcessed = await checkAndRecordWamid(supabaseClient, wamid, senderPhone);
+      if (alreadyProcessed) {
+        if (fastify?.log) fastify.log.warn(`[Deduplication] Message ${wamid} already processed. Aborting Meta retry.`);
         return reply.status(200).send({ status: 'success', deduplicated: true });
       }
-      markMessageProcessed(wamid);
     }
 
     // 2. Immediate Fastify 200 OK Response (Eliminates Meta Webhook Timeout & Retries)
@@ -399,14 +422,32 @@ export async function handleWhatsAppWebhook(request, reply, fastify) {
       reply.status(200).send({ status: 'success' });
     }
 
-    // 3. Asynchronous Background Execution (DeepSeek AI, State Machine, Database)
-    return processIncomingWhatsAppMessage({ messageObj, fastify, supabaseClient });
+    // 3. Per-phone serial queue + global concurrency cap + retry/backoff.
+    //    The returned promise is awaited by tests and ignored by Fastify (200 sent).
+    return enqueueUserMessage(senderPhone, () => processIncomingWhatsAppMessage({ messageObj, fastify, supabaseClient }))
+      .catch(async (err) => {
+        if (fastify?.log) fastify.log.error({ err }, 'WhatsApp background processing failed');
+        await logSystemError(supabaseClient, err, '/webhook/whatsapp').catch(() => {});
+        return { status: 'error', error: err?.message };
+      });
   }
 
   return reply.status(404).send({ error: 'Not Found' });
 }
 
 export async function processIncomingWhatsAppMessage({ messageObj, fastify, supabaseClient }) {
+  const sessionPhone = messageObj?.from || '';
+  const formattedPhoneForSession = sessionPhone.startsWith('+') ? sessionPhone : `+${sessionPhone.replace(/[^\d]/g, '')}`;
+  const persistSnap = async () => {
+    if (!supabaseClient || !sessionPhone) return;
+    try {
+      await persistSessionSnapshot(supabaseClient, formattedPhoneForSession, {
+        session: chatSessions.get(sessionPhone) || null,
+        onboarding: onboardingStore.get(sessionPhone) || null
+      });
+    } catch {}
+  };
+
   try {
     const senderPhone = messageObj.from;
     const wamid = messageObj.id;
@@ -427,6 +468,18 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
       await saveChatMessage(supabaseClient, senderPhone, 'user', messageText);
     }
 
+    // Durable session hydration — restores quiz/onboarding/OTP state from
+    // Supabase so any Cloud Run instance can continue the conversation.
+    if (supabaseClient) {
+      try {
+        const snapshot = await loadSessionSnapshot(supabaseClient, formattedPhoneForSession);
+        if (snapshot) {
+          if (snapshot.session && !chatSessions.has(senderPhone)) chatSessions.set(senderPhone, snapshot.session);
+          if (snapshot.onboarding && !onboardingStore.has(senderPhone)) onboardingStore.set(senderPhone, snapshot.onboarding);
+        }
+      } catch {}
+    }
+
     // Superadmin Intercept Middleware
     if (supabaseClient) {
       const superadminRes = await handleSuperadminFlow(supabaseClient, senderPhone, messageText);
@@ -436,6 +489,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           await logChatTranscript(supabaseClient, senderPhone, 'assistant', superadminRes.reply);
           await saveChatMessage(supabaseClient, senderPhone, 'assistant', superadminRes.reply);
         }
+        await persistSnap();
         return { status: 'superadmin_handled' };
       }
     }
@@ -443,27 +497,38 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
     let session = chatSessions.get(senderPhone) || { history: [], lastActive: Date.now() };
     session.lastActive = Date.now();
 
-    // Circuit Breaker State Check & Reset on user reset/cancel commands
+    // Circuit Breaker State Check & Reset on user navigation commands
     const cleanCmd = messageText.trim().toLowerCase();
-    if (/^(cancel|exit|stop|reset|start over|1|2|3|4|5)$/i.test(cleanCmd) || /^(log|update|set|request|help)/i.test(cleanCmd)) {
+    if (/^(cancel|exit|stop|reset|restart|start over|start again|1|2|3|4|5)$/i.test(cleanCmd) || /^(log|update|set|request|help)/i.test(cleanCmd)) {
       session.circuitBreakerStage = null;
       session.consecutivePromptCount = 0;
       session.lastAssistantPrompt = null;
       session.loopSignature = null;
     } else if (session.circuitBreakerStage === 'HARD_TRIP') {
-      // Circuit breaker is in hard trip: bypass DeepSeek and send clean fallback message
-      const fallbackReply = "I've hit a temporary snag processing this step. I have notified our support team at support@sakafleet.com, and we will update you right here on WhatsApp once this is resolved!";
-      await sendWhatsAppReply(senderPhone, fallbackReply);
+      // Circuit breaker is in hard trip: bypass DeepSeek and send a short,
+      // AI-rendered recovery message (deterministic fallback if AI is down).
+      const fallbackReply = "⚠️ I've paused automated replies for this step. Type Restart to begin again, or contact support@sakafleet.com — we will update you here once resolved.";
+      const recoveryReply = await composeMessage({
+        purpose: 'circuit_breaker_recovery',
+        facts: {
+          reason: 'Repeated identical assistant prompt detected',
+          nextSteps: ['Type Restart to begin again', 'Type Cancel to exit', 'Email support@sakafleet.com'],
+          supportEmail: 'support@sakafleet.com'
+        },
+        fallbackText: fallbackReply
+      });
+      await sendWhatsAppReply(senderPhone, recoveryReply);
       if (supabaseClient) {
         try {
-          await supabaseClient.from('chat_transcripts').insert([{ phone_number: senderPhone, sender: 'assistant', message_text: fallbackReply }]);
-          await supabaseClient.from('chat_history').insert([{ user_phone: senderPhone, role: 'assistant', message: fallbackReply }]);
+          await supabaseClient.from('chat_transcripts').insert([{ phone_number: senderPhone, sender: 'assistant', message_text: recoveryReply }]);
+          await supabaseClient.from('chat_history').insert([{ user_phone: senderPhone, role: 'assistant', message: recoveryReply }]);
         } catch {}
       }
+      await persistSnap();
       return { status: 'circuit_breaker_active' };
     }
 
-        const formattedPhone = senderPhone.startsWith('+') ? senderPhone : `+${senderPhone}`;
+        const formattedPhone = formattedPhoneForSession;
         const countryInfo = detectCountryFromPhone(formattedPhone);
 
         let profileData = null;
@@ -582,12 +647,21 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             customReply = "I've forwarded your message to our support team at support@sakafleet.com. They will reach out to you shortly!";
           }
         } else if (
-          intent === 'CONTACT_SUPPORT' ||
           /\b(support|human|agent|representative|talk to a person|admin intervention|file a complaint|escalat(e|ion)|dispute|help from human|talk to support|contact support|human help|customer care)\b/i.test(messageText)
         ) {
           isSupportFlow = true;
           session.pendingSupportEscalation = true;
-          customReply = "Please write out a description of your issue in a single paragraph so our support team can assist you.";
+          customReply = await composeMessage({
+            purpose: 'support_intake',
+            facts: {
+              instruction: 'Ask the user to describe the issue in one message so it can be forwarded to support.',
+              supportEmail: 'support@sakafleet.com'
+            },
+            language: targetLang,
+            countryInfo,
+            profile: profileData,
+            fallbackText: 'Please describe your issue in one message and I will forward it to support@sakafleet.com.'
+          });
         }
 
         if (!isSupportFlow) {
@@ -663,7 +737,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           }
         }
         // 3. Buyer Email OTP Verification (Step 5)
-        else if (session.pendingTransferBuyerOtp || (messageText.trim().match(/^\d{6}$/) && !isCurrentlyOnboarding && !session.pendingEmailUpdate && !session.pendingDeleteVehicle && !session.pendingAccountDeletion && !onboardingStore.has(senderPhone))) {
+        else if (session.pendingTransferBuyerOtp || (messageText.trim().match(/^\d{6}$/) && !session.quiz && !isCurrentlyOnboarding && !session.pendingEmailUpdate && !session.pendingDeleteVehicle && !session.pendingAccountDeletion && !onboardingStore.has(senderPhone))) {
           if (supabaseClient) {
             const transferCompleteRes = await completePassbookTransfer({
               buyerPhone: senderPhone,
@@ -680,7 +754,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           }
         }
         // 4. Trial Extension Coupon ("Yes" or coupon code)
-        else if (!session.pendingDeleteVehicle && !session.pendingAccountDeletion && (intent === 'APPLY_COUPON' || /^(yes|yes please|apply coupon|extend trial|extend)$/i.test(messageText.trim()) || /^EXT30-[A-Z0-9]+$/i.test(messageText.trim()))) {
+        else if (!session.quiz && !session.pendingDeleteVehicle && !session.pendingAccountDeletion && (intent === 'APPLY_COUPON' || /^(yes|yes please|apply coupon|extend trial|extend)$/i.test(messageText.trim()) || /^EXT30-[A-Z0-9]+$/i.test(messageText.trim()))) {
           if (supabaseClient) {
             const extRes = await applyTrialExtensionCoupon({
               phone: senderPhone,
@@ -693,25 +767,69 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             }
           }
         }
-        // 5. Action Discovery & Role Help
-        else if (intent === 'ACTION_DISCOVERY' || intent === 'APP_HELP' || /\b(?:what\s+can\s+i\s+do|show\s+my\s+actions|my\s+actions|show\s+actions|what\s+are\s+my\s+commands|available\s+commands)\b/i.test(messageText.trim())) {
+        // 5. Action Discovery & Role Help (AI-rendered from the role index)
+        else if (!session.quiz && (intent === 'ACTION_DISCOVERY' || intent === 'APP_HELP' || /\b(?:what\s+can\s+i\s+do|show\s+my\s+actions|my\s+actions|show\s+actions|what\s+are\s+my\s+commands|available\s+commands)\b/i.test(messageText.trim()))) {
           isSpecialFlowHandled = true;
-          customReply = generateRoleBasedActionDiscovery({
+          customReply = await renderRoleActions({
             profileData,
             vehicles: existingVehicles,
             senderPhone,
-            targetVeh: currentActiveVehicle
+            language: targetLang,
+            countryInfo
           });
         }
 
         if (!isSpecialFlowHandled) {
 
+        // --- SAKA QUIZ ENGINE: one-piece-at-a-time flows + confirmation ---
+        const quizStartFlow = detectQuizStart({
+          intent,
+          messageText,
+          hasVehicleRegistered,
+          isRegisterCommand,
+          hasVehicleAttributes
+        });
 
-        // --- BRANCH A: TWO-STAGE PROGRESSIVE ONBOARDING FLOW ---
-        if (
+        const quizTurn = await handleQuizTurn({
+          session,
+          messageText,
+          aiExtracted: mergedExt,
+          startFlow: quizStartFlow,
+          ctx: {
+            supabase: supabaseClient,
+            profile: profileData,
+            vehicles: existingVehicles,
+            countryInfo,
+            senderPhone,
+            formattedPhone,
+            language: targetLang,
+            aiExtracted: mergedExt,
+            sendWhatsApp: sendWhatsAppReply
+          }
+        });
+
+        if (quizTurn.handled) {
+          isSpecialFlowHandled = true;
+          customReply = quizTurn.reply;
+
+          if (quizTurn.flow === 'vehicle_registration') {
+            onboardingStore.delete(senderPhone);
+            session.state = quizTurn.completed ? 'ACTIVE' : 'ONBOARDING';
+            if (quizTurn.completed) session.onboardingStep = null;
+          }
+
+          if (quizTurn.completed && quizTurn.flow === 'delete_account') {
+            session.state = 'IDLE';
+            session.active_vehicle_id = null;
+            session.history = [];
+          }
+        }
+
+        // --- BRANCH A: TWO-STAGE PROGRESSIVE ONBOARDING FLOW (legacy fallback) ---
+        if (!isSpecialFlowHandled && (
           isCurrentlyOnboarding ||
           (!hasVehicleRegistered && (intent === 'REGISTER_VEHICLE' || intent === 'ONBOARDING_INPUT' || intent === 'VERIFY_OTP' || isRegisterCommand || hasVehicleAttributes))
-        ) {
+        )) {
           session.state = 'ONBOARDING';
           const userTierKey = profileData?.subscription_tier || 'free';
           const currentTier = SUBSCRIPTION_TIERS[userTierKey] || SUBSCRIPTION_TIERS.free;
@@ -925,7 +1043,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             }
           }
 
-          if (session.state === 'ACTIVE') {
+          if (!isSpecialFlowHandled && session.state === 'ACTIVE') {
             // Resolve active or target vehicle
             let targetVeh = null;
             if (mergedExt.plate_number) {
@@ -1192,17 +1310,21 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               }
             }
             else if (activeIntent === 'GREETING') {
-              customReply = `Hello! 👋 Welcome back to Saka Fleet.\n\n` +
-                `Currently managing: *${targetVeh?.plate_number || 'Fleet'}* (${targetVeh?.make_model || 'Vehicle'})\n\n` +
-                `What would you like to do today?\n` +
-                `1️⃣ Log Expense / Fuel\n` +
-                `2️⃣ Update Odometer\n` +
-                `3️⃣ Set Service Reminder\n` +
-                `4️⃣ Log Earnings\n` +
-                `5️⃣ View Reports & Summary`;
-              if (existingVehicles.length > 1) {
-                customReply += `\n\n*(You have ${existingVehicles.length} vehicles registered. Reply "switch to [plate]" to change car)*`;
-              }
+              customReply = aiResult.reply_message && !aiResult.reply_message.includes('I am your Saka Fleet WhatsApp assistant')
+                ? aiResult.reply_message
+                : await composeMessage({
+                    purpose: 'greeting',
+                    facts: {
+                      activeVehicle: targetVeh?.plate_number || null,
+                      makeModel: targetVeh?.make_model || null,
+                      fleetSize: existingVehicles.length,
+                      nextSteps: ['log expense/fuel', 'update odometer', 'set a reminder', 'log earnings', 'view summary']
+                    },
+                    language: targetLang,
+                    countryInfo,
+                    profile: profileData,
+                    fallbackText: `👋 ${targetVeh?.plate_number || 'Fleet'} — what would you like to do today?`
+                  });
             }
             else if (activeIntent === 'LOG_EXPENSE') {
               const extAmount = mergedExt.amount || extractNumberFromText(messageText);
@@ -1460,37 +1582,49 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               }
             }
             else if (activeIntent === 'APP_HELP' || activeIntent === 'ACTION_DISCOVERY') {
-              customReply = generateRoleBasedActionDiscovery({
+              customReply = await renderRoleActions({
                 profileData,
                 vehicles: existingVehicles,
                 senderPhone,
-                targetVeh
+                language: targetLang,
+                countryInfo
               });
             }
             else {
               if (aiResult.reply_message && !aiResult.reply_message.includes('I am your Saka Fleet WhatsApp assistant. How can I help with your vehicle')) {
                 customReply = aiResult.reply_message;
               } else {
-                customReply = `Hello! 👋 How can I help manage your fleet today?\n\n` +
-                  `Currently managing: *${targetVeh?.plate_number || 'Fleet'}*\n\n` +
-                  `1️⃣ *Log Expense / Fuel*\n` +
-                  `2️⃣ *Update Mileage*\n` +
-                  `3️⃣ *Set Service Reminder*\n` +
-                  `4️⃣ *Log Earnings*\n` +
-                  `5️⃣ *View Reports & Summary*\n\n` +
-                  `Or ask me anything: *"What is my fuel consumption in km/l for ${targetVeh?.plate_number || 'my vehicle'}?"*`;
+                customReply = await composeMessage({
+                  purpose: 'active_user_default',
+                  facts: {
+                    activeVehicle: targetVeh?.plate_number || null,
+                    makeModel: targetVeh?.make_model || null,
+                    fleetSize: existingVehicles.length
+                  },
+                  language: targetLang,
+                  countryInfo,
+                  profile: profileData,
+                  fallbackText: `How can I help with ${targetVeh?.plate_number || 'your fleet'} today?`
+                });
               }
             }
           }
         }
 
         // --- BRANCH C: UNREGISTERED / IDLE USER DEFAULT ---
-        else {
+        else if (!isSpecialFlowHandled) {
           const clean = messageText.trim().toLowerCase();
 
           // 1. User asks to pause / stop
           if (/^(stop|pause|halt|quiet|exit|cancel)$/i.test(clean)) {
-            customReply = `Understood! I'll pause here. Whenever you're ready or have questions about Saka Fleet, simply text me anytime! 👋`;
+            customReply = await composeMessage({
+              purpose: 'pause_acknowledgement',
+              facts: { state: 'paused', note: 'Acknowledge the pause warmly and say they can return anytime.' },
+              language: targetLang,
+              countryInfo,
+              profile: profileData,
+              fallbackText: 'Paused — message me anytime to continue.'
+            });
           }
           // 2. Conversational feedback / frustration / message looping detected
           else if (checkIsConversationalFeedback(messageText, 1) || /\b(many replies|lot of responses|too many messages|repeating|looping|frustrat|bot broken|why so many)\b/i.test(clean)) {
@@ -1504,23 +1638,56 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                 }]);
               } catch {}
             }
-            customReply = `I sincerely apologize for the message overload! Our system experienced a temporary messaging sync delay. I've paused the messages. If you need any assistance, text **'Support'** to reach our team at support@sakafleet.com, or send your vehicle registration plate (e.g. *KDA 123A*) whenever you're ready to onboard.`;
+            customReply = await composeMessage({
+              purpose: 'friction_apology',
+              facts: {
+                issue: 'The user reported too many or repeating messages',
+                actionTaken: 'Automated prompts paused for this chat',
+                nextSteps: ['Type Support to reach support@sakafleet.com', 'Send a vehicle plate when ready to onboard']
+              },
+              language: targetLang,
+              countryInfo,
+              profile: profileData,
+              fallbackText: 'Apologies for the message overload — I have paused automated prompts. Type Support for help, or send your plate when ready.'
+            });
           }
-          // 3. Swahili Greetings — first-time guide in Swahili tone
-          else if (/^(habari|mambo|jambo|hujambo|salama)\b/i.test(clean)) {
-            customReply = buildFirstTimeWelcome({ swahili: true, countryInfo });
+          // 3. Greetings — AI-rendered first-time introduction
+          else if (/^(habari|mambo|jambo|hujambo|salama)\b/i.test(clean) || intent === 'GREETING') {
+            customReply = aiResult.reply_message && !aiResult.reply_message.includes('I am your Saka Fleet WhatsApp assistant')
+              ? aiResult.reply_message
+              : await composeMessage({
+                  purpose: 'first_time_welcome',
+                  facts: {
+                    prompt: 'Introduce Saka Fleet in one short paragraph, then ask exactly ONE question: the vehicle registration plate (or invite them to type REGISTER).',
+                    region: countryInfo,
+                    plateExample: countryInfo.plate_example,
+                    setupSteps: ['plate number', 'make/model, year, fuel, odometer', 'email OTP', 'VIN-locked passbook'],
+                    helpHint: 'Type Help anytime, Restart or Cancel to recover.'
+                  },
+                  language: targetLang,
+                  countryInfo,
+                  profile: profileData,
+                  fallbackText: `Welcome to Saka Fleet 🚗 What is your vehicle's registration plate? (e.g. ${countryInfo.plate_example})`
+                });
           }
-          // 4. English Greetings — first-time progressive guide
-          else if (intent === 'GREETING') {
-            customReply = buildFirstTimeWelcome({ countryInfo });
-          }
-          // 5. General informational questions answered via DeepSeek
+          // 4. General informational questions answered by Saka AI
           else if (aiResult.reply_message && !aiResult.reply_message.includes('I am your Saka Fleet WhatsApp assistant. How can I help with your vehicle')) {
             customReply = aiResult.reply_message;
           }
-          // 6. Default Welcome Prompt
+          // 5. Default: AI-rendered single next step
           else {
-            customReply = buildFirstTimeWelcome({ countryInfo });
+            customReply = await composeMessage({
+              purpose: 'first_time_default',
+              facts: {
+                prompt: 'Give exactly ONE next step: ask for the vehicle registration plate (or invite REGISTER). Optionally mention ACCEPT for a transferred passbook.',
+                plateExample: countryInfo.plate_example,
+                region: countryInfo
+              },
+              language: targetLang,
+              countryInfo,
+              profile: profileData,
+              fallbackText: `Send your vehicle registration plate (e.g. ${countryInfo.plate_example}) — or type REGISTER — to get started.`
+            });
           }
         }
         }
@@ -1548,7 +1715,17 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         // Stage 1 (Soft Trip): Prompt repeated 3 times. Grace retry.
         if (session.consecutivePromptCount === 3) {
           session.circuitBreakerStage = 'SOFT_TRIP';
-          finalReply = "I've hit a temporary snag processing this step. Kindly try again!";
+          finalReply = await composeMessage({
+            purpose: 'soft_trip_retry',
+            facts: {
+              issue: 'The same prompt repeated without progress',
+              instruction: 'Invite the user to resend that one answer in a slightly different way. Keep it to one short question.'
+            },
+            language: targetLang,
+            countryInfo,
+            profile: profileData,
+            fallbackText: "Let's try that once more — please resend your last answer."
+          });
           session.lastAssistantPrompt = finalReply;
           if (fastify?.log) fastify.log.warn(`[Circuit Breaker] SOFT TRIP for ${senderPhone}! Same assistant prompt repeated 3 times.`);
           if (supabaseClient) {
@@ -1588,7 +1765,18 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             if (fastify?.log) fastify.log.error('Failed to dispatch circuit breaker escalation email:', escErr?.message);
           }
 
-          finalReply = "I've hit a temporary snag processing this step. I have notified our support team at support@sakafleet.com, and we will update you right here on WhatsApp once this is resolved!";
+          finalReply = await composeMessage({
+            purpose: 'hard_trip_support_escalation',
+            facts: {
+              issue: 'Repeated identical prompt; support has been emailed automatically',
+              supportEmail: 'support@sakafleet.com',
+              nextSteps: ['Type Restart to begin again', 'Type Cancel to exit', 'Wait for a WhatsApp update from support']
+            },
+            language: targetLang,
+            countryInfo,
+            profile: profileData,
+            fallbackText: "I've escalated this step to support@sakafleet.com. Type Restart to begin again, or Cancel to exit."
+          });
           session.lastAssistantPrompt = finalReply;
         }
 
@@ -1603,9 +1791,11 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           await saveChatMessage(supabaseClient, senderPhone, 'assistant', finalReply);
         }
 
+        await persistSnap();
         return { status: 'success' };
       } catch (err) {
         if (fastify?.log) fastify.log.error(err);
+        await persistSnap();
         return { status: 'error', error: err?.message };
       }
 }
