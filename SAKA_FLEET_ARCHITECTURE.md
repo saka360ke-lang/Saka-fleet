@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.7.6  
+**Version:** 1.7.7  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -322,6 +322,17 @@ Sentinel executes an autonomous 4-stage optimization loop to detect conversation
 
 **Sentinel response:** friction was captured (LOOPING_PROMPTS / USER_FRUSTRATION / SYSTEM_ERROR) and a micro-rule was synthesized, but the Function Boundary Lock prevented it from repairing state-machine logic — hence the structural fixes above. Sentinel now also logs `MULTI_QUESTION_PROMPT` whenever any assistant turn asks 3+ questions.
 
+### 5.2 Real-Time Conversation Recovery (v1.7.7)
+
+`monitorActiveConversations(supabase)` runs every 5 minutes (`SENTINEL_STALL_INTERVAL_MS`) and is also exposed via `POST /api/sentinel/run`:
+
+1. Scans durable `chat_sessions` rows whose `updated_at` is older than `SENTINEL_STALL_MINUTES` (default 15) and whose snapshot contains an active `session.quiz`.
+2. Resolves the pending question with `getCurrentQuizField()` and composes an AI-rendered recovery nudge (fallback text if the provider is down).
+3. Sends ONE proactive WhatsApp message via the Meta Graph API, records it in `chat_transcripts`, logs `CONVERSATION_STALL` in `chat_friction_logs`, and increments `state.recovery.nudges` (max `SENTINEL_MAX_NUDGES`, default 2; rate-limited to one per stall window).
+4. Never claims data was saved; offers `Restart` / `Cancel`.
+
+This is the live counterpart to the post-hoc friction evaluator — it rescues users trapped mid-quiz (the Oct-2026 "Set reminder → expense trap" class of bug) instead of waiting for ten minutes of looped prompts.
+
 ---
 
 ## 6. Superadmin Command Center & System Boundaries
@@ -621,9 +632,11 @@ Every stateful test or check MUST clear the data it created from the database af
   - `runWithCleanup({ testFn, phones, vins })` wraps a suite in `try/finally` so cleanup always runs.
   - `KNOWN_TEST_PHONES` / `KNOWN_TEST_VINS` cover the identifiers used by the repository's suites.
 - `scripts/run_tests.js` (exposed as `npm test`) runs the targeted suite(s) and always performs a final cleanup sweep. `npm run test:cleanup` clears test data without running tests.
-- `test_quiz_flow.js` — stateless suite for the one-piece-at-a-time quiz engine, multi-field fast-forward, confirmation gate, corrections, Cancel/Restart, and quiz↔conversation arbitration (35 assertions).
+- `test_quiz_flow.js` — stateless suite for the one-piece-at-a-time quiz engine, multi-field fast-forward, confirmation gate, corrections, Cancel/Restart, quiz↔conversation arbitration, and audit regressions (reminder-vs-intent priority, mid-quiz flow switching, bare "No") — 41 assertions.
 - `test_concurrency.js` — stateless suite for per-phone serialization, global concurrency cap, retry/backoff, dead-letter rejection and graceful drain (8 assertions).
 - `test_ocr_flow.js` — stateless OCR suite: Meta media download, Vision parsing, size/type guards, receipt hint extraction and quiz prefill (20 assertions).
+- `test_date_parser.js` — stateless global date suite: ISO, country-resolved DD/MM vs MM/DD, ordinals, natural language, Nairobi normalization and quiz-field integration (24 assertions).
+- `test_sentinel_recovery.js` — stateless Sentinel stall suite with mocked Supabase + Graph API: nudge dispatch, recovery counter, rate limit, nudge cap and idle-session exclusion (15 assertions).
 
 ### 19.3 Conventions
 - New tests must import `runWithCleanup` and declare every phone/VIN/vehicle they create.
@@ -651,7 +664,7 @@ All multi-field flows run through `src/services/quizEngine.js`. Each asks exactl
 | `delete_vehicle` | vehicle → confirm (cascade notes) | — | `deleteVehicle` (soft delete + cleanup) |
 | `delete_account` | confirm → MFA OTP | — | soft-delete profile/vehicles + clear chat tables |
 | `apply_coupon` | code → confirm | — | `applyTrialExtensionCoupon` |
-| `set_reminder` | vehicle → type → due date or odometer threshold → confirm | optional threshold | `reminders` |
+| `set_reminder` | vehicle → type → due date (global parser, Nairobi-normalized) or odometer threshold → confirm | optional threshold | `reminders` |
 | `contact_support` | description → confirm | — | Resend escalation |
 | `reactivate_account` | confirm | — | `profiles.is_active = true` |
 
@@ -753,5 +766,39 @@ Saka Fleet serves a **global audience**. Every feature, quiz flow and AI prompt 
 **Measured live (real DeepSeek):** quiz answer turns dropped from ~3.3–3.7 s to **~2.0–2.4 s** (~40% faster). Remaining time is DB round trips + the Meta send; the first turn of a flow also pays the one-time question render + prefetch.
 
 Tuning env: `AI_TIMEOUT_MS`, `SAKA_PROMPT_CACHE_MS` (60 s), `QUIZ_QUESTION_CACHE_MS` (15 min), `QUIZ_QUESTION_CACHE_MAX` (300).
+
+
+---
+
+## 26. Rules of Engagement (Codified, v1.7.7)
+
+These rules are permanent and mirrored in `.clinerules`:
+
+1. **Mandatory pre-execution consultation:** before inspecting code, running commands or editing files, read `.clinerules` + `SAKA_FLEET_ARCHITECTURE.md` (and any other relevant project `.md`).
+2. **Self-updating documentation:** every code/schema/workflow/config change updates this document immediately.
+3. **Global audience:** country detection, mixed date conventions, metric/imperial units, currency/locale formatting and AI auto-translation on every feature, prompt and test.
+4. **Date & timezone canonicalization:** all dates are parsed by `src/services/dateParser.js` and normalized to **Africa/Nairobi (UTC+3, `TZ=Africa/Nairobi`)** before any database write.
+5. **Automatic test-data cleanup:** every stateful test/check clears what it created (pass or fail) via `runWithCleanup` / `npm test`; `npm run test:cleanup` for ad-hoc sweeps.
+6. **Targeted testing only:** run only the suites directly related to the change; no redundant full-suite runs.
+7. **Git commit & publish:** once verified, automatically stage, commit and push to `origin/main`; the commit hook dispatches deployment alerts.
+
+---
+
+## 27. Global Date Parsing (v1.7.7)
+
+`src/services/dateParser.js` is the single source of truth for date deciphering:
+
+| Input style | Example | Behaviour |
+| :--- | :--- | :--- |
+| ISO | `2027-05-15`, `2027-05-15T10:30:00Z` | High confidence |
+| Numeric day/month | `15/10/2027`, `15-10-27` | Unambiguous values resolved directly |
+| Ambiguous numeric | `05/06/2026` | Country convention: `US/PH` → MM/DD, otherwise DD/MM (medium confidence) |
+| Named / ordinal | `15th October 2026`, `Oct 15`, `October 15, 2026` | High confidence |
+| Relative | `today`, `tomorrow`, `yesterday`, `in 2 weeks`, `10 days from now`, `next week`, `next month` | Computed from the Nairobi calendar day |
+| Weekday | `next Monday`, `this Friday`, `coming Sunday` | Next occurrence in Nairobi time |
+
+Normalization: every result returns `{ ok, localDate (YYYY-MM-DD), iso, timeZone: 'Africa/Nairobi', confidence, source }`. Date-only quiz values are stored as `YYYY-MM-DD`; reminder `due_date` stores the same calendar day. The AI prompt mirrors these rules (ISO/DD-MM/MM-DD, ordinals, relative phrases, Nairobi timezone).
+
+Integration points: `vehicle_registration` insurance/inspection expiry, `edit_vehicle` date fields, `set_reminder` due date, and `globalization.formatDate()` (renders in Africa/Nairobi by default).
 
 

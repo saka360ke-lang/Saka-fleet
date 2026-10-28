@@ -1,15 +1,26 @@
 # SAKA FLEET - STRICT EFFICIENCY & ARCHITECTURAL CONSULTATION RULES
 
-## MANDATORY FIRST-CONSULT RULE (CRITICAL - TOKEN CREDIT PRESERVATION)
-1. **Mandatory First Consult Directive:** On every prompt or operation done on Saka Fleet, Cline must FIRST read and consult `SAKA_FLEET_ARCHITECTURE.md` and `.clinerules` before inspecting code or executing actions to preserve token credits.
+## MANDATORY PRE-EXECUTION PROTOCOL (CRITICAL - TOKEN CREDIT PRESERVATION)
+1. **Always consult the rules and project docs first:** On EVERY prompt, before inspecting code, running commands, or editing files, Cline must FIRST read `.clinerules` and `SAKA_FLEET_ARCHITECTURE.md` (plus any other relevant project `.md` files). No exceptions.
 2. **Self-Updating Policy:** Whenever any change is made to the codebase, database schema, workflow, or configuration, Cline must IMMEDIATELY update `SAKA_FLEET_ARCHITECTURE.md` to reflect the latest state.
 3. **Targeted Reads & Writes:** Never read large files in their entirety when only specific ranges are needed. Use `start_line` and `end_line` aggressively.
 4. **Tool Call Batching:** Always combine independent searches, reads, commands, or edits into parallel tool calls in a single turn.
 5. **No Blind Full Scans:** Rely on the architecture file for schema definitions, routing rules, and design patterns instead of searching through `node_modules` or executing unfocused filesystem walks.
 6. **Non-Interactive Windows CLI:** Commands execute in Windows PowerShell. Always use `--no-pager` for git or other paginated commands to prevent terminal hangs.
 
+## GLOBAL AUDIENCE RULE (PERMANENT)
+7. **Saka Fleet serves a global audience.** Every feature, prompt, quiz flow, summary and test must account for:
+   - Country detection from the WhatsApp number (E.164).
+   - Mixed date conventions: ISO, DD/MM/YYYY, MM/DD/YYYY (country-resolved), ordinals ("15th October") and natural language ("tomorrow", "next Monday", "in 2 weeks").
+   - Metric/imperial units, local currency, regional number/date formatting and multi-language auto-translation.
+   - Canonical storage: kilometres, litres, ISO-8601 dates normalized to **Africa/Nairobi** (`TZ=Africa/Nairobi`, UTC+3) before any database write.
+   - Date parsing lives in `src/services/dateParser.js`; never hand-roll date parsing in flows.
+
 ## EDIT/DELETE, VIN & DATA-INTEGRITY RULES
-7. **VIN Immutability (Absolute):** The vehicle VIN (`vehicles.vin`) and `qr_passbook_token` are permanent asset identifiers. They must never be editable or deletable by any handler, service, migration, or direct SQL. Enforced by `sanitizeVehicleUpdates`, `updateVehicleDetails`, and the Postgres trigger `trg_prevent_vin_mutation` (`npm run migrate:vin`).
-8. **Owner-Authorized Vehicle Deletion:** Only `vehicles.owner_id` may delete a vehicle. Deletion is a soft-delete (`deleted_at`, `status='DELETED'`) that unassigns the driver, cancels pending passbook transfers, retires active reminders, and PRESERVES historical logs + the `vin_registry` trial ledger.
-9. **Automatic Test Data Cleanup (Permanent Rule):** Every test or stateful check MUST clear the data it created from the database after it runs — pass or fail. Use `runWithCleanup` (`scripts/testCleanup.js`) inside `test_*.js` and run suites via `npm test` (`scripts/run_tests.js`), which always performs a final cleanup sweep. `npm run test:cleanup` clears test data without running tests. Never leave garbage rows behind.
-10. **Targeted Testing Only:** Run only the tests directly related to the change (e.g. `test_edit_delete.js` for edit/delete/VIN work). Do not run or add redundant full-suite bloat.
+8. **VIN Immutability (Absolute):** The vehicle VIN (`vehicles.vin`) and `qr_passbook_token` are permanent asset identifiers. They must never be editable or deletable by any handler, service, migration, or direct SQL. Enforced by `sanitizeVehicleUpdates`, `updateVehicleDetails`, and the Postgres trigger `trg_prevent_vin_mutation` (`npm run migrate:vin`).
+9. **Owner-Authorized Vehicle Deletion:** Only `vehicles.owner_id` may delete a vehicle. Deletion is a soft-delete (`deleted_at`, `status='DELETED'`) that unassigns the driver, cancels pending passbook transfers, retires active reminders, and PRESERVES historical logs + the `vin_registry` trial ledger.
+
+## TESTING & DELIVERY RULES
+10. **Automatic Test Data Cleanup (Permanent):** Every test or stateful check MUST clear the data it created from the database after it runs — pass or fail. Use `runWithCleanup` (`scripts/testCleanup.js`) inside `test_*.js` and run suites via `npm test` (`scripts/run_tests.js`), which always performs a final cleanup sweep. `npm run test:cleanup` clears test data without running tests. Never leave garbage rows behind.
+11. **Targeted Testing Only:** Run only the tests directly related to the change (e.g. `test_date_parser.js` for date work, `test_quiz_flow.js` for quiz changes, `test_sentinel_recovery.js` for Sentinel recovery work). Do not run or add redundant full-suite bloat.
+12. **Git Commit & Publish Rule:** Once updates are completed, tested and verified, Cline MUST automatically stage, commit and push all changes to git (`git --no-pager add -A`, commit with a descriptive message, `git --no-pager push origin main`). The commit hook dispatches the deployment publish alerts automatically.

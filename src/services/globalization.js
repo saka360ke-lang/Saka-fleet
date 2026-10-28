@@ -151,7 +151,11 @@ export function formatDate(dateLike, locale = 'en-US', options = {}) {
   const date = dateLike instanceof Date ? dateLike : new Date(dateLike);
   if (Number.isNaN(date.getTime())) return String(dateLike);
   try {
-    return new Intl.DateTimeFormat(locale, { year: 'numeric', month: 'short', day: 'numeric', ...options }).format(date);
+    return new Intl.DateTimeFormat(locale, {
+      year: 'numeric', month: 'short', day: 'numeric',
+      timeZone: options.timeZone || 'Africa/Nairobi',
+      ...options
+    }).format(date);
   } catch {
     return date.toISOString().split('T')[0];
   }

@@ -1,6 +1,9 @@
-import { createClient } from '@supabase/supabase-js';
+﻿import { createClient } from '@supabase/supabase-js';
 import { fetchCloudRunLogs } from '../services/sentinelCloudLogs.js';
 import { generateText, parseJsonSafely } from '../services/aiClient.js';
+import { composeMessage } from '../services/conversationEngine.js';
+import { getCurrentQuizField } from '../services/quizEngine.js';
+import { detectCountryFromPhone } from '../services/globalization.js';
 
 function getSupabase(providedSupabase) {
   if (providedSupabase) return providedSupabase;
@@ -359,7 +362,7 @@ Return strictly a single valid JSON object matching this schema (no markdown ast
 export async function logSystemError(providedSupabase, error, route = 'unknown') {
   try {
     const message = error?.message || (typeof error === 'string' ? error : '');
-    // Ignore empty/serialized-empty errors and benign status codes — these are
+    // Ignore empty/serialized-empty errors and benign status codes â€” these are
     // observability noise (e.g. INFO 200 webhook logs) and must not pollute
     // error_logs or Sentinel AI diagnosis.
     if (!message || message === '{}' || message === 'undefined' || message === 'null') return;
@@ -427,7 +430,7 @@ export async function scanCloudRunAnomalies(providedSupabase) {
     const isError = log.severity === 'ERROR' || log.severity === 'CRITICAL';
     const isTimeoutRisk = (log.httpRequest?.latency >= 5) || (log.httpRequest?.status >= 500);
 
-    // Ignore benign INFO/NOTICE traffic (health checks, 200 webhooks) — this is
+    // Ignore benign INFO/NOTICE traffic (health checks, 200 webhooks) â€” this is
     // the noise source that produced false "AI-diagnosed errors".
     const status = Number(log.httpRequest?.status || 0);
     const severity = String(log.severity || '').toUpperCase();
@@ -473,7 +476,7 @@ export async function scanCloudRunAnomalies(providedSupabase) {
       const metaToken = process.env.META_WHATSAPP_TOKEN;
       if (metaPhoneId && metaToken) {
         const cleanPhone = superadminPhone.replace(/[^\d]/g, '');
-        const waMessage = `🚨 *Sentinel Cloud Run Error Alert* ⚠️\n\n• *Service:* saka-fleet\n• *Severity:* ${log.severity}\n• *Latency / Status:* ${log.httpRequest?.status || 'N/A'} (${log.httpRequest?.latency || 0}s)\n• *Timestamp:* ${new Date(log.timestamp).toLocaleString()}\n• *Snippet:* "${(log.text || '').substring(0, 200)}"\n\n_Logged to chat_friction_logs. Text 'admin alerts' for full diagnostic._`;
+        const waMessage = `ðŸš¨ *Sentinel Cloud Run Error Alert* âš ï¸\n\nâ€¢ *Service:* saka-fleet\nâ€¢ *Severity:* ${log.severity}\nâ€¢ *Latency / Status:* ${log.httpRequest?.status || 'N/A'} (${log.httpRequest?.latency || 0}s)\nâ€¢ *Timestamp:* ${new Date(log.timestamp).toLocaleString()}\nâ€¢ *Snippet:* "${(log.text || '').substring(0, 200)}"\n\n_Logged to chat_friction_logs. Text 'admin alerts' for full diagnostic._`;
         
         try {
           await fetch(`https://graph.facebook.com/v17.0/${metaPhoneId}/messages`, {
@@ -838,7 +841,7 @@ ${rawCorpus.slice(0, 15000)}`;
   // 3. Dispatch to Superadmin
   const superadminPhone = process.env.SUPERADMIN_PHONE;
   if (superadminPhone) {
-    const waMsg = `🌟 *Saka Sentinel Horizon — Weekly Feature Evolution* 🚀\n\nAnalyzed ${recentTranscripts.length} driver exchanges this week.\nTop Driver Feature Opportunity:\n\n💡 *${parsedProposal.title}*\n• *Why:* ${parsedProposal.evidence_quotes.substring(0, 100)}...\n• *Driver Value:* ${parsedProposal.driver_value_proposition}\n• *Impact:* ${parsedProposal.impact_score}/10\n\n_Text "admin proposals" to review._`;
+    const waMsg = `ðŸŒŸ *Saka Sentinel Horizon â€” Weekly Feature Evolution* ðŸš€\n\nAnalyzed ${recentTranscripts.length} driver exchanges this week.\nTop Driver Feature Opportunity:\n\nðŸ’¡ *${parsedProposal.title}*\nâ€¢ *Why:* ${parsedProposal.evidence_quotes.substring(0, 100)}...\nâ€¢ *Driver Value:* ${parsedProposal.driver_value_proposition}\nâ€¢ *Impact:* ${parsedProposal.impact_score}/10\n\n_Text "admin proposals" to review._`;
     try {
       const token = process.env.META_WHATSAPP_TOKEN;
       const phoneNumberId = process.env.META_PHONE_NUMBER_ID;
@@ -853,8 +856,172 @@ ${rawCorpus.slice(0, 15000)}`;
     } catch {}
   }
 
-  return { status: 'success', message: `✅ Sentinel Horizon generated blueprint: ${parsedProposal.title}` };
+  return { status: 'success', message: `âœ… Sentinel Horizon generated blueprint: ${parsedProposal.title}` };
 }
 
+/* ------------------------------------------------------------------ */
+/* Real-time conversational flow recovery (v1.7.7)                     */
+/* ------------------------------------------------------------------ */
 
+/**
+ * Dispatch a plain WhatsApp text through the Meta Cloud API.
+ * Used for proactive Sentinel nudges (not replies).
+ */
+export async function sendProactiveWhatsApp(toPhone, text) {
+  const phoneNumberId = process.env.META_PHONE_NUMBER_ID;
+  const token = process.env.META_WHATSAPP_TOKEN;
+  if (!phoneNumberId || !token || !toPhone || !text) return false;
+
+  const cleanPhone = String(toPhone).replace(/[^\d]/g, '');
+  if (!cleanPhone) return false;
+
+  try {
+    const res = await fetch(`https://graph.facebook.com/v17.0/${phoneNumberId}/messages`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        to: cleanPhone,
+        type: 'text',
+        text: { body: text }
+      })
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Real-time stall monitor: scans durable chat_sessions for active quizzes that
+ * have not progressed within SENTINEL_STALL_MINUTES and sends ONE AI-rendered
+ * recovery nudge (max SENTINEL_MAX_NUDGES per session).
+ *
+ * This is the live counterpart to the post-hoc friction evaluator: it rescues
+ * users who are stuck mid-flow (the Oct-2026 "expense trap" class of bug).
+ */
+export async function monitorActiveConversations(providedSupabase) {
+  const supabase = getSupabase(providedSupabase);
+  const stallMinutes = Number(process.env.SENTINEL_STALL_MINUTES || 15);
+  const maxNudges = Number(process.env.SENTINEL_MAX_NUDGES || 2);
+  const cutoff = new Date(Date.now() - stallMinutes * 60 * 1000).toISOString();
+
+  let rows = [];
+  try {
+    const { data, error } = await supabase
+      .from('chat_sessions')
+      .select('phone_number,state,updated_at')
+      .lt('updated_at', cutoff)
+      .order('updated_at', { ascending: true })
+      .limit(50);
+    if (error) {
+      console.warn('[Sentinel monitor] chat_sessions query failed:', error.message);
+      return { status: 'error', stalled: 0, nudged: 0, error: error.message };
+    }
+    rows = data || [];
+  } catch (err) {
+    console.warn('[Sentinel monitor] unexpected error:', err.message);
+    return { status: 'error', stalled: 0, nudged: 0, error: err.message };
+  }
+
+  let nudged = 0;
+  let inspected = 0;
+
+  for (const row of rows) {
+    try {
+      const state = row.state || {};
+      const session = state.session || {};
+      const quiz = session.quiz || state.quiz || null;
+      if (!quiz) continue;
+
+      // Under-way quizzes only (finished/cancelled flows have no quiz object).
+      inspected += 1;
+
+      const recovery = state.recovery || {};
+      if ((recovery.nudges || 0) >= maxNudges) continue;
+      if (recovery.lastNudgedAt && Date.now() - new Date(recovery.lastNudgedAt).getTime() < stallMinutes * 60 * 1000) {
+        continue;
+      }
+
+      const phone = row.phone_number;
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('preferred_language, unit_system')
+        .eq('phone_number', phone)
+        .maybeSingle();
+
+      const countryInfo = detectCountryFromPhone(phone);
+      const language = profile?.preferred_language || countryInfo.default_language || 'English';
+      const field = getCurrentQuizField(quiz, { profile, countryInfo, language });
+
+      const nudgeText = await composeMessage({
+        purpose: 'conversation_stall_nudge',
+        facts: {
+          flow: quiz.flow,
+          phase: quiz.phase,
+          idleMinutes: stallMinutes,
+          pendingQuestion: field ? { label: field.label, hint: field.hint } : null,
+          instruction: 'In ONE short friendly message, check whether the user is still there, repeat ONLY the pending question if one exists, and offer Restart or Cancel. Do not claim anything was saved.'
+        },
+        language,
+        countryInfo,
+        profile,
+        fallbackText: field
+          ? `Still there? When you're ready: ${field.label} â€” ${field.hint} (Reply Restart or Cancel.)`
+          : 'Still there? Reply to continue, or type Restart / Cancel.'
+      });
+
+      const sent = await sendProactiveWhatsApp(phone, nudgeText);
+      if (!sent) continue;
+
+      const newState = {
+        ...state,
+        recovery: {
+          nudges: (recovery.nudges || 0) + 1,
+          lastNudgedAt: new Date().toISOString(),
+          lastFlow: quiz.flow,
+          lastPhase: quiz.phase
+        }
+      };
+
+      await supabase
+        .from('chat_sessions')
+        .update({ state: newState, updated_at: new Date().toISOString() })
+        .eq('phone_number', phone);
+
+      try {
+        await supabase.from('chat_transcripts').insert([{
+          phone_number: phone,
+          sender: 'assistant',
+          message_text: nudgeText,
+          created_at: new Date().toISOString()
+        }]);
+      } catch {}
+
+      try {
+        await supabase.from('chat_friction_logs').insert([{
+          user_phone: phone,
+          session_id: `session_${String(phone).replace(/[^\d]/g, '')}`,
+          friction_type: 'CONVERSATION_STALL',
+          transcript_snippet: `Stalled ${stallMinutes}m in ${quiz.flow}/${quiz.phase}. Pending: ${field?.label || 'n/a'}. Nudge #${newState.recovery.nudges}.`,
+          detected_at: new Date().toISOString()
+        }]);
+      } catch {}
+
+      nudged += 1;
+    } catch (err) {
+      console.warn('[Sentinel monitor] Failed to nudge a stalled session:', err.message);
+    }
+  }
+
+  return { status: 'success', inspected, stalled: rows.length, nudged };
+}
+
+export default {
+  monitorActiveConversations,
+  sendProactiveWhatsApp
+};
 

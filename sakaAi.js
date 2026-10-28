@@ -129,7 +129,9 @@ CONFIRMATION BEFORE WRITE (MANDATORY):
 - Summaries must list every collected field with localized units/currency/dates, and invite corrections by naming a field.
 
 CRITICAL CONTEXT & TIME-AWARENESS:
-- Resolve relative date references (such as "today", "tomorrow", "next Monday") into absolute calendar dates YYYY-MM-DD.
+- The system timezone is Africa/Nairobi (UTC+3). Resolve "today", "tomorrow" and relative references in that timezone.
+- Accept ISO (YYYY-MM-DD), DD/MM/YYYY and MM/DD/YYYY. When the order is ambiguous (both parts ≤ 12), follow the user's country convention: US/PH → MM/DD, most other countries → DD/MM.
+- Understand ordinals ("15th October"), month names, weekdays ("next Monday") and relative phrases ("in 2 weeks"); always output extracted dates as YYYY-MM-DD.
 - Keep reply_message concise, friendly, and clean plain text formatted for WhatsApp.
 - Output ONLY valid JSON matching the schema.`;
 

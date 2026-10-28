@@ -7,7 +7,7 @@ import crypto from 'crypto';
 import { generateFleetReport, uploadReportToSupabase } from './reports.js';
 import { sendReportByEmail, sendMfaEmail } from './src/services/mailer.js';
 import { processSakaMessage } from './sakaAi.js';
-import { runHealthCheck, runConversationRefinement, evaluateConversationalFriction, logSystemError, logChatTranscript, ensureSentinelTables, scanCloudRunAnomalies } from './src/workers/sentinel.js';
+import { runHealthCheck, runConversationRefinement, evaluateConversationalFriction, monitorActiveConversations, logSystemError, logChatTranscript, ensureSentinelTables, scanCloudRunAnomalies } from './src/workers/sentinel.js';
 import { ensureSuperadminTables, isSuperadminPhone, sendMorningExecutiveBriefing } from './src/services/superadmin.js';
 import { ensureVehicleTableColumns } from './src/services/vehicles.js';
 import whatsappRoutes, { handleWhatsAppWebhook as handleWhatsAppWebhookRoute } from './src/routes/whatsapp.js';
@@ -719,7 +719,16 @@ setInterval(async () => {
   } catch (err) {
     console.warn('[Sentinel Friction Loop Warning]:', err.message);
   }
-}, 10 * 60 * 1000); // Run friction evaluation every 10 minutes
+}, 5 * 60 * 1000); // Run friction evaluation every 5 minutes
+
+// Sentinel Real-Time Conversation Recovery Loop — rescues users stalled mid-quiz.
+setInterval(async () => {
+  try {
+    await monitorActiveConversations(supabase);
+  } catch (err) {
+    console.warn('[Sentinel Stall Monitor Warning]:', err.message);
+  }
+}, Number(process.env.SENTINEL_STALL_INTERVAL_MS || 5 * 60 * 1000));
 
 // Sentinel Cloud Run Log Polling (Anomalies & Timeouts)
 setInterval(async () => {
@@ -926,6 +935,7 @@ fastify.post('/api/sentinel/run', async (request, reply) => {
     const healthCheckResult = await runHealthCheck(supabase);
     const frictionResult = await evaluateConversationalFriction(supabase);
     const refinementResult = await runConversationRefinement(supabase);
+    const stallResult = await monitorActiveConversations(supabase);
     await scanCloudRunAnomalies(supabase);
 
     return reply.status(200).send({
@@ -934,7 +944,8 @@ fastify.post('/api/sentinel/run', async (request, reply) => {
       actions: {
         health_check: healthCheckResult,
         conversational_friction: frictionResult,
-        conversation_refinement: refinementResult
+        conversation_refinement: refinementResult,
+        conversation_stall_recovery: stallResult
       }
     });
   } catch (err) {

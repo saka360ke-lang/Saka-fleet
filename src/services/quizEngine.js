@@ -37,6 +37,7 @@ import {
   checkOwnerVehicleTierLimit
 } from './vehicles.js';
 import { scheduleTrialExtensionCoupon, applyTrialExtensionCoupon } from './coupons.js';
+import { parseFlexibleDate } from './dateParser.js';
 import {
   initiatePassbookTransfer,
   setBuyerDetailsAndSendReleaseOtp,
@@ -92,17 +93,12 @@ function parseOdometer(text, ctx) {
   return userDistanceToKm(num, unitSystem);
 }
 
-function parseDateValue(text) {
-  const raw = String(text).trim();
-  if (!raw) return null;
-  const normalized = raw.replace(/\b(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})\b/, (m, a, b, c) => {
-    const year = c.length === 2 ? `20${c}` : c;
-    return `${year}-${a.padStart(2, '0')}-${b.padStart(2, '0')}`;
+function parseDateValue(text, ctx = {}) {
+  const result = parseFlexibleDate(text, {
+    countryCode: ctx.countryInfo?.country_code || 'GLOBAL',
+    locale: ctx.countryInfo?.locale || 'en-US'
   });
-  const isoMatch = normalized.match(/\d{4}-\d{2}-\d{2}/);
-  const ts = Date.parse(isoMatch ? isoMatch[0] : normalized);
-  if (Number.isNaN(ts)) return null;
-  return new Date(ts).toISOString().split('T')[0];
+  return result.ok ? result.localDate : null;
 }
 
 function isYes(text) {
@@ -264,7 +260,7 @@ function registrationOptionalFields() {
   return [
     field('insurance_expiry', 'Insurance expiry date', 'e.g. 2027-05-15 (optional)', {
       optional: true, group: 'optional', aliases: ['insurance_expiry'],
-      parse: (text) => parseDateValue(text),
+      parse: (text, c) => parseDateValue(text, c),
       validate: (value) => (value ? { ok: true } : { ok: false, message: 'Please send a valid date, or reply Skip.' })
     }),
     field('insurance_policy', 'Insurance policy number/provider', 'optional', {
@@ -272,7 +268,7 @@ function registrationOptionalFields() {
     }),
     field('inspection_expiry', 'Inspection / NTAC expiry date', 'e.g. 2027-03-01 (optional)', {
       optional: true, group: 'optional', aliases: ['inspection_expiry'],
-      parse: (text) => parseDateValue(text),
+      parse: (text, c) => parseDateValue(text, c),
       validate: (value) => (value ? { ok: true } : { ok: false, message: 'Please send a valid date, or reply Skip.' })
     }),
     field('color', 'Vehicle colour', 'optional', { optional: true, group: 'optional', aliases: ['color'] }),
@@ -322,7 +318,7 @@ const EDITABLE_VEHICLE_FIELDS = {
 
 function editVehicleNewValueParser(editField) {
   if (['yom', 'current_mileage', 'purchase_cost'].includes(editField)) return parseNumber;
-  if (['insurance_expiry', 'inspection_expiry'].includes(editField)) return parseDateValue;
+  if (['insurance_expiry', 'inspection_expiry'].includes(editField)) return (text, ctx) => parseDateValue(text, ctx);
   return (text) => String(text).trim();
 }
 
@@ -619,16 +615,19 @@ export function getFlowDefinition(flowKey, ctx) {
             { value: 'Inspection', aliases: ['inspection', 'ntac'] },
             { value: 'Other', aliases: ['other'] }
           ]),
-          field('due', 'Due date or odometer threshold', 'e.g. 2027-05-15 or 45000 km', {
+          field('due', 'Due date or odometer threshold', 'e.g. 2027-05-15, 15th October, next Monday or 45000 km', {
             aliases: ['due', 'due_date', 'due_mileage'],
-            parse: (text) => {
-              const date = parseDateValue(text);
-              if (date) return { kind: 'date', value: date };
+            parse: (text, c) => {
+              const parsed = parseFlexibleDate(text, {
+                countryCode: c?.countryInfo?.country_code || 'GLOBAL',
+                locale: c?.countryInfo?.locale || 'en-US'
+              });
+              if (parsed.ok) return { kind: 'date', value: parsed.localDate, localDate: parsed.localDate };
               const num = parseNumber(text);
               if (num !== null && num > 0) return { kind: 'odometer', value: num };
               return null;
             },
-            validate: (value) => (value ? { ok: true } : { ok: false, message: 'Please send a due date (YYYY-MM-DD) or an odometer reading.' }),
+            validate: (value) => (value ? { ok: true } : { ok: false, message: 'Please send a due date (e.g. 2027-05-15, 15th October, next Monday) or an odometer reading.' }),
             summary: (value) => (value?.kind === 'date' ? value.value : value ? `${formatNumber(value.value)} km` : 'â€”')
           })
         ]
@@ -997,6 +996,12 @@ export function shouldPauseQuizForChat({ messageText = '', intent = '', quiz = n
   // Security steps always consume the raw input
   if (quiz.phase === 'pin' || quiz.phase === 'account_otp') return false;
 
+  // Bare conversational acknowledgements mid-question are chat, not answers.
+  if (quiz.phase === 'question' &&
+      /^(no|nope|nah|yes|yeah|yep|ok|okay|thanks|thank you|good|great|nice|cool|sure)$/i.test(clean)) {
+    return true;
+  }
+
   // Control words are owned by the engine
   if (/^(cancel|exit|stop|quit|abort|restart|start over|reset|yes|no|confirm|save|correct|skip|later|done|resend|resend code|new code|send again)$/i.test(clean)) {
     return false;
@@ -1029,6 +1034,38 @@ export function getCurrentQuizField(quiz, ctx = {}) {
   if (!def) return null;
   const f = nextField(def, quiz.answers);
   return f ? { key: f.key, label: f.label, hint: f.hint, optional: !!f.optional } : null;
+}
+
+// Explicit commands that may switch the active quiz to another flow. Only
+// deterministic text patterns are allowed — AI intent alone must never hijack
+// a flow (the Oct-2026 "Set reminder" → expense-trap incident).
+const EXPLICIT_FLOW_PATTERNS = [
+  { flow: 'set_reminder', re: /^(?:remind|reminder|set\s+reminder|remind\s+me)\b/i },
+  { flow: 'log_expense', re: /^(?:log|record)\s+(?:an?\s+)?(?:expense|fuel|refuel)\b/i },
+  { flow: 'log_earnings', re: /^(?:log|record)\s+(?:an?\s+)?(?:earning|earnings|income|revenue)\b/i },
+  { flow: 'log_mileage', re: /^(?:update|set)\s+(?:the\s+)?(?:odometer|mileage)\b/i },
+  { flow: 'transfer_seller', re: /^transfer\s+passbook\b/i },
+  { flow: 'assign_driver', re: /^(?:assign\s+driver|assign)\b/i },
+  { flow: 'unassign_driver', re: /^(?:unassign\s+driver|remove\s+driver)\b/i },
+  { flow: 'delete_vehicle', re: /^(?:delete|remove)\s+(?:my\s+)?(?:vehicle|car)\b/i },
+  { flow: 'edit_vehicle', re: /^(?:edit|update|change|modify)\s+(?:my\s+)?(?:vehicle|car)\b/i }
+];
+
+/**
+ * Detect an explicit command that should switch an in-progress quiz to a
+ * different flow. Returns the target flow key or null.
+ */
+export function detectFlowSwitch({ quiz, messageText = '', intent = '' } = {}) {
+  if (!quiz) return null;
+  // Never abandon registration (the user has no vehicle to act on yet).
+  if (quiz.flow === 'vehicle_registration') return null;
+
+  const text = String(messageText || '').trim();
+  if (!text) return null;
+
+  const match = EXPLICIT_FLOW_PATTERNS.find((p) => p.re.test(text));
+  if (match && match.flow !== quiz.flow) return match.flow;
+  return null;
 }
 
 /**
@@ -1957,18 +1994,23 @@ export function detectQuizStart({
     REACTIVATE_ACCOUNT: 'reactivate_account'
   };
 
-  if (intentMap[intent]) return intentMap[intent];
-
-  // Natural-language fallbacks for explicit commands
+  // Explicit deterministic commands win over AI intent — this prevents
+  // "Set reminder. Oil change in 2500km" from being misread as LOG_EXPENSE.
+  if (/^(?:remind|reminder|set\s+reminder|remind\s+me)\b/i.test(text)) return 'set_reminder';
+  if (/^(?:log|record)\s+(?:an?\s+)?(?:expense|fuel|refuel)\b/i.test(text)) return 'log_expense';
+  if (/^(?:log|record)\s+(?:an?\s+)?(?:earning|earnings|income|revenue)\b/i.test(text)) return 'log_earnings';
+  if (/^(?:update|set)\s+(?:the\s+)?(?:odometer|mileage)\b/i.test(text)) return 'log_mileage';
+  if (/^transfer\s+passbook\b/i.test(text)) return 'transfer_seller';
   if (/^(?:assign\s+driver|assign)\b/i.test(text)) return 'assign_driver';
   if (/^(?:unassign\s+driver|remove\s+driver)\b/i.test(text)) return 'unassign_driver';
-  if (/^(?:transfer\s+passbook|transfer\s+vehicle)\b/i.test(text)) return 'transfer_seller';
   if (/^(?:edit|update|change|modify)\s+(?:my\s+)?(?:vehicle|car)\b/i.test(text)) return 'edit_vehicle';
   if (/^(?:edit|update|change|modify)\s+(?:my\s+)?(?:profile|details|name|language|units?|settings)\b/i.test(text)) return 'edit_profile';
   if (/^(?:delete|remove)\s+(?:my\s+)?(?:vehicle|car)\b/i.test(text)) return 'delete_vehicle';
   if (/^(?:delete|deactivate|close)\s+(?:my\s+)?account\b/i.test(text)) return 'delete_account';
-  if (/^(?:remind|set\s+reminder|reminder)\b/i.test(text)) return 'set_reminder';
   if (/^(?:update\s+email|change\s+email|new\s+email)\b/i.test(text)) return 'email_update';
+
+  // AI intent is only consulted when no explicit command pattern matched.
+  if (intentMap[intent]) return intentMap[intent];
 
   return null;
 }
@@ -1977,6 +2019,7 @@ export default {
   handleQuizTurn,
   startQuiz,
   detectQuizStart,
+  detectFlowSwitch,
   getActiveQuiz,
   clearQuiz,
   getFlowDefinition,

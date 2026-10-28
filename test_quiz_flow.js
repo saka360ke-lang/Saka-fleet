@@ -4,7 +4,8 @@ import {
   handleQuizTurn,
   getFlowDefinition,
   getCurrentQuizField,
-  shouldPauseQuizForChat
+  shouldPauseQuizForChat,
+  detectFlowSwitch
 } from './src/services/quizEngine.js';
 
 /**
@@ -175,6 +176,42 @@ async function run() {
     restartSession.quiz.answers.odometer_reading === undefined &&
     restartSession.quiz.answers.vehicle_id === vehicle.id,
     'Restart clears collected answers (auto-keeps the only registered vehicle)'
+  );
+
+  console.log('\n--- Test 7: audit regression — reminder must beat AI intent & switch flows ---');
+  assert(
+    detectQuizStart({
+      intent: 'LOG_EXPENSE',
+      messageText: 'Set reminder. Oil change in 2500km',
+      hasVehicleRegistered: true
+    }) === 'set_reminder',
+    'Explicit "Set reminder" wins over a misclassified LOG_EXPENSE intent'
+  );
+  assert(
+    detectQuizStart({ intent: 'LOG_EARNINGS', messageText: 'Income', hasVehicleRegistered: true }) === 'log_earnings',
+    'AI intent still maps when no explicit command pattern matches'
+  );
+  assert(
+    detectFlowSwitch({
+      quiz: { flow: 'log_expense', phase: 'question', answers: {} },
+      messageText: 'Set reminder'
+    }) === 'set_reminder',
+    'Mid-quiz "Set reminder" switches the stalled expense flow'
+  );
+  assert(
+    detectFlowSwitch({
+      quiz: { flow: 'vehicle_registration', phase: 'question', answers: {} },
+      messageText: 'Set reminder'
+    }) === null,
+    'Registration is never abandoned by a mid-quiz command'
+  );
+  assert(
+    shouldPauseQuizForChat({ messageText: 'No', intent: 'GENERAL_CHAT', quiz: { phase: 'question' } }) === true,
+    'Bare "No" mid-question pauses to conversation'
+  );
+  assert(
+    shouldPauseQuizForChat({ messageText: 'No', intent: 'GENERAL_CHAT', quiz: { phase: 'confirm' } }) === false,
+    'Bare "No" during confirmation remains engine-owned'
   );
 
   console.log(`\n🎉 ALL QUIZ ENGINE TESTS PASSED (${passed} assertions).`);

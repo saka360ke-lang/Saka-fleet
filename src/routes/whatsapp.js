@@ -30,7 +30,7 @@ import {
 } from '../services/transfers.js';
 import { applyTrialExtensionCoupon } from '../services/coupons.js';
 import { detectCountryFromPhone as detectCountryGlobal } from '../services/globalization.js';
-import { handleQuizTurn, detectQuizStart, shouldPauseQuizForChat, getCurrentQuizField } from '../services/quizEngine.js';
+import { handleQuizTurn, detectQuizStart, shouldPauseQuizForChat, getCurrentQuizField, detectFlowSwitch, getFlowDefinition } from '../services/quizEngine.js';
 import { renderActionDiscovery, composeMessage } from '../services/conversationEngine.js';
 import { enqueueUserMessage } from '../services/messageQueue.js';
 import { loadSessionSnapshot, persistSessionSnapshot } from '../services/sessionStore.js';
@@ -874,6 +874,9 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         // answered conversationally and the quiz resumes where it paused.
         const activeQuiz = session.quiz || null;
         const pauseQuizForChat = activeQuiz && shouldPauseQuizForChat({ messageText, intent, quiz: activeQuiz });
+        const switchQuizFlow = activeQuiz && !pauseQuizForChat
+          ? detectFlowSwitch({ quiz: activeQuiz, messageText, intent })
+          : null;
 
         const buildPausedQuizReply = async (quizState) => {
           const isHelp = intent === 'ACTION_DISCOVERY' || intent === 'APP_HELP' ||
@@ -931,6 +934,35 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         if (pauseQuizForChat) {
           isSpecialFlowHandled = true;
           customReply = await buildPausedQuizReply(activeQuiz);
+        } else if (switchQuizFlow) {
+          // The user explicitly asked for a different task mid-quiz. Discard the
+          // current draft and start the requested flow (audit fix: "Set reminder"
+          // must never be trapped inside the expense quiz).
+          const previousLabel = getFlowDefinition(activeQuiz.flow, quizCtx)?.label || activeQuiz.flow;
+          session.quiz = null;
+          quizTurn = await handleQuizTurn({
+            session,
+            messageText,
+            aiExtracted: mergedExt,
+            startFlow: switchQuizFlow,
+            ctx: quizCtx
+          });
+
+          if (quizTurn.handled) {
+            const switchNote = await composeMessage({
+              purpose: 'flow_switch',
+              facts: {
+                previousFlow: previousLabel,
+                newFlow: switchQuizFlow,
+                instruction: 'In ONE short sentence, tell the user the previous draft was discarded and the new task is starting.'
+              },
+              language: targetLang,
+              countryInfo,
+              profile: profileData,
+              fallbackText: `Switched to ${switchQuizFlow}. Your previous draft was discarded.`
+            });
+            quizTurn.reply = `${switchNote}\n\n${quizTurn.reply}`;
+          }
         } else {
           quizTurn = await handleQuizTurn({
             session,
