@@ -1,13 +1,7 @@
-import { GoogleGenAI } from '@google/genai';
 import { runHealthCheck } from '../workers/sentinel.js';
 import { sendAdminNotificationEmail } from './mailer.js';
+import { generateText, parseJsonSafely } from './aiClient.js';
 import crypto from 'crypto';
-
-function getGeminiClient() {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error('GEMINI_API_KEY missing in environment');
-  return new GoogleGenAI({ apiKey });
-}
 
 export function isSuperadminPhone(senderPhone) {
   const superadminPhone = process.env.SUPERADMIN_PHONE;
@@ -138,28 +132,14 @@ Intent: "HEALTH_CHECK" | "GENERATE_COUPON" | "PROFILES_REPORT" | "ADMIN_REPORT" 
 Extract: discount_value (e.g. "20%"), target_phone (e.g. "+254712345678"), query (e.g. "KDA 123A" or VIN), rule_key (e.g. "clarify_vin")
 Command: "${text}"`;
 
-  const candidateModels = Array.from(new Set([
-    'gemini-3.8-flash',
-    process.env.GEMINI_MODEL,
-    'gemini-flash-latest'
-  ].filter(Boolean)));
-
-  for (const modelName of candidateModels) {
-    try {
-      const response = await getGeminiClient().models.generateContent({
-        model: modelName,
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        config: { responseMimeType: 'application/json' }
-      });
-
-      if (response && response.text) {
-        const cleaned = response.text.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/, '').trim();
-        const parsed = JSON.parse(cleaned);
-        if (parsed && parsed.intent) return parsed;
-      }
-    } catch (err) {
-      console.warn(`[Superadmin Command Parser] Model ${modelName} failed:`, err.message);
+  try {
+    const rawText = await generateText({ prompt, jsonMode: true, maxTokens: 512, temperature: 0.2 });
+    if (rawText) {
+      const parsed = parseJsonSafely(rawText);
+      if (parsed && parsed.intent) return parsed;
     }
+  } catch (err) {
+    console.warn('[Superadmin Command Parser] DeepSeek failed:', err.message);
   }
 
   if (/(health|sentinel|status|system|diagnostic|error logs)/i.test(lower)) return { intent: 'HEALTH_CHECK' };
@@ -225,26 +205,11 @@ Diagnostic Telemetry:
 ${rawInfo}`;
 
   let summaryText = null;
-  const candidateModels = Array.from(new Set([
-    'gemini-3.8-flash',
-    process.env.GEMINI_MODEL,
-    'gemini-flash-latest'
-  ].filter(Boolean)));
 
-  for (const modelName of candidateModels) {
-    try {
-      const response = await getGeminiClient().models.generateContent({
-        model: modelName,
-        contents: [{ role: 'user', parts: [{ text: synthesisPrompt }] }]
-      });
-
-      if (response && response.text) {
-        summaryText = response.text.trim();
-        break;
-      }
-    } catch (err) {
-      console.warn(`[Superadmin Synthesis] Model ${modelName} failed:`, err.message);
-    }
+  try {
+    summaryText = await generateText({ prompt: synthesisPrompt, maxTokens: 900, temperature: 0.5 });
+  } catch (err) {
+    console.warn('[Superadmin Synthesis] DeepSeek failed:', err.message);
   }
 
   if (!summaryText) {

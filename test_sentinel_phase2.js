@@ -73,7 +73,7 @@ async function runTests() {
   }
   console.log('✅ Friction incident successfully captured in chat_friction_logs:', loggedFriction[0].friction_type);
 
-  // TEST 3: Runtime Injection into Gemini System Prompt
+  // TEST 3: Runtime Injection into DeepSeek System Prompt
   console.log('\n--- Test 3: Runtime Injection of Dynamic Rules into Prompt ---');
   const testRuleKey = 'clarify_vin_entry_test';
   await supabase.from('saka_dynamic_rules').upsert({
@@ -86,7 +86,7 @@ async function runTests() {
 
   const runtimePrompt = await getSakaCorePrompt(supabase);
   if (!runtimePrompt.includes(testRuleKey) || !runtimePrompt.includes('ACTIVE SENTINEL DYNAMIC MICRO-RULES')) {
-    throw new Error('Active dynamic micro-rules were not injected into runtime Gemini system prompt!');
+    throw new Error('Active dynamic micro-rules were not injected into runtime DeepSeek System Prompt!');
   }
   console.log('✅ Active dynamic micro-rule verified in runtime system prompt.\n');
 

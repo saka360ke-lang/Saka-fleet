@@ -40,26 +40,27 @@ export async function getRecentChatHistory(supabase, userPhone, limit = 10) {
     // Chronological order (oldest to newest among the last N)
     const chronological = [...data].reverse();
 
-    // Map into Gemini contents format: { role: 'user' | 'model', parts: [{ text }] }
-    const geminiTurns = [];
+    // Map into Saka's provider-neutral turn format: { role: 'user' | 'model', parts: [{ text }] }
+    // (normalizeHistory() in aiClient.js converts this into DeepSeek/OpenAI messages.)
+    const turns = [];
     for (const item of chronological) {
-      const geminiRole = (item.role === 'assistant' || item.role === 'model') ? 'model' : 'user';
+      const turnRole = (item.role === 'assistant' || item.role === 'model') ? 'model' : 'user';
       const text = (item.message || '').trim();
       if (!text) continue;
 
-      // Merge adjacent turns with identical role to comply with Gemini turn format
-      const lastTurn = geminiTurns[geminiTurns.length - 1];
-      if (lastTurn && lastTurn.role === geminiRole) {
+      // Merge adjacent turns with identical role to keep the conversation alternating
+      const lastTurn = turns[turns.length - 1];
+      if (lastTurn && lastTurn.role === turnRole) {
         lastTurn.parts[0].text += `\n${text}`;
       } else {
-        geminiTurns.push({
-          role: geminiRole,
+        turns.push({
+          role: turnRole,
           parts: [{ text }]
         });
       }
     }
 
-    return geminiTurns;
+    return turns;
   } catch (err) {
     console.warn('[chatHistory] Exception in getRecentChatHistory:', err.message);
     return [];

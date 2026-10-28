@@ -1,6 +1,6 @@
-import { GoogleGenAI } from '@google/genai';
 import { createClient } from '@supabase/supabase-js';
 import { fetchCloudRunLogs } from '../services/sentinelCloudLogs.js';
+import { generateText, parseJsonSafely } from '../services/aiClient.js';
 
 function getSupabase(providedSupabase) {
   if (providedSupabase) return providedSupabase;
@@ -10,14 +10,6 @@ function getSupabase(providedSupabase) {
     throw new Error('Supabase credentials missing in environment');
   }
   return createClient(url, key);
-}
-
-function getGeminiClient() {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error('GEMINI_API_KEY missing in environment');
-  }
-  return new GoogleGenAI({ apiKey });
 }
 
 /**
@@ -122,12 +114,12 @@ export async function ensureSentinelTables(providedSupabase) {
 
 /**
  * Health Check Sentinel:
- * Queries recent unresolved rows in error_logs, sends stack traces to Gemini (gemini-3.8-flash / flash-latest)
- * to generate a diagnosis and mitigation suggestion, and updates the row status & ai_diagnosis.
+ * Queries recent unresolved rows in error_logs, sends stack traces to DeepSeek
+ * (deepseek-chat / DeepSeek-V3) to generate a diagnosis and mitigation suggestion,
+ * and updates the row status & ai_diagnosis.
  */
 export async function runHealthCheck(providedSupabase) {
   const supabase = getSupabase(providedSupabase);
-  const ai = getGeminiClient();
 
   await ensureSentinelTables(supabase);
 
@@ -153,12 +145,6 @@ export async function runHealthCheck(providedSupabase) {
     };
   }
 
-  const candidateModels = Array.from(new Set([
-    'gemini-3.8-flash',
-    process.env.GEMINI_MODEL,
-    'gemini-flash-latest'
-  ].filter(Boolean)));
-
   const diagnosedLogs = [];
 
   for (const log of unresolvedLogs) {
@@ -178,23 +164,14 @@ Format your answer clearly with 'DIAGNOSIS:' and 'MITIGATION SUGGESTION:'.`;
 
     let diagnosisText = null;
 
-    for (const modelName of candidateModels) {
-      try {
-        const response = await ai.models.generateContent({
-          model: modelName,
-          contents: prompt
-        });
-        if (response && response.text) {
-          diagnosisText = response.text.trim();
-          break;
-        }
-      } catch (gemErr) {
-        console.warn(`[Sentinel HealthCheck] Gemini model ${modelName} failed for error ID ${log.id}:`, gemErr.message);
-      }
+    try {
+      diagnosisText = await generateText({ prompt, maxTokens: 900, temperature: 0.3 });
+    } catch (aiErr) {
+      console.warn(`[Sentinel HealthCheck] DeepSeek failed for error ID ${log.id}:`, aiErr.message);
     }
 
     if (!diagnosisText) {
-      diagnosisText = `Diagnosis unavailable. Failed to reach Gemini AI service. Error ID: ${log.id}`;
+      diagnosisText = `Diagnosis unavailable. Failed to reach DeepSeek AI service. Error ID: ${log.id}`;
     }
 
     // Update row status and diagnosis in error_logs
@@ -228,12 +205,11 @@ Format your answer clearly with 'DIAGNOSIS:' and 'MITIGATION SUGGESTION:'.`;
 
 /**
  * Conversation Refinement Sentinel:
- * Pulls recent chat transcripts from Supabase, analyzes them with Gemini to detect changing user conversation patterns,
+ * Pulls recent chat transcripts from Supabase, analyzes them with DeepSeek to detect changing user conversation patterns,
  * slang, or drop-off points, updates conversation_analytics, and updates the saka_core_prompt inside system_config.
  */
 export async function runConversationRefinement(providedSupabase) {
   const supabase = getSupabase(providedSupabase);
-  const ai = getGeminiClient();
 
   await ensureSentinelTables(supabase);
 
@@ -278,6 +254,14 @@ export async function runConversationRefinement(providedSupabase) {
     currentCorePrompt = configRow.value;
   }
 
+  // Guard against unbounded prompt growth (Sentinel refinement feedback loop):
+  // each run rewrites saka_core_prompt, so we bound both the input we feed back
+  // and the size of what we persist.
+  const MAX_CORE_PROMPT_CHARS = 6000;
+  if (currentCorePrompt && currentCorePrompt.length > MAX_CORE_PROMPT_CHARS) {
+    currentCorePrompt = `${currentCorePrompt.slice(0, MAX_CORE_PROMPT_CHARS)}\n...[truncated for analysis]`;
+  }
+
   const prompt = `You are Saka Sentinel Worker, an expert AI prompt engineer and conversational analyst for Saka, a WhatsApp-first intelligent vehicle and asset management assistant operating internationally.
 
 Analyze these recent customer conversation transcripts and support inquiries:
@@ -303,57 +287,34 @@ Return strictly a single valid JSON object matching this schema (no markdown ast
   "updated_saka_core_prompt": "Complete updated Saka core system prompt text."
 }`;
 
-  const candidateModels = Array.from(new Set([
-    'gemini-3.8-flash',
-    process.env.GEMINI_MODEL,
-    'gemini-flash-latest'
-  ].filter(Boolean)));
-
   let parsedAnalysis = null;
 
-  for (const modelName of candidateModels) {
-    try {
-      const response = await ai.models.generateContent({
-        model: modelName,
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json'
-        }
-      });
-
-      if (response && response.text) {
-        const cleanedJson = response.text
-          .replace(/^```json\s*/i, '')
-          .replace(/^```\s*/i, '')
-          .replace(/\s*```$/, '')
-          .trim();
-
-        parsedAnalysis = JSON.parse(cleanedJson);
-        if (parsedAnalysis && parsedAnalysis.updated_saka_core_prompt) {
-          break;
-        }
-      }
-    } catch (gemErr) {
-      console.warn(`[Sentinel ConversationRefinement] Gemini model ${modelName} failed:`, gemErr.message);
+  try {
+    const rawText = await generateText({ prompt, jsonMode: true, maxTokens: 4096, temperature: 0.4 });
+    if (rawText) {
+      parsedAnalysis = parseJsonSafely(rawText);
     }
+  } catch (aiErr) {
+    console.warn('[Sentinel ConversationRefinement] DeepSeek failed:', aiErr.message);
   }
 
   if (!parsedAnalysis || !parsedAnalysis.updated_saka_core_prompt) {
     return {
       status: 'warning',
-      message: 'Failed to generate refined prompt with Gemini AI',
+      message: 'Failed to generate refined prompt with DeepSeek AI',
       insights: null,
       saka_core_prompt_updated: false
     };
   }
 
-  // 3. Update saka_core_prompt inside system_config
+  // 3. Update saka_core_prompt inside system_config (bounded to prevent runaway growth)
   const nowIso = new Date().toISOString();
+  const persistedPrompt = String(parsedAnalysis.updated_saka_core_prompt).slice(0, MAX_CORE_PROMPT_CHARS);
   const { error: configErr } = await supabase
     .from('system_config')
     .upsert({
       key: 'saka_core_prompt',
-      value: parsedAnalysis.updated_saka_core_prompt,
+      value: persistedPrompt,
       updated_by: 'sentinel_worker',
       updated_at: nowIso
     });
@@ -524,12 +485,11 @@ export async function scanCloudRunAnomalies(providedSupabase) {
  * Sentinel Autonomous Conversational Optimization Loop:
  * Scans recent chat logs for friction signatures (looping prompts 3+ times,
  * user frustration keywords, intent ambiguity), logs to chat_friction_logs,
- * and calls gemini-3.8-flash under the Function Boundary Lock to upsert
+ * and calls DeepSeek (deepseek-chat) under the Function Boundary Lock to upsert
  * active micro-rule patches in saka_dynamic_rules.
  */
 export async function evaluateConversationalFriction(providedSupabase) {
   const supabase = getSupabase(providedSupabase);
-  const ai = getGeminiClient();
 
   await ensureSentinelTables(supabase);
 
@@ -647,16 +607,10 @@ export async function evaluateConversationalFriction(providedSupabase) {
     };
   }
 
-  return await processFrictionPatches(supabase, ai, detectedFrictions);
+  return await processFrictionPatches(supabase, detectedFrictions);
 }
 
-async function processFrictionPatches(supabase, ai, detectedFrictions) {
-  const candidateModels = Array.from(new Set([
-    'gemini-3.8-flash',
-    process.env.GEMINI_MODEL,
-    'gemini-flash-latest'
-  ].filter(Boolean)));
-
+async function processFrictionPatches(supabase, detectedFrictions) {
   const patches = [];
 
   for (const friction of detectedFrictions) {
@@ -700,24 +654,13 @@ Output ONLY valid JSON matching this schema:
 
     let parsedPatch = null;
 
-    for (const modelName of candidateModels) {
-      try {
-        const response = await ai.models.generateContent({
-          model: modelName,
-          contents: [{ role: 'user', parts: [{ text: optimizerPrompt }] }],
-          config: { responseMimeType: 'application/json' }
-        });
-
-        if (response && response.text) {
-          const cleaned = response.text.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/, '').trim();
-          parsedPatch = JSON.parse(cleaned);
-          if (parsedPatch && parsedPatch.rule_key && parsedPatch.patch_instruction) {
-            break;
-          }
-        }
-      } catch (gemErr) {
-        console.warn(`[Sentinel evaluateConversationalFriction] Gemini ${modelName} error:`, gemErr.message);
+    try {
+      const rawText = await generateText({ prompt: optimizerPrompt, jsonMode: true, maxTokens: 600, temperature: 0.4 });
+      if (rawText) {
+        parsedPatch = parseJsonSafely(rawText);
       }
+    } catch (aiErr) {
+      console.warn('[Sentinel evaluateConversationalFriction] DeepSeek error:', aiErr.message);
     }
 
     if (!parsedPatch || !parsedPatch.rule_key || !parsedPatch.patch_instruction) {
@@ -784,7 +727,6 @@ Output ONLY valid JSON matching this schema:
 
 export async function generateWeeklyFeaturePlan(providedSupabase) {
   const supabase = getSupabase(providedSupabase);
-  const ai = getGeminiClient();
 
   const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
@@ -830,27 +772,18 @@ RAW CHAT DATA:
 ${rawCorpus.slice(0, 15000)}`;
 
   let parsedProposal = null;
-  const candidateModels = ['gemini-3.8-flash', process.env.GEMINI_MODEL, 'gemini-flash-latest'].filter(Boolean);
 
-  for (const modelName of candidateModels) {
-    try {
-      const response = await ai.models.generateContent({
-        model: modelName,
-        contents: [{ role: 'user', parts: [{ text: horizonPrompt }] }],
-        config: { responseMimeType: 'application/json' }
-      });
-      if (response && response.text) {
-        const cleaned = response.text.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/, '').trim();
-        parsedProposal = JSON.parse(cleaned);
-        if (parsedProposal && parsedProposal.proposal_code) break;
-      }
-    } catch (e) {
-      console.warn(`[Sentinel Horizon] Model ${modelName} failed:`, e.message);
+  try {
+    const rawText = await generateText({ prompt: horizonPrompt, jsonMode: true, maxTokens: 1200, temperature: 0.5 });
+    if (rawText) {
+      parsedProposal = parseJsonSafely(rawText);
     }
+  } catch (aiErr) {
+    console.warn('[Sentinel Horizon] DeepSeek failed:', aiErr.message);
   }
 
   if (!parsedProposal || !parsedProposal.proposal_code) {
-    return { status: 'error', message: 'Failed to synthesize feature plan from AI.' };
+    return { status: 'error', message: 'Failed to synthesize feature plan from DeepSeek.' };
   }
 
   // 2. Insert into Supabase

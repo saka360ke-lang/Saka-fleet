@@ -1,11 +1,14 @@
-import { GoogleGenAI } from '@google/genai';
 import { createClient } from '@supabase/supabase-js';
+import {
+  getAIClient,
+  chatCompletion,
+  normalizeHistory,
+  parseJsonSafely
+} from './src/services/aiClient.js';
 
-// Lazy Gemini Client Initializer
-function getGeminiClient() {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error('GEMINI_API_KEY missing in environment');
-  return new GoogleGenAI({ apiKey });
+// DeepSeek client (OpenAI-compatible). Thin alias kept for backward compatibility.
+function getSakaAIClient() {
+  return getAIClient();
 }
 
 // Initialize Supabase Client
@@ -634,58 +637,45 @@ RUNTIME DYNAMIC CONTEXT:
 ${fleetContextSection}
 `;
 
-  const userParts = [{ text: messageText }];
-  if (mediaParts && mediaParts.length > 0) {
-    userParts.push(...mediaParts);
-  }
+  const cleanHistory = normalizeHistory(conversationHistory);
 
-  const cleanHistory = [];
-  if (Array.isArray(conversationHistory)) {
-    for (const item of conversationHistory) {
-      if (item && item.role && item.parts) {
-        cleanHistory.push(item);
+  const aiResult = await chatCompletion({
+    system: systemInstruction,
+    messages: [
+      ...cleanHistory,
+      { role: 'user', content: messageText }
+    ],
+    jsonMode: true,
+    maxTokens: 2048,
+    temperature: 0.3
+  });
+
+  if (aiResult.ok) {
+    const parsed = parseJsonSafely(aiResult.text);
+    if (parsed && parsed.intent && parsed.reply_message) {
+      // Null-safe merge: DeepSeek emits every schema key, frequently as explicit
+      // `null`. A raw spread would wipe regex-extracted values (plate, VIN, odometer…),
+      // so only non-empty AI values are allowed to override the regex heuristic.
+      const regexAttrs = extractVehicleAttributes(messageText);
+      const aiAttrs = parsed.extracted_data && typeof parsed.extracted_data === 'object'
+        ? parsed.extracted_data
+        : {};
+
+      const meaningfulAiAttrs = {};
+      for (const [key, value] of Object.entries(aiAttrs)) {
+        if (value === null || value === undefined) continue;
+        if (typeof value === 'string' && value.trim() === '') continue;
+        if (Array.isArray(value) && value.length === 0) continue;
+        if (typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0) continue;
+        meaningfulAiAttrs[key] = value;
       }
+
+      parsed.extracted_data = { ...regexAttrs, ...meaningfulAiAttrs };
+      return parsed;
     }
-  }
-
-  const candidateModels = Array.from(new Set([
-    'gemini-3.8-flash',
-    process.env.GEMINI_MODEL,
-    'gemini-flash-latest'
-  ].filter(Boolean)));
-
-  for (const selectedModel of candidateModels) {
-    try {
-      const response = await getGeminiClient().models.generateContent({
-        model: selectedModel,
-        contents: [
-          ...cleanHistory,
-          { role: 'user', parts: userParts }
-        ],
-        config: {
-          systemInstruction: systemInstruction,
-          responseMimeType: 'application/json',
-        }
-      });
-
-      const rawText = response.text ? response.text.trim() : '';
-      const cleanedJsonText = rawText
-        .replace(/^```json\s*/i, '')
-        .replace(/^```\s*/i, '')
-        .replace(/\s*```$/, '');
-
-      const parsed = JSON.parse(cleanedJsonText);
-      if (parsed && parsed.intent && parsed.reply_message) {
-        const regexAttrs = extractVehicleAttributes(messageText);
-        parsed.extracted_data = {
-          ...regexAttrs,
-          ...(parsed.extracted_data || {})
-        };
-        return parsed;
-      }
-    } catch (err) {
-      console.warn(`Saka AI generation attempt with model '${selectedModel}' failed:`, err.message);
-    }
+    console.warn('[sakaAi] DeepSeek returned non-conforming JSON, using regex classifier.');
+  } else if (aiResult.error) {
+    console.warn('[sakaAi] DeepSeek unavailable, falling back to regex classifier:', aiResult.error?.message || aiResult.error);
   }
 
   return classifyIntentWithRegex(messageText);

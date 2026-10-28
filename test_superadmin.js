@@ -77,7 +77,7 @@ async function runSuperadminTests() {
   if (!healthRes.reply || (!healthRes.reply.includes('Container') && !healthRes.reply.includes('Database') && !healthRes.reply.includes('Status') && !healthRes.reply.includes('Sentinel'))) {
     throw new Error('Health check reply is missing essential telemetry information!');
   }
-  console.log('✅ Health Check completed and Gemini-synthesized summary generated.\n');
+  console.log('✅ Health Check completed and DeepSeek-synthesized summary generated.\n');
 
   // Test 6: Command Handler - Coupon Generation
   console.log('--- Test 6: Command Handler - Coupon Generation ---');

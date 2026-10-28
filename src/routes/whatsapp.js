@@ -331,7 +331,7 @@ export async function handleWhatsAppWebhook(request, reply, fastify) {
       reply.status(200).send({ status: 'success' });
     }
 
-    // 3. Asynchronous Background Execution (Gemini AI, State Machine, Database)
+    // 3. Asynchronous Background Execution (DeepSeek AI, State Machine, Database)
     return processIncomingWhatsAppMessage({ messageObj, fastify, supabaseClient });
   }
 
@@ -355,7 +355,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
 
     if (fastify?.log) fastify.log.info(`Incoming WhatsApp message from ${senderPhone}: "${messageText}"`);
     if (supabaseClient) {
-      logChatTranscript(supabaseClient, senderPhone, 'user', messageText);
+      await logChatTranscript(supabaseClient, senderPhone, 'user', messageText);
       await saveChatMessage(supabaseClient, senderPhone, 'user', messageText);
     }
 
@@ -365,7 +365,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
       if (superadminRes.isSuperadmin) {
         if (superadminRes.reply) {
           await sendWhatsAppReply(senderPhone, superadminRes.reply);
-          logChatTranscript(supabaseClient, senderPhone, 'assistant', superadminRes.reply);
+          await logChatTranscript(supabaseClient, senderPhone, 'assistant', superadminRes.reply);
           await saveChatMessage(supabaseClient, senderPhone, 'assistant', superadminRes.reply);
         }
         return { status: 'superadmin_handled' };
@@ -383,7 +383,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
       session.lastAssistantPrompt = null;
       session.loopSignature = null;
     } else if (session.circuitBreakerStage === 'HARD_TRIP') {
-      // Circuit breaker is in hard trip: bypass Gemini and send clean fallback message
+      // Circuit breaker is in hard trip: bypass DeepSeek and send clean fallback message
       const fallbackReply = "I've hit a temporary snag processing this step. I have notified our support team at support@sakafleet.com, and we will update you right here on WhatsApp once this is resolved!";
       await sendWhatsAppReply(senderPhone, fallbackReply);
       if (supabaseClient) {
@@ -466,7 +466,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           }
         }
 
-        // Pass message through Gemini Intent Classifier (sakaAi.js) with Active Fleet Context
+        // Pass message through DeepSeek Intent Classifier (sakaAi.js) with Active Fleet Context
         const activeVehicleContext = hasVehicleRegistered ? {
           activeVehicle: currentActiveVehicle,
           allVehicles: existingVehicles
@@ -1216,7 +1216,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           else if (/^(habari|mambo|jambo|hujambo|salama)\b/i.test(clean)) {
             customReply = `👋 *Habari! Welcome to Saka Fleet!* 🚗\n\nSaka Fleet tracks vehicle processes, compliance, expenses, and maintenance directly on WhatsApp.\n\n🚀 *Get Started:* To start onboarding, reply with your vehicle's registration number (e.g. *KDA 123A*) or type **'Register'**.\n\n💡 *Tip:* Ask *"What can I do?"* anytime to explore available tools!`;
           }
-          // 4. General informational questions answered via Gemini
+          // 4. General informational questions answered via DeepSeek
           else if (aiResult.reply_message && !aiResult.reply_message.includes('I am your Saka Fleet WhatsApp assistant. How can I help with your vehicle')) {
             customReply = aiResult.reply_message;
           }
@@ -1301,7 +1301,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
 
         await sendWhatsAppReply(senderPhone, finalReply);
         if (supabaseClient) {
-          logChatTranscript(supabaseClient, senderPhone, 'assistant', finalReply);
+          await logChatTranscript(supabaseClient, senderPhone, 'assistant', finalReply);
           await saveChatMessage(supabaseClient, senderPhone, 'assistant', finalReply);
         }
 

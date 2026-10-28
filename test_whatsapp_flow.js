@@ -320,13 +320,13 @@ async function runTests() {
     await saveChatMessage(supabase, testMemPhone, 'user', 'Remind me to refuel when it reaches a quarter');
 
     const history = await getRecentChatHistory(supabase, testMemPhone, 10);
-    console.log(`Retrieved ${history.length} conversation turns for Gemini context:`);
+    console.log(`Retrieved ${history.length} conversation turns for DeepSeek context:`);
     console.log(JSON.stringify(history, null, 2));
 
     if (history.length < 2) {
       throw new Error('Expected at least 2 conversational history turns from chat_history');
     }
-    console.log('✅ Persistent conversational history saved and injected for Gemini.');
+    console.log('✅ Persistent conversational history saved and injected for DeepSeek.');
   }
 
   console.log('\n=== ALL CONVERSATIONAL FLOW TESTS PASSED SUCCESSFULLY ===');
