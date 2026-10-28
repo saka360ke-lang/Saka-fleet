@@ -747,6 +747,36 @@ setInterval(async () => {
   }
 }, 2 * 60 * 1000); // Run anomaly evaluation every 2 minutes
 
+// ==========================================
+// SENTINEL HORIZON — WEEKLY FEATURE EVOLUTION (Sundays 20:00 EAT)
+// ==========================================
+let lastHorizonDate = null;
+async function checkHorizonSchedule() {
+  try {
+    const now = new Date();
+    const nairobiHour = (now.getUTCHours() + 3) % 24;
+    const nairobiMinute = now.getUTCMinutes();
+    const todayStr = now.toISOString().split('T')[0];
+
+    // Sunday === 0
+    if (now.getUTCDay() === 0 && nairobiHour === 20 && nairobiMinute <= 5 && lastHorizonDate !== todayStr) {
+      lastHorizonDate = todayStr;
+      fastify.log.info('🌟 Sentinel Horizon: synthesizing weekly feature evolution blueprint...');
+      const { generateWeeklyFeaturePlan } = await import('./src/workers/sentinel.js');
+      await generateWeeklyFeaturePlan(supabase);
+    }
+  } catch (err) {
+    fastify.log.error('Error running Sentinel Horizon schedule:', err);
+  }
+}
+setInterval(checkHorizonSchedule, 60000); // Check every minute
+
+fastify.post('/api/cron/sentinel-horizon', async (request, reply) => {
+  const { generateWeeklyFeaturePlan } = await import('./src/workers/sentinel.js');
+  const result = await generateWeeklyFeaturePlan(supabase);
+  return { success: true, horizon: result };
+});
+
 
 // ==========================================
 // PAYSTACK WEBHOOK HANDLERS
@@ -959,7 +989,7 @@ const start = async () => {
     console.log(`🚀 Saka Fleet Meta-Native Backend is live and listening on port ${port}`);
     // Cloud Run Startup Self-Announcement
     const isProduction = process.env.NODE_ENV === 'production' || process.env.K_SERVICE;
-    const currentRevision = process.env.K_REVISION;
+    const currentRevision = process.env.K_REVISION || process.env.COMMIT_SHA || process.env.RENDER_GIT_COMMIT;
     if (isProduction && currentRevision && process.env.SUPERADMIN_PHONE) {
       const { data: config } = await supabase.from('system_config').select('value').eq('key', 'last_deployed_revision').maybeSingle();
       if (!config || config.value !== currentRevision) {

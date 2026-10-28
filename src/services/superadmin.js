@@ -126,9 +126,15 @@ export async function parseSuperadminCommand(messageText) {
   if (/^\s*adminrules?(\s+list)?\b/i.test(lower)) {
     return { intent: 'ADMIN_RULES_LIST' };
   }
+  if (/^\s*admin\s+horizon\b/i.test(lower)) {
+    return { intent: 'ADMIN_HORIZON' };
+  }
+  if (/^\s*admin\s+proposals\b/i.test(lower)) {
+    return { intent: 'ADMIN_PROPOSALS' };
+  }
 
   const prompt = `Classify user's admin request into JSON:
-Intent: "HEALTH_CHECK" | "GENERATE_COUPON" | "PROFILES_REPORT" | "ADMIN_REPORT" | "ADMIN_AUDIT" | "ADMIN_ALERTS" | "ADMIN_RULES_RESET" | "ADMIN_RULES_TOGGLE" | "ADMIN_RULES_LIST" | "UNKNOWN"
+Intent: "HEALTH_CHECK" | "GENERATE_COUPON" | "PROFILES_REPORT" | "ADMIN_REPORT" | "ADMIN_AUDIT" | "ADMIN_ALERTS" | "ADMIN_RULES_RESET" | "ADMIN_RULES_TOGGLE" | "ADMIN_RULES_LIST" | "ADMIN_HORIZON" | "ADMIN_PROPOSALS" | "UNKNOWN"
 Extract: discount_value (e.g. "20%"), target_phone (e.g. "+254712345678"), query (e.g. "KDA 123A" or VIN), rule_key (e.g. "clarify_vin")
 Command: "${text}"`;
 
@@ -924,6 +930,30 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
       isSuperadmin: true,
       reply: listRes.reply
     };
+  }
+
+  if (parsedCommand.intent === 'ADMIN_HORIZON') {
+    const { generateWeeklyFeaturePlan } = await import('../workers/sentinel.js');
+    const horizonRes = await generateWeeklyFeaturePlan(supabase);
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_HORIZON', { manually_triggered: true });
+    return {
+      isSuperadmin: true,
+      reply: horizonRes.message
+    };
+  }
+
+  if (parsedCommand.intent === 'ADMIN_PROPOSALS') {
+    const { data: proposals, error } = await supabase.from('weekly_feature_proposals').select('*').order('created_at', { ascending: false }).limit(5);
+    let replyText = '🚀 *Saka Sentinel Horizon Proposals* 🌟\n\n';
+    if (error || !proposals || proposals.length === 0) {
+      replyText += 'No pending feature proposals found.';
+    } else {
+      proposals.forEach((p, idx) => {
+        replyText += `${idx + 1}. *${p.title}* (\`${p.proposal_code}\`)\n   • Target: ${p.target_persona}\n   • Impact: ${p.impact_score}/10\n   • Value: ${p.driver_value_proposition}\n\n`;
+      });
+      replyText += `_Text 'admin approve [code]' to review spec._`;
+    }
+    return { isSuperadmin: true, reply: replyText };
   }
 
   if (parsedCommand.intent === 'HEALTH_CHECK') {

@@ -156,6 +156,19 @@ Cluster-wide message deduplication store tracking Meta message IDs (`wamid`) to 
 - `phone_number`: `text`
 - `processed_at`: `timestamptz` (Default `now()`, indexed for time-based cleanup)
 
+### 2.10 `weekly_feature_proposals` (Sentinel Horizon)
+Driver-centric feature blueprints synthesized weekly by Sentinel from live conversation logs.
+- `id`: `uuid` (Primary Key, default `gen_random_uuid()`)
+- `proposal_code`: `text` (Unique, e.g. `FEAT-2026-W44-01`)
+- `title`: `text`
+- `target_persona`: `text` (e.g. `Everyday Driver`, `Fleet Owner`)
+- `driver_value_proposition`: `text`
+- `evidence_quotes`: `text` (Anonymized clusters from real chat logs)
+- `technical_spec`: `text`
+- `impact_score`: `integer` (1–10)
+- `status`: `text` (Default `pending`)
+- `created_at`: `timestamptz` (Default `now()`)
+
 ---
 
 ## 3. WhatsApp Webhook, Reliability & Circuit Breaker Architecture
@@ -178,13 +191,14 @@ Cluster-wide message deduplication store tracking Meta message IDs (`wamid`) to 
    - Fastify immediately sends `HTTP 200 OK` (`{ status: 'success' }`) to Meta upon receiving the webhook (after signature and deduplication checks).
    - Gemini AI generation, vehicle state transitions, WhatsApp reply dispatches, and database logging execute asynchronously in background tasks, eliminating Meta webhook timeout errors.
 
-5. **State Machine Circuit Breaker:**
-   - User sessions track `lastAssistantPrompt`, `consecutivePromptCount`, and `circuitBreakerTripped`.
-   - If the same assistant prompt is generated 3 consecutive times without state progression, the circuit breaker automatically trips:
-     - Bypasses Gemini LLM generation.
-     - Dispatches a diagnostic escalation email to `support@sakafleet.com` via Resend with user profile, repeated prompt text, and vehicle context.
-     - Sends clean WhatsApp fallback message: *"I've hit a temporary snag processing this step. I have notified our support team at support@sakafleet.com, and they will reach out to assist you shortly!"*
-     - Resets automatically when the user texts `reset`, `start over`, or `cancel`.
+5. **Two-Stage Self-Healing Circuit Breaker (Strike-Based):**
+   - Sessions track `loopSignature`, `consecutivePromptCount`, `circuitBreakerStage`, `lastAssistantPrompt`.
+   - The `loopSignature` is the actual generated reply text; breaker messages never overwrite it, so strikes accumulate correctly across grace retries.
+   - **Strike 3 → `SOFT_TRIP` (Sentinel self-heal window):** logs `LOOPING_PROMPTS` friction, replies *"I've hit a temporary snag processing this step. Kindly try again!"* and grants one clean retry while Sentinel synthesizes a dynamic micro-rule.
+   - **Strike 4 → `HARD_TRIP` (escalation):** logs `SYSTEM_ERROR` friction, emails `support@sakafleet.com` via Resend with the profile, repeated prompt, and last user input, then replies *"I've hit a temporary snag processing this step. I have notified our support team at support@sakafleet.com, and we will update you right here on WhatsApp once this is resolved!"*
+   - **Navigation Freedom (no permanent lockout):** any `cancel|exit|stop|reset|start over|1..5` or `log|update|set|request|help` input clears the breaker stage, strike count, and loop signature instantly.
+   - **Driver assignment parser is order-agnostic:** single-turn `assign <plate> to [driver] <phone>` and `assign <phone> to <plate>` both work; if no phone is supplied the session stores `pendingDriverAssignment` and asks for the driver's number (multi-turn). `UNASSIGN_DRIVER` supports `unassign driver [from] <plate>` / `remove driver`.
+   - **Phone-as-VIN guard:** `extractVehicleAttributes` routes `(?:+?254|0)[17]\d{8}` / `\+?\d{9,15}` into `driver_phone` and never into `vin`.
 
 6. **Unregistered / Idle User Conversational Model:**
    - Swahili greetings (*"Habari"*, *"Mambo"*, *"Jambo"*) are greeted warmly with an introduction to Saka Fleet.
@@ -202,20 +216,6 @@ Cluster-wide message deduplication store tracking Meta message IDs (`wamid`) to 
 1. **Agent-in-the-Middle Architecture:**
    - Saka (powered by Gemini `gemini-3.8-flash`) sits directly between the WhatsApp user and the Supabase database.
    - Saka parses user requests, writes data (expenses, fuel, mileage, earnings, reminders) with explicit vehicle attribution, and queries analytics (e.g. km/L fuel consumption, fleet summaries) on demand.
-### 5.4 Google Cloud Logging Integration & Telemetry Polling
-- **Log Ingestion:** `saka-fleet` on Google Cloud Run auto-ingests access logs, stdout/stderr, and HTTP status codes (500, 504) to Google Cloud Logging.
-- **Sentinel Background Worker (`scanCloudRunAnomalies`):**
-  - Uses `@google-cloud/logging` to poll recent logs for `resource.type="cloud_run_revision"` every 2 minutes.
-  - Filters for `severity >= ERROR` or high latency (`latency >= "5.000s"`).
-  - Deduplicates events using a strict 15-minute sliding window cache (`recentlyAlertedLogHashes`) to prevent alert flooding.
-  - Logs critical anomalies into `public.chat_friction_logs` (with `friction_type: 'SYSTEM_ERROR'`) and `public.error_logs`.
-  - Immediately pushes real-time diagnostic alerts to `SUPERADMIN_PHONE` via WhatsApp with timestamp, severity, HTTP status, and log snippet.
-
-### 5.5 Automated Cloud Run Deployment Self-Announcement
-- On Fastify server boot, the process checks if it is running in production (`process.env.K_REVISION` is present).
-- It compares the current revision ID with `last_deployed_revision` cached in `system_config`.
-- If a new revision is detected, it broadcasts a deployment notification via WhatsApp to the Superadmin: *"🚀 Saka Fleet Live on Cloud Run! Revision: [K_REVISION]..."*
-
    - When required data points are missing (e.g., need second fill-up with odometer reading to compute exact km/L), Saka conversational prompts the user to supply them.
 
 2. **Active Vehicle Context & Vehicle Switching:**
@@ -230,8 +230,9 @@ Cluster-wide message deduplication store tracking Meta message IDs (`wamid`) to 
    - The last 10 messages from `chat_history` are fetched and injected as turns (`{ role: 'user' | 'model', parts: [{ text }] }`).
 
 4. **Intent Classification & Autonomous Actions:**
-   - Supported intents: `GREETING`, `REGISTER_VEHICLE`, `ONBOARDING_INPUT`, `ONBOARDING_SKIP`, `VERIFY_OTP`, `RESEND_OTP`, `UPDATE_EMAIL`, `SWITCH_VEHICLE`, `QUERY_FUEL_EFFICIENCY`, `QUERY_FLEET_SUMMARY`, `LOG_EXPENSE`, `UPDATE_MILEAGE`, `LOG_EARNINGS`, `SET_REMINDER`, `REQUEST_REPORT`, `MANAGE_VEHICLE`, `APP_HELP`, `CONTACT_SUPPORT`, `GENERAL_CHAT`.
-   - Hybrid extraction merges Gemini structured JSON with smart regex heuristics (including currency exclusion to prevent false plate matches and odometer-safe OTP parsing).
+   - Supported intents: `GREETING`, `REGISTER_VEHICLE`, `ONBOARDING_INPUT`, `ONBOARDING_SKIP`, `VERIFY_OTP`, `RESEND_OTP`, `UPDATE_EMAIL`, `SWITCH_VEHICLE`, `ASSIGN_DRIVER`, `UNASSIGN_DRIVER`, `QUERY_FUEL_EFFICIENCY`, `QUERY_FLEET_SUMMARY`, `LOG_EXPENSE`, `UPDATE_MILEAGE`, `LOG_EARNINGS`, `SET_REMINDER`, `REQUEST_REPORT`, `MANAGE_VEHICLE`, `APP_HELP`, `CONTACT_SUPPORT`, `GENERAL_CHAT`.
+   - Hybrid extraction merges Gemini structured JSON with smart regex heuristics (including currency exclusion to prevent false plate matches, phone-vs-VIN disambiguation, and odometer-safe OTP parsing).
+   - **Expense-vs-Odometer disambiguation:** messages containing fuel/expense wording (`fuel`, `liters`, `refuel`, `paid`, `cost`, `receipt`, `maintenance`) are classified as `LOG_EXPENSE` even when an odometer value is also present (e.g. *"Logged 30L fuel at 50350 km for KES 5500"*).
 
 5. **Fleet Analytics Engine (`src/services/analytics.js`):**
    - `calculateFuelConsumption`: Calculates km/L, L/100km, MPG, total distance, volume in liters, and total cost from `expense_logs`. Identifies missing parameters (`NEEDS_MORE_DATA`) and prompts the user conversationally.
@@ -276,7 +277,9 @@ Requires active session (`adminstart`, 30-min inactivity TTL) from verified `SUP
 - `admin report`: Executive fleet digest (total vehicles, owners, drivers, error counts, active dynamic rules).
 - `admin audit [Plate or VIN]`: Detailed audit of a vehicle (passbook history, owner contact, driver, mileage, compliance dates, custom attributes).
 - `admin alerts`: Current system warnings, unresolved errors, and detected friction logs.
-- `adminrules reset` / `adminrules toggle [key]`: Dynamic rule management.
+- `adminrules reset` / `adminrules toggle [key]` / `adminrules list`: Dynamic rule management.
+- `admin horizon`: Manually triggers Sentinel Horizon weekly feature synthesis on demand.
+- `admin proposals`: Lists the latest pending Sentinel Horizon feature blueprints.
 - `adminstop`: Terminates the admin session immediately.
 
 ### 6.2 Automated 8:00 AM Morning Executive Briefing
@@ -284,7 +287,48 @@ Requires active session (`adminstart`, 30-min inactivity TTL) from verified `SUP
 
 ### 6.3 Strict Scope Bounds & System Protection
 - Sentinel is strictly a superadmin and system-level supervisor.
-- Sentinel **must not** receive general vehicle reminders, compliance alerts, or delayed owner notifications unless the superadmin is actively operating in Owner or Driver mode for a vehicle they personally own or are assigned to.
+- Sentinel **must not** receive general vehicle reminders, compliance alerts, or delayed owner notifications unless the superadmin is actively operating in Owner or Driver mode for a vehicle they personally own or is assigned to.
+
+### 6.4 Sentinel Full-Authority Self-Healing & Evolution Framework
+
+Sentinel operates under a **"fix first, escalate last"** doctrine: it autonomously repairs every issue it is capable of fixing, and only pages human support when a boundary is hit.
+
+**A. Guaranteed Deployment Notifications (Cloud Build → Superadmin)**
+- `scripts/notify_git_push.js` now dispatches **dual-channel** alerts (Meta WhatsApp **and** Resend email to `SUPERADMIN_EMAIL`) so a single API outage never silences a deployment announcement.
+- `package.json` runs `notify:deploy` on `postinstall`, so every container build on Cloud Build / GitHub Actions fires the alert.
+- `index.js` boot hook detects the revision from `K_REVISION` || `COMMIT_SHA` || `RENDER_GIT_COMMIT`, compares it to `system_config.last_deployed_revision`, and only announces genuinely new revisions (idempotent, no duplicates).
+
+**B. Autonomous Repair Loop (`evaluateConversationalFriction` + `scanCloudRunAnomalies`)**
+- Sentinel runs every 10 minutes over `chat_history` / `chat_transcripts`, and every 2 minutes over Google Cloud Run logs.
+- Detected friction is auto-patched into `saka_dynamic_rules` and hot-injected into the live Gemini prompt by `getSakaCorePrompt()` — no deploy required.
+- Systemic errors (`ERROR`/`CRITICAL`, HTTP ≥ 500, latency ≥ 5s) are logged as `SYSTEM_ERROR` in `chat_friction_logs` and `error_logs`, deduplicated for 15 minutes, and pushed to `SUPERADMIN_PHONE`.
+
+**C. Guardrails (Immutable Boundaries)**
+Sentinel may never instruct or perform any of the following; `processFrictionPatches` blocks patches matching `/\b(bypass vin|ignore vin|skip otp|disable auth|drop table|modify schema)\b/i`:
+1. VIN immutability or passbook re-anchoring outside the approved transfer flow.
+2. Weakening the strict 1-to-1 driver/vehicle mapping.
+3. Bypassing email OTP verification.
+4. Altering subscription-tier limits or Paystack payment math.
+5. Any destructive schema or data operation.
+- **Admin Kill Switch:** `adminrules reset` instantly deactivates every Sentinel-generated rule.
+- **Anti-flood:** `recentlyAlertedLogHashes` (15-min TTL) and per-session strike counters prevent alert storms.
+
+**D. Sentinel Horizon — Autonomous Weekly Feature Evolution**
+- Worker: `generateWeeklyFeaturePlan(supabase)` in `src/workers/sentinel.js`.
+- Ingests the last 7 days of `chat_transcripts` (user messages) and `chat_friction_logs`, then asks Gemini to synthesize the single highest-value feature that would make Saka Fleet the #1 vehicle manager for everyday drivers.
+- Persists to `public.weekly_feature_proposals` (`proposal_code`, `title`, `target_persona`, `driver_value_proposition`, `evidence_quotes`, `technical_spec`, `impact_score`, `status`).
+- Schedule: every Sunday 20:00 EAT (`checkHorizonSchedule`) plus a manual `POST /api/cron/sentinel-horizon` endpoint.
+- Delivery: WhatsApp blueprint summary to `SUPERADMIN_PHONE`; Superadmin can then run `admin proposals` to list pending blueprints.
+
+### 6.5 Google Cloud Logging Integration & Telemetry Polling
+- **Log Ingestion:** `saka-fleet` on Google Cloud Run auto-ingests access logs, stdout/stderr, and HTTP status codes (500, 504) to Google Cloud Logging.
+- **Sentinel Background Worker (`scanCloudRunAnomalies`):**
+  - Uses `@google-cloud/logging` to poll recent logs for `resource.type="cloud_run_revision"` every 2 minutes.
+  - Filters for `severity >= ERROR` or high latency (`latency >= "5.000s"`).
+  - Deduplicates events using a strict 15-minute sliding window cache (`recentlyAlertedLogHashes`) to prevent alert flooding.
+  - Logs critical anomalies into `public.chat_friction_logs` (with `friction_type: 'SYSTEM_ERROR'`) and `public.error_logs`.
+  - Immediately pushes real-time diagnostic alerts to `SUPERADMIN_PHONE` via WhatsApp with timestamp, severity, HTTP status, and log snippet.
+  - Service: `src/services/sentinelCloudLogs.js` (`fetchCloudRunLogs(minutesAgo)`), which degrades gracefully to `[]` outside GCP.
 
 ---
 

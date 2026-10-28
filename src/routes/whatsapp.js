@@ -377,17 +377,20 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
 
     // Circuit Breaker State Check & Reset on user reset/cancel commands
     const cleanCmd = messageText.trim().toLowerCase();
-    if (/^(cancel|exit|stop|reset|start over)$/i.test(cleanCmd)) {
-      session.circuitBreakerTripped = false;
+    if (/^(cancel|exit|stop|reset|start over|1|2|3|4|5)$/i.test(cleanCmd) || /^(log|update|set|request|help)/i.test(cleanCmd)) {
+      session.circuitBreakerStage = null;
       session.consecutivePromptCount = 0;
       session.lastAssistantPrompt = null;
-    } else if (session.circuitBreakerTripped) {
-      // Circuit breaker is active: bypass Gemini and send clean fallback message
-      const fallbackReply = "I've hit a temporary snag processing this step. I have notified our support team at support@sakafleet.com, and they will reach out to assist you shortly!";
+      session.loopSignature = null;
+    } else if (session.circuitBreakerStage === 'HARD_TRIP') {
+      // Circuit breaker is in hard trip: bypass Gemini and send clean fallback message
+      const fallbackReply = "I've hit a temporary snag processing this step. I have notified our support team at support@sakafleet.com, and we will update you right here on WhatsApp once this is resolved!";
       await sendWhatsAppReply(senderPhone, fallbackReply);
       if (supabaseClient) {
-        logChatTranscript(supabaseClient, senderPhone, 'assistant', fallbackReply);
-        await saveChatMessage(supabaseClient, senderPhone, 'assistant', fallbackReply);
+        try {
+          await supabaseClient.from('chat_transcripts').insert([{ phone_number: senderPhone, sender: 'assistant', message_text: fallbackReply }]);
+          await supabaseClient.from('chat_history').insert([{ user_phone: senderPhone, role: 'assistant', message: fallbackReply }]);
+        } catch {}
       }
       return { status: 'circuit_breaker_active' };
     }
@@ -851,61 +854,79 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               targetVeh = getActiveVehicle({ senderPhone, vehicles: existingVehicles, chatSessions }) || existingVehicles[0];
             }
 
-            const assignDriverMatch = messageText.match(/^(?:assign\s+driver|assign)\s+(\+?[0-9]{9,15})\s+(?:to|for)\s+([A-Z0-9\s]+)$/i) ||
-                                      messageText.match(/^driver\s+(\+?[0-9]{9,15})\s+(?:to|for)\s+([A-Z0-9\s]+)$/i);
-            const unassignDriverMatch = messageText.match(/^unassign\s+driver\s+(?:from\s+)?([A-Z0-9\s]+)$/i);
+            if (activeIntent === 'ASSIGN_DRIVER' || session.pendingDriverAssignment || /^(?:assign\s+driver|assign)\b/i.test(messageText)) {
+              let assignTarget = targetVeh;
+              if (mergedExt.plate_number) {
+                const found = findVehicleByCandidate(existingVehicles, mergedExt.plate_number);
+                if (found) assignTarget = found;
+              } else if (session.pendingDriverAssignment) {
+                const found = existingVehicles.find(v => v.id === session.pendingDriverAssignment.vehicleId);
+                if (found) assignTarget = found;
+              }
 
-            if (assignDriverMatch) {
-              const rawDriverPhone = assignDriverMatch[1];
-              const rawTargetPlate = assignDriverMatch[2].trim().toUpperCase().replace(/\s+/g, '');
-              const targetVeh = existingVehicles.find(v => v.plate_number.replace(/\s+/g, '').toUpperCase() === rawTargetPlate) || existingVehicles[0];
-
-              if (!targetVeh) {
-                customReply = `⚠️ Vehicle "${assignDriverMatch[2]}" was not found in your registered fleet.`;
+              if (!assignTarget) {
+                customReply = `⚠️ I could not find that vehicle in your registered fleet.`;
+                session.pendingDriverAssignment = null;
               } else {
-                const cleanDrvPhone = rawDriverPhone.startsWith('+') ? rawDriverPhone : `+${rawDriverPhone.replace(/[^\d]/g, '')}`;
-                let { data: drvProfile } = await supabaseClient
-                  .from('profiles')
-                  .select('*')
-                  .eq('phone_number', cleanDrvPhone)
-                  .maybeSingle();
-
-                if (!drvProfile) {
-                  const { data: newDrv } = await supabaseClient
-                    .from('profiles')
-                    .insert([{
-                      id: crypto.randomUUID(),
-                      phone_number: cleanDrvPhone,
-                      full_name: 'Fleet Driver',
-                      is_active: true
-                    }])
-                    .select()
-                    .single();
-                  drvProfile = newDrv;
+                let driverPhone = mergedExt.driver_phone;
+                const manualPhoneMatch = messageText.match(/(?:\+?254|0)[17]\d{8}|\+?\d{9,15}/);
+                if (!driverPhone && manualPhoneMatch) {
+                  driverPhone = manualPhoneMatch[0];
                 }
 
-                const assignRes = await assignDriverToVehicle({
-                  vehicleId: targetVeh.id,
-                  driverId: drvProfile.id,
-                  supabase: supabaseClient
-                });
-
-                if (!assignRes.success) {
-                  customReply = `❌ *Driver Assignment Blocked (Strict 1-to-1 Rule)*\n\n${assignRes.error}`;
+                if (!driverPhone) {
+                  session.pendingDriverAssignment = { vehicleId: assignTarget.id, plateNumber: assignTarget.plate_number };
+                  customReply = `🚗 *Assign Driver to Vehicle*\n\n• Target Vehicle: *${assignTarget.plate_number}*\n\nPlease reply with the driver's WhatsApp phone number (e.g. *+254712345678*).\n\n_(Reply 'cancel' to abort)_`;
                 } else {
-                  customReply = `✅ *Driver Assigned Successfully!*\n\n• *Driver:* ${drvProfile.full_name || cleanDrvPhone} (${cleanDrvPhone})\n• *Vehicle:* ${targetVeh.plate_number}\n\n🔒 *Strict 1-to-1 Constraint:* This driver cannot be assigned to another vehicle while this assignment is active.`;
+                  session.pendingDriverAssignment = null;
+                  const cleanDrvPhone = driverPhone.startsWith('+') ? driverPhone : `+${driverPhone.replace(/[^\d]/g, '')}`;
+                  
+                  let { data: drvProfile } = await supabaseClient
+                    .from('profiles')
+                    .select('*')
+                    .eq('phone_number', cleanDrvPhone)
+                    .maybeSingle();
+
+                  if (!drvProfile) {
+                    const { data: newDrv } = await supabaseClient
+                      .from('profiles')
+                      .insert([{
+                        id: crypto.randomUUID(),
+                        phone_number: cleanDrvPhone,
+                        full_name: 'Fleet Driver',
+                        is_active: true
+                      }])
+                      .select()
+                      .single();
+                    drvProfile = newDrv;
+                  }
+
+                  const assignRes = await assignDriverToVehicle({
+                    vehicleId: assignTarget.id,
+                    driverId: drvProfile.id,
+                    supabase: supabaseClient
+                  });
+
+                  if (!assignRes.success) {
+                    customReply = `❌ *Driver Assignment Blocked (Strict 1-to-1 Rule)*\n\n${assignRes.error}`;
+                  } else {
+                    customReply = `✅ *Driver Assigned Successfully!*\n\n• *Driver:* ${drvProfile.full_name || cleanDrvPhone} (${cleanDrvPhone})\n• *Vehicle:* ${assignTarget.plate_number}\n\n🔒 *Strict 1-to-1 Constraint:* This driver cannot be assigned to another vehicle while this assignment is active.`;
+                  }
                 }
               }
             }
-            else if (unassignDriverMatch) {
-              const rawTargetPlate = unassignDriverMatch[1].trim().toUpperCase().replace(/\s+/g, '');
-              const targetVeh = existingVehicles.find(v => v.plate_number.replace(/\s+/g, '').toUpperCase() === rawTargetPlate) || existingVehicles[0];
+            else if (activeIntent === 'UNASSIGN_DRIVER' || /^unassign\s+driver/i.test(messageText.trim()) || /^remove\s+driver/i.test(messageText.trim())) {
+              let unassignTarget = targetVeh;
+              if (mergedExt.plate_number) {
+                const found = findVehicleByCandidate(existingVehicles, mergedExt.plate_number);
+                if (found) unassignTarget = found;
+              }
 
-              if (!targetVeh) {
-                customReply = `⚠️ Vehicle "${unassignDriverMatch[1]}" was not found in your registered fleet.`;
+              if (!unassignTarget) {
+                customReply = `⚠️ Could not identify the vehicle to unassign the driver from.`;
               } else {
-                await unassignDriverFromVehicle({ vehicleId: targetVeh.id, supabase: supabaseClient });
-                customReply = `✅ Driver unassigned from vehicle *${targetVeh.plate_number}*. Vehicle is now available for a new driver.`;
+                await unassignDriverFromVehicle({ vehicleId: unassignTarget.id, supabase: supabaseClient });
+                customReply = `✅ Driver unassigned from vehicle *${unassignTarget.plate_number}*. Vehicle is now available for a new driver.`;
               }
             }
             else if (activeIntent === 'SWITCH_VEHICLE') {
@@ -1211,40 +1232,65 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
 
         // State Machine Circuit Breaker Check: Track consecutive identical assistant prompts
         const normalizedReply = sanitizedReply.toLowerCase().replace(/\s+/g, ' ');
-        const lastPrompt = (session.lastAssistantPrompt || '').toLowerCase().replace(/\s+/g, ' ');
+        const loopSig = (session.loopSignature || '').toLowerCase().replace(/\s+/g, ' ');
 
-        if (lastPrompt && lastPrompt === normalizedReply) {
+        if (loopSig && loopSig === normalizedReply) {
+          // Same prompt again -> advance the strike counter
           session.consecutivePromptCount = (session.consecutivePromptCount || 1) + 1;
         } else {
+          // A genuinely different prompt -> new loop signature
+          session.loopSignature = sanitizedReply;
           session.lastAssistantPrompt = sanitizedReply;
           session.consecutivePromptCount = 1;
-          session.circuitBreakerTripped = false;
+          if (session.circuitBreakerStage !== 'HARD_TRIP') session.circuitBreakerStage = null;
         }
 
         let finalReply = sanitizedReply;
 
-        if (session.consecutivePromptCount >= 3) {
-          if (fastify?.log) {
-            fastify.log.warn(`[Circuit Breaker] Tripped for ${senderPhone}! Same assistant prompt repeated 3 times.`);
-          }
-
-          if (!session.circuitBreakerTripped) {
-            session.circuitBreakerTripped = true;
+        // Stage 1 (Soft Trip): Prompt repeated 3 times. Grace retry.
+        if (session.consecutivePromptCount === 3) {
+          session.circuitBreakerStage = 'SOFT_TRIP';
+          finalReply = "I've hit a temporary snag processing this step. Kindly try again!";
+          session.lastAssistantPrompt = finalReply;
+          if (fastify?.log) fastify.log.warn(`[Circuit Breaker] SOFT TRIP for ${senderPhone}! Same assistant prompt repeated 3 times.`);
+          if (supabaseClient) {
             try {
-              await sendSupportEscalationEmail({
-                userPhone: senderPhone,
-                userEmail: profileData?.email,
-                userName: profileData?.full_name,
-                subscriptionTier: profileData?.subscription_tier,
-                issueParagraph: `[AUTOMATIC CIRCUIT BREAKER TRIPPED]\n\nThe assistant generated the exact same prompt 3 consecutive times without user state progression.\n\nRepeated Prompt:\n${sanitizedReply}\n\nLast User Input:\n${messageText}`,
-                vehiclesList: existingVehicles
-              });
-            } catch (escErr) {
-              if (fastify?.log) fastify.log.error('Failed to dispatch circuit breaker escalation email:', escErr?.message);
+              await supabaseClient.from('chat_friction_logs').insert([{
+                user_phone: senderPhone,
+                session_id: senderPhone,
+                friction_type: 'LOOPING_PROMPTS',
+                transcript_snippet: `Circuit Breaker Soft Trip (Strike 3) for prompt: "${sanitizedReply}"`
+              }]);
+            } catch {}
+          }
+        } 
+        // Stage 2 (Hard Trip): Prompt repeated 4 times. Support escalation.
+        else if (session.consecutivePromptCount >= 4) {
+          session.circuitBreakerStage = 'HARD_TRIP';
+          if (fastify?.log) fastify.log.warn(`[Circuit Breaker] HARD TRIP for ${senderPhone}! Escalating to support.`);
+
+          try {
+            await sendSupportEscalationEmail({
+              userPhone: senderPhone,
+              userEmail: profileData?.email,
+              userName: profileData?.full_name,
+              subscriptionTier: profileData?.subscription_tier,
+              issueParagraph: `[AUTOMATIC CIRCUIT BREAKER TRIPPED - HARD TRIP]\n\nThe assistant generated the exact same prompt 4 consecutive times without user state progression.\n\nRepeated Prompt:\n${sanitizedReply}\n\nLast User Input:\n${messageText}`,
+              vehiclesList: existingVehicles
+            });
+            if (supabaseClient) {
+              await supabaseClient.from('chat_friction_logs').insert([{
+                user_phone: senderPhone,
+                session_id: senderPhone,
+                friction_type: 'SYSTEM_ERROR',
+                transcript_snippet: `Circuit Breaker Hard Trip (Strike 4). Escalated to support. User input: "${messageText}"`
+              }]);
             }
+          } catch (escErr) {
+            if (fastify?.log) fastify.log.error('Failed to dispatch circuit breaker escalation email:', escErr?.message);
           }
 
-          finalReply = "I've hit a temporary snag processing this step. I have notified our support team at support@sakafleet.com, and they will reach out to assist you shortly!";
+          finalReply = "I've hit a temporary snag processing this step. I have notified our support team at support@sakafleet.com, and we will update you right here on WhatsApp once this is resolved!";
           session.lastAssistantPrompt = finalReply;
         }
 

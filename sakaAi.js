@@ -27,10 +27,11 @@ You sit directly between the user and the fleet database: collecting, parsing, l
 INTENT CLASSIFICATION & AGENT ACTIONS:
 Analyze the incoming message, conversation context, and user fleet roster to classify the user's intent into a JSON object matching this schema:
 {
-  "intent": "GREETING" | "ACTION_DISCOVERY" | "TRANSFER_PASSBOOK" | "APPLY_COUPON" | "REGISTER_VEHICLE" | "ONBOARDING_INPUT" | "ONBOARDING_SKIP" | "VERIFY_OTP" | "RESEND_OTP" | "UPDATE_EMAIL" | "APP_HELP" | "MANAGE_VEHICLE" | "LIST_VEHICLES" | "SWITCH_VEHICLE" | "QUERY_FUEL_EFFICIENCY" | "QUERY_FLEET_SUMMARY" | "LOG_EXPENSE" | "UPDATE_MILEAGE" | "LOG_EARNINGS" | "SET_REMINDER" | "COMPLETE_REMINDER" | "REQUEST_REPORT" | "CONTACT_SUPPORT" | "REACTIVATE_ACCOUNT" | "GENERAL_CHAT",
+  "intent": "GREETING" | "ACTION_DISCOVERY" | "TRANSFER_PASSBOOK" | "APPLY_COUPON" | "REGISTER_VEHICLE" | "ONBOARDING_INPUT" | "ONBOARDING_SKIP" | "VERIFY_OTP" | "RESEND_OTP" | "UPDATE_EMAIL" | "APP_HELP" | "MANAGE_VEHICLE" | "LIST_VEHICLES" | "SWITCH_VEHICLE" | "QUERY_FUEL_EFFICIENCY" | "QUERY_FLEET_SUMMARY" | "LOG_EXPENSE" | "UPDATE_MILEAGE" | "LOG_EARNINGS" | "SET_REMINDER" | "COMPLETE_REMINDER" | "REQUEST_REPORT" | "CONTACT_SUPPORT" | "REACTIVATE_ACCOUNT" | "GENERAL_CHAT" | "ASSIGN_DRIVER" | "UNASSIGN_DRIVER",
   "extracted_data": {
     "plate_number": string | null,
     "target_vehicle": string | null,
+    "driver_phone": string | null,
     "make_model": string | null,
     "yom": number | null,
     "year": number | null,
@@ -76,6 +77,11 @@ AGENT ROLES & BEHAVIORAL DIRECTIVES:
    - Extract target plate into "plate_number" if specified, or use the active vehicle.
    - If more data or odometer readings are needed to complete the math, indicate that clearly and warmly.
    - QUERY_FLEET_SUMMARY: Triggered when user asks for overall summary, car status, or financial overview.
+
+5. DRIVER ASSIGNMENT:
+   - ASSIGN_DRIVER: Triggered when a user asks to assign a driver to a vehicle. (e.g. "Assign driver +254711223344", "assign KAS to driver +254700000000").
+   - UNASSIGN_DRIVER: Triggered when user asks to remove/unassign a driver.
+   - Driver assignments ARE natively supported on WhatsApp. Do NOT tell the user to use a web portal. Extract the target vehicle plate into "plate_number" and the driver's phone into "driver_phone".
 
 4. TWO-STAGE PROGRESSIVE ONBOARDING:
    - Stage 1 Core: plate_number, make_model, yom, fuel_type, current_mileage, vin (immutable chassis number), owner_email, otp_code, role ('Owner' | 'Driver').
@@ -206,7 +212,7 @@ export function extractVehicleAttributes(messageText = '') {
       .replace(/\s+/g, ' ')
       .trim();
 
-    if (stripped.length >= 2 && !/^(register|onboard|add car|help|skip|done|resend)$/i.test(stripped) && !/^\d+$/.test(stripped)) {
+    if (stripped.length >= 2 && !/^(register|onboard|add car|help|skip|done|resend|great|ok|okay|awesome|cool|thanks|thank you|none|good|perfect|all set)$/i.test(stripped) && !/^\d+$/.test(stripped)) {
       const isPlate = /\b([A-Z]{1,4}\s?\d{1,4}[A-Z]{0,2}|\d[A-Z]{3}\d{3})\b/i.test(stripped);
       if (!isPlate && (!data.plate_number || stripped.replace(/\s+/g, '').toUpperCase() !== data.plate_number.replace(/\s+/g, '').toUpperCase())) {
         data.make_model = stripped;
@@ -221,9 +227,18 @@ export function extractVehicleAttributes(messageText = '') {
   const colorMatch = clean.match(/\b(white|black|silver|grey|gray|blue|red|green|yellow|gold|brown|orange|maroon|beige)\b/i);
   if (colorMatch) data.color = colorMatch[1].charAt(0).toUpperCase() + colorMatch[1].slice(1).toLowerCase();
 
+  const phoneMatchPattern = /(?:\+?254|0)[17]\d{8}|\+?\d{9,15}/;
+  const driverPhoneMatch = clean.match(phoneMatchPattern);
+  if (driverPhoneMatch) {
+    data.driver_phone = driverPhoneMatch[0];
+  }
+
   const vinMatch = clean.match(/\b(?:vin|chassis)?\s*[:=]?\s*([A-HJ-NPR-Z0-9]{11,17})\b/i);
   if (vinMatch && !/^(diesel|petrol|hybrid|toyota|nissan|fielder|automatic|owner|driver)$/i.test(vinMatch[1])) {
-    data.vin = vinMatch[1].toUpperCase();
+    const candidateVin = vinMatch[1].toUpperCase();
+    if (!phoneMatchPattern.test(candidateVin)) {
+      data.vin = candidateVin;
+    }
   }
 
   const engMatch = clean.match(/(?:engine|eng)\s*(?:no|number|#)?\s*[:=]?\s*([A-Z0-9-]+)/i);
@@ -476,9 +491,10 @@ export function classifyIntentWithRegex(messageText = '') {
   }
 
   // Odometer / Mileage Update (when not part of a broader vehicle profile)
-  if (/odometer|mileage|\bkm\b|\bmiles\b|reading|clocked/i.test(clean)) {
-    const odoMatch = clean.match(/[\d,]+/);
-    const odoVal = odoMatch ? parseInt(odoMatch[0].replace(/,/g, ''), 10) : null;
+  // Fuel/expense wording takes priority so "Logged 30L fuel at 50350 km for KES 5500" is not misread as an odometer update.
+  const looksLikeExpense = /fuel|expense|spent|refuel|liter|litres|liters|receipt|repair|oil change|maintenance|paid|cost/i.test(clean);
+  if (!looksLikeExpense && /odometer|mileage|\bkm\b|\bmiles\b|reading|clocked/i.test(clean)) {
+    const odoVal = attrs.odometer || attrs.current_mileage || null;
     return {
       intent: 'UPDATE_MILEAGE',
       extracted_data: { odometer: odoVal, current_mileage: odoVal },

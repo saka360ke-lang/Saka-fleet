@@ -13,11 +13,20 @@ export async function handleStage2OptionalWeaving({
   countryInfo,
   supabaseClient
 }) {
-  const cleanText = messageText.trim().toLowerCase();
-  const isSkipOrDone = mergedExt.skip_or_done || /^(skip|done|later|no|finish|not now|no thanks|exit)$/i.test(cleanText);
+  const cleanText = messageText.trim().toLowerCase().replace(/[!.,?;:]+$/g, '');
+  const isSkipOrDone = mergedExt.skip_or_done || /^(skip|done|later|no|finish|not now|no thanks|exit|great|ok|okay|awesome|cool|thanks|thank you|none|good|perfect|all set|got it|nice|alright|sure|yes)$/i.test(cleanText);
   const regPlate = obState.registered_plate || obState.core?.plate_number || obState.plate_number;
 
-  if (isSkipOrDone) {
+  // Detect whether the message carried any real optional spec payload
+  const SPEC_KEYS = ['insurance_expiry', 'insurance_policy', 'engine_number', 'color', 'transmission', 'tire_size', 'inspection_expiry', 'purchase_cost', 'custom_attributes'];
+  const hasSpecPayload = SPEC_KEYS.some((k) => {
+    const v = mergedExt ? mergedExt[k] : null;
+    if (v === null || v === undefined || v === '') return false;
+    if (typeof v === 'object') return Object.keys(v).length > 0;
+    return true;
+  });
+
+  if (isSkipOrDone || !hasSpecPayload) {
     onboardingStore.delete(senderPhone);
     session.state = 'ACTIVE';
     session.onboardingStep = null;

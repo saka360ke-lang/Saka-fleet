@@ -160,35 +160,49 @@ async function runReliabilityTests() {
   const strike3 = createMockMetaWebhook({ messageBody: 'Still confused', wamid: `wamid_${Date.now()}_s3`, fromPhone: circuitPhone });
   await handleWhatsAppWebhook(strike3.req, strike3.reply, mockFastify);
   circuitSession = chatSessions.get(circuitPhone);
-  console.log('Strike 3 prompt count:', circuitSession.consecutivePromptCount, 'Tripped:', circuitSession.circuitBreakerTripped);
-  if (!circuitSession.circuitBreakerTripped) {
-    throw new Error('Expected circuitBreakerTripped = true after 3 identical prompts!');
+  console.log('Strike 3 prompt count:', circuitSession.consecutivePromptCount, 'Stage:', circuitSession.circuitBreakerStage);
+  if (circuitSession.circuitBreakerStage !== 'SOFT_TRIP') {
+    throw new Error('Expected circuitBreakerStage = SOFT_TRIP after 3 identical prompts!');
+  }
+
+  const softReply = circuitSession.history.slice(-1)[0].parts[0].text;
+  console.log('Soft Trip Reply:', softReply);
+  if (!softReply.includes('Kindly try again')) {
+    throw new Error(`Expected soft trip grace-retry message, got: "${softReply}"`);
+  }
+
+  // Strike 4: Hard Trip -> support escalation with pending-fix message
+  const strike4 = createMockMetaWebhook({ messageBody: 'Still confused', wamid: `wamid_${Date.now()}_s4`, fromPhone: circuitPhone });
+  await handleWhatsAppWebhook(strike4.req, strike4.reply, mockFastify);
+  circuitSession = chatSessions.get(circuitPhone);
+  console.log('Strike 4 Stage:', circuitSession.circuitBreakerStage);
+  if (circuitSession.circuitBreakerStage !== 'HARD_TRIP') {
+    throw new Error('Expected circuitBreakerStage = HARD_TRIP after 4 identical prompts!');
   }
 
   const circuitReply = circuitSession.history.slice(-1)[0].parts[0].text;
-  console.log('Circuit Breaker Fallback Reply:', circuitReply);
-  const expectedFallback = "I've hit a temporary snag processing this step. I have notified our support team at support@sakafleet.com, and they will reach out to assist you shortly!";
+  console.log('Hard Trip Reply:', circuitReply);
+  const expectedFallback = "I've hit a temporary snag processing this step. I have notified our support team at support@sakafleet.com, and we will update you right here on WhatsApp once this is resolved!";
   if (!circuitReply.includes(expectedFallback)) {
-    throw new Error(`Expected exact circuit breaker fallback message, got: "${circuitReply}"`);
+    throw new Error(`Expected hard trip fallback message, got: "${circuitReply}"`);
   }
 
-  // Strike 4: Subsequent input while tripped bypasses Gemini
-  const strike4 = createMockMetaWebhook({ messageBody: 'Help me please', wamid: `wamid_${Date.now()}_s4`, fromPhone: circuitPhone });
-  await handleWhatsAppWebhook(strike4.req, strike4.reply, mockFastify);
+  // Strike 5: Subsequent input while hard-tripped bypasses processing
+  const strike5 = createMockMetaWebhook({ messageBody: 'Still confused', wamid: `wamid_${Date.now()}_s5`, fromPhone: circuitPhone });
+  await handleWhatsAppWebhook(strike5.req, strike5.reply, mockFastify);
   circuitSession = chatSessions.get(circuitPhone);
-  const strike4Reply = circuitSession.history.slice(-1)[0].parts[0].text;
-  if (!strike4Reply.includes(expectedFallback)) {
-    throw new Error(`Expected fallback reply while circuit breaker is tripped, got: "${strike4Reply}"`);
+  if (circuitSession.circuitBreakerStage !== 'HARD_TRIP') {
+    throw new Error('Expected HARD_TRIP to persist for non-navigation input');
   }
 
-  // Reset Command: User says "reset" -> Circuit breaker resets
-  const resetTurn = createMockMetaWebhook({ messageBody: 'reset', wamid: `wamid_${Date.now()}_reset`, fromPhone: circuitPhone });
+  // Navigation Freedom: A valid numbered menu input must reset the breaker
+  const resetTurn = createMockMetaWebhook({ messageBody: '1', wamid: `wamid_${Date.now()}_reset`, fromPhone: circuitPhone });
   await handleWhatsAppWebhook(resetTurn.req, resetTurn.reply, mockFastify);
   circuitSession = chatSessions.get(circuitPhone);
-  if (circuitSession.circuitBreakerTripped) {
-    throw new Error('Expected circuitBreakerTripped to be reset to false after "reset"');
+  if (circuitSession.circuitBreakerStage) {
+    throw new Error('Expected circuit breaker stage to clear when user navigates via valid menu input');
   }
-  console.log('✅ Safeguard 3 Verified: Circuit breaker tripped on 3rd identical prompt, auto-escalated to support@sakafleet.com, and cleanly reset on user "reset" command.\n');
+  console.log('✅ Safeguard 3 Verified: 2-stage self-healing breaker (SOFT_TRIP grace retry -> HARD_TRIP support escalation -> auto-free on navigation).\n');
 
   console.log('🎉 ALL RELIABILITY & CIRCUIT BREAKER TESTS PASSED SUCCESSFULLY!');
 }

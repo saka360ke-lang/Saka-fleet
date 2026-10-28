@@ -782,5 +782,113 @@ Output ONLY valid JSON matching this schema:
   };
 }
 
+export async function generateWeeklyFeaturePlan(providedSupabase) {
+  const supabase = getSupabase(providedSupabase);
+  const ai = getGeminiClient();
+
+  const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  // 1. Ingest Weekly Transcripts
+  const { data: recentTranscripts } = await supabase
+    .from('chat_transcripts')
+    .select('message_text')
+    .eq('sender', 'user')
+    .gte('created_at', oneWeekAgo)
+    .limit(150);
+
+  const { data: recentFriction } = await supabase
+    .from('chat_friction_logs')
+    .select('transcript_snippet, friction_type')
+    .gte('detected_at', oneWeekAgo)
+    .limit(50);
+
+  if (!recentTranscripts || recentTranscripts.length < 5) {
+    return { status: 'success', message: 'Not enough conversation data this week to synthesize a meaningful feature blueprint.' };
+  }
+
+  const rawCorpus = recentTranscripts.map(t => t.message_text).join('\n') + '\n' + 
+                    (recentFriction || []).map(f => `[${f.friction_type}] ${f.transcript_snippet}`).join('\n');
+
+  const horizonPrompt = `You are Sentinel Horizon, the evolutionary architect for Saka Fleet. 
+Analyze the following raw WhatsApp chat transcripts and friction logs from the past week.
+Identify recurring driver pain points, unhandled intents, feature requests, or slang that Saka doesn't yet support perfectly.
+
+Synthesize the single most valuable feature proposal to make Saka Fleet the #1 vehicle management companion for everyday drivers.
+
+Output ONLY valid JSON matching this schema:
+{
+  "proposal_code": "FEAT-2026-WXX-XX",
+  "title": "string",
+  "target_persona": "string",
+  "driver_value_proposition": "string",
+  "evidence_quotes": "string",
+  "technical_spec": "string",
+  "impact_score": number (1-10)
+}
+
+RAW CHAT DATA:
+${rawCorpus.slice(0, 15000)}`;
+
+  let parsedProposal = null;
+  const candidateModels = ['gemini-3.8-flash', process.env.GEMINI_MODEL, 'gemini-flash-latest'].filter(Boolean);
+
+  for (const modelName of candidateModels) {
+    try {
+      const response = await ai.models.generateContent({
+        model: modelName,
+        contents: [{ role: 'user', parts: [{ text: horizonPrompt }] }],
+        config: { responseMimeType: 'application/json' }
+      });
+      if (response && response.text) {
+        const cleaned = response.text.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/, '').trim();
+        parsedProposal = JSON.parse(cleaned);
+        if (parsedProposal && parsedProposal.proposal_code) break;
+      }
+    } catch (e) {
+      console.warn(`[Sentinel Horizon] Model ${modelName} failed:`, e.message);
+    }
+  }
+
+  if (!parsedProposal || !parsedProposal.proposal_code) {
+    return { status: 'error', message: 'Failed to synthesize feature plan from AI.' };
+  }
+
+  // 2. Insert into Supabase
+  try {
+    await supabase.from('weekly_feature_proposals').insert([{
+      proposal_code: parsedProposal.proposal_code,
+      title: parsedProposal.title,
+      target_persona: parsedProposal.target_persona,
+      driver_value_proposition: parsedProposal.driver_value_proposition,
+      evidence_quotes: parsedProposal.evidence_quotes,
+      technical_spec: parsedProposal.technical_spec,
+      impact_score: parsedProposal.impact_score
+    }]);
+  } catch (err) {
+    console.error('[Sentinel Horizon] DB Insert Error:', err.message);
+    return { status: 'error', message: 'Synthesized plan but failed to save to database.' };
+  }
+
+  // 3. Dispatch to Superadmin
+  const superadminPhone = process.env.SUPERADMIN_PHONE;
+  if (superadminPhone) {
+    const waMsg = `🌟 *Saka Sentinel Horizon — Weekly Feature Evolution* 🚀\n\nAnalyzed ${recentTranscripts.length} driver exchanges this week.\nTop Driver Feature Opportunity:\n\n💡 *${parsedProposal.title}*\n• *Why:* ${parsedProposal.evidence_quotes.substring(0, 100)}...\n• *Driver Value:* ${parsedProposal.driver_value_proposition}\n• *Impact:* ${parsedProposal.impact_score}/10\n\n_Text "admin proposals" to review._`;
+    try {
+      const token = process.env.META_WHATSAPP_TOKEN;
+      const phoneNumberId = process.env.META_PHONE_NUMBER_ID;
+      const cleanPhone = superadminPhone.replace(/[^\d]/g, '');
+      if (token && phoneNumberId && cleanPhone) {
+        await fetch(`https://graph.facebook.com/v17.0/${phoneNumberId}/messages`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messaging_product: 'whatsapp', to: cleanPhone, type: 'text', text: { body: waMsg } })
+        });
+      }
+    } catch {}
+  }
+
+  return { status: 'success', message: `✅ Sentinel Horizon generated blueprint: ${parsedProposal.title}` };
+}
+
 
 
