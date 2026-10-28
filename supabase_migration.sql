@@ -159,6 +159,55 @@ CREATE TABLE IF NOT EXISTS public.chat_transcripts (
 CREATE INDEX IF NOT EXISTS idx_error_logs_status ON public.error_logs(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_chat_transcripts_created ON public.chat_transcripts(created_at);
 
+
+-- 15. VIN Registry, Asset-Bound Trials, Extension Coupons & Passbook Transfers
+CREATE TABLE IF NOT EXISTS public.vin_registry (
+    vin text PRIMARY KEY,
+    first_registered_at timestamp with time zone DEFAULT now(),
+    first_owner_id uuid REFERENCES public.profiles(id) ON DELETE SET NULL,
+    trial_granted boolean DEFAULT true,
+    trial_start_at timestamp with time zone DEFAULT now(),
+    trial_end_at timestamp with time zone DEFAULT (now() + interval '30 days'),
+    trial_extended boolean DEFAULT false,
+    trial_extension_coupon_id uuid,
+    trial_status text DEFAULT 'active',
+    current_vehicle_id uuid,
+    updated_at timestamp with time zone DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_vin_registry_status ON public.vin_registry(trial_status, trial_end_at);
+
+ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS trial_start_at timestamp with time zone;
+ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS trial_end_at timestamp with time zone;
+ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS trial_status text DEFAULT 'trial';
+ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS transfer_count_current_year integer DEFAULT 0;
+ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS last_transfer_year integer DEFAULT EXTRACT(YEAR FROM CURRENT_DATE);
+
+ALTER TABLE public.coupons ADD COLUMN IF NOT EXISTS assigned_to_phone text;
+ALTER TABLE public.coupons ADD COLUMN IF NOT EXISTS vin text;
+ALTER TABLE public.coupons ADD COLUMN IF NOT EXISTS applicable_to text DEFAULT 'trial_extension';
+ALTER TABLE public.coupons ADD COLUMN IF NOT EXISTS scheduled_dispatch_at timestamp with time zone;
+ALTER TABLE public.coupons ADD COLUMN IF NOT EXISTS dispatched_at timestamp with time zone;
+ALTER TABLE public.coupons ADD COLUMN IF NOT EXISTS email_notified boolean DEFAULT false;
+ALTER TABLE public.coupons ADD COLUMN IF NOT EXISTS whatsapp_notified boolean DEFAULT false;
+ALTER TABLE public.coupons ADD COLUMN IF NOT EXISTS status text DEFAULT 'scheduled';
+CREATE INDEX IF NOT EXISTS idx_coupons_scheduled_dispatch ON public.coupons(status, scheduled_dispatch_at);
+CREATE INDEX IF NOT EXISTS idx_coupons_vin_status ON public.coupons(vin, status);
+
+ALTER TABLE public.passbook_transfers ADD COLUMN IF NOT EXISTS to_owner_email text;
+ALTER TABLE public.passbook_transfers ADD COLUMN IF NOT EXISTS to_owner_id uuid REFERENCES public.profiles(id);
+ALTER TABLE public.passbook_transfers ADD COLUMN IF NOT EXISTS vin text;
+ALTER TABLE public.passbook_transfers ADD COLUMN IF NOT EXISTS release_otp text;
+ALTER TABLE public.passbook_transfers ADD COLUMN IF NOT EXISTS release_otp_expires_at timestamp with time zone;
+ALTER TABLE public.passbook_transfers ADD COLUMN IF NOT EXISTS buyer_otp text;
+ALTER TABLE public.passbook_transfers ADD COLUMN IF NOT EXISTS buyer_otp_expires_at timestamp with time zone;
+ALTER TABLE public.passbook_transfers ADD COLUMN IF NOT EXISTS is_free_transfer boolean DEFAULT true;
+ALTER TABLE public.passbook_transfers ADD COLUMN IF NOT EXISTS fee_amount numeric DEFAULT 0;
+ALTER TABLE public.passbook_transfers ADD COLUMN IF NOT EXISTS fee_currency text DEFAULT 'USD';
+ALTER TABLE public.passbook_transfers ADD COLUMN IF NOT EXISTS checkout_url text;
+CREATE INDEX IF NOT EXISTS idx_transfers_vehicle_year ON public.passbook_transfers(vehicle_id, status, completed_at);
+CREATE INDEX IF NOT EXISTS idx_transfers_buyer_phone ON public.passbook_transfers(to_owner_phone, status);
+
+
 -- 15. Superadmin Feature Set Tables
 CREATE TABLE IF NOT EXISTS public.superadmin_sessions (
     phone_number text PRIMARY KEY,
@@ -188,4 +237,54 @@ CREATE INDEX IF NOT EXISTS idx_coupons_code ON public.coupons(code);
 CREATE INDEX IF NOT EXISTS idx_admin_audit_admin ON public.admin_audit_logs(admin_phone, created_at);
 
 
+-- 16. Chat History (Conversational Memory) & Vehicles Custom Attributes
+ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS custom_attributes jsonb DEFAULT '{}'::jsonb;
+
+CREATE TABLE IF NOT EXISTS public.chat_history (
+    id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+    user_phone text NOT NULL,
+    role text NOT NULL,
+    message text NOT NULL,
+    created_at timestamp with time zone DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_history_phone_time ON public.chat_history(user_phone, created_at DESC);
+
+
+-- 17. Sentinel Real-Time Optimization & Strict 1-to-1 Driver Constraints
+CREATE TABLE IF NOT EXISTS public.chat_friction_logs (
+    id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+    user_phone text,
+    session_id text,
+    friction_type text,
+    transcript_snippet text,
+    detected_at timestamp with time zone DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.saka_dynamic_rules (
+    id serial PRIMARY KEY,
+    rule_key text UNIQUE,
+    rule_description text,
+    patch_instruction text,
+    is_active boolean DEFAULT true,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_friction_logs_phone ON public.chat_friction_logs(user_phone, detected_at DESC);
+CREATE INDEX IF NOT EXISTS idx_dynamic_rules_active ON public.saka_dynamic_rules(is_active);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_vehicles_unique_active_driver 
+ON public.vehicles(assigned_driver_id) 
+WHERE assigned_driver_id IS NOT NULL AND deleted_at IS NULL;
+
+
+-- 18. Meta WhatsApp Webhook Deduplication & Idempotency Cache
+CREATE TABLE IF NOT EXISTS public.processed_webhooks (
+    wamid text PRIMARY KEY,
+    phone_number text,
+    processed_at timestamp with time zone DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_processed_webhooks_processed_at ON public.processed_webhooks(processed_at);
 

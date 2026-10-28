@@ -4,6 +4,12 @@
   "version": "1.0.0",
   "description": "Saka Fleet Backend",
   "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "reset:db": "node scripts/reset-db.js",
+    "reset:slate": "node scripts/reset_db_slate.js",
+    "notify:deploy": "node scripts/notify_git_push.js"
+  },
   "dependencies": {
     "@fastify/formbody": "^9.0.1",
     "@fastify/rate-limit": "^11.2.1",

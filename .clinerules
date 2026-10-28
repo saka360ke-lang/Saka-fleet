@@ -1,0 +1,9 @@
+# SAKA FLEET - STRICT EFFICIENCY & ARCHITECTURAL CONSULTATION RULES
+
+## MANDATORY FIRST-CONSULT RULE (CRITICAL - TOKEN CREDIT PRESERVATION)
+1. **Mandatory First Consult Directive:** On every prompt or operation done on Saka Fleet, Cline must FIRST read and consult `SAKA_FLEET_ARCHITECTURE.md` and `.clinerules` before inspecting code or executing actions to preserve token credits.
+2. **Self-Updating Policy:** Whenever any change is made to the codebase, database schema, workflow, or configuration, Cline must IMMEDIATELY update `SAKA_FLEET_ARCHITECTURE.md` to reflect the latest state.
+3. **Targeted Reads & Writes:** Never read large files in their entirety when only specific ranges are needed. Use `start_line` and `end_line` aggressively.
+4. **Tool Call Batching:** Always combine independent searches, reads, commands, or edits into parallel tool calls in a single turn.
+5. **No Blind Full Scans:** Rely on the architecture file for schema definitions, routing rules, and design patterns instead of searching through `node_modules` or executing unfocused filesystem walks.
+6. **Non-Interactive Windows CLI:** Commands execute in Windows PowerShell. Always use `--no-pager` for git or other paginated commands to prevent terminal hangs.

@@ -21,14 +21,16 @@ export const SAKA_FALLBACK_RESPONSE = {
   reply_message: "I am your Saka Fleet WhatsApp assistant. How can I help with your vehicle or fleet today? You can log expenses, update odometer readings, set service reminders, or view reports."
 };
 
-export const DEFAULT_SAKA_CORE_PROMPT = `You are Saka, an intelligent, warm, and professional WhatsApp assistant for Saka Fleet, an international intelligent vehicle and asset management system.
+export const DEFAULT_SAKA_CORE_PROMPT = `You are Saka, an intelligent autonomous agent and WhatsApp fleet operating assistant for Saka Fleet.
+You sit directly between the user and the fleet database: collecting, parsing, logging information to the database, and retrieving specific analytics and data requested by the user.
 
-INTENT CLASSIFICATION & PROGRESSIVE ONBOARDING REQUIREMENTS:
-Analyze the incoming message and conversation context to classify the user's intent into a JSON object matching this schema:
+INTENT CLASSIFICATION & AGENT ACTIONS:
+Analyze the incoming message, conversation context, and user fleet roster to classify the user's intent into a JSON object matching this schema:
 {
-  "intent": "GREETING" | "REGISTER_VEHICLE" | "ONBOARDING_INPUT" | "ONBOARDING_SKIP" | "APP_HELP" | "MANAGE_VEHICLE" | "LIST_VEHICLES" | "LOG_EXPENSE" | "UPDATE_MILEAGE" | "LOG_EARNINGS" | "SET_REMINDER" | "COMPLETE_REMINDER" | "REQUEST_REPORT" | "CONTACT_SUPPORT" | "REACTIVATE_ACCOUNT" | "GENERAL_CHAT",
+  "intent": "GREETING" | "ACTION_DISCOVERY" | "TRANSFER_PASSBOOK" | "APPLY_COUPON" | "REGISTER_VEHICLE" | "ONBOARDING_INPUT" | "ONBOARDING_SKIP" | "VERIFY_OTP" | "RESEND_OTP" | "UPDATE_EMAIL" | "APP_HELP" | "MANAGE_VEHICLE" | "LIST_VEHICLES" | "SWITCH_VEHICLE" | "QUERY_FUEL_EFFICIENCY" | "QUERY_FLEET_SUMMARY" | "LOG_EXPENSE" | "UPDATE_MILEAGE" | "LOG_EARNINGS" | "SET_REMINDER" | "COMPLETE_REMINDER" | "REQUEST_REPORT" | "CONTACT_SUPPORT" | "REACTIVATE_ACCOUNT" | "GENERAL_CHAT",
   "extracted_data": {
     "plate_number": string | null,
+    "target_vehicle": string | null,
     "make_model": string | null,
     "yom": number | null,
     "year": number | null,
@@ -37,9 +39,14 @@ Analyze the incoming message and conversation context to classify the user's int
     "current_mileage": number | null,
     "odometer": number | null,
     "amount": number | null,
+    "fuel_liters": number | null,
+    "liters": number | null,
+    "expense_type": string | null,
+    "notes": string | null,
     "preferred_language": string | null,
     "role": string | null,
     "vin": string | null,
+    "otp_code": string | null,
     "engine_number": string | null,
     "color": string | null,
     "transmission": string | null,
@@ -48,65 +55,71 @@ Analyze the incoming message and conversation context to classify the user's int
     "insurance_expiry": string | null,
     "inspection_expiry": string | null,
     "purchase_cost": number | null,
+    "custom_attributes": object | null,
     "skip_or_done": boolean | null
   },
   "reply_message": string
 }
 
-TWO-STAGE PROGRESSIVE ONBOARDING & SPEC EXTRACTION RULES:
-1. Stage 1 (Core Capture):
-   When a user registers or describes their vehicle, intelligently extract all available core fields from unstructured input without rigid looping:
-   - plate_number: License plate (e.g., 'KDA 123A', 'KBC 456X').
-   - make_model: Vehicle brand & model (e.g., 'Toyota Land Cruiser 80 series', '80 series', 'Toyota Fielder').
-   - yom: Year of manufacture as integer (e.g., 1991, 2018).
-   - owner_email: User/owner email address (e.g., 'user@mail.com').
-   - fuel_type: Powertrain fuel type ('Diesel', 'Petrol', 'Hybrid', 'Electric').
-   - current_mileage: Odometer reading as integer (e.g., 366700, 45000).
-   - role: 'Owner' or 'Driver'.
+AGENT ROLES & BEHAVIORAL DIRECTIVES:
+1. SAKA IS THE AGENT BETWEEN USER AND DATABASE:
+   - When a user logs data (fuel, expenses, odometer, earnings), extract the numbers, volume in liters, odometer, cost, and notes.
+   - ALWAYS explicitly mention in reply_message which vehicle/machine the data will be or has been logged under (e.g., "Logged 40L fuel under KDA 123A (Toyota Land Cruiser)").
+   - If the user has multiple vehicles and neither specifies a plate nor has a clear active vehicle context, prompt them politely to clarify which vehicle they are managing.
 
-2. Stage 2 (Optional Specs Weaving):
-   When invited to share optional compliance or mechanical specs:
-   - insurance_expiry: Insurance expiration date formatted as YYYY-MM-DD.
-   - inspection_expiry: Vehicle inspection/NTAC expiry formatted as YYYY-MM-DD.
-   - vin: Vehicle chassis/VIN number (11-17 characters).
-   - engine_number: Engine serial identifier.
-   - color: Vehicle exterior color (e.g., 'White', 'Silver').
-   - transmission: 'Automatic' or 'Manual'.
-   - tire_size: Tire size specification (e.g., '265/70R16').
-   - insurance_policy: Insurance policy identifier.
-   - purchase_cost: Asset purchase cost amount.
-   - skip_or_done: Set to true if user replies 'skip', 'done', 'later', 'no thanks'.
+2. VEHICLE SWITCHING & SELECTION:
+   - SWITCH_VEHICLE: Triggered when user asks to switch or select a vehicle (e.g., "switch to Demio", "manage KBC 456X", "car 2", "select 1").
+   - Extract the target vehicle plate or candidate into "target_vehicle" and "plate_number".
 
-3. General Features (Expenses, Mileage, Earnings, Reports):
-   - LOG_EXPENSE: Fuel receipts, repairs, spare parts.
-   - UPDATE_MILEAGE: Odometer updates for existing vehicles.
-   - LOG_EARNINGS: Trip revenue, daily taxi/haulage income.
-   - SET_REMINDER: Maintenance, oil change, service alerts.
-   - REQUEST_REPORT: Monthly PDF statements, auto-audits.
+3. RETRIEVAL & DATA ANALYSIS (e.g. Fuel Consumption in km/L):
+   - QUERY_FUEL_EFFICIENCY: Triggered when user asks for fuel consumption, km/l, km per liter, fuel analysis, mpg, or fuel efficiency (e.g. "give me an analysis of fuel consumption in km/l for vehicle xyz", "how is my fuel consumption?").
+   - Extract target plate into "plate_number" if specified, or use the active vehicle.
+   - If more data or odometer readings are needed to complete the math, indicate that clearly and warmly.
+   - QUERY_FLEET_SUMMARY: Triggered when user asks for overall summary, car status, or financial overview.
+
+4. TWO-STAGE PROGRESSIVE ONBOARDING:
+   - Stage 1 Core: plate_number, make_model, yom, fuel_type, current_mileage, vin (immutable chassis number), owner_email, otp_code, role ('Owner' | 'Driver').
+   - Stage 2 Optional: insurance_expiry, inspection_expiry, engine_number, color, transmission, tire_size, purchase_cost, custom_attributes.
 
 CRITICAL CONTEXT & TIME-AWARENESS:
-- RELATIVE DATE RESOLUTION: You MUST resolve relative date references (such as "today", "tomorrow", "next Monday") into absolute calendar dates YYYY-MM-DD.
+- Resolve relative date references (such as "today", "tomorrow", "next Monday") into absolute calendar dates YYYY-MM-DD.
 - Keep reply_message concise, friendly, and clean plain text formatted for WhatsApp.
 - Output ONLY valid JSON matching the schema.`;
 
 /**
- * Check system_config table in Supabase for saka_core_prompt, falling back to default prompt if query fails.
+ * Check system_config and active dynamic micro-rules in Supabase,
+ * dynamically injecting active patches (is_active = TRUE) as behavioral hints.
  */
 export async function getSakaCorePrompt(providedSupabase = null) {
   const client = providedSupabase || defaultSupabase;
-  if (!client) return DEFAULT_SAKA_CORE_PROMPT;
+  let basePrompt = DEFAULT_SAKA_CORE_PROMPT;
+  if (!client) return basePrompt;
 
   try {
-    const { data, error } = await client
+    const { data: configData } = await client
       .from('system_config')
       .select('value')
       .eq('key', 'saka_core_prompt')
-      .single();
+      .maybeSingle();
 
-    if (error || !data || !data.value) {
-      return DEFAULT_SAKA_CORE_PROMPT;
+    if (configData && configData.value) {
+      basePrompt = `${basePrompt}\n\nSENTINEL PROMPT REFINEMENT:\n${configData.value}`;
     }
-    return `${DEFAULT_SAKA_CORE_PROMPT}\n\nSENTINEL DYNAMIC REFINEMENTS:\n${data.value}\n\nREMINDER: You MUST output ONLY valid JSON matching the schema.`;
+
+    // Inject active dynamic micro-rules at runtime
+    const { data: dynamicRules, error: rulesErr } = await client
+      .from('saka_dynamic_rules')
+      .select('rule_key, patch_instruction')
+      .eq('is_active', true);
+
+    if (!rulesErr && dynamicRules && dynamicRules.length > 0) {
+      const activePatches = dynamicRules
+        .map(r => `• [${r.rule_key}]: ${r.patch_instruction}`)
+        .join('\n');
+      basePrompt = `${basePrompt}\n\nACTIVE SENTINEL DYNAMIC MICRO-RULES (BEHAVIORAL HINTS):\n${activePatches}`;
+    }
+
+    return `${basePrompt}\n\nREMINDER: You MUST output ONLY valid JSON matching the schema.`;
   } catch (err) {
     console.warn('[sakaAi] Failed to fetch saka_core_prompt from Supabase, falling back to default:', err.message);
     return DEFAULT_SAKA_CORE_PROMPT;
@@ -153,12 +166,18 @@ export function extractVehicleAttributes(messageText = '') {
     }
   }
 
-  // 5. Plate Number
-  const plateMatch = clean.match(/\b([A-Z]{1,4}\s?\d{1,4}[A-Z]{0,2}|\d[A-Z]{3}\d{3})\b/i);
+  // 5. Plate Number (Excluding Currency strings and reserved keywords)
+  const currencyRegex = /^(?:KES|USD|EUR|GBP|ZAR|NGN|UGX|TZS|RWF)\b/i;
+  const plateMatch = clean.match(/\b([A-Z]{1,4}\s?\d{1,4}[A-Z]{1,2}|\d[A-Z]{3}\d{3})\b/i);
   if (plateMatch) {
     const candidate = plateMatch[0].toUpperCase().trim();
-    const reservedWords = ['REGISTER', 'DIESEL', 'PETROL', 'HYBRID', 'ELECTRIC', 'OWNER', 'DRIVER', 'SKIP', 'DONE', 'SERIES', 'MODEL', 'YEAR', 'EMAIL', 'ODOMETER', 'MILEAGE'];
-    if (!reservedWords.includes(candidate.replace(/\s+/g, '')) && candidate.length <= 10) {
+    const reservedWords = [
+      'REGISTER', 'DIESEL', 'PETROL', 'HYBRID', 'ELECTRIC', 'OWNER', 'DRIVER', 
+      'SKIP', 'DONE', 'SERIES', 'MODEL', 'YEAR', 'EMAIL', 'ODOMETER', 'MILEAGE',
+      'KES', 'USD', 'EUR', 'GBP', 'ZAR', 'NGN', 'UGX', 'TZS', 'RWF'
+    ];
+    const startsWithCurrency = currencyRegex.test(candidate);
+    if (!startsWithCurrency && !reservedWords.includes(candidate.replace(/\s+/g, '')) && candidate.length <= 10) {
       data.plate_number = candidate;
     }
   }
@@ -187,7 +206,7 @@ export function extractVehicleAttributes(messageText = '') {
       .replace(/\s+/g, ' ')
       .trim();
 
-    if (stripped.length >= 2 && !/^(register|onboard|add car|help|skip|done)$/i.test(stripped)) {
+    if (stripped.length >= 2 && !/^(register|onboard|add car|help|skip|done|resend)$/i.test(stripped) && !/^\d+$/.test(stripped)) {
       const isPlate = /\b([A-Z]{1,4}\s?\d{1,4}[A-Z]{0,2}|\d[A-Z]{3}\d{3})\b/i.test(stripped);
       if (!isPlate && (!data.plate_number || stripped.replace(/\s+/g, '').toUpperCase() !== data.plate_number.replace(/\s+/g, '').toUpperCase())) {
         data.make_model = stripped;
@@ -230,6 +249,58 @@ export function extractVehicleAttributes(messageText = '') {
   const costMatch = clean.match(/(?:purchase\s+cost|bought\s+for|cost|price)\s*[:=]?\s*(?:kes|usd)?\s*([\d,]+(?:\.\d+)?)/i);
   if (costMatch) data.purchase_cost = parseFloat(costMatch[1].replace(/,/g, ''));
 
+  const isStandaloneOtp = /^\s*\d{6}\s*$/.test(clean);
+  const labeledOtpMatch = clean.match(/(?:otp|code|verification)\s*[:=]?\s*(\d{6})\b/i);
+  if (isStandaloneOtp) {
+    data.otp_code = clean.trim();
+  } else if (labeledOtpMatch) {
+    data.otp_code = labeledOtpMatch[1];
+  }
+
+  const customMods = clean.match(/(?:custom|mods|modifications|extras|accessories|specs)\s*[:=]?\s*([^\n\r.]+)/i);
+  if (customMods && customMods[1].trim()) {
+    data.custom_attributes = { modifications: customMods[1].trim() };
+  } else {
+    const accessories = [];
+    if (/bullbar|bull\s*bar/i.test(clean)) accessories.push('Bullbar');
+    if (/winch/i.test(clean)) accessories.push('Winch');
+    if (/snorkel/i.test(clean)) accessories.push('Snorkel');
+    if (/roof\s*rack/i.test(clean)) accessories.push('Roof Rack');
+    if (/lift\s*kit/i.test(clean)) accessories.push('Suspension Lift');
+    if (/dual\s*batter(y|ies)/i.test(clean)) accessories.push('Dual Battery System');
+    if (/refrigerat(ion|or)|fridge/i.test(clean)) accessories.push('Refrigeration Unit');
+    if (/tow\s*(bar|hitch)/i.test(clean)) accessories.push('Tow Hitch');
+    if (accessories.length > 0) {
+      data.custom_attributes = { modifications: accessories.join(', ') };
+    }
+  }
+
+  // 9. Liters / Fuel Volume
+  const litersMatch = clean.match(/\b(\d+(?:\.\d+)?)\s*(?:l|liters|litres)\b/i);
+  if (litersMatch) {
+    const lVal = parseFloat(litersMatch[1]);
+    if (!isNaN(lVal) && lVal > 0) {
+      data.fuel_liters = lVal;
+      data.liters = lVal;
+    }
+  }
+
+  // 10. Amount / Cost
+  const amtMatch = clean.match(/(?:kes|usd|gbp|eur|spent|paid|cost|for)\s*[:=]?\s*([\d,]+(?:\.\d+)?)/i) ||
+                   clean.match(/([\d,]+(?:\.\d+)?)\s*(?:kes|usd|gbp|eur)\b/i);
+  if (amtMatch) {
+    const aVal = parseFloat(amtMatch[1].replace(/,/g, ''));
+    if (!isNaN(aVal) && aVal > 0) {
+      data.amount = aVal;
+    }
+  }
+
+  // 11. Vehicle Switching Target
+  const switchTargetMatch = clean.match(/(?:switch(?:\s+to)?|manage|select)\s+(?:car|vehicle)?\s*([A-Za-z0-9\s-]+)$/i);
+  if (switchTargetMatch && !/^(skip|done|cancel|resend|help)$/i.test(switchTargetMatch[1].trim())) {
+    data.target_vehicle = switchTargetMatch[1].trim();
+  }
+
   if (/\b(skip|done|later|finish|not now|no thanks)\b/i.test(lower)) {
     data.skip_or_done = true;
   }
@@ -242,6 +313,101 @@ export function extractVehicleAttributes(messageText = '') {
  */
 export function classifyIntentWithRegex(messageText = '') {
   const clean = messageText.trim().toLowerCase();
+
+  // Transfer Passbook Intent (e.g. "transfer passbook KDA 123A", "passbook transfer")
+  if (/^transfer\s+passbook\b/i.test(clean) || /^passbook\s+transfer\b/i.test(clean)) {
+    const match = messageText.match(/(?:transfer\s+passbook|passbook\s+transfer)\s*([A-Za-z0-9\s-]+)?/i);
+    const candidate = match && match[1] ? match[1].trim() : null;
+    return {
+      intent: 'TRANSFER_PASSBOOK',
+      extracted_data: { target_vehicle: candidate, plate_number: candidate },
+      reply_message: 'Initiating secure passbook transfer...'
+    };
+  }
+
+  // Conversational Action Discovery (e.g. "What can I do?", "Show my actions as an owner", "Show my actions as a driver")
+  if (/\b(?:what\s+can\s+i\s+do|show\s+my\s+actions|my\s+actions|show\s+actions|what\s+are\s+my\s+commands|available\s+commands|what\s+actions)\b/i.test(clean)) {
+    const roleMatch = clean.match(/\b(owner|driver|admin|superadmin)\b/i);
+    return {
+      intent: 'ACTION_DISCOVERY',
+      extracted_data: { role: roleMatch ? roleMatch[1].toLowerCase() : null },
+      reply_message: 'Displaying available actions and tools for your account...'
+    };
+  }
+
+  // Trial Extension Coupon Intent (e.g. "Yes", "yes please", "apply coupon", or specific code)
+  if (/^(yes|yes please|apply coupon|extend trial|extend)$/i.test(clean) || /^EXT30-[A-Z0-9]+$/i.test(clean)) {
+    const codeMatch = clean.match(/EXT30-[A-Z0-9]+/i);
+    return {
+      intent: 'APPLY_COUPON',
+      extracted_data: { coupon_code: codeMatch ? codeMatch[0].toUpperCase() : null },
+      reply_message: 'Applying trial extension coupon...'
+    };
+  }
+
+  // OTP Verification Intent (6-digit standalone code or "otp: 123456")
+  if (/^\s*\d{6}\s*$/.test(clean) || /^(?:otp|code)\s*[:=]?\s*\d{6}$/i.test(clean)) {
+    const codeMatch = clean.match(/\d{6}/);
+    return {
+      intent: 'VERIFY_OTP',
+      extracted_data: { otp_code: codeMatch ? codeMatch[0] : null },
+      reply_message: 'Verifying your 6-digit email code...'
+    };
+  }
+
+  // Resend OTP
+  if (/^resend(\s+otp|\s+code)?$/i.test(clean)) {
+    return {
+      intent: 'RESEND_OTP',
+      extracted_data: {},
+      reply_message: 'Resending verification code to your email...'
+    };
+  }
+
+  // Vehicle Switching Intent (e.g. "switch to Demio", "manage KDA 123A", "switch to car 2")
+  const switchMatch = messageText.match(/^(?:switch(?:\s+to)?|manage|select)\s+(?:car|vehicle)?\s*([A-Za-z0-9\s-]+)$/i);
+  if (switchMatch && !/^(skip|done|cancel|resend|help)$/i.test(switchMatch[1].trim())) {
+    const candidate = switchMatch[1].trim();
+    const attrs = extractVehicleAttributes(messageText);
+    return {
+      intent: 'SWITCH_VEHICLE',
+      extracted_data: {
+        ...attrs,
+        target_vehicle: candidate
+      },
+      reply_message: `Switching active vehicle to ${candidate}...`
+    };
+  }
+
+  // Fuel Consumption & Efficiency Query Intent
+  if (/\b(?:fuel\s+consumption|fuel\s+efficiency|km\/l|km\s*per\s*liter|km\s*per\s*litre|consumption|mpg|l\/100km)\b/i.test(clean)) {
+    const attrs = extractVehicleAttributes(messageText);
+    return {
+      intent: 'QUERY_FUEL_EFFICIENCY',
+      extracted_data: attrs,
+      reply_message: `Analyzing fuel consumption for ${attrs.plate_number || 'your active vehicle'}...`
+    };
+  }
+
+  // Fleet / Vehicle Summary Query Intent
+  if (/\b(?:fleet\s+summary|car\s+summary|vehicle\s+status|fleet\s+status|vehicle\s+summary|digest)\b/i.test(clean)) {
+    const attrs = extractVehicleAttributes(messageText);
+    return {
+      intent: 'QUERY_FLEET_SUMMARY',
+      extracted_data: attrs,
+      reply_message: "Retrieving vehicle and fleet summary report..."
+    };
+  }
+
+  // Update Email
+  if (/^(?:update|change)\s+email\b/i.test(clean)) {
+    const emailMatch = clean.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+    return {
+      intent: 'UPDATE_EMAIL',
+      extracted_data: { owner_email: emailMatch ? emailMatch[0] : null },
+      reply_message: 'Updating registered email address...'
+    };
+  }
   
   if (/^(hi|hello|hey|habari|mambo|greetings|jambo|good morning|good afternoon|good evening)\b/i.test(clean)) {
     return {
@@ -359,6 +525,15 @@ export function classifyIntentWithRegex(messageText = '') {
       reply_message: "Generating report summary..."
     };
   }
+  if (/\b(support|human|agent|representative|talk to a person|admin intervention|file a complaint|escalat(e|ion)|dispute|help from human|talk to support|contact support|customer care)\b/i.test(clean)) {
+    return {
+      intent: 'CONTACT_SUPPORT',
+      extracted_data: {},
+      reply_message: "Please write out a description of your issue in a single paragraph so our support team can assist you."
+    };
+  }
+
+
 
   if (/register|onboard|add car|add vehicle|new vehicle|can i register/i.test(clean)) {
     const rawPlate = messageText.match(/\b([A-Z]{1,4}\s?\d{1,4}[A-Z]{0,2}|\d[A-Z]{3}\d{3})\b/i);
@@ -415,12 +590,24 @@ export function classifyIntentWithRegex(messageText = '') {
 /**
  * Intelligent message parser and intent classifier for Saka Assistant
  */
-export async function processSakaMessage(targetLang = 'English', messageText = '', conversationHistory = [], mediaParts = [], providedSupabase = null) {
+export async function processSakaMessage(targetLang = 'English', messageText = '', conversationHistory = [], mediaParts = [], providedSupabase = null, activeVehicleContext = null) {
   const now = new Date();
   const currentLocalDateTime = now.toLocaleString('en-US', { dateStyle: 'full', timeStyle: 'medium' });
   const currentIsoDate = now.toISOString().split('T')[0];
 
   const baseCorePrompt = await getSakaCorePrompt(providedSupabase);
+
+  let fleetContextSection = '';
+  if (activeVehicleContext) {
+    const { activeVehicle, allVehicles = [] } = activeVehicleContext;
+    fleetContextSection = `
+USER FLEET ROSTER & ACTIVE VEHICLE CONTEXT:
+- Total Vehicles in Fleet: ${allVehicles.length}
+- Active / Currently Selected Vehicle: ${activeVehicle ? `${activeVehicle.plate_number} (${activeVehicle.make_model || 'Vehicle'}, Fuel: ${activeVehicle.fuel_type || 'Fuel'}, Odometer: ${activeVehicle.current_mileage || activeVehicle.odometer_reading || 0} km)` : 'None'}
+- All Fleet Vehicles:
+${allVehicles.map((v, i) => `  ${i + 1}. [${activeVehicle?.id === v.id ? 'CURRENTLY ACTIVE' : 'INACTIVE'}] ${v.plate_number} - ${v.make_model || 'Vehicle'} (Fuel: ${v.fuel_type || 'Fuel'}, Odo: ${v.current_mileage || v.odometer_reading || 0} km)`).join('\n')}
+`;
+  }
 
   const systemInstruction = `
 ${baseCorePrompt}
@@ -428,6 +615,7 @@ ${baseCorePrompt}
 RUNTIME DYNAMIC CONTEXT:
 - Current Server Date & Time: ${currentLocalDateTime} (ISO Baseline: ${currentIsoDate})
 - User Preferred Language: ${targetLang}
+${fleetContextSection}
 `;
 
   const userParts = [{ text: messageText }];

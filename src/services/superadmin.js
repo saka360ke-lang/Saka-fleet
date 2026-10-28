@@ -103,17 +103,40 @@ export async function ensureSuperadminTables(supabase) {
 
 export async function parseSuperadminCommand(messageText) {
   const text = messageText ? messageText.trim() : '';
+  const lower = text.toLowerCase();
+
+  // 1. Direct Regex Pre-Matching for high-performance zero-latency commands
+  const auditMatch = text.match(/^\s*admin\s+audit\s+(.+)$/i);
+  if (auditMatch) {
+    return { intent: 'ADMIN_AUDIT', query: auditMatch[1].trim() };
+  }
+  if (/^\s*admin\s+report\b/i.test(lower)) {
+    return { intent: 'ADMIN_REPORT' };
+  }
+  if (/^\s*admin\s+alerts\b/i.test(lower)) {
+    return { intent: 'ADMIN_ALERTS' };
+  }
+  if (/^\s*adminrules?\s+reset\b/i.test(lower)) {
+    return { intent: 'ADMIN_RULES_RESET' };
+  }
+  const toggleMatch = text.match(/^\s*adminrules?\s+toggle\s+([a-zA-Z0-9_-]+)/i);
+  if (toggleMatch) {
+    return { intent: 'ADMIN_RULES_TOGGLE', rule_key: toggleMatch[1].trim() };
+  }
+  if (/^\s*adminrules?(\s+list)?\b/i.test(lower)) {
+    return { intent: 'ADMIN_RULES_LIST' };
+  }
 
   const prompt = `Classify user's admin request into JSON:
-Intent: "HEALTH_CHECK" | "GENERATE_COUPON" | "PROFILES_REPORT" | "UNKNOWN"
-Extract: discount_value (e.g. "20%"), target_phone (e.g. "+254712345678")
+Intent: "HEALTH_CHECK" | "GENERATE_COUPON" | "PROFILES_REPORT" | "ADMIN_REPORT" | "ADMIN_AUDIT" | "ADMIN_ALERTS" | "ADMIN_RULES_RESET" | "ADMIN_RULES_TOGGLE" | "ADMIN_RULES_LIST" | "UNKNOWN"
+Extract: discount_value (e.g. "20%"), target_phone (e.g. "+254712345678"), query (e.g. "KDA 123A" or VIN), rule_key (e.g. "clarify_vin")
 Command: "${text}"`;
 
-  const candidateModels = [
-    'gemini-flash-latest',
-    'gemini-1.5-flash',
-    process.env.GEMINI_MODEL
-  ].filter(Boolean);
+  const candidateModels = Array.from(new Set([
+    'gemini-3.8-flash',
+    process.env.GEMINI_MODEL,
+    'gemini-flash-latest'
+  ].filter(Boolean)));
 
   for (const modelName of candidateModels) {
     try {
@@ -132,7 +155,7 @@ Command: "${text}"`;
       console.warn(`[Superadmin Command Parser] Model ${modelName} failed:`, err.message);
     }
   }
-  const lower = text.toLowerCase();
+
   if (/(health|sentinel|status|system|diagnostic|error logs)/i.test(lower)) return { intent: 'HEALTH_CHECK' };
   if (/(coupon|discount|generate|create)/i.test(lower)) {
     const discountMatch = text.match(/([0-9]+\s*%|[0-9]+\s*percent|KES\s*[0-9]+|\$[0-9]+)/i);
@@ -143,7 +166,7 @@ Command: "${text}"`;
       target_phone: phoneMatch ? phoneMatch[0].trim() : null
     };
   }
-  if (/(profile|profiles|user|users|driver|drivers|owner|owners|report|stats|summary)/i.test(lower)) {
+  if (/(profile|profiles|user|users|driver|drivers|owner|owners|stats|summary)/i.test(lower)) {
     return { intent: 'PROFILES_REPORT' };
   }
 
@@ -196,11 +219,11 @@ Diagnostic Telemetry:
 ${rawInfo}`;
 
   let summaryText = null;
-  const candidateModels = [
-    'gemini-flash-latest',
-    'gemini-1.5-flash',
-    process.env.GEMINI_MODEL
-  ].filter(Boolean);
+  const candidateModels = Array.from(new Set([
+    'gemini-3.8-flash',
+    process.env.GEMINI_MODEL,
+    'gemini-flash-latest'
+  ].filter(Boolean)));
 
   for (const modelName of candidateModels) {
     try {
@@ -377,6 +400,372 @@ export async function handleProfilesReportCommand(supabase) {
   };
 }
 
+
+export async function handleAdminReportCommand(supabase) {
+  // 1. Vehicle counts and mileage
+  const { data: vehList } = await supabase
+    .from('vehicles')
+    .select('id, plate_number, current_mileage, odometer_reading, status')
+    .is('deleted_at', null);
+
+  const totalVehicles = vehList ? vehList.length : 0;
+  const activeVehicles = vehList ? vehList.filter(v => v.status === 'ACTIVE').length : 0;
+  const totalMileage = vehList
+    ? vehList.reduce((sum, v) => sum + (Number(v.current_mileage || v.odometer_reading || 0)), 0)
+    : 0;
+
+  // 2. Profiles counts
+  const { count: totalProfiles } = await supabase
+    .from('profiles')
+    .select('*', { count: 'exact', head: true })
+    .is('deleted_at', null);
+
+  const { data: ownersData } = await supabase
+    .from('vehicles')
+    .select('owner_id')
+    .is('deleted_at', null);
+  const uniqueOwners = new Set((ownersData || []).map(v => v.owner_id).filter(Boolean)).size;
+
+  const { data: driversData } = await supabase
+    .from('vehicles')
+    .select('assigned_driver_id')
+    .is('deleted_at', null);
+  const uniqueDrivers = new Set((driversData || []).map(v => v.assigned_driver_id).filter(Boolean)).size;
+
+  // 3. Financial aggregates
+  const { data: expenses } = await supabase
+    .from('expenses')
+    .select('amount');
+  const expTotal1 = expenses ? expenses.reduce((s, e) => s + (Number(e.amount) || 0), 0) : 0;
+
+  const { data: expLogs } = await supabase
+    .from('expense_logs')
+    .select('amount');
+  const expTotal2 = expLogs ? expLogs.reduce((s, e) => s + (Number(e.amount) || 0), 0) : 0;
+  const totalExpenses = expTotal1 + expTotal2;
+
+  const { data: earnings } = await supabase
+    .from('private_earnings')
+    .select('revenue_amount');
+  const totalEarnings = earnings ? earnings.reduce((s, e) => s + (Number(e.revenue_amount) || 0), 0) : 0;
+
+  // 4. Sentinel telemetry & system health
+  const { count: unresolvedErrors } = await supabase
+    .from('error_logs')
+    .select('*', { count: 'exact', head: true })
+    .eq('status', 'unresolved');
+
+  const { count: activeRulesCount } = await supabase
+    .from('saka_dynamic_rules')
+    .select('*', { count: 'exact', head: true })
+    .eq('is_active', true);
+
+  const iso24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const { count: friction24h } = await supabase
+    .from('chat_friction_logs')
+    .select('*', { count: 'exact', head: true })
+    .gte('detected_at', iso24h);
+
+  const netEarnings = totalEarnings - totalExpenses;
+
+  const reply = `📊 *Saka Fleet Executive Digest & System Report*\n\n` +
+    `🚗 *Fleet Overview:*\n` +
+    `• Total Vehicles: ${totalVehicles} (${activeVehicles} active)\n` +
+    `• Registered Profiles: ${totalProfiles || 0} (${uniqueOwners} owners, ${uniqueDrivers} drivers)\n` +
+    `• Total Fleet Mileage: ${totalMileage.toLocaleString()} km\n\n` +
+    `💰 *Financial Telemetry:*\n` +
+    `• Total Earnings: KES ${totalEarnings.toFixed(2)}\n` +
+    `• Total Expenses: KES ${totalExpenses.toFixed(2)}\n` +
+    `• Net Fleet Profit: KES ${netEarnings.toFixed(2)}\n\n` +
+    `🛡️ *Autonomous Sentinel & System Health:*\n` +
+    `• Active Sentinel Micro-Rules: ${activeRulesCount || 0}\n` +
+    `• Friction Events (Last 24h): ${friction24h || 0}\n` +
+    `• Unresolved System Errors: ${unresolvedErrors || 0}\n` +
+    `• Overall System Status: Operational & Healthy ✅`;
+
+  return {
+    reply,
+    details: {
+      total_vehicles: totalVehicles,
+      active_vehicles: activeVehicles,
+      total_mileage: totalMileage,
+      total_profiles: totalProfiles,
+      total_earnings: totalEarnings,
+      total_expenses: totalExpenses,
+      active_rules: activeRulesCount,
+      unresolved_errors: unresolvedErrors
+    }
+  };
+}
+
+
+export async function handleAdminAuditCommand(supabase, queryParam) {
+  if (!queryParam || !queryParam.trim()) {
+    return {
+      reply: '⚠️ *Admin Audit Usage:* Please specify a plate number or VIN chassis (e.g. `admin audit KDA 123A` or `admin audit 1HGCR2F83HA123456`).'
+    };
+  }
+
+  const rawQuery = queryParam.trim();
+  const stripped = rawQuery.replace(/\s+/g, '');
+
+  const { data: matchedVehicles, error } = await supabase
+    .from('vehicles')
+    .select(`
+      *,
+      owner:profiles!vehicles_owner_id_fkey(full_name, phone_number, email, email_verified),
+      driver:profiles!vehicles_assigned_driver_id_fkey(full_name, phone_number, driver_license_number)
+    `)
+    .or(`plate_number.ilike.%${rawQuery}%,vin.ilike.%${rawQuery}%,plate_number.ilike.%${stripped}%,vin.ilike.%${stripped}%`)
+    .is('deleted_at', null)
+    .limit(1);
+
+  let vehicle = matchedVehicles && matchedVehicles.length > 0 ? matchedVehicles[0] : null;
+
+  if (!vehicle) {
+    const { data: allActive } = await supabase
+      .from('vehicles')
+      .select(`
+        *,
+        owner:profiles!vehicles_owner_id_fkey(full_name, phone_number, email, email_verified),
+        driver:profiles!vehicles_assigned_driver_id_fkey(full_name, phone_number, driver_license_number)
+      `)
+      .is('deleted_at', null);
+
+    if (allActive) {
+      vehicle = allActive.find(v =>
+        (v.plate_number && v.plate_number.replace(/\s+/g, '').toUpperCase() === stripped.toUpperCase()) ||
+        (v.vin && v.vin.replace(/\s+/g, '').toUpperCase() === stripped.toUpperCase())
+      );
+    }
+  }
+
+  if (!vehicle) {
+    return {
+      reply: `⚠️ *Vehicle Audit Not Found*\n\nNo active vehicle matched Plate or VIN "${queryParam}". Please verify the identifier.`
+    };
+  }
+
+  const { data: vExpenses } = await supabase
+    .from('expenses')
+    .select('amount, expense_type, created_at')
+    .eq('plate', vehicle.plate_number)
+    .order('created_at', { ascending: false })
+    .limit(5);
+
+  const { data: vEarnings } = await supabase
+    .from('private_earnings')
+    .select('revenue_amount, logged_at')
+    .eq('vehicle_id', vehicle.id)
+    .order('logged_at', { ascending: false })
+    .limit(5);
+
+  const expSum = (vExpenses || []).reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  const earnSum = (vEarnings || []).reduce((s, e) => s + (Number(e.revenue_amount) || 0), 0);
+
+  const customAttrsText = vehicle.custom_attributes && Object.keys(vehicle.custom_attributes).length > 0
+    ? Object.entries(vehicle.custom_attributes).map(([k, v]) => `  • ${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`).join('\n')
+    : '  • None specified';
+
+  const reply = `🔍 *Saka Fleet Vehicle Audit Passbook: ${vehicle.plate_number}*\n\n` +
+    `🚘 *Asset Record:*\n` +
+    `• Plate Number: *${vehicle.plate_number}*\n` +
+    `• VIN (Chassis): \`${vehicle.vin || 'N/A'}\` 🔒 *(Permanently Locked)*\n` +
+    `• Digital Passbook Token: \`${vehicle.qr_passbook_token || 'N/A'}\`\n` +
+    `• Make & Model: ${vehicle.make_model || 'N/A'} (${vehicle.yom || vehicle.year_of_manufacture || 'N/A'})\n` +
+    `• Powertrain: ${vehicle.fuel_type || 'Petrol'} | Status: ${vehicle.status || 'ACTIVE'}\n` +
+    `• Current Odometer: ${(vehicle.current_mileage || vehicle.odometer_reading || 0).toLocaleString()} km\n` +
+    `• Transmission: ${vehicle.transmission || 'N/A'} | Color: ${vehicle.color || 'N/A'}\n` +
+    `• Engine No: ${vehicle.engine_number || 'N/A'} | Tire Size: ${vehicle.tire_size || 'N/A'}\n\n` +
+    `👤 *Ownership & Assignment:*\n` +
+    `• Owner: ${vehicle.owner?.full_name || 'Owner'} (${vehicle.owner?.phone_number || vehicle.owner_phone || 'N/A'})\n` +
+    `• Verified Email: ${vehicle.owner_email || vehicle.owner?.email || 'N/A'} (${vehicle.owner?.email_verified ? 'Verified ✅' : 'Unverified ⏳'})\n` +
+    `• Assigned Driver: ${vehicle.driver ? `${vehicle.driver.full_name || 'Driver'} (${vehicle.driver.phone_number})` : 'Unassigned (Strict 1-to-1 Available)'}\n\n` +
+    `🛡️ *Compliance Deadlines:*\n` +
+    `• Insurance Policy: ${vehicle.insurance_policy || 'N/A'}\n` +
+    `• Insurance Expiry: ${vehicle.insurance_expiry || 'Not set'}\n` +
+    `• Inspection Expiry: ${vehicle.inspection_expiry || 'Not set'}\n\n` +
+    `🔧 *Custom Attributes & Equipment:*\n${customAttrsText}\n\n` +
+    `📊 *Recent Financials:*\n` +
+    `• Recent Expenses: KES ${expSum.toFixed(2)} (${(vExpenses || []).length} logs)\n` +
+    `• Recent Earnings: KES ${earnSum.toFixed(2)} (${(vEarnings || []).length} logs)`;
+
+  return {
+    reply,
+    details: {
+      vehicle_id: vehicle.id,
+      plate_number: vehicle.plate_number,
+      vin: vehicle.vin,
+      token: vehicle.qr_passbook_token,
+      owner_phone: vehicle.owner?.phone_number || vehicle.owner_phone,
+      mileage: vehicle.current_mileage || vehicle.odometer_reading
+    }
+  };
+}
+
+
+export async function handleAdminAlertsCommand(supabase) {
+  // 1. Unresolved Error Logs
+  const { data: errors } = await supabase
+    .from('error_logs')
+    .select('id, route, error_message, created_at')
+    .eq('status', 'unresolved')
+    .order('created_at', { ascending: false })
+    .limit(5);
+
+  // 2. Recent Conversational Friction Events
+  const { data: frictionLogs } = await supabase
+    .from('chat_friction_logs')
+    .select('id, user_phone, friction_type, transcript_snippet, detected_at')
+    .order('detected_at', { ascending: false })
+    .limit(5);
+
+  // 3. Imminent or Overdue Compliance Reminders (next 48h or past due)
+  const thresholdIso = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString();
+  const { data: reminders } = await supabase
+    .from('reminders')
+    .select('id, reminder_type, due_date, vehicle:vehicles(plate_number)')
+    .eq('status', 'active')
+    .lte('due_date', thresholdIso)
+    .order('due_date', { ascending: true })
+    .limit(5);
+
+  let errText = '• No unresolved system errors. All clean! ✅';
+  if (errors && errors.length > 0) {
+    errText = errors.map(e => `• [${e.route || 'system'}] ${(e.error_message || '').slice(0, 75)}`).join('\n');
+  }
+
+  let frictionText = '• No recent conversational friction detected. Assistant running smoothly! ✅';
+  if (frictionLogs && frictionLogs.length > 0) {
+    frictionText = frictionLogs.map(f => `• [${f.friction_type}] ${f.user_phone}: ${(f.transcript_snippet || '').slice(0, 65).replace(/\n/g, ' ')}`).join('\n');
+  }
+
+  let reminderText = '• All fleet compliance up to date. No imminent expirations! ✅';
+  if (reminders && reminders.length > 0) {
+    reminderText = reminders.map(r => `• ${r.vehicle?.plate_number || 'Fleet'}: ${r.reminder_type} due ${r.due_date}`).join('\n');
+  }
+
+  const reply = `🚨 *Saka Fleet System Alerts & Warnings*\n\n` +
+    `⚠️ *Unresolved System Errors (${errors ? errors.length : 0}):*\n${errText}\n\n` +
+    `🔄 *Conversational Friction Detections (${frictionLogs ? frictionLogs.length : 0}):*\n${frictionText}\n\n` +
+    `⏰ *Imminent / Overdue Compliance Reminders (${reminders ? reminders.length : 0}):*\n${reminderText}`;
+
+  return {
+    reply,
+    details: {
+      unresolved_errors_count: errors ? errors.length : 0,
+      friction_count: frictionLogs ? frictionLogs.length : 0,
+      urgent_reminders_count: reminders ? reminders.length : 0
+    }
+  };
+}
+
+export async function handleAdminRulesReset(supabase) {
+  const { error } = await supabase
+    .from('saka_dynamic_rules')
+    .update({ is_active: false, updated_at: new Date().toISOString() })
+    .neq('id', 0);
+
+  if (error) {
+    return { reply: `❌ Failed to reset dynamic rules: ${error.message}` };
+  }
+
+  return {
+    reply: `🛑 *Sentinel Dynamic Micro-Rules Reset (Admin Kill Switch)*\n\nAll active micro-rule prompt patches have been deactivated across the platform.`
+  };
+}
+
+export async function handleAdminRulesToggle(supabase, ruleKey) {
+  if (!ruleKey) {
+    return { reply: '⚠️ Please specify a rule key to toggle (e.g. `adminrules toggle clarify_vin_entry`).' };
+  }
+
+  const cleanKey = ruleKey.trim().toLowerCase();
+  const { data: rule, error } = await supabase
+    .from('saka_dynamic_rules')
+    .select('*')
+    .eq('rule_key', cleanKey)
+    .maybeSingle();
+
+  if (error || !rule) {
+    return { reply: `⚠️ Rule key \`${cleanKey}\` was not found in saka_dynamic_rules.` };
+  }
+
+  const newStatus = !rule.is_active;
+  await supabase
+    .from('saka_dynamic_rules')
+    .update({ is_active: newStatus, updated_at: new Date().toISOString() })
+    .eq('id', rule.id);
+
+  return {
+    reply: `🔄 *Sentinel Dynamic Rule Toggled*\n\n• *Rule Key*: \`${cleanKey}\`\n• *New Status*: ${newStatus ? 'ACTIVE ✅' : 'INACTIVE ⏸️'}\n• *Instruction*: ${rule.patch_instruction}`
+  };
+}
+
+export async function handleAdminRulesList(supabase) {
+  const { data: rules, error } = await supabase
+    .from('saka_dynamic_rules')
+    .select('*')
+    .order('created_at', { ascending: false });
+
+  if (error || !rules || rules.length === 0) {
+    return {
+      reply: '📋 *Sentinel Dynamic Rules:* No dynamic micro-rules currently recorded in database.'
+    };
+  }
+
+  const formatted = rules.map((r, i) =>
+    `${i + 1}. \`${r.rule_key}\` [${r.is_active ? 'ACTIVE ✅' : 'INACTIVE ⏸️'}]\n   👉 ${r.patch_instruction}`
+  ).join('\n\n');
+
+  return {
+    reply: `📋 *Saka Sentinel Dynamic Rules (${rules.length}):*\n\n${formatted}\n\n_Use \`adminrules toggle [key]\` to enable/disable or \`adminrules reset\` to deactivate all._`
+  };
+}
+
+export async function sendMorningExecutiveBriefing(supabase) {
+  const superadminPhone = process.env.SUPERADMIN_PHONE;
+  if (!superadminPhone) return null;
+
+  try {
+    const reportRes = await handleAdminReportCommand(supabase);
+    const alertsRes = await handleAdminAlertsCommand(supabase);
+
+    const briefingMsg = `🌅 *Saka Fleet 8:00 AM Executive Morning Briefing*\n\n` +
+      reportRes.reply.replace('📊 *Saka Fleet Executive Digest & System Report*\n\n', '') +
+      `\n\n━━━━━━━━━━━━━━━━━━━━\n` +
+      alertsRes.reply;
+
+    const phoneNumberId = process.env.META_PHONE_NUMBER_ID;
+    const token = process.env.META_WHATSAPP_TOKEN;
+    if (phoneNumberId && token) {
+      const cleanPhone = superadminPhone.replace(/[^\d]/g, '');
+      await fetch(`https://graph.facebook.com/v17.0/${phoneNumberId}/messages`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          messaging_product: 'whatsapp',
+          to: cleanPhone,
+          type: 'text',
+          text: { body: briefingMsg }
+        })
+      });
+    }
+
+    await logAdminAudit(supabase, superadminPhone, 'SCHEDULED_MORNING_BRIEFING', {
+      timestamp: new Date().toISOString()
+    });
+
+    return briefingMsg;
+  } catch (err) {
+    console.error('[sendMorningExecutiveBriefing Error]:', err.message);
+    return null;
+  }
+}
+
 /**
  * Main Intercept Flow for Superadmin WhatsApp Messages
  */
@@ -483,6 +872,60 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
   // 4. Command Routing
   const parsedCommand = await parseSuperadminCommand(messageText);
 
+  if (parsedCommand.intent === 'ADMIN_REPORT') {
+    const reportRes = await handleAdminReportCommand(supabase);
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_REPORT', reportRes.details);
+    return {
+      isSuperadmin: true,
+      reply: reportRes.reply
+    };
+  }
+
+  if (parsedCommand.intent === 'ADMIN_AUDIT') {
+    const auditRes = await handleAdminAuditCommand(supabase, parsedCommand.query);
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_AUDIT', auditRes.details || { query: parsedCommand.query });
+    return {
+      isSuperadmin: true,
+      reply: auditRes.reply
+    };
+  }
+
+  if (parsedCommand.intent === 'ADMIN_ALERTS') {
+    const alertsRes = await handleAdminAlertsCommand(supabase);
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_ALERTS', alertsRes.details);
+    return {
+      isSuperadmin: true,
+      reply: alertsRes.reply
+    };
+  }
+
+  if (parsedCommand.intent === 'ADMIN_RULES_RESET') {
+    const resetRes = await handleAdminRulesReset(supabase);
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_RULES_RESET', {});
+    return {
+      isSuperadmin: true,
+      reply: resetRes.reply
+    };
+  }
+
+  if (parsedCommand.intent === 'ADMIN_RULES_TOGGLE') {
+    const toggleRes = await handleAdminRulesToggle(supabase, parsedCommand.rule_key);
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_RULES_TOGGLE', { rule_key: parsedCommand.rule_key });
+    return {
+      isSuperadmin: true,
+      reply: toggleRes.reply
+    };
+  }
+
+  if (parsedCommand.intent === 'ADMIN_RULES_LIST') {
+    const listRes = await handleAdminRulesList(supabase);
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_RULES_LIST', {});
+    return {
+      isSuperadmin: true,
+      reply: listRes.reply
+    };
+  }
+
   if (parsedCommand.intent === 'HEALTH_CHECK') {
     const healthRes = await handleHealthCheckCommand(supabase);
     await logAdminAudit(supabase, formattedPhone, 'HEALTH_CHECK', healthRes.telemetry);
@@ -518,7 +961,11 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
 
   const defaultReply = `🔒 *Saka Superadmin Command Center*\n\n` +
     `Your admin session is active. You can issue the following commands:\n\n` +
-    `• *Health / Sentinel Check*: "check health", "system status", "run sentinel"\n` +
+    `• *Executive Report*: "admin report" (fleet digest & financials)\n` +
+    `• *Vehicle Audit*: "admin audit [Plate or VIN]" (passbook history & specs)\n` +
+    `• *System Alerts*: "admin alerts" (unresolved errors, friction logs & reminders)\n` +
+    `• *Sentinel Dynamic Rules*: "adminrules", "adminrules reset", "adminrules toggle [key]"\n` +
+    `• *System Health*: "check health", "system status"\n` +
     `• *Coupon Generation*: "generate 20% coupon for +254712345678"\n` +
     `• *Profiles Report*: "profiles report", "user stats"\n` +
     `• *Close Session*: "adminstop"`;

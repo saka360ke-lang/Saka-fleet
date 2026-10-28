@@ -1,0 +1,27 @@
+name: Deploy & Push WhatsApp Notification
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  notify-superadmin:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Dispatch WhatsApp Deployment Notification
+        env:
+          SUPERADMIN_PHONE: ${{ secrets.SUPERADMIN_PHONE }}
+          META_PHONE_NUMBER_ID: ${{ secrets.META_PHONE_NUMBER_ID }}
+          META_WHATSAPP_TOKEN: ${{ secrets.META_WHATSAPP_TOKEN }}
+        run: |
+          node scripts/notify_git_push.js

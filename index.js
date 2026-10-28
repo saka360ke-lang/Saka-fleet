@@ -7,8 +7,8 @@ import crypto from 'crypto';
 import { generateFleetReport, uploadReportToSupabase } from './reports.js';
 import { sendReportByEmail, sendMfaEmail } from './src/services/mailer.js';
 import { processSakaMessage } from './sakaAi.js';
-import { runHealthCheck, runConversationRefinement, logSystemError, logChatTranscript, ensureSentinelTables } from './src/workers/sentinel.js';
-import { ensureSuperadminTables } from './src/services/superadmin.js';
+import { runHealthCheck, runConversationRefinement, evaluateConversationalFriction, logSystemError, logChatTranscript, ensureSentinelTables } from './src/workers/sentinel.js';
+import { ensureSuperadminTables, isSuperadminPhone, sendMorningExecutiveBriefing } from './src/services/superadmin.js';
 import { ensureVehicleTableColumns } from './src/services/vehicles.js';
 import whatsappRoutes, { handleWhatsAppWebhook as handleWhatsAppWebhookRoute } from './src/routes/whatsapp.js';
 import {
@@ -17,6 +17,7 @@ import {
   initializePaystackCheckout,
   verifyPaystackSignature
 } from './src/services/paystack.js';
+import { processImpendingTrialReminders } from './src/services/coupons.js';
 
 // 1. Initialize Fastify Server
 const fastify = Fastify({ logger: true });
@@ -113,6 +114,19 @@ async function queueOwnerNotification(ownerId, vehicleId, driverId, actionType, 
   }
 }
 
+// Helper: Guard Sentinel boundaries so Superadmin doesn't receive general vehicle reminders
+function canDeliverVehicleAlert(targetPhone, vehicle) {
+  if (!targetPhone) return false;
+  if (isSuperadminPhone(targetPhone)) {
+    if (!vehicle) return false;
+    const cleanAdmin = targetPhone.replace(/[^\d]/g, '');
+    const ownerPhone = (vehicle.owner_phone || vehicle.profiles?.phone_number || vehicle.owner?.phone_number || '').replace(/[^\d]/g, '');
+    const driverPhone = (vehicle.assigned_driver_profile?.phone_number || vehicle.driver?.phone_number || '').replace(/[^\d]/g, '');
+    return cleanAdmin === ownerPhone || cleanAdmin === driverPhone;
+  }
+  return true;
+}
+
 // Helper: Evaluate Service Thresholds (75%, 25%, 5%, 0% Due, Overdue)
 async function evaluateServiceThresholds(vehicle, currentVal, unitType) {
   if (!vehicle || !currentVal) return;
@@ -168,8 +182,8 @@ async function evaluateServiceThresholds(vehicle, currentVal, unitType) {
       }
 
       if (alertText && updateCol) {
-        if (ownerPhone) await sendMetaWhatsAppMessage(ownerPhone, alertText);
-        if (driverPhone && driverPhone !== ownerPhone) await sendMetaWhatsAppMessage(driverPhone, alertText);
+        if (ownerPhone && canDeliverVehicleAlert(ownerPhone, vehicle)) await sendMetaWhatsAppMessage(ownerPhone, alertText);
+        if (driverPhone && driverPhone !== ownerPhone && canDeliverVehicleAlert(driverPhone, vehicle)) await sendMetaWhatsAppMessage(driverPhone, alertText);
 
         await supabase.from('reminders').update({ [updateCol]: true }).eq('id', rem.id);
       }
@@ -204,7 +218,7 @@ async function processPendingOwnerNotifications() {
       const driverName = item.driver?.full_name || item.driver?.phone_number || 'Assigned Driver';
       const plate = item.vehicle?.plate_number || 'Vehicle';
 
-      if (ownerPhone) {
+      if (ownerPhone && canDeliverVehicleAlert(ownerPhone, item.vehicle)) {
         const msg = `🔔 *Driver Activity Summary (${plate})*\nDriver *${driverName}* submitted:\n👉 ${item.details_summary}`;
         await sendMetaWhatsAppMessage(ownerPhone, msg);
       }
@@ -220,6 +234,13 @@ async function processPendingOwnerNotifications() {
 }
 
 setInterval(processPendingOwnerNotifications, 30000); // Check every 30s
+// Worker: Process Impending 3-Day Trial Reminders and 15-Day Overdue Winback Offers
+setInterval(() => {
+  processImpendingTrialReminders({ supabase, sendWhatsAppMessageFn: sendMetaWhatsAppMessage }).catch(err => {
+    console.error('[Worker] Error processing impending trial reminders:', err);
+  });
+}, 15 * 60 * 1000); // Check every 15 minutes
+
 
 
 setInterval(() => {
@@ -447,7 +468,9 @@ async function processComplianceReminders() {
 
         if (alertMessage && updateField) {
           // 1. Notify Owner
-          await sendMetaWhatsAppMessage(phone, alertMessage);
+          if (phone && canDeliverVehicleAlert(phone, rem.vehicles)) {
+            await sendMetaWhatsAppMessage(phone, alertMessage);
+          }
 
           // 2. Notify Assigned Driver if present
           if (rem.vehicles?.assigned_driver_id) {
@@ -456,7 +479,7 @@ async function processComplianceReminders() {
               .select('phone_number')
               .eq('id', rem.vehicles.assigned_driver_id)
               .maybeSingle();
-            if (drvProfile?.phone_number && drvProfile.phone_number !== phone) {
+            if (drvProfile?.phone_number && drvProfile.phone_number !== phone && canDeliverVehicleAlert(drvProfile.phone_number, rem.vehicles)) {
               await sendMetaWhatsAppMessage(drvProfile.phone_number, `[Driver Notice] ${alertMessage}`);
             }
           }
@@ -510,18 +533,20 @@ async function processComplianceReminders() {
 
         if (alertMsg && updateCol) {
           // 1. Notify Driver
-          await sendMetaWhatsAppMessage(drvPhone, alertMsg);
+          if (drvPhone && canDeliverVehicleAlert(drvPhone, null)) {
+            await sendMetaWhatsAppMessage(drvPhone, alertMsg);
+          }
 
           // 2. Notify Owners of vehicles assigned to this driver
           const { data: assignedVehicles } = await supabase
             .from('vehicles')
-            .select('plate_number, profiles!vehicles_owner_id_fkey(phone_number)')
+            .select('plate_number, owner_phone, profiles!vehicles_owner_id_fkey(phone_number)')
             .eq('assigned_driver_id', drv.id);
 
           if (assignedVehicles) {
             for (const av of assignedVehicles) {
-              const ownerPhone = av.profiles?.phone_number;
-              if (ownerPhone && ownerPhone !== drvPhone) {
+              const ownerPhone = av.owner_phone || av.profiles?.phone_number;
+              if (ownerPhone && ownerPhone !== drvPhone && canDeliverVehicleAlert(ownerPhone, av)) {
                 const ownerAlert = `⚠️ *Driver License Expiry Alert (${av.plate_number})*\nAssigned driver *${drvName}*'s license expires in ${daysLeft} days (${expiryDate.toDateString()}).`;
                 await sendMetaWhatsAppMessage(ownerPhone, ownerAlert);
               }
@@ -677,6 +702,44 @@ fastify.post('/api/cron/check-reminders', async (request, reply) => {
 });
 
 // ==========================================
+// AUTOMATED 8:00 AM MORNING EXECUTIVE BRIEFING CRON
+// ==========================================
+let lastMorningBriefingDate = null;
+async function checkMorningBriefingSchedule() {
+  try {
+    const now = new Date();
+    // Kenya / East Africa Time is UTC+3
+    const nairobiHour = (now.getUTCHours() + 3) % 24;
+    const nairobiMinute = now.getUTCMinutes();
+    const todayStr = now.toISOString().split('T')[0];
+
+    if (nairobiHour === 8 && nairobiMinute <= 5 && lastMorningBriefingDate !== todayStr) {
+      lastMorningBriefingDate = todayStr;
+      fastify.log.info('🌅 Dispatching automated 8:00 AM executive morning briefing to superadmin...');
+      await sendMorningExecutiveBriefing(supabase);
+    }
+  } catch (err) {
+    fastify.log.error('Error running morning executive briefing schedule:', err);
+  }
+}
+setInterval(checkMorningBriefingSchedule, 60000); // Check every minute
+
+fastify.post('/api/cron/morning-briefing', async (request, reply) => {
+  const result = await sendMorningExecutiveBriefing(supabase);
+  return { success: true, message: 'Morning executive briefing sent.', briefing: result };
+});
+
+// Sentinel Autonomous Conversational Friction Optimization Loop
+setInterval(async () => {
+  try {
+    await evaluateConversationalFriction(supabase);
+  } catch (err) {
+    console.warn('[Sentinel Friction Loop Warning]:', err.message);
+  }
+}, 10 * 60 * 1000); // Run friction evaluation every 10 minutes
+
+
+// ==========================================
 // PAYSTACK WEBHOOK HANDLERS
 // ==========================================
 
@@ -696,6 +759,20 @@ async function handlePaystackWebhook(request, reply) {
     if (event.event === 'charge.success') {
       const data = event.data || {};
       const metadata = data.metadata || {};
+      if (metadata.type === 'passbook_transfer_fee' || metadata.transfer_id) {
+        const transferId = metadata.transfer_id;
+        await supabase.from('passbook_transfers').update({
+          transfer_fee_paid: true,
+          payment_reference: data.reference || null
+        }).eq('id', transferId);
+
+        if (phone) {
+          const cleanPhone = phone.startsWith('+') ? phone : `+${phone}`;
+          await sendMetaWhatsAppMessage(cleanPhone, `✅ *Transfer Fee Payment Confirmed!* 💳\n\nYour transfer payment has been received. Please reply **'ACCEPT'** to verify your email and receive your digital passbook!`);
+        }
+        return reply.status(200).send({ status: 'success', transfer_fee_handled: true });
+      }
+
       const phone = metadata.phone_number;
       const targetTier = metadata.target_tier || 'solo_pro';
       const billingInterval = metadata.billing_interval || 'monthly';
@@ -823,8 +900,9 @@ fastify.post('/api/sentinel/run', async (request, reply) => {
   }
 
   try {
-    fastify.log.info('Running Saka Sentinel Worker (Health Check + Conversation Refinement)...');
+    fastify.log.info('Running Saka Sentinel Worker (Health Check + Conversational Friction + Conversation Refinement)...');
     const healthCheckResult = await runHealthCheck(supabase);
+    const frictionResult = await evaluateConversationalFriction(supabase);
     const refinementResult = await runConversationRefinement(supabase);
 
     return reply.status(200).send({
@@ -832,6 +910,7 @@ fastify.post('/api/sentinel/run', async (request, reply) => {
       timestamp: new Date().toISOString(),
       actions: {
         health_check: healthCheckResult,
+        conversational_friction: frictionResult,
         conversation_refinement: refinementResult
       }
     });

@@ -24,7 +24,14 @@ function getGeminiClient() {
  */
 export async function ensureSentinelTables(providedSupabase) {
   const supabase = getSupabase(providedSupabase);
-  const requiredTables = ['system_config', 'error_logs', 'conversation_analytics', 'chat_transcripts'];
+  const requiredTables = [
+    'system_config',
+    'error_logs',
+    'conversation_analytics',
+    'chat_transcripts',
+    'chat_friction_logs',
+    'saka_dynamic_rules'
+  ];
   const statusMap = {};
 
   for (const table of requiredTables) {
@@ -73,6 +80,25 @@ export async function ensureSentinelTables(providedSupabase) {
             message_text text,
             created_at timestamp with time zone DEFAULT now()
         );
+        CREATE TABLE IF NOT EXISTS public.chat_friction_logs (
+            id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+            user_phone text,
+            session_id text,
+            friction_type text,
+            transcript_snippet text,
+            detected_at timestamp with time zone DEFAULT now()
+        );
+        CREATE TABLE IF NOT EXISTS public.saka_dynamic_rules (
+            id serial PRIMARY KEY,
+            rule_key text UNIQUE,
+            rule_description text,
+            patch_instruction text,
+            is_active boolean DEFAULT true,
+            created_at timestamp with time zone DEFAULT now(),
+            updated_at timestamp with time zone DEFAULT now()
+        );
+        CREATE INDEX IF NOT EXISTS idx_friction_logs_phone ON public.chat_friction_logs(user_phone, detected_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_dynamic_rules_active ON public.saka_dynamic_rules(is_active);
       `;
 
       await fetch(`https://api.supabase.com/v1/projects/${projectRef}/database/query`, {
@@ -95,7 +121,7 @@ export async function ensureSentinelTables(providedSupabase) {
 
 /**
  * Health Check Sentinel:
- * Queries recent unresolved rows in error_logs, sends stack traces to Gemini (gemini-1.5-flash / flash-latest)
+ * Queries recent unresolved rows in error_logs, sends stack traces to Gemini (gemini-3.8-flash / flash-latest)
  * to generate a diagnosis and mitigation suggestion, and updates the row status & ai_diagnosis.
  */
 export async function runHealthCheck(providedSupabase) {
@@ -127,12 +153,9 @@ export async function runHealthCheck(providedSupabase) {
   }
 
   const candidateModels = Array.from(new Set([
-    'gemini-flash-latest',
-    'gemini-2.0-flash',
+    'gemini-3.8-flash',
     process.env.GEMINI_MODEL,
-    'gemini-1.5-flash',
-    'gemini-2.5-flash',
-    'gemini-1.5-pro'
+    'gemini-flash-latest'
   ].filter(Boolean)));
 
   const diagnosedLogs = [];
@@ -280,12 +303,9 @@ Return strictly a single valid JSON object matching this schema (no markdown ast
 }`;
 
   const candidateModels = Array.from(new Set([
-    'gemini-flash-latest',
-    'gemini-2.0-flash',
+    'gemini-3.8-flash',
     process.env.GEMINI_MODEL,
-    'gemini-1.5-flash',
-    'gemini-2.5-flash',
-    'gemini-1.5-pro'
+    'gemini-flash-latest'
   ].filter(Boolean)));
 
   let parsedAnalysis = null;
@@ -405,4 +425,268 @@ export async function logChatTranscript(providedSupabase, phoneNumber, sender, m
     console.error('[Sentinel Helper] Failed to log chat transcript:', err.message);
   }
 }
+
+/**
+ * Sentinel Autonomous Conversational Optimization Loop:
+ * Scans recent chat logs for friction signatures (looping prompts 3+ times,
+ * user frustration keywords, intent ambiguity), logs to chat_friction_logs,
+ * and calls gemini-3.8-flash under the Function Boundary Lock to upsert
+ * active micro-rule patches in saka_dynamic_rules.
+ */
+export async function evaluateConversationalFriction(providedSupabase) {
+  const supabase = getSupabase(providedSupabase);
+  const ai = getGeminiClient();
+
+  await ensureSentinelTables(supabase);
+
+  // 1. Fetch recent chat history
+  let { data: messages, error } = await supabase
+    .from('chat_history')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(100);
+
+  if (error || !messages || messages.length === 0) {
+    const { data: transcripts } = await supabase
+      .from('chat_transcripts')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(100);
+
+    if (transcripts && transcripts.length > 0) {
+      messages = transcripts.map(t => ({
+        user_phone: t.phone_number,
+        role: t.sender === 'user' ? 'user' : 'assistant',
+        message: t.message_text,
+        created_at: t.created_at
+      }));
+    }
+  }
+
+  if (!messages || messages.length === 0) {
+    return {
+      status: 'success',
+      message: 'No recent chat messages to analyze for friction.',
+      friction_detected: 0,
+      patches_created: 0,
+      patches: []
+    };
+  }
+
+  // 2. Group messages by user_phone
+  const userChats = new Map();
+  for (const m of messages) {
+    const phone = m.user_phone;
+    if (!phone) continue;
+    if (!userChats.has(phone)) userChats.set(phone, []);
+    userChats.get(phone).push(m);
+  }
+
+  const frustrationRegex = /\b(stuck|looping|loop|broken|bug|wrong|repeating|stop asking|already gave|already told|help me|stupid|not working|why are you|confused|frustrated|ridiculous)\b/i;
+  const detectedFrictions = [];
+
+  for (const [phone, chatList] of userChats.entries()) {
+    chatList.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+
+    let botRepeatCount = 1;
+    let lastBotMsg = null;
+    let userRepeatCount = 1;
+    let lastUserMsg = null;
+
+    for (let i = 0; i < chatList.length; i++) {
+      const item = chatList[i];
+      const normText = (item.message || '').trim().toLowerCase().replace(/\s+/g, ' ');
+
+      if (item.role === 'assistant' || item.role === 'model') {
+        if (lastBotMsg && normText.length > 10 && normText === lastBotMsg) {
+          botRepeatCount++;
+          if (botRepeatCount >= 3) {
+            const snippet = chatList.slice(Math.max(0, i - 5), i + 1)
+              .map(c => `[${c.role}]: ${c.message}`).join('\n');
+            detectedFrictions.push({ phone, type: 'LOOPING_PROMPTS', snippet, reason: 'Assistant repeated same prompt 3+ times.' });
+            break;
+          }
+        } else {
+          lastBotMsg = normText;
+          botRepeatCount = 1;
+        }
+      } else if (item.role === 'user') {
+        if (lastUserMsg && normText.length > 5 && normText === lastUserMsg) {
+          userRepeatCount++;
+          if (userRepeatCount >= 3) {
+            const snippet = chatList.slice(Math.max(0, i - 5), i + 1)
+              .map(c => `[${c.role}]: ${c.message}`).join('\n');
+            detectedFrictions.push({ phone, type: 'LOOPING_PROMPTS', snippet, reason: 'User repeated identical message 3+ times.' });
+            break;
+          }
+        } else {
+          lastUserMsg = normText;
+          userRepeatCount = 1;
+        }
+
+        if (frustrationRegex.test(item.message || '')) {
+          const snippet = chatList.slice(Math.max(0, i - 4), i + 2)
+            .map(c => `[${c.role}]: ${c.message}`).join('\n');
+          detectedFrictions.push({ phone, type: 'USER_FRUSTRATION', snippet, reason: `User expressed frustration: "${item.message.slice(0, 80)}"` });
+          break;
+        }
+      }
+    }
+
+    const fallbackMatches = chatList.filter(c =>
+      (c.role === 'assistant' || c.role === 'model') &&
+      /I am your Saka Fleet WhatsApp assistant\. How can I help/i.test(c.message || '')
+    );
+    if (fallbackMatches.length >= 3) {
+      const snippet = chatList.slice(-6).map(c => `[${c.role}]: ${c.message}`).join('\n');
+      detectedFrictions.push({ phone, type: 'INTENT_AMBIGUITY', snippet, reason: 'Assistant fell back to generic greeting 3+ times.' });
+    }
+  }
+
+  if (detectedFrictions.length === 0) {
+    return {
+      status: 'success',
+      message: 'No conversational friction signatures detected in recent logs.',
+      friction_detected: 0,
+      patches_created: 0,
+      patches: []
+    };
+  }
+
+  return await processFrictionPatches(supabase, ai, detectedFrictions);
+}
+
+async function processFrictionPatches(supabase, ai, detectedFrictions) {
+  const candidateModels = Array.from(new Set([
+    'gemini-3.8-flash',
+    process.env.GEMINI_MODEL,
+    'gemini-flash-latest'
+  ].filter(Boolean)));
+
+  const patches = [];
+
+  for (const friction of detectedFrictions) {
+    try {
+      await supabase.from('chat_friction_logs').insert([{
+        user_phone: friction.phone,
+        session_id: `session_${friction.phone.replace(/[^\d]/g, '')}`,
+        friction_type: friction.type,
+        transcript_snippet: friction.snippet,
+        detected_at: new Date().toISOString()
+      }]);
+    } catch (logErr) {
+      console.warn('[Sentinel Friction Log Warning]:', logErr.message);
+    }
+
+    const optimizerPrompt = `You are the Saka Sentinel Micro-Rule Optimizer for Saka Fleet's conversational assistant.
+
+CRITICAL FUNCTION BOUNDARY LOCK:
+- You are ONLY permitted to formulate behavioral hints, tone adjustments, phrasing modifications, or clarification flows.
+- You CANNOT alter or recommend changing core hardcoded rules, database structures, VIN locks, OTP email verification, or security checks.
+- If friction stems from an immutable requirement (e.g., VIN chassis or OTP code), formulate a behavioral hint on how Saka can explain the requirement more clearly, warmly, and concisely to the user.
+
+Conversational Friction Incident:
+- User Phone: ${friction.phone}
+- Friction Type: ${friction.type}
+- Detection Context: ${friction.reason}
+- Transcript Snippet:
+${friction.snippet}
+
+Tasks:
+1. Identify the phrasing confusion or friction cause.
+2. Produce a unique, descriptive snake_case rule_key (e.g., "clarify_vin_entry", "soothe_frustrated_user", "rephrase_mileage_prompt").
+3. Formulate a concise patch_instruction (1-2 sentences) to inject into the Saka Assistant runtime system prompt as behavioral guidance.
+
+Output ONLY valid JSON matching this schema:
+{
+  "rule_key": "string",
+  "rule_description": "string",
+  "patch_instruction": "string"
+}`;
+
+    let parsedPatch = null;
+
+    for (const modelName of candidateModels) {
+      try {
+        const response = await ai.models.generateContent({
+          model: modelName,
+          contents: [{ role: 'user', parts: [{ text: optimizerPrompt }] }],
+          config: { responseMimeType: 'application/json' }
+        });
+
+        if (response && response.text) {
+          const cleaned = response.text.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/, '').trim();
+          parsedPatch = JSON.parse(cleaned);
+          if (parsedPatch && parsedPatch.rule_key && parsedPatch.patch_instruction) {
+            break;
+          }
+        }
+      } catch (gemErr) {
+        console.warn(`[Sentinel evaluateConversationalFriction] Gemini ${modelName} error:`, gemErr.message);
+      }
+    }
+
+    if (!parsedPatch || !parsedPatch.rule_key || !parsedPatch.patch_instruction) {
+      const suffix = (friction.phone || 'user').replace(/[^\d]/g, '').slice(-4) || 'patch';
+      if (friction.type === 'USER_FRUSTRATION') {
+        parsedPatch = {
+          rule_key: `soothe_frustration_${suffix}`,
+          rule_description: 'Acknowledge user frustration and clarify questions concisely',
+          patch_instruction: 'When user seems frustrated or confused, warmly acknowledge their input and state requirements clearly with concrete examples.'
+        };
+      } else if (friction.type === 'LOOPING_PROMPTS') {
+        parsedPatch = {
+          rule_key: `break_loop_${suffix}`,
+          rule_description: 'Avoid repetitive prompt loops by guiding the user',
+          patch_instruction: 'Avoid asking for the same information repeatedly; offer assistance or suggest typing in their vehicle details in one message.'
+        };
+      } else {
+        parsedPatch = {
+          rule_key: `clarify_intent_${suffix}`,
+          rule_description: 'Disambiguate conversational inputs with numbered options',
+          patch_instruction: 'When intent is ambiguous, present clear numbered menu options to help user navigate.'
+        };
+      }
+    }
+
+    if (parsedPatch && parsedPatch.rule_key && parsedPatch.patch_instruction) {
+      const sanitizedKey = parsedPatch.rule_key.toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, 50);
+      const instruction = parsedPatch.patch_instruction.trim();
+
+      const violatesLock = /\b(bypass vin|ignore vin|skip otp|disable auth|drop table|modify schema)\b/i.test(instruction);
+      if (!violatesLock) {
+        const nowIso = new Date().toISOString();
+        const { error: upsertErr } = await supabase
+          .from('saka_dynamic_rules')
+          .upsert({
+            rule_key: sanitizedKey,
+            rule_description: parsedPatch.rule_description || 'Sentinel-generated friction mitigation',
+            patch_instruction: instruction,
+            is_active: true,
+            updated_at: nowIso
+          }, { onConflict: 'rule_key' });
+
+        if (!upsertErr) {
+          patches.push({
+            rule_key: sanitizedKey,
+            rule_description: parsedPatch.rule_description,
+            patch_instruction: instruction,
+            friction_type: friction.type
+          });
+        } else {
+          console.error('[Sentinel Dynamic Rule Upsert Error]:', upsertErr.message);
+        }
+      }
+    }
+  }
+
+  return {
+    status: 'success',
+    friction_detected: detectedFrictions.length,
+    patches_created: patches.length,
+    patches
+  };
+}
+
+
 
