@@ -37,6 +37,8 @@ export const RESET_TABLES = [
   'chat_transcripts',
   'chat_friction_logs',
   'processed_webhooks',
+  'chat_sessions',
+  'saka_dynamic_rules',
   'pending_owner_notifications',
   'passbook_transfers',
   'private_earnings',
@@ -74,6 +76,7 @@ export async function executeDatabaseReset({ targetPhone = null, verbose = true 
         DELETE FROM public.chat_transcripts WHERE phone_number IN ('${cleanPhone}', '${altPhone}');
         DELETE FROM public.chat_friction_logs WHERE user_phone IN ('${cleanPhone}', '${altPhone}');
         DELETE FROM public.processed_webhooks WHERE phone_number IN ('${cleanPhone}', '${altPhone}');
+        DELETE FROM public.chat_sessions WHERE phone_number IN ('${cleanPhone}', '${altPhone}');
         DELETE FROM public.superadmin_sessions WHERE phone_number IN ('${cleanPhone}', '${altPhone}');
         DELETE FROM public.coupons WHERE assigned_to_phone IN ('${cleanPhone}', '${altPhone}');
         DELETE FROM public.reminders WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_phone IN ('${cleanPhone}', '${altPhone}'));
@@ -99,6 +102,8 @@ export async function executeDatabaseReset({ targetPhone = null, verbose = true 
           public.chat_transcripts,
           public.chat_friction_logs,
           public.processed_webhooks,
+          public.chat_sessions,
+          public.saka_dynamic_rules,
           public.pending_owner_notifications,
           public.passbook_transfers,
           public.private_earnings,
@@ -140,6 +145,7 @@ export async function executeDatabaseReset({ targetPhone = null, verbose = true 
       await supabase.from('chat_transcripts').delete().eq('phone_number', targetPhone);
       await supabase.from('chat_friction_logs').delete().eq('user_phone', targetPhone);
       await supabase.from('processed_webhooks').delete().eq('phone_number', targetPhone);
+      await supabase.from('chat_sessions').delete().eq('phone_number', targetPhone);
       await supabase.from('vehicles').delete().eq('owner_phone', targetPhone);
       await supabase.from('profiles').delete().eq('phone_number', targetPhone);
       if (verbose) console.log(`✅ Targeted data cleared for ${targetPhone} via Supabase Client.`);
@@ -147,7 +153,9 @@ export async function executeDatabaseReset({ targetPhone = null, verbose = true 
       // Some tables use text primary keys instead of a uuid `id`.
       const RESET_PRIMARY_KEYS = {
         processed_webhooks: 'wamid',
-        vin_registry: 'vin'
+        vin_registry: 'vin',
+        chat_sessions: 'phone_number',
+        saka_dynamic_rules: 'rule_key'
       };
       for (const table of RESET_TABLES) {
         const primaryKey = RESET_PRIMARY_KEYS[table] || 'id';
@@ -164,7 +172,7 @@ export async function executeDatabaseReset({ targetPhone = null, verbose = true 
   if (verbose && supabaseUrl && supabaseKey) {
     const supabase = createClient(supabaseUrl, supabaseKey);
     console.log('\n--- Post-Reset Verification ---');
-    const verificationTables = ['vehicles', 'profiles', 'vin_registry', 'chat_history', 'chat_transcripts', 'processed_webhooks'];
+    const verificationTables = ['vehicles', 'profiles', 'vin_registry', 'chat_history', 'chat_transcripts', 'processed_webhooks', 'chat_sessions', 'saka_dynamic_rules'];
     const summary = [];
     for (const t of verificationTables) {
       const { count } = await supabase.from(t).select('*', { count: 'exact', head: true });

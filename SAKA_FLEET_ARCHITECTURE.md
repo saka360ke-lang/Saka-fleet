@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.7.1  
+**Version:** 1.7.2  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -522,10 +522,11 @@ Owners exceeding tier limits are prompted to upgrade via Paystack checkout.
 - Covered Tables:
   - `vehicles`, `vin_registry`
   - `profiles`
-  - `chat_history`, `chat_transcripts`, `chat_friction_logs`, `processed_webhooks`
+  - `chat_history`, `chat_transcripts`, `chat_friction_logs`, `processed_webhooks`, `chat_sessions`, `saka_dynamic_rules`
   - `pending_owner_notifications`, `passbook_transfers`
   - `private_earnings`, `expenses`, `expense_logs`, `reminders`
   - `superadmin_sessions`, `coupons`, `admin_audit_logs`, `conversation_analytics`, `error_logs`
+  - **Intentionally preserved:** `system_config` (deployment revision + retained prompt overrides) and `weekly_feature_proposals`.
 
 ### 15.2 Production & Execution Safeguards
 - **Production Block:** If `NODE_ENV === 'production'` or `APP_ENV === 'production'`, the script aborts immediately unless `--force-production-wipe` is explicitly supplied.
