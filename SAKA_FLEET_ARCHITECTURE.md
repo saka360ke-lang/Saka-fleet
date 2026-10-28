@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.7.3  
+**Version:** 1.7.4  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -15,6 +15,7 @@ Saka Fleet is an intelligent vehicle asset management and conversational fleet o
 - **AI Engine:** DeepSeek (`deepseek-chat` / DeepSeek-V3) via the `openai` SDK pointed at `https://api.deepseek.com`, with structured JSON intent triage, conversational memory, and Sentinel runtime micro-rules
 - **Database & Storage:** Supabase (PostgreSQL 15+ with Row-Level Security, B-Tree Indexes, REST & direct SQL query endpoints)
 - **Messaging & Channels:** Meta WhatsApp Cloud API (Graph API v17.0+) with HMAC SHA-256 signature verification
+- **OCR:** Google Cloud Vision `DOCUMENT_TEXT_DETECTION` (receipts, logbooks, odometer photos) via `src/services/ocrService.js`; Meta Graph media download with 5 MB / 15 s guards
 - **Email Infrastructure:** Resend SDK (`resend`) for transactional MFA codes, OTP verification, PDF audit reports, passbook issuance, support escalation, and admin alerts
 - **Payments & Subscriptions:** Paystack API (KES, USD, ZAR, NGN multi-currency checkout & subscriptions)
 - **Document Generation:** PDFKit (`pdfkit`) for automated monthly fleet financial audits and compliance reports
@@ -621,6 +622,7 @@ Every stateful test or check MUST clear the data it created from the database af
 - `scripts/run_tests.js` (exposed as `npm test`) runs the targeted suite(s) and always performs a final cleanup sweep. `npm run test:cleanup` clears test data without running tests.
 - `test_quiz_flow.js` — stateless suite for the one-piece-at-a-time quiz engine, multi-field fast-forward, confirmation gate, corrections, Cancel/Restart, and quiz↔conversation arbitration (35 assertions).
 - `test_concurrency.js` — stateless suite for per-phone serialization, global concurrency cap, retry/backoff, dead-letter rejection and graceful drain (8 assertions).
+- `test_ocr_flow.js` — stateless OCR suite: Meta media download, Vision parsing, size/type guards, receipt hint extraction and quiz prefill (20 assertions).
 
 ### 19.3 Conventions
 - New tests must import `runWithCleanup` and declare every phone/VIN/vehicle they create.
@@ -698,5 +700,35 @@ Saka Fleet serves a **global audience**. Every feature, quiz flow and AI prompt 
 - `test_reliability.js` assertions predate AI-rendered breaker copy and may need loosening.
 - `chat_sessions` pruning is manual (`pruneSessionSnapshots`) until scheduled in the Sentinel worker.
 - AI-rendered replies add one model call for quiz questions/summaries (intent classification remains a single call per message).
+
+
+---
+
+## 24. OCR Flow (v1.7.4)
+
+### 24.1 Pipeline
+1. The webhook detects `messageObj.image` or `messageObj.document`, capturing `id`, `caption` and `mime_type` (previously image messages were silently ignored).
+2. `downloadWhatsAppMedia()` calls `GET graph.facebook.com/{version}/{media-id}` → receives `{ url, mime_type, file_size }`, then downloads the binary from `url` with the same bearer token (`User-Agent: curl/8.0.0`). Direct-binary responses are also supported.
+3. `extractTextFromImage()` posts the bytes to Google Cloud Vision `images:annotate` with `DOCUMENT_TEXT_DETECTION` → `{ text, confidence }`.
+4. OCR text + caption become the conversation turn:
+   - **Active quiz** → the OCR text can answer the pending field (e.g. VIN/plate from a logbook photo).
+   - **No quiz** → DeepSeek classifies the OCR text (a receipt naturally becomes `LOG_EXPENSE`).
+5. `extractReceiptHints()` deterministically extracts `amount` (prefers a TOTAL line), `fuel_liters`, `odometer` and `notes` (vendor + date). Hints merge into `mergedExt` only when AI/regex did not capture the value.
+6. The expense quiz prefills from those hints and still presents the **CONFIRM summary before any database write**.
+
+### 24.2 Configuration
+| Env var | Purpose | Default |
+| :--- | :--- | :--- |
+| `GCP_VISION_API_KEY` | Google Cloud Vision API key (required for OCR) | — |
+| `GCP_VISION_ENDPOINT` | Override the Vision endpoint | `https://vision.googleapis.com/v1/images:annotate` |
+| `OCR_MAX_MEDIA_BYTES` | Maximum media download size | `5242880` (5 MB) |
+| `OCR_TIMEOUT_MS` | Media/Vision request timeout | `15000` |
+| `META_GRAPH_VERSION` | Graph API version | `v17.0` |
+
+### 24.3 Failure behaviour & limits
+- Missing key, quota errors, unsupported types (PDF in v1) or oversized media never break the turn: Saka AI apologises and asks for a clearer photo or typed details.
+- OCR failures are warnings only; no database write occurs.
+- Media messages flow through the same per-phone queue, dedupe and durable session store as text.
+- Test coverage: `test_ocr_flow.js` (20 stateless assertions — Meta download, Vision parsing, size/type guards, receipt hints, quiz prefill).
 
 

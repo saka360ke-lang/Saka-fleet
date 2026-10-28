@@ -35,6 +35,7 @@ import { renderActionDiscovery, composeMessage } from '../services/conversationE
 import { enqueueUserMessage } from '../services/messageQueue.js';
 import { loadSessionSnapshot, persistSessionSnapshot } from '../services/sessionStore.js';
 import { createResilientClient } from '../services/supabaseClient.js';
+import { ocrWhatsAppMedia, extractReceiptHints } from '../services/ocrService.js';
 
 let supabaseClient = createResilientClient();
 
@@ -451,7 +452,38 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
   try {
     const senderPhone = messageObj.from;
     const wamid = messageObj.id;
-    let messageText = messageObj.text?.body || '';
+
+    // --- MEDIA / OCR INGESTION -------------------------------------------------
+    // WhatsApp photos and documents carry no `.text`. Download them from Meta,
+    // OCR with Google Cloud Vision, and treat the extracted text as the turn.
+    const imageObj = messageObj.image || null;
+    const documentObj = messageObj.document || null;
+    const mediaObj = imageObj || documentObj;
+    const mediaCaption = (imageObj?.caption || documentObj?.caption || '').trim();
+    const mediaMimeType = imageObj?.mime_type || documentObj?.mime_type || null;
+
+    let ocrText = '';
+    let ocrError = null;
+    if (mediaObj?.id) {
+      const ocrResult = await ocrWhatsAppMedia({
+        mediaId: mediaObj.id,
+        mimeType: mediaMimeType,
+        token: process.env.META_WHATSAPP_TOKEN
+      });
+      ocrText = (ocrResult.text || '').trim();
+      ocrError = ocrResult.error || null;
+      if (ocrError) console.warn('[OCR] Media could not be read:', ocrError);
+    }
+
+    const baseText = messageObj.text?.body || mediaCaption || '';
+    let messageText = baseText;
+    if (ocrText) {
+      messageText = `${baseText ? `${baseText}\n\n` : ''}${ocrText}`.slice(0, 4000);
+    } else if (mediaObj && !baseText) {
+      messageText = '[Saka system note: the user sent an image/document that could not be read by OCR. Apologize briefly in their language, do not claim anything was saved, and ask them to resend a clearer photo or type the details.]';
+    }
+
+    const receiptHints = ocrText ? extractReceiptHints(ocrText) : {};
 
     // Record wamid in Supabase processed_webhooks table for cluster persistence
     if (wamid && supabaseClient) {
@@ -622,6 +654,14 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           ...regexAttrs,
           ...(aiResult.extracted_data || {})
         };
+
+        // OCR receipt hints prefill the quiz when AI/regex did not capture them
+        for (const [hintKey, hintValue] of Object.entries(receiptHints)) {
+          if (hintValue === null || hintValue === undefined || hintValue === '') continue;
+          if (mergedExt[hintKey] === null || mergedExt[hintKey] === undefined || mergedExt[hintKey] === '') {
+            mergedExt[hintKey] = hintValue;
+          }
+        }
 
         const isRegisterCommand = /^\s*(register|onboard|add car|add vehicle|new vehicle)\b/i.test(messageText);
         const hasVehicleAttributes = !!(mergedExt.plate_number || (mergedExt.yom && (mergedExt.fuel_type || mergedExt.make_model)) || (mergedExt.fuel_type && mergedExt.current_mileage) || mergedExt.vin);

@@ -695,18 +695,22 @@ function buildSummaryRows(def, answers, ctx) {
 
 function applyExtraction(state, def, ext, ctx) {
   if (!ext) return;
-  for (const f of activeFields(def, state.answers)) {
-    if (f.key in state.answers && state.answers[f.key] !== undefined) continue;
-    if (f.kind === 'otp') continue;
-    for (const alias of f.aliases) {
-      const raw = ext[alias];
-      if (raw === null || raw === undefined || raw === '') continue;
-      const parsed = f.parse(String(raw), { ...ctx, answers: state.answers }, state.answers);
-      if (parsed === null || parsed === undefined) continue;
-      const check = f.validate(parsed, { ...ctx, answers: state.answers }, state.answers);
-      if (check.ok) {
-        state.answers[f.key] = parsed;
-        break;
+  // Two passes: conditional fields (e.g. fuel volume when expense_type = Fuel)
+  // only become active after earlier fields in the same payload are captured.
+  for (let pass = 0; pass < 2; pass += 1) {
+    for (const f of activeFields(def, state.answers)) {
+      if (f.key in state.answers && state.answers[f.key] !== undefined) continue;
+      if (f.kind === 'otp') continue;
+      for (const alias of f.aliases) {
+        const raw = ext[alias];
+        if (raw === null || raw === undefined || raw === '') continue;
+        const parsed = f.parse(String(raw), { ...ctx, answers: state.answers }, state.answers);
+        if (parsed === null || parsed === undefined) continue;
+        const check = f.validate(parsed, { ...ctx, answers: state.answers }, state.answers);
+        if (check.ok) {
+          state.answers[f.key] = parsed;
+          break;
+        }
       }
     }
   }
