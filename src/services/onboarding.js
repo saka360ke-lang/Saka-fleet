@@ -33,7 +33,7 @@ export async function handleStage2OptionalWeaving({
     session.onboardingStage = null;
     chatSessions.set(senderPhone, session);
 
-    return `🎉 *Your Vehicle Asset Record is Active!* 🚀\n\n🚘 *Vehicle:* ${regPlate}\n\n📋 *What would you like to do next?*\n1️⃣ *Log Expense / Fuel* (e.g. "Logged fuel KES 3000")\n2️⃣ *Update Mileage* (e.g. "Odometer 366700 km")\n3️⃣ *Set Service Reminder* (e.g. "Remind oil change in 5000 km")\n4️⃣ *Log Earnings* (e.g. "Earned KES 5000 today")\n5️⃣ *View Reports & Summary*\n\nReply with a number or type what you want to do!`;
+    return `🎉 *Onboarding Complete — Your Vehicle Asset Record is Active!* 🚀\n\n🚘 *Vehicle:* ${regPlate}\n\n📋 *What would you like to do next?*\n1️⃣ *Log Expense / Fuel* (e.g. "Logged fuel KES 3000")\n2️⃣ *Update Mileage* (e.g. "Odometer 366700 km")\n3️⃣ *Set Service Reminder* (e.g. "Remind oil change in 5000 km")\n4️⃣ *Log Earnings* (e.g. "Earned KES 5000 today")\n5️⃣ *View Reports & Summary*\n\nReply with a number or type what you want to do! Type *Help* anytime for your full menu.`;
   }
 
   const optUpdates = {};
@@ -321,7 +321,7 @@ export async function handleStage1CoreCapture({
           obState.core.email_verified = true;
           obState.pending_otp = null;
         } else {
-          return `❌ *Invalid or Expired Verification Code*\n\nThe code \`${providedOtp}\` does not match or has expired. Please check your inbox for **${obState.core.owner_email}** or reply **'resend'** to request a new verification code.`;
+          return `❌ *Stage 1 of 2 · Step 3 of 4: Invalid or Expired Code*\n\nThe code \`${providedOtp}\` does not match or has expired. Please check your inbox for **${obState.core.owner_email}**, reply **'resend'** for a new code, or **'cancel'** to abort.`;
         }
       } else if (isResendReq || !obState.pending_otp) {
         const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
@@ -333,9 +333,9 @@ export async function handleStage1CoreCapture({
         await sendEmailOtp(obState.core.owner_email, otpCode);
         obState.step = 3;
         onboardingStore.set(senderPhone, obState);
-        return `📧 *Email Verification Required*\n\nWe have dispatched a 6-digit verification code to **${obState.core.owner_email}**.\n\n🔒 *VIN Lock Reminder:* Your vehicle passbook will be permanently bound to VIN \`${obState.core.vin}\`.\n\nPlease reply with the 6-digit code sent to your email to verify and issue your passbook.\n\n_(Reply **'resend'** if you need a new code.)_`;
+        return `📧 *Stage 1 of 2 · Step 3 of 4: Email Verification*\n\nWe have dispatched a 6-digit verification code to **${obState.core.owner_email}**.\n\n🔒 *VIN Lock Reminder:* Your vehicle passbook will be permanently bound to VIN \`${obState.core.vin}\`.\n\nPlease reply with the 6-digit code sent to your email to verify and issue your passbook.\n\n_(Reply **'resend'** for a new code, or **'cancel'** to abort.)_`;
       } else {
-        return `📧 *Email Verification Pending*\n\nPlease enter the 6-digit verification code sent to **${obState.core.owner_email}** to complete registration.\n\n🔒 *VIN Lock:* Once confirmed, this passbook will be permanently locked to VIN \`${obState.core.vin}\`.\n\n_(Reply **'resend'** if you need a new code.)_`;
+        return `📧 *Stage 1 of 2 · Step 3 of 4: Email Verification Pending*\n\nPlease enter the 6-digit verification code sent to **${obState.core.owner_email}** to complete registration.\n\n🔒 *VIN Lock:* Once confirmed, this passbook will be permanently locked to VIN \`${obState.core.vin}\`.\n\n_(Reply **'resend'** for a new code, or **'cancel'** to abort.)_`;
       }
     }
 
@@ -371,7 +371,7 @@ export async function handleStage1CoreCapture({
       session.state = 'ONBOARDING_STAGE_2';
       chatSessions.set(senderPhone, session);
 
-      return `🎉 *Vehicle Registration Complete & Passbook Issued!* 🚀\n\n🚘 *Vehicle Asset Record:*\n• *Plate Number:* ${saved.corePlate}\n• *VIN (Chassis):* \`${saved.coreVin}\` *(Permanently Locked 🔒)*\n• *Make & Model:* ${saved.coreModel} (${saved.coreYom})\n• *Fuel:* ${saved.coreFuel} | *Odometer:* ${saved.coreMileage.toLocaleString()} km\n• *Email:* ${saved.coreEmail} *(Verified ✅)*\n• *Passbook Token:* \`${saved.token}\`\n\n📧 *Your official digital passbook and token have been sent directly to ${saved.coreEmail}!*\n\n🛡️ *Unlock Proactive Compliance & Maintenance Reminders:*\nWould you like to optionally add details like **Insurance Expiry Date**, **Inspection/NTAC Date**, **Color**, **Transmission** (Auto/Manual), or any **Custom Modifications** (e.g. Bullbar, Winch)?\n\nAdding insurance expiry enables Saka to send proactive renewal alerts before expiration!\n\n💡 *Reply with any details (e.g. "Insurance expires 2027-05-15, automatic, color White"), or simply type **'Skip'** or **'Done'** to finish.*`;
+      return `🎉 *Stage 1 of 2 · Step 4 of 4: Passbook Issued!* 🚀\n\n*Vehicle Registration Complete & VIN-Locked* ✅\n\n🚘 *Vehicle Asset Record:*\n• *Plate Number:* ${saved.corePlate}\n• *VIN (Chassis):* \`${saved.coreVin}\` *(Permanently Locked 🔒)*\n• *Make & Model:* ${saved.coreModel} (${saved.coreYom})\n• *Fuel:* ${saved.coreFuel} | *Odometer:* ${saved.coreMileage.toLocaleString()} km\n• *Email:* ${saved.coreEmail} *(Verified ✅)*\n• *Passbook Token:* \`${saved.token}\`\n\n📧 *Your official digital passbook and token have been sent directly to ${saved.coreEmail}!*\n\n🛠️ *Stage 2 of 2 — Optional Specs:*\nWould you like to optionally add details like **Insurance Expiry Date**, **Inspection/NTAC Date**, **Color**, **Transmission** (Auto/Manual), or any **Custom Modifications** (e.g. Bullbar, Winch)?\n\nAdding insurance expiry enables Saka to send proactive renewal alerts before expiration!\n\n💡 *Reply with any details (e.g. "Insurance expires 2027-05-15, automatic, color White"), or simply type **'Skip'** or **'Done'** to finish. Type **'Help'** anytime for your menu.*`;
     } catch (regErr) {
       console.error('[handleStage1CoreCapture] Registration Error:', regErr);
       onboardingStore.delete(senderPhone);

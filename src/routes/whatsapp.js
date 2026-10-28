@@ -191,6 +191,28 @@ async function sendWhatsAppReply(toPhone, messageBody) {
   }
 }
 /**
+ * First-time / unregistered user progressive onboarding guide.
+ * Shared by role discovery and the idle greeting so every brand-new user
+ * receives one consistent, numbered, step-by-step path.
+ */
+export function buildFirstTimeWelcome({ swahili = false } = {}) {
+  const opener = swahili
+    ? '👋 *Habari! Karibu Saka Fleet!* 🚗'
+    : '👋 *Welcome to Saka Fleet!* 🚗';
+  return `${opener}\n\n` +
+    `Saka tracks your vehicles, fuel, expenses, compliance & maintenance right here on WhatsApp.\n\n` +
+    `🚀 *Your First-Time Setup (about 2 minutes):*\n` +
+    `1️⃣ Reply with your plate number (e.g. *KDA 123A*) — or type *Register*.\n` +
+    `2️⃣ Send Make & Model, Year, Fuel Type and current mileage.\n` +
+    `3️⃣ Verify your email with the 6-digit code we send you.\n` +
+    `4️⃣ Receive your VIN-locked digital passbook instantly. 🎉\n\n` +
+    `💡 *Anytime:* type *Help* or *What can I do?* to see your menu.\n` +
+    `🔄 *Mistake?* type *Restart* or *Cancel*.\n` +
+    `🤝 *Buying a vehicle with a passbook?* Reply *ACCEPT* once the seller starts the transfer.`;
+}
+
+
+/**
  * Conversational Action Discovery (Driver, Owner, Superadmin)
  */
 export function generateRoleBasedActionDiscovery({ profileData, vehicles = [], senderPhone, targetVeh }) {
@@ -264,12 +286,7 @@ export function generateRoleBasedActionDiscovery({ profileData, vehicles = [], s
       `💡 *Note:* Driver submissions automatically update fleet records and notify your owner.`;
   }
 
-  return `👋 *Welcome to Saka Fleet!* 🚗\n\n` +
-    `Saka Fleet tracks vehicle maintenance, compliance, and expenses directly on WhatsApp.\n\n` +
-    `🚀 *Getting Started:*\n` +
-    `• Reply with your registration plate (e.g. *KDA 123A*) or type **'Register'** to onboard your vehicle.\n` +
-    `• If you are buying a vehicle with a Saka Passbook, reply **'ACCEPT'** once the seller initiates transfer.\n` +
-    `• Type **'Help'** or **'What can I do?'** anytime for assistance!`;
+  return buildFirstTimeWelcome();
 }
 
 
@@ -619,7 +636,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           }
         }
         // 5. Action Discovery & Role Help
-        else if (intent === 'ACTION_DISCOVERY' || /\b(?:what\s+can\s+i\s+do|show\s+my\s+actions|my\s+actions|show\s+actions|what\s+are\s+my\s+commands|available\s+commands)\b/i.test(messageText.trim())) {
+        else if (intent === 'ACTION_DISCOVERY' || intent === 'APP_HELP' || /\b(?:what\s+can\s+i\s+do|show\s+my\s+actions|my\s+actions|show\s+actions|what\s+are\s+my\s+commands|available\s+commands)\b/i.test(messageText.trim())) {
           isSpecialFlowHandled = true;
           customReply = generateRoleBasedActionDiscovery({
             profileData,
@@ -651,7 +668,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             session.onboardingStep = null;
             session.onboardingStage = null;
             customReply = `Vehicle onboarding cancelled. ${hasVehicleRegistered ? "You are back in active menu mode." : "Type **'Register'** whenever you're ready!"}`;
-          } else if (/^(reset|start over)$/i.test(cleanText)) {
+          } else if (/^(reset|restart|start over)$/i.test(cleanText)) {
             onboardingStore.set(senderPhone, {
               stage: 1,
               step: 1,
@@ -833,9 +850,9 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                 session.onboardingStep = initPlate ? 2 : 1;
                 session.onboardingStage = 1;
                 if (initPlate) {
-                  customReply = `🚘 *Step 2 of 2: Vehicle Core Details* 📝\n\nGot registration plate *${initPlate}*!\n\nCould you share the **Make & Model**, **Year of Manufacture (YOM)**, **Fuel Type (Diesel/Petrol/Hybrid/EV)**, **Current Mileage**, and your **Email**?\n\n💡 *Tip: You can send them all together in one message (e.g., "1991 diesel 80 series, mileage 366700, email user@mail.com")!*`;
+                  customReply = `🚘 *Stage 1 of 2 · Step 2 of 4: Vehicle Core Details* 📝\n\nGot registration plate *${initPlate}*!\n\nCould you share the **Make & Model**, **Year of Manufacture (YOM)**, **Fuel Type (Diesel/Petrol/Hybrid/EV)**, **Current Mileage**, and your **Email**?\n\n💡 *Tip:* Send them all together in one message (e.g. "1991 diesel 80 series, mileage 366700, email user@mail.com").\n\n_(Type *Cancel* to stop, or *Restart* to begin again.)_`;
                 } else {
-                  customReply = `🚘 *Step 1 of 2: Vehicle Registration Plate*\n\nPlease reply with the registration plate number for your new vehicle (e.g. *KDA 123A* or *KBC 456X*).`;
+                  customReply = `🚘 *Stage 1 of 2 · Step 1 of 4: Vehicle Registration Plate*\n\nPlease reply with the registration plate number for your new vehicle (e.g. *KDA 123A* or *KBC 456X*).\n\n_(Type *Cancel* to stop.)_`;
                 }
               }
             }
@@ -1212,17 +1229,21 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             }
             customReply = `I sincerely apologize for the message overload! Our system experienced a temporary messaging sync delay. I've paused the messages. If you need any assistance, text **'Support'** to reach our team at support@sakafleet.com, or send your vehicle registration plate (e.g. *KDA 123A*) whenever you're ready to onboard.`;
           }
-          // 3. Swahili Greetings
+          // 3. Swahili Greetings — first-time guide in Swahili tone
           else if (/^(habari|mambo|jambo|hujambo|salama)\b/i.test(clean)) {
-            customReply = `👋 *Habari! Welcome to Saka Fleet!* 🚗\n\nSaka Fleet tracks vehicle processes, compliance, expenses, and maintenance directly on WhatsApp.\n\n🚀 *Get Started:* To start onboarding, reply with your vehicle's registration number (e.g. *KDA 123A*) or type **'Register'**.\n\n💡 *Tip:* Ask *"What can I do?"* anytime to explore available tools!`;
+            customReply = buildFirstTimeWelcome({ swahili: true });
           }
-          // 4. General informational questions answered via DeepSeek
+          // 4. English Greetings — first-time progressive guide
+          else if (intent === 'GREETING') {
+            customReply = buildFirstTimeWelcome();
+          }
+          // 5. General informational questions answered via DeepSeek
           else if (aiResult.reply_message && !aiResult.reply_message.includes('I am your Saka Fleet WhatsApp assistant. How can I help with your vehicle')) {
             customReply = aiResult.reply_message;
           }
-          // 5. Default Welcome Prompt
+          // 6. Default Welcome Prompt
           else {
-            customReply = `👋 *Welcome to Saka Fleet!* 🚗\n\nSaka Fleet tracks vehicle processes, compliance, expenses, and maintenance directly on WhatsApp.\n\n🚀 *Get Started:* To start onboarding, reply with your vehicle's registration number (e.g. *KDA 123A*) or type **'Register'**.\n\n💡 *Tip:* Ask *"What can I do?"* anytime to explore available tools!`;
+            customReply = buildFirstTimeWelcome();
           }
         }
         }

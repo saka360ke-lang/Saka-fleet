@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.3.0  
+**Version:** 1.4.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -259,7 +259,7 @@ Driver-centric feature blueprints synthesized weekly by Sentinel from live conve
    - The last 10 messages from `chat_history` are fetched and injected as turns (`{ role: 'user' | 'model', parts: [{ text }] }`).
 
 4. **Intent Classification & Autonomous Actions:**
-   - Supported intents: `GREETING`, `REGISTER_VEHICLE`, `ONBOARDING_INPUT`, `ONBOARDING_SKIP`, `VERIFY_OTP`, `RESEND_OTP`, `UPDATE_EMAIL`, `SWITCH_VEHICLE`, `ASSIGN_DRIVER`, `UNASSIGN_DRIVER`, `QUERY_FUEL_EFFICIENCY`, `QUERY_FLEET_SUMMARY`, `LOG_EXPENSE`, `UPDATE_MILEAGE`, `LOG_EARNINGS`, `SET_REMINDER`, `REQUEST_REPORT`, `MANAGE_VEHICLE`, `APP_HELP`, `CONTACT_SUPPORT`, `GENERAL_CHAT`.
+   - Supported intents (single source of truth: `sakaAi.js` `DEFAULT_SAKA_CORE_PROMPT`): `GREETING`, `ACTION_DISCOVERY`, `TRANSFER_PASSBOOK`, `APPLY_COUPON`, `REGISTER_VEHICLE`, `ONBOARDING_INPUT`, `ONBOARDING_SKIP`, `VERIFY_OTP`, `RESEND_OTP`, `UPDATE_EMAIL`, `APP_HELP`, `MANAGE_VEHICLE`, `LIST_VEHICLES`, `SWITCH_VEHICLE`, `QUERY_FUEL_EFFICIENCY`, `QUERY_FLEET_SUMMARY`, `LOG_EXPENSE`, `UPDATE_MILEAGE`, `LOG_EARNINGS`, `SET_REMINDER`, `COMPLETE_REMINDER`, `REQUEST_REPORT`, `CONTACT_SUPPORT`, `REACTIVATE_ACCOUNT`, `GENERAL_CHAT`, `ASSIGN_DRIVER`, `UNASSIGN_DRIVER`.
    - Hybrid extraction merges DeepSeek structured JSON with smart regex heuristics (including currency exclusion to prevent false plate matches, phone-vs-VIN disambiguation, and odometer-safe OTP parsing).
    - **Expense-vs-Odometer disambiguation:** messages containing fuel/expense wording (`fuel`, `liters`, `refuel`, `paid`, `cost`, `receipt`, `maintenance`) are classified as `LOG_EXPENSE` even when an odometer value is also present (e.g. *"Logged 30L fuel at 50350 km for KES 5500"*).
 
@@ -462,6 +462,8 @@ Owners exceeding tier limits are prompted to upgrade via Paystack checkout.
   - **Driver:** Displays Driver Hub (`Odometer [km]`, `Logged [L] fuel`, `Earned [amount]`, `Oil change needed`, `passbook details`). Strictly prevents driver from transferring passbooks or deleting vehicles.
   - **Dual Role (Owner + Driver):** Combines both sections with clear visual segregation.
   - **Unregistered:** Provides a quick-start guide to register a vehicle or accept a transferred passbook.
+- **Shared first-time guide:** `buildFirstTimeWelcome()` in `src/routes/whatsapp.js` is the single source of truth for brand-new users; it is reused by `generateRoleBasedActionDiscovery` and the idle/greeting branches (English + Swahili).
+- **Help routing:** `Help` (`APP_HELP`) and `What can I do?` (`ACTION_DISCOVERY`) both route through `generateRoleBasedActionDiscovery`, so every user receives a role-aware command center (or the first-time guide when unregistered).
 
 ---
 
@@ -509,4 +511,38 @@ Owners exceeding tier limits are prompted to upgrade via Paystack checkout.
 - **Confirmation Flag:** Requires `--confirm` flag (e.g. `node scripts/reset-db.js --all --confirm`). Without `--confirm`, execution is safely aborted with an informational warning.
 - **Targeted Reset:** Supports phone-specific data clearing: `node scripts/reset-db.js --phone +254712345678 --confirm`.
 - **Post-Reset Verification:** Queries and outputs a clean verification summary table confirming zero residual records across all primary operational tables.
+
+---
+
+## 16. First-Time User Conversational Flow (Progressive Onboarding)
+
+### 16.1 Shared First-Time Guide (`buildFirstTimeWelcome`)
+- `src/routes/whatsapp.js` exports `buildFirstTimeWelcome({ swahili })` — the single source of truth for brand-new / unregistered users.
+- Provides a numbered, ~2-minute walkthrough: (1) plate → (2) make/model + year + fuel + mileage → (3) email OTP → (4) VIN-locked passbook, then optional Stage 2 specs.
+- Always surfaces recovery affordances: **Help**, **What can I do?**, **Restart**, **Cancel**, and buyer **ACCEPT**.
+- Reused by `generateRoleBasedActionDiscovery` (unregistered branch) and the idle/greeting branches (English + Swahili), so every entry point is consistent.
+
+### 16.2 Accurate Progressive Stage Labels
+- **Stage 1 of 2 · Step 1 of 4** — Registration Plate (offers *Cancel*).
+- **Stage 1 of 2 · Step 2 of 4** — Vehicle Core Details (offers *Cancel* / *Restart*).
+- **Stage 1 of 2 · Step 3 of 4** — Email Verification (invalid/expired codes offer **resend** or **cancel**).
+- **Stage 1 of 2 · Step 4 of 4** — Passbook Issued (transitions into **Stage 2 of 2 — Optional Specs**).
+- Onboarding completion returns a numbered quick-action menu (1–5) plus a **Help** hint.
+
+### 16.3 Help & Action Discovery Routing
+- `Help` → `APP_HELP` and `What can I do?` → `ACTION_DISCOVERY`; both route through the special-flow handler to `generateRoleBasedActionDiscovery`.
+- Unregistered users receive the first-time guide; active users receive their role-specific command center (Owner / Driver / Owner+Driver / Superadmin).
+- `Restart` / `Reset` / `Start over` restarts onboarding; `Cancel` / `Exit` / `Stop` aborts cleanly.
+
+---
+
+## 17. Known Operational Observations (Operational Review 2026-10-28)
+
+1. **Tier-limit source drift (needs alignment):**
+   - `src/services/paystack.js` → `SUBSCRIPTION_TIERS.solo_pro.vehicleLimit = 2`.
+   - `src/services/vehicles.js` → `TIER_LIMITS.solo_pro = 3` (and this document specifies 3).
+   - `whatsapp.js` gates pre-registration capacity via `SUBSCRIPTION_TIERS` (2), while `onboarding.js` gates final capacity via `checkOwnerVehicleTierLimit` (3). Recommend converging on a single source (3 per this document).
+2. **Intermittent DeepSeek empty completions:** Under high-frequency test runs, `deepseek-chat` occasionally returns an empty completion; `aiClient.chatCompletion` retries and callers deterministically fall back to `classifyIntentWithRegex`, so flows remain functional with no data loss observed.
+3. **Test isolation:** Root-level `test_*.js` suites depend on live Supabase + Resend + DeepSeek and clear data by hard-coded test phones. A transient Supabase `fetch failed` can leave stale rows and make an "unregistered" test user appear registered; run `node scripts/reset-db.js --phone <number> --confirm` before re-running.
+4. **Test runner:** All suites are standalone `node test_*.js` scripts (no Jest/Mocha/Vitest, no `npm test` script). `test_first_time_flow.js` is the offline suite covering the redesigned first-time flows.
 
