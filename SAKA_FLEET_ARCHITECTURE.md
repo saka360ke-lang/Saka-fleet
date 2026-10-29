@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.9.0  
+**Version:** 1.9.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -1045,4 +1045,53 @@ All money uses `formatMoney(amount, ctx.currency, ctx.locale)`, distances honour
 ### 32.6 Access paths
 - WhatsApp: `QUERY_FLEET_SUMMARY` → Fleet Status; `REQUEST_REPORT` + `report_type` → the selected report (owners/drivers see their own fleet scope).
 - `fleetReports` is also reusable by executive dashboards (JSON-first) and the per-vehicle PDF audit path (`reports.js` remains the PDF renderer).
+
+---
+
+## 33. Supabase Connectivity Verification (v1.9.1)
+
+### 33.1 Tooling — `scripts/check_supabase_connection.js`
+`npm run check:supabase` (alias: `node scripts/check_supabase_connection.js`).
+
+A **strictly read-only** diagnostic. Every remote call is a `GET`/`HEAD` or a `SELECT` inside an explicit `BEGIN TRANSACTION READ ONLY … ROLLBACK`. It never inserts, updates, deletes, upserts, truncates or runs DDL, and never triggers WhatsApp/Resend/Paystack/DeepSeek traffic.
+
+| Phase | Checks |
+| :--- | :--- |
+| P1 | Redacted credential inventory, project-ref guard (hard stop on mismatch), JWT role/expiry validation, JWT `ref` vs URL host comparison |
+| P2 | `GET /auth/v1/health`, `GET /rest/v1/` OpenAPI root, `createResilientClient()` construction, per-table row counts, column-shape assertions, corrupt-key negative control, client-cache identity |
+| P3 | `DATABASE_URL` parse → TCP → `pg` session with TLS negotiation → read-only `SELECT` → `public` schema table count |
+| P4 | Application key mapping + `SUPABASE_TIMEOUT_MS` AbortSignal wiring |
+
+Flags: `--with-timeout-test` (asserts the AbortSignal guard), `--with-pooler-discovery` (tries the regional pooler hosts when the direct host is unreachable). Exit codes: `0` all passed, `1` one or more failed, `2` hard stop (wrong project ref or missing credentials).
+
+> **Anti-false-positive rule:** table/schema probes must use `GET`, never `HEAD`. A `HEAD` 404 carries no body, so `supabase-js` reports no error and an empty project can look healthy. Row-count probes therefore fall back to a 1-row `GET` selecting only `id` (no PII).
+
+### 33.2 Credential contract
+| Env | Used by | Notes |
+| :--- | :--- | :--- |
+| `SUPABASE_URL` | all DB paths | Project ref guard compares the host against the expected staging ref |
+| `SUPABASE_SERVICE_KEY` | canonical name across the codebase | `resolveServiceKey()` (`src/services/supabaseClient.js`) |
+| `SUPABASE_SERVICE_ROLE_KEY` | accepted alias | Dashboard naming; resolved as a fallback so a correctly supplied key is never silently ignored |
+| `DATABASE_URL` | verification tooling only | **No runtime code path consumes it** and no `pg` dependency is bundled; install `pg` ad hoc (`npm i --no-save --no-package-lock --ignore-scripts pg`) to exercise P3 |
+| `SUPABASE_ACCESS_TOKEN` | Management API SQL (migrations, `ensureVehicleTableColumns`, session store, Sentinel) | `https://api.supabase.com/v1/projects/{ref}/database/query` |
+| `SUPABASE_POOLER_REGION` | verification tooling | e.g. `eu-west-1`; builds `postgresql://postgres.<ref>:…@aws-0-<region>.pooler.supabase.com:5432/postgres` |
+| `SUPABASE_TIMEOUT_MS` | runtime | 15000 ms per-request AbortController |
+
+**Connection-string rules learned on staging:** `db.<ref>.supabase.co` is not resolvable for this project (no A/AAAA record). Direct/pooler access must use `aws-0-<region>.pooler.supabase.com:5432` with the username form `postgres.<ref>` and `sslmode=require`.
+
+### 33.3 Staging verification result (2026-10-29)
+Verified with `--with-timeout-test` against project `knlxpwiqiqcliprjqjfp`:
+
+- ✅ GoTrue health `200`, PostgREST root `200`, service-role JWT valid (`role=service_role`, exp 2036-10-28), corrupt-key control `401`.
+- ✅ Postgres session `postgres as postgres`, TLS `TLS_AES_256_GCM_SHA384`, read-only transaction honoured.
+- ❌ `public` schema contains **0 tables** — the Saka Fleet schema has not been applied to this staging project, so every domain table (`profiles`, `vehicles`, `vin_registry`, `system_config`, `passbook_transfers`, `chat_history`, `error_logs`) returns `PGRST205`. Only `auth.*` and `storage.*` system tables exist.
+- The originally supplied `SUPABASE_URL`/`DATABASE_URL` used the ref `knlxpwiqcliprjqjfp` (18 chars, NXDOMAIN); the live ref is `knlxpwiqiqcliprjqjfp` (20 chars), which matches the JWT `ref` claim.
+
+**Interpretation:** transport, credentials and TLS are fully working; the environment is simply un-migrated. Applying the schema is a separate, write-bearing step and is deliberately out of scope for this read-only tool.
+
+### 33.4 Safety guarantees
+- No test-suite invocation (`npm test` seeds rows, `--cleanup-only` deletes them) and no `reset:db` / `migrate:*` path is ever called by the checker.
+- `GET /healthz` is DB-free by design and is **not** accepted as database evidence.
+- The script is safe to run against production-like projects because it cannot mutate state; the project-ref guard still refuses unexpected targets.
+
 
