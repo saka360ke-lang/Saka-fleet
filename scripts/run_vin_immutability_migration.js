@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { runSql, hasSqlAccess } from '../src/db/sqlRunner.js';
 
 /**
  * Applies the VIN immutability trigger to Supabase.
@@ -25,29 +26,17 @@ export const VIN_IMMUTABILITY_SQL = `
 `;
 
 export async function applyVinImmutabilityMigration() {
-  const token = process.env.SUPABASE_ACCESS_TOKEN;
-  const projectRef = (process.env.SUPABASE_URL || '').replace('https://', '').split('.')[0];
-
-  if (!token || !projectRef) {
-    throw new Error('Missing SUPABASE_ACCESS_TOKEN or SUPABASE_URL');
+  if (!hasSqlAccess()) {
+    throw new Error('Missing SQL transport: set SUPABASE_ACCESS_TOKEN or DATABASE_URL');
   }
 
-  const res = await fetch(`https://api.supabase.com/v1/projects/${projectRef}/database/query`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({ query: VIN_IMMUTABILITY_SQL })
-  });
-
-  const responseText = await res.text();
-  if (!res.ok) {
-    throw new Error(`VIN immutability migration failed: ${responseText}`);
+  const result = await runSql(VIN_IMMUTABILITY_SQL, { label: 'vinImmutabilityMigration' });
+  if (!result.ok) {
+    throw new Error(`VIN immutability migration failed: ${result.error || result.body}`);
   }
 
-  console.log('✅ VIN immutability trigger applied:', responseText || '(ok)');
-  return { success: true, response: responseText };
+  console.log('✅ VIN immutability trigger applied:', result.body || '(ok)');
+  return { success: true, response: result.body, via: result.via };
 }
 
 if (process.argv[1] && process.argv[1].endsWith('run_vin_immutability_migration.js')) {

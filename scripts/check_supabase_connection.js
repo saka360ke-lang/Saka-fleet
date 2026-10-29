@@ -29,14 +29,16 @@ const ARGS = new Set(process.argv.slice(2));
 const EXPECTED_REF = process.env.SUPABASE_EXPECTED_PROJECT_REF || 'knlxpwiqiqcliprjqjfp';
 
 // Tables that must exist in staging (see SAKA_FLEET_ARCHITECTURE.md §2).
+// `key` is the primary-key column used for the count probe — not every table
+// uses `id` (vin_registry → vin, system_config → key).
 const TABLES = [
-  'profiles',
-  'vehicles',
-  'vin_registry',
-  'system_config',
-  'passbook_transfers',
-  'chat_history',
-  'error_logs'
+  { table: 'profiles', key: 'id' },
+  { table: 'vehicles', key: 'id' },
+  { table: 'vin_registry', key: 'vin' },
+  { table: 'system_config', key: 'key' },
+  { table: 'passbook_transfers', key: 'id' },
+  { table: 'chat_history', key: 'id' },
+  { table: 'error_logs', key: 'id' }
 ];
 
 // Column shapes asserted from SAKA_FLEET_ARCHITECTURE.md §2.1 / §2.2.
@@ -163,16 +165,16 @@ async function main() {
   const appClient = createResilientClient(url, key);
   record('P2', 'createResilientClient() returns a client', Boolean(appClient));
 
-  for (const table of TABLES) {
+  for (const { table, key: pk } of TABLES) {
     try {
       // PostgREST can omit Content-Range on HEAD, so fall back to a 1-row GET
-      // that selects only the primary key (no PII is transferred).
-      const headRes = await appClient.from(table).select('id', { count: 'exact', head: true }).limit(0);
+      // selecting only the primary key (no PII is transferred).
+      const headRes = await appClient.from(table).select(pk, { count: 'exact', head: true }).limit(0);
       if (!headRes.error && typeof headRes.count === 'number') {
         record('P2', `row count ${table}`, true, `${headRes.count} rows (HEAD)`);
         continue;
       }
-      const getRes = await appClient.from(table).select('id', { count: 'exact' }).limit(1);
+      const getRes = await appClient.from(table).select(pk, { count: 'exact' }).limit(1);
       if (getRes.error) {
         record('P2', `row count ${table}`, false, `${getRes.error.code || ''} ${getRes.error.message}`.trim());
       } else {

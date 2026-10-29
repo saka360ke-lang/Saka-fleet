@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.9.1  
+**Version:** 1.9.2  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -1064,7 +1064,7 @@ A **strictly read-only** diagnostic. Every remote call is a `GET`/`HEAD` or a `S
 
 Flags: `--with-timeout-test` (asserts the AbortSignal guard), `--with-pooler-discovery` (tries the regional pooler hosts when the direct host is unreachable). Exit codes: `0` all passed, `1` one or more failed, `2` hard stop (wrong project ref or missing credentials).
 
-> **Anti-false-positive rule:** table/schema probes must use `GET`, never `HEAD`. A `HEAD` 404 carries no body, so `supabase-js` reports no error and an empty project can look healthy. Row-count probes therefore fall back to a 1-row `GET` selecting only `id` (no PII).
+> **Anti-false-positive rule:** table/schema probes must use `GET`, never `HEAD`. A `HEAD` 404 carries no body, so `supabase-js` reports no error and an empty project can look healthy. Row-count probes therefore fall back to a 1-row `GET` selecting only the table's primary key (`id`, `vin` or `key`) — no PII is transferred.
 
 ### 33.2 Credential contract
 | Env | Used by | Notes |
@@ -1080,14 +1080,42 @@ Flags: `--with-timeout-test` (asserts the AbortSignal guard), `--with-pooler-dis
 **Connection-string rules learned on staging:** `db.<ref>.supabase.co` is not resolvable for this project (no A/AAAA record). Direct/pooler access must use `aws-0-<region>.pooler.supabase.com:5432` with the username form `postgres.<ref>` and `sslmode=require`.
 
 ### 33.3 Staging verification result (2026-10-29)
-Verified with `--with-timeout-test` against project `knlxpwiqiqcliprjqjfp`:
+Pre-provisioning state, then post-provisioning state, both verified with `--with-timeout-test` against project `knlxpwiqiqcliprjqjfp`:
 
+**Before provisioning**
 - ✅ GoTrue health `200`, PostgREST root `200`, service-role JWT valid (`role=service_role`, exp 2036-10-28), corrupt-key control `401`.
 - ✅ Postgres session `postgres as postgres`, TLS `TLS_AES_256_GCM_SHA384`, read-only transaction honoured.
-- ❌ `public` schema contains **0 tables** — the Saka Fleet schema has not been applied to this staging project, so every domain table (`profiles`, `vehicles`, `vin_registry`, `system_config`, `passbook_transfers`, `chat_history`, `error_logs`) returns `PGRST205`. Only `auth.*` and `storage.*` system tables exist.
+- ❌ `public` schema contained **0 tables** — only `auth.*` and `storage.*` system tables existed, so every domain table returned `PGRST205`.
 - The originally supplied `SUPABASE_URL`/`DATABASE_URL` used the ref `knlxpwiqcliprjqjfp` (18 chars, NXDOMAIN); the live ref is `knlxpwiqiqcliprjqjfp` (20 chars), which matches the JWT `ref` claim.
 
-**Interpretation:** transport, credentials and TLS are fully working; the environment is simply un-migrated. Applying the schema is a separate, write-bearing step and is deliberately out of scope for this read-only tool.
+**After provisioning (§33.5)**
+- ✅ `25/25` expected tables present; `public schema tables = 25`; checker reports `passed=28 failed=0 skipped=0` and **exit code 0**.
+- ✅ `trg_prevent_vin_mutation` present and proven to block `UPDATE vehicles SET vin = …` (verified inside a rolled-back transaction, so zero residue).
+- ✅ Repository CRUD suite `test_edit_delete.js` passes end-to-end against the new schema (seed → edit → VIN rejection → owner-only delete → cleanup), leaving `0` rows in all 25 tables.
+
+### 33.5 Provisioning the schema — `scripts/provision_staging_schema.js`
+`npm run migrate:staging-schema` (alias: `node scripts/provision_staging_schema.js`).
+
+Provisions a target database from scratch. Idempotent (`CREATE … IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`) and guarded by the same project-ref check, exiting `2` on a mismatch before writing.
+
+**Two classes of schema:**
+1. `BOOTSTRAP_SQL` / `BOOTSTRAP_OPERATIONAL_SQL` — base tables that **no code path creates** (`profiles`, `vehicles`, `passbook_transfers`, `reminders`, `expenses`, `expense_logs`, `private_earnings`, `pending_owner_notifications`, `processed_webhooks`, `exchange_rates_cache`, `support_tickets`, `weekly_feature_proposals`). Columns are derived from §2 + §28.3 and the repository's real insert/select payloads.
+2. The existing migrations, executed in dependency order — single source of truth, not duplicated:
+   `ensureSuperadminTables()` → `ensureVehicleTableColumns()` → `ensureSentinelTables()` → `ensureChatSessionsTable()` → `applySentinelMigration()` → `applyChatSessionsMigration()` → `applyVinImmutabilityMigration()`.
+
+**Ordering constraint (critical):** `ensureVehicleTableColumns()` ALTERs `coupons`, `passbook_transfers`, `reminders`, `profiles` and `vehicles`, so those tables must exist first. Because `pg` sends a multi-statement batch as one implicit transaction, a single failure rolls back the whole batch — hence `ensureSuperadminTables()` (which creates `coupons`) must run *before* the vehicles migration.
+
+`GRANTS_SQL` then grants `service_role`/`anon`/`authenticated` access so freshly created tables are visible through PostgREST rather than returning `401/403`.
+
+### 33.6 Transport abstraction — `src/db/sqlRunner.js`
+All migrations now call `runSql(sql, { label })` instead of hand-rolling `fetch` calls:
+- `SUPABASE_ACCESS_TOKEN` set → Management API (original behaviour, unchanged).
+- otherwise `DATABASE_URL` → direct Postgres via the optional `pg` driver.
+- neither → `{ ok: false, error: 'No SQL transport configured' }`.
+
+`runSql` never throws; callers keep their existing fail-soft behaviour. Refactored call sites: `ensureVehicleTableColumns`, `ensureSuperadminTables`, `ensureSentinelTables`, `ensureChatSessionsTable`, `run_vin_immutability_migration`, `run_chat_sessions_migration`, `run_sentinel_migration`. The two `run_*` scripts also gained a direct-execution guard so the provisioning script can import them without side effects.
+
+> **`sslmode` gotcha:** `pg-connection-string` maps `sslmode=require` to *full* certificate verification, which fails against the Supabase pooler chain with `SELF_SIGNED_CERT_IN_CHAIN`. `sqlRunner` strips `sslmode` and sets `ssl: { rejectUnauthorized: false }` explicitly — TLS is still negotiated, just without CA pinning.
 
 ### 33.4 Safety guarantees
 - No test-suite invocation (`npm test` seeds rows, `--cleanup-only` deletes them) and no `reset:db` / `migrate:*` path is ever called by the checker.

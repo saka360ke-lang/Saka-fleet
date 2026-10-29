@@ -1,6 +1,7 @@
 import { runHealthCheck, evaluateConversationalFriction } from '../workers/sentinel.js';
 import { sendAdminNotificationEmail } from './mailer.js';
 import { generateText, parseJsonSafely } from './aiClient.js';
+import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
 import crypto from 'crypto';
 
 export function isSuperadminPhone(senderPhone) {
@@ -44,9 +45,8 @@ export async function ensureSuperadminTables(supabase) {
   }
 
   const missing = Object.keys(statusMap).filter(t => statusMap[t] === 'missing');
-  if (process.env.SUPABASE_ACCESS_TOKEN) {
+  if (hasSqlAccess()) {
     try {
-      const projectRef = (process.env.SUPABASE_URL || '').replace('https://', '').split('.')[0];
       const sql = `
         CREATE TABLE IF NOT EXISTS public.superadmin_sessions (
             phone_number text PRIMARY KEY,
@@ -77,14 +77,7 @@ export async function ensureSuperadminTables(supabase) {
         CREATE INDEX IF NOT EXISTS idx_admin_audit_admin ON public.admin_audit_logs(admin_phone, created_at);
       `;
 
-      await fetch(`https://api.supabase.com/v1/projects/${projectRef}/database/query`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${process.env.SUPABASE_ACCESS_TOKEN}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ query: sql })
-      });
+      await runSql(sql, { label: 'ensureSuperadminTables' });
 
       missing.forEach(t => { statusMap[t] = 'created'; });
     } catch (createErr) {

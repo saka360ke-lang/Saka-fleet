@@ -1,10 +1,10 @@
 import dotenv from 'dotenv';
 dotenv.config();
+import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
 
 export async function ensureVehicleTableColumns(providedSupabase = null) {
-  if (process.env.SUPABASE_ACCESS_TOKEN) {
+  if (hasSqlAccess()) {
     try {
-      const projectRef = (process.env.SUPABASE_URL || '').replace('https://', '').split('.')[0];
       const sql = `
         ALTER TABLE public.profiles DROP CONSTRAINT IF EXISTS profiles_subscription_status_check;
         ALTER TABLE public.profiles ADD CONSTRAINT profiles_subscription_status_check CHECK (UPPER(subscription_status) = ANY (ARRAY['TRIALING', 'ACTIVE', 'PAST_DUE', 'CANCELED', 'CANCELLED', 'TRIAL']));
@@ -154,17 +154,9 @@ export async function ensureVehicleTableColumns(providedSupabase = null) {
         END
         $v18$;
       `;
-      const res = await fetch(`https://api.supabase.com/v1/projects/${projectRef}/database/query`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${process.env.SUPABASE_ACCESS_TOKEN}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ query: sql })
-      });
-      if (!res.ok) {
-        const errText = await res.text();
-        console.warn('ensureVehicleTableColumns warning:', errText);
+      const result = await runSql(sql, { label: 'ensureVehicleTableColumns' });
+      if (!result.ok) {
+        console.warn('ensureVehicleTableColumns warning:', result.error || result.body);
       } else {
         console.log('✅ Supabase vehicles table columns verified and ensured.');
       }
