@@ -1,35 +1,42 @@
 import dotenv from 'dotenv';
 dotenv.config();
+import fs from 'node:fs';
 import { createClient } from '@supabase/supabase-js';
 
 const isProduction = process.env.NODE_ENV === 'production' || process.env.APP_ENV === 'production';
 const hasForceProduction = process.argv.includes('--force-production-wipe');
 const hasConfirm = process.argv.includes('--confirm');
 const hasAll = process.argv.includes('--all');
+const hasBackup = process.argv.includes('--backup');
 const targetPhone = process.argv.find((arg, i, arr) => arr[i - 1] === '--phone') || null;
+const isDirectInvocation = Boolean(
+  process.argv[1] && (process.argv[1].endsWith('reset-db.js') || process.argv[1].endsWith('reset_db_slate.js'))
+);
 
-// 1. Environment & Confirmation Safeguards
-if (isProduction && !hasForceProduction) {
-  console.error('🛑 ABORTED: Database slate wipe blocked in PRODUCTION environment!');
-  console.error('To override in production, you must explicitly supply: --force-production-wipe --confirm');
-  process.exit(1);
-}
+// 1. Environment & Confirmation Safeguards (CLI only — importing this module is side-effect free)
+if (isDirectInvocation) {
+  if (isProduction && !hasForceProduction) {
+    console.error('🛑 ABORTED: Database slate wipe blocked in PRODUCTION environment!');
+    console.error('To override in production, you must explicitly supply: --force-production-wipe --confirm');
+    process.exit(1);
+  }
 
-if (!hasConfirm) {
-  console.error('⚠️  SAFEGUARD TRIGGERED: Database reset requires explicit confirmation.');
-  console.error('Usage:');
-  console.error('  Global Slate Reset: node scripts/reset-db.js --all --confirm');
-  console.error('  Targeted Phone:     node scripts/reset-db.js --phone +254712345678 --confirm');
-  process.exit(1);
-}
+  if (!hasConfirm) {
+    console.error('⚠️  SAFEGUARD TRIGGERED: Database reset requires explicit confirmation.');
+    console.error('Usage:');
+    console.error('  Global Slate Reset: node scripts/reset-db.js --all --confirm [--backup]');
+    console.error('  Targeted Phone:     node scripts/reset-db.js --phone +254712345678 --confirm');
+    process.exit(1);
+  }
 
-// Require an explicit scope so a bare "--confirm" can never wipe globally.
-if (!hasAll && !targetPhone) {
-  console.error('⚠️  SAFEGUARD TRIGGERED: Specify the reset scope explicitly.');
-  console.error('Usage:');
-  console.error('  Global Slate Reset: node scripts/reset-db.js --all --confirm');
-  console.error('  Targeted Phone:     node scripts/reset-db.js --phone +254712345678 --confirm');
-  process.exit(1);
+  // Require an explicit scope so a bare "--confirm" can never wipe globally.
+  if (!hasAll && !targetPhone) {
+    console.error('⚠️  SAFEGUARD TRIGGERED: Specify the reset scope explicitly.');
+    console.error('Usage:');
+    console.error('  Global Slate Reset: node scripts/reset-db.js --all --confirm [--backup]');
+    console.error('  Targeted Phone:     node scripts/reset-db.js --phone +254712345678 --confirm');
+    process.exit(1);
+  }
 }
 
 export const RESET_TABLES = [
@@ -55,19 +62,92 @@ export const RESET_TABLES = [
   'admin_audit_logs',
   'conversation_analytics',
   'error_logs',
+  'ai_usage_logs',
+  'support_tickets',
+  'exchange_rates_cache',
   'profiles'
-  // Intentionally PRESERVED (governance ledger + feature backlog):
-  //   weekly_feature_proposals, sentinel_audit_runs, remediation_proposals, system_config
 ];
 
-export async function executeDatabaseReset({ targetPhone = null, verbose = true } = {}) {
+// Never touched by a slate wipe (config hooks, reference data + governance ledger):
+//   - system_config: boot-critical keys read at startup (saka_core_prompt,
+//     last_deployed_revision) plus Sentinel/remediation scheduling markers.
+//   - compliance_catalog: bundled + superadmin-overridden legal reference data.
+//   - sentinel_audit_runs / remediation_proposals / weekly_feature_proposals:
+//     governance ledger for autonomous remediation and the feature backlog.
+export const PRESERVED_TABLES = [
+  'system_config',
+  'compliance_catalog',
+  'sentinel_audit_runs',
+  'remediation_proposals',
+  'weekly_feature_proposals'
+];
+
+const BACKUP_TABLES = ['system_config', 'compliance_catalog'];
+
+export function resetBackupFilename(now = new Date()) {
+  return `reset-backup-${now.toISOString().replace(/[:.]/g, '-')}.json`;
+}
+
+async function countRows(supabase, table) {
+  try {
+    const { count, error } = await supabase.from(table).select('*', { count: 'exact', head: true });
+    if (error) return { count: null, error: error.message };
+    return { count: count || 0, error: null };
+  } catch (err) {
+    return { count: null, error: err.message };
+  }
+}
+
+export async function executeDatabaseReset({ targetPhone = null, verbose = true, backup = false } = {}) {
   const token = process.env.SUPABASE_ACCESS_TOKEN;
   const supabaseUrl = process.env.SUPABASE_URL;
   const projectRef = (supabaseUrl || '').replace('https://', '').split('.')[0];
   const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
+  const supabase = supabaseUrl && supabaseKey
+    ? createClient(supabaseUrl, supabaseKey, { auth: { persistSession: false, autoRefreshToken: false } })
+    : null;
+
+  if (!(token && projectRef) && !supabase) {
+    throw new Error('No reset transport configured: set SUPABASE_ACCESS_TOKEN (preferred) or SUPABASE_URL + SUPABASE_SERVICE_KEY');
+  }
 
   if (verbose) {
     console.log(`🧹 Starting Saka Fleet Database Slate Wipe... ${targetPhone ? `[Target Phone: ${targetPhone}]` : '[Global Slate Wipe]'}`);
+  }
+
+  // 0. Pre-reset snapshot: preserved-table baseline (always) + optional JSON backup.
+  const preservedBaseline = {};
+  let backupFile = null;
+  if (supabase) {
+    for (const table of PRESERVED_TABLES) {
+      const { count } = await countRows(supabase, table);
+      preservedBaseline[table] = count;
+    }
+
+    if (backup && !targetPhone) {
+      const snapshot = {
+        created_at: new Date().toISOString(),
+        project_ref: projectRef || null,
+        scope: 'global-slate',
+        preserved_baseline: preservedBaseline,
+        wiped_row_counts: {},
+        tables: {}
+      };
+      for (const table of RESET_TABLES) {
+        const { count } = await countRows(supabase, table);
+        snapshot.wiped_row_counts[table] = count;
+      }
+      for (const table of BACKUP_TABLES) {
+        const { data, error } = await supabase.from(table).select('*');
+        if (error) throw new Error(`Backup aborted — could not read ${table}: ${error.message}`);
+        snapshot.tables[table] = data || [];
+      }
+      backupFile = resetBackupFilename();
+      await fs.promises.writeFile(backupFile, JSON.stringify(snapshot, null, 2), 'utf8');
+      if (verbose) console.log(`💾 Pre-reset backup written to ${backupFile}`);
+    }
+  } else if (backup) {
+    console.warn('⚠️  --backup requested but Supabase JS credentials are missing; no backup file was written.');
   }
 
   // Method A: Supabase Management API via SQL
@@ -131,6 +211,9 @@ export async function executeDatabaseReset({ targetPhone = null, verbose = true 
           public.admin_audit_logs,
           public.conversation_analytics,
           public.error_logs,
+          public.ai_usage_logs,
+          public.support_tickets,
+          public.exchange_rates_cache,
           public.profiles
         RESTART IDENTITY CASCADE;
       `;
@@ -151,9 +234,8 @@ export async function executeDatabaseReset({ targetPhone = null, verbose = true 
     }
 
     if (verbose) console.log('✅ Database slate successfully cleared via Supabase Management API.');
-  } else if (supabaseUrl && supabaseKey) {
+  } else if (supabase) {
     // Method B: Fallback to Supabase JS Client with cascade order
-    const supabase = createClient(supabaseUrl, supabaseKey);
     if (targetPhone) {
       await supabase.from('chat_history').delete().eq('user_phone', targetPhone);
       await supabase.from('chat_transcripts').delete().eq('phone_number', targetPhone);
@@ -182,25 +264,55 @@ export async function executeDatabaseReset({ targetPhone = null, verbose = true 
     }
   }
 
-  // Row Count Verification
-  if (verbose && supabaseUrl && supabaseKey) {
-    const supabase = createClient(supabaseUrl, supabaseKey);
+  // 2. Post-reset verification — every wiped table at 0 rows, preserved tables unchanged.
+  let verification = null;
+  if (verbose && supabase) {
     console.log('\n--- Post-Reset Verification ---');
-    const verificationTables = ['vehicles', 'profiles', 'vin_registry', 'chat_history', 'chat_transcripts', 'processed_webhooks', 'chat_sessions', 'saka_dynamic_rules'];
-    const summary = [];
-    for (const t of verificationTables) {
-      const { count } = await supabase.from(t).select('*', { count: 'exact', head: true });
-      summary.push({ table: t, remaining_rows: count || 0 });
+    verification = { wipedOk: true, preservedOk: true, wiped: [], preserved: [], backupFile };
+
+    if (!targetPhone) {
+      for (const table of RESET_TABLES) {
+        const { count, error } = await countRows(supabase, table);
+        if (error || count !== 0) verification.wipedOk = false;
+        verification.wiped.push({
+          table,
+          remaining_rows: error ? `ERR: ${error}` : count,
+          status: !error && count === 0 ? '✅ clean' : '❌ residual'
+        });
+      }
+      console.table(verification.wiped);
     }
-    console.table(summary);
+
+    for (const table of PRESERVED_TABLES) {
+      const { count, error } = await countRows(supabase, table);
+      const before = preservedBaseline[table];
+      const comparable = typeof before === 'number';
+      const unchanged = !error && (!comparable || before === count);
+      if (!unchanged) verification.preservedOk = false;
+      verification.preserved.push({
+        table,
+        before_rows: comparable ? before : 'n/a',
+        after_rows: error ? `ERR: ${error}` : count,
+        status: unchanged ? '✅ intact' : '❌ drift'
+      });
+    }
+    console.table(verification.preserved);
   }
 
-  return { success: true };
+  if (verification && !targetPhone) {
+    if (verification.wipedOk && verification.preservedOk) {
+      console.log('✅ Verification clean: all operational tables at 0 rows, preserved tables intact.');
+    } else {
+      console.error('⚠️  Verification found residual operational rows or preserved-table drift.');
+    }
+  }
+
+  return { success: true, verification, backupFile };
 }
 
 // Direct CLI Invocation
-if (process.argv[1] && (process.argv[1].endsWith('reset-db.js') || process.argv[1].endsWith('reset_db_slate.js'))) {
-  executeDatabaseReset({ targetPhone })
+if (isDirectInvocation) {
+  executeDatabaseReset({ targetPhone, backup: hasBackup })
     .then(() => {
       console.log('🎉 Database Slate Reset Completed Successfully!');
       process.exit(0);

@@ -4,4 +4,5 @@ remediation/work-orders/
 remediation/audit-context.json
 remediation/cline-plan.log
 remediation/cline-execute.log
+reset-backup-*.json
 

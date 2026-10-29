@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.14.1  
+**Version:** 1.14.2  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -594,14 +594,15 @@ Owners exceeding tier limits are prompted to upgrade via Paystack checkout.
 ### 15.1 Reset Script (`scripts/reset-db.js`)
 - Standardized command aliases: `npm run reset:db` and `npm run reset:slate`.
 - Clears test and operational data to establish a pristine slate for onboarding audits.
-- Covered Tables:
-  - `vehicles`, `vin_registry`
-  - `profiles`
-  - `chat_history`, `chat_transcripts`, `chat_friction_logs`, `processed_webhooks`, `chat_sessions`, `saka_dynamic_rules`
-  - `pending_owner_notifications`, `passbook_transfers`
-  - `private_earnings`, `expenses`, `expense_logs`, `expiry_notification_log`, `reminders`
-  - `superadmin_sessions`, `coupons`, `admin_audit_logs`, `conversation_analytics`, `error_logs`
-  - **Intentionally preserved:** `system_config` (deployment revision + retained prompt overrides), `weekly_feature_proposals`, `sentinel_audit_runs` and `remediation_proposals` (governance ledger for autonomous changes).
+- **v1.14.2 scope:** 26 operational tables, codified in the exported `RESET_TABLES` registry:
+  - Onboarding & assets: `vehicles`, `vin_registry`, `profiles`, `coupons`, `driver_assignments`, `driver_compliances`
+  - Sessions: `chat_sessions`, `superadmin_sessions`
+  - Conversation & telemetry: `chat_history`, `chat_transcripts`, `chat_friction_logs`, `processed_webhooks`, `conversation_analytics`, `error_logs`, `ai_usage_logs`
+  - Dynamic rules: `saka_dynamic_rules` (Sentinel re-patches on its next scan)
+  - Fleet ops: `pending_owner_notifications`, `passbook_transfers`, `private_earnings`, `expenses`, `expense_logs`, `expiry_notification_log`, `reminders`, `admin_audit_logs`
+  - Support/cache: `support_tickets`, `exchange_rates_cache` (self-repopulates on demand via `paystack.js`)
+- **Preserved (`PRESERVED_TABLES`):** `system_config` (boot-critical `saka_core_prompt`, `last_deployed_revision`, remediation scheduling markers), `compliance_catalog` (bundled + superadmin legal overrides), `weekly_feature_proposals`, `sentinel_audit_runs` and `remediation_proposals` (governance ledger for autonomous changes).
+- **Scope regression test:** `test_db_reset_scope.js` (stateless) asserts the wipe/preserve registries are disjoint and that the global `TRUNCATE` block matches `RESET_TABLES` exactly.
 
 ### 15.2 Production & Execution Safeguards
 - **Production Block:** If `NODE_ENV === 'production'` or `APP_ENV === 'production'`, the script aborts immediately unless `--force-production-wipe` is explicitly supplied.
@@ -609,7 +610,9 @@ Owners exceeding tier limits are prompted to upgrade via Paystack checkout.
 - **Explicit Scope Required:** The script now also requires either `--all` (global slate wipe) or `--phone <number>` (targeted). A bare `--confirm` can no longer wipe the database.
 - **Targeted Reset:** Supports phone-specific clearing: `node scripts/reset-db.js --phone +254712345678 --confirm`. It resolves vehicles by `owner_phone` **and** `owner_id`, releases any driver assignment held by the phone, and clears dependent logs/transfers/notifications.
 - **Fallback Safety:** The Supabase-JS fallback uses per-table primary keys (`processed_webhooks.wamid`, `vin_registry.vin`, otherwise `id`).
-- **Post-Reset Verification:** Queries and outputs a clean verification summary table confirming zero residual records across all primary operational tables.
+- **Backup Flag (`--backup`):** writes a git-ignored `reset-backup-<ISO>.json` containing pre-wipe row counts plus full `system_config` + `compliance_catalog` rows; aborts before any truncation if the export fails.
+- **Post-Reset Verification (v1.14.2):** asserts every `RESET_TABLES` entry is at zero rows and every `PRESERVED_TABLES` count is unchanged from the pre-wipe baseline, printing clean/intact tables.
+- **Import-safe module:** the production/confirmation guards run only on direct CLI invocation, so `RESET_TABLES` / `PRESERVED_TABLES` are importable by tests without side effects.
 
 ---
 
