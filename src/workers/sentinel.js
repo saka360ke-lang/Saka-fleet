@@ -4,6 +4,7 @@ import { generateText, parseJsonSafely } from '../services/aiClient.js';
 import { composeMessage } from '../services/conversationEngine.js';
 import { getCurrentQuizField } from '../services/quizEngine.js';
 import { detectCountryFromPhone } from '../services/globalization.js';
+import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
 
 function getSupabase(providedSupabase) {
   if (providedSupabase) return providedSupabase;
@@ -41,10 +42,8 @@ export async function ensureSentinelTables(providedSupabase) {
 
   // If any table is missing and ACCESS TOKEN is available, run SQL creation
   const missingTables = Object.keys(statusMap).filter(t => statusMap[t] === 'missing');
-  if (missingTables.length > 0 && process.env.SUPABASE_ACCESS_TOKEN) {
+  if (missingTables.length > 0 && hasSqlAccess()) {
     try {
-      const token = process.env.SUPABASE_ACCESS_TOKEN;
-      const projectRef = (process.env.SUPABASE_URL || '').replace('https://', '').split('.')[0];
       const sql = `
         CREATE TABLE IF NOT EXISTS public.system_config (
             key text PRIMARY KEY,
@@ -97,14 +96,7 @@ export async function ensureSentinelTables(providedSupabase) {
         CREATE INDEX IF NOT EXISTS idx_dynamic_rules_active ON public.saka_dynamic_rules(is_active);
       `;
 
-      await fetch(`https://api.supabase.com/v1/projects/${projectRef}/database/query`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ query: sql })
-      });
+      await runSql(sql, { label: 'ensureSentinelTables' });
       missingTables.forEach(t => { statusMap[t] = 'created'; });
     } catch (createErr) {
       console.warn('Sentinel table creation notice:', createErr.message);

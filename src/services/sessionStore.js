@@ -8,6 +8,8 @@
  * hot cache in front of it.
  */
 
+import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
+
 let tableReady = false;
 
 export async function ensureChatSessionsTable(supabase) {
@@ -19,9 +21,8 @@ export async function ensureChatSessionsTable(supabase) {
     return { status: 'exists' };
   }
 
-  if (process.env.SUPABASE_ACCESS_TOKEN) {
+  if (hasSqlAccess()) {
     try {
-      const projectRef = (process.env.SUPABASE_URL || '').replace('https://', '').split('.')[0];
       const sql = `
         CREATE TABLE IF NOT EXISTS public.chat_sessions (
             phone_number text PRIMARY KEY,
@@ -31,15 +32,8 @@ export async function ensureChatSessionsTable(supabase) {
         CREATE INDEX IF NOT EXISTS idx_chat_sessions_updated ON public.chat_sessions(updated_at DESC);
         ALTER TABLE public.chat_sessions ENABLE ROW LEVEL SECURITY;
       `;
-      const res = await fetch(`https://api.supabase.com/v1/projects/${projectRef}/database/query`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${process.env.SUPABASE_ACCESS_TOKEN}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ query: sql })
-      });
-      if (res.ok) {
+      const result = await runSql(sql, { label: 'ensureChatSessionsTable' });
+      if (result.ok) {
         tableReady = true;
         return { status: 'created' };
       }

@@ -1,15 +1,8 @@
 import 'dotenv/config';
+import { pathToFileURL } from 'node:url';
+import { runSql, hasSqlAccess, getProjectRef } from '../src/db/sqlRunner.js';
 
-async function runMigration() {
-  const token = process.env.SUPABASE_ACCESS_TOKEN;
-  const projectRef = (process.env.SUPABASE_URL || '').replace('https://', '').split('.')[0];
-
-  if (!token || !projectRef) {
-    console.error('Missing SUPABASE_ACCESS_TOKEN or SUPABASE_URL');
-    process.exit(1);
-  }
-
-  const sql = `
+export const SENTINEL_MIGRATION_SQL = `
     CREATE TABLE IF NOT EXISTS public.chat_friction_logs (
         id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
         user_phone text,
@@ -35,23 +28,29 @@ async function runMigration() {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_vehicles_unique_active_driver 
     ON public.vehicles(assigned_driver_id) 
     WHERE assigned_driver_id IS NOT NULL AND deleted_at IS NULL;
-  `;
+`;
 
-  console.log(`Executing migration on Supabase project: ${projectRef}...`);
-  const res = await fetch(`https://api.supabase.com/v1/projects/${projectRef}/database/query`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({ query: sql })
-  });
+export async function applySentinelMigration() {
+  if (!hasSqlAccess()) {
+    console.error('Missing SQL transport: set SUPABASE_ACCESS_TOKEN or DATABASE_URL');
+    return { success: false };
+  }
 
-  const responseText = await res.text();
-  console.log('Migration response status:', res.status, responseText);
+  console.log(`Executing Sentinel migration on Supabase project: ${getProjectRef()}...`);
+  const result = await runSql(SENTINEL_MIGRATION_SQL, { label: 'sentinelMigration' });
+  if (!result.ok) {
+    console.error('Migration failed:', result.error || result.body);
+    return { success: false, ...result };
+  }
+  console.log('✅ Sentinel migration applied.');
+  return { success: true, ...result };
 }
 
-runMigration().catch(err => {
-  console.error('Migration error:', err);
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  applySentinelMigration()
+    .then((r) => process.exit(r.success ? 0 : 1))
+    .catch((err) => {
+      console.error('Migration error:', err);
+      process.exit(1);
+    });
+}

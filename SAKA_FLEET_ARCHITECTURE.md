@@ -59,8 +59,6 @@ All LLM traffic flows through **`src/services/aiClient.js`**. No service talks t
 - **`src/services/naturalParser.js` (v1.8)** — natural conversational extraction: deterministic field parsing plus a DeepSeek JSON top-up for missing fields, "extra notes" compilation for details that do not map to a database column, missing-field computation for dynamic prompts, and graceful degradation when the provider is unavailable.
 - **`src/services/maintenanceReminders.js` (v1.9)** — universal reminder engine: distance (canonical km), operating hours **and date-based expiries** (insurance, inspection/MOT, licensing, permits, driver licences, general deadlines). Explicit `remaining_value` tracking, 75/25/5/due-now/overdue threshold tiers, 30d/14d/7d/24h/overdue expiry tiers, `due_at` timestamps in the user's confirmed timezone, driver-licence promotion, `expiry_notification_log` audit trail, and a single background sweep worker.
 - **`src/services/fleetReports.js` (v1.9)** — four core report builders returning structured JSON + localized WhatsApp text: Fleet Status, Compliance & Expiry, Maintenance & Service and Financial & Cost. Every figure is derived from the database; currency/units/dates come from `globalization.js`.
-- **`src/services/complianceCatalog.js` (v1.9.1)** — regional, asset-aware compliance catalog (mandatory minimal item + optional extras), lifetime-economy support, bundled defaults + effective-dated DB overrides, natural compliance parsing, and a Sentinel staleness review (`COMPLIANCE_CATALOG_VERSION`).
-- **`src/services/driverAssignments.js` (v1.9.1)** — OTP-gated driver assignment lifecycle (owner OTP → driver ACCEPT), compliance snapshot, management gate, 3-strike cancellation, once-only owner compliance reports and 48h acceptance expiry.
 - **`src/services/globalization.js`** — single source of truth for country detection (E.164), metric/imperial conversion, currency + locale formatting, plate examples and unit labels. Every AI prompt and quiz question receives this context.
 - **`src/services/ocrService.js`** — Meta media download + Google Cloud Vision `DOCUMENT_TEXT_DETECTION`, with deterministic receipt hints (`extractReceiptHints`). See §24.
 - **`src/services/messageQueue.js`** — per-phone serialization + bounded global concurrency + retry/backoff + graceful drain on shutdown.
@@ -549,7 +547,7 @@ Owners exceeding tier limits are prompted to upgrade via Paystack checkout.
   - `pending_owner_notifications`, `passbook_transfers`
   - `private_earnings`, `expenses`, `expense_logs`, `expiry_notification_log`, `reminders`
   - `superadmin_sessions`, `coupons`, `admin_audit_logs`, `conversation_analytics`, `error_logs`
-  - **Intentionally preserved:** `system_config` (deployment revision + retained prompt overrides), `weekly_feature_proposals` and `compliance_catalog` (legal reference data + effective-dated overrides; reseeded idempotently at startup).
+  - **Intentionally preserved:** `system_config` (deployment revision + retained prompt overrides) and `weekly_feature_proposals`.
 
 ### 15.2 Production & Execution Safeguards
 - **Production Block:** If `NODE_ENV === 'production'` or `APP_ENV === 'production'`, the script aborts immediately unless `--force-production-wipe` is explicitly supplied.
@@ -668,8 +666,7 @@ All multi-field flows run through `src/services/quizEngine.js`. Each asks exactl
 | :--- | :--- | :--- | :--- |
 | `vehicle_registration` | plate → make/model → YOM → fuel → odometer → VIN → email → OTP → optional specs (insurance/inspection/colour/transmission/engine/tires/cost/mods) → confirm | `current_mileage` (canonical km) | inserts `vehicles`, `vin_registry` trial, profile email, coupon, passbook email, reminders |
 | `email_update` | new email → OTP → confirm | — | `profiles.email`, `vehicles.owner_email` |
-| `assign_driver` | vehicle → driver phone → **handover odometer** → confirm → **owner email OTP** | assignment request (no vehicle write yet) | `driver_assignments` → `PENDING_OWNER_OTP` → `PENDING_DRIVER_ACCEPTANCE`; driver replies ACCEPT |
-| `driver_onboarding` | full name (optional) → email → OTP → minimal compliance (regional catalog) → optional asset-aware extras → confirm | compliance details + catalog | `profiles` (email_verified, compliance_*), `driver_compliances`, driver expiry reminders, once-only owner compliance report |
+| `assign_driver` | vehicle → driver phone → **handover odometer** → confirm | `metadata.odometer_at_assignment` + vehicle odometer | `assignDriverToVehicle` |
 | `unassign_driver` | vehicle → **handback odometer** → confirm | `metadata.odometer_at_release` + distance driven | `unassignDriverFromVehicle` |
 | `transfer_seller` | vehicle → buyer phone → buyer email → **odometer at sale** → confirm → release PIN | `metadata.odometer_at_transfer` | `initiatePassbookTransfer` → `setBuyerDetailsAndSendReleaseOtp` → `verifyOwnerReleaseOtpAndNotifyBuyer` |
 | `log_expense` | vehicle → type → amount → fuel volume → **odometer at fill-up** → notes → confirm | `expense_logs.odometer_reading` + vehicle odometer | `expense_logs` + `expenses` |
@@ -964,7 +961,7 @@ Alerts are WhatsApp-ready and unit-aware, e.g. "Service Warning (KDA 123A): Oil 
 
 ### 31.1 Single source of truth — `src/services/flowKnowledge.js`
 - `SAKA_INTENTS` — every classifier intent (32), matching the JSON schema.
-- `SAKA_QUIZ_FLOWS` — every quiz flow (18) with trigger phrases, field order, extracted JSON keys, post-confirmation writes and per-flow rules.
+- `SAKA_QUIZ_FLOWS` — every quiz flow (17) with trigger phrases, field order, extracted JSON keys, post-confirmation writes and per-flow rules.
 - `SAKA_INTENT_PLAYBOOK` — non-quiz intents (greeting, discovery, analytics, buyer-side transfer, OTP, reminders, onboarding) and the allowed behaviour for each.
 - `SAKA_BOUNDARY_RULES` — VIN/passbook-token immutability, owner-only soft delete, strict 1-to-1 driver assignment, never invent OTP/PIN/amounts/dates, confirmation gate, superadmin interception, Saka/Sentinel division.
 - `buildFlowPlaybook()` is injected into `DEFAULT_SAKA_CORE_PROMPT` via `${SAKA_FLOW_PLAYBOOK}`, so **the prompt can never drift from the code**.
@@ -973,11 +970,11 @@ Alerts are WhatsApp-ready and unit-aware, e.g. "Service Warning (KDA 123A): Oil 
 - **Saka** = front-facing WhatsApp agent: intent classification, structured extraction, localized prose, step-by-step guidance.
 - **Sentinel** = background supervisor: health checks, conversational friction analysis, stall recovery, Cloud Run triage, weekly feature proposals. Saka never impersonates Sentinel or superadmin.
 
-### 31.3 Training coverage added in v1.9.1
-- All 18 quiz flows, all non-quiz intents, the universal reminder engine (date expiries / km-mi distance / operating hours), the 30d/14d/7d/24h/overdue expiry ladder, timezone confirmation, natural multi-field parsing + extra-notes compilation, the four core reports, the email-OTP-gated driver assignment handshake and the regional compliance catalog are explicit prompt instructions.
-- `extracted_data` gained `reminder_type`, `reminder_category`, `reminder_due_date`, `reminder_threshold`, `timezone`, `report_type`, `driver_email`, `driver_response`, `compliance_type`, `compliance_number`, `compliance_expiry`, `compliance_lifetime` and `extra_notes`.
-- `conversationEngine.composeMessage` adds FACTS-contract lines for expiry timezone confirmation, assignment OTP/ACCEPT, report fidelity and catalog-derived compliance facts.
-- `test_agent_training.js` asserts every intent and flow key is embedded in the assembled core prompt (offline training regression guard), including the new driver/compliance tokens and all 18 flows.
+### 31.3 Training coverage added in v1.9.0
+- All 17 quiz flows, all non-quiz intents, the universal reminder engine (date expiries / km-mi distance / operating hours), the 30d/14d/7d/24h/overdue expiry ladder, timezone confirmation, natural multi-field parsing + extra-notes compilation, the four core reports and the mandatory confirmation gate are explicit prompt instructions.
+- `extracted_data` gained `reminder_type`, `reminder_category`, `reminder_due_date`, `reminder_threshold`, `timezone`, `report_type` and `extra_notes`.
+- `conversationEngine.composeMessage` adds FACTS-contract lines for expiry timezone confirmation and report fidelity.
+- `test_agent_training.js` asserts every intent and flow key is embedded in the assembled core prompt (offline training regression guard), including the new reminder/report tokens.
 
 ### 31.4 Permanent governance rule
 Whenever the Saka Fleet application changes (feature, flow, intent, field, handler, schema, config or env knob), update **in the same commit**:
@@ -1049,55 +1046,80 @@ All money uses `formatMoney(amount, ctx.currency, ctx.locale)`, distances honour
 - WhatsApp: `QUERY_FLEET_SUMMARY` → Fleet Status; `REQUEST_REPORT` + `report_type` → the selected report (owners/drivers see their own fleet scope).
 - `fleetReports` is also reusable by executive dashboards (JSON-first) and the per-vehicle PDF audit path (`reports.js` remains the PDF renderer).
 
-
 ---
 
-## 33. OTP-Gated Driver Assignment & Compliance Lifecycle (v1.9.1)
+## 33. Supabase Connectivity Verification (v1.9.1)
 
-### 33.1 Assignment lifecycle (`driver_assignments`)
-| Status | Meaning |
+### 33.1 Tooling — `scripts/check_supabase_connection.js`
+`npm run check:supabase` (alias: `node scripts/check_supabase_connection.js`).
+
+A **strictly read-only** diagnostic. Every remote call is a `GET`/`HEAD` or a `SELECT` inside an explicit `BEGIN TRANSACTION READ ONLY … ROLLBACK`. It never inserts, updates, deletes, upserts, truncates or runs DDL, and never triggers WhatsApp/Resend/Paystack/DeepSeek traffic.
+
+| Phase | Checks |
 | :--- | :--- |
-| `PENDING_OWNER_OTP` | Owner confirmed the assignment summary; a 6-digit code was **emailed to the owner's verified email address**. The driver has not been contacted yet. |
-| `PENDING_DRIVER_ACCEPTANCE` | Owner verified the OTP. The driver receives a WhatsApp message and must reply **ACCEPT** or **DECLINE**. |
-| `ACTIVE` | Driver accepted; `vehicles.assigned_driver_id` is set and the compliance snapshot is stored. **Management stays gated** until email + minimal compliance are valid. |
-| `REJECTED` / `CANCELLED` / `EXPIRED` | Driver declined, owner/3-strike cancelled, or 48h acceptance timeout. |
-| `COMPLETED` | Assignment ended (unassignment). |
+| P1 | Redacted credential inventory, project-ref guard (hard stop on mismatch), JWT role/expiry validation, JWT `ref` vs URL host comparison |
+| P2 | `GET /auth/v1/health`, `GET /rest/v1/` OpenAPI root, `createResilientClient()` construction, per-table row counts, column-shape assertions, corrupt-key negative control, client-cache identity |
+| P3 | `DATABASE_URL` parse → TCP → `pg` session with TLS negotiation → read-only `SELECT` → `public` schema table count |
+| P4 | Application key mapping + `SUPABASE_TIMEOUT_MS` AbortSignal wiring |
 
-Pending rows reserve both the driver and the vehicle (`canAssignDriverToVehicle` also checks `driver_assignments`), so the strict 1-to-1 rule cannot be raced. The owner OTP is delivered **by email (Resend) to the verified owner address — never by WhatsApp**, so the code never appears in chat logs. A missing/unverified owner email blocks the request with one next step ("update email"). The OTP expires after 10 minutes, is cancelled after 3 wrong attempts, and a Resend supersedes the previous pending request; an email-send failure cancels the pending row so nothing dangles.
+Flags: `--with-timeout-test` (asserts the AbortSignal guard), `--with-pooler-discovery` (tries the regional pooler hosts when the direct host is unreachable). Exit codes: `0` all passed, `1` one or more failed, `2` hard stop (wrong project ref or missing credentials).
 
-### 33.2 Assignment-time compliance snapshot
-On ACCEPT, `compliance_snapshot` records the email-verified flag, the minimal item (type/number/expiry/lifetime), the additional items and `validAtAssignment`. This is an audit record of what was valid when the driver took the vehicle; the live gate is always recomputed from current data.
+> **Anti-false-positive rule:** table/schema probes must use `GET`, never `HEAD`. A `HEAD` 404 carries no body, so `supabase-js` reports no error and an empty project can look healthy. Row-count probes therefore fall back to a 1-row `GET` selecting only the table's primary key (`id`, `vin` or `key`) — no PII is transferred.
 
-### 33.3 Management gate
-`canManageVehicle()` returns `{ gated, canManage, status }`:
-- Owner acting on their own vehicle → never gated.
-- Assigned driver with an OTP-gated ACTIVE assignment → gated until `profiles.email_verified = true` **and** the minimal compliance is valid (`expiry >= today`, or `lifetime` where the catalog allows it).
-- Legacy assignments without a `driver_assignments` row are grandfathered (re-assigning through the new flow enables the gate).
+### 33.2 Credential contract
+| Env | Used by | Notes |
+| :--- | :--- | :--- |
+| `SUPABASE_URL` | all DB paths | Project ref guard compares the host against the expected staging ref |
+| `SUPABASE_SERVICE_KEY` | canonical name across the codebase | `resolveServiceKey()` (`src/services/supabaseClient.js`) |
+| `SUPABASE_SERVICE_ROLE_KEY` | accepted alias | Dashboard naming; resolved as a fallback so a correctly supplied key is never silently ignored |
+| `DATABASE_URL` | verification tooling only | **No runtime code path consumes it** and no `pg` dependency is bundled; install `pg` ad hoc (`npm i --no-save --no-package-lock --ignore-scripts pg`) to exercise P3 |
+| `SUPABASE_ACCESS_TOKEN` | Management API SQL (migrations, `ensureVehicleTableColumns`, session store, Sentinel) | `https://api.supabase.com/v1/projects/{ref}/database/query` |
+| `SUPABASE_POOLER_REGION` | verification tooling | e.g. `eu-west-1`; builds `postgresql://postgres.<ref>:…@aws-0-<region>.pooler.supabase.com:5432/postgres` |
+| `SUPABASE_TIMEOUT_MS` | runtime | 15000 ms per-request AbortController |
 
-The route computes the gate for the active vehicle and redirects vehicle-bound intents (`LOG_EXPENSE`, `UPDATE_MILEAGE`, `SET_REMINDER`, reports, edits, transfers…) into the `driver_onboarding` flow with a single next step. `detectQuizStart({ driverOnboardingPending })` owns the redirect, and the gate is re-checked on the engine path.
+**Connection-string rules learned on staging:** `db.<ref>.supabase.co` is not resolvable for this project (no A/AAAA record). Direct/pooler access must use `aws-0-<region>.pooler.supabase.com:5432` with the username form `postgres.<ref>` and `sslmode=require`.
 
+### 33.3 Staging verification result (2026-10-29)
+Pre-provisioning state, then post-provisioning state, both verified with `--with-timeout-test` against project `knlxpwiqiqcliprjqjfp`:
 
-### 33.4 Regional, asset-aware compliance catalog (`compliance_catalog`)
-- `COUNTRY_COMPLIANCE_CATALOG` in `src/services/complianceCatalog.js` ships bundled defaults per country: a mandatory **minimal** item (driver licence variants: NTSA, DMV, DVLA, RTA, RTO, FRSC, TRA, URA, RRA, CNH, LTO…) and **additional** items filtered by the vehicle's `asset_type` (KE PSV badge, GB Driver CPC + CPCS plant card for excavators, US CDL + operator certification, ZA PDP, NG Hackney permit, AU heavy rigid/white card, AE heavy vehicle permit, IN commercial DL…). Unknown economies fall back to the driver licence.
-- `lifetimeAllowed` marks economies that issue the minimal item for life (e.g. Belgium); everywhere else an expiry date is mandatory and must be in the future or the submission is rejected.
-- **Living catalog:** bundled defaults are versioned (`COMPLIANCE_CATALOG_VERSION`, bumped with every release), seeded idempotently into `compliance_catalog` at startup (`ensureComplianceCatalog`), and can be overridden by superadmin with an `effective_from` date (`upsertComplianceCatalogEntry`). Resolution order: active DB override effective today → bundled default. `getComplianceCatalog()` caches for `COMPLIANCE_CATALOG_CACHE_MS` (1h).
-- **Periodic review:** `reviewComplianceCatalog()` flags entries whose `next_review_at` (180 days after review) has passed. The Sentinel weekly worker messages the superadmin to re-verify against current law. Legal rules are **never** auto-applied by AI; only a code release or an explicit admin override changes them.
+**Before provisioning**
+- ✅ GoTrue health `200`, PostgREST root `200`, service-role JWT valid (`role=service_role`, exp 2036-10-28), corrupt-key control `401`.
+- ✅ Postgres session `postgres as postgres`, TLS `TLS_AES_256_GCM_SHA384`, read-only transaction honoured.
+- ❌ `public` schema contained **0 tables** — only `auth.*` and `storage.*` system tables existed, so every domain table returned `PGRST205`.
+- The originally supplied `SUPABASE_URL`/`DATABASE_URL` used the ref `knlxpwiqcliprjqjfp` (18 chars, NXDOMAIN); the live ref is `knlxpwiqiqcliprjqjfp` (20 chars), which matches the JWT `ref` claim.
 
-### 33.5 Driver profile & reminder integration
-- `driver_onboarding` (18th quiz flow) collects full name (optional), email + OTP (if unverified), the minimal compliance and up to three asset-aware extra items. Natural parsing (`parseComplianceItem`) extracts the number and country-resolved expiry, and detects "valid for life".
-- `driver_compliances` stores one row per item (`driver_id`, `type`, `label`, `number`, `expiry`, `lifetime`, `country_code`, `asset_type`). The minimal item is mirrored to `profiles.compliance_*` and legacy `driver_license_*`.
-- Expiring items create driver-linked reminders (`linked_column = 'driver_compliances:<type>'`) through the v1.9 engine, so the 30d/14d/7d/24h/overdue ladder notifies the driver and the owner(s). Lifetime items create no reminder.
-- Optional extras are framed as "so we can remind you before it expires"; skipped items are never mandatory and are re-offered gently later. A driver can also add or refresh any item directly in chat (e.g. "PSV badge 445566 expires 15 Dec 2028"), which routes through the same parser and reminder pipeline (and can open the gate if the minimal item is submitted).
+**After provisioning (§33.5)**
+- ✅ `25/25` expected tables present; `public schema tables = 25`; checker reports `passed=28 failed=0 skipped=0` and **exit code 0**.
+- ✅ `trg_prevent_vin_mutation` present and proven to block `UPDATE vehicles SET vin = …` (verified inside a rolled-back transaction, so zero residue).
+- ✅ Repository CRUD suite `test_edit_delete.js` passes end-to-end against the new schema (seed → edit → VIN rejection → owner-only delete → cleanup), leaving `0` rows in all 25 tables.
 
-### 33.6 Owner reports, invalid attempts & cancellation
-- **Once-only compliance-cleared report:** when the minimal item first becomes valid, the owner receives a deterministic WhatsApp report (driver, email status, minimal item + expiry/lifetime, additional items) and `compliance_report_sent_at` prevents repeats.
-- **Invalid minimal attempt:** every expired submission queues an owner report (`DRIVER_COMPLIANCE_INVALID`, attempt n/3) and the gate stays closed.
-- **3-strike cancellation:** the third expired minimal submission sets the assignment to `CANCELLED` (`cancelled_reason = EXPIRED_MINIMAL_COMPLIANCE_3X`), unassigns the driver, releases the vehicle, and sends `DRIVER_ASSIGNMENT_CANCELLED` telling the owner to restart once the driver renews.
-- Owner reports use the existing `pending_owner_notifications` queue (processed every 30s).
+### 33.5 Provisioning the schema — `scripts/provision_staging_schema.js`
+`npm run migrate:staging-schema` (alias: `node scripts/provision_staging_schema.js`).
 
-### 33.7 Schema
-`driver_assignments` (lifecycle, OTP code/attempts, handover odometer, compliance snapshot/report timestamps), `driver_compliances` (unique per driver+type), `compliance_catalog` (country_code unique, minimal/additional jsonb, effective/review dates, source, version, is_active), `profiles.compliance_type/number/expiry/updated_at`. DDL is idempotent in `ensureVehicleTableColumns`; assignment/compliance tables are cleaned by `scripts/testCleanup.js` and `scripts/reset-db.js`, while `compliance_catalog` is intentionally preserved.
+Provisions a target database from scratch. Idempotent (`CREATE … IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`) and guarded by the same project-ref check, exiting `2` on a mismatch before writing.
 
-### 33.8 Tests
-`test_driver_assignment_gate.js` (stateless) covers catalog resolution incl. lifetime + asset filtering, natural parsing, email OTP delivery/expiry/attempt cancellation, missing-email blocking, strict 1-to-1 reservation, ACCEPT + snapshot, the gate, once-only owner report, 3-strike cancellation, lifetime vs expiring economies, catalog overrides/effective dating, stale expiry and flow wiring.
+**Two classes of schema:**
+1. `BOOTSTRAP_SQL` / `BOOTSTRAP_OPERATIONAL_SQL` — base tables that **no code path creates** (`profiles`, `vehicles`, `passbook_transfers`, `reminders`, `expenses`, `expense_logs`, `private_earnings`, `pending_owner_notifications`, `processed_webhooks`, `exchange_rates_cache`, `support_tickets`, `weekly_feature_proposals`). Columns are derived from §2 + §28.3 and the repository's real insert/select payloads.
+2. The existing migrations, executed in dependency order — single source of truth, not duplicated:
+   `ensureSuperadminTables()` → `ensureVehicleTableColumns()` → `ensureSentinelTables()` → `ensureChatSessionsTable()` → `applySentinelMigration()` → `applyChatSessionsMigration()` → `applyVinImmutabilityMigration()`.
+
+**Ordering constraint (critical):** `ensureVehicleTableColumns()` ALTERs `coupons`, `passbook_transfers`, `reminders`, `profiles` and `vehicles`, so those tables must exist first. Because `pg` sends a multi-statement batch as one implicit transaction, a single failure rolls back the whole batch — hence `ensureSuperadminTables()` (which creates `coupons`) must run *before* the vehicles migration.
+
+`GRANTS_SQL` then grants `service_role`/`anon`/`authenticated` access so freshly created tables are visible through PostgREST rather than returning `401/403`.
+
+### 33.6 Transport abstraction — `src/db/sqlRunner.js`
+All migrations now call `runSql(sql, { label })` instead of hand-rolling `fetch` calls:
+- `SUPABASE_ACCESS_TOKEN` set → Management API (original behaviour, unchanged).
+- otherwise `DATABASE_URL` → direct Postgres via the optional `pg` driver.
+- neither → `{ ok: false, error: 'No SQL transport configured' }`.
+
+`runSql` never throws; callers keep their existing fail-soft behaviour. Refactored call sites: `ensureVehicleTableColumns`, `ensureSuperadminTables`, `ensureSentinelTables`, `ensureChatSessionsTable`, `run_vin_immutability_migration`, `run_chat_sessions_migration`, `run_sentinel_migration`. The two `run_*` scripts also gained a direct-execution guard so the provisioning script can import them without side effects.
+
+> **`sslmode` gotcha:** `pg-connection-string` maps `sslmode=require` to *full* certificate verification, which fails against the Supabase pooler chain with `SELF_SIGNED_CERT_IN_CHAIN`. `sqlRunner` strips `sslmode` and sets `ssl: { rejectUnauthorized: false }` explicitly — TLS is still negotiated, just without CA pinning.
+
+### 33.4 Safety guarantees
+- No test-suite invocation (`npm test` seeds rows, `--cleanup-only` deletes them) and no `reset:db` / `migrate:*` path is ever called by the checker.
+- `GET /healthz` is DB-free by design and is **not** accepted as database evidence.
+- The script is safe to run against production-like projects because it cannot mutate state; the project-ref guard still refuses unexpected targets.
+
 

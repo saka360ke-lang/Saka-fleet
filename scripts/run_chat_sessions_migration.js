@@ -1,15 +1,14 @@
 import 'dotenv/config';
+import { pathToFileURL } from 'node:url';
+import { runSql, hasSqlAccess } from '../src/db/sqlRunner.js';
 
 /**
  * Chat Sessions migration — durable multi-instance conversation state.
  * Usage: node scripts/run_chat_sessions_migration.js
  */
 export async function applyChatSessionsMigration() {
-  const token = process.env.SUPABASE_ACCESS_TOKEN;
-  const projectRef = (process.env.SUPABASE_URL || '').replace('https://', '').split('.')[0];
-
-  if (!token || !projectRef) {
-    console.error('Missing SUPABASE_ACCESS_TOKEN or SUPABASE_URL');
+  if (!hasSqlAccess()) {
+    console.error('Missing SQL transport: set SUPABASE_ACCESS_TOKEN or DATABASE_URL');
     return { success: false };
   }
 
@@ -23,28 +22,22 @@ export async function applyChatSessionsMigration() {
     ALTER TABLE public.chat_sessions ENABLE ROW LEVEL SECURITY;
   `;
 
-  const res = await fetch(`https://api.supabase.com/v1/projects/${projectRef}/database/query`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({ query: sql })
-  });
-
-  const text = await res.text();
-  if (!res.ok) {
-    console.error('❌ chat_sessions migration failed:', res.status, text);
-    return { success: false, status: res.status, body: text };
+  const result = await runSql(sql, { label: 'chatSessionsMigration' });
+  if (!result.ok) {
+    console.error('❌ chat_sessions migration failed:', result.status, result.error || result.body);
+    return { success: false, status: result.status, body: result.error || result.body };
   }
 
   console.log('✅ chat_sessions table is ready.');
-  return { success: true, status: res.status, body: text };
+  return { success: true, status: result.status, body: result.body, via: result.via };
 }
 
-applyChatSessionsMigration()
-  .then((r) => process.exit(r.success ? 0 : 1))
-  .catch((err) => {
-    console.error('❌ Migration error:', err.message);
-    process.exit(1);
-  });
+// Only execute when run directly (safe to import from the provisioning script).
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  applyChatSessionsMigration()
+    .then((r) => process.exit(r.success ? 0 : 1))
+    .catch((err) => {
+      console.error('❌ Migration error:', err.message);
+      process.exit(1);
+    });
+}
