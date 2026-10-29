@@ -108,6 +108,17 @@ export async function cleanupTestData({
   summary.expenses = await deleteIn(client, 'expenses', 'plate', [...plates], verbose);
   summary.expense_logs = await deleteIn(client, 'expense_logs', 'vehicle_id', vehicleIdList, verbose);
   summary.private_earnings = await deleteIn(client, 'private_earnings', 'vehicle_id', vehicleIdList, verbose);
+  summary.driver_assignments = await deleteIn(client, 'driver_assignments', 'vehicle_id', vehicleIdList, verbose);
+  try {
+    if (allPhones.length) {
+      const { data: driverProfiles } = await client.from('profiles').select('id').in('phone_number', allPhones);
+      const driverIds = (driverProfiles || []).map((p) => p.id);
+      if (driverIds.length) {
+        summary.driver_compliances = await deleteIn(client, 'driver_compliances', 'driver_id', driverIds, verbose);
+        summary.driver_assignments_by_driver = await deleteIn(client, 'driver_assignments', 'driver_id', driverIds, verbose);
+      }
+    }
+  } catch { /* driver tables may not exist on legacy deployments */ }
   summary.expiry_notification_log = await deleteIn(client, 'expiry_notification_log', 'vehicle_id', vehicleIdList, verbose);
   summary.reminders = await deleteIn(client, 'reminders', 'vehicle_id', vehicleIdList, verbose);
   summary.passbook_transfers = await deleteIn(client, 'passbook_transfers', 'vehicle_id', vehicleIdList, verbose);

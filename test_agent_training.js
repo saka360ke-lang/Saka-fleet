@@ -56,7 +56,7 @@ async function run() {
   check(missingSchema.length === 0, 'Every intent is present in the JSON schema');
 
   console.log('\n--- Test 3: every quiz flow is trained and resolvable ---');
-  check(SAKA_QUIZ_FLOWS.length === 17, 'Registry declares all 17 quiz flows');
+  check(SAKA_QUIZ_FLOWS.length === 18, 'Registry declares all 18 quiz flows');
   const missingFlows = SAKA_QUIZ_FLOWS.filter((flow) => !DEFAULT_SAKA_CORE_PROMPT.includes(flow.key));
   check(missingFlows.length === 0, `All quiz flow keys appear in the core prompt (${SAKA_QUIZ_FLOWS.length})`);
   const unresolvable = getKnownFlowKeys().filter((key) => !getFlowDefinition(key, ctx));
@@ -70,6 +70,7 @@ async function run() {
     'NATURAL MULTI-FIELD PARSING',
     'UNIVERSAL REMINDER ENGINE',
     'CORE FLEET REPORTS',
+    'DRIVER COMPLIANCE CATALOG',
     'AGENT DIVISION OF LABOUR',
     'extra_notes',
     'reminder_type',
@@ -78,6 +79,10 @@ async function run() {
     'reminder_category',
     'timezone',
     'report_type',
+    'driver_email',
+    'driver_response',
+    'compliance_expiry',
+    'driver_onboarding',
     'compliance',
     'maintenance',
     'financial',

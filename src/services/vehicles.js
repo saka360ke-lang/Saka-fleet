@@ -108,6 +108,67 @@ export async function ensureVehicleTableColumns(providedSupabase = null) {
         ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS timezone text;
         ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS timezone_confirmed_at timestamp with time zone;
 
+        -- v1.9.1 OTP-gated driver assignments + compliance onboarding
+        ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS compliance_type text;
+        ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS compliance_number text;
+        ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS compliance_expiry date;
+        ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS compliance_updated_at timestamp with time zone;
+        CREATE TABLE IF NOT EXISTS public.driver_assignments (
+          id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+          vehicle_id uuid NOT NULL,
+          owner_id uuid,
+          driver_id uuid,
+          driver_phone text NOT NULL,
+          handover_odometer numeric,
+          owner_otp text,
+          owner_otp_expires_at timestamp with time zone,
+          owner_otp_attempts integer DEFAULT 0,
+          owner_otp_verified_at timestamp with time zone,
+          invalid_compliance_attempts integer DEFAULT 0,
+          compliance_snapshot jsonb DEFAULT '{}'::jsonb,
+          compliance_completed_at timestamp with time zone,
+          compliance_report_sent_at timestamp with time zone,
+          status text NOT NULL DEFAULT 'PENDING_OWNER_OTP',
+          cancelled_reason text,
+          accepted_at timestamp with time zone,
+          activated_at timestamp with time zone,
+          rejected_at timestamp with time zone,
+          cancelled_at timestamp with time zone,
+          created_at timestamp with time zone DEFAULT now()
+        );
+        CREATE INDEX IF NOT EXISTS idx_driver_assignments_vehicle ON public.driver_assignments(vehicle_id, status);
+        CREATE INDEX IF NOT EXISTS idx_driver_assignments_driver ON public.driver_assignments(driver_phone, status);
+        CREATE TABLE IF NOT EXISTS public.driver_compliances (
+          id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+          driver_id uuid NOT NULL,
+          type text NOT NULL,
+          label text NOT NULL,
+          number text,
+          expiry date,
+          lifetime boolean DEFAULT false,
+          country_code text,
+          asset_type text,
+          verified_at timestamp with time zone,
+          created_at timestamp with time zone DEFAULT now(),
+          updated_at timestamp with time zone DEFAULT now()
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_driver_compliances_unique ON public.driver_compliances(driver_id, type);
+        CREATE TABLE IF NOT EXISTS public.compliance_catalog (
+          id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+          country_code text UNIQUE NOT NULL,
+          minimal jsonb NOT NULL DEFAULT '{}'::jsonb,
+          additional jsonb DEFAULT '[]'::jsonb,
+          lifetime_allowed boolean DEFAULT false,
+          effective_from date,
+          reviewed_at timestamp with time zone,
+          next_review_at date,
+          source text DEFAULT 'bundled',
+          catalog_version text,
+          is_active boolean DEFAULT true,
+          created_at timestamp with time zone DEFAULT now(),
+          updated_at timestamp with time zone DEFAULT now()
+        );
+
         DO $v18$
         BEGIN
           IF to_regclass('public.reminders') IS NOT NULL THEN
@@ -347,6 +408,43 @@ export async function canAssignDriverToVehicle({ vehicleId, driverId, supabase }
       conflict_driver: existingDriverName,
       message: `Vehicle ${targetVeh.plate_number} already has active driver ${existingDriverName} assigned. Unassign the current driver first.`
     };
+  }
+
+  // 3. OTP-gated assignments reserve both sides while pending/active.
+  try {
+    const { data: pending } = await supabase
+      .from('driver_assignments')
+      .select('id, vehicle_id, driver_id, status')
+      .eq('driver_id', driverId)
+      .limit(20);
+    const conflict = (pending || []).find((row) =>
+      ['PENDING_OWNER_OTP', 'PENDING_DRIVER_ACCEPTANCE', 'ACTIVE'].includes(row.status) && row.vehicle_id !== vehicleId
+    );
+    if (conflict) {
+      return {
+        allowed: false,
+        reason: 'DRIVER_ASSIGNMENT_PENDING',
+        message: 'This driver already has an active or pending vehicle assignment. Complete or cancel it first.'
+      };
+    }
+
+    const { data: vehiclePending } = await supabase
+      .from('driver_assignments')
+      .select('id, vehicle_id, driver_id, status')
+      .eq('vehicle_id', vehicleId)
+      .limit(20);
+    const vehicleConflict = (vehiclePending || []).find((row) =>
+      ['PENDING_OWNER_OTP', 'PENDING_DRIVER_ACCEPTANCE'].includes(row.status) && row.driver_id !== driverId
+    );
+    if (vehicleConflict) {
+      return {
+        allowed: false,
+        reason: 'VEHICLE_ASSIGNMENT_PENDING',
+        message: 'This vehicle already has a pending driver assignment awaiting verification or acceptance.'
+      };
+    }
+  } catch {
+    // Assignment table unavailable (legacy deployment) — active checks above still apply.
   }
 
   return { allowed: true, vehicle: targetVeh };

@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.9.0  
+**Version:** 1.9.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -59,6 +59,8 @@ All LLM traffic flows through **`src/services/aiClient.js`**. No service talks t
 - **`src/services/naturalParser.js` (v1.8)** — natural conversational extraction: deterministic field parsing plus a DeepSeek JSON top-up for missing fields, "extra notes" compilation for details that do not map to a database column, missing-field computation for dynamic prompts, and graceful degradation when the provider is unavailable.
 - **`src/services/maintenanceReminders.js` (v1.9)** — universal reminder engine: distance (canonical km), operating hours **and date-based expiries** (insurance, inspection/MOT, licensing, permits, driver licences, general deadlines). Explicit `remaining_value` tracking, 75/25/5/due-now/overdue threshold tiers, 30d/14d/7d/24h/overdue expiry tiers, `due_at` timestamps in the user's confirmed timezone, driver-licence promotion, `expiry_notification_log` audit trail, and a single background sweep worker.
 - **`src/services/fleetReports.js` (v1.9)** — four core report builders returning structured JSON + localized WhatsApp text: Fleet Status, Compliance & Expiry, Maintenance & Service and Financial & Cost. Every figure is derived from the database; currency/units/dates come from `globalization.js`.
+- **`src/services/complianceCatalog.js` (v1.9.1)** — regional, asset-aware compliance catalog (mandatory minimal item + optional extras), lifetime-economy support, bundled defaults + effective-dated DB overrides, natural compliance parsing, and a Sentinel staleness review (`COMPLIANCE_CATALOG_VERSION`).
+- **`src/services/driverAssignments.js` (v1.9.1)** — OTP-gated driver assignment lifecycle (owner OTP → driver ACCEPT), compliance snapshot, management gate, 3-strike cancellation, once-only owner compliance reports and 48h acceptance expiry.
 - **`src/services/globalization.js`** — single source of truth for country detection (E.164), metric/imperial conversion, currency + locale formatting, plate examples and unit labels. Every AI prompt and quiz question receives this context.
 - **`src/services/ocrService.js`** — Meta media download + Google Cloud Vision `DOCUMENT_TEXT_DETECTION`, with deterministic receipt hints (`extractReceiptHints`). See §24.
 - **`src/services/messageQueue.js`** — per-phone serialization + bounded global concurrency + retry/backoff + graceful drain on shutdown.
@@ -547,7 +549,7 @@ Owners exceeding tier limits are prompted to upgrade via Paystack checkout.
   - `pending_owner_notifications`, `passbook_transfers`
   - `private_earnings`, `expenses`, `expense_logs`, `expiry_notification_log`, `reminders`
   - `superadmin_sessions`, `coupons`, `admin_audit_logs`, `conversation_analytics`, `error_logs`
-  - **Intentionally preserved:** `system_config` (deployment revision + retained prompt overrides) and `weekly_feature_proposals`.
+  - **Intentionally preserved:** `system_config` (deployment revision + retained prompt overrides), `weekly_feature_proposals` and `compliance_catalog` (legal reference data + effective-dated overrides; reseeded idempotently at startup).
 
 ### 15.2 Production & Execution Safeguards
 - **Production Block:** If `NODE_ENV === 'production'` or `APP_ENV === 'production'`, the script aborts immediately unless `--force-production-wipe` is explicitly supplied.
@@ -666,7 +668,8 @@ All multi-field flows run through `src/services/quizEngine.js`. Each asks exactl
 | :--- | :--- | :--- | :--- |
 | `vehicle_registration` | plate → make/model → YOM → fuel → odometer → VIN → email → OTP → optional specs (insurance/inspection/colour/transmission/engine/tires/cost/mods) → confirm | `current_mileage` (canonical km) | inserts `vehicles`, `vin_registry` trial, profile email, coupon, passbook email, reminders |
 | `email_update` | new email → OTP → confirm | — | `profiles.email`, `vehicles.owner_email` |
-| `assign_driver` | vehicle → driver phone → **handover odometer** → confirm | `metadata.odometer_at_assignment` + vehicle odometer | `assignDriverToVehicle` |
+| `assign_driver` | vehicle → driver phone → **handover odometer** → confirm → **owner WhatsApp OTP** | assignment request (no vehicle write yet) | `driver_assignments` → `PENDING_OWNER_OTP` → `PENDING_DRIVER_ACCEPTANCE`; driver replies ACCEPT |
+| `driver_onboarding` | full name (optional) → email → OTP → minimal compliance (regional catalog) → optional asset-aware extras → confirm | compliance details + catalog | `profiles` (email_verified, compliance_*), `driver_compliances`, driver expiry reminders, once-only owner compliance report |
 | `unassign_driver` | vehicle → **handback odometer** → confirm | `metadata.odometer_at_release` + distance driven | `unassignDriverFromVehicle` |
 | `transfer_seller` | vehicle → buyer phone → buyer email → **odometer at sale** → confirm → release PIN | `metadata.odometer_at_transfer` | `initiatePassbookTransfer` → `setBuyerDetailsAndSendReleaseOtp` → `verifyOwnerReleaseOtpAndNotifyBuyer` |
 | `log_expense` | vehicle → type → amount → fuel volume → **odometer at fill-up** → notes → confirm | `expense_logs.odometer_reading` + vehicle odometer | `expense_logs` + `expenses` |
@@ -961,7 +964,7 @@ Alerts are WhatsApp-ready and unit-aware, e.g. "Service Warning (KDA 123A): Oil 
 
 ### 31.1 Single source of truth — `src/services/flowKnowledge.js`
 - `SAKA_INTENTS` — every classifier intent (32), matching the JSON schema.
-- `SAKA_QUIZ_FLOWS` — every quiz flow (17) with trigger phrases, field order, extracted JSON keys, post-confirmation writes and per-flow rules.
+- `SAKA_QUIZ_FLOWS` — every quiz flow (18) with trigger phrases, field order, extracted JSON keys, post-confirmation writes and per-flow rules.
 - `SAKA_INTENT_PLAYBOOK` — non-quiz intents (greeting, discovery, analytics, buyer-side transfer, OTP, reminders, onboarding) and the allowed behaviour for each.
 - `SAKA_BOUNDARY_RULES` — VIN/passbook-token immutability, owner-only soft delete, strict 1-to-1 driver assignment, never invent OTP/PIN/amounts/dates, confirmation gate, superadmin interception, Saka/Sentinel division.
 - `buildFlowPlaybook()` is injected into `DEFAULT_SAKA_CORE_PROMPT` via `${SAKA_FLOW_PLAYBOOK}`, so **the prompt can never drift from the code**.
@@ -970,11 +973,11 @@ Alerts are WhatsApp-ready and unit-aware, e.g. "Service Warning (KDA 123A): Oil 
 - **Saka** = front-facing WhatsApp agent: intent classification, structured extraction, localized prose, step-by-step guidance.
 - **Sentinel** = background supervisor: health checks, conversational friction analysis, stall recovery, Cloud Run triage, weekly feature proposals. Saka never impersonates Sentinel or superadmin.
 
-### 31.3 Training coverage added in v1.9.0
-- All 17 quiz flows, all non-quiz intents, the universal reminder engine (date expiries / km-mi distance / operating hours), the 30d/14d/7d/24h/overdue expiry ladder, timezone confirmation, natural multi-field parsing + extra-notes compilation, the four core reports and the mandatory confirmation gate are explicit prompt instructions.
-- `extracted_data` gained `reminder_type`, `reminder_category`, `reminder_due_date`, `reminder_threshold`, `timezone`, `report_type` and `extra_notes`.
-- `conversationEngine.composeMessage` adds FACTS-contract lines for expiry timezone confirmation and report fidelity.
-- `test_agent_training.js` asserts every intent and flow key is embedded in the assembled core prompt (offline training regression guard), including the new reminder/report tokens.
+### 31.3 Training coverage added in v1.9.1
+- All 18 quiz flows, all non-quiz intents, the universal reminder engine (date expiries / km-mi distance / operating hours), the 30d/14d/7d/24h/overdue expiry ladder, timezone confirmation, natural multi-field parsing + extra-notes compilation, the four core reports, the OTP-gated driver assignment handshake and the regional compliance catalog are explicit prompt instructions.
+- `extracted_data` gained `reminder_type`, `reminder_category`, `reminder_due_date`, `reminder_threshold`, `timezone`, `report_type`, `driver_email`, `driver_response`, `compliance_type`, `compliance_number`, `compliance_expiry`, `compliance_lifetime` and `extra_notes`.
+- `conversationEngine.composeMessage` adds FACTS-contract lines for expiry timezone confirmation, assignment OTP/ACCEPT, report fidelity and catalog-derived compliance facts.
+- `test_agent_training.js` asserts every intent and flow key is embedded in the assembled core prompt (offline training regression guard), including the new driver/compliance tokens and all 18 flows.
 
 ### 31.4 Permanent governance rule
 Whenever the Saka Fleet application changes (feature, flow, intent, field, handler, schema, config or env knob), update **in the same commit**:
@@ -1045,4 +1048,56 @@ All money uses `formatMoney(amount, ctx.currency, ctx.locale)`, distances honour
 ### 32.6 Access paths
 - WhatsApp: `QUERY_FLEET_SUMMARY` → Fleet Status; `REQUEST_REPORT` + `report_type` → the selected report (owners/drivers see their own fleet scope).
 - `fleetReports` is also reusable by executive dashboards (JSON-first) and the per-vehicle PDF audit path (`reports.js` remains the PDF renderer).
+
+
+---
+
+## 33. OTP-Gated Driver Assignment & Compliance Lifecycle (v1.9.1)
+
+### 33.1 Assignment lifecycle (`driver_assignments`)
+| Status | Meaning |
+| :--- | :--- |
+| `PENDING_OWNER_OTP` | Owner confirmed the assignment summary; a 6-digit code was sent to the **owner's WhatsApp**. The driver has not been contacted yet. |
+| `PENDING_DRIVER_ACCEPTANCE` | Owner verified the OTP. The driver receives a WhatsApp message and must reply **ACCEPT** or **DECLINE**. |
+| `ACTIVE` | Driver accepted; `vehicles.assigned_driver_id` is set and the compliance snapshot is stored. **Management stays gated** until email + minimal compliance are valid. |
+| `REJECTED` / `CANCELLED` / `EXPIRED` | Driver declined, owner/3-strike cancelled, or 48h acceptance timeout. |
+| `COMPLETED` | Assignment ended (unassignment). |
+
+Pending rows reserve both the driver and the vehicle (`canAssignDriverToVehicle` also checks `driver_assignments`), so the strict 1-to-1 rule cannot be raced. The owner OTP expires after 10 minutes and is cancelled after 3 wrong attempts; a Resend supersedes the previous pending request.
+
+### 33.2 Assignment-time compliance snapshot
+On ACCEPT, `compliance_snapshot` records the email-verified flag, the minimal item (type/number/expiry/lifetime), the additional items and `validAtAssignment`. This is an audit record of what was valid when the driver took the vehicle; the live gate is always recomputed from current data.
+
+### 33.3 Management gate
+`canManageVehicle()` returns `{ gated, canManage, status }`:
+- Owner acting on their own vehicle → never gated.
+- Assigned driver with an OTP-gated ACTIVE assignment → gated until `profiles.email_verified = true` **and** the minimal compliance is valid (`expiry >= today`, or `lifetime` where the catalog allows it).
+- Legacy assignments without a `driver_assignments` row are grandfathered (re-assigning through the new flow enables the gate).
+
+The route computes the gate for the active vehicle and redirects vehicle-bound intents (`LOG_EXPENSE`, `UPDATE_MILEAGE`, `SET_REMINDER`, reports, edits, transfers…) into the `driver_onboarding` flow with a single next step. `detectQuizStart({ driverOnboardingPending })` owns the redirect, and the gate is re-checked on the engine path.
+
+
+### 33.4 Regional, asset-aware compliance catalog (`compliance_catalog`)
+- `COUNTRY_COMPLIANCE_CATALOG` in `src/services/complianceCatalog.js` ships bundled defaults per country: a mandatory **minimal** item (driver licence variants: NTSA, DMV, DVLA, RTA, RTO, FRSC, TRA, URA, RRA, CNH, LTO…) and **additional** items filtered by the vehicle's `asset_type` (KE PSV badge, GB Driver CPC + CPCS plant card for excavators, US CDL + operator certification, ZA PDP, NG Hackney permit, AU heavy rigid/white card, AE heavy vehicle permit, IN commercial DL…). Unknown economies fall back to the driver licence.
+- `lifetimeAllowed` marks economies that issue the minimal item for life (e.g. Belgium); everywhere else an expiry date is mandatory and must be in the future or the submission is rejected.
+- **Living catalog:** bundled defaults are versioned (`COMPLIANCE_CATALOG_VERSION`, bumped with every release), seeded idempotently into `compliance_catalog` at startup (`ensureComplianceCatalog`), and can be overridden by superadmin with an `effective_from` date (`upsertComplianceCatalogEntry`). Resolution order: active DB override effective today → bundled default. `getComplianceCatalog()` caches for `COMPLIANCE_CATALOG_CACHE_MS` (1h).
+- **Periodic review:** `reviewComplianceCatalog()` flags entries whose `next_review_at` (180 days after review) has passed. The Sentinel weekly worker messages the superadmin to re-verify against current law. Legal rules are **never** auto-applied by AI; only a code release or an explicit admin override changes them.
+
+### 33.5 Driver profile & reminder integration
+- `driver_onboarding` (18th quiz flow) collects full name (optional), email + OTP (if unverified), the minimal compliance and up to three asset-aware extra items. Natural parsing (`parseComplianceItem`) extracts the number and country-resolved expiry, and detects "valid for life".
+- `driver_compliances` stores one row per item (`driver_id`, `type`, `label`, `number`, `expiry`, `lifetime`, `country_code`, `asset_type`). The minimal item is mirrored to `profiles.compliance_*` and legacy `driver_license_*`.
+- Expiring items create driver-linked reminders (`linked_column = 'driver_compliances:<type>'`) through the v1.9 engine, so the 30d/14d/7d/24h/overdue ladder notifies the driver and the owner(s). Lifetime items create no reminder.
+- Optional extras are framed as "so we can remind you before it expires"; skipped items are never mandatory and are re-offered gently later.
+
+### 33.6 Owner reports, invalid attempts & cancellation
+- **Once-only compliance-cleared report:** when the minimal item first becomes valid, the owner receives a deterministic WhatsApp report (driver, email status, minimal item + expiry/lifetime, additional items) and `compliance_report_sent_at` prevents repeats.
+- **Invalid minimal attempt:** every expired submission queues an owner report (`DRIVER_COMPLIANCE_INVALID`, attempt n/3) and the gate stays closed.
+- **3-strike cancellation:** the third expired minimal submission sets the assignment to `CANCELLED` (`cancelled_reason = EXPIRED_MINIMAL_COMPLIANCE_3X`), unassigns the driver, releases the vehicle, and sends `DRIVER_ASSIGNMENT_CANCELLED` telling the owner to restart once the driver renews.
+- Owner reports use the existing `pending_owner_notifications` queue (processed every 30s).
+
+### 33.7 Schema
+`driver_assignments` (lifecycle, OTP code/attempts, handover odometer, compliance snapshot/report timestamps), `driver_compliances` (unique per driver+type), `compliance_catalog` (country_code unique, minimal/additional jsonb, effective/review dates, source, version, is_active), `profiles.compliance_type/number/expiry/updated_at`. DDL is idempotent in `ensureVehicleTableColumns`; assignment/compliance tables are cleaned by `scripts/testCleanup.js` and `scripts/reset-db.js`, while `compliance_catalog` is intentionally preserved.
+
+### 33.8 Tests
+`test_driver_assignment_gate.js` (stateless) covers catalog resolution incl. lifetime + asset filtering, natural parsing, OTP expiry/attempt cancellation, strict 1-to-1 reservation, ACCEPT + snapshot, the gate, once-only owner report, 3-strike cancellation, lifetime vs expiring economies, catalog overrides/effective dating, stale expiry and flow wiring (48 assertions).
 

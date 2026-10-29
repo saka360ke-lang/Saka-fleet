@@ -44,6 +44,8 @@ export const RESET_TABLES = [
   'private_earnings',
   'expenses',
   'expense_logs',
+  'driver_compliances',
+  'driver_assignments',
   'expiry_notification_log',
   'reminders',
   'vehicles',
@@ -87,11 +89,15 @@ export async function executeDatabaseReset({ targetPhone = null, verbose = true 
         DELETE FROM public.private_earnings WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_phone IN ('${cleanPhone}', '${altPhone}'));
         DELETE FROM public.passbook_transfers WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_phone IN ('${cleanPhone}', '${altPhone}'));
         DELETE FROM public.pending_owner_notifications WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_phone IN ('${cleanPhone}', '${altPhone}'));
+        DELETE FROM public.driver_assignments WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_phone IN ('${cleanPhone}', '${altPhone}')) OR driver_phone IN ('${cleanPhone}', '${altPhone}');
+        DELETE FROM public.driver_compliances WHERE driver_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}'));
         DELETE FROM public.reminders WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}')));
         DELETE FROM public.expense_logs WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}')));
         DELETE FROM public.private_earnings WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}')));
         DELETE FROM public.passbook_transfers WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}')));
         DELETE FROM public.pending_owner_notifications WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}')));
+        DELETE FROM public.driver_assignments WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}'))) OR driver_phone IN ('${cleanPhone}', '${altPhone}');
+        DELETE FROM public.driver_compliances WHERE driver_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}'));
         DELETE FROM public.expiry_notification_log WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}')));
         -- Release any driver assignment held by this phone
         UPDATE public.vehicles SET assigned_driver_id = NULL WHERE assigned_driver_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}'));
@@ -112,6 +118,8 @@ export async function executeDatabaseReset({ targetPhone = null, verbose = true 
           public.private_earnings,
           public.expenses,
           public.expense_logs,
+          public.driver_compliances,
+          public.driver_assignments,
           public.expiry_notification_log,
           public.reminders,
           public.vehicles,

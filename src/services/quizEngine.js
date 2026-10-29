@@ -53,6 +53,20 @@ import {
 } from './maintenanceReminders.js';
 import { extractWithAI, mergeExtraNotes, formatExtraNotes, isSubstantiveText } from './naturalParser.js';
 import {
+  createDriverAssignment,
+  verifyOwnerAssignmentOtp,
+  cancelPendingAssignment,
+  getDriverComplianceStatus,
+  getActiveAssignment,
+  submitDriverCompliance,
+  notifyOwnerComplianceCleared
+} from './driverAssignments.js';
+import {
+  resolveBundledCatalog,
+  getComplianceCatalog,
+  parseComplianceItem
+} from './complianceCatalog.js';
+import {
   initiatePassbookTransfer,
   setBuyerDetailsAndSendReleaseOtp,
   verifyOwnerReleaseOtpAndNotifyBuyer
@@ -407,11 +421,75 @@ const FLOW_LABELS = {
   delete_account: 'Account deletion',
   apply_coupon: 'Trial coupon',
   set_reminder: 'Maintenance or expiry reminder',
+  driver_onboarding: 'Driver compliance onboarding',
   contact_support: 'Support escalation',
   reactivate_account: 'Account reactivation'
 };
 
 export const QUIZ_FLOW_KEYS = Object.keys(FLOW_LABELS);
+
+/** Compliance catalog item -> quiz field (minimal mandatory, extras optional). */
+function complianceItemField(key, item, ctx, optional) {
+  const timeZone = resolveUserTimezone({ countryInfo: ctx.countryInfo, profile: ctx.profile });
+  return field(key, `${item.label} number and expiry`, `e.g. "DL-1234567 expires 15 Dec 2028"${item.lifetimeAllowed ? ' or "valid for life"' : ''}`, {
+    optional,
+    aliases: [key, item.type, item.label.toLowerCase()],
+    parse: (text) => parseComplianceItem(text, {
+      countryCode: ctx.countryInfo?.country_code || 'GLOBAL',
+      locale: ctx.countryInfo?.locale || 'en-US',
+      timeZone,
+      catalogItem: item
+    }),
+    validate: (value) => {
+      if (!value?.ok) return { ok: false, message: `Please send the ${item.label} number and its expiry date.` };
+      if (value.lifetime && !item.lifetimeAllowed) {
+        return { ok: false, message: `${item.label} has an expiry date in your economy — please send it.` };
+      }
+      if (!value.lifetime && !value.expiry) return { ok: false, message: 'Please include the expiry date, e.g. 15 Dec 2028.' };
+      if (!value.lifetime && value.expired) {
+        return { ok: false, message: `That ${item.label} expired on ${value.expiry}. Please send a currently valid one.` };
+      }
+      return { ok: true };
+    },
+    summary: (value) => (value?.ok
+      ? `${value.number} — ${value.lifetime ? 'valid for life' : `expires ${value.expiry}`} (${value.timeZone})`
+      : '-')
+  });
+}
+
+/** Build the driver onboarding wizard from the regional compliance catalog. */
+function driverOnboardingFields(ctx) {
+  const profile = ctx.profile || {};
+  const assigned = (ctx.vehicles || []).find((v) => v.assigned_driver_id === profile.id)
+    || (ctx.activeVehicle?.assigned_driver_id === profile.id ? ctx.activeVehicle : null);
+  const assetType = assigned?.asset_type || assigned?.metadata?.asset_type || null;
+  const catalog = resolveBundledCatalog({ countryCode: ctx.countryInfo?.country_code, assetType });
+  const fields = [];
+
+  if (!profile.full_name || /^(Fleet Driver|WhatsApp User)$/i.test(String(profile.full_name))) {
+    fields.push(field('full_name', 'Your full name', 'the name printed on your licence', {
+      optional: true,
+      aliases: ['full_name', 'name'],
+      parse: (text) => (String(text).trim().length >= 2 ? String(text).trim() : null),
+      validate: (value) => (value ? { ok: true } : { ok: false, message: 'Please send your full name, or reply Skip.' })
+    }));
+  }
+
+  if (!profile.email || !profile.email_verified) {
+    fields.push(field('driver_email', 'Your email address', 'used to verify you and send renewal reminders', {
+      aliases: ['driver_email', 'email'],
+      parse: (text) => parseEmail(text),
+      validate: (value) => (value ? { ok: true } : { ok: false, message: 'Please send a valid email address.' })
+    }));
+    fields.push(otpQuestionField());
+  }
+
+  fields.push(complianceItemField('minimal_compliance', catalog.minimal, ctx, false));
+  for (const item of (catalog.additional || []).slice(0, 3)) {
+    fields.push(complianceItemField(`compliance_${item.type}`, item, ctx, true));
+  }
+  return fields;
+}
 
 export function getFlowDefinition(flowKey, ctx) {
   const label = FLOW_LABELS[flowKey] || flowKey;
@@ -721,6 +799,9 @@ export function getFlowDefinition(flowKey, ctx) {
         ]
       };
 
+    case 'driver_onboarding':
+      return { key: flowKey, label, fields: driverOnboardingFields(ctx) };
+
     case 'contact_support':
       return {
         key: flowKey,
@@ -990,6 +1071,18 @@ function confirmationNotes(state, ctx) {
 }
 
 function confirmationNotesBase(state, ctx) {
+  if (state.flow === 'assign_driver') {
+    return [
+      'A 6-digit verification code will be sent to your WhatsApp before the driver is notified.',
+      'The driver must reply ACCEPT, then verify their email and a valid compliance item before they can manage this vehicle.'
+    ];
+  }
+  if (state.flow === 'driver_onboarding') {
+    return [
+      'The minimal compliance item must be currently valid; it is used for renewal reminders.',
+      'Optional extras can be added anytime and are only used so Saka can remind the driver before they expire.'
+    ];
+  }
   if (state.flow === 'delete_vehicle') {
     return [
       'The driver will be unassigned, pending passbook transfers cancelled, and active reminders retired.',
@@ -1018,13 +1111,17 @@ async function sendQuizOtp(state, def, ctx) {
     ? 'email_update'
     : state.flow === 'delete_account'
       ? 'account_deletion'
-      : 'registration';
+      : state.flow === 'driver_onboarding'
+        ? 'driver_onboarding'
+        : 'registration';
 
   const target = purpose === 'email_update'
     ? state.answers.new_email
     : purpose === 'account_deletion'
       ? ctx.profile?.email
-      : state.answers.owner_email;
+      : purpose === 'driver_onboarding'
+        ? state.answers.driver_email
+        : state.answers.owner_email;
 
   if (!target) return;
 
@@ -1048,7 +1145,7 @@ function otpQuestionField() {
 }
 
 async function askOtp(state, ctx, note = null) {
-  const target = state.otp?.target || ctx.profile?.email || state.answers.owner_email || state.answers.new_email;
+  const target = state.otp?.target || ctx.profile?.email || state.answers.owner_email || state.answers.new_email || state.answers.driver_email;
   return renderQuizQuestion({
     flowLabel: getFlowDefinition(state.flow, ctx)?.label || state.flow,
     fieldLabel: '6-digit verification code',
@@ -1061,6 +1158,150 @@ async function askOtp(state, ctx, note = null) {
     isFirst: false,
     isLast: true
   });
+}
+
+/**
+ * Owner confirmed the assignment summary → create the pending assignment,
+ * send the WhatsApp OTP and switch to the assignment_otp security phase.
+ */
+async function startAssignmentOtp(state, def, ctx) {
+  const a = state.answers;
+  const vehicle = (ctx.vehicles || []).find((v) => v.id === a.vehicle_id) || null;
+  const base = { language: ctx.language, countryInfo: ctx.countryInfo, profile: ctx.profile };
+
+  if (!ctx.supabase || !vehicle) {
+    state.phase = 'confirm';
+    const reply = await renderOutcome({
+      flowLabel: def.label,
+      success: false,
+      facts: { error: 'Vehicle or database unavailable.' },
+      ...base
+    });
+    return { handled: true, reply, flow: state.flow, active: true };
+  }
+
+  const created = await createDriverAssignment({
+    supabase: ctx.supabase,
+    ownerProfile: ctx.profile,
+    vehicle,
+    driverPhone: a.driver_phone,
+    handoverOdometer: a.odometer_at_assignment,
+    countryInfo: ctx.countryInfo,
+    sendWhatsApp: ctx.sendWhatsApp
+  });
+
+  if (!created.ok) {
+    state.phase = 'confirm';
+    const reply = await renderOutcome({
+      flowLabel: def.label,
+      success: false,
+      facts: { error: created.error },
+      ...base
+    });
+    return { handled: true, reply, flow: state.flow, active: true };
+  }
+
+  state.assignmentId = created.assignment.id;
+  state.assignmentExpiresAt = created.expiresAt;
+  state.phase = 'assignment_otp';
+
+  const reply = await renderQuizQuestion({
+    flowLabel: def.label,
+    fieldLabel: '6-digit assignment code',
+    hint: `We sent a code to your WhatsApp${created.ownerPhone ? ` (${created.ownerPhone})` : ''}. Reply with the 6 digits, or Resend for a new code.`,
+    answers: a,
+    collectedLabels: buildSummaryRows(def, a, ctx).map((row) => `${row.label}: ${row.value}`),
+    language: ctx.language,
+    countryInfo: ctx.countryInfo,
+    profile: ctx.profile,
+    isFirst: false,
+    isLast: true
+  });
+  return { handled: true, reply, flow: state.flow, active: true };
+}
+
+/** Verify the owner's assignment OTP and notify the driver. */
+async function handleAssignmentOtp(state, clean, ctx) {
+  const def = getFlowDefinition(state.flow, ctx);
+  const label = def?.label || state.flow;
+  const a = state.answers;
+  const vehicle = (ctx.vehicles || []).find((v) => v.id === a.vehicle_id) || null;
+  const base = { language: ctx.language, countryInfo: ctx.countryInfo, profile: ctx.profile };
+
+  const askAgain = async (note) => renderQuizQuestion({
+    flowLabel: label,
+    fieldLabel: '6-digit assignment code',
+    hint: note,
+    answers: a,
+    collectedLabels: buildSummaryRows(def, a, ctx).map((row) => `${row.label}: ${row.value}`),
+    language: ctx.language,
+    countryInfo: ctx.countryInfo,
+    profile: ctx.profile,
+    isFirst: false,
+    isLast: true
+  });
+
+  if (/^(resend|resend code|new code|send again)$/i.test(clean)) {
+    const created = await createDriverAssignment({
+      supabase: ctx.supabase,
+      ownerProfile: ctx.profile,
+      vehicle,
+      driverPhone: a.driver_phone,
+      handoverOdometer: a.odometer_at_assignment,
+      countryInfo: ctx.countryInfo,
+      sendWhatsApp: ctx.sendWhatsApp
+    });
+    if (created.ok) {
+      state.assignmentId = created.assignment.id;
+      state.assignmentExpiresAt = created.expiresAt;
+    }
+    const reply = await askAgain(created.ok
+      ? 'A fresh code has been sent to your WhatsApp.'
+      : `Could not send a code: ${created.error}`);
+    return { handled: true, reply, flow: state.flow, active: true };
+  }
+
+  const code = (String(clean).match(/\b\d{6}\b/) || [])[0];
+  if (!code) {
+    const reply = await askAgain('Please reply with the 6-digit code from your WhatsApp, or Resend.');
+    return { handled: true, reply, flow: state.flow, active: true };
+  }
+
+  const verified = await verifyOwnerAssignmentOtp({
+    supabase: ctx.supabase,
+    assignmentId: state.assignmentId,
+    ownerId: ctx.profile?.id,
+    code,
+    sendWhatsApp: ctx.sendWhatsApp
+  });
+
+  if (!verified.ok) {
+    if (verified.cancelled || verified.expired) {
+      state.assignmentId = null;
+      const reply = await renderOutcome({
+        flowLabel: label,
+        success: false,
+        facts: { error: verified.error },
+        ...base
+      });
+      return { handled: true, reply, flow: state.flow, cancelled: true };
+    }
+    const reply = await askAgain(verified.error);
+    return { handled: true, reply, flow: state.flow, active: true };
+  }
+
+  const reply = await renderOutcome({
+    flowLabel: label,
+    success: true,
+    facts: {
+      vehicle: verified.plate,
+      driver: verified.driverPhone,
+      status: 'Assignment request sent — awaiting the driver\'s ACCEPT.',
+      nextStep: 'You will receive a compliance report as soon as their verification and compliance item are valid.'
+    },
+    ...base
+  });
+  return { handled: true, reply, flow: state.flow, completed: true };
 }
 
 function applyCorrections(state, def, ext, ctx) {
@@ -1201,6 +1442,11 @@ export async function handleQuizTurn({
 
   if (/^(cancel|exit|stop|quit|abort)$/i.test(clean)) {
     const flowLabel = getFlowDefinition(state.flow, ctx)?.label || state.flow;
+    if (state.assignmentId && ctx.supabase) {
+      try {
+        await cancelPendingAssignment({ supabase: ctx.supabase, assignmentId: state.assignmentId, ownerId: ctx.profile?.id });
+      } catch { /* pending request already closed */ }
+    }
     session.quiz = null;
     const reply = await renderOutcome({
       flowLabel,
@@ -1215,6 +1461,11 @@ export async function handleQuizTurn({
 
   if (/^(restart|start over|reset)$/i.test(clean)) {
     const flowKey = state.flow;
+    if (state.assignmentId && ctx.supabase) {
+      try {
+        await cancelPendingAssignment({ supabase: ctx.supabase, assignmentId: state.assignmentId, ownerId: ctx.profile?.id });
+      } catch { /* pending request already closed */ }
+    }
     session.quiz = null;
     // Do NOT re-ingest the control word ("Reset") as quiz data.
     startQuiz({ session, flowKey, ctx: { ...ctx, aiExtracted: {} } });
@@ -1257,6 +1508,12 @@ export async function handleQuizTurn({
 
   if (state.phase === 'account_otp') {
     const result = await handleAccountOtp(state, clean, ctx);
+    if (result.completed || result.cancelled) session.quiz = null;
+    return result;
+  }
+
+  if (state.phase === 'assignment_otp') {
+    const result = await handleAssignmentOtp(state, clean, ctx);
     if (result.completed || result.cancelled) session.quiz = null;
     return result;
   }
@@ -1400,6 +1657,9 @@ export async function handleQuizTurn({
 
 async function handleConfirmation(state, def, clean, ctx, aiExtracted) {
   if (isYes(clean)) {
+    if (state.flow === 'assign_driver') {
+      return startAssignmentOtp(state, def, ctx);
+    }
     if (state.flow === 'delete_account') {
       await sendQuizOtp(state, def, ctx);
       if (!state.otp) {
@@ -1589,48 +1849,10 @@ async function executeFlow(state, ctx) {
       }
 
       case 'assign_driver': {
-        if (!vehicle) return { handled: true, reply: await fail('Vehicle not found.'), flow: state.flow, active: true };
-        const cleanPhone = a.driver_phone.startsWith('+') ? a.driver_phone : `+${a.driver_phone.replace(/[^\d]/g, '')}`;
-        let { data: drvProfile } = await ctx.supabase.from('profiles').select('*').eq('phone_number', cleanPhone).maybeSingle();
-        if (!drvProfile) {
-          const { data: newDrv } = await ctx.supabase.from('profiles').insert([{
-            id: crypto.randomUUID(),
-            phone_number: cleanPhone,
-            full_name: 'Fleet Driver',
-            is_active: true,
-            country: ctx.countryInfo?.country,
-            country_code: ctx.countryInfo?.country_code,
-            unit_system: ctx.countryInfo?.default_units || 'metric'
-          }]).select().single();
-          drvProfile = newDrv;
-        }
-        if (!drvProfile?.id) {
-          return { handled: true, reply: await fail('Could not create the driver profile.'), flow: state.flow, active: true };
-        }
-
-        const assigned = await assignDriverToVehicle({ vehicleId: vehicle.id, driverId: drvProfile.id, supabase: ctx.supabase });
-        if (!assigned.success) return { handled: true, reply: await fail(assigned.error), flow: state.flow, active: true };
-
-        const metadata = {
-          ...(vehicle.metadata || {}),
-          odometer_at_assignment: a.odometer_at_assignment,
-          assigned_at: new Date().toISOString(),
-          assigned_driver_phone: cleanPhone
-        };
-        await ctx.supabase.from('vehicles').update({
-          current_mileage: a.odometer_at_assignment,
-          odometer_reading: a.odometer_at_assignment,
-          metadata,
-          updated_at: new Date().toISOString()
-        }).eq('id', vehicle.id);
-
-        const reply = await ok({
-          vehicle: vehicle.plate_number,
-          driver: cleanPhone,
-          handoverOdometer: a.odometer_at_assignment,
-          rule: 'Strict 1-to-1: this driver cannot hold another active vehicle until unassigned.'
-        });
-        return { handled: true, reply, flow: state.flow, completed: true };
+        // Assignments are only created after the owner verifies the WhatsApp
+        // OTP in the assignment_otp phase. Direct execution must never bypass it.
+        const reply = await fail('Please confirm the assignment so we can send the verification code.');
+        return { handled: true, reply, flow: state.flow, active: true };
       }
 
 
@@ -2030,6 +2252,92 @@ async function executeFlow(state, ctx) {
         return { handled: true, reply, flow: state.flow, completed: true };
       }
 
+      case 'driver_onboarding': {
+        if (!ctx.profile?.id) return { handled: true, reply: await fail('Profile not found.'), flow: state.flow, active: true };
+        if (!ctx.supabase) return { handled: true, reply: await fail('Database unavailable.'), flow: state.flow, active: true };
+
+        const assigned = (ctx.vehicles || []).find((v) => v.assigned_driver_id === ctx.profile.id)
+          || (ctx.activeVehicle?.assigned_driver_id === ctx.profile.id ? ctx.activeVehicle : null);
+        const assetType = assigned?.asset_type || assigned?.metadata?.asset_type || null;
+        const countryCode = ctx.countryInfo?.country_code || ctx.profile.country_code || 'GLOBAL';
+        const timeZone = resolveUserTimezone({ countryInfo: ctx.countryInfo, profile: ctx.profile });
+
+        const profileUpdates = {};
+        if (a.full_name) profileUpdates.full_name = a.full_name;
+        if (a.driver_email && state.otpVerified) {
+          profileUpdates.email = a.driver_email;
+          profileUpdates.email_verified = true;
+        }
+        if (Object.keys(profileUpdates).length > 0) {
+          const { error } = await ctx.supabase.from('profiles')
+            .update({ ...profileUpdates, updated_at: new Date().toISOString() })
+            .eq('id', ctx.profile.id);
+          if (error) return { handled: true, reply: await fail(error.message), flow: state.flow, active: true };
+        }
+
+        const catalog = await getComplianceCatalog({ supabase: ctx.supabase, countryCode, assetType });
+        const minimal = catalog.minimal;
+        const parsedMinimal = a.minimal_compliance;
+        if (!parsedMinimal?.ok) {
+          delete state.answers.minimal_compliance;
+          state.phase = 'question';
+          return { handled: true, reply: await fail(`Please send your ${minimal.label} number and expiry.`), flow: state.flow, active: true };
+        }
+
+        const minimalRes = await submitDriverCompliance({
+          supabase: ctx.supabase,
+          driverId: ctx.profile.id,
+          item: minimal,
+          parsed: parsedMinimal,
+          isMinimal: true,
+          countryCode,
+          assetType,
+          timeZone
+        });
+        if (!minimalRes.ok) {
+          delete state.answers.minimal_compliance;
+          state.phase = 'question';
+          return { handled: true, reply: await fail(minimalRes.error), flow: state.flow, active: true };
+        }
+
+        const collected = [];
+        for (const item of catalog.additional || []) {
+          const parsed = a[`compliance_${item.type}`];
+          if (!parsed?.ok) continue;
+          const submitted = await submitDriverCompliance({
+            supabase: ctx.supabase,
+            driverId: ctx.profile.id,
+            item,
+            parsed,
+            isMinimal: false,
+            countryCode,
+            assetType,
+            timeZone
+          });
+          if (submitted.ok) collected.push(item.label);
+        }
+
+        const status = await getDriverComplianceStatus({ supabase: ctx.supabase, driverId: ctx.profile.id, countryCode, assetType });
+        let ownerReported = false;
+        if (status.canManage) {
+          const assignment = await getActiveAssignment({ supabase: ctx.supabase, driverId: ctx.profile.id, vehicleId: assigned?.id });
+          if (assignment) {
+            const report = await notifyOwnerComplianceCleared({ supabase: ctx.supabase, assignment, status });
+            ownerReported = Boolean(report?.sent);
+          }
+        }
+
+        const reply = await ok({
+          driver: profileUpdates.full_name || ctx.profile.full_name || 'Driver',
+          email: status.emailVerified ? 'verified' : 'pending',
+          compliance: `${status.minimal.label} ${status.minimal.valid ? 'valid' : status.minimal.status}`,
+          additional: collected.length ? collected.join(', ') : 'None yet (optional)',
+          gate: status.canManage ? 'open — you can now manage the vehicle' : 'still closed until the missing items are provided',
+          ownerReport: ownerReported ? 'owner notified' : 'owner report pending'
+        });
+        return { handled: true, reply, flow: state.flow, completed: true };
+      }
+
       case 'contact_support': {
         await sendSupportEscalationEmail({
           userPhone: ctx.formattedPhone,
@@ -2239,7 +2547,8 @@ export function detectQuizStart({
   messageText = '',
   hasVehicleRegistered = false,
   isRegisterCommand = false,
-  hasVehicleAttributes = false
+  hasVehicleAttributes = false,
+  driverOnboardingPending = false
 }) {
   const text = String(messageText).trim();
 
@@ -2249,6 +2558,10 @@ export function detectQuizStart({
     }
     return null;
   }
+
+  // A newly accepted driver must finish email verification + minimal compliance
+  // before any vehicle management flow can start.
+  if (driverOnboardingPending) return 'driver_onboarding';
 
   const intentMap = {
     ASSIGN_DRIVER: 'assign_driver',

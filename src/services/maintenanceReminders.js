@@ -22,6 +22,7 @@
  */
 
 import { kmToUserDistance, userDistanceToKm, formatNumber, formatDate } from './globalization.js';
+import { complianceCategory } from './complianceCatalog.js';
 import {
   parseFlexibleDate,
   extractDatePhrase,
@@ -846,9 +847,11 @@ export async function runReminderSweep({ supabase, sendFn = null, canDeliver = n
 
   let driverSync = { synced: 0 };
   try {
-    driverSync = await syncDriverLicenseReminders({ supabase });
+    const legacySync = await syncDriverLicenseReminders({ supabase });
+    const complianceSync = await syncDriverComplianceReminders({ supabase });
+    driverSync = { synced: (legacySync.synced || 0) + (complianceSync.synced || 0) };
   } catch (syncErr) {
-    console.warn('[maintenanceReminders] Driver licence sync skipped:', syncErr.message);
+    console.warn('[maintenanceReminders] Driver compliance sync skipped:', syncErr.message);
   }
 
   let expiry = { evaluated: 0, alerts: [], dispatched: 0, overdue: 0 };
@@ -881,6 +884,37 @@ export async function runReminderSweep({ supabase, sendFn = null, canDeliver = n
   };
 }
 
+/**
+ * Promote driver_compliances (minimal + additional items with an expiry) into
+ * first-class driver-linked reminders. Lifetime items need no reminder.
+ */
+export async function syncDriverComplianceReminders({ supabase, limit = 500 } = {}) {
+  if (!supabase) return { ok: false, synced: 0, error: 'Database unavailable.' };
+  const { data, error } = await supabase.from('driver_compliances').select('*').limit(limit);
+  if (error) return { ok: false, synced: 0, error: error.message };
+
+  const items = (data || []).filter((row) => row && row.driver_id && row.expiry && row.lifetime !== true);
+  let synced = 0;
+  for (const item of items) {
+    const timeZone = item.time_zone || SYSTEM_TIMEZONE;
+    const spec = buildExpirySpecFromDate(String(item.expiry).slice(0, 10), { timeZone });
+    if (!spec.ok) continue;
+    const res = await createExpiryReminder({
+      supabase,
+      profileId: item.driver_id,
+      subjectType: 'driver',
+      subjectId: item.driver_id,
+      reminderType: item.label || item.type,
+      category: complianceCategory(item.type),
+      spec,
+      linkedColumn: `driver_compliances:${item.type}`,
+      timeZone
+    });
+    if (res.ok) synced += 1;
+  }
+  return { ok: true, synced };
+}
+
 export default {
   parseThresholdSpec,
   parseOperatingHours,
@@ -899,6 +933,7 @@ export default {
   createExpiryReminder,
   evaluateExpiryReminders,
   syncDriverLicenseReminders,
+  syncDriverComplianceReminders,
   reminderDueDate,
   daysUntilDue,
   EXPIRY_CATEGORIES,

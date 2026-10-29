@@ -18,6 +18,8 @@ import {
 } from './src/services/paystack.js';
 import { processImpendingTrialReminders } from './src/services/coupons.js';
 import { runReminderSweep } from './src/services/maintenanceReminders.js';
+import { ensureComplianceCatalog, reviewComplianceCatalog, COMPLIANCE_CATALOG_VERSION } from './src/services/complianceCatalog.js';
+import { expireStaleAssignments } from './src/services/driverAssignments.js';
 import { createResilientClient } from './src/services/supabaseClient.js';
 import { ensureChatSessionsTable } from './src/services/sessionStore.js';
 import { drainQueue, getQueueStats } from './src/services/messageQueue.js';
@@ -177,6 +179,44 @@ async function runMaintenanceReminderSweep() {
 }
 setTimeout(runMaintenanceReminderSweep, 90 * 1000); // First pass shortly after boot
 setInterval(runMaintenanceReminderSweep, 30 * 60 * 1000); // Every 30 minutes
+
+// Worker: expire driver assignment requests the driver never accepted (48h).
+async function runDriverAssignmentExpiry() {
+  try {
+    const result = await expireStaleAssignments({ supabase });
+    if (result?.expired) {
+      console.log(`[Assignments] Expired ${result.expired} stale driver assignment(s).`);
+    }
+  } catch (err) {
+    console.error('[Worker] Driver assignment expiry failed:', err.message);
+  }
+}
+setTimeout(runDriverAssignmentExpiry, 5 * 60 * 1000);
+setInterval(runDriverAssignmentExpiry, 6 * 60 * 60 * 1000);
+
+// Worker (Sentinel): weekly compliance catalog staleness review. Legal rules
+// are NEVER auto-changed — a human must re-verify stale entries.
+async function runComplianceCatalogReview() {
+  try {
+    const result = await reviewComplianceCatalog({ supabase });
+    if (result?.stale?.length) {
+      const list = result.stale
+        .map((entry) => `• ${entry.countryCode} (review by ${String(entry.nextReviewAt).slice(0, 10)})`)
+        .join('\n');
+      if (process.env.SUPERADMIN_PHONE) {
+        await sendMetaWhatsAppMessage(
+          process.env.SUPERADMIN_PHONE,
+          `🗂️ *Compliance Catalog Review Due (v${COMPLIANCE_CATALOG_VERSION})*\n\n${list}\n\nPlease re-verify these requirements against current law and ship an override or code release. No rules were changed automatically.`
+        ).catch(() => {});
+      }
+      console.log(`[Sentinel] ${result.stale.length} compliance catalog entr(ies) need review.`);
+    }
+  } catch (err) {
+    console.error('[Worker] Compliance catalog review failed:', err.message);
+  }
+}
+setTimeout(runComplianceCatalogReview, 10 * 60 * 1000);
+setInterval(runComplianceCatalogReview, 7 * 24 * 60 * 60 * 1000);
 
 
 
@@ -782,6 +822,7 @@ const start = async () => {
     await ensureSentinelTables(supabase);
     await ensureSuperadminTables(supabase);
     await ensureVehicleTableColumns(supabase);
+    await ensureComplianceCatalog({ supabase });
     await ensureChatSessionsTable(supabase);
 
     const port = process.env.PORT || 3000;

@@ -5,8 +5,6 @@ import { logChatTranscript, logSystemError } from '../workers/sentinel.js';
 import { SUBSCRIPTION_TIERS, initializePaystackCheckout } from '../services/paystack.js';
 import {
   ensureVehicleTableColumns,
-  canAssignDriverToVehicle,
-  assignDriverToVehicle,
   unassignDriverFromVehicle,
   checkOwnerVehicleTierLimit,
   getActiveVehicle,
@@ -18,6 +16,13 @@ import {
 } from '../services/vehicles.js';
 import { calculateFuelConsumption } from '../services/analytics.js';
 import { buildFleetReport, resolveReportType } from '../services/fleetReports.js';
+import {
+  createDriverAssignment,
+  verifyOwnerAssignmentOtp,
+  cancelPendingAssignment,
+  handleDriverResponse,
+  canManageVehicle
+} from '../services/driverAssignments.js';
 import { handleStage1CoreCapture, handleStage2OptionalWeaving } from '../services/onboarding.js';
 import { saveChatMessage, getRecentChatHistory } from '../services/chatHistory.js';
 import { sendEmailOtp, sendSupportEscalationEmail, sendMfaEmail } from '../services/mailer.js';
@@ -785,8 +790,8 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             }
           }
         }
-        // 2. Buyer Acceptance ("ACCEPT")
-        else if (/^\s*(accept|claim passbook|claim ownership)\b/i.test(messageText)) {
+        // 2. Buyer Acceptance ("ACCEPT") / Driver Assignment Response
+        else if (/^\s*(accept|decline|reject|claim passbook|claim ownership)\b/i.test(messageText)) {
           if (supabaseClient) {
             const acceptRes = await handleBuyerAcceptance({
               buyerPhone: senderPhone,
@@ -799,6 +804,81 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                 session.pendingTransferBuyerOtp = { transferId: acceptRes.transferId };
               }
               customReply = acceptRes.replyMessage;
+            } else if (/^\s*(accept|decline|reject)\b/i.test(messageText.trim())) {
+              const driverRes = await handleDriverResponse({
+                driverPhone: senderPhone,
+                response: /^\s*accept/i.test(messageText.trim()) ? 'ACCEPT' : 'DECLINE',
+                supabase: supabaseClient,
+                sendWhatsAppFn: sendWhatsAppReply,
+                countryInfo
+              });
+              if (driverRes) {
+                isSpecialFlowHandled = true;
+                if (driverRes.status === 'ACCEPTED') {
+                  session.driverOnboarding = !driverRes.compliance?.canManage;
+                  session.active_vehicle_id = driverRes.vehicle?.id || session.active_vehicle_id;
+                }
+                customReply = driverRes.replyMessage;
+              }
+            }
+          }
+        }
+        // 2b. Owner driver-assignment OTP (legacy command path)
+        else if (session.pendingAssignmentOtp && (
+          /^\d{6}$/.test(messageText.trim()) ||
+          /^(resend|resend code|new code|send again)$/i.test(messageText.trim()) ||
+          /^(cancel|exit|stop)$/i.test(messageText.trim())
+        )) {
+          if (supabaseClient) {
+            const clean = messageText.trim();
+            if (/^(cancel|exit|stop)$/i.test(clean)) {
+              await cancelPendingAssignment({
+                supabase: supabaseClient,
+                assignmentId: session.pendingAssignmentOtp.assignmentId,
+                ownerId: profileData?.id
+              });
+              session.pendingAssignmentOtp = null;
+              isSpecialFlowHandled = true;
+              customReply = 'Driver assignment cancelled. No driver was notified.';
+            } else if (/^(resend|resend code|new code|send again)$/i.test(clean)) {
+              const vehicle = existingVehicles.find((v) => v.id === session.pendingAssignmentOtp.vehicleId) || targetVeh;
+              const resent = await createDriverAssignment({
+                supabase: supabaseClient,
+                ownerProfile: profileData,
+                vehicle,
+                driverPhone: session.pendingAssignmentOtp.driverPhone,
+                handoverOdometer: Number(vehicle?.current_mileage || vehicle?.odometer_reading || 0) || null,
+                countryInfo,
+                sendWhatsApp: sendWhatsAppReply
+              });
+              isSpecialFlowHandled = true;
+              if (resent.ok) {
+                session.pendingAssignmentOtp = {
+                  assignmentId: resent.assignment.id,
+                  vehicleId: resent.assignment.vehicle_id,
+                  driverPhone: resent.driverPhone,
+                  expiresAt: resent.expiresAt
+                };
+                customReply = '🔐 A fresh 6-digit code has been sent to your WhatsApp. Reply with it to continue.';
+              } else {
+                customReply = `❌ ${resent.error}`;
+              }
+            } else {
+              const verified = await verifyOwnerAssignmentOtp({
+                supabase: supabaseClient,
+                assignmentId: session.pendingAssignmentOtp.assignmentId,
+                ownerId: profileData?.id,
+                code: clean,
+                sendWhatsApp: sendWhatsAppReply
+              });
+              isSpecialFlowHandled = true;
+              if (verified.ok) {
+                session.pendingAssignmentOtp = null;
+                customReply = `✅ *Assignment Verified*\n\nWe notified *${verified.driverPhone}* about *${verified.plate}*. They must reply *ACCEPT* to take over the vehicle.\n\nOnce they accept, Saka will guide them through email verification and their ${verified.vehicle?.asset_type ? 'compliance details' : 'driving licence'} before they can manage it.`;
+              } else {
+                if (verified.cancelled || verified.expired) session.pendingAssignmentOtp = null;
+                customReply = `❌ ${verified.error}`;
+              }
             }
           }
         }
@@ -848,12 +928,31 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         if (!isSpecialFlowHandled) {
 
         // --- SAKA QUIZ ENGINE: one-piece-at-a-time flows + confirmation ---
+        // Driver compliance gate: accepted drivers must verify their email and
+        // submit a valid minimal compliance item before managing the vehicle.
+        let driverGate = null;
+        if (supabaseClient && profileData?.id && currentActiveVehicle?.assigned_driver_id === profileData.id) {
+          try {
+            driverGate = await canManageVehicle({ supabase: supabaseClient, profile: profileData, vehicle: currentActiveVehicle });
+          } catch {
+            driverGate = null;
+          }
+        }
+        const VEHICLE_BOUND_INTENTS = new Set([
+          'LOG_EXPENSE', 'LOG_EARNINGS', 'UPDATE_MILEAGE', 'LOG_OPERATING_HOURS',
+          'SET_REMINDER', 'COMPLETE_REMINDER', 'EDIT_VEHICLE', 'DELETE_VEHICLE',
+          'TRANSFER_PASSBOOK', 'QUERY_FLEET_SUMMARY', 'REQUEST_REPORT',
+          'QUERY_FUEL_EFFICIENCY', 'MANAGE_VEHICLE', 'LIST_VEHICLES'
+        ]);
+        const gateRedirect = Boolean(driverGate?.gated) && VEHICLE_BOUND_INTENTS.has(intent);
+
         const quizStartFlow = detectQuizStart({
           intent,
           messageText,
           hasVehicleRegistered,
           isRegisterCommand,
-          hasVehicleAttributes
+          hasVehicleAttributes,
+          driverOnboardingPending: session.driverOnboarding === true || gateRedirect
         });
 
         const quizCtx = {
@@ -869,6 +968,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           aiExtracted: mergedExt,
           messageText,
           fastQuiz: fastQuizTurn,
+          driverGate,
           sendWhatsApp: sendWhatsAppReply
         };
 
@@ -980,7 +1080,14 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           customReply = await buildPausedQuizReply(session.quiz);
         } else if (quizTurn.handled) {
           isSpecialFlowHandled = true;
-          customReply = quizTurn.reply;
+          const gateNotice = gateRedirect && !activeQuiz
+            ? `🔒 *Finish your driver profile first*\n\nSaka needs to verify your email and your ${driverGate?.status?.catalog?.minimal?.label || 'driving licence'} so it can remind you before it expires. This protects you and the vehicle owner.\n\n`
+            : '';
+          customReply = `${gateNotice}${quizTurn.reply}`;
+
+          if (quizTurn.flow === 'driver_onboarding' && quizTurn.completed) {
+            session.driverOnboarding = false;
+          }
 
           if (quizTurn.flow === 'vehicle_registration') {
             onboardingStore.delete(senderPhone);
@@ -1288,38 +1395,26 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                   customReply = `🚗 *Assign Driver to Vehicle*\n\n• Target Vehicle: *${assignTarget.plate_number}*\n\nPlease reply with the driver's WhatsApp phone number (e.g. *+254712345678*).\n\n_(Reply 'cancel' to abort)_`;
                 } else {
                   session.pendingDriverAssignment = null;
-                  const cleanDrvPhone = driverPhone.startsWith('+') ? driverPhone : `+${driverPhone.replace(/[^\d]/g, '')}`;
-                  
-                  let { data: drvProfile } = await supabaseClient
-                    .from('profiles')
-                    .select('*')
-                    .eq('phone_number', cleanDrvPhone)
-                    .maybeSingle();
-
-                  if (!drvProfile) {
-                    const { data: newDrv } = await supabaseClient
-                      .from('profiles')
-                      .insert([{
-                        id: crypto.randomUUID(),
-                        phone_number: cleanDrvPhone,
-                        full_name: 'Fleet Driver',
-                        is_active: true
-                      }])
-                      .select()
-                      .single();
-                    drvProfile = newDrv;
-                  }
-
-                  const assignRes = await assignDriverToVehicle({
-                    vehicleId: assignTarget.id,
-                    driverId: drvProfile.id,
-                    supabase: supabaseClient
+                  const created = await createDriverAssignment({
+                    supabase: supabaseClient,
+                    ownerProfile: profileData,
+                    vehicle: assignTarget,
+                    driverPhone,
+                    handoverOdometer: Number(mergedExt.odometer || mergedExt.current_mileage || assignTarget.current_mileage || assignTarget.odometer_reading || 0) || null,
+                    countryInfo,
+                    sendWhatsApp: sendWhatsAppReply
                   });
 
-                  if (!assignRes.success) {
-                    customReply = `❌ *Driver Assignment Blocked (Strict 1-to-1 Rule)*\n\n${assignRes.error}`;
+                  if (!created.ok) {
+                    customReply = `❌ *Driver Assignment Blocked*\n\n${created.error}`;
                   } else {
-                    customReply = `✅ *Driver Assigned Successfully!*\n\n• *Driver:* ${drvProfile.full_name || cleanDrvPhone} (${cleanDrvPhone})\n• *Vehicle:* ${assignTarget.plate_number}\n\n🔒 *Strict 1-to-1 Constraint:* This driver cannot be assigned to another vehicle while this assignment is active.`;
+                    session.pendingAssignmentOtp = {
+                      assignmentId: created.assignment.id,
+                      vehicleId: created.assignment.vehicle_id,
+                      driverPhone: created.driverPhone,
+                      expiresAt: created.expiresAt
+                    };
+                    customReply = `🔐 *Verify Driver Assignment*\n\nWe sent a 6-digit code to your WhatsApp. Reply with the code to assign *${created.driverPhone}* to *${assignTarget.plate_number}*.\n\n_(Reply *Resend* for a new code or *Cancel* to abort.)_`;
                   }
                 }
               }

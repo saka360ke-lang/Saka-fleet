@@ -56,6 +56,8 @@ export async function composeMessage({
     'The FACTS block is the only source of truth for flow state: reflect every collected item, and never add, drop or reorder required items.',
     'Maintenance facts may carry distance (km or mi), operating hours, or remaining-vs-target thresholds: always show the unit supplied and never convert silently.',
     'Expiry facts may carry insurance, inspection/MOT, licensing, permit, driver-licence or general-deadline dates: always show the due date, the resolved timezone and the days remaining exactly as supplied.',
+    'Driver assignment facts follow an OTP gate and a driver ACCEPT handshake: never claim an assignment is complete before the driver accepts, and never expose the OTP.',
+    'Driver compliance facts come from the regional catalog: distinguish the mandatory minimal item from optional extras, always state the expiry (or valid-for-life status) and never invent a legal requirement.',
     'Report facts come from the fleet report engine: present the supplied totals, currency and units faithfully and never recompute or invent figures.',
     "Dates and times are resolved in the user's confirmed timezone; when a timezone appears in the facts, include it once so the user can confirm it.",
     'Keep it warm, human and short (max ~110 words unless the facts require a summary list).',

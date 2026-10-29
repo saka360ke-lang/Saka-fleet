@@ -97,7 +97,7 @@ function plateFor(vehicleId, vehicles) {
 
 /** Load the shared fleet dataset used by all four reports. */
 async function loadFleetData({ supabase, ownerId = null, driverId = null, vehicleId = null }) {
-  const empty = { vehicles: [], reminders: [], expenses: [], earnings: [], transfers: [], profiles: [], notificationLog: [] };
+  const empty = { vehicles: [], reminders: [], expenses: [], earnings: [], transfers: [], profiles: [], notificationLog: [], driverCompliances: [] };
   if (!supabase) return empty;
 
   const scopes = [];
@@ -180,7 +180,15 @@ async function loadFleetData({ supabase, ownerId = null, driverId = null, vehicl
     notificationLog = data || [];
   } catch { notificationLog = []; }
 
-  return { vehicles, reminders, expenses, earnings, transfers, profiles, notificationLog };
+  let driverCompliances = [];
+  if (driverIds.length > 0) {
+    try {
+      const { data } = await supabase.from('driver_compliances').select('*').in('driver_id', driverIds).limit(300);
+      driverCompliances = data || [];
+    } catch { driverCompliances = []; }
+  }
+
+  return { vehicles, reminders, expenses, earnings, transfers, profiles, notificationLog, driverCompliances };
 }
 
 /** Unified expiry item list from reminders + canonical vehicle date columns. */
@@ -407,6 +415,21 @@ export async function buildComplianceReport({ supabase, ownerId = null, driverId
     }));
 
   const upcoming = items.filter((item) => item.daysLeft !== null && item.daysLeft >= 0 && item.daysLeft <= 30);
+  const driverCompliance = (dataset.driverCompliances || []).map((row) => {
+    const expiry = row.expiry ? String(row.expiry).slice(0, 10) : null;
+    const daysLeft = expiry ? daysUntilDue(expiry, now) : null;
+    const driverProfile = (dataset.profiles || []).find((p) => p.id === row.driver_id) || null;
+    return {
+      driverPhone: driverProfile?.phone_number || null,
+      type: row.type,
+      label: row.label,
+      number: row.number || null,
+      expiry,
+      lifetime: row.lifetime === true,
+      daysLeft,
+      status: row.lifetime ? 'lifetime' : daysLeft === null ? 'unknown' : daysLeft < 0 ? 'expired' : daysLeft <= 30 ? 'due30' : 'active'
+    };
+  });
   const actionPrompt = upcoming.slice(0, 5).map((item) => {
     const target = new Date(now.getTime() + Math.max(item.daysLeft, 1) * DAY_MS).toISOString().slice(0, 10);
     return `Update ${item.reminderType.toLowerCase()} for ${item.plate} to ${target}`;
@@ -420,6 +443,7 @@ export async function buildComplianceReport({ supabase, ownerId = null, driverId
     insuranceStatusMatrix: insurance,
     inspectionAndPermits: { inspections, permits, licensing },
     driverLicenses,
+    driverCompliance,
     notificationLog,
     actionPrompt,
     totals: {
@@ -458,6 +482,12 @@ function formatComplianceText(data, ctx) {
     `• Licensing — active ${data.inspectionAndPermits.licensing.active}, due 30d ${data.inspectionAndPermits.licensing.due30}, expired ${data.inspectionAndPermits.licensing.expired}`,
     `• Driver licences — active ${data.driverLicenses.active}, expired ${data.driverLicenses.expired}`
   ];
+
+  if (data.driverCompliance && data.driverCompliance.length > 0) {
+    const expiredDocs = data.driverCompliance.filter((doc) => doc.status === 'expired').length;
+    const dueDocs = data.driverCompliance.filter((doc) => doc.status === 'due30').length;
+    lines.push(`• Driver docs on file: ${data.driverCompliance.length} (${dueDocs} due in 30 days, ${expiredDocs} expired)`);
+  }
 
   const upcoming = [...data.insuranceStatusMatrix.items, ...data.inspectionAndPermits.inspections.items, ...data.inspectionAndPermits.permits.items, ...data.inspectionAndPermits.licensing.items, ...data.driverLicenses.items]
     .filter((item) => item.daysLeft !== null && item.daysLeft <= 30)
