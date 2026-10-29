@@ -4,7 +4,7 @@ import { generateText, parseJsonSafely } from '../services/aiClient.js';
 import { formatNairobiDate } from '../services/dateParser.js';
 import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
 import { sendAdminNotificationEmail, sendRemediationProposalEmail, sendRemediationDigestEmail } from '../services/mailer.js';
-import { dispatchRepositoryEvent } from '../services/githubDispatch.js';
+import { dispatchRepositoryEvent, isRemediationAutonomyEnabled } from '../services/githubDispatch.js';
 import { sendProactiveWhatsApp } from './sentinel.js';
 
 /**
@@ -871,7 +871,7 @@ export function selectPlanTriggerClusters(clusters = [], { triggerCount = REMEDI
  */
 export async function checkRemediationPlanTriggers(providedSupabase, { now = new Date() } = {}) {
   const supabase = getSupabase(providedSupabase);
-  if (String(process.env.REMEDIATION_AUTONOMY || 'off').toLowerCase() !== 'on') {
+  if (!isRemediationAutonomyEnabled()) {
     return { status: 'skipped', reason: 'REMEDIATION_AUTONOMY is not enabled.' };
   }
 
@@ -1256,7 +1256,7 @@ export async function maybeSendUrgentRemediationAlert(providedSupabase, { now = 
  */
 export async function checkRemediationExecutionRetry(providedSupabase) {
   const supabase = getSupabase(providedSupabase);
-  if (String(process.env.REMEDIATION_AUTONOMY || 'off').toLowerCase() !== 'on') {
+  if (!isRemediationAutonomyEnabled()) {
     return { status: 'skipped', reason: 'REMEDIATION_AUTONOMY is not enabled.' };
   }
 

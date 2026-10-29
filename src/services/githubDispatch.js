@@ -18,7 +18,7 @@ export function resolveRemediationRepo() {
 }
 
 export function isRemediationAutonomyEnabled() {
-  return String(process.env.REMEDIATION_AUTONOMY || 'off').toLowerCase() === 'on';
+  return ['on', 'true', '1'].includes(String(process.env.REMEDIATION_AUTONOMY || 'off').toLowerCase());
 }
 
 const DISPATCH_TIMEOUT_MS = Number(process.env.REMEDIATION_DISPATCH_TIMEOUT_MS || 15000);

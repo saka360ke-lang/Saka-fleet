@@ -25,7 +25,7 @@ import {
   consumeProposalNonce
 } from './src/workers/remediation.js';
 import { handleAdminRemediationDecision } from './src/services/superadmin.js';
-import { dispatchRepositoryEvent } from './src/services/githubDispatch.js';
+import { dispatchRepositoryEvent, isRemediationAutonomyEnabled } from './src/services/githubDispatch.js';
 
 /**
  * Saka Fleet — Autonomous Remediation Pipeline tests (v1.11.2).
@@ -211,6 +211,11 @@ async function run() {
     check(triggerSkip.status === 'skipped', 'REMEDIATION_AUTONOMY=off skips plan dispatch');
     const dispatchSkip = await dispatchRepositoryEvent('remediation_execute', { proposal_code: PROPOSAL_CODES[3], approval_nonce: 'test' });
     check(dispatchSkip.skipped === true && dispatchSkip.ok === false, 'REMEDIATION_AUTONOMY=off short-circuits repository_dispatch');
+    process.env.REMEDIATION_AUTONOMY = 'true';
+    check(isRemediationAutonomyEnabled() === true, 'Autonomy gate treats true as enabled');
+    process.env.REMEDIATION_AUTONOMY = '1';
+    check(isRemediationAutonomyEnabled() === true, 'Autonomy gate treats 1 as enabled');
+    process.env.REMEDIATION_AUTONOMY = 'off';
   } finally {
     if (originalKill === undefined) delete process.env.REMEDIATION_AUTONOMY;
     else process.env.REMEDIATION_AUTONOMY = originalKill;

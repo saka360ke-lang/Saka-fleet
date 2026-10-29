@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.11.2  
+**Version:** 1.11.3  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -1264,11 +1264,11 @@ Three fail-soft, idempotent tiers run in `index.js`:
 - **Post-edit diff guard:** after the post-change tests, the execute job runs `node scripts/remediation_ci.js guard <CODE>`; any working-tree change matching `REMEDIATION_FORBIDDEN_PATHS` (via the shared `matchForbiddenRemediationPath`, including untracked files and renames) aborts the run before `git add` — nothing is committed or pushed.
 - Attempt ceiling: `REMEDIATION_MAX_ATTEMPTS` (default 2); excess → `NEEDS_MODIFICATION` + alert.
 - Frequency/storm guards: per-signature plan cooldown, daily plan cap, per-slot digest key, `digest_sent_at` batching, urgent-alert cooldown, and a scan `inFlight` guard (no overlapping ticks).
-- Kill switch: `REMEDIATION_AUTONOMY=off` (default) gates plan dispatch, approvals and execution. Continuous scans, digests and urgent health alerts are notification/read-only and keep running so the Superadmin stays informed. `adminrules reset` remains the Sentinel prompt-rule kill switch.
+- Kill switch: `REMEDIATION_AUTONOMY=off` (default; `on`, `true` or `1` enable) gates plan dispatch, approvals and execution. Continuous scans, digests and urgent health alerts are notification/read-only and keep running so the Superadmin stays informed. `adminrules reset` remains the Sentinel prompt-rule kill switch.
 - Exit codes/status are auditable in `remediation_proposals.execution` and `admin_audit_logs`.
 
 ### 35.9 Environment & secrets
-- **Cloud Run / server:** `REMEDIATION_AUTONOMY` (off), `GH_REMEDIATION_TOKEN` (fine-grained PAT: contents write + workflow dispatch on this repo), `GH_REMEDIATION_REPO` (`owner/repo`), `REMEDIATION_MAX_ATTEMPTS`, `REMEDIATION_NONCE_TTL_HOURS`, `REMEDIATION_EXECUTION_RETRY_MS`, `REMEDIATION_DISPATCH_TIMEOUT_MS`, `REMEDIATION_SCAN_INTERVAL_MS` (60 s), `REMEDIATION_AUDIT_WINDOW_HOURS` (4), `REMEDIATION_SYNTHESIS_INTERVAL_MS` (15 min), `REMEDIATION_PLAN_TRIGGER_COUNT` (3), `REMEDIATION_PLAN_COOLDOWN_MS` (6 h), `REMEDIATION_MAX_PLANS_PER_DAY` (4), `REMEDIATION_DIGEST_HOURS_CSV` (`8,20`), `REMEDIATION_DIGEST_SCALE_DOWN_WINDOW_DAYS` (7), `REMEDIATION_DIGEST_DAILY_THRESHOLD` (10), `REMEDIATION_DIGEST_WEEKLY_THRESHOLD` (3), `REMEDIATION_URGENT_ERROR_THRESHOLD` (10), `REMEDIATION_URGENT_COOLDOWN_MS` (1 h).
+- **Cloud Run / server:** `REMEDIATION_AUTONOMY` (off; `on`, `true` or `1` enable), `GH_REMEDIATION_TOKEN` (fine-grained PAT: contents write + workflow dispatch on this repo), `GH_REMEDIATION_REPO` (`owner/repo`), `REMEDIATION_MAX_ATTEMPTS`, `REMEDIATION_NONCE_TTL_HOURS`, `REMEDIATION_EXECUTION_RETRY_MS`, `REMEDIATION_DISPATCH_TIMEOUT_MS`, `REMEDIATION_SCAN_INTERVAL_MS` (60 s), `REMEDIATION_AUDIT_WINDOW_HOURS` (4), `REMEDIATION_SYNTHESIS_INTERVAL_MS` (15 min), `REMEDIATION_PLAN_TRIGGER_COUNT` (3), `REMEDIATION_PLAN_COOLDOWN_MS` (6 h), `REMEDIATION_MAX_PLANS_PER_DAY` (4), `REMEDIATION_DIGEST_HOURS_CSV` (`8,20`), `REMEDIATION_DIGEST_SCALE_DOWN_WINDOW_DAYS` (7), `REMEDIATION_DIGEST_DAILY_THRESHOLD` (10), `REMEDIATION_DIGEST_WEEKLY_THRESHOLD` (3), `REMEDIATION_URGENT_ERROR_THRESHOLD` (10), `REMEDIATION_URGENT_COOLDOWN_MS` (1 h).
 - **Rolling-window note:** `REMEDIATION_AUDIT_WINDOW_HOURS` is clamped to 1-72h and read at process start; a change applies from the next scan tick. Digest labels always report the currently loaded value while the counts come from the last persisted scan.
 - **GitHub repository secrets (used by the workflow):** `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `DEEPSEEK_API_KEY`, `SUPERADMIN_PHONE`, `SUPERADMIN_EMAIL`, `META_PHONE_NUMBER_ID`, `META_WHATSAPP_TOKEN`, `RESEND_API_KEY`.
 - Cline CLI: installed in CI with `npm install -g cline`; provider/model pinned with `-P deepseek -m deepseek-chat` (adjust per `cline config` if the provider id differs — the gate fails closed).
@@ -1276,7 +1276,7 @@ Three fail-soft, idempotent tiers run in `index.js`:
 ### 35.10 Operations & verification
 - `npm run migrate:remediation` applies the schema; `npm run migrate:staging-schema` provisions and verifies all tables.
 - `npm run remediation:ci -- <subcommand>` is the CI-only runner (`fetch-audit`, `submit-plan`, `tests`, `gate`, `guard`, `fetch`, `report`, `fail`).
-- Targeted suite: `node scripts/run_tests.js test_remediation_pipeline.js` (schema, sanitizer, scan idempotency, health score, plan triggers, gate replay/expiry/status, approval state machine, adaptive digest frequency, digest batching, urgent escalation, kill switch) — 66 assertions, always auto-cleans its rows.
+- Targeted suite: `node scripts/run_tests.js test_remediation_pipeline.js` (schema, sanitizer, scan idempotency, health score, plan triggers, gate replay/expiry/status, approval state machine, adaptive digest frequency, digest batching, urgent escalation, kill switch) — 68 assertions, always auto-cleans its rows.
 - `npm run audit:logs` remains the read-only forensic companion.
 
 ### 35.11 Files

@@ -5,7 +5,7 @@ import {
   buildApprovalWindow,
   dispatchExecutionForProposal
 } from '../workers/remediation.js';
-import { dispatchRepositoryEvent } from './githubDispatch.js';
+import { dispatchRepositoryEvent, isRemediationAutonomyEnabled } from './githubDispatch.js';
 import { sendAdminNotificationEmail } from './mailer.js';
 import { generateText, parseJsonSafely } from './aiClient.js';
 import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
@@ -790,7 +790,7 @@ export async function handleAdminRemediationDecision(supabase, proposalCode, dec
   if (!code) {
     return { reply: '⚠️ Please specify a proposal code, e.g. `admin accept fix FIX-2026-10-30-01`.' };
   }
-  if (String(process.env.REMEDIATION_AUTONOMY || 'off').toLowerCase() !== 'on') {
+  if (!isRemediationAutonomyEnabled()) {
     return {
       reply: '🔒 *Remediation autonomy is disabled.* Set `REMEDIATION_AUTONOMY=on` to enable execution dispatch. No changes were made.'
     };

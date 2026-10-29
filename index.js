@@ -631,7 +631,7 @@ fastify.post('/api/cron/sentinel-horizon', async (request, reply) => {
 // AUTONOMOUS REMEDIATION PIPELINE (v1.11.0)
 // Continuous scan (60s) → tiered AI synthesis → threshold-triggered Cline plans
 // → twice-daily adaptive digests → Superadmin approval → nonce-gated CI execution.
-// Requires REMEDIATION_AUTONOMY=on for plan dispatch/execution (kill switch, default off).
+// Requires REMEDIATION_AUTONOMY=on|true|1 for plan dispatch/execution (kill switch, default off).
 // ==========================================
 let lastRemediationDigestKey = null;
 let remediationScanInFlight = false;
