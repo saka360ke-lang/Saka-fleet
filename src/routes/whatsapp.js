@@ -21,8 +21,13 @@ import {
   verifyOwnerAssignmentOtp,
   cancelPendingAssignment,
   handleDriverResponse,
-  canManageVehicle
+  canManageVehicle,
+  getDriverComplianceStatus,
+  getActiveAssignment,
+  submitDriverCompliance,
+  notifyOwnerComplianceCleared
 } from '../services/driverAssignments.js';
+import { resolveBundledCatalog, parseComplianceItem } from '../services/complianceCatalog.js';
 import { handleStage1CoreCapture, handleStage2OptionalWeaving } from '../services/onboarding.js';
 import { saveChatMessage, getRecentChatHistory } from '../services/chatHistory.js';
 import { sendEmailOtp, sendSupportEscalationEmail, sendMfaEmail } from '../services/mailer.js';
@@ -34,7 +39,7 @@ import {
   completePassbookTransfer
 } from '../services/transfers.js';
 import { applyTrialExtensionCoupon } from '../services/coupons.js';
-import { detectCountryFromPhone as detectCountryGlobal } from '../services/globalization.js';
+import { detectCountryFromPhone as detectCountryGlobal, resolveUserTimezone } from '../services/globalization.js';
 import { applyOdometerReading, applyOperatingHours } from '../services/maintenanceReminders.js';
 import { handleQuizTurn, detectQuizStart, shouldPauseQuizForChat, getCurrentQuizField, detectFlowSwitch, getFlowDefinition } from '../services/quizEngine.js';
 import { renderActionDiscovery, composeMessage } from '../services/conversationEngine.js';
@@ -923,6 +928,60 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             language: targetLang,
             countryInfo
           });
+        }
+
+        // A driver can add or refresh any compliance item from chat at any
+        // time ("PSV badge 445566 expires 15 Dec 2028"). This is how Saka keeps
+        // collecting optional extras after the gate has opened.
+        if (!isSpecialFlowHandled && !session.quiz && supabaseClient && profileData?.id
+          && /\b(licen[cs]e|psv|cpc|cdl|pdp|permit|operator|card|badge|dl|compliance)\b/i.test(messageText)
+          && /\d/.test(messageText)) {
+          const assignedVehicle = existingVehicles.find((v) => v.assigned_driver_id === profileData.id) || null;
+          if (assignedVehicle) {
+            const assetType = assignedVehicle.asset_type || assignedVehicle.metadata?.asset_type || null;
+            const catalog = resolveBundledCatalog({ countryCode: countryInfo?.country_code, assetType });
+            const lower = messageText.toLowerCase();
+            const item = [catalog.minimal, ...(catalog.additional || [])].find((entry) =>
+              lower.includes(entry.type.replace(/_/g, ' ')) ||
+              (entry.aliases || []).some((alias) => lower.includes(alias)) ||
+              lower.includes(entry.label.toLowerCase())
+            );
+            if (item) {
+              const timeZone = resolveUserTimezone({ countryInfo, profile: profileData });
+              const parsed = parseComplianceItem(messageText, {
+                countryCode: countryInfo?.country_code || 'GLOBAL',
+                locale: countryInfo?.locale || 'en-US',
+                timeZone,
+                catalogItem: item
+              });
+              if (parsed?.ok) {
+                const isMinimal = item.type === catalog.minimal.type;
+                const result = await submitDriverCompliance({
+                  supabase: supabaseClient,
+                  driverId: profileData.id,
+                  item,
+                  parsed,
+                  isMinimal,
+                  countryCode: countryInfo?.country_code || 'GLOBAL',
+                  assetType,
+                  timeZone
+                });
+                isSpecialFlowHandled = true;
+                if (result.ok) {
+                  if (isMinimal) {
+                    const status = await getDriverComplianceStatus({ supabase: supabaseClient, driverId: profileData.id, assetType });
+                    const assignment = await getActiveAssignment({ supabase: supabaseClient, driverId: profileData.id, vehicleId: assignedVehicle.id });
+                    if (status.canManage && assignment) {
+                      await notifyOwnerComplianceCleared({ supabase: supabaseClient, assignment, status });
+                    }
+                  }
+                  customReply = `✅ *Compliance Saved*\n\n• ${item.label}: ${parsed.number} — ${parsed.lifetime ? 'valid for life' : `expires ${parsed.expiry}`}\n\nWe'll remind you before it expires.`;
+                } else {
+                  customReply = `❌ ${result.error}`;
+                }
+              }
+            }
+          }
         }
 
         if (!isSpecialFlowHandled) {

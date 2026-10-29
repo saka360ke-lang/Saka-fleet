@@ -1087,7 +1087,7 @@ The route computes the gate for the active vehicle and redirects vehicle-bound i
 - `driver_onboarding` (18th quiz flow) collects full name (optional), email + OTP (if unverified), the minimal compliance and up to three asset-aware extra items. Natural parsing (`parseComplianceItem`) extracts the number and country-resolved expiry, and detects "valid for life".
 - `driver_compliances` stores one row per item (`driver_id`, `type`, `label`, `number`, `expiry`, `lifetime`, `country_code`, `asset_type`). The minimal item is mirrored to `profiles.compliance_*` and legacy `driver_license_*`.
 - Expiring items create driver-linked reminders (`linked_column = 'driver_compliances:<type>'`) through the v1.9 engine, so the 30d/14d/7d/24h/overdue ladder notifies the driver and the owner(s). Lifetime items create no reminder.
-- Optional extras are framed as "so we can remind you before it expires"; skipped items are never mandatory and are re-offered gently later.
+- Optional extras are framed as "so we can remind you before it expires"; skipped items are never mandatory and are re-offered gently later. A driver can also add or refresh any item directly in chat (e.g. "PSV badge 445566 expires 15 Dec 2028"), which routes through the same parser and reminder pipeline (and can open the gate if the minimal item is submitted).
 
 ### 33.6 Owner reports, invalid attempts & cancellation
 - **Once-only compliance-cleared report:** when the minimal item first becomes valid, the owner receives a deterministic WhatsApp report (driver, email status, minimal item + expiry/lifetime, additional items) and `compliance_report_sent_at` prevents repeats.
