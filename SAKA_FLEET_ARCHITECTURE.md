@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.7.7  
+**Version:** 1.8.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -56,6 +56,8 @@ All LLM traffic flows through **`src/services/aiClient.js`**. No service talks t
 
 - **`src/services/conversationEngine.js`** — every user-facing reply is rendered by DeepSeek-V3 from a structured FACTS payload (`composeMessage`, `renderQuizQuestion`, `renderConfirmationSummary`, `renderOutcome`, `renderActionDiscovery`). Hard-coded conversational prose has been removed from the WhatsApp route; deterministic fallbacks remain only for provider outages. Quiz questions are cached per field/language (`seedQuizQuestions`, `isQuizQuestionCacheWarm`) and prefetched in one batch per flow.
 - **`src/services/quizEngine.js`** — one-piece-at-a-time wizard engine: declarative flow definitions, per-field validators/extractors, deterministic multi-field fast-forward (`applyTextExtraction`), two-pass conditional extraction (`applyExtraction`), background question prefetch, Cancel/Restart/Help navigation, and a **mandatory confirmation summary before any database write**. VIN and passbook token are never editable.
+- **`src/services/naturalParser.js` (v1.8)** — natural conversational extraction: deterministic field parsing plus a DeepSeek JSON top-up for missing fields, "extra notes" compilation for details that do not map to a database column, missing-field computation for dynamic prompts, and graceful degradation when the provider is unavailable.
+- **`src/services/maintenanceReminders.js` (v1.8)** — metric/imperial/operating-hours maintenance reminder engine: canonical km/hours storage, explicit `remaining_value` tracking, 75/25/5/due-now/overdue dispatch (once per tier), odometer + operating-hours monitoring, and a background sweep worker.
 - **`src/services/globalization.js`** — single source of truth for country detection (E.164), metric/imperial conversion, currency + locale formatting, plate examples and unit labels. Every AI prompt and quiz question receives this context.
 - **`src/services/ocrService.js`** — Meta media download + Google Cloud Vision `DOCUMENT_TEXT_DETECTION`, with deterministic receipt hints (`extractReceiptHints`). See §24.
 - **`src/services/messageQueue.js`** — per-phone serialization + bounded global concurrency + retry/backoff + graceful drain on shutdown.
@@ -585,6 +587,10 @@ Owners exceeding tier limits are prompted to upgrade via Paystack checkout.
 3. **Test isolation:** Root-level `test_*.js` suites depend on live Supabase + Resend + DeepSeek. Per the permanent rule (§19), every run must clear its own data via `runWithCleanup` / `npm test`. A transient Supabase `fetch failed` can still leave stale rows; run `node scripts/reset-db.js --phone <number> --confirm` for an ad-hoc targeted reset.
 4. **Test runner & cleanup:** All suites are standalone `node test_*.js` scripts (no Jest/Mocha/Vitest). Use `npm test` (`scripts/run_tests.js`) for targeted runs — it always performs a final auto-cleanup sweep. `npm run test:cleanup` clears test data without running tests. `test_first_time_flow.js` is the offline first-time-flow suite; `test_edit_delete.js` covers edit/delete handlers, VIN immutability, vehicle-deletion cascade, and cleanup.
 
+5. **Cloud Run alert false positives (fixed v1.8):** INFO/200 log entries with 5s+ latency were being classified as `SYSTEM_ERROR`, polluting `chat_friction_logs` and writing empty `"{}"` rows into `error_logs`. `scanCloudRunAnomalies` now ignores INFO/NOTICE/DEBUG + <400 status rows regardless of latency and skips empty payloads. `scripts/audit_logs.js` is the permanent read-only triage tool that cross-references errors, friction, chat records, reminders and vehicle units.
+6. **Dead reminder evaluator (fixed v1.8):** the orphaned `evaluateServiceThresholds()` helper in `index.js` was never invoked and referenced a non-existent `notified_overdue` column. It has been removed and replaced by `maintenanceReminders.evaluateVehicleReminders()` plus a 30-minute sweep worker (initial pass 90s after boot).
+7. **Confirm-phase stall copy (fixed v1.8):** stall nudges now say "Reply YES to confirm / Cancel to discard" instead of "Pending: n/a". Sessions with repeated extraction failures are logged as `EXTRACTION_ERROR` friction so parsing regressions surface immediately.
+
 ---
 
 ## 18. Edit, Delete & VIN Immutability
@@ -637,6 +643,9 @@ Every stateful test or check MUST clear the data it created from the database af
 - `test_ocr_flow.js` — stateless OCR suite: Meta media download, Vision parsing, size/type guards, receipt hint extraction and quiz prefill (20 assertions).
 - `test_date_parser.js` — stateless global date suite: ISO, country-resolved DD/MM vs MM/DD, ordinals, natural language, Nairobi normalization and quiz-field integration (24 assertions).
 - `test_sentinel_recovery.js` — stateless Sentinel stall suite with mocked Supabase + Graph API: nudge dispatch, recovery counter, rate limit, nudge cap and idle-session exclusion (15 assertions).
+- `test_maintenance_reminders.js` — stateless maintenance reminder suite with an in-memory Supabase mock: metric/imperial/operating-hours parsing, canonical conversion, explicit remaining tracking, exactly-once tier dispatch (75/25/5/due/overdue), odometer + hours monitoring, sweep aggregation and delivery guards (44 assertions).
+- `test_natural_parser.js` — stateless natural-parsing suite: deterministic multi-field extraction, extra-notes compilation/dedupe/cap, dynamic missing-field computation and graceful AI degradation (24 assertions).
+- `scripts/audit_logs.js` — read-only log/chat/schema audit used for Cloud Run alert triage (SELECT-only; creates no data).
 
 ### 19.3 Conventions
 - New tests must import `runWithCleanup` and declare every phone/VIN/vehicle they create.
@@ -658,13 +667,14 @@ All multi-field flows run through `src/services/quizEngine.js`. Each asks exactl
 | `transfer_seller` | vehicle → buyer phone → buyer email → **odometer at sale** → confirm → release PIN | `metadata.odometer_at_transfer` | `initiatePassbookTransfer` → `setBuyerDetailsAndSendReleaseOtp` → `verifyOwnerReleaseOtpAndNotifyBuyer` |
 | `log_expense` | vehicle → type → amount → fuel volume → **odometer at fill-up** → notes → confirm | `expense_logs.odometer_reading` + vehicle odometer | `expense_logs` + `expenses` |
 | `log_earnings` | vehicle → amount → **odometer at trip end** → period → confirm | vehicle odometer + `private_earnings.notes` | `private_earnings` |
-| `log_mileage` | vehicle → new odometer → confirm | vehicle odometer | `vehicles` |
+| `log_mileage` | vehicle → new odometer → confirm | vehicle odometer + reminder evaluation | `vehicles` + active distance reminders |
+| `log_operating_hours` | vehicle → hour-meter reading → confirm | vehicle operating hours + hours reminder evaluation | `vehicles.operating_hours`, `vehicles.hours_updated_at` |
 | `edit_vehicle` | vehicle → field → new value → confirm | field-dependent | `updateVehicleDetails` (VIN/token rejected) |
 | `edit_profile` | field (name/language/units) → new value → confirm | — | `profiles` |
 | `delete_vehicle` | vehicle → confirm (cascade notes) | — | `deleteVehicle` (soft delete + cleanup) |
 | `delete_account` | confirm → MFA OTP | — | soft-delete profile/vehicles + clear chat tables |
 | `apply_coupon` | code → confirm | — | `applyTrialExtensionCoupon` |
-| `set_reminder` | vehicle → type → due date (global parser, Nairobi-normalized) or odometer threshold → confirm | optional threshold | `reminders` |
+| `set_reminder` | vehicle → type → due date (global parser, Nairobi-normalized), distance (km/miles) or operating-hours threshold → confirm | structured threshold (`threshold_unit`, `target_value`, `last_service_value`, `remaining_value`) + extra notes | `createThresholdReminder` / `reminders` |
 | `contact_support` | description → confirm | — | Resend escalation |
 | `reactivate_account` | confirm | — | `profiles.is_active = true` |
 
@@ -770,7 +780,7 @@ Tuning env: `AI_TIMEOUT_MS`, `SAKA_PROMPT_CACHE_MS` (60 s), `QUIZ_QUESTION_CACHE
 
 ---
 
-## 26. Rules of Engagement (Codified, v1.7.7)
+## 26. Rules of Engagement (Codified, v1.8.0)
 
 These rules are permanent and mirrored in `.clinerules`:
 
@@ -801,4 +811,79 @@ Normalization: every result returns `{ ok, localDate (YYYY-MM-DD), iso, timeZone
 
 Integration points: `vehicle_registration` insurance/inspection expiry, `edit_vehicle` date fields, `set_reminder` due date, and `globalization.formatDate()` (renders in Africa/Nairobi by default).
 
+
+
+---
+
+## 28. Maintenance Reminder Engine & Operating Hours (v1.8)
+
+### 28.1 Purpose
+Threshold-based maintenance reminders explicitly track and record the remaining distance (kilometres or miles) or time (operating hours) until a reminder triggers, and automatically dispatch proactive WhatsApp alerts as thresholds approach, plus urgent alerts when items are due or overdue.
+
+### 28.2 Unit model (global rule)
+- Canonical storage: distance in **kilometres**, time in **decimal operating hours**.
+- Unit-aware input: "in 5000 km", "3000 miles", "at 45000 km", bare numbers (interpreted in the vehicle unit system), "36 operating hours", "in 36 engine hours", "1250 hrs".
+- Miles convert with `userDistanceToKm()` (1 mi = 1.609344 km). Display adapts per vehicle: metric → km, imperial → mi; time always renders as "operating hours".
+- `parseThresholdSpec()` and `parseOperatingHours()` in `src/services/maintenanceReminders.js` are the single source of truth.
+
+### 28.3 Schema (`reminders` + `vehicles`)
+| Column | Purpose |
+| :--- | :--- |
+| `reminders.threshold_unit` | `distance` \| `hours` \| `date` |
+| `reminders.threshold_input_unit` | `km` \| `mi` \| `hours` as entered |
+| `reminders.target_value` | Absolute target in canonical km / hours |
+| `reminders.last_service_value` | Baseline reading at creation (remaining is computed from here) |
+| `reminders.remaining_value` + `remaining_updated_at` | **Explicit remaining distance/time tracking**, refreshed on every evaluation |
+| `reminders.display_unit` | `km` \| `mi` \| `hours` for rendering |
+| `reminders.notes` | Compiled extra notes from the conversation |
+| `reminders.notified_75p/25p/5p/0p/overdue` | Exactly-once tier dispatch flags |
+| `vehicles.operating_hours` + `hours_updated_at` | Canonical hour-meter reading and update time |
+
+DDL is applied idempotently by `ensureVehicleTableColumns()` (`src/services/vehicles.js`) at startup (the reminders block is guarded by `to_regclass`).
+
+### 28.4 Monitoring & dispatch
+- `applyOdometerReading()` canonicalizes input, updates the vehicle, then evaluates active distance reminders immediately.
+- `applyOperatingHours()` records hour-meter submissions and evaluates hours reminders immediately.
+- `evaluateVehicleReminders()` recomputes remaining, persists `remaining_value`, and dispatches once per tier: 75% (approaching), 25% (warning), 5% (urgent), 0% (due now), overdue. Owner + assigned driver are notified (deduped phones; `canDeliver` preserves Sentinel/superadmin boundaries).
+- `runReminderSweep()` runs every 30 minutes (first pass 90s after boot) from `index.js`, covering reminders for vehicles whose readings changed elsewhere.
+- Wiring: `UPDATE_MILEAGE` and `LOG_OPERATING_HOURS` route handlers, `log_mileage` / `log_operating_hours` quiz completions, and `set_reminder` quiz creation.
+
+### 28.5 Alert copy
+Alerts are WhatsApp-ready and unit-aware, e.g. "Service Warning (KDA 123A): Oil change due soon! Remaining: 850 km. Target: 105,000 km." Imperial vehicles see miles; hour-based reminders see "operating hours". Alerts include remaining value, target and current reading so no follow-up question is needed.
+
+
+---
+
+## 29. Natural Conversational Parsing & Summary Confirmation (v1.8)
+
+### 29.1 Natural extraction
+- `src/services/naturalParser.js` provides:
+  - `extractDeterministicFields()` — runs every flow field's parser/validator (instant, AI-free).
+  - `extractWithAI()` — DeepSeek JSON extraction over the same sentence, flow-aware (field labels/hints), returning `{ fields, extraNotes, confidence }`; never throws and times out at 8s.
+  - `extractEntitiesFromText()` — combined pipeline with missing-field computation.
+- The quiz engine remains the state machine: when the strict parser cannot read a message, it calls `extractWithAI()` for ALL remaining fields before re-asking. Multi-detail sentences ("Toyota Hilux 2018 diesel, 88,000 km, serviced at Shell") fill several fields at once and only genuinely missing required fields are prompted.
+- Prompts stay one question per turn and data-free (no stale acknowledgments); the AI renders them from facts.
+
+### 29.2 Extra notes catch-all
+- Any relevant detail that does not map to a database column is compiled into the quiz draft's `extraNotes` (deduped, capped at 6, ≤280 chars each).
+- Sources: AI `extra_notes`, explicit user notes ("Note: always serviced at Shell"), and substantive replies during confirmation.
+- On save: registration → `vehicles.other_details` + `metadata.extra_notes`; `log_expense` → `expense_logs.notes`; `log_earnings` → `private_earnings.notes`; `set_reminder` → `reminders.notes`.
+- The confirmation summary renders an "Extra notes" section alongside the collected fields.
+
+### 29.3 Summary & confirmation (unchanged invariant)
+- No database write happens until the user explicitly confirms (`YES`/`CONFIRM`).
+- Corrections re-render the summary; `Cancel` aborts; the draft survives conversational interruptions.
+- Confirmation fallback text always includes the extra-notes section, and the AI instruction explicitly renders it.
+
+### 29.4 Sentinel real-time parsing & error monitoring
+- `monitorActiveConversations()` runs every 60s, rescues stalled quizzes and now:
+  - Sends confirm-phase recovery copy ("Reply YES to confirm / Cancel to discard") instead of "Pending: n/a".
+  - Logs `EXTRACTION_ERROR` friction when a session accumulates repeated extraction failures and includes the failure count in the friction snippet.
+  - Continues to record `CONVERSATION_STALL` nudges, rate limits and max-nudge caps.
+- Cloud Run triage: `scanCloudRunAnomalies()` ignores benign INFO/NOTICE/DEBUG + <400 entries (regardless of latency) and skips empty payloads; `scripts/audit_logs.js` is the read-only cross-reference tool.
+
+### 29.5 Tests
+- `test_maintenance_reminders.js` — 44 stateless assertions (unit parsing, canonical conversion, remaining tracking, tier dispatch, overdue, sweep, imperial display).
+- `test_natural_parser.js` — 24 stateless assertions (deterministic extraction, extra notes, dynamic missing fields, AI degradation).
+- Regressions kept green: `test_quiz_flow.js` (41) and `test_sentinel_recovery.js` (15).
 

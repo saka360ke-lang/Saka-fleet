@@ -30,6 +30,7 @@ import {
 } from '../services/transfers.js';
 import { applyTrialExtensionCoupon } from '../services/coupons.js';
 import { detectCountryFromPhone as detectCountryGlobal } from '../services/globalization.js';
+import { applyOdometerReading, applyOperatingHours } from '../services/maintenanceReminders.js';
 import { handleQuizTurn, detectQuizStart, shouldPauseQuizForChat, getCurrentQuizField, detectFlowSwitch, getFlowDefinition } from '../services/quizEngine.js';
 import { renderActionDiscovery, composeMessage } from '../services/conversationEngine.js';
 import { enqueueUserMessage } from '../services/messageQueue.js';
@@ -1547,23 +1548,77 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             else if (activeIntent === 'UPDATE_MILEAGE') {
               const extOdometer = mergedExt.odometer || mergedExt.current_mileage || extractOdometerFromText(messageText);
               if (extOdometer && extOdometer > 0) {
+                const inputUnit = targetVeh?.unit_system === 'imperial' ? 'mi' : 'km';
+                let odometerSaveError = null;
                 if (supabaseClient && targetVeh) {
-                  await supabaseClient.from('vehicles').update({
-                    odometer_reading: extOdometer,
-                    current_mileage: extOdometer,
-                    updated_at: new Date().toISOString()
-                  }).eq('id', targetVeh.id);
-                  targetVeh.current_mileage = extOdometer;
+                  const recorded = await applyOdometerReading({
+                    supabase: supabaseClient,
+                    vehicle: targetVeh,
+                    reading: extOdometer,
+                    inputUnit,
+                    sendFn: (phone, text) => sendWhatsAppReply(phone, text),
+                    canDeliver: (phone) => String(phone || '').replace(/[^\d]/g, '') !== String(senderPhone || '').replace(/[^\d]/g, '')
+                  });
+                  if (recorded?.ok === false) odometerSaveError = recorded.error;
+                  if (recorded?.canonicalKm) targetVeh.current_mileage = recorded.canonicalKm;
                 }
-                customReply = `📈 *Odometer Updated!* 🚗\n\n` +
-                  `• *Vehicle:* *${targetVeh.plate_number}* (${targetVeh.make_model || 'Vehicle'})\n` +
-                  `• *New Odometer:* ${Number(extOdometer).toLocaleString()} ${targetVeh?.unit_system === 'imperial' ? 'mi' : 'km'}\n\n` +
-                  `✅ Saved to database under *${targetVeh.plate_number}*!`;
-                if (existingVehicles.length > 1) {
-                  customReply += `\n*(Active vehicle: ${targetVeh.plate_number})*`;
+                if (odometerSaveError) {
+                  customReply = `⚠️ Could not update the odometer for *${targetVeh.plate_number}*: ${odometerSaveError}`;
+                } else {
+                  customReply = `📈 *Odometer Updated!* 🚗
+
+` +
+                    `• *Vehicle:* *${targetVeh.plate_number}* (${targetVeh.make_model || 'Vehicle'})
+` +
+                    `• *New Odometer:* ${Number(extOdometer).toLocaleString()} ${inputUnit}
+
+` +
+                    `✅ Saved to database under *${targetVeh.plate_number}*!`;
+                  if (existingVehicles.length > 1) {
+                    customReply += `
+*(Active vehicle: ${targetVeh.plate_number})*`;
+                  }
                 }
               } else {
-                customReply = `📈 *Update Mileage / Odometer*\n\nPlease reply with your updated odometer reading (e.g. *"Odometer 45000 km"*).`;
+                customReply = `📈 *Update Mileage / Odometer*
+
+Please reply with your updated odometer reading (e.g. *"Odometer 45000 km"*).`;
+              }
+            }
+            else if (activeIntent === 'LOG_OPERATING_HOURS') {
+              const extHours = mergedExt.operating_hours !== undefined && mergedExt.operating_hours !== null
+                ? Number(mergedExt.operating_hours)
+                : extractNumberFromText(messageText);
+              if (supabaseClient && targetVeh && extHours !== null && Number.isFinite(extHours) && extHours >= 0) {
+                const recorded = await applyOperatingHours({
+                  supabase: supabaseClient,
+                  vehicle: targetVeh,
+                  hours: extHours,
+                  sendFn: (phone, text) => sendWhatsAppReply(phone, text),
+                  canDeliver: (phone) => String(phone || '').replace(/[^\d]/g, '') !== String(senderPhone || '').replace(/[^\d]/g, '')
+                });
+                if (!recorded.ok) {
+                  customReply = `⚠️ Could not update operating hours for *${targetVeh.plate_number}*: ${recorded.error}`;
+                } else {
+                  targetVeh.operating_hours = extHours;
+                  customReply = `⏱️ *Operating Hours Updated!*
+
+` +
+                    `• *Vehicle:* *${targetVeh.plate_number}* (${targetVeh.make_model || 'Vehicle'})
+` +
+                    `• *New Hour Meter:* ${Number(extHours).toLocaleString()} operating hours
+
+` +
+                    `✅ Saved to database under *${targetVeh.plate_number}*!`;
+                  if (existingVehicles.length > 1) {
+                    customReply += `
+*(Active vehicle: ${targetVeh.plate_number})*`;
+                  }
+                }
+              } else {
+                customReply = `⏱️ *Log Operating Hours*
+
+Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
               }
             }
             else if (activeIntent === 'LOG_EARNINGS') {
@@ -1586,7 +1641,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               }
             }
             else if (activeIntent === 'SET_REMINDER') {
-              customReply = `🔔 *Set Service Reminder for ${targetVeh.plate_number}*\n\nPlease reply with your service reminder details. For example:\n• *"Remind oil change in 5000 km"* or *"Service due next Monday"*`;
+              customReply = `🔔 *Set Service Reminder for ${targetVeh.plate_number}*\n\nPlease reply with your service reminder details. For example:\n• *"Remind oil change in 5000 km"*, *"Brake pads in 3000 miles"*, *"Spare part change in 36 operating hours"* or *"Service due next Monday"*`;
             }
             else if (activeIntent === 'REQUEST_REPORT') {
               const summaryReport = await getVehicleSummaryReport({

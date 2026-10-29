@@ -30,7 +30,7 @@ You sit directly between the user and the fleet database: collecting, parsing, l
 INTENT CLASSIFICATION & AGENT ACTIONS:
 Analyze the incoming message, conversation context, and user fleet roster to classify the user's intent into a JSON object matching this schema:
 {
-  "intent": "GREETING" | "ACTION_DISCOVERY" | "TRANSFER_PASSBOOK" | "APPLY_COUPON" | "REGISTER_VEHICLE" | "ONBOARDING_INPUT" | "ONBOARDING_SKIP" | "VERIFY_OTP" | "RESEND_OTP" | "UPDATE_EMAIL" | "APP_HELP" | "MANAGE_VEHICLE" | "LIST_VEHICLES" | "SWITCH_VEHICLE" | "QUERY_FUEL_EFFICIENCY" | "QUERY_FLEET_SUMMARY" | "LOG_EXPENSE" | "UPDATE_MILEAGE" | "LOG_EARNINGS" | "SET_REMINDER" | "COMPLETE_REMINDER" | "REQUEST_REPORT" | "CONTACT_SUPPORT" | "REACTIVATE_ACCOUNT" | "EDIT_VEHICLE" | "DELETE_VEHICLE" | "EDIT_PROFILE" | "DELETE_ACCOUNT" | "GENERAL_CHAT" | "ASSIGN_DRIVER" | "UNASSIGN_DRIVER",
+  "intent": "GREETING" | "ACTION_DISCOVERY" | "TRANSFER_PASSBOOK" | "APPLY_COUPON" | "REGISTER_VEHICLE" | "ONBOARDING_INPUT" | "ONBOARDING_SKIP" | "VERIFY_OTP" | "RESEND_OTP" | "UPDATE_EMAIL" | "APP_HELP" | "MANAGE_VEHICLE" | "LIST_VEHICLES" | "SWITCH_VEHICLE" | "QUERY_FUEL_EFFICIENCY" | "QUERY_FLEET_SUMMARY" | "LOG_EXPENSE" | "UPDATE_MILEAGE" | "LOG_EARNINGS" | "SET_REMINDER" | "COMPLETE_REMINDER" | "LOG_OPERATING_HOURS" | "REQUEST_REPORT" | "CONTACT_SUPPORT" | "REACTIVATE_ACCOUNT" | "EDIT_VEHICLE" | "DELETE_VEHICLE" | "EDIT_PROFILE" | "DELETE_ACCOUNT" | "GENERAL_CHAT" | "ASSIGN_DRIVER" | "UNASSIGN_DRIVER",
   "extracted_data": {
     "plate_number": string | null,
     "target_vehicle": string | null,
@@ -42,6 +42,7 @@ Analyze the incoming message, conversation context, and user fleet roster to cla
     "fuel_type": string | null,
     "current_mileage": number | null,
     "odometer": number | null,
+    "operating_hours": number | null,
     "amount": number | null,
     "fuel_liters": number | null,
     "liters": number | null,
@@ -98,7 +99,11 @@ AGENT ROLES & BEHAVIORAL DIRECTIVES:
    - Always remind first-time users they can type "Help" or "What can I do?" anytime, "Restart"/"Cancel" to recover, and reply "ACCEPT" to claim a transferred passbook.
    - Keep each onboarding prompt short, friendly, and state the current stage/step.
 
-7. EDIT & DELETE (VIN IS PERMANENTLY IMMUTABLE):
+7. MAINTENANCE HOURS & THRESHOLD REMINDERS (GLOBAL UNITS):
+   - LOG_OPERATING_HOURS: Triggered when a user logs or updates a vehicle/machine hour meter, e.g. "log 1250 engine hours", "update operating hours to 36.5", "hours now 1200". Extract "operating_hours".
+   - SET_REMINDER must capture distance thresholds in km OR miles and time thresholds in operating hours, e.g. "oil change in 5000 km", "brake pads in 3000 miles", "spare part change in 36 operating hours". Store canonical values (km, hours) and display them in the user unit system.
+
+8. EDIT & DELETE (VIN IS PERMANENTLY IMMUTABLE):
    - EDIT_VEHICLE: Triggered when an owner asks to update vehicle details, e.g. "update vehicle KDA 123A color to White", "change make and model for KBC 456X to Toyota Fielder", "edit my car". Extract the target plate into "plate_number"/"target_vehicle", the changed field into "edit_field" and the new value into "edit_value" (also populate the matching attribute).
    - DELETE_VEHICLE: Triggered when an owner asks to delete/remove a vehicle, e.g. "delete vehicle KDA 123A", "remove my car". Extract the plate into "plate_number"/"target_vehicle". Deletion is soft-delete + driver unassignment and preserves historical logs; only the owner may delete.
    - EDIT_PROFILE: Triggered when a user asks to update their profile, contact details, or settings, e.g. "update my name to Jane Doe", "change my language to Swahili", "switch me to imperial units". Extract "full_name", "preferred_language", "unit_system".
@@ -226,6 +231,14 @@ export function extractVehicleAttributes(messageText = '') {
     }
   }
 
+  // 4b. Operating / Engine Hours (hour-meter submissions)
+  const hoursMatch = clean.match(/(\d+(?:\.\d+)?)\s*(?:operating|engine|machine|running)?\s*hours?\b/i) ||
+                     clean.match(/\b(?:operating|engine|machine)\s*hours?\s*(?:at|now|reading|=|:)?\s*(\d+(?:\.\d+)?)/i);
+  if (hoursMatch) {
+    const hoursNum = parseFloat(hoursMatch[1]);
+    if (!isNaN(hoursNum) && hoursNum >= 0) data.operating_hours = hoursNum;
+  }
+
   // 5. Plate Number (Excluding Currency strings and reserved keywords)
   const currencyRegex = /^(?:KES|USD|EUR|GBP|ZAR|NGN|UGX|TZS|RWF)\b/i;
   const plateMatch = clean.match(/\b([A-Z]{1,4}\s?\d{1,4}[A-Z]{1,2}|\d[A-Z]{3}\d{3})\b/i);
@@ -258,6 +271,7 @@ export function extractVehicleAttributes(messageText = '') {
       .replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, '')
       .replace(/(?:odometer|mileage|reading|clocked)\s*[:=]?\s*[\d,]+/gi, '')
       .replace(/\b[\d,]+\s*(?:km|kms|miles|mi)\b/gi, '')
+      .replace(/[\d,.]+\s*(?:operating|engine|machine)?\s*hours?/gi, '')
       .replace(/(?:yom|year)?\s*\b(19[5-9]\d|20[0-2]\d)\b/gi, '')
       .replace(/\b(diesel|petrol|gasoline|hybrid|electric|ev)\b/gi, '')
       .replace(/\b(owner|driver)\b/gi, '')
@@ -596,10 +610,24 @@ export function classifyIntentWithRegex(messageText = '') {
     };
   }
 
+  // Threshold-reminder phrasing wins over logging intents (e.g. "oil change in 36 operating hours").
+  const looksLikeReminder = /remind|reminder|service in|due in|alert/i.test(clean) ||
+    /\b(?:in|after|every|within)\s*\d[\d.,]*\s*(?:km|kms|kilometers?|kilometres?|miles?|mi|(?:operating|engine|machine|running|work)?\s*(?:hours?|hrs?))\b/i.test(clean);
+
+  // Operating / engine hours logging
+  if (!looksLikeReminder && /operating hours|engine hours|machine hours|running hours|log hours|update hours|record hours|hours reading|hours now/i.test(clean)) {
+    const hoursVal = attrs.operating_hours !== undefined ? attrs.operating_hours : null;
+    return {
+      intent: 'LOG_OPERATING_HOURS',
+      extracted_data: { operating_hours: hoursVal },
+      reply_message: 'Updating operating hours.'
+    };
+  }
+
   // Odometer / Mileage Update (when not part of a broader vehicle profile)
   // Fuel/expense wording takes priority so "Logged 30L fuel at 50350 km for KES 5500" is not misread as an odometer update.
   const looksLikeExpense = /fuel|expense|spent|refuel|liter|litres|liters|receipt|repair|oil change|maintenance|paid|cost/i.test(clean);
-  if (!looksLikeExpense && /odometer|mileage|\bkm\b|\bmiles\b|reading|clocked/i.test(clean)) {
+  if (!looksLikeReminder && !looksLikeExpense && /odometer|mileage|\bkm\b|\bmiles\b|reading|clocked/i.test(clean)) {
     const odoVal = attrs.odometer || attrs.current_mileage || null;
     return {
       intent: 'UPDATE_MILEAGE',
@@ -609,7 +637,7 @@ export function classifyIntentWithRegex(messageText = '') {
   }
 
   // Expense / Fuel Logging
-  if (/fuel|expense|spent|kes|usd|gbp|eur|cost|paid|refuel|liter|litres|receipt|repair|oil change|maintenance/i.test(clean)) {
+  if (!looksLikeReminder && /fuel|expense|spent|kes|usd|gbp|eur|cost|paid|refuel|liter|litres|receipt|repair|oil change|maintenance/i.test(clean)) {
     const amtMatch = clean.match(/[\d,]+(?:\.\d+)?/);
     const amtVal = amtMatch ? parseFloat(amtMatch[0].replace(/,/g, '')) : null;
     return {
@@ -631,7 +659,8 @@ export function classifyIntentWithRegex(messageText = '') {
   }
 
   // Reminders
-  if (/remind|reminder|service in|due in|alert/i.test(clean)) {
+  // Reminders - unit-aware (km, miles, operating hours)
+  if (looksLikeReminder) {
     return {
       intent: 'SET_REMINDER',
       extracted_data: {},

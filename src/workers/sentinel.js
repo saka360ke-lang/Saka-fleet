@@ -428,22 +428,23 @@ export async function scanCloudRunAnomalies(providedSupabase) {
     if (recentlyAlertedLogHashes.has(hashStr)) continue;
 
     const isError = log.severity === 'ERROR' || log.severity === 'CRITICAL';
-    const isTimeoutRisk = (log.httpRequest?.latency >= 5) || (log.httpRequest?.status >= 500);
+    const isTimeoutRisk = Number(log.httpRequest?.status || 0) >= 500;
 
     // Ignore benign INFO/NOTICE traffic (health checks, 200 webhooks) â€” this is
     // the noise source that produced false "AI-diagnosed errors".
     const status = Number(log.httpRequest?.status || 0);
     const severity = String(log.severity || '').toUpperCase();
-    const isBenign = (severity === 'INFO' || severity === 'NOTICE' || severity === 'DEBUG') &&
-      (status === 0 || status < 400) &&
-      !(log.httpRequest?.latency >= 5);
+    const isBenign = (severity === 'INFO' || severity === 'NOTICE' || severity === 'DEBUG') && status < 400;
 
     if (isBenign) continue;
+
+    const logText = String(log.text || '').trim();
+    if (!logText || logText === '{}' || logText === 'null' || logText === 'undefined') continue;
 
     if (isError || isTimeoutRisk) {
       recentlyAlertedLogHashes.set(hashStr, now);
 
-      const snippet = `[Cloud Run Alert] Severity: ${log.severity} | Status: ${log.httpRequest?.status || 'N/A'} | Latency: ${log.httpRequest?.latency || 0}s\nMessage: ${log.text || 'No message'}`;
+      const snippet = `[Cloud Run Alert] Severity: ${log.severity} | Status: ${log.httpRequest?.status || 'N/A'} | Latency: ${log.httpRequest?.latency || 0}s\nMessage: ${logText}`;
       
       // Log to chat_friction_logs
       try {
@@ -461,7 +462,7 @@ export async function scanCloudRunAnomalies(providedSupabase) {
       // Log to error_logs
       try {
         await supabase.from('error_logs').insert([{
-          error_message: log.text || 'Cloud Run Log Alert',
+          error_message: logText,
           stack_trace: JSON.stringify(log),
           route: log.httpRequest?.requestUrl || 'system',
           status: 'unresolved',
@@ -964,14 +965,20 @@ export async function monitorActiveConversations(providedSupabase) {
           phase: quiz.phase,
           idleMinutes: stallMinutes,
           pendingQuestion: field ? { label: field.label, hint: field.hint } : null,
-          instruction: 'In ONE short friendly message, check whether the user is still there, repeat ONLY the pending question if one exists, and offer Restart or Cancel. Do not claim anything was saved.'
+          isConfirmPhase: quiz.phase === 'confirm',
+          extractionFailures: Number(quiz.extractionFailures || 0),
+          instruction: quiz.phase === 'confirm'
+            ? 'In ONE short friendly message, remind the user they were confirming their draft. Ask them to reply YES/CONFIRM to save or Cancel to discard. Do not claim anything was saved.'
+            : 'In ONE short friendly message, check whether the user is still there, repeat ONLY the pending question if one exists, and offer Restart or Cancel. Do not claim anything was saved.'
         },
         language,
         countryInfo,
         profile,
         fallbackText: field
           ? `Still there? When you're ready: ${field.label} â€” ${field.hint} (Reply Restart or Cancel.)`
-          : 'Still there? Reply to continue, or type Restart / Cancel.'
+          : quiz.phase === 'confirm'
+            ? 'Still there? Reply YES to confirm and save, or Cancel to discard your draft.'
+            : 'Still there? Reply to continue, or type Restart / Cancel.'
       });
 
       const sent = await sendProactiveWhatsApp(phone, nudgeText);
@@ -1001,12 +1008,14 @@ export async function monitorActiveConversations(providedSupabase) {
         }]);
       } catch {}
 
+      const extractionFailures = Number(quiz.extractionFailures || 0);
+      const frictionType = extractionFailures >= 2 ? 'EXTRACTION_ERROR' : 'CONVERSATION_STALL';
       try {
         await supabase.from('chat_friction_logs').insert([{
           user_phone: phone,
           session_id: `session_${String(phone).replace(/[^\d]/g, '')}`,
-          friction_type: 'CONVERSATION_STALL',
-          transcript_snippet: `Stalled ${stallMinutes}m in ${quiz.flow}/${quiz.phase}. Pending: ${field?.label || 'n/a'}. Nudge #${newState.recovery.nudges}.`,
+          friction_type: frictionType,
+          transcript_snippet: `Stalled ${stallMinutes}m in ${quiz.flow}/${quiz.phase}. Pending: ${field?.label || 'confirm draft'}. Nudge #${newState.recovery.nudges}. Extraction failures: ${extractionFailures}.`,
           detected_at: new Date().toISOString()
         }]);
       } catch {}

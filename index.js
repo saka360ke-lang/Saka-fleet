@@ -18,6 +18,7 @@ import {
   verifyPaystackSignature
 } from './src/services/paystack.js';
 import { processImpendingTrialReminders } from './src/services/coupons.js';
+import { runReminderSweep } from './src/services/maintenanceReminders.js';
 import { createResilientClient } from './src/services/supabaseClient.js';
 import { ensureChatSessionsTable } from './src/services/sessionStore.js';
 import { drainQueue, getQueueStats } from './src/services/messageQueue.js';
@@ -110,73 +111,6 @@ function canDeliverVehicleAlert(targetPhone, vehicle) {
   return true;
 }
 
-// Helper: Evaluate Service Thresholds (75%, 25%, 5%, 0% Due, Overdue)
-async function evaluateServiceThresholds(vehicle, currentVal, unitType) {
-  if (!vehicle || !currentVal) return;
-  try {
-    const { data: activeReminders } = await supabase
-      .from('reminders')
-      .select('*, profiles!reminders_profile_id_fkey(phone_number)')
-      .eq('vehicle_id', vehicle.id)
-      .eq('status', 'active')
-      .eq('threshold_unit', unitType);
-
-    if (!activeReminders || activeReminders.length === 0) return;
-
-    const numericCurrent = parseFloat(currentVal) || 0;
-    const isImperial = (vehicle.unit_system || 'metric').toLowerCase() === 'imperial';
-
-    let unitLabel = 'KM';
-    if (unitType === 'distance') unitLabel = isImperial ? 'Miles' : 'KM';
-    else if (unitType === 'hours') unitLabel = 'Hours';
-    else if (unitType === 'kwh') unitLabel = 'kWh';
-    else if (unitType === 'cycles') unitLabel = 'Cycles';
-
-    for (const rem of activeReminders) {
-      const target = parseFloat(rem.target_value);
-      const lastServ = parseFloat(rem.last_service_value || 0);
-      if (!target || target <= lastServ) continue;
-
-      const interval = target - lastServ;
-      const remaining = target - numericCurrent;
-      const remainingRatio = remaining / interval;
-
-      const ownerPhone = vehicle.profiles?.phone_number || rem.profiles?.phone_number;
-      const driverPhone = vehicle.assigned_driver_profile?.phone_number;
-
-      let alertText = null;
-      let updateCol = null;
-
-      if (remainingRatio <= 0.75 && remainingRatio > 0.25 && !rem.notified_75p) {
-        alertText = `🛠️ *Service Reminder (${vehicle.plate_number})*\n${rem.reminder_type} is approaching. Current: ${numericCurrent} ${unitLabel}, Target: ${target} ${unitLabel} (${Math.round(remainingRatio * 100)}% remaining).`;
-        updateCol = 'notified_75p';
-      } else if (remainingRatio <= 0.25 && remainingRatio > 0.05 && !rem.notified_25p) {
-        alertText = `⚠️ *Service Warning (${vehicle.plate_number})*\n${rem.reminder_type} due soon! Remaining: ${Math.round(remaining)} ${unitLabel}. Target: ${target} ${unitLabel}.`;
-        updateCol = 'notified_25p';
-      } else if (remainingRatio <= 0.05 && remainingRatio > 0 && !rem.notified_5p) {
-        alertText = `🚨 *URGENT Service Alert (${vehicle.plate_number})*\n${rem.reminder_type} due imminently! Remaining: ${Math.round(remaining)} ${unitLabel}.`;
-        updateCol = 'notified_5p';
-      } else if (remainingRatio <= 0 && remainingRatio > -0.05 && !rem.notified_0p) {
-        alertText = `‼️ *CRITICAL: Service Due Now (${vehicle.plate_number})*\n${rem.reminder_type} reached target ${target} ${unitLabel}! Perform service & reply "Renewed ${rem.reminder_type}".`;
-        updateCol = 'notified_0p';
-      } else if (remainingRatio <= -0.05 && !rem.notified_overdue) {
-        alertText = `🚨 *OVERDUE Service Alert (${vehicle.plate_number})*\n${rem.reminder_type} is OVERDUE by ${Math.abs(Math.round(remaining))} ${unitLabel}! Target was ${target} ${unitLabel}, current is ${numericCurrent} ${unitLabel}.`;
-        updateCol = 'notified_overdue';
-      }
-
-      if (alertText && updateCol) {
-        if (ownerPhone && canDeliverVehicleAlert(ownerPhone, vehicle)) await sendMetaWhatsAppMessage(ownerPhone, alertText);
-        if (driverPhone && driverPhone !== ownerPhone && canDeliverVehicleAlert(driverPhone, vehicle)) await sendMetaWhatsAppMessage(driverPhone, alertText);
-
-        await supabase.from('reminders').update({ [updateCol]: true }).eq('id', rem.id);
-      }
-    }
-  } catch (err) {
-    console.error('Error evaluating service thresholds:', err);
-  }
-}
-
-
 // Worker: Process 5-Minute Delayed Owner Notifications
 async function processPendingOwnerNotifications() {
   try {
@@ -202,7 +136,7 @@ async function processPendingOwnerNotifications() {
       const plate = item.vehicle?.plate_number || 'Vehicle';
 
       if (ownerPhone && canDeliverVehicleAlert(ownerPhone, item.vehicle)) {
-        const msg = `🔔 *Driver Activity Summary (${plate})*\nDriver *${driverName}* submitted:\n👉 ${item.details_summary}`;
+        const msg = `ðŸ”” *Driver Activity Summary (${plate})*\nDriver *${driverName}* submitted:\nðŸ‘‰ ${item.details_summary}`;
         await sendMetaWhatsAppMessage(ownerPhone, msg);
       }
 
@@ -223,6 +157,27 @@ setInterval(() => {
     console.error('[Worker] Error processing impending trial reminders:', err);
   });
 }, 15 * 60 * 1000); // Check every 15 minutes
+
+// Worker: Maintenance Reminder Monitoring — evaluates active distance (km/mi)
+// and operating-hours thresholds against live odometer/hours readings and
+// dispatches proactive WhatsApp alerts as thresholds approach (75/25/5%) plus
+// urgent alerts when an item is due or overdue.
+async function runMaintenanceReminderSweep() {
+  try {
+    const result = await runReminderSweep({
+      supabase,
+      sendFn: (phone, text) => sendMetaWhatsAppMessage(phone, text),
+      canDeliver: canDeliverVehicleAlert
+    });
+    if (result?.alerts) {
+      console.log(`[Maintenance] Sweep: ${result.vehiclesChecked} vehicle(s), ${result.evaluated} reminder(s), ${result.alerts} alert(s), ${result.dispatched} dispatched.`);
+    }
+  } catch (err) {
+    console.error('[Worker] Maintenance reminder sweep failed:', err.message);
+  }
+}
+setTimeout(runMaintenanceReminderSweep, 90 * 1000); // First pass shortly after boot
+setInterval(runMaintenanceReminderSweep, 30 * 60 * 1000); // Every 30 minutes
 
 
 
@@ -321,7 +276,7 @@ fastify.post('/api/auth/whatsapp/request', async (request, reply) => {
           <h1 style="color: #38BDF8; letter-spacing: 2px;">${emailOtp}</h1>
           <p>This code is valid for 5 minutes.</p>
           <hr style="border: 0; border-top: 1px solid #1e293b; margin: 20px 0;" />
-          <p style="font-size: 12px; color: #94a3b8;">Cryptographically Verified by Saka AI • <a href="https://sakafleet.com" style="color: #38BDF8;">sakafleet.com</a></p>
+          <p style="font-size: 12px; color: #94a3b8;">Cryptographically Verified by Saka AI â€¢ <a href="https://sakafleet.com" style="color: #38BDF8;">sakafleet.com</a></p>
         </div>
       `
     });
@@ -530,7 +485,7 @@ async function processComplianceReminders() {
             for (const av of assignedVehicles) {
               const ownerPhone = av.owner_phone || av.profiles?.phone_number;
               if (ownerPhone && ownerPhone !== drvPhone && canDeliverVehicleAlert(ownerPhone, av)) {
-                const ownerAlert = `⚠️ *Driver License Expiry Alert (${av.plate_number})*\nAssigned driver *${drvName}*'s license expires in ${daysLeft} days (${expiryDate.toDateString()}).`;
+                const ownerAlert = `âš ï¸ *Driver License Expiry Alert (${av.plate_number})*\nAssigned driver *${drvName}*'s license expires in ${daysLeft} days (${expiryDate.toDateString()}).`;
                 await sendMetaWhatsAppMessage(ownerPhone, ownerAlert);
               }
             }
@@ -650,7 +605,7 @@ async function processAutoAudits() {
       try {
         const pdfBuffer = await generateFleetReport(reportData);
         const reportUrl = await uploadReportToSupabase(supabase, pdfBuffer, `Fleet_${Date.now()}`);
-        const msg = `📊 Your Fleet Auto-Audit Report is ready.\n\nNet Earnings Today: KES ${(fleetTotalEarnings - fleetTotalExpenses).toFixed(2)}\nView PDF: ${reportUrl}`;
+        const msg = `ðŸ“Š Your Fleet Auto-Audit Report is ready.\n\nNet Earnings Today: KES ${(fleetTotalEarnings - fleetTotalExpenses).toFixed(2)}\nView PDF: ${reportUrl}`;
         await sendMetaWhatsAppMessage(phone, msg);
         fastify.log.info(`Auto-audit sent to ${phone} for entire fleet.`);
       } catch (repErr) {
@@ -698,7 +653,7 @@ async function checkMorningBriefingSchedule() {
 
     if (nairobiHour === 8 && nairobiMinute <= 5 && lastMorningBriefingDate !== todayStr) {
       lastMorningBriefingDate = todayStr;
-      fastify.log.info('🌅 Dispatching automated 8:00 AM executive morning briefing to superadmin...');
+      fastify.log.info('ðŸŒ… Dispatching automated 8:00 AM executive morning briefing to superadmin...');
       await sendMorningExecutiveBriefing(supabase);
     }
   } catch (err) {
@@ -721,7 +676,7 @@ setInterval(async () => {
   }
 }, 5 * 60 * 1000); // Run friction evaluation every 5 minutes
 
-// Sentinel Real-Time Conversation Recovery Loop — rescues users stalled mid-quiz.
+// Sentinel Real-Time Conversation Recovery Loop â€” rescues users stalled mid-quiz.
 setInterval(async () => {
   try {
     await monitorActiveConversations(supabase);
@@ -740,7 +695,7 @@ setInterval(async () => {
 }, 2 * 60 * 1000); // Run anomaly evaluation every 2 minutes
 
 // ==========================================
-// SENTINEL HORIZON — WEEKLY FEATURE EVOLUTION (Sundays 20:00 EAT)
+// SENTINEL HORIZON â€” WEEKLY FEATURE EVOLUTION (Sundays 20:00 EAT)
 // ==========================================
 let lastHorizonDate = null;
 async function checkHorizonSchedule() {
@@ -753,7 +708,7 @@ async function checkHorizonSchedule() {
     // Sunday === 0
     if (now.getUTCDay() === 0 && nairobiHour === 20 && nairobiMinute <= 5 && lastHorizonDate !== todayStr) {
       lastHorizonDate = todayStr;
-      fastify.log.info('🌟 Sentinel Horizon: synthesizing weekly feature evolution blueprint...');
+      fastify.log.info('ðŸŒŸ Sentinel Horizon: synthesizing weekly feature evolution blueprint...');
       const { generateWeeklyFeaturePlan } = await import('./src/workers/sentinel.js');
       await generateWeeklyFeaturePlan(supabase);
     }
@@ -799,7 +754,7 @@ async function handlePaystackWebhook(request, reply) {
 
         if (phone) {
           const cleanPhone = phone.startsWith('+') ? phone : `+${phone}`;
-          await sendMetaWhatsAppMessage(cleanPhone, `✅ *Transfer Fee Payment Confirmed!* 💳\n\nYour transfer payment has been received. Please reply **'ACCEPT'** to verify your email and receive your digital passbook!`);
+          await sendMetaWhatsAppMessage(cleanPhone, `âœ… *Transfer Fee Payment Confirmed!* ðŸ’³\n\nYour transfer payment has been received. Please reply **'ACCEPT'** to verify your email and receive your digital passbook!`);
         }
         return reply.status(200).send({ status: 'success', transfer_fee_handled: true });
       }
@@ -842,7 +797,7 @@ async function handlePaystackWebhook(request, reply) {
         const tierInfo = SUBSCRIPTION_TIERS[targetTier] || SUBSCRIPTION_TIERS.solo_pro;
         const targetPhone = phone || updatedProfile?.phone_number;
         if (targetPhone) {
-          const successMsg = `🎉 *Subscription Upgrade Successful!*\n\nYour account has been upgraded to *${tierInfo.name}* (${billingInterval}).\n• Vehicle Limit: ${tierInfo.vehicleLimit === Infinity ? 'Unlimited' : tierInfo.vehicleLimit}\n• Premium Features: Unlocked 🚀\n\nThank you for choosing Saka!`;
+          const successMsg = `ðŸŽ‰ *Subscription Upgrade Successful!*\n\nYour account has been upgraded to *${tierInfo.name}* (${billingInterval}).\nâ€¢ Vehicle Limit: ${tierInfo.vehicleLimit === Infinity ? 'Unlimited' : tierInfo.vehicleLimit}\nâ€¢ Premium Features: Unlocked ðŸš€\n\nThank you for choosing Saka!`;
           await sendMetaWhatsAppMessage(targetPhone, successMsg);
         }
       }
@@ -967,10 +922,10 @@ const start = async () => {
     // Verify Supabase connection before starting
     const { error: pingErr } = await supabase.from('profiles').select('id').limit(1);
     if (pingErr) {
-      console.error('❌ Supabase connection test failed:', pingErr.message);
+      console.error('âŒ Supabase connection test failed:', pingErr.message);
       process.exit(1);
     }
-    console.log('✅ Supabase connected successfully.');
+    console.log('âœ… Supabase connected successfully.');
 
     // Ensure Sentinel Worker & Superadmin Feature Set Tables exist
     await ensureSentinelTables(supabase);
@@ -981,7 +936,7 @@ const start = async () => {
     const port = process.env.PORT || 3000;
     await fastify.listen({ port: Number(port), host: '0.0.0.0' });
     serverStarted = true;
-    console.log(`🚀 Saka Fleet Meta-Native Backend is live and listening on port ${port}`);
+    console.log(`ðŸš€ Saka Fleet Meta-Native Backend is live and listening on port ${port}`);
     // Cloud Run Startup Self-Announcement
     const isProduction = process.env.NODE_ENV === 'production' || process.env.K_SERVICE;
     const currentRevision = process.env.K_REVISION || process.env.COMMIT_SHA || process.env.RENDER_GIT_COMMIT;
@@ -989,7 +944,7 @@ const start = async () => {
       const { data: config } = await supabase.from('system_config').select('value').eq('key', 'last_deployed_revision').maybeSingle();
       if (!config || config.value !== currentRevision) {
         await supabase.from('system_config').upsert([{ key: 'last_deployed_revision', value: currentRevision }]);
-        const waMsg = `🚀 *Saka Fleet Live on Cloud Run!* 🛠️\n\n• *Revision:* \`${currentRevision}\`\n• *Status:* Healthy & Listening\n• *Timestamp:* ${new Date().toLocaleString()}\n\n_Automated startup hook dispatched to Superadmin._`;
+        const waMsg = `ðŸš€ *Saka Fleet Live on Cloud Run!* ðŸ› ï¸\n\nâ€¢ *Revision:* \`${currentRevision}\`\nâ€¢ *Status:* Healthy & Listening\nâ€¢ *Timestamp:* ${new Date().toLocaleString()}\n\n_Automated startup hook dispatched to Superadmin._`;
         await sendMetaWhatsAppMessage(process.env.SUPERADMIN_PHONE, waMsg).catch(() => {});
         console.log(`[Deployment Alert] Startup announcement sent to Superadmin for revision: ${currentRevision}`);
       }
@@ -1005,7 +960,7 @@ const start = async () => {
 // complete before Cloud Run terminates the instance.
 const shutdown = async (signal) => {
   try {
-    console.log(`[Shutdown] ${signal} received — draining message queue (${JSON.stringify(getQueueStats())})...`);
+    console.log(`[Shutdown] ${signal} received â€” draining message queue (${JSON.stringify(getQueueStats())})...`);
     const drained = await drainQueue(12000);
     if (!drained) console.warn('[Shutdown] Queue drain timed out; exiting.');
     await fastify.close();

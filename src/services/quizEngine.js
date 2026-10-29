@@ -38,6 +38,8 @@ import {
 } from './vehicles.js';
 import { scheduleTrialExtensionCoupon, applyTrialExtensionCoupon } from './coupons.js';
 import { parseFlexibleDate } from './dateParser.js';
+import { parseThresholdSpec, describeThresholdSpec, createThresholdReminder, evaluateVehicleReminders, parseOperatingHours } from './maintenanceReminders.js';
+import { extractWithAI, mergeExtraNotes, formatExtraNotes, isSubstantiveText } from './naturalParser.js';
 import {
   initiatePassbookTransfer,
   setBuyerDetailsAndSendReleaseOtp,
@@ -373,6 +375,7 @@ const FLOW_LABELS = {
   log_expense: 'Expense logging',
   log_earnings: 'Earnings logging',
   log_mileage: 'Odometer update',
+  log_operating_hours: 'Operating hours log',
   edit_vehicle: 'Vehicle edit',
   edit_profile: 'Profile update',
   delete_vehicle: 'Vehicle deletion',
@@ -541,6 +544,27 @@ export function getFlowDefinition(flowKey, ctx) {
         ]
       };
 
+    case 'log_operating_hours':
+      return {
+        key: flowKey,
+        label,
+        fields: [
+          vehicleField(ctx),
+          field('hours', 'Operating hours', 'current hour-meter reading, e.g. 1250 or 36.5 hours', {
+            aliases: ['hours', 'operating_hours', 'engine_hours', 'machine_hours'],
+            parse: (text) => parseOperatingHours(text),
+            validate: (value, c) => {
+              const selected = (c.vehicles || []).find((v) => v.id === c.answers?.vehicle_id);
+              const last = Number(selected?.operating_hours || 0);
+              if (!Number.isFinite(value) || value < 0) return { ok: false, message: 'Please send the operating hours as a number.' };
+              if (last > 0 && value < last) return { ok: false, message: `Operating hours cannot be below the last recorded ${last}.` };
+              return { ok: true };
+            },
+            summary: (value) => `${formatNumber(value)} operating hours`
+          })
+        ]
+      };
+
     case 'edit_vehicle':
       return {
         key: flowKey,
@@ -615,20 +639,27 @@ export function getFlowDefinition(flowKey, ctx) {
             { value: 'Inspection', aliases: ['inspection', 'ntac'] },
             { value: 'Other', aliases: ['other'] }
           ]),
-          field('due', 'Due date or odometer threshold', 'e.g. 2027-05-15, 15th October, next Monday or 45000 km', {
-            aliases: ['due', 'due_date', 'due_mileage'],
+          field('due', 'Due date, distance or operating hours', 'e.g. 2027-05-15, next Monday, in 5000 km, 3000 miles or 36 operating hours', {
+            aliases: ['due', 'due_date', 'due_mileage', 'threshold'],
             parse: (text, c) => {
               const parsed = parseFlexibleDate(text, {
                 countryCode: c?.countryInfo?.country_code || 'GLOBAL',
                 locale: c?.countryInfo?.locale || 'en-US'
               });
               if (parsed.ok) return { kind: 'date', value: parsed.localDate, localDate: parsed.localDate };
-              const num = parseNumber(text);
-              if (num !== null && num > 0) return { kind: 'odometer', value: num };
+              const unitSystem = buildGlobalContext(c?.countryInfo, c?.profile).unitSystem;
+              const spec = parseThresholdSpec(text, { unitSystem });
+              if (spec.ok) return spec;
               return null;
             },
-            validate: (value) => (value ? { ok: true } : { ok: false, message: 'Please send a due date (e.g. 2027-05-15, 15th October, next Monday) or an odometer reading.' }),
-            summary: (value) => (value?.kind === 'date' ? value.value : value ? `${formatNumber(value.value)} km` : 'â€”')
+            validate: (value) => (value
+              ? { ok: true }
+              : { ok: false, message: 'Please send a due date (e.g. 2027-05-15, next Monday), a distance (in 5000 km / 3000 miles) or operating hours (36 hours).' }),
+            summary: (value) => {
+              if (!value) return '-';
+              if (value.kind === 'date') return value.value;
+              return describeThresholdSpec(value);
+            }
           })
         ]
       };
@@ -813,7 +844,9 @@ export function startQuiz({ session, flowKey, ctx, prefill = {} }) {
     transfer: null,
     lastNote: null,
     lastAcceptedAnswer: null,
-    turnNote: null
+    turnNote: null,
+    extraNotes: [],
+    extractionFailures: 0
   };
 
   applyExtraction(session.quiz, def, ctx.aiExtracted || {}, ctx);
@@ -883,6 +916,11 @@ function answersValueMissing(answers, f) {
 }
 
 function confirmationNotes(state, ctx) {
+  const extras = (state.extraNotes || []).map((n) => `Extra note: ${n}`);
+  return [...confirmationNotesBase(state, ctx), ...extras];
+}
+
+function confirmationNotesBase(state, ctx) {
   if (state.flow === 'delete_vehicle') {
     return [
       'The driver will be unassigned, pending passbook transfers cancelled, and active reminders retired.',
@@ -1044,6 +1082,7 @@ const EXPLICIT_FLOW_PATTERNS = [
   { flow: 'log_expense', re: /^(?:log|record)\s+(?:an?\s+)?(?:expense|fuel|refuel)\b/i },
   { flow: 'log_earnings', re: /^(?:log|record)\s+(?:an?\s+)?(?:earning|earnings|income|revenue)\b/i },
   { flow: 'log_mileage', re: /^(?:update|set)\s+(?:the\s+)?(?:odometer|mileage)\b/i },
+  { flow: 'log_operating_hours', re: /^(?:log|record|update|set)\s+(?:the\s+)?(?:operating|engine|machine|running)?\s*hours?\b/i },
   { flow: 'transfer_seller', re: /^transfer\s+passbook\b/i },
   { flow: 'assign_driver', re: /^(?:assign\s+driver|assign)\b/i },
   { flow: 'unassign_driver', re: /^(?:unassign\s+driver|remove\s+driver)\b/i },
@@ -1130,6 +1169,17 @@ export async function handleQuizTurn({
   }
   const vctx = { ...ctx, answers: state.answers };
 
+  // Extra-notes catch-all: details that do not map to a database column can
+  // be attached explicitly ("Note: always serviced at Shell") and are
+  // compiled into the record's notes on save.
+  const explicitNote = clean.match(/^(?:note|extra note|remember)[:\s]+(.+)$/i);
+  if (explicitNote && state.phase === 'question') {
+    state.extraNotes = mergeExtraNotes(state.extraNotes || [], [explicitNote[1]]);
+    state.turnNote = 'The extra note was stored with this draft. Do not claim the whole record was saved.';
+    const reply = await askCurrent(state, vctx);
+    return { handled: true, reply, flow: state.flow, active: true };
+  }
+
   if (state.phase === 'pin') {
     const result = await handleTransferPin(state, clean, ctx);
     if (result.completed || result.cancelled) session.quiz = null;
@@ -1192,6 +1242,35 @@ export async function handleQuizTurn({
   if (parsed === null || parsed === undefined) {
     // Capture any other safe values volunteered in this message, then re-ask.
     applyTextExtraction(state, def, clean, vctx);
+
+    // Natural conversational parsing: when the strict parser cannot read the
+    // sentence, let Saka AI extract ANY remaining fields plus extra notes from
+    // the same message before we ever re-ask. Nothing is written to the
+    // database here - the mandatory summary/confirmation gate is unchanged.
+    if (isSubstantiveText(clean)) {
+      const natural = await extractWithAI({
+        text: clean,
+        flowDef: def,
+        answers: state.answers,
+        ctx: vctx
+      });
+      let naturalFilled = 0;
+      for (const [key, value] of Object.entries(natural.fields || {})) {
+        if (key in state.answers && state.answers[key] !== undefined) continue;
+        state.answers[key] = value;
+        naturalFilled += 1;
+      }
+      if (natural.extraNotes?.length) {
+        state.extraNotes = mergeExtraNotes(state.extraNotes || [], natural.extraNotes);
+      }
+      if (naturalFilled > 0) {
+        state.extractionFailures = 0;
+        state.lastAcceptedAnswer = `Captured ${naturalFilled} detail(s) from your message`;
+        state.turnNote = 'Acknowledge the details captured from the message briefly. Do not claim anything was saved.';
+        const reply = await askCurrent(state, vctx);
+        return { handled: true, reply, flow: state.flow, active: true };
+      }
+    }
     // If the message reads like conversation rather than an answer, hand the
     // turn back to the conversational engine instead of nagging.
     if (shouldPauseQuizForChat({ messageText: clean, intent: ctx.intent, quiz: state })) {
@@ -1237,6 +1316,7 @@ export async function handleQuizTurn({
     state.lastAcceptedAnswer = 'Email verification code confirmed';
   } else {
     state.answers[current.key] = parsed;
+    state.extractionFailures = 0;
     state.lastAcceptedAnswer = `${current.label}: ${current.summary(parsed, vctx, state.answers)}`;
   }
 
@@ -1286,12 +1366,16 @@ async function handleConfirmation(state, def, clean, ctx, aiExtracted) {
   }
 
   const changed = applyCorrections(state, def, aiExtracted || {}, ctx);
+  if (changed.length === 0 && isSubstantiveText(clean)) {
+    state.extraNotes = mergeExtraNotes(state.extraNotes || [], [clean]);
+  }
+  const extraNoteLines = (state.extraNotes || []).map((n) => `Extra note: ${n}`);
   const reply = await renderConfirmationSummary({
     flowLabel: def.label,
     summaryRows: buildSummaryRows(def, state.answers, ctx),
     notes: changed.length
-      ? [`Updated from your correction: ${changed.join(', ')}.`]
-      : [`The user replied "${clean}". Ask which field they want to change, or whether to confirm.`],
+      ? [`Updated from your correction: ${changed.join(', ')}.`, ...extraNoteLines]
+      : [`The user replied "${clean}". Ask which field they want to change, or whether to confirm.`, ...extraNoteLines],
     language: ctx.language,
     countryInfo: ctx.countryInfo,
     profile: ctx.profile
@@ -1571,7 +1655,7 @@ async function executeFlow(state, ctx) {
           amount: a.amount,
           fuel_liters: a.fuel_liters || 0,
           odometer_reading: a.odometer_reading,
-          notes: a.notes || null
+          notes: [a.notes, formatExtraNotes(state.extraNotes || [])].filter(Boolean).join(' | ') || null,
         }]);
         if (logErr) return { handled: true, reply: await fail(logErr.message), flow: state.flow, active: true };
 
@@ -1606,6 +1690,8 @@ async function executeFlow(state, ctx) {
         if (!vehicle) return { handled: true, reply: await fail('Vehicle not found.'), flow: state.flow, active: true };
         const noteParts = [`Odometer: ${a.odometer_reading} km`];
         if (a.period) noteParts.push(`Period: ${a.period}`);
+        const compiledEarningNotes = formatExtraNotes(state.extraNotes || []);
+        if (compiledEarningNotes) noteParts.push(compiledEarningNotes);
         const { error } = await ctx.supabase.from('private_earnings').insert([{
           vehicle_id: vehicle.id,
           driver_id: ctx.profile?.id,
@@ -1642,10 +1728,46 @@ async function executeFlow(state, ctx) {
         }).eq('id', vehicle.id);
         if (error) return { handled: true, reply: await fail(error.message), flow: state.flow, active: true };
 
+        // Odometer monitoring: evaluate active distance reminders immediately
+        // so approaching/overdue alerts reach the owner without waiting for
+        // the background sweep.
+        try {
+          await evaluateVehicleReminders({
+            supabase: ctx.supabase,
+            vehicle: { ...vehicle, current_mileage: a.odometer_reading, odometer_reading: a.odometer_reading },
+            sendFn: typeof ctx.sendWhatsApp === 'function' ? ctx.sendWhatsApp : null
+          });
+        } catch (remErr) {
+          console.warn('[quizEngine] Reminder evaluation skipped:', remErr.message);
+        }
+
         const reply = await ok({ vehicle: vehicle.plate_number, odometer: a.odometer_reading });
         return { handled: true, reply, flow: state.flow, completed: true };
       }
 
+      case 'log_operating_hours': {
+        if (!vehicle) return { handled: true, reply: await fail('Vehicle not found.'), flow: state.flow, active: true };
+        const nowIso = new Date().toISOString();
+        const { error } = await ctx.supabase.from('vehicles').update({
+          operating_hours: a.hours,
+          hours_updated_at: nowIso,
+          updated_at: nowIso
+        }).eq('id', vehicle.id);
+        if (error) return { handled: true, reply: await fail(error.message), flow: state.flow, active: true };
+
+        try {
+          await evaluateVehicleReminders({
+            supabase: ctx.supabase,
+            vehicle: { ...vehicle, operating_hours: a.hours },
+            sendFn: typeof ctx.sendWhatsApp === 'function' ? ctx.sendWhatsApp : null
+          });
+        } catch (remErr) {
+          console.warn('[quizEngine] Hours reminder evaluation skipped:', remErr.message);
+        }
+
+        const reply = await ok({ vehicle: vehicle.plate_number, operatingHours: `${formatNumber(a.hours)} operating hours` });
+        return { handled: true, reply, flow: state.flow, completed: true };
+      }
 
       case 'edit_vehicle': {
         if (!vehicle) return { handled: true, reply: await fail('Vehicle not found.'), flow: state.flow, active: true };
@@ -1749,22 +1871,34 @@ async function executeFlow(state, ctx) {
       case 'set_reminder': {
         if (!vehicle) return { handled: true, reply: await fail('Vehicle not found.'), flow: state.flow, active: true };
         const due = a.due;
-        const isDate = due?.kind === 'date';
-        const reminderType = isDate ? a.reminder_type : `${a.reminder_type} (at ${formatNumber(due?.value)} km)`;
-        const { error } = await ctx.supabase.from('reminders').insert([{
-          vehicle_id: vehicle.id,
-          profile_id: ctx.profile?.id,
-          reminder_type: reminderType,
-          due_date: isDate ? due.value : null,
-          status: 'active'
-        }]);
-        if (error) return { handled: true, reply: await fail(error.message), flow: state.flow, active: true };
+        const extraNotes = formatExtraNotes(state.extraNotes || []);
+        if (due?.kind === 'date') {
+          const { error } = await ctx.supabase.from('reminders').insert([{
+            vehicle_id: vehicle.id,
+            profile_id: ctx.profile?.id,
+            reminder_type: a.reminder_type,
+            due_date: due.value,
+            notes: extraNotes,
+            status: 'active'
+          }]);
+          if (error) return { handled: true, reply: await fail(error.message), flow: state.flow, active: true };
+          const reply = await ok({ vehicle: vehicle.plate_number, reminder: a.reminder_type, due: due.value });
+          return { handled: true, reply, flow: state.flow, completed: true };
+        }
 
-        const reply = await ok({
-          vehicle: vehicle.plate_number,
-          reminder: a.reminder_type,
-          due: isDate ? due.value : `at ${formatNumber(due?.value)} km`
+        // Threshold-based (distance km/mi or operating hours): structured
+        // columns let the monitoring engine track remaining values and
+        // dispatch proactive alerts as the threshold approaches.
+        const created = await createThresholdReminder({
+          supabase: ctx.supabase,
+          vehicle,
+          profileId: ctx.profile?.id,
+          reminderType: a.reminder_type,
+          spec: due,
+          notes: extraNotes
         });
+        if (!created.ok) return { handled: true, reply: await fail(created.error), flow: state.flow, active: true };
+        const reply = await ok({ vehicle: vehicle.plate_number, reminder: a.reminder_type, due: describeThresholdSpec(due) });
         return { handled: true, reply, flow: state.flow, completed: true };
       }
 
@@ -1872,6 +2006,12 @@ async function persistVehicleRegistration(state, ctx) {
     if (a[answerKey] !== null && a[answerKey] !== undefined && a[answerKey] !== '') {
       record[column] = a[answerKey];
     }
+  }
+
+  const compiledExtraNotes = formatExtraNotes(state.extraNotes || []);
+  if (compiledExtraNotes) {
+    record.other_details = [record.other_details, compiledExtraNotes].filter(Boolean).join(' | ');
+    record.metadata = { ...(record.metadata || {}), extra_notes: state.extraNotes };
   }
 
   const { error: insertErr } = await ctx.supabase.from('vehicles').insert([record]);
@@ -1984,6 +2124,7 @@ export function detectQuizStart({
     LOG_EXPENSE: 'log_expense',
     LOG_EARNINGS: 'log_earnings',
     UPDATE_MILEAGE: 'log_mileage',
+    LOG_OPERATING_HOURS: 'log_operating_hours',
     EDIT_VEHICLE: 'edit_vehicle',
     EDIT_PROFILE: 'edit_profile',
     DELETE_VEHICLE: 'delete_vehicle',
@@ -2000,6 +2141,7 @@ export function detectQuizStart({
   if (/^(?:log|record)\s+(?:an?\s+)?(?:expense|fuel|refuel)\b/i.test(text)) return 'log_expense';
   if (/^(?:log|record)\s+(?:an?\s+)?(?:earning|earnings|income|revenue)\b/i.test(text)) return 'log_earnings';
   if (/^(?:update|set)\s+(?:the\s+)?(?:odometer|mileage)\b/i.test(text)) return 'log_mileage';
+  if (/^(?:log|record|update|set)\s+(?:the\s+)?(?:operating|engine|machine|running)?\s*hours?\b/i.test(text)) return 'log_operating_hours';
   if (/^transfer\s+passbook\b/i.test(text)) return 'transfer_seller';
   if (/^(?:assign\s+driver|assign)\b/i.test(text)) return 'assign_driver';
   if (/^(?:unassign\s+driver|remove\s+driver)\b/i.test(text)) return 'unassign_driver';

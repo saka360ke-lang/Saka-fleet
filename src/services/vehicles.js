@@ -94,6 +94,27 @@ export async function ensureVehicleTableColumns(providedSupabase = null) {
         ALTER TABLE public.passbook_transfers ADD COLUMN IF NOT EXISTS checkout_url text;
         CREATE INDEX IF NOT EXISTS idx_transfers_vehicle_year ON public.passbook_transfers(vehicle_id, status, completed_at);
         CREATE INDEX IF NOT EXISTS idx_transfers_buyer_phone ON public.passbook_transfers(to_owner_phone, status);
+
+        -- v1.8 Maintenance Reminder Engine: distance (canonical km) + operating hours
+        ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS operating_hours numeric DEFAULT 0;
+        ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS hours_updated_at timestamp with time zone;
+        ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS unit_system text DEFAULT 'metric';
+        DO $v18$
+        BEGIN
+          IF to_regclass('public.reminders') IS NOT NULL THEN
+            EXECUTE 'ALTER TABLE public.reminders ADD COLUMN IF NOT EXISTS threshold_unit text';
+            EXECUTE 'ALTER TABLE public.reminders ADD COLUMN IF NOT EXISTS threshold_input_unit text';
+            EXECUTE 'ALTER TABLE public.reminders ADD COLUMN IF NOT EXISTS target_value numeric';
+            EXECUTE 'ALTER TABLE public.reminders ADD COLUMN IF NOT EXISTS last_service_value numeric DEFAULT 0';
+            EXECUTE 'ALTER TABLE public.reminders ADD COLUMN IF NOT EXISTS remaining_value numeric';
+            EXECUTE 'ALTER TABLE public.reminders ADD COLUMN IF NOT EXISTS remaining_updated_at timestamp with time zone';
+            EXECUTE 'ALTER TABLE public.reminders ADD COLUMN IF NOT EXISTS display_unit text';
+            EXECUTE 'ALTER TABLE public.reminders ADD COLUMN IF NOT EXISTS notes text';
+            EXECUTE 'ALTER TABLE public.reminders ADD COLUMN IF NOT EXISTS notified_overdue boolean DEFAULT false';
+            EXECUTE 'CREATE INDEX IF NOT EXISTS idx_reminders_active_threshold ON public.reminders(status, threshold_unit)';
+          END IF;
+        END
+        $v18$;
       `;
       const res = await fetch(`https://api.supabase.com/v1/projects/${projectRef}/database/query`, {
         method: 'POST',

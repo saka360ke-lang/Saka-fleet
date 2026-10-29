@@ -195,11 +195,14 @@ export async function renderConfirmationSummary({
     flow: flowLabel,
     summaryRows,
     notes,
-    instruction: `Present a clean checklist summary of every collected item. End by asking the user to reply ${confirmWord} to save, or to name any field they want to change. Do not invent missing values.`
+    instruction: `Present a clean checklist summary of every collected item. End by asking the user to reply ${confirmWord} to save, or to name any field they want to change. Do not invent missing values. If a note starts with "Extra note:", show it under a short Extra notes section.`
   };
 
   const fallbackLines = summaryRows.map((r) => `• ${r.label}: ${r.value}`).join('\n');
-  const fallback = `${flowLabel}\n${fallbackLines}\n\nReply ${confirmWord} to save or name a field to change.`.trim();
+  const noteLines = (notes || []).length
+    ? `\n\nExtra notes:\n${notes.map((n) => `• ${n}`).join('\n')}`
+    : '';
+  const fallback = `${flowLabel}\n${fallbackLines}${noteLines}\n\nReply ${confirmWord} to save or name a field to change.`.trim();
 
   return composeMessage({
     purpose: 'confirmation_summary',
