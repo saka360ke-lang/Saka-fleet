@@ -3,6 +3,8 @@ import { onboardingStore, chatSessions } from '../routes/whatsapp.js';
 import { sendEmailOtp, sendPassbookWelcomeEmail } from './mailer.js';
 import { checkOwnerVehicleTierLimit, getOrCreateVinTrial } from './vehicles.js';
 import { scheduleTrialExtensionCoupon } from './coupons.js';
+import { createExpiryReminder, buildExpirySpecFromDate } from './maintenanceReminders.js';
+import { resolveUserTimezone } from './globalization.js';
 
 export async function handleStage2OptionalWeaving({
   obState,
@@ -61,13 +63,28 @@ export async function handleStage2OptionalWeaving({
       .select()
       .maybeSingle();
 
-    if (optUpdates.insurance_expiry && updatedVeh) {
-      await supabaseClient.from('reminders').insert([{
-        vehicle_id: updatedVeh.id,
-        reminder_type: 'Insurance Renewal',
-        due_date: optUpdates.insurance_expiry,
-        status: 'active'
-      }]);
+    if (updatedVeh) {
+      // Route stage-2 compliance dates through the universal expiry engine so
+      // they gain the 30/14/7/24h/overdue ladder and stay deduplicated.
+      const onboardingTimeZone = resolveUserTimezone({ countryInfo });
+      const linkedExpiries = [
+        { date: optUpdates.insurance_expiry, category: 'insurance', reminderType: 'Insurance Renewal', column: 'vehicles.insurance_expiry' },
+        { date: optUpdates.inspection_expiry, category: 'inspection', reminderType: 'Inspection', column: 'vehicles.inspection_expiry' }
+      ];
+      for (const item of linkedExpiries) {
+        if (!item.date) continue;
+        const spec = buildExpirySpecFromDate(String(item.date).slice(0, 10), { timeZone: onboardingTimeZone });
+        if (!spec.ok) continue;
+        await createExpiryReminder({
+          supabase: supabaseClient,
+          vehicle: { id: updatedVeh.id },
+          reminderType: item.reminderType,
+          category: item.category,
+          spec,
+          timeZone: onboardingTimeZone,
+          linkedColumn: item.column
+        });
+      }
     }
   }
 

@@ -68,12 +68,19 @@ async function run() {
   const sections = [
     'CONFIRMATION BEFORE WRITE',
     'NATURAL MULTI-FIELD PARSING',
-    'MAINTENANCE REMINDER ENGINE',
+    'UNIVERSAL REMINDER ENGINE',
+    'CORE FLEET REPORTS',
     'AGENT DIVISION OF LABOUR',
     'extra_notes',
     'reminder_type',
     'reminder_due_date',
     'reminder_threshold',
+    'reminder_category',
+    'timezone',
+    'report_type',
+    'compliance',
+    'maintenance',
+    'financial',
     'Saka is the front-facing agent',
     'Sentinel'
   ];

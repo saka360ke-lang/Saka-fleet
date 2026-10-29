@@ -108,6 +108,7 @@ export async function cleanupTestData({
   summary.expenses = await deleteIn(client, 'expenses', 'plate', [...plates], verbose);
   summary.expense_logs = await deleteIn(client, 'expense_logs', 'vehicle_id', vehicleIdList, verbose);
   summary.private_earnings = await deleteIn(client, 'private_earnings', 'vehicle_id', vehicleIdList, verbose);
+  summary.expiry_notification_log = await deleteIn(client, 'expiry_notification_log', 'vehicle_id', vehicleIdList, verbose);
   summary.reminders = await deleteIn(client, 'reminders', 'vehicle_id', vehicleIdList, verbose);
   summary.passbook_transfers = await deleteIn(client, 'passbook_transfers', 'vehicle_id', vehicleIdList, verbose);
   summary.pending_owner_notifications = await deleteIn(client, 'pending_owner_notifications', 'vehicle_id', vehicleIdList, verbose);

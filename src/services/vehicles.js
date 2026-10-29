@@ -99,6 +99,15 @@ export async function ensureVehicleTableColumns(providedSupabase = null) {
         ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS operating_hours numeric DEFAULT 0;
         ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS hours_updated_at timestamp with time zone;
         ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS unit_system text DEFAULT 'metric';
+
+        -- v1.9 Universal Reminder Engine: first-class date-based expiries
+        ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS road_license_expiry date;
+        ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS road_license_number text;
+        ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS permit_expiry date;
+        ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS permit_number text;
+        ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS timezone text;
+        ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS timezone_confirmed_at timestamp with time zone;
+
         DO $v18$
         BEGIN
           IF to_regclass('public.reminders') IS NOT NULL THEN
@@ -111,7 +120,36 @@ export async function ensureVehicleTableColumns(providedSupabase = null) {
             EXECUTE 'ALTER TABLE public.reminders ADD COLUMN IF NOT EXISTS display_unit text';
             EXECUTE 'ALTER TABLE public.reminders ADD COLUMN IF NOT EXISTS notes text';
             EXECUTE 'ALTER TABLE public.reminders ADD COLUMN IF NOT EXISTS notified_overdue boolean DEFAULT false';
+            EXECUTE 'ALTER TABLE public.reminders ADD COLUMN IF NOT EXISTS category text';
+            EXECUTE 'ALTER TABLE public.reminders ADD COLUMN IF NOT EXISTS kind text';
+            EXECUTE 'ALTER TABLE public.reminders ADD COLUMN IF NOT EXISTS due_at timestamp with time zone';
+            EXECUTE 'ALTER TABLE public.reminders ADD COLUMN IF NOT EXISTS timezone text';
+            EXECUTE 'ALTER TABLE public.reminders ADD COLUMN IF NOT EXISTS linked_column text';
+            EXECUTE 'ALTER TABLE public.reminders ADD COLUMN IF NOT EXISTS subject_type text DEFAULT ''vehicle''';
+            EXECUTE 'ALTER TABLE public.reminders ADD COLUMN IF NOT EXISTS subject_id uuid';
+            EXECUTE 'ALTER TABLE public.reminders ADD COLUMN IF NOT EXISTS completed_at timestamp with time zone';
+            EXECUTE 'ALTER TABLE public.reminders ADD COLUMN IF NOT EXISTS completed_on_time boolean';
+            EXECUTE 'ALTER TABLE public.reminders ADD COLUMN IF NOT EXISTS notified_14d boolean DEFAULT false';
+            EXECUTE 'ALTER TABLE public.reminders ADD COLUMN IF NOT EXISTS notified_24h boolean DEFAULT false';
+            EXECUTE 'ALTER TABLE public.reminders ADD COLUMN IF NOT EXISTS expiry_tier_at timestamp with time zone';
             EXECUTE 'CREATE INDEX IF NOT EXISTS idx_reminders_active_threshold ON public.reminders(status, threshold_unit)';
+            EXECUTE 'CREATE INDEX IF NOT EXISTS idx_reminders_due_active ON public.reminders(status, due_date)';
+            EXECUTE 'CREATE INDEX IF NOT EXISTS idx_reminders_subject ON public.reminders(subject_type, subject_id)';
+          END IF;
+          IF to_regclass('public.expiry_notification_log') IS NULL THEN
+            EXECUTE 'CREATE TABLE public.expiry_notification_log (
+              id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+              reminder_id uuid,
+              vehicle_id uuid,
+              category text,
+              tier text NOT NULL,
+              phone text NOT NULL,
+              channel text DEFAULT ''whatsapp'',
+              message text,
+              sent_at timestamp with time zone DEFAULT now()
+            )';
+            EXECUTE 'CREATE INDEX IF NOT EXISTS idx_expiry_log_reminder ON public.expiry_notification_log(reminder_id, sent_at DESC)';
+            EXECUTE 'CREATE INDEX IF NOT EXISTS idx_expiry_log_vehicle ON public.expiry_notification_log(vehicle_id, sent_at DESC)';
           END IF;
         END
         $v18$;
@@ -439,6 +477,10 @@ export const EDITABLE_VEHICLE_FIELDS = [
   'insurance_policy',
   'insurance_expiry',
   'inspection_expiry',
+  'road_license_expiry',
+  'road_license_number',
+  'permit_expiry',
+  'permit_number',
   'purchase_cost',
   'custom_attributes',
   'metadata',

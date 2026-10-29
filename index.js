@@ -157,10 +157,10 @@ setInterval(() => {
   });
 }, 15 * 60 * 1000); // Check every 15 minutes
 
-// Worker: Maintenance Reminder Monitoring — evaluates active distance (km/mi)
-// and operating-hours thresholds against live odometer/hours readings and
-// dispatches proactive WhatsApp alerts as thresholds approach (75/25/5%) plus
-// urgent alerts when an item is due or overdue.
+// Worker: Universal Reminder Sweep — evaluates distance (km/mi) and
+// operating-hours thresholds against live readings AND the date-based expiry
+// ladder (insurance, inspection/MOT, licensing, permits, driver licences,
+// general deadlines) at 30d / 14d / 7d / 24h / overdue.
 async function runMaintenanceReminderSweep() {
   try {
     const result = await runReminderSweep({
@@ -169,10 +169,10 @@ async function runMaintenanceReminderSweep() {
       canDeliver: canDeliverVehicleAlert
     });
     if (result?.alerts) {
-      console.log(`[Maintenance] Sweep: ${result.vehiclesChecked} vehicle(s), ${result.evaluated} reminder(s), ${result.alerts} alert(s), ${result.dispatched} dispatched.`);
+      console.log(`[Reminders] Sweep: ${result.vehiclesChecked} vehicle(s), ${result.evaluated} reminder(s), ${result.alerts} alert(s), ${result.dispatched} dispatched (${result.expiry?.overdue || 0} expiry item(s) overdue).`);
     }
   } catch (err) {
-    console.error('[Worker] Maintenance reminder sweep failed:', err.message);
+    console.error('[Worker] Reminder sweep failed:', err.message);
   }
 }
 setTimeout(runMaintenanceReminderSweep, 90 * 1000); // First pass shortly after boot
@@ -351,167 +351,11 @@ fastify.post('/api/auth/whatsapp/verify', async (request, reply) => {
 });
 
 // ==========================================
-// PROACTIVE COMPLIANCE REMINDER CRON ENGINE
-// ==========================================
+// Compliance & expiry reminders (insurance, inspection/MOT, licences, permits,
+// general deadlines and driver licences) are now evaluated by the universal
+// expiry engine in maintenanceReminders.evaluateExpiryReminders(), invoked by
+// runReminderSweep() every 30 minutes (see runMaintenanceReminderSweep above).
 
-async function processComplianceReminders() {
-  fastify.log.info('Running daily compliance reminder scan...');
-
-  try {
-    const now = new Date();
-
-    const { data: reminders, error } = await supabase
-      .from('reminders')
-      .select(`
-        id,
-        reminder_type,
-        due_date,
-        notified_30d,
-        notified_7d,
-        notified_48h,
-        notified_1d,
-        vehicles (plate_number, make_model, assigned_driver_id),
-        profiles (phone_number, full_name)
-      `)
-      .eq('status', 'active');
-
-    if (error || !reminders) {
-      fastify.log.error('Failed to fetch reminders for cron check:', error);
-      return;
-    }
-
-    for (const rem of reminders) {
-      const dueDate = new Date(rem.due_date);
-      const diffTime = dueDate - now;
-      const daysLeft = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-      const phone = rem.profiles?.phone_number;
-      const plate = rem.vehicles?.plate_number || 'Fleet Vehicle';
-      const docType = rem.reminder_type;
-
-      if (!phone) continue;
-
-      let alertMessage = null;
-      let updateField = null;
-
-      if (daysLeft <= 30 && daysLeft > 7 && !rem.notified_30d) {
-        alertMessage = `Heads up! The ${docType} for ${plate} expires in about 30 days (${dueDate.toDateString()}). Time to plan renewal!`;
-        updateField = 'notified_30d';
-      } else if (daysLeft <= 7 && daysLeft > 2 && !rem.notified_7d) {
-        alertMessage = `Action required: ${docType} for ${plate} expires in ${daysLeft} days (${dueDate.toDateString()}). Reply "Renewed" once updated.`;
-        updateField = 'notified_7d';
-      } else if (daysLeft <= 2 && daysLeft > 1 && !rem.notified_48h) {
-        alertMessage = `URGENT: ${docType} for ${plate} expires in 48 hours (${dueDate.toDateString()}). Please renew immediately!`;
-        updateField = 'notified_48h';
-      } else if (daysLeft <= 1 && daysLeft >= 0 && !rem.notified_1d) {
-        alertMessage = `URGENT: ${docType} for ${plate} expires TOMORROW (${dueDate.toDateString()}). Please renew immediately!`;
-        updateField = 'notified_1d';
-      } else if (daysLeft < 0 && !rem.notified_1d) {
-        alertMessage = `CRITICAL: ${docType} for ${plate} is OVERDUE (expired on ${dueDate.toDateString()}).`;
-        updateField = 'notified_1d';
-      }
-
-        if (alertMessage && updateField) {
-          // 1. Notify Owner
-          if (phone && canDeliverVehicleAlert(phone, rem.vehicles)) {
-            await sendMetaWhatsAppMessage(phone, alertMessage);
-          }
-
-          // 2. Notify Assigned Driver if present
-          if (rem.vehicles?.assigned_driver_id) {
-            const { data: drvProfile } = await supabase
-              .from('profiles')
-              .select('phone_number')
-              .eq('id', rem.vehicles.assigned_driver_id)
-              .maybeSingle();
-            if (drvProfile?.phone_number && drvProfile.phone_number !== phone && canDeliverVehicleAlert(drvProfile.phone_number, rem.vehicles)) {
-              await sendMetaWhatsAppMessage(drvProfile.phone_number, `[Driver Notice] ${alertMessage}`);
-            }
-          }
-
-          await supabase
-            .from('reminders')
-            .update({ [updateField]: true })
-            .eq('id', rem.id);
-
-          fastify.log.info(`Compliance alert sent to ${phone} for reminder ID ${rem.id} (${daysLeft} days left)`);
-        }
-    }
-  } catch (cronErr) {
-
-    // B. Driver License Expirations Compliance Scan
-    const { data: driversWithLicense } = await supabase
-      .from('profiles')
-      .select('id, phone_number, full_name, driver_license_number, driver_license_expiry, license_notified_30d, license_notified_7d, license_notified_48h, license_notified_1d')
-      .not('driver_license_expiry', 'is', null)
-      .eq('is_active', true);
-
-    if (driversWithLicense) {
-      for (const drv of driversWithLicense) {
-        const expiryDate = new Date(drv.driver_license_expiry);
-        const diffTime = expiryDate - now;
-        const daysLeft = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-        const drvPhone = drv.phone_number;
-        const drvName = drv.full_name || drvPhone;
-        if (!drvPhone) continue;
-
-        let alertMsg = null;
-        let updateCol = null;
-
-        if (daysLeft <= 30 && daysLeft > 7 && !drv.license_notified_30d) {
-          alertMsg = `Driver License Notice: Your driver license expires in 30 days (${expiryDate.toDateString()}). Please plan renewal.`;
-          updateCol = 'license_notified_30d';
-        } else if (daysLeft <= 7 && daysLeft > 2 && !drv.license_notified_7d) {
-          alertMsg = `Action Required: Your driver license expires in ${daysLeft} days (${expiryDate.toDateString()}).`;
-          updateCol = 'license_notified_7d';
-        } else if (daysLeft <= 2 && daysLeft > 1 && !drv.license_notified_48h) {
-          alertMsg = `URGENT: Your driver license expires in 48 hours (${expiryDate.toDateString()}). Renew immediately!`;
-          updateCol = 'license_notified_48h';
-        } else if (daysLeft <= 1 && daysLeft >= 0 && !drv.license_notified_1d) {
-          alertMsg = `URGENT: Your driver license expires TOMORROW (${expiryDate.toDateString()}).`;
-          updateCol = 'license_notified_1d';
-        } else if (daysLeft < 0 && !drv.license_notified_1d) {
-          alertMsg = `CRITICAL: Your driver license is OVERDUE (expired ${expiryDate.toDateString()}).`;
-          updateCol = 'license_notified_1d';
-        }
-
-        if (alertMsg && updateCol) {
-          // 1. Notify Driver
-          if (drvPhone && canDeliverVehicleAlert(drvPhone, null)) {
-            await sendMetaWhatsAppMessage(drvPhone, alertMsg);
-          }
-
-          // 2. Notify Owners of vehicles assigned to this driver
-          const { data: assignedVehicles } = await supabase
-            .from('vehicles')
-            .select('plate_number, owner_phone, profiles!vehicles_owner_id_fkey(phone_number)')
-            .eq('assigned_driver_id', drv.id);
-
-          if (assignedVehicles) {
-            for (const av of assignedVehicles) {
-              const ownerPhone = av.owner_phone || av.profiles?.phone_number;
-              if (ownerPhone && ownerPhone !== drvPhone && canDeliverVehicleAlert(ownerPhone, av)) {
-                const ownerAlert = `âš ï¸ *Driver License Expiry Alert (${av.plate_number})*\nAssigned driver *${drvName}*'s license expires in ${daysLeft} days (${expiryDate.toDateString()}).`;
-                await sendMetaWhatsAppMessage(ownerPhone, ownerAlert);
-              }
-            }
-          }
-
-          await supabase
-            .from('profiles')
-            .update({ [updateCol]: true })
-            .eq('id', drv.id);
-        }
-      }
-    }
-
-    fastify.log.error('Error running compliance reminder cron:', cronErr);
-  }
-}
-
-// Run daily
-setInterval(processComplianceReminders, 24 * 60 * 60 * 1000);
 
 // ==========================================
 // DAILY END-OF-SHIFT AUTO-AUDIT CRON ENGINE

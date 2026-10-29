@@ -24,7 +24,8 @@ import {
   kmToUserDistance,
   formatDate,
   formatMoney,
-  formatNumber
+  formatNumber,
+  resolveUserTimezone
 } from './globalization.js';
 import { sendEmailOtp, sendMfaEmail, sendSupportEscalationEmail, sendPassbookWelcomeEmail } from './mailer.js';
 import {
@@ -38,7 +39,18 @@ import {
 } from './vehicles.js';
 import { scheduleTrialExtensionCoupon, applyTrialExtensionCoupon } from './coupons.js';
 import { parseFlexibleDate } from './dateParser.js';
-import { parseThresholdSpec, describeThresholdSpec, createThresholdReminder, evaluateVehicleReminders, parseOperatingHours } from './maintenanceReminders.js';
+import {
+  parseThresholdSpec,
+  describeThresholdSpec,
+  createThresholdReminder,
+  evaluateVehicleReminders,
+  parseOperatingHours,
+  parseExpirySpec,
+  buildExpirySpecFromDate,
+  describeExpirySpec,
+  createExpiryReminder,
+  categoryForReminderType
+} from './maintenanceReminders.js';
 import { extractWithAI, mergeExtraNotes, formatExtraNotes, isSubstantiveText } from './naturalParser.js';
 import {
   initiatePassbookTransfer,
@@ -101,6 +113,15 @@ function parseDateValue(text, ctx = {}) {
     locale: ctx.countryInfo?.locale || 'en-US'
   });
   return result.ok ? result.localDate : null;
+}
+
+/** Canonical vehicle column linked to a compliance category (if any). */
+function expiryLinkedColumn(category) {
+  if (category === 'insurance') return 'vehicles.insurance_expiry';
+  if (category === 'inspection') return 'vehicles.inspection_expiry';
+  if (category === 'licensing') return 'vehicles.road_license_expiry';
+  if (category === 'permit') return 'vehicles.permit_expiry';
+  return null;
 }
 
 function isYes(text) {
@@ -315,12 +336,16 @@ const EDITABLE_VEHICLE_FIELDS = {
   'Insurance policy': 'insurance_policy',
   'Insurance expiry': 'insurance_expiry',
   'Inspection expiry': 'inspection_expiry',
+  'Road license expiry': 'road_license_expiry',
+  'Permit expiry': 'permit_expiry',
   'Purchase cost': 'purchase_cost'
 };
 
 function editVehicleNewValueParser(editField) {
   if (['yom', 'current_mileage', 'purchase_cost'].includes(editField)) return parseNumber;
-  if (['insurance_expiry', 'inspection_expiry'].includes(editField)) return (text, ctx) => parseDateValue(text, ctx);
+  if (['insurance_expiry', 'inspection_expiry', 'road_license_expiry', 'permit_expiry'].includes(editField)) {
+    return (text, ctx) => parseDateValue(text, ctx);
+  }
   return (text) => String(text).trim();
 }
 
@@ -381,7 +406,7 @@ const FLOW_LABELS = {
   delete_vehicle: 'Vehicle deletion',
   delete_account: 'Account deletion',
   apply_coupon: 'Trial coupon',
-  set_reminder: 'Service reminder',
+  set_reminder: 'Maintenance or expiry reminder',
   contact_support: 'Support escalation',
   reactivate_account: 'Account reactivation'
 };
@@ -632,21 +657,47 @@ export function getFlowDefinition(flowKey, ctx) {
         label,
         fields: [
           vehicleField(ctx),
-          choiceField('reminder_type', 'Reminder type', 'Service, Oil change, Insurance, Inspection or Other', [
+          choiceField('reminder_type', 'Reminder type', 'Service, Insurance, Inspection/MOT, Driver License, Road License, Permit, Deadline or Other', [
             { value: 'Oil change', aliases: ['oil'] },
             { value: 'Service', aliases: ['service', 'maintenance'] },
-            { value: 'Insurance Renewal', aliases: ['insurance'] },
-            { value: 'Inspection', aliases: ['inspection', 'ntac'] },
+            { value: 'Insurance Renewal', aliases: ['insurance', 'insure', 'policy'] },
+            { value: 'Inspection', aliases: ['inspection', 'mot', 'ntac', 'roadworthiness'] },
+            { value: 'Driver License', aliases: ['driver license', 'driver licence', 'drivers license', 'driving licence'] },
+            { value: 'Road License', aliases: ['license', 'licence', 'licensing', 'road tax', 'road license'] },
+            { value: 'Permit', aliases: ['permit', 'transport permit', 'operator permit'] },
+            { value: 'Deadline', aliases: ['deadline', 'renewal', 'expiry', 'expires'] },
             { value: 'Other', aliases: ['other'] }
           ]),
-          field('due', 'Due date, distance or operating hours', 'e.g. 2027-05-15, next Monday, in 5000 km, 3000 miles or 36 operating hours', {
+          field('due', 'Due date, distance or operating hours', 'e.g. 2027-05-15, 15th Dec 2026, next month, in 14 days, 5000 km, 3000 miles or 36 operating hours', {
             aliases: ['due', 'due_date', 'due_mileage', 'threshold'],
             parse: (text, c) => {
-              const parsed = parseFlexibleDate(text, {
-                countryCode: c?.countryInfo?.country_code || 'GLOBAL',
-                locale: c?.countryInfo?.locale || 'en-US'
-              });
-              if (parsed.ok) return { kind: 'date', value: parsed.localDate, localDate: parsed.localDate };
+              const countryCode = c?.countryInfo?.country_code || 'GLOBAL';
+              const locale = c?.countryInfo?.locale || 'en-US';
+              const timeZone = resolveUserTimezone({ countryInfo: c?.countryInfo, profile: c?.profile });
+              const expiry = parseExpirySpec(text, { countryCode, locale, timeZone });
+              if (expiry.ok) {
+                return {
+                  kind: 'date',
+                  category: expiry.category,
+                  value: expiry.localDate,
+                  localDate: expiry.localDate,
+                  dueAt: expiry.dueAt,
+                  timeZone,
+                  source: expiry.source
+                };
+              }
+              const parsed = parseFlexibleDate(text, { countryCode, locale });
+              if (parsed.ok) {
+                return {
+                  kind: 'date',
+                  category: categoryForReminderType(text),
+                  value: parsed.localDate,
+                  localDate: parsed.localDate,
+                  dueAt: null,
+                  timeZone,
+                  source: parsed.source
+                };
+              }
               const unitSystem = buildGlobalContext(c?.countryInfo, c?.profile).unitSystem;
               const spec = parseThresholdSpec(text, { unitSystem });
               if (spec.ok) return spec;
@@ -654,10 +705,16 @@ export function getFlowDefinition(flowKey, ctx) {
             },
             validate: (value) => (value
               ? { ok: true }
-              : { ok: false, message: 'Please send a due date (e.g. 2027-05-15, next Monday), a distance (in 5000 km / 3000 miles) or operating hours (36 hours).' }),
-            summary: (value) => {
+              : { ok: false, message: 'Please send an expiry date (e.g. 2027-05-15, 15th Dec 2026, next month, in 14 days), a distance (in 5000 km / 3000 miles) or operating hours (36 hours).' }),
+            summary: (value, c) => {
               if (!value) return '-';
-              if (value.kind === 'date') return value.value;
+              if (value.kind === 'date') {
+                const timeZone = value.timeZone || resolveUserTimezone({ countryInfo: c?.countryInfo, profile: c?.profile });
+                return describeExpirySpec(
+                  { localDate: value.value, dueAt: value.dueAt, timeZone },
+                  { locale: c?.countryInfo?.locale || 'en-US' }
+                );
+              }
               return describeThresholdSpec(value);
             }
           })
@@ -1803,6 +1860,36 @@ async function executeFlow(state, ctx) {
         });
         if (!res.success) return { handled: true, reply: await fail(res.error), flow: state.flow, active: true };
 
+        // Keep the universal expiry engine in step with edited compliance dates.
+        const linkedCategory = {
+          insurance_expiry: 'insurance',
+          inspection_expiry: 'inspection',
+          road_license_expiry: 'licensing',
+          permit_expiry: 'permit'
+        }[column];
+        if (linkedCategory) {
+          const timeZone = resolveUserTimezone({ countryInfo: ctx.countryInfo, profile: ctx.profile });
+          const spec = buildExpirySpecFromDate(a.new_value, { timeZone });
+          if (spec.ok) {
+            const reminderType = {
+              insurance: 'Insurance Renewal',
+              inspection: 'Inspection',
+              licensing: 'Road License',
+              permit: 'Permit'
+            }[linkedCategory];
+            await createExpiryReminder({
+              supabase: ctx.supabase,
+              vehicle,
+              profileId: ctx.profile?.id,
+              reminderType,
+              category: linkedCategory,
+              spec,
+              timeZone,
+              linkedColumn: `vehicles.${column}`
+            });
+          }
+        }
+
         const reply = await ok({ vehicle: vehicle.plate_number, field: a.edit_field, newValue: a.new_value });
         return { handled: true, reply, flow: state.flow, completed: true };
       }
@@ -1885,16 +1972,45 @@ async function executeFlow(state, ctx) {
         const due = a.due;
         const extraNotes = formatExtraNotes(state.extraNotes || []);
         if (due?.kind === 'date') {
-          const { error } = await ctx.supabase.from('reminders').insert([{
-            vehicle_id: vehicle.id,
-            profile_id: ctx.profile?.id,
-            reminder_type: a.reminder_type,
-            due_date: due.value,
+          // Universal expiry reminder: insurance, inspection/MOT, licensing,
+          // permits, driver licences and general deadlines share one ladder.
+          const timeZone = due.timeZone || resolveUserTimezone({ countryInfo: ctx.countryInfo, profile: ctx.profile });
+          const textCategory = due.category && due.category !== 'other' ? due.category : null;
+          const category = textCategory || categoryForReminderType(a.reminder_type);
+          const spec = due.dueAt
+            ? { ok: true, kind: 'date', localDate: due.value, dueAt: due.dueAt, timeZone }
+            : buildExpirySpecFromDate(due.value, { timeZone });
+          const created = await createExpiryReminder({
+            supabase: ctx.supabase,
+            vehicle,
+            profileId: ctx.profile?.id,
+            reminderType: a.reminder_type,
+            category,
+            spec,
             notes: extraNotes,
-            status: 'active'
-          }]);
-          if (error) return { handled: true, reply: await fail(error.message), flow: state.flow, active: true };
-          const reply = await ok({ vehicle: vehicle.plate_number, reminder: a.reminder_type, due: due.value });
+            timeZone,
+            linkedColumn: expiryLinkedColumn(category)
+          });
+          if (!created.ok) return { handled: true, reply: await fail(created.error), flow: state.flow, active: true };
+
+          // The confirmation summary showed this timezone; persist it once the
+          // user confirms so later dates resolve consistently.
+          if (ctx.profile?.id && ctx.profile.timezone !== timeZone) {
+            try {
+              await ctx.supabase.from('profiles').update({
+                timezone: timeZone,
+                timezone_confirmed_at: new Date().toISOString()
+              }).eq('id', ctx.profile.id);
+            } catch (tzErr) {
+              console.warn('[quizEngine] Timezone persistence skipped:', tzErr.message);
+            }
+          }
+
+          const reply = await ok({
+            vehicle: vehicle.plate_number,
+            reminder: a.reminder_type,
+            due: describeExpirySpec(spec, { locale: ctx.countryInfo?.locale || 'en-US' })
+          });
           return { handled: true, reply, flow: state.flow, completed: true };
         }
 
@@ -2075,23 +2191,28 @@ async function persistVehicleRegistration(state, ctx) {
     .maybeSingle();
 
   if (savedVehicle?.id) {
-    if (a.insurance_expiry) {
-      await ctx.supabase.from('reminders').insert([{
-        vehicle_id: savedVehicle.id,
-        profile_id: ctx.profile.id,
-        reminder_type: 'Insurance Renewal',
-        due_date: a.insurance_expiry,
-        status: 'active'
-      }]);
-    }
-    if (a.inspection_expiry) {
-      await ctx.supabase.from('reminders').insert([{
-        vehicle_id: savedVehicle.id,
-        profile_id: ctx.profile.id,
-        reminder_type: 'Inspection',
-        due_date: a.inspection_expiry,
-        status: 'active'
-      }]);
+    // Register linked compliance items through the universal expiry engine so
+    // insurance / inspection dates always have exactly one reminder row with
+    // the full 30/14/7/24h/overdue notification ladder.
+    const registrationTimeZone = resolveUserTimezone({ countryInfo: ctx.countryInfo, profile: ctx.profile });
+    const linkedExpiries = [
+      { date: a.insurance_expiry, category: 'insurance', reminderType: 'Insurance Renewal', column: 'vehicles.insurance_expiry' },
+      { date: a.inspection_expiry, category: 'inspection', reminderType: 'Inspection', column: 'vehicles.inspection_expiry' }
+    ];
+    for (const item of linkedExpiries) {
+      if (!item.date) continue;
+      const spec = buildExpirySpecFromDate(item.date, { timeZone: registrationTimeZone });
+      if (!spec.ok) continue;
+      await createExpiryReminder({
+        supabase: ctx.supabase,
+        vehicle: { id: savedVehicle.id },
+        profileId: ctx.profile.id,
+        reminderType: item.reminderType,
+        category: item.category,
+        spec,
+        timeZone: registrationTimeZone,
+        linkedColumn: item.column
+      });
     }
   }
 

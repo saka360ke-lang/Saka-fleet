@@ -56,6 +56,122 @@ export function formatNairobiDate(date = new Date()) {
   return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
+/**
+ * UTC offset (in milliseconds) of an IANA timezone at a given instant.
+ * Uses Intl so it stays correct across DST transitions without dependencies.
+ */
+export function getTimeZoneOffsetMs(date, timeZone = SYSTEM_TIMEZONE) {
+  const target = date instanceof Date ? date : new Date(date);
+  if (Number.isNaN(target.getTime())) return 0;
+  try {
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hour12: false
+    });
+    const parts = formatter.formatToParts(target).reduce((acc, part) => {
+      if (part.type !== 'literal') acc[part.type] = part.value;
+      return acc;
+    }, {});
+    const wallClockUtc = Date.UTC(
+      Number(parts.year),
+      Number(parts.month) - 1,
+      Number(parts.day),
+      Number(parts.hour) % 24,
+      Number(parts.minute),
+      Number(parts.second)
+    );
+    const flooredMs = Math.floor(target.getTime() / 1000) * 1000;
+    return wallClockUtc - flooredMs;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Convert a calendar day (YYYY-MM-DD) in a user's timezone into a canonical
+ * UTC ISO timestamp (default 12:00 local time — safely inside the same day for
+ * every IANA zone). Falls back to the Nairobi noon convention.
+ */
+export function zonedDateTimeToUtcIso(localDate, timeZone = SYSTEM_TIMEZONE, hour = 12) {
+  const match = String(localDate || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const wallClockUtc = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), hour, 0, 0);
+  // Two passes: the first resolves the offset at the guessed instant, the
+  // second corrects zones where that guess crossed a DST boundary.
+  let utcMs = wallClockUtc - getTimeZoneOffsetMs(new Date(wallClockUtc), timeZone);
+  utcMs = wallClockUtc - getTimeZoneOffsetMs(new Date(utcMs), timeZone);
+  return new Date(utcMs).toISOString();
+}
+
+function dayNumberFromParts(parts) {
+  return Math.floor(Date.UTC(parts.year, parts.month - 1, parts.day) / 86400000);
+}
+
+/** Calendar-day difference (to - from) as seen in Africa/Nairobi. */
+export function diffCalendarDays(fromDateLike, toDateLike) {
+  const toParts = toDateLike instanceof Date ? getNairobiParts(toDateLike) : parseDateParts(toDateLike);
+  const fromParts = fromDateLike instanceof Date ? getNairobiParts(fromDateLike) : parseDateParts(fromDateLike);
+  if (!toParts || !fromParts) return null;
+  return dayNumberFromParts(toParts) - dayNumberFromParts(fromParts);
+}
+
+function parseDateParts(dateLike) {
+  if (dateLike === null || dateLike === undefined || dateLike === '') return null;
+  const text = String(dateLike).trim();
+  const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return { year: Number(iso[1]), month: Number(iso[2]), day: Number(iso[3]) };
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return getNairobiParts(parsed);
+}
+
+const MONTH_WORD = '(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)';
+const DAY_ORDINAL = '(?:\\d{1,2}(?:st|nd|rd|th)?)';
+const WEEKDAY_WORD = '(?:sun(?:day)?|mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?)';
+
+/**
+ * Pull date phrases out of a full sentence ("Insurance expires on 15th Dec
+ * 2026", "Inspection due next month", "License renewal in 14 days") and
+ * resolve them through parseFlexibleDate. Never throws.
+ */
+export function extractDatePhrase(input, { countryCode = 'GLOBAL', locale = 'en-US', now = new Date() } = {}) {
+  const text = String(input || '').trim();
+  if (!text) return fail('Empty date');
+  const candidates = [];
+
+  const patterns = [
+    /\b\d{4}[-/.]\d{1,2}[-/.]\d{1,2}\b/g,
+    new RegExp(`\\b${DAY_ORDINAL}\\s+(?:of\\s+)?${MONTH_WORD}(?:\\s*,?\\s*\\d{4})?\\b`, 'gi'),
+    new RegExp(`\\b${MONTH_WORD}\\s+${DAY_ORDINAL}(?:\\s*,?\\s*\\d{4})?\\b`, 'gi'),
+    /\b\d{1,2}[-/.]\d{1,2}(?:[-/.]\d{2,4})?\b/g,
+    /\b(?:today|tomorrow|next\s+week|next\s+month)\b/gi,
+    /\bin\s+\d{1,3}\s+(?:days?|weeks?|months?)\b/gi,
+    /\b\d{1,3}\s+(?:days?|weeks?)\s+from\s+now\b/gi,
+    new RegExp(`\\b(?:next|this|coming)\\s+${WEEKDAY_WORD}\\b`, 'gi')
+  ];
+
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern)) {
+      const phrase = String(match[0]).replace(/^[,\s]+|[,\s.]+$/g, '').trim();
+      if (!phrase) continue;
+      if (candidates.some((c) => c.phrase.toLowerCase() === phrase.toLowerCase())) continue;
+      const parsed = parseFlexibleDate(phrase, { countryCode, locale, now });
+      if (parsed.ok) candidates.push({ ...parsed, phrase });
+    }
+  }
+
+  if (candidates.length === 0) {
+    return fail('No date phrase found in the message');
+  }
+
+  const confidenceRank = { high: 3, medium: 2, low: 1 };
+  candidates.sort((a, b) => (confidenceRank[b.confidence] || 0) - (confidenceRank[a.confidence] || 0));
+  const best = candidates[0];
+  return { ...best, phrase: best.phrase, candidates: candidates.map((c) => ({ phrase: c.phrase, localDate: c.localDate, confidence: c.confidence })) };
+}
+
 function daysInMonth(year, month) {
   return new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
@@ -232,5 +348,9 @@ export default {
   SYSTEM_TIMEZONE,
   parseFlexibleDate,
   getNairobiParts,
-  formatNairobiDate
+  formatNairobiDate,
+  getTimeZoneOffsetMs,
+  zonedDateTimeToUtcIso,
+  diffCalendarDays,
+  extractDatePhrase
 };

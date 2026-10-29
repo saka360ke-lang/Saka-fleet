@@ -18,8 +18,78 @@ export const REGION_FALLBACK = Object.freeze({
   default_units: 'metric',
   currency: 'USD',
   default_language: 'English',
-  locale: 'en-US'
+  locale: 'en-US',
+  timezone: 'Africa/Nairobi'
 });
+
+/**
+ * Default IANA timezone per detected country. Users can override this in their
+ * profile (profiles.timezone); the resolved value is always confirmed with the
+ * user before a date-based reminder is written.
+ */
+export const COUNTRY_TIMEZONES = Object.freeze({
+  KE: 'Africa/Nairobi',
+  TZ: 'Africa/Dar_es_Salaam',
+  UG: 'Africa/Kampala',
+  RW: 'Africa/Kigali',
+  ZA: 'Africa/Johannesburg',
+  NG: 'Africa/Lagos',
+  GH: 'Africa/Accra',
+  EG: 'Africa/Cairo',
+  US: 'America/New_York',
+  CA: 'America/Toronto',
+  MX: 'America/Mexico_City',
+  BR: 'America/Sao_Paulo',
+  AR: 'America/Argentina/Buenos_Aires',
+  GB: 'Europe/London',
+  IE: 'Europe/Dublin',
+  DE: 'Europe/Berlin',
+  FR: 'Europe/Paris',
+  ES: 'Europe/Madrid',
+  IT: 'Europe/Rome',
+  NL: 'Europe/Amsterdam',
+  PT: 'Europe/Lisbon',
+  CH: 'Europe/Zurich',
+  SE: 'Europe/Stockholm',
+  PL: 'Europe/Warsaw',
+  TR: 'Europe/Istanbul',
+  AE: 'Asia/Dubai',
+  SA: 'Asia/Riyadh',
+  QA: 'Asia/Qatar',
+  IN: 'Asia/Kolkata',
+  PK: 'Asia/Karachi',
+  BD: 'Asia/Dhaka',
+  CN: 'Asia/Shanghai',
+  JP: 'Asia/Tokyo',
+  KR: 'Asia/Seoul',
+  SG: 'Asia/Singapore',
+  MY: 'Asia/Kuala_Lumpur',
+  ID: 'Asia/Jakarta',
+  TH: 'Asia/Bangkok',
+  PH: 'Asia/Manila',
+  AU: 'Australia/Sydney',
+  NZ: 'Pacific/Auckland'
+});
+
+const IANA_TIMEZONE_RE = /^[A-Za-z]+\/[A-Za-z0-9_+\-/]+$/;
+
+/** Country code -> IANA timezone (Africa/Nairobi fallback). */
+export function resolveTimezoneFromCountry(countryCode = 'GLOBAL') {
+  const code = String(countryCode || '').toUpperCase();
+  return COUNTRY_TIMEZONES[code] || REGION_FALLBACK.timezone;
+}
+
+/**
+ * Resolve the timezone used to normalize a user's dates:
+ *   1. explicit, user-confirmed profile timezone,
+ *   2. country detected from the WhatsApp number,
+ *   3. Africa/Nairobi (canonical system timezone).
+ */
+export function resolveUserTimezone({ countryInfo = null, profile = null } = {}) {
+  const stored = profile?.timezone;
+  if (stored && IANA_TIMEZONE_RE.test(String(stored))) return String(stored);
+  return resolveTimezoneFromCountry(countryInfo?.country_code || REGION_FALLBACK.country_code);
+}
 
 export const REGIONS = Object.freeze([
   { prefix: '+254', country: 'Kenya', country_code: 'KE', plate_example: 'KDA 123A', default_units: 'metric', currency: 'KES', default_language: 'Swahili', locale: 'en-KE' },
@@ -176,6 +246,7 @@ export function buildGlobalContext(countryInfo, profile = null) {
     locale: region.locale || 'en-US',
     unitSystem,
     labels,
+    timeZone: resolveUserTimezone({ countryInfo: region, profile }),
     preferredLanguage: profile?.preferred_language || region.default_language || 'English',
     plateExample: region.plate_example
   };
@@ -188,6 +259,7 @@ export function describeGlobalContext(countryInfo, profile = null) {
     `Currency: ${ctx.currency}`,
     `Units: ${ctx.unitSystem} (distance ${ctx.labels.distance}, volume ${ctx.labels.volume}, economy ${ctx.labels.fuelEconomy})`,
     `Locale: ${ctx.locale}`,
+    `Timezone: ${ctx.timeZone}`,
     `Preferred language: ${ctx.preferredLanguage}`,
     `Plate example: ${ctx.plateExample}`
   ].join('\n');
@@ -206,6 +278,8 @@ export default {
   formatMoney,
   formatDate,
   normalizePhone,
-  resolveUnitSystem
+  resolveUnitSystem,
+  resolveTimezoneFromCountry,
+  resolveUserTimezone
 };
 

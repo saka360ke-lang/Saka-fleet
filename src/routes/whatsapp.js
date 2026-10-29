@@ -16,7 +16,8 @@ import {
   deleteVehicle,
   sanitizeVehicleUpdates
 } from '../services/vehicles.js';
-import { calculateFuelConsumption, getVehicleSummaryReport } from '../services/analytics.js';
+import { calculateFuelConsumption } from '../services/analytics.js';
+import { buildFleetReport, resolveReportType } from '../services/fleetReports.js';
 import { handleStage1CoreCapture, handleStage2OptionalWeaving } from '../services/onboarding.js';
 import { saveChatMessage, getRecentChatHistory } from '../services/chatHistory.js';
 import { sendEmailOtp, sendSupportEscalationEmail, sendMfaEmail } from '../services/mailer.js';
@@ -1467,16 +1468,17 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               }
             }
             else if (activeIntent === 'QUERY_FLEET_SUMMARY') {
-              const summaryReport = await getVehicleSummaryReport({
+              const fleetReport = await buildFleetReport({
                 supabase: supabaseClient,
-                vehicleId: targetVeh?.id,
-                plateNumber: mergedExt.plate_number || targetVeh?.plate_number
+                type: 'fleet',
+                ownerId: existingVehicles.some((v) => v.owner_id === profileData?.id) ? profileData?.id : null,
+                driverId: existingVehicles.some((v) => v.assigned_driver_id === profileData?.id) ? profileData?.id : null,
+                countryInfo,
+                profile: profileData
               });
-              if (summaryReport && summaryReport.explanation) {
-                customReply = summaryReport.explanation;
-              } else {
-                customReply = `Could not retrieve summary for ${targetVeh?.plate_number}.`;
-              }
+              customReply = fleetReport?.ok && fleetReport.text
+                ? fleetReport.text
+                : `Could not retrieve the fleet summary right now.`;
             }
             else if (activeIntent === 'GREETING') {
               customReply = aiResult.reply_message && !aiResult.reply_message.includes('I am your Saka Fleet WhatsApp assistant')
@@ -1641,19 +1643,21 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
               }
             }
             else if (activeIntent === 'SET_REMINDER') {
-              customReply = `🔔 *Set Service Reminder for ${targetVeh.plate_number}*\n\nPlease reply with your service reminder details. For example:\n• *"Remind oil change in 5000 km"*, *"Brake pads in 3000 miles"*, *"Spare part change in 36 operating hours"* or *"Service due next Monday"*`;
+              customReply = `🔔 *Set Reminder for ${targetVeh.plate_number}*\n\nReply with the item and its date, distance or operating hours. Examples:\n• *"Insurance expires on 15th Dec 2026"*, *"Inspection due next month"*, *"License renewal in 14 days"*\n• *"Road license expires 2027-03-31"* or *"Permit due in 30 days"*\n• *"Oil change in 5000 km"*, *"Brake pads in 3000 miles"* or *"Spare part change in 36 operating hours"*`;
             }
             else if (activeIntent === 'REQUEST_REPORT') {
-              const summaryReport = await getVehicleSummaryReport({
+              const reportType = resolveReportType(mergedExt.report_type || messageText, 'fleet');
+              const fleetReport = await buildFleetReport({
                 supabase: supabaseClient,
-                vehicleId: targetVeh?.id,
-                plateNumber: targetVeh?.plate_number
+                type: reportType,
+                ownerId: existingVehicles.some((v) => v.owner_id === profileData?.id) ? profileData?.id : null,
+                driverId: existingVehicles.some((v) => v.assigned_driver_id === profileData?.id) ? profileData?.id : null,
+                countryInfo,
+                profile: profileData
               });
-              if (summaryReport && summaryReport.explanation) {
-                customReply = summaryReport.explanation;
-              } else {
-                customReply = `📊 *Fleet Reports & Summary*\n\nYou have ${existingVehicles.length} active vehicle(s).\n\nType *"Send monthly report"* or *"View summary"* for a detailed statement.`;
-              }
+              customReply = fleetReport?.ok && fleetReport.text
+                ? fleetReport.text
+                : `📊 *Fleet Reports & Summary*\n\nYou have ${existingVehicles.length} active vehicle(s).\n\nAsk for *fleet status*, *compliance report*, *maintenance report* or *financial report*.`;
             }
             else if (activeIntent === 'MANAGE_VEHICLE' || activeIntent === 'LIST_VEHICLES') {
               const vehicleList = existingVehicles.map((v, i) => {

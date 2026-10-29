@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.8.1  
+**Version:** 1.9.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -57,7 +57,8 @@ All LLM traffic flows through **`src/services/aiClient.js`**. No service talks t
 - **`src/services/conversationEngine.js`** — every user-facing reply is rendered by DeepSeek-V3 from a structured FACTS payload (`composeMessage`, `renderQuizQuestion`, `renderConfirmationSummary`, `renderOutcome`, `renderActionDiscovery`). Hard-coded conversational prose has been removed from the WhatsApp route; deterministic fallbacks remain only for provider outages. Quiz questions are cached per field/language (`seedQuizQuestions`, `isQuizQuestionCacheWarm`) and prefetched in one batch per flow.
 - **`src/services/quizEngine.js`** — one-piece-at-a-time wizard engine: declarative flow definitions, per-field validators/extractors, deterministic multi-field fast-forward (`applyTextExtraction`), two-pass conditional extraction (`applyExtraction`), background question prefetch, Cancel/Restart/Help navigation, and a **mandatory confirmation summary before any database write**. VIN and passbook token are never editable.
 - **`src/services/naturalParser.js` (v1.8)** — natural conversational extraction: deterministic field parsing plus a DeepSeek JSON top-up for missing fields, "extra notes" compilation for details that do not map to a database column, missing-field computation for dynamic prompts, and graceful degradation when the provider is unavailable.
-- **`src/services/maintenanceReminders.js` (v1.8)** — metric/imperial/operating-hours maintenance reminder engine: canonical km/hours storage, explicit `remaining_value` tracking, 75/25/5/due-now/overdue dispatch (once per tier), odometer + operating-hours monitoring, and a background sweep worker.
+- **`src/services/maintenanceReminders.js` (v1.9)** — universal reminder engine: distance (canonical km), operating hours **and date-based expiries** (insurance, inspection/MOT, licensing, permits, driver licences, general deadlines). Explicit `remaining_value` tracking, 75/25/5/due-now/overdue threshold tiers, 30d/14d/7d/24h/overdue expiry tiers, `due_at` timestamps in the user's confirmed timezone, driver-licence promotion, `expiry_notification_log` audit trail, and a single background sweep worker.
+- **`src/services/fleetReports.js` (v1.9)** — four core report builders returning structured JSON + localized WhatsApp text: Fleet Status, Compliance & Expiry, Maintenance & Service and Financial & Cost. Every figure is derived from the database; currency/units/dates come from `globalization.js`.
 - **`src/services/globalization.js`** — single source of truth for country detection (E.164), metric/imperial conversion, currency + locale formatting, plate examples and unit labels. Every AI prompt and quiz question receives this context.
 - **`src/services/ocrService.js`** — Meta media download + Google Cloud Vision `DOCUMENT_TEXT_DETECTION`, with deterministic receipt hints (`extractReceiptHints`). See §24.
 - **`src/services/messageQueue.js`** — per-phone serialization + bounded global concurrency + retry/backoff + graceful drain on shutdown.
@@ -277,9 +278,10 @@ Driver-centric feature blueprints synthesized weekly by Sentinel from live conve
    - **Active-quiz extraction is deterministic and AI-free:** `applyTextExtraction` captures safe volunteered fields from the same message (year, odometer only with a km/mi marker, fuel type, volume only with a litre/gallon marker), and `applyExtraction` runs two passes so conditional fields (e.g. fuel volume once `expense_type = Fuel`) fill from one payload.
    - **Expense-vs-Odometer disambiguation:** messages containing fuel/expense wording (`fuel`, `liters`, `refuel`, `paid`, `cost`, `receipt`, `maintenance`) are classified as `LOG_EXPENSE` even when an odometer value is also present (e.g. *"Logged 30L fuel at 50350 km for KES 5500"*).
 
-5. **Fleet Analytics Engine (`src/services/analytics.js`):**
+5. **Fleet Analytics & Reporting Engine (`src/services/analytics.js`, `src/services/fleetReports.js`):**
    - `calculateFuelConsumption`: Calculates km/L, L/100km, MPG, total distance, volume in liters, and total cost from `expense_logs`. Identifies missing parameters (`NEEDS_MORE_DATA`) and prompts the user conversationally.
-   - `getVehicleSummaryReport`: Provides full financial breakdown (fuel, maintenance, net profit) and asset health.
+   - `getVehicleSummaryReport`: per-vehicle financial breakdown (fuel, maintenance, net profit) used by legacy branches.
+   - `fleetReports.buildFleetReport`: the four core reports (fleet status, compliance & expiry, maintenance & service, financial & cost) — see §32. `REQUEST_REPORT.report_type` selects the report; `QUERY_FLEET_SUMMARY` always renders the Fleet Status report.
 
 ---
 
@@ -543,7 +545,7 @@ Owners exceeding tier limits are prompted to upgrade via Paystack checkout.
   - `profiles`
   - `chat_history`, `chat_transcripts`, `chat_friction_logs`, `processed_webhooks`, `chat_sessions`, `saka_dynamic_rules`
   - `pending_owner_notifications`, `passbook_transfers`
-  - `private_earnings`, `expenses`, `expense_logs`, `reminders`
+  - `private_earnings`, `expenses`, `expense_logs`, `expiry_notification_log`, `reminders`
   - `superadmin_sessions`, `coupons`, `admin_audit_logs`, `conversation_analytics`, `error_logs`
   - **Intentionally preserved:** `system_config` (deployment revision + retained prompt overrides) and `weekly_feature_proposals`.
 
@@ -636,7 +638,7 @@ Every stateful test or check MUST clear the data it created from the database af
 
 ### 19.2 Implementation
 - `scripts/testCleanup.js`
-  - `cleanupTestData({ phones, vins, vehicleIds })` deletes dependent rows first (`expenses`, `expense_logs`, `private_earnings`, `reminders`, `passbook_transfers`, `pending_owner_notifications`, `coupons`), releases driver assignments, then removes `vehicles`, `vin_registry`, chat tables, `superadmin_sessions`, and `profiles`.
+  - `cleanupTestData({ phones, vins, vehicleIds })` deletes dependent rows first (`expenses`, `expense_logs`, `private_earnings`, `expiry_notification_log`, `reminders`, `passbook_transfers`, `pending_owner_notifications`, `coupons`), releases driver assignments, then removes `vehicles`, `vin_registry`, chat tables, `superadmin_sessions`, and `profiles`.
   - `runWithCleanup({ testFn, phones, vins })` wraps a suite in `try/finally` so cleanup always runs.
   - `KNOWN_TEST_PHONES` / `KNOWN_TEST_VINS` cover the identifiers used by the repository's suites.
 - `scripts/run_tests.js` (exposed as `npm test`) runs the targeted suite(s) and always performs a final cleanup sweep. `npm run test:cleanup` clears test data without running tests.
@@ -724,7 +726,7 @@ Saka Fleet serves a **global audience**. Every feature, quiz flow and AI prompt 
 
 ## 23. Known Gaps (next iteration)
 
-- `request_report` and `complete_reminder` still use the legacy handlers (not yet quiz-based).
+- `complete_reminder` still uses the legacy handler (not yet quiz-based); `request_report` now routes to the four core report builders in `fleetReports.js`. PM completions populate `reminders.completed_at` / `completed_on_time` when a reminder is completed.
 - `test_reliability.js` is a legacy suite outside the targeted runner; its breaker assertions were loosened for AI-rendered copy.
 - `chat_sessions` pruning is manual (`pruneSessionSnapshots`) until scheduled in the Sentinel worker.
 - Free-form chat replies still require one DeepSeek call (~2–4 s); quiz question turns are served from the question cache. PDF OCR is not supported in v1 (images only).
@@ -813,47 +815,75 @@ These rules are permanent and mirrored in `.clinerules`:
 
 Normalization: every result returns `{ ok, localDate (YYYY-MM-DD), iso, timeZone: 'Africa/Nairobi', confidence, source }`. Date-only quiz values are stored as `YYYY-MM-DD`; reminder `due_date` stores the same calendar day. The AI prompt mirrors these rules (ISO/DD-MM/MM-DD, ordinals, relative phrases, Nairobi timezone).
 
-Integration points: `vehicle_registration` insurance/inspection expiry, `edit_vehicle` date fields, `set_reminder` due date, and `globalization.formatDate()` (renders in Africa/Nairobi by default).
+Integration points: `vehicle_registration` insurance/inspection expiry, `edit_vehicle` date fields, `set_reminder` due dates (via `extractDatePhrase()` + `parseExpirySpec()`), and `globalization.formatDate()` (renders in the user's confirmed timezone, Africa/Nairobi by default). `globalization.resolveUserTimezone()` resolves the IANA zone from the WhatsApp number and the user confirms it in the flow summary before any write.
 
 
 
 ---
 
-## 28. Maintenance Reminder Engine & Operating Hours (v1.8)
+## 28. Universal Reminder Engine: Thresholds & Date Expiries (v1.9)
 
 ### 28.1 Purpose
-Threshold-based maintenance reminders explicitly track and record the remaining distance (kilometres or miles) or time (operating hours) until a reminder triggers, and automatically dispatch proactive WhatsApp alerts as thresholds approach, plus urgent alerts when items are due or overdue.
+Any time-bound or threshold-bound item is a first-class reminder: **insurance, inspection/MOT, licensing, permits, driver licences and general deadlines** alongside distance (km/mi) and operating hours. The engine explicitly tracks the remaining distance, operating hours or days until each item triggers, dispatches proactive WhatsApp alerts exactly once per tier, and writes an audit trail for every expiry dispatch.
 
-### 28.2 Unit model (global rule)
-- Canonical storage: distance in **kilometres**, time in **decimal operating hours**.
-- Unit-aware input: "in 5000 km", "3000 miles", "at 45000 km", bare numbers (interpreted in the vehicle unit system), "36 operating hours", "in 36 engine hours", "1250 hrs".
+### 28.2 Unit & date model (global rule)
+- Canonical storage: distance in **kilometres**, time in **decimal operating hours**, dates as ISO `YYYY-MM-DD` plus a `due_at` UTC instant.
+- Unit-aware input: "in 5000 km", "3000 miles", "at 45000 km", bare numbers (vehicle unit system), "36 operating hours", "in 36 engine hours", "1250 hrs".
 - Miles convert with `userDistanceToKm()` (1 mi = 1.609344 km). Display adapts per vehicle: metric → km, imperial → mi; time always renders as "operating hours".
-- `parseThresholdSpec()` and `parseOperatingHours()` in `src/services/maintenanceReminders.js` are the single source of truth.
+- Date input: "Insurance expires on 15th Dec 2026", "Inspection due next month", "License renewal in 14 days", "Permit expires 2027-03-31". `dateParser.extractDatePhrase()` finds the date inside a full sentence and `parseExpirySpec()` classifies the item.
+- Timezone: `globalization.resolveUserTimezone()` prefers the confirmed `profiles.timezone`, otherwise the country default from `COUNTRY_TIMEZONES` (detected from the E.164 WhatsApp number). The confirmation summary displays the timezone before any write; `due_at` is computed in that zone while canonical storage stays ISO / Africa/Nairobi-normalized.
+- Category detection: `detectExpiryCategory()` → `insurance` | `inspection` | `licensing` | `permit` | `driver_license` | `maintenance` | `deadline` | `other`.
+- `parseThresholdSpec()`, `parseOperatingHours()`, `parseExpirySpec()` and `buildExpirySpecFromDate()` in `src/services/maintenanceReminders.js` are the single source of truth.
 
-### 28.3 Schema (`reminders` + `vehicles`)
+### 28.3 Schema (`reminders` + `vehicles` + `profiles` + `expiry_notification_log`)
 | Column | Purpose |
 | :--- | :--- |
 | `reminders.threshold_unit` | `distance` \| `hours` \| `date` |
+| `reminders.kind` | `threshold` \| `expiry` |
+| `reminders.category` | `insurance` \| `inspection` \| `licensing` \| `permit` \| `driver_license` \| `maintenance` \| `deadline` \| `other` |
+| `reminders.due_date` + `due_at` | Canonical calendar day and UTC expiry instant |
+| `reminders.timezone` | User-confirmed IANA timezone used to resolve `due_at` |
+| `reminders.linked_column` | Canonical column kept in sync (`vehicles.insurance_expiry`, `vehicles.inspection_expiry`, `vehicles.road_license_expiry`, `vehicles.permit_expiry`, `profiles.driver_license_expiry`) |
+| `reminders.subject_type` / `subject_id` | `vehicle` or `driver` subject for owner + driver notifications |
 | `reminders.threshold_input_unit` | `km` \| `mi` \| `hours` as entered |
 | `reminders.target_value` | Absolute target in canonical km / hours |
 | `reminders.last_service_value` | Baseline reading at creation (remaining is computed from here) |
-| `reminders.remaining_value` + `remaining_updated_at` | **Explicit remaining distance/time tracking**, refreshed on every evaluation |
+| `reminders.remaining_value` + `remaining_updated_at` | **Explicit remaining distance/time/days tracking**, refreshed on every evaluation |
 | `reminders.display_unit` | `km` \| `mi` \| `hours` for rendering |
 | `reminders.notes` | Compiled extra notes from the conversation |
-| `reminders.notified_75p/25p/5p/0p/overdue` | Exactly-once tier dispatch flags |
+| `reminders.notified_75p/25p/5p/0p/overdue` | Exactly-once threshold tier flags |
+| `reminders.notified_30d/14d/7d/24h/overdue` + `expiry_tier_at` | Exactly-once expiry ladder flags and last evaluation |
+| `reminders.completed_at` / `completed_on_time` | PM completion history used by the Maintenance report |
 | `vehicles.operating_hours` + `hours_updated_at` | Canonical hour-meter reading and update time |
+| `vehicles.insurance_expiry`, `inspection_expiry`, `road_license_expiry`, `permit_expiry` | Canonical compliance dates (upserted through `linked_column`) |
+| `profiles.timezone` + `timezone_confirmed_at` | User-confirmed IANA timezone |
+| `expiry_notification_log` | `reminder_id`, `vehicle_id`, `category`, `tier`, `phone`, `channel`, `message`, `sent_at` — feeds the Compliance report |
 
-DDL is applied idempotently by `ensureVehicleTableColumns()` (`src/services/vehicles.js`) at startup (the reminders block is guarded by `to_regclass`).
+DDL is applied idempotently by `ensureVehicleTableColumns()` (`src/services/vehicles.js`) at startup (the reminders block is guarded by `to_regclass`). The legacy `notified_30d/7d/48h/1d` reminder cron and the driver-licence cron were retired in v1.9; their tiers are superseded by the 30d/14d/7d/24h/overdue ladder.
 
 ### 28.4 Monitoring & dispatch
 - `applyOdometerReading()` canonicalizes input, updates the vehicle, then evaluates active distance reminders immediately.
 - `applyOperatingHours()` records hour-meter submissions and evaluates hours reminders immediately.
 - `evaluateVehicleReminders()` recomputes remaining, persists `remaining_value`, and dispatches once per tier: 75% (approaching), 25% (warning), 5% (urgent), 0% (due now), overdue. Owner + assigned driver are notified (deduped phones; `canDeliver` preserves Sentinel/superadmin boundaries).
-- `runReminderSweep()` runs every 30 minutes (first pass 90s after boot) from `index.js`, covering reminders for vehicles whose readings changed elsewhere.
-- Wiring: `UPDATE_MILEAGE` and `LOG_OPERATING_HOURS` route handlers, `log_mileage` / `log_operating_hours` quiz completions, and `set_reminder` quiz creation.
+- `createExpiryReminder()` upserts linked compliance items by `vehicle_id`/`subject_id` + `linked_column`, keeps the canonical vehicle date column in sync, and resets the full notification ladder whenever a date changes.
+- `evaluateExpiryReminders()` computes calendar days remaining (Africa/Nairobi), selects the most urgent un-notified ladder tier, dispatches to owner + assigned driver (driver-linked items notify the driver and every owner of their assigned vehicles), writes `expiry_notification_log`, and persists `remaining_value` (days) + tier flags.
+- `syncDriverLicenseReminders()` promotes `profiles.driver_license_expiry` into driver-linked reminders before each sweep.
+- `runReminderSweep()` runs every 30 minutes (first pass 90s after boot) from `index.js` and performs all three passes (threshold → driver-licence promotion → expiry ladder), returning `{ threshold, expiry, driverRemindersSynced }`.
+- Wiring: `UPDATE_MILEAGE` and `LOG_OPERATING_HOURS` route handlers, `log_mileage` / `log_operating_hours` quiz completions, `set_reminder` quiz creation (date + threshold), vehicle registration insurance/inspection dates, and `edit_vehicle` compliance-date edits.
 
-### 28.5 Alert copy
-Alerts are WhatsApp-ready and unit-aware, e.g. "Service Warning (KDA 123A): Oil change due soon! Remaining: 850 km. Target: 105,000 km." Imperial vehicles see miles; hour-based reminders see "operating hours". Alerts include remaining value, target and current reading so no follow-up question is needed.
+### 28.5 Expiry tier ladder
+| Tier | Window (days remaining) | Flag |
+| :--- | :--- | :--- |
+| 30 days | 15–30 | `notified_30d` |
+| 14 days | 8–14 | `notified_14d` |
+| 7 days | 2–7 | `notified_7d` |
+| 24 hours | 0–1 | `notified_24h` |
+| Overdue | < 0 | `notified_overdue` |
+
+A sweep that missed a window still sends the single most urgent applicable alert, marks all coarser tiers as consumed, and never repeats a tier.
+
+### 28.6 Alert copy
+Alerts are WhatsApp-ready and unit-aware, e.g. "Service Warning (KDA 123A): Oil change due soon! Remaining: 850 km. Target: 105,000 km." Imperial vehicles see miles; hour-based reminders see "operating hours". Expiry alerts name the item and countdown, e.g. "Expiry Reminder (KDA 123A): Insurance Renewal expires in 14 days (2026-11-12)." Alerts include remaining value, target/due date and current reading so no follow-up question is needed.
 
 
 ---
@@ -940,11 +970,11 @@ Alerts are WhatsApp-ready and unit-aware, e.g. "Service Warning (KDA 123A): Oil 
 - **Saka** = front-facing WhatsApp agent: intent classification, structured extraction, localized prose, step-by-step guidance.
 - **Sentinel** = background supervisor: health checks, conversational friction analysis, stall recovery, Cloud Run triage, weekly feature proposals. Saka never impersonates Sentinel or superadmin.
 
-### 31.3 Training coverage added in v1.8.1
-- All 17 quiz flows, all non-quiz intents, the maintenance-reminder engine (date / km-mi distance / operating hours), natural multi-field parsing + extra-notes compilation, and the mandatory confirmation gate are now explicit prompt instructions.
-- `extracted_data` gained `reminder_type`, `reminder_due_date`, `reminder_threshold` and `extra_notes`.
-- `conversationEngine.composeMessage` adds a FACTS-contract line and a maintenance-unit display rule.
-- `test_agent_training.js` asserts every intent and flow key is embedded in the assembled core prompt (offline training regression guard).
+### 31.3 Training coverage added in v1.9.0
+- All 17 quiz flows, all non-quiz intents, the universal reminder engine (date expiries / km-mi distance / operating hours), the 30d/14d/7d/24h/overdue expiry ladder, timezone confirmation, natural multi-field parsing + extra-notes compilation, the four core reports and the mandatory confirmation gate are explicit prompt instructions.
+- `extracted_data` gained `reminder_type`, `reminder_category`, `reminder_due_date`, `reminder_threshold`, `timezone`, `report_type` and `extra_notes`.
+- `conversationEngine.composeMessage` adds FACTS-contract lines for expiry timezone confirmation and report fidelity.
+- `test_agent_training.js` asserts every intent and flow key is embedded in the assembled core prompt (offline training regression guard), including the new reminder/report tokens.
 
 ### 31.4 Permanent governance rule
 Whenever the Saka Fleet application changes (feature, flow, intent, field, handler, schema, config or env knob), update **in the same commit**:
@@ -956,4 +986,63 @@ Whenever the Saka Fleet application changes (feature, flow, intent, field, handl
 Mirrored in `.clinerules` rule 13.
 
 
+
+
+---
+
+## 32. Core Fleet Reports (v1.9)
+
+`src/services/fleetReports.js` is the single source of truth for fleet reporting. Every builder returns:
+
+```js
+{ ok, type, data /* structured JSON */, text /* WhatsApp markdown */ }
+```
+
+`buildFleetReport({ supabase, type, ownerId, vehicleId, countryInfo, profile })` dispatches to the four builders below. `resolveReportType(text)` maps free text (and `extracted_data.report_type`) to `fleet | compliance | maintenance | financial`.
+
+### 32.1 Shared data collection
+`loadFleetData()` scopes vehicles by `owner_id` (or a single `vehicle_id`) with `deleted_at IS NULL`, then loads:
+`reminders` (vehicle-linked + driver-linked), `expense_logs`, `private_earnings`, `passbook_transfers`, `profiles` (owner/driver phone + timezone) and `expiry_notification_log`.
+Every query is bounded (≤2000 rows) and failure-tolerant: a missing/legacy table degrades that section instead of breaking the report.
+
+Expiry items are unified by `collectExpiryItems()`: reminder rows take precedence, and canonical vehicle columns (`insurance_expiry`, `inspection_expiry`, `road_license_expiry`, `permit_expiry`) fill any gaps. Status buckets: `active`, `due_30d`, `due_14d`, `due_7d`, `expired`.
+
+### 32.2 Report 1 — Fleet Status
+| Section | Metric |
+| :--- | :--- |
+| `overview` | Total vehicles, active, unassigned, active drivers, owners |
+| `health` | Availability rate %, distance this month (odometer deltas), total odometer, operating hours, expiry items monitored, upcoming 30 days |
+| `urgent` | Overdue threshold maintenance, overdue expiries, expired insurance, expired inspections |
+| `recentActivity` | Latest registrations, passbook transfers, logged expenses |
+
+### 32.3 Report 2 — Compliance & Expiry
+| Section | Metric |
+| :--- | :--- |
+| `insuranceStatusMatrix` | Active / 30d / 14d / 7d / expired counts + item rows |
+| `inspectionAndPermits` | Inspections, permits and licensing summaries |
+| `driverLicenses` | Driver-licence summary (driver-linked reminders) |
+| `notificationLog` | Last 10 rows from `expiry_notification_log` (tier, plate, phone, sent_at) |
+| `actionPrompt` | Owner quick-update prompts, e.g. "Update insurance for KDA 123A to 2026-11-12" |
+
+### 32.4 Report 3 — Maintenance & Service
+| Section | Metric |
+| :--- | :--- |
+| `thresholds` | Per-reminder remaining km/mi/hours, target, current, % remaining, `dueState` (`on_track` / `warning` / `due_now` / `overdue`) |
+| `pmCompliance` | Scheduled, completed, completed on time, overdue, compliance rate % |
+| `serviceHistory` | Recent maintenance/parts expense logs with workshop notes |
+| `extraNotes` | Unstructured catch-all notes from reminders + `vehicles.other_details` |
+
+### 32.5 Report 4 — Financial & Cost
+| Section | Metric |
+| :--- | :--- |
+| `expenses` | Fuel, maintenance, parts, tolls/parking, other, total (owner currency) |
+| `earnings` | Total revenue + per-vehicle earnings (`private_earnings`) |
+| `net` | Earnings − expenses per vehicle and fleet total |
+| `efficiency` | Distance covered this month, operating hours, cost per km/mi, cost per operating hour |
+
+All money uses `formatMoney(amount, ctx.currency, ctx.locale)`, distances honour the owner's metric/imperial system, and dates render in the owner's confirmed timezone. Report text never contains hard-coded KES.
+
+### 32.6 Access paths
+- WhatsApp: `QUERY_FLEET_SUMMARY` → Fleet Status; `REQUEST_REPORT` + `report_type` → the selected report (owners/drivers see their own fleet scope).
+- `fleetReports` is also reusable by executive dashboards (JSON-first) and the per-vehicle PDF audit path (`reports.js` remains the PDF renderer).
 
