@@ -1073,7 +1073,7 @@ function confirmationNotes(state, ctx) {
 function confirmationNotesBase(state, ctx) {
   if (state.flow === 'assign_driver') {
     return [
-      'A 6-digit verification code will be sent to your WhatsApp before the driver is notified.',
+      'A 6-digit verification code will be emailed to your verified email address before the driver is notified.',
       'The driver must reply ACCEPT, then verify their email and a valid compliance item before they can manage this vehicle.'
     ];
   }
@@ -1162,7 +1162,7 @@ async function askOtp(state, ctx, note = null) {
 
 /**
  * Owner confirmed the assignment summary → create the pending assignment,
- * send the WhatsApp OTP and switch to the assignment_otp security phase.
+ * email the 6-digit OTP and switch to the assignment_otp security phase.
  */
 async function startAssignmentOtp(state, def, ctx) {
   const a = state.answers;
@@ -1208,7 +1208,7 @@ async function startAssignmentOtp(state, def, ctx) {
   const reply = await renderQuizQuestion({
     flowLabel: def.label,
     fieldLabel: '6-digit assignment code',
-    hint: `We sent a code to your WhatsApp${created.ownerPhone ? ` (${created.ownerPhone})` : ''}. Reply with the 6 digits, or Resend for a new code.`,
+    hint: `We emailed a code to ${created.ownerEmail}. Reply with the 6 digits, or Resend for a new code.`,
     answers: a,
     collectedLabels: buildSummaryRows(def, a, ctx).map((row) => `${row.label}: ${row.value}`),
     language: ctx.language,
@@ -1256,7 +1256,7 @@ async function handleAssignmentOtp(state, clean, ctx) {
       state.assignmentExpiresAt = created.expiresAt;
     }
     const reply = await askAgain(created.ok
-      ? 'A fresh code has been sent to your WhatsApp.'
+      ? 'A fresh code has been emailed to you.'
       : `Could not send a code: ${created.error}`);
     return { handled: true, reply, flow: state.flow, active: true };
   }

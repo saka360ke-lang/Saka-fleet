@@ -864,7 +864,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                   driverPhone: resent.driverPhone,
                   expiresAt: resent.expiresAt
                 };
-                customReply = '🔐 A fresh 6-digit code has been sent to your WhatsApp. Reply with it to continue.';
+                customReply = '🔐 A fresh 6-digit code has been emailed to you. Reply with it to continue.';
               } else {
                 customReply = `❌ ${resent.error}`;
               }
@@ -1473,7 +1473,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                       driverPhone: created.driverPhone,
                       expiresAt: created.expiresAt
                     };
-                    customReply = `🔐 *Verify Driver Assignment*\n\nWe sent a 6-digit code to your WhatsApp. Reply with the code to assign *${created.driverPhone}* to *${assignTarget.plate_number}*.\n\n_(Reply *Resend* for a new code or *Cancel* to abort.)_`;
+                    customReply = `🔐 *Verify Driver Assignment*\n\nWe emailed a 6-digit code to *${created.ownerEmail}*. Reply with the code to assign *${created.driverPhone}* to *${assignTarget.plate_number}*.\n\n_(Reply *Resend* for a new code or *Cancel* to abort.)_`;
                   }
                 }
               }

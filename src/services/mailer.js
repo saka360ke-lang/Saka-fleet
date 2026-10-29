@@ -139,6 +139,45 @@ export async function sendEmailOtp(targetEmail, code) {
     }
 }
 
+/**
+ * Owner-side driver-assignment verification code. Sent by email (never by
+ * WhatsApp) so the code never appears in chat logs.
+ */
+export async function sendDriverAssignmentOtp(targetEmail, code, { plate = 'your vehicle', driverPhone = '' } = {}) {
+    try {
+        const { data, error } = await getResendClient().emails.send({
+            from: 'Saka Security <security@reports.sakafleet.com>',
+            to: [targetEmail],
+            subject: `Saka Fleet: Driver assignment verification — ${plate}`,
+            html: `
+                <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #1e293b; max-width: 520px; margin: auto; border: 1px solid #e2e8f0; padding: 24px; border-radius: 12px; background: #ffffff;">
+                    <h2 style="color: #0f172a; margin-top: 0;">Driver Assignment Verification</h2>
+                    <p>Hello,</p>
+                    <p>You requested to assign <strong>${driverPhone || 'a driver'}</strong> to <strong>${plate}</strong> on Saka Fleet.</p>
+                    <p>Enter this 6-digit code in WhatsApp to confirm the assignment:</p>
+                    <div style="background-color: #f0f9ff; border: 1px solid #bae6fd; padding: 16px; font-size: 32px; font-weight: bold; letter-spacing: 8px; text-align: center; border-radius: 8px; color: #0284c7; margin: 24px 0;">
+                        ${code}
+                    </div>
+                    <p style="font-size: 13px; color: #64748b;">This code is valid for 10 minutes. If you did not request this assignment, ignore this email and reply Cancel in WhatsApp.</p>
+                    <hr style="border: none; border-top: 1px solid #e2e8f0; margin-top: 24px;">
+                    <p style="font-size: 12px; color: #94a3b8; margin-bottom: 0;">Saka Fleet Operating System • Automated Verification Service</p>
+                </div>
+            `
+        });
+
+        if (error) {
+            console.error('[Resend Assignment OTP Error]:', error);
+            throw new Error(`Failed to send assignment OTP: ${error.message}`);
+        }
+
+        console.log(`[Resend Assignment OTP] Dispatched code to ${targetEmail}. ID: ${data?.id}`);
+        return true;
+    } catch (err) {
+        console.error('[Resend Assignment OTP Exception]:', err.message);
+        throw err;
+    }
+}
+
 
 
 export async function sendPassbookWelcomeEmail({ targetEmail, plateNumber, makeModel, yom, vin, token, fuelType, mileage }) {

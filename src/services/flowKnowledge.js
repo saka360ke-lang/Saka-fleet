@@ -81,10 +81,10 @@ export const SAKA_QUIZ_FLOWS = [
     key: 'assign_driver',
     label: 'Assign driver',
     trigger: 'assign driver, add driver, driver phone',
-    fields: 'vehicle → driver phone → handover odometer → confirm → owner WhatsApp OTP',
+    fields: 'vehicle → driver phone → handover odometer → confirm → owner email OTP',
     extracted: ['plate_number', 'driver_phone', 'odometer'],
     writes: 'driver_assignments (PENDING_OWNER_OTP → PENDING_DRIVER_ACCEPTANCE); vehicles.assigned_driver_id only after the driver replies ACCEPT',
-    rules: 'owner-only; WhatsApp OTP gate (10 min, 3 attempts); strict 1-to-1 incl. pending reservations; driver must reply ACCEPT; a non-compliant driver cannot manage the vehicle'
+    rules: 'owner-only; 6-digit OTP emailed to the owner (10 min, 3 attempts); strict 1-to-1 incl. pending reservations; driver must reply ACCEPT; a non-compliant driver cannot manage the vehicle'
   },
   {
     key: 'driver_onboarding',
@@ -252,7 +252,7 @@ export const SAKA_BOUNDARY_RULES = [
   'VIN and passbook QR token are permanent and immutable — never offer to change them.',
   'Only the vehicle owner may delete a vehicle; deletion is soft and preserves history.',
   'A driver can never be assigned to two vehicles, and a vehicle can never have two drivers.',
-  'Driver assignments require an owner WhatsApp OTP and the driver\'s ACCEPT; a driver whose email or minimal compliance is not valid can never manage the vehicle.',
+  'Driver assignments require an owner email OTP and the driver\'s ACCEPT; a driver whose email or minimal compliance is not valid can never manage the vehicle.',
   'Compliance requirements come from the regional catalog — never invent a licence type, expiry or legal rule.',
   'Never invent OTPs, PINs, amounts, dates, plate numbers or VINs.',
   'Never claim a write happened until the user explicitly confirmed the summary.',

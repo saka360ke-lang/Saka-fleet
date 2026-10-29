@@ -1,7 +1,7 @@
 /**
- * Saka Fleet — OTP-Gated Driver Assignment & Compliance Lifecycle (v1.9.1)
+ * Saka Fleet — OTP-Gated Driver Assignment & Compliance Lifecycle (v1.9.2)
  * ------------------------------------------------------------------------
- * Owner assigns a driver -> owner verifies a WhatsApp OTP -> driver replies
+ * Owner assigns a driver -> owner verifies an EMAIL OTP -> driver replies
  * ACCEPT -> the assignment becomes ACTIVE but the driver is GATED from managing
  * the vehicle until:
  *   1. their email is verified, and
@@ -15,6 +15,7 @@
 
 import crypto from 'crypto';
 import { resolveUserTimezone } from './globalization.js';
+import { sendDriverAssignmentOtp } from './mailer.js';
 import { buildExpirySpecFromDate, createExpiryReminder, daysUntilDue } from './maintenanceReminders.js';
 import { SYSTEM_TIMEZONE } from './dateParser.js';
 import { complianceCategory, getComplianceCatalog } from './complianceCatalog.js';
@@ -100,6 +101,7 @@ export async function createDriverAssignment({
   driverPhone,
   handoverOdometer = null,
   countryInfo = null,
+  sendOtpFn = sendDriverAssignmentOtp,
   sendWhatsApp = null,
   now = new Date()
 } = {}) {
@@ -109,9 +111,16 @@ export async function createDriverAssignment({
 
   const ownerId = ownerProfile?.id || vehicle.owner_id;
   const ownerPhone = ownerProfile?.phone_number || vehicle.owner_phone;
+  const ownerEmail = String(ownerProfile?.email || vehicle.owner_email || '').trim().toLowerCase();
   if (!ownerId) return { ok: false, error: 'Owner profile not found.' };
   if (ownerPhone && normalizeDriverPhone(ownerPhone) === cleanPhone) {
     return { ok: false, error: 'You cannot assign a vehicle to your own number.' };
+  }
+  if (!ownerEmail) {
+    return { ok: false, error: 'Please add an email address before assigning a driver — reply "update email" to set it.' };
+  }
+  if (ownerProfile && ownerProfile.email_verified === false) {
+    return { ok: false, error: 'Your email is not verified yet — complete email verification, then retry the assignment.' };
   }
 
   // Strict 1-to-1 at request time: a driver can only hold one active/pending
@@ -186,13 +195,15 @@ export async function createDriverAssignment({
   const { error } = await supabase.from('driver_assignments').insert([row]);
   if (error) return { ok: false, error: error.message };
 
-  if (sendWhatsApp && ownerPhone) {
-    const text = `🔐 *Driver Assignment Verification*\n\nConfirm assigning *${driver.full_name || cleanPhone}* (${cleanPhone}) to *${vehicleLabel(vehicle)}*.\n\nYour 6-digit code: *${otp}*\nIt expires in 10 minutes. Reply with the code to continue, or reply Cancel.`;
-    try {
-      await sendWhatsApp(ownerPhone, text);
-    } catch (sendErr) {
-      console.warn('[driverAssignments] Owner OTP dispatch failed:', sendErr.message);
-    }
+  try {
+    await sendOtpFn(ownerEmail, otp, { plate: vehicleLabel(vehicle), driverPhone: cleanPhone });
+  } catch (sendErr) {
+    // Do not leave a dangling pending row when the email could not be sent.
+    await supabase.from('driver_assignments').update({
+      status: ASSIGNMENT_STATUS.CANCELLED,
+      cancelled_reason: 'OWNER_OTP_EMAIL_FAILED'
+    }).eq('id', row.id);
+    return { ok: false, error: `Could not email the verification code (${sendErr.message}). Please try again.` };
   }
 
   return {
@@ -200,6 +211,7 @@ export async function createDriverAssignment({
     assignment: row,
     driver,
     ownerPhone,
+    ownerEmail,
     driverPhone: cleanPhone,
     expiresAt,
     otp

@@ -110,7 +110,7 @@ function seedFleet() {
   };
 }
 
-const OWNER = { id: 'owner1', phone_number: '+254700000001' };
+const OWNER = { id: 'owner1', phone_number: '+254700000001', email: 'owner@example.com', email_verified: true };
 
 async function createVerifiedAssignment(mock, { vehicle = { id: 'v1' }, driverPhone = '+254700000002' } = {}) {
   const created = await createDriverAssignment({
@@ -119,7 +119,8 @@ async function createVerifiedAssignment(mock, { vehicle = { id: 'v1' }, driverPh
     vehicle,
     driverPhone,
     handoverOdometer: 50000,
-    countryInfo: { country_code: 'KE', country: 'Kenya', default_units: 'metric' }
+    countryInfo: { country_code: 'KE', country: 'Kenya', default_units: 'metric' },
+    sendOtpFn: async () => true
   });
   if (!created.ok) throw new Error(`create failed: ${created.error}`);
   const verified = await verifyOwnerAssignmentOtp({
@@ -161,21 +162,47 @@ async function run() {
   check(parseComplianceItem('DL-1234567', { now }) === null, 'A missing expiry is rejected');
   check(complianceCategory('psv_badge') === 'permit' && complianceCategory('driver_license') === 'driver_license', 'Compliance types map to reminder categories');
 
-  console.log('\n--- Test 3: owner OTP gate ---');
+  console.log('\n--- Test 3: owner OTP gate (email delivery) ---');
   const otpMock = createMockSupabase(seedFleet());
-  const sent = [];
+  const emails = [];
   const created = await createDriverAssignment({
     supabase: otpMock.client,
+    ownerProfile: OWNER,
+    vehicle: { id: 'v1', plate_number: 'KDA 123A' },
+    driverPhone: '+254700000002',
+    handoverOdometer: 50000,
+    countryInfo: { country_code: 'KE', country: 'Kenya' },
+    sendOtpFn: async (email, code, meta) => emails.push({ email, code, meta })
+  });
+  check(created.ok && created.otp?.length === 6, 'Creating an assignment generates a 6-digit owner OTP');
+  check(created.ownerEmail === 'owner@example.com', 'Assignment resolves the owner email');
+  check(emails.some((m) => m.email === 'owner@example.com' && m.code === created.otp), 'Owner receives the OTP by email');
+  check(emails[0]?.meta?.plate === 'KDA 123A', 'Assignment OTP email carries the vehicle context');
+  check(otpMock.tables.driver_assignments[0].status === 'PENDING_OWNER_OTP', 'Assignment waits for owner verification');
+
+  const noEmailMock = createMockSupabase(seedFleet());
+  const blocked = await createDriverAssignment({
+    supabase: noEmailMock.client,
+    ownerProfile: { id: 'owner1', phone_number: '+254700000001' },
+    vehicle: { id: 'v1', owner_id: 'owner1', plate_number: 'KDA 123A' },
+    driverPhone: '+254700000002',
+    sendOtpFn: async () => true
+  });
+  check(!blocked.ok && /email/i.test(blocked.error), 'Assignments are blocked without an owner email');
+  check((noEmailMock.tables.driver_assignments || []).length === 0, 'No pending assignment is created without an email');
+
+  const failMock = createMockSupabase(seedFleet());
+  const emailFailure = await createDriverAssignment({
+    supabase: failMock.client,
     ownerProfile: OWNER,
     vehicle: { id: 'v1' },
     driverPhone: '+254700000002',
     handoverOdometer: 50000,
-    countryInfo: { country_code: 'KE', country: 'Kenya' },
-    sendWhatsApp: async (phone, text) => sent.push({ phone, text })
+    countryInfo: { country_code: 'KE' },
+    sendOtpFn: async () => { throw new Error('resend down'); }
   });
-  check(created.ok && created.otp?.length === 6, 'Creating an assignment generates a 6-digit owner OTP');
-  check(sent.some((m) => m.phone === '+254700000001' && m.text.includes(created.otp)), 'Owner receives the OTP on WhatsApp');
-  check(otpMock.tables.driver_assignments[0].status === 'PENDING_OWNER_OTP', 'Assignment waits for owner verification');
+  check(!emailFailure.ok && /verification code/i.test(emailFailure.error), 'Email delivery failure is surfaced to the owner');
+  check(failMock.tables.driver_assignments[0].status === 'CANCELLED', 'Pending request is cancelled when the OTP email fails');
 
   const firstBad = await verifyOwnerAssignmentOtp({ supabase: otpMock.client, assignmentId: created.assignment.id, code: '000000', now });
   check(!firstBad.ok && firstBad.attempts === 1, 'A wrong OTP is rejected and counted');
@@ -190,6 +217,7 @@ async function run() {
     driverPhone: '+254700000002',
     handoverOdometer: 50000,
     countryInfo: { country_code: 'KE' },
+    sendOtpFn: async () => true,
     sendWhatsApp: async () => {}
   });
   const verified = await verifyOwnerAssignmentOtp({
@@ -206,7 +234,8 @@ async function run() {
     ownerProfile: OWNER,
     vehicle: { id: 'v2' },
     driverPhone: '+254700000002',
-    countryInfo: { country_code: 'KE' }
+    countryInfo: { country_code: 'KE' },
+    sendOtpFn: async () => true
   });
   check(!conflict.ok, 'A pending assignment reserves the driver (strict 1-to-1)');
 
