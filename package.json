@@ -13,6 +13,7 @@
     "reset:db": "node scripts/reset-db.js",
     "reset:slate": "node scripts/reset_db_slate.js",
     "migrate:vin": "node scripts/run_vin_immutability_migration.js",
+    "migrate:subscriptions": "node scripts/run_subscription_migration.js",
     "migrate:remediation": "node scripts/run_remediation_migration.js",
     "remediation:ci": "node scripts/remediation_ci.js",
     "migrate:staging-schema": "node scripts/provision_staging_schema.js",

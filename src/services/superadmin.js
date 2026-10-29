@@ -18,6 +18,7 @@ import {
   getAiBudgetAlertPct
 } from './aiUsageLog.js';
 import { formatNairobiDate } from './dateParser.js';
+import { getTrialFunnelStats, formatTrialStatsReply } from './trialEngine.js';
 import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
 import crypto from 'crypto';
 
@@ -111,6 +112,7 @@ const ADMIN_INTENTS = new Set([
   'ADMIN_HORIZON', 'ADMIN_PROPOSALS',
   'ADMIN_REMEDIATIONS', 'ADMIN_REMEDIATION_ACCEPT', 'ADMIN_REMEDIATION_DECLINE', 'ADMIN_REMEDIATION_MODIFY',
   'ADMIN_AI_STATS',
+  'ADMIN_TRIAL_STATS',
   'HEALTH_CHECK', 'GENERATE_COUPON', 'PROFILES_REPORT', 'SENTINEL_DIAGNOSE'
 ]);
 
@@ -171,6 +173,13 @@ export async function parseSuperadminCommand(messageText) {
     return { intent: 'ADMIN_AI_STATS', hours: Math.min(168, Math.max(1, requestedHours)) };
   }
 
+  // v1.15.0: trial funnel digest (deterministic, zero LLM calls).
+  const trialStatsMatch = text.match(/^\s*admin\s+trial[\s_-]*stats?(?:\s+(\d{1,3})\s*d(?:ays?)?)?\s*$/i);
+  if (trialStatsMatch) {
+    const requestedDays = trialStatsMatch[1] ? Number(trialStatsMatch[1]) : 30;
+    return { intent: 'ADMIN_TRIAL_STATS', days: Math.min(365, Math.max(1, requestedDays)) };
+  }
+
   // Autonomous remediation approval gateway (v1.10.0)
   if (/^\s*admin\s+remediations?\b/i.test(lower)) {
     return { intent: 'ADMIN_REMEDIATIONS' };
@@ -193,8 +202,8 @@ export async function parseSuperadminCommand(messageText) {
   }
 
   const prompt = `Classify user's admin request into JSON:
-Intent: "HEALTH_CHECK" | "GENERATE_COUPON" | "PROFILES_REPORT" | "ADMIN_AI_STATS" | "ADMIN_REPORT" | "ADMIN_AUDIT" | "ADMIN_ALERTS" | "ADMIN_RULES_RESET" | "ADMIN_RULES_TOGGLE" | "ADMIN_RULES_LIST" | "ADMIN_HORIZON" | "ADMIN_PROPOSALS" | "ADMIN_REMEDIATIONS" | "ADMIN_REMEDIATION_ACCEPT" | "ADMIN_REMEDIATION_DECLINE" | "ADMIN_REMEDIATION_MODIFY" | "UNKNOWN"
-Extract: discount_value (e.g. "20%"), target_phone (e.g. "+254712345678"), query (e.g. "KDA 123A" or VIN), rule_key (e.g. "clarify_vin"), proposal_code (e.g. "FIX-2026-10-30-01"), feedback (guidance text), hours (AI telemetry window 1-168, default 24)
+Intent: "HEALTH_CHECK" | "GENERATE_COUPON" | "PROFILES_REPORT" | "ADMIN_AI_STATS" | "ADMIN_TRIAL_STATS" | "ADMIN_REPORT" | "ADMIN_AUDIT" | "ADMIN_ALERTS" | "ADMIN_RULES_RESET" | "ADMIN_RULES_TOGGLE" | "ADMIN_RULES_LIST" | "ADMIN_HORIZON" | "ADMIN_PROPOSALS" | "ADMIN_REMEDIATIONS" | "ADMIN_REMEDIATION_ACCEPT" | "ADMIN_REMEDIATION_DECLINE" | "ADMIN_REMEDIATION_MODIFY" | "UNKNOWN"
+Extract: discount_value (e.g. "20%"), target_phone (e.g. "+254712345678"), query (e.g. "KDA 123A" or VIN), rule_key (e.g. "clarify_vin"), proposal_code (e.g. "FIX-2026-10-30-01"), feedback (guidance text), hours (AI telemetry window 1-168, default 24), days (trial funnel window 1-365, default 30)
 Command: "${text}"`;
 
   try {
@@ -219,6 +228,9 @@ Command: "${text}"`;
   }
   if (/\b(ai[\s_-]*(?:stats?|usage|telemetry)|usage\s+stats?)\b/i.test(lower)) {
     return { intent: 'ADMIN_AI_STATS', hours: 24 };
+  }
+  if (/\btrial[\s_-]*stats?\b/i.test(lower)) {
+    return { intent: 'ADMIN_TRIAL_STATS', days: 30 };
   }
   if (/\b(profiles?|users?|drivers?|owners?)\s+(report|stats|summary|list|count)\b/i.test(lower) || /\b(user|driver|owner|profile)\s+(stats|summary|report)\b/i.test(lower)) {
     return { intent: 'PROFILES_REPORT' };
@@ -516,6 +528,28 @@ export function formatAiStatsReply(summary, budget = null) {
     `*By Provider*\n${providerLines || '• none'}\n\n` +
     `*Top Purposes*\n${purposeLines || '• none'}\n\n` +
     `_Window: ${summary.hours}h${capNote} · retention cap ${formatCount(AI_USAGE_LOG_MAX_ROWS)} rows_`;
+}
+
+/**
+ * Superadmin trial funnel command handler (v1.15.0). Deterministic; zero tokens.
+ */
+export async function handleTrialStatsCommand(supabase, days = 30) {
+  const stats = await getTrialFunnelStats({ supabase, windowDays: days });
+  return {
+    reply: formatTrialStatsReply(stats),
+    details: {
+      window_days: stats.windowDays,
+      started: stats.started,
+      activated: stats.activated,
+      activated_pct: stats.activationRate,
+      converted: stats.converted,
+      conversion_rate: stats.conversionRate,
+      expired: stats.expired,
+      extended: stats.extended,
+      active: stats.active,
+      by_tier: stats.byTier
+    }
+  };
 }
 
 /**
@@ -1370,6 +1404,15 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
     };
   }
 
+  if (parsedCommand.intent === 'ADMIN_TRIAL_STATS') {
+    const trialRes = await handleTrialStatsCommand(supabase, parsedCommand.days || 30);
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_TRIAL_STATS', trialRes.details);
+    return {
+      isSuperadmin: true,
+      reply: trialRes.reply
+    };
+  }
+
   if (parsedCommand.intent === 'SENTINEL_DIAGNOSE') {
     let health = null;
     let friction = null;
@@ -1453,6 +1496,7 @@ ${JSON.stringify(telemetry).slice(0, 6000)}`;
     `• *Sentinel Dynamic Rules*: "adminrules", "adminrules reset", "adminrules toggle [key]"\n` +
     `• *System Health*: "check health", "system status"\n` +
     `• *AI Telemetry*: "admin ai-stats" or "admin usage 48h" (router cost, latency & token digest)\n` +
+    `• *Trial Funnel*: "admin trial-stats" or "admin trial-stats 90d" (trial → paid conversion)\n` +
     `• *Coupon Generation*: "generate 20% coupon for +254712345678"\n` +
     `• *Profiles Report*: "profiles report", "user stats"\n` +
     `• *Autonomous Remediation*: "admin remediations", "admin accept fix FIX-YYYY-MM-DD-NN"\n` +

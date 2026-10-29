@@ -1,57 +1,30 @@
 import crypto from 'crypto';
+import {
+  TIER_MATRIX,
+  normalizeTierKey,
+  getTierPriceUSD
+} from './subscriptionTiers.js';
 
-export const SUBSCRIPTION_TIERS = {
-  free: {
-    id: 'free',
-    name: 'Free',
-    vehicleLimit: 1,
-    hasPremiumFeatures: false,
-    pricing: {
-      monthlyUSD: 0,
-      annualUSD: 0
-    }
-  },
-  solo_pro: {
-    id: 'solo_pro',
-    name: 'Solo Pro',
-    vehicleLimit: 2,
-    hasPremiumFeatures: true,
-    pricing: {
-      monthlyUSD: 7.99,
-      annualUSD: 67.12
-    }
-  },
-  growth: {
-    id: 'growth',
-    name: 'Growth',
-    vehicleLimit: 5,
-    hasPremiumFeatures: true,
-    pricing: {
-      monthlyUSD: 16.99,
-      annualUSD: 142.72
-    }
-  },
-  scale: {
-    id: 'scale',
-    name: 'Scale',
-    vehicleLimit: 10,
-    hasPremiumFeatures: true,
-    pricing: {
-      monthlyUSD: 32.99,
-      annualUSD: 277.12
-    }
-  },
-  unlimited: {
-    id: 'unlimited',
-    name: 'Unlimited',
-    vehicleLimit: Infinity,
-    hasPremiumFeatures: true,
-    pricing: {
-      monthlyUSD: 69.99,
-      annualUSD: 587.92
-    }
-  }
-};
+/**
+ * Backward-compatible tier view derived from the frozen registry
+ * (`subscriptionTiers.js`). Existing callers read `vehicleLimit`,
+ * `hasPremiumFeatures` and `pricing`; the registry is the single source.
+ */
+export const SUBSCRIPTION_TIERS = Object.freeze(
+  Object.fromEntries(
+    Object.values(TIER_MATRIX).map((tier) => [
+      tier.key,
+      Object.freeze({
+        id: tier.key,
+        name: tier.label,
+        vehicleLimit: tier.baseLimit,
+        hasPremiumFeatures: tier.hasPremiumFeatures,
+        addonEligible: tier.addonEligible,
+        pricing: { monthlyUSD: tier.monthlyUSD, annualUSD: tier.annualUSD }
+      })
+    ])
+  )
+);
 
 const FALLBACK_EXCHANGE_RATES = {
   USD: 1.0,
@@ -153,19 +126,21 @@ export async function getEffectiveExchangeRate(supabase, currency = 'USD') {
  * Calculates local price and currency display formatting for a given tier and billing interval
  */
 export async function getTierLocalPrice(supabase, tierKey, currency = 'USD', interval = 'monthly') {
-  const tier = SUBSCRIPTION_TIERS[tierKey] || SUBSCRIPTION_TIERS.free;
-  if (tierKey === 'free') {
+  const canonical = normalizeTierKey(tierKey);
+  const tier = SUBSCRIPTION_TIERS[canonical] || SUBSCRIPTION_TIERS.free;
+  if (canonical === 'free') {
     return {
       tierKey: 'free',
       tierName: 'Free',
       usdPrice: 0,
       localPrice: 0,
       currency: currency,
-      formattedPrice: 'Free ($0)'
+      formattedPrice: 'Free ($0)',
+      interval
     };
   }
 
-  const usdPrice = interval === 'annual' ? tier.pricing.annualUSD : tier.pricing.monthlyUSD;
+  const usdPrice = getTierPriceUSD(canonical, interval);
   const rate = await getEffectiveExchangeRate(supabase, currency);
   let rawLocalPrice = usdPrice * rate;
 
@@ -188,7 +163,16 @@ export async function getTierLocalPrice(supabase, tierKey, currency = 'USD', int
 }
 
 /**
- * Initialize a Paystack Checkout session and return authorization URL
+ * Initialize a Paystack Checkout session.
+ *
+ * v1.15.0 additions:
+ *  - `planCode`      → recurring subscription (Paystack plan; interval handled by Paystack)
+ *  - `amountUSDOverride` → coupon-discounted first cycle (converted to the local currency)
+ *  - `couponCode` / `addonQuantity` → metadata for the webhook state machine
+ *  - `metadata`      → merged into Paystack metadata (owner id, phone, trial flag…)
+ *
+ * When no plan code is configured the checkout degrades to the legacy one-time
+ * transaction (the webhook still activates the tier via `charge.success`).
  */
 export async function initializePaystackCheckout({
   supabase,
@@ -197,16 +181,33 @@ export async function initializePaystackCheckout({
   billingInterval = 'monthly',
   userEmail,
   userId,
-  currency = 'KES'
+  currency = 'KES',
+  planCode = null,
+  amountUSDOverride = null,
+  couponCode = null,
+  addonQuantity = null,
+  metadata = {}
 }) {
   const secretKey = process.env.PAYSTACK_SECRET_KEY;
   if (!secretKey) {
     throw new Error('PAYSTACK_SECRET_KEY is missing in environment variables');
   }
 
-  const priceInfo = await getTierLocalPrice(supabase, targetTierKey, currency, billingInterval);
+  const canonicalTier = normalizeTierKey(targetTierKey);
+  const priceInfo = await getTierLocalPrice(supabase, canonicalTier, currency, billingInterval);
 
-  const amountSubunits = Math.round(priceInfo.localPrice * 100);
+  let localAmount = priceInfo.localPrice;
+  if (amountUSDOverride !== null && amountUSDOverride !== undefined) {
+    const usd = Math.max(0, Number(amountUSDOverride) || 0);
+    if (String(priceInfo.currency).toUpperCase() === 'USD') {
+      localAmount = usd;
+    } else {
+      const rate = await getEffectiveExchangeRate(supabase, priceInfo.currency);
+      localAmount = Math.round(usd * rate);
+    }
+  }
+  // Paystack rejects zero-amount charges: 100% coupons still need a token amount.
+  const amountSubunits = Math.max(100, Math.round(Number(localAmount) * 100));
 
   const cleanPhone = userPhone ? userPhone.replace(/[^\d+]/g, '') : '';
   const emailToUse = userEmail || `${cleanPhone.replace(/\+/g, '') || 'user'}@sakafleet.com`;
@@ -216,13 +217,19 @@ export async function initializePaystackCheckout({
     amount: amountSubunits,
     currency: priceInfo.currency,
     metadata: {
+      ...metadata,
       phone_number: cleanPhone,
-      target_tier: targetTierKey,
-      billing_interval: billingInterval,
-      user_id: userId || null
+      target_tier: canonicalTier,
+      billing_interval: billingInterval === 'annual' ? 'annual' : 'monthly',
+      user_id: userId || null,
+      coupon_code: couponCode || null,
+      addon_quantity: addonQuantity || null,
+      recurring: Boolean(planCode)
     },
-    callback_url: 'https://sakafleet.com/payment-success'
+    callback_url: process.env.PAYSTACK_CALLBACK_URL || 'https://sakafleet.com/payment-success'
   };
+
+  if (planCode) payload.plan = planCode;
 
   const response = await fetch('https://api.paystack.co/transaction/initialize', {
     method: 'POST',
@@ -242,7 +249,8 @@ export async function initializePaystackCheckout({
     checkoutUrl: json.data.authorization_url,
     accessCode: json.data.access_code,
     reference: json.data.reference,
-    priceInfo
+    priceInfo: { ...priceInfo, localPrice: localAmount },
+    recurring: Boolean(planCode)
   };
 }
 
@@ -260,3 +268,57 @@ export function verifyPaystackSignature(rawBody, signatureHeader) {
 
   return hash === signatureHeader;
 }
+
+/**
+ * Paystack recurring-subscription management (fail-soft: never throws).
+ * All helpers return `{ ok, data, error }` so the request path can degrade.
+ */
+async function paystackRequest(path, { method = 'POST', body = null } = {}) {
+  const secretKey = process.env.PAYSTACK_SECRET_KEY;
+  if (!secretKey) return { ok: false, error: 'PAYSTACK_SECRET_KEY missing' };
+  try {
+    const res = await fetch(`https://api.paystack.co${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${secretKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: body ? JSON.stringify(body) : undefined
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || json.status === false) {
+      return { ok: false, error: json.message || `Paystack ${res.status}`, data: json.data || null };
+    }
+    return { ok: true, data: json.data || null };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+/** Disable (cancel at period end) a subscription. Needs the email token. */
+export async function disablePaystackSubscription({ code, token }) {
+  if (!code || !token) return { ok: false, error: 'subscription code + email token required' };
+  return paystackRequest('/subscription/disable', { body: { code, token } });
+}
+
+/** Re-enable a disabled subscription (undo cancel). */
+export async function enablePaystackSubscription({ code, token }) {
+  if (!code || !token) return { ok: false, error: 'subscription code + email token required' };
+  return paystackRequest('/subscription/enable', { body: { code, token } });
+}
+
+/** Update plan and/or quantity (Fleet Command add-ons). */
+export async function updatePaystackSubscription({ code, planCode = null, quantity = null }) {
+  if (!code) return { ok: false, error: 'subscription code required' };
+  const body = {};
+  if (planCode) body.plan = planCode;
+  if (quantity !== null && quantity !== undefined) body.quantity = Math.max(1, Math.floor(Number(quantity) || 1));
+  return paystackRequest(`/subscription/${encodeURIComponent(code)}`, { method: 'PUT', body });
+}
+
+/** Fetch the authoritative Paystack view of a subscription. */
+export async function fetchPaystackSubscription(code) {
+  if (!code) return { ok: false, error: 'subscription code required' };
+  return paystackRequest(`/subscription/${encodeURIComponent(code)}`, { method: 'GET' });
+}
+

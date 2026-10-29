@@ -38,6 +38,18 @@ import {
   checkOwnerVehicleTierLimit
 } from './vehicles.js';
 import { scheduleTrialExtensionCoupon, applyTrialExtensionCoupon } from './coupons.js';
+import {
+  startAccountTrial,
+  recordActivationEvent,
+  ACTIVATION_EVENTS
+} from './trialEngine.js';
+import {
+  checkoutForTier,
+  cancelSubscription,
+  selectVehiclesToKeep,
+  getEntitlements
+} from './subscriptions.js';
+import { normalizeTierKey, getTierLabel } from './subscriptionTiers.js';
 import { parseFlexibleDate } from './dateParser.js';
 import {
   parseThresholdSpec,
@@ -423,7 +435,10 @@ const FLOW_LABELS = {
   set_reminder: 'Maintenance or expiry reminder',
   driver_onboarding: 'Driver compliance onboarding',
   contact_support: 'Support escalation',
-  reactivate_account: 'Account reactivation'
+  reactivate_account: 'Account reactivation',
+  subscription_upgrade: 'Subscription upgrade / trial',
+  cancel_subscription: 'Subscription cancellation',
+  keep_vehicles: 'Choose vehicles to keep'
 };
 
 export const QUIZ_FLOW_KEYS = Object.keys(FLOW_LABELS);
@@ -589,6 +604,89 @@ export function getFlowDefinition(flowKey, ctx) {
               if (!Number.isFinite(value) || value < 0) return { ok: false, message: 'Please send the odometer as a number.' };
               if (last > 0 && value < last) return { ok: false, message: `Odometer cannot be below the last recorded ${last}.` };
               return { ok: true };
+            }
+          })
+        ]
+      };
+
+    case 'subscription_upgrade':
+      return {
+        key: flowKey,
+        label,
+        fields: [
+          field('subscription_tier', 'Which plan?', 'Solo Pro (1 car) | Team Fleet (3) | Growth Fleet (5) | Fleet Command (5+)', {
+            aliases: ['subscription_tier', 'plan'],
+            parse: (text) => {
+              const t = String(text).toLowerCase();
+              if (/fleet\s*command|add[- ]?on|command/.test(t)) return 'fleet_command';
+              if (/team/.test(t)) return 'team_fleet';
+              if (/solo|pro\b/.test(t)) return 'solo_pro';
+              if (/growth/.test(t)) return 'growth';
+              return null;
+            },
+            validate: (value) => (value
+              ? { ok: true }
+              : { ok: false, message: 'Please choose Solo Pro, Team Fleet, Growth or Fleet Command.' }),
+            summary: (value) => getTierLabel(value)
+          }),
+          field('billing_interval', 'Monthly or annual?', 'annual saves roughly 30%', {
+            aliases: ['billing_interval', 'interval'],
+            parse: (text) => (/month/i.test(String(text)) ? 'monthly' : 'annual'),
+            validate: () => ({ ok: true })
+          }),
+          field('coupon_code', 'Coupon code', 'optional — reply Skip', {
+            optional: true,
+            aliases: ['coupon_code', 'coupon', 'promo'],
+            parse: (text) => {
+              const raw = String(text).trim();
+              return /^[A-Z0-9-]{4,}$/i.test(raw) ? raw.toUpperCase() : null;
+            }
+          })
+        ]
+      };
+
+    case 'cancel_subscription':
+      return {
+        key: flowKey,
+        label,
+        fields: [
+          field('confirm', 'Confirm cancellation', 'YES to cancel, NO to keep your plan', {
+            aliases: ['confirm'],
+            parse: (text) => {
+              const raw = String(text).trim();
+              if (/^(yes|y|confirm|yep|do it)$/i.test(raw)) return 'yes';
+              if (/^(no|n|abort|keep|stop)$/i.test(raw)) return 'no';
+              return null;
+            },
+            validate: (value) => (value
+              ? { ok: true }
+              : { ok: false, message: 'Reply YES to cancel or NO to keep your plan.' })
+          })
+        ]
+      };
+
+    case 'keep_vehicles':
+      return {
+        key: flowKey,
+        label,
+        fields: [
+          field('keep_vehicle_id', 'Which vehicle should stay active?', 'send its plate (or number)', {
+            aliases: ['plate_number', 'target_vehicle', 'keep_vehicle_id'],
+            parse: (text, c) => {
+              const raw = String(text).trim().toUpperCase();
+              const list = c.vehicles || [];
+              const byPlate = list.find((v) => String(v.plate_number || '').toUpperCase() === raw);
+              if (byPlate) return byPlate.id;
+              const index = Number(raw);
+              if (Number.isInteger(index) && index >= 1 && index <= list.length) return list[index - 1].id;
+              return null;
+            },
+            validate: (value) => (value
+              ? { ok: true }
+              : { ok: false, message: 'Please send the plate of the vehicle to keep active.' }),
+            summary: (value) => {
+              const match = (ctx.vehicles || []).find((v) => v.id === value);
+              return match?.plate_number || String(value);
             }
           })
         ]
@@ -1817,6 +1915,14 @@ async function executeFlow(state, ctx) {
           const reply = await fail(saved.error);
           return { handled: true, reply, flow: state.flow, active: true };
         }
+        // Trial activation #1: vehicle registered + passbook issued.
+        try {
+          await recordActivationEvent({
+            supabase: ctx.supabase,
+            ownerId: ctx.profile?.id,
+            event: ACTIVATION_EVENTS.VEHICLE_REGISTERED
+          });
+        } catch { /* activation is best-effort */ }
         const reply = await ok({
           vehicle: saved.plate,
           vin: saved.vin,
@@ -1937,6 +2043,100 @@ async function executeFlow(state, ctx) {
       }
 
 
+      case 'subscription_upgrade': {
+        const ownerId = ctx.profile?.id;
+        if (!ownerId) return { handled: true, reply: await fail('Profile not found.'), flow: state.flow, active: true };
+        const tierKey = normalizeTierKey(a.subscription_tier);
+        const interval = a.billing_interval === 'monthly' ? 'monthly' : 'annual';
+        const trial = await startAccountTrial({ supabase: ctx.supabase, ownerId, tierKey, interval });
+
+        if (trial.started) {
+          const reply = await ok({
+            plan: getTierLabel(tierKey),
+            billing: interval,
+            trialDays: trial.days,
+            trialEnds: formatDate(trial.endsAt, buildGlobalContext(ctx.countryInfo, ctx.profile).locale),
+            cardRequired: false,
+            note: 'Your full trial is unlocked — no card is needed until you decide to convert.'
+          });
+          return { handled: true, reply, flow: state.flow, completed: true };
+        }
+
+        if (trial.reason === 'trial_active') {
+          const reply = await ok({
+            plan: getTierLabel(trial.tierKey || tierKey),
+            billing: interval,
+            trialDaysLeft: trial.daysLeft,
+            trialEnds: trial.endsAt,
+            note: 'Your trial is already running.'
+          });
+          return { handled: true, reply, flow: state.flow, completed: true };
+        }
+
+        const checkout = await checkoutForTier({
+          supabase: ctx.supabase,
+          owner: {
+            id: ownerId,
+            phone_number: ctx.formattedPhone || ctx.profile?.phone_number,
+            email: ctx.profile?.email
+          },
+          targetTierKey: tierKey,
+          interval,
+          currency: ctx.countryInfo?.currency || 'USD',
+          couponCode: a.coupon_code || null
+        });
+        if (!checkout.ok) {
+          return { handled: true, reply: await fail(checkout.error), flow: state.flow, active: true };
+        }
+        const reply = await ok({
+          plan: getTierLabel(tierKey),
+          billing: interval,
+          checkoutUrl: checkout.checkoutUrl,
+          payable: checkout.priceInfo?.formattedPrice,
+          coupon: checkout.coupon?.code,
+          trialUsed: trial.reason === 'trial_already_used'
+        });
+        return { handled: true, reply, flow: state.flow, completed: true };
+      }
+
+      case 'cancel_subscription': {
+        const ownerId = ctx.profile?.id;
+        if (!ownerId) return { handled: true, reply: await fail('Profile not found.'), flow: state.flow, active: true };
+        if (a.confirm !== 'yes') {
+          const reply = await ok({ status: 'kept', note: 'No changes — your plan stays active.' });
+          return { handled: true, reply, flow: state.flow, completed: true };
+        }
+        const cancelled = await cancelSubscription({ supabase: ctx.supabase, ownerId, profile: ctx.profile });
+        if (!cancelled.ok) return { handled: true, reply: await fail(cancelled.error), flow: state.flow, active: true };
+        const reply = await ok({
+          status: cancelled.trial ? 'cancelled now (trial)' : 'cancellation scheduled',
+          accessUntil: cancelled.effectiveAt
+            ? formatDate(cancelled.effectiveAt, buildGlobalContext(ctx.countryInfo, ctx.profile).locale)
+            : null,
+          note: cancelled.trial
+            ? 'No payment was taken during the trial.'
+            : 'You keep full access until the paid period ends, then move to Free.'
+        });
+        return { handled: true, reply, flow: state.flow, completed: true };
+      }
+
+      case 'keep_vehicles': {
+        const ownerId = ctx.profile?.id;
+        if (!ownerId) return { handled: true, reply: await fail('Profile not found.'), flow: state.flow, active: true };
+        const kept = await selectVehiclesToKeep({
+          supabase: ctx.supabase,
+          ownerId,
+          keepVehicleIds: [a.keep_vehicle_id]
+        });
+        if (!kept.ok) return { handled: true, reply: await fail(kept.error), flow: state.flow, active: true };
+        const reply = await ok({
+          activeVehicles: (kept.resumed || []).join(', '),
+          capacity: kept.capacity,
+          note: 'Other vehicles are paused — history and passbook tokens are preserved.'
+        });
+        return { handled: true, reply, flow: state.flow, completed: true };
+      }
+
       case 'log_expense': {
         if (!vehicle) return { handled: true, reply: await fail('Vehicle not found.'), flow: state.flow, active: true };
         const { error: logErr } = await ctx.supabase.from('expense_logs').insert([{
@@ -1949,6 +2149,15 @@ async function executeFlow(state, ctx) {
           notes: [a.notes, formatExtraNotes(state.extraNotes || [])].filter(Boolean).join(' | ') || null,
         }]);
         if (logErr) return { handled: true, reply: await fail(logErr.message), flow: state.flow, active: true };
+
+        // Trial activation #2: first expense logged (no-op outside trials).
+        try {
+          await recordActivationEvent({
+            supabase: ctx.supabase,
+            ownerId: ctx.profile?.id,
+            event: ACTIVATION_EVENTS.EXPENSE_LOGGED
+          });
+        } catch { /* activation is best-effort */ }
 
         await ctx.supabase.from('expenses').insert([{
           plate: vehicle.plate_number,
@@ -2578,7 +2787,10 @@ export function detectQuizStart({
     SET_REMINDER: 'set_reminder',
     UPDATE_EMAIL: 'email_update',
     CONTACT_SUPPORT: 'contact_support',
-    REACTIVATE_ACCOUNT: 'reactivate_account'
+    REACTIVATE_ACCOUNT: 'reactivate_account',
+    UPGRADE_SUBSCRIPTION: 'subscription_upgrade',
+    CANCEL_SUBSCRIPTION: 'cancel_subscription',
+    KEEP_VEHICLE: 'keep_vehicles'
   };
 
   // Explicit deterministic commands win over AI intent — this prevents

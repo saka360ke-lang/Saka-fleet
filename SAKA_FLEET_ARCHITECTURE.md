@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.14.2  
+**Version:** 1.15.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -458,13 +458,16 @@ Sentinel may never instruct or perform any of the following; `processFrictionPat
 
 ## 7. Subscription-Tier Ownership & Strict 1-to-1 Assignments
 
-### 7.1 Subscription-Tier Ownership Limits
-Vehicle ownership capacity is bound to active subscription tier:
-- `free`: 1 vehicle
-- `solo_pro`: 3 vehicles
-- `fleet_starter`: 10 vehicles
-- `enterprise`: Unlimited vehicles
-Owners exceeding tier limits are prompted to upgrade via Paystack checkout.
+### 7.1 Subscription-Tier Ownership Limits (v1.15.0)
+Vehicle ownership capacity is bound to the active subscription tier and is
+resolved **only** through `src/services/subscriptionTiers.js` (no local copies):
+- `free`: 1 vehicle — basic passbook, essential expense logs, 1 report/month, Tier-1 AI
+- `solo_pro`: 1 vehicle — 100% features, full Tiers 0–3 AI, unlimited reports
+- `team_fleet`: 3 vehicles — 100% features
+- `growth`: 5 vehicles — 100% features (anchor plan)
+- `fleet_command`: 5 vehicles + per-vehicle add-on quantity (`fleet_command.addon_quantity`)
+Legacy tiers resolve through aliases (`solo`/`pro` → solo_pro; `scale`, `fleet_starter`, `enterprise`, `unlimited` → fleet_command) and are remapped once by `npm run migrate:subscriptions`.
+Owners exceeding capacity are prompted with the next-tier upgrade checkout (or the add-on checkout on Fleet Command). See §39.
 
 ### 7.2 Strict 1-to-1 Driver Assignments
 - A driver can only be assigned to **one vehicle at any given time** across the platform.
@@ -511,17 +514,19 @@ Owners exceeding tier limits are prompted to upgrade via Paystack checkout.
   - Re-registering the same VIN preserves the original trial expiration and does NOT grant extra free days.
   - If a trial has lapsed, the vehicle requires an active subscription slot to continue live updates.
 
-### 11.2 Slot-Based Capacity & Upgrade Prompt
-- Owners operate under slot capacity limits:
+### 11.2 Slot-Based Capacity & Upgrade Prompt (v1.15.0)
+- Capacity comes from `subscriptionTiers.js` + the owner's Fleet Command add-on quantity:
   - `free`: 1 active vehicle slot
-  - `solo_pro`: 3 active vehicle slots
+  - `solo_pro`: 1 active vehicle slot (all features)
+  - `team_fleet`: 3 active vehicle slots
   - `growth`: 5 active vehicle slots
-  - `scale` / `fleet_starter`: 10 active vehicle slots
-  - `unlimited` / `enterprise`: Unlimited active vehicle slots
-- When an owner reaches their tier limit and attempts to add another vehicle:
+  - `fleet_command`: 5 active vehicle slots + `profiles.addon_quantity`
+- When an owner reaches capacity and attempts to add another vehicle:
   - Registration is halted before database insertion.
-  - Saka displays: *"⚠️ Vehicle Capacity Limit Reached. Your current plan allows [X] active vehicle(s). To add more vehicles, please upgrade to Solo Pro. Upgrade Link: [Paystack URL]. Note: Individual 30-day trials on your existing vehicles will remain fully preserved and active!"*
-  - Account upgrading expands available slots without altering any vehicle's trial countdown.
+  - Non-add-on tiers: Saka returns the next-tier Paystack checkout link.
+  - Fleet Command: Saka returns the per-vehicle add-on checkout (`$4.99/mo` unit) and the slot activates on `charge.success` (`type: fleet_addon`).
+  - Account upgrading expands available slots without altering any vehicle's VIN trial countdown.
+- The same capacity gate protects passbook transfers: an over-capacity buyer is paused at `PENDING_BUYER_UPGRADE` (see §39.6).
 
 ---
 
@@ -594,8 +599,9 @@ Owners exceeding tier limits are prompted to upgrade via Paystack checkout.
 ### 15.1 Reset Script (`scripts/reset-db.js`)
 - Standardized command aliases: `npm run reset:db` and `npm run reset:slate`.
 - Clears test and operational data to establish a pristine slate for onboarding audits.
-- **v1.14.2 scope:** 26 operational tables, codified in the exported `RESET_TABLES` registry:
+- **v1.15.0 scope:** 30 operational tables, codified in the exported `RESET_TABLES` registry:
   - Onboarding & assets: `vehicles`, `vin_registry`, `profiles`, `coupons`, `driver_assignments`, `driver_compliances`
+  - Subscriptions & trials: `subscriptions`, `trial_sessions`, `usage_counters`, `paystack_webhook_events`
   - Sessions: `chat_sessions`, `superadmin_sessions`
   - Conversation & telemetry: `chat_history`, `chat_transcripts`, `chat_friction_logs`, `processed_webhooks`, `conversation_analytics`, `error_logs`, `ai_usage_logs`
   - Dynamic rules: `saka_dynamic_rules` (Sentinel re-patches on its next scan)
@@ -638,10 +644,8 @@ Owners exceeding tier limits are prompted to upgrade via Paystack checkout.
 
 ## 17. Known Operational Observations (Operational Review 2026-10-28)
 
-1. **Tier-limit source drift (needs alignment):**
-   - `src/services/paystack.js` → `SUBSCRIPTION_TIERS.solo_pro.vehicleLimit = 2`.
-   - `src/services/vehicles.js` → `TIER_LIMITS.solo_pro = 3` (and this document specifies 3).
-   - `whatsapp.js` gates pre-registration capacity via `SUBSCRIPTION_TIERS` (2), while `onboarding.js` gates final capacity via `checkOwnerVehicleTierLimit` (3). Recommend converging on a single source (3 per this document).
+1. **Tier-limit source drift (RESOLVED in v1.15.0):**
+   - The v1.14.x drift (`SUBSCRIPTION_TIERS.solo_pro = 2` vs `vehicles.js TIER_LIMITS.solo_pro = 3`) is gone: `src/services/subscriptionTiers.js` is the single frozen matrix consumed by paystack, vehicles, subscriptions, trialEngine, whatsapp and the AI clamp. `checkOwnerVehicleTierLimit` now reads the registry + `profiles.addon_quantity`.
 2. **Intermittent DeepSeek empty completions:** Under high-frequency test runs, `deepseek-chat` occasionally returns an empty completion. `aiClient.chatCompletion` now calls the SDK with `maxRetries: 0` and a 12 s timeout, so callers deterministically fall back to `classifyIntentWithRegex` / template-free fallback text instead of retrying and stalling the queue.
 3. **Test isolation:** Root-level `test_*.js` suites depend on live Supabase + Resend + DeepSeek. Per the permanent rule (§19), every run must clear its own data via `runWithCleanup` / `npm test`. A transient Supabase `fetch failed` can still leave stale rows; run `node scripts/reset-db.js --phone <number> --confirm` for an ad-hoc targeted reset.
 4. **Test runner & cleanup:** All suites are standalone `node test_*.js` scripts (no Jest/Mocha/Vitest). Use `npm test` (`scripts/run_tests.js`) for targeted runs — it always performs a final auto-cleanup sweep. `npm run test:cleanup` clears test data without running tests. `test_first_time_flow.js` is the offline first-time-flow suite; `test_edit_delete.js` covers edit/delete handlers, VIN immutability, vehicle-deletion cascade, and cleanup.
@@ -1538,4 +1542,107 @@ Per-provider, in-memory, fixed-cooldown breakers in `aiClient.js`:
 
 _End of document — v1.14.1._
 
+
+
+---
+
+## 39. Subscription, Pricing & Trial Engine (v1.15.0)
+
+### 39.1 Tier matrix — single source of truth
+`src/services/subscriptionTiers.js` is the ONLY tier registry. Every service, route, prompt and test reads it; nothing re-declares limits.
+
+| Tier | Cars | AI | Reports | Driver/compliance | Price (USD) |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `free` | 1 | Tier 1 only | 1 / Nairobi month | ✗ | $0 |
+| `solo_pro` | 1 | Tiers 0–3 | Unlimited | ✓ | 7.99 / 67.12 yr |
+| `team_fleet` | 3 | Tiers 0–3 | Unlimited | ✓ | 19.99 / 167.92 yr |
+| `growth` | 5 | Tiers 0–3 | Unlimited | ✓ | 29.99 / 251.92 yr |
+| `fleet_command` | 5 + add-ons | Tiers 0–3 | Unlimited | ✓ | 29.99 base + 4.99 / extra car (41.92 yr) |
+
+- Intervals: `monthly` | `annual` for every paid tier.
+- Legacy aliases: `solo`/`pro` → `solo_pro`; `scale`, `fleet_starter`, `fleet_scale`, `enterprise`, `unlimited` → `fleet_command`.
+- `getEffectiveVehicleLimit(tier, addonQuantity)` is the only capacity formula.
+
+### 39.2 Entitlement engine (`src/services/subscriptions.js`)
+- `getEntitlements({ supabase, ownerId, profile })` → `{ tierKey, isPaid, isTrial, trialDaysLeft, addonQuantity, effectiveVehicleCapacity, maxAiTier, reportsPerMonth, reportsUsedThisMonth, driverAssignment, complianceTracking, cancelAtPeriodEnd, currentPeriodEnd, … }`.
+- Cached for `SUBSCRIPTION_CACHE_MS` (60 s); every subscription write calls `invalidateEntitlements(ownerId)`.
+- Lazy downgrade: a paid tier past its access window is downgraded to Free on read (data preserved, excess vehicles paused).
+- `evaluateVehicleCapacity()` → Simple Rule R1 decision (includes add-on pricing).
+- `getReportQuota()` / `recordReportUsage()` → `usage_counters` keyed by the Nairobi month (`YYYY-MM`).
+- **AI clamp:** `resolveTier(purpose, { tier, maxTier })` in `aiClient.js` clamps to `maxTier`, so Free (`maxAiTier = 1`) can never reach Tier-2/3 premium legs even with `PREMIUM_MODEL_ENABLED=on`. Background/Sentinel purposes omit `maxTier` (system, not user-facing). `processSakaMessage(..., { maxAiTier, ownerId, planSummary })` threads the clamp + telemetry attribution per turn.
+
+### 39.3 Paystack billing (owner-centric, recurring)
+- Subscriptions belong to `profiles.id`. `subscriptions` is the event-sourced ledger (one row per Paystack subscription code); `profiles` keeps the fast-lookup cache.
+- `initializePaystackCheckout({ planCode, amountUSDOverride, couponCode, addonQuantity, metadata })` → recurring when a plan code is configured, otherwise the legacy one-time charge (the webhook still activates the tier).
+- Plan codes resolve from env: `PAYSTACK_PLAN_<TIER>_<MONTHLY|ANNUAL>_<USD|KES|NGN|ZAR>`; blank codes degrade to one-time checkout.
+- `handlePaystackEvent()` is the ONLY webhook state machine and is idempotent on `paystack_webhook_events.event_id`:
+
+| Event | Effect |
+| :--- | :--- |
+| `subscription.create` | tier/interval/period set, ledger row upserted, trial → `CONVERTED`, WhatsApp confirmation |
+| `invoice.create` / `invoice.update` (paid) | period rolls forward, status `ACTIVE`, trial → `CONVERTED` |
+| `invoice.payment_failed` | status `PAST_DUE` + card-update nudge; access grace = `SUBSCRIPTION_GRACE_DAYS` (3) |
+| `subscription.disable` | period still open → `CANCELING`; else downgrade to Free |
+| `subscription.not_renew` | `CANCELING` (cancel at period end) |
+| `charge.success` `type=fleet_addon` | `addon_quantity += quantity`, tier → `fleet_command`, Paystack quantity updated when a code exists |
+| `charge.success` `target_tier` (legacy) | one-time activation path (no plan configured) |
+| `charge.success` `passbook_transfer_fee` | handled by the legacy branch in `index.js` |
+
+- Mid-cycle cancellation (`cancelSubscription`) uses `disablePaystackSubscription` when the email token is stored, otherwise marks `CANCELING` locally. Trials cancel immediately (nothing was billed). `resumeSubscription` re-enables.
+
+### 39.4 Trial engine (`src/services/trialEngine.js`)
+- **30 days** (`TRIAL_DAYS`, clamped 7–90), one trial per owner lifetime (`profiles.trial_used_at`), **no card at start** — `startAccountTrial()` makes zero Paystack calls and sets `profiles.subscription_status='TRIALING'` with full paid entitlements.
+- `trial_sessions` is the funnel ledger: `ACTIVE → EXTENDED → CONVERTED | EXPIRED | CANCELLED`, with activation data and one-shot nudge timestamps.
+- **Activation ("Aha!") — strictly three events:** `vehicle_registered` (vehicle + passbook), `expense_logged`, `report_generated`. Reminders are engagement metrics only and NEVER activate.
+- On first activation: `ACTIVATE20-XXXX` coupon (20% off first cycle, 7-day TTL) is issued and delivered by the sweep (deterministic copy).
+- **Nudge lifecycle** (`runTrialLifecycleSweep`, 15-min tick in `index.js`): activation reward → T+7d nudge if still un-activated → optional T−14d midpoint (`TRIAL_CONVERSION_LADDER=on`) → T−3d value digest (counts + ≈hours saved + localized price + checkout URL) → T−24h urgent → T−0 expiry. Each stage fires exactly once.
+- **Expiry:** trial → `EXPIRED`, account → Free, excess vehicles → `PAUSED` (never deleted), owner prompted to `KEEP_VEHICLE`. The existing 15-day winback worker still fires afterwards.
+- **Extensions:** `account_trial_extension` coupons only; cumulative lifetime capped by `TRIAL_MAX_TOTAL_DAYS` (45); nudges re-arm after an extension.
+- **Funnel:** `getTrialFunnelStats()` + `admin trial-stats [Nd]` (deterministic, audited `ADMIN_TRIAL_STATS`).
+- The VIN-bound 30-day asset trial (§11) remains separate and untouched.
+
+
+### 39.5 The "Simple Rules" engine
+| Rule | Behaviour |
+| :--- | :--- |
+| **R1 Add vehicle mid-cycle** | Within capacity → instant, no billing change. Over capacity → block + next-tier checkout; on Fleet Command → per-vehicle add-on checkout (`type=fleet_addon`), slot activates on payment. |
+| **R2 Vehicle transfer** | Seller unlinks → slot freed, **no mid-cycle refund** (capacity retained to renewal). Buyer over capacity → transfer paused at `PENDING_BUYER_UPGRADE` with a 24 h OTP window; upgrade link sent; retry completes the handover. Capacity is re-evaluated before the vehicle re-anchors. |
+| **R3 Cancellation** | `subscription_status='CANCELING'` + `cancel_at_period_end`; full access until the paid period ends (no grace for cancellations). Trials cancel immediately. |
+| **R4 Expiry / downgrade** | Tier → Free, `addon_quantity=0`, subscription codes cleared, excess vehicles → `PAUSED` (ordered by recent activity, first stays active), `KEEP_VEHICLE` prompt. Nothing is deleted; passbook tokens intact. |
+| **R5 Report quota** | Free = 1 `REQUEST_REPORT` per Nairobi month (`usage_counters`); further requests return the upgrade checkout. Paid = unlimited. `QUERY_FLEET_SUMMARY` stays free. |
+
+### 39.6 Schema (migration: `npm run migrate:subscriptions`)
+- `subscriptions` — ledger: `owner_id, plan_code, tier, interval, status, quantity, addon_quantity, paystack_subscription_code (unique), paystack_customer_code, paystack_email_token, current_period_start/end, trial_end_at, canceled_at`.
+- `paystack_webhook_events` — `event_id UNIQUE` idempotency ledger with the raw payload.
+- `usage_counters` — `(owner_id, period_key)` PK, `report_count`, `last_report_at`.
+- `trial_sessions` — `owner_id UNIQUE`, `tier, interval, status, started_at, ends_at, activated, activated_at, activation_events jsonb, coupon_code`, one-shot nudge timestamps, `checkout_started_at`, `converted_at`, `paystack_subscription_code`.
+- `profiles` += `trial_used_at, addon_quantity, cancel_at_period_end, subscription_period_start/end, downgraded_at, paystack_email_token`.
+- `coupons` += `discount_amount, discount_currency, applies_to_tier, applies_to_interval, redeemed_at, redemption_type` (+ `applicable_to='account_trial_extension'`).
+- `passbook_transfers` += `blocked_reason` (buyer-upgrade gate).
+- `ai_usage_logs` += `owner_id` (per-owner AI attribution; trail engagement + T−3 digest).
+- Constraints accept canonical + legacy tier keys and `CANCELING`/`EXPIRED` statuses. Boot calls `ensureSubscriptionSchema()`; the migration also remaps legacy tiers once.
+
+### 39.7 Skills, intents & training
+- New intents: `VIEW_SUBSCRIPTION`, `UPGRADE_SUBSCRIPTION`, `CANCEL_SUBSCRIPTION`, `MANAGE_ADDONS`, `KEEP_VEHICLE`, `EXTEND_TRIAL` (registry 39 intents).
+- New quiz flows: `subscription_upgrade`, `cancel_subscription`, `keep_vehicles` (registry 21 flows) + deterministic one-turn handling in `src/routes/whatsapp.js` (`maybeHandleSubscriptionTurn`).
+- `sakaAi.js` core prompt §7c teaches: engine-owned prices, no-card trial, annual-first conversion, no refunds. `test_agent_training.js` (50 assertions) asserts every intent/flow/section stays trained.
+
+### 39.8 Environment knobs
+- `TRIAL_DAYS` (30; 7–90), `TRIAL_MAX_TOTAL_DAYS` (45), `TRIAL_ACTIVATION_COUPON_PCT` (20), `TRIAL_ACTIVATION_COUPON_TTL_DAYS` (7), `TRIAL_ACTIVATION_NUDGE_HOURS` (168), `TRIAL_CONVERSION_LADDER` (off), `TRIAL_MIDPOINT_COUPON_PCT` (15).
+- `SUBSCRIPTION_CACHE_MS` (60000), `SUBSCRIPTION_GRACE_DAYS` (3).
+- `PAYSTACK_PLAN_<TIER>_<INTERVAL>_<CURRENCY>`, `PAYSTACK_CALLBACK_URL`, `PUBLIC_PRICING_URL`.
+
+### 39.9 Files & tests
+- `src/services/subscriptionTiers.js` — frozen matrix, aliases, pricing, plan codes.
+- `src/services/subscriptions.js` — entitlements, checkout, webhook state machine, Simple Rules, quotas, formatting.
+- `src/services/trialEngine.js` — trial lifecycle, activation, coupons, sweep, funnel digest.
+- `src/db/subscriptionSchema.js` + `scripts/run_subscription_migration.js` — idempotent DDL + legacy remap.
+- `src/services/paystack.js` — matrix-derived view, plan/coupon checkout, subscription disable/enable/update.
+- `src/services/coupons.js` — `validateCouponForCheckout` (percent/flat/scoping) + redemption.
+- `test_subscription_billing.js` — 73 assertions (matrix, entitlements, AI clamp, quotas, coupons, webhook state machine, downgrade, add-ons) — mock Supabase, zero network.
+- `test_trial_engine.js` — 68 assertions (30-day window, 3-point activation incl. reminder negative control, once-per-lifetime, extension cap, nudge one-shot, expiry → PAUSED, funnel) — mock Supabase, zero network.
+- `scripts/mockSupabase.js` — shared in-memory Supabase mock (also enforces `paystack_webhook_events.event_id` uniqueness).
+
+### 39.10 Governance
+Subscription math is engine-owned and never AI-generated. No autonomous remediation may edit `paystack.js`, the tier registry, the trial engine or the schema (forbidden-path guard). Migration + schema changes require a human Cline session. `.clinerules` rules 23–28 mirror this section.
 

@@ -35,7 +35,7 @@ You sit directly between the user and the fleet database: collecting, parsing, l
 INTENT CLASSIFICATION & AGENT ACTIONS:
 Analyze the incoming message, conversation context, and user fleet roster to classify the user's intent into a JSON object matching this schema:
 {
-  "intent": "GREETING" | "ACTION_DISCOVERY" | "TRANSFER_PASSBOOK" | "APPLY_COUPON" | "REGISTER_VEHICLE" | "ONBOARDING_INPUT" | "ONBOARDING_SKIP" | "VERIFY_OTP" | "RESEND_OTP" | "UPDATE_EMAIL" | "APP_HELP" | "MANAGE_VEHICLE" | "VIEW_PROFILE" | "LIST_VEHICLES" | "SWITCH_VEHICLE" | "QUERY_FUEL_EFFICIENCY" | "QUERY_FLEET_SUMMARY" | "LOG_EXPENSE" | "UPDATE_MILEAGE" | "LOG_EARNINGS" | "SET_REMINDER" | "COMPLETE_REMINDER" | "LOG_OPERATING_HOURS" | "REQUEST_REPORT" | "CONTACT_SUPPORT" | "REACTIVATE_ACCOUNT" | "EDIT_VEHICLE" | "DELETE_VEHICLE" | "EDIT_PROFILE" | "DELETE_ACCOUNT" | "GENERAL_CHAT" | "ASSIGN_DRIVER" | "UNASSIGN_DRIVER",
+  "intent": "GREETING" | "ACTION_DISCOVERY" | "TRANSFER_PASSBOOK" | "APPLY_COUPON" | "REGISTER_VEHICLE" | "ONBOARDING_INPUT" | "ONBOARDING_SKIP" | "VERIFY_OTP" | "RESEND_OTP" | "UPDATE_EMAIL" | "APP_HELP" | "MANAGE_VEHICLE" | "VIEW_PROFILE" | "LIST_VEHICLES" | "SWITCH_VEHICLE" | "QUERY_FUEL_EFFICIENCY" | "QUERY_FLEET_SUMMARY" | "LOG_EXPENSE" | "UPDATE_MILEAGE" | "LOG_EARNINGS" | "SET_REMINDER" | "COMPLETE_REMINDER" | "LOG_OPERATING_HOURS" | "REQUEST_REPORT" | "CONTACT_SUPPORT" | "REACTIVATE_ACCOUNT" | "EDIT_VEHICLE" | "DELETE_VEHICLE" | "EDIT_PROFILE" | "DELETE_ACCOUNT" | "GENERAL_CHAT" | "ASSIGN_DRIVER" | "UNASSIGN_DRIVER" | "VIEW_SUBSCRIPTION" | "UPGRADE_SUBSCRIPTION" | "CANCEL_SUBSCRIPTION" | "MANAGE_ADDONS" | "KEEP_VEHICLE" | "EXTEND_TRIAL",
   "extracted_data": {
     "plate_number": string | null,
     "target_vehicle": string | null,
@@ -137,6 +137,15 @@ AGENT ROLES & BEHAVIORAL DIRECTIVES:
 7b. CORE FLEET REPORTS (REQUEST_REPORT):
    - Extract "report_type": "fleet" (status/overview), "compliance" (insurance, inspection/MOT, licences, permits, expiry), "maintenance" (service thresholds, PM compliance, repairs) or "financial" (expenses, earnings, net, cost per km/hour).
    - Default to "fleet" when the user just says "report" or "summary". Never invent figures; the report engine supplies every number.
+
+7c. SUBSCRIPTION, TRIAL & BILLING (ENGINE-OWNED NUMBERS):
+   - VIEW_SUBSCRIPTION: "my plan", "subscription", "billing", "how many days left". The engine renders tier, status, trial days left, vehicle slots, report quota and price. Never invent prices or dates.
+   - UPGRADE_SUBSCRIPTION: "upgrade", "subscribe", "go Pro", "switch to Growth annual". Extract "subscription_tier" (solo_pro | team_fleet | growth | fleet_command) and "billing_interval" (monthly | annual). The engine decides whether the owner gets the ONE-TIME 30-day free trial (no card) or a direct Paystack checkout link.
+   - CANCEL_SUBSCRIPTION: "cancel my subscription", "stop billing". Cancellation keeps full access until the paid period ends; the engine handles the confirmation.
+   - MANAGE_ADDONS: "extra car slot", "add-on", "add another vehicle to Fleet Command". Fleet Command = base 5 vehicles + per-vehicle add-ons; the engine returns the add-on checkout.
+   - KEEP_VEHICLE: after a trial/subscription ends, "keep KDA 123A", "keep vehicle 2". Only the chosen vehicle(s) stay active; the rest are PAUSED, never deleted.
+   - EXTEND_TRIAL: "extend my trial". Redeem a trial-extension coupon through the engine; never extend a trial yourself.
+   - Never quote a plan price, discount, trial end date or vehicle limit that the engine did not supply in the facts.
 
 8. EDIT & DELETE (VIN IS PERMANENTLY IMMUTABLE):
    - EDIT_VEHICLE: Triggered when an owner asks to update vehicle details, e.g. "update vehicle KDA 123A color to White", "change make and model for KBC 456X to Toyota Fielder", "edit my car". Extract the target plate into "plate_number"/"target_vehicle", the changed field into "edit_field" and the new value into "edit_value" (also populate the matching attribute).
@@ -479,6 +488,40 @@ export function extractVehicleAttributes(messageText = '') {
  */
 export function classifyIntentWithRegex(messageText = '') {
   const clean = messageText.trim().toLowerCase();
+
+  // Subscription & trial intents (v1.15.0) — deterministic fast path.
+  if (/^(?:extend|extension)\s+(?:my\s+)?trial\b/i.test(clean) || /^trial\s+extension\b/i.test(clean)) {
+    return { intent: 'EXTEND_TRIAL', extracted_data: { notes: clean }, reply_message: 'Checking your trial extension options...' };
+  }
+  if (/^keep\s+(?:vehicle\s+|car\s+)?[A-Za-z0-9 -]+$/i.test(clean)) {
+    const match = messageText.match(/^keep\s+(?:vehicle\s+|car\s+)?(.+)$/i);
+    return {
+      intent: 'KEEP_VEHICLE',
+      extracted_data: { target_vehicle: match ? match[1].trim() : null },
+      reply_message: 'Keeping that vehicle active...'
+    };
+  }
+  if (/\b(?:add[- ]?on|extra\s+(?:car|vehicle|slot)|additional\s+(?:car|vehicle|slot))\b/i.test(clean)) {
+    return { intent: 'MANAGE_ADDONS', extracted_data: {}, reply_message: 'Checking Fleet Command add-ons...' };
+  }
+  if (/^(?:cancel|stop)\s+(?:my\s+)?(?:subscription|plan|billing)\b/i.test(clean) || /^unsubscribe\b/i.test(clean)) {
+    return { intent: 'CANCEL_SUBSCRIPTION', extracted_data: {}, reply_message: 'Reviewing your cancellation options...' };
+  }
+  if (/\b(?:upgrade|subscribe|go\s+(?:pro|paid)|switch\s+(?:to\s+)?(?:solo|team|growth|fleet))\b/i.test(clean)) {
+    const tierMatch = clean.match(/\b(solo(?:\s*pro)?|team(?:\s*fleet)?|growth(?:\s*fleet)?|fleet\s*command|pro)\b/i);
+    const intervalMatch = clean.match(/\b(annual|annually|yearly|year|monthly|month)\b/i);
+    return {
+      intent: 'UPGRADE_SUBSCRIPTION',
+      extracted_data: {
+        subscription_tier: tierMatch ? tierMatch[1] : null,
+        billing_interval: intervalMatch ? intervalMatch[1] : null
+      },
+      reply_message: 'Checking your upgrade options...'
+    };
+  }
+  if (/^(?:subscription|my\s+(?:plan|subscription)|billing|plan\s+details|show\s+(?:my\s+)?(?:plan|subscription))\b/i.test(clean)) {
+    return { intent: 'VIEW_SUBSCRIPTION', extracted_data: {}, reply_message: 'Fetching your plan details...' };
+  }
 
   // Transfer Passbook Intent (e.g. "transfer passbook KDA 123A", "passbook transfer")
   if (/^transfer\s+passbook\b/i.test(clean) || /^passbook\s+transfer\b/i.test(clean)) {
@@ -869,7 +912,8 @@ export function classifyIntentTier(messageText = '', conversationHistory = []) {
 /**
  * Intelligent message parser and intent classifier for Saka Assistant
  */
-export async function processSakaMessage(targetLang = 'English', messageText = '', conversationHistory = [], mediaParts = [], providedSupabase = null, activeVehicleContext = null) {
+export async function processSakaMessage(targetLang = 'English', messageText = '', conversationHistory = [], mediaParts = [], providedSupabase = null, activeVehicleContext = null, options = {}) {
+  const { maxAiTier = null, ownerId = null, planSummary = null } = options || {};
   const now = new Date();
   const currentLocalDateTime = now.toLocaleString('en-US', { dateStyle: 'full', timeStyle: 'medium' });
   const currentIsoDate = now.toISOString().split('T')[0];
@@ -896,6 +940,7 @@ RUNTIME DYNAMIC CONTEXT:
 - User Preferred Language: ${targetLang}
 - User Unit System: ${activeVehicleContext?.activeVehicle?.unit_system || 'metric'} (display distances/volumes in this system; store canonical km/litres)
 - Global Audience: localize currency, dates and plate examples to the user's country; never assume a region.
+${planSummary ? `- Subscription context: ${planSummary} (quote only limits/prices the engine supplied)` : ''}
 ${fleetContextSection}
 `;
 
@@ -912,7 +957,9 @@ ${fleetContextSection}
     maxTokens: 800,
     temperature: 0.3,
     purpose: 'intent_classify',
-    tier: intentTier
+    tier: intentTier,
+    maxTier: maxAiTier,
+    ownerId
   });
 
   if (aiResult.ok) {

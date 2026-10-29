@@ -202,12 +202,12 @@ async function runTests() {
 
   const soloTest = await checkOwnerVehicleTierLimit({
     ownerId: freeOwnerId,
-    subscriptionTier: 'solo_pro',
+    subscriptionTier: 'team_fleet',
     supabase
   });
-  console.log('Solo Pro tier check:', soloTest);
+  console.log('Team Fleet tier check:', soloTest);
   if (soloTest.limit !== 3) {
-    throw new Error('Solo Pro tier vehicle limit should be 3!');
+    throw new Error('Team Fleet tier vehicle limit should be 3!');
   }
   console.log('✅ Subscription-tier vehicle capacity limits verified.\n');
 

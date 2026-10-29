@@ -121,9 +121,16 @@ export const AI_PURPOSES = Object.freeze({
  * Tier 2 downgrades to Tier 1 while PREMIUM_MODEL_ENABLED is off; Tier 0 means
  * "no model call" and returns null provider/model.
  */
-export function resolveTier(purpose = 'default', { tier: forcedTier } = {}) {
+export function resolveTier(purpose = 'default', { tier: forcedTier, maxTier = null } = {}) {
   const def = AI_PURPOSES[purpose] || AI_PURPOSES.default;
   let tier = forcedTier ?? def.tier;
+
+  // Entitlement clamp (v1.15.0): Free plans resolve to Tier 1 regardless of
+  // premium routing. System/background purposes simply omit `maxTier`.
+  if (maxTier !== null && maxTier !== undefined && Number.isFinite(Number(maxTier))) {
+    const cap = Math.min(AI_TIERS.REASONING, Math.max(AI_TIERS.DETERMINISTIC, Number(maxTier)));
+    tier = Math.min(tier, cap);
+  }
 
   if (tier === AI_TIERS.DETERMINISTIC) {
     return { tier, provider: null, model: null };
@@ -144,8 +151,8 @@ export function resolveTier(purpose = 'default', { tier: forcedTier } = {}) {
  * candidate list (purpose model first, DeepSeek fallbacks last).
  */
 export function routeModelForPurpose(purpose = 'default', ctx = {}) {
-  const { tier: forcedTier } = ctx || {};
-  const resolved = resolveTier(purpose, { tier: forcedTier });
+  const { tier: forcedTier, maxTier = null } = ctx || {};
+  const resolved = resolveTier(purpose, { tier: forcedTier, maxTier });
   if (!resolved.model) return { ...resolved, candidates: [] };
 
   const candidates = [resolved.model];
@@ -560,7 +567,9 @@ export async function chatCompletion({
   model = null,
   provider = null,
   purpose = null,
-  tier = null
+  tier = null,
+  maxTier = null,
+  ownerId = null
 } = {}) {
   let lastError = null;
   const startedAt = Date.now();
@@ -568,10 +577,11 @@ export async function chatCompletion({
 
   // Explicit `model` keeps the legacy contract (single provider, DeepSeek).
   // Otherwise a purpose (optionally with a canary tier override) routes.
+  // `maxTier` is the subscription entitlement clamp (Free = 1, paid = 3).
   const routing = model
     ? { tier: null, provider: provider || AI_PROVIDERS.DEEPSEEK, candidates: [model], model, explicit: true }
     : (purpose
-      ? routeModelForPurpose(purpose, { tier })
+      ? routeModelForPurpose(purpose, { tier, maxTier })
       : { tier: null, provider: provider || AI_PROVIDERS.DEEPSEEK, candidates: getModelCandidates(), explicit: true });
 
   const budgetExceeded = await isBudgetExceeded(routing);
@@ -674,6 +684,7 @@ export async function chatCompletion({
         recordProviderOutcome(attempt.provider, true);
         emitAiUsage({
           purpose,
+          ownerId,
           tier: routing.tier,
           provider: attempt.provider,
           model: attempt.model,
@@ -724,6 +735,7 @@ export async function chatCompletion({
 
   emitAiUsage({
     purpose,
+    ownerId,
     tier: routing.tier,
     provider: lastProvider,
     model: lastModel,
@@ -748,7 +760,9 @@ export async function generateText({
   temperature = 0.4,
   provider = null,
   purpose = null,
-  tier = null
+  tier = null,
+  maxTier = null,
+  ownerId = null
 }) {
   const result = await chatCompletion({
     system,
@@ -758,7 +772,9 @@ export async function generateText({
     temperature,
     provider,
     purpose,
-    tier
+    tier,
+    maxTier,
+    ownerId
   });
   return result.ok ? result.text : null;
 }

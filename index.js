@@ -10,12 +10,7 @@ import { runHealthCheck, runConversationRefinement, evaluateConversationalFricti
 import { ensureSuperadminTables, isSuperadminPhone, sendMorningExecutiveBriefing, maybeSendAiBudgetAlert } from './src/services/superadmin.js';
 import { ensureVehicleTableColumns } from './src/services/vehicles.js';
 import whatsappRoutes, { handleWhatsAppWebhook as handleWhatsAppWebhookRoute } from './src/routes/whatsapp.js';
-import {
-  SUBSCRIPTION_TIERS,
-  getTierLocalPrice,
-  initializePaystackCheckout,
-  verifyPaystackSignature
-} from './src/services/paystack.js';
+import { verifyPaystackSignature } from './src/services/paystack.js';
 import { processImpendingTrialReminders } from './src/services/coupons.js';
 import { runReminderSweep } from './src/services/maintenanceReminders.js';
 import { ensureComplianceCatalog, reviewComplianceCatalog, COMPLIANCE_CATALOG_VERSION } from './src/services/complianceCatalog.js';
@@ -36,6 +31,9 @@ import { createResilientClient } from './src/services/supabaseClient.js';
 import { ensureAiUsageLogsTable, installAiUsageSink, installAiBudgetGuard } from './src/services/aiUsageLog.js';
 import { ensureChatSessionsTable } from './src/services/sessionStore.js';
 import { drainQueue, getQueueStats } from './src/services/messageQueue.js';
+import { handlePaystackEvent } from './src/services/subscriptions.js';
+import { ensureSubscriptionSchema } from './src/db/subscriptionSchema.js';
+import { runTrialLifecycleSweep } from './src/services/trialEngine.js';
 
 // 1. Initialize Fastify Server
 const fastify = Fastify({ logger: true });
@@ -169,6 +167,14 @@ setInterval(processPendingOwnerNotifications, 30000); // Check every 30s
 setInterval(() => {
   processImpendingTrialReminders({ supabase, sendWhatsAppMessageFn: sendMetaWhatsAppMessage }).catch(err => {
     console.error('[Worker] Error processing impending trial reminders:', err);
+  });
+}, 15 * 60 * 1000); // Check every 15 minutes
+
+// Worker: Account-trial lifecycle (T+7d activation nudge, T-3d digest,
+// T-24h urgent, T-0 expiry -> Free with PAUSED vehicles). v1.15.0.
+setInterval(() => {
+  runTrialLifecycleSweep({ supabase, sendWhatsAppFn: sendMetaWhatsAppMessage }).catch(err => {
+    console.error('[Worker] Error processing trial lifecycle sweep:', err);
   });
 }, 15 * 60 * 1000); // Check every 15 minutes
 
@@ -726,69 +732,33 @@ async function handlePaystackWebhook(request, reply) {
 
     const event = request.body || {};
     fastify.log.info(`Paystack Webhook Event Received: ${event.event}`);
+    const data = event.data || {};
+    const metadata = data.metadata || {};
 
-    if (event.event === 'charge.success') {
-      const data = event.data || {};
-      const metadata = data.metadata || {};
-      if (metadata.type === 'passbook_transfer_fee' || metadata.transfer_id) {
-        const transferId = metadata.transfer_id;
-        await supabase.from('passbook_transfers').update({
-          transfer_fee_paid: true,
-          payment_reference: data.reference || null
-        }).eq('id', transferId);
+    // Legacy one-time passbook transfer fee (handled here, not in the ledger).
+    if (event.event === 'charge.success' && (metadata.type === 'passbook_transfer_fee' || metadata.transfer_id)) {
+      await supabase.from('passbook_transfers').update({
+        transfer_fee_paid: true,
+        payment_reference: data.reference || null
+      }).eq('id', metadata.transfer_id);
 
-        if (phone) {
-          const cleanPhone = phone.startsWith('+') ? phone : `+${phone}`;
-          await sendMetaWhatsAppMessage(cleanPhone, `âœ… *Transfer Fee Payment Confirmed!* ðŸ’³\n\nYour transfer payment has been received. Please reply **'ACCEPT'** to verify your email and receive your digital passbook!`);
-        }
-        return reply.status(200).send({ status: 'success', transfer_fee_handled: true });
+      if (metadata.phone_number) {
+        const cleanPhone = metadata.phone_number.startsWith('+') ? metadata.phone_number : `+${metadata.phone_number}`;
+        await sendMetaWhatsAppMessage(cleanPhone, `✅ *Transfer Fee Payment Confirmed!* 💳\n\nYour transfer payment has been received. Please reply **'ACCEPT'** to verify your email and receive your digital passbook!`);
       }
-
-      const phone = metadata.phone_number;
-      const targetTier = metadata.target_tier || 'solo_pro';
-      const billingInterval = metadata.billing_interval || 'monthly';
-      const userId = metadata.user_id;
-
-      const now = new Date();
-      let expiresAt = new Date(now);
-      if (billingInterval === 'annual') {
-        expiresAt.setFullYear(expiresAt.getFullYear() + 1);
-      } else {
-        expiresAt.setDate(expiresAt.getDate() + 30);
-      }
-
-      let query = supabase.from('profiles').update({
-        subscription_tier: targetTier,
-        subscription_status: 'active',
-        billing_interval: billingInterval,
-        subscription_expires_at: expiresAt.toISOString(),
-        paystack_customer_code: data.customer?.customer_code || null,
-        paystack_subscription_code: data.subscription_code || data.reference || null,
-        updated_at: now.toISOString()
-      });
-
-      if (userId) {
-        query = query.eq('id', userId);
-      } else if (phone) {
-        const cleanPhone = phone.startsWith('+') ? phone : `+${phone}`;
-        query = query.eq('phone_number', cleanPhone);
-      }
-
-      const { data: updatedProfile, error: updateErr } = await query.select().single();
-
-      if (updateErr) {
-        fastify.log.error('Failed to update subscription profile on Paystack charge.success:', updateErr);
-      } else {
-        const tierInfo = SUBSCRIPTION_TIERS[targetTier] || SUBSCRIPTION_TIERS.solo_pro;
-        const targetPhone = phone || updatedProfile?.phone_number;
-        if (targetPhone) {
-          const successMsg = `ðŸŽ‰ *Subscription Upgrade Successful!*\n\nYour account has been upgraded to *${tierInfo.name}* (${billingInterval}).\nâ€¢ Vehicle Limit: ${tierInfo.vehicleLimit === Infinity ? 'Unlimited' : tierInfo.vehicleLimit}\nâ€¢ Premium Features: Unlocked ðŸš€\n\nThank you for choosing Saka!`;
-          await sendMetaWhatsAppMessage(targetPhone, successMsg);
-        }
-      }
+      return reply.status(200).send({ status: 'success', transfer_fee_handled: true });
     }
 
-    return reply.status(200).send({ status: 'success' });
+    // v1.15.0 state machine: subscription.create, invoice.*, subscription.disable,
+    // subscription.not_renew, fleet_addon charges and legacy tier charges.
+    const result = await handlePaystackEvent({
+      supabase,
+      event,
+      sendWhatsAppFn: sendMetaWhatsAppMessage,
+      log: fastify.log
+    });
+
+    return reply.status(200).send({ status: 'success', ...result });
   } catch (err) {
     fastify.log.error('Paystack webhook error:', err);
     return reply.status(500).send({ error: 'Internal Server Error handling Paystack webhook' });
@@ -917,6 +887,7 @@ const start = async () => {
     await ensureSuperadminTables(supabase);
     await ensureRemediationTables(supabase);
     await ensureAiUsageLogsTable(supabase);
+    await ensureSubscriptionSchema({ label: 'boot.ensureSubscriptionSchema' });
     installAiUsageSink(supabase);
     installAiBudgetGuard(supabase);
     await ensureVehicleTableColumns(supabase);

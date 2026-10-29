@@ -34,6 +34,7 @@ import { ensureSentinelTables } from '../src/workers/sentinel.js';
 import { ensureChatSessionsTable } from '../src/services/sessionStore.js';
 import { ensureRemediationTables } from '../src/workers/remediation.js';
 import { ensureAiUsageLogsTable } from '../src/services/aiUsageLog.js';
+import { ensureSubscriptionSchema } from '../src/db/subscriptionSchema.js';
 import { applySentinelMigration } from './run_sentinel_migration.js';
 import { applyChatSessionsMigration } from './run_chat_sessions_migration.js';
 import { applyVinImmutabilityMigration } from './run_vin_immutability_migration.js';
@@ -234,7 +235,8 @@ const EXPECTED_TABLES = [
   'chat_friction_logs', 'conversation_analytics', 'error_logs', 'system_config',
   'saka_dynamic_rules', 'superadmin_sessions', 'coupons', 'admin_audit_logs',
   'expiry_notification_log',
-  'sentinel_audit_runs', 'remediation_proposals', 'ai_usage_logs'
+  'sentinel_audit_runs', 'remediation_proposals', 'ai_usage_logs',
+  'subscriptions', 'paystack_webhook_events', 'usage_counters', 'trial_sessions'
 ];
 
 async function step(label, fn) {
@@ -287,6 +289,11 @@ async function main() {
   await step('ensureSentinelTables()', async () => console.log('   ->', JSON.stringify(await ensureSentinelTables(supabase))));
   await step('ensureRemediationTables()', async () => console.log('   ->', JSON.stringify(await ensureRemediationTables(supabase))));
   await step('ensureAiUsageLogsTable()', async () => console.log('   ->', JSON.stringify(await ensureAiUsageLogsTable(supabase))));
+  await step('ensureSubscriptionSchema()', async () => {
+    const r = await ensureSubscriptionSchema({ label: 'provision.ensureSubscriptionSchema' });
+    if (!r.ok) throw new Error(r.error || 'subscription schema failed');
+    console.log('   ✅ via', r.via);
+  });
   await step('ensureChatSessionsTable()', async () => console.log('   ->', JSON.stringify(await ensureChatSessionsTable(supabase))));
   await step('applySentinelMigration()', async () => {
     const r = await applySentinelMigration();

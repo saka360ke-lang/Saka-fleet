@@ -160,6 +160,7 @@ const AI_USAGE_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS public.ai_usage_logs (
     id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
     purpose text,
+    owner_id uuid,
     tier integer,
     provider text,
     model text,
@@ -173,6 +174,7 @@ CREATE TABLE IF NOT EXISTS public.ai_usage_logs (
     created_at timestamp with time zone DEFAULT now()
 );
 ALTER TABLE public.ai_usage_logs ADD COLUMN IF NOT EXISTS attempts jsonb;
+ALTER TABLE public.ai_usage_logs ADD COLUMN IF NOT EXISTS owner_id uuid;
 CREATE INDEX IF NOT EXISTS idx_ai_usage_logs_created ON public.ai_usage_logs(created_at DESC);
 NOTIFY pgrst, 'reload schema';
 `;
@@ -196,10 +198,13 @@ export async function ensureAiUsageLogsTable(providedSupabase) {
 
   if (hasSqlAccess()) {
     try {
-      // Legacy tables predate the Phase 3 `attempts` column: detect + migrate it.
+      // Legacy tables predate the Phase 3 `attempts` column and the v1.15.0
+      // `owner_id` attribution column: detect + migrate both.
       const { error: columnError } = await supabase.from(AI_USAGE_TABLE).select('attempts').limit(1);
       const columnMissing = Boolean(columnError && /attempts/i.test(columnError.message || ''));
-      if (missing || columnMissing) {
+      const { error: ownerColumnError } = await supabase.from(AI_USAGE_TABLE).select('owner_id').limit(1);
+      const ownerColumnMissing = Boolean(ownerColumnError && /owner_id/i.test(ownerColumnError.message || ''));
+      if (missing || columnMissing || ownerColumnMissing) {
         const result = await runSql(AI_USAGE_TABLE_SQL, { label: 'ensureAiUsageLogsTable' });
         if (result.ok && missing) statusMap[AI_USAGE_TABLE] = 'created';
       }
@@ -247,6 +252,7 @@ function toAttempts(value) {
 function toRow(record = {}) {
   return {
     purpose: record.purpose ? String(record.purpose).slice(0, 64) : 'unknown',
+    owner_id: record.ownerId ? String(record.ownerId) : null,
     tier: Number.isInteger(record.tier) ? record.tier : null,
     provider: record.provider ? String(record.provider).slice(0, 32) : null,
     model: record.model ? String(record.model).slice(0, 64) : null,

@@ -52,7 +52,13 @@ export const SAKA_INTENTS = [
   'DELETE_ACCOUNT',
   'GENERAL_CHAT',
   'ASSIGN_DRIVER',
-  'UNASSIGN_DRIVER'
+  'UNASSIGN_DRIVER',
+  'VIEW_SUBSCRIPTION',
+  'UPGRADE_SUBSCRIPTION',
+  'CANCEL_SUBSCRIPTION',
+  'MANAGE_ADDONS',
+  'KEEP_VEHICLE',
+  'EXTEND_TRIAL'
 ];
 
 /**
@@ -222,6 +228,33 @@ export const SAKA_QUIZ_FLOWS = [
     extracted: [],
     writes: 'profiles.is_active = true',
     rules: 'only for soft-deleted accounts'
+  },
+  {
+    key: 'subscription_upgrade',
+    label: 'Subscription upgrade / trial',
+    trigger: 'upgrade, subscribe, go Pro, switch to Growth annual',
+    fields: 'tier (solo_pro | team_fleet | growth | fleet_command) → interval (monthly | annual) → optional coupon → confirm',
+    extracted: ['subscription_tier', 'billing_interval', 'notes'],
+    writes: 'first upgrade: trial_sessions (30-day free trial, no card) + profiles TRIALING; otherwise Paystack checkout link (subscriptions.checkoutForTier)',
+    rules: 'one trial per owner lifetime (profiles.trial_used_at); never invent prices, discounts or trial dates; annual-first checkout; coupons are validated by the engine'
+  },
+  {
+    key: 'cancel_subscription',
+    label: 'Cancel subscription',
+    trigger: 'cancel my subscription, stop billing, unsubscribe',
+    fields: 'confirm → (optional) reason',
+    extracted: [],
+    writes: 'profiles.subscription_status = CANCELING + cancel_at_period_end; Paystack disable when a token exists; trials cancel immediately',
+    rules: 'full access is retained until the paid period ends; excess vehicles are PAUSED at expiry, never deleted'
+  },
+  {
+    key: 'keep_vehicles',
+    label: 'Keep vehicles after downgrade',
+    trigger: 'keep KDA 123A, keep vehicle 1, which car should stay active',
+    fields: 'vehicle(s) to keep (within the Free capacity) → confirm',
+    extracted: ['plate_number', 'target_vehicle'],
+    writes: 'vehicles.status = ACTIVE for the chosen vehicle(s); every other active vehicle becomes PAUSED',
+    rules: 'never delete; only as many vehicles as the current plan allows; data and passbook tokens stay intact'
   }
 ];
 
@@ -247,7 +280,13 @@ export const SAKA_INTENT_PLAYBOOK = [
   { intent: 'COMPLETE_REMINDER', behavior: 'Match the overdue reminder for the vehicle, log completion, reset the threshold.' },
   { intent: 'REACTIVATE_ACCOUNT', behavior: 'Start reactivation; confirm before any write.' },
   { intent: 'ONBOARDING_INPUT', behavior: 'Quiz owns the field; acknowledge briefly and ask only the next missing item.' },
-  { intent: 'ONBOARDING_SKIP', behavior: 'Skip the optional specs group only; never skip a required field.' }
+  { intent: 'ONBOARDING_SKIP', behavior: 'Skip the optional specs group only; never skip a required field.' },
+  { intent: 'VIEW_SUBSCRIPTION', behavior: 'Render the engine-provided plan snapshot: tier, trial days left, vehicle slots, report quota, price, cancellation state. Never invent numbers.' },
+  { intent: 'MANAGE_ADDONS', behavior: 'Fleet Command only: explain base 5 vehicles + per-vehicle add-ons and return the add-on checkout link supplied by the engine.' },
+  { intent: 'EXTEND_TRIAL', behavior: 'Redeem an account trial-extension coupon through trialEngine; never extend a trial without a valid coupon.' },
+  { intent: 'UPGRADE_SUBSCRIPTION', behavior: 'Run the subscription_upgrade flow. First paid upgrade may start the one-time 30-day no-card trial; otherwise the engine returns a Paystack checkout link.' },
+  { intent: 'CANCEL_SUBSCRIPTION', behavior: 'Run the cancel_subscription flow; access continues until the paid period ends and trials cancel immediately.' },
+  { intent: 'KEEP_VEHICLE', behavior: 'Run the keep_vehicles flow: choose which vehicle(s) stay active; all others are PAUSED (never deleted).' }
 ];
 
 /** Immutable boundaries every prompt version must state. */
@@ -261,7 +300,9 @@ export const SAKA_BOUNDARY_RULES = [
   'Never claim a write happened until the user explicitly confirmed the summary.',
   'Superadmin commands are intercepted by the system before Saka; Saka never claims admin powers.',
   'Saka is the front-facing agent; Sentinel is the background supervisor and is never impersonated.',
-  'The autonomous remediation pipeline is superadmin-only: Saka never drafts, approves or executes code changes.'
+  'The autonomous remediation pipeline is superadmin-only: Saka never drafts, approves or executes code changes.',
+  'Subscription math is engine-owned: Saka never invents prices, discounts, trial dates, plan limits or payment results, and never promises a refund.',
+  'One free trial per owner lifetime; trials never require a card upfront; excess vehicles after a downgrade are PAUSED, never deleted.'
 ];
 
 /** Compact prompt block — injected into Saka's core system prompt. */

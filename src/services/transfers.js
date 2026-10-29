@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { sendEmailOtp, sendTransferReleasePinEmail, sendPassbookWelcomeEmail } from './mailer.js';
 import { getEffectiveExchangeRate } from './paystack.js';
 import { findVehicleByCandidate } from './vehicles.js';
+import { evaluateVehicleCapacity, invalidateEntitlements } from './subscriptions.js';
 
 /**
  * Step 1: Initiate passbook transfer by current owner
@@ -317,7 +318,7 @@ export async function completePassbookTransfer({ buyerPhone, providedOtp, supaba
       .from('passbook_transfers')
       .select('*, vehicles!passbook_transfers_vehicle_id_fkey(*), seller:profiles!passbook_transfers_from_owner_id_fkey(*)')
       .eq('to_owner_phone', cleanPhone)
-      .eq('status', 'PENDING_BUYER_OTP')
+      .in('status', ['PENDING_BUYER_OTP', 'PENDING_BUYER_UPGRADE'])
       .order('initiated_at', { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -367,6 +368,28 @@ export async function completePassbookTransfer({ buyerPhone, providedOtp, supaba
     const vehicleId = transfer.vehicle_id;
     const oldVeh = transfer.vehicles;
 
+    // Simple Rule R2 — the buyer's garage must have a free slot before the
+    // passbook re-anchors. Over capacity: pause the transfer (24h OTP window)
+    // and return the upgrade path; the buyer retries the same code afterwards.
+    const capacity = await evaluateVehicleCapacity({
+      supabase,
+      ownerId: buyerProfile.id,
+      additionalVehicles: 1
+    });
+    if (!capacity.allowed) {
+      await supabase.from('passbook_transfers').update({
+        status: 'PENDING_BUYER_UPGRADE',
+        blocked_reason: 'BUYER_UPGRADE_REQUIRED',
+        buyer_otp_expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+      }).eq('id', transfer.id);
+      return {
+        success: false,
+        needsUpgrade: true,
+        capacity,
+        error: `Your ${capacity.tierName} plan allows ${capacity.capacity} active vehicle(s) and you already have ${capacity.currentCount}. Upgrade to accept this passbook.`
+      };
+    }
+
     const { error: vUpErr } = await supabase.from('vehicles').update({
       owner_id: buyerProfile.id,
       owner_phone: cleanPhone,
@@ -393,8 +416,11 @@ export async function completePassbookTransfer({ buyerPhone, providedOtp, supaba
     await supabase.from('passbook_transfers').update({
       status: 'COMPLETED',
       to_owner_id: buyerProfile.id,
+      blocked_reason: null,
       completed_at: new Date().toISOString()
     }).eq('id', transfer.id);
+    invalidateEntitlements(buyerProfile.id);
+    invalidateEntitlements(transfer.from_owner_id);
 
     if (transfer.to_owner_email) {
       await sendPassbookWelcomeEmail({

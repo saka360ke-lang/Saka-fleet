@@ -342,3 +342,116 @@ export async function processImpendingTrialReminders({
 }
 
 
+
+/**
+ * Validate a coupon for a subscription checkout (v1.15.0).
+ * Supports percentage discounts, flat reductions and tier/interval scoping.
+ * Trial-extension coupons are deliberately NOT checkout discounts — they are
+ * redeemed through `trialEngine.applyAccountTrialExtensionCoupon`.
+ */
+export async function validateCouponForCheckout({
+  supabase,
+  code,
+  tierKey = 'free',
+  interval = 'monthly',
+  ownerId = null,
+  currency = 'USD',
+  amountUSD = null
+} = {}) {
+  if (!supabase || !code) return { valid: false, error: 'Coupon code required' };
+  const cleanCode = String(code).toUpperCase().trim();
+  const canonicalInterval = interval === 'annual' ? 'annual' : 'monthly';
+
+  try {
+    const { data: coupon, error } = await supabase
+      .from('coupons')
+      .select('*')
+      .eq('code', cleanCode)
+      .maybeSingle();
+    if (error || !coupon) return { valid: false, error: 'Coupon not found.' };
+
+    if (coupon.status === 'applied') return { valid: false, error: 'Coupon already redeemed.' };
+    if (coupon.status === 'expired') return { valid: false, error: 'Coupon expired.' };
+    if (Number(coupon.current_uses || 0) >= Number(coupon.max_uses || 1)) {
+      return { valid: false, error: 'Coupon usage limit reached.' };
+    }
+    if (coupon.expires_at && new Date(coupon.expires_at).getTime() < Date.now()) {
+      return { valid: false, error: 'Coupon expired.' };
+    }
+
+    const applicableTo = String(coupon.applicable_to || '').toLowerCase();
+    if (applicableTo === 'trial_extension' || applicableTo === 'account_trial_extension') {
+      return { valid: false, error: 'This coupon extends a trial — reply *"extend trial"* to redeem it.' };
+    }
+    if (applicableTo === 'annual_subscription' && canonicalInterval !== 'annual') {
+      return { valid: false, error: 'This coupon applies to the annual plan only.' };
+    }
+    if (coupon.assigned_to_phone && ownerId) {
+      const { data: owner } = await supabase
+        .from('profiles')
+        .select('phone_number')
+        .eq('id', ownerId)
+        .maybeSingle();
+      if (owner?.phone_number && owner.phone_number.replace(/[^\d]/g, '') !== String(coupon.assigned_to_phone).replace(/[^\d]/g, '')) {
+        return { valid: false, error: 'This coupon belongs to another account.' };
+      }
+    }
+
+    const tierScope = String(coupon.applies_to_tier || '').toLowerCase();
+    if (tierScope && tierScope !== 'all') {
+      const allowed = tierScope.split(',').map((t) => t.trim());
+      if (!allowed.includes(String(tierKey).toLowerCase())) {
+        return { valid: false, error: 'This coupon does not apply to the selected plan.' };
+      }
+    }
+    const intervalScope = String(coupon.applies_to_interval || 'both').toLowerCase();
+    if (intervalScope !== 'both' && intervalScope !== 'all' && intervalScope !== canonicalInterval) {
+      return { valid: false, error: `This coupon applies to ${intervalScope} billing only.` };
+    }
+
+    const baseAmount = Number.isFinite(Number(amountUSD)) && Number(amountUSD) > 0
+      ? Number(amountUSD)
+      : 0;
+    const percent = Number(coupon.discount_percent || 0);
+    const flat = Number(coupon.discount_amount || 0);
+    const isFlat = flat > 0 && percent <= 0;
+    const discountType = isFlat ? 'flat' : 'percent';
+    let discountUSD = 0;
+    if (isFlat) {
+      discountUSD = Math.min(baseAmount || flat, flat);
+    } else if (percent > 0) {
+      discountUSD = Number(((baseAmount || 0) * percent / 100).toFixed(2));
+    }
+
+    return {
+      valid: true,
+      coupon,
+      code: coupon.code,
+      discountType,
+      discountPercent: isFlat ? 0 : percent,
+      discountUSD,
+      currency: coupon.discount_currency || currency,
+      payableUSD: Math.max(0, Number(((baseAmount || 0) - discountUSD).toFixed(2)))
+    };
+  } catch (err) {
+    return { valid: false, error: err.message };
+  }
+}
+
+/** Mark a coupon redeemed (idempotent enough for a single checkout flow). */
+export async function markCouponRedeemed({ supabase, coupon, ownerId = null, redemptionType = 'subscription' } = {}) {
+  if (!supabase || !coupon?.id) return { ok: false };
+  try {
+    await supabase.from('coupons').update({
+      status: 'applied',
+      current_uses: Number(coupon.current_uses || 0) + 1,
+      redeemed_at: new Date().toISOString(),
+      redemption_type: redemptionType,
+      dispatched_at: coupon.dispatched_at || new Date().toISOString()
+    }).eq('id', coupon.id);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+

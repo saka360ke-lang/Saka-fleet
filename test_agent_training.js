@@ -49,14 +49,14 @@ async function run() {
   check(DEFAULT_SAKA_CORE_PROMPT.includes(SAKA_FLOW_PLAYBOOK), 'Full flow playbook is embedded in the core prompt');
 
   console.log('\n--- Test 2: every intent is trained ---');
-  check(SAKA_INTENTS.length === 33, 'Registry declares all 33 classifier intents');
+  check(SAKA_INTENTS.length === 39, 'Registry declares all 39 classifier intents');
   const missingIntents = SAKA_INTENTS.filter((intent) => !DEFAULT_SAKA_CORE_PROMPT.includes(intent));
   check(missingIntents.length === 0, `All intents appear in the core prompt (${SAKA_INTENTS.length})`);
   const missingSchema = SAKA_INTENTS.filter((intent) => !DEFAULT_SAKA_CORE_PROMPT.includes(`"${intent}"`));
   check(missingSchema.length === 0, 'Every intent is present in the JSON schema');
 
   console.log('\n--- Test 3: every quiz flow is trained and resolvable ---');
-  check(SAKA_QUIZ_FLOWS.length === 18, 'Registry declares all 18 quiz flows');
+  check(SAKA_QUIZ_FLOWS.length === 21, 'Registry declares all 21 quiz flows');
   const missingFlows = SAKA_QUIZ_FLOWS.filter((flow) => !DEFAULT_SAKA_CORE_PROMPT.includes(flow.key));
   check(missingFlows.length === 0, `All quiz flow keys appear in the core prompt (${SAKA_QUIZ_FLOWS.length})`);
   const unresolvable = getKnownFlowKeys().filter((key) => !getFlowDefinition(key, ctx));
@@ -87,6 +87,14 @@ async function run() {
     'compliance',
     'maintenance',
     'financial',
+    'SUBSCRIPTION, TRIAL & BILLING',
+    'VIEW_SUBSCRIPTION',
+    'UPGRADE_SUBSCRIPTION',
+    'CANCEL_SUBSCRIPTION',
+    'MANAGE_ADDONS',
+    'KEEP_VEHICLE',
+    'EXTEND_TRIAL',
+    'Fleet Command',
     'Saka is the front-facing agent',
     'Sentinel',
     'AUTONOMOUS REMEDIATION PIPELINE',

@@ -1,6 +1,13 @@
 import dotenv from 'dotenv';
 dotenv.config();
 import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
+import {
+  normalizeTierKey,
+  getTierDefinition,
+  getEffectiveVehicleLimit,
+  getNextTierKey,
+  getAddonPriceUSD
+} from './subscriptionTiers.js';
 
 export async function ensureVehicleTableColumns(providedSupabase = null) {
   if (hasSqlAccess()) {
@@ -229,29 +236,30 @@ export async function ensureVehicleTableColumns(providedSupabase = null) {
 
 
 /**
- * Check if owner can register an additional vehicle under their subscription tier
+ * Check if owner can register an additional vehicle under their subscription.
+ * v1.15.0: capacity comes from the frozen registry AND the owner's Fleet
+ * Command add-on quantity — there is no local tier table any more.
  */
-export async function checkOwnerVehicleTierLimit({ ownerId, subscriptionTier = 'free', supabase }) {
-  const TIER_LIMITS = {
-    free: 1,
-    solo_pro: 3,
-    growth: 5,
-    scale: 10,
-    fleet_starter: 10,
-    unlimited: Infinity,
-    enterprise: Infinity
-  };
+export async function checkOwnerVehicleTierLimit({ ownerId, subscriptionTier = 'free', addonQuantity = null, supabase }) {
+  const tierKey = normalizeTierKey(subscriptionTier);
+  const tier = getTierDefinition(tierKey);
+  const nextTierKey = getNextTierKey(tierKey);
 
-  const limit = TIER_LIMITS[subscriptionTier] !== undefined ? TIER_LIMITS[subscriptionTier] : 1;
-
-  let nextTierKey = 'solo_pro';
-  if (subscriptionTier === 'solo_pro') nextTierKey = 'growth';
-  else if (subscriptionTier === 'growth') nextTierKey = 'scale';
-  else if (subscriptionTier === 'scale') nextTierKey = 'unlimited';
-
-  if (limit === Infinity) {
-    return { canAdd: true, currentCount: 0, limit, tier: subscriptionTier, nextTierKey: null };
+  let addons = addonQuantity;
+  if (addons === null && ownerId && supabase) {
+    try {
+      const { data } = await supabase
+        .from('profiles')
+        .select('addon_quantity')
+        .eq('id', ownerId)
+        .maybeSingle();
+      addons = Number(data?.addon_quantity || 0);
+    } catch {
+      addons = 0;
+    }
   }
+  const effectiveAddons = tier.addonEligible ? Math.max(0, Math.floor(Number(addons) || 0)) : 0;
+  const limit = getEffectiveVehicleLimit(tierKey, effectiveAddons);
 
   const { count, error } = await supabase
     .from('vehicles')
@@ -266,8 +274,11 @@ export async function checkOwnerVehicleTierLimit({ ownerId, subscriptionTier = '
     canAdd,
     currentCount,
     limit,
-    tier: subscriptionTier,
-    nextTierKey
+    tier: tierKey,
+    nextTierKey,
+    addonEligible: Boolean(tier.addonEligible),
+    addonQuantity: effectiveAddons,
+    addonPriceUSD: tier.addonEligible ? getAddonPriceUSD(tierKey, 'monthly') : 0
   };
 }
 

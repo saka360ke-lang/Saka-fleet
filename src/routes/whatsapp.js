@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { handleSuperadminFlow, isSuperadminPhone } from '../services/superadmin.js';
 import { processSakaMessage, extractVehicleAttributes, classifyIntentWithRegex } from '../../sakaAi.js';
 import { logChatTranscript, logSystemError } from '../workers/sentinel.js';
-import { SUBSCRIPTION_TIERS, initializePaystackCheckout } from '../services/paystack.js';
+import { verifyPaystackSignature } from '../services/paystack.js';
 import {
   ensureVehicleTableColumns,
   unassignDriverFromVehicle,
@@ -39,6 +39,26 @@ import {
   completePassbookTransfer
 } from '../services/transfers.js';
 import { applyTrialExtensionCoupon } from '../services/coupons.js';
+import {
+  getEntitlements,
+  evaluateVehicleCapacity,
+  getReportQuota,
+  recordReportUsage,
+  checkoutForTier,
+  checkoutForAddon,
+  cancelSubscription,
+  resumeSubscription,
+  formatSubscriptionSummary,
+  formatTierChoices,
+  selectVehiclesToKeep
+} from '../services/subscriptions.js';
+import {
+  startAccountTrial,
+  applyAccountTrialExtensionCoupon,
+  recordActivationEvent,
+  ACTIVATION_EVENTS
+} from '../services/trialEngine.js';
+import { normalizeTierKey, getTierLabel } from '../services/subscriptionTiers.js';
 import { detectCountryFromPhone as detectCountryGlobal, resolveUserTimezone } from '../services/globalization.js';
 import { applyOdometerReading, applyOperatingHours } from '../services/maintenanceReminders.js';
 import { handleQuizTurn, detectQuizStart, shouldPauseQuizForChat, getCurrentQuizField, detectFlowSwitch, getFlowDefinition } from '../services/quizEngine.js';
@@ -612,6 +632,23 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
 
         let existingVehicles = [];
         let dbHistory = [];
+
+        // Subscription entitlements — resolved once per turn from the frozen
+        // registry (cached 60s). Drives the AI tier clamp, registration gate,
+        // report quota and every upgrade prompt.
+        let entitlements = null;
+        try {
+          entitlements = await getEntitlements({
+            supabase: supabaseClient,
+            ownerId: profileData?.id,
+            profile: profileData
+          });
+        } catch (entErr) {
+          console.warn('[WhatsApp] entitlements lookup failed:', entErr.message);
+        }
+        const planSummary = entitlements
+          ? `${entitlements.tierName}${entitlements.isTrial ? ` (trial, ${entitlements.trialDaysLeft} day(s) left)` : ''} — ${entitlements.effectiveVehicleCapacity} vehicle slot(s), ${Number.isFinite(entitlements.reportsPerMonth) ? `${entitlements.reportsPerMonth} report(s)/month` : 'unlimited reports'}, ${entitlements.maxAiTier >= 3 ? 'full AI (Tiers 0-3)' : 'Tier-1 AI'}`
+          : null;
         if (supabaseClient && profileData) {
           // Parallel reads + skip the history query entirely on warm sessions.
           const needHistory = !session.history || session.history.length === 0;
@@ -679,7 +716,11 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           const quick = classifyIntentWithRegex(messageText);
           aiResult = { intent: quick.intent, extracted_data: {}, reply_message: null };
         } else {
-          aiResult = await processSakaMessage(targetLang, messageText, conversationHistory, [], supabaseClient, activeVehicleContext);
+          aiResult = await processSakaMessage(targetLang, messageText, conversationHistory, [], supabaseClient, activeVehicleContext, {
+            maxAiTier: entitlements?.maxAiTier ?? null,
+            ownerId: profileData?.id || null,
+            planSummary
+          });
         }
         let intent = aiResult.intent;
         let customReply = aiResult.reply_message;
@@ -901,11 +942,24 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               session.pendingTransferBuyerOtp = null;
               session.state = 'ACTIVE';
               customReply = `🎉 *Congratulations!* You are now the official registered owner of *${transferCompleteRes.plateNumber}* on Saka Fleet! 🚗\n\n• *VIN:* \`${transferCompleteRes.vin}\`\n• *Passbook Token:* \`${transferCompleteRes.newToken}\`\n\nYour official digital passbook has been sent to *${transferCompleteRes.buyerEmail}*.\nType *"What can I do?"* to explore your owner tools!`;
+            } else if (transferCompleteRes.needsUpgrade) {
+              // Simple Rule R2 — buyer over capacity: send the upgrade link,
+              // keep the transfer paused, and accept the same code afterwards.
+              isSpecialFlowHandled = true;
+              const cap = transferCompleteRes.capacity || {};
+              const upgrade = await checkoutForTier({
+                supabase: supabaseClient,
+                owner: { id: profileData?.id, phone_number: formattedPhone, email: profileData?.email },
+                targetTierKey: cap.nextTierKey || 'team_fleet',
+                interval: entitlements?.billingInterval || 'monthly',
+                currency: countryInfo?.currency || 'USD'
+              });
+              customReply = `⚠️ *Upgrade needed to accept this passbook*\n\nYour *${cap.tierName || 'current'}* plan allows ${cap.capacity || 1} active vehicle(s) and you already have ${cap.currentCount || 0}.\n\nUpgrade to *${getTierLabel(cap.nextTierKey || 'team_fleet')}* to accept the transfer:\n👉 ${upgrade.ok ? upgrade.checkoutUrl : 'https://sakafleet.com/pricing'}\n\nAfter payment, reply *resend* to get a fresh verification code and finish the handover. The seller's vehicle stays untouched until then.`;
             }
           }
         }
         // 4. Trial Extension Coupon ("Yes" or coupon code)
-        else if (!session.quiz && !session.pendingDeleteVehicle && !session.pendingAccountDeletion && (intent === 'APPLY_COUPON' || /^(yes|yes please|apply coupon|extend trial|extend)$/i.test(messageText.trim()) || /^EXT30-[A-Z0-9]+$/i.test(messageText.trim()))) {
+        else if (!session.quiz && !session.pendingDeleteVehicle && !session.pendingAccountDeletion && !session.pendingCancelSubscription && intent !== 'EXTEND_TRIAL' && (intent === 'APPLY_COUPON' || /^(yes|yes please|apply coupon|extend trial|extend)$/i.test(messageText.trim()) || /^EXT30-[A-Z0-9]+$/i.test(messageText.trim()))) {
           if (supabaseClient) {
             const extRes = await applyTrialExtensionCoupon({
               phone: senderPhone,
@@ -917,6 +971,27 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               customReply = `🎉 *Trial Extension Applied!* 🚗💨\n\n• *Vehicle:* *${extRes.plateNumber}* (VIN: \`${extRes.vin}\`)\n• *Coupon Code:* *${extRes.couponCode}*\n• *Days Added:* +${extRes.daysAdded} Days\n• *New Trial Expiration:* ${new Date(extRes.newTrialEndAt).toLocaleDateString()}\n\nYour 30-day free trial has been successfully extended. Type *"What can I do?"* to explore your fleet tools!`;
             }
           }
+        }
+        // 4b. Subscription, trial & add-on intents (v1.15.0) — engine-owned.
+        else if (!session.quiz && !session.pendingDeleteVehicle && !session.pendingAccountDeletion
+          && (session.pendingCancelSubscription
+            || ['VIEW_SUBSCRIPTION', 'UPGRADE_SUBSCRIPTION', 'CANCEL_SUBSCRIPTION', 'MANAGE_ADDONS', 'KEEP_VEHICLE', 'EXTEND_TRIAL'].includes(intent)
+            || /^(?:subscription|my\s+(?:plan|subscription)|billing|upgrade|subscribe|cancel\s+(?:my\s+)?(?:subscription|plan)|unsubscribe|keep\s+(?:vehicle|car)\b|extra\s+(?:car|vehicle|slot)|add[- ]?on|extend\s+(?:my\s+)?trial)\b/i.test(messageText.trim()))) {
+          isSpecialFlowHandled = true;
+          const subTurn = await maybeHandleSubscriptionTurn({
+            intent,
+            messageText,
+            mergedExt,
+            session,
+            profileData,
+            supabaseClient,
+            countryInfo,
+            senderPhone: formattedPhone,
+            entitlements,
+            existingVehicles
+          });
+          customReply = subTurn.reply;
+          if (subTurn.entitlements) entitlements = subTurn.entitlements;
         }
         // 5. Action Discovery & Role Help (AI-rendered from the role index)
         else if (!session.quiz && (intent === 'ACTION_DISCOVERY' || intent === 'APP_HELP' || /\b(?:what\s+can\s+i\s+do|show\s+my\s+actions|my\s+actions|show\s+actions|what\s+are\s+my\s+commands|available\s+commands)\b/i.test(messageText.trim()))) {
@@ -1167,9 +1242,12 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           (!hasVehicleRegistered && (intent === 'REGISTER_VEHICLE' || intent === 'ONBOARDING_INPUT' || intent === 'VERIFY_OTP' || isRegisterCommand || hasVehicleAttributes))
         )) {
           session.state = 'ONBOARDING';
-          const userTierKey = profileData?.subscription_tier || 'free';
-          const currentTier = SUBSCRIPTION_TIERS[userTierKey] || SUBSCRIPTION_TIERS.free;
-          const currentVehicleCount = existingVehicles.length;
+          const currentVehicleCount = existingVehicles.filter((v) => v.owner_id === profileData?.id).length;
+          const branchCapacity = await evaluateVehicleCapacity({
+            supabase: supabaseClient,
+            ownerId: profileData?.id,
+            profile: profileData
+          });
           const isNewRegistrationStart = !onboardingStore.has(senderPhone);
 
           const cleanText = messageText.trim().toLowerCase();
@@ -1195,17 +1273,28 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             session.onboardingStep = 1;
             session.onboardingStage = 1;
             customReply = `🔄 *Onboarding Reset*\n\nPlease reply with your vehicle's registration plate number (e.g. *KDA 123A* or *KBC 456X*).`;
-          } else if (isNewRegistrationStart && currentVehicleCount >= currentTier.vehicleLimit) {
-            const checkout = await initializePaystackCheckout({
-              supabase: supabaseClient,
-              userPhone: senderPhone,
-              targetTierKey: 'solo_pro',
-              billingInterval: 'monthly',
-              userEmail: profileData?.email,
-              userId: profileData?.id,
-              currency: countryInfo.currency
-            });
-            customReply = `⚠️ *Vehicle Capacity Limit Reached*\n\nYour current plan (*${currentTier.name}*) allows a maximum of ${currentTier.vehicleLimit} vehicle(s).\n\nTo add more vehicles, please upgrade to the **Solo Pro** plan.\n👉 *Upgrade Link:* ${checkout.checkoutUrl}`;
+          } else if (isNewRegistrationStart && currentVehicleCount >= branchCapacity.capacity) {
+            const branchOwner = { id: profileData?.id, phone_number: senderPhone, email: profileData?.email };
+            if (branchCapacity.addonEligible) {
+              const addon = await checkoutForAddon({
+                supabase: supabaseClient,
+                owner: branchOwner,
+                addonQuantity: Math.max(1, branchCapacity.overBy),
+                interval: entitlements?.billingInterval || 'monthly',
+                currency: countryInfo?.currency || 'USD'
+              });
+              customReply = `⚠️ *Garage Full — Fleet Command Add-on Needed*\n\nYour plan allows *${branchCapacity.capacity}* active vehicle(s). Add a slot at *$${branchCapacity.addonPriceUSD || 4.99}/month*:\n👉 ${addon.ok ? addon.checkoutUrl : 'https://sakafleet.com/pricing'}`;
+            } else {
+              const nextTier = branchCapacity.nextTierKey || 'fleet_command';
+              const upgrade = await checkoutForTier({
+                supabase: supabaseClient,
+                owner: branchOwner,
+                targetTierKey: nextTier,
+                interval: entitlements?.billingInterval || 'monthly',
+                currency: countryInfo?.currency || 'USD'
+              });
+              customReply = `⚠️ *Vehicle Capacity Limit Reached*\n\nYour current plan (*${branchCapacity.tierName}*) allows ${branchCapacity.capacity} vehicle(s).\n\nUpgrade to *${getTierLabel(nextTier)}*:\n👉 ${upgrade.ok ? upgrade.checkoutUrl : 'https://sakafleet.com/pricing'}`;
+            }
             onboardingStore.delete(senderPhone);
             session.state = hasVehicleRegistered ? 'ACTIVE' : 'IDLE';
             session.onboardingStep = null;
@@ -1321,20 +1410,38 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                 activeIntent = 'GENERAL_CHAT';
               }
             } else {
-              const userTierKey = profileData?.subscription_tier || 'free';
-              const currentTier = SUBSCRIPTION_TIERS[userTierKey] || SUBSCRIPTION_TIERS.free;
-              const ownedVehicles = existingVehicles.filter(v => v.owner_id === profileData?.id);
-              if (ownedVehicles.length >= currentTier.vehicleLimit) {
-                const checkout = await initializePaystackCheckout({
-                  supabase: supabaseClient,
-                  userPhone: senderPhone,
-                  targetTierKey: 'solo_pro',
-                  billingInterval: 'monthly',
-                  userEmail: profileData?.email,
-                  userId: profileData?.id,
-                  currency: countryInfo.currency
-                });
-                customReply = `⚠️ *Vehicle Capacity Limit Reached*\n\nYour current plan (*${currentTier.name}*) allows a maximum of ${currentTier.vehicleLimit} vehicle(s).\n\nTo add more vehicles, please upgrade to the **Solo Pro** plan.\n👉 *Upgrade Link:* ${checkout.checkoutUrl}`;
+              const capacity = await evaluateVehicleCapacity({
+                supabase: supabaseClient,
+                ownerId: profileData?.id,
+                profile: profileData
+              });
+              if (!capacity.allowed) {
+                const ownerPayload = {
+                  id: profileData?.id,
+                  phone_number: senderPhone,
+                  email: profileData?.email
+                };
+                const interval = entitlements?.billingInterval || 'monthly';
+                if (capacity.addonEligible) {
+                  const addon = await checkoutForAddon({
+                    supabase: supabaseClient,
+                    owner: ownerPayload,
+                    addonQuantity: Math.max(1, capacity.overBy),
+                    interval,
+                    currency: countryInfo?.currency || 'USD'
+                  });
+                  customReply = `⚠️ *Garage Full — Fleet Command Add-on Needed*\n\nYour Fleet Command plan includes *${capacity.capacity}* active vehicle slots (base ${entitlements?.baseLimit || 5} + add-ons).\n\nTo add this vehicle, activate *+${Math.max(1, capacity.overBy)} slot${Math.max(1, capacity.overBy) > 1 ? 's' : ''}* at *$${capacity.addonPriceUSD || 4.99}/month each*.\n\n👉 *Add-on Link:* ${addon.ok ? addon.checkoutUrl : 'https://sakafleet.com/pricing'}\n\nOnce payment is confirmed, register the vehicle again.`;
+                } else {
+                  const nextTier = capacity.nextTierKey || 'fleet_command';
+                  const upgrade = await checkoutForTier({
+                    supabase: supabaseClient,
+                    owner: ownerPayload,
+                    targetTierKey: nextTier,
+                    interval,
+                    currency: countryInfo?.currency || 'USD'
+                  });
+                  customReply = `⚠️ *Vehicle Capacity Limit Reached*\n\nYour current plan (*${capacity.tierName}*) allows ${capacity.capacity} active vehicle(s).\n\nUpgrade to *${getTierLabel(nextTier)}* to add more vehicles.\n👉 *Upgrade Link:* ${upgrade.ok ? upgrade.checkoutUrl : 'https://sakafleet.com/pricing'}\n\n💡 Reply *"subscription"* to review your plan.`;
+                }
               } else {
                 const initPlate = mergedExt.plate_number ? mergedExt.plate_number.toUpperCase().trim() : null;
                 onboardingStore.set(senderPhone, {
@@ -1851,6 +1958,25 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
               customReply = `🔔 *Set Reminder for ${targetVeh.plate_number}*\n\nReply with the item and its date, distance or operating hours. Examples:\n• *"Insurance expires on 15th Dec 2026"*, *"Inspection due next month"*, *"License renewal in 14 days"*\n• *"Road license expires 2027-03-31"* or *"Permit due in 30 days"*\n• *"Oil change in 5000 km"*, *"Brake pads in 3000 miles"* or *"Spare part change in 36 operating hours"*`;
             }
             else if (activeIntent === 'REQUEST_REPORT') {
+              const quota = await getReportQuota({
+                supabase: supabaseClient,
+                ownerId: profileData?.id,
+                profile: profileData
+              });
+              if (!quota.canGenerate) {
+                const upgrade = await checkoutForTier({
+                  supabase: supabaseClient,
+                  owner: {
+                    id: profileData?.id,
+                    phone_number: senderPhone,
+                    email: profileData?.email
+                  },
+                  targetTierKey: entitlements?.nextTierKey || 'solo_pro',
+                  interval: entitlements?.billingInterval || 'annual',
+                  currency: countryInfo?.currency || 'USD'
+                });
+                customReply = `📊 *Monthly Report Limit Reached*\n\nThe Free plan includes *${quota.limit} report per month* and you have used it (resets monthly).\n\nUnlock unlimited reports, full AI and compliance tracking with *${getTierLabel(entitlements?.nextTierKey || 'solo_pro')}*:\n👉 ${upgrade.ok ? upgrade.checkoutUrl : 'https://sakafleet.com/pricing'}`;
+              } else {
               const reportType = resolveReportType(mergedExt.report_type || messageText, 'fleet');
               const fleetReport = await buildFleetReport({
                 supabase: supabaseClient,
@@ -1863,6 +1989,24 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
               customReply = fleetReport?.ok && fleetReport.text
                 ? fleetReport.text
                 : `📊 *Fleet Reports & Summary*\n\nYou have ${existingVehicles.length} active vehicle(s).\n\nAsk for *fleet status*, *compliance report*, *maintenance report* or *financial report*.`;
+              if (profileData?.id && fleetReport?.ok) {
+                try {
+                  await recordReportUsage({ supabase: supabaseClient, ownerId: profileData.id });
+                  // Trial activation #3: first fleet report generated.
+                  await recordActivationEvent({
+                    supabase: supabaseClient,
+                    ownerId: profileData.id,
+                    event: ACTIVATION_EVENTS.REPORT_GENERATED
+                  });
+                  entitlements = await getEntitlements({
+                    supabase: supabaseClient,
+                    ownerId: profileData.id,
+                    profile: profileData,
+                    useCache: false
+                  });
+                } catch { /* quota/activation are best-effort */ }
+              }
+              }
             }
             else if (activeIntent === 'MANAGE_VEHICLE' || activeIntent === 'LIST_VEHICLES') {
               const vehicleList = existingVehicles.map((v, i) => {
@@ -2276,4 +2420,251 @@ export default async function whatsappRoutes(fastify, options) {
   fastify.post('/webhook', webhookHandler);
   fastify.post('/webhook/whatsapp', webhookHandler);
   fastify.post('/api/whatsapp/webhook', webhookHandler);
+}
+
+/* ------------------------------------------------------------------ */
+/* Subscription / trial turn handling (v1.15.0)                        */
+/* ------------------------------------------------------------------ */
+
+/** Resolve a plan key from free text ("growth monthly", "fleet command"). */
+function parseTierFromMessage(text = '') {
+  const raw = String(text).toLowerCase();
+  if (/fleet\s*command|\bcommand\b/.test(raw)) return 'fleet_command';
+  if (/\bteam\b/.test(raw)) return 'team_fleet';
+  if (/\bgrowth\b/.test(raw)) return 'growth';
+  if (/\bsolo\b|\bpro\b/.test(raw)) return 'solo_pro';
+  return null;
+}
+
+function parseIntervalFromMessage(text = '') {
+  return /month/i.test(String(text)) ? 'monthly' : 'annual';
+}
+
+/**
+ * Engine-owned subscription turn handler. Returns `{ handled, reply, entitlements }`.
+ * Every branch is deterministic (zero AI tokens) so billing copy can never drift.
+ */
+async function maybeHandleSubscriptionTurn({
+  intent,
+  messageText = '',
+  mergedExt = {},
+  session = null,
+  profileData = null,
+  supabaseClient = null,
+  countryInfo = {},
+  senderPhone = null,
+  entitlements = null,
+  existingVehicles = []
+} = {}) {
+  const ownerId = profileData?.id || null;
+  if (!ownerId || !supabaseClient) {
+    return { handled: false, reply: null };
+  }
+  const text = String(messageText || '').trim();
+  const lower = text.toLowerCase();
+  const currency = countryInfo?.currency || 'USD';
+  const owner = { id: ownerId, phone_number: senderPhone, email: profileData?.email };
+
+  const refresh = async () => {
+    try {
+      return await getEntitlements({ supabase: supabaseClient, ownerId, profile: profileData, useCache: false });
+    } catch {
+      return entitlements;
+    }
+  };
+
+  // ---- pending cancellation confirmation (runs before every other branch) ----
+  if (session?.pendingCancelSubscription) {
+    if (/^(yes|y|confirm|do it|cancel it)$/i.test(lower)) {
+      session.pendingCancelSubscription = null;
+      const res = await cancelSubscription({ supabase: supabaseClient, ownerId, profile: profileData });
+      if (!res.ok) return { handled: true, reply: `⚠️ ${res.error}` };
+      const until = res.effectiveAt ? new Date(res.effectiveAt).toLocaleDateString() : 'today';
+      const reply = res.trial
+        ? `✅ *Trial cancelled* — no payment was taken. Your account is back on the Free plan (1 vehicle, 1 report/month). Data is preserved.`
+        : `✅ *Cancellation scheduled*\n\nYou keep full access until *${until}*. After that your account moves to Free (1 vehicle) and extra vehicles are paused — never deleted.\n\nChanged your mind? Reply *"resume subscription"* before then.`;
+      return { handled: true, reply, entitlements: await refresh() };
+    }
+    if (/^(no|n|keep|stop|abort|never mind)$/i.test(lower)) {
+      session.pendingCancelSubscription = null;
+      return { handled: true, reply: 'No changes — your plan stays active. 👍' };
+    }
+    return { handled: true, reply: 'Please reply *YES* to cancel or *NO* to keep your plan.' };
+  }
+
+  const wantsView = intent === 'VIEW_SUBSCRIPTION'
+    || /^(?:subscription|my\s+(?:plan|subscription)|billing|plan\s+details)\b/i.test(lower);
+  const wantsResume = /^resume\s+(?:my\s+)?(?:subscription|plan)\b/i.test(lower);
+  const wantsCancel = intent === 'CANCEL_SUBSCRIPTION'
+    || /^(?:cancel|stop)\s+(?:my\s+)?(?:subscription|plan|billing)\b/i.test(lower)
+    || /^unsubscribe\b/i.test(lower);
+  const wantsUpgrade = intent === 'UPGRADE_SUBSCRIPTION' || /\b(?:upgrade|subscribe)\b/i.test(lower);
+  const wantsAddon = intent === 'MANAGE_ADDONS' || /\b(?:add[- ]?on|extra\s+(?:car|vehicle|slot))\b/i.test(lower);
+  const wantsKeep = intent === 'KEEP_VEHICLE' || /^keep\s+(?:vehicle\s+|car\s+)?\S/i.test(lower);
+  const wantsExtend = intent === 'EXTEND_TRIAL' || /\bextend\s+(?:my\s+)?trial\b/i.test(lower);
+
+  const ent = entitlements || await refresh();
+
+  // ---- resume a pending cancellation ----
+  if (wantsResume) {
+    if (!ent?.cancelAtPeriodEnd && ent?.status !== 'CANCELING') {
+      return { handled: true, reply: 'Your plan is not scheduled for cancellation.' };
+    }
+    const res = await resumeSubscription({ supabase: supabaseClient, ownerId, profile: profileData });
+    return {
+      handled: true,
+      entitlements: await refresh(),
+      reply: res.ok
+        ? '✅ *Subscription resumed* — auto-renewal is back on and your plan continues unchanged.'
+        : `⚠️ Could not resume automatically: ${res.error}. Please contact support.`
+    };
+  }
+
+  // ---- view plan ----
+  if (wantsView && !wantsUpgrade && !wantsCancel && !wantsAddon && !wantsKeep && !wantsExtend) {
+    const fresh = await refresh();
+    return {
+      handled: true,
+      entitlements: fresh,
+      reply: await formatSubscriptionSummary({ supabase: supabaseClient, entitlements: fresh, currency })
+    };
+  }
+
+  // ---- cancel (confirmation gate) ----
+  if (wantsCancel) {
+    if (!ent?.isPaid) {
+      return { handled: true, reply: 'You are on the Free plan — there is no paid subscription to cancel. Reply *"upgrade"* to see paid plans.' };
+    }
+    session.pendingCancelSubscription = { requestedAt: Date.now(), trial: ent.isTrial };
+    const until = ent.currentPeriodEnd ? new Date(ent.currentPeriodEnd).toLocaleDateString() : null;
+    const detail = ent.isTrial
+      ? 'Your trial ends immediately (no payment was taken).'
+      : `You keep full access until *${until || 'the end of the paid period'}*.`;
+    return {
+      handled: true,
+      reply: `⚠️ *Cancel ${ent.tierName}?*\n\n${detail}\n\nReply *YES* to confirm or *NO* to keep your plan.`
+    };
+  }
+
+
+
+  // ---- Fleet Command add-ons ----
+  if (wantsAddon) {
+    if (!ent?.addonEligible) {
+      const upgrade = await checkoutForTier({
+        supabase: supabaseClient,
+        owner,
+        targetTierKey: 'fleet_command',
+        interval: ent?.billingInterval || 'monthly',
+        currency
+      });
+      return {
+        handled: true,
+        reply: `🚚 *Fleet Command* is the plan with per-vehicle add-ons: it covers *5 vehicles* and then *$4.99/month per extra car*.\n\n👉 Switch to Fleet Command: ${upgrade.ok ? upgrade.checkoutUrl : 'https://sakafleet.com/pricing'}\n\nAlready on Fleet Command? Reply *"add-on"* to buy extra slots.`
+      };
+    }
+    const qtyMatch = lower.match(/(\d+)\s*(?:car|vehicle|slot)/);
+    const quantity = Math.max(1, Number(qtyMatch?.[1] || 1));
+    const addon = await checkoutForAddon({
+      supabase: supabaseClient,
+      owner,
+      addonQuantity: quantity,
+      interval: ent.billingInterval || 'monthly',
+      currency
+    });
+    if (!addon.ok) return { handled: true, reply: `⚠️ ${addon.error}` };
+    return {
+      handled: true,
+      reply: `➕ *Fleet Command add-on*\n\n+${quantity} garage slot(s) — $${addon.amountUSD} for this cycle.\n\n👉 ${addon.checkoutUrl}\n\nYour slots activate automatically after payment.`
+    };
+  }
+
+  // ---- keep vehicles after a downgrade ----
+  if (wantsKeep) {
+    const rawPlate = String(mergedExt.target_vehicle || mergedExt.plate_number || text.replace(/^keep\s+(?:vehicle\s+|car\s+)?/i, '')).trim().toUpperCase();
+    const matched = existingVehicles.find((v) => String(v.plate_number || '').toUpperCase() === rawPlate)
+      || existingVehicles[Number(rawPlate) - 1]
+      || null;
+    if (!matched) {
+      const list = existingVehicles.map((v, i) => `${i + 1}. ${v.plate_number}${String(v.status || '').toUpperCase() === 'PAUSED' ? ' (paused)' : ''}`).join('\n');
+      return { handled: true, reply: `Which vehicle should stay active?\n\n${list}\n\nReply *keep <plate>*.` };
+    }
+    const kept = await selectVehiclesToKeep({ supabase: supabaseClient, ownerId, keepVehicleIds: [matched.id] });
+    if (!kept.ok) return { handled: true, reply: `⚠️ ${kept.error}` };
+    return {
+      handled: true,
+      entitlements: await refresh(),
+      reply: `✅ *${matched.plate_number} is active*\n\nEvery other vehicle is paused — history and passbook tokens are preserved. Reply *"upgrade"* to reactivate them all.`
+    };
+  }
+
+  // ---- extend the active trial with a coupon ----
+  if (wantsExtend) {
+    let couponCode = mergedExt.coupon_code || (text.match(/\b[A-Z0-9][A-Z0-9-]{4,}\b/i) || [])[0] || null;
+    if (!couponCode) {
+      const { data } = await supabaseClient
+        .from('coupons')
+        .select('code')
+        .eq('assigned_to_phone', senderPhone)
+        .eq('applicable_to', 'account_trial_extension')
+        .neq('status', 'applied')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      couponCode = data?.code || null;
+    }
+    if (!couponCode) {
+      return {
+        handled: true,
+        reply: '🎟️ I could not find an unused trial-extension coupon on your account. Reply *"subscription"* to review your plan or *"upgrade"* to convert early.'
+      };
+    }
+    const extended = await applyAccountTrialExtensionCoupon({ supabase: supabaseClient, ownerId, code: couponCode });
+    if (!extended.ok) return { handled: true, reply: `⚠️ ${extended.error}` };
+    return {
+      handled: true,
+      entitlements: await refresh(),
+      reply: `🎁 *Trial extended!*\n\n• Coupon: *${extended.couponCode}*\n• Days added: +${extended.daysAdded}\n• New end date: ${new Date(extended.endsAt).toLocaleDateString()}\n\nEnjoy the full Saka toolkit.`
+    };
+  }
+
+  // ---- upgrade / start the one-time trial ----
+  if (wantsUpgrade) {
+    const tierFromText = parseTierFromMessage(
+      [mergedExt.subscription_tier, lower].filter(Boolean).join(' ')
+    );
+    if (!tierFromText) {
+      return { handled: true, reply: await formatTierChoices({ supabase: supabaseClient, currency }) };
+    }
+    const interval = parseIntervalFromMessage(mergedExt.billing_interval || lower);
+
+    const trialEligible = !ent?.profile?.trial_used_at && !ent?.isPaid;
+    if (trialEligible) {
+      const trial = await startAccountTrial({ supabase: supabaseClient, ownerId, tierKey: tierFromText, interval });
+      if (trial.started) {
+        return {
+          handled: true,
+          entitlements: await refresh(),
+          reply: `🎁 *Your ${trial.days}-day ${getTierLabel(tierFromText)} trial is live!*\n\n• No card needed — nothing is charged today\n• Full access: Tiers 0-3 AI, unlimited reports, compliance tracking\n• Ends: ${new Date(trial.endsAt).toLocaleDateString()}\n\nI'll check in with your value summary before it ends. Reply *"subscription"* anytime to see the plan.`
+        };
+      }
+    }
+
+    const checkout = await checkoutForTier({
+      supabase: supabaseClient,
+      owner,
+      targetTierKey: tierFromText,
+      interval,
+      currency,
+      couponCode: mergedExt.coupon_code || null
+    });
+    if (!checkout.ok) return { handled: true, reply: `⚠️ ${checkout.error}` };
+    const couponLine = checkout.coupon?.code ? `\n🎟️ Coupon *${checkout.coupon.code}* applied` : '';
+    return {
+      handled: true,
+      reply: `🚀 *${getTierLabel(tierFromText)} — ${interval}*\n\n• Price: ${checkout.priceInfo?.formattedPrice || ''}${couponLine}\n\n👉 *Activate now:* ${checkout.checkoutUrl}\n\n${checkout.recurring ? 'Billing renews automatically — cancel anytime.' : 'One-time payment; renewal reminders keep you posted.'}`
+    };
+  }
+
+  return { handled: false, reply: null };
 }

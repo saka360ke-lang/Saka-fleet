@@ -14,8 +14,7 @@ async function runTests() {
   console.log('Free limit:', SUBSCRIPTION_TIERS.free.vehicleLimit);
   console.log('Solo Pro limit:', SUBSCRIPTION_TIERS.solo_pro.vehicleLimit, 'Premium:', SUBSCRIPTION_TIERS.solo_pro.hasPremiumFeatures);
   console.log('Growth limit:', SUBSCRIPTION_TIERS.growth.vehicleLimit);
-  console.log('Scale limit:', SUBSCRIPTION_TIERS.scale.vehicleLimit);
-  console.log('Unlimited limit:', SUBSCRIPTION_TIERS.unlimited.vehicleLimit);
+  console.log('Fleet Command limit:', SUBSCRIPTION_TIERS.fleet_command.vehicleLimit);
 
   // Test 2: Local Currency Pricing Conversion & ±10% Drift Exchange Rate Caching
   console.log('\n--- Test 2: Local Currency Pricing & Exchange Rate Cache ---');
@@ -28,11 +27,11 @@ async function runTests() {
   const priceNGN = await getTierLocalPrice(supabase, 'growth', 'NGN', 'monthly');
   console.log('Growth (NGN Monthly):', priceNGN.formattedPrice);
 
-  const priceZAR = await getTierLocalPrice(supabase, 'scale', 'ZAR', 'monthly');
-  console.log('Scale (ZAR Monthly):', priceZAR.formattedPrice);
+  const priceZAR = await getTierLocalPrice(supabase, 'fleet_command', 'ZAR', 'monthly');
+  console.log('Fleet Command (ZAR Monthly):', priceZAR.formattedPrice);
 
-  const priceUSD = await getTierLocalPrice(supabase, 'unlimited', 'USD', 'annual');
-  console.log('Unlimited (USD Annual):', priceUSD.formattedPrice);
+  const priceUSD = await getTierLocalPrice(supabase, 'fleet_command', 'USD', 'annual');
+  console.log('Fleet Command (USD Annual):', priceUSD.formattedPrice);
 
   // Test 3: Paystack Checkout Session Initialization
   console.log('\n--- Test 3: Paystack Checkout Link Generation ---');
