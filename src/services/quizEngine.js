@@ -695,9 +695,9 @@ export function getFlowDefinition(flowKey, ctx) {
         label,
         fields: [
           choiceField('profile_field', 'Profile field', 'Full name, Language or Unit system', [
-            { value: 'Full name', aliases: ['name', 'full name'] },
-            { value: 'Language', aliases: ['language', 'preferred language'] },
-            { value: 'Unit system', aliases: ['units', 'unit system', 'metric', 'imperial'] }
+            { value: 'Full name', aliases: ['name', 'full name', 'jina', 'jina kamili', 'nom', 'nombre'] },
+            { value: 'Language', aliases: ['language', 'preferred language', 'lugha', 'lugha unayotumia', 'langue', 'idioma'] },
+            { value: 'Unit system', aliases: ['units', 'unit system', 'metric', 'imperial', 'vipimo', 'mfumo wa vipimo', 'unites', 'unidades', 'sistema de unidades'] }
           ]),
           field('new_value', 'New value', 'e.g. Jane Doe, Swahili, or imperial', {
             validate: (value) => (value && String(value).trim().length > 0
@@ -1327,7 +1327,7 @@ function applyCorrections(state, def, ext, ctx) {
 
 const NON_QUIZ_INTENTS = new Set([
   'GREETING', 'APP_HELP', 'ACTION_DISCOVERY', 'CONTACT_SUPPORT',
-  'QUERY_FUEL_EFFICIENCY', 'QUERY_FLEET_SUMMARY', 'LIST_VEHICLES', 'SWITCH_VEHICLE', 'REQUEST_REPORT'
+  'QUERY_FUEL_EFFICIENCY', 'QUERY_FLEET_SUMMARY', 'LIST_VEHICLES', 'SWITCH_VEHICLE', 'REQUEST_REPORT', 'VIEW_PROFILE'
 ]);
 
 /**

@@ -63,6 +63,12 @@ async function run() {
   assert(detectQuizStart({ intent: 'REGISTER_VEHICLE', messageText: 'register', hasVehicleRegistered: false }) === 'vehicle_registration', 'Registration intent starts registration quiz');
   assert(detectQuizStart({ intent: 'ASSIGN_DRIVER', messageText: 'assign driver', hasVehicleRegistered: true }) === 'assign_driver', 'Assign-driver intent maps to its quiz');
   assert(detectQuizStart({ intent: 'GENERAL_CHAT', messageText: 'what can I do', hasVehicleRegistered: true }) === null, 'General chat does not start a quiz');
+  assert(detectQuizStart({ intent: 'VIEW_PROFILE', messageText: 'my profile details', hasVehicleRegistered: true }) === null, 'Viewing a profile never starts a quiz');
+
+  const profileField = getFlowDefinition('edit_profile', baseCtx()).fields.find((f) => f.key === 'profile_field');
+  assert(profileField.parse('lugha') === 'Language', 'Swahili "lugha" selects the Language field');
+  assert(profileField.parse('vipimo') === 'Unit system', 'Swahili "vipimo" selects the Unit system field');
+  assert(profileField.parse('jina') === 'Full name', 'Swahili "jina" selects the Full name field');
 
   console.log('\n--- Test 2: one question at a time (regression for mega-prompt) ---');
   const session = {};

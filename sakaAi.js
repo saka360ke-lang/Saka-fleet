@@ -34,7 +34,7 @@ You sit directly between the user and the fleet database: collecting, parsing, l
 INTENT CLASSIFICATION & AGENT ACTIONS:
 Analyze the incoming message, conversation context, and user fleet roster to classify the user's intent into a JSON object matching this schema:
 {
-  "intent": "GREETING" | "ACTION_DISCOVERY" | "TRANSFER_PASSBOOK" | "APPLY_COUPON" | "REGISTER_VEHICLE" | "ONBOARDING_INPUT" | "ONBOARDING_SKIP" | "VERIFY_OTP" | "RESEND_OTP" | "UPDATE_EMAIL" | "APP_HELP" | "MANAGE_VEHICLE" | "LIST_VEHICLES" | "SWITCH_VEHICLE" | "QUERY_FUEL_EFFICIENCY" | "QUERY_FLEET_SUMMARY" | "LOG_EXPENSE" | "UPDATE_MILEAGE" | "LOG_EARNINGS" | "SET_REMINDER" | "COMPLETE_REMINDER" | "LOG_OPERATING_HOURS" | "REQUEST_REPORT" | "CONTACT_SUPPORT" | "REACTIVATE_ACCOUNT" | "EDIT_VEHICLE" | "DELETE_VEHICLE" | "EDIT_PROFILE" | "DELETE_ACCOUNT" | "GENERAL_CHAT" | "ASSIGN_DRIVER" | "UNASSIGN_DRIVER",
+  "intent": "GREETING" | "ACTION_DISCOVERY" | "TRANSFER_PASSBOOK" | "APPLY_COUPON" | "REGISTER_VEHICLE" | "ONBOARDING_INPUT" | "ONBOARDING_SKIP" | "VERIFY_OTP" | "RESEND_OTP" | "UPDATE_EMAIL" | "APP_HELP" | "MANAGE_VEHICLE" | "VIEW_PROFILE" | "LIST_VEHICLES" | "SWITCH_VEHICLE" | "QUERY_FUEL_EFFICIENCY" | "QUERY_FLEET_SUMMARY" | "LOG_EXPENSE" | "UPDATE_MILEAGE" | "LOG_EARNINGS" | "SET_REMINDER" | "COMPLETE_REMINDER" | "LOG_OPERATING_HOURS" | "REQUEST_REPORT" | "CONTACT_SUPPORT" | "REACTIVATE_ACCOUNT" | "EDIT_VEHICLE" | "DELETE_VEHICLE" | "EDIT_PROFILE" | "DELETE_ACCOUNT" | "GENERAL_CHAT" | "ASSIGN_DRIVER" | "UNASSIGN_DRIVER",
   "extracted_data": {
     "plate_number": string | null,
     "target_vehicle": string | null,
@@ -113,6 +113,10 @@ AGENT ROLES & BEHAVIORAL DIRECTIVES:
    - After accepting, the driver must verify their email (OTP) and submit the MINIMAL compliance item for their economy (driver licence, or the catalog equivalent) with a valid expiry — or "valid for life" where the economy allows it — before they can manage the vehicle.
    - Extract compliance details into "compliance_type", "compliance_number", "compliance_expiry" (YYYY-MM-DD) and "compliance_lifetime". Additional regional items (PSV badge, Driver CPC, plant/operator card, CDL, PDP…) are optional but should be collected for renewal reminders.
    - Three expired minimal-compliance submissions cancel the assignment; the owner must restart it.
+
+5b. PROFILE VIEWING:
+   - VIEW_PROFILE: Triggered by "my profile", "my profile details", "show my account", "what do you know about me". Render the supplied profile snapshot (name, language, units, timezone, email + verified status, roles, subscription tier, driver compliance status).
+   - NEVER start the edit_profile quiz for a viewing request. Only EDIT_PROFILE (explicit "update/change/set…") may start the wizard.
 
 4. TWO-STAGE PROGRESSIVE ONBOARDING:
    - Stage 1 Core: plate_number, make_model, yom, fuel_type, current_mileage, vin (immutable chassis number), owner_email, otp_code, role ('Owner' | 'Driver').
@@ -204,6 +208,14 @@ CRITICAL CONTEXT & TIME-AWARENESS:
  * dynamically injecting active patches (is_active = TRUE) as behavioral hints.
  */
 const CORE_PROMPT_TTL_MS = Number(process.env.SAKA_PROMPT_CACHE_MS || 60000);
+/**
+ * Stored prompt refinements must be small and tagged with the current schema
+ * version. This prevents a stale pre-v1.7 mega-prompt in system_config from
+ * silently contradicting the trained core prompt and flow playbook.
+ */
+export const SAKA_PROMPT_SCHEMA_VERSION = '2026.10.3';
+export const MAX_STORED_PROMPT_REFINEMENT_CHARS = Number(process.env.SAKA_MAX_PROMPT_REFINEMENT_CHARS || 2000);
+export const PROMPT_REFINEMENT_MARKER = `SAKA-PROMPT-SCHEMA:${SAKA_PROMPT_SCHEMA_VERSION}`;
 let corePromptCache = { text: null, expiresAt: 0 };
 
 /** Invalidate after Sentinel prompt/rules changes (admin kill switch, etc.). */
@@ -229,7 +241,17 @@ export async function getSakaCorePrompt(providedSupabase = null) {
 
     const configData = configRes?.data;
     if (configData && configData.value) {
-      basePrompt = `${basePrompt}\n\nSENTINEL PROMPT REFINEMENT:\n${configData.value}`;
+      const stored = String(configData.value).trim();
+      const isVersioned = stored.includes(PROMPT_REFINEMENT_MARKER);
+      const withinBound = stored.length <= MAX_STORED_PROMPT_REFINEMENT_CHARS;
+      if (isVersioned && withinBound) {
+        basePrompt = `${basePrompt}\n\nSENTINEL PROMPT REFINEMENT:\n${stored}`;
+      } else {
+        console.warn(
+          `[sakaAi] Ignoring stored saka_core_prompt refinement (${stored.length} chars, versioned=${isVersioned}). ` +
+          `Store a <=${MAX_STORED_PROMPT_REFINEMENT_CHARS}-char refinement prefixed with ${PROMPT_REFINEMENT_MARKER}.`
+        );
+      }
     }
 
     const dynamicRules = rulesRes?.data;
@@ -501,6 +523,15 @@ export function classifyIntentWithRegex(messageText = '') {
       intent: 'DELETE_VEHICLE',
       extracted_data: attrs,
       reply_message: 'Starting vehicle deletion...'
+    };
+  }
+
+  // Profile Viewing (must win over the edit_profile wizard)
+  if (/^(?:view|show|display|see)\s+(?:my\s+)?(?:profile|account)|^my\s+profile\b|^profile\s+details$|^profile$|^account\s+details$|^who\s+am\s+i$|^what\s+do\s+you\s+know\s+about\s+me$/i.test(clean)) {
+    return {
+      intent: 'VIEW_PROFILE',
+      extracted_data: {},
+      reply_message: 'Here is your profile snapshot.'
     };
   }
 

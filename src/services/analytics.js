@@ -138,7 +138,7 @@ export async function calculateFuelConsumption({ supabase, vehicleId, plateNumbe
     explanation: `📊 *Fuel Analysis for ${plate} (${model})*\n\n` +
       `Found ${fuelLogs.length} fuel entry (${lastAmt > 0 ? `KES ${lastAmt.toLocaleString()}` : ''}${lastLiters > 0 ? `, ${lastLiters} ${unit === 'imperial' ? 'gal' : 'L'}` : ''}).\n\n` +
       `🔍 *Calculation Rule:* (Distance traveled ÷ ${volLabel}).\n` +
-      `To calculate exact ${effLabel}, please share your latest fill-up with odometer and ${volLabel}:\n👉 *"Logged [${volLabel}] at [Odometer] ${distLabel}"*`
+      `To unlock exact ${effLabel}, log your *next* fill-up with the odometer reading and ${volLabel}:\n👉 *"Logged [${volLabel}] at [Odometer] ${distLabel}"*`
   };
 }
 

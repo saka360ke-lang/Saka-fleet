@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.9.2  
+**Version:** 1.9.3  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -273,7 +273,7 @@ Driver-centric feature blueprints synthesized weekly by Sentinel from live conve
    - **Quiz fast path:** while a quiz is active (except PIN/OTP phases), the DeepSeek intent call is skipped entirely — the instant regex classifier plus deterministic field parsing drive the turn (see §25).
 
 4. **Intent Classification & Autonomous Actions:**
-   - Supported intents (single source of truth: `sakaAi.js` `DEFAULT_SAKA_CORE_PROMPT`): `GREETING`, `ACTION_DISCOVERY`, `TRANSFER_PASSBOOK`, `APPLY_COUPON`, `REGISTER_VEHICLE`, `ONBOARDING_INPUT`, `ONBOARDING_SKIP`, `VERIFY_OTP`, `RESEND_OTP`, `UPDATE_EMAIL`, `APP_HELP`, `MANAGE_VEHICLE`, `LIST_VEHICLES`, `SWITCH_VEHICLE`, `QUERY_FUEL_EFFICIENCY`, `QUERY_FLEET_SUMMARY`, `LOG_EXPENSE`, `UPDATE_MILEAGE`, `LOG_EARNINGS`, `SET_REMINDER`, `COMPLETE_REMINDER`, `REQUEST_REPORT`, `CONTACT_SUPPORT`, `REACTIVATE_ACCOUNT`, `EDIT_VEHICLE`, `DELETE_VEHICLE`, `EDIT_PROFILE`, `DELETE_ACCOUNT`, `GENERAL_CHAT`, `ASSIGN_DRIVER`, `UNASSIGN_DRIVER`.
+   - Supported intents (single source of truth: `sakaAi.js` `DEFAULT_SAKA_CORE_PROMPT`): `GREETING`, `ACTION_DISCOVERY`, `TRANSFER_PASSBOOK`, `APPLY_COUPON`, `REGISTER_VEHICLE`, `ONBOARDING_INPUT`, `ONBOARDING_SKIP`, `VERIFY_OTP`, `RESEND_OTP`, `UPDATE_EMAIL`, `APP_HELP`, `MANAGE_VEHICLE`, `VIEW_PROFILE`, `LIST_VEHICLES`, `SWITCH_VEHICLE`, `QUERY_FUEL_EFFICIENCY`, `QUERY_FLEET_SUMMARY`, `LOG_EXPENSE`, `UPDATE_MILEAGE`, `LOG_EARNINGS`, `SET_REMINDER`, `COMPLETE_REMINDER`, `REQUEST_REPORT`, `CONTACT_SUPPORT`, `REACTIVATE_ACCOUNT`, `EDIT_VEHICLE`, `DELETE_VEHICLE`, `EDIT_PROFILE`, `DELETE_ACCOUNT`, `GENERAL_CHAT`, `ASSIGN_DRIVER`, `UNASSIGN_DRIVER`.
    - Hybrid extraction merges DeepSeek structured JSON with smart regex heuristics (including currency exclusion to prevent false plate matches, phone-vs-VIN disambiguation, and odometer-safe OTP parsing).
    - **Active-quiz extraction is deterministic and AI-free:** `applyTextExtraction` captures safe volunteered fields from the same message (year, odometer only with a km/mi marker, fuel type, volume only with a litre/gallon marker), and `applyExtraction` runs two passes so conditional fields (e.g. fuel volume once `expense_type = Fuel`) fill from one payload.
    - **Expense-vs-Odometer disambiguation:** messages containing fuel/expense wording (`fuel`, `liters`, `refuel`, `paid`, `cost`, `receipt`, `maintenance`) are classified as `LOG_EXPENSE` even when an odometer value is also present (e.g. *"Logged 30L fuel at 50350 km for KES 5500"*).
@@ -306,6 +306,7 @@ Sentinel executes an autonomous 4-stage optimization loop to detect conversation
 
 4. **Runtime Injection:**
    - In `sakaAi.js`, `getSakaCorePrompt()` retrieves active rules (`is_active = TRUE`) and appends them as real-time behavioral guidance. The assembled prompt is cached for 60 s (`SAKA_PROMPT_CACHE_MS`) and the two reads run in parallel; call `clearSakaPromptCache()` after changing prompt config or rules (e.g. after `adminrules reset`).
+   - **Stored refinement guard (v1.9.3):** a `system_config.saka_core_prompt` refinement is only appended when it is ≤ `SAKA_MAX_PROMPT_REFINEMENT_CHARS` (2000) **and** carries the current `SAKA-PROMPT-SCHEMA:<version>` marker. Legacy pre-v1.7 mega-prompts are ignored (and logged) so they can never contradict the trained core prompt.
 
 ### Function Boundary Lock & Admin Kill Switch
 - **Function Boundary Lock:** Sentinel is strictly restricted to tone, phrasing, clarification flows, and entity hints. It cannot alter core hardcoded logic, database schemas, VIN locks, OTP verification, or security rules.
@@ -953,6 +954,7 @@ Alerts are WhatsApp-ready and unit-aware, e.g. "Service Warning (KDA 123A): Oil 
 | `AI_TIMEOUT_MS` | 12000 | DeepSeek fail-fast timeout |
 | `SUPABASE_TIMEOUT_MS` | 15000 | per-request DB timeout |
 | `SAKA_PROMPT_CACHE_MS` | 60000 | core prompt cache |
+| `SAKA_MAX_PROMPT_REFINEMENT_CHARS` | 2000 | max length of a stored `saka_core_prompt` refinement |
 | `QUIZ_QUESTION_CACHE_MS` / `QUIZ_QUESTION_CACHE_MAX` | 900000 / 300 | AI question render cache |
 
 ---
@@ -960,8 +962,8 @@ Alerts are WhatsApp-ready and unit-aware, e.g. "Service Warning (KDA 123A): Oil 
 ## 31. Agent Training: Flow Knowledge & Skill Synchronization (v1.8.1)
 
 ### 31.1 Single source of truth — `src/services/flowKnowledge.js`
-- `SAKA_INTENTS` — every classifier intent (32), matching the JSON schema.
-- `SAKA_QUIZ_FLOWS` — every quiz flow (17) with trigger phrases, field order, extracted JSON keys, post-confirmation writes and per-flow rules.
+- `SAKA_INTENTS` — every classifier intent (33), matching the JSON schema.
+- `SAKA_QUIZ_FLOWS` — every quiz flow (18) with trigger phrases, field order, extracted JSON keys, post-confirmation writes and per-flow rules.
 - `SAKA_INTENT_PLAYBOOK` — non-quiz intents (greeting, discovery, analytics, buyer-side transfer, OTP, reminders, onboarding) and the allowed behaviour for each.
 - `SAKA_BOUNDARY_RULES` — VIN/passbook-token immutability, owner-only soft delete, strict 1-to-1 driver assignment, never invent OTP/PIN/amounts/dates, confirmation gate, superadmin interception, Saka/Sentinel division.
 - `buildFlowPlaybook()` is injected into `DEFAULT_SAKA_CORE_PROMPT` via `${SAKA_FLOW_PLAYBOOK}`, so **the prompt can never drift from the code**.
@@ -970,11 +972,11 @@ Alerts are WhatsApp-ready and unit-aware, e.g. "Service Warning (KDA 123A): Oil 
 - **Saka** = front-facing WhatsApp agent: intent classification, structured extraction, localized prose, step-by-step guidance.
 - **Sentinel** = background supervisor: health checks, conversational friction analysis, stall recovery, Cloud Run triage, weekly feature proposals. Saka never impersonates Sentinel or superadmin.
 
-### 31.3 Training coverage added in v1.9.0
-- All 17 quiz flows, all non-quiz intents, the universal reminder engine (date expiries / km-mi distance / operating hours), the 30d/14d/7d/24h/overdue expiry ladder, timezone confirmation, natural multi-field parsing + extra-notes compilation, the four core reports and the mandatory confirmation gate are explicit prompt instructions.
-- `extracted_data` gained `reminder_type`, `reminder_category`, `reminder_due_date`, `reminder_threshold`, `timezone`, `report_type` and `extra_notes`.
-- `conversationEngine.composeMessage` adds FACTS-contract lines for expiry timezone confirmation and report fidelity.
-- `test_agent_training.js` asserts every intent and flow key is embedded in the assembled core prompt (offline training regression guard), including the new reminder/report tokens.
+### 31.3 Training coverage added in v1.9.3
+- All 18 quiz flows, all 33 classifier intents (including `VIEW_PROFILE`), the universal reminder engine (date expiries / km-mi distance / operating hours), the 30d/14d/7d/24h/overdue expiry ladder, timezone confirmation, natural multi-field parsing + extra-notes compilation, the four core reports, the email-OTP-gated driver assignment handshake and the regional compliance catalog are explicit prompt instructions.
+- `extracted_data` gained `reminder_type`, `reminder_category`, `reminder_due_date`, `reminder_threshold`, `timezone`, `report_type`, `driver_email`, `driver_response`, `compliance_type`, `compliance_number`, `compliance_expiry`, `compliance_lifetime` and `extra_notes`.
+- `conversationEngine.composeMessage` adds FACTS-contract lines for expiry timezone confirmation, assignment email OTP/ACCEPT, report fidelity and catalog-derived compliance facts.
+- `test_agent_training.js` asserts every intent and flow key is embedded in the assembled core prompt, and that stored prompt refinements are versioned, bounded and never able to override the trained prompt.
 
 ### 31.4 Permanent governance rule
 Whenever the Saka Fleet application changes (feature, flow, intent, field, handler, schema, config or env knob), update **in the same commit**:
@@ -1122,4 +1124,29 @@ All migrations now call `runSql(sql, { label })` instead of hand-rolling `fetch`
 - `GET /healthz` is DB-free by design and is **not** accepted as database evidence.
 - The script is safe to run against production-like projects because it cannot mutate state; the project-ref guard still refuses unexpected targets.
 
+
+
+---
+
+## 34. Chat-Log Audit Findings & Hardening (v1.9.3)
+
+### 34.1 Findings (read-only audit, 2026-10-29)
+- **Stale deployment:** `system_config.last_deployed_revision` was `saka-fleet-00045-g6f` (2026-10-28 05:58Z), predating v1.9.0–v1.9.2. Live sessions still showed the pre-OTP driver assignment (including self-assignment), transient "Vehicle not found." on the first status request, and INFO/2xx `SYSTEM_ERROR` noise.
+- **Stale prompt override:** `system_config.saka_core_prompt` held the pre-v1.7 mega-prompt (numbered menus, old assignment copy) and was appended after the trained core prompt, creating contradictory instructions.
+- **Profile viewing misrouted:** *"My profile details"* started the `edit_profile` wizard / greeting because no view intent existed.
+- **Multilingual gap:** Swahili *"lugha"* / *"kingereza"* were not recognized by the `profile_field` choice, producing an apology loop (`CONVERSATION_STALL`).
+- **Observability:** legacy `CONVERSATION_STALL` rows had empty snippets; `error_logs` rows had empty `{}` payloads (both fixed in current Sentinel code — deploy resolves).
+
+### 34.2 Fixes shipped in v1.9.3
+- **Prompt refinement guard** (`sakaAi.getSakaCorePrompt`): stored refinements are only applied when ≤ `SAKA_MAX_PROMPT_REFINEMENT_CHARS` (2000) **and** tagged with the current `SAKA-PROMPT-SCHEMA:<version>` marker (`PROMPT_REFINEMENT_MARKER`). Legacy overrides are ignored and logged. `clearSakaPromptCache()` remains the invalidation hook.
+- **`VIEW_PROFILE` intent (33rd):** read-only profile snapshot — name, phone, email + verified status, language, units, timezone, country, roles, subscription tier, driver compliance status. Never starts a quiz. Added to `SAKA_INTENTS`, the playbook, the JSON schema, regex fallback (`VIEW_PROFILE` wins over edit), `NON_QUIZ_INTENTS` and role command discovery.
+- **Multilingual profile aliases:** `profile_field` now recognizes Swahili (`jina`, `lugha`, `vipimo`, …), French (`nom`, `langue`, `unités`) and Spanish (`nombre`, `idioma`, `unidades`, `sistema de unidades`).
+- **Fuel-economy nudge:** when only one fill-up exists, the reply now says *"log your **next** fill-up with the odometer reading"* so users know exactly how to unlock km/L or MPG.
+- **Audit tool hardening** (`scripts/audit_logs.js`): flags stale/unversioned `saka_core_prompt` overrides, stall rows missing context, plus the existing empty-payload/reminder/operating-hours checks. The script remains SELECT-only.
+- **Sentinel context:** `monitorActiveConversations` already records flow/phase/pending question/nudge count in `transcript_snippet`, and `scanCloudRunAnomalies` filters INFO/2xx and stores the raw log text — both take effect once the latest revision is deployed.
+
+### 34.3 Operational follow-ups
+1. Redeploy Cloud Run to the latest commit and confirm `system_config.last_deployed_revision` advances.
+2. Clear or replace the stale `saka_core_prompt` override with a versioned ≤2000-char refinement (e.g. `SAKA-PROMPT-SCHEMA:2026.10.3`), or delete the row.
+3. Expect the insurance reminder due 2026-10-30 to fire the 24h expiry tier once the new revision runs — this is the v1.9 expiry ladder working as designed.
 

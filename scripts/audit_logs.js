@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { createClient } from '@supabase/supabase-js';
 
 /**
- * Saka Fleet - Read-Only Log, Chat & Schema Audit (v1.8)
+ * Saka Fleet - Read-Only Log, Chat & Schema Audit (v1.9.3)
  * -------------------------------------------------------
  * Cross-references Superadmin Cloud Run alerts with system logs, webhooks,
  * chat records and reminder/vehicle schema so false-positive noise and real
@@ -47,7 +47,7 @@ function countMatches(rows, predicate) {
 async function main() {
   const asJson = process.argv.includes('--json');
 
-  const [errors, friction, analytics, transcripts, sessions, reminders, vehicles, profiles] = await Promise.all([
+  const [errors, friction, analytics, transcripts, sessions, reminders, vehicles, profiles, promptConfig] = await Promise.all([
     readTable('error_logs', 'id,error_message,route,status,created_at', { limit: LIMIT }),
     readTable('chat_friction_logs', 'friction_type,transcript_snippet,user_phone,detected_at', { order: 'detected_at', limit: LIMIT }),
     readTable('conversation_analytics', 'id,period_start,period_end,insights,created_at', { limit: 5 }),
@@ -55,7 +55,8 @@ async function main() {
     readTable('chat_sessions', 'phone_number,state,updated_at', { order: 'updated_at', limit: 10 }),
     readTable('reminders', '*', { limit: 50 }),
     readTable('vehicles', 'id,plate_number,current_mileage,odometer_reading,operating_hours,unit_system,status', { order: 'created_at', limit: 50 }),
-    readTable('profiles', 'id,phone_number,unit_system,subscription_tier,is_active', { order: 'created_at', limit: 25 })
+    readTable('profiles', 'id,phone_number,unit_system,subscription_tier,is_active', { order: 'created_at', limit: 25 }),
+    readTable('system_config', 'key,value,updated_at', { order: null, limit: 25 })
   ]);
 
   const frictionTypes = {};
@@ -86,12 +87,23 @@ async function main() {
   const hoursTracked = countMatches(vehicles.rows, (v) => Number(v.operating_hours || 0) > 0);
   const imperialVehicles = countMatches(vehicles.rows, (v) => String(v.unit_system || '').toLowerCase() === 'imperial');
 
+  const maxRefinement = Number(process.env.SAKA_MAX_PROMPT_REFINEMENT_CHARS || 2000);
+  const promptRow = (promptConfig.rows || []).find((r) => r.key === 'saka_core_prompt');
+  const promptOverrideChars = promptRow && promptRow.value ? String(promptRow.value).length : 0;
+  const promptOverrideVersioned = promptRow && promptRow.value
+    ? String(promptRow.value).includes('SAKA-PROMPT-SCHEMA:')
+    : false;
+  const stalePromptOverride = promptOverrideChars > 0 && (promptOverrideChars > maxRefinement || !promptOverrideVersioned);
+  const emptyStallContext = countMatches(friction.rows, (r) =>
+    String(r.friction_type) === 'CONVERSATION_STALL' && !String(r.transcript_snippet || '').trim()
+  );
+
   const recommendations = [];
   if (emptyErrorPayloads > 0) {
-    recommendations.push('error_logs contains empty "{}" payloads: verify the Cloud Run INFO/200 benign filter (v1.8 scanCloudRunAnomalies).');
+    recommendations.push('error_logs contains empty "{}" payloads: redeploy the latest revision (scanCloudRunAnomalies benign filter).');
   }
   if (cloudRunFalsePositives > 0) {
-    recommendations.push('chat_friction_logs shows INFO/2xx Cloud Run entries logged as SYSTEM_ERROR: redeploy with the v1.8 benign-filter fix.');
+    recommendations.push('chat_friction_logs shows INFO/2xx Cloud Run entries logged as SYSTEM_ERROR: redeploy the latest revision.');
   }
   if (legacyTextReminders > 0) {
     recommendations.push('Reminders exist with thresholds only in reminder_type text: recreate them through set_reminder so remaining km/mi/hours are tracked.');
@@ -102,6 +114,12 @@ async function main() {
   if (vehicles.rows.length > 0 && hoursTracked === 0) {
     recommendations.push('No vehicle has operating hours recorded: operating-hour reminders cannot fire until readings are logged.');
   }
+  if (stalePromptOverride) {
+    recommendations.push(`system_config.saka_core_prompt is stale/unversioned (${promptOverrideChars} chars) and is now ignored at runtime; replace it with a <=${maxRefinement}-char refinement prefixed with SAKA-PROMPT-SCHEMA:<version> or clear it.`);
+  }
+  if (emptyStallContext > 0) {
+    recommendations.push('CONVERSATION_STALL rows lack context (pre-v1.9.3 deployment): redeploy the revised Sentinel stall logging.');
+  }
   if (recommendations.length === 0) {
     recommendations.push('No anomalies detected in the sampled window.');
   }
@@ -111,13 +129,14 @@ async function main() {
     window: { rowsPerTable: LIMIT },
     tables: {
       error_logs: { ok: errors.ok, error: errors.error, sampled: errors.rows.length, emptyPayloads: emptyErrorPayloads },
-      chat_friction_logs: { ok: friction.ok, error: friction.error, sampled: friction.rows.length, types: frictionTypes, cloudRunFalsePositives },
+      chat_friction_logs: { ok: friction.ok, error: friction.error, sampled: friction.rows.length, types: frictionTypes, cloudRunFalsePositives, emptyStallContext },
       conversation_analytics: { ok: analytics.ok, error: analytics.error, sampled: analytics.rows.length },
       chat_transcripts: { ok: transcripts.ok, error: transcripts.error, sampled: transcripts.rows.length },
       chat_sessions: { ok: sessions.ok, error: sessions.error, sampled: sessions.rows.length },
       reminders: { ok: reminders.ok, error: reminders.error, sampled: reminders.rows.length, structured: structuredReminders, legacyTextOnly: legacyTextReminders },
       vehicles: { ok: vehicles.ok, error: vehicles.error, sampled: vehicles.rows.length, withOperatingHours: hoursTracked, imperial: imperialVehicles },
-      profiles: { ok: profiles.ok, error: profiles.error, sampled: profiles.rows.length }
+      profiles: { ok: profiles.ok, error: profiles.error, sampled: profiles.rows.length },
+      system_config: { ok: promptConfig.ok, error: promptConfig.error, sampled: promptConfig.rows.length, promptOverrideChars, promptOverrideVersioned, stalePromptOverride }
     },
     recent: {
       errors: errors.rows,

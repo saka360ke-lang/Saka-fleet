@@ -237,10 +237,10 @@ export function buildRoleContext(profileData, vehicles = [], senderPhone = '') {
   }
   if (roles.includes('Owner')) {
     commands.push('register vehicle', 'my vehicles', 'switch vehicle', 'log expense', 'log earnings', 'update odometer',
-      'assign driver', 'unassign driver', 'transfer passbook', 'set reminder', 'request report', 'edit vehicle', 'delete vehicle');
+      'assign driver', 'unassign driver', 'transfer passbook', 'set reminder', 'request report', 'edit vehicle', 'delete vehicle', 'view my profile');
   }
   if (roles.includes('Driver')) {
-    commands.push('update odometer', 'log expense', 'log earnings', 'set reminder', 'passbook details');
+    commands.push('update odometer', 'log expense', 'log earnings', 'set reminder', 'passbook details', 'view my profile');
   }
   if (roles.includes('Unregistered')) {
     commands.push('register vehicle', 'accept passbook transfer', 'help');
@@ -1491,6 +1491,57 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                 await unassignDriverFromVehicle({ vehicleId: unassignTarget.id, supabase: supabaseClient });
                 customReply = `✅ Driver unassigned from vehicle *${unassignTarget.plate_number}*. Vehicle is now available for a new driver.`;
               }
+            }
+            else if (activeIntent === 'VIEW_PROFILE' || /^(?:view|show|display|see)\s+(?:my\s+)?(?:profile|account)|^my\s+profile\b|^profile\s+details$|^profile$|^account\s+details$|^who\s+am\s+i$/i.test(messageText.trim())) {
+              const roles = buildRoleContext(profileData, existingVehicles, senderPhone).roles;
+              const assigned = existingVehicles.find((v) => v.assigned_driver_id === profileData?.id) || null;
+              let complianceLine = null;
+              if (assigned && supabaseClient) {
+                try {
+                  const st = await getDriverComplianceStatus({
+                    supabase: supabaseClient,
+                    driverId: profileData.id,
+                    countryCode: countryInfo?.country_code,
+                    assetType: assigned.asset_type || assigned.metadata?.asset_type || null
+                  });
+                  const min = st.minimal;
+                  complianceLine = `${min.label}: ${min.status}${min.lifetime ? ' (valid for life)' : min.expiry ? ` (expires ${min.expiry})` : ''}`;
+                } catch {
+                  complianceLine = null;
+                }
+              }
+              const facts = {
+                name: profileData?.full_name || 'Not set',
+                phone: formattedPhone,
+                email: profileData?.email || 'Not set',
+                emailVerified: Boolean(profileData?.email_verified),
+                language: targetLang,
+                unitSystem: profileData?.unit_system || countryInfo?.default_units || 'metric',
+                timezone: resolveUserTimezone({ countryInfo, profile: profileData }),
+                country: countryInfo?.country,
+                roles,
+                subscriptionTier: profileData?.subscription_tier || 'free',
+                compliance: complianceLine,
+                instruction: 'Present a compact read-only profile snapshot. Do not start an edit flow or ask for new values.'
+              };
+              const fallback = `👤 *Your Profile*\n\n` +
+                `• Name: ${facts.name}\n` +
+                `• Phone: ${facts.phone}\n` +
+                `• Email: ${facts.email} (${facts.emailVerified ? 'verified ✅' : 'not verified ⚠️'})\n` +
+                `• Language: ${facts.language}\n` +
+                `• Units: ${facts.unitSystem}\n` +
+                `• Timezone: ${facts.timezone}` +
+                (complianceLine ? `\n• ${complianceLine}` : '') +
+                `\n\nTo change something, say e.g. *"update my language to Swahili"*.`;
+              isSpecialFlowHandled = true;
+              customReply = await composeMessage({
+                purpose: 'profile_overview',
+                facts,
+                language: targetLang,
+                countryInfo,
+                profile: profileData,
+                fallbackText: fallback
+              });
             }
             else if (activeIntent === 'EDIT_VEHICLE' || /^(?:edit|update|change|modify)\s+(?:my\s+)?(?:vehicle|car)\b/i.test(messageText.trim())) {
               const editTarget = mergedExt.plate_number

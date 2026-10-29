@@ -11,7 +11,7 @@
  */
 
 import assert from 'assert';
-import { DEFAULT_SAKA_CORE_PROMPT, SAKA_FLOW_PLAYBOOK } from './sakaAi.js';
+import { DEFAULT_SAKA_CORE_PROMPT, SAKA_FLOW_PLAYBOOK, getSakaCorePrompt, clearSakaPromptCache, PROMPT_REFINEMENT_MARKER, MAX_STORED_PROMPT_REFINEMENT_CHARS } from './sakaAi.js';
 import {
   SAKA_INTENTS,
   SAKA_QUIZ_FLOWS,
@@ -49,7 +49,7 @@ async function run() {
   check(DEFAULT_SAKA_CORE_PROMPT.includes(SAKA_FLOW_PLAYBOOK), 'Full flow playbook is embedded in the core prompt');
 
   console.log('\n--- Test 2: every intent is trained ---');
-  check(SAKA_INTENTS.length === 32, 'Registry declares all 32 classifier intents');
+  check(SAKA_INTENTS.length === 33, 'Registry declares all 33 classifier intents');
   const missingIntents = SAKA_INTENTS.filter((intent) => !DEFAULT_SAKA_CORE_PROMPT.includes(intent));
   check(missingIntents.length === 0, `All intents appear in the core prompt (${SAKA_INTENTS.length})`);
   const missingSchema = SAKA_INTENTS.filter((intent) => !DEFAULT_SAKA_CORE_PROMPT.includes(`"${intent}"`));
@@ -83,6 +83,7 @@ async function run() {
     'driver_response',
     'compliance_expiry',
     'driver_onboarding',
+    'VIEW_PROFILE',
     'compliance',
     'maintenance',
     'financial',
@@ -116,6 +117,26 @@ async function run() {
     if (originalKey !== undefined) process.env.DEEPSEEK_API_KEY = originalKey;
     else delete process.env.DEEPSEEK_API_KEY;
   }
+
+  console.log('\n--- Test 6: stored prompt-refinement guard ---');
+  const makePromptMock = (configValue) => ({
+    from(table) {
+      if (table === 'system_config') {
+        return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: configValue ? { value: configValue } : null, error: null }) }) }) };
+      }
+      return { select: () => ({ eq: async () => ({ data: [], error: null }) }) };
+    }
+  });
+  clearSakaPromptCache();
+  const stalePrompt = await getSakaCorePrompt(makePromptMock('OLD-PROMPT-CONFLICT '.repeat(150)));
+  check(!stalePrompt.includes('OLD-PROMPT-CONFLICT'), 'Unversioned stale prompt refinement is ignored');
+  clearSakaPromptCache();
+  const versionedPrompt = await getSakaCorePrompt(makePromptMock(`${PROMPT_REFINEMENT_MARKER}\nKeep replies short and warm.`));
+  check(versionedPrompt.includes('Keep replies short and warm.'), 'Versioned, bounded prompt refinement is injected');
+  clearSakaPromptCache();
+  const oversizedPrompt = await getSakaCorePrompt(makePromptMock(`${PROMPT_REFINEMENT_MARKER}\nZZZ_OVERSIZE ${'x'.repeat(MAX_STORED_PROMPT_REFINEMENT_CHARS + 50)}`));
+  check(!oversizedPrompt.includes('ZZZ_OVERSIZE'), 'Oversized prompt refinement is ignored');
+  clearSakaPromptCache();
 
   console.log(`\n\u2705 ALL AGENT TRAINING TESTS PASSED (${passed} assertions).`);
   console.log('Stateless suite: no real database rows were created, so no cleanup is required.');
