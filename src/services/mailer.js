@@ -185,6 +185,7 @@ export async function sendRemediationDigestEmail({
     dateLabel = '',
     slotLabel = 'Digest',
     frequency = 'twice_daily',
+    windowHours = 4,
     health = {},
     pending = [],
     weeklyEvents = 0
@@ -219,9 +220,9 @@ export async function sendRemediationDigestEmail({
                     <h3 style="margin-bottom: 8px;">System health</h3>
                     <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
                         <tr><td style="padding: 6px 8px; font-weight: bold; width: 220px;">Health score</td><td style="padding: 6px 8px;">${Number(health.health_score) || 0}/100</td></tr>
-                        <tr><td style="padding: 6px 8px; font-weight: bold;">Errors (24h)</td><td style="padding: 6px 8px;">${Number(health.errors_24h) || 0} (unresolved: ${Number(health.unresolved_errors) || 0})</td></tr>
-                        <tr><td style="padding: 6px 8px; font-weight: bold;">Friction events (24h)</td><td style="padding: 6px 8px;">${Number(health.friction_24h) || 0}</td></tr>
-                        <tr><td style="padding: 6px 8px; font-weight: bold;">Stalled sessions</td><td style="padding: 6px 8px;">${Number(health.stalls_24h) || 0}</td></tr>
+                        <tr><td style="padding: 6px 8px; font-weight: bold;">Errors (${Number(windowHours) || 4}h)</td><td style="padding: 6px 8px;">${Number(health.errors_window) || 0} (unresolved: ${Number(health.unresolved_errors) || 0})</td></tr>
+                        <tr><td style="padding: 6px 8px; font-weight: bold;">Friction events (${Number(windowHours) || 4}h)</td><td style="padding: 6px 8px;">${Number(health.friction_window) || 0}</td></tr>
+                        <tr><td style="padding: 6px 8px; font-weight: bold;">Stalled sessions</td><td style="padding: 6px 8px;">${Number(health.stalls_window) || 0}</td></tr>
                         <tr><td style="padding: 6px 8px; font-weight: bold;">Active Sentinel rules</td><td style="padding: 6px 8px;">${Number(health.active_rules) || 0}</td></tr>
                         <tr><td style="padding: 6px 8px; font-weight: bold;">Completed scans</td><td style="padding: 6px 8px;">${Number(health.scans) || 0}</td></tr>
                     </table>

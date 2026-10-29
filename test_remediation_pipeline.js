@@ -12,6 +12,8 @@ import {
   refreshRemediationSynthesis,
   computeHealthScore,
   computeDigestFrequency,
+  REMEDIATION_AUDIT_WINDOW_HOURS,
+  dispatchTwiceDailyDigests,
   selectPlanTriggerClusters,
   sendRemediationDigest,
   getDigestFrequency,
@@ -23,7 +25,7 @@ import {
 import { handleAdminRemediationDecision } from './src/services/superadmin.js';
 
 /**
- * Saka Fleet — Autonomous Remediation Pipeline tests (v1.10.0).
+ * Saka Fleet — Autonomous Remediation Pipeline tests (v1.11.1).
  *
  * Covers: schema creation, audit-run persistence/idempotency, the plan
  * sanitizer guardrails, the approval state machine and the execution nonce
@@ -200,6 +202,7 @@ async function run() {
   check(scanTwo.scan_count === scanOne.scan_count + 1, 'Every tick increments scan_count');
   check(scanOne.changed === false, 'An unchanged window is detected without rewriting the summary');
   check(Number.isFinite(scanOne.health_score), 'Health score is persisted on every scan');
+  check(scanOne.counts.windowHours === REMEDIATION_AUDIT_WINDOW_HOURS, 'Scan window honours REMEDIATION_AUDIT_WINDOW_HOURS');
   check(computeHealthScore({ errors: 10, friction: 20, stalls: 4 }) === 54, 'Health score formula is deterministic (54 for 10/20/4)');
   check(computeHealthScore({ errors: 500, friction: 0, stalls: 0 }) === 0, 'Health score clamps at 0');
   const synthesis = await refreshRemediationSynthesis(supabase, { now: auditNow, force: true });
@@ -232,11 +235,14 @@ async function run() {
   check(['twice_daily', 'daily', 'weekly'].includes(await getDigestFrequency(supabase)), 'Persisted digest frequency is always valid');
 
   console.log('\n--- Test 11: twice-daily digest batching ---');
+  check(Number.isInteger(REMEDIATION_AUDIT_WINDOW_HOURS) && REMEDIATION_AUDIT_WINDOW_HOURS >= 1, `Audit window knob is a positive integer (${REMEDIATION_AUDIT_WINDOW_HOURS}h)`);
+  check(dispatchTwiceDailyDigests === sendRemediationDigest, 'dispatchTwiceDailyDigests is a naming-parity alias of sendRemediationDigest');
   const digestOne = await sendRemediationDigest(supabase, { now: auditNow, force: true, dryRun: true });
   check(digestOne.status === 'success', 'Digest dispatch completes');
   check(digestOne.proposals >= 1, 'Digest aggregates pending proposals');
   check(['twice_daily', 'daily', 'weekly'].includes(digestOne.frequency), 'Digest reports the adaptive frequency');
   check(Number.isFinite(digestOne.health.health_score), 'Digest includes the health snapshot');
+  check(digestOne.health.window_hours === REMEDIATION_AUDIT_WINDOW_HOURS, 'Digest health snapshot reports the rolling window hours');
   const digestTwo = await sendRemediationDigest(supabase, { now: auditNow, force: true, dryRun: true });
   check(digestTwo.proposals === 0, 'Already-digested proposals are not re-sent');
   const urgent = await maybeSendUrgentRemediationAlert(supabase, { now: auditNow, dryRun: true });

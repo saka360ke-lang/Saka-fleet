@@ -78,7 +78,7 @@ jobs:
           cline --auto-approve true -t 1800 -P deepseek -m deepseek-chat \
             "You are Cline drafting a remediation plan for Saka Fleet inside CI. \
              Read .clinerules and SAKA_FLEET_ARCHITECTURE.md completely first. \
-             Then read remediation/audit-context.json (Sentinel audit of the last 24h). \
+             Then read remediation/audit-context.json (Sentinel audit of the rolling window). \
              When cluster_signature is present, focus the plan on that cluster and ignore unrelated clusters. \
              Explore only the code needed to write a precise, minimal plan. \
              Write ONE JSON file to remediation/work-orders/plan.json using the plan_schema from the context. \

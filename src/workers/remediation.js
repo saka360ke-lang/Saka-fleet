@@ -54,6 +54,7 @@ export const REMEDIATION_DIGEST_DAILY_THRESHOLD = Number(process.env.REMEDIATION
 export const REMEDIATION_DIGEST_WEEKLY_THRESHOLD = Number(process.env.REMEDIATION_DIGEST_WEEKLY_THRESHOLD || 3);
 export const REMEDIATION_URGENT_ERROR_THRESHOLD = Number(process.env.REMEDIATION_URGENT_ERROR_THRESHOLD || 10);
 export const REMEDIATION_URGENT_COOLDOWN_MS = Number(process.env.REMEDIATION_URGENT_COOLDOWN_MS || 60 * 60 * 1000);
+export const REMEDIATION_AUDIT_WINDOW_HOURS = Math.min(72, Math.max(1, Number(process.env.REMEDIATION_AUDIT_WINDOW_HOURS || 4)));
 
 const DIGEST_FREQUENCY_KEY = 'remediation_digest_frequency';
 const DIGEST_LAST_SENT_KEY = 'remediation_digest_last_sent';
@@ -409,7 +410,7 @@ async function collectAuditWindow(supabase, now, windowHours) {
  * rewrites the deterministic summary when the window materially changed.
  * Tier 2 (`refreshRemediationSynthesis`) supplies the throttled AI narrative.
  */
-export async function runRemediationScan(providedSupabase, { now = new Date(), windowHours = 24 } = {}) {
+export async function runRemediationScan(providedSupabase, { now = new Date(), windowHours = REMEDIATION_AUDIT_WINDOW_HOURS } = {}) {
   const supabase = getSupabase(providedSupabase);
   await ensureRemediationTables(supabase);
 
@@ -516,7 +517,7 @@ export async function refreshRemediationSynthesis(providedSupabase, { now = new 
     errors: audit.error_count || 0,
     friction: audit.friction_count || 0,
     stalls: audit.stall_count || 0,
-    windowHours: 24
+    windowHours: REMEDIATION_AUDIT_WINDOW_HOURS
   };
   const summary = await synthesizeAuditSummary(clusters, counts);
   const { error } = await supabase
@@ -1076,9 +1077,10 @@ export async function sendRemediationDigest(providedSupabase, { now = new Date()
       friction: audit?.friction_count || 0,
       stalls: audit?.stall_count || 0
     }),
-    errors_24h: audit?.error_count || 0,
-    friction_24h: audit?.friction_count || 0,
-    stalls_24h: audit?.stall_count || 0,
+    errors_window: audit?.error_count || 0,
+    friction_window: audit?.friction_count || 0,
+    stalls_window: audit?.stall_count || 0,
+    window_hours: REMEDIATION_AUDIT_WINDOW_HOURS,
     unresolved_errors: unresolvedErrors || 0,
     active_rules: activeRules || 0,
     scans: audit?.scan_count || 0
@@ -1098,9 +1100,9 @@ export async function sendRemediationDigest(providedSupabase, { now = new Date()
     `_${dateLabel} • frequency: ${nextFrequency}_`,
     '',
     `📊 *System health: ${health.health_score}/100*`,
-    `• Errors (24h): ${health.errors_24h} (unresolved: ${health.unresolved_errors})`,
-    `• Friction events (24h): ${health.friction_24h}`,
-    `• Stalled sessions: ${health.stalls_24h}`,
+    `• Errors (${REMEDIATION_AUDIT_WINDOW_HOURS}h): ${health.errors_window} (unresolved: ${health.unresolved_errors})`,
+    `• Friction events (${REMEDIATION_AUDIT_WINDOW_HOURS}h): ${health.friction_window}`,
+    `• Stalled sessions: ${health.stalls_window}`,
     `• Active Sentinel rules: ${health.active_rules}`,
     '',
     proposals.length
@@ -1123,6 +1125,7 @@ export async function sendRemediationDigest(providedSupabase, { now = new Date()
       dateLabel,
       slotLabel,
       frequency: nextFrequency,
+      windowHours: REMEDIATION_AUDIT_WINDOW_HOURS,
       health,
       pending: proposals,
       weeklyEvents
@@ -1164,6 +1167,12 @@ export async function sendRemediationDigest(providedSupabase, { now = new Date()
     dryRun
   };
 }
+
+/**
+ * Naming-parity alias for the twice-daily Superadmin digest dispatcher.
+ * Kept for orchestration compatibility with the Step-2 digest contract.
+ */
+export const dispatchTwiceDailyDigests = sendRemediationDigest;
 
 /**
  * Urgent escalation: unresolved errors above threshold or high-risk pending
