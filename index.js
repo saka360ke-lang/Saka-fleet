@@ -21,11 +21,16 @@ import { runReminderSweep } from './src/services/maintenanceReminders.js';
 import { ensureComplianceCatalog, reviewComplianceCatalog, COMPLIANCE_CATALOG_VERSION } from './src/services/complianceCatalog.js';
 import { expireStaleAssignments } from './src/services/driverAssignments.js';
 import {
-  runRemediationAudit,
-  checkRemediationPlanDispatch,
-  checkRemediationProposalDelivery,
+  runRemediationScan,
+  refreshRemediationSynthesis,
+  checkRemediationPlanTriggers,
+  sendRemediationDigest,
+  maybeSendUrgentRemediationAlert,
   checkRemediationExecutionRetry,
-  ensureRemediationTables
+  ensureRemediationTables,
+  REMEDIATION_SCAN_INTERVAL_MS,
+  REMEDIATION_SYNTHESIS_INTERVAL_MS,
+  REMEDIATION_DIGEST_HOURS
 } from './src/workers/remediation.js';
 import { createResilientClient } from './src/services/supabaseClient.js';
 import { ensureChatSessionsTable } from './src/services/sessionStore.js';
@@ -623,74 +628,75 @@ fastify.post('/api/cron/sentinel-horizon', async (request, reply) => {
 });
 
 // ==========================================
-// AUTONOMOUS REMEDIATION PIPELINE (v1.10.0)
-// 02:00 EAT Sentinel audit → 03:00 EAT Cline plan (CI) → Superadmin approval → CI execution
-// Requires REMEDIATION_AUTONOMY=on (kill switch, default off).
+// AUTONOMOUS REMEDIATION PIPELINE (v1.11.0)
+// Continuous scan (60s) → tiered AI synthesis → threshold-triggered Cline plans
+// → twice-daily adaptive digests → Superadmin approval → nonce-gated CI execution.
+// Requires REMEDIATION_AUTONOMY=on for plan dispatch/execution (kill switch, default off).
 // ==========================================
-let lastRemediationAuditDate = null;
-let lastRemediationPlanDate = null;
+let lastRemediationDigestKey = null;
+let remediationScanInFlight = false;
 
-async function checkRemediationAuditSchedule() {
+async function runRemediationScanTick() {
+  if (remediationScanInFlight) return;
+  remediationScanInFlight = true;
   try {
-    const now = new Date();
-    const nairobiHour = (now.getUTCHours() + 3) % 24;
-    const nairobiMinute = now.getUTCMinutes();
-    const todayStr = now.toISOString().split('T')[0];
-
-    if (nairobiHour === 2 && nairobiMinute <= 5 && lastRemediationAuditDate !== todayStr) {
-      lastRemediationAuditDate = todayStr;
-      fastify.log.info('🛠️ Remediation audit: Sentinel aggregating the last 24h of logs...');
-      await runRemediationAudit(supabase);
-    }
+    await runRemediationScan(supabase);
+    await checkRemediationPlanTriggers(supabase);
+    await maybeSendUrgentRemediationAlert(supabase);
   } catch (err) {
-    fastify.log.error('Error running remediation audit schedule:', err);
+    console.warn('[Remediation Scan Warning]:', err.message);
+  } finally {
+    remediationScanInFlight = false;
   }
 }
 
-async function checkRemediationPlanSchedule() {
-  try {
-    const now = new Date();
-    const nairobiHour = (now.getUTCHours() + 3) % 24;
-    const nairobiMinute = now.getUTCMinutes();
-    const todayStr = now.toISOString().split('T')[0];
-
-    if (nairobiHour === 3 && nairobiMinute <= 5 && lastRemediationPlanDate !== todayStr) {
-      lastRemediationPlanDate = todayStr;
-      fastify.log.info('🛠️ Remediation plan: dispatching Cline plan generation...');
-      await checkRemediationPlanDispatch(supabase);
-    }
-  } catch (err) {
-    fastify.log.error('Error running remediation plan schedule:', err);
-  }
-}
-
-setInterval(checkRemediationAuditSchedule, 60000);
-setInterval(checkRemediationPlanSchedule, 60000);
+setInterval(runRemediationScanTick, Math.max(15000, REMEDIATION_SCAN_INTERVAL_MS));
 setInterval(() => {
-  checkRemediationProposalDelivery(supabase).catch((err) => {
-    console.warn('[Remediation Delivery Warning]:', err.message);
+  refreshRemediationSynthesis(supabase).catch((err) => {
+    console.warn('[Remediation Synthesis Warning]:', err.message);
   });
-}, 15 * 60 * 1000);
+}, REMEDIATION_SYNTHESIS_INTERVAL_MS);
 setInterval(() => {
   checkRemediationExecutionRetry(supabase).catch((err) => {
     console.warn('[Remediation Retry Warning]:', err.message);
   });
 }, 30 * 60 * 1000);
 
+async function checkRemediationDigestSchedule() {
+  try {
+    const now = new Date();
+    const nairobiHour = (now.getUTCHours() + 3) % 24;
+    const nairobiMinute = now.getUTCMinutes();
+    const todayStr = now.toISOString().split('T')[0];
+    const slot = nairobiHour < 12 ? 'AM' : 'PM';
+    const digestKey = `${todayStr}-${slot}`;
+
+    if (REMEDIATION_DIGEST_HOURS.includes(nairobiHour) && nairobiMinute <= 5 && lastRemediationDigestKey !== digestKey) {
+      lastRemediationDigestKey = digestKey;
+      fastify.log.info('🩺 Dispatching remediation digest to superadmin...');
+      await sendRemediationDigest(supabase);
+    }
+  } catch (err) {
+    fastify.log.error('Error running remediation digest schedule:', err);
+  }
+}
+setInterval(checkRemediationDigestSchedule, 60000);
+
 fastify.post('/api/cron/remediation-audit', async (request, reply) => {
-  const result = await runRemediationAudit(supabase);
-  return { success: true, remediation_audit: result };
+  const scan = await runRemediationScan(supabase);
+  const synthesis = await refreshRemediationSynthesis(supabase, { force: true });
+  return { success: true, remediation_scan: scan, synthesis };
 });
 
 fastify.post('/api/cron/remediation-plan', async (request, reply) => {
-  const result = await checkRemediationPlanDispatch(supabase);
+  const result = await checkRemediationPlanTriggers(supabase);
   return { success: true, remediation_plan: result };
 });
 
-fastify.post('/api/cron/remediation-delivery', async (request, reply) => {
-  const delivered = await checkRemediationProposalDelivery(supabase);
+fastify.post('/api/cron/remediation-digest', async (request, reply) => {
+  const digest = await sendRemediationDigest(supabase, { force: true });
   const retried = await checkRemediationExecutionRetry(supabase);
-  return { success: true, delivery: delivered, retry: retried };
+  return { success: true, digest, retry: retried };
 });
 
 

@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.10.0  
+**Version:** 1.11.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -20,7 +20,7 @@ Saka Fleet is an intelligent vehicle asset management and conversational fleet o
 - **Payments & Subscriptions:** Paystack API (KES, USD, ZAR, NGN multi-currency checkout & subscriptions)
 - **Document Generation:** PDFKit (`pdfkit`) for automated monthly fleet financial audits and compliance reports
 - **Worker & Self-Healing:** Saka Sentinel background supervisor with health checks, conversational friction analysis (`evaluateConversationalFriction`), and runtime prompt self-tuning
-- **Autonomous Remediation (v1.10.0):** Sentinel nightly audit (02:00 EAT) → Cline headless plan drafting in GitHub Actions (03:00 EAT) → Superadmin approval via WhatsApp/email → nonce-gated CI execution with before/after tests and automatic deployment alerts. See §35.
+- **Autonomous Remediation (v1.11.0):** continuous Sentinel scanning (default 60s, deterministic + throttled AI synthesis) → threshold-triggered Cline headless plan drafting in GitHub Actions → twice-daily adaptive Superadmin digests (08:00/20:00 EAT) → nonce-gated CI execution with before/after tests and automatic deployment alerts. See §35.
 - **Legacy providers removed (v1.7.3):** SendGrid (`@sendgrid/mail`), Twilio (`twilio`) and the unused `supabase` CLI package were fully removed — zero code imports, zero env keys. **Resend** + **Meta WhatsApp Cloud API** are the only outbound channels.
 
 ### 1.1 LLM Provider — DeepSeek (single source of truth)
@@ -215,14 +215,19 @@ Driver-centric feature blueprints synthesized weekly by Sentinel from live conve
 - `status`: `text` (Default `pending`)
 - `created_at`: `timestamptz` (Default `now()`)
 
-### 2.11 `sentinel_audit_runs` (Autonomous Remediation — Audit Artifact)
-One nightly Sentinel audit per Nairobi calendar date; the idempotency anchor for plan generation.
+### 2.11 `sentinel_audit_runs` (Autonomous Remediation — Continuous Audit Artifact)
+One continuously-updated rolling-window scan per Nairobi calendar date; the anchor for plan triggers and digests.
 - `id`: `uuid` (Primary Key, default `gen_random_uuid()`)
 - `run_date`: `date` (UNIQUE — Nairobi calendar date)
-- `window_start` / `window_end`: `timestamptz` (analysis window, default last 24h)
+- `window_start` / `window_end`: `timestamptz` (rolling analysis window, default 24h, upper-bounded by the scan instant)
 - `error_count` / `friction_count` / `stall_count`: `integer`
-- `summary`: `jsonb` (`{ title, overview, clusters: [{ signature, category, count, severity, root_cause_hypothesis, evidence_ids, sample }], source }`)
-- `plan_dispatched_at`: `timestamptz` (set when CI plan generation was dispatched; drives the 2h re-dispatch fallback)
+- `clusters`: `jsonb` (deterministic clusters: `signature`, `category`, `count`, `severity`, `evidence_ids`, `sample`)
+- `summary`: `jsonb` (AI narrative: `title`, `overview`, `clusters`, `source`)
+- `health_score`: `integer` (0–100; `100 − errors*2 − friction*1 − stalls*1.5`, clamped)
+- `scan_count`: `integer` (increments every deterministic scan tick)
+- `last_scanned_at` / `last_synthesis_at`: `timestamptz`
+- `plan_dispatches`: `jsonb` (signature → last CI plan dispatch ISO; cooldown ledger + daily cap)
+- `plan_dispatched_at`: `timestamptz` (legacy marker, retained for compatibility)
 - `created_at`: `timestamptz`
 
 ### 2.12 `remediation_proposals` (Autonomous Remediation — Approval-Gated Work Orders)
@@ -230,6 +235,7 @@ Cline-authored, Superadmin-approved fix plans consumed by the CI executor.
 - `id`: `uuid` (Primary Key, default `gen_random_uuid()`)
 - `proposal_code`: `text` (UNIQUE, e.g. `FIX-2026-10-30-01`)
 - `audit_run_id`: `uuid` (Foreign Key -> `sentinel_audit_runs.id`, `ON DELETE SET NULL`)
+- `target_signature`: `text` (cluster signature this plan addresses; drives trigger dedupe)
 - `title`, `category`, `root_cause`: `text`
 - `evidence`: `jsonb` (clusters/ids from the audit)
 - `proposed_changes`: `jsonb` (`{ overview, changes: [{ file, function, change, rationale }], tests, rollback, violations }`)
@@ -239,6 +245,7 @@ Cline-authored, Superadmin-approved fix plans consumed by the CI executor.
 - `approval_nonce` / `nonce_expires_at`: single-use execution gate (24h TTL, NULLed after success)
 - `attempts`: `integer` (execution dispatch attempts, server-owned, capped by `REMEDIATION_MAX_ATTEMPTS`)
 - `dispatched_at`: `timestamptz` (approval request sent)
+- `digest_sent_at`: `timestamptz` (included in the latest twice-daily digest)
 - `execution_dispatched_at`: `timestamptz` (CI execution dispatched)
 - `execution`: `jsonb` (`{ started_at, finished_at, commit_sha, failure }`)
 - `created_at` / `reviewed_at` / `executed_at`: `timestamptz`
@@ -1003,8 +1010,8 @@ Alerts are WhatsApp-ready and unit-aware, e.g. "Service Warning (KDA 123A): Oil 
 
 ### 31.2 Saka vs Sentinel vs Cline (permanent boundary)
 - **Saka** = front-facing WhatsApp agent: intent classification, structured extraction, localized prose, step-by-step guidance.
-- **Sentinel** = background supervisor: health checks, conversational friction analysis, stall recovery, Cloud Run triage, weekly feature proposals, and the nightly remediation audit (02:00 EAT). Saka never impersonates Sentinel or superadmin.
-- **Cline** = approved code executor: drafts remediation plans headlessly in GitHub Actions (03:00 EAT) and implements them only after a verified Superadmin approval (nonce-gated, test-gated, no force pushes). Saka never mentions, simulates or claims Cline/remediation actions; see §35.
+- **Sentinel** = background supervisor: health checks, conversational friction analysis, stall recovery, Cloud Run triage, weekly feature proposals, and the continuous remediation scan (60s deterministic + 15-min AI synthesis). Saka never impersonates Sentinel or superadmin.
+- **Cline** = approved code executor: drafts cluster-focused remediation plans headlessly in GitHub Actions when thresholds trigger, and implements them only after a verified Superadmin approval (nonce-gated, test-gated, no force pushes). Saka never mentions, simulates or claims Cline/remediation actions; see §35.
 
 ### 31.3 Training coverage added in v1.9.3
 - All 18 quiz flows, all 33 classifier intents (including `VIEW_PROFILE`), the universal reminder engine (date expiries / km-mi distance / operating hours), the 30d/14d/7d/24h/overdue expiry ladder, timezone confirmation, natural multi-field parsing + extra-notes compilation, the four core reports, the email-OTP-gated driver assignment handshake and the regional compliance catalog are explicit prompt instructions.
@@ -1190,11 +1197,11 @@ All migrations now call `runSql(sql, { label })` instead of hand-rolling `fetch`
 ## 35. Autonomous Sentinel ↔ Cline Remediation Pipeline (v1.10.0)
 
 ### 35.1 Purpose & agent roles
-Minimises manual error-log inspection and manual prompt-writing with a nightly, approval-gated self-healing cycle. Boundaries are permanent (`.clinerules` rules 15–19):
+Minimises manual error-log inspection and manual prompt-writing with a continuous, approval-gated self-healing cycle. Boundaries are permanent (`.clinerules` rules 15–19):
 - **Saka** — front-facing WhatsApp agent (unchanged; never impersonates the pipeline).
-- **Sentinel** — background supervisor: the 02:00 EAT audit (`runRemediationAudit` in `src/workers/remediation.js`).
-- **Cline** — headless code executor in GitHub Actions: drafts plans at 03:00 EAT and implements only approved work orders.
-- **Superadmin** — sole approver via `admin accept/decline/modify fix <CODE>`.
+- **Sentinel** — background supervisor: continuous rolling-window scan (`runRemediationScan`) with throttled AI synthesis (`refreshRemediationSynthesis`).
+- **Cline** — headless code executor in GitHub Actions: drafts cluster-focused plans when thresholds trigger and implements only approved work orders.
+- **Superadmin** — sole approver via `admin accept/decline/modify fix <CODE>`; receives twice-daily adaptive digests plus immediate urgent alerts.
 
 ### 35.2 Schema & migration
 - `sentinel_audit_runs` (§2.11) — one audit artifact per Nairobi date (`run_date` UNIQUE), clusters + counts + AI overview.
@@ -1203,20 +1210,23 @@ Minimises manual error-log inspection and manual prompt-writing with a nightly, 
 - Provisioned by `npm run migrate:staging-schema` in the chain `ensureRemediationTables → … → applyRemediationMigration`; both tables are verified in `EXPECTED_TABLES`.
 - `scripts/reset-db.js` **preserves** both tables (governance ledger, like `weekly_feature_proposals`).
 
-### 35.3 Scheduling & triggers
-- **02:00 EAT** — `checkRemediationAuditSchedule` (in-process minute-checker in `index.js`) → `runRemediationAudit(supabase)`: aggregates `error_logs`, `chat_friction_logs` and stalled `chat_sessions` from the last 24h, clusters by normalized signature (`buildSignature`), asks DeepSeek for a structured summary (deterministic fallback if the provider is down), upserts today's audit run.
-- **03:00 EAT** — `checkRemediationPlanSchedule` → `checkRemediationPlanDispatch`: if today's audit exists and no proposal was created, dispatch the `remediation_plan` repository event to GitHub Actions. Gated by `REMEDIATION_AUTONOMY=on`.
-- **Every 15 min** — `checkRemediationProposalDelivery`: sends approval requests for `PENDING_APPROVAL` proposals whose `dispatched_at` is NULL.
-- **Every 30 min** — `checkRemediationExecutionRetry`: re-dispatches execution for `APPROVED` proposals that never started (dispatch outage), capped by `REMEDIATION_MAX_ATTEMPTS`; excess attempts → `NEEDS_MODIFICATION`.
-- Manual endpoints: `POST /api/cron/remediation-audit`, `POST /api/cron/remediation-plan`, `POST /api/cron/remediation-delivery`.
-- Cloud Scheduler may call the endpoints at 23:00/00:00 UTC (02:00/03:00 EAT) as the primary trigger; the in-process checkers remain the fallback. No `pg_cron`/`node-cron` dependency was added.
+### 35.3 Scheduling & triggers (continuous — v1.11.0)
+Three fail-soft, idempotent tiers run in `index.js`:
+- **Tier 1 — deterministic scan (default every 60 s):** `runRemediationScan` collects the rolling, upper-bounded 24h window (`error_logs`, `chat_friction_logs`, quiz-active `chat_sessions`), clusters by `buildSignature`, computes `health_score`, and upserts today's `sentinel_audit_runs` row. It increments `scan_count`, updates `last_scanned_at`, and only rewrites the deterministic summary when counts/clusters changed. No AI call and no watermark races (recompute model).
+- **Tier 2 — throttled AI synthesis (default every 15 min):** `refreshRemediationSynthesis` re-runs the DeepSeek summary only when `last_synthesis_at` is stale or forced; deterministic fallback retained.
+- **Tier 3 — plan triggers (every scan tick):** `checkRemediationPlanTriggers` dispatches `remediation_plan` for clusters that are `severity=high` or `count >= REMEDIATION_PLAN_TRIGGER_COUNT`, with a per-signature cooldown (`REMEDIATION_PLAN_COOLDOWN_MS`), active-proposal dedupe (`target_signature`) and a hard daily cap (`REMEDIATION_MAX_PLANS_PER_DAY`). Gated by `REMEDIATION_AUTONOMY=on`.
+- **Digest scheduler (08:00 / 20:00 EAT):** `checkRemediationDigestSchedule` (minute-checker, per-slot key) calls `sendRemediationDigest`; see §35.7.
+- **Urgent escalation (every scan tick, 1h cooldown):** `maybeSendUrgentRemediationAlert` pages immediately when unresolved errors ≥ `REMEDIATION_URGENT_ERROR_THRESHOLD` or a high-risk proposal is pending. Notification-only → not autonomy-gated.
+- **Every 30 min:** `checkRemediationExecutionRetry` re-dispatches or recovers execution (see §35.6).
+- Manual endpoints: `POST /api/cron/remediation-audit` (scan + forced synthesis), `POST /api/cron/remediation-plan` (trigger evaluation), `POST /api/cron/remediation-digest` (forced digest + retry).
+- Cloud Scheduler is optional; the in-process timers are primary. No `pg_cron`/`node-cron` dependency was added.
 
 ### 35.4 Plan generation in CI (Cline headless)
-`repository_dispatch: remediation_plan { audit_run_id, feedback? }` → job **plan** in `.github/workflows/remediation.yml`:
-1. `node scripts/remediation_ci.js fetch-audit <id|date> [feedback]` emits the audit context + plan schema + forbidden paths.
-2. `cline --auto-approve true -t 1800 -P deepseek -m deepseek-chat "…"` reads `.clinerules`, `SAKA_FLEET_ARCHITECTURE.md` and the audit context, then writes `remediation/work-orders/plan.json` (descriptive JSON only — no code edits).
-3. `node scripts/remediation_ci.js submit-plan <auditId> <planFile>` validates the shape, runs `sanitizeRemediationPlan` (≤12 changes, repo-relative paths, ≥1 existing `test_*.js`, forbidden paths/keywords blocked), assigns `FIX-YYYY-MM-DD-NN` and inserts the proposal:
-   - clean plan → `PENDING_APPROVAL` (the delivery poller then sends the approval request);
+`repository_dispatch: remediation_plan { audit_run_id, cluster_signature?, feedback? }` → job **plan** in `.github/workflows/remediation.yml`:
+1. `node scripts/remediation_ci.js fetch-audit <id|date> [feedback] [clusterSignature]` emits the audit context (health score, focused cluster, plan schema, forbidden paths).
+2. `cline --auto-approve true -t 1800 -P deepseek -m deepseek-chat "…"` reads `.clinerules`, `SAKA_FLEET_ARCHITECTURE.md` and the audit context, then writes `remediation/work-orders/plan.json` (descriptive JSON only — the plan job never commits).
+3. `node scripts/remediation_ci.js submit-plan <auditId> <planFile> [clusterSignature]` validates the shape, runs `sanitizeRemediationPlan` (≤12 changes, repo-relative paths, ≥1 existing `test_*.js`, forbidden paths/keywords blocked), stores `target_signature`, assigns `FIX-YYYY-MM-DD-NN` and inserts the proposal:
+   - clean plan → `PENDING_APPROVAL` (rides the next twice-daily digest; high-risk proposals still trigger an immediate urgent alert);
    - blocked plan → `NEEDS_MODIFICATION` + dual-channel alert; never delivered for approval.
 
 ### 35.5 Approval gateway & state machine
@@ -1239,9 +1249,12 @@ Minimises manual error-log inspection and manual prompt-writing with a nightly, 
 7. **Report** — `node scripts/remediation_ci.js report <CODE> <sha>` → `DEPLOYED`, nonce consumed, `executed_at`, dual-channel outcome alert. Any earlier failure triggers `fail <CODE> <run-url>` → `NEEDS_MODIFICATION` + alert; nothing was pushed.
 - The existing `.github/workflows/deploy_notify.yml` automatically announces the resulting push to `main`.
 
-### 35.7 Notifications (dual-channel)
-- **Approval request:** `dispatchRemediationProposal` sends a WhatsApp summary (`sendProactiveWhatsApp`) and a Resend email (`sendRemediationProposalEmail` in `mailer.js`) listing code, title, risk, evidence count, top changes and the three reply commands. `dispatched_at` prevents duplicates.
-- **Outcome:** `reportRemediationResult` sends WhatsApp + `sendAdminNotificationEmail` for both success and failure.
+### 35.7 Twice-daily adaptive digests & notifications (dual-channel)
+- **Digest aggregation:** `sendRemediationDigest` collects `PENDING_APPROVAL`/`NEEDS_MODIFICATION` proposals with `digest_sent_at IS NULL` plus a system-health snapshot (health score, 24h errors/friction/stalls, unresolved errors, active Sentinel rules, scan count) and sends one WhatsApp + `sendRemediationDigestEmail` (Resend) summary. Included proposals get `digest_sent_at`; a digest is sent even with zero proposals.
+- **Schedule:** 08:00 and 20:00 EAT by default (`REMEDIATION_DIGEST_HOURS_CSV`); the minute-checker uses a per-slot key so each slot fires once.
+- **Adaptive frequency:** `computeDigestFrequency` persists `system_config.remediation_digest_frequency` (`twice_daily` → `daily` (08:00 only) → `weekly` (Monday 08:00); `weekly` is the floor). A 7-day trailing event count ≤ `REMEDIATION_DIGEST_DAILY_THRESHOLD` (10) steps down to daily; ≤ `REMEDIATION_DIGEST_WEEKLY_THRESHOLD` (3) steps down to weekly. Scale-down is one step per evaluation; any regression escalates immediately.
+- **Urgent escalation:** `maybeSendUrgentRemediationAlert` sends an immediate WhatsApp + email when unresolved errors ≥ `REMEDIATION_URGENT_ERROR_THRESHOLD` or a high-risk proposal is pending, deduped via `system_config.remediation_urgent_last_sent` (`REMEDIATION_URGENT_COOLDOWN_MS`, default 1 h).
+- **Outcome alerts:** `reportRemediationResult` still sends WhatsApp + `sendAdminNotificationEmail` per execution result.
 - Both channels are independent (one outage never silences the other), mirroring `scripts/notify_git_push.js`.
 
 ### 35.8 Safety guardrails & kill switches
@@ -1249,27 +1262,28 @@ Minimises manual error-log inspection and manual prompt-writing with a nightly, 
 - Execution requires DB-verified approval + fresh single-use nonce (`consumeProposalNonce` nulls it on success).
 - Tests gate both sides of the edit; no green, no push.
 - Attempt ceiling: `REMEDIATION_MAX_ATTEMPTS` (default 2); excess → `NEEDS_MODIFICATION` + alert.
-- Kill switch: `REMEDIATION_AUTONOMY=off` (default). `adminrules reset` remains the Sentinel prompt-rule kill switch.
+- Frequency/storm guards: per-signature plan cooldown, daily plan cap, per-slot digest key, `digest_sent_at` batching, urgent-alert cooldown, and a scan `inFlight` guard (no overlapping ticks).
+- Kill switch: `REMEDIATION_AUTONOMY=off` (default) gates plan dispatch, approvals and execution. Continuous scans, digests and urgent health alerts are notification/read-only and keep running so the Superadmin stays informed. `adminrules reset` remains the Sentinel prompt-rule kill switch.
 - Exit codes/status are auditable in `remediation_proposals.execution` and `admin_audit_logs`.
 
 ### 35.9 Environment & secrets
-- **Cloud Run / server:** `REMEDIATION_AUTONOMY` (off), `GH_REMEDIATION_TOKEN` (fine-grained PAT: contents write + workflow dispatch on this repo), `GH_REMEDIATION_REPO` (`owner/repo`), `REMEDIATION_MAX_ATTEMPTS`, `REMEDIATION_NONCE_TTL_HOURS`, `REMEDIATION_EXECUTION_RETRY_MS`, `REMEDIATION_PLAN_REDISPATCH_MS`, `REMEDIATION_DISPATCH_TIMEOUT_MS`.
+- **Cloud Run / server:** `REMEDIATION_AUTONOMY` (off), `GH_REMEDIATION_TOKEN` (fine-grained PAT: contents write + workflow dispatch on this repo), `GH_REMEDIATION_REPO` (`owner/repo`), `REMEDIATION_MAX_ATTEMPTS`, `REMEDIATION_NONCE_TTL_HOURS`, `REMEDIATION_EXECUTION_RETRY_MS`, `REMEDIATION_DISPATCH_TIMEOUT_MS`, `REMEDIATION_SCAN_INTERVAL_MS` (60 s), `REMEDIATION_SYNTHESIS_INTERVAL_MS` (15 min), `REMEDIATION_PLAN_TRIGGER_COUNT` (3), `REMEDIATION_PLAN_COOLDOWN_MS` (6 h), `REMEDIATION_MAX_PLANS_PER_DAY` (4), `REMEDIATION_DIGEST_HOURS_CSV` (`8,20`), `REMEDIATION_DIGEST_SCALE_DOWN_WINDOW_DAYS` (7), `REMEDIATION_DIGEST_DAILY_THRESHOLD` (10), `REMEDIATION_DIGEST_WEEKLY_THRESHOLD` (3), `REMEDIATION_URGENT_ERROR_THRESHOLD` (10), `REMEDIATION_URGENT_COOLDOWN_MS` (1 h).
 - **GitHub repository secrets (used by the workflow):** `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `DEEPSEEK_API_KEY`, `SUPERADMIN_PHONE`, `SUPERADMIN_EMAIL`, `META_PHONE_NUMBER_ID`, `META_WHATSAPP_TOKEN`, `RESEND_API_KEY`.
 - Cline CLI: installed in CI with `npm install -g cline`; provider/model pinned with `-P deepseek -m deepseek-chat` (adjust per `cline config` if the provider id differs — the gate fails closed).
 
 ### 35.10 Operations & verification
 - `npm run migrate:remediation` applies the schema; `npm run migrate:staging-schema` provisions and verifies all tables.
 - `npm run remediation:ci -- <subcommand>` is the CI-only runner (`fetch-audit`, `submit-plan`, `tests`, `gate`, `fetch`, `report`, `fail`).
-- Targeted suite: `node scripts/run_tests.js test_remediation_pipeline.js` (schema, sanitizer, audit idempotency, gate replay/expiry/status, approval state machine, kill switch) — always auto-cleans its rows.
+- Targeted suite: `node scripts/run_tests.js test_remediation_pipeline.js` (schema, sanitizer, scan idempotency, health score, plan triggers, gate replay/expiry/status, approval state machine, adaptive digest frequency, digest batching, urgent escalation, kill switch) — 56 assertions, always auto-cleans its rows.
 - `npm run audit:logs` remains the read-only forensic companion.
 
 ### 35.11 Files
-- `src/workers/remediation.js` — audit, sanitizer, dispatch, gate helpers, pollers.
+- `src/workers/remediation.js` — continuous scan, throttled synthesis, plan triggers, digest/frequency/urgent logic, sanitizer, dispatch, gate helpers, retry poller.
 - `src/services/githubDispatch.js` — the sole server → GitHub bridge (kill-switch gated, fail-soft).
-- `scripts/remediation_ci.js` + `.github/workflows/remediation.yml` — plan/execute CI lifecycle.
+- `scripts/remediation_ci.js` + `.github/workflows/remediation.yml` — cluster-focused plan/execute CI lifecycle.
 - `scripts/run_remediation_migration.js` — schema migration.
 - `src/services/superadmin.js` — approval commands, state machine, nonce minting.
-- `src/services/mailer.js` — remediation approval email.
-- `test_remediation_pipeline.js` — regression suite.
+- `src/services/mailer.js` — remediation approval + digest emails.
+- `test_remediation_pipeline.js` — regression suite (56 assertions).
 
 

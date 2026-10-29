@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { generateText, parseJsonSafely } from '../services/aiClient.js';
 import { formatNairobiDate } from '../services/dateParser.js';
 import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
-import { sendAdminNotificationEmail, sendRemediationProposalEmail } from '../services/mailer.js';
+import { sendAdminNotificationEmail, sendRemediationProposalEmail, sendRemediationDigestEmail } from '../services/mailer.js';
 import { dispatchRepositoryEvent } from '../services/githubDispatch.js';
 import { sendProactiveWhatsApp } from './sentinel.js';
 
@@ -11,8 +11,8 @@ import { sendProactiveWhatsApp } from './sentinel.js';
  * Saka Fleet — Autonomous Sentinel ↔ Cline Remediation Pipeline (v1.10.0)
  * ------------------------------------------------------------------------
  * Agent boundary (permanent, .clinerules rule 15):
- *   Sentinel — 02:00 EAT audit of error_logs / chat_friction_logs / stalled sessions.
- *   Cline    — 03:00 EAT plan drafting inside GitHub Actions (repository_dispatch),
+ *   Sentinel — continuous (60s) rolling-window audit of error_logs / chat_friction_logs / stalled sessions.
+ *   Cline    — threshold-triggered plan drafting inside GitHub Actions (repository_dispatch),
  *              and post-approval implementation inside the same workflow.
  *   Superadmin — sole approver: admin accept/decline/modify fix <CODE>.
  *
@@ -37,7 +37,27 @@ export const REMEDIATION_STATUS = Object.freeze({
 export const REMEDIATION_NONCE_TTL_HOURS = Number(process.env.REMEDIATION_NONCE_TTL_HOURS || 24);
 export const REMEDIATION_MAX_ATTEMPTS = Number(process.env.REMEDIATION_MAX_ATTEMPTS || 2);
 export const REMEDIATION_EXECUTION_RETRY_MS = Number(process.env.REMEDIATION_EXECUTION_RETRY_MS || 30 * 60 * 1000);
-export const REMEDIATION_PLAN_REDISPATCH_MS = Number(process.env.REMEDIATION_PLAN_REDISPATCH_MS || 2 * 60 * 60 * 1000);
+
+/* v1.11.0 — high-frequency scanning + adaptive digest tunables */
+export const REMEDIATION_SCAN_INTERVAL_MS = Number(process.env.REMEDIATION_SCAN_INTERVAL_MS || 60000);
+export const REMEDIATION_SYNTHESIS_INTERVAL_MS = Number(process.env.REMEDIATION_SYNTHESIS_INTERVAL_MS || 15 * 60 * 1000);
+export const REMEDIATION_PLAN_TRIGGER_COUNT = Number(process.env.REMEDIATION_PLAN_TRIGGER_COUNT || 3);
+export const REMEDIATION_PLAN_COOLDOWN_MS = Number(process.env.REMEDIATION_PLAN_COOLDOWN_MS || 6 * 60 * 60 * 1000);
+export const REMEDIATION_MAX_PLANS_PER_DAY = Number(process.env.REMEDIATION_MAX_PLANS_PER_DAY || 4);
+export const REMEDIATION_DIGEST_HOURS = String(process.env.REMEDIATION_DIGEST_HOURS_CSV || '8,20')
+  .split(',')
+  .map((hour) => Number(String(hour).trim()))
+  .filter((hour) => Number.isInteger(hour) && hour >= 0 && hour <= 23);
+export const REMEDIATION_DIGEST_FREQUENCIES = Object.freeze(['weekly', 'daily', 'twice_daily']);
+export const REMEDIATION_DIGEST_SCALE_DOWN_WINDOW_DAYS = Number(process.env.REMEDIATION_DIGEST_SCALE_DOWN_WINDOW_DAYS || 7);
+export const REMEDIATION_DIGEST_DAILY_THRESHOLD = Number(process.env.REMEDIATION_DIGEST_DAILY_THRESHOLD || 10);
+export const REMEDIATION_DIGEST_WEEKLY_THRESHOLD = Number(process.env.REMEDIATION_DIGEST_WEEKLY_THRESHOLD || 3);
+export const REMEDIATION_URGENT_ERROR_THRESHOLD = Number(process.env.REMEDIATION_URGENT_ERROR_THRESHOLD || 10);
+export const REMEDIATION_URGENT_COOLDOWN_MS = Number(process.env.REMEDIATION_URGENT_COOLDOWN_MS || 60 * 60 * 1000);
+
+const DIGEST_FREQUENCY_KEY = 'remediation_digest_frequency';
+const DIGEST_LAST_SENT_KEY = 'remediation_digest_last_sent';
+const URGENT_LAST_SENT_KEY = 'remediation_urgent_last_sent';
 
 
 /**
@@ -55,6 +75,12 @@ export const REMEDIATION_TABLE_SQL = `
         friction_count integer DEFAULT 0,
         stall_count integer DEFAULT 0,
         summary jsonb,
+        clusters jsonb,
+        health_score integer,
+        scan_count integer DEFAULT 0,
+        last_scanned_at timestamp with time zone,
+        last_synthesis_at timestamp with time zone,
+        plan_dispatches jsonb DEFAULT '{}'::jsonb,
         plan_dispatched_at timestamp with time zone,
         created_at timestamp with time zone DEFAULT now()
     );
@@ -69,11 +95,13 @@ export const REMEDIATION_TABLE_SQL = `
         proposed_changes jsonb,
         risk_level text DEFAULT 'low',
         status text DEFAULT 'PENDING_APPROVAL',
+        target_signature text,
         feedback text,
         approval_nonce text,
         nonce_expires_at timestamp with time zone,
         attempts integer DEFAULT 0,
         dispatched_at timestamp with time zone,
+        digest_sent_at timestamp with time zone,
         execution_dispatched_at timestamp with time zone,
         execution jsonb,
         created_at timestamp with time zone DEFAULT now(),
@@ -83,6 +111,7 @@ export const REMEDIATION_TABLE_SQL = `
     CREATE INDEX IF NOT EXISTS idx_sentinel_audit_runs_date ON public.sentinel_audit_runs(run_date DESC);
     CREATE INDEX IF NOT EXISTS idx_remediation_proposals_status ON public.remediation_proposals(status, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_remediation_proposals_audit ON public.remediation_proposals(audit_run_id);
+    CREATE INDEX IF NOT EXISTS idx_remediation_proposals_signature ON public.remediation_proposals(target_signature, status);
 `;
 
 /** Forbidden operations anywhere in a generated plan (extends the §6.4C lock). */
@@ -218,7 +247,7 @@ export function buildSignature(text = '') {
 }
 
 /* ------------------------------------------------------------------ */
-/* 02:00 EAT — Sentinel remediation audit                              */
+/* Continuous Sentinel remediation scan (tier 1 + shared collector)   */
 /* ------------------------------------------------------------------ */
 
 function buildAuditClusters({ errors = [], friction = [], stalls = [] } = {}) {
@@ -303,16 +332,30 @@ Return JSON only:
   return fallback;
 }
 
-/**
- * Aggregate the last 24h of error/friction/stall evidence into one audit run.
- * Idempotent per Nairobi calendar date (sentinel_audit_runs.run_date UNIQUE).
- */
-export async function runRemediationAudit(providedSupabase, { now = new Date(), windowHours = 24 } = {}) {
-  const supabase = getSupabase(providedSupabase);
-  await ensureRemediationTables(supabase);
+/** 0–100 health score derived from the rolling audit window. */
+export function computeHealthScore({ errors = 0, friction = 0, stalls = 0 } = {}) {
+  const score = 100 - errors * 2 - friction * 1 - stalls * 1.5;
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
 
+function clusterFingerprint(clusters = []) {
+  return JSON.stringify((clusters || [])
+    .map((cluster) => [cluster.signature, cluster.category, cluster.count])
+    .sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
+}
+
+/** Deterministic clusters persisted on the audit row (AI narrative lives in summary). */
+export function auditClustersOf(audit) {
+  if (!audit) return [];
+  if (Array.isArray(audit.clusters)) return audit.clusters;
+  return Array.isArray(audit.summary?.clusters) ? audit.summary.clusters : [];
+}
+
+/** Collect + cluster the rolling window (shared by the scan and manual refresh). */
+async function collectAuditWindow(supabase, now, windowHours) {
   const windowStart = new Date(now.getTime() - windowHours * 60 * 60 * 1000);
   const windowStartIso = windowStart.toISOString();
+  const windowEndIso = now.toISOString();
   const stallCutoffIso = new Date(now.getTime() - 15 * 60 * 1000).toISOString();
 
   const [errorRes, frictionRes, sessionRes] = await Promise.all([
@@ -320,12 +363,14 @@ export async function runRemediationAudit(providedSupabase, { now = new Date(), 
       .from('error_logs')
       .select('id,error_message,route,status,created_at')
       .gte('created_at', windowStartIso)
+      .lte('created_at', windowEndIso)
       .order('created_at', { ascending: false })
       .limit(120),
     supabase
       .from('chat_friction_logs')
       .select('id,friction_type,transcript_snippet,user_phone,detected_at')
       .gte('detected_at', windowStartIso)
+      .lte('detected_at', windowEndIso)
       .order('detected_at', { ascending: false })
       .limit(120),
     supabase
@@ -351,11 +396,40 @@ export async function runRemediationAudit(providedSupabase, { now = new Date(), 
     return Boolean(snapshot?.quiz || snapshot?.session?.quiz);
   });
 
-  const clusters = buildAuditClusters({ errors, friction, stalls });
-  const counts = { errors: errors.length, friction: friction.length, stalls: stalls.length, windowHours };
-  const summary = await synthesizeAuditSummary(clusters, counts);
+  return {
+    counts: { errors: errors.length, friction: friction.length, stalls: stalls.length, windowHours },
+    clusters: buildAuditClusters({ errors, friction, stalls }),
+    windowStartIso
+  };
+}
 
+/**
+ * Tier 1 — high-frequency deterministic scan (no AI call).
+ * Idempotent per Nairobi date: updates the same row, bumps scan_count, and only
+ * rewrites the deterministic summary when the window materially changed.
+ * Tier 2 (`refreshRemediationSynthesis`) supplies the throttled AI narrative.
+ */
+export async function runRemediationScan(providedSupabase, { now = new Date(), windowHours = 24 } = {}) {
+  const supabase = getSupabase(providedSupabase);
+  await ensureRemediationTables(supabase);
+
+  const { counts, clusters, windowStartIso } = await collectAuditWindow(supabase, now, windowHours);
+
+  const health_score = computeHealthScore(counts);
   const runDate = formatNairobiDate(now);
+
+  const { data: existing } = await supabase
+    .from('sentinel_audit_runs')
+    .select('*')
+    .eq('run_date', runDate)
+    .maybeSingle();
+
+  const changed = !existing
+    || existing.error_count !== counts.errors
+    || existing.friction_count !== counts.friction
+    || existing.stall_count !== counts.stalls
+    || clusterFingerprint(auditClustersOf(existing)) !== clusterFingerprint(clusters);
+
   const payload = {
     run_date: runDate,
     window_start: windowStartIso,
@@ -363,7 +437,13 @@ export async function runRemediationAudit(providedSupabase, { now = new Date(), 
     error_count: counts.errors,
     friction_count: counts.friction,
     stall_count: counts.stalls,
-    summary
+    clusters,
+    health_score,
+    scan_count: (existing?.scan_count || 0) + 1,
+    last_scanned_at: now.toISOString(),
+    summary: changed || !existing?.summary
+      ? buildFallbackSummary(clusters, counts)
+      : existing.summary
   };
 
   const { data: saved, error: upsertErr } = await supabase
@@ -373,24 +453,95 @@ export async function runRemediationAudit(providedSupabase, { now = new Date(), 
     .maybeSingle();
 
   if (upsertErr) {
-    console.error('[RemediationAudit] Failed to persist audit run:', upsertErr.message);
-    return { status: 'error', message: upsertErr.message, run_date: runDate, counts, summary };
+    console.error('[RemediationScan] Failed to persist scan:', upsertErr.message);
+    return { status: 'error', message: upsertErr.message, run_date: runDate, counts, health_score, clusters };
   }
 
-  await logRemediationAudit(supabase, 'REMEDIATION_AUDIT_COMPLETED', {
-    run_date: runDate,
-    audit_run_id: saved?.id || null,
-    counts,
-    clusters: clusters.length
-  });
+  if (changed) {
+    await logRemediationAudit(supabase, 'REMEDIATION_SCAN_UPDATED', {
+      run_date: runDate,
+      audit_run_id: saved?.id || null,
+      counts,
+      clusters: clusters.length,
+      health_score
+    });
+  }
 
   return {
     status: 'success',
     audit_run_id: saved?.id || null,
     run_date: runDate,
+    changed,
     counts,
-    summary
+    health_score,
+    clusters,
+    summary: payload.summary,
+    scan_count: payload.scan_count
   };
+}
+
+/**
+ * Tier 2 — throttled AI synthesis. Refreshes the narrative summary at most every
+ * REMEDIATION_SYNTHESIS_INTERVAL_MS (or immediately when forced).
+ */
+export async function refreshRemediationSynthesis(providedSupabase, { now = new Date(), force = false } = {}) {
+  const supabase = getSupabase(providedSupabase);
+  await ensureRemediationTables(supabase);
+
+  const runDate = formatNairobiDate(now);
+  const { data: audit } = await supabase
+    .from('sentinel_audit_runs')
+    .select('*')
+    .eq('run_date', runDate)
+    .maybeSingle();
+
+  if (!audit) return { status: 'skipped', reason: 'No scan for today yet.' };
+  if (!force && audit.last_synthesis_at) {
+    const age = now.getTime() - new Date(audit.last_synthesis_at).getTime();
+    if (age < REMEDIATION_SYNTHESIS_INTERVAL_MS) {
+      return { status: 'skipped', reason: 'Synthesis is fresh.' };
+    }
+  }
+
+  const clusters = auditClustersOf(audit);
+  if (clusters.length === 0) {
+    await supabase
+      .from('sentinel_audit_runs')
+      .update({ last_synthesis_at: now.toISOString() })
+      .eq('id', audit.id);
+    return { status: 'success', synthesized: false, reason: 'No clusters in the window.' };
+  }
+
+  const counts = {
+    errors: audit.error_count || 0,
+    friction: audit.friction_count || 0,
+    stalls: audit.stall_count || 0,
+    windowHours: 24
+  };
+  const summary = await synthesizeAuditSummary(clusters, counts);
+  const { error } = await supabase
+    .from('sentinel_audit_runs')
+    .update({ summary, last_synthesis_at: now.toISOString() })
+    .eq('id', audit.id);
+
+  if (error) return { status: 'error', message: error.message };
+
+  await logRemediationAudit(supabase, 'REMEDIATION_SYNTHESIS_COMPLETED', {
+    run_date: runDate,
+    source: summary.source,
+    clusters: clusters.length
+  });
+
+  return { status: 'success', synthesized: true, source: summary.source };
+}
+
+/** Manual full refresh (cron endpoint / tests): deterministic scan + forced AI synthesis. */
+export async function runRemediationAudit(providedSupabase, options = {}) {
+  const scan = await runRemediationScan(providedSupabase, options);
+  if (scan.status === 'success') {
+    await refreshRemediationSynthesis(providedSupabase, { now: options.now || new Date(), force: true });
+  }
+  return scan;
 }
 
 /** Load an audit run by UUID or by Nairobi run_date (YYYY-MM-DD). */
@@ -689,82 +840,394 @@ export async function reportRemediationResult(providedSupabase, proposalCode, { 
 /* Scheduler pollers (server-side fallbacks)                           */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* Tier 3 — event/threshold-driven plan dispatch                      */
+/* ------------------------------------------------------------------ */
+
+/** A cluster qualifies when it is high severity or crosses the repeat threshold. */
+export function selectPlanTriggerClusters(clusters = [], { triggerCount = REMEDIATION_PLAN_TRIGGER_COUNT } = {}) {
+  return (clusters || []).filter((cluster) => {
+    const count = Number(cluster?.count || 0);
+    const severity = String(cluster?.severity || 'low').toLowerCase();
+    return severity === 'high' || count >= triggerCount;
+  });
+}
+
 /**
- * 03:00 EAT — ask CI/Cline to draft a plan for today's audit.
- * Re-dispatches after REMEDIATION_PLAN_REDISPATCH_MS if CI never produced a
- * proposal (workflow failure), and never duplicates a successful dispatch.
+ * Ask CI/Cline to draft a plan for each qualifying cluster, with a per-signature
+ * cooldown, active-proposal dedupe and a hard daily plan cap.
+ * Gated by REMEDIATION_AUTONOMY=on.
  */
-export async function checkRemediationPlanDispatch(providedSupabase) {
+export async function checkRemediationPlanTriggers(providedSupabase, { now = new Date() } = {}) {
   const supabase = getSupabase(providedSupabase);
   if (String(process.env.REMEDIATION_AUTONOMY || 'off').toLowerCase() !== 'on') {
     return { status: 'skipped', reason: 'REMEDIATION_AUTONOMY is not enabled.' };
   }
 
   await ensureRemediationTables(supabase);
-  const today = formatNairobiDate();
+  const runDate = formatNairobiDate(now);
 
   const { data: audit } = await supabase
     .from('sentinel_audit_runs')
     .select('*')
-    .eq('run_date', today)
+    .eq('run_date', runDate)
     .maybeSingle();
-  if (!audit) return { status: 'skipped', reason: 'No audit run for today.' };
+  if (!audit) return { status: 'skipped', reason: 'No scan for today yet.' };
 
-  const { data: existing } = await supabase
-    .from('remediation_proposals')
-    .select('id,status')
-    .eq('audit_run_id', audit.id)
-    .limit(1);
-  if (existing && existing.length > 0) {
-    return { status: 'skipped', reason: 'A proposal already exists for today’s audit.' };
+  const eligible = selectPlanTriggerClusters(auditClustersOf(audit));
+  if (eligible.length === 0) return { status: 'success', dispatched: 0, eligible: 0 };
+
+  const ledger = audit.plan_dispatches && typeof audit.plan_dispatches === 'object'
+    ? audit.plan_dispatches
+    : {};
+  const todayDispatches = Object.values(ledger)
+    .filter((value) => value && formatNairobiDate(new Date(value)) === runDate)
+    .length;
+
+  if (todayDispatches >= REMEDIATION_MAX_PLANS_PER_DAY) {
+    return {
+      status: 'skipped',
+      reason: `Daily plan cap reached (${REMEDIATION_MAX_PLANS_PER_DAY}).`,
+      eligible: eligible.length
+    };
   }
 
-  if (audit.plan_dispatched_at) {
-    const age = Date.now() - new Date(audit.plan_dispatched_at).getTime();
-    if (age < REMEDIATION_PLAN_REDISPATCH_MS) {
-      return { status: 'skipped', reason: 'Plan dispatch already requested.' };
+  const signatures = eligible.map((cluster) => cluster.signature);
+  const { data: active } = await supabase
+    .from('remediation_proposals')
+    .select('target_signature,status')
+    .in('target_signature', signatures)
+    .in('status', [REMEDIATION_STATUS.PENDING_APPROVAL, REMEDIATION_STATUS.APPROVED, REMEDIATION_STATUS.EXECUTING]);
+  const activeSignatures = new Set((active || []).map((row) => row.target_signature));
+
+  const ledgerUpdates = {};
+  let dispatchedCount = 0;
+
+  for (const cluster of eligible) {
+    if (todayDispatches + dispatchedCount >= REMEDIATION_MAX_PLANS_PER_DAY) break;
+    if (activeSignatures.has(cluster.signature)) continue;
+
+    const last = ledger[cluster.signature] ? new Date(ledger[cluster.signature]).getTime() : 0;
+    if (last && now.getTime() - last < REMEDIATION_PLAN_COOLDOWN_MS) continue;
+
+    const dispatch = await dispatchRepositoryEvent('remediation_plan', {
+      audit_run_id: audit.id,
+      run_date: runDate,
+      cluster_signature: cluster.signature,
+      cluster
+    });
+
+    if (dispatch.ok) {
+      ledgerUpdates[cluster.signature] = now.toISOString();
+      dispatchedCount += 1;
     }
   }
 
-  const dispatch = await dispatchRepositoryEvent('remediation_plan', {
-    audit_run_id: audit.id,
-    run_date: audit.run_date
-  });
-
-  if (dispatch.ok) {
+  if (dispatchedCount > 0) {
     await supabase
       .from('sentinel_audit_runs')
-      .update({ plan_dispatched_at: new Date().toISOString() })
+      .update({ plan_dispatches: { ...ledger, ...ledgerUpdates } })
       .eq('id', audit.id);
     await logRemediationAudit(supabase, 'REMEDIATION_PLAN_DISPATCHED', {
-      audit_run_id: audit.id,
-      run_date: audit.run_date
+      run_date: runDate,
+      signatures: Object.keys(ledgerUpdates),
+      dispatched: dispatchedCount
     });
   }
 
-  return { status: dispatch.ok ? 'dispatched' : 'failed', audit_run_id: audit.id, dispatch };
+  return {
+    status: 'success',
+    dispatched: dispatchedCount,
+    eligible: eligible.length,
+    skipped_active: [...activeSignatures]
+  };
 }
 
-/** Deliver approval requests for proposals CI has created but not yet announced. */
-export async function checkRemediationProposalDelivery(providedSupabase) {
+/* ------------------------------------------------------------------ */
+/* Twice-daily digest + adaptive frequency + urgent escalation        */
+/* ------------------------------------------------------------------ */
+
+async function getConfigValue(supabase, key) {
+  try {
+    const { data } = await supabase.from('system_config').select('value').eq('key', key).maybeSingle();
+    return data?.value || null;
+  } catch {
+    return null;
+  }
+}
+
+async function setConfigValue(supabase, key, value) {
+  try {
+    const { error } = await supabase
+      .from('system_config')
+      .upsert([{ key, value, updated_by: 'SENTINEL', updated_at: new Date().toISOString() }], { onConflict: 'key' });
+    if (error) console.warn(`[Remediation] ${key} write failed:`, error.message);
+  } catch (err) {
+    console.warn(`[Remediation] ${key} write exception:`, err.message);
+  }
+}
+
+/**
+ * Pure adaptive-frequency state machine.
+ * - More events than the daily threshold → escalate immediately.
+ * - Fewer events → scale DOWN one step per evaluation (twice_daily → daily → weekly).
+ */
+export function computeDigestFrequency(events, current = 'twice_daily', {
+  dailyThreshold = REMEDIATION_DIGEST_DAILY_THRESHOLD,
+  weeklyThreshold = REMEDIATION_DIGEST_WEEKLY_THRESHOLD
+} = {}) {
+  const order = REMEDIATION_DIGEST_FREQUENCIES; // ['weekly', 'daily', 'twice_daily']
+  const currentIndex = order.indexOf(current);
+  const targetIndex = events <= weeklyThreshold ? 0 : (events <= dailyThreshold ? 1 : 2);
+
+  if (currentIndex === -1) return order[targetIndex];
+  if (targetIndex > currentIndex) return order[targetIndex]; // escalate immediately
+  return order[Math.max(targetIndex, currentIndex - 1)]; // one step down per evaluation
+}
+
+/** Current persisted digest frequency (defaults to twice_daily). */
+export async function getDigestFrequency(supabase) {
+  const stored = await getConfigValue(supabase, DIGEST_FREQUENCY_KEY);
+  return REMEDIATION_DIGEST_FREQUENCIES.includes(stored) ? stored : 'twice_daily';
+}
+
+async function setDigestFrequency(supabase, value) {
+  await setConfigValue(supabase, DIGEST_FREQUENCY_KEY, value);
+}
+
+/** Error + friction events in the trailing window (used for adaptive scaling). */
+async function countRecentEvents(supabase, now, days) {
+  const since = new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString();
+  try {
+    const [errors, friction] = await Promise.all([
+      supabase.from('error_logs').select('*', { count: 'exact', head: true }).gte('created_at', since),
+      supabase.from('chat_friction_logs').select('*', { count: 'exact', head: true }).gte('detected_at', since)
+    ]);
+    return (errors.count || 0) + (friction.count || 0);
+  } catch {
+    return 0;
+  }
+}
+
+
+/**
+ * Twice-daily (adaptive) Superadmin digest: pending approvals + health snapshot.
+ * Sends regardless of REMEDIATION_AUTONOMY (notification-only); `force` bypasses
+ * the slot/frequency checks, `dryRun` marks proposals without external sends.
+ */
+export async function sendRemediationDigest(providedSupabase, { now = new Date(), force = false, dryRun = false } = {}) {
   const supabase = getSupabase(providedSupabase);
   await ensureRemediationTables(supabase);
 
+  const frequency = await getDigestFrequency(supabase);
+  const nairobiHour = (now.getUTCHours() + 3) % 24;
+  const morningHour = REMEDIATION_DIGEST_HOURS[0] ?? 8;
+
+  if (!force) {
+    const allowed = frequency === 'twice_daily'
+      ? REMEDIATION_DIGEST_HOURS.includes(nairobiHour)
+      : (frequency === 'daily'
+        ? nairobiHour === morningHour
+        : (now.getUTCDay() === 1 && nairobiHour === morningHour));
+    if (!allowed) {
+      return { status: 'skipped', reason: `Frequency ${frequency} does not allow a digest at ${nairobiHour}:00 EAT.` };
+    }
+  }
+
+  const runDate = formatNairobiDate(now);
+  const { data: audit } = await supabase
+    .from('sentinel_audit_runs')
+    .select('*')
+    .eq('run_date', runDate)
+    .maybeSingle();
+
   const { data: pending } = await supabase
     .from('remediation_proposals')
-    .select('*')
+    .select('id,proposal_code,title,risk_level,status,target_signature,created_at')
+    .in('status', [REMEDIATION_STATUS.PENDING_APPROVAL, REMEDIATION_STATUS.NEEDS_MODIFICATION])
+    .is('digest_sent_at', null)
+    .order('created_at', { ascending: true })
+    .limit(10);
+  const proposals = pending || [];
+
+  const { count: unresolvedErrors } = await supabase
+    .from('error_logs')
+    .select('*', { count: 'exact', head: true })
+    .eq('status', 'unresolved');
+  const { count: activeRules } = await supabase
+    .from('saka_dynamic_rules')
+    .select('*', { count: 'exact', head: true })
+    .eq('is_active', true);
+
+  const weeklyEvents = await countRecentEvents(supabase, now, REMEDIATION_DIGEST_SCALE_DOWN_WINDOW_DAYS);
+  const nextFrequency = computeDigestFrequency(weeklyEvents, frequency);
+  if (nextFrequency !== frequency && !dryRun) {
+    await setDigestFrequency(supabase, nextFrequency);
+    await logRemediationAudit(supabase, 'REMEDIATION_DIGEST_FREQUENCY_CHANGED', {
+      from: frequency,
+      to: nextFrequency,
+      weekly_events: weeklyEvents
+    });
+  }
+
+  const health = {
+    health_score: audit?.health_score ?? computeHealthScore({
+      errors: audit?.error_count || 0,
+      friction: audit?.friction_count || 0,
+      stalls: audit?.stall_count || 0
+    }),
+    errors_24h: audit?.error_count || 0,
+    friction_24h: audit?.friction_count || 0,
+    stalls_24h: audit?.stall_count || 0,
+    unresolved_errors: unresolvedErrors || 0,
+    active_rules: activeRules || 0,
+    scans: audit?.scan_count || 0
+  };
+
+  const dateLabel = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Africa/Nairobi',
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric'
+  }).format(now);
+  const slotLabel = nairobiHour < 12 ? 'Morning' : 'Evening';
+
+  const lines = [
+    `🩺 *Saka Remediation Digest — ${slotLabel}*`,
+    `_${dateLabel} • frequency: ${nextFrequency}_`,
+    '',
+    `📊 *System health: ${health.health_score}/100*`,
+    `• Errors (24h): ${health.errors_24h} (unresolved: ${health.unresolved_errors})`,
+    `• Friction events (24h): ${health.friction_24h}`,
+    `• Stalled sessions: ${health.stalls_24h}`,
+    `• Active Sentinel rules: ${health.active_rules}`,
+    '',
+    proposals.length
+      ? `🛠️ *Pending approvals (${proposals.length}):*\n${proposals
+        .map((proposal, index) => `${index + 1}. \`${proposal.proposal_code}\` — ${proposal.title || 'Untitled'} (${String(proposal.risk_level || 'low').toUpperCase()})`)
+        .join('\n')}`
+      : '✅ *No pending remediation approvals.*',
+    proposals.length
+      ? '✅ `admin accept fix <CODE>`\n⛔ `admin decline fix <CODE>`\n✏️ `admin modify fix <CODE> <guidance>`'
+      : '',
+    `_Digest frequency auto-scales with stability (${REMEDIATION_DIGEST_SCALE_DOWN_WINDOW_DAYS}-day events: ${weeklyEvents})._`
+  ].filter(Boolean).join('\n');
+
+  let waSent = false;
+  let emailSent = false;
+
+  if (!dryRun) {
+    waSent = await sendProactiveWhatsApp(process.env.SUPERADMIN_PHONE, lines);
+    emailSent = await sendRemediationDigestEmail({
+      dateLabel,
+      slotLabel,
+      frequency: nextFrequency,
+      health,
+      pending: proposals,
+      weeklyEvents
+    });
+
+    if (waSent || emailSent) {
+      if (proposals.length) {
+        await supabase
+          .from('remediation_proposals')
+          .update({ digest_sent_at: now.toISOString() })
+          .in('id', proposals.map((proposal) => proposal.id));
+      }
+      await setConfigValue(supabase, DIGEST_LAST_SENT_KEY, now.toISOString());
+    }
+  } else if (proposals.length) {
+    await supabase
+      .from('remediation_proposals')
+      .update({ digest_sent_at: now.toISOString() })
+      .in('id', proposals.map((proposal) => proposal.id));
+  }
+
+  await logRemediationAudit(supabase, 'REMEDIATION_DIGEST_SENT', {
+    date: runDate,
+    slot: slotLabel,
+    proposals: proposals.length,
+    frequency: nextFrequency,
+    wa_sent: waSent,
+    email_sent: emailSent,
+    dry_run: dryRun
+  });
+
+  return {
+    status: 'success',
+    proposals: proposals.length,
+    frequency: nextFrequency,
+    health,
+    waSent,
+    emailSent,
+    dryRun
+  };
+}
+
+/**
+ * Urgent escalation: unresolved errors above threshold or high-risk pending
+ * proposals trigger an immediate WhatsApp+email alert (deduped by cooldown),
+ * in addition to the regular digest. Notification-only → not autonomy-gated.
+ */
+export async function maybeSendUrgentRemediationAlert(providedSupabase, { now = new Date(), dryRun = false } = {}) {
+  const supabase = getSupabase(providedSupabase);
+  await ensureRemediationTables(supabase);
+
+  const { count: unresolvedErrors } = await supabase
+    .from('error_logs')
+    .select('*', { count: 'exact', head: true })
+    .eq('status', 'unresolved');
+
+  const { data: highRisk } = await supabase
+    .from('remediation_proposals')
+    .select('proposal_code,title,status')
     .eq('status', REMEDIATION_STATUS.PENDING_APPROVAL)
-    .is('dispatched_at', null)
+    .eq('risk_level', 'high')
     .order('created_at', { ascending: true })
     .limit(5);
 
-  const results = [];
-  for (const proposal of pending || []) {
-    const sent = await dispatchRemediationProposal(supabase, proposal);
-    results.push({ proposal_code: proposal.proposal_code, ...sent });
+  const errorBreach = (unresolvedErrors || 0) >= REMEDIATION_URGENT_ERROR_THRESHOLD;
+  const proposals = highRisk || [];
+  if (!errorBreach && proposals.length === 0) {
+    return { status: 'skipped', reason: 'No urgent condition.' };
   }
 
-  return { status: 'success', delivered: results.length, results };
+  const lastSent = await getConfigValue(supabase, URGENT_LAST_SENT_KEY);
+  if (lastSent && now.getTime() - new Date(lastSent).getTime() < REMEDIATION_URGENT_COOLDOWN_MS) {
+    return { status: 'skipped', reason: 'Urgent alert cooldown active.' };
+  }
+
+  const lines = `🚨 *Saka Remediation — Urgent Attention*\n\n` +
+    (errorBreach ? `• Unresolved errors: *${unresolvedErrors}* (threshold ${REMEDIATION_URGENT_ERROR_THRESHOLD})\n` : '') +
+    (proposals.length
+      ? `• High-risk proposals:\n${proposals.map((proposal) => `   – \`${proposal.proposal_code}\` ${proposal.title || ''}`).join('\n')}\n`
+      : '') +
+    `\nReply \`admin remediations\` to review, then \`admin accept fix <CODE>\` to approve.`;
+
+  let waSent = false;
+  let emailSent = false;
+
+  if (!dryRun) {
+    waSent = await sendProactiveWhatsApp(process.env.SUPERADMIN_PHONE, lines);
+    emailSent = await sendAdminNotificationEmail(
+      '🚨 Saka Remediation — urgent attention required',
+      `<p>${lines.replace(/\n/g, '<br>')}</p>`
+    );
+    if (waSent || emailSent) {
+      await setConfigValue(supabase, URGENT_LAST_SENT_KEY, now.toISOString());
+    }
+  }
+
+  await logRemediationAudit(supabase, 'REMEDIATION_URGENT_ALERT', {
+    unresolved_errors: unresolvedErrors || 0,
+    proposals: proposals.length,
+    wa_sent: waSent,
+    email_sent: emailSent,
+    dry_run: dryRun
+  });
+
+  return { status: 'success', urgent: true, proposals: proposals.length, waSent, emailSent };
 }
 
 /**

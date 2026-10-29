@@ -8,6 +8,14 @@ import {
   sanitizeRemediationPlan,
   buildSignature,
   runRemediationAudit,
+  runRemediationScan,
+  refreshRemediationSynthesis,
+  computeHealthScore,
+  computeDigestFrequency,
+  selectPlanTriggerClusters,
+  sendRemediationDigest,
+  getDigestFrequency,
+  maybeSendUrgentRemediationAlert,
   verifyProposalGate,
   markProposalExecuting,
   consumeProposalNonce
@@ -27,6 +35,7 @@ import { handleAdminRemediationDecision } from './src/services/superadmin.js';
 
 const TEST_RUN_DATE = '2000-01-03'; // far-past Nairobi date owned by this suite
 const PROPOSAL_CODES = ['FIX-TEST-0001', 'FIX-TEST-0002', 'FIX-TEST-0003', 'FIX-TEST-0004'];
+const TEST_STARTED_AT = new Date().toISOString();
 
 let passed = 0;
 function check(condition, message) {
@@ -66,7 +75,12 @@ async function cleanup(supabaseClient) {
   try {
     await supabaseClient.from('remediation_proposals').delete().in('proposal_code', PROPOSAL_CODES);
     await supabaseClient.from('sentinel_audit_runs').delete().eq('run_date', TEST_RUN_DATE);
-    await supabaseClient.from('admin_audit_logs').delete().eq('admin_phone', 'SENTINEL').like('action', 'REMEDIATION_%');
+    await supabaseClient
+      .from('admin_audit_logs')
+      .delete()
+      .eq('admin_phone', 'SENTINEL')
+      .like('action', 'REMEDIATION_%')
+      .gte('created_at', TEST_STARTED_AT);
   } catch (err) {
     console.warn('[test_remediation_pipeline] cleanup warning:', err.message);
   }
@@ -95,7 +109,7 @@ async function run() {
   check(signatureA === signatureB, 'UUIDs/numbers normalize to the same signature');
   check(buildSignature('') === 'unspecified', 'Empty input yields a stable placeholder signature');
 
-  console.log('\n--- Test 4: 02:00 audit run persistence & idempotency ---');
+  console.log('\n--- Test 4: rolling audit run persistence & idempotency ---');
   const auditNow = new Date('2000-01-03T00:30:00.000Z');
   const auditOne = await runRemediationAudit(supabase, { now: auditNow });
   check(auditOne.status === 'success', 'Audit run completes');
@@ -177,6 +191,56 @@ async function run() {
     if (originalKill === undefined) delete process.env.REMEDIATION_AUTONOMY;
     else process.env.REMEDIATION_AUTONOMY = originalKill;
   }
+
+  console.log('\n--- Test 8: continuous scan idempotency & health score ---');
+  const scanOne = await runRemediationScan(supabase, { now: auditNow });
+  const scanTwo = await runRemediationScan(supabase, { now: auditNow });
+  check(scanOne.status === 'success' && scanTwo.status === 'success', 'Continuous scan ticks complete');
+  check(scanOne.audit_run_id === auditTwo.audit_run_id, 'Scan ticks update the same daily audit row');
+  check(scanTwo.scan_count === scanOne.scan_count + 1, 'Every tick increments scan_count');
+  check(scanOne.changed === false, 'An unchanged window is detected without rewriting the summary');
+  check(Number.isFinite(scanOne.health_score), 'Health score is persisted on every scan');
+  check(computeHealthScore({ errors: 10, friction: 20, stalls: 4 }) === 54, 'Health score formula is deterministic (54 for 10/20/4)');
+  check(computeHealthScore({ errors: 500, friction: 0, stalls: 0 }) === 0, 'Health score clamps at 0');
+  const synthesis = await refreshRemediationSynthesis(supabase, { now: auditNow, force: true });
+  check(['success', 'skipped'].includes(synthesis.status), 'Throttled AI synthesis runs without throwing');
+
+  console.log('\n--- Test 9: threshold-driven plan triggers ---');
+  const triggerClusters = selectPlanTriggerClusters([
+    { signature: 'quiet', severity: 'low', count: 1 },
+    { signature: 'repeating', severity: 'low', count: 3 },
+    { signature: 'critical', severity: 'high', count: 1 }
+  ]);
+  check(
+    triggerClusters.map((cluster) => cluster.signature).join(',') === 'repeating,critical',
+    'Plan triggers select high severity OR count >= threshold'
+  );
+  const strictTriggers = selectPlanTriggerClusters(
+    [{ signature: 'repeating', severity: 'low', count: 3 }, { signature: 'critical', severity: 'high', count: 1 }],
+    { triggerCount: 5 }
+  );
+  check(strictTriggers.length === 1 && strictTriggers[0].signature === 'critical', 'Custom trigger threshold is honoured');
+
+  console.log('\n--- Test 10: adaptive digest frequency ---');
+  const thresholds = { dailyThreshold: 10, weeklyThreshold: 3 };
+  check(computeDigestFrequency(50, 'twice_daily', thresholds) === 'twice_daily', 'High activity keeps twice-daily digests');
+  check(computeDigestFrequency(5, 'twice_daily', thresholds) === 'daily', 'Improvement steps twice_daily → daily');
+  check(computeDigestFrequency(2, 'daily', thresholds) === 'weekly', 'Improvement steps daily → weekly');
+  check(computeDigestFrequency(2, 'weekly', thresholds) === 'weekly', 'Weekly is the floor (never disables)');
+  check(computeDigestFrequency(50, 'weekly', thresholds) === 'twice_daily', 'Regression escalates immediately to twice_daily');
+  check(computeDigestFrequency(50, 'daily', thresholds) === 'twice_daily', 'Regression escalates daily → twice_daily');
+  check(['twice_daily', 'daily', 'weekly'].includes(await getDigestFrequency(supabase)), 'Persisted digest frequency is always valid');
+
+  console.log('\n--- Test 11: twice-daily digest batching ---');
+  const digestOne = await sendRemediationDigest(supabase, { now: auditNow, force: true, dryRun: true });
+  check(digestOne.status === 'success', 'Digest dispatch completes');
+  check(digestOne.proposals >= 1, 'Digest aggregates pending proposals');
+  check(['twice_daily', 'daily', 'weekly'].includes(digestOne.frequency), 'Digest reports the adaptive frequency');
+  check(Number.isFinite(digestOne.health.health_score), 'Digest includes the health snapshot');
+  const digestTwo = await sendRemediationDigest(supabase, { now: auditNow, force: true, dryRun: true });
+  check(digestTwo.proposals === 0, 'Already-digested proposals are not re-sent');
+  const urgent = await maybeSendUrgentRemediationAlert(supabase, { now: auditNow, dryRun: true });
+  check(['skipped', 'success'].includes(urgent.status), 'Urgent escalation evaluates cleanly');
 
   console.log(`\n🎉 ALL ${passed} REMEDIATION PIPELINE ASSERTIONS PASSED`);
 }

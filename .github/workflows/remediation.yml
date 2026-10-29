@@ -48,6 +48,7 @@ jobs:
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       AUDIT_RUN_ID: ${{ github.event.client_payload.audit_run_id || github.event.inputs.audit_run_id }}
       MODIFY_FEEDBACK: ${{ github.event.client_payload.feedback || '' }}
+      CLUSTER_SIGNATURE: ${{ github.event.client_payload.cluster_signature || '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -65,7 +66,7 @@ jobs:
       - name: Prepare audit context
         run: |
           mkdir -p remediation/work-orders
-          node scripts/remediation_ci.js fetch-audit "$AUDIT_RUN_ID" "$MODIFY_FEEDBACK" > remediation/audit-context.json
+          node scripts/remediation_ci.js fetch-audit "$AUDIT_RUN_ID" "$MODIFY_FEEDBACK" "$CLUSTER_SIGNATURE" > remediation/audit-context.json
           test -s remediation/audit-context.json
 
       - name: Install Cline CLI
@@ -78,6 +79,7 @@ jobs:
             "You are Cline drafting a remediation plan for Saka Fleet inside CI. \
              Read .clinerules and SAKA_FLEET_ARCHITECTURE.md completely first. \
              Then read remediation/audit-context.json (Sentinel audit of the last 24h). \
+             When cluster_signature is present, focus the plan on that cluster and ignore unrelated clusters. \
              Explore only the code needed to write a precise, minimal plan. \
              Write ONE JSON file to remediation/work-orders/plan.json using the plan_schema from the context. \
              Hard rules: at most 12 changes; repository-relative paths; at least one existing root-level test_*.js suite; \
@@ -87,7 +89,7 @@ jobs:
           test -f remediation/work-orders/plan.json
 
       - name: Submit plan (guardrail-sanitized)
-        run: node scripts/remediation_ci.js submit-plan "$AUDIT_RUN_ID" remediation/work-orders/plan.json
+        run: node scripts/remediation_ci.js submit-plan "$AUDIT_RUN_ID" remediation/work-orders/plan.json "$CLUSTER_SIGNATURE"
 
       - name: Upload plan artifacts
         if: always()

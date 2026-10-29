@@ -48,8 +48,8 @@ const SHAPES = [
   { table: 'profiles', columns: 'id, phone_number, subscription_tier, subscription_status, unit_system, country_code, deleted_at' },
   { table: 'vehicles', columns: 'id, owner_id, assigned_driver_id, plate_number, vin, qr_passbook_token, status, deleted_at, owner_phone, transfer_count_current_year' },
   { table: 'vin_registry', columns: 'vin, first_owner_id, trial_granted, trial_end_at, trial_status' },
-  { table: 'sentinel_audit_runs', columns: 'id, run_date, error_count, friction_count, stall_count, summary, plan_dispatched_at' },
-  { table: 'remediation_proposals', columns: 'id, proposal_code, audit_run_id, status, approval_nonce, nonce_expires_at, attempts, execution' }
+  { table: 'sentinel_audit_runs', columns: 'id, run_date, error_count, friction_count, stall_count, summary, clusters, health_score, scan_count, last_scanned_at, last_synthesis_at, plan_dispatches' },
+  { table: 'remediation_proposals', columns: 'id, proposal_code, audit_run_id, target_signature, status, approval_nonce, nonce_expires_at, attempts, digest_sent_at, execution' }
 ];
 
 const results = [];

@@ -26,6 +26,12 @@ export const REMEDIATION_MIGRATION_SQL = `
         friction_count integer DEFAULT 0,
         stall_count integer DEFAULT 0,
         summary jsonb,
+        clusters jsonb,
+        health_score integer,
+        scan_count integer DEFAULT 0,
+        last_scanned_at timestamp with time zone,
+        last_synthesis_at timestamp with time zone,
+        plan_dispatches jsonb DEFAULT '{}'::jsonb,
         plan_dispatched_at timestamp with time zone,
         created_at timestamp with time zone DEFAULT now()
     );
@@ -41,11 +47,13 @@ export const REMEDIATION_MIGRATION_SQL = `
         proposed_changes jsonb,
         risk_level text DEFAULT 'low',
         status text DEFAULT 'PENDING_APPROVAL',
+        target_signature text,
         feedback text,
         approval_nonce text,
         nonce_expires_at timestamp with time zone,
         attempts integer DEFAULT 0,
         dispatched_at timestamp with time zone,
+        digest_sent_at timestamp with time zone,
         execution_dispatched_at timestamp with time zone,
         execution jsonb,
         created_at timestamp with time zone DEFAULT now(),
@@ -55,8 +63,16 @@ export const REMEDIATION_MIGRATION_SQL = `
 
     -- Forward-compatible columns (no-ops on a fresh table).
     ALTER TABLE public.sentinel_audit_runs ADD COLUMN IF NOT EXISTS plan_dispatched_at timestamp with time zone;
+    ALTER TABLE public.sentinel_audit_runs ADD COLUMN IF NOT EXISTS clusters jsonb;
+    ALTER TABLE public.sentinel_audit_runs ADD COLUMN IF NOT EXISTS health_score integer;
+    ALTER TABLE public.sentinel_audit_runs ADD COLUMN IF NOT EXISTS scan_count integer DEFAULT 0;
+    ALTER TABLE public.sentinel_audit_runs ADD COLUMN IF NOT EXISTS last_scanned_at timestamp with time zone;
+    ALTER TABLE public.sentinel_audit_runs ADD COLUMN IF NOT EXISTS last_synthesis_at timestamp with time zone;
+    ALTER TABLE public.sentinel_audit_runs ADD COLUMN IF NOT EXISTS plan_dispatches jsonb DEFAULT '{}'::jsonb;
     ALTER TABLE public.remediation_proposals ADD COLUMN IF NOT EXISTS attempts integer DEFAULT 0;
     ALTER TABLE public.remediation_proposals ADD COLUMN IF NOT EXISTS dispatched_at timestamp with time zone;
+    ALTER TABLE public.remediation_proposals ADD COLUMN IF NOT EXISTS digest_sent_at timestamp with time zone;
+    ALTER TABLE public.remediation_proposals ADD COLUMN IF NOT EXISTS target_signature text;
     ALTER TABLE public.remediation_proposals ADD COLUMN IF NOT EXISTS execution_dispatched_at timestamp with time zone;
     ALTER TABLE public.remediation_proposals ADD COLUMN IF NOT EXISTS execution jsonb;
     ALTER TABLE public.remediation_proposals ADD COLUMN IF NOT EXISTS feedback text;
@@ -64,6 +80,7 @@ export const REMEDIATION_MIGRATION_SQL = `
     CREATE INDEX IF NOT EXISTS idx_sentinel_audit_runs_date ON public.sentinel_audit_runs(run_date DESC);
     CREATE INDEX IF NOT EXISTS idx_remediation_proposals_status ON public.remediation_proposals(status, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_remediation_proposals_audit ON public.remediation_proposals(audit_run_id);
+    CREATE INDEX IF NOT EXISTS idx_remediation_proposals_signature ON public.remediation_proposals(target_signature, status);
 `;
 
 export async function applyRemediationMigration() {

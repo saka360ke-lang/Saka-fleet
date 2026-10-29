@@ -177,6 +177,85 @@ export async function sendRemediationProposalEmail({
     }
 }
 
+/**
+ * Twice-daily remediation digest email (v1.11.0).
+ * Dual-channel companion to the WhatsApp digest; never throws.
+ */
+export async function sendRemediationDigestEmail({
+    dateLabel = '',
+    slotLabel = 'Digest',
+    frequency = 'twice_daily',
+    health = {},
+    pending = [],
+    weeklyEvents = 0
+} = {}) {
+    const targetEmail = process.env.SUPERADMIN_EMAIL;
+    if (!targetEmail || !process.env.RESEND_API_KEY) return false;
+
+    const esc = (value) => String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+
+    const rows = (Array.isArray(pending) ? pending : []).map((proposal, index) => `
+        <tr>
+            <td style="padding: 6px 8px; border-bottom: 1px solid #e2e8f0;">${index + 1}</td>
+            <td style="padding: 6px 8px; border-bottom: 1px solid #e2e8f0;"><code>${esc(proposal.proposal_code)}</code></td>
+            <td style="padding: 6px 8px; border-bottom: 1px solid #e2e8f0;">${esc(proposal.title)}</td>
+            <td style="padding: 6px 8px; border-bottom: 1px solid #e2e8f0;">${esc(proposal.risk_level || 'low')}</td>
+            <td style="padding: 6px 8px; border-bottom: 1px solid #e2e8f0;">${esc(proposal.status)}</td>
+        </tr>`).join('');
+
+    try {
+        const { data, error } = await getResendClient().emails.send({
+            from: 'Saka Remediation <security@reports.sakafleet.com>',
+            to: [targetEmail],
+            subject: `Saka Remediation ${slotLabel} Digest — ${dateLabel}`,
+            html: `
+                <div style="font-family: Arial, sans-serif; color: #1e293b; max-width: 680px; margin: auto; border: 1px solid #e2e8f0; padding: 24px; border-radius: 12px;">
+                    <h2 style="color: #0f172a; margin-top: 0;">🩺 Saka Remediation ${esc(slotLabel)} Digest</h2>
+                    <p style="color: #64748b;">${esc(dateLabel)} • digest frequency: <strong>${esc(frequency)}</strong> (auto-scales with stability)</p>
+
+                    <h3 style="margin-bottom: 8px;">System health</h3>
+                    <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+                        <tr><td style="padding: 6px 8px; font-weight: bold; width: 220px;">Health score</td><td style="padding: 6px 8px;">${Number(health.health_score) || 0}/100</td></tr>
+                        <tr><td style="padding: 6px 8px; font-weight: bold;">Errors (24h)</td><td style="padding: 6px 8px;">${Number(health.errors_24h) || 0} (unresolved: ${Number(health.unresolved_errors) || 0})</td></tr>
+                        <tr><td style="padding: 6px 8px; font-weight: bold;">Friction events (24h)</td><td style="padding: 6px 8px;">${Number(health.friction_24h) || 0}</td></tr>
+                        <tr><td style="padding: 6px 8px; font-weight: bold;">Stalled sessions</td><td style="padding: 6px 8px;">${Number(health.stalls_24h) || 0}</td></tr>
+                        <tr><td style="padding: 6px 8px; font-weight: bold;">Active Sentinel rules</td><td style="padding: 6px 8px;">${Number(health.active_rules) || 0}</td></tr>
+                        <tr><td style="padding: 6px 8px; font-weight: bold;">Completed scans</td><td style="padding: 6px 8px;">${Number(health.scans) || 0}</td></tr>
+                    </table>
+
+                    ${rows ? `<h3 style="margin-bottom: 8px;">Pending approvals (${pending.length})</h3>
+                    <table style="width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px;">
+                        <thead><tr style="background: #f8fafc;"><th style="text-align: left; padding: 6px 8px;">#</th><th style="text-align: left; padding: 6px 8px;">Code</th><th style="text-align: left; padding: 6px 8px;">Title</th><th style="text-align: left; padding: 6px 8px;">Risk</th><th style="text-align: left; padding: 6px 8px;">Status</th></tr></thead>
+                        <tbody>${rows}</tbody>
+                    </table>` : '<p>✅ No pending remediation approvals.</p>'}
+
+                    <div style="background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 8px; padding: 16px; margin-top: 20px;">
+                        <p style="margin: 0 0 8px 0; font-weight: bold;">Reply on WhatsApp to decide:</p>
+                        <p style="margin: 4px 0;"><code>admin accept fix &lt;CODE&gt;</code></p>
+                        <p style="margin: 4px 0;"><code>admin decline fix &lt;CODE&gt;</code></p>
+                        <p style="margin: 4px 0;"><code>admin modify fix &lt;CODE&gt; &lt;guidance&gt;</code></p>
+                    </div>
+                    <p style="font-size: 12px; color: #64748b; margin-top: 20px;">Trailing weekly events: ${Number(weeklyEvents) || 0}. Digest frequency steps down one level at a time as stability improves and escalates immediately on regression.</p>
+                </div>
+            `
+        });
+
+        if (error) {
+            console.error('[Resend Remediation Digest Error]:', error.message);
+            return false;
+        }
+
+        console.log(`[Resend Remediation Digest] Sent to ${targetEmail}. ID: ${data?.id}`);
+        return true;
+    } catch (err) {
+        console.error('[Resend Remediation Digest Exception]:', err.message);
+        return false;
+    }
+}
+
 export async function sendEmailOtp(targetEmail, code) {
     try {
         const { data, error } = await getResendClient().emails.send({

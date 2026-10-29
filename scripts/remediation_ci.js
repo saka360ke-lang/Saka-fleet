@@ -22,8 +22,8 @@ import {
  * --------------------------------------------
  * Executed inside .github/workflows/remediation.yml only. Subcommands:
  *
- *   fetch-audit <auditRunId|run_date> [modifyFeedback]
- *   submit-plan <auditRunId> <planFile>
+ *   fetch-audit <auditRunId|run_date> [modifyFeedback] [clusterSignature]
+ *   submit-plan <auditRunId> <planFile> [clusterSignature]
  *   tests <proposalCode>
  *   gate <proposalCode> <approvalNonce>
  *   fetch <proposalCode>
@@ -65,9 +65,16 @@ async function getProposal(supabase, proposalCode) {
   return data;
 }
 
-async function fetchAudit(supabase, [auditKey, modifyFeedback]) {
+async function fetchAudit(supabase, [auditKey, modifyFeedback, clusterSignature]) {
   const audit = await loadAuditRun(supabase, auditKey);
   if (!audit) throw new Error(`Audit run not found: ${auditKey}`);
+
+  const allClusters = Array.isArray(audit.clusters)
+    ? audit.clusters
+    : (Array.isArray(audit.summary?.clusters) ? audit.summary.clusters : []);
+  const focusedClusters = clusterSignature
+    ? allClusters.filter((cluster) => cluster.signature === clusterSignature)
+    : allClusters;
 
   const context = {
     audit_run_id: audit.id,
@@ -79,6 +86,9 @@ async function fetchAudit(supabase, [auditKey, modifyFeedback]) {
       friction: audit.friction_count,
       stalls: audit.stall_count
     },
+    health_score: audit.health_score ?? null,
+    cluster_signature: clusterSignature || null,
+    clusters: focusedClusters,
     summary: audit.summary,
     modify_feedback: modifyFeedback || null,
     plan_schema: {
@@ -117,7 +127,7 @@ async function nextProposalCode(supabase) {
   return `${prefix}${String(next).padStart(2, '0')}`;
 }
 
-async function submitPlan(supabase, [auditKey, planFile]) {
+async function submitPlan(supabase, [auditKey, planFile, clusterSignature]) {
   if (!planFile || !fs.existsSync(planFile)) {
     throw new Error(`Plan file not found: ${planFile}`);
   }
@@ -152,6 +162,7 @@ async function submitPlan(supabase, [auditKey, planFile]) {
       .insert([{
         proposal_code: proposalCode,
         audit_run_id: audit.id,
+        target_signature: clusterSignature || null,
         title: plan.title,
         category: plan.category,
         root_cause: plan.root_cause,
