@@ -3,7 +3,8 @@ import {
   getAIClient,
   chatCompletion,
   normalizeHistory,
-  parseJsonSafely
+  parseJsonSafely,
+  AI_TIERS
 } from './src/services/aiClient.js';
 import { buildFlowPlaybook } from './src/services/flowKnowledge.js';
 
@@ -830,6 +831,30 @@ export function classifyIntentWithRegex(messageText = '') {
 }
 
 /**
+ * Canary escalation (Phase 1): decide whether a non-quiz conversational turn
+ * deserves the premium Tier-2 model. Deterministic and provider-agnostic —
+ * when PREMIUM_MODEL_ENABLED is off, resolveTier() downgrades Tier 2 to Tier 1.
+ */
+const FRUSTRATION_RE = /\b(stuck|broken|not working|complaint|angry|frustrated|terrible|worst|refund|scam|cheat|report you|fed up|useless)\b/i;
+const HIGH_STAKES_RE = /\b(assign\s+driver|unassign|remove\s+driver|transfer|sell\s+(my\s+)?vehicle|passbook|ownership|driver\s+licen[cs]e|compliance|otp)\b/i;
+const DISPATCH_RE = /\b(book(?:ing)?|dispatch|pickup|pick\s*up|drop\s*off|drop-off|deliver|hire|rent)\b/i;
+const ACTION_VERB_RE = /\b(log|set|update|add|register|assign|transfer|complete|request)\b/i;
+
+export function classifyIntentTier(messageText = '', conversationHistory = []) {
+  const clean = String(messageText || '').replace(/\s+/g, ' ').trim();
+  if (!clean) return AI_TIERS.ROUTER;
+  if (FRUSTRATION_RE.test(clean) || HIGH_STAKES_RE.test(clean) || DISPATCH_RE.test(clean)) {
+    return AI_TIERS.CONVERSATIONAL;
+  }
+  if (clean.length > 160) return AI_TIERS.CONVERSATIONAL;
+  const digitCount = (clean.match(/\d/g) || []).length;
+  if (digitCount >= 2 && ACTION_VERB_RE.test(clean)) return AI_TIERS.CONVERSATIONAL;
+  const historyLength = Array.isArray(conversationHistory) ? conversationHistory.length : 0;
+  if (historyLength >= 6 && /^(why|explain|how come)\b/i.test(clean)) return AI_TIERS.CONVERSATIONAL;
+  return AI_TIERS.ROUTER;
+}
+
+/**
  * Intelligent message parser and intent classifier for Saka Assistant
  */
 export async function processSakaMessage(targetLang = 'English', messageText = '', conversationHistory = [], mediaParts = [], providedSupabase = null, activeVehicleContext = null) {
@@ -863,6 +888,7 @@ ${fleetContextSection}
 `;
 
   const cleanHistory = normalizeHistory(conversationHistory);
+  const intentTier = classifyIntentTier(messageText, conversationHistory);
 
   const aiResult = await chatCompletion({
     system: systemInstruction,
@@ -873,7 +899,8 @@ ${fleetContextSection}
     jsonMode: true,
     maxTokens: 800,
     temperature: 0.3,
-    purpose: 'intent_classify'
+    purpose: 'intent_classify',
+    tier: intentTier
   });
 
   if (aiResult.ok) {

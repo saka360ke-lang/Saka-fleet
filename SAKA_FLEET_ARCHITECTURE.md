@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.12.0  
+**Version:** 1.12.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -33,14 +33,17 @@ All LLM traffic flows through **`src/services/aiClient.js`**. No service talks t
 | Primary model | `deepseek-chat` (DeepSeek-V3) |
 | Tier-3 opt-in | `deepseek-reasoner` via `AI_MODEL_TIER_3` |
 | SDK | `openai` (OpenAI-compatible surface) |
-| API key env | `DEEPSEEK_API_KEY` (plus optional `OPENAI_API_KEY` for the Phase-1 provider) |
+| API key env | `DEEPSEEK_API_KEY` (Tier 1/3) + `ANTHROPIC_API_KEY` (Tier 2) + optional `OPENAI_API_KEY` |
+| Tier-2 provider | Anthropic Messages API via native `fetch` (`anthropic-version: 2023-06-01`, `AI_TIMEOUT_MS_PREMIUM` timeout) |
 | Optional model override | `DEEPSEEK_MODEL`, `AI_MODEL_TIER_1/2/3` |
 | Purpose registry | `AI_PURPOSES` (tier + default params per purpose) |
 | Kill switch | `PREMIUM_MODEL_ENABLED` (off; Tier-2 downgrades to Tier 1 while off) |
 
 **Exports**
 - `getAIClient()` — lazily created, cached `OpenAI` instance bound to the DeepSeek baseURL.
-- `getProviderClient(provider)` — lazy, cached per provider + key (`deepseek`, `openai`; `anthropic` is a fail-soft stub until Phase 1).
+- `getProviderClient(provider)` — lazy, cached per provider + key (`deepseek`, `openai`; Anthropic is invoked through `runAnthropicAttempt`).
+- `runAnthropicAttempt({ model, system, messages, jsonMode, maxTokens, temperature, timeoutMs })` — fetch-based Anthropic Messages API call with `AbortSignal` timeout; throws so `chatCompletion()` can fall back to DeepSeek.
+- `toAnthropicMessages()` / `normalizeAnthropicResponse()` — pure request/response translation (system hoisting, role merging, text-block + token normalization).
 - `resolveTier(purpose, { tier })` / `routeModelForPurpose(purpose, ctx)` — purpose → `{ tier, provider, model, candidates[] }`.
 - `chatCompletion({ system, messages, jsonMode, maxTokens, temperature, model, provider, purpose })` → `{ ok, text, model, error }`. **Never throws.**
 - `generateText({ system, prompt, jsonMode, maxTokens, temperature, provider, purpose })` → `string | null`.
@@ -1314,20 +1317,24 @@ All LLM traffic still flows through `src/services/aiClient.js` (the only provide
 | 2 | Conversational nuance | `AI_MODEL_TIER_2` → `deepseek-chat` | intent classification, prose rendering (driver handshakes, transfers, complaints) |
 | 3 | Reasoning / synthesis | `AI_MODEL_TIER_3` → `deepseek-chat` (`deepseek-reasoner` opt-in) | Sentinel diagnosis, friction patches, prompt refinement, Horizon, remediation synthesis |
 
-`PREMIUM_MODEL_ENABLED` (default **off**) is the master kill switch: while off, every Tier-2 purpose downgrades to Tier 1. `CONVERSATIONAL_PROVIDER` selects the Tier-2 provider (`deepseek` in Phase 0; `openai` is supported by the lazy client, `anthropic` is a fail-soft stub until Phase 1).
+`PREMIUM_MODEL_ENABLED` (default **off**) is the master kill switch: while off, every Tier-2 purpose downgrades to Tier 1. `CONVERSATIONAL_PROVIDER` selects the Tier-2 provider (`deepseek` by default; `anthropic` is live via the fetch-based Messages API in v1.12.1; `openai` is supported by the lazy client).
 
 ### 36.2 Registry & routing API
 - `AI_PURPOSES` — frozen purpose → `{ tier, jsonMode, maxTokens, temperature }` registry (source of truth for defaults).
 - `resolveTier(purpose, { tier })` → `{ tier, provider, model }`; Tier 0 returns null provider/model (deterministic, no call).
 - `routeModelForPurpose(purpose, ctx)` → `{ tier, provider, model, candidates[] }`; DeepSeek candidate fallbacks are appended for DeepSeek-provider routes.
-- `getProviderClient(provider)` — lazy, cached per provider + key. DeepSeek and OpenAI are implemented; Anthropic returns `null` so `chatCompletion()` falls back to DeepSeek instead of failing.
-- `chatCompletion({ ..., provider, purpose })` / `generateText({ ..., provider, purpose })` — additive and backward-compatible. An explicit `model` keeps the legacy single-candidate contract.
+- `getProviderClient(provider)` — lazy, cached per provider + key. DeepSeek and OpenAI are implemented; Anthropic uses the separate fetch-based `runAnthropicAttempt()` path.
+- `runAnthropicAttempt({ model, system, messages, jsonMode, maxTokens, temperature, timeoutMs })` — native `fetch` POST to `https://api.anthropic.com/v1/messages` (`x-api-key`, `anthropic-version: 2023-06-01`, `AbortSignal.timeout(AI_TIMEOUT_MS_PREMIUM)`). Throws on non-2xx/timeout so `chatCompletion()` falls back to DeepSeek.
+- `chatCompletion({ ..., provider, purpose, tier })` / `generateText({ ..., provider, purpose, tier })` — additive and backward-compatible. An explicit `model` keeps the legacy single-candidate contract; `tier` lets the canary classifier force or suppress escalation.
+- Premium concurrency guard: an in-process counter caps Anthropic in-flight calls at `AI_PREMIUM_MAX_CONCURRENCY` (default 2); overflow continues straight to the DeepSeek fallback, which is always the last attempt.
+- Canary escalation: `classifyIntentTier()` (sakaAi.js) promotes only high-stakes or complex non-quiz turns to Tier 2 (frustration lexicon, driver handshakes, booking/dispatch, >160 chars, multi-fact actions, deep-history why-questions). Tier-0 quiz fast paths and simple FAQs/greetings stay Tier 1.
 - Each outcome (success or terminal failure) emits exactly one usage record to the sink installed by `installAiUsageSink()`; emission is fire-and-forget and can never block a turn.
 
 ### 36.3 Purpose tagging (call sites)
 | Purpose | Call site |
 | :--- | :--- |
 | `intent_classify` | `sakaAi.js` `processSakaMessage()` |
+| `classifyIntentTier` (canary) | `sakaAi.js` — deterministic Tier-1 vs Tier-2 decision for non-quiz turns |
 | `extraction` | `naturalParser.js` `extractWithAI()` |
 | `question_render` / `stall_nudge` / `prose_render` | `conversationEngine.js` `composeMessage()` (mapped from the compose purpose) |
 | `sentinel_diagnosis` | `sentinel.js` `runHealthCheck()`, `superadmin.js` `SENTINEL_DIAGNOSE` |
@@ -1359,9 +1366,10 @@ Retention: `AI_USAGE_LOG_MAX_ROWS` (10,000) trimmed every `AI_USAGE_TRIM_EVERY` 
 | `AI_MODEL_TIER_1` | `DEEPSEEK_MODEL` → `deepseek-chat` | router-tier model |
 | `AI_MODEL_TIER_2` | `deepseek-chat` | conversational-tier model (Phase 1: Claude/GPT-4o-class) |
 | `AI_MODEL_TIER_3` | `deepseek-chat` | reasoning-tier model (`deepseek-reasoner` opt-in) |
+| `ANTHROPIC_API_KEY` | (unset) | Tier-2 Anthropic key; unset ⇒ DeepSeek-only |
 | `CONVERSATIONAL_PROVIDER` | deepseek | Tier-2 provider |
-| `AI_TIMEOUT_MS_PREMIUM` | 15000 | Tier-2 fail-fast timeout |
-| `AI_PREMIUM_MAX_CONCURRENCY` | 2 | Tier-2 concurrency cap (enforced Phase 1) |
+| `AI_TIMEOUT_MS_PREMIUM` | 15000 | Tier-2 fail-fast timeout (Anthropic `AbortSignal`) |
+| `AI_PREMIUM_MAX_CONCURRENCY` | 2 | Anthropic in-flight cap; overflow → DeepSeek |
 | `AI_USAGE_LOGGING_ENABLED` | on | telemetry writes kill switch |
 | `AI_USAGE_LOG_MAX_ROWS` | 10000 | retention cap |
 | `AI_USAGE_TRIM_EVERY` | 250 | writes between retention sweeps |
@@ -1371,17 +1379,18 @@ Retention: `AI_USAGE_LOG_MAX_ROWS` (10,000) trimmed every `AI_USAGE_TRIM_EVERY` 
 - `src/services/aiUsageLog.js` — `ensureAiUsageLogsTable`, `logAiUsage`, `trimAiUsageLogs`, `installAiUsageSink`.
 - `index.js` — boot chain ensures the table and installs the sink after `ensureRemediationTables()`.
 - `test_model_router.js` — 70 assertions: tier resolution for every purpose, premium toggle, Tier 0, unknown purpose, missing-key degradation + single telemetry record, provider caching, helper contracts, DB provisioning/insert/cleanup (zero live API calls).
+- `test_phase1_canary.js` — 37 assertions: Anthropic translation/normalization, Tier-2 success, 429/timeout fallback to DeepSeek, `AI_PREMIUM_MAX_CONCURRENCY` cap + overflow, escalation matrix, premium-off downgrade, DB telemetry (fetch-stubbed, zero network).
 
 ### 36.7 Phase roadmap
 | Phase | Scope | Status |
 | :--- | :--- | :--- |
 | 0 | Router abstraction + usage telemetry (all DeepSeek) | shipped (v1.12.0) |
-| 1 | Premium conversational provider behind `PREMIUM_MODEL_ENABLED` | planned |
+| 1 | Anthropic canary Tier-2 + escalation rules + concurrency cap | shipped (v1.12.1) |
 | 2 | Complexity-based escalation for intent classification | planned |
 | 3 | CI Cline model parameterization + reasoning-model opt-in | planned |
 | 4 | Budget alerts + weekly cost/latency report | planned |
 
 ### 36.8 Governance rule
-Every new LLM call must pass a `purpose` from `AI_PURPOSES`; provider/model changes go through `aiClient.js` only; telemetry must never be bypassed. Mirrored in `.clinerules` rule 20.
+Every new LLM call must pass a `purpose` from `AI_PURPOSES`; provider/model changes go through `aiClient.js` only; telemetry must never be bypassed. Tier-2 promotion is deterministic (`classifyIntentTier`), and premium-provider failures must always fall back to Tier-1 DeepSeek. Mirrored in `.clinerules` rule 20.
 
 
