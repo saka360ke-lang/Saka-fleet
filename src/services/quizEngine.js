@@ -861,6 +861,18 @@ export function startQuiz({ session, flowKey, ctx, prefill = {} }) {
     if (check.ok) session.quiz.answers.vehicle_id = onlyId;
   }
 
+  // Active-vehicle context: honour the switch promise ("subsequent logs apply
+  // to this vehicle") when the session already points at a fleet vehicle.
+  // Ambiguity (no active vehicle, or one outside the fleet) still prompts.
+  if (vField && session.quiz.answers.vehicle_id === undefined && ctx.activeVehicle?.id) {
+    const activeVehicleId = ctx.activeVehicle.id;
+    const belongsToFleet = (ctx.vehicles || []).some((v) => v.id === activeVehicleId);
+    if (belongsToFleet) {
+      const check = vField.validate(activeVehicleId, { ...ctx, answers: session.quiz.answers }, session.quiz.answers);
+      if (check.ok) session.quiz.answers.vehicle_id = activeVehicleId;
+    }
+  }
+
   // Warm the question cache for the remaining fields in the background — one
   // AI call for the whole flow instead of one per turn.
   prefetchFlowQuestions(def, ctx).catch(() => {});

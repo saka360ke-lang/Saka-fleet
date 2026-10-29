@@ -23,12 +23,31 @@ import { chatCompletion, parseJsonSafely } from './aiClient.js';
 
 export const MAX_EXTRA_NOTE_LENGTH = 280;
 export const MAX_EXTRA_NOTES = 6;
+// AI extraction prompt bounds: keep the DeepSeek payload small and fast.
+export const MAX_EXTRACTION_TEXT_CHARS = 600;
+export const MAX_COLLECTED_JSON_CHARS = 800;
 
 const SMALL_TALK_RE = /^(hi|hello|hey|thanks|thank you|ok|okay|cool|great|nice|sure|yes|no|yep|nope|got it|alright|perfect|please)[.! ]*$/i;
 const CONTROL_RE = /^(cancel|exit|stop|quit|abort|restart|start over|reset|skip|later|not now|no thanks|none|na|n\/a|done|finish|help|hint)$/i;
 
 function normalizeNote(text) {
   return String(text || '').replace(/\s+/g, ' ').trim().slice(0, MAX_EXTRA_NOTE_LENGTH);
+}
+
+/**
+ * Bound AI-extraction input so a pasted transcript or long OCR dump can never
+ * bloat the DeepSeek payload. Deterministic parsing still sees the full text.
+ */
+export function clampExtractionText(text, maxChars = MAX_EXTRACTION_TEXT_CHARS) {
+  const clean = String(text || '').trim();
+  if (clean.length <= maxChars) return clean;
+  return `${clean.slice(0, maxChars)}…`;
+}
+
+function clampCollectedJson(collected) {
+  const raw = JSON.stringify(collected || {});
+  if (raw.length <= MAX_COLLECTED_JSON_CHARS) return raw;
+  return `${raw.slice(0, MAX_COLLECTED_JSON_CHARS)}…`;
 }
 
 /**
@@ -139,7 +158,7 @@ function fieldSpecForAI(flowDef, answers = {}) {
 export async function extractWithAI({ text, flowDef, answers = {}, ctx = {}, timeoutMs = 8000 }) {
   if (!process.env.DEEPSEEK_API_KEY) return { fields: {}, extraNotes: [], confidence: 0, skipped: 'no-api-key' };
 
-  const clean = String(text || '').trim();
+  const clean = clampExtractionText(text);
   if (!clean) return { fields: {}, extraNotes: [], confidence: 0 };
 
   const specs = fieldSpecForAI(flowDef, answers);
@@ -153,7 +172,7 @@ export async function extractWithAI({ text, flowDef, answers = {}, ctx = {}, tim
     'Return JSON only: {"fields": {"<key>": <value>}, "extra_notes": ["<detail>"]}.',
     `Flow: ${flowDef?.label || 'conversation'}`,
     `User message: ${JSON.stringify(clean)}`,
-    `Already collected: ${JSON.stringify(collected)}`,
+    `Already collected: ${clampCollectedJson(collected)}`,
     `Missing fields: ${JSON.stringify(specs)}`,
     'Rules:',
     '- Fill ONLY fields the message clearly provides. Never invent values.',

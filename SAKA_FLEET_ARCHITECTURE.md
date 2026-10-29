@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.8.0  
+**Version:** 1.8.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -590,6 +590,8 @@ Owners exceeding tier limits are prompted to upgrade via Paystack checkout.
 5. **Cloud Run alert false positives (fixed v1.8):** INFO/200 log entries with 5s+ latency were being classified as `SYSTEM_ERROR`, polluting `chat_friction_logs` and writing empty `"{}"` rows into `error_logs`. `scanCloudRunAnomalies` now ignores INFO/NOTICE/DEBUG + <400 status rows regardless of latency and skips empty payloads. `scripts/audit_logs.js` is the permanent read-only triage tool that cross-references errors, friction, chat records, reminders and vehicle units.
 6. **Dead reminder evaluator (fixed v1.8):** the orphaned `evaluateServiceThresholds()` helper in `index.js` was never invoked and referenced a non-existent `notified_overdue` column. It has been removed and replaced by `maintenanceReminders.evaluateVehicleReminders()` plus a 30-minute sweep worker (initial pass 90s after boot).
 7. **Confirm-phase stall copy (fixed v1.8):** stall nudges now say "Reply YES to confirm / Cancel to discard" instead of "Pending: n/a". Sessions with repeated extraction failures are logged as `EXTRACTION_ERROR` friction so parsing regressions surface immediately.
+8. **Legacy live suite `test_agent_flow.js` (stale since v1.7):** it asserts pre-quiz static strings ("Switched Active Vehicle", "Expense Logged Successfully") that no longer exist because outcomes are AI-rendered and every write is confirmation-gated. It fails at HEAD when run standalone — do not treat that as a regression without checking prompt/flow changes. Maintained coverage lives in `test_quiz_flow.js`, `test_natural_parser.js`, `test_maintenance_reminders.js` and the offline `test_agent_training.js`.
+9. **Active-vehicle quiz prefill (fixed v1.8.1):** multi-vehicle fleets now pre-fill `vehicle_id` from the session's active vehicle (honouring the switch promise "subsequent logs apply to this vehicle"). Only genuinely ambiguous turns (no active vehicle, or an out-of-fleet id) re-ask.
 
 ---
 
@@ -679,6 +681,7 @@ All multi-field flows run through `src/services/quizEngine.js`. Each asks exactl
 | `reactivate_account` | confirm | — | `profiles.is_active = true` |
 
 Navigation: `Cancel` aborts, `Restart` resets the flow, `Skip` is accepted only on optional fields (skips the whole optional group).
+Vehicle resolution: quiz flows pre-fill `vehicle_id` from the session's active vehicle when it belongs to the fleet (v1.8.1), so multi-vehicle fleets are not re-asked after a switch; a single-vehicle fleet auto-selects, and genuinely ambiguous turns still prompt with the plate list.
 
 ### 20.1 Quiz ↔ Conversation Arbitration (v1.7.1)
 
@@ -791,6 +794,7 @@ These rules are permanent and mirrored in `.clinerules`:
 5. **Automatic test-data cleanup:** every stateful test/check clears what it created (pass or fail) via `runWithCleanup` / `npm test`; `npm run test:cleanup` for ad-hoc sweeps.
 6. **Targeted testing only:** run only the suites directly related to the change; no redundant full-suite runs.
 7. **Git commit & publish:** once verified, automatically stage, commit and push to `origin/main`; the commit hook dispatches deployment alerts.
+8. **App changes & skill synchronization:** every application change simultaneously updates `src/services/flowKnowledge.js`, Saka's prompt definitions (`sakaAi.js`, `conversationEngine.js`) and all project `.md` files — see §31.
 
 ---
 
@@ -884,6 +888,72 @@ Alerts are WhatsApp-ready and unit-aware, e.g. "Service Warning (KDA 123A): Oil 
 
 ### 29.5 Tests
 - `test_maintenance_reminders.js` — 44 stateless assertions (unit parsing, canonical conversion, remaining tracking, tier dispatch, overdue, sweep, imperial display).
-- `test_natural_parser.js` — 24 stateless assertions (deterministic extraction, extra notes, dynamic missing fields, AI degradation).
+- `test_natural_parser.js` — 28 stateless assertions (deterministic extraction, extra notes, dynamic missing fields, AI degradation, AI payload bounds).
+- `test_agent_training.js` — 24 stateless assertions (flow-playbook injection, all 32 intents and 17 flows trained, mandatory training sections, active-vehicle prefill).
 - Regressions kept green: `test_quiz_flow.js` (41) and `test_sentinel_recovery.js` (15).
+
+---
+
+## 30. Latency Architecture & Cloud Run Operations (v1.8.1)
+
+### 30.1 Instant webhook acknowledgement
+- `handleWhatsAppWebhook` verifies the Meta HMAC → checks the in-memory wamid cache (`isMessageProcessed`, <0.1 ms) → sends **200 OK immediately** → enqueues the turn.
+- **No Supabase I/O remains on the acknowledgement path.** The distributed claim (`checkAndRecordWamid`: memory mark + `processed_webhooks` select/upsert) now runs as the FIRST step inside the per-phone queued task. A per-task `claimed` flag ensures queue retries re-run processing without re-claiming (retry semantics preserved).
+- `processed_webhooks` is written **once** per message; the previous duplicate upsert inside `processIncomingWhatsAppMessage` was removed.
+- Media turns run OCR (`ocrWhatsAppMedia`) and durable session hydration (`loadSessionSnapshot`) **in parallel** via `Promise.all`; both are side-effect free, so a media turn no longer pays two serial round trips.
+
+### 30.2 Pooling & fail-fast timeouts
+- `src/services/supabaseClient.js` caches exactly one client per process (HTTP keep-alive pool) and wraps every request in a `SUPABASE_TIMEOUT_MS` (15 s) AbortController. `index.js`, `whatsapp.js` and the route layer reuse the same pooled client.
+- DeepSeek calls are fail-fast: SDK `maxRetries: 0`, `AI_TIMEOUT_MS` 12 s. `naturalParser.extractWithAI` races an 8 s cap and degrades to deterministic extraction.
+
+### 30.3 Bounded AI payloads
+- `naturalParser` clamps extraction input to `MAX_EXTRACTION_TEXT_CHARS` (600) and the collected-fields JSON to `MAX_COLLECTED_JSON_CHARS` (800); deterministic parsing still sees the full text.
+- `naturalParser.extractWithAI` keeps `maxTokens` 600; intent calls keep `maxTokens` 800. Question rendering is cached (`QUIZ_QUESTION_CACHE_MS` 15 min, max 300).
+
+### 30.4 Cloud Run warm-instance settings (operations)
+- Recommended: `gcloud run services update <service> --min-instances=1 --cpu-boost --no-cpu-throttling` to remove cold-start lag and guarantee post-ACK background processing (queue, AI, DB, Meta send) keeps CPU after the 200 OK; keep instance concurrency aligned with `MESSAGE_MAX_CONCURRENCY` (default 8) so a single container never starves the queue.
+- `GET /healthz` returns `{ status, uptimeSeconds, queue }` with **no DB I/O** for liveness/warm probes; `GET /` remains the service banner.
+- Multi-instance is safe: per-phone serialization is in-process, cross-instance correctness comes from the `processed_webhooks` claim + durable `chat_sessions` snapshots. (The claim is a check-then-upsert, so a simultaneous same-wamid delivery to two cold instances has the same narrow race window as before — acceptable at Meta retry timings.)
+
+### 30.5 Tuning knobs
+| Env | Default | Purpose |
+| :--- | :--- | :--- |
+| `MESSAGE_MAX_CONCURRENCY` | 8 | global parallel AI + DB tasks |
+| `MESSAGE_MAX_ATTEMPTS` / `MESSAGE_RETRY_BASE_MS` | 3 / 250 | retry budget + exponential backoff |
+| `AI_TIMEOUT_MS` | 12000 | DeepSeek fail-fast timeout |
+| `SUPABASE_TIMEOUT_MS` | 15000 | per-request DB timeout |
+| `SAKA_PROMPT_CACHE_MS` | 60000 | core prompt cache |
+| `QUIZ_QUESTION_CACHE_MS` / `QUIZ_QUESTION_CACHE_MAX` | 900000 / 300 | AI question render cache |
+
+---
+
+## 31. Agent Training: Flow Knowledge & Skill Synchronization (v1.8.1)
+
+### 31.1 Single source of truth — `src/services/flowKnowledge.js`
+- `SAKA_INTENTS` — every classifier intent (32), matching the JSON schema.
+- `SAKA_QUIZ_FLOWS` — every quiz flow (17) with trigger phrases, field order, extracted JSON keys, post-confirmation writes and per-flow rules.
+- `SAKA_INTENT_PLAYBOOK` — non-quiz intents (greeting, discovery, analytics, buyer-side transfer, OTP, reminders, onboarding) and the allowed behaviour for each.
+- `SAKA_BOUNDARY_RULES` — VIN/passbook-token immutability, owner-only soft delete, strict 1-to-1 driver assignment, never invent OTP/PIN/amounts/dates, confirmation gate, superadmin interception, Saka/Sentinel division.
+- `buildFlowPlaybook()` is injected into `DEFAULT_SAKA_CORE_PROMPT` via `${SAKA_FLOW_PLAYBOOK}`, so **the prompt can never drift from the code**.
+
+### 31.2 Saka vs Sentinel (permanent boundary)
+- **Saka** = front-facing WhatsApp agent: intent classification, structured extraction, localized prose, step-by-step guidance.
+- **Sentinel** = background supervisor: health checks, conversational friction analysis, stall recovery, Cloud Run triage, weekly feature proposals. Saka never impersonates Sentinel or superadmin.
+
+### 31.3 Training coverage added in v1.8.1
+- All 17 quiz flows, all non-quiz intents, the maintenance-reminder engine (date / km-mi distance / operating hours), natural multi-field parsing + extra-notes compilation, and the mandatory confirmation gate are now explicit prompt instructions.
+- `extracted_data` gained `reminder_type`, `reminder_due_date`, `reminder_threshold` and `extra_notes`.
+- `conversationEngine.composeMessage` adds a FACTS-contract line and a maintenance-unit display rule.
+- `test_agent_training.js` asserts every intent and flow key is embedded in the assembled core prompt (offline training regression guard).
+
+### 31.4 Permanent governance rule
+Whenever the Saka Fleet application changes (feature, flow, intent, field, handler, schema, config or env knob), update **in the same commit**:
+1. `src/services/flowKnowledge.js` (skills/flow registry),
+2. `sakaAi.js` core prompt + `conversationEngine.js` instructions,
+3. `SAKA_FLEET_ARCHITECTURE.md` (version bump + affected sections),
+4. the matching `test_*.js` completeness/behaviour assertions.
+
+Mirrored in `.clinerules` rule 13.
+
+
 

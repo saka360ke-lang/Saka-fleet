@@ -24,3 +24,17 @@
 10. **Automatic Test Data Cleanup (Permanent):** Every test or stateful check MUST clear the data it created from the database after it runs — pass or fail. Use `runWithCleanup` (`scripts/testCleanup.js`) inside `test_*.js` and run suites via `npm test` (`scripts/run_tests.js`), which always performs a final cleanup sweep. `npm run test:cleanup` clears test data without running tests. Never leave garbage rows behind.
 11. **Targeted Testing Only:** Run only the tests directly related to the change (e.g. `test_date_parser.js` for date work, `test_quiz_flow.js` for quiz changes, `test_sentinel_recovery.js` for Sentinel recovery work). Do not run or add redundant full-suite bloat.
 12. **Git Commit & Publish Rule:** Once updates are completed, tested and verified, Cline MUST automatically stage, commit and push all changes to git (`git --no-pager add -A`, commit with a descriptive message, `git --no-pager push origin main`). The commit hook dispatches the deployment publish alerts automatically.
+
+## APP CHANGES & SKILL SYNCHRONIZATION (PERMANENT)
+13. **Mandatory skill & markdown synchronization:** Whenever there is ANY change, addition, refactor or removal in the Saka Fleet application (feature, flow, intent, field, handler, service, schema, workflow, configuration or env knob), Cline MUST update and synchronize the following IN THE SAME COMMIT:
+    - **Saka's core skills and prompt definitions:** `src/services/flowKnowledge.js` (single source of truth for every intent + quiz flow), `sakaAi.js` `DEFAULT_SAKA_CORE_PROMPT` (schema, flow playbook injection, boundary rules) and `src/services/conversationEngine.js` composer instructions.
+    - **All project `.md` design files:** most importantly `SAKA_FLEET_ARCHITECTURE.md`, including a version bump and every affected section.
+    - **Training regression tests:** `test_agent_training.js` must keep asserting that every intent and flow key is embedded in the assembled core prompt.
+    - A flow/intent change is NEVER complete while the registry, prompt, tests or docs disagree.
+14. **Agent boundary (permanent):** Saka is the front-facing WhatsApp agent; Sentinel is the background supervisor (health, friction, stalls, Cloud Run triage, weekly proposals). Never blur, swap or impersonate these roles in prompts, docs, handlers or tests.
+
+## LATENCY & RUNTIME KNOBS (REFERENCE)
+- `MESSAGE_MAX_CONCURRENCY` (8), `MESSAGE_MAX_ATTEMPTS` (3), `MESSAGE_RETRY_BASE_MS` (250) — per-phone serial queue + global cap.
+- `AI_TIMEOUT_MS` (12000), `SUPABASE_TIMEOUT_MS` (15000) — fail-fast provider/DB timeouts.
+- `SAKA_PROMPT_CACHE_MS` (60000), `QUIZ_QUESTION_CACHE_MS` (900000), `QUIZ_QUESTION_CACHE_MAX` (300) — hot-path caches.
+- Cloud Run: run with `--min-instances=1`, `--cpu-boost` and `--no-cpu-throttling` to remove cold-start lag and keep post-ACK background work running; keep instance concurrency aligned with `MESSAGE_MAX_CONCURRENCY`. `GET /healthz` is the DB-free liveness/warm probe.

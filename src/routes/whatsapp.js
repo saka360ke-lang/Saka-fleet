@@ -1,5 +1,4 @@
 import crypto from 'crypto';
-import { createClient } from '@supabase/supabase-js';
 import { handleSuperadminFlow, isSuperadminPhone } from '../services/superadmin.js';
 import { processSakaMessage, extractVehicleAttributes, classifyIntentWithRegex } from '../../sakaAi.js';
 import { logChatTranscript, logSystemError } from '../workers/sentinel.js';
@@ -408,15 +407,12 @@ export async function handleWhatsAppWebhook(request, reply, fastify) {
     const wamid = messageObj.id;
     const senderPhone = messageObj.from;
 
-    // 1. Distributed idempotency (in-memory + Supabase) BEFORE any processing.
-    //    This is the cross-instance guard that prevents Meta retries from being
-    //    processed twice when Cloud Run runs multiple containers.
-    if (wamid) {
-      const alreadyProcessed = await checkAndRecordWamid(supabaseClient, wamid, senderPhone);
-      if (alreadyProcessed) {
-        if (fastify?.log) fastify.log.warn(`[Deduplication] Message ${wamid} already processed. Aborting Meta retry.`);
-        return reply.status(200).send({ status: 'success', deduplicated: true });
-      }
+    // 1. Fast in-memory idempotency check (sub-millisecond). The distributed
+    //    Supabase claim now runs in the background queue, so the 200 OK is
+    //    never blocked on database I/O.
+    if (wamid && isMessageProcessed(wamid)) {
+      if (fastify?.log) fastify.log.warn(`[Deduplication] Message ${wamid} already processed (memory). Aborting Meta retry.`);
+      return reply.status(200).send({ status: 'success', deduplicated: true });
     }
 
     // 2. Immediate Fastify 200 OK Response (Eliminates Meta Webhook Timeout & Retries)
@@ -425,8 +421,20 @@ export async function handleWhatsAppWebhook(request, reply, fastify) {
     }
 
     // 3. Per-phone serial queue + global concurrency cap + retry/backoff.
-    //    The returned promise is awaited by tests and ignored by Fastify (200 sent).
-    return enqueueUserMessage(senderPhone, () => processIncomingWhatsAppMessage({ messageObj, fastify, supabaseClient }))
+    //    The wamid is claimed once inside the queued task (cross-instance
+    //    dedup); retries re-run processing without re-claiming.
+    let claimed = false;
+    return enqueueUserMessage(senderPhone, async () => {
+      if (!claimed) {
+        const alreadyProcessed = await checkAndRecordWamid(supabaseClient, wamid, senderPhone);
+        if (alreadyProcessed) {
+          if (fastify?.log) fastify.log.warn(`[Deduplication] Message ${wamid} already processed. Aborting Meta retry.`);
+          return { status: 'success', deduplicated: true };
+        }
+        claimed = true;
+      }
+      return processIncomingWhatsAppMessage({ messageObj, fastify, supabaseClient });
+    })
       .catch(async (err) => {
         if (fastify?.log) fastify.log.error({ err }, 'WhatsApp background processing failed');
         await logSystemError(supabaseClient, err, '/webhook/whatsapp').catch(() => {});
@@ -455,9 +463,8 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
 
   try {
     const senderPhone = messageObj.from;
-    const wamid = messageObj.id;
 
-    // --- MEDIA / OCR INGESTION -------------------------------------------------
+    // --- MEDIA / OCR INGESTION (parallel with durable session hydration) ------
     // WhatsApp photos and documents carry no `.text`. Download them from Meta,
     // OCR with Google Cloud Vision, and treat the extracted text as the turn.
     const imageObj = messageObj.image || null;
@@ -466,18 +473,26 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
     const mediaCaption = (imageObj?.caption || documentObj?.caption || '').trim();
     const mediaMimeType = imageObj?.mime_type || documentObj?.mime_type || null;
 
-    let ocrText = '';
-    let ocrError = null;
-    if (mediaObj?.id) {
-      const ocrResult = await ocrWhatsAppMedia({
-        mediaId: mediaObj.id,
-        mimeType: mediaMimeType,
-        token: process.env.META_WHATSAPP_TOKEN
-      });
-      ocrText = (ocrResult.text || '').trim();
-      ocrError = ocrResult.error || null;
-      if (ocrError) console.warn('[OCR] Media could not be read:', ocrError);
-    }
+    // OCR and session hydration are independent and side-effect free: run them
+    // together so media turns do not pay two serial round trips.
+    const ocrPromise = mediaObj?.id
+      ? ocrWhatsAppMedia({
+          mediaId: mediaObj.id,
+          mimeType: mediaMimeType,
+          token: process.env.META_WHATSAPP_TOKEN
+        }).catch((err) => ({ text: '', error: err?.message || 'ocr_failed' }))
+      : Promise.resolve({ text: '', error: null });
+
+    // Durable session hydration — restores quiz/onboarding/OTP state from
+    // Supabase so any Cloud Run instance can continue the conversation.
+    const hydrationPromise = supabaseClient
+      ? loadSessionSnapshot(supabaseClient, formattedPhoneForSession).catch(() => null)
+      : Promise.resolve(null);
+
+    const [ocrResult, snapshot] = await Promise.all([ocrPromise, hydrationPromise]);
+    const ocrText = (ocrResult?.text || '').trim();
+    const ocrError = ocrResult?.error || null;
+    if (ocrError) console.warn('[OCR] Media could not be read:', ocrError);
 
     const baseText = messageObj.text?.body || mediaCaption || '';
     let messageText = baseText;
@@ -489,13 +504,9 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
 
     const receiptHints = ocrText ? extractReceiptHints(ocrText) : {};
 
-    // Record wamid in Supabase processed_webhooks table for cluster persistence
-    if (wamid && supabaseClient) {
-      try {
-        await supabaseClient
-          .from('processed_webhooks')
-          .upsert([{ wamid, phone_number: senderPhone, processed_at: new Date().toISOString() }], { onConflict: 'wamid' });
-      } catch {}
+    if (snapshot) {
+      if (snapshot.session && !chatSessions.has(senderPhone)) chatSessions.set(senderPhone, snapshot.session);
+      if (snapshot.onboarding && !onboardingStore.has(senderPhone)) onboardingStore.set(senderPhone, snapshot.onboarding);
     }
 
     if (fastify?.log) fastify.log.info(`Incoming WhatsApp message from ${senderPhone}: "${messageText}"`);
@@ -504,18 +515,6 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         logChatTranscript(supabaseClient, senderPhone, 'user', messageText),
         saveChatMessage(supabaseClient, senderPhone, 'user', messageText)
       ]).catch(() => {});
-    }
-
-    // Durable session hydration — restores quiz/onboarding/OTP state from
-    // Supabase so any Cloud Run instance can continue the conversation.
-    if (supabaseClient) {
-      try {
-        const snapshot = await loadSessionSnapshot(supabaseClient, formattedPhoneForSession);
-        if (snapshot) {
-          if (snapshot.session && !chatSessions.has(senderPhone)) chatSessions.set(senderPhone, snapshot.session);
-          if (snapshot.onboarding && !onboardingStore.has(senderPhone)) onboardingStore.set(senderPhone, snapshot.onboarding);
-        }
-      } catch {}
     }
 
     // Superadmin Intercept Middleware
@@ -860,6 +859,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           supabase: supabaseClient,
           profile: profileData,
           vehicles: existingVehicles,
+          activeVehicle: currentActiveVehicle,
           countryInfo,
           senderPhone,
           formattedPhone,

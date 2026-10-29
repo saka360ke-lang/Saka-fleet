@@ -15,7 +15,9 @@ import {
   mergeExtraNotes,
   formatExtraNotes,
   isSubstantiveText,
-  MAX_EXTRA_NOTES
+  clampExtractionText,
+  MAX_EXTRA_NOTES,
+  MAX_EXTRACTION_TEXT_CHARS
 } from './src/services/naturalParser.js';
 
 let passed = 0;
@@ -149,6 +151,15 @@ async function run() {
     });
     check(incomplete.missing.some((m) => m.key === 'yom'), 'Missing required fields are computed for dynamic prompts');
     check(incomplete.missing.some((m) => m.key === 'notes') === false, 'Optional notes are excluded from dynamic prompts');
+
+    // AI payload bounds (latency guard for the DeepSeek extraction call)
+    check(MAX_EXTRACTION_TEXT_CHARS === 600, 'Extraction text bound stays tightly capped at 600 chars');
+    const longText = 'x'.repeat(MAX_EXTRACTION_TEXT_CHARS + 200);
+    const clamped = clampExtractionText(longText);
+    check(clamped.length <= MAX_EXTRACTION_TEXT_CHARS + 1, 'Long extraction text is clamped to the AI payload bound');
+    check(clamped.endsWith('\u2026'), 'Clamped text is explicitly marked as truncated');
+    const shortText = 'Toyota Hilux 2018';
+    check(clampExtractionText(shortText) === shortText, 'Short extraction text is preserved unchanged');
 
     console.log(`\n\u2705 ALL NATURAL PARSER TESTS PASSED (${passed} assertions).`);
     console.log('Stateless suite: no real database rows were created, so no cleanup is required.');

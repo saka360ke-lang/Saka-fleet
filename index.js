@@ -1,7 +1,6 @@
 import 'dotenv/config';
 import Fastify from 'fastify';
 import rateLimit from '@fastify/rate-limit';
-import { createClient } from '@supabase/supabase-js';
 import crypto from 'crypto';
 
 import { generateFleetReport, uploadReportToSupabase } from './reports.js';
@@ -238,6 +237,14 @@ fastify.get('/', async (request, reply) => {
     timestamp: new Date().toISOString() 
   };
 });
+
+// 5.1 Warm/liveness probe for Cloud Run (cheap, no DB I/O).
+fastify.get('/healthz', async () => ({
+  status: 'ok',
+  uptimeSeconds: Math.round(process.uptime()),
+  queue: getQueueStats(),
+  timestamp: new Date().toISOString()
+}));
 
 // 6. WhatsApp & Email Auth OTP Request Endpoint (Mandatory Email)
 fastify.post('/api/auth/whatsapp/request', async (request, reply) => {
