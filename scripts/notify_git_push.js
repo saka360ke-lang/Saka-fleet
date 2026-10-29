@@ -1,12 +1,8 @@
 import { execSync } from 'child_process';
 
-// Optional dependencies are loaded lazily so a missing SDK (e.g. in a minimal CI
-// runner) can never block the primary WhatsApp deployment-notification channel.
-let Resend = null;
-try {
-  ({ Resend } = await import('resend'));
-} catch {}
-
+// dotenv is loaded lazily so a missing dependency can never block the primary
+// WhatsApp deployment-notification channel. (Resend was removed in v1.14.1:
+// deployment emails are muted by policy to protect the daily email quota.)
 try {
   const { config } = await import('dotenv');
   config?.();
@@ -14,10 +10,8 @@ try {
 
 export async function sendAdminDeploymentAlert(customData = {}) {
   const superadminPhone = process.env.SUPERADMIN_PHONE;
-  const superadminEmail = process.env.SUPERADMIN_EMAIL || 'saka360ke@gmail.com';
   const phoneNumberId = process.env.META_PHONE_NUMBER_ID;
   const token = process.env.META_WHATSAPP_TOKEN;
-  const resendApiKey = process.env.RESEND_API_KEY;
 
   if (!superadminPhone || !phoneNumberId || !token) {
     console.warn('[notify_git_push] Missing SUPERADMIN_PHONE, META_PHONE_NUMBER_ID, or META_WHATSAPP_TOKEN. WhatsApp alert may fail.');
@@ -91,41 +85,13 @@ _Automated deployment hook dispatched to Superadmin._`;
     }
   }
 
-  let emailSuccess = false;
-  if (resendApiKey && superadminEmail && Resend) {
-    try {
-      const resend = new Resend(resendApiKey);
-      const { error } = await resend.emails.send({
-        from: 'Saka Fleet Deployment <reports@reports.sakafleet.com>',
-        to: [superadminEmail],
-        subject: `🚀 Deployment Alert: Saka Fleet (${commitHash})`,
-        html: `
-          <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #ddd; border-radius: 8px;">
-            <h2 style="color: #0284c7; border-bottom: 2px solid #0284c7; padding-bottom: 10px; margin-top: 0;">Saka Fleet Deployment Alert 🛠️</h2>
-            <p>A new code version has been pushed and is now live.</p>
-            <table style="width: 100%; border-collapse: collapse; margin-top: 15px;">
-              <tr><td style="padding: 8px 0; font-weight: bold; width: 100px;">Commit:</td><td style="padding: 8px 0;"><code>${commitHash}</code></td></tr>
-              <tr><td style="padding: 8px 0; font-weight: bold;">Branch:</td><td style="padding: 8px 0;">${branch}</td></tr>
-              <tr><td style="padding: 8px 0; font-weight: bold;">Author:</td><td style="padding: 8px 0;">${author}</td></tr>
-              <tr><td style="padding: 8px 0; font-weight: bold;">Summary:</td><td style="padding: 8px 0;">${commitMessage}</td></tr>
-              <tr><td style="padding: 8px 0; font-weight: bold;">Time (EAT):</td><td style="padding: 8px 0;">${timestamp}</td></tr>
-            </table>
-            <p style="margin-top: 20px; font-weight: bold; color: #16a34a;">Status: Live & Operational ✅</p>
-          </div>
-        `
-      });
-      if (error) {
-        console.error('[notify_git_push] Resend API Error:', error);
-      } else {
-        console.log(`✅ Email deployment alert dispatched to ${superadminEmail}.`);
-        emailSuccess = true;
-      }
-    } catch (err) {
-      console.error('[notify_git_push] Email Exception:', err.message);
-    }
-  }
+  // Deployment EMAIL alerts are muted by policy (v1.14.1) to protect the daily
+  // Resend quota; WhatsApp remains the primary deployment channel. Re-enable by
+  // restoring a Resend send block here - never silently re-add it.
+  console.log('[deploy] Email deployment alert skipped - quota-protection policy (v1.14.1).');
+  const emailSuccess = false;
 
-  return { success: waSuccess || emailSuccess, waSuccess, emailSuccess };
+  return { success: waSuccess, waSuccess, emailSuccess };
 }
 
 // Direct CLI invocation

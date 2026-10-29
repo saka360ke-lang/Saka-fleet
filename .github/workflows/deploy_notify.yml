@@ -24,9 +24,7 @@ jobs:
       - name: Dispatch WhatsApp Deployment Notification
         env:
           SUPERADMIN_PHONE: ${{ secrets.SUPERADMIN_PHONE }}
-          SUPERADMIN_EMAIL: ${{ secrets.SUPERADMIN_EMAIL }}
           META_PHONE_NUMBER_ID: ${{ secrets.META_PHONE_NUMBER_ID }}
           META_WHATSAPP_TOKEN: ${{ secrets.META_WHATSAPP_TOKEN }}
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
         run: |
           node scripts/notify_git_push.js

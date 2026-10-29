@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.14.0  
+**Version:** 1.14.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -68,7 +68,7 @@ All LLM traffic flows through **`src/services/aiClient.js`**. No service talks t
 
 ### 1.2 Conversational Engine (v1.7 — pure AI, quiz-first)
 
-- **`src/services/conversationEngine.js`** — every user-facing reply is rendered by DeepSeek-V3 from a structured FACTS payload (`composeMessage`, `renderQuizQuestion`, `renderConfirmationSummary`, `renderOutcome`, `renderActionDiscovery`). Hard-coded conversational prose has been removed from the WhatsApp route; deterministic fallbacks remain only for provider outages. Quiz questions are cached per field/language (`seedQuizQuestions`, `isQuizQuestionCacheWarm`) and prefetched in one batch per flow.
+- **`src/services/conversationEngine.js`** — every user-facing reply is rendered by Saka AI from a structured FACTS payload (`composeMessage`, `renderQuizQuestion`, `renderConfirmationSummary`, `renderOutcome`, `renderActionDiscovery`). The provider is tier-routed: prose renders use Tier 2 (Claude Sonnet 4.5 when `PREMIUM_MODEL_ENABLED=on`, otherwise DeepSeek-V3) while quiz questions and stall nudges stay Tier 1; the system prompt carries explicit **VOICE & EMPATHY** guardrails so tone stays consistent across providers and failover legs. Hard-coded conversational prose has been removed from the WhatsApp route; deterministic fallbacks remain only for provider outages. Quiz questions are cached per field/language (`seedQuizQuestions`, `isQuizQuestionCacheWarm`) and prefetched in one batch per flow.
 - **`src/services/quizEngine.js`** — one-piece-at-a-time wizard engine: declarative flow definitions, per-field validators/extractors, deterministic multi-field fast-forward (`applyTextExtraction`), two-pass conditional extraction (`applyExtraction`), background question prefetch, Cancel/Restart/Help navigation, and a **mandatory confirmation summary before any database write**. VIN and passbook token are never editable.
 - **`src/services/naturalParser.js` (v1.8)** — natural conversational extraction: deterministic field parsing plus a DeepSeek JSON top-up for missing fields, "extra notes" compilation for details that do not map to a database column, missing-field computation for dynamic prompts, and graceful degradation when the provider is unavailable.
 - **`src/services/maintenanceReminders.js` (v1.9)** — universal reminder engine: distance (canonical km), operating hours **and date-based expiries** (insurance, inspection/MOT, licensing, permits, driver licences, general deadlines). Explicit `remaining_value` tracking, 75/25/5/due-now/overdue threshold tiers, 30d/14d/7d/24h/overdue expiry tiers, `due_at` timestamps in the user's confirmed timezone, driver-licence promotion, `expiry_notification_log` audit trail, and a single background sweep worker.
@@ -416,9 +416,9 @@ Requires active session (`adminstart`, 30-min inactivity TTL) from verified `SUP
 
 Sentinel operates under a **"fix first, escalate last"** doctrine: it autonomously repairs every issue it is capable of fixing, and only pages human support when a boundary is hit.
 
-**A. Guaranteed Deployment Notifications (Cloud Build → Superadmin)**
-- `scripts/notify_git_push.js` now dispatches **dual-channel** alerts (Meta WhatsApp **and** Resend email to `SUPERADMIN_EMAIL`) so a single API outage never silences a deployment announcement.
-- `.github/workflows/deploy_notify.yml` installs dependencies before invoking `node scripts/notify_git_push.js`, and `notify_git_push.js` loads `dotenv`/`resend` lazily so the primary WhatsApp channel can never be blocked by a missing optional SDK.
+**A. Guaranteed Deployment Notifications (WhatsApp-only, v1.14.1)**
+- `scripts/notify_git_push.js` dispatches **WhatsApp-only** deployment alerts. Deployment **emails are muted by policy (v1.14.1)** to protect the daily Resend quota for customer-critical mail (auth OTPs, passbooks, remediation digests). The function still returns `emailSuccess: false` so callers keep a stable contract.
+- `.github/workflows/deploy_notify.yml` installs dependencies before invoking `node scripts/notify_git_push.js`; it no longer passes `SUPERADMIN_EMAIL`/`RESEND_API_KEY`, and `notify_git_push.js` loads `dotenv` lazily so the primary WhatsApp channel can never be blocked by a missing optional SDK.
 - `package.json` runs `notify:deploy` on `postinstall`, so every container build on Cloud Build / GitHub Actions fires the alert.
 - `index.js` boot hook detects the revision from `K_REVISION` || `COMMIT_SHA` || `RENDER_GIT_COMMIT`, compares it to `system_config.last_deployed_revision`, and only announces genuinely new revisions (idempotent, no duplicates).
 
@@ -1288,7 +1288,7 @@ Three fail-soft, idempotent tiers run in `index.js`:
 ### 35.9 Environment & secrets
 - **Cloud Run / server:** `REMEDIATION_AUTONOMY` (off; `on`, `true` or `1` enable), `GH_REMEDIATION_TOKEN` (fine-grained PAT: contents write + workflow dispatch on this repo), `GH_REMEDIATION_REPO` (`owner/repo`), `REMEDIATION_MAX_ATTEMPTS`, `REMEDIATION_NONCE_TTL_HOURS`, `REMEDIATION_EXECUTION_RETRY_MS`, `REMEDIATION_DISPATCH_TIMEOUT_MS`, `REMEDIATION_SCAN_INTERVAL_MS` (60 s), `REMEDIATION_AUDIT_WINDOW_HOURS` (4), `REMEDIATION_SYNTHESIS_INTERVAL_MS` (15 min), `REMEDIATION_PLAN_TRIGGER_COUNT` (3), `REMEDIATION_PLAN_COOLDOWN_MS` (6 h), `REMEDIATION_MAX_PLANS_PER_DAY` (4), `REMEDIATION_DIGEST_HOURS_CSV` (`8,20`), `REMEDIATION_DIGEST_SCALE_DOWN_WINDOW_DAYS` (7), `REMEDIATION_DIGEST_DAILY_THRESHOLD` (10), `REMEDIATION_DIGEST_WEEKLY_THRESHOLD` (3), `REMEDIATION_URGENT_ERROR_THRESHOLD` (10), `REMEDIATION_URGENT_COOLDOWN_MS` (1 h).
 - **Rolling-window note:** `REMEDIATION_AUDIT_WINDOW_HOURS` is clamped to 1-72h and read at process start; a change applies from the next scan tick. Digest labels always report the currently loaded value while the counts come from the last persisted scan.
-- **GitHub repository secrets (used by the workflow):** `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `DEEPSEEK_API_KEY`, `SUPERADMIN_PHONE`, `SUPERADMIN_EMAIL`, `META_PHONE_NUMBER_ID`, `META_WHATSAPP_TOKEN`, `RESEND_API_KEY`.
+- **GitHub repository secrets (used by the workflow):** `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `DEEPSEEK_API_KEY`, `SUPERADMIN_PHONE`, `SUPERADMIN_EMAIL`, `META_PHONE_NUMBER_ID`, `META_WHATSAPP_TOKEN`, `RESEND_API_KEY` (RESEND_API_KEY remains for remediation outcome/digest mail and auth OTPs; it is no longer consumed by `deploy_notify`).
 - Cline CLI: installed in CI with `npm install -g cline`; provider/model pinned with `-P deepseek -m deepseek-chat` (adjust per `cline config` if the provider id differs — the gate fails closed).
 
 ### 35.10 Operations & verification
@@ -1533,6 +1533,6 @@ Per-provider, in-memory, fixed-cooldown breakers in `aiClient.js`:
 
 ---
 
-_End of document — v1.14.0._
+_End of document — v1.14.1._
 
 
