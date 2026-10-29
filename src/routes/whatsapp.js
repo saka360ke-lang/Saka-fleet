@@ -394,6 +394,66 @@ export function generateRoleBasedActionDiscovery({ profileData, vehicles = [], s
 }
 
 
+/**
+ * Known test/placeholder App Secret (used by test_security.js). A production
+ * deployment carrying this value can never verify Meta signatures.
+ */
+export const META_APP_SECRET_PLACEHOLDER = 'meta_app_secret_sakafleet_2026';
+
+/**
+ * Verify a Meta WhatsApp webhook signature (HMAC SHA-256).
+ *
+ * Accepts the exact raw bytes Meta signed and — only when they differ from the
+ * re-serialized JSON body — the re-serialized body as a fallback. Returns
+ * masked diagnostics so a 403 is diagnosable from logs without leaking secrets.
+ */
+export function verifyMetaWebhookSignature({ secret, rawBody, reserializedBody = null, signatureHeader } = {}) {
+  const diagnostics = {
+    secretSet: Boolean(secret),
+    secretLen: secret ? String(secret).length : 0,
+    secretIsPlaceholder: secret === META_APP_SECRET_PLACEHOLDER,
+    headerPresent: Boolean(signatureHeader),
+    providedLen: 0,
+    providedPrefix: null,
+    expectedPrefix: null,
+    rawBodyLen: typeof rawBody === 'string' ? rawBody.length : 0,
+    reserializedLen: typeof reserializedBody === 'string' ? reserializedBody.length : 0,
+    bodiesMatch: reserializedBody === null ? true : rawBody === reserializedBody
+  };
+
+  if (!secret) return { valid: false, reason: 'missing_secret', diagnostics };
+  if (!signatureHeader) return { valid: false, reason: 'missing_header', diagnostics };
+
+  const providedHash = String(signatureHeader).replace(/^sha256=/i, '').trim().toLowerCase();
+  diagnostics.providedLen = providedHash.length;
+  diagnostics.providedPrefix = providedHash.slice(0, 4);
+
+  const candidates = [];
+  if (typeof rawBody === 'string') candidates.push(rawBody);
+  if (typeof reserializedBody === 'string' && reserializedBody !== rawBody) candidates.push(reserializedBody);
+  if (candidates.length === 0) return { valid: false, reason: 'missing_body', diagnostics };
+
+  const hashes = candidates.map((payload) =>
+    crypto.createHmac('sha256', secret).update(payload).digest('hex')
+  );
+  diagnostics.expectedPrefix = hashes[0].slice(0, 4);
+
+  let valid = false;
+  for (const expectedHash of hashes) {
+    try {
+      if (expectedHash.length === providedHash.length
+        && crypto.timingSafeEqual(Buffer.from(expectedHash, 'hex'), Buffer.from(providedHash, 'hex'))) {
+        valid = true;
+        break;
+      }
+    } catch {
+      // Non-hex signatures throw inside Buffer.from — treat as invalid.
+    }
+  }
+
+  return { valid, reason: valid ? 'ok' : 'mismatch', diagnostics };
+}
+
 export async function handleWhatsAppWebhook(request, reply, fastify) {
   // Meta WhatsApp Webhook HMAC SHA-256 Signature Verification
   const metaAppSecret = process.env.META_APP_SECRET;
@@ -404,21 +464,29 @@ export async function handleWhatsAppWebhook(request, reply, fastify) {
       return reply.status(403).send({ error: 'Forbidden: Missing signature header' });
     }
 
-    const rawBody = request.rawBody || (typeof request.body === 'string' ? request.body : JSON.stringify(request.body || {}));
-    const expectedHash = crypto.createHmac('sha256', metaAppSecret).update(rawBody).digest('hex');
-    const providedHash = signatureHeader.startsWith('sha256=') ? signatureHeader.slice(7) : signatureHeader;
+    // Prefer the exact raw bytes captured by the Fastify content-type parser.
+    // Re-serialize only as a fallback so tests / alternate transports still work.
+    const rawBody = typeof request.rawBody === 'string'
+      ? request.rawBody
+      : (typeof request.body === 'string' ? request.body : JSON.stringify(request.body || {}));
+    const reserializedBody = typeof request.body === 'string'
+      ? request.body
+      : JSON.stringify(request.body || {});
 
-    let isValid = false;
-    try {
-      if (expectedHash.length === providedHash.length) {
-        isValid = crypto.timingSafeEqual(Buffer.from(expectedHash, 'hex'), Buffer.from(providedHash, 'hex'));
+    const verification = verifyMetaWebhookSignature({
+      secret: metaAppSecret,
+      rawBody,
+      reserializedBody,
+      signatureHeader
+    });
+
+    if (!verification.valid) {
+      if (fastify?.log) {
+        fastify.log.warn(
+          { event: 'meta_webhook_signature_failed', reason: verification.reason, ...verification.diagnostics },
+          'Meta WhatsApp webhook signature verification failed.'
+        );
       }
-    } catch {
-      isValid = false;
-    }
-
-    if (!isValid) {
-      if (fastify?.log) fastify.log.warn('Meta WhatsApp webhook signature verification failed.');
       return reply.status(403).send({ error: 'Forbidden: Invalid x-hub-signature-256' });
     }
   }

@@ -123,6 +123,23 @@ function canDeliverVehicleAlert(targetPhone, vehicle) {
   return true;
 }
 
+// Boot-time env parity probe (masked). Makes Meta/Paystack secret drift visible
+// in the very first Cloud Run log lines instead of a silent webhook 403 storm.
+function logWebhookEnvParity() {
+  const placeholder = 'meta_app_secret_sakafleet_2026';
+  const metaSecret = String(process.env.META_APP_SECRET || '');
+  const metaState = !metaSecret
+    ? 'MISSING — inbound Meta signature verification is DISABLED (fail-open)'
+    : (metaSecret === placeholder
+      ? `set (len ${metaSecret.length}) ⚠️ PLACEHOLDER VALUE — real Meta webhooks will 403`
+      : `set (len ${metaSecret.length})`);
+  console.log(`[ENV] META_APP_SECRET: ${metaState}`);
+  for (const key of ['META_VERIFY_TOKEN', 'META_PHONE_NUMBER_ID', 'META_WHATSAPP_TOKEN', 'PAYSTACK_SECRET_KEY', 'PAYSTACK_PUBLIC_KEY']) {
+    const value = String(process.env[key] || '');
+    console.log(`[ENV] ${key}: ${value ? `set (len ${value.length})` : 'MISSING'}`);
+  }
+}
+
 // Worker: Process 5-Minute Delayed Owner Notifications
 async function processPendingOwnerNotifications() {
   try {
@@ -893,6 +910,8 @@ const start = async () => {
     await ensureVehicleTableColumns(supabase);
     await ensureComplianceCatalog({ supabase });
     await ensureChatSessionsTable(supabase);
+
+    logWebhookEnvParity();
 
     const port = process.env.PORT || 3000;
     await fastify.listen({ port: Number(port), host: '0.0.0.0' });

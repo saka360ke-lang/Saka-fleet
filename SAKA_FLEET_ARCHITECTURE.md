@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.15.0  
+**Version:** 1.15.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -271,9 +271,12 @@ Cline-authored, Superadmin-approved fix plans consumed by the CI executor.
    - Handshake: `GET /webhook`, `GET /webhook/whatsapp`, `GET /api/whatsapp/webhook`
    - Messages: `POST /webhook`, `POST /webhook/whatsapp`, `POST /api/whatsapp/webhook`
 
-2. **Cryptographic Validation:**
-   - Meta Cloud API sends `x-hub-signature-256`.
-   - The server verifies `crypto.createHmac('sha256', META_APP_SECRET)` against raw request body using constant-time comparison (`crypto.timingSafeEqual`).
+2. **Cryptographic Validation (v1.15.1 hardening):**
+   - Meta Cloud API sends `x-hub-signature-256` (`sha256=<hex>`; prefix matching is case-insensitive).
+   - `verifyMetaWebhookSignature()` (`src/routes/whatsapp.js`, exported) verifies HMAC-SHA-256 with `META_APP_SECRET` against the **exact raw bytes** captured by the Fastify `application/json` `parseAs: 'buffer'` parser (`index.js`) and falls back to the re-serialized JSON body only when the raw bytes are unavailable or differ — so unicode-escaping/serialization drift can never cause a false 403. Constant-time compare via `crypto.timingSafeEqual`.
+   - Failures emit **masked diagnostics** (`event: meta_webhook_signature_failed`): secret presence/length, `secretIsPlaceholder`, header presence, provided/expected 4-char hash prefixes, raw vs re-serialized body lengths. Secrets are never logged.
+   - Boot emits `[ENV] META_APP_SECRET: …` (masked) and warns loudly when the value is the test placeholder (`meta_app_secret_sakafleet_2026`) or missing (missing ⇒ verification disabled, fail-open). A placeholder in Cloud Run means every real webhook 403s — align the Cloud Run env with the Meta App Secret.
+   - Suite: `test_meta_signature.js` — 16 stateless assertions (raw/fallback verification, tampering, secret drift, missing inputs, non-hex, masked diagnostics).
 
 3. **Message ID Deduplication (cross-instance idempotency):**
    - Extracts Meta Message ID (`wamid`) from `entry[0].changes[0].value.messages[0].id`.
