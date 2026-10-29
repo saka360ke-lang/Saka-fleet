@@ -1,4 +1,11 @@
 import { runHealthCheck, evaluateConversationalFriction } from '../workers/sentinel.js';
+import {
+  REMEDIATION_STATUS,
+  REMEDIATION_MAX_ATTEMPTS,
+  buildApprovalWindow,
+  dispatchExecutionForProposal
+} from '../workers/remediation.js';
+import { dispatchRepositoryEvent } from './githubDispatch.js';
 import { sendAdminNotificationEmail } from './mailer.js';
 import { generateText, parseJsonSafely } from './aiClient.js';
 import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
@@ -92,6 +99,7 @@ const ADMIN_INTENTS = new Set([
   'ADMIN_REPORT', 'ADMIN_AUDIT', 'ADMIN_ALERTS',
   'ADMIN_RULES_RESET', 'ADMIN_RULES_TOGGLE', 'ADMIN_RULES_LIST',
   'ADMIN_HORIZON', 'ADMIN_PROPOSALS',
+  'ADMIN_REMEDIATIONS', 'ADMIN_REMEDIATION_ACCEPT', 'ADMIN_REMEDIATION_DECLINE', 'ADMIN_REMEDIATION_MODIFY',
   'HEALTH_CHECK', 'GENERATE_COUPON', 'PROFILES_REPORT', 'SENTINEL_DIAGNOSE'
 ]);
 
@@ -145,9 +153,30 @@ export async function parseSuperadminCommand(messageText) {
     return { intent: 'ADMIN_PROPOSALS' };
   }
 
+  // Autonomous remediation approval gateway (v1.10.0)
+  if (/^\s*admin\s+remediations?\b/i.test(lower)) {
+    return { intent: 'ADMIN_REMEDIATIONS' };
+  }
+  const acceptFixMatch = text.match(/^\s*admin\s+accept\s+fix\s+([a-zA-Z0-9-]+)/i);
+  if (acceptFixMatch) {
+    return { intent: 'ADMIN_REMEDIATION_ACCEPT', proposal_code: acceptFixMatch[1].toUpperCase() };
+  }
+  const declineFixMatch = text.match(/^\s*admin\s+decline\s+fix\s+([a-zA-Z0-9-]+)/i);
+  if (declineFixMatch) {
+    return { intent: 'ADMIN_REMEDIATION_DECLINE', proposal_code: declineFixMatch[1].toUpperCase() };
+  }
+  const modifyFixMatch = text.match(/^\s*admin\s+modify\s+fix\s+([a-zA-Z0-9-]+)\s+([\s\S]+)$/i);
+  if (modifyFixMatch) {
+    return {
+      intent: 'ADMIN_REMEDIATION_MODIFY',
+      proposal_code: modifyFixMatch[1].toUpperCase(),
+      feedback: modifyFixMatch[2].trim()
+    };
+  }
+
   const prompt = `Classify user's admin request into JSON:
-Intent: "HEALTH_CHECK" | "GENERATE_COUPON" | "PROFILES_REPORT" | "ADMIN_REPORT" | "ADMIN_AUDIT" | "ADMIN_ALERTS" | "ADMIN_RULES_RESET" | "ADMIN_RULES_TOGGLE" | "ADMIN_RULES_LIST" | "ADMIN_HORIZON" | "ADMIN_PROPOSALS" | "UNKNOWN"
-Extract: discount_value (e.g. "20%"), target_phone (e.g. "+254712345678"), query (e.g. "KDA 123A" or VIN), rule_key (e.g. "clarify_vin")
+Intent: "HEALTH_CHECK" | "GENERATE_COUPON" | "PROFILES_REPORT" | "ADMIN_REPORT" | "ADMIN_AUDIT" | "ADMIN_ALERTS" | "ADMIN_RULES_RESET" | "ADMIN_RULES_TOGGLE" | "ADMIN_RULES_LIST" | "ADMIN_HORIZON" | "ADMIN_PROPOSALS" | "ADMIN_REMEDIATIONS" | "ADMIN_REMEDIATION_ACCEPT" | "ADMIN_REMEDIATION_DECLINE" | "ADMIN_REMEDIATION_MODIFY" | "UNKNOWN"
+Extract: discount_value (e.g. "20%"), target_phone (e.g. "+254712345678"), query (e.g. "KDA 123A" or VIN), rule_key (e.g. "clarify_vin"), proposal_code (e.g. "FIX-2026-10-30-01"), feedback (guidance text)
 Command: "${text}"`;
 
   try {
@@ -712,6 +741,153 @@ export async function handleAdminRulesList(supabase) {
   };
 }
 
+export async function handleAdminRemediationsList(supabase) {
+  const { data: proposals, error } = await supabase
+    .from('remediation_proposals')
+    .select('proposal_code,title,status,risk_level,created_at')
+    .order('created_at', { ascending: false })
+    .limit(8);
+
+  if (error) {
+    return { reply: `⚠️ Could not load remediation proposals: ${error.message}` };
+  }
+  if (!proposals || proposals.length === 0) {
+    return {
+      reply: '🛠️ *Autonomous Remediation*\n\nNo remediation proposals exist yet. Sentinel audits run daily at 02:00 EAT and Cline drafts plans at 03:00 EAT (requires `REMEDIATION_AUTONOMY=on`).'
+    };
+  }
+
+  const formatted = proposals.map((proposal) => {
+    const icons = {
+      PENDING_APPROVAL: '⏳',
+      APPROVED: '✅',
+      EXECUTING: '⚙️',
+      VALIDATED: '🧪',
+      DEPLOYED: '🚀',
+      DECLINED: '⛔',
+      NEEDS_MODIFICATION: '✏️'
+    };
+    const icon = icons[proposal.status] || '•';
+    return `${icon} \`${proposal.proposal_code}\` — ${proposal.title || 'Untitled'}\n   Status: *${proposal.status}* | Risk: ${String(proposal.risk_level || 'low').toUpperCase()}`;
+  }).join('\n\n');
+
+  return {
+    reply: `🛠️ *Autonomous Remediation Proposals*\n\n${formatted}\n\n` +
+      `_Approve:_ \`admin accept fix <CODE>\`\n` +
+      `_Decline:_ \`admin decline fix <CODE>\`\n` +
+      `_Modify:_ \`admin modify fix <CODE> <guidance>\``
+  };
+}
+
+/**
+ * Superadmin approval state machine (v1.10.0).
+ * PENDING_APPROVAL / NEEDS_MODIFICATION → APPROVED (nonce minted, CI dispatched)
+ *                                       | DECLINED
+ *                                       | NEEDS_MODIFICATION (feedback stored, re-plan dispatched)
+ */
+export async function handleAdminRemediationDecision(supabase, proposalCode, decision, feedback = '') {
+  const code = String(proposalCode || '').trim().toUpperCase();
+  if (!code) {
+    return { reply: '⚠️ Please specify a proposal code, e.g. `admin accept fix FIX-2026-10-30-01`.' };
+  }
+  if (String(process.env.REMEDIATION_AUTONOMY || 'off').toLowerCase() !== 'on') {
+    return {
+      reply: '🔒 *Remediation autonomy is disabled.* Set `REMEDIATION_AUTONOMY=on` to enable execution dispatch. No changes were made.'
+    };
+  }
+
+  const { data: proposal, error } = await supabase
+    .from('remediation_proposals')
+    .select('*')
+    .eq('proposal_code', code)
+    .maybeSingle();
+
+  if (error) return { reply: `⚠️ Could not load \`${code}\`: ${error.message}` };
+  if (!proposal) return { reply: `⚠️ Unknown proposal \`${code}\`.` };
+
+  const nowIso = new Date().toISOString();
+  const actionable = [REMEDIATION_STATUS.PENDING_APPROVAL, REMEDIATION_STATUS.NEEDS_MODIFICATION]
+    .includes(proposal.status);
+
+  if (decision === 'accept') {
+    if (!actionable) {
+      return { reply: `⚠️ \`${code}\` is ${proposal.status}; only PENDING_APPROVAL or NEEDS_MODIFICATION can be approved.` };
+    }
+
+    const window = buildApprovalWindow();
+    const { data: updated, error: updateErr } = await supabase
+      .from('remediation_proposals')
+      .update({
+        status: REMEDIATION_STATUS.APPROVED,
+        approval_nonce: window.approval_nonce,
+        nonce_expires_at: window.nonce_expires_at,
+        attempts: 0,
+        reviewed_at: nowIso,
+        feedback: feedback ? String(feedback).trim() : proposal.feedback
+      })
+      .eq('id', proposal.id)
+      .select('*')
+      .maybeSingle();
+
+    if (updateErr) return { reply: `⚠️ Approval failed: ${updateErr.message}` };
+
+    const dispatch = await dispatchExecutionForProposal(supabase, updated || proposal);
+    const note = dispatch.ok
+      ? 'Execution workflow dispatched. Cline will implement, run targeted tests and push; a deployment alert will follow.'
+      : `Execution dispatch failed (${dispatch.error || 'unknown'}). The retry poller re-dispatches every 30 minutes (max ${REMEDIATION_MAX_ATTEMPTS} attempts).`;
+
+    return { reply: `✅ *Approved* \`${code}\`.\n\n${note}` };
+  }
+
+  if (decision === 'decline') {
+    const { error: updateErr } = await supabase
+      .from('remediation_proposals')
+      .update({
+        status: REMEDIATION_STATUS.DECLINED,
+        reviewed_at: nowIso,
+        feedback: feedback ? String(feedback).trim() : proposal.feedback
+      })
+      .eq('id', proposal.id);
+
+    if (updateErr) return { reply: `⚠️ Decline failed: ${updateErr.message}` };
+    return { reply: `⛔ *Declined* \`${code}\`. No code changes will be made.` };
+  }
+
+  if (decision === 'modify') {
+    if (!feedback || !String(feedback).trim()) {
+      return { reply: '⚠️ Add guidance, e.g. `admin modify fix FIX-2026-10-30-01 keep the change inside src/workers/sentinel.js`.' };
+    }
+
+    const guidance = String(feedback).trim();
+    const { error: updateErr } = await supabase
+      .from('remediation_proposals')
+      .update({
+        status: REMEDIATION_STATUS.NEEDS_MODIFICATION,
+        feedback: guidance,
+        reviewed_at: nowIso
+      })
+      .eq('id', proposal.id);
+
+    if (updateErr) return { reply: `⚠️ Modify failed: ${updateErr.message}` };
+
+    let dispatchNote = 'Guidance saved. It will be applied when the plan is regenerated.';
+    if (proposal.audit_run_id) {
+      const dispatch = await dispatchRepositoryEvent('remediation_plan', {
+        audit_run_id: proposal.audit_run_id,
+        proposal_code: code,
+        feedback: guidance
+      });
+      dispatchNote = dispatch.ok
+        ? 'Cline is re-drafting the plan with your guidance. A new approval request will arrive shortly.'
+        : `Guidance saved, but the re-plan dispatch failed (${dispatch.error || 'unknown'}). It will retry on the next cycle.`;
+    }
+
+    return { reply: `✏️ *Modification requested* for \`${code}\`.\n\n${dispatchNote}` };
+  }
+
+  return { reply: `⚠️ Unknown remediation decision: ${decision}` };
+}
+
 export async function sendMorningExecutiveBriefing(supabase) {
   const superadminPhone = process.env.SUPERADMIN_PHONE;
   if (!superadminPhone) return null;
@@ -894,6 +1070,35 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
     };
   }
 
+  if (parsedCommand.intent === 'ADMIN_REMEDIATIONS') {
+    const listRes = await handleAdminRemediationsList(supabase);
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_REMEDIATIONS', {});
+    return {
+      isSuperadmin: true,
+      reply: listRes.reply
+    };
+  }
+
+  if (['ADMIN_REMEDIATION_ACCEPT', 'ADMIN_REMEDIATION_DECLINE', 'ADMIN_REMEDIATION_MODIFY'].includes(parsedCommand.intent)) {
+    const decision = parsedCommand.intent === 'ADMIN_REMEDIATION_ACCEPT'
+      ? 'accept'
+      : (parsedCommand.intent === 'ADMIN_REMEDIATION_DECLINE' ? 'decline' : 'modify');
+    const decisionRes = await handleAdminRemediationDecision(
+      supabase,
+      parsedCommand.proposal_code,
+      decision,
+      parsedCommand.feedback || ''
+    );
+    await logAdminAudit(supabase, formattedPhone, `ADMIN_REMEDIATION_${decision.toUpperCase()}`, {
+      proposal_code: parsedCommand.proposal_code || null,
+      feedback: parsedCommand.feedback || null
+    });
+    return {
+      isSuperadmin: true,
+      reply: decisionRes.reply
+    };
+  }
+
   if (parsedCommand.intent === 'ADMIN_RULES_RESET') {
     const resetRes = await handleAdminRulesReset(supabase);
     await logAdminAudit(supabase, formattedPhone, 'ADMIN_RULES_RESET', {});
@@ -1038,6 +1243,7 @@ ${JSON.stringify(telemetry).slice(0, 6000)}`;
     `• *System Health*: "check health", "system status"\n` +
     `• *Coupon Generation*: "generate 20% coupon for +254712345678"\n` +
     `• *Profiles Report*: "profiles report", "user stats"\n` +
+    `• *Autonomous Remediation*: "admin remediations", "admin accept fix FIX-YYYY-MM-DD-NN"\n` +
     `• *Close Session*: "adminstop"`;
 
   return {

@@ -38,14 +38,18 @@ const TABLES = [
   { table: 'system_config', key: 'key' },
   { table: 'passbook_transfers', key: 'id' },
   { table: 'chat_history', key: 'id' },
-  { table: 'error_logs', key: 'id' }
+  { table: 'error_logs', key: 'id' },
+  { table: 'sentinel_audit_runs', key: 'id' },
+  { table: 'remediation_proposals', key: 'id' }
 ];
 
 // Column shapes asserted from SAKA_FLEET_ARCHITECTURE.md §2.1 / §2.2.
 const SHAPES = [
   { table: 'profiles', columns: 'id, phone_number, subscription_tier, subscription_status, unit_system, country_code, deleted_at' },
   { table: 'vehicles', columns: 'id, owner_id, assigned_driver_id, plate_number, vin, qr_passbook_token, status, deleted_at, owner_phone, transfer_count_current_year' },
-  { table: 'vin_registry', columns: 'vin, first_owner_id, trial_granted, trial_end_at, trial_status' }
+  { table: 'vin_registry', columns: 'vin, first_owner_id, trial_granted, trial_end_at, trial_status' },
+  { table: 'sentinel_audit_runs', columns: 'id, run_date, error_count, friction_count, stall_count, summary, plan_dispatched_at' },
+  { table: 'remediation_proposals', columns: 'id, proposal_code, audit_run_id, status, approval_nonce, nonce_expires_at, attempts, execution' }
 ];
 
 const results = [];

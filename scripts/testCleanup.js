@@ -143,6 +143,17 @@ export async function cleanupTestData({
   summary.chat_friction_logs = await deleteIn(client, 'chat_friction_logs', 'user_phone', allPhones, verbose);
   summary.processed_webhooks = await deleteIn(client, 'processed_webhooks', 'phone_number', allPhones, verbose);
   summary.superadmin_sessions = await deleteIn(client, 'superadmin_sessions', 'phone_number', allPhones, verbose);
+
+  // Autonomous remediation pipeline rows created by test_remediation_pipeline.js.
+  const testProposalCodes = ['FIX-TEST-0001', 'FIX-TEST-0002', 'FIX-TEST-0003', 'FIX-TEST-0004'];
+  summary.remediation_proposals = await deleteIn(client, 'remediation_proposals', 'proposal_code', testProposalCodes, verbose);
+  try {
+    const { error, count } = await client
+      .from('sentinel_audit_runs')
+      .delete({ count: 'exact' })
+      .eq('run_date', '2000-01-03');
+    if (!error) summary.sentinel_audit_runs = count || 0;
+  } catch {}
   summary.profiles = await deleteIn(client, 'profiles', 'phone_number', allPhones, verbose);
 
   if (verbose) {

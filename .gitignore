@@ -1,2 +1,7 @@
 node_modules/ 
 .env 
+remediation/work-orders/
+remediation/audit-context.json
+remediation/cline-plan.log
+remediation/cline-execute.log
+

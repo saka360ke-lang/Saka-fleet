@@ -56,6 +56,8 @@ export const RESET_TABLES = [
   'conversation_analytics',
   'error_logs',
   'profiles'
+  // Intentionally PRESERVED (governance ledger + feature backlog):
+  //   weekly_feature_proposals, sentinel_audit_runs, remediation_proposals, system_config
 ];
 
 export async function executeDatabaseReset({ targetPhone = null, verbose = true } = {}) {

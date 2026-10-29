@@ -20,6 +20,13 @@ import { processImpendingTrialReminders } from './src/services/coupons.js';
 import { runReminderSweep } from './src/services/maintenanceReminders.js';
 import { ensureComplianceCatalog, reviewComplianceCatalog, COMPLIANCE_CATALOG_VERSION } from './src/services/complianceCatalog.js';
 import { expireStaleAssignments } from './src/services/driverAssignments.js';
+import {
+  runRemediationAudit,
+  checkRemediationPlanDispatch,
+  checkRemediationProposalDelivery,
+  checkRemediationExecutionRetry,
+  ensureRemediationTables
+} from './src/workers/remediation.js';
 import { createResilientClient } from './src/services/supabaseClient.js';
 import { ensureChatSessionsTable } from './src/services/sessionStore.js';
 import { drainQueue, getQueueStats } from './src/services/messageQueue.js';
@@ -615,6 +622,77 @@ fastify.post('/api/cron/sentinel-horizon', async (request, reply) => {
   return { success: true, horizon: result };
 });
 
+// ==========================================
+// AUTONOMOUS REMEDIATION PIPELINE (v1.10.0)
+// 02:00 EAT Sentinel audit → 03:00 EAT Cline plan (CI) → Superadmin approval → CI execution
+// Requires REMEDIATION_AUTONOMY=on (kill switch, default off).
+// ==========================================
+let lastRemediationAuditDate = null;
+let lastRemediationPlanDate = null;
+
+async function checkRemediationAuditSchedule() {
+  try {
+    const now = new Date();
+    const nairobiHour = (now.getUTCHours() + 3) % 24;
+    const nairobiMinute = now.getUTCMinutes();
+    const todayStr = now.toISOString().split('T')[0];
+
+    if (nairobiHour === 2 && nairobiMinute <= 5 && lastRemediationAuditDate !== todayStr) {
+      lastRemediationAuditDate = todayStr;
+      fastify.log.info('🛠️ Remediation audit: Sentinel aggregating the last 24h of logs...');
+      await runRemediationAudit(supabase);
+    }
+  } catch (err) {
+    fastify.log.error('Error running remediation audit schedule:', err);
+  }
+}
+
+async function checkRemediationPlanSchedule() {
+  try {
+    const now = new Date();
+    const nairobiHour = (now.getUTCHours() + 3) % 24;
+    const nairobiMinute = now.getUTCMinutes();
+    const todayStr = now.toISOString().split('T')[0];
+
+    if (nairobiHour === 3 && nairobiMinute <= 5 && lastRemediationPlanDate !== todayStr) {
+      lastRemediationPlanDate = todayStr;
+      fastify.log.info('🛠️ Remediation plan: dispatching Cline plan generation...');
+      await checkRemediationPlanDispatch(supabase);
+    }
+  } catch (err) {
+    fastify.log.error('Error running remediation plan schedule:', err);
+  }
+}
+
+setInterval(checkRemediationAuditSchedule, 60000);
+setInterval(checkRemediationPlanSchedule, 60000);
+setInterval(() => {
+  checkRemediationProposalDelivery(supabase).catch((err) => {
+    console.warn('[Remediation Delivery Warning]:', err.message);
+  });
+}, 15 * 60 * 1000);
+setInterval(() => {
+  checkRemediationExecutionRetry(supabase).catch((err) => {
+    console.warn('[Remediation Retry Warning]:', err.message);
+  });
+}, 30 * 60 * 1000);
+
+fastify.post('/api/cron/remediation-audit', async (request, reply) => {
+  const result = await runRemediationAudit(supabase);
+  return { success: true, remediation_audit: result };
+});
+
+fastify.post('/api/cron/remediation-plan', async (request, reply) => {
+  const result = await checkRemediationPlanDispatch(supabase);
+  return { success: true, remediation_plan: result };
+});
+
+fastify.post('/api/cron/remediation-delivery', async (request, reply) => {
+  const delivered = await checkRemediationProposalDelivery(supabase);
+  const retried = await checkRemediationExecutionRetry(supabase);
+  return { success: true, delivery: delivered, retry: retried };
+});
+
 
 // ==========================================
 // PAYSTACK WEBHOOK HANDLERS
@@ -821,6 +899,7 @@ const start = async () => {
     // Ensure Sentinel Worker & Superadmin Feature Set Tables exist
     await ensureSentinelTables(supabase);
     await ensureSuperadminTables(supabase);
+    await ensureRemediationTables(supabase);
     await ensureVehicleTableColumns(supabase);
     await ensureComplianceCatalog({ supabase });
     await ensureChatSessionsTable(supabase);

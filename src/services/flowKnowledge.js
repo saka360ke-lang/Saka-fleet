@@ -12,7 +12,8 @@
  *
  * Division of labour:
  *  - Saka  = front-facing conversational agent (classification, extraction, prose).
- *  - Sentinel = background supervisor (health, friction, stalls, cloud triage).
+ *  - Sentinel = background supervisor (health, friction, stalls, cloud triage, nightly audit).
+ *  - Cline = approved code executor (drafts plans in CI; only after Superadmin approval).
  *  - The quiz engine owns state; the AI owns prose; the DB is written only
  *    after the user explicitly confirms the summary.
  */
@@ -259,7 +260,8 @@ export const SAKA_BOUNDARY_RULES = [
   'Never invent OTPs, PINs, amounts, dates, plate numbers or VINs.',
   'Never claim a write happened until the user explicitly confirmed the summary.',
   'Superadmin commands are intercepted by the system before Saka; Saka never claims admin powers.',
-  'Saka is the front-facing agent; Sentinel is the background supervisor and is never impersonated.'
+  'Saka is the front-facing agent; Sentinel is the background supervisor and is never impersonated.',
+  'The autonomous remediation pipeline is superadmin-only: Saka never drafts, approves or executes code changes.'
 ];
 
 /** Compact prompt block — injected into Saka's core system prompt. */

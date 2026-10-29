@@ -13,8 +13,9 @@
  *      repository's real insert/select payloads.
  *   2. The existing migrations, executed in place (single source of truth):
  *      ensureSuperadminTables → ensureVehicleTableColumns → ensureSentinelTables
- *      → ensureChatSessionsTable → applySentinelMigration →
- *      applyChatSessionsMigration → applyVinImmutabilityMigration.
+ *      → ensureRemediationTables → ensureChatSessionsTable → applySentinelMigration
+ *      → applyChatSessionsMigration → applyVinImmutabilityMigration
+ *      → applyRemediationMigration.
  *
  * Transport: Supabase Management API when SUPABASE_ACCESS_TOKEN is set,
  * otherwise direct Postgres over DATABASE_URL (see src/db/sqlRunner.js).
@@ -30,9 +31,11 @@ import { ensureVehicleTableColumns } from '../src/services/vehicles.js';
 import { ensureSuperadminTables } from '../src/services/superadmin.js';
 import { ensureSentinelTables } from '../src/workers/sentinel.js';
 import { ensureChatSessionsTable } from '../src/services/sessionStore.js';
+import { ensureRemediationTables } from '../src/workers/remediation.js';
 import { applySentinelMigration } from './run_sentinel_migration.js';
 import { applyChatSessionsMigration } from './run_chat_sessions_migration.js';
 import { applyVinImmutabilityMigration } from './run_vin_immutability_migration.js';
+import { applyRemediationMigration } from './run_remediation_migration.js';
 
 const EXPECTED_REF = process.env.SUPABASE_EXPECTED_PROJECT_REF || 'knlxpwiqiqcliprjqjfp';
 
@@ -228,7 +231,8 @@ const EXPECTED_TABLES = [
   'weekly_feature_proposals', 'chat_history', 'chat_sessions', 'chat_transcripts',
   'chat_friction_logs', 'conversation_analytics', 'error_logs', 'system_config',
   'saka_dynamic_rules', 'superadmin_sessions', 'coupons', 'admin_audit_logs',
-  'expiry_notification_log'
+  'expiry_notification_log',
+  'sentinel_audit_runs', 'remediation_proposals'
 ];
 
 async function step(label, fn) {
@@ -279,10 +283,16 @@ async function main() {
     console.log('   -> executed');
   });
   await step('ensureSentinelTables()', async () => console.log('   ->', JSON.stringify(await ensureSentinelTables(supabase))));
+  await step('ensureRemediationTables()', async () => console.log('   ->', JSON.stringify(await ensureRemediationTables(supabase))));
   await step('ensureChatSessionsTable()', async () => console.log('   ->', JSON.stringify(await ensureChatSessionsTable(supabase))));
   await step('applySentinelMigration()', async () => {
     const r = await applySentinelMigration();
     if (!r.success) throw new Error(r.error || r.body || 'sentinel migration failed');
+    console.log('   ✅');
+  });
+  await step('applyRemediationMigration()', async () => {
+    const r = await applyRemediationMigration();
+    if (!r.success) throw new Error(r.error || r.body || 'remediation migration failed');
     console.log('   ✅');
   });
   await step('applyChatSessionsMigration()', async () => {

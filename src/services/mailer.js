@@ -105,6 +105,78 @@ export async function sendAdminNotificationEmail(subject, htmlContent) {
     }
 }
 
+/**
+ * Remediation proposal approval request (v1.10.0).
+ * Dual-channel companion to the WhatsApp summary; never throws.
+ */
+export async function sendRemediationProposalEmail({
+    proposalCode,
+    title,
+    riskLevel = 'low',
+    overview = '',
+    changes = [],
+    evidenceCount = 0
+} = {}) {
+    const targetEmail = process.env.SUPERADMIN_EMAIL;
+    if (!targetEmail || !process.env.RESEND_API_KEY) return false;
+
+    const esc = (value) => String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+
+    const rows = (Array.isArray(changes) ? changes : []).slice(0, 8).map((change, index) => `
+        <tr>
+            <td style="padding: 6px 8px; border-bottom: 1px solid #e2e8f0;">${index + 1}</td>
+            <td style="padding: 6px 8px; border-bottom: 1px solid #e2e8f0;"><code>${esc(change.file)}</code></td>
+            <td style="padding: 6px 8px; border-bottom: 1px solid #e2e8f0;">${esc(change.change)}</td>
+        </tr>`).join('');
+
+    try {
+        const { data, error } = await getResendClient().emails.send({
+            from: 'Saka Remediation <security@reports.sakafleet.com>',
+            to: [targetEmail],
+            subject: `Approval required: ${proposalCode} (${riskLevel} risk)`,
+            html: `
+                <div style="font-family: Arial, sans-serif; color: #1e293b; max-width: 640px; margin: auto; border: 1px solid #e2e8f0; padding: 24px; border-radius: 12px;">
+                    <h2 style="color: #0f172a; margin-top: 0;">Autonomous Remediation Approval</h2>
+                    <p><strong>Saka Sentinel</strong> audited the last 24 hours of logs and <strong>Cline</strong> drafted a scoped fix. No code will change without your explicit approval.</p>
+                    <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
+                        <tr><td style="padding: 6px 8px; font-weight: bold; width: 140px;">Proposal:</td><td style="padding: 6px 8px;"><code>${esc(proposalCode)}</code></td></tr>
+                        <tr><td style="padding: 6px 8px; font-weight: bold;">Title:</td><td style="padding: 6px 8px;">${esc(title)}</td></tr>
+                        <tr><td style="padding: 6px 8px; font-weight: bold;">Risk level:</td><td style="padding: 6px 8px;">${esc(riskLevel)}</td></tr>
+                        <tr><td style="padding: 6px 8px; font-weight: bold;">Evidence rows:</td><td style="padding: 6px 8px;">${Number(evidenceCount) || 0}</td></tr>
+                    </table>
+                    <p>${esc(overview)}</p>
+                    ${rows ? `<h3 style="margin-bottom: 8px;">Proposed changes</h3>
+                    <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+                        <thead><tr style="background: #f8fafc;"><th style="text-align: left; padding: 6px 8px;">#</th><th style="text-align: left; padding: 6px 8px;">File</th><th style="text-align: left; padding: 6px 8px;">Change</th></tr></thead>
+                        <tbody>${rows}</tbody>
+                    </table>` : ''}
+                    <div style="background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 8px; padding: 16px; margin-top: 20px;">
+                        <p style="margin: 0 0 8px 0; font-weight: bold;">Reply on WhatsApp to decide:</p>
+                        <p style="margin: 4px 0;"><code>admin accept fix ${esc(proposalCode)}</code></p>
+                        <p style="margin: 4px 0;"><code>admin decline fix ${esc(proposalCode)}</code></p>
+                        <p style="margin: 4px 0;"><code>admin modify fix ${esc(proposalCode)} &lt;your guidance&gt;</code></p>
+                    </div>
+                    <p style="font-size: 12px; color: #64748b; margin-top: 20px;">Tests run before and after execution. A failed suite aborts the run and no code is pushed.</p>
+                </div>
+            `
+        });
+
+        if (error) {
+            console.error('[Resend Remediation Email Error]:', error.message);
+            return false;
+        }
+
+        console.log(`[Resend Remediation] Approval request sent to ${targetEmail}. ID: ${data?.id}`);
+        return true;
+    } catch (err) {
+        console.error('[Resend Remediation Email Exception]:', err.message);
+        return false;
+    }
+}
+
 export async function sendEmailOtp(targetEmail, code) {
     try {
         const { data, error } = await getResendClient().emails.send({

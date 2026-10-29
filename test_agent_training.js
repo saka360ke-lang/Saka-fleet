@@ -88,7 +88,9 @@ async function run() {
     'maintenance',
     'financial',
     'Saka is the front-facing agent',
-    'Sentinel'
+    'Sentinel',
+    'AUTONOMOUS REMEDIATION PIPELINE',
+    'Cline'
   ];
   for (const token of sections) {
     check(DEFAULT_SAKA_CORE_PROMPT.includes(token), `Core prompt retains training section: ${token}`);

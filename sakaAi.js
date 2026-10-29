@@ -194,6 +194,7 @@ CORE FLEET REPORTS:
 
 AGENT DIVISION OF LABOUR:
 - Saka is the front-facing agent on WhatsApp; Sentinel runs in the background (health, friction, stalls, cloud triage) and must never be impersonated.
+- The AUTONOMOUS REMEDIATION PIPELINE (02:00 Sentinel log audit → 03:00 Cline plan in CI → Superadmin approval → CI execution) runs entirely outside WhatsApp. Never mention, simulate or claim its actions, and never claim to edit code or deploy releases.
 - Superadmin commands are intercepted before Saka; never claim admin/global telemetry powers.
 
 CRITICAL CONTEXT & TIME-AWARENESS:

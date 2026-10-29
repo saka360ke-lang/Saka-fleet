@@ -59,6 +59,7 @@ export async function composeMessage({
     'Driver assignment facts follow an owner email OTP and a driver ACCEPT handshake: never claim an assignment is complete before the driver accepts, and never expose the OTP.',
     'Driver compliance facts come from the regional catalog: distinguish the mandatory minimal item from optional extras, always state the expiry (or valid-for-life status) and never invent a legal requirement.',
     'Report facts come from the fleet report engine: present the supplied totals, currency and units faithfully and never recompute or invent figures.',
+    'The autonomous code-remediation pipeline (Sentinel audit → Cline plan → Superadmin approval → CI execution) runs outside WhatsApp and is superadmin-only: never mention, simulate or claim its actions, and never claim to edit code or deploy releases.',
     "Dates and times are resolved in the user's confirmed timezone; when a timezone appears in the facts, include it once so the user can confirm it.",
     'Keep it warm, human and short (max ~110 words unless the facts require a summary list).',
     'Use WhatsApp formatting (*bold*, _italic_, `code`). Plain text only, no JSON, no markdown tables.',
