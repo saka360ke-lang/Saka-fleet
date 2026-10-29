@@ -65,14 +65,24 @@ const supabase = createTestSupabaseClient();
 async function runTests() {
   console.log('=== SAKA FLEET — MODEL ROUTER TESTS (PHASE 0) ===\n');
 
+  // Environment-independent baseline: a unit suite must not inherit the local
+  // .env kill switch. Test 2 explicitly re-enables premium in isolation.
+  const premiumEnvironmentBefore = isPremiumModelEnabled();
+  process.env.PREMIUM_MODEL_ENABLED = 'off';
+  console.log(`  ℹ️ Premium switch forced off for the suite (local value: ${premiumEnvironmentBefore ? 'on' : 'off'}).\n`);
+
   console.log('--- Test 1: every purpose resolves to DeepSeek while premium is off ---');
-  check(isPremiumModelEnabled() === false, 'premium routing is off by default');
-  for (const purpose of Object.keys(AI_PURPOSES)) {
-    const resolved = resolveTier(purpose);
-    check(resolved.provider === AI_PROVIDERS.DEEPSEEK, `${purpose}: provider is deepseek`);
-    check(typeof resolved.model === 'string' && resolved.model.startsWith('deepseek'), `${purpose}: DeepSeek model (${resolved.model})`);
-    check(resolved.tier === AI_TIERS.ROUTER || resolved.tier === AI_TIERS.REASONING, `${purpose}: tier is 1/3 while premium is off`);
-  }
+  const premiumBefore = isPremiumModelEnabled();
+  withEnv({ PREMIUM_MODEL_ENABLED: 'off', CONVERSATIONAL_PROVIDER: undefined, AI_MODEL_TIER_2: undefined }, () => {
+    check(isPremiumModelEnabled() === false, 'premium routing is off when the kill switch is off');
+    for (const purpose of Object.keys(AI_PURPOSES)) {
+      const resolved = resolveTier(purpose);
+      check(resolved.provider === AI_PROVIDERS.DEEPSEEK, `${purpose}: provider is deepseek`);
+      check(typeof resolved.model === 'string' && resolved.model.startsWith('deepseek'), `${purpose}: DeepSeek model (${resolved.model})`);
+      check(resolved.tier === AI_TIERS.ROUTER || resolved.tier === AI_TIERS.REASONING, `${purpose}: tier is 1/3 while premium is off`);
+    }
+  });
+  check(isPremiumModelEnabled() === premiumBefore, 'premium switch restored to its pre-test value');
 
   console.log('\n--- Test 2: PREMIUM_MODEL_ENABLED upgrades the conversational tier ---');
   withEnv({
@@ -87,7 +97,7 @@ async function runTests() {
     const extraction = resolveTier('extraction');
     check(extraction.tier === AI_TIERS.ROUTER && extraction.provider === AI_PROVIDERS.DEEPSEEK, 'extraction stays on the DeepSeek router tier');
   });
-  check(isPremiumModelEnabled() === false, 'premium toggle restored to off after the test');
+  check(isPremiumModelEnabled() === premiumBefore, 'premium toggle restored after the test');
 
   console.log('\n--- Test 3: Tier 0 is deterministic (no model) ---');
   const deterministic = resolveTier('intent_classify', { tier: AI_TIERS.DETERMINISTIC });

@@ -8,6 +8,7 @@ import {
 import { dispatchRepositoryEvent, isRemediationAutonomyEnabled } from './githubDispatch.js';
 import { sendAdminNotificationEmail } from './mailer.js';
 import { generateText, parseJsonSafely } from './aiClient.js';
+import { getAiUsageSummary, AI_USAGE_LOG_MAX_ROWS } from './aiUsageLog.js';
 import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
 import crypto from 'crypto';
 
@@ -100,6 +101,7 @@ const ADMIN_INTENTS = new Set([
   'ADMIN_RULES_RESET', 'ADMIN_RULES_TOGGLE', 'ADMIN_RULES_LIST',
   'ADMIN_HORIZON', 'ADMIN_PROPOSALS',
   'ADMIN_REMEDIATIONS', 'ADMIN_REMEDIATION_ACCEPT', 'ADMIN_REMEDIATION_DECLINE', 'ADMIN_REMEDIATION_MODIFY',
+  'ADMIN_AI_STATS',
   'HEALTH_CHECK', 'GENERATE_COUPON', 'PROFILES_REPORT', 'SENTINEL_DIAGNOSE'
 ]);
 
@@ -153,6 +155,13 @@ export async function parseSuperadminCommand(messageText) {
     return { intent: 'ADMIN_PROPOSALS' };
   }
 
+  // Phase 2 (v1.13.0): AI telemetry digest — regex first, zero LLM calls.
+  const aiStatsMatch = text.match(/^\s*admin\s+(?:ai[\s_-]*(?:stats?|usage|telemetry)|usage)(?:\s+(\d{1,3})\s*h(?:ours?|rs?)?)?\s*$/i);
+  if (aiStatsMatch) {
+    const requestedHours = aiStatsMatch[1] ? Number(aiStatsMatch[1]) : 24;
+    return { intent: 'ADMIN_AI_STATS', hours: Math.min(168, Math.max(1, requestedHours)) };
+  }
+
   // Autonomous remediation approval gateway (v1.10.0)
   if (/^\s*admin\s+remediations?\b/i.test(lower)) {
     return { intent: 'ADMIN_REMEDIATIONS' };
@@ -175,8 +184,8 @@ export async function parseSuperadminCommand(messageText) {
   }
 
   const prompt = `Classify user's admin request into JSON:
-Intent: "HEALTH_CHECK" | "GENERATE_COUPON" | "PROFILES_REPORT" | "ADMIN_REPORT" | "ADMIN_AUDIT" | "ADMIN_ALERTS" | "ADMIN_RULES_RESET" | "ADMIN_RULES_TOGGLE" | "ADMIN_RULES_LIST" | "ADMIN_HORIZON" | "ADMIN_PROPOSALS" | "ADMIN_REMEDIATIONS" | "ADMIN_REMEDIATION_ACCEPT" | "ADMIN_REMEDIATION_DECLINE" | "ADMIN_REMEDIATION_MODIFY" | "UNKNOWN"
-Extract: discount_value (e.g. "20%"), target_phone (e.g. "+254712345678"), query (e.g. "KDA 123A" or VIN), rule_key (e.g. "clarify_vin"), proposal_code (e.g. "FIX-2026-10-30-01"), feedback (guidance text)
+Intent: "HEALTH_CHECK" | "GENERATE_COUPON" | "PROFILES_REPORT" | "ADMIN_AI_STATS" | "ADMIN_REPORT" | "ADMIN_AUDIT" | "ADMIN_ALERTS" | "ADMIN_RULES_RESET" | "ADMIN_RULES_TOGGLE" | "ADMIN_RULES_LIST" | "ADMIN_HORIZON" | "ADMIN_PROPOSALS" | "ADMIN_REMEDIATIONS" | "ADMIN_REMEDIATION_ACCEPT" | "ADMIN_REMEDIATION_DECLINE" | "ADMIN_REMEDIATION_MODIFY" | "UNKNOWN"
+Extract: discount_value (e.g. "20%"), target_phone (e.g. "+254712345678"), query (e.g. "KDA 123A" or VIN), rule_key (e.g. "clarify_vin"), proposal_code (e.g. "FIX-2026-10-30-01"), feedback (guidance text), hours (AI telemetry window 1-168, default 24)
 Command: "${text}"`;
 
   try {
@@ -198,6 +207,9 @@ Command: "${text}"`;
       discount_value: discountMatch ? discountMatch[0].trim() : '20%',
       target_phone: phoneMatch ? phoneMatch[0].trim() : null
     };
+  }
+  if (/\b(ai[\s_-]*(?:stats?|usage|telemetry)|usage\s+stats?)\b/i.test(lower)) {
+    return { intent: 'ADMIN_AI_STATS', hours: 24 };
   }
   if (/\b(profiles?|users?|drivers?|owners?)\s+(report|stats|summary|list|count)\b/i.test(lower) || /\b(user|driver|owner|profile)\s+(stats|summary|report)\b/i.test(lower)) {
     return { intent: 'PROFILES_REPORT' };
@@ -418,6 +430,103 @@ export async function handleProfilesReportCommand(supabase) {
   };
 }
 
+function formatCount(value) {
+  return Number.isFinite(value) ? value.toLocaleString('en-US') : '0';
+}
+
+function formatPercent(rate) {
+  return Number.isFinite(rate) ? `${(rate * 100).toFixed(1)}%` : 'n/a';
+}
+
+function formatDuration(latencyMs) {
+  return Number.isFinite(latencyMs) ? `${formatCount(latencyMs)} ms` : 'n/a';
+}
+
+function formatApproxCost(value, unpricedTokens = 0) {
+  if (value === null) return 'n/a';
+  const amount = value === 0 ? '$0.00' : `$${value.toFixed(value >= 1 ? 2 : 4)}`;
+  return unpricedTokens > 0 ? `${amount}+` : amount;
+}
+
+function formatTierLabel(tierKey) {
+  if (tierKey === '0') return 'Tier 0 (deterministic)';
+  if (tierKey === '1') return 'Tier 1 (router)';
+  if (tierKey === '2') return 'Tier 2 (conversational)';
+  if (tierKey === '3') return 'Tier 3 (reasoning)';
+  return 'Untagged';
+}
+
+/**
+ * Render the deterministic WhatsApp digest for admin ai-stats (v1.13.0).
+ * Pure string formatting — intentionally no LLM call, so the digest costs
+ * zero tokens and can never fabricate telemetry.
+ */
+export function formatAiStatsReply(summary) {
+  if (!summary || summary.ok !== true) {
+    return `📉 *Saka AI Telemetry*\n\nTelemetry unavailable: ${summary?.error || 'unknown error'}\n\n_Verify Supabase connectivity and the ai_usage_logs table._`;
+  }
+
+  if (summary.totalRequests === 0) {
+    const loggingState = String(process.env.AI_USAGE_LOGGING_ENABLED || 'on').toLowerCase();
+    const disabled = ['off', 'false', '0'].includes(loggingState);
+    return `📊 *Saka AI Telemetry — Last ${summary.hours}h*\n\nNo AI calls were recorded in this window.\n\n_Telemetry is ${disabled ? 'disabled (AI_USAGE_LOGGING_ENABLED=off)' : 'enabled'}._`;
+  }
+
+  const tierLines = Object.entries(summary.byTier)
+    .sort((a, b) => Number(a[0]) - Number(b[0]))
+    .map(([key, bucket]) => `• ${formatTierLabel(key)}: ${formatCount(bucket.requests)} · ${formatPercent(bucket.successRate)} ok · ${formatDuration(bucket.avgLatencyMs)} · ${formatApproxCost(bucket.approxCostUsd, bucket.unpricedTokens)}`)
+    .join('\n');
+
+  const providerLines = Object.entries(summary.byProvider)
+    .sort((a, b) => b[1].requests - a[1].requests)
+    .map(([key, bucket]) => `• ${key}: ${formatCount(bucket.requests)} · ${formatPercent(bucket.successRate)} ok · ${formatDuration(bucket.avgLatencyMs)} · ${formatApproxCost(bucket.approxCostUsd, bucket.unpricedTokens)}`)
+    .join('\n');
+
+  const purposeLines = Object.entries(summary.byPurpose)
+    .sort((a, b) => b[1].requests - a[1].requests)
+    .slice(0, 4)
+    .map(([key, bucket]) => `• ${key}: ${formatCount(bucket.requests)} · ${formatPercent(bucket.successRate)} ok`)
+    .join('\n');
+
+  const capNote = summary.truncated ? ` · capped at ${formatCount(AI_USAGE_LOG_MAX_ROWS)} rows` : '';
+
+  return `🤖 *Saka AI Telemetry — Last ${summary.hours}h*\n\n` +
+    `*Totals*\n` +
+    `• Requests: ${formatCount(summary.totalRequests)} (✅ ${formatCount(summary.okRequests)} · ❌ ${formatCount(summary.errorRequests)})\n` +
+    `• Success: ${formatPercent(summary.successRate)} · Errors: ${formatPercent(summary.errorRate)}\n` +
+    `• Latency: avg ${formatDuration(summary.avgLatencyMs)} · p50 ${formatDuration(summary.p50LatencyMs)}\n` +
+    `• Tokens: ${formatCount(summary.promptTokens)} in / ${formatCount(summary.completionTokens)} out\n` +
+    `• Est. cost: ${formatApproxCost(summary.approxCostUsd, summary.unpricedTokens)} (approx list price)\n\n` +
+    `*By Tier*\n${tierLines || '• none'}\n\n` +
+    `*By Provider*\n${providerLines || '• none'}\n\n` +
+    `*Top Purposes*\n${purposeLines || '• none'}\n\n` +
+    `_Window: ${summary.hours}h${capNote} · retention cap ${formatCount(AI_USAGE_LOG_MAX_ROWS)} rows_`;
+}
+
+/**
+ * Superadmin AI telemetry command handler (v1.13.0).
+ * Returns `{ reply, details }` like every other admin command handler.
+ */
+export async function handleAiStatsCommand(supabase, hours = 24) {
+  const summary = await getAiUsageSummary(supabase, hours);
+  return {
+    reply: formatAiStatsReply(summary),
+    details: {
+      hours: summary.hours,
+      ok: summary.ok,
+      total_requests: summary.totalRequests,
+      ok_requests: summary.okRequests,
+      error_requests: summary.errorRequests,
+      error_rate: summary.errorRate,
+      avg_latency_ms: summary.avgLatencyMs,
+      prompt_tokens: summary.promptTokens,
+      completion_tokens: summary.completionTokens,
+      approx_cost_usd: summary.approxCostUsd,
+      truncated: summary.truncated,
+      error: summary.error || null
+    }
+  };
+}
 
 export async function handleAdminReportCommand(supabase) {
   // 1. Vehicle counts and mileage
@@ -1159,6 +1268,15 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
     };
   }
 
+  if (parsedCommand.intent === 'ADMIN_AI_STATS') {
+    const statsRes = await handleAiStatsCommand(supabase, parsedCommand.hours || 24);
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_AI_STATS', statsRes.details);
+    return {
+      isSuperadmin: true,
+      reply: statsRes.reply
+    };
+  }
+
   if (parsedCommand.intent === 'SENTINEL_DIAGNOSE') {
     let health = null;
     let friction = null;
@@ -1241,6 +1359,7 @@ ${JSON.stringify(telemetry).slice(0, 6000)}`;
     `• *System Alerts*: "admin alerts" (unresolved errors, friction logs & reminders)\n` +
     `• *Sentinel Dynamic Rules*: "adminrules", "adminrules reset", "adminrules toggle [key]"\n` +
     `• *System Health*: "check health", "system status"\n` +
+    `• *AI Telemetry*: "admin ai-stats" or "admin usage 48h" (router cost, latency & token digest)\n` +
     `• *Coupon Generation*: "generate 20% coupon for +254712345678"\n` +
     `• *Profiles Report*: "profiles report", "user stats"\n` +
     `• *Autonomous Remediation*: "admin remediations", "admin accept fix FIX-YYYY-MM-DD-NN"\n` +

@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.12.1  
+**Version:** 1.13.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -23,9 +23,9 @@ Saka Fleet is an intelligent vehicle asset management and conversational fleet o
 - **Autonomous Remediation (v1.11.1):** continuous Sentinel scanning over a configurable rolling window (default 60s ticks, 4h window, deterministic + throttled AI synthesis) → threshold-triggered Cline headless plan drafting in GitHub Actions → twice-daily adaptive Superadmin digests (08:00/20:00 EAT) → nonce-gated CI execution with before/after tests and automatic deployment alerts. See §35.
 - **Legacy providers removed (v1.7.3):** SendGrid (`@sendgrid/mail`), Twilio (`twilio`) and the unused `supabase` CLI package were fully removed — zero code imports, zero env keys. **Resend** + **Meta WhatsApp Cloud API** are the only outbound channels.
 
-### 1.1 LLM Provider Hub — Purpose Router (DeepSeek default, v1.12.0)
+### 1.1 LLM Provider Hub — Purpose Router (DeepSeek default, v1.13.0)
 
-All LLM traffic flows through **`src/services/aiClient.js`**. No service talks to a provider directly. Phase 0 adds a purpose → tier router; every tier resolves to DeepSeek until `PREMIUM_MODEL_ENABLED=on` (see §36).
+All LLM traffic flows through **`src/services/aiClient.js`**. No service talks to a provider directly. A purpose → tier router sends every tier to DeepSeek until `PREMIUM_MODEL_ENABLED=on`; Phase 2 (v1.13.0) adds telemetry analytics and the Superadmin `admin ai-stats` digest (see §36–§37).
 
 | Setting | Value |
 | :--- | :--- |
@@ -38,6 +38,7 @@ All LLM traffic flows through **`src/services/aiClient.js`**. No service talks t
 | Optional model override | `DEEPSEEK_MODEL`, `AI_MODEL_TIER_1/2/3` |
 | Purpose registry | `AI_PURPOSES` (tier + default params per purpose) |
 | Kill switch | `PREMIUM_MODEL_ENABLED` (off; Tier-2 downgrades to Tier 1 while off) |
+| Telemetry analytics | `getAiUsageSummary()` (1–168 h window) → Superadmin `admin ai-stats` digest (§37) |
 
 **Exports**
 - `getAIClient()` — lazily created, cached `OpenAI` instance bound to the DeepSeek baseURL.
@@ -60,7 +61,7 @@ All LLM traffic flows through **`src/services/aiClient.js`**. No service talks t
 - Gemini (`@google/genai`, `GEMINI_API_KEY`, `gemini-3.8-flash`, `gemini-flash-latest`) has been **fully removed** from code, dependencies, and environment.
 - **Null-safe attribute merge:** DeepSeek always emits every schema key (usually as explicit `null`). `processSakaMessage` therefore only lets **non-empty** AI values override the regex heuristic — otherwise a bare plate like `KBC 456X` would be wiped to `null` and onboarding would never start.
 - **Fail-fast AI:** the OpenAI SDK is called with `maxRetries: 0` and `AI_TIMEOUT_MS` (12 s default); slow or empty completions fall through to the deterministic fallbacks above instead of blocking the message queue.
-- **Purpose tagging & telemetry (v1.12.0):** every runtime AI call declares a `purpose` from `AI_PURPOSES`; each outcome emits one fire-and-forget record to `ai_usage_logs` (purpose, tier, provider, model, latency, tokens). `AI_USAGE_LOGGING_ENABLED=off` disables writes — see §36.
+- **Purpose tagging & telemetry (v1.12.0):** every runtime AI call declares a `purpose` from `AI_PURPOSES`; each outcome emits one fire-and-forget record to `ai_usage_logs` (purpose, tier, provider, model, latency, tokens). `AI_USAGE_LOGGING_ENABLED=off` disables writes — see §36. Aggregation lives in `getAiUsageSummary()` and powers the Superadmin `admin ai-stats` digest (§37).
 - **Verify connectivity** any time with `node scripts/test_deepseek_connection.js` (plain text + JSON mode + conversation history).
 
 ### 1.2 Conversational Engine (v1.7 — pure AI, quiz-first)
@@ -293,7 +294,7 @@ Cline-authored, Superadmin-approved fix plans consumed by the CI executor.
    - First-time introductions, Swahili greetings, pause acknowledgements, friction apologies and default prompts are all rendered by Saka AI from structured facts; only one next step is requested at a time.
 
 7. **Superadmin Intercept (multi-role coexistence):**
-   - Only explicit admin directives (`admin*`, `adminrules*`, `check health`, `system status`, `sentinel …`, `profiles report`, `coupon …`, `horizon`, `proposals`) are claimed by `handleSuperadminFlow`.
+   - Only explicit admin directives (`admin*`, `adminrules*`, `check health`, `system status`, `sentinel …`, `profiles report`, `coupon …`, `horizon`, `proposals`, `admin ai-stats` / `admin usage [Nh]`) are claimed by `handleSuperadminFlow`.
    - All other messages from the superadmin phone fall through to the normal Saka AI conversation so the admin can also operate as Owner/Driver.
    - `admin sentinel diagnose` (also `sentinel diagnose`, `superadmin to sentinel …`) runs live health + friction analysis and returns an AI diagnostic report in chat.
 
@@ -549,7 +550,7 @@ Owners exceeding tier limits are prompted to upgrade via Paystack checkout.
 ### 13.1 Dynamic Role & Context Indexing
 - Users can ask Saka at any time: *"What can I do?"*, *"Show my actions"*, *"Show my actions as an owner"*, or *"Show my actions as a driver"*.
 - Saka dynamically detects user permissions:
-  - **Superadmin:** Displays executive fleet commands (`admin report`, `admin audit [Plate or VIN]`, `admin alerts`, `adminrules`).
+  - **Superadmin:** Displays executive fleet commands (`admin report`, `admin audit [Plate or VIN]`, `admin alerts`, `adminrules`, `admin ai-stats`).
   - **Superadmin Multi-Role Coexistence:** `handleSuperadminFlow` intercepts only explicit admin directives; all other messages fall through so the superadmin phone can simultaneously register vehicles as an **Owner** and be assigned as a **Driver** without losing admin access.
   - **Owner:** Displays Owner Command Center (`my vehicles`, `switch to [plate]`, `register`, `transfer passbook [plate]`, `assign driver [phone] to [plate]`, fuel/odometer logging, revenue tracking, monthly PDF reports).
   - **Driver:** Displays Driver Hub (`Odometer [km]`, `Logged [L] fuel`, `Earned [amount]`, `Oil change needed`, `passbook details`). Strictly prevents driver from transferring passbooks or deleting vehicles.
@@ -1359,6 +1360,8 @@ All LLM traffic still flows through `src/services/aiClient.js` (the only provide
 
 Retention: `AI_USAGE_LOG_MAX_ROWS` (10,000) trimmed every `AI_USAGE_TRIM_EVERY` (250) writes. `AI_USAGE_LOGGING_ENABLED=off` disables writes. The ledger is operational (not governance) and can be truncated without audit impact.
 
+Analytics (v1.13.0): `getAiUsageSummary(supabase, hours = 24)` aggregates a 1–168 h window in JS over paged PostgREST reads (1,000-row pages, capped by `AI_USAGE_LOG_MAX_ROWS`) and returns totals, success/error rates, avg + p50 latency, prompt/completion tokens, approximate cost and `byTier` / `byProvider` / `byPurpose` buckets. `estimateAiUsageCostUsd()` applies `AI_USAGE_COST_RULES` approximate public list prices — informational only, never billing. The helper never throws (returns `{ ok: false, error }`) and makes no provider calls. See §37.
+
 ### 36.5 Env knobs
 | Env | Default | Purpose |
 | :--- | :--- | :--- |
@@ -1376,21 +1379,93 @@ Retention: `AI_USAGE_LOG_MAX_ROWS` (10,000) trimmed every `AI_USAGE_TRIM_EVERY` 
 
 ### 36.6 Files & tests
 - `src/services/aiClient.js` — purpose registry, tier resolution, provider clients, telemetry sink.
-- `src/services/aiUsageLog.js` — `ensureAiUsageLogsTable`, `logAiUsage`, `trimAiUsageLogs`, `installAiUsageSink`.
+- `src/services/aiUsageLog.js` — `ensureAiUsageLogsTable`, `logAiUsage`, `trimAiUsageLogs`, `installAiUsageSink`, plus Phase 2 analytics: `getAiUsageSummary`, `estimateAiUsageCostUsd`, `AI_USAGE_COST_RULES`.
+- `src/services/superadmin.js` — `ADMIN_AI_STATS` parsing, `handleAiStatsCommand`, `formatAiStatsReply` (v1.13.0).
 - `index.js` — boot chain ensures the table and installs the sink after `ensureRemediationTables()`.
 - `test_model_router.js` — 70 assertions: tier resolution for every purpose, premium toggle, Tier 0, unknown purpose, missing-key degradation + single telemetry record, provider caching, helper contracts, DB provisioning/insert/cleanup (zero live API calls).
 - `test_phase1_canary.js` — 37 assertions: Anthropic translation/normalization, Tier-2 success, 429/timeout fallback to DeepSeek, `AI_PREMIUM_MAX_CONCURRENCY` cap + overflow, escalation matrix, premium-off downgrade, DB telemetry (fetch-stubbed, zero network).
+- `test_phase2_analytics.js` — 57 assertions: pricing rules, aggregation math (tier/provider/purpose), window clamping, 1,000-row pagination, fail-soft contract, deterministic digest, escalation precision, offline `admin ai-stats` parsing, DB round-trip with self-cleanup.
 
 ### 36.7 Phase roadmap
 | Phase | Scope | Status |
 | :--- | :--- | :--- |
 | 0 | Router abstraction + usage telemetry (all DeepSeek) | shipped (v1.12.0) |
 | 1 | Anthropic canary Tier-2 + escalation rules + concurrency cap | shipped (v1.12.1) |
-| 2 | Complexity-based escalation for intent classification | planned |
+| 2 | Telemetry analytics + Superadmin AI digest + escalation precision tuning + `.env` standards | shipped (v1.13.0) |
 | 3 | CI Cline model parameterization + reasoning-model opt-in | planned |
-| 4 | Budget alerts + weekly cost/latency report | planned |
+| 4 | Budget alerts + weekly cost/latency report (data source: `admin ai-stats`) | planned |
 
 ### 36.8 Governance rule
-Every new LLM call must pass a `purpose` from `AI_PURPOSES`; provider/model changes go through `aiClient.js` only; telemetry must never be bypassed. Tier-2 promotion is deterministic (`classifyIntentTier`), and premium-provider failures must always fall back to Tier-1 DeepSeek. Mirrored in `.clinerules` rule 20.
+Every new LLM call must pass a `purpose` from `AI_PURPOSES`; provider/model changes go through `aiClient.js` only; telemetry must never be bypassed. Tier-2 promotion is deterministic (`classifyIntentTier`) with exported `ESCALATION_RULES` thresholds, and premium-provider failures must always fall back to Tier-1 DeepSeek. `getAiUsageSummary()` is the only analytics aggregator and must stay fail-soft and provider-free. Mirrored in `.clinerules` rules 20–21.
 
+
+---
+
+## 37. Telemetry-Driven Optimization & .env Standards — Phase 2 (v1.13.0)
+
+### 37.1 Scope
+Phase 2 closes the loop opened by the Phase 0/1 telemetry seam: `ai_usage_logs` is now queryable as a live cost/performance surface, exposed to the Superadmin over WhatsApp, and the deterministic Tier-2 escalation classifier is precision-tuned. `.env` and `.env.example` are standardized so routing, provider, telemetry, timeout and concurrency knobs are grouped and auditable. No new LLM call sites and no schema changes.
+
+### 37.2 Analytics helper (`src/services/aiUsageLog.js`)
+`getAiUsageSummary(supabase, hours = 24)` — fail-soft aggregate over a 1–168 h window (default 24 h):
+
+| Field | Meaning |
+| :--- | :--- |
+| `totalRequests` / `okRequests` / `errorRequests` | call counts in the window |
+| `successRate` / `errorRate` | 0–1 ratios (null for an empty window) |
+| `avgLatencyMs` / `p50LatencyMs` | wall-clock latency (lower median for even samples) |
+| `promptTokens` / `completionTokens` / `totalTokens` | provider-reported usage summed |
+| `approxCostUsd` / `unpricedTokens` | approximate list-price cost; tokens with no pricing rule |
+| `byTier` / `byProvider` / `byPurpose` | the same bucket metrics keyed by `0/1/2/3/unknown`, provider and purpose |
+| `truncated` | true when the window exceeded the retention cap |
+| `ok` / `error` | query outcome; failures return zeroed totals instead of throwing |
+
+- Reads are paged at `AI_USAGE_PAGE_SIZE` (1,000, PostgREST's default max) up to `AI_USAGE_LOG_MAX_ROWS` (10,000) with a stable `created_at` + `id` ordering.
+- `estimateAiUsageCostUsd(provider, model, promptTokens, completionTokens)` uses `AI_USAGE_COST_RULES` approximate public prices (USD / 1M tokens): `deepseek-chat` $0.27/$1.10, `deepseek-reasoner` $0.55/$2.19, Claude Sonnet $3/$15, Haiku $1/$5, Opus $15/$75, OpenAI fallback $2.50/$10. Informational only — never billing.
+- Unknown providers/models return `null` pricing (the digest shows `n/a`), never a guessed figure.
+
+### 37.3 Superadmin WhatsApp command
+- Aliases: `admin ai-stats`, `admin ai stats`, `admin ai usage`, `admin ai telemetry`, `admin usage [Nh]` → intent `ADMIN_AI_STATS`.
+- Deterministic regex pre-match (zero LLM calls); optional window `1–168 h` (default 24 h, clamped in both directions). The `admin_parse` fallback also recognizes the intent.
+- `handleAiStatsCommand(supabase, hours)` renders a concise digest via `formatAiStatsReply()` — totals + success/error rate, avg/p50 latency, token volumes, approximate cost, per-tier and per-provider breakdowns and the top four purposes. No AI synthesis is used, so the digest costs zero tokens and can never fabricate telemetry.
+- Routed inside `handleSuperadminFlow` after the 30-minute session gate; every invocation writes `ADMIN_AI_STATS` to `admin_audit_logs`. The command is listed in the default help reply.
+
+---
+
+### 37.4 Escalation precision tuning (`sakaAi.js`)
+`ESCALATION_RULES` (exported, frozen) is the single source of truth for deterministic Tier-2 promotion:
+
+| Rule | Value | Rationale |
+| :--- | :--- | :--- |
+| Long turn | `longTurnChars: 160` | multi-clause requests need conversational nuance |
+| Fact-dense action | `minFactDigits: 3` + action verb | e.g. "Log fuel 3000 at 50350 km"; 2-digit turns were noisy |
+| Deep-history why | `minHistoryTurns: 6` + why/explain/how come | root-cause questions only |
+
+- `ACTION_VERB_RE` narrowed to `log|set|update|add|register|assign|transfer`; `request` and `complete` were removed because they promoted informational asks (e.g. "request a report") to the premium tier.
+- Frustration, high-stakes and dispatch lexicons are unchanged.
+- At release `ai_usage_logs` contained 0 rows (verified), so tuning is precision-first and validated by the canary matrix. `admin ai-stats` is the instrument for future data-driven threshold changes; thresholds are exported so tests and tuning stay aligned.
+
+### 37.5 `.env` / `.env.example` standards
+Canonical section order (both files):
+
+`Server → Superadmin → Supabase → Paystack → Meta WhatsApp → Resend → Google Vision → AI Router: master kill switches → AI Router: tier & provider → AI Router: telemetry & retention → AI Router: timeout & concurrency → Sentinel & remediation`
+
+- AI Router sections: kill switches (`PREMIUM_MODEL_ENABLED`, `AI_USAGE_LOGGING_ENABLED`); tier/provider (`DEEPSEEK_API_KEY`, `ANTHROPIC_API_KEY`, `CONVERSATIONAL_PROVIDER`, `AI_MODEL_TIER_1/2/3`, `DEEPSEEK_MODEL`, `OPENAI_API_KEY`); telemetry/retention (`AI_USAGE_LOG_MAX_ROWS`, `AI_USAGE_TRIM_EVERY`); timeout/concurrency (`AI_TIMEOUT_MS`, `AI_TIMEOUT_MS_PREMIUM`, `AI_PREMIUM_MAX_CONCURRENCY`).
+- Section banners are ASCII (`# ===` / `# ----`) so the files survive any encoding/editor.
+- Every optional knob documents its default and stays commented out; kill switches (`PREMIUM_MODEL_ENABLED`, `REMEDIATION_AUTONOMY`) are **off** in the template.
+- `.env` is git-ignored (values preserved during reordering); `.env.example` is committed with placeholders only. Unknown/legacy keys are preserved in a trailing section, never dropped.
+
+### 37.6 Files, tests & operations
+- `src/services/aiUsageLog.js` — `getAiUsageSummary`, `estimateAiUsageCostUsd`, `AI_USAGE_COST_RULES`, window/pagination constants.
+- `src/services/superadmin.js` — `ADMIN_AI_STATS` regex/AI parsing, `handleAiStatsCommand`, `formatAiStatsReply`, routing + audit.
+- `sakaAi.js` — `ESCALATION_RULES` + narrowed `ACTION_VERB_RE`.
+- `test_phase2_analytics.js` — 57 assertions (offline + self-cleaning DB round-trip).
+- `test_model_router.js` — environment-independent premium baseline (unit suites never inherit the local `.env` kill switch).
+- `test_superadmin.js` — end-to-end `admin ai-stats` digest + `ADMIN_AI_STATS` audit assertion.
+- Targeted verification: `node scripts/run_tests.js test_model_router.js test_phase1_canary.js test_phase2_analytics.js test_superadmin.js test_agent_training.js`.
+- Operate: `adminstart` → `admin ai-stats` (24 h) or `admin usage 48h` (custom window) → `adminstop`.
+
+---
+
+_End of document — v1.13.0._
 

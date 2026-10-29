@@ -79,6 +79,15 @@ async function runSuperadminTests() {
   }
   console.log('✅ Health Check completed and DeepSeek-synthesized summary generated.\n');
 
+  // Test 5b: Command Handler - AI Telemetry Digest (v1.13.0)
+  console.log('--- Test 5b: Command Handler - AI Telemetry Digest ---');
+  const aiStatsRes = await handleSuperadminFlow(supabase, superadminPhone, 'admin ai-stats');
+  console.log('AI Telemetry Response:\n' + aiStatsRes.reply + '\n');
+  if (!aiStatsRes.reply.includes('Saka AI Telemetry')) {
+    throw new Error(`Expected the AI telemetry digest, got: ${aiStatsRes.reply}`);
+  }
+  console.log('✅ AI telemetry digest rendered from ai_usage_logs.\n');
+
   // Test 6: Command Handler - Coupon Generation
   console.log('--- Test 6: Command Handler - Coupon Generation ---');
   const targetPhone = '+254712345678';
@@ -132,7 +141,7 @@ async function runSuperadminTests() {
   });
 
   const actions = auditLogs.map(l => l.action);
-  ['SESSION_START', 'HEALTH_CHECK', 'GENERATE_COUPON', 'PROFILES_REPORT'].forEach(act => {
+  ['SESSION_START', 'HEALTH_CHECK', 'ADMIN_AI_STATS', 'GENERATE_COUPON', 'PROFILES_REPORT'].forEach(act => {
     if (!actions.includes(act)) {
       throw new Error(`Missing expected audit log action: ${act}`);
     }

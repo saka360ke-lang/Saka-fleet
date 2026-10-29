@@ -17,7 +17,48 @@ export const AI_USAGE_TABLE = 'ai_usage_logs';
 export const AI_USAGE_LOG_MAX_ROWS = Math.max(100, Number(process.env.AI_USAGE_LOG_MAX_ROWS || 10000));
 export const AI_USAGE_TRIM_EVERY = Math.max(1, Number(process.env.AI_USAGE_TRIM_EVERY || 250));
 
+// Analytics window bounds for getAiUsageSummary() (v1.13.0).
+export const AI_USAGE_DEFAULT_WINDOW_HOURS = 24;
+export const AI_USAGE_MAX_WINDOW_HOURS = 168;
+// PostgREST pages the table at most 1000 rows per request by default.
+export const AI_USAGE_PAGE_SIZE = Math.max(100, Math.min(1000, Number(process.env.AI_USAGE_PAGE_SIZE || 1000)));
+
+/**
+ * Approximate public list prices (USD per 1M tokens) used ONLY by the
+ * Superadmin cost-performance digest. Informational, never billing — update
+ * when a provider changes pricing. `match: null` is the provider default.
+ */
+export const AI_USAGE_COST_RULES = Object.freeze([
+  { provider: 'deepseek', match: /reasoner/i, input: 0.55, output: 2.19 },
+  { provider: 'deepseek', match: null, input: 0.27, output: 1.10 },
+  { provider: 'anthropic', match: /opus/i, input: 15, output: 75 },
+  { provider: 'anthropic', match: /sonnet/i, input: 3, output: 15 },
+  { provider: 'anthropic', match: /haiku/i, input: 1, output: 5 },
+  { provider: 'anthropic', match: null, input: 3, output: 15 },
+  { provider: 'openai', match: null, input: 2.5, output: 10 }
+]);
+
 const FALSY = new Set(['off', 'false', '0']);
+
+/** Resolve the approximate price rule for a provider/model pair (or null). */
+function resolveCostRule(provider, model) {
+  const providerKey = String(provider || '').toLowerCase();
+  const modelKey = String(model || '').toLowerCase();
+  for (const rule of AI_USAGE_COST_RULES) {
+    if (rule.provider !== providerKey) continue;
+    if (!rule.match || rule.match.test(modelKey)) return rule;
+  }
+  return null;
+}
+
+/** Estimate the USD cost of one call. Returns null when pricing is unknown. */
+export function estimateAiUsageCostUsd(provider, model, promptTokens = 0, completionTokens = 0) {
+  const rule = resolveCostRule(provider, model);
+  if (!rule) return null;
+  const prompt = Number.isFinite(promptTokens) ? promptTokens : 0;
+  const completion = Number.isFinite(completionTokens) ? completionTokens : 0;
+  return (prompt / 1e6) * rule.input + (completion / 1e6) * rule.output;
+}
 
 /** Kill switch for telemetry writes (AI_USAGE_LOGGING_ENABLED, default on). */
 export function isAiUsageLoggingEnabled() {
@@ -134,6 +175,181 @@ export async function logAiUsage(providedSupabase, record = {}) {
   }
 }
 
+function newUsageBucket() {
+  return {
+    requests: 0,
+    ok: 0,
+    errors: 0,
+    promptTokens: 0,
+    completionTokens: 0,
+    approxCostUsd: 0,
+    pricedTokens: 0,
+    unpricedTokens: 0,
+    latencies: []
+  };
+}
+
+function addUsageRow(bucket, row = {}) {
+  const promptTokens = Number.isFinite(row.prompt_tokens) ? row.prompt_tokens : 0;
+  const completionTokens = Number.isFinite(row.completion_tokens) ? row.completion_tokens : 0;
+
+  bucket.requests += 1;
+  if (row.ok === true) bucket.ok += 1;
+  else bucket.errors += 1;
+
+  bucket.promptTokens += promptTokens;
+  bucket.completionTokens += completionTokens;
+  if (Number.isFinite(row.latency_ms)) bucket.latencies.push(row.latency_ms);
+
+  const rowTokens = promptTokens + completionTokens;
+  if (rowTokens > 0) {
+    const cost = estimateAiUsageCostUsd(row.provider, row.model, promptTokens, completionTokens);
+    if (cost === null) {
+      bucket.unpricedTokens += rowTokens;
+    } else {
+      bucket.approxCostUsd += cost;
+      bucket.pricedTokens += rowTokens;
+    }
+  }
+}
+
+function finalizeUsageBucket(bucket) {
+  const latencies = bucket.latencies.slice().sort((a, b) => a - b);
+  const avgLatencyMs = latencies.length
+    ? Math.round(latencies.reduce((sum, value) => sum + value, 0) / latencies.length)
+    : null;
+  // Lower median keeps the figure stable for even-sized samples.
+  const p50LatencyMs = latencies.length ? latencies[Math.floor((latencies.length - 1) / 2)] : null;
+
+  return {
+    requests: bucket.requests,
+    ok: bucket.ok,
+    errors: bucket.errors,
+    successRate: bucket.requests ? bucket.ok / bucket.requests : null,
+    errorRate: bucket.requests ? bucket.errors / bucket.requests : null,
+    avgLatencyMs,
+    p50LatencyMs,
+    promptTokens: bucket.promptTokens,
+    completionTokens: bucket.completionTokens,
+    totalTokens: bucket.promptTokens + bucket.completionTokens,
+    approxCostUsd: bucket.pricedTokens > 0
+      ? Number(bucket.approxCostUsd.toFixed(6))
+      : (bucket.unpricedTokens > 0 ? null : 0),
+    unpricedTokens: bucket.unpricedTokens
+  };
+}
+
+/**
+ * Aggregate ai_usage_logs for the Superadmin telemetry digest (v1.13.0).
+ *
+ * Fail-soft by contract: a transport/query failure returns `{ ok: false,
+ * error }` with zeroed totals instead of throwing, so an admin command can
+ * never brick the WhatsApp turn. Reads are paged (PostgREST caps at 1000 rows
+ * per request) up to AI_USAGE_LOG_MAX_ROWS — the same retention cap that
+ * bounds the table.
+ */
+export async function getAiUsageSummary(providedSupabase, hours = AI_USAGE_DEFAULT_WINDOW_HOURS) {
+  const requestedHours = Number(hours);
+  const windowHours = Math.min(
+    AI_USAGE_MAX_WINDOW_HOURS,
+    Math.max(1, Math.round(Number.isFinite(requestedHours) && requestedHours > 0 ? requestedHours : AI_USAGE_DEFAULT_WINDOW_HOURS))
+  );
+  const since = new Date(Date.now() - windowHours * 60 * 60 * 1000).toISOString();
+  const generatedAt = new Date().toISOString();
+
+  const summary = {
+    ok: true,
+    hours: windowHours,
+    since,
+    generatedAt,
+    totalRequests: 0,
+    okRequests: 0,
+    errorRequests: 0,
+    successRate: null,
+    errorRate: null,
+    avgLatencyMs: null,
+    p50LatencyMs: null,
+    promptTokens: 0,
+    completionTokens: 0,
+    totalTokens: 0,
+    approxCostUsd: 0,
+    unpricedTokens: 0,
+    truncated: false,
+    byTier: {},
+    byProvider: {},
+    byPurpose: {},
+    error: null
+  };
+
+  try {
+    const supabase = getSupabase(providedSupabase);
+    const totals = newUsageBucket();
+    const byTier = new Map();
+    const byProvider = new Map();
+    const byPurpose = new Map();
+    let fetched = 0;
+    let exhausted = false;
+
+    while (fetched < AI_USAGE_LOG_MAX_ROWS) {
+      const pageSize = Math.min(AI_USAGE_PAGE_SIZE, AI_USAGE_LOG_MAX_ROWS - fetched);
+      const { data, error } = await supabase
+        .from(AI_USAGE_TABLE)
+        .select('id,tier,provider,model,purpose,latency_ms,ok,prompt_tokens,completion_tokens')
+        .gte('created_at', since)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .range(fetched, fetched + pageSize - 1);
+
+      if (error) throw new Error(error.message || 'telemetry query failed');
+
+      const rows = Array.isArray(data) ? data : [];
+      for (const row of rows) {
+        addUsageRow(totals, row);
+
+        const tierKey = Number.isInteger(row.tier) ? String(row.tier) : 'unknown';
+        const providerKey = row.provider || 'unknown';
+        const purposeKey = row.purpose || 'unknown';
+
+        if (!byTier.has(tierKey)) byTier.set(tierKey, newUsageBucket());
+        if (!byProvider.has(providerKey)) byProvider.set(providerKey, newUsageBucket());
+        if (!byPurpose.has(purposeKey)) byPurpose.set(purposeKey, newUsageBucket());
+
+        addUsageRow(byTier.get(tierKey), row);
+        addUsageRow(byProvider.get(providerKey), row);
+        addUsageRow(byPurpose.get(purposeKey), row);
+      }
+
+      fetched += rows.length;
+      if (rows.length < pageSize) {
+        exhausted = true;
+        break;
+      }
+    }
+
+    const total = finalizeUsageBucket(totals);
+    summary.totalRequests = total.requests;
+    summary.okRequests = total.ok;
+    summary.errorRequests = total.errors;
+    summary.successRate = total.successRate;
+    summary.errorRate = total.errorRate;
+    summary.avgLatencyMs = total.avgLatencyMs;
+    summary.p50LatencyMs = total.p50LatencyMs;
+    summary.promptTokens = total.promptTokens;
+    summary.completionTokens = total.completionTokens;
+    summary.totalTokens = total.totalTokens;
+    summary.approxCostUsd = total.approxCostUsd;
+    summary.unpricedTokens = total.unpricedTokens;
+    summary.truncated = !exhausted;
+    summary.byTier = Object.fromEntries([...byTier].map(([key, bucket]) => [key, finalizeUsageBucket(bucket)]));
+    summary.byProvider = Object.fromEntries([...byProvider].map(([key, bucket]) => [key, finalizeUsageBucket(bucket)]));
+    summary.byPurpose = Object.fromEntries([...byPurpose].map(([key, bucket]) => [key, finalizeUsageBucket(bucket)]));
+
+    return summary;
+  } catch (err) {
+    return { ...summary, ok: false, error: err.message || 'telemetry query failed' };
+  }
+}
+
 /**
  * Wire aiClient's telemetry sink to Supabase. Called once at boot; harmless to
  * call twice. The returned promise from the sink is intentionally not awaited.
@@ -151,5 +367,7 @@ export default {
   logAiUsage,
   installAiUsageSink,
   trimAiUsageLogs,
-  isAiUsageLoggingEnabled
+  isAiUsageLoggingEnabled,
+  getAiUsageSummary,
+  estimateAiUsageCostUsd
 };

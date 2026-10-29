@@ -831,14 +831,26 @@ export function classifyIntentWithRegex(messageText = '') {
 }
 
 /**
- * Canary escalation (Phase 1): decide whether a non-quiz conversational turn
- * deserves the premium Tier-2 model. Deterministic and provider-agnostic —
- * when PREMIUM_MODEL_ENABLED is off, resolveTier() downgrades Tier 2 to Tier 1.
+ * Canary escalation (Phase 1, precision-tuned in Phase 2/v1.13.0): decide
+ * whether a non-quiz conversational turn deserves the premium Tier-2 model.
+ * Deterministic and provider-agnostic — when PREMIUM_MODEL_ENABLED is off,
+ * resolveTier() downgrades Tier 2 to Tier 1.
+ *
+ * Thresholds are exported so the canary suite can assert precision and future
+ * telemetry (Superadmin `admin ai-stats`) can drive data-based tuning.
  */
+export const ESCALATION_RULES = Object.freeze({
+  longTurnChars: 160,
+  minFactDigits: 3,
+  minHistoryTurns: 6
+});
+
 const FRUSTRATION_RE = /\b(stuck|broken|not working|complaint|angry|frustrated|terrible|worst|refund|scam|cheat|report you|fed up|useless)\b/i;
 const HIGH_STAKES_RE = /\b(assign\s+driver|unassign|remove\s+driver|transfer|sell\s+(my\s+)?vehicle|passbook|ownership|driver\s+licen[cs]e|compliance|otp)\b/i;
 const DISPATCH_RE = /\b(book(?:ing)?|dispatch|pickup|pick\s*up|drop\s*off|drop-off|deliver|hire|rent)\b/i;
-const ACTION_VERB_RE = /\b(log|set|update|add|register|assign|transfer|complete|request)\b/i;
+// Precision-tuned in v1.13.0: 'request' and 'complete' were removed — they
+// promoted informational asks ("request a report") to the premium tier.
+const ACTION_VERB_RE = /\b(log|set|update|add|register|assign|transfer)\b/i;
 
 export function classifyIntentTier(messageText = '', conversationHistory = []) {
   const clean = String(messageText || '').replace(/\s+/g, ' ').trim();
@@ -846,11 +858,11 @@ export function classifyIntentTier(messageText = '', conversationHistory = []) {
   if (FRUSTRATION_RE.test(clean) || HIGH_STAKES_RE.test(clean) || DISPATCH_RE.test(clean)) {
     return AI_TIERS.CONVERSATIONAL;
   }
-  if (clean.length > 160) return AI_TIERS.CONVERSATIONAL;
+  if (clean.length > ESCALATION_RULES.longTurnChars) return AI_TIERS.CONVERSATIONAL;
   const digitCount = (clean.match(/\d/g) || []).length;
-  if (digitCount >= 2 && ACTION_VERB_RE.test(clean)) return AI_TIERS.CONVERSATIONAL;
+  if (digitCount >= ESCALATION_RULES.minFactDigits && ACTION_VERB_RE.test(clean)) return AI_TIERS.CONVERSATIONAL;
   const historyLength = Array.isArray(conversationHistory) ? conversationHistory.length : 0;
-  if (historyLength >= 6 && /^(why|explain|how come)\b/i.test(clean)) return AI_TIERS.CONVERSATIONAL;
+  if (historyLength >= ESCALATION_RULES.minHistoryTurns && /^(why|explain|how come)\b/i.test(clean)) return AI_TIERS.CONVERSATIONAL;
   return AI_TIERS.ROUTER;
 }
 
