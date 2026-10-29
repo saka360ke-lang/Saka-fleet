@@ -170,6 +170,9 @@ jobs:
       - name: Post-change test pass (must be green before push)
         run: node scripts/run_tests.js $TESTS
 
+      - name: Forbidden-path guard (block sensitive edits before commit)
+        run: node scripts/remediation_ci.js guard "$PROPOSAL_CODE"
+
       - name: Commit and push to main
         run: |
           git config user.name "Saka Remediation Bot"

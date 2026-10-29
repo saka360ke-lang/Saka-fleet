@@ -6,11 +6,13 @@ import {
   REMEDIATION_STATUS,
   ensureRemediationTables,
   sanitizeRemediationPlan,
+  matchForbiddenRemediationPath,
   buildSignature,
   runRemediationAudit,
   runRemediationScan,
   refreshRemediationSynthesis,
   computeHealthScore,
+  checkRemediationPlanTriggers,
   computeDigestFrequency,
   REMEDIATION_AUDIT_WINDOW_HOURS,
   dispatchTwiceDailyDigests,
@@ -23,9 +25,10 @@ import {
   consumeProposalNonce
 } from './src/workers/remediation.js';
 import { handleAdminRemediationDecision } from './src/services/superadmin.js';
+import { dispatchRepositoryEvent } from './src/services/githubDispatch.js';
 
 /**
- * Saka Fleet — Autonomous Remediation Pipeline tests (v1.11.1).
+ * Saka Fleet — Autonomous Remediation Pipeline tests (v1.11.2).
  *
  * Covers: schema creation, audit-run persistence/idempotency, the plan
  * sanitizer guardrails, the approval state machine and the execution nonce
@@ -104,6 +107,9 @@ async function run() {
   check(!sanitizeRemediationPlan({ ...safePlan, tests: [] }).ok, 'Plan without targeted tests is rejected');
   check(!sanitizeRemediationPlan({ ...safePlan, root_cause: 'drop table reminders' }).ok, 'Destructive keyword is rejected');
   check(!sanitizeRemediationPlan({ ...safePlan, changes: [] }).ok, 'Empty change list is rejected');
+  check(matchForbiddenRemediationPath('.github/workflows/remediation.yml') === '.github/', 'Forbidden-path helper matches CI workflows');
+  check(matchForbiddenRemediationPath('src/services/paystack.js') === 'src/services/paystack.js', 'Forbidden-path helper matches payment services');
+  check(matchForbiddenRemediationPath('src/workers/sentinel.js') === null, 'Forbidden-path helper allows normal source files');
 
   console.log('\n--- Test 3: log signature normalization ---');
   const signatureA = buildSignature('Error 500 at 2026-10-30 id 9f8b1c2d-1111-2222-3333-444455556666 route /webhook');
@@ -159,7 +165,13 @@ async function run() {
 
   console.log('\n--- Test 6: Superadmin approval state machine ---');
   const originalAutonomy = process.env.REMEDIATION_AUTONOMY;
+  const originalGhToken = process.env.GH_REMEDIATION_TOKEN;
+  const originalGhRepo = process.env.GH_REMEDIATION_REPO;
+  const originalGithubToken = process.env.GITHUB_TOKEN;
   process.env.REMEDIATION_AUTONOMY = 'on';
+  delete process.env.GH_REMEDIATION_TOKEN;
+  delete process.env.GH_REMEDIATION_REPO;
+  delete process.env.GITHUB_TOKEN;
   try {
     const accepted = await handleAdminRemediationDecision(supabase, PROPOSAL_CODES[3], 'accept');
     check(String(accepted.reply).includes('Approved'), 'ACCEPT returns an approval confirmation');
@@ -181,6 +193,12 @@ async function run() {
   } finally {
     if (originalAutonomy === undefined) delete process.env.REMEDIATION_AUTONOMY;
     else process.env.REMEDIATION_AUTONOMY = originalAutonomy;
+    if (originalGhToken === undefined) delete process.env.GH_REMEDIATION_TOKEN;
+    else process.env.GH_REMEDIATION_TOKEN = originalGhToken;
+    if (originalGhRepo === undefined) delete process.env.GH_REMEDIATION_REPO;
+    else process.env.GH_REMEDIATION_REPO = originalGhRepo;
+    if (originalGithubToken === undefined) delete process.env.GITHUB_TOKEN;
+    else process.env.GITHUB_TOKEN = originalGithubToken;
   }
 
   console.log('\n--- Test 7: kill switch ---');
@@ -189,6 +207,10 @@ async function run() {
   try {
     const blocked = await handleAdminRemediationDecision(supabase, PROPOSAL_CODES[3], 'accept');
     check(String(blocked.reply).includes('disabled'), 'REMEDIATION_AUTONOMY=off blocks approvals');
+    const triggerSkip = await checkRemediationPlanTriggers(supabase, { now: auditNow });
+    check(triggerSkip.status === 'skipped', 'REMEDIATION_AUTONOMY=off skips plan dispatch');
+    const dispatchSkip = await dispatchRepositoryEvent('remediation_execute', { proposal_code: PROPOSAL_CODES[3], approval_nonce: 'test' });
+    check(dispatchSkip.skipped === true && dispatchSkip.ok === false, 'REMEDIATION_AUTONOMY=off short-circuits repository_dispatch');
   } finally {
     if (originalKill === undefined) delete process.env.REMEDIATION_AUTONOMY;
     else process.env.REMEDIATION_AUTONOMY = originalKill;
@@ -247,6 +269,15 @@ async function run() {
   check(digestTwo.proposals === 0, 'Already-digested proposals are not re-sent');
   const urgent = await maybeSendUrgentRemediationAlert(supabase, { now: auditNow, dryRun: true });
   check(['skipped', 'success'].includes(urgent.status), 'Urgent escalation evaluates cleanly');
+  const storedAutonomy = process.env.REMEDIATION_AUTONOMY;
+  process.env.REMEDIATION_AUTONOMY = 'off';
+  try {
+    const digestOff = await sendRemediationDigest(supabase, { now: auditNow, force: true, dryRun: true });
+    check(digestOff.status === 'success', 'Digests stay notification-only when autonomy is off');
+  } finally {
+    if (storedAutonomy === undefined) delete process.env.REMEDIATION_AUTONOMY;
+    else process.env.REMEDIATION_AUTONOMY = storedAutonomy;
+  }
 
   console.log(`\n🎉 ALL ${passed} REMEDIATION PIPELINE ASSERTIONS PASSED`);
 }

@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createClient } from '@supabase/supabase-js';
@@ -11,6 +12,7 @@ import {
   ensureRemediationTables,
   loadAuditRun,
   sanitizeRemediationPlan,
+  matchForbiddenRemediationPath,
   verifyProposalGate,
   markProposalExecuting,
   reportRemediationResult,
@@ -26,6 +28,7 @@ import {
  *   submit-plan <auditRunId> <planFile> [clusterSignature]
  *   tests <proposalCode>
  *   gate <proposalCode> <approvalNonce>
+ *   guard <proposalCode>
  *   fetch <proposalCode>
  *   report <proposalCode> <commitSha>
  *   fail <proposalCode> <message>
@@ -335,6 +338,40 @@ async function fail(supabase, [proposalCode, ...messageParts]) {
   console.log(JSON.stringify(result, null, 2));
 }
 
+/** Repository-relative paths changed in the working tree (tracked + untracked). */
+function changedPaths() {
+  const out = execFileSync('git', ['status', '--porcelain=v1'], { encoding: 'utf8' });
+  const paths = new Set();
+  for (const line of out.split('\n')) {
+    if (!line.trim()) continue;
+    let rest = line.slice(3).trim();
+    if (rest.includes(' -> ')) rest = rest.split(' -> ').pop().trim();
+    rest = rest.replace(/^"|"$/g, '').replace(/\\/g, '/');
+    if (rest) paths.add(rest);
+  }
+  return [...paths];
+}
+
+/** Post-edit guard: refuse to commit any change touching a forbidden path. */
+async function guardWorkOrder([proposalCode]) {
+  const files = changedPaths();
+  const blocked = files
+    .map((file) => ({ file, forbidden: matchForbiddenRemediationPath(file) }))
+    .filter((entry) => entry.forbidden);
+
+  if (blocked.length > 0) {
+    console.error(JSON.stringify({
+      ok: false,
+      proposal_code: proposalCode || null,
+      reason: 'Forbidden path modification blocked before commit.',
+      blocked
+    }, null, 2));
+    process.exit(1);
+  }
+
+  console.log(JSON.stringify({ ok: true, proposal_code: proposalCode || null, changed: files.length, files }, null, 2));
+}
+
 async function main() {
   const [command, ...args] = process.argv.slice(2);
   const supabase = getClient();
@@ -349,6 +386,8 @@ async function main() {
       return printTests(supabase, args);
     case 'gate':
       return gate(supabase, args);
+    case 'guard':
+      return guardWorkOrder(args);
     case 'fetch':
       return fetchWorkOrder(supabase, args);
     case 'report':
@@ -357,7 +396,7 @@ async function main() {
       return fail(supabase, args);
     default:
       console.error(`Unknown remediation CI command: ${command || '(none)'}`);
-      console.error('Usage: node scripts/remediation_ci.js <fetch-audit|submit-plan|tests|gate|fetch|report|fail> [...args]');
+      console.error('Usage: node scripts/remediation_ci.js <fetch-audit|submit-plan|tests|gate|guard|fetch|report|fail> [...args]');
       process.exit(1);
   }
 }

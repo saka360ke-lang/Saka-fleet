@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.11.1  
+**Version:** 1.11.2  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -1261,6 +1261,7 @@ Three fail-soft, idempotent tiers run in `index.js`:
 - `sanitizeRemediationPlan` (shared by CI submit and server) blocks: VIN/OTP/auth/schema/destructive keywords, `.env`, `.clinerules`, `.github/`, `supabase/`, reset/provision/VIN migrations, `paystack.js`, `transfers.js`, `githubDispatch.js`, `remediation.js`, `remediation_ci.js` and the remediation migration (self-modification guard).
 - Execution requires DB-verified approval + fresh single-use nonce (`consumeProposalNonce` nulls it on success).
 - Tests gate both sides of the edit; no green, no push.
+- **Post-edit diff guard:** after the post-change tests, the execute job runs `node scripts/remediation_ci.js guard <CODE>`; any working-tree change matching `REMEDIATION_FORBIDDEN_PATHS` (via the shared `matchForbiddenRemediationPath`, including untracked files and renames) aborts the run before `git add` — nothing is committed or pushed.
 - Attempt ceiling: `REMEDIATION_MAX_ATTEMPTS` (default 2); excess → `NEEDS_MODIFICATION` + alert.
 - Frequency/storm guards: per-signature plan cooldown, daily plan cap, per-slot digest key, `digest_sent_at` batching, urgent-alert cooldown, and a scan `inFlight` guard (no overlapping ticks).
 - Kill switch: `REMEDIATION_AUTONOMY=off` (default) gates plan dispatch, approvals and execution. Continuous scans, digests and urgent health alerts are notification/read-only and keep running so the Superadmin stays informed. `adminrules reset` remains the Sentinel prompt-rule kill switch.
@@ -1274,14 +1275,14 @@ Three fail-soft, idempotent tiers run in `index.js`:
 
 ### 35.10 Operations & verification
 - `npm run migrate:remediation` applies the schema; `npm run migrate:staging-schema` provisions and verifies all tables.
-- `npm run remediation:ci -- <subcommand>` is the CI-only runner (`fetch-audit`, `submit-plan`, `tests`, `gate`, `fetch`, `report`, `fail`).
-- Targeted suite: `node scripts/run_tests.js test_remediation_pipeline.js` (schema, sanitizer, scan idempotency, health score, plan triggers, gate replay/expiry/status, approval state machine, adaptive digest frequency, digest batching, urgent escalation, kill switch) — 56 assertions, always auto-cleans its rows.
+- `npm run remediation:ci -- <subcommand>` is the CI-only runner (`fetch-audit`, `submit-plan`, `tests`, `gate`, `guard`, `fetch`, `report`, `fail`).
+- Targeted suite: `node scripts/run_tests.js test_remediation_pipeline.js` (schema, sanitizer, scan idempotency, health score, plan triggers, gate replay/expiry/status, approval state machine, adaptive digest frequency, digest batching, urgent escalation, kill switch) — 66 assertions, always auto-cleans its rows.
 - `npm run audit:logs` remains the read-only forensic companion.
 
 ### 35.11 Files
 - `src/workers/remediation.js` — continuous scan, throttled synthesis, plan triggers, digest/frequency/urgent logic, sanitizer, dispatch, gate helpers, retry poller.
 - `src/services/githubDispatch.js` — the sole server → GitHub bridge (kill-switch gated, fail-soft).
-- `scripts/remediation_ci.js` + `.github/workflows/remediation.yml` — cluster-focused plan/execute CI lifecycle.
+- `scripts/remediation_ci.js` + `.github/workflows/remediation.yml` — cluster-focused plan/execute CI lifecycle with a post-edit forbidden-path guard before commit.
 - `scripts/run_remediation_migration.js` — schema migration.
 - `src/services/superadmin.js` — approval commands, state machine, nonce minting.
 - `src/services/mailer.js` — remediation approval + digest emails.

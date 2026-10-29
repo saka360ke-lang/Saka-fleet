@@ -753,7 +753,7 @@ export async function handleAdminRemediationsList(supabase) {
   }
   if (!proposals || proposals.length === 0) {
     return {
-      reply: '🛠️ *Autonomous Remediation*\n\nNo remediation proposals exist yet. Sentinel audits run daily at 02:00 EAT and Cline drafts plans at 03:00 EAT (requires `REMEDIATION_AUTONOMY=on`).'
+      reply: '🛠️ *Autonomous Remediation*\n\nNo remediation proposals exist yet. Sentinel scans the rolling audit window continuously and Cline drafts plans when thresholds trigger (requires `REMEDIATION_AUTONOMY=on`).'
     };
   }
 

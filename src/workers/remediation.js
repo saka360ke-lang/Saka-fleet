@@ -176,6 +176,18 @@ export async function ensureRemediationTables(providedSupabase) {
 
 
 /**
+ * Return the matching forbidden entry for a repository-relative path, or null.
+ * Shared by the plan sanitizer and the post-edit CI diff guard.
+ */
+export function matchForbiddenRemediationPath(file) {
+  const normalized = String(file || '').replace(/\\/g, '/').trim();
+  if (!normalized) return null;
+  return REMEDIATION_FORBIDDEN_PATHS.find(
+    (entry) => normalized === entry || normalized.startsWith(entry) || normalized.endsWith(`/${entry}`)
+  ) || null;
+}
+
+/**
  * Validate a Cline-authored plan against the permanent guardrails.
  * @returns {{ok:boolean, violations:string[], plan:object|null}}
  */
@@ -205,9 +217,7 @@ export function sanitizeRemediationPlan(plan) {
     if (file.startsWith('/') || file.includes('..')) {
       violations.push(`Target path must be repository-relative: ${file}`);
     }
-    const forbidden = REMEDIATION_FORBIDDEN_PATHS.find(
-      (entry) => file === entry || file.startsWith(entry) || file.endsWith(`/${entry}`)
-    );
+    const forbidden = matchForbiddenRemediationPath(file);
     if (forbidden) violations.push(`Forbidden target file: ${file} (matches ${forbidden}).`);
   }
 
