@@ -21,6 +21,8 @@ import OpenAI from 'openai';
 export const DEEPSEEK_BASE_URL = 'https://api.deepseek.com';
 export const DEFAULT_DEEPSEEK_MODEL = 'deepseek-chat'; // DeepSeek-V3
 export const DEFAULT_DEEPSEEK_REASONER = 'deepseek-reasoner'; // Tier-3 opt-in
+export const DEFAULT_ANTHROPIC_TIER2_MODEL = 'claude-sonnet-4-5';
+export const DEFAULT_OPENAI_TIER2_MODEL = 'gpt-4o';
 
 export const AI_PROVIDERS = Object.freeze({
   DEEPSEEK: 'deepseek',
@@ -42,13 +44,29 @@ export function isPremiumModelEnabled() {
   return TRUTHY.has(String(process.env.PREMIUM_MODEL_ENABLED || 'off').toLowerCase());
 }
 
-/** Resolve the model configured for a tier (all DeepSeek by default). */
-export function getTierModel(tier) {
+/** REMEDIATION_AUTONOMY kill switch (default off; mirrors githubDispatch). */
+export function isRemediationAutonomyOn() {
+  return TRUTHY.has(String(process.env.REMEDIATION_AUTONOMY || 'off').toLowerCase());
+}
+
+/**
+ * Resolve the model configured for a tier. Premium tiers are provider-aware:
+ * an unset AI_MODEL_TIER_2 resolves to the provider's default rather than a
+ * DeepSeek model name that the provider would reject. Tier 3 opts into the
+ * reasoning model only when REMEDIATION_AUTONOMY=on (explicit opt-in).
+ */
+export function getTierModel(tier, providerOverride = null) {
   if (tier === AI_TIERS.CONVERSATIONAL) {
-    return process.env.AI_MODEL_TIER_2 || DEFAULT_DEEPSEEK_MODEL;
+    if (process.env.AI_MODEL_TIER_2) return process.env.AI_MODEL_TIER_2;
+    if (providerOverride === AI_PROVIDERS.ANTHROPIC) return DEFAULT_ANTHROPIC_TIER2_MODEL;
+    if (providerOverride === AI_PROVIDERS.OPENAI) {
+      return process.env.AI_MODEL_TIER_2_OPENAI || DEFAULT_OPENAI_TIER2_MODEL;
+    }
+    return DEFAULT_DEEPSEEK_MODEL;
   }
   if (tier === AI_TIERS.REASONING) {
-    return process.env.AI_MODEL_TIER_3 || DEFAULT_DEEPSEEK_MODEL;
+    if (process.env.AI_MODEL_TIER_3) return process.env.AI_MODEL_TIER_3;
+    return isRemediationAutonomyOn() ? DEFAULT_DEEPSEEK_REASONER : DEFAULT_DEEPSEEK_MODEL;
   }
   return process.env.AI_MODEL_TIER_1 || process.env.DEEPSEEK_MODEL || DEFAULT_DEEPSEEK_MODEL;
 }
@@ -58,8 +76,18 @@ export function getConversationalProvider() {
   return String(process.env.CONVERSATIONAL_PROVIDER || AI_PROVIDERS.DEEPSEEK).toLowerCase();
 }
 
+/** Provider for reasoning/synthesis calls (Phase 3, default DeepSeek). */
+export function getReasoningProvider() {
+  return String(process.env.AI_REASONING_PROVIDER || AI_PROVIDERS.DEEPSEEK).toLowerCase();
+}
+
 export function getPremiumTimeoutMs() {
   return Number(process.env.AI_TIMEOUT_MS_PREMIUM || 15000);
+}
+
+/** Reasoning calls are background-only, so they get a longer fail-fast budget. */
+export function getReasoningTimeoutMs() {
+  return Math.max(1000, Number(process.env.AI_TIMEOUT_MS_REASONING || 45000));
 }
 
 export function getPremiumMaxConcurrency() {
@@ -106,9 +134,9 @@ export function resolveTier(purpose = 'default', { tier: forcedTier } = {}) {
 
   const provider = tier === AI_TIERS.CONVERSATIONAL
     ? getConversationalProvider()
-    : AI_PROVIDERS.DEEPSEEK;
+    : (tier === AI_TIERS.REASONING ? getReasoningProvider() : AI_PROVIDERS.DEEPSEEK);
 
-  return { tier, provider, model: getTierModel(tier) };
+  return { tier, provider, model: getTierModel(tier, provider) };
 }
 
 /**
@@ -305,6 +333,159 @@ export function getModelCandidates() {
 }
 
 /* ------------------------------------------------------------------ */
+/* Circuit breakers (in-memory, per provider; DeepSeek is exempt)       */
+/* ------------------------------------------------------------------ */
+
+export const AI_BREAKER_DEFAULTS = Object.freeze({ failureThreshold: 3, windowMs: 60000, openMs: 30000 });
+
+function getBreakerConfig() {
+  return {
+    failureThreshold: Math.max(1, Number(process.env.AI_CB_FAILURE_THRESHOLD || AI_BREAKER_DEFAULTS.failureThreshold)),
+    windowMs: Math.max(1000, Number(process.env.AI_CB_WINDOW_MS || AI_BREAKER_DEFAULTS.windowMs)),
+    openMs: Math.max(1000, Number(process.env.AI_CB_OPEN_MS || AI_BREAKER_DEFAULTS.openMs))
+  };
+}
+
+const providerBreakers = new Map();
+
+function getBreaker(provider) {
+  if (!providerBreakers.has(provider)) providerBreakers.set(provider, { failures: [], openedUntil: 0 });
+  return providerBreakers.get(provider);
+}
+
+export function isProviderCircuitOpen(provider, now = Date.now()) {
+  if (!provider || provider === AI_PROVIDERS.DEEPSEEK) return false;
+  const breaker = providerBreakers.get(provider);
+  if (!breaker) return false;
+  if (breaker.openedUntil && breaker.openedUntil > now) return true;
+  if (breaker.openedUntil) {
+    // Cooldown elapsed: allow the provider again with a clean slate.
+    breaker.openedUntil = 0;
+    breaker.failures = [];
+  }
+  return false;
+}
+
+/** Record one provider outcome; opens the breaker after N failures in-window. */
+export function recordProviderOutcome(provider, ok, now = Date.now()) {
+  if (!provider || provider === AI_PROVIDERS.DEEPSEEK) return;
+  const breaker = getBreaker(provider);
+  if (ok) {
+    breaker.failures = [];
+    breaker.openedUntil = 0;
+    return;
+  }
+  const { failureThreshold, windowMs, openMs } = getBreakerConfig();
+  breaker.failures = breaker.failures.filter((timestamp) => now - timestamp <= windowMs);
+  breaker.failures.push(now);
+  if (breaker.failures.length >= failureThreshold) {
+    breaker.openedUntil = now + openMs;
+    breaker.failures = [];
+    console.warn(`[aiClient] Circuit breaker OPEN for '${provider}' for ${openMs}ms after ${failureThreshold} failures.`);
+  }
+}
+
+/** Test/ops helper: clear every breaker state. */
+export function resetProviderBreakers() {
+  providerBreakers.clear();
+}
+
+/* ------------------------------------------------------------------ */
+/* Budget guard seam (wired by aiUsageLog.installAiBudgetGuard)         */
+/* ------------------------------------------------------------------ */
+
+let budgetGuard = null;
+
+export function setBudgetGuard(guard) {
+  budgetGuard = typeof guard === 'function' ? guard : null;
+}
+
+export function getBudgetGuard() {
+  return budgetGuard;
+}
+
+async function isBudgetExceeded(routing) {
+  if (routing.tier !== AI_TIERS.CONVERSATIONAL || !budgetGuard) return false;
+  try {
+    return (await budgetGuard()) === true;
+  } catch {
+    // Fail-open: a budget lookup outage must never block a conversation.
+    return false;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Provider failover chain (Phase 3)                                    */
+/* ------------------------------------------------------------------ */
+
+/** True when a provider has credentials configured. */
+export function hasProviderKey(provider) {
+  if (provider === AI_PROVIDERS.DEEPSEEK) return Boolean(process.env.DEEPSEEK_API_KEY);
+  if (provider === AI_PROVIDERS.ANTHROPIC) return Boolean(process.env.ANTHROPIC_API_KEY);
+  if (provider === AI_PROVIDERS.OPENAI) return Boolean(process.env.OPENAI_API_KEY);
+  return false;
+}
+
+/** Default model used when a premium provider is a secondary fallback leg. */
+function getPremiumFallbackModel(provider) {
+  if (provider === AI_PROVIDERS.OPENAI) return process.env.AI_MODEL_TIER_2_OPENAI || DEFAULT_OPENAI_TIER2_MODEL;
+  if (provider === AI_PROVIDERS.ANTHROPIC) return DEFAULT_ANTHROPIC_TIER2_MODEL;
+  return DEFAULT_DEEPSEEK_MODEL;
+}
+
+/**
+ * Build the ordered provider chain for a routing decision.
+ *
+ * Premium legs are skipped (and logged as `steps[].skipReason`) when their API
+ * key is missing, their circuit breaker is open, or the daily budget guard is
+ * exceeded. DeepSeek is ALWAYS appended last and is never skipped or
+ * breaker-blocked — the never-throws fallback contract depends on it.
+ */
+export function buildProviderChain(routing = {}, { budgetExceeded = false, now = Date.now() } = {}) {
+  const steps = [];
+  const chain = [];
+  const seen = new Set();
+
+  const push = (provider, model, skipReason = null) => {
+    if (!provider) return;
+    steps.push({ provider, model: model || null, skipReason });
+    if (skipReason || !model) return;
+    const key = `${provider}:${model}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    chain.push({ provider, model });
+  };
+
+  const premiumOrder = [];
+  if (routing.explicit && routing.provider && routing.provider !== AI_PROVIDERS.DEEPSEEK) {
+    premiumOrder.push(routing.provider);
+  } else if (routing.tier === AI_TIERS.CONVERSATIONAL) {
+    if (routing.provider && routing.provider !== AI_PROVIDERS.DEEPSEEK) premiumOrder.push(routing.provider);
+    for (const provider of [AI_PROVIDERS.OPENAI, AI_PROVIDERS.ANTHROPIC]) {
+      if (provider !== routing.provider) premiumOrder.push(provider);
+    }
+  } else if (routing.tier === AI_TIERS.REASONING) {
+    if (routing.provider && routing.provider !== AI_PROVIDERS.DEEPSEEK) premiumOrder.push(routing.provider);
+  }
+
+  for (const provider of premiumOrder) {
+    const model = provider === routing.provider ? routing.model : getPremiumFallbackModel(provider);
+    let skipReason = null;
+    if (!hasProviderKey(provider)) skipReason = 'skipped_missing_key';
+    else if (isProviderCircuitOpen(provider, now)) skipReason = 'skipped_circuit_open';
+    else if (budgetExceeded) skipReason = 'skipped_budget';
+    push(provider, model, skipReason);
+  }
+
+  const deepseekModels = routing.provider && routing.provider !== AI_PROVIDERS.DEEPSEEK
+    ? getModelCandidates()
+    : (routing.candidates || getModelCandidates());
+  for (const model of deepseekModels) push(AI_PROVIDERS.DEEPSEEK, model);
+
+  return { steps, chain };
+}
+
+/* ------------------------------------------------------------------ */
 /* Usage telemetry sink (fire-and-forget; wired by aiUsageLog.js)      */
 /* ------------------------------------------------------------------ */
 
@@ -385,34 +566,37 @@ export async function chatCompletion({
   const startedAt = Date.now();
   const inputChars = measureInputChars(system, messages);
 
-  // Explicit `model` keeps the legacy contract (single candidate, DeepSeek).
+  // Explicit `model` keeps the legacy contract (single provider, DeepSeek).
   // Otherwise a purpose (optionally with a canary tier override) routes.
   const routing = model
-    ? { tier: null, provider: provider || AI_PROVIDERS.DEEPSEEK, candidates: [model] }
+    ? { tier: null, provider: provider || AI_PROVIDERS.DEEPSEEK, candidates: [model], model, explicit: true }
     : (purpose
       ? routeModelForPurpose(purpose, { tier })
-      : { tier: null, provider: provider || AI_PROVIDERS.DEEPSEEK, candidates: getModelCandidates() });
+      : { tier: null, provider: provider || AI_PROVIDERS.DEEPSEEK, candidates: getModelCandidates(), explicit: true });
+
+  const budgetExceeded = await isBudgetExceeded(routing);
+  const { steps, chain } = buildProviderChain(routing, { budgetExceeded });
+  const attempts = chain;
+  const attemptLog = steps
+    .filter((step) => step.skipReason)
+    .map((step) => ({
+      provider: step.provider,
+      model: step.model || null,
+      outcome: step.skipReason,
+      latencyMs: 0,
+      error: null
+    }));
 
   const timeoutMs = routing.tier === AI_TIERS.CONVERSATIONAL
     ? getPremiumTimeoutMs()
-    : Number(process.env.AI_TIMEOUT_MS || 12000);
-
-  // Always keep DeepSeek as the last-resort attempt so the never-throws contract
-  // survives a premium provider outage, rate limit or misconfiguration.
-  const attempts = routing.candidates.map((candidate) => ({ provider: routing.provider, model: candidate }));
-  if (routing.provider && routing.provider !== AI_PROVIDERS.DEEPSEEK) {
-    for (const candidate of getModelCandidates()) {
-      if (!attempts.some((attempt) => attempt.provider === AI_PROVIDERS.DEEPSEEK && attempt.model === candidate)) {
-        attempts.push({ provider: AI_PROVIDERS.DEEPSEEK, model: candidate });
-      }
-    }
-  }
+    : (routing.tier === AI_TIERS.REASONING ? getReasoningTimeoutMs() : Number(process.env.AI_TIMEOUT_MS || 12000));
 
   let lastProvider = routing.provider;
   let lastModel = attempts[0]?.model || null;
 
   for (const attempt of attempts) {
     let premiumSlotHeld = false;
+    const attemptStartedAt = Date.now();
     try {
       let text = '';
       let promptTokens = null;
@@ -424,6 +608,13 @@ export async function chatCompletion({
           lastError = new Error('Premium concurrency cap reached — overflowing to DeepSeek.');
           lastProvider = attempt.provider;
           lastModel = attempt.model;
+          attemptLog.push({
+            provider: attempt.provider,
+            model: attempt.model,
+            outcome: 'skipped_concurrency',
+            latencyMs: 0,
+            error: lastError.message
+          });
           continue;
         }
         premiumSlotHeld = true;
@@ -480,6 +671,7 @@ export async function chatCompletion({
       }
 
       if (text && text.trim()) {
+        recordProviderOutcome(attempt.provider, true);
         emitAiUsage({
           purpose,
           tier: routing.tier,
@@ -490,15 +682,38 @@ export async function chatCompletion({
           error: null,
           inputChars,
           promptTokens,
-          completionTokens
+          completionTokens,
+          attempts: [...attemptLog, {
+            provider: attempt.provider,
+            model: attempt.model,
+            outcome: 'ok',
+            latencyMs: Date.now() - attemptStartedAt,
+            error: null
+          }]
         });
         return { ok: true, text: text.trim(), model: attempt.model, error: null };
       }
       lastError = new Error('Empty completion returned by provider');
+      recordProviderOutcome(attempt.provider, false);
+      attemptLog.push({
+        provider: attempt.provider,
+        model: attempt.model,
+        outcome: 'failed',
+        latencyMs: Date.now() - attemptStartedAt,
+        error: lastError.message
+      });
       lastProvider = attempt.provider;
       lastModel = attempt.model;
     } catch (err) {
       lastError = err;
+      recordProviderOutcome(attempt.provider, false);
+      attemptLog.push({
+        provider: attempt.provider,
+        model: attempt.model,
+        outcome: 'failed',
+        latencyMs: Date.now() - attemptStartedAt,
+        error: err?.message || String(err)
+      });
       lastProvider = attempt.provider;
       lastModel = attempt.model;
       console.warn(`[aiClient] ${attempt.provider} call failed for model '${attempt.model}':`, err?.message || err);
@@ -517,7 +732,8 @@ export async function chatCompletion({
     error: lastError?.message || 'unknown error',
     inputChars,
     promptTokens: null,
-    completionTokens: null
+    completionTokens: null,
+    attempts: attemptLog
   });
 
   return { ok: false, text: '', model: null, error: lastError };

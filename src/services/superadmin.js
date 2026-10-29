@@ -1,14 +1,23 @@
-import { runHealthCheck, evaluateConversationalFriction } from '../workers/sentinel.js';
+import { runHealthCheck, evaluateConversationalFriction, sendProactiveWhatsApp } from '../workers/sentinel.js';
 import {
   REMEDIATION_STATUS,
   REMEDIATION_MAX_ATTEMPTS,
   buildApprovalWindow,
-  dispatchExecutionForProposal
+  dispatchExecutionForProposal,
+  getConfigValue,
+  setConfigValue
 } from '../workers/remediation.js';
 import { dispatchRepositoryEvent, isRemediationAutonomyEnabled } from './githubDispatch.js';
 import { sendAdminNotificationEmail } from './mailer.js';
 import { generateText, parseJsonSafely } from './aiClient.js';
-import { getAiUsageSummary, AI_USAGE_LOG_MAX_ROWS } from './aiUsageLog.js';
+import {
+  getAiUsageSummary,
+  AI_USAGE_LOG_MAX_ROWS,
+  computeAiBudgetStatus,
+  checkAiDailyBudget,
+  getAiBudgetAlertPct
+} from './aiUsageLog.js';
+import { formatNairobiDate } from './dateParser.js';
 import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
 import crypto from 'crypto';
 
@@ -461,7 +470,7 @@ function formatTierLabel(tierKey) {
  * Pure string formatting — intentionally no LLM call, so the digest costs
  * zero tokens and can never fabricate telemetry.
  */
-export function formatAiStatsReply(summary) {
+export function formatAiStatsReply(summary, budget = null) {
   if (!summary || summary.ok !== true) {
     return `📉 *Saka AI Telemetry*\n\nTelemetry unavailable: ${summary?.error || 'unknown error'}\n\n_Verify Supabase connectivity and the ai_usage_logs table._`;
   }
@@ -489,14 +498,20 @@ export function formatAiStatsReply(summary) {
     .join('\n');
 
   const capNote = summary.truncated ? ` · capped at ${formatCount(AI_USAGE_LOG_MAX_ROWS)} rows` : '';
+  const budgetLine = budget && budget.enabled
+    ? `• Budget: ${formatApproxCost(budget.spentUsd)} / $${budget.budgetUsd.toFixed(2)} (${(budget.pct * 100).toFixed(1)}%${budget.overBudget ? ' — cap reached' : ''})\n`
+    : '';
 
   return `🤖 *Saka AI Telemetry — Last ${summary.hours}h*\n\n` +
     `*Totals*\n` +
     `• Requests: ${formatCount(summary.totalRequests)} (✅ ${formatCount(summary.okRequests)} · ❌ ${formatCount(summary.errorRequests)})\n` +
     `• Success: ${formatPercent(summary.successRate)} · Errors: ${formatPercent(summary.errorRate)}\n` +
+    `• Fallbacks: ${formatCount(summary.fallbacks || 0)}\n` +
     `• Latency: avg ${formatDuration(summary.avgLatencyMs)} · p50 ${formatDuration(summary.p50LatencyMs)}\n` +
     `• Tokens: ${formatCount(summary.promptTokens)} in / ${formatCount(summary.completionTokens)} out\n` +
-    `• Est. cost: ${formatApproxCost(summary.approxCostUsd, summary.unpricedTokens)} (approx list price)\n\n` +
+    `• Est. cost: ${formatApproxCost(summary.approxCostUsd, summary.unpricedTokens)} (approx list price)\n` +
+    budgetLine +
+    `\n` +
     `*By Tier*\n${tierLines || '• none'}\n\n` +
     `*By Provider*\n${providerLines || '• none'}\n\n` +
     `*Top Purposes*\n${purposeLines || '• none'}\n\n` +
@@ -509,8 +524,9 @@ export function formatAiStatsReply(summary) {
  */
 export async function handleAiStatsCommand(supabase, hours = 24) {
   const summary = await getAiUsageSummary(supabase, hours);
+  const budget = computeAiBudgetStatus(summary);
   return {
-    reply: formatAiStatsReply(summary),
+    reply: formatAiStatsReply(summary, budget),
     details: {
       hours: summary.hours,
       ok: summary.ok,
@@ -518,13 +534,90 @@ export async function handleAiStatsCommand(supabase, hours = 24) {
       ok_requests: summary.okRequests,
       error_requests: summary.errorRequests,
       error_rate: summary.errorRate,
+      fallbacks: summary.fallbacks,
       avg_latency_ms: summary.avgLatencyMs,
       prompt_tokens: summary.promptTokens,
       completion_tokens: summary.completionTokens,
       approx_cost_usd: summary.approxCostUsd,
+      budget_usd: budget.enabled ? budget.budgetUsd : null,
+      budget_pct: budget.enabled ? Number((budget.pct * 100).toFixed(2)) : null,
+      over_budget: budget.overBudget === true,
       truncated: summary.truncated,
       error: summary.error || null
     }
+  };
+}
+
+/**
+ * Daily AI budget alert (Phase 3, v1.14.0).
+ *
+ * Notification-only: enforcement happens inside the aiClient chain builder
+ * (premium legs are skipped once the cap is reached). Fires once per threshold
+ * per Nairobi day at AI_BUDGET_ALERT_PCT and 100%, dual-channel, audit-logged.
+ * `senders` is injectable for offline tests.
+ */
+export async function maybeSendAiBudgetAlert(providedSupabase, { now = new Date(), dryRun = false, senders = {} } = {}) {
+  const budget = await checkAiDailyBudget(providedSupabase, now);
+  if (!budget.enabled) return { status: 'skipped', reason: 'AI daily budget guard is disabled.' };
+  if (budget.error) return { status: 'skipped', reason: `Budget check failed: ${budget.error}` };
+  if (!Number.isFinite(budget.pct)) return { status: 'skipped', reason: 'No budget percentage available.' };
+
+  const pct = budget.pct * 100;
+  const thresholds = Array.from(new Set([getAiBudgetAlertPct(), 100])).sort((a, b) => a - b);
+  const crossed = thresholds.filter((threshold) => pct >= threshold);
+  if (crossed.length === 0) return { status: 'skipped', reason: 'Within budget.' };
+
+  const threshold = crossed[crossed.length - 1];
+  const configKey = `ai_budget_alert_${threshold}_${formatNairobiDate(now)}`;
+  const existing = await getConfigValue(providedSupabase, configKey);
+  if (existing) return { status: 'skipped', reason: `Threshold ${threshold}% already alerted today.` };
+
+  const lines = `💸 *Saka AI Budget ${threshold >= 100 ? 'Cap Reached' : 'Warning'}*\n\n` +
+    `• Spend (24h): *$${budget.spentUsd.toFixed(2)}* of $${budget.budgetUsd.toFixed(2)} (${pct.toFixed(1)}%)\n` +
+    `• Alert threshold: ${threshold}%\n` +
+    (budget.unpricedTokens > 0
+      ? `• Unpriced tokens: ${budget.unpricedTokens.toLocaleString('en-US')} (cost may be understated)\n`
+      : '') +
+    (threshold >= 100
+      ? `\nPremium (Tier-2) calls now soft-fallback to DeepSeek until the rolling window clears.`
+      : `\nPremium (Tier-2) routing continues; Tier-2 legs are skipped at 100%.`) +
+    `\nReply \`admin ai-stats\` for the full telemetry digest.`;
+
+  let waSent = false;
+  let emailSent = false;
+
+  if (!dryRun) {
+    const sendWhatsApp = senders.whatsapp || sendProactiveWhatsApp;
+    const sendEmail = senders.email || sendAdminNotificationEmail;
+    waSent = await sendWhatsApp(process.env.SUPERADMIN_PHONE, lines);
+    emailSent = await sendEmail(
+      `💸 Saka AI budget ${threshold >= 100 ? 'cap reached' : 'warning'} (${pct.toFixed(1)}%)`,
+      `<p>${lines.replace(/\n/g, '<br>')}</p>`
+    );
+    if (waSent || emailSent) {
+      await setConfigValue(providedSupabase, configKey, now.toISOString());
+    }
+  }
+
+  await logAdminAudit(providedSupabase, process.env.SUPERADMIN_PHONE || 'SUPERADMIN', 'AI_BUDGET_ALERT', {
+    threshold_pct: threshold,
+    spend_usd: budget.spentUsd,
+    budget_usd: budget.budgetUsd,
+    pct: Number(pct.toFixed(2)),
+    unpriced_tokens: budget.unpricedTokens,
+    wa_sent: waSent,
+    email_sent: emailSent,
+    dry_run: dryRun
+  });
+
+  return {
+    status: 'success',
+    threshold,
+    pct: Number(pct.toFixed(2)),
+    spentUsd: budget.spentUsd,
+    budgetUsd: budget.budgetUsd,
+    waSent,
+    emailSent
   };
 }
 

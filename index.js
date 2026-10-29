@@ -7,7 +7,7 @@ import { generateFleetReport, uploadReportToSupabase } from './reports.js';
 import { sendReportByEmail, sendMfaEmail } from './src/services/mailer.js';
 import { processSakaMessage } from './sakaAi.js';
 import { runHealthCheck, runConversationRefinement, evaluateConversationalFriction, monitorActiveConversations, logSystemError, logChatTranscript, ensureSentinelTables, scanCloudRunAnomalies } from './src/workers/sentinel.js';
-import { ensureSuperadminTables, isSuperadminPhone, sendMorningExecutiveBriefing } from './src/services/superadmin.js';
+import { ensureSuperadminTables, isSuperadminPhone, sendMorningExecutiveBriefing, maybeSendAiBudgetAlert } from './src/services/superadmin.js';
 import { ensureVehicleTableColumns } from './src/services/vehicles.js';
 import whatsappRoutes, { handleWhatsAppWebhook as handleWhatsAppWebhookRoute } from './src/routes/whatsapp.js';
 import {
@@ -33,7 +33,7 @@ import {
   REMEDIATION_DIGEST_HOURS
 } from './src/workers/remediation.js';
 import { createResilientClient } from './src/services/supabaseClient.js';
-import { ensureAiUsageLogsTable, installAiUsageSink } from './src/services/aiUsageLog.js';
+import { ensureAiUsageLogsTable, installAiUsageSink, installAiBudgetGuard } from './src/services/aiUsageLog.js';
 import { ensureChatSessionsTable } from './src/services/sessionStore.js';
 import { drainQueue, getQueueStats } from './src/services/messageQueue.js';
 
@@ -663,6 +663,15 @@ setInterval(() => {
   });
 }, 30 * 60 * 1000);
 
+// AI budget guardrail (v1.14.0): alerts at AI_BUDGET_ALERT_PCT and 100%
+// (deduped per Nairobi day). Notification-only — routing enforcement lives in
+// aiClient's chain builder via installAiBudgetGuard().
+setInterval(() => {
+  maybeSendAiBudgetAlert(supabase).catch((err) => {
+    console.warn('[AI Budget Alert Warning]:', err.message);
+  });
+}, 5 * 60 * 1000);
+
 async function checkRemediationDigestSchedule() {
   try {
     const now = new Date();
@@ -909,6 +918,7 @@ const start = async () => {
     await ensureRemediationTables(supabase);
     await ensureAiUsageLogsTable(supabase);
     installAiUsageSink(supabase);
+    installAiBudgetGuard(supabase);
     await ensureVehicleTableColumns(supabase);
     await ensureComplianceCatalog({ supabase });
     await ensureChatSessionsTable(supabase);

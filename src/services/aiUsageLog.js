@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
-import { setAiUsageSink } from './aiClient.js';
+import { setAiUsageSink, setBudgetGuard } from './aiClient.js';
 
 /**
  * Saka Fleet — AI Usage Telemetry (v1.12.0, Phase 0)
@@ -60,6 +60,97 @@ export function estimateAiUsageCostUsd(provider, model, promptTokens = 0, comple
   return (prompt / 1e6) * rule.input + (completion / 1e6) * rule.output;
 }
 
+/* ------------------------------------------------------------------ */
+/* Daily budget guardrail (Phase 3, v1.14.0)                            */
+/* ------------------------------------------------------------------ */
+
+// Read dynamically so env changes/tests never require a module reload.
+export function getAiDailyBudgetUsd() {
+  const value = Number(process.env.AI_DAILY_BUDGET_USD || 0);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+export function getAiBudgetAlertPct() {
+  return Math.min(100, Math.max(1, Number(process.env.AI_BUDGET_ALERT_PCT || 80)));
+}
+
+// Budget checks are cached as a promise so concurrent turns share one query.
+export const AI_BUDGET_CACHE_TTL_MS = 60000;
+let budgetCache = { promise: null, checkedAt: 0 };
+
+export function resetAiBudgetGuardCache() {
+  budgetCache = { promise: null, checkedAt: 0 };
+}
+
+/** Pure budget status derived from an existing summary (no extra query). */
+export function computeAiBudgetStatus(summary = {}) {
+  const budgetUsd = getAiDailyBudgetUsd();
+  const alertPct = getAiBudgetAlertPct();
+  const spentUsd = Number.isFinite(summary.approxCostUsd) ? summary.approxCostUsd : 0;
+  if (!budgetUsd) {
+    return {
+      enabled: false,
+      budgetUsd: 0,
+      spentUsd,
+      pct: null,
+      alertPct,
+      overBudget: false,
+      unpricedTokens: summary.unpricedTokens || 0
+    };
+  }
+  return {
+    enabled: true,
+    budgetUsd,
+    spentUsd,
+    pct: spentUsd / budgetUsd,
+    alertPct,
+    overBudget: spentUsd >= budgetUsd,
+    unpricedTokens: summary.unpricedTokens || 0
+  };
+}
+
+/** Rolling 24 h budget check. Fail-soft: never throws. */
+export async function checkAiDailyBudget(providedSupabase, now = new Date()) {
+  if (!getAiDailyBudgetUsd()) {
+    return { ...computeAiBudgetStatus({}), windowHours: 24, error: null };
+  }
+  try {
+    const summary = await getAiUsageSummary(providedSupabase, 24);
+    if (summary.ok !== true) {
+      // Fail-open: a telemetry outage must never block premium routing.
+      return {
+        ...computeAiBudgetStatus({}),
+        windowHours: 24,
+        error: summary.error || 'telemetry unavailable'
+      };
+    }
+    return { ...computeAiBudgetStatus(summary), windowHours: 24, summary, error: null };
+  } catch (err) {
+    return {
+      ...computeAiBudgetStatus({}),
+      windowHours: 24,
+      error: err.message || 'budget check failed'
+    };
+  }
+}
+
+/** Wire the aiClient budget seam (called once at boot; harmless twice). */
+export function installAiBudgetGuard(providedSupabase) {
+  setBudgetGuard(async () => {
+    if (!getAiDailyBudgetUsd()) return false;
+    const now = Date.now();
+    if (budgetCache.promise && now - budgetCache.checkedAt < AI_BUDGET_CACHE_TTL_MS) {
+      return budgetCache.promise;
+    }
+    budgetCache.checkedAt = now;
+    budgetCache.promise = checkAiDailyBudget(providedSupabase)
+      .then((status) => (status.error ? false : status.overBudget === true))
+      .catch(() => false);
+    return budgetCache.promise;
+  });
+  return true;
+}
+
 /** Kill switch for telemetry writes (AI_USAGE_LOGGING_ENABLED, default on). */
 export function isAiUsageLoggingEnabled() {
   return !FALSY.has(String(process.env.AI_USAGE_LOGGING_ENABLED || 'on').toLowerCase());
@@ -78,8 +169,10 @@ CREATE TABLE IF NOT EXISTS public.ai_usage_logs (
     input_chars integer,
     prompt_tokens integer,
     completion_tokens integer,
+    attempts jsonb,
     created_at timestamp with time zone DEFAULT now()
 );
+ALTER TABLE public.ai_usage_logs ADD COLUMN IF NOT EXISTS attempts jsonb;
 CREATE INDEX IF NOT EXISTS idx_ai_usage_logs_created ON public.ai_usage_logs(created_at DESC);
 NOTIFY pgrst, 'reload schema';
 `;
@@ -101,12 +194,17 @@ export async function ensureAiUsageLogsTable(providedSupabase) {
   const missing = error && error.message && error.message.includes('Could not find the table');
   statusMap[AI_USAGE_TABLE] = missing ? 'missing' : 'exists';
 
-  if (missing && hasSqlAccess()) {
+  if (hasSqlAccess()) {
     try {
-      const result = await runSql(AI_USAGE_TABLE_SQL, { label: 'ensureAiUsageLogsTable' });
-      if (result.ok) statusMap[AI_USAGE_TABLE] = 'created';
+      // Legacy tables predate the Phase 3 `attempts` column: detect + migrate it.
+      const { error: columnError } = await supabase.from(AI_USAGE_TABLE).select('attempts').limit(1);
+      const columnMissing = Boolean(columnError && /attempts/i.test(columnError.message || ''));
+      if (missing || columnMissing) {
+        const result = await runSql(AI_USAGE_TABLE_SQL, { label: 'ensureAiUsageLogsTable' });
+        if (result.ok && missing) statusMap[AI_USAGE_TABLE] = 'created';
+      }
     } catch (err) {
-      console.warn('[AiUsageLog] Table creation notice:', err.message);
+      console.warn('[AiUsageLog] Table provisioning notice:', err.message);
     }
   }
 
@@ -135,6 +233,17 @@ export async function trimAiUsageLogs(providedSupabase) {
   }
 }
 
+function toAttempts(value) {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  return value.slice(0, 8).map((entry = {}) => ({
+    provider: entry.provider ? String(entry.provider).slice(0, 32) : null,
+    model: entry.model ? String(entry.model).slice(0, 64) : null,
+    outcome: entry.outcome ? String(entry.outcome).slice(0, 32) : 'unknown',
+    latency_ms: Number.isFinite(entry.latencyMs) ? Math.round(entry.latencyMs) : null,
+    error: entry.error ? String(entry.error).slice(0, 200) : null
+  }));
+}
+
 function toRow(record = {}) {
   return {
     purpose: record.purpose ? String(record.purpose).slice(0, 64) : 'unknown',
@@ -147,6 +256,7 @@ function toRow(record = {}) {
     input_chars: Number.isFinite(record.inputChars) ? Math.round(record.inputChars) : null,
     prompt_tokens: Number.isFinite(record.promptTokens) ? Math.round(record.promptTokens) : null,
     completion_tokens: Number.isFinite(record.completionTokens) ? Math.round(record.completionTokens) : null,
+    attempts: toAttempts(record.attempts),
     created_at: new Date().toISOString()
   };
 }
@@ -180,6 +290,7 @@ function newUsageBucket() {
     requests: 0,
     ok: 0,
     errors: 0,
+    fallbacks: 0,
     promptTokens: 0,
     completionTokens: 0,
     approxCostUsd: 0,
@@ -196,6 +307,9 @@ function addUsageRow(bucket, row = {}) {
   bucket.requests += 1;
   if (row.ok === true) bucket.ok += 1;
   else bucket.errors += 1;
+
+  // Every leg after the first is a failover/skip transition.
+  bucket.fallbacks += Math.max(0, (Array.isArray(row.attempts) ? row.attempts.length : 0) - 1);
 
   bucket.promptTokens += promptTokens;
   bucket.completionTokens += completionTokens;
@@ -225,6 +339,7 @@ function finalizeUsageBucket(bucket) {
     requests: bucket.requests,
     ok: bucket.ok,
     errors: bucket.errors,
+    fallbacks: bucket.fallbacks,
     successRate: bucket.requests ? bucket.ok / bucket.requests : null,
     errorRate: bucket.requests ? bucket.errors / bucket.requests : null,
     avgLatencyMs,
@@ -265,6 +380,7 @@ export async function getAiUsageSummary(providedSupabase, hours = AI_USAGE_DEFAU
     totalRequests: 0,
     okRequests: 0,
     errorRequests: 0,
+    fallbacks: 0,
     successRate: null,
     errorRate: null,
     avgLatencyMs: null,
@@ -294,7 +410,7 @@ export async function getAiUsageSummary(providedSupabase, hours = AI_USAGE_DEFAU
       const pageSize = Math.min(AI_USAGE_PAGE_SIZE, AI_USAGE_LOG_MAX_ROWS - fetched);
       const { data, error } = await supabase
         .from(AI_USAGE_TABLE)
-        .select('id,tier,provider,model,purpose,latency_ms,ok,prompt_tokens,completion_tokens')
+        .select('id,tier,provider,model,purpose,latency_ms,ok,prompt_tokens,completion_tokens,attempts')
         .gte('created_at', since)
         .order('created_at', { ascending: false })
         .order('id', { ascending: false })
@@ -330,6 +446,7 @@ export async function getAiUsageSummary(providedSupabase, hours = AI_USAGE_DEFAU
     summary.totalRequests = total.requests;
     summary.okRequests = total.ok;
     summary.errorRequests = total.errors;
+    summary.fallbacks = total.fallbacks;
     summary.successRate = total.successRate;
     summary.errorRate = total.errorRate;
     summary.avgLatencyMs = total.avgLatencyMs;
@@ -369,5 +486,9 @@ export default {
   trimAiUsageLogs,
   isAiUsageLoggingEnabled,
   getAiUsageSummary,
-  estimateAiUsageCostUsd
+  estimateAiUsageCostUsd,
+  computeAiBudgetStatus,
+  checkAiDailyBudget,
+  installAiBudgetGuard,
+  getAiDailyBudgetUsd
 };

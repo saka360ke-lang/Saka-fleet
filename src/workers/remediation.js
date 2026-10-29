@@ -958,7 +958,7 @@ export async function checkRemediationPlanTriggers(providedSupabase, { now = new
 /* Twice-daily digest + adaptive frequency + urgent escalation        */
 /* ------------------------------------------------------------------ */
 
-async function getConfigValue(supabase, key) {
+export async function getConfigValue(supabase, key) {
   try {
     const { data } = await supabase.from('system_config').select('value').eq('key', key).maybeSingle();
     return data?.value || null;
@@ -967,7 +967,7 @@ async function getConfigValue(supabase, key) {
   }
 }
 
-async function setConfigValue(supabase, key, value) {
+export async function setConfigValue(supabase, key, value) {
   try {
     const { error } = await supabase
       .from('system_config')

@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.13.0  
+**Version:** 1.14.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -39,6 +39,8 @@ All LLM traffic flows through **`src/services/aiClient.js`**. No service talks t
 | Purpose registry | `AI_PURPOSES` (tier + default params per purpose) |
 | Kill switch | `PREMIUM_MODEL_ENABLED` (off; Tier-2 downgrades to Tier 1 while off) |
 | Telemetry analytics | `getAiUsageSummary()` (1–168 h window) → Superadmin `admin ai-stats` digest (§37) |
+| Tier-2 failover chain | `anthropic → openai → deepseek`; per-provider circuit breakers; DeepSeek never skipped (§38) |
+| Budget guardrail | `AI_DAILY_BUDGET_USD` (unset = off) skips premium legs at 100%; alerts at `AI_BUDGET_ALERT_PCT` + 100% (§38) |
 
 **Exports**
 - `getAIClient()` — lazily created, cached `OpenAI` instance bound to the DeepSeek baseURL.
@@ -1229,7 +1231,7 @@ Minimises manual error-log inspection and manual prompt-writing with a continuou
 ### 35.3 Scheduling & triggers (continuous — v1.11.0)
 Three fail-soft, idempotent tiers run in `index.js`:
 - **Tier 1 — deterministic scan (default every 60 s):** `runRemediationScan` collects the rolling, upper-bounded window (default 4h, `REMEDIATION_AUDIT_WINDOW_HOURS`) from `error_logs`, `chat_friction_logs` and quiz-active `chat_sessions`, clusters by `buildSignature`, computes `health_score`, and upserts today's `sentinel_audit_runs` row. It increments `scan_count`, updates `last_scanned_at`, and only rewrites the deterministic summary when counts/clusters changed. No AI call and no watermark races (recompute model).
-- **Tier 2 — throttled AI synthesis (default every 15 min):** `refreshRemediationSynthesis` re-runs the DeepSeek summary only when `last_synthesis_at` is stale or forced; deterministic fallback retained.
+- **Tier 2 — throttled AI synthesis (default every 15 min):** `refreshRemediationSynthesis` re-runs the reasoning-tier summary only when `last_synthesis_at` is stale or forced; deterministic fallback retained. Since v1.14.0 the model is `deepseek-reasoner` when `REMEDIATION_AUTONOMY=on` (otherwise `deepseek-chat`), or Claude Opus when `AI_REASONING_PROVIDER=anthropic`, with `AI_TIMEOUT_MS_REASONING` (45 s) and DeepSeek failover (see §38.3).
 - **Tier 3 — plan triggers (every scan tick):** `checkRemediationPlanTriggers` dispatches `remediation_plan` for clusters that are `severity=high` or `count >= REMEDIATION_PLAN_TRIGGER_COUNT`, with a per-signature cooldown (`REMEDIATION_PLAN_COOLDOWN_MS`), active-proposal dedupe (`target_signature`) and a hard daily cap (`REMEDIATION_MAX_PLANS_PER_DAY`). Gated by `REMEDIATION_AUTONOMY=on`.
 - **Digest scheduler (08:00 / 20:00 EAT):** `checkRemediationDigestSchedule` (minute-checker, per-slot key) calls `sendRemediationDigest`; see §35.7.
 - **Urgent escalation (every scan tick, 1h cooldown):** `maybeSendUrgentRemediationAlert` pages immediately when unresolved errors ≥ `REMEDIATION_URGENT_ERROR_THRESHOLD` or a high-risk proposal is pending. Notification-only → not autonomy-gated.
@@ -1356,35 +1358,44 @@ All LLM traffic still flows through `src/services/aiClient.js` (the only provide
 | `latency_ms` / `ok` / `error` | wall-clock latency and outcome |
 | `input_chars` | system + message character count (payload-size proxy) |
 | `prompt_tokens` / `completion_tokens` | provider-reported usage when available |
+| `attempts` | ordered provider legs with outcome (`ok`, `failed`, `skipped_missing_key`, `skipped_circuit_open`, `skipped_budget`, `skipped_concurrency`) — one row per turn (v1.14.0) |
 | `created_at` | insert timestamp |
 
 Retention: `AI_USAGE_LOG_MAX_ROWS` (10,000) trimmed every `AI_USAGE_TRIM_EVERY` (250) writes. `AI_USAGE_LOGGING_ENABLED=off` disables writes. The ledger is operational (not governance) and can be truncated without audit impact.
 
-Analytics (v1.13.0): `getAiUsageSummary(supabase, hours = 24)` aggregates a 1–168 h window in JS over paged PostgREST reads (1,000-row pages, capped by `AI_USAGE_LOG_MAX_ROWS`) and returns totals, success/error rates, avg + p50 latency, prompt/completion tokens, approximate cost and `byTier` / `byProvider` / `byPurpose` buckets. `estimateAiUsageCostUsd()` applies `AI_USAGE_COST_RULES` approximate public list prices — informational only, never billing. The helper never throws (returns `{ ok: false, error }`) and makes no provider calls. See §37.
+Analytics (v1.13.0): `getAiUsageSummary(supabase, hours = 24)` aggregates a 1–168 h window in JS over paged PostgREST reads (1,000-row pages, capped by `AI_USAGE_LOG_MAX_ROWS`) and returns totals, success/error rates, avg + p50 latency, prompt/completion tokens, approximate cost and `byTier` / `byProvider` / `byPurpose` buckets. `estimateAiUsageCostUsd()` applies `AI_USAGE_COST_RULES` approximate public list prices — informational only, never billing. The helper never throws (returns `{ ok: false, error }`) and makes no provider calls. Since v1.14.0 it also totals `fallbacks` (every leg after the first in `attempts`), so the digest exposes failover volume. See §37–§38.
 
 ### 36.5 Env knobs
 | Env | Default | Purpose |
 | :--- | :--- | :--- |
 | `PREMIUM_MODEL_ENABLED` | off | master kill switch for Tier-2 routing |
 | `AI_MODEL_TIER_1` | `DEEPSEEK_MODEL` → `deepseek-chat` | router-tier model |
-| `AI_MODEL_TIER_2` | `deepseek-chat` | conversational-tier model (Phase 1: Claude/GPT-4o-class) |
-| `AI_MODEL_TIER_3` | `deepseek-chat` | reasoning-tier model (`deepseek-reasoner` opt-in) |
-| `ANTHROPIC_API_KEY` | (unset) | Tier-2 Anthropic key; unset ⇒ DeepSeek-only |
-| `CONVERSATIONAL_PROVIDER` | deepseek | Tier-2 provider |
-| `AI_TIMEOUT_MS_PREMIUM` | 15000 | Tier-2 fail-fast timeout (Anthropic `AbortSignal`) |
-| `AI_PREMIUM_MAX_CONCURRENCY` | 2 | Anthropic in-flight cap; overflow → DeepSeek |
+| `AI_MODEL_TIER_2` | env → provider default (`claude-sonnet-4-5` / `gpt-4o` / `deepseek-chat`) | conversational-tier model |
+| `AI_MODEL_TIER_2_OPENAI` | `gpt-4o` | OpenAI secondary Tier-2 leg model |
+| `AI_MODEL_TIER_3` | `deepseek-chat` (`deepseek-reasoner` when autonomy is on) | reasoning-tier model |
+| `AI_REASONING_PROVIDER` | deepseek | Tier-3 provider (`anthropic` = Claude Opus opt-in) |
+| `AI_TIMEOUT_MS_REASONING` | 45000 | Tier-3 background timeout |
+| `ANTHROPIC_API_KEY` | (unset) | Tier-2/Tier-3 Anthropic key; unset ⇒ DeepSeek-only |
+| `OPENAI_API_KEY` | (unset) | enables the OpenAI Tier-2 fallback leg |
+| `CONVERSATIONAL_PROVIDER` | deepseek | Tier-2 primary provider |
+| `AI_TIMEOUT_MS_PREMIUM` | 15000 | Tier-2 fail-fast timeout (Anthropic `AbortSignal` / OpenAI SDK) |
+| `AI_PREMIUM_MAX_CONCURRENCY` | 2 | Anthropic in-flight cap; overflow → next leg |
+| `AI_CB_FAILURE_THRESHOLD` / `AI_CB_WINDOW_MS` / `AI_CB_OPEN_MS` | 3 / 60000 / 30000 | per-provider circuit breaker (DeepSeek exempt) |
+| `AI_DAILY_BUDGET_USD` | (unset = off) | rolling-24 h spend cap; over-budget premium legs are skipped |
+| `AI_BUDGET_ALERT_PCT` | 80 | first alert threshold; 100% always alerts |
 | `AI_USAGE_LOGGING_ENABLED` | on | telemetry writes kill switch |
 | `AI_USAGE_LOG_MAX_ROWS` | 10000 | retention cap |
 | `AI_USAGE_TRIM_EVERY` | 250 | writes between retention sweeps |
 
 ### 36.6 Files & tests
-- `src/services/aiClient.js` — purpose registry, tier resolution, provider clients, telemetry sink.
-- `src/services/aiUsageLog.js` — `ensureAiUsageLogsTable`, `logAiUsage`, `trimAiUsageLogs`, `installAiUsageSink`, plus Phase 2 analytics: `getAiUsageSummary`, `estimateAiUsageCostUsd`, `AI_USAGE_COST_RULES`.
-- `src/services/superadmin.js` — `ADMIN_AI_STATS` parsing, `handleAiStatsCommand`, `formatAiStatsReply` (v1.13.0).
-- `index.js` — boot chain ensures the table and installs the sink after `ensureRemediationTables()`.
-- `test_model_router.js` — 70 assertions: tier resolution for every purpose, premium toggle, Tier 0, unknown purpose, missing-key degradation + single telemetry record, provider caching, helper contracts, DB provisioning/insert/cleanup (zero live API calls).
+- `src/services/aiClient.js` — purpose registry, tier resolution, provider clients, telemetry sink, Phase 3 failover chain (`buildProviderChain`), per-provider circuit breakers and the budget-guard seam.
+- `src/services/aiUsageLog.js` — `ensureAiUsageLogsTable` (incl. the `attempts` self-migration), `logAiUsage`, `trimAiUsageLogs`, `installAiUsageSink`, Phase 2 analytics (`getAiUsageSummary`, `estimateAiUsageCostUsd`, `AI_USAGE_COST_RULES`) and Phase 3 budget guard (`computeAiBudgetStatus`, `checkAiDailyBudget`, `installAiBudgetGuard`).
+- `src/services/superadmin.js` — `ADMIN_AI_STATS` parsing, `handleAiStatsCommand`, `formatAiStatsReply` (v1.13.0) and `maybeSendAiBudgetAlert` (v1.14.0).
+- `index.js` — boot chain ensures the table, installs the usage sink **and** the budget guard after `ensureRemediationTables()`; a 5-minute ticker runs `maybeSendAiBudgetAlert`.
+- `test_model_router.js` — 71 assertions: tier resolution for every purpose, premium toggle, Tier 0, unknown purpose, missing-key degradation + single telemetry record, provider caching, helper contracts, DB provisioning/insert/cleanup (zero live API calls).
 - `test_phase1_canary.js` — 37 assertions: Anthropic translation/normalization, Tier-2 success, 429/timeout fallback to DeepSeek, `AI_PREMIUM_MAX_CONCURRENCY` cap + overflow, escalation matrix, premium-off downgrade, DB telemetry (fetch-stubbed, zero network).
 - `test_phase2_analytics.js` — 57 assertions: pricing rules, aggregation math (tier/provider/purpose), window clamping, 1,000-row pagination, fail-soft contract, deterministic digest, escalation precision, offline `admin ai-stats` parsing, DB round-trip with self-cleanup.
+- `test_phase3_resilience.js` — 54 assertions: chain order, missing-key skip, autonomy-gated reasoning binding, Anthropic→DeepSeek failover with `attempts`, breaker state machine + bypass, budget gating, budget math/alerts/dedupe, digest fallbacks/budget lines, `attempts` jsonb DB round-trip.
 
 ### 36.7 Phase roadmap
 | Phase | Scope | Status |
@@ -1392,11 +1403,11 @@ Analytics (v1.13.0): `getAiUsageSummary(supabase, hours = 24)` aggregates a 1–
 | 0 | Router abstraction + usage telemetry (all DeepSeek) | shipped (v1.12.0) |
 | 1 | Anthropic canary Tier-2 + escalation rules + concurrency cap | shipped (v1.12.1) |
 | 2 | Telemetry analytics + Superadmin AI digest + escalation precision tuning + `.env` standards | shipped (v1.13.0) |
-| 3 | CI Cline model parameterization + reasoning-model opt-in | planned |
-| 4 | Budget alerts + weekly cost/latency report (data source: `admin ai-stats`) | planned |
+| 3 | Multi-provider failover chain + circuit breakers + Tier-3 autonomy binding + budget guardrails | shipped (v1.14.0) |
+| 4 | CI Cline model parameterization + weekly cost/latency report | planned |
 
 ### 36.8 Governance rule
-Every new LLM call must pass a `purpose` from `AI_PURPOSES`; provider/model changes go through `aiClient.js` only; telemetry must never be bypassed. Tier-2 promotion is deterministic (`classifyIntentTier`) with exported `ESCALATION_RULES` thresholds, and premium-provider failures must always fall back to Tier-1 DeepSeek. `getAiUsageSummary()` is the only analytics aggregator and must stay fail-soft and provider-free. Mirrored in `.clinerules` rules 20–21.
+Every new LLM call must pass a `purpose` from `AI_PURPOSES`; provider/model changes go through `aiClient.js` only; telemetry must never be bypassed. Tier-2 promotion is deterministic (`classifyIntentTier`) with exported `ESCALATION_RULES` thresholds, and premium-provider failures must always fall back to DeepSeek. `getAiUsageSummary()` is the only analytics aggregator and must stay fail-soft and provider-free. Provider chains are built only by `buildProviderChain()`; DeepSeek is always terminal and never breaker-blocked, and budget enforcement must stay cached + fail-open. Mirrored in `.clinerules` rules 20–22.
 
 
 ---
@@ -1416,6 +1427,7 @@ Phase 2 closes the loop opened by the Phase 0/1 telemetry seam: `ai_usage_logs` 
 | `avgLatencyMs` / `p50LatencyMs` | wall-clock latency (lower median for even samples) |
 | `promptTokens` / `completionTokens` / `totalTokens` | provider-reported usage summed |
 | `approxCostUsd` / `unpricedTokens` | approximate list-price cost; tokens with no pricing rule |
+| `fallbacks` | legs after the first in `attempts` (v1.14.0) |
 | `byTier` / `byProvider` / `byPurpose` | the same bucket metrics keyed by `0/1/2/3/unknown`, provider and purpose |
 | `truncated` | true when the window exceeded the retention cap |
 | `ok` / `error` | query outcome; failures return zeroed totals instead of throwing |
@@ -1427,7 +1439,7 @@ Phase 2 closes the loop opened by the Phase 0/1 telemetry seam: `ai_usage_logs` 
 ### 37.3 Superadmin WhatsApp command
 - Aliases: `admin ai-stats`, `admin ai stats`, `admin ai usage`, `admin ai telemetry`, `admin usage [Nh]` → intent `ADMIN_AI_STATS`.
 - Deterministic regex pre-match (zero LLM calls); optional window `1–168 h` (default 24 h, clamped in both directions). The `admin_parse` fallback also recognizes the intent.
-- `handleAiStatsCommand(supabase, hours)` renders a concise digest via `formatAiStatsReply()` — totals + success/error rate, avg/p50 latency, token volumes, approximate cost, per-tier and per-provider breakdowns and the top four purposes. No AI synthesis is used, so the digest costs zero tokens and can never fabricate telemetry.
+- `handleAiStatsCommand(supabase, hours)` renders a concise digest via `formatAiStatsReply()` — totals + success/error rate, avg/p50 latency, token volumes, approximate cost, per-tier and per-provider breakdowns and the top four purposes. Since v1.14.0 the totals also include fallbacks, and a budget line appears when `AI_DAILY_BUDGET_USD` is configured. No AI synthesis is used, so the digest costs zero tokens and can never fabricate telemetry.
 - Routed inside `handleSuperadminFlow` after the 30-minute session gate; every invocation writes `ADMIN_AI_STATS` to `admin_audit_logs`. The command is listed in the default help reply.
 
 ---
@@ -1467,5 +1479,60 @@ Canonical section order (both files):
 
 ---
 
-_End of document — v1.13.0._
+---
+
+## 38. Resilient Multi-Provider Failover, Circuit Breakers & Budget Guardrails — Phase 3 (v1.14.0)
+
+### 38.1 Ordered failover chain
+Every LLM turn still starts at `chatCompletion()`; Phase 3 replaces the ad-hoc candidate list with `buildProviderChain(routing, { budgetExceeded })`:
+
+| Route | Chain |
+| :--- | :--- |
+| Tier 1 (router) | DeepSeek candidates only (`AI_MODEL_TIER_1` → `DEEPSEEK_MODEL` → `deepseek-chat`) |
+| Tier 2 (conversational) | primary `CONVERSATIONAL_PROVIDER` → the other premium provider (OpenAI or Anthropic) → DeepSeek |
+| Tier 3 (reasoning) | `AI_REASONING_PROVIDER` (DeepSeek default / Anthropic Opus opt-in) → DeepSeek |
+| explicit `model` | that provider/model → DeepSeek fallbacks |
+
+- Premium legs are included only when their API key exists; missing keys are recorded as `skipped_missing_key`.
+- `AI_PREMIUM_MAX_CONCURRENCY` still caps in-flight Anthropic calls; overflow is recorded as `skipped_concurrency` and falls through to the next leg.
+- **Invariant:** DeepSeek is always the terminal leg and is never skipped, never budget-gated and never breaker-blocked. No single provider can brick a conversation.
+
+### 38.2 Circuit breakers
+Per-provider, in-memory, fixed-cooldown breakers in `aiClient.js`:
+- `AI_CB_FAILURE_THRESHOLD` (3) failures within `AI_CB_WINDOW_MS` (60 s) open the breaker for `AI_CB_OPEN_MS` (30 s).
+- Any success resets the failure window; cooldown expiry resets the breaker (no half-open probing).
+- While open, the provider is omitted from the chain and logged as `skipped_circuit_open`; DeepSeek is exempt.
+- Helpers: `isProviderCircuitOpen()`, `recordProviderOutcome()`, `resetProviderBreakers()` (tests/ops).
+
+### 38.3 Tier-3 reasoning binding (autonomy-gated)
+- `resolveTier()` Tier 3 resolves provider = `AI_REASONING_PROVIDER` and model = `AI_MODEL_TIER_3`; when `AI_MODEL_TIER_3` is unset the default is `deepseek-reasoner` **only** while `REMEDIATION_AUTONOMY=on`, otherwise `deepseek-chat` (prior behaviour).
+- `AI_REASONING_PROVIDER=anthropic` + `ANTHROPIC_API_KEY` binds Claude Opus-class models through the existing fetch adapter, with DeepSeek failover.
+- Tier-3 calls use `AI_TIMEOUT_MS_REASONING` (45 s) because they are background-only (Sentinel diagnosis, remediation synthesis, Horizon, prompt refinement). User-facing tiers keep their existing timeouts.
+- No call-site changes: every Sentinel/remediation purpose was already tagged Tier 3.
+
+### 38.4 Budget guardrails & alerts
+- `AI_DAILY_BUDGET_USD` (unset/0 = **disabled**) caps approximate rolling-24 h spend, computed from `getAiUsageSummary()` list prices.
+- Enforcement: `installAiBudgetGuard(supabase)` wires `aiClient.setBudgetGuard()`; the guard is consulted only for **Tier-2** chain construction, cached as a promise for 60 s (concurrent turns share one query), and **fail-open** — a telemetry outage never blocks a conversation. Over-budget premium legs are logged as `skipped_budget` and DeepSeek serves the turn.
+- Alerts: `maybeSendAiBudgetAlert()` (superadmin.js) fires once per threshold per Nairobi day at `AI_BUDGET_ALERT_PCT` (80%) and 100%, via WhatsApp + email (injectable senders for offline tests), deduped through `system_config.ai_budget_alert_<pct>_<YYYY-MM-DD>` and audited as `AI_BUDGET_ALERT`. `index.js` checks every 5 minutes; notification-only (enforcement is the chain builder).
+- `admin ai-stats` adds `• Fallbacks: N` and, when a budget is configured, `• Budget: $spent / $cap (pct%)`.
+
+### 38.5 Telemetry & `.env` delta
+- `ai_usage_logs.attempts` (`jsonb`) stores the ordered legs per outcome; `ensureAiUsageLogsTable()` detects and adds the column on legacy tables (`ALTER TABLE … ADD COLUMN IF NOT EXISTS`). The one-row-per-turn contract is preserved — no per-leg row spam.
+- `getAiUsageSummary()` exposes `fallbacks` (legs after the first), aggregated across the window and per bucket.
+- `.env` / `.env.example` gain a `FAILOVER, CIRCUIT BREAKERS & BUDGET` block: `AI_CB_FAILURE_THRESHOLD`, `AI_CB_WINDOW_MS`, `AI_CB_OPEN_MS`, `AI_REASONING_PROVIDER`, `AI_MODEL_TIER_2_OPENAI`, `AI_TIMEOUT_MS_REASONING`, `AI_DAILY_BUDGET_USD` (0 = off in the template), `AI_BUDGET_ALERT_PCT`.
+
+### 38.6 Files, tests & operations
+- `src/services/aiClient.js` — `buildProviderChain`, breaker registry, budget seam, provider-aware tier models, `attempts` emission, reasoning timeout.
+- `src/services/aiUsageLog.js` — `attempts` persistence/self-migration, `fallbacks`, `computeAiBudgetStatus`, `checkAiDailyBudget`, `installAiBudgetGuard`.
+- `src/services/superadmin.js` — `maybeSendAiBudgetAlert`, digest fallback/budget lines.
+- `src/workers/remediation.js` — `getConfigValue` / `setConfigValue` exported for alert dedupe.
+- `index.js` — budget-guard install + 5-minute alert ticker.
+- `test_phase3_resilience.js` — 54 assertions, zero live network (fetch stub + OpenAI key cleared), DB round-trip self-cleans.
+- Regression: `node scripts/run_tests.js test_model_router.js test_phase1_canary.js test_phase2_analytics.js test_phase3_resilience.js test_agent_training.js test_remediation_pipeline.js`.
+- Operate: `admin ai-stats` shows fallbacks + budget; set `AI_DAILY_BUDGET_USD` to activate the cap and alerts.
+
+---
+
+_End of document — v1.14.0._
+
 
