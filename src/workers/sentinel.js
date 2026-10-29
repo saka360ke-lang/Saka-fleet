@@ -160,7 +160,7 @@ Format your answer clearly with 'DIAGNOSIS:' and 'MITIGATION SUGGESTION:'.`;
     let diagnosisText = null;
 
     try {
-      diagnosisText = await generateText({ prompt, maxTokens: 900, temperature: 0.3 });
+      diagnosisText = await generateText({ prompt, maxTokens: 900, temperature: 0.3, purpose: 'sentinel_diagnosis' });
     } catch (aiErr) {
       console.warn(`[Sentinel HealthCheck] DeepSeek failed for error ID ${log.id}:`, aiErr.message);
     }
@@ -285,7 +285,7 @@ Return strictly a single valid JSON object matching this schema (no markdown ast
   let parsedAnalysis = null;
 
   try {
-    const rawText = await generateText({ prompt, jsonMode: true, maxTokens: 4096, temperature: 0.4 });
+    const rawText = await generateText({ prompt, jsonMode: true, maxTokens: 4096, temperature: 0.4, purpose: 'prompt_refinement' });
     if (rawText) {
       parsedAnalysis = parseJsonSafely(rawText);
     }
@@ -684,7 +684,7 @@ Output ONLY valid JSON matching this schema:
     let parsedPatch = null;
 
     try {
-      const rawText = await generateText({ prompt: optimizerPrompt, jsonMode: true, maxTokens: 600, temperature: 0.4 });
+      const rawText = await generateText({ prompt: optimizerPrompt, jsonMode: true, maxTokens: 600, temperature: 0.4, purpose: 'friction_patch' });
       if (rawText) {
         parsedPatch = parseJsonSafely(rawText);
       }
@@ -803,7 +803,7 @@ ${rawCorpus.slice(0, 15000)}`;
   let parsedProposal = null;
 
   try {
-    const rawText = await generateText({ prompt: horizonPrompt, jsonMode: true, maxTokens: 1200, temperature: 0.5 });
+    const rawText = await generateText({ prompt: horizonPrompt, jsonMode: true, maxTokens: 1200, temperature: 0.5, purpose: 'horizon_synthesis' });
     if (rawText) {
       parsedProposal = parseJsonSafely(rawText);
     }

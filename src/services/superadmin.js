@@ -180,7 +180,7 @@ Extract: discount_value (e.g. "20%"), target_phone (e.g. "+254712345678"), query
 Command: "${text}"`;
 
   try {
-    const rawText = await generateText({ prompt, jsonMode: true, maxTokens: 512, temperature: 0.2 });
+    const rawText = await generateText({ prompt, jsonMode: true, maxTokens: 512, temperature: 0.2, purpose: 'admin_parse' });
     if (rawText) {
       const parsed = parseJsonSafely(rawText);
       if (parsed && parsed.intent) return parsed;
@@ -254,7 +254,7 @@ ${rawInfo}`;
   let summaryText = null;
 
   try {
-    summaryText = await generateText({ prompt: synthesisPrompt, maxTokens: 900, temperature: 0.5 });
+    summaryText = await generateText({ prompt: synthesisPrompt, maxTokens: 900, temperature: 0.5, purpose: 'health_synthesis' });
   } catch (err) {
     console.warn('[Superadmin Synthesis] DeepSeek failed:', err.message);
   }
@@ -1198,7 +1198,7 @@ Keep it under 220 words, use WhatsApp formatting, and never invent data.
 Telemetry:
 ${JSON.stringify(telemetry).slice(0, 6000)}`;
 
-    const summary = await generateText({ prompt, maxTokens: 900, temperature: 0.3 });
+    const summary = await generateText({ prompt, maxTokens: 900, temperature: 0.3, purpose: 'sentinel_diagnosis' });
     await logAdminAudit(supabase, formattedPhone, 'SENTINEL_DIAGNOSE', {
       friction_detected: friction?.friction_detected || 0,
       health_status: health?.status || 'unknown'

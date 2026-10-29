@@ -22,6 +22,21 @@ const LANGUAGE_HINT = (language) => (language && language !== 'English'
   ? `Write in ${language}. If the user writes in another language, mirror it.`
   : 'Reply in the user\'s language (auto-detect; default English).');
 
+/**
+ * Map a compose purpose to the AI router purpose (tier + telemetry). Quiz
+ * question renders and background nudges never need the conversational tier;
+ * every other render is prose (Tier 2 when premium routing is enabled).
+ */
+const ROUTER_PURPOSE_BY_COMPOSE = Object.freeze({
+  quiz_intro_question: 'question_render',
+  quiz_next_question: 'question_render',
+  conversation_stall_nudge: 'stall_nudge'
+});
+
+function routerPurposeForCompose(purpose) {
+  return ROUTER_PURPOSE_BY_COMPOSE[purpose] || 'prose_render';
+}
+
 function globalizationLines(globalCtx) {
   return [
     `Country: ${globalCtx.country} (${globalCtx.countryCode})`,
@@ -75,7 +90,14 @@ export async function composeMessage({
     { role: 'user', content: `Compose the next Saka message from these facts:\n${JSON.stringify(factsBlock)}` }
   ];
 
-  const result = await chatCompletion({ system, messages, jsonMode: false, maxTokens, temperature: 0.5 });
+  const result = await chatCompletion({
+    system,
+    messages,
+    jsonMode: false,
+    maxTokens,
+    temperature: 0.5,
+    purpose: routerPurposeForCompose(purpose)
+  });
   if (result.ok && result.text && result.text.trim()) {
     return result.text.trim();
   }

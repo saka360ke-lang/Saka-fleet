@@ -326,7 +326,7 @@ Return JSON only:
 {"title":"short report title","overview":"2-3 sentence executive summary","clusters":[{"signature":"...","category":"...","count":0,"severity":"low|medium|high","root_cause_hypothesis":"...","recommended_fix_area":"file or service name"}]}`;
 
   try {
-    const rawText = await generateText({ prompt, jsonMode: true, maxTokens: 1200, temperature: 0.2 });
+    const rawText = await generateText({ prompt, jsonMode: true, maxTokens: 1200, temperature: 0.2, purpose: 'remediation_synthesis' });
     const parsed = rawText ? parseJsonSafely(rawText) : null;
     if (parsed && Array.isArray(parsed.clusters) && parsed.clusters.length) {
       return {

@@ -13,7 +13,8 @@
  *      repository's real insert/select payloads.
  *   2. The existing migrations, executed in place (single source of truth):
  *      ensureSuperadminTables → ensureVehicleTableColumns → ensureSentinelTables
- *      → ensureRemediationTables → ensureChatSessionsTable → applySentinelMigration
+ *      → ensureRemediationTables → ensureAiUsageLogsTable → ensureChatSessionsTable
+ *      → applySentinelMigration
  *      → applyChatSessionsMigration → applyVinImmutabilityMigration
  *      → applyRemediationMigration.
  *
@@ -32,6 +33,7 @@ import { ensureSuperadminTables } from '../src/services/superadmin.js';
 import { ensureSentinelTables } from '../src/workers/sentinel.js';
 import { ensureChatSessionsTable } from '../src/services/sessionStore.js';
 import { ensureRemediationTables } from '../src/workers/remediation.js';
+import { ensureAiUsageLogsTable } from '../src/services/aiUsageLog.js';
 import { applySentinelMigration } from './run_sentinel_migration.js';
 import { applyChatSessionsMigration } from './run_chat_sessions_migration.js';
 import { applyVinImmutabilityMigration } from './run_vin_immutability_migration.js';
@@ -232,7 +234,7 @@ const EXPECTED_TABLES = [
   'chat_friction_logs', 'conversation_analytics', 'error_logs', 'system_config',
   'saka_dynamic_rules', 'superadmin_sessions', 'coupons', 'admin_audit_logs',
   'expiry_notification_log',
-  'sentinel_audit_runs', 'remediation_proposals'
+  'sentinel_audit_runs', 'remediation_proposals', 'ai_usage_logs'
 ];
 
 async function step(label, fn) {
@@ -284,6 +286,7 @@ async function main() {
   });
   await step('ensureSentinelTables()', async () => console.log('   ->', JSON.stringify(await ensureSentinelTables(supabase))));
   await step('ensureRemediationTables()', async () => console.log('   ->', JSON.stringify(await ensureRemediationTables(supabase))));
+  await step('ensureAiUsageLogsTable()', async () => console.log('   ->', JSON.stringify(await ensureAiUsageLogsTable(supabase))));
   await step('ensureChatSessionsTable()', async () => console.log('   ->', JSON.stringify(await ensureChatSessionsTable(supabase))));
   await step('applySentinelMigration()', async () => {
     const r = await applySentinelMigration();

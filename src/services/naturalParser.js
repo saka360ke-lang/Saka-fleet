@@ -189,7 +189,8 @@ export async function extractWithAI({ text, flowDef, answers = {}, ctx = {}, tim
         messages: [{ role: 'user', content: prompt }],
         jsonMode: true,
         maxTokens: 600,
-        temperature: 0.1
+        temperature: 0.1,
+        purpose: 'extraction'
       }),
       new Promise((resolve) => setTimeout(() => resolve({ ok: false, error: 'timeout' }), timeoutMs))
     ]);

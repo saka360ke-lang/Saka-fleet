@@ -33,6 +33,7 @@ import {
   REMEDIATION_DIGEST_HOURS
 } from './src/workers/remediation.js';
 import { createResilientClient } from './src/services/supabaseClient.js';
+import { ensureAiUsageLogsTable, installAiUsageSink } from './src/services/aiUsageLog.js';
 import { ensureChatSessionsTable } from './src/services/sessionStore.js';
 import { drainQueue, getQueueStats } from './src/services/messageQueue.js';
 
@@ -906,6 +907,8 @@ const start = async () => {
     await ensureSentinelTables(supabase);
     await ensureSuperadminTables(supabase);
     await ensureRemediationTables(supabase);
+    await ensureAiUsageLogsTable(supabase);
+    installAiUsageSink(supabase);
     await ensureVehicleTableColumns(supabase);
     await ensureComplianceCatalog({ supabase });
     await ensureChatSessionsTable(supabase);

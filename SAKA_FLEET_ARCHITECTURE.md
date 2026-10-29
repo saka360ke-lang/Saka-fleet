@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.11.3  
+**Version:** 1.12.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -23,22 +23,28 @@ Saka Fleet is an intelligent vehicle asset management and conversational fleet o
 - **Autonomous Remediation (v1.11.1):** continuous Sentinel scanning over a configurable rolling window (default 60s ticks, 4h window, deterministic + throttled AI synthesis) → threshold-triggered Cline headless plan drafting in GitHub Actions → twice-daily adaptive Superadmin digests (08:00/20:00 EAT) → nonce-gated CI execution with before/after tests and automatic deployment alerts. See §35.
 - **Legacy providers removed (v1.7.3):** SendGrid (`@sendgrid/mail`), Twilio (`twilio`) and the unused `supabase` CLI package were fully removed — zero code imports, zero env keys. **Resend** + **Meta WhatsApp Cloud API** are the only outbound channels.
 
-### 1.1 LLM Provider — DeepSeek (single source of truth)
+### 1.1 LLM Provider Hub — Purpose Router (DeepSeek default, v1.12.0)
 
-All LLM traffic flows through **`src/services/aiClient.js`**. No service talks to a provider directly.
+All LLM traffic flows through **`src/services/aiClient.js`**. No service talks to a provider directly. Phase 0 adds a purpose → tier router; every tier resolves to DeepSeek until `PREMIUM_MODEL_ENABLED=on` (see §36).
 
 | Setting | Value |
 | :--- | :--- |
 | Base URL | `https://api.deepseek.com` |
 | Primary model | `deepseek-chat` (DeepSeek-V3) |
+| Tier-3 opt-in | `deepseek-reasoner` via `AI_MODEL_TIER_3` |
 | SDK | `openai` (OpenAI-compatible surface) |
-| API key env | `DEEPSEEK_API_KEY` |
-| Optional model override | `DEEPSEEK_MODEL` |
+| API key env | `DEEPSEEK_API_KEY` (plus optional `OPENAI_API_KEY` for the Phase-1 provider) |
+| Optional model override | `DEEPSEEK_MODEL`, `AI_MODEL_TIER_1/2/3` |
+| Purpose registry | `AI_PURPOSES` (tier + default params per purpose) |
+| Kill switch | `PREMIUM_MODEL_ENABLED` (off; Tier-2 downgrades to Tier 1 while off) |
 
 **Exports**
 - `getAIClient()` — lazily created, cached `OpenAI` instance bound to the DeepSeek baseURL.
-- `chatCompletion({ system, messages, jsonMode, maxTokens, temperature })` → `{ ok, text, model, error }`. **Never throws.**
-- `generateText({ system, prompt, jsonMode, ... })` → `string | null` (single-turn convenience wrapper).
+- `getProviderClient(provider)` — lazy, cached per provider + key (`deepseek`, `openai`; `anthropic` is a fail-soft stub until Phase 1).
+- `resolveTier(purpose, { tier })` / `routeModelForPurpose(purpose, ctx)` — purpose → `{ tier, provider, model, candidates[] }`.
+- `chatCompletion({ system, messages, jsonMode, maxTokens, temperature, model, provider, purpose })` → `{ ok, text, model, error }`. **Never throws.**
+- `generateText({ system, prompt, jsonMode, maxTokens, temperature, provider, purpose })` → `string | null`.
+- `setAiUsageSink(fn)` / `getAiUsageSink()` — fire-and-forget telemetry seam wired by `aiUsageLog.js`.
 - `normalizeHistory(history)` — converts Saka's internal `{ role: 'user'|'model', parts: [{ text }] }` shape into OpenAI `{ role, content }` messages (`model` → `assistant`).
 - `parseJsonSafely(raw)` — strips ``` fences, parses JSON, and falls back to first-`{`/last-`}` extraction.
 
@@ -51,6 +57,7 @@ All LLM traffic flows through **`src/services/aiClient.js`**. No service talks t
 - Gemini (`@google/genai`, `GEMINI_API_KEY`, `gemini-3.8-flash`, `gemini-flash-latest`) has been **fully removed** from code, dependencies, and environment.
 - **Null-safe attribute merge:** DeepSeek always emits every schema key (usually as explicit `null`). `processSakaMessage` therefore only lets **non-empty** AI values override the regex heuristic — otherwise a bare plate like `KBC 456X` would be wiped to `null` and onboarding would never start.
 - **Fail-fast AI:** the OpenAI SDK is called with `maxRetries: 0` and `AI_TIMEOUT_MS` (12 s default); slow or empty completions fall through to the deterministic fallbacks above instead of blocking the message queue.
+- **Purpose tagging & telemetry (v1.12.0):** every runtime AI call declares a `purpose` from `AI_PURPOSES`; each outcome emits one fire-and-forget record to `ai_usage_logs` (purpose, tier, provider, model, latency, tokens). `AI_USAGE_LOGGING_ENABLED=off` disables writes — see §36.
 - **Verify connectivity** any time with `node scripts/test_deepseek_connection.js` (plain text + JSON mode + conversation history).
 
 ### 1.2 Conversational Engine (v1.7 — pure AI, quiz-first)
@@ -992,6 +999,11 @@ Alerts are WhatsApp-ready and unit-aware, e.g. "Service Warning (KDA 123A): Oil 
 | `MESSAGE_MAX_CONCURRENCY` | 8 | global parallel AI + DB tasks |
 | `MESSAGE_MAX_ATTEMPTS` / `MESSAGE_RETRY_BASE_MS` | 3 / 250 | retry budget + exponential backoff |
 | `AI_TIMEOUT_MS` | 12000 | DeepSeek fail-fast timeout |
+| `PREMIUM_MODEL_ENABLED` | off | Tier-2 premium routing kill switch |
+| `AI_MODEL_TIER_1/2/3` | deepseek-chat | per-tier model overrides (Tier 3 accepts `deepseek-reasoner`) |
+| `CONVERSATIONAL_PROVIDER` | deepseek | Tier-2 provider (`deepseek`/`openai`; `anthropic` Phase 1) |
+| `AI_TIMEOUT_MS_PREMIUM` | 15000 | Tier-2 fail-fast timeout |
+| `AI_USAGE_LOGGING_ENABLED` / `AI_USAGE_LOG_MAX_ROWS` / `AI_USAGE_TRIM_EVERY` | on / 10000 / 250 | telemetry writes + retention |
 | `SUPABASE_TIMEOUT_MS` | 15000 | per-request DB timeout |
 | `SAKA_PROMPT_CACHE_MS` | 60000 | core prompt cache |
 | `SAKA_MAX_PROMPT_REFINEMENT_CHARS` | 2000 | max length of a stored `saka_core_prompt` refinement |
@@ -1144,7 +1156,7 @@ Provisions a target database from scratch. Idempotent (`CREATE … IF NOT EXISTS
 **Two classes of schema:**
 1. `BOOTSTRAP_SQL` / `BOOTSTRAP_OPERATIONAL_SQL` — base tables that **no code path creates** (`profiles`, `vehicles`, `passbook_transfers`, `reminders`, `expenses`, `expense_logs`, `private_earnings`, `pending_owner_notifications`, `processed_webhooks`, `exchange_rates_cache`, `support_tickets`, `weekly_feature_proposals`). Columns are derived from §2 + §28.3 and the repository's real insert/select payloads.
 2. The existing migrations, executed in dependency order — single source of truth, not duplicated:
-   `ensureSuperadminTables()` → `ensureVehicleTableColumns()` → `ensureSentinelTables()` → `ensureRemediationTables()` → `ensureChatSessionsTable()` → `applySentinelMigration()` → `applyChatSessionsMigration()` → `applyVinImmutabilityMigration()` → `applyRemediationMigration()`.
+   `ensureSuperadminTables()` → `ensureVehicleTableColumns()` → `ensureSentinelTables()` → `ensureRemediationTables()` → `ensureAiUsageLogsTable()` → `ensureChatSessionsTable()` → `applySentinelMigration()` → `applyChatSessionsMigration()` → `applyVinImmutabilityMigration()` → `applyRemediationMigration()`.
 
 **Ordering constraint (critical):** `ensureVehicleTableColumns()` ALTERs `coupons`, `passbook_transfers`, `reminders`, `profiles` and `vehicles`, so those tables must exist first. Because `pg` sends a multi-statement batch as one implicit transaction, a single failure rolls back the whole batch — hence `ensureSuperadminTables()` (which creates `coupons`) must run *before* the vehicles migration.
 
@@ -1287,5 +1299,89 @@ Three fail-soft, idempotent tiers run in `index.js`:
 - `src/services/superadmin.js` — approval commands, state machine, nonce minting.
 - `src/services/mailer.js` — remediation approval + digest emails.
 - `test_remediation_pipeline.js` — regression suite (56 assertions).
+
+---
+
+## 36. Multi-Model Router — Phase 0 (v1.12.0)
+
+### 36.1 Purpose → tier architecture
+All LLM traffic still flows through `src/services/aiClient.js` (the only provider surface). Phase 0 adds a purpose registry and tier routing with **all tiers resolving to DeepSeek**:
+
+| Tier | Role | Default model | Used by |
+| :--- | :--- | :--- | :--- |
+| 0 | Deterministic (no model) | — | regex classifier, quiz fast path, date parser, cached question hits |
+| 1 | Router / utility | `AI_MODEL_TIER_1` → `DEEPSEEK_MODEL` → `deepseek-chat` | extraction, question render, stall nudge, admin parse |
+| 2 | Conversational nuance | `AI_MODEL_TIER_2` → `deepseek-chat` | intent classification, prose rendering (driver handshakes, transfers, complaints) |
+| 3 | Reasoning / synthesis | `AI_MODEL_TIER_3` → `deepseek-chat` (`deepseek-reasoner` opt-in) | Sentinel diagnosis, friction patches, prompt refinement, Horizon, remediation synthesis |
+
+`PREMIUM_MODEL_ENABLED` (default **off**) is the master kill switch: while off, every Tier-2 purpose downgrades to Tier 1. `CONVERSATIONAL_PROVIDER` selects the Tier-2 provider (`deepseek` in Phase 0; `openai` is supported by the lazy client, `anthropic` is a fail-soft stub until Phase 1).
+
+### 36.2 Registry & routing API
+- `AI_PURPOSES` — frozen purpose → `{ tier, jsonMode, maxTokens, temperature }` registry (source of truth for defaults).
+- `resolveTier(purpose, { tier })` → `{ tier, provider, model }`; Tier 0 returns null provider/model (deterministic, no call).
+- `routeModelForPurpose(purpose, ctx)` → `{ tier, provider, model, candidates[] }`; DeepSeek candidate fallbacks are appended for DeepSeek-provider routes.
+- `getProviderClient(provider)` — lazy, cached per provider + key. DeepSeek and OpenAI are implemented; Anthropic returns `null` so `chatCompletion()` falls back to DeepSeek instead of failing.
+- `chatCompletion({ ..., provider, purpose })` / `generateText({ ..., provider, purpose })` — additive and backward-compatible. An explicit `model` keeps the legacy single-candidate contract.
+- Each outcome (success or terminal failure) emits exactly one usage record to the sink installed by `installAiUsageSink()`; emission is fire-and-forget and can never block a turn.
+
+### 36.3 Purpose tagging (call sites)
+| Purpose | Call site |
+| :--- | :--- |
+| `intent_classify` | `sakaAi.js` `processSakaMessage()` |
+| `extraction` | `naturalParser.js` `extractWithAI()` |
+| `question_render` / `stall_nudge` / `prose_render` | `conversationEngine.js` `composeMessage()` (mapped from the compose purpose) |
+| `sentinel_diagnosis` | `sentinel.js` `runHealthCheck()`, `superadmin.js` `SENTINEL_DIAGNOSE` |
+| `prompt_refinement` | `sentinel.js` `runConversationRefinement()` |
+| `friction_patch` | `sentinel.js` `evaluateConversationalFriction()` |
+| `horizon_synthesis` | `sentinel.js` `generateWeeklyFeaturePlan()` |
+| `remediation_synthesis` | `remediation.js` `refreshRemediationSynthesis()` |
+| `admin_parse` | `superadmin.js` `parseSuperadminCommand()` |
+| `health_synthesis` | `superadmin.js` `handleHealthCheckCommand()` |
+
+### 36.4 Telemetry table & retention
+`public.ai_usage_logs` — idempotent `ensureAiUsageLogsTable()` at boot, provisioned by `npm run migrate:staging-schema`, verified in `EXPECTED_TABLES`:
+
+| Column | Meaning |
+| :--- | :--- |
+| `purpose` / `tier` | router purpose + resolved tier (null for legacy untagged calls) |
+| `provider` / `model` | provider and model that produced the outcome |
+| `latency_ms` / `ok` / `error` | wall-clock latency and outcome |
+| `input_chars` | system + message character count (payload-size proxy) |
+| `prompt_tokens` / `completion_tokens` | provider-reported usage when available |
+| `created_at` | insert timestamp |
+
+Retention: `AI_USAGE_LOG_MAX_ROWS` (10,000) trimmed every `AI_USAGE_TRIM_EVERY` (250) writes. `AI_USAGE_LOGGING_ENABLED=off` disables writes. The ledger is operational (not governance) and can be truncated without audit impact.
+
+### 36.5 Env knobs
+| Env | Default | Purpose |
+| :--- | :--- | :--- |
+| `PREMIUM_MODEL_ENABLED` | off | master kill switch for Tier-2 routing |
+| `AI_MODEL_TIER_1` | `DEEPSEEK_MODEL` → `deepseek-chat` | router-tier model |
+| `AI_MODEL_TIER_2` | `deepseek-chat` | conversational-tier model (Phase 1: Claude/GPT-4o-class) |
+| `AI_MODEL_TIER_3` | `deepseek-chat` | reasoning-tier model (`deepseek-reasoner` opt-in) |
+| `CONVERSATIONAL_PROVIDER` | deepseek | Tier-2 provider |
+| `AI_TIMEOUT_MS_PREMIUM` | 15000 | Tier-2 fail-fast timeout |
+| `AI_PREMIUM_MAX_CONCURRENCY` | 2 | Tier-2 concurrency cap (enforced Phase 1) |
+| `AI_USAGE_LOGGING_ENABLED` | on | telemetry writes kill switch |
+| `AI_USAGE_LOG_MAX_ROWS` | 10000 | retention cap |
+| `AI_USAGE_TRIM_EVERY` | 250 | writes between retention sweeps |
+
+### 36.6 Files & tests
+- `src/services/aiClient.js` — purpose registry, tier resolution, provider clients, telemetry sink.
+- `src/services/aiUsageLog.js` — `ensureAiUsageLogsTable`, `logAiUsage`, `trimAiUsageLogs`, `installAiUsageSink`.
+- `index.js` — boot chain ensures the table and installs the sink after `ensureRemediationTables()`.
+- `test_model_router.js` — 70 assertions: tier resolution for every purpose, premium toggle, Tier 0, unknown purpose, missing-key degradation + single telemetry record, provider caching, helper contracts, DB provisioning/insert/cleanup (zero live API calls).
+
+### 36.7 Phase roadmap
+| Phase | Scope | Status |
+| :--- | :--- | :--- |
+| 0 | Router abstraction + usage telemetry (all DeepSeek) | shipped (v1.12.0) |
+| 1 | Premium conversational provider behind `PREMIUM_MODEL_ENABLED` | planned |
+| 2 | Complexity-based escalation for intent classification | planned |
+| 3 | CI Cline model parameterization + reasoning-model opt-in | planned |
+| 4 | Budget alerts + weekly cost/latency report | planned |
+
+### 36.8 Governance rule
+Every new LLM call must pass a `purpose` from `AI_PURPOSES`; provider/model changes go through `aiClient.js` only; telemetry must never be bypassed. Mirrored in `.clinerules` rule 20.
 
 

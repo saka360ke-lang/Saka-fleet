@@ -872,7 +872,8 @@ ${fleetContextSection}
     ],
     jsonMode: true,
     maxTokens: 800,
-    temperature: 0.3
+    temperature: 0.3,
+    purpose: 'intent_classify'
   });
 
   if (aiResult.ok) {
