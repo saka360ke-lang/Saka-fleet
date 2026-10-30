@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.23.1  
+**Version:** 1.23.2  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.23.2** | Plain-English admin alerts and deploy-noise decoder | §59 |
 | **1.23.1** | Pricing v2, free-tier vault gating, OCR flow hard-paused | §58 |
 | 1.23.0 | Sonnet-first front conversations with GPT-4o fallback | §57 |
 | 1.22.0 | Snappy replies: ack-first media, OCR kill switch, AI latency trims | §56 |
@@ -2253,3 +2254,25 @@ Owner decision: model quality is not a subscription gate - vehicle count is. Eve
 
 ### 58.5 Tests
 - `test_subscription_billing.js` (new prices, 30% annual, add-on annual, paid-only vault flag), `test_ocr_flow.js` (hard pause even with `OCR_ENABLED=on`), `test_doc_lens.js` (PDF intake unchanged), `test_trial_engine.js` (trial keeps paid features).
+
+---
+
+## 59. v1.23.2 - Plain-English Admin Alerts & Deploy-Noise Decoder
+
+Template for every superadmin alert: what happened -> what it means -> what to do (or no action needed).
+
+### 59.1 Deploy alert
+- notify_git_push.js renders "Saka update is live - vX.Y.Z", pulls the headline from the Release History above, states the impact and the action needed, then a compact details footer. Exported buildDeploymentAlertText() is unit-tested.
+
+### 59.2 Remediation watchdog
+- formatRemediationBlockedReply() explains the stuck auto-fix job, names GH_REMEDIATION_TOKEN as the likely cause and gives three numbered steps; one alert per stuck plan.
+
+### 59.3 Quieter startup & health
+- Cloud Run startup announcements are opt-in (STARTUP_ANNOUNCE=on, default off) and say only "Saka is running (revision X). No action needed."
+- Bare Health / Status from the superadmin phone now maps to the health check.
+
+### 59.4 Deploy-noise decoder
+- isDeployNoiseLog() decodes protobuf AuditLog byte arrays before matching, so stale-revision console deploys no longer create errors, friction, alerts or a FAILING health status.
+
+### 59.5 Tests
+- test_notifications.js: 11 assertions (plain-English alert + headline, watchdog copy, protobuf/plain noise filtered, genuine errors still alert).

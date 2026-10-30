@@ -143,7 +143,7 @@ const ADMIN_INTENTS = new Set([
  * Everything else from the superadmin phone falls through to the normal
  * Saka AI conversation (multi-role coexistence).
  */
-const ADMIN_DIRECTIVE_RE = /^\s*(admin\b|adminrules?\b|check\s+health\b|health\s+check\b|system\s+(status|health|diagnostics?)\b|sentinel\b|superadmin\s+(to\s+)?sentinel\b|profiles?\s+report\b|user\s+stats\b|generate\b[^\n]*\bcoupon\b|coupon\b|horizon\b|proposals?\b)/i;
+const ADMIN_DIRECTIVE_RE = /^\s*(admin\b|adminrules?\b|check\s+health\b|health\s+check\b|system\s+(status|health|diagnostics?)\b|sentinel\b|superadmin\s+(to\s+)?sentinel\b|profiles?\s+report\b|user\s+stats\b|generate\b[^\n]*\bcoupon\b|coupon\b|horizon\b|proposals?\b|health\s*$|status\s*$)/i;
 
 export async function parseSuperadminCommand(messageText) {
   const text = messageText ? messageText.trim() : '';

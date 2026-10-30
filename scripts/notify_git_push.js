@@ -9,6 +9,31 @@ try {
   config?.();
 } catch {}
 
+function architectureHeadline(version) {
+  try {
+    const arch = fs.readFileSync('SAKA_FLEET_ARCHITECTURE.md', 'utf8');
+    const normalized = (line) => line.replace(/\*/g, '').split('|').map((cell) => cell.trim());
+    const row = arch.split('\n').find((line) => normalized(line)[1] === String(version));
+    if (!row) return null;
+    const cells = row.split('|').map((cell) => cell.trim());
+    return cells[2] || null;
+  } catch { return null; }
+}
+
+export function buildDeploymentAlertText({ version = 'unknown', commitHash = 'HEAD', branch = 'main', author = 'Deploy Bot', timestamp = '' } = {}) {
+  const headline = architectureHeadline(version) || 'A new version of Saka is running.';
+  const needsCheck = /migrat|secret|environment variable|env knob/i.test(headline);
+  return [
+    '✅ *Saka update is live* - v' + version,
+    '',
+    '*In plain words:* ' + headline,
+    '*What this means:* this is the version now answering WhatsApp conversations.',
+    '*Action needed:* ' + (needsCheck ? 'Check the release notes in SAKA_FLEET_ARCHITECTURE.md.' : 'None - everything is automatic.'),
+    '',
+    'Details: commit ' + commitHash + ' - branch ' + branch + ' - by ' + author + ' - ' + timestamp
+  ].join('\n');
+}
+
 export async function sendAdminDeploymentAlert(customData = {}) {
   const superadminPhone = process.env.SUPERADMIN_PHONE;
   const phoneNumberId = process.env.META_PHONE_NUMBER_ID;
@@ -49,19 +74,7 @@ export async function sendAdminDeploymentAlert(customData = {}) {
   } catch {}  const timestamp = new Date().toLocaleString('en-US', { timeZone: 'Africa/Nairobi', dateStyle: 'medium', timeStyle: 'short' });
   const cleanPhone = superadminPhone ? superadminPhone.replace(/[^\d]/g, '') : null;
 
-  const waMessage = 
-`🚀 *Saka Fleet Deployment Alert* 🛠️
-
-A new code version has been pushed/deployed:
-• *Release:* v${releaseVersion}
-• *Commit:* \`${commitHash}\`
-• *Branch:* \`${branch}\`
-• *Author:* ${author}
-• *Summary:* "${commitMessage}"
-• *Server Time (EAT):* ${timestamp}
-• *Status:* Live & Operational ✅
-
-_Automated deployment hook dispatched to Superadmin._`;
+  const waMessage = buildDeploymentAlertText({ version: releaseVersion, commitHash, branch, author, timestamp });
 
   let waSuccess = false;
   if (cleanPhone && phoneNumberId && token) {

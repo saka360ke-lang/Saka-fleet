@@ -977,11 +977,11 @@ const start = async () => {
     // Cloud Run Startup Self-Announcement
     const isProduction = process.env.NODE_ENV === 'production' || process.env.K_SERVICE;
     const currentRevision = process.env.K_REVISION || process.env.COMMIT_SHA || process.env.RENDER_GIT_COMMIT;
-    if (isProduction && currentRevision && process.env.SUPERADMIN_PHONE) {
+    if (isProduction && currentRevision && process.env.SUPERADMIN_PHONE && String(process.env.STARTUP_ANNOUNCE || 'off').toLowerCase() === 'on') {
       const { data: config } = await supabase.from('system_config').select('value').eq('key', 'last_deployed_revision').maybeSingle();
       if (!config || config.value !== currentRevision) {
         await supabase.from('system_config').upsert([{ key: 'last_deployed_revision', value: currentRevision }]);
-        const waMsg = `ðŸš€ *Saka Fleet Live on Cloud Run!* ðŸ› ï¸\n\nâ€¢ *Revision:* \`${currentRevision}\`\nâ€¢ *Status:* Healthy & Listening\nâ€¢ *Timestamp:* ${new Date().toLocaleString()}\n\n_Automated startup hook dispatched to Superadmin._`;
+        const waMsg = 'Saka is running (revision ' + currentRevision + '). No action needed - users can chat normally.';
         await sendMetaWhatsAppMessage(process.env.SUPERADMIN_PHONE, waMsg).catch(() => {});
         console.log(`[Deployment Alert] Startup announcement sent to Superadmin for revision: ${currentRevision}`);
       }

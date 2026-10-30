@@ -304,7 +304,7 @@ export async function checkRemediationDispatchVerification(providedSupabase, { n
           const minutes = Math.round(age / 60000);
           await sendProactiveWhatsApp(
             process.env.SUPERADMIN_PHONE,
-            `⚠️ *Remediation CI did not start*\n\nA plan was dispatched ${minutes} min ago for signature \`${String(signature).slice(0, 70)}…\` but no proposal arrived.\n\nCheck \`.github/workflows/remediation_pipeline.yml\` (and the repo Actions secrets) — the autonomous pipeline is blind until this is fixed.`
+            formatRemediationBlockedReply({ minutes, signature }),
           ).catch(() => {});
         }
       }
@@ -1417,3 +1417,21 @@ export async function checkRemediationExecutionRetry(providedSupabase) {
 
 
 
+
+/** v1.23.2 - plain-English remediation watchdog message. */
+export function formatRemediationBlockedReply({ minutes = 0 } = {}) {
+  return [
+    '🤖 *The auto-fix system is stuck*',
+    '',
+    `In plain words: Saka asked GitHub to start a repair job ${minutes} minutes ago, but GitHub never picked it up. Nothing has been changed.`,
+    '',
+    'Most likely cause: the repair token (GH_REMEDIATION_TOKEN) is missing or expired in the GitHub repository secrets.',
+    '',
+    'What to do:',
+    '1. Open the repo -> Settings -> Secrets and variables -> Actions.',
+    '2. Add or refresh GH_REMEDIATION_TOKEN (fine-grained token with contents:write and workflow access).',
+    '3. The next audit retries automatically.',
+    '',
+    '_You will only be told once for this plan._'
+  ].join('\n');
+}

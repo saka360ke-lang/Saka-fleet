@@ -1,4 +1,4 @@
-﻿import { createClient } from '@supabase/supabase-js';
+import { createClient } from '@supabase/supabase-js';
 import { fetchCloudRunLogs } from '../services/sentinelCloudLogs.js';
 import { generateText, parseJsonSafely } from '../services/aiClient.js';
 import { composeMessage } from '../services/conversationEngine.js';
@@ -400,8 +400,27 @@ const CLOUD_RUN_ALERT_TTL = 15 * 60 * 1000; // 15 minutes
 // Sentinel health and Superadmin alerts signal-rich.
 export const DEPLOY_NOISE_RE = /(version\s+'[^']+'\s+was\s+specified\s+but\s+current\s+version\s+is|Conflict\s+for\s+resource|traffic\s+was\s+specified\s+but\s+current\s+traffic)/i;
 
+/**
+ * v1.23.2 - decode protobuf AuditLog byte arrays (Cloud Run deploy noise is
+ * often stored as "data":[67,111,110,...] = "Conflict for resource ...").
+ */
+export function decodeAuditByteArrays(text) {
+  const raw = String(text || '');
+  if (!raw.includes('"data"') || raw.length > 200000) return raw;
+  return raw.replace(/\[(?:\s*\d{1,3}\s*,)*\s*\d{1,3}\s*\]/g, (match) => {
+    try {
+      const bytes = match.slice(1, -1).split(',').map((n) => Number(n.trim()))
+        .filter((n) => Number.isInteger(n) && n >= 0 && n <= 255);
+      if (bytes.length < 4) return match;
+      return Buffer.from(bytes).toString('utf8');
+    } catch { return match; }
+  });
+}
+
 export function isDeployNoiseLog(text) {
-  return DEPLOY_NOISE_RE.test(String(text || ''));
+  const raw = String(text || '');
+  if (DEPLOY_NOISE_RE.test(raw)) return true;
+  return DEPLOY_NOISE_RE.test(decodeAuditByteArrays(raw));
 }
 
 export async function scanCloudRunAnomalies(providedSupabase) {
