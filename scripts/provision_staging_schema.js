@@ -148,6 +148,7 @@ CREATE TABLE IF NOT EXISTS public.expense_logs (
   cost numeric DEFAULT 0,
   currency text DEFAULT 'KES',
   fuel_liters numeric DEFAULT 0,
+  fill_type text,
   odometer_reading integer,
   notes text,
   logged_at timestamp with time zone DEFAULT now(),

@@ -15,6 +15,7 @@ import {
   sanitizeVehicleUpdates
 } from '../services/vehicles.js';
 import { calculateFuelConsumption } from '../services/analytics.js';
+import { normalizeFillType } from '../services/fuelEconomy.js';
 import { buildFleetReport, resolveReportType } from '../services/fleetReports.js';
 import {
   createDriverAssignment,
@@ -1963,7 +1964,8 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                 supabase: supabaseClient,
                 vehicleId: targetVeh?.id,
                 plateNumber: mergedExt.plate_number || targetVeh?.plate_number,
-                targetUnit: targetVeh?.unit_system || countryInfo.default_units
+                targetUnit: targetVeh?.unit_system || countryInfo.default_units,
+                currency: countryInfo?.currency || null
               });
 
               if (fuelAnalysis && fuelAnalysis.explanation) {
@@ -2010,6 +2012,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               const extLiters = mergedExt.fuel_liters || mergedExt.liters || null;
               const extOdo = mergedExt.odometer || mergedExt.current_mileage || extractOdometerFromText(messageText);
               const expType = mergedExt.expense_type || (/fuel|petrol|diesel|gas/i.test(messageText) ? 'Fuel' : 'Expense');
+              const extFillType = normalizeFillType(mergedExt.fill_type) || normalizeFillType(messageText);
 
               if ((extAmount && extAmount > 0) || (extLiters && extLiters > 0)) {
                 if (supabaseClient && targetVeh) {
@@ -2019,6 +2022,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                     expense_type: expType,
                     amount: extAmount || 0,
                     fuel_liters: extLiters || 0,
+                    fill_type: extFillType,
                     odometer_reading: extOdo || null,
                     notes: messageText.trim()
                   }]);
@@ -2046,8 +2050,12 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                   `• *Category:* ${expType}\n` +
                   (extAmount ? `• *Amount:* ${countryInfo.currency} ${Number(extAmount).toLocaleString()}\n` : '') +
                   (extLiters ? `• *Volume:* ${extLiters} Liters\n` : '') +
+                  (extFillType ? `• *Fill:* ${extFillType === 'full' ? 'Full tank' : 'Top-up'}\n` : '') +
                   (extOdo ? `• *Odometer:* ${Number(extOdo).toLocaleString()} km\n` : '') +
-                  `\n✅ Saved to database under *${targetVeh.plate_number}*.`;
+                  `\n✅ Saved to database under *${targetVeh.plate_number}*.` +
+                  (expType.toLowerCase().includes('fuel') && !extFillType
+                    ? `\n\n💡 *Tip:* say *"full tank"* or *"top-up"* with your next fuel log so I can measure exact fuel economy.`
+                    : '');
                 if (existingVehicles.length > 1) {
                   customReply += `\n*(Active vehicle: ${targetVeh.plate_number}. Type "switch to [car]" to change)*`;
                 }

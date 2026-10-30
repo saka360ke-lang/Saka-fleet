@@ -36,6 +36,7 @@ import {
   monitorModelHealth,
   AI_MODEL_SCOUT_INTERVAL_MS
 } from './src/services/aiModelRegistry.js';
+import { ensureFuelEconomySchema } from './src/services/fuelEconomy.js';
 import { ensureChatSessionsTable } from './src/services/sessionStore.js';
 import { drainQueue, getQueueStats } from './src/services/messageQueue.js';
 import { processPendingFollowUps } from './src/services/followups.js';
@@ -959,6 +960,7 @@ const start = async () => {
     installAiBudgetGuard(supabase);
     await installModelRuntime(supabase);
     await ensureVehicleTableColumns(supabase);
+    await ensureFuelEconomySchema(supabase);
     await ensureComplianceCatalog({ supabase });
     await ensureChatSessionsTable(supabase);
 

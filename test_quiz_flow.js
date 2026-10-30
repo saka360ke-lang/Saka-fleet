@@ -64,6 +64,22 @@ async function run() {
   assert(detectQuizStart({ intent: 'ASSIGN_DRIVER', messageText: 'assign driver', hasVehicleRegistered: true }) === 'assign_driver', 'Assign-driver intent maps to its quiz');
   assert(detectQuizStart({ intent: 'GENERAL_CHAT', messageText: 'what can I do', hasVehicleRegistered: true }) === null, 'General chat does not start a quiz');
   assert(detectQuizStart({ intent: 'VIEW_PROFILE', messageText: 'my profile details', hasVehicleRegistered: true }) === null, 'Viewing a profile never starts a quiz');
+  assert(
+    detectQuizStart({ intent: 'LOG_EXPENSE', messageText: 'Logged 30L fuel at 50350 km for KES 5500', hasVehicleRegistered: true }) === null,
+    'Complete one-line fuel logs skip the quiz (saved directly by the quick path)'
+  );
+  assert(
+    detectQuizStart({ intent: 'LOG_EXPENSE', messageText: 'I want to log fuel', hasVehicleRegistered: true }) === 'log_expense',
+    'Incomplete fuel logs still start the quiz (fill type is asked)'
+  );
+  assert(
+    detectQuizStart({ intent: 'LOG_EXPENSE', messageText: 'give me an analysis of fuel consumption in km/l', hasVehicleRegistered: true }) === null,
+    'Fuel-economy queries never start the expense quiz, even if the classifier leans LOG_EXPENSE'
+  );
+  assert(
+    detectQuizStart({ intent: 'LOG_EXPENSE', messageText: 'switch to KBC 888B', hasVehicleRegistered: true }) === null,
+    'Vehicle switching is never hijacked by a misclassified LOG_EXPENSE intent'
+  );
 
   const profileField = getFlowDefinition('edit_profile', baseCtx()).fields.find((f) => f.key === 'profile_field');
   assert(profileField.parse('lugha') === 'Language', 'Swahili "lugha" selects the Language field');
@@ -150,6 +166,8 @@ async function run() {
   await handleQuizTurn({ session: expenseSession, messageText: 'Fuel', aiExtracted: { expense_type: 'Fuel' }, ctx: expenseCtx });
   await handleQuizTurn({ session: expenseSession, messageText: '5000', aiExtracted: { amount: 5000 }, ctx: expenseCtx });
   await handleQuizTurn({ session: expenseSession, messageText: '40', aiExtracted: { fuel_liters: 40 }, ctx: expenseCtx });
+  await handleQuizTurn({ session: expenseSession, messageText: 'full tank', aiExtracted: { fill_type: 'full' }, ctx: expenseCtx });
+  assert(expenseSession.quiz.answers.fill_type === 'Full tank', 'Fill type captured (full tank)');
   await handleQuizTurn({ session: expenseSession, messageText: '366800', aiExtracted: { odometer: 366800 }, ctx: expenseCtx });
   await handleQuizTurn({ session: expenseSession, messageText: 'skip', ctx: expenseCtx });
 

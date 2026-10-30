@@ -72,8 +72,8 @@ async function runAgentFlowTests() {
                 order: () => ({
                   limit: async () => ({
                     data: [
-                      { id: 'e-2', fuel_liters: 40, amount: 7200, odometer_reading: 367200, created_at: '2026-10-15T10:00:00Z' },
-                      { id: 'e-1', fuel_liters: 45, amount: 8100, odometer_reading: 366750, created_at: '2026-10-01T10:00:00Z' }
+                      { id: 'e-2', fuel_liters: 40, fill_type: 'full', amount: 7200, odometer_reading: 367200, created_at: '2026-10-15T10:00:00Z' },
+                      { id: 'e-1', fuel_liters: 45, fill_type: 'full', amount: 8100, odometer_reading: 366750, created_at: '2026-10-01T10:00:00Z' }
                     ]
                   })
                 })
@@ -119,7 +119,7 @@ async function runAgentFlowTests() {
                 order: () => ({
                   limit: async () => ({
                     data: [
-                      { id: 'e-1', fuel_liters: 45, amount: 8100, odometer_reading: 366750, created_at: '2026-10-01T10:00:00Z' }
+                      { id: 'e-1', fuel_liters: 45, fill_type: 'full', amount: 8100, odometer_reading: 366750, created_at: '2026-10-01T10:00:00Z' }
                     ]
                   })
                 })
@@ -149,6 +149,7 @@ async function runAgentFlowTests() {
   if (realSupabase) {
     await realSupabase.from('vehicles').delete().in('owner_phone', ['+254799000111', '254799000111']);
     await realSupabase.from('profiles').delete().in('phone_number', ['+254799000111', '254799000111']);
+    await realSupabase.from('chat_sessions').delete().in('phone_number', ['+254799000111', '254799000111']);
 
     const { data: profile, error: profErr } = await realSupabase.from('profiles').insert([{
       id: crypto.randomUUID(),

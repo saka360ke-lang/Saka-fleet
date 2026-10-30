@@ -18,6 +18,7 @@ import {
   isQuizQuestionCacheWarm
 } from './conversationEngine.js';
 import { chatCompletion, parseJsonSafely } from './aiClient.js';
+import { normalizeFillType } from './fuelEconomy.js';
 import {
   buildGlobalContext,
   userDistanceToKm,
@@ -403,6 +404,10 @@ function expenseFields(ctx) {
         ? { ok: true }
         : { ok: false, message: 'Please send the volume as a positive number, or reply Skip.' })
     }),
+    choiceField('fill_type', 'Fill type', 'Full tank or a top-up? Top-ups are fine — they count between full tanks', [
+      { value: 'Full tank', aliases: ['full tank', 'full', 'filled up', 'fill up', 'brim', 'filled to full', 'to the top'] },
+      { value: 'Top-up', aliases: ['top up', 'top-up', 'topped up', 'partial', 'half tank', 'not full', 'some fuel'] }
+    ], { optional: true, when: (answers) => answers.expense_type === 'Fuel' }),
     field('odometer_reading', 'Odometer at fill-up', 'must be at least the last recorded reading', {
       aliases: ['odometer', 'odometer_reading', 'current_mileage', 'mileage'],
       parse: (text, c) => parseOdometer(text, c),
@@ -2423,6 +2428,7 @@ async function executeFlow(state, ctx) {
           expense_type: a.expense_type,
           amount: a.amount,
           fuel_liters: a.fuel_liters || 0,
+          fill_type: normalizeFillType(a.fill_type),
           odometer_reading: a.odometer_reading,
           notes: [a.notes, formatExtraNotes(state.extraNotes || [])].filter(Boolean).join(' | ') || null,
         }]);
@@ -3064,6 +3070,13 @@ async function persistVehicleRegistration(state, ctx) {
 /* Flow detection                                                      */
 /* ------------------------------------------------------------------ */
 
+export function looksLikeCompleteFuelLog(text = '') {
+  const clean = String(text || '');
+  const hasVolume = /\b\d+(?:\.\d+)?\s*(?:l|lt|ltr|litre|liter|litres|liters|gal|gallon|gallons)\b/i.test(clean);
+  const hasOdometer = /\b\d[\d,]{2,}\s*(?:km|kms|kilomet(?:er|re)s?|mi|miles)\b/i.test(clean);
+  return hasVolume && hasOdometer;
+}
+
 export function detectQuizStart({
   intent,
   messageText = '',
@@ -3114,6 +3127,8 @@ export function detectQuizStart({
   if (/^(?:log|record)\s+(?:an?\s+)?(?:earning|earnings|income|revenue)\b/i.test(text)) return 'log_earnings';
   if (/^(?:update|set)\s+(?:the\s+)?(?:odometer|mileage)\b/i.test(text)) return 'log_mileage';
   if (/^(?:log|record|update|set)\s+(?:the\s+)?(?:operating|engine|machine|running)?\s*hours?\b/i.test(text)) return 'log_operating_hours';
+  // Vehicle switching / management is owned by the route, never the expense quiz.
+  if (/^(?:switch|manage|select)\s+/i.test(text)) return null;
   if (/^transfer\s+passbook\b/i.test(text)) return 'transfer_seller';
   if (/^(?:assign\s+driver|assign)\b/i.test(text)) return 'assign_driver';
   if (/^(?:unassign\s+driver|remove\s+driver)\b/i.test(text)) return 'unassign_driver';
@@ -3123,7 +3138,17 @@ export function detectQuizStart({
   if (/^(?:delete|deactivate|close)\s+(?:my\s+)?account\b/i.test(text)) return 'delete_account';
   if (/^(?:update\s+email|change\s+email|new\s+email)\b/i.test(text)) return 'email_update';
 
+  // Plain fuel-economy queries must never start the expense quiz, even if the
+  // classifier leans LOG_EXPENSE because the message mentions fuel.
+  if (/\b(?:fuel\s+(?:consumption|efficiency|economy|analysis)|km\s*\/\s*l|km\s+per\s+(?:liter|litre)|mpg|lit(?:er|re)s?\s*(?:per|\/)\s*100\s*km|fuel\s+cost\s+per\s+km)\b/i.test(text)) {
+    return null;
+  }
+
   // AI intent is only consulted when no explicit command pattern matched.
+  // A fully-specified one-liner ("Logged 30L fuel at 50350 km for KES 5500")
+  // is saved directly by the route's quick path — never interrupted by a quiz.
+  // The fill type is read from the text when present and defaults to unknown.
+  if (intentMap[intent] === 'log_expense' && looksLikeCompleteFuelLog(text)) return null;
   if (intentMap[intent]) return intentMap[intent];
 
   return null;

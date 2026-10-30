@@ -104,7 +104,9 @@ async function run() {
     'SITUATION PRIORITY MATRIX',
     'user_tone',
     'relationship_stage',
-    'MODEL IDENTITY'
+    'MODEL IDENTITY',
+    'fill_type',
+    'full-tank'
   ];
   for (const token of sections) {
     check(DEFAULT_SAKA_CORE_PROMPT.includes(token), `Core prompt retains training section: ${token}`);

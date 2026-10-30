@@ -2,7 +2,9 @@
  * Saka Fleet - Fleet Analytics & Conversational Calculation Engine
  */
 
-export async function calculateFuelConsumption({ supabase, vehicleId, plateNumber, targetUnit = 'metric' }) {
+import { analyzeFuelEconomy, buildFuelEconomyReply } from './fuelEconomy.js';
+
+export async function calculateFuelConsumption({ supabase, vehicleId, plateNumber, targetUnit = 'metric', currency = null }) {
   if (!supabase) {
     return { success: false, status: 'ERROR', explanation: 'Database connection unavailable.' };
   }
@@ -30,9 +32,6 @@ export async function calculateFuelConsumption({ supabase, vehicleId, plateNumbe
   const plate = vehicle.plate_number;
   const model = vehicle.make_model || 'Vehicle';
   const unit = vehicle.unit_system || targetUnit || 'metric';
-  const distLabel = unit === 'imperial' ? 'miles' : 'km';
-  const volLabel = unit === 'imperial' ? 'gallons' : 'liters';
-  const effLabel = unit === 'imperial' ? 'MPG' : 'km/L';
 
   const { data: logs } = await supabase
     .from('expense_logs')
@@ -40,7 +39,7 @@ export async function calculateFuelConsumption({ supabase, vehicleId, plateNumbe
     .eq('vehicle_id', vehicle.id)
     .ilike('expense_type', '%fuel%')
     .order('created_at', { ascending: false })
-    .limit(20);
+    .limit(50);
 
   let fuelLogs = logs || [];
   if (fuelLogs.length === 0) {
@@ -50,7 +49,7 @@ export async function calculateFuelConsumption({ supabase, vehicleId, plateNumbe
       .eq('plate', plate)
       .ilike('expense_type', '%fuel%')
       .order('created_at', { ascending: false })
-      .limit(20);
+      .limit(50);
     
     if (legacyLogs && legacyLogs.length > 0) {
       fuelLogs = legacyLogs.map(l => ({
@@ -60,85 +59,69 @@ export async function calculateFuelConsumption({ supabase, vehicleId, plateNumbe
         amount: Number(l.amount) || 0,
         fuel_liters: Number(l.liters) || 0,
         odometer_reading: l.odometer_reading || null,
+        fill_type: null,
         created_at: l.created_at
       }));
     }
   }
 
   if (fuelLogs.length === 0) {
+    const resolvedCurrency = currency || vehicle.currency || 'KES';
     return {
       success: true,
       status: 'NO_DATA',
       vehicle: { id: vehicle.id, plate_number: plate, make_model: model },
-      explanation: `📊 *Fuel Analysis for ${plate} (${model})*\n\nNo fuel receipts or logs found for this vehicle yet.\n\n💡 *To get started:* Reply with a fuel log like:\n👉 *"Logged ${unit === 'imperial' ? '12 gallons' : '45L'} fuel at ${unit === 'imperial' ? '45000 miles' : '368000 km'} for [amount]"*`
+      explanation: buildFuelEconomyReply({
+        plate,
+        model,
+        currency: resolvedCurrency,
+        analysis: { status: 'NEEDS_MORE_DATA', unitSystem: unit, currency: resolvedCurrency }
+      })
     };
   }
 
-  const chronological = [...fuelLogs].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-  const validIntervals = [];
-  let totalCost = 0;
+  const resolvedCurrency = currency || vehicle.currency || fuelLogs.find((row) => row.currency)?.currency || 'KES';
+  const analysis = analyzeFuelEconomy({
+    logs: fuelLogs,
+    unitSystem: unit,
+    currency: resolvedCurrency
+  });
 
-  for (let i = 0; i < chronological.length; i++) {
-    const cur = chronological[i];
-    const liters = Number(cur.fuel_liters) || 0;
-    const amount = Number(cur.amount) || 0;
-    const odo = Number(cur.odometer_reading) || null;
-    totalCost += amount;
-
-    if (i > 0) {
-      const prev = chronological[i - 1];
-      const prevOdo = Number(prev.odometer_reading) || null;
-      if (odo && prevOdo && odo > prevOdo && liters > 0) {
-        const deltaDist = odo - prevOdo;
-        const kmL = deltaDist / liters;
-        validIntervals.push({ deltaDist, liters, kmL, date: cur.created_at });
-      }
+  const metrics = analysis.status === 'CALCULATED'
+    ? {
+      kmPerLiter: analysis.averageKmPerLiter,
+      litersPer100km: analysis.averageLitersPer100km,
+      mpg: analysis.averageMpg,
+      totalDist: analysis.totalDistanceKm,
+      totalLiters: analysis.totalLitres,
+      totalCost: analysis.totalSpend,
+      latestKmPerLiter: analysis.latest.kmPerLiter,
+      segmentCount: analysis.segmentCount,
+      costPerKm: analysis.costPerKm
     }
-  }
-
-  if (validIntervals.length > 0) {
-    const totalDist = validIntervals.reduce((sum, int) => sum + int.deltaDist, 0);
-    const totalLiters = validIntervals.reduce((sum, int) => sum + int.liters, 0);
-    const avgKmL = (totalDist / totalLiters).toFixed(2);
-    const lPer100 = ((totalLiters / totalDist) * 100).toFixed(2);
-    const mpg = (avgKmL * 2.35215).toFixed(2);
-
-    const latestInterval = validIntervals[validIntervals.length - 1];
-    const latestKmL = latestInterval.kmL.toFixed(2);
-
-    const rating = avgKmL >= 14 ? 'Excellent 🟢' : avgKmL >= 10 ? 'Good 🟡' : 'Heavy Consumption 🔴';
-    const effStr = unit === 'imperial' ? `${mpg} MPG` : `${avgKmL} km/L (${lPer100} L/100km)`;
-    const latestStr = unit === 'imperial' ? `${(latestKmL * 2.35215).toFixed(2)} MPG` : `${latestKmL} km/L`;
-
-    return {
-      success: true,
-      status: 'CALCULATED',
-      vehicle: { id: vehicle.id, plate_number: plate, make_model: model },
-      metrics: { kmPerLiter: Number(avgKmL), litersPer100km: Number(lPer100), mpg: Number(mpg), totalDist, totalLiters, totalCost },
-      explanation: `📊 *Fuel Efficiency: ${plate} (${model})*\n\n` +
-        `• *Average Consumption:* *${effStr}*\n` +
-        `• *Latest Fill-up Rate:* *${latestStr}*\n` +
-        `• *Performance Rating:* ${rating}\n` +
-        `• *Distance Analyzed:* ${totalDist.toLocaleString()} ${distLabel}\n` +
-        `• *Fuel Consumed:* ${totalLiters.toFixed(1)} ${volLabel}\n` +
-        `• *Total Fuel Spend:* KES ${totalCost.toLocaleString()}`
-    };
-  }
-
-  const latestLog = chronological[chronological.length - 1];
-  const lastOdo = latestLog.odometer_reading || vehicle.current_mileage || vehicle.odometer_reading;
-  const lastLiters = Number(latestLog.fuel_liters) || 0;
-  const lastAmt = Number(latestLog.amount) || 0;
+    : analysis.status === 'ESTIMATED'
+      ? {
+        kmPerLiter: analysis.estimate.kmPerLiter,
+        litersPer100km: analysis.estimate.litersPer100km,
+        mpg: analysis.estimate.mpg,
+        totalDist: analysis.estimate.distanceKm,
+        totalLiters: analysis.estimate.litres,
+        totalCost: analysis.totalSpend,
+        segmentCount: 0
+      }
+      : {};
 
   return {
     success: true,
-    status: 'NEEDS_MORE_DATA',
+    status: analysis.status,
+    confidence: analysis.confidence,
     vehicle: { id: vehicle.id, plate_number: plate, make_model: model },
-    missingFields: !lastOdo ? ['odometer'] : ['fuel_liters'],
-    explanation: `📊 *Fuel Analysis for ${plate} (${model})*\n\n` +
-      `Found ${fuelLogs.length} fuel entry (${lastAmt > 0 ? `KES ${lastAmt.toLocaleString()}` : ''}${lastLiters > 0 ? `, ${lastLiters} ${unit === 'imperial' ? 'gal' : 'L'}` : ''}).\n\n` +
-      `🔍 *Calculation Rule:* (Distance traveled ÷ ${volLabel}).\n` +
-      `To unlock exact ${effLabel}, log your *next* fill-up with the odometer reading and ${volLabel}:\n👉 *"Logged [${volLabel}] at [Odometer] ${distLabel}"*`
+    metrics,
+    segments: analysis.segments,
+    latest: analysis.latest,
+    currentTank: analysis.currentTank,
+    warnings: analysis.warnings,
+    explanation: buildFuelEconomyReply({ plate, model, analysis, currency: resolvedCurrency })
   };
 }
 

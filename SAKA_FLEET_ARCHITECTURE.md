@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.17.0  
+**Version:** 1.17.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -333,7 +333,7 @@ Cline-authored, Superadmin-approved fix plans consumed by the CI executor.
    - **Expense-vs-Odometer disambiguation:** messages containing fuel/expense wording (`fuel`, `liters`, `refuel`, `paid`, `cost`, `receipt`, `maintenance`) are classified as `LOG_EXPENSE` even when an odometer value is also present (e.g. *"Logged 30L fuel at 50350 km for KES 5500"*).
 
 5. **Fleet Analytics & Reporting Engine (`src/services/analytics.js`, `src/services/fleetReports.js`):**
-   - `calculateFuelConsumption`: Calculates km/L, L/100km, MPG, total distance, volume in liters, and total cost from `expense_logs`. Identifies missing parameters (`NEEDS_MORE_DATA`) and prompts the user conversationally.
+   - `calculateFuelConsumption`: v1.17.1 DB wrapper over the pure `src/services/fuelEconomy.js` engine. Fuel economy is measured **only between full-tank fills** (brim-to-brim); top-ups and unlabelled fills between them are counted in the fuel used automatically. Returns exact segments, a labelled span estimate when no full pair exists, current-tank progress, cost/km, skipped-segment warnings and a deterministic localized reply (no hard-coded currency).
    - `getVehicleSummaryReport`: per-vehicle financial breakdown (fuel, maintenance, net profit) used by legacy branches.
    - `fleetReports.buildFleetReport`: the four core reports (fleet status, compliance & expiry, maintenance & service, financial & cost) — see §32. `REQUEST_REPORT.report_type` selects the report; `QUERY_FLEET_SUMMARY` always renders the Fleet Status report.
 
@@ -735,7 +735,7 @@ All multi-field flows run through `src/services/quizEngine.js`. Each asks exactl
 | `assign_driver` | vehicle → driver phone → **handover odometer** → confirm | `metadata.odometer_at_assignment` + vehicle odometer | `assignDriverToVehicle` |
 | `unassign_driver` | vehicle → **handback odometer** → confirm | `metadata.odometer_at_release` + distance driven | `unassignDriverFromVehicle` |
 | `transfer_seller` | vehicle → buyer phone → buyer email → **odometer at sale** → confirm → release PIN | `metadata.odometer_at_transfer` | `initiatePassbookTransfer` → `setBuyerDetailsAndSendReleaseOtp` → `verifyOwnerReleaseOtpAndNotifyBuyer` |
-| `log_expense` | vehicle → type → amount → fuel volume → **odometer at fill-up** → notes → confirm | `expense_logs.odometer_reading` + vehicle odometer | `expense_logs` + `expenses` |
+| `log_expense` | vehicle → type → amount → fuel volume → **fill type (full tank/top-up)** → odometer at fill-up → notes → confirm | `expense_logs.odometer_reading` + `expense_logs.fill_type` + vehicle odometer | `expense_logs` + `expenses` |
 | `log_earnings` | vehicle → amount → **odometer at trip end** → period → confirm | vehicle odometer + `private_earnings.notes` | `private_earnings` |
 | `log_mileage` | vehicle → new odometer → confirm | vehicle odometer + reminder evaluation | `vehicles` + active distance reminders |
 | `log_operating_hours` | vehicle → hour-meter reading → confirm | vehicle operating hours + hours reminder evaluation | `vehicles.operating_hours`, `vehicles.hours_updated_at` |
@@ -1842,5 +1842,31 @@ The voice policy is data, not prose drift: `SAKA_TONE_COMPASS` in `flowKnowledge
 - **Situation matrix:** product error, user mistake, billing anxiety, compliance urgency, routine logging, onboarding, discovery, stalls, escalation.
 - **Floors:** no sarcasm/shame; no empty reassurance; emoji situation-gated; no humour in money/legal/compliance; translation-proof sentences; unknown tone → calm professional warmth.
 - **Honest self-reporting:** Saka states only the `model_label` supplied by the runtime (registry alias); otherwise it says the model is managed by Saka Fleet and never guesses a version.
+
+---
+
+## 46. v1.17.1 — Fuel Economy Engine (full tank vs top-up)
+
+### 46.1 Why the old math was wrong
+The legacy `calculateFuelConsumption` treated **every** fuel log as a full tank: `(odo[i] − odo[i−1]) / litres[i]` for every consecutive pair, averaged over all pairs and always labelled "Average Consumption". A routine top-up ("40 L, half tank") therefore attributed all distance since the previous log to those 40 L, swaying economy by 20–40%. "Full tank" existed only as free text in `notes` and was never stored or parsed.
+
+### 46.2 Data model & capture
+- `expense_logs.fill_type` (`'full' | 'partial' | null`). Migration `npm run migrate:fuel-fill` (`scripts/run_fuel_fill_type_migration.js`) adds the column + index and backfills legacy rows from notes (`full tank`/`brim` → full; `top-up`/`half tank`/`partial` → partial). Boot ensures it via `ensureFuelEconomySchema()`; staging provisioning includes it.
+- Quiz `log_expense` asks **"Fill type: Full tank or a top-up?"** after fuel volume (skippable → null). Fully-specified one-liners (`Logged 30L fuel at 50350 km …`) still save instantly through the quick path; fill type is read from the text when present and otherwise Saka adds a one-line tip. Fuel-economy queries and vehicle switches are deterministically excluded from quiz starts.
+- Classifier schema adds `fill_type`; the core prompt requests it only on `LOG_EXPENSE`.
+
+### 46.3 The engine (`src/services/fuelEconomy.js`, pure)
+- **Segments run between consecutive FULL fills:** `distance = odo[B] − odo[A]`, `litres = litres[B] + Σ(all fuel logged between A and B)`. Top-ups, unlabelled fills and even a full fill without an odometer are folded into the denominator. This is physically exact because the tank level is equal at both full fills, so every litre added in between was consumed over that distance.
+- Weighted average = Σ segment distance ÷ Σ segment litres; latest full-to-full reported separately; cost/km, latest price/litre and spend derived from the same data.
+- Guards: odometer regressions, segments shorter than `FUEL_ECON_MIN_SEGMENT_KM`, implausible economy (> `FUEL_ECON_MAX_PLAUSIBLE_KML`), missing litres, full fills lacking odometers (folded forward) and unlabelled fills (counted + warned). Every skip is reported, never silently averaged.
+- No full-to-full pair yet → explicit **span estimate** (never labelled exact) with guidance to mark the next fill FULL; fewer than two usable logs → `NEEDS_MORE_DATA`.
+- Current tank = distance since the last full + litres added since; never presented as economy.
+- Canonical units: litres/km; display converts to gallons/miles/MPG. Currency comes from the caller (country context) — no hard-coded KES.
+- `buildFuelEconomyReply()` renders the WhatsApp digest deterministically; the AI never does math.
+
+### 46.4 Files, tests & knobs
+- Files: `src/services/fuelEconomy.js` (engine, reply, schema ensure), `src/services/analytics.js` (thin DB wrapper; same `calculateFuelConsumption` signature plus `currency`), `src/services/quizEngine.js` (fill-type field + executor + routing guards), `src/routes/whatsapp.js` (quick-path fill type + tip + currency), `sakaAi.js`, `flowKnowledge.js`, `scripts/run_fuel_fill_type_migration.js`, `scripts/provision_staging_schema.js`, boot ensure in `index.js`.
+- Tests: `test_fuel_economy.js` (47 assertions, pure math), `test_quiz_flow.js` (fill-type turn + routing guards), `test_agent_flow.js` (DB wrapper + one-line quick log), `test_agent_training.js` (`fill_type`, `full-tank`). `scripts/testCleanup.js` now also clears `chat_sessions` for test phones (stale quiz state).
+- Knobs (defaults shown): `FUEL_ECON_MIN_SEGMENT_KM=20`, `FUEL_ECON_MAX_PLAUSIBLE_KML=80`, `FUEL_RATING_GOOD_KML=10`, `FUEL_RATING_EXCELLENT_KML=14`.
 
 

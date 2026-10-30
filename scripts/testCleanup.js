@@ -142,6 +142,7 @@ export async function cleanupTestData({
   summary.chat_transcripts = await deleteIn(client, 'chat_transcripts', 'phone_number', allPhones, verbose);
   summary.chat_friction_logs = await deleteIn(client, 'chat_friction_logs', 'user_phone', allPhones, verbose);
   summary.processed_webhooks = await deleteIn(client, 'processed_webhooks', 'phone_number', allPhones, verbose);
+  summary.chat_sessions = await deleteIn(client, 'chat_sessions', 'phone_number', allPhones, verbose);
   summary.superadmin_sessions = await deleteIn(client, 'superadmin_sessions', 'phone_number', allPhones, verbose);
 
   // Autonomous remediation pipeline rows created by test_remediation_pipeline.js.
