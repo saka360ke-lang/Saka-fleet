@@ -21,6 +21,14 @@ import { formatNairobiDate } from './dateParser.js';
 import { getTrialFunnelStats, formatTrialStatsReply } from './trialEngine.js';
 import { getFeatureRolloutStatus, FEATURE_NOTICE_VERSION } from './featureNotice.js';
 import {
+  listKbDrafts,
+  approveKbRule,
+  rejectKbRule,
+  getKbStaleRules,
+  formatKbQueueReply,
+  formatKbStaleReply
+} from './kbIngest.js';
+import {
   applyModelRollout,
   rollbackModel,
   runModelScoutCycle,
@@ -125,6 +133,7 @@ const ADMIN_INTENTS = new Set([
   'ADMIN_AI_STATS',
   'ADMIN_TRIAL_STATS',
   'ADMIN_ROLLOUT',
+  'ADMIN_KB', 'ADMIN_KB_REVIEW', 'ADMIN_KB_APPROVE', 'ADMIN_KB_REJECT', 'ADMIN_KB_STALE',
   'ADMIN_MODELS', 'ADMIN_MODEL_SCOUT', 'ADMIN_MODEL_ADOPT', 'ADMIN_MODEL_ROLLBACK',
   'HEALTH_CHECK', 'GENERATE_COUPON', 'PROFILES_REPORT', 'SENTINEL_DIAGNOSE'
 ]);
@@ -180,6 +189,25 @@ export async function parseSuperadminCommand(messageText) {
   }
   if (/^\s*admin\s+rollout(?:\s+status)?\s*$/i.test(lower)) {
     return { intent: 'ADMIN_ROLLOUT' };
+  }
+
+  // v1.21.1 — Country KB review queue (drafts are never live until approved).
+  const kbApproveMatch = text.match(/^\s*admin\s+kb\s+approve\s+([0-9a-f][0-9a-f-]{7,})\s*$/i);
+  if (kbApproveMatch) {
+    return { intent: 'ADMIN_KB_APPROVE', rule_id: kbApproveMatch[1].toLowerCase() };
+  }
+  const kbRejectMatch = text.match(/^\s*admin\s+kb\s+reject\s+([0-9a-f][0-9a-f-]{7,})\s*$/i);
+  if (kbRejectMatch) {
+    return { intent: 'ADMIN_KB_REJECT', rule_id: kbRejectMatch[1].toLowerCase() };
+  }
+  if (/^\s*admin\s+kb\s+(?:review|queue|drafts?)\s*$/i.test(lower)) {
+    return { intent: 'ADMIN_KB_REVIEW' };
+  }
+  if (/^\s*admin\s+kb\s+(?:stale|due|freshness|fresh)\s*$/i.test(lower)) {
+    return { intent: 'ADMIN_KB_STALE' };
+  }
+  if (/^\s*admin\s+kb\b/i.test(lower)) {
+    return { intent: 'ADMIN_KB' };
   }
 
   // Phase 2 (v1.13.0): AI telemetry digest — regex first, zero LLM calls.
@@ -1654,6 +1682,58 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
     return {
       isSuperadmin: true,
       reply: formatFeatureRolloutReply(status)
+    };
+  }
+
+  if (parsedCommand.intent === 'ADMIN_KB' || parsedCommand.intent === 'ADMIN_KB_REVIEW') {
+    const [queue, stale] = await Promise.all([
+      listKbDrafts(supabase, { limit: 20 }),
+      getKbStaleRules(supabase)
+    ]);
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_KB_REVIEW', {
+      drafts: queue.rows?.length || 0,
+      stale: stale.rows?.length || 0,
+      error: queue.error || null
+    });
+    const header = `📚 *Country KB* — ${queue.rows?.length || 0} draft(s) · ${stale.rows?.length || 0} due for re-verification.\n\n`;
+    return {
+      isSuperadmin: true,
+      reply: `${header}${queue.ok ? formatKbQueueReply(queue.rows) : `⚠️ ${queue.error}`}\n\n${stale.ok && stale.rows.length ? formatKbStaleReply(stale.rows) : ''}`.trim()
+    };
+  }
+
+  if (parsedCommand.intent === 'ADMIN_KB_STALE') {
+    const stale = await getKbStaleRules(supabase);
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_KB_STALE', { stale: stale.rows?.length || 0 });
+    return {
+      isSuperadmin: true,
+      reply: stale.ok ? formatKbStaleReply(stale.rows) : `⚠️ ${stale.error}`
+    };
+  }
+
+  if (parsedCommand.intent === 'ADMIN_KB_APPROVE') {
+    const result = await approveKbRule(supabase, parsedCommand.rule_id, {
+      adminPhone: formattedPhone,
+      audit: (phone, action, details) => logAdminAudit(supabase, phone, action, details)
+    });
+    return {
+      isSuperadmin: true,
+      reply: result.ok
+        ? `✅ *KB rule published*\n\n${result.rule.country_code} · ${result.rule.rule_key}\nVerified ${result.rule.verified_at}.\n\nUsers in that country now see it in *required documents*.`
+        : `⚠️ Could not approve that rule: ${result.error}`
+    };
+  }
+
+  if (parsedCommand.intent === 'ADMIN_KB_REJECT') {
+    const result = await rejectKbRule(supabase, parsedCommand.rule_id, {
+      adminPhone: formattedPhone,
+      audit: (phone, action, details) => logAdminAudit(supabase, phone, action, details)
+    });
+    return {
+      isSuperadmin: true,
+      reply: result.ok
+        ? `🗑️ Draft rejected: ${result.rule.country_code} · ${result.rule.rule_key}`
+        : `⚠️ Could not reject that rule: ${result.error}`
     };
   }
 

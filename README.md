@@ -108,6 +108,10 @@ ask you to double-check before saving; nothing is ever written without your YES.
 - Bundled knowledgebase ships for Kenya, Tanzania, Uganda, Rwanda, Nigeria,
   South Africa, the UK, US, Canada, UAE, India, Australia and Belgium, with a
   global fallback and superadmin overrides in `country_kb`.
+- Official-source updates: `npm run kb:ingest` fetches allow-listed government
+  sources into **draft** rules (never live), `npm run kb:ingest -- --review`
+  lists them, and superadmin `admin kb approve <id>` publishes a verified rule.
+  `admin kb stale` shows rules due for re-verification (90-day window).
 
 ## Doc Lens — documents by photo or PDF (v1.20.0)
 - Send **any photo or PDF**: logbook/registration certificate, fuel or service

@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.21.0  
+**Version:** 1.21.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -2103,6 +2103,36 @@ Every user is placed in ONE **country bucket**, created automatically at onboard
 - Files: `src/services/countryBucket.js`, `src/services/quizEngine.js`, `src/routes/whatsapp.js`, `sakaAi.js`, `src/services/flowKnowledge.js`, `scripts/run_country_kb_migration.js`, `scripts/reset-db.js`, `package.json`, README.
 - Tests: `test_country_bucket.js` (54 — asset kinds, bucket resolution/overrides, guidance/examples/disclaimers, onboarding conditional fields), `test_agent_training.js` (80 — jurisdiction boundary), `test_quiz_flow.js` (asset-kind-first registration).
 - Knobs: `COUNTRY_KB_VERSION` (2026.10.1), `KB_VERIFIED_AT` (2026-10-30), `KB_REVIEW_DAYS` (90).
+
+
+---
+
+## 54. v1.21.1 — Knowledgebase Ingest & Review Pipeline
+
+Official-source harvesting for the Country Bucket, with a superadmin approval gateway. **Legal rules are never auto-changed by AI.**
+
+### 54.1 Source registry & allow-list (`src/data/kb_sources.json`)
+- One entry per country: authority + official HTTPS sources (NTSA, TRA, URA, RRA, FRSC, DoT ZA, GOV.UK, NHTSA/USA.gov, Transport Canada, RTA, Parivahan, infrastructure.gov.au, Mobilité BE).
+- `kbIngest.js` enforces an **HTTPS + official-host allow-list** (exact base domain or subdomain, `www.` normalised). Anything else is rejected before a request is made.
+- Fetch guards: 20 s timeout, 2 MB cap, HTML → text (scripts/styles removed, entities decoded), PDFs via `pdfTextExtractor`.
+
+### 54.2 Draft-only ingest (`npm run kb:ingest`)
+- `buildDraftRules()` deterministically scans fetched text for rule families (insurance, inspection, road service licence/permit, road tax, speed limiter, driving licence, PSV/PDP) and extracts a real summary sentence per rule.
+- Drafts are written with `is_active=false`, `verified_at=null`, `curated_by='ingest-draft'`, official `source_urls` and the current `COUNTRY_KB_VERSION`.
+- **Approved rows are never overwritten** by a later ingest; only drafts are refreshed.
+- CLI: `npm run kb:ingest` (dry run) · `-- --apply` · `-- --countries=KE,TZ` · `-- --review` · `-- --stale` · `-- --approve <id>` · `-- --reject <id>`.
+
+### 54.3 Superadmin approval gateway
+- `admin kb` / `admin kb review` → draft queue + stale count (audited `ADMIN_KB_REVIEW`).
+- `admin kb approve <id>` → `is_active=true`, `verified_at=today`, `curated_by='superadmin'` (audited `ADMIN_KB_APPROVE`).
+- `admin kb reject <id>` → draft deleted (audited `ADMIN_KB_REJECT`); active rules can never be deleted here.
+- `admin kb stale` → active rules missing/older than `KB_REVIEW_DAYS` (audited `ADMIN_KB_STALE`).
+- Resolution order stays: active DB override → bundled `COUNTRY_KB` → `DEFAULT` + disclaimer.
+
+### 54.4 Files, tests & knobs
+- Files: `src/services/kbIngest.js`, `src/data/kb_sources.json`, `scripts/kb_ingest.js`, `src/services/superadmin.js`, `package.json`, `.env.example`, README.
+- Tests: `test_kb_ingest.js` (42 — allow-list, HTML/PDF fetching, draft-only guarantees, dry-run vs apply, approve/reject audits, freshness, command parsing).
+- Knobs: `KB_MAX_SOURCE_BYTES` (2000000), `KB_FETCH_TIMEOUT_MS` (20000), `KB_REVIEW_DAYS` (90).
 
 
 

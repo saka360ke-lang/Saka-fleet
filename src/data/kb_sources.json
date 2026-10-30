@@ -1,0 +1,81 @@
+{
+  "version": "2026.10.1",
+  "note": "Official-source registry for the Country Bucket knowledgebase. Only these hosts may be fetched by kb_ingest.js; additions require a reviewed code change.",
+  "countries": [
+    {
+      "country_code": "KE",
+      "authority": "NTSA (National Transport and Safety Authority)",
+      "sources": [
+        { "label": "NTSA", "url": "https://www.ntsa.go.ke/" },
+        { "label": "Kenya Law", "url": "https://new.kenyalaw.org/" }
+      ]
+    },
+    {
+      "country_code": "TZ",
+      "authority": "TRA / Tanzania Police Traffic",
+      "sources": [{ "label": "TRA", "url": "https://www.tra.go.tz/" }]
+    },
+    {
+      "country_code": "UG",
+      "authority": "URA / Ministry of Works and Transport",
+      "sources": [{ "label": "URA", "url": "https://www.ura.go.ug/" }]
+    },
+    {
+      "country_code": "RW",
+      "authority": "RRA / Rwanda National Police (Traffic)",
+      "sources": [{ "label": "RRA", "url": "https://www.rra.gov.rw/" }]
+    },
+    {
+      "country_code": "NG",
+      "authority": "FRSC / State Motor Licensing Office",
+      "sources": [{ "label": "FRSC", "url": "https://frsc.gov.ng/" }]
+    },
+    {
+      "country_code": "ZA",
+      "authority": "Department of Transport / provincial licensing",
+      "sources": [{ "label": "Department of Transport", "url": "https://www.transport.gov.za/" }]
+    },
+    {
+      "country_code": "GB",
+      "authority": "DVLA / DVSA",
+      "sources": [
+        { "label": "GOV.UK vehicle tax", "url": "https://www.gov.uk/vehicle-tax" },
+        { "label": "GOV.UK MOT", "url": "https://www.gov.uk/getting-an-mot" },
+        { "label": "GOV.UK vehicle insurance", "url": "https://www.gov.uk/vehicle-insurance" }
+      ]
+    },
+    {
+      "country_code": "US",
+      "authority": "State DMV / NHTSA",
+      "sources": [
+        { "label": "NHTSA", "url": "https://www.nhtsa.gov/" },
+        { "label": "USA.gov vehicle registration", "url": "https://www.usa.gov/vehicle-registration" }
+      ]
+    },
+    {
+      "country_code": "CA",
+      "authority": "Provincial ministry of transportation",
+      "sources": [{ "label": "Transport Canada", "url": "https://tc.canada.ca/" }]
+    },
+    {
+      "country_code": "AE",
+      "authority": "RTA / local traffic department",
+      "sources": [{ "label": "RTA Dubai", "url": "https://www.rta.ae/" }]
+    },
+    {
+      "country_code": "IN",
+      "authority": "Parivahan / State RTO",
+      "sources": [{ "label": "Parivahan", "url": "https://parivahan.gov.in/" }]
+    },
+    {
+      "country_code": "AU",
+      "authority": "State transport authority",
+      "sources": [{ "label": "infrastructure.gov.au", "url": "https://www.infrastructure.gov.au/" }]
+    },
+    {
+      "country_code": "BE",
+      "authority": "SPF Mobilité / DIV",
+      "sources": [{ "label": "Mobilité Belgique", "url": "https://mobilit.belgium.be/" }]
+    }
+  ]
+}
