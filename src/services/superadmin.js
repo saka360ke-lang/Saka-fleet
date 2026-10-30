@@ -26,6 +26,7 @@ import {
   formatIncidentResolvedReply
 } from './incidents.js';
 import { getTrialFunnelStats, formatTrialStatsReply } from './trialEngine.js';
+import { getTurnLatencySummary } from './turnLatency.js';
 import { getFeatureRolloutStatus, FEATURE_NOTICE_VERSION } from './featureNotice.js';
 import {
   listKbDrafts,
@@ -138,6 +139,7 @@ const ADMIN_INTENTS = new Set([
   'ADMIN_HORIZON', 'ADMIN_PROPOSALS',
   'ADMIN_REMEDIATIONS', 'ADMIN_REMEDIATION_ACCEPT', 'ADMIN_REMEDIATION_DECLINE', 'ADMIN_REMEDIATION_MODIFY',
   'ADMIN_AI_STATS',
+  'ADMIN_TURN_LATENCY',
   'ADMIN_TRIAL_STATS',
   'ADMIN_ROLLOUT',
   'ADMIN_KB', 'ADMIN_KB_REVIEW', 'ADMIN_KB_APPROVE', 'ADMIN_KB_REJECT', 'ADMIN_KB_STALE',
@@ -231,6 +233,13 @@ export async function parseSuperadminCommand(messageText) {
     return { intent: 'ADMIN_INCIDENTS' };
   }
 
+  // v1.24.1 - reply-speed digest (deterministic, zero LLM calls).
+  const latencyMatch = text.match(/^\s*admin\s+(?:reply[\s_-]*|turn[\s_-]*)?latency(?:\s+(\d{1,3})\s*h(?:ours?|rs?)?)?\s*$/i);
+  if (latencyMatch) {
+    const requestedHours = latencyMatch[1] ? Number(latencyMatch[1]) : 24;
+    return { intent: 'ADMIN_TURN_LATENCY', hours: Math.min(168, Math.max(1, requestedHours)) };
+  }
+
   // Phase 2 (v1.13.0): AI telemetry digest — regex first, zero LLM calls.
   const aiStatsMatch = text.match(/^\s*admin\s+(?:ai[\s_-]*(?:stats?|usage|telemetry)|usage)(?:\s+(\d{1,3})\s*h(?:ours?|rs?)?)?\s*$/i);
   if (aiStatsMatch) {
@@ -291,7 +300,7 @@ export async function parseSuperadminCommand(messageText) {
   }
 
   const prompt = `Classify user's admin request into JSON:
-Intent: "HEALTH_CHECK" | "GENERATE_COUPON" | "PROFILES_REPORT" | "ADMIN_AI_STATS" | "ADMIN_TRIAL_STATS" | "ADMIN_ROLLOUT" | "ADMIN_REPORT" | "ADMIN_AUDIT" | "ADMIN_ALERTS" | "ADMIN_RULES_RESET" | "ADMIN_RULES_TOGGLE" | "ADMIN_RULES_LIST" | "ADMIN_HORIZON" | "ADMIN_PROPOSALS" | "ADMIN_REMEDIATIONS" | "ADMIN_REMEDIATION_ACCEPT" | "ADMIN_REMEDIATION_DECLINE" | "ADMIN_REMEDIATION_MODIFY" | "UNKNOWN"
+Intent: "HEALTH_CHECK" | "GENERATE_COUPON" | "PROFILES_REPORT" | "ADMIN_AI_STATS" | "ADMIN_TURN_LATENCY" | "ADMIN_TRIAL_STATS" | "ADMIN_ROLLOUT" | "ADMIN_REPORT" | "ADMIN_AUDIT" | "ADMIN_ALERTS" | "ADMIN_RULES_RESET" | "ADMIN_RULES_TOGGLE" | "ADMIN_RULES_LIST" | "ADMIN_HORIZON" | "ADMIN_PROPOSALS" | "ADMIN_REMEDIATIONS" | "ADMIN_REMEDIATION_ACCEPT" | "ADMIN_REMEDIATION_DECLINE" | "ADMIN_REMEDIATION_MODIFY" | "UNKNOWN"
 Extract: discount_value (e.g. "20%"), target_phone (e.g. "+254712345678"), query (e.g. "KDA 123A" or VIN), rule_key (e.g. "clarify_vin"), proposal_code (e.g. "FIX-2026-10-30-01"), feedback (guidance text), hours (AI telemetry window 1-168, default 24), days (trial funnel window 1-365, default 30)
 Command: "${text}"`;
 
@@ -314,6 +323,9 @@ Command: "${text}"`;
       discount_value: discountMatch ? discountMatch[0].trim() : '20%',
       target_phone: phoneMatch ? phoneMatch[0].trim() : null
     };
+  }
+  if (/\b(reply|turn)\s+latency\b/i.test(lower)) {
+    return { intent: 'ADMIN_TURN_LATENCY', hours: 24 };
   }
   if (/\b(ai[\s_-]*(?:stats?|usage|telemetry)|usage\s+stats?)\b/i.test(lower)) {
     return { intent: 'ADMIN_AI_STATS', hours: 24 };
@@ -571,7 +583,7 @@ function formatTierLabel(tierKey) {
  * Pure string formatting — intentionally no LLM call, so the digest costs
  * zero tokens and can never fabricate telemetry.
  */
-export function formatAiStatsReply(summary, budget = null) {
+export function formatAiStatsReply(summary, budget = null, latency = null) {
   if (!summary || summary.ok !== true) {
     return `📉 *Saka AI Telemetry*\n\nTelemetry unavailable: ${summary?.error || 'unknown error'}\n\n_Verify Supabase connectivity and the ai_usage_logs table._`;
   }
@@ -608,6 +620,9 @@ export function formatAiStatsReply(summary, budget = null) {
     `• Requests: ${formatCount(summary.totalRequests)} (✅ ${formatCount(summary.okRequests)} · ❌ ${formatCount(summary.errorRequests)})\n` +
     `• Success: ${formatPercent(summary.successRate)} · Errors: ${formatPercent(summary.errorRate)}\n` +
     `• Fallbacks: ${formatCount(summary.fallbacks || 0)}\n` +
+    (latency && latency.ok === true && latency.turns > 0
+      ? `• Conversation replies: p50 ${formatReplyDuration(latency.p50Ms)} · p95 ${formatReplyDuration(latency.p95Ms)} over ${formatCount(latency.turns)} turns\n`
+      : '') +
     `• Latency: avg ${formatDuration(summary.avgLatencyMs)} · p50 ${formatDuration(summary.p50LatencyMs)}\n` +
     `• Tokens: ${formatCount(summary.promptTokens)} in / ${formatCount(summary.completionTokens)} out\n` +
     `• Est. cost: ${formatApproxCost(summary.approxCostUsd, summary.unpricedTokens)} (approx list price)\n` +
@@ -617,6 +632,41 @@ export function formatAiStatsReply(summary, budget = null) {
     `*By Provider*\n${providerLines || '• none'}\n\n` +
     `*Top Purposes*\n${purposeLines || '• none'}\n\n` +
     `_Window: ${summary.hours}h${capNote} · retention cap ${formatCount(AI_USAGE_LOG_MAX_ROWS)} rows_`;
+}
+
+/**
+ * Human-friendly reply duration (v1.24.1): milliseconds below a second,
+ * seconds with one decimal above it.
+ */
+export function formatReplyDuration(latencyMs) {
+  if (!Number.isFinite(latencyMs)) return 'n/a';
+  if (latencyMs < 1000) return `${Math.round(latencyMs)} ms`;
+  return `${(latencyMs / 1000).toFixed(1)} s`;
+}
+
+/**
+ * Render the deterministic reply-speed digest (v1.24.1). Zero tokens.
+ * The 4s p95 line is the documented trigger for the two-lane worker (§62.3).
+ */
+export function formatTurnLatencyReply(summary) {
+  if (!summary || summary.ok !== true) {
+    return `📉 *Saka Reply Speed*\n\nMetrics unavailable: ${summary?.error || 'unknown error'}\n\n_Verify Supabase connectivity and the turn_latency_logs table._`;
+  }
+  if (summary.turns === 0) {
+    return `⏱️ *Saka Reply Speed — Last ${summary.hours}h*\n\nNo replies measured yet.\n\n_Every answered turn records its latency automatically._`;
+  }
+  const p95 = Number.isFinite(summary.p95Ms) ? summary.p95Ms : null;
+  const verdict = p95 !== null && p95 >= 4000
+    ? 'Tail is slow (p95 ≥ 4s) — the two-lane background worker is worth building.'
+    : 'Healthy: the slow tail stays under 4 seconds.';
+  const ackLine = summary.ackRate === null ? 'n/a' : `${(summary.ackRate * 100).toFixed(0)}%`;
+  return `⏱️ *Saka Reply Speed — Last ${summary.hours}h*\n\n` +
+    `• Turns measured: ${formatCount(summary.turns)}\n` +
+    `• Typical (p50): ${formatReplyDuration(summary.p50Ms)}\n` +
+    `• Slow tail (p95): ${formatReplyDuration(summary.p95Ms)} · worst (p99): ${formatReplyDuration(summary.p99Ms)}\n` +
+    `• Average: ${formatReplyDuration(summary.avgMs)}\n` +
+    `• Instant ack: ${ackLine} of turns\n\n` +
+    `_${verdict}_`;
 }
 
 /**
@@ -646,10 +696,13 @@ export async function handleTrialStatsCommand(supabase, days = 30) {
  * Returns `{ reply, details }` like every other admin command handler.
  */
 export async function handleAiStatsCommand(supabase, hours = 24) {
-  const summary = await getAiUsageSummary(supabase, hours);
+  const [summary, latency] = await Promise.all([
+    getAiUsageSummary(supabase, hours),
+    getTurnLatencySummary(supabase, hours)
+  ]);
   const budget = computeAiBudgetStatus(summary);
   return {
-    reply: formatAiStatsReply(summary, budget),
+    reply: formatAiStatsReply(summary, budget, latency),
     details: {
       hours: summary.hours,
       ok: summary.ok,
@@ -658,6 +711,9 @@ export async function handleAiStatsCommand(supabase, hours = 24) {
       error_requests: summary.errorRequests,
       error_rate: summary.errorRate,
       fallbacks: summary.fallbacks,
+      reply_p50_ms: latency.p50Ms,
+      reply_p95_ms: latency.p95Ms,
+      reply_turns: latency.turns,
       avg_latency_ms: summary.avgLatencyMs,
       prompt_tokens: summary.promptTokens,
       completion_tokens: summary.completionTokens,
@@ -665,6 +721,29 @@ export async function handleAiStatsCommand(supabase, hours = 24) {
       budget_usd: budget.enabled ? budget.budgetUsd : null,
       budget_pct: budget.enabled ? Number((budget.pct * 100).toFixed(2)) : null,
       over_budget: budget.overBudget === true,
+      truncated: summary.truncated,
+      error: summary.error || null
+    }
+  };
+}
+
+/**
+ * Superadmin reply-speed command handler (v1.24.1). Deterministic; zero tokens.
+ */
+export async function handleTurnLatencyCommand(supabase, hours = 24) {
+  const summary = await getTurnLatencySummary(supabase, hours);
+  return {
+    reply: formatTurnLatencyReply(summary),
+    details: {
+      hours: summary.hours,
+      ok: summary.ok,
+      turns: summary.turns,
+      ack_turns: summary.ackTurns,
+      ack_rate: summary.ackRate,
+      avg_ms: summary.avgMs,
+      p50_ms: summary.p50Ms,
+      p95_ms: summary.p95Ms,
+      p99_ms: summary.p99Ms,
       truncated: summary.truncated,
       error: summary.error || null
     }
@@ -1684,6 +1763,15 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
     };
   }
 
+  if (parsedCommand.intent === 'ADMIN_TURN_LATENCY') {
+    const latencyRes = await handleTurnLatencyCommand(supabase, parsedCommand.hours || 24);
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_TURN_LATENCY', latencyRes.details);
+    return {
+      isSuperadmin: true,
+      reply: latencyRes.reply
+    };
+  }
+
   if (parsedCommand.intent === 'ADMIN_TRIAL_STATS') {
     const trialRes = await handleTrialStatsCommand(supabase, parsedCommand.days || 30);
     await logAdminAudit(supabase, formattedPhone, 'ADMIN_TRIAL_STATS', trialRes.details);
@@ -1898,6 +1986,7 @@ ${JSON.stringify(telemetry).slice(0, 6000)}`;
     `• *Sentinel Dynamic Rules*: "adminrules", "adminrules reset", "adminrules toggle [key]"\n` +
     `• *System Health*: "check health", "system status"\n` +
     `• *AI Telemetry*: "admin ai-stats" or "admin usage 48h" (router cost, latency & token digest)\n` +
+    `• *Reply Speed*: "admin latency" or "admin latency 48h" (p50/p95 reply time & two-lane trigger)\n` +
     `• *Model Watchdog*: "admin models", "admin model scout", "admin model adopt [model] [split]", "admin model rollback [tier_1]"\n` +
     `• *Trial Funnel*: "admin trial-stats" or "admin trial-stats 90d" (trial → paid conversion)\n` +
     `• *Coupon Generation*: "generate 20% coupon for +254712345678"\n` +

@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.24.0  
+**Version:** 1.24.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.24.1** | Reply-speed telemetry + NATURAL_INTAKE kill switch | §62 |
 | **1.24.0** | Conversation-first Saka: natural intake, instant acks, paragraph parsing | §61 |
 | **1.23.3** | Incident registry: track, resolve and silence backend issues | §60 |
 | **1.23.2** | Plain-English admin alerts and deploy-noise decoder | §59 |
@@ -2317,6 +2318,7 @@ Saka now gathers data from natural, flowing conversation instead of running a qu
 - The quiz-composer instruction no longer says "state the current question exactly once": it asks for the ONE missing item in a natural, varied sentence, with an explicit ban on form-like wording and listing future questions.
 - `DEFAULT_SAKA_CORE_PROMPT` carries a `NATURAL CONVERSATION FIRST` directive: extract values from paragraphs, celebrate captured data in one short line, then ask at most one natural follow-up.
 - `SAKA_BOUNDARY_RULES` states that natural conversation is the default intake style (no numbered questionnaires).
+- `NATURAL_INTAKE` (v1.24.1, default on) is the prompt-style kill switch: `off|false|0` restores the original strict "state the current question exactly once" instruction without a deploy of code.
 - Security flows (OTP, PIN) and the deterministic plate/menu prompts stay exact - never conversational.
 
 ### 61.2 Instant acks (perceived speed)
@@ -2333,3 +2335,31 @@ Saka now gathers data from natural, flowing conversation instead of running a qu
 
 ### 61.5 Tests
 - `test_natural_intake.js` (13): paragraph stories (two shapes), fuel-spend never becomes purchase cost, core prompt directive, boundary rule.
+
+---
+
+## 62. v1.24.1 - Reply-Speed Telemetry & Natural-Intake Kill Switch
+
+The user-perceived reply time is now measured on every answered turn, so the two-lane worker decision is data-driven rather than guessed.
+
+### 62.1 What is measured
+- `turn_latency_logs` holds one row per answered turn: `phone`, `turn_ms` (webhook receipt to the final reply), `ack_sent` (instant ack fired first) and `created_at`.
+- Instrumentation lives in `processIncomingWhatsAppMessage`: `turnStartedAt` at entry, `void logTurnLatency(...)` after the final send and on the error path (never delays the reply).
+- Caps mirror `ai_usage_logs`: `TURN_LATENCY_MAX_ROWS` (10000), `TURN_LATENCY_TRIM_EVERY` (250). `TURN_LATENCY_LOGGING_ENABLED` (on) is the kill switch; writes never throw.
+- Migration: `npm run migrate:turn-latency` (`scripts/run_turn_latency_migration.js`); the table is part of the slate-wipe scope.
+
+### 62.2 Commands
+- `admin latency [Nh]` (aliases: `admin reply latency`, `admin turn latency`) — deterministic p50/p95/p99/average digest, instant-ack share, and a plain verdict. Audited `ADMIN_TURN_LATENCY`, zero tokens.
+- `admin ai-stats` now appends `Conversation replies: p50 … · p95 … over N turns` when latency rows exist.
+
+### 62.3 Two-lane worker — trigger and design (deferred)
+- **Decision (2026-10-30): measure first.** Trigger: p95 reply ≥ 4 s for 7 consecutive days (the `admin latency` verdict states this).
+- If triggered: Cloud Tasks → idempotent `/internal/parse-worker` HTTP target that owns extraction + DB writes; the front lane answers instantly (ack already exists via `INSTANT_ACK_ENABLED`) and posts a follow-up only when it has news. Merge rule stays `session.pendingWork` so a mid-flight user message is never clobbered.
+- No `@google-cloud/tasks` dependency is added until the trigger fires.
+
+### 62.4 Natural-intake kill switch
+- `NATURAL_INTAKE` (default on) selects `QUIZ_INSTRUCTION_NATURAL`; `off|false|0|no|disabled` restores `QUIZ_INSTRUCTION_STRICT`. Both strings and `buildQuizQuestionInstruction()` are exported for tests.
+
+### 62.5 Files & tests
+- Files: `src/services/turnLatency.js`, `scripts/run_turn_latency_migration.js`, `src/routes/whatsapp.js`, `src/services/superadmin.js`, `src/services/conversationEngine.js`, `index.js`, `scripts/reset-db.js`, `.env.example`.
+- Tests: `test_turn_latency.js` (32 — percentile math, aggregation, paging, fail-soft, digest copy, command parsing, self-cleaning DB round-trip); `test_natural_intake.js` (15 — kill-switch branches). Also repaired pre-existing pricing drift in `test_phase2_analytics.js` (Sonnet $2 / Haiku $0.50 list prices, cost total 0.0083) — it had been stale since v1.23.0.

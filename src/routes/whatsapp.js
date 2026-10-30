@@ -103,6 +103,7 @@ import {
   OCR_LOW_CONFIDENCE_NOTE,
   OCR_UNREADABLE_NOTE
 } from '../services/receipts.js';
+import { logTurnLatency } from '../services/turnLatency.js';
 
 let supabaseClient = createResilientClient();
 
@@ -606,6 +607,9 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
   // assistant log so transcript ordering stays correct.
   let userLogPromise = Promise.resolve();
 
+  // v1.24.1 - user-perceived reply latency (webhook receipt to final reply).
+  const turnStartedAt = Date.now();
+
   try {
     const senderPhone = messageObj.from;
 
@@ -980,6 +984,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           && String(messageText || '').trim().length >= instantAckChars) {
           try {
             await sendWhatsAppReply(senderPhone, '📖 Got it - reading that now.');
+            session.instantAckSent = true;
             if (supabaseClient) await logChatTranscript(supabaseClient, senderPhone, 'assistant', 'Got it - reading that now.');
           } catch { /* ack is best-effort */ }
         }
@@ -3001,6 +3006,7 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
         chatSessions.set(senderPhone, session);
 
         await sendWhatsAppReply(senderPhone, finalReply);
+        void logTurnLatency(supabaseClient, { phone: senderPhone, turnMs: Date.now() - turnStartedAt, ackSent: session.instantAckSent === true });
         await userLogPromise;
         if (supabaseClient) {
           await Promise.all([
@@ -3017,6 +3023,7 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
         if (fastify?.log) fastify.log.error(err);
         await userLogPromise;
         await persistSnap();
+        void logTurnLatency(supabaseClient, { phone: messageObj?.from || null, turnMs: Date.now() - turnStartedAt, ackSent: false });
         return { status: 'error', error: err?.message };
       }
 }

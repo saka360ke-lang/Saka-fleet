@@ -41,6 +41,7 @@ if (isDirectInvocation) {
 
 export const RESET_TABLES = [
   'backend_incidents',
+  'turn_latency_logs',
   'chat_history',
   'chat_transcripts',
   'chat_friction_logs',

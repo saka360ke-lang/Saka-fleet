@@ -37,6 +37,7 @@
     "migrate:sessions": "node scripts/run_chat_sessions_migration.js",
     "notify:deploy": "node scripts/notify_git_push.js",
     "postinstall": "node scripts/notify_git_push.js || true",
+    "migrate:turn-latency": "node scripts/run_turn_latency_migration.js",
     "migrate:incidents": "node scripts/run_incidents_migration.js"
   },
   "dependencies": {

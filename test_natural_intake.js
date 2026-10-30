@@ -3,6 +3,11 @@
 // prompts no longer encourage questionnaire-style interrogations.
 import { extractVehicleAttributes, DEFAULT_SAKA_CORE_PROMPT } from './sakaAi.js';
 import { SAKA_BOUNDARY_RULES } from './src/services/flowKnowledge.js';
+import {
+  QUIZ_INSTRUCTION_NATURAL,
+  QUIZ_INSTRUCTION_STRICT,
+  buildQuizQuestionInstruction
+} from './src/services/conversationEngine.js';
 
 let pass = 0;
 let fail = 0;
@@ -52,6 +57,15 @@ check(
 check(
   'boundary rules default to natural intake',
   SAKA_BOUNDARY_RULES.some((rule) => /Natural conversation is the default intake style/.test(rule))
+);
+check(
+  'quiz instruction is natural by default',
+  buildQuizQuestionInstruction(true) === QUIZ_INSTRUCTION_NATURAL
+);
+check(
+  'NATURAL_INTAKE=off restores the strict instruction',
+  buildQuizQuestionInstruction(false) === QUIZ_INSTRUCTION_STRICT
+    && /State the current question exactly once/.test(QUIZ_INSTRUCTION_STRICT)
 );
 
 console.log(`\n${pass} passed, ${fail} failed`);

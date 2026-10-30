@@ -29,6 +29,7 @@ import {
 } from './src/workers/remediation.js';
 import { createResilientClient } from './src/services/supabaseClient.js';
 import { ensureAiUsageLogsTable, installAiUsageSink, installAiBudgetGuard } from './src/services/aiUsageLog.js';
+import { ensureTurnLatencyTable } from './src/services/turnLatency.js';
 import {
   ensureAiModelRegistryTables,
   installModelRuntime,
@@ -956,6 +957,7 @@ const start = async () => {
     await ensureSuperadminTables(supabase);
     await ensureRemediationTables(supabase);
     await ensureAiUsageLogsTable(supabase);
+    await ensureTurnLatencyTable(supabase);
     await ensureAiModelRegistryTables(supabase);
     await ensureSubscriptionSchema({ label: 'boot.ensureSubscriptionSchema' });
     installAiUsageSink(supabase);

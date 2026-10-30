@@ -178,6 +178,24 @@ export function seedQuizQuestions(flowLabel, language, questionMap = {}) {
 }
 
 /**
+ * Quiz question instructions (v1.24.1).
+ *
+ * NATURAL_INTAKE=on (default) keeps Saka conversational; setting it to
+ * off|false|0 restores the original strict wording without a code change.
+ */
+export const QUIZ_INSTRUCTION_NATURAL = 'Ask for that ONE item in a natural, varied sentence the way a helpful human would - never sound like a form, never list future questions, never repeat the question verbatim if it was already asked. If the engine reports the question was already answered, acknowledge briefly and never repeat it. Do not praise answers, never invent one, and do not ask for anything else. If dispatchFailed is true, say the last message could not be sent and offer to resend or use a different address.';
+
+export const QUIZ_INSTRUCTION_STRICT = 'State the current question exactly once and ask ONLY for that. If the engine reports the question was already answered, acknowledge that briefly and never repeat it. Do not acknowledge or praise any answer - never invent one. Do not ask for anything else. Do not list future questions. If dispatchFailed is true, say the last message could not be sent and offer to resend or use a different address.';
+
+export function isNaturalIntakeEnabled() {
+  return !['off', 'false', '0', 'no', 'disabled'].includes(String(process.env.NATURAL_INTAKE || 'on').toLowerCase());
+}
+
+export function buildQuizQuestionInstruction(natural = isNaturalIntakeEnabled()) {
+  return natural ? QUIZ_INSTRUCTION_NATURAL : QUIZ_INSTRUCTION_STRICT;
+}
+
+/**
  * Quiz question renderer — exactly ONE question per turn.
  */
 export async function renderQuizQuestion({
@@ -215,7 +233,7 @@ export async function renderQuizQuestion({
     dispatchFailed: Boolean(dispatchFailed),
     // Deliberately data-free: the cached question must never reference values
     // from a previous user/session (prevents stale acknowledgments).
-    instruction: 'Ask for that ONE item in a natural, varied sentence the way a helpful human would - never sound like a form, never list future questions, never repeat the question verbatim if it was already asked. If the engine reports the question was already answered, acknowledge briefly and never repeat it. Do not praise answers, never invent one, and do not ask for anything else. If dispatchFailed is true, say the last message could not be sent and offer to resend or use a different address.'
+    instruction: buildQuizQuestionInstruction()
   };
 
   const fallback = `${fieldLabel}: ${hint}`;
