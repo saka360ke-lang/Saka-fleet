@@ -24,6 +24,7 @@ npm run migrate:trial-unbind        # account-only trials (coupons.owner_id)
 npm run migrate:driver-profile      # owner driver-profile flags
 npm run migrate:vehicle-compliance  # vehicle_compliances ledger
 npm run migrate:followups           # background follow-up lane
+npm run migrate:dunning             # dunning + re-engagement bookkeeping
 npm run migrate:remediation         # Sentinel audit + proposals tables
 npm run migrate:sessions            # chat session snapshots
 ```
@@ -43,6 +44,10 @@ Two workflows, both bound to the `Saka-Fleet-Staging` environment:
 Required Actions secrets (repository or environment scope): `SUPABASE_URL`,
 `SUPABASE_SERVICE_KEY`, `SUPERADMIN_PHONE`, `SUPERADMIN_EMAIL`,
 `META_PHONE_NUMBER_ID`, `META_WHATSAPP_TOKEN`, `RESEND_API_KEY`, `DEEPSEEK_API_KEY`.
+
+Governance: add **Required reviewers** to the `Saka-Fleet-Staging` environment
+(Settings → Environments) so the execute leg pauses for the Superadmin; the plan
+leg stays automatic.
 
 ## Superadmin quick reference
 `adminstart` → session, then `admin report`, `admin alerts`, `admin remediations`,

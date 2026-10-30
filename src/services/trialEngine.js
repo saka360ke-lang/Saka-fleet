@@ -643,12 +643,162 @@ async function processAccountWinbacks({ supabase, sendWhatsAppFn, now = new Date
   }
 }
 
+/* ---------------- v1.16.3 — PAST_DUE dunning & silent re-engagement ---------------- */
+
+const PAST_DUE_GRACE_DAYS = clampNumber(process.env.SUBSCRIPTION_GRACE_DAYS, 1, 30, 3);
+
+/** Deterministic dunning copy (engine-owned link, never an invented amount). */
+function dunningText({ ownerName, tierLabel, daysPast, daysLeft, checkoutUrl }) {
+  const left = Math.max(0, daysLeft);
+  return `💳 *Your ${tierLabel} renewal did not go through* — ${ownerName || 'there'}\n\n` +
+    `It is ${daysPast} day(s) past due. You still have about ${left} day(s) in the grace window before the account moves to Free (extra vehicles are paused, never deleted).\n\n` +
+    `👉 *Renew now:* ${checkoutUrl || 'https://sakafleet.com/pricing'}\n\n` +
+    `No price change and no data loss — the same plan simply continues.`;
+}
+
+/**
+ * T+1 / T+3 dunning ladder for PAST_DUE accounts. Two notices max, deduped via
+ * past_due_notice_count; counters heal automatically once the account is no
+ * longer PAST_DUE. Always includes the engine's own renewal checkout link.
+ */
+export async function processPastDueDunning({ supabase, sendWhatsAppFn, now = new Date(), stats, checkoutFn = initializePaystackCheckout }) {
+  if (!supabase || !sendWhatsAppFn) return;
+  try {
+    const oneDayAgo = new Date(now.getTime() - DAY_MS).toISOString();
+    const { data: pastDue } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('subscription_status', 'PAST_DUE')
+      .lte('subscription_period_end', oneDayAgo)
+      .limit(20);
+
+    for (const owner of pastDue || []) {
+      if (!owner.phone_number) continue;
+      const count = Number(owner.past_due_notice_count || 0);
+      if (count >= 2) continue;
+      const periodEnd = new Date(owner.subscription_period_end).getTime();
+      if (!Number.isFinite(periodEnd)) continue;
+      const daysPast = Math.floor((now.getTime() - periodEnd) / DAY_MS);
+      const due = count === 0 ? daysPast >= 1 : daysPast >= 3;
+      if (!due) continue;
+
+      const tierKey = normalizeTierKey(owner.subscription_tier);
+      const checkout = await checkoutFn({
+        supabase,
+        userPhone: owner.phone_number,
+        targetTierKey: tierKey,
+        billingInterval: owner.billing_interval === 'annual' ? 'annual' : 'monthly',
+        userEmail: owner.email,
+        userId: owner.id,
+        currency: 'USD'
+      }).catch(() => null);
+
+      await sendWhatsAppFn(owner.phone_number, dunningText({
+        ownerName: owner.full_name,
+        tierLabel: getTierLabel(tierKey),
+        daysPast,
+        daysLeft: PAST_DUE_GRACE_DAYS - daysPast,
+        checkoutUrl: checkout?.checkoutUrl
+      })).catch(() => {});
+
+      await supabase.from('profiles').update({
+        past_due_notice_count: count + 1,
+        past_due_notified_at: new Date(now).toISOString(),
+        updated_at: new Date(now).toISOString()
+      }).eq('id', owner.id);
+
+      stats.sent += 1;
+      stats.dunning = (stats.dunning || 0) + 1;
+    }
+
+    // Heal counters when the account is no longer PAST_DUE (renewed/resumed).
+    const { data: stale } = await supabase
+      .from('profiles')
+      .select('id, subscription_status, past_due_notice_count')
+      .gte('past_due_notice_count', 1)
+      .limit(50);
+    for (const row of stale || []) {
+      if (String(row.subscription_status || '').toUpperCase() === 'PAST_DUE') continue;
+      await supabase.from('profiles').update({
+        past_due_notice_count: 0,
+        past_due_notified_at: null,
+        updated_at: new Date(now).toISOString()
+      }).eq('id', row.id);
+    }
+  } catch (err) {
+    console.warn('[TrialEngine] Dunning sweep skipped:', err.message);
+  }
+}
+
+/** Deterministic 14-day re-engagement copy. */
+function reengagementText({ ownerName }) {
+  return `👋 *Quick win for your fleet* — ${ownerName || 'there'}\n\n` +
+    `It has been a couple of weeks. Log one expense today (e.g. _"fuel 3000"_) and Saka keeps your cost-per-km, reminders and compliance dates accurate.\n\n` +
+    `Reply *"passbook details"* for an instant snapshot, or *"help"* to see everything.`;
+}
+
+/**
+ * 14-day silence nudge: owners with an active vehicle and no chat for 13-15
+ * days get ONE deterministic tip. Deduped by profiles.reengage_nudged_at and
+ * capped at 10 sends per sweep.
+ */
+export async function processSilentReengagement({ supabase, sendWhatsAppFn, now = new Date(), stats }) {
+  if (!supabase || !sendWhatsAppFn) return;
+  try {
+    const { data: transcripts } = await supabase
+      .from('chat_transcripts')
+      .select('phone_number,created_at')
+      .order('created_at', { ascending: false })
+      .limit(400);
+
+    const lastSeen = new Map();
+    for (const row of transcripts || []) {
+      const digits = String(row.phone_number || '').replace(/[^0-9]/g, '');
+      if (!digits || lastSeen.has(digits)) continue;
+      lastSeen.set(digits, new Date(row.created_at).getTime());
+    }
+
+    const quietSince = now.getTime() - 15 * DAY_MS;
+    const quietUntil = now.getTime() - 13 * DAY_MS;
+    let sent = 0;
+    for (const [digits, timestamp] of lastSeen) {
+      if (!Number.isFinite(timestamp) || timestamp > quietUntil || timestamp < quietSince) continue;
+      const phone = `+${digits}`;
+      if (process.env.SUPERADMIN_PHONE && phone === process.env.SUPERADMIN_PHONE) continue;
+
+      const { data: owner } = await supabase.from('profiles').select('*').eq('phone_number', phone).maybeSingle();
+      if (!owner?.id || owner.reengage_nudged_at || owner.deleted_at) continue;
+
+      const { data: vehicles } = await supabase
+        .from('vehicles')
+        .select('id')
+        .eq('owner_id', owner.id)
+        .is('deleted_at', null)
+        .limit(1);
+      if (!Array.isArray(vehicles) || vehicles.length === 0) continue;
+
+      await sendWhatsAppFn(phone, reengagementText({ ownerName: owner.full_name })).catch(() => {});
+      await supabase.from('profiles').update({
+        reengage_nudged_at: new Date(now).toISOString(),
+        updated_at: new Date(now).toISOString()
+      }).eq('id', owner.id);
+
+      sent += 1;
+      stats.sent += 1;
+      stats.reengaged = (stats.reengaged || 0) + 1;
+      if (sent >= 10) break;
+    }
+  } catch (err) {
+    console.warn('[TrialEngine] Re-engagement sweep skipped:', err.message);
+  }
+}
+
 /**
  * Trial lifecycle sweep (15-minute tick in index.js).
  * Each stage fires exactly once per trial, guarded by one-shot timestamps.
  */
 export async function runTrialLifecycleSweep({ supabase, sendWhatsAppFn = null, now = new Date(), limit = 100 } = {}) {
-  const stats = { scanned: 0, sent: 0, activationNudges: 0, midpoint: 0, t3: 0, t24: 0, expired: 0, extensionOffers: 0, winbacks: 0 };
+  const stats = { scanned: 0, sent: 0, activationNudges: 0, midpoint: 0, t3: 0, t24: 0, expired: 0, extensionOffers: 0, winbacks: 0, dunning: 0, reengaged: 0 };
   if (!supabase) return stats;
 
   const { data: trials, error } = await supabase
@@ -787,6 +937,9 @@ export async function runTrialLifecycleSweep({ supabase, sendWhatsAppFn = null, 
   // so trials can never produce two competing message streams.
   await dispatchDueAccountTrialCoupons({ supabase, sendWhatsAppFn, now, stats });
   await processAccountWinbacks({ supabase, sendWhatsAppFn, now, stats });
+  // v1.16.3 — revenue recovery + re-engagement ride the SAME worker.
+  await processPastDueDunning({ supabase, sendWhatsAppFn, now, stats });
+  await processSilentReengagement({ supabase, sendWhatsAppFn, now, stats });
 
   return stats;
 }
@@ -914,6 +1067,8 @@ export default {
   recordActivationEvent,
   issueActivationCoupon,
   scheduleAccountTrialExtensionCoupon,
+  processPastDueDunning,
+  processSilentReengagement,
   extendAccountTrial,
   applyAccountTrialExtensionCoupon,
   formatActivationReward,

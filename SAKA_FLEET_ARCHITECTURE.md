@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.16.2  
+**Version:** 1.16.3  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -1717,6 +1717,25 @@ Subscription math is engine-owned and never AI-generated. No autonomous remediat
 ### 42.6 Professional operations
 - `npm run health` — one read-only audit: stateless suites, workflow lint (BOM / non-ASCII / trailing-slash artifact paths), git state, pipeline + DB snapshot.
 - `README.md` + `.editorconfig` (LF, UTF-8, no BOM) so the CI-file corruption class cannot recur.
+
+---
+
+## 43. v1.16.3 — Revenue Recovery, Re-engagement & Governance Polish
+
+### 43.1 PAST_DUE dunning ladder
+- `processPastDueDunning()` runs inside the same 15-minute `runTrialLifecycleSweep`: **T+1 and T+3** deterministic reminders (two per failed renewal, deduped by `profiles.past_due_notice_count` / `past_due_notified_at`), each carrying the engine's own Paystack renewal link (`initializePaystackCheckout`). Counters heal to 0 automatically once the account is no longer `PAST_DUE`.
+- Grace window = `SUBSCRIPTION_GRACE_DAYS` (default 3). Copy never invents an amount and states that extra vehicles are paused, never deleted.
+- Migration: `npm run migrate:dunning` (`past_due_notified_at`, `past_due_notice_count`, `reengage_nudged_at`, partial PAST_DUE index).
+
+### 43.2 14-day silence re-engagement
+- `processSilentReengagement()` finds owners whose last `chat_transcripts` row is **13–15 days old**, who own ≥1 active vehicle, are not the Superadmin phone and have not been nudged (`profiles.reengage_nudged_at`). One deterministic, zero-token tip per owner (one expense log, or "passbook details"); capped at 10 sends per sweep.
+
+### 43.3 Execute-environment protection (manual step)
+- The remediation PAT is deliberately least-privilege: `PUT /repos/.../environments/Saka-Fleet-Staging` returns **403**. Required reviewers must be enabled once in the GitHub UI: **Settings → Environments → `Saka-Fleet-Staging` → Required reviewers → add the Superadmin**. Plan drafting stays automatic; only the execute leg waits for the human approval.
+
+### 43.4 Tests & ops
+- `test_dunning_reengagement.js` (15 assertions: T+1/T+3, two-notice cap, counter healing, silence window, dedupe, vehicle/superadmin guards) is part of `npm run health`, which also reports `past-due accounts`.
+
 
 
 ---

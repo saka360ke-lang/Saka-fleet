@@ -16,6 +16,7 @@ const STATLESS_SUITES = [
   'test_trial_unbind.js',
   'test_vehicle_compliance.js',
   'test_driver_profile_onboarding.js',
+  'test_dunning_reengagement.js',
   'test_subscription_billing.js',
   'test_trial_engine.js',
   'test_agent_training.js'
@@ -98,6 +99,9 @@ async function dbSnapshot() {
 
     const followups = await supabase.from('pending_followups').select('id', { count: 'exact', head: true }).eq('status', 'pending');
     ok('pending follow-ups', String(followups.count ?? 0));
+
+    const pastDue = await supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('subscription_status', 'PAST_DUE');
+    ok('past-due accounts', String(pastDue.count ?? 0));
   } catch (err) {
     bad('DB snapshot', err.message);
   }
