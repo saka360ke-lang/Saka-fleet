@@ -102,5 +102,12 @@ jobs:
         if: failure()
         run: node scripts/remediation_ci.js fail "$PROPOSAL_CODE" "GitHub Actions run failed"
 
-      - name: Smoke end
-        run: echo "bisect D ok"
+      - name: Upload execution artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: remediation-execute-${{ github.run_id }}
+          path: |
+            remediation/work-orders/**
+            remediation/cline-execute.log
+          if-no-files-found: warn
