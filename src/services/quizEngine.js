@@ -493,12 +493,15 @@ function driverOnboardingFields(ctx) {
   }
 
   if (!profile.email || !profile.email_verified) {
-    fields.push(field('driver_email', 'Your email address', 'used to verify you and send renewal reminders', {
+    // Single-turn note: state what comes next so the wizard never reads as a
+    // blind re-ask (code first, then the regional minimal compliance item).
+    const nextComplianceLabel = catalog.minimal?.label || 'licence';
+    fields.push(field('driver_email', 'Your email address', `used to verify you and send renewal reminders — a 6-digit code follows, then your ${nextComplianceLabel} number and expiry`, {
       aliases: ['driver_email', 'email'],
       parse: (text) => parseEmail(text),
       validate: (value) => (value ? { ok: true } : { ok: false, message: 'Please send a valid email address.' })
     }));
-    fields.push(otpQuestionField());
+    fields.push(otpQuestionField(profile.email || null));
   }
 
   // v1.16.0 — never re-ask for compliance already on file (this was the
@@ -1002,6 +1005,16 @@ function isSkipInput(text) {
   return /^(skip|later|not now|no thanks|none|na|n\/a|done|finish|that'?s all|no more|nothing else)$/i.test(String(text).trim());
 }
 
+/** "resend" family — accepted on every OTP turn. */
+function isResendRequest(text) {
+  return /^(?:resend|resend code|new code|send again|send it again|resend it)$/i.test(String(text || '').trim());
+}
+
+/** Explicit "wrong inbox" escape hatch on an OTP step. */
+function isChangeEmailRequest(text) {
+  return /\b(?:change|different|another|wrong|other)\s+(?:my\s+)?e-?mail\b/i.test(String(text || ''));
+}
+
 /**
  * Deterministic multi-field fast-forward. When the AI intent call is skipped on
  * quiz turns, this still captures extra values volunteered in the same message
@@ -1107,6 +1120,8 @@ export function startQuiz({ session, flowKey, ctx, prefill = {} }) {
     phase: 'question',
     startedAt: Date.now(),
     otp: null,
+    otpDispatch: null,
+    otpDispatchAttempts: 0,
     transfer: null,
     lastNote: null,
     lastAcceptedAnswer: null,
@@ -1164,8 +1179,22 @@ async function askCurrent(state, ctx, note = null) {
     });
   }
 
-  if (field.kind === 'otp' && (!state.otp || state.otp.expiresAt < Date.now())) {
-    await sendQuizOtp(state, def, ctx);
+  // OTP step: never mint a second code when this flow already dispatched one
+  // (a silent re-send both burns Resend quota and invalidates the code the user
+  // is typing). Reuse the live code; dispatch only when it is missing, expired
+  // or the destination email actually changed.
+  let hint = note ? `${field.hint} (${note})` : field.hint;
+  if (field.kind === 'otp') {
+    const dispatched = state.otpDispatch || null;
+    const dispatchTarget = dispatched?.target || null;
+    const answersTarget = currentOtpTarget(state) || ctx.profile?.email || null;
+    const targetChanged = Boolean(dispatchTarget && answersTarget && dispatchTarget !== answersTarget);
+    const unexpired = Boolean(state.otp && state.otp.expiresAt > Date.now());
+    if (!dispatched || targetChanged || !unexpired) {
+      await sendQuizOtp(state, def, ctx);
+    }
+    const knownTarget = state.otpDispatch?.target || state.otp?.target || null;
+    hint = `${otpQuestionField(knownTarget).hint}${note ? ` (${note})` : ''}`;
   }
 
   state.lastNote = note;
@@ -1174,7 +1203,7 @@ async function askCurrent(state, ctx, note = null) {
   const reply = await renderQuizQuestion({
     flowLabel: def.label,
     fieldLabel: field.label,
-    hint: note ? `${field.hint} (${note})` : field.hint,
+    hint,
     answers: state.answers,
     collectedLabels: rows.map((r) => `${r.label}: ${r.value}`),
     language: ctx.language,
@@ -1234,6 +1263,14 @@ function confirmationNotesBase(state, ctx) {
   }
   return [];
 }
+/** Destination mailbox for the flowing OTP step (never the code itself). */
+function currentOtpTarget(state) {
+  if (state.flow === 'email_update') return state.answers.new_email || null;
+  if (state.flow === 'delete_account') return null; // resolved from the profile inside sendQuizOtp
+  if (state.flow === 'driver_onboarding') return state.answers.driver_email || null;
+  return state.answers.owner_email || null;
+}
+
 async function sendQuizOtp(state, def, ctx) {
   const purpose = state.flow === 'email_update'
     ? 'email_update'
@@ -1258,33 +1295,72 @@ async function sendQuizOtp(state, def, ctx) {
     if (purpose === 'account_deletion') await sendMfaEmail(target, code);
     else await sendEmailOtp(target, code);
     state.otp = { code, target, purpose, expiresAt: Date.now() + 10 * 60 * 1000 };
+    // A new code was minted — the quiet "code check n of 3" counter restarts.
+    state.otpDispatchAttempts = 0;
+    state.otpError = null;
+    state.otpDispatch = { status: 'sent', target, purpose, attemptedAt: Date.now() };
   } catch (err) {
     state.otp = null;
     state.otpError = err.message;
+    state.otpDispatch = { status: 'failed', target, purpose, attemptedAt: Date.now() };
   }
 }
 
-function otpQuestionField() {
-  return field('otp', '6-digit verification code', 'check your email inbox', {
+/**
+ * OTP question field. The label is the question-cache key and is asserted by the
+ * training/flow suites — never change it. The hint names the destination mailbox
+ * and the escape hatches so the same step never sounds like a blind re-ask.
+ */
+function otpQuestionField(target = null) {
+  const hint = target
+    ? `We emailed the 6-digit code to ${target} — reply with the 6 digits, or "resend" if it has not arrived, or "change email" if that inbox is wrong. One message can carry both the code and your licence details.`
+    : 'We emailed a 6-digit code to the address you just gave me — reply with the 6 digits, or "resend" if it has not arrived, or "change email" if that inbox is wrong. One message can carry both the code and your licence details.';
+  return field('otp', '6-digit verification code', hint, {
     kind: 'otp',
     parse: (text) => (String(text).match(/\b\d{6}\b/) || [])[0] || null,
     validate: (value) => (/^\d{6}$/.test(String(value)) ? { ok: true } : { ok: false, message: 'Please send the 6-digit code.' })
   });
 }
 
+/**
+ * Render the OTP step. The turn note is composed deterministically so every
+ * re-ask is distinct (and therefore never served from the shared question
+ * cache), while carrying no secret: never the code value, only the mailbox the
+ * dispatch actually reached and a quiet attempt counter.
+ */
 async function askOtp(state, ctx, note = null) {
-  const target = state.otp?.target || ctx.profile?.email || state.answers.owner_email || state.answers.new_email || state.answers.driver_email;
+  const target = state.otpDispatch?.target || state.otp?.target || ctx.profile?.email || state.answers.owner_email || state.answers.new_email || state.answers.driver_email;
+  const attempts = (Number(state.otpDispatchAttempts) || 0) + 1;
+  state.otpDispatchAttempts = attempts;
+  const dispatchFailed = state.otpDispatch?.status === 'failed';
+  const def = getFlowDefinition(state.flow, ctx);
+  const nextField = def ? activeFields(def, state.answers).find((f) => f.kind !== 'otp' && !(f.key in state.answers)) : null;
+
+  const lines = [`Verifying your email — code check ${attempts} of 3.`];
+  if (dispatchFailed) {
+    lines.push('The last email could not be sent — reply "resend" or tell me a different address.');
+  } else if (target) {
+    lines.push(`The 6-digit code is in the mailbox ${target}.`);
+  } else {
+    lines.push('The 6-digit code is in the mailbox you just gave me.');
+  }
+  if (note) lines.push(note);
+  if (nextField?.label) lines.push(`Once the code is confirmed, the next step is your ${nextField.label.toLowerCase()}.`);
+  lines.push('One message can carry both the code and those details; reply "resend" or "change email" if needed.');
+
   return renderQuizQuestion({
-    flowLabel: getFlowDefinition(state.flow, ctx)?.label || state.flow,
+    flowLabel: def?.label || state.flow,
     fieldLabel: '6-digit verification code',
-    hint: note || `We emailed a code to ${target}. Reply with the 6 digits (or "resend" for a new code).`,
+    hint: lines.join(' '),
     answers: state.answers,
-    collectedLabels: buildSummaryRows(getFlowDefinition(state.flow, ctx), state.answers, ctx).map((r) => `${r.label}: ${r.value}`),
+    collectedLabels: buildSummaryRows(def, state.answers, ctx).map((r) => `${r.label}: ${r.value}`),
     language: ctx.language,
     countryInfo: ctx.countryInfo,
     profile: ctx.profile,
     isFirst: false,
-    isLast: true
+    isLast: true,
+    turnNote: lines.join(' '),
+    dispatchFailed
   });
 }
 
@@ -1369,7 +1445,7 @@ async function handleAssignmentOtp(state, clean, ctx) {
     isLast: true
   });
 
-  if (/^(resend|resend code|new code|send again)$/i.test(clean)) {
+  if (isResendRequest(clean)) {
     const created = await createDriverAssignment({
       supabase: ctx.supabase,
       ownerProfile: ctx.profile,
@@ -1540,6 +1616,10 @@ export function detectFlowSwitch({ quiz, messageText = '', intent = '' } = {}) {
   const text = String(messageText || '').trim();
   if (!text) return null;
 
+  // "change email" on an OTP step is an in-flow escape hatch owned by
+  // handleQuizTurn (it re-asks only the email field) — never a flow switch.
+  if (quiz.phase === 'question' && isChangeEmailRequest(text)) return null;
+
   const match = EXPLICIT_FLOW_PATTERNS.find((p) => p.re.test(text));
   if (match && match.flow !== quiz.flow) return match.flow;
   return null;
@@ -1611,6 +1691,23 @@ export async function handleQuizTurn({
     return { handled: false, pausedForChat: true, flow: state.flow };
   }
 
+  // Mid-OTP escape hatch: "change email" re-asks ONLY the email field so a user
+  // who used the wrong inbox leaves the code loop deterministically.
+  const pendingField = state.phase === 'question' ? nextField(getFlowDefinition(state.flow, ctx), state.answers) : null;
+  if (isChangeEmailRequest(clean) && pendingField?.kind === 'otp' && state.flow !== 'vehicle_registration') {
+    delete state.answers[pendingField.key];
+    delete state.answers.driver_email;
+    delete state.answers.owner_email;
+    state.otp = null;
+    state.otpDispatch = null;
+    state.otpDispatchAttempts = 0;
+    state.phase = 'question';
+    state.lastAcceptedAnswer = null;
+    state.turnNote = 'The user wants a different email address. Do not ask for a code now; ask only for the new email address.';
+    const reply = await askCurrent(state, { ...ctx, aiExtracted, answers: state.answers });
+    return { handled: true, reply, flow: state.flow, active: true };
+  }
+
   const def = getFlowDefinition(state.flow, ctx);
   if (!def) {
     session.quiz = null;
@@ -1660,11 +1757,28 @@ export async function handleQuizTurn({
     return { handled: true, reply, flow: state.flow, active: true };
   }
 
-  // OTP resend request
-  if (current.kind === 'otp' && /^(resend|resend code|new code|send again)$/i.test(clean)) {
+  // OTP resend request — offered on ANY OTP turn, whichever path re-rendered it
+  // (first ask, expired code or mismatch), so the user is never stuck.
+  if (current.kind === 'otp' && isResendRequest(clean)) {
     await sendQuizOtp(state, def, vctx);
     const reply = await askOtp(state, vctx, state.otp ? 'A fresh code has been sent.' : `Could not send a code: ${state.otpError || 'unknown error'}`);
     return { handled: true, reply, flow: state.flow, active: true };
+  }
+
+  // An OTP already accepted for this code stays accepted: a repeated (or extra)
+  // code in a longer message never triggers the code question again.
+  if (current.kind === 'otp' && state.otpVerified && state.otp) {
+    const repeated = (String(clean).match(/\b\d{6}\b/) || [])[0] || null;
+    if (repeated && repeated === String(state.otp.code)) {
+      state.answers[current.key] = true;
+      state.lastAcceptedAnswer = 'Email verification code confirmed';
+      state.turnNote = 'The email is already verified — say so briefly and ask only the next question.';
+      // Licence/expiry volunteered in the same message still fills the next field.
+      applyExtraction(state, def, aiExtracted || {}, vctx);
+      applyTextExtraction(state, def, clean, vctx);
+      const reply = await askCurrent(state, vctx);
+      return { handled: true, reply, flow: state.flow, active: true };
+    }
   }
 
   // Skip an optional field (or the whole optional group)
@@ -1876,7 +1990,7 @@ async function handleConfirmation(state, def, clean, ctx, aiExtracted) {
 async function handleAccountOtp(state, clean, ctx) {
   const def = getFlowDefinition(state.flow, ctx);
 
-  if (/^(resend|resend code|new code|send again)$/i.test(clean)) {
+  if (isResendRequest(clean)) {
     await sendQuizOtp(state, def, ctx);
     const reply = await askOtp(state, ctx, state.otp ? 'A fresh code has been sent.' : 'Could not send a code — please try again.');
     return { handled: true, reply, flow: state.flow, active: true };

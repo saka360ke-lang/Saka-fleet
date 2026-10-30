@@ -98,10 +98,10 @@ export const SAKA_QUIZ_FLOWS = [
     key: 'driver_onboarding',
     label: 'Driver compliance onboarding',
     trigger: 'driver accepted the assignment, verify my email, submit my driver licence / PSV / CPC / operator card',
-    fields: 'full name (optional) → email → OTP → minimal compliance (regional catalog) → optional asset-aware additional compliances → confirm',
+    fields: 'full name (optional) → email → OTP (states the destination mailbox, with resend / change-email escape hatches) → minimal compliance (regional catalog) → optional asset-aware additional compliances → confirm',
     extracted: ['full_name', 'driver_email', 'otp_code', 'minimal_compliance', 'compliance_<type>'],
     writes: 'profiles (full_name, email_verified, compliance_*), driver_compliances, driver-linked expiry reminders, once-only owner compliance report',
-    rules: 'minimal compliance must be valid at assignment (future expiry, or lifetime where the economy allows); additional items are optional but collected for renewal reminders; 3 expired minimal submissions cancel the assignment and the owner must restart; NEVER re-ask a compliance already on file (prefilled from the live gate); an owner self-profile minimum is skippable, a gated driver minimum is not'
+    rules: 'minimal compliance must be valid at assignment (future expiry, or lifetime where the economy allows); additional items are optional but collected for renewal reminders; 3 expired minimal submissions cancel the assignment and the owner must restart; NEVER re-ask a compliance already on file (prefilled from the live gate); an owner self-profile minimum is skippable, a gated driver minimum is not; a code turn is a single step carrying a quiet "code check n of 3" counter and the mailbox the code went to; a failed dispatch is surfaced with the "resend" / "change email" hint instead of "just sent" prose; a previously accepted or repeated code is never re-asked (a code pasted next to the licence details fills both); "change email" re-asks only the email field and invalidates the pending code; an unexpired code is reused, never silently re-sent'
   },
   {
     key: 'unassign_driver',

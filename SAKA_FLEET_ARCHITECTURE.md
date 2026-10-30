@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.16.0  
+**Version:** 1.16.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -1688,5 +1688,29 @@ Subscription math is engine-owned and never AI-generated. No autonomous remediat
 ### 40.7 Migrations & tests
 - `npm run migrate:trial-unbind`, `migrate:driver-profile`, `migrate:vehicle-compliance`, `migrate:followups` (all idempotent; applied on release).
 - Suites: `test_trial_unbind.js`, `test_vehicle_compliance.js`, `test_driver_profile_onboarding.js`, updated `test_new_features.js`, `test_agent_training.js`.
+
+---
+
+## 41. v1.16.1 — Single-Contract Driver-Profile OTP Step (remediation FIX-2026-10-30-01)
+
+Every path that renders the driver-profile email OTP now shares ONE contract, closing the `friction_user_frustration` repeat-ask cluster (18/19 rolling-window events: "Great, we're nearly there… enter the 6-digit verification code we just sent to your email").
+
+### 41.1 The OTP step, one contract
+- `otpQuestionField(target = null)` names the destination mailbox and the escape hatches ("we emailed it to {email} — reply with the 6 digits, or \"resend\" … or \"change email\" …") and states that one message may carry both the code and the licence details. **The label stays exactly `6-digit verification code`** — it is the question-cache key and is asserted by the training/flow suites. Parse (`\b\d{6}\b`) and validate (`^\d{6}$`) are untouched, as is the 10-minute expiry.
+- `driverOnboardingFields()` builds the OTP field through `otpQuestionField(profile.email || null)` and gives the email field a single-turn hint that a 6-digit code follows and that the regional minimal compliance item (`catalog.minimal.label`) comes next. A verified owner still gets no email/OTP field (§40.1).
+- `sendQuizOtp()` records `state.otpDispatch = { status: 'sent' | 'failed', target, purpose, attemptedAt }` (plus the existing `state.otpError`), resets `state.otpDispatchAttempts`, and never logs or echoes the code.
+- `askOtp()` composes a deterministic turn note: quiet counter (`Verifying your email — code check n of 3`), the mailbox the dispatch actually reached (`otpDispatch.target` → `otp.target`), a failed-dispatch line ("the last email could not be sent — reply \"resend\" or tell me a different address"), the existing branch notes (expired/mismatch), and the next step. The note is data-bearing but secret-free, and because `renderQuizQuestion()` only serves the cache when `turnNote` is null, every re-ask is unique while the cached success path stays data-free.
+
+### 41.2 Idempotent OTP turns
+- An already-verified code (`state.otpVerified` + matching digits) is never re-asked: the turn acknowledges and renders the next question, still running `applyExtraction()`/`applyTextExtraction()` so licence number + expiry pasted next to the code ("code 123456, licence D1234567 expires 2027-05-15") fill the following compliance field.
+- The resend branch (`isResendRequest()`, also covers "send it again" / "resend it") is offered on every OTP turn — first ask, expired or mismatch. `handleAccountOtp()` and `handleAssignmentOtp()` share the same helper.
+- `askCurrent()` no longer mints a second code when this flow already dispatched one: an unexpired `state.otp` is reused and the OTP hint names the known mailbox. A new code is sent only when the dispatch is missing, the code expired, or the destination email actually changed (`currentOtpTarget()`).
+
+### 41.3 Escape hatch & composer contract
+- `isChangeEmailRequest()` ("change email", "different email", "wrong email", …) on a pending OTP field re-asks **only** the email field, invalidating `state.otp` / `state.otpDispatch` / the counter so the next render explains the new destination. `detectFlowSwitch()` returns null for that pattern (it is an in-flow control, never a flow switch) and still never abandons `vehicle_registration`.
+- `conversationEngine.renderQuizQuestion({ …, dispatchFailed })` gains a boolean FACTS flag (never a raw address, code or step target) and an instruction that states the current question once, forbids repeating an already-answered question, asks nothing beyond it, and phrases a failed dispatch with the resend / different-address offer.
+- `sakaAi.js` §7d gains the matching operating rule (OTP is one wizard step: mailbox + 6 digits only, then the compliance item; accept resend/change email/owner skip and embedded codes; never reveal or invent a code; never claim verification before the engine confirms). `flowKnowledge.js` `driver_onboarding` `fields`/`rules` were updated in the same commit (rule 13 of `.clinerules`); the never-re-ask-on-file and owner-skippable/gated-mandatory rules are unchanged.
+- Untouched: OTP verification strictness, code expiry, VIN immutability, the driver 1-to-1 gate and all subscription math. Description-only change — no migration, no schema write, no new env knob.
+- Suites: `test_driver_profile_onboarding.js`, `test_agent_training.js`.
 
 
