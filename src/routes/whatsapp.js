@@ -899,8 +899,15 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
 
         // v1.21.0 — Country Bucket commands (deterministic, zero tokens).
         const textForCommands = String(messageText || '').trim();
-        const countryChangeMatch = textForCommands.match(/^(?:change|set|switch)\s+country\s+(?:to\s+)?(.+)$/i)
-          || textForCommands.match(/^country\s+(.+)$/i);
+        const countryChangeCandidate = textForCommands.match(/^(?:change|set|switch)\s+country\s+(?:to\s+)?(.+)$/i)?.[1]
+          || textForCommands.match(/^country\s+(.+)$/i)?.[1]
+          || null;
+        // "country rules/documents/example" are knowledge commands, not a country.
+        const isKnowledgeSuffix = Boolean(countryChangeCandidate)
+          && /^(?:rules?|documents?|docs?|requirements?|examples?)$/i.test(countryChangeCandidate.trim());
+        const countryChangeMatch = countryChangeCandidate && !isKnowledgeSuffix
+          ? [null, countryChangeCandidate]
+          : null;
         const wantsCountryInfo = /^(?:my\s+country|country|where\s+am\s+i)$/i.test(textForCommands);
         const myRulesCommand = /^(?:my\s+rules?|country\s+rules?|what\s+(?:are\s+)?my\s+rules?|compliance\s+rules?)$/i.test(textForCommands);
         const requiredDocsCommand = /^(?:required\s+(?:documents?|docs?)|what\s+documents?\s+do\s+i\s+need|my\s+document\s+requirements?)$/i.test(textForCommands);
