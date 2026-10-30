@@ -16,7 +16,7 @@ import {
 } from '../services/vehicles.js';
 import { calculateFuelConsumption } from '../services/analytics.js';
 import { normalizeFillType } from '../services/fuelEconomy.js';
-import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction } from '../services/greetings.js';
+import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly } from '../services/greetings.js';
 import { buildVehicleSummary, emailVehicleSummary } from '../services/vehicleSummary.js';
 import {
   buildFeatureNotice,
@@ -778,15 +778,17 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           ? `${entitlements.tierName}${entitlements.isTrial ? ` (trial, ${entitlements.trialDaysLeft} day(s) left)` : ''} — ${entitlements.effectiveVehicleCapacity} vehicle slot(s), ${Number.isFinite(entitlements.reportsPerMonth) ? `${entitlements.reportsPerMonth} report(s)/month` : 'unlimited reports'}, ${entitlements.maxAiTier >= 3 ? 'full AI (Tiers 0-3)' : 'Tier-1 AI'}`
           : null;
         if (supabaseClient && profileData) {
-          // Parallel reads + skip the history query entirely on warm sessions.
-          const needHistory = !session.history || session.history.length === 0;
+          // v1.21.3 — history is ALWAYS read: it is the only reliable signal
+          // that a conversation really exists. A warm Cloud Run instance can
+          // outlive a database wipe, and its in-memory flags must never make a
+          // brand-new account look like a returning one.
           const [vehiclesRes, historyRes] = await Promise.all([
             supabaseClient
               .from('vehicles')
               .select('*')
               .is('deleted_at', null)
               .or(`owner_id.eq.${profileData.id},assigned_driver_id.eq.${profileData.id}`),
-            needHistory ? getRecentChatHistory(supabaseClient, senderPhone, 10) : Promise.resolve([])
+            getRecentChatHistory(supabaseClient, senderPhone, 10)
           ]);
           existingVehicles = vehiclesRes?.data || [];
           dbHistory = historyRes || [];
@@ -2842,6 +2844,15 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
           && isIntroCopy(finalReply)
           && !wantsIntroduction(messageText)) {
           finalReply = '🙂 I\'m still here with you — no need to start over.\n\nSend your next answer in your own words, or type *Help* to see what I can do.';
+        }
+
+        // v1.21.3 — a zero-vehicle user must never be asked for a plate before
+        // the Country Bucket onboarding (asset kind first). Route to REGISTER.
+        if (!hasVehicleRegistered
+          && !session.quiz
+          && asksForPlateDirectly(finalReply)
+          && !/^\s*(?:register|onboard|add)\b/i.test(messageText)) {
+          finalReply = '🚗 Let\'s set up your first asset.\n\nReply *REGISTER* and I\'ll start with one question: what kind of asset it is (car, truck, bus, motorcycle, machinery, generator…). Then the plate or serial — or send a document and I\'ll read it.';
         }
 
         // v1.19.2 — OCR recovery ladder: two unreadable photos on the same quiz

@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.21.2  
+**Version:** 1.21.3  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -2136,6 +2136,27 @@ Official-source harvesting for the Country Bucket, with a superadmin approval ga
 - Files: `src/services/kbIngest.js`, `src/data/kb_sources.json`, `scripts/kb_ingest.js`, `src/services/superadmin.js`, `package.json`, `.env.example`, README.
 - Tests: `test_kb_ingest.js` (50 — allow-list, HTML/PDF fetching, legislation ordering + law references, pending never fetched, draft-only guarantees, dry-run vs apply, approve/reject audits, freshness, command parsing).
 - Knobs: `KB_MAX_SOURCE_BYTES` (2000000), `KB_FETCH_TIMEOUT_MS` (20000), `KB_REVIEW_DAYS` (90).
+
+
+---
+
+## 55. v1.21.3 — Wipe-Aware First Contact & Zero-Vehicle Routing
+
+Live onboarding evidence (2026-10-30, post-slate-wipe): the first "Hello" received the v1.19.2 re-engage guard ("I'm still here — no need to start over") because a warm Cloud Run instance still held pre-wipe in-memory session flags while the database was empty; two later turns also asked a zero-vehicle user for a plate before the asset-kind question.
+
+### 55.1 Wipe-aware `isFirstContact()` (`greetings.js`)
+- **Persisted history is now the only conversation signal.** `isFirstContact()` returns true when there are no registered vehicles and `chat_history` is empty, regardless of stale in-memory `session.history` / `sakaIntroduced` flags.
+- The route now **always reads the last 10 persisted turns** (parallel with the vehicle query) instead of skipping the read on warm sessions — a warm instance must never make a wiped account look like a returning one.
+- Persisted history still suppresses the intro (returning users are unaffected).
+
+### 55.2 Zero-vehicle plate guard (`whatsapp.js` + `greetings.js`)
+- `asksForPlateDirectly()` detects replies that ask for a registration plate outright.
+- When the user has **zero assets**, no active quiz and did not ask to register, the route replaces such a reply with a REGISTER invitation describing the asset-kind-first flow (plate or serial, or a document).
+- Prompt sync: `sakaAi.js` section 6 now states "NEVER ask a zero-vehicle user for a plate directly. Invite REGISTER; the engine asks the asset kind first…".
+
+### 55.3 Files, tests & knobs
+- Files: `src/services/greetings.js`, `src/routes/whatsapp.js`, `sakaAi.js`, `test_greetings.js`, `test_agent_training.js`, README.
+- Tests: `test_greetings.js` (33 — wipe-aware contact, stale-flag handling, plate-ask detection), `test_agent_training.js` (81 — prompt routing rule), `test_quiz_flow.js` 52, `test_country_bucket.js` 54.
 
 
 

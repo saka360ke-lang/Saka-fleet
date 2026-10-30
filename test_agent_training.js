@@ -72,6 +72,7 @@ async function run() {
   check(SAKA_BOUNDARY_RULES.some((rule) => /PDF text layers/i.test(rule)), 'Boundary: the Document Lens reads images or PDF text layers');
   check(SAKA_BOUNDARY_RULES.some((rule) => /JURISDICTION CONTEXT/i.test(rule)), 'Boundary: country-bucket rules are engine-owned');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('Country-bucket rules are engine-owned'), 'Core prompt teaches the jurisdiction boundary');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('NEVER ask a zero-vehicle user for a plate directly'), 'Core prompt routes zero-vehicle users through REGISTER');
 
   console.log('\n--- Test 4: mandatory training sections ---');
   const sections = [

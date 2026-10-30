@@ -81,13 +81,27 @@ export function sakaIntroText({ countryInfo = null, now = new Date(), profile = 
     (step ? `\n\n${step}` : '');
 }
 
-/** True only for a genuinely fresh conversation (no history, no intro yet). */
+/** True only for a genuinely fresh conversation (no persisted history, no vehicle). */
 export function isFirstContact({ session = null, dbHistory = [], profile = null, hasVehicleRegistered = false } = {}) {
-  if (session?.sakaIntroduced) return false;
   if (hasVehicleRegistered) return false;
+  // v1.21.3 — wipe-aware: with NO persisted history there is no real
+  // conversation to preserve, so stale in-memory flags (e.g. a warm Cloud Run
+  // instance that survived a database slate wipe) must never suppress the
+  // welcome. Every real turn is persisted, so a genuine warm session always
+  // has DB history.
   if (Array.isArray(dbHistory) && dbHistory.length > 0) return false;
-  if (Array.isArray(session?.history) && session.history.length > 0) return false;
   return true;
+}
+
+const PLATE_ASK_RE = /\b(?:what(?:'s| is) (?:your|the) (?:vehicle'?s? )?(?:registration |number )?plate|send (?:me )?(?:your|the) (?:vehicle'?s? )?(?:registration |number )?plate|share (?:your|the) (?:vehicle'?s? )?(?:registration )?plate|plate number of (?:the|your) vehicle)\b/i;
+
+/**
+ * v1.21.3 — detect a reply that asks a zero-vehicle user for a plate directly.
+ * That bypasses the Country Bucket onboarding (asset kind first); the route
+ * replaces it with a REGISTER invitation.
+ */
+export function asksForPlateDirectly(text = '') {
+  return PLATE_ASK_RE.test(String(text || ''));
 }
 
 const INTRO_COPY_RE = /\b(i'?m saka|i am saka|karibu (?:to|kwenye) saka|welcome to saka(?: fleet)?|your (?:fleet|vehicle)(?:'s)? (?:co-pilot|assistant) on whatsapp)\b/i;
@@ -114,5 +128,6 @@ export default {
   sakaIntroText,
   isFirstContact,
   isIntroCopy,
-  wantsIntroduction
+  wantsIntroduction,
+  asksForPlateDirectly
 };

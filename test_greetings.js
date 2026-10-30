@@ -5,7 +5,8 @@ import {
   sakaIntroText,
   isFirstContact,
   isIntroCopy,
-  wantsIntroduction
+  wantsIntroduction,
+  asksForPlateDirectly
 } from './src/services/greetings.js';
 
 /**
@@ -61,9 +62,16 @@ check(named.includes('Amina'), 'returning profile name is used warmly');
 console.log('--- Test 4: first-contact detection ---');
 check(isFirstContact({ session: {}, dbHistory: [], hasVehicleRegistered: false }) === true, 'fresh number is first contact');
 check(isFirstContact({ session: {}, dbHistory: [{ role: 'user' }], hasVehicleRegistered: false }) === false, 'existing chat history is not first contact');
-check(isFirstContact({ session: { history: [{ role: 'user' }] }, dbHistory: [], hasVehicleRegistered: false }) === false, 'in-memory history is not first contact');
-check(isFirstContact({ session: { sakaIntroduced: true }, dbHistory: [], hasVehicleRegistered: false }) === false, 'intro never repeats');
+check(isFirstContact({ session: { history: [{ role: 'user' }] }, dbHistory: [], hasVehicleRegistered: false }) === true, 'in-memory-only history is treated as stale (wipe-aware)');
+check(isFirstContact({ session: { sakaIntroduced: true }, dbHistory: [], hasVehicleRegistered: false }) === true, 'a stale introduced flag never suppresses a fresh welcome');
+check(isFirstContact({ session: { sakaIntroduced: true }, dbHistory: [{ role: 'assistant' }], hasVehicleRegistered: false }) === false, 'persisted history still suppresses the intro');
 check(isFirstContact({ session: {}, dbHistory: [], hasVehicleRegistered: true }) === false, 'registered users skip the intro');
+
+console.log('--- Test 4b: zero-vehicle plate guard (v1.21.3) ---');
+check(asksForPlateDirectly("What's the plate number of the vehicle you'd like to work with?") === true, 'a direct plate ask is detected');
+check(asksForPlateDirectly('Please send me the registration plate') === true, 'an instruction to send the plate is detected');
+check(asksForPlateDirectly('What kind of asset is it? Car, truck, generator…') === false, 'the asset-kind question is not a plate ask');
+check(asksForPlateDirectly('What vehicles do I own?') === false, 'a fleet question is not a plate ask');
 
 console.log('--- Test 4b: intro-copy guard (v1.19.2) ---');
 check(isIntroCopy('Karibu to Saka Fleet! I help you keep track of your vehicles') === true, 'a fresh Karibu welcome is detected');
