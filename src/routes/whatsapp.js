@@ -80,7 +80,8 @@ import { enqueueFollowUp, FOLLOWUP_KINDS, followUpAckText } from '../services/fo
 import { enqueueUserMessage } from '../services/messageQueue.js';
 import { loadSessionSnapshot, persistSessionSnapshot } from '../services/sessionStore.js';
 import { createResilientClient } from '../services/supabaseClient.js';
-import { ocrWhatsAppMedia, extractDocumentHints, classifyOcrDocument } from '../services/ocrService.js';
+import { ocrWhatsAppMedia, extractDocumentHints } from '../services/ocrService.js';
+import { parseDocumentFields, uploadHintFor, DOCUMENT_SUPPORT_MENU } from '../services/documentLens.js';
 import {
   findReceiptByMediaId,
   recordReceipt,
@@ -633,11 +634,18 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
     if (ocrText) {
       messageText = `${baseText ? `${baseText}\n\n` : ''}${ocrText}`.slice(0, 4000);
     } else if (mediaObj && !baseText) {
-      messageText = '[Saka system note: the user sent an image/document that could not be read by OCR. Apologize ONCE with 📸 and 🙏, never claim anything was saved, and offer a clearer photo or typed details (e.g. "Logged 40L at 50350 km for KES 5500 — full tank").]';
+      messageText = '[Saka system note: the user sent an image/document that could not be read by OCR. Apologize ONCE with 📸 and 🙏, never claim anything was saved, and offer a clearer photo or typed details (e.g. "Logged 40L at 50350 km for KES 5500 — full tank"). If it was a PDF scan without a text layer, ask them to send the pages as photos.]';
     }
 
-    const ocrKind = ocrText ? classifyOcrDocument(ocrText) : null;
-    const receiptHints = ocrText ? extractDocumentHints(ocrText, ocrKind) : {};
+    const ocrCountry = detectCountryFromPhone(formattedPhoneForSession);
+    const lens = ocrText
+      ? parseDocumentFields(ocrText, { countryCode: ocrCountry?.country_code || 'GLOBAL' })
+      : null;
+    const ocrKind = lens?.family || null;
+    // Deterministic Vision hints + the richer Document Lens field map (v1.20.0).
+    const receiptHints = ocrText
+      ? { ...extractDocumentHints(ocrText, ocrKind), ...(lens?.hints || {}) }
+      : {};
     const ocrLowConfidence = Boolean(
       ocrText
       && Number.isFinite(Number(ocrResult?.confidence))
@@ -859,6 +867,9 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         // switch menu in the AI branch below.
         const vehiclesCommand = /^(?:(?:list|show|view)\s+)?(?:my\s+)?(?:cars|vehicles|fleet)$|^(?:vehicle|car)\s+list$|^manage\s+(?:my\s+)?(?:vehicles?|cars?)$/i.test(String(messageText || '').trim());
 
+        // v1.20.0 — deterministic document menu ("what documents can I send?").
+        const uploadMenuCommand = /^(?:upload|send|share|scan)\s+(?:a\s+)?(?:document|doc|documents|photo|file|files)s?$|^what\s+(?:documents?|files?)\s+(?:can|may|do)\s+(?:i|you)\s+(?:send|upload|accept)\b|^(?:documents?|docs?)\s+(?:list|supported)$/i.test(String(messageText || '').trim());
+
         // Vehicle registration summary ("send me registration summary as PDF").
         const summaryCommand = /(?:(?:send|email|resend|share|mail)\b[\s\S]{0,40}(?:registration|vehicle|passbook)\b[\s\S]{0,20}(?:summary|details|copy|pdf|email))|(?:registration|vehicle)\s+(?:summary|details|passbook)/i.test(String(messageText || ''));
 
@@ -896,6 +907,12 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             }
             aiResult = { intent: 'GENERAL_CHAT', extracted_data: {}, reply_message: reply };
           }
+        } else if (uploadMenuCommand) {
+          aiResult = {
+            intent: 'APP_HELP',
+            extracted_data: {},
+            reply_message: `${DOCUMENT_SUPPORT_MENU}\n\n💡 Send one document at a time — I will always show what I read before saving.`
+          };
         } else if (vehiclesCommand && !hasVehicleRegistered) {
           aiResult = {
             intent: 'MANAGE_VEHICLE',
@@ -2697,6 +2714,23 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
           const plateGiven = Boolean(mergedExt?.plate_number);
           finalReply = `${sakaIntroText({ countryInfo, profile: profileData, nextStep: plateGiven ? '' : undefined })}${finalReply ? `\n\n${finalReply}` : ''}`;
           session.sakaIntroduced = true;
+        }
+
+        // v1.20.0 — deterministic document-upload hint on the pending quiz
+        // question (zero tokens). Shown once per field so it never nags.
+        if (session.quiz && session.quiz.phase === 'question') {
+          const pendingField = getCurrentQuizField(session.quiz, {
+            countryInfo,
+            vehicles: existingVehicles,
+            profile: profileData
+          });
+          const uploadHint = pendingField?.key ? uploadHintFor(pendingField.key) : null;
+          if (uploadHint && session.uploadHintField !== pendingField.key) {
+            finalReply = `${finalReply}\n\n${uploadHint}`;
+            session.uploadHintField = pendingField.key;
+          }
+        } else if (!session.quiz) {
+          session.uploadHintField = null;
         }
 
         // Receipt outcomes override any AI prose: a duplicate is never re-logged,

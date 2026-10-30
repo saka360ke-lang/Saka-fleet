@@ -128,9 +128,11 @@ async function run() {
   assert(OCR_VISION_TIMEOUT_MS >= 25000 && OCR_VISION_MAX_ATTEMPTS === 2, 'Vision budget and retry knobs are exported');
   assert(/type the answer/i.test(OCR_UNREADABLE_NOTE) && /Skip/i.test(OCR_UNREADABLE_NOTE), 'Unreadable-photo note offers a typed or skip fallback');
 
-  console.log('\n--- Test 4: unsupported media types ---');
-  const pdf = await ocrWhatsAppMedia({ mediaId: 'doc-1', mimeType: 'application/pdf', token: 't' });
-  assert(pdf.text === null && /Unsupported media type/i.test(pdf.error), 'PDF documents are politely rejected in v1');
+  console.log('\n--- Test 4: media type routing (v1.20.0) ---');
+  // PDFs are first-class since v1.20.0 (full coverage in test_doc_lens.js).
+  // Unsupported types are still rejected before any Vision call.
+  const unsupported = await ocrWhatsAppMedia({ mediaId: 'doc-1', mimeType: 'application/msword', token: 't' });
+  assert(unsupported.text === null && /Unsupported media type/i.test(unsupported.error), 'Unsupported document types are politely rejected');
 
   console.log('\n--- Test 5: receipt hint extraction ---');
   const hints = extractReceiptHints('SHELL KAREN\nTOTAL KES 5,500\n40.5 L\nOdometer: 366800\n2026-10-12');

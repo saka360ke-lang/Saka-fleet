@@ -96,6 +96,16 @@ ask you to double-check before saving; nothing is ever written without your YES.
   normal turn (never during a quiz), version-stamped by `FEATURE_NOTICE_VERSION`.
   Run `npm run rollout:features -- --apply` to backfill, and `admin rollout` for status.
 
+## Doc Lens — documents by photo or PDF (v1.20.0)
+- Send **any photo or PDF**: logbook/registration certificate, fuel or service
+  receipt, insurance, inspection, road-service licence, driver licence/PSV/PDP
+  or a purchase invoice. Saka reads it, shows what she found, and only saves
+  after you confirm — then asks only for the fields the document did not have.
+- PDFs are read locally (no extra service): digitally generated documents give
+  their text instantly; a scanned PDF asks you to send the pages as photos.
+- Every uploadable quiz question advertises the upload (e.g. the VIN question
+  offers the logbook), and `what documents can I send?` lists the menu.
+
 ## Live-chat hardening (v1.19.2)
 - **Document scans get a 25 s Vision budget** (`OCR_VISION_TIMEOUT_MS`) and one
   retry on timeout; blank reads now report *"No text detected"* instead of an

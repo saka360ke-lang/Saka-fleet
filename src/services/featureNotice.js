@@ -8,7 +8,7 @@ import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
  * and never shown during a quiz/confirmation so it can never disturb a flow.
  */
 
-export const FEATURE_NOTICE_VERSION = String(process.env.FEATURE_NOTICE_VERSION || '1.19.1');
+export const FEATURE_NOTICE_VERSION = String(process.env.FEATURE_NOTICE_VERSION || '1.20.0');
 
 export const FEATURE_NOTICE_SQL = `
     ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS feature_notice text;
@@ -52,13 +52,13 @@ export function isNoticeStale(profileVersion, current = FEATURE_NOTICE_VERSION) 
 export function buildFeatureNotice({ lane = 'owner' } = {}) {
   if (lane === 'driver') {
     return '✨ *What\'s new for you*\n' +
+      '• 📄 Send your licence or badge as a photo or PDF — I read it and confirm first.\n' +
       '• 📓 Driver Daybook — your week at a glance.\n' +
-      '• 🩺 Vehicle Health Check-in before a trip.\n' +
-      '• 🎫 My Compliance Card — licence and badges always ready.';
+      '• 🩺 Vehicle Health Check-in before a trip.';
   }
   return '✨ *What\'s new in Saka*\n' +
-    '• 📸 Photo receipts — send a fuel or service receipt and I\'ll read it.\n' +
-    '• 📄 Branded PDF reports — fleet, fuel economy, compliance and bespoke.\n' +
+    '• 📄 Documents by photo or PDF — logbook, insurance or licence; I read, then confirm before saving.\n' +
+    '• 🧾 Photo receipts and branded PDF reports.\n' +
     '• ⛽ Say *"full tank"* or *"top-up"* when logging fuel for exact km/L.';
 }
 

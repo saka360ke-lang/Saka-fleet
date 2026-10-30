@@ -67,6 +67,9 @@ async function run() {
   check(SAKA_BOUNDARY_RULES.some((rule) => /typed-or-skip/i.test(rule)), 'Boundary: unreadable photos get a typed-or-skip fallback');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('NEVER re-introduce yourself'), 'Core prompt forbids repeated introductions');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('Never repeat the identical question verbatim'), 'Core prompt forbids repeating an unreadable-photo question');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('PDF documents'), 'Core prompt teaches PDF document intake');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('inspection certificates'), 'Core prompt lists the document families');
+  check(SAKA_BOUNDARY_RULES.some((rule) => /PDF text layers/i.test(rule)), 'Boundary: the Document Lens reads images or PDF text layers');
 
   console.log('\n--- Test 4: mandatory training sections ---');
   const sections = [

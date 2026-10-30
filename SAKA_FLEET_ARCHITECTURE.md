@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.19.2  
+**Version:** 1.20.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -805,7 +805,7 @@ Saka Fleet serves a **global audience**. Every feature, quiz flow and AI prompt 
 ### 24.1 Pipeline
 1. The webhook detects `messageObj.image` or `messageObj.document`, capturing `id`, `caption` and `mime_type` (previously image messages were silently ignored).
 2. `downloadWhatsAppMedia()` calls `GET graph.facebook.com/{version}/{media-id}` → receives `{ url, mime_type, file_size }`, then downloads the binary from `url` with the same bearer token (`User-Agent: curl/8.0.0`). Direct-binary responses are also supported.
-3. `extractTextFromImage()` posts the bytes to Google Cloud Vision `images:annotate` with `DOCUMENT_TEXT_DETECTION` → `{ text, confidence }`.
+3. `extractTextFromImage()` posts the bytes to Google Cloud Vision `images:annotate` with `DOCUMENT_TEXT_DETECTION` → `{ text, confidence }`. **PDFs (v1.20.0)** skip Vision: `pdfTextExtractor.js` inflates FlateDecode streams with Node `zlib` and decodes `Tj`/`TJ` strings locally; scanned PDFs return a "send the pages as photos" reason.
 4. OCR text + caption become the conversation turn:
    - **Active quiz** → the OCR text can answer the pending field (e.g. VIN/plate from a logbook photo).
    - **No quiz** → DeepSeek classifies the OCR text (a receipt naturally becomes `LOG_EXPENSE`).
@@ -821,6 +821,7 @@ Saka Fleet serves a **global audience**. Every feature, quiz flow and AI prompt 
 | `OCR_TIMEOUT_MS` | Meta lookup/download request timeout | `15000` |
 | `OCR_VISION_TIMEOUT_MS` | Vision annotate budget for dense document scans (v1.19.2) | `25000` |
 | `OCR_VISION_MAX_ATTEMPTS` | Vision attempts; abort/timeout is retried once (v1.19.2) | `2` (clamped 1–3) |
+| `OCR_PDF_MAX_PAGES` | PDF page cap before asking for photos (v1.20.0) | `20` (max 80) |
 | `META_GRAPH_VERSION` | Graph API version | `v17.0` |
 
 ### 24.3 Failure behaviour & limits
@@ -2034,6 +2035,40 @@ Evidence base: the 2026-10-30 production transcript (`254734852529`) plus `ai_us
 - Files: `src/services/ocrService.js`, `src/services/receipts.js`, `src/services/greetings.js`, `src/routes/whatsapp.js`, `sakaAi.js`, `src/services/conversationEngine.js`, `src/services/flowKnowledge.js`, `.env.example`, `README.md`.
 - Tests: `test_ocr_flow.js` (45 — timeout retry, no-retry transport, blank-read reason, escape copy), `test_greetings.js` (28 — intro-copy guard), `test_agent_training.js` (75 — boundary + prompt sync).
 - Knobs: `OCR_VISION_TIMEOUT_MS` (25000), `OCR_VISION_MAX_ATTEMPTS` (2).
+
+
+---
+
+## 52. v1.20.0 — Document Lens (Photos & PDFs, Confirm-Before-Save)
+
+Saka now accepts **any PDF or image** as an input, reads it, shows what it found, and asks only for what is missing. Nothing is written without the user's confirmation.
+
+### 52.1 PDF support (`pdfTextExtractor.js`, zero dependency)
+- Google Vision cannot read PDFs inline and the async batch API would need a GCS bucket, so Saka extracts the text layer locally: scan `stream…endstream`, inflate `FlateDecode` with Node `zlib` (with sync-flush fallbacks), then walk `Tj` / `TJ` / `'` / `"` operators plus `Td`/`TD`/`T*` line breaks.
+- Literal + hex strings (incl. UTF-16BE) are decoded with escape handling; content is sanity-checked (≥55% printable) so CID-font binary is never surfaced as text.
+- Guards: `%PDF` magic check, `OCR_PDF_MAX_PAGES` (20, max 80), `400` stream cap, 4,000-char output cap, never throws.
+- **Scanned PDFs** (no text layer) return a clear "send the pages as photos" reason; the route's OCR recovery ladder then applies.
+
+### 52.2 Document Lens (`documentLens.js`)
+- `classifyDocumentFamily()` refines the Vision classifier into nine families: registration/logbook, insurance, inspection/roadworthiness, road service licence/permit, purchase invoice, driver licence/badge, fuel receipt, service invoice, odometer photo.
+- `parseDocumentFields()` returns `{ family, label, lane, fields, hints, found, missing, confidence }`; every field carries `{ value, confidence }` and dates are normalized through `dateParser.js` (Africa/Nairobi canonical).
+- `toQuizHints()` maps lens fields onto the existing quiz/classifier keys so prefill, confirm-before-save and "ask only the missing field" keep working unchanged.
+- `DOCUMENT_UPLOAD_HINTS` + `uploadHintFor()` give every uploadable quiz field a deterministic, zero-token invite (plate/VIN/year → logbook; expiry → insurance/licence; amount → receipt).
+- `DOCUMENT_SUPPORT_MENU` powers the `what documents can I send?` / `upload document` command.
+
+### 52.3 Route wiring (`whatsapp.js`)
+- `ocrWhatsAppMedia()` accepts `application/pdf`, returns `kind: 'pdf'`, and keeps the 5 MB download guard.
+- Every media turn runs the lens; lens hints merge **over** Vision hints so richer fields (insurer, service items, inspection dates) prefill the quiz.
+- Quiz turns append the upload hint **once per pending field** (`getCurrentQuizField` + `session.uploadHintField`).
+- OCR recovery ladder (v1.19.2) and low-confidence note apply to PDFs too; a scanned PDF gets the photo fallback note.
+
+### 52.4 Supported families
+Photos **or PDFs**: logbook/registration certificate, fuel receipt, service invoice, insurance certificate, driving licence / PSV / PDP / CPC / CDL, inspection certificate, road service licence or permit, purchase invoice, odometer/hour-meter photo. Extended catalog (flag-first): speed-limiter certificates, driver medicals, fleet fuel-card statements, fleet insurance schedules, M-Pesa receipts. ID/passport copies are politely declined (data minimisation).
+
+### 52.5 Files, tests & knobs
+- Files: `src/services/pdfTextExtractor.js`, `src/services/documentLens.js`, `src/services/ocrService.js`, `src/routes/whatsapp.js`, `src/services/featureNotice.js` (1.20.0 copy), `sakaAi.js`, `src/services/conversationEngine.js`, `src/services/flowKnowledge.js`, `.env.example`, README.
+- Tests: `test_doc_lens.js` (48 — PDF parsing/extraction/guards, nine families, upload hints, end-to-end PDF intake), `test_agent_training.js` (78 — Document Lens prompt + boundary sync), `test_feature_notice.js` (1.20.0 digest), `test_ocr_flow.js` (45).
+- Knobs: `OCR_PDF_MAX_PAGES` (20), `FEATURE_NOTICE_VERSION` (1.20.0).
 
 
 

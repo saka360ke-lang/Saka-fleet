@@ -1,3 +1,5 @@
+import { extractPdfText } from './pdfTextExtractor.js';
+
 /**
  * Saka Fleet — OCR Service
  * ------------------------
@@ -183,8 +185,9 @@ export async function extractTextFromImage(buffer) {
  */
 export async function ocrWhatsAppMedia({ mediaId, mimeType, token } = {}) {
   const normalizedType = (mimeType || '').toLowerCase().split(';')[0];
+  const declaredPdf = normalizedType === 'application/pdf';
 
-  if (normalizedType && !SUPPORTED_IMAGE_TYPES.includes(normalizedType)) {
+  if (normalizedType && !SUPPORTED_IMAGE_TYPES.includes(normalizedType) && !declaredPdf) {
     return {
       text: null,
       confidence: null,
@@ -197,12 +200,19 @@ export async function ocrWhatsAppMedia({ mediaId, mimeType, token } = {}) {
   if (!download.buffer) return { text: null, confidence: null, mimeType: normalizedType || null, error: download.error };
 
   const effectiveType = (download.mimeType || normalizedType || 'image/jpeg').toLowerCase();
+
+  // v1.20.0 — PDFs are first-class: extract the text layer locally (zero
+  // dependency). Scanned PDFs return a clear "send pages as photos" reason.
+  if (declaredPdf || effectiveType === 'application/pdf') {
+    const pdf = extractPdfText(download.buffer);
+    return { ...pdf, confidence: null, mimeType: 'application/pdf', buffer: download.buffer, kind: 'pdf' };
+  }
   if (!SUPPORTED_IMAGE_TYPES.includes(effectiveType)) {
     return { text: null, confidence: null, mimeType: effectiveType, error: 'Unsupported media type — please resend as a JPEG or PNG photo 📸.' };
   }
 
   const ocr = await extractTextFromImage(download.buffer);
-  return { ...ocr, mimeType: effectiveType, buffer: download.buffer };
+  return { ...ocr, mimeType: effectiveType, buffer: download.buffer, kind: 'image' };
 }
 
 function toNumber(raw) {

@@ -27,11 +27,11 @@ function emojiCount(text) {
 console.log('=== SAKA FLEET — FEATURE NOTICE & ROLLOUT TESTS ===\n');
 
 console.log('--- Test 1: version stamping ---');
-check(FEATURE_NOTICE_VERSION === '1.19.1', 'current notice version is 1.19.1');
+check(FEATURE_NOTICE_VERSION === '1.20.0', 'current notice version is 1.20.0');
 check(isNoticeStale(null) === true, 'no stored version means the digest is due');
 check(isNoticeStale('1.19.0') === true, 'older version is stale');
-check(isNoticeStale('1.19.1') === false, 'same version never repeats');
-check(isNoticeStale('1.19.10') === false, 'semantic compare is numeric (1.19.10 > 1.19.1)');
+check(isNoticeStale('1.20.0') === false, 'same version never repeats');
+check(isNoticeStale('1.20.10') === false, 'semantic compare is numeric (1.20.10 > 1.20.0)');
 check(isNoticeStale('2.0.0') === false, 'a future stamp outranks the current digest');
 
 console.log('--- Test 2: role-aware digest ---');
@@ -50,7 +50,7 @@ check(shouldShowFeatureNotice({ profile, session: {}, hasQuiz: false, hasVehicle
 check(shouldShowFeatureNotice({ profile, session: {}, hasQuiz: true, hasVehicleRegistered: true }) === false, 'quiz/confirmation turns never carry the digest');
 check(shouldShowFeatureNotice({ profile, session: {}, hasQuiz: false, hasVehicleRegistered: false }) === false, 'brand-new users skip the digest');
 check(shouldShowFeatureNotice({ profile, session: { featureNoticeShown: true }, hasQuiz: false, hasVehicleRegistered: true }) === false, 'one digest per session');
-check(shouldShowFeatureNotice({ profile: { id: 'p1', feature_notice: '1.19.1' }, session: {}, hasQuiz: false, hasVehicleRegistered: true }) === false, 'stamped profiles never repeat');
+check(shouldShowFeatureNotice({ profile: { id: 'p1', feature_notice: '1.20.0' }, session: {}, hasQuiz: false, hasVehicleRegistered: true }) === false, 'stamped profiles never repeat');
 check(shouldShowFeatureNotice({ profile: null, session: {}, hasQuiz: false, hasVehicleRegistered: true }) === false, 'missing profile is safe');
 
 console.log('--- Test 4: Cloud Run deployment noise ---');
