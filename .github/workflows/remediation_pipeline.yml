@@ -1,6 +1,7 @@
 name: Autonomous Remediation (Cline)
 
 on:
+  repository_dispatch:
   workflow_dispatch:
     inputs:
       mode:
@@ -8,9 +9,19 @@ on:
         required: true
         default: 'plan'
 
+permissions:
+  contents: write
+
+concurrency: remediation-pipeline
+
 jobs:
   smoke:
+    if: |
+      (github.event_name == 'repository_dispatch' && github.event.action == 'remediation_plan') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'plan')
     runs-on: ubuntu-latest
+    env:
+      AUDIT_RUN_ID: ${{ github.event.client_payload.audit_run_id || github.event.inputs.audit_run_id }}
     steps:
       - name: Smoke test
-        run: echo "remediation workflow is alive"
+        run: echo "alive $AUDIT_RUN_ID"
