@@ -71,17 +71,7 @@ jobs:
 
       - name: Draft remediation plan with Cline (headless)
         run: |
-          cline --auto-approve true -t 1800 -P deepseek -m deepseek-chat \
-            "You are Cline drafting a remediation plan for Saka Fleet inside CI. \
-             Read .clinerules and SAKA_FLEET_ARCHITECTURE.md completely first. \
-             Then read remediation/audit-context.json (Sentinel audit of the rolling window). \
-             When cluster_signature is present, focus the plan on that cluster and ignore unrelated clusters. \
-             Explore only the code needed to write a precise, minimal plan. \
-             Write ONE JSON file to remediation/work-orders/plan.json using the plan_schema from the context. \
-             Hard rules: at most 12 changes; repository-relative paths; at least one existing root-level test_*.js suite; \
-             never target any forbidden_paths entry; descriptive plan only (no code edits, no SQL, no schema changes); \
-             incorporate modify_feedback if present. Do not create any other files." \
-            > remediation/cline-plan.log 2>&1 || true
+          cline --auto-approve true -t 1800 -P deepseek -m deepseek-chat "You are Cline drafting a remediation plan for Saka Fleet inside CI. Read .clinerules and SAKA_FLEET_ARCHITECTURE.md completely first. Then read remediation/audit-context.json (Sentinel audit of the rolling window). When cluster_signature is present, focus the plan on that cluster and ignore unrelated clusters. Explore only the code needed to write a precise, minimal plan. Write ONE JSON file to remediation/work-orders/plan.json using the plan_schema from the context. Hard rules: at most 12 changes; repository-relative paths; at least one existing root-level test_*.js suite; never target any forbidden_paths entry; descriptive plan only (no code edits, no SQL, no schema changes); incorporate modify_feedback if present. Do not create any other files." > remediation/cline-plan.log 2>&1 || true
           test -f remediation/work-orders/plan.json
 
       - name: Submit plan (guardrail-sanitized)
@@ -152,14 +142,7 @@ jobs:
 
       - name: Implement approved plan with Cline (headless)
         run: |
-          cline --auto-approve true -t 1800 -P deepseek -m deepseek-chat \
-            "You are Cline executing an APPROVED remediation work order for Saka Fleet inside CI. \
-             Read .clinerules, SAKA_FLEET_ARCHITECTURE.md and remediation/work-orders/${PROPOSAL_CODE}.md completely first. \
-             Implement EXACTLY the approved changes in the work order - no scope expansion. \
-             Run 'node scripts/run_tests.js ${TESTS}' and fix only regressions you introduced. \
-             Never edit any forbidden path. Never commit, push, force-push or rewrite history. \
-             If the scope is impossible or unsafe, make NO changes and explain why." \
-            > remediation/cline-execute.log 2>&1 || true
+          cline --auto-approve true -t 1800 -P deepseek -m deepseek-chat "You are Cline executing an APPROVED remediation work order for Saka Fleet inside CI. Read .clinerules, SAKA_FLEET_ARCHITECTURE.md and remediation/work-orders/${PROPOSAL_CODE}.md completely first. Implement EXACTLY the approved changes in the work order - no scope expansion. Run 'node scripts/run_tests.js ${TESTS}' and fix only regressions you introduced. Never edit any forbidden path. Never commit, push, force-push or rewrite history. If the scope is impossible or unsafe, make NO changes and explain why." > remediation/cline-execute.log 2>&1 || true
           echo "Cline execution finished (see remediation/cline-execute.log)"
 
       - name: Post-change test pass (must be green before push)
