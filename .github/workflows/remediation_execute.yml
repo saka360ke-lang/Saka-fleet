@@ -95,5 +95,12 @@ jobs:
           git commit -m "fix(remediation): $PROPOSAL_CODE - approved autonomous remediation"
           git push origin HEAD:main
 
+      - name: Report success to Superadmin
+        run: node scripts/remediation_ci.js report "$PROPOSAL_CODE" "$(git rev-parse --short HEAD)"
+
+      - name: Report failure to Superadmin (no code pushed)
+        if: failure()
+        run: node scripts/remediation_ci.js fail "$PROPOSAL_CODE" "GitHub Actions run failed"
+
       - name: Smoke end
-        run: echo "bisect C ok"
+        run: echo "bisect D ok"
