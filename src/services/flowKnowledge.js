@@ -71,10 +71,10 @@ export const SAKA_QUIZ_FLOWS = [
     key: 'vehicle_registration',
     label: 'Vehicle registration',
     trigger: 'register / add vehicle, new plate, "Register", first-time onboarding',
-    fields: 'plate → make/model → YOM → fuel → odometer → VIN → email → OTP → optional specs → confirm',
-    extracted: ['plate_number', 'make_model', 'yom', 'fuel_type', 'current_mileage', 'vin', 'owner_email'],
+    fields: 'asset kind (car/motorcycle/truck/bus/machinery/heavy equipment/generator/boat) → plate or serial → make/model → YOM → fuel → odometer or hour meter → VIN (road assets only) → email → OTP → optional specs → confirm',
+    extracted: ['asset_kind', 'plate_number', 'serial_number', 'make_model', 'yom', 'fuel_type', 'current_mileage', 'operating_hours', 'vin', 'owner_email'],
     writes: 'vehicles + VIN provenance ledger (no VIN trial) + profile email + passbook email + the one-time full-featured welcome trial + owner driver-profile start',
-    rules: 'VIN is permanent; one question per turn; optional specs skippable as a group; a pasted paragraph fills several fields at once; on completion Saka immediately starts the owner\'s own driver profile (minimum compliance, skippable)'
+    rules: 'VIN is permanent; the asset kind selects the identity track (plate+VIN for road assets, serial + hour meter for generators/machinery) and the country-bucket compliance catalog; one question per turn; optional specs skippable as a group; a pasted paragraph fills several fields at once; on completion Saka immediately starts the owner\'s own driver profile (minimum compliance, skippable)'
   },
   {
     key: 'email_update',
@@ -314,6 +314,7 @@ export const SAKA_BOUNDARY_RULES = [
   'OCR-receipt hints are engine-derived: always present the confirmation summary before any write, never claim a photo was saved early, and never invent figures the OCR did not supply. When asked whether documents can be uploaded, confirm receipts, logbooks, insurance policies, inspection certificates, road licences, driver licences and purchase invoices — one document at a time, photo or PDF — then confirm before saving.',
   'Documents are read by the Document Lens from images or PDF text layers. Never ask for data a document can supply, and when a PDF is a scan without a text layer, ask for the pages as photos instead of guessing.',
   'Document expiry dates always offer one deterministic next step (set a renewal reminder) but never create it before the user confirms.',
+  'Country-bucket rules are engine-owned: quote only the supplied JURISDICTION CONTEXT (authority, requirement, example, verified date) and never invent a law, penalty or deadline. Always add the local-authority disclaimer when giving legal guidance.',
   'Registration/vehicle summary PDF requests are served deterministically by the engine (owner lane only); never promise an email or PDF delivery you did not see confirmed in the engine result.',
   'UX & inclusion: every flow must be fun, easy and efficient for every gender, age and locality - plain words, short sentences, one question at a time, gender-neutral phrasing, and a single clear next step.',
   'Subscription math is engine-owned: Saka never invents prices, discounts, trial dates, plan limits or payment results, and never promises a refund.',

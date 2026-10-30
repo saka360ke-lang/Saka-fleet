@@ -56,7 +56,8 @@ async function run() {
   console.log('--- Test 1: flow definitions & detection ---');
   const regFlow = getFlowDefinition('vehicle_registration', baseCtx());
   const keys = regFlow.fields.map((f) => f.key);
-  assert(keys[0] === 'plate_number', 'Registration starts with plate number');
+  assert(keys[0] === 'asset_kind', 'Registration starts by asking the asset kind');
+  assert(keys[1] === 'plate_number', 'Road assets are then asked for the plate');
   assert(keys.includes('vin') && keys.includes('owner_email') && keys.includes('otp'), 'Registration includes VIN, email and OTP');
   assert(regFlow.fields.filter((f) => f.group === 'optional').length >= 8, 'Optional spec group is present');
 
@@ -92,12 +93,20 @@ async function run() {
 
   await handleQuizTurn({
     session,
-    messageText: 'KDA 123A',
-    aiExtracted: { plate_number: 'KDA 123A' },
+    messageText: 'Car',
+    aiExtracted: { asset_kind: 'vehicle' },
     startFlow: 'vehicle_registration',
     ctx
   });
   assert(session.quiz?.flow === 'vehicle_registration', 'Quiz session created');
+  assert(session.quiz.answers.asset_kind === 'vehicle', 'Asset kind captured first');
+
+  await handleQuizTurn({
+    session,
+    messageText: 'KDA 123A',
+    aiExtracted: { plate_number: 'KDA 123A' },
+    ctx
+  });
   assert(session.quiz.answers.plate_number === 'KDA 123A', 'Plate captured');
   assert(session.quiz.answers.make_model === undefined, 'Make/model NOT captured yet (one at a time)');
 

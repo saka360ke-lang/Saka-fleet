@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Saka Fleet â€” One-Piece-at-a-Time Quiz Engine
  * --------------------------------------------
  * Every multi-field conversational flow is a step-by-step wizard that asks
@@ -54,6 +54,7 @@ import {
 } from './subscriptions.js';
 import { normalizeTierKey, getTierLabel } from './subscriptionTiers.js';
 import { parseFlexibleDate } from './dateParser.js';
+import { normalizeAssetKind, requiresPlate, requiresVin, meterForAssetKind } from './countryBucket.js';
 import {
   parseThresholdSpec,
   describeThresholdSpec,
@@ -246,7 +247,20 @@ const REGISTRATION_OPTIONAL_KEYS = [
 
 function registrationFields() {
   return [
+    // v1.21.0 — Country Bucket: the asset kind decides identity (plate/VIN vs
+    // serial) and which compliance catalog applies. Asked once, first.
+    choiceField('asset_kind', 'What kind of asset is it?', 'Car, motorcycle, truck, bus, machinery, heavy equipment, generator or boat', [
+      { value: 'vehicle', aliases: ['car', 'van', 'suv', 'saloon', 'sedan', 'pickup', 'vehicle'] },
+      { value: 'motorcycle', aliases: ['motorcycle', 'motorbike', 'bike', 'boda', 'scooter', 'tuk tuk', 'tuk-tuk'] },
+      { value: 'truck', aliases: ['truck', 'lorry', 'hgv', 'tanker', 'trailer'] },
+      { value: 'bus', aliases: ['bus', 'matatu', 'minibus', 'coach', 'daladala'] },
+      { value: 'heavy_equipment', aliases: ['excavator', 'bulldozer', 'loader', 'grader', 'crane', 'forklift', 'backhoe', 'heavy equipment'] },
+      { value: 'machinery', aliases: ['machinery', 'machine', 'tractor', 'plant', 'compressor', 'pump'] },
+      { value: 'generator', aliases: ['generator', 'genset', 'power plant', 'standby power'] },
+      { value: 'watercraft', aliases: ['boat', 'vessel', 'watercraft', 'ship', 'ferry'] }
+    ]),
     field('plate_number', 'Registration plate number', 'e.g. KDA 123A', {
+      when: (answers) => requiresPlate(answers.asset_kind),
       parse: (text, c) => parsePlate(text, c),
       validate: (value, c) => {
         if (!value) return { ok: false, message: 'That does not look like a registration plate. Please resend it.' };
@@ -257,6 +271,16 @@ function registrationFields() {
         if (duplicate) return { ok: false, message: `Plate ${value} is already registered in your fleet.` };
         return { ok: true };
       }
+    }),
+    field('serial_number', 'Serial / model number', 'e.g. SN EK-8831 (printed on the machine)', {
+      when: (answers) => !requiresPlate(answers.asset_kind),
+      parse: (text) => {
+        const clean = String(text).trim().toUpperCase();
+        return clean.length >= 3 && clean.length <= 40 ? clean : null;
+      },
+      validate: (value) => (value
+        ? { ok: true }
+        : { ok: false, message: 'Please send the serial or model number (at least 3 characters).' })
     }),
     field('make_model', 'Make and model', 'e.g. Toyota Land Cruiser 80 series', {
       validate: (value) => (value && value.length >= 2 && value.length <= 80
@@ -277,13 +301,23 @@ function registrationFields() {
       { value: 'Electric', aliases: ['electric', 'ev'] }
     ]),
     field('current_mileage', 'Current odometer reading', 'e.g. 366700 (in your preferred units)', {
+      when: (answers) => requiresPlate(answers.asset_kind),
       aliases: ['current_mileage', 'odometer', 'odometer_reading', 'mileage'],
       parse: (text, c) => parseOdometer(text, c),
       validate: (value) => (Number.isFinite(value) && value >= 0
         ? { ok: true }
         : { ok: false, message: 'Please send the odometer as a number (e.g. 366700).' })
     }),
-    field('vin', 'VIN / chassis number', '11â€“17 characters â€” permanently locked to your passbook', {
+    field('operating_hours', 'Current hour-meter reading', 'e.g. 1250.5 engine hours', {
+      when: (answers) => !requiresPlate(answers.asset_kind),
+      aliases: ['operating_hours', 'hours', 'hour_meter', 'engine_hours'],
+      parse: (text) => parseNumber(text),
+      validate: (value) => (Number.isFinite(value) && value >= 0
+        ? { ok: true }
+        : { ok: false, message: 'Please send the hour-meter reading as a number (e.g. 1250).' })
+    }),
+    field('vin', 'VIN / chassis number', '11-17 characters - permanently locked to your passbook', {
+      when: (answers) => requiresVin(answers.asset_kind),
       aliases: ['vin', 'chassis'],
       parse: (text) => parseVin(text),
       validate: (value) => (value && VIN_RE.test(value)
@@ -2934,31 +2968,49 @@ async function persistVehicleRegistration(state, ctx) {
   }
 
   const token = `SK-PASSBOOK-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+  const assetKind = normalizeAssetKind(a.asset_kind);
+  const roadAsset = requiresPlate(assetKind);
+  const serialNumber = a.serial_number || null;
+  // Non-road assets have no plate; keep a stable internal identity so the
+  // NOT NULL index stays happy even before the migration is applied.
+  const plateNumber = a.plate_number || serialNumber || `ASSET-${token.slice(-6)}`;
+  const displayName = plateNumber;
   // v1.16.0: the VIN registry records asset provenance only — trials bind to
   // the owner account (profiles.trial_used_at + trial_sessions), never to a VIN.
-  await ensureVinRegistryEntry({ vin: a.vin, ownerId: ctx.profile.id, supabase: ctx.supabase });
+  if (a.vin) {
+    await ensureVinRegistryEntry({ vin: a.vin, ownerId: ctx.profile.id, supabase: ctx.supabase });
+  }
   const unitSystem = buildGlobalContext(ctx.countryInfo, ctx.profile).unitSystem;
+
+  const assetType = roadAsset
+    ? (/electric|ev/i.test(a.fuel_type) ? 'EV' : (/hybrid/i.test(a.fuel_type) ? 'HYBRID' : 'ICE'))
+    : assetKind.toUpperCase();
 
   const record = {
     owner_id: ctx.profile.id,
-    plate_number: a.plate_number,
+    plate_number: plateNumber,
     make_model: a.make_model,
     yom: a.yom,
     year_of_manufacture: a.yom,
     owner_email: a.owner_email,
     fuel_type: a.fuel_type,
-    current_mileage: a.current_mileage,
-    odometer_reading: a.current_mileage,
+    current_mileage: a.current_mileage ?? 0,
+    odometer_reading: a.current_mileage ?? 0,
+    operating_hours: a.operating_hours ?? null,
     owner_phone: ctx.formattedPhone,
     status: 'ACTIVE',
-    vin: a.vin,
-    asset_type: /electric|ev/i.test(a.fuel_type) ? 'EV' : (/hybrid/i.test(a.fuel_type) ? 'HYBRID' : 'ICE'),
+    vin: a.vin || null,
+    asset_type: assetType,
+    asset_kind: assetKind,
+    serial_number: serialNumber,
     unit_system: unitSystem,
     qr_passbook_token: token,
     custom_attributes: a.custom_attributes || {},
     metadata: {
       role: 'Owner',
-      vin_locked: true,
+      asset_kind: assetKind,
+      identity_track: roadAsset ? 'vin' : 'serial',
+      vin_locked: Boolean(a.vin),
       vin_locked_at: new Date().toISOString(),
       onboarding_completed_at: new Date().toISOString(),
       onboarding_flow: 'quiz_v2'
@@ -2987,17 +3039,31 @@ async function persistVehicleRegistration(state, ctx) {
     record.metadata = { ...(record.metadata || {}), extra_notes: state.extraNotes };
   }
 
-  const { error: insertErr } = await ctx.supabase.from('vehicles').insert([record]);
+  let insertRes = await ctx.supabase.from('vehicles').insert([record]).select('id').maybeSingle();
+  let insertErr = insertRes.error || null;
+  // Pre-migration safety: if asset_kind/serial_number/operating_hours columns do
+  // not exist yet, retry without them so onboarding never blocks.
+  if (insertErr && /asset_kind|serial_number|operating_hours|column .* does not exist/i.test(insertErr.message || '')) {
+    const legacyRecord = { ...record };
+    delete legacyRecord.asset_kind;
+    delete legacyRecord.serial_number;
+    delete legacyRecord.operating_hours;
+    insertRes = await ctx.supabase.from('vehicles').insert([legacyRecord]).select('id').maybeSingle();
+    insertErr = insertRes.error || null;
+  }
   if (insertErr) {
     if (insertErr.code === '23505') {
-      return { success: false, error: `Plate ${a.plate_number} or VIN ${a.vin} is already registered.` };
+      return { success: false, error: `Plate ${displayName} or VIN ${a.vin} is already registered.` };
     }
     return { success: false, error: insertErr.message };
   }
+  const insertedVehicleId = insertRes.data?.id || null;
 
   await ctx.supabase.from('profiles').update({
     email: a.owner_email,
     email_verified: true,
+    jurisdiction_confirmed: true,
+    jurisdiction_updated_at: new Date().toISOString(),
     updated_at: new Date().toISOString()
   }).eq('id', ctx.profile.id);
 
@@ -3007,29 +3073,30 @@ async function persistVehicleRegistration(state, ctx) {
   try {
     await sendPassbookWelcomeEmail({
       targetEmail: a.owner_email,
-      plateNumber: a.plate_number,
+      plateNumber: displayName,
       makeModel: a.make_model,
       yom: a.yom,
-      vin: a.vin,
+      vin: a.vin || serialNumber,
       token,
       fuelType: a.fuel_type,
-      mileage: a.current_mileage
+      mileage: a.current_mileage ?? a.operating_hours ?? null
     });
   } catch (emailErr) {
     console.warn('[quizEngine] Passbook email skipped:', emailErr.message);
   }
 
-  const { data: savedVehicle } = await ctx.supabase
-    .from('vehicles')
-    .select('id')
-    .eq('plate_number', a.plate_number)
-    .maybeSingle();
+  const { data: savedVehicle } = insertedVehicleId
+    ? { data: { id: insertedVehicleId } }
+    : await ctx.supabase
+      .from('vehicles')
+      .select('id')
+      .eq('plate_number', plateNumber)
+      .maybeSingle();
 
   if (savedVehicle?.id) {
     // VEHICLE compliance (separate from driver compliance): seed the asset
     // ledger + linked expiry reminder through one engine.
     const registrationTimeZone = resolveUserTimezone({ countryInfo: ctx.countryInfo, profile: ctx.profile });
-    const assetType = /electric|ev/i.test(a.fuel_type) ? 'EV' : (/hybrid/i.test(a.fuel_type) ? 'HYBRID' : 'ICE');
     const countryCode = ctx.countryInfo?.country_code || ctx.profile.country_code || 'GLOBAL';
     const vehicleCatalog = resolveVehicleComplianceCatalog({ countryCode, assetType });
     const seeds = [
@@ -3042,7 +3109,7 @@ async function persistVehicleRegistration(state, ctx) {
       if (!item) continue;
       await submitVehicleCompliance({
         supabase: ctx.supabase,
-        vehicle: { id: savedVehicle.id, plate_number: a.plate_number },
+        vehicle: { id: savedVehicle.id, plate_number: plateNumber },
         item,
         parsed: { ok: true, lifetime: false, expiry: seed.expiry, number: seed.number },
         countryCode,
@@ -3055,11 +3122,14 @@ async function persistVehicleRegistration(state, ctx) {
 
   return {
     success: true,
-    plate: a.plate_number,
-    vin: a.vin,
+    plate: displayName,
+    assetKind,
+    vin: a.vin || null,
+    serialNumber,
     makeModel: a.make_model,
     yom: a.yom,
-    mileage: a.current_mileage,
+    mileage: a.current_mileage ?? null,
+    operatingHours: a.operating_hours ?? null,
     email: a.owner_email,
     token
   };

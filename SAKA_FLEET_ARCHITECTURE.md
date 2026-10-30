@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.20.0  
+**Version:** 1.21.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -612,7 +612,7 @@ Owners exceeding capacity are prompted with the next-tier upgrade checkout (or t
   - Dynamic rules: `saka_dynamic_rules` (Sentinel re-patches on its next scan)
   - Fleet ops: `pending_owner_notifications`, `passbook_transfers`, `private_earnings`, `expenses`, `expense_logs`, `expiry_notification_log`, `reminders`, `admin_audit_logs`
   - Support/cache: `support_tickets`, `exchange_rates_cache` (self-repopulates on demand via `paystack.js`)
-- **Preserved (`PRESERVED_TABLES`):** `system_config` (boot-critical `saka_core_prompt`, `last_deployed_revision`, remediation scheduling markers), `compliance_catalog` (bundled + superadmin legal overrides), `weekly_feature_proposals`, `sentinel_audit_runs` and `remediation_proposals` (governance ledger for autonomous changes), plus `ai_model_registry` and `model_eval_runs` (runtime model governance — a slate wipe must never silently downgrade the serving model).
+- **Preserved (`PRESERVED_TABLES`):** `system_config` (boot-critical `saka_core_prompt`, `last_deployed_revision`, remediation scheduling markers), `compliance_catalog` (bundled + superadmin legal overrides), **`country_kb` (v1.21.0 jurisdiction knowledgebase overrides)**, `weekly_feature_proposals`, `sentinel_audit_runs` and `remediation_proposals` (governance ledger for autonomous changes), plus `ai_model_registry` and `model_eval_runs` (runtime model governance — a slate wipe must never silently downgrade the serving model).
 - **Scope regression test:** `test_db_reset_scope.js` (stateless) asserts the wipe/preserve registries are disjoint and that the global `TRUNCATE` block matches `RESET_TABLES` exactly.
 
 ### 15.2 Production & Execution Safeguards
@@ -2071,6 +2071,37 @@ Photos **or PDFs**: logbook/registration certificate, fuel receipt, service invo
 - Tests: `test_doc_lens.js` (48 — PDF parsing/extraction/guards, nine families, upload hints, end-to-end PDF intake), `test_agent_training.js` (78 — Document Lens prompt + boundary sync), `test_feature_notice.js` (1.20.0 digest), `test_ocr_flow.js` (45).
 - Knobs: `OCR_PDF_MAX_PAGES` (20), `FEATURE_NOTICE_VERSION` (1.20.0).
 - Clean-slate onboarding test: `node scripts/reset-db.js --all --confirm --backup` cleared all operational tables (with a git-ignored backup); Management API token failures now fall back to the Supabase JS client (§15.2).
+
+
+---
+
+## 53. v1.21.0 — Country Bucket & Global Asset Kinds
+
+Every user is placed in ONE **country bucket**, created automatically at onboarding: the country is parsed from the WhatsApp number (E.164), confirmed once, and the **asset kind** selects the identity track and the jurisdiction knowledgebase.
+
+### 53.1 Asset kinds & identity tracks (`countryBucket.js`)
+- Eight kinds: `vehicle`, `motorcycle`, `truck`, `bus`, `heavy_equipment`, `machinery`, `generator`, `watercraft` (`ASSET_KINDS`).
+- Road assets: plate + VIN (**VIN immutability unchanged**), odometer meter. Non-road assets: **serial number**, hour meter, no plate/VIN; the passbook remains asset-scoped (`vehicles.id`), and `vin_registry` stays a road-vehicle provenance ledger.
+- `vehicles.asset_kind` + `vehicles.serial_number` added; `vehicles.plate_number` is nullable. Non-road registration writes a stable `ASSET-……` internal identity so the NOT NULL index never blocks onboarding (pre-migration safe), and the insert retries without new columns if the schema is not yet migrated.
+- `assetDisplayName()` returns the plate for road assets and `make/model (SN …)` for equipment; the registration quiz asks the asset kind first and then swaps plate↔serial, odometer↔hours, VIN↔(skipped).
+
+### 53.2 Country knowledgebase (`COUNTRY_KB`)
+- Bundled bundles (code) for **DEFAULT + KE, TZ, UG, RW, NG, ZA, GB, US, CA, AE, IN, AU, BE** with authority, official source URLs, required/optional compliance rules, renewal hints, law references, **example submission text** and `verified_at` (v1.21.0).
+- `country_kb` table (superadmin-approved overrides, effective-dated, asset-scoped) layered over the bundle — same discipline as `compliance_catalog`; legal rules are never auto-generated or auto-changed.
+- `getCountryBucket()` (sync, bundled) feeds the prompt; `loadCountryBucket()` (DB overrides) feeds deterministic commands. Unknown countries fall back to `DEFAULT` with `fallback: true` and the local-authority disclaimer.
+- Freshness: `KB_REVIEW_DAYS` (90), `KB_VERIFIED_AT`, `COUNTRY_KB_VERSION`; future ingest (`scripts/kb_ingest.js`) writes draft rows for superadmin approval only.
+
+### 53.3 Conversation & onboarding
+- Registration: **asset kind is the first question** (Car / motorcycle / truck / bus / heavy equipment / machinery / generator / boat); plate, serial, VIN, odometer and hour-meter questions are conditional on the answer.
+- Profiles gain `jurisdiction_confirmed` / `jurisdiction_updated_at`; completing registration stamps the bucket as confirmed.
+- Deterministic commands (zero tokens): `my country` / `country <name>` (writes the profile, updates units/timezone), `my rules`, `required documents`, `example compliance` (personalized with the plate).
+- `processSakaMessage({ jurisdictionContext })` injects the **JURISDICTION CONTEXT** block (authority, required documents, example submissions, verified date). Boundary rule: quote only supplied rules, never invent a law/penalty/deadline, always add the disclaimer.
+
+### 53.4 Migration, files & tests
+- `npm run migrate:country-kb` (`scripts/run_country_kb_migration.js`): `country_kb` + `profiles.jurisdiction_*` + `vehicles.asset_kind/serial_number` + nullable plate; `country_kb` joins `PRESERVED_TABLES` so a slate wipe never deletes legal reference data.
+- Files: `src/services/countryBucket.js`, `src/services/quizEngine.js`, `src/routes/whatsapp.js`, `sakaAi.js`, `src/services/flowKnowledge.js`, `scripts/run_country_kb_migration.js`, `scripts/reset-db.js`, `package.json`, README.
+- Tests: `test_country_bucket.js` (54 — asset kinds, bucket resolution/overrides, guidance/examples/disclaimers, onboarding conditional fields), `test_agent_training.js` (80 — jurisdiction boundary), `test_quiz_flow.js` (asset-kind-first registration).
+- Knobs: `COUNTRY_KB_VERSION` (2026.10.1), `KB_VERIFIED_AT` (2026-10-30), `KB_REVIEW_DAYS` (90).
 
 
 

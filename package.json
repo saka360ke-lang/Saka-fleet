@@ -27,6 +27,7 @@
     "migrate:report-grants": "node scripts/run_driver_report_grants_migration.js",
     "migrate:receipts": "node scripts/run_receipts_migration.js",
     "migrate:feature-notice": "node scripts/run_feature_notice_migration.js",
+    "migrate:country-kb": "node scripts/run_country_kb_migration.js",
     "rollout:features": "node scripts/feature_rollout.js",
     "test:anthropic": "node scripts/test_anthropic_connection.js",
     "model:scout": "node scripts/model_scout.js",

@@ -96,6 +96,19 @@ ask you to double-check before saving; nothing is ever written without your YES.
   normal turn (never during a quiz), version-stamped by `FEATURE_NOTICE_VERSION`.
   Run `npm run rollout:features -- --apply` to backfill, and `admin rollout` for status.
 
+## Country Bucket & global assets (v1.21.0)
+- Every user gets a **country bucket** from their WhatsApp number, confirmed at
+  onboarding: currency, units, dates, compliance rules and document examples.
+- Onboarding now asks **what kind of asset it is** (car, motorcycle, truck, bus,
+  machinery, heavy equipment, generator, boat): road assets use plate + VIN,
+  generators and machinery use a serial and the hour meter.
+- Deterministic commands: `my country`, `country <name>` to switch buckets,
+  `my rules`, `required documents` and `example compliance` — sourced from
+  official transport authorities, versioned and always disclaimer-tagged.
+- Bundled knowledgebase ships for Kenya, Tanzania, Uganda, Rwanda, Nigeria,
+  South Africa, the UK, US, Canada, UAE, India, Australia and Belgium, with a
+  global fallback and superadmin overrides in `country_kb`.
+
 ## Doc Lens — documents by photo or PDF (v1.20.0)
 - Send **any photo or PDF**: logbook/registration certificate, fuel or service
   receipt, insurance, inspection, road-service licence, driver licence/PSV/PDP

@@ -70,6 +70,8 @@ async function run() {
   check(DEFAULT_SAKA_CORE_PROMPT.includes('PDF documents'), 'Core prompt teaches PDF document intake');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('inspection certificates'), 'Core prompt lists the document families');
   check(SAKA_BOUNDARY_RULES.some((rule) => /PDF text layers/i.test(rule)), 'Boundary: the Document Lens reads images or PDF text layers');
+  check(SAKA_BOUNDARY_RULES.some((rule) => /JURISDICTION CONTEXT/i.test(rule)), 'Boundary: country-bucket rules are engine-owned');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('Country-bucket rules are engine-owned'), 'Core prompt teaches the jurisdiction boundary');
 
   console.log('\n--- Test 4: mandatory training sections ---');
   const sections = [

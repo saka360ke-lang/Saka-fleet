@@ -85,6 +85,7 @@ export const RESET_TABLES = [
 export const PRESERVED_TABLES = [
   'system_config',
   'compliance_catalog',
+  'country_kb',
   'sentinel_audit_runs',
   'remediation_proposals',
   'weekly_feature_proposals',

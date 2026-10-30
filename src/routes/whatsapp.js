@@ -72,7 +72,7 @@ import {
   ACTIVATION_EVENTS
 } from '../services/trialEngine.js';
 import { normalizeTierKey, getTierLabel, getAnnualDiscountPercent } from '../services/subscriptionTiers.js';
-import { detectCountryFromPhone as detectCountryGlobal, resolveUserTimezone } from '../services/globalization.js';
+import { detectCountryFromPhone as detectCountryGlobal, resolveUserTimezone, resolveTimezoneFromCountry } from '../services/globalization.js';
 import { applyOdometerReading, applyOperatingHours } from '../services/maintenanceReminders.js';
 import { handleQuizTurn, detectQuizStart, shouldPauseQuizForChat, getCurrentQuizField, detectFlowSwitch, getFlowDefinition } from '../services/quizEngine.js';
 import { renderActionDiscovery, composeMessage } from '../services/conversationEngine.js';
@@ -82,6 +82,16 @@ import { loadSessionSnapshot, persistSessionSnapshot } from '../services/session
 import { createResilientClient } from '../services/supabaseClient.js';
 import { ocrWhatsAppMedia, extractDocumentHints } from '../services/ocrService.js';
 import { parseDocumentFields, uploadHintFor, DOCUMENT_SUPPORT_MENU } from '../services/documentLens.js';
+import {
+  normalizeAssetKind,
+  getCountryBucket,
+  loadCountryBucket,
+  buildJurisdictionContext,
+  formatCountryRulesReply,
+  formatRequiredDocumentsReply,
+  formatExampleComplianceReply,
+  resolveCountryInput
+} from '../services/countryBucket.js';
 import {
   findReceiptByMediaId,
   recordReceipt,
@@ -816,6 +826,20 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         }
         const firstContact = isFirstContact({ session, dbHistory, hasVehicleRegistered });
 
+        // v1.21.0 — every user lives in a Country Bucket: detected from the
+        // WhatsApp number and confirmed at onboarding. The active asset kind
+        // selects the right compliance/legal knowledgebase.
+        const bucketAssetKind = normalizeAssetKind(
+          currentActiveVehicle?.asset_kind
+          || currentActiveVehicle?.metadata?.asset_kind
+          || currentActiveVehicle?.asset_type
+          || 'vehicle'
+        );
+        const bucketCountryCode = profileData?.country_code || countryInfo.country_code;
+        const jurisdictionContext = buildJurisdictionContext(
+          getCountryBucket({ countryCode: bucketCountryCode, assetKind: bucketAssetKind })
+        );
+
         // --- Receipt intelligence (v1.19.0): dedupe + vault ---
         let duplicateReceipt = null;
         if (mediaObj?.id && supabaseClient) {
@@ -873,8 +897,67 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         // Vehicle registration summary ("send me registration summary as PDF").
         const summaryCommand = /(?:(?:send|email|resend|share|mail)\b[\s\S]{0,40}(?:registration|vehicle|passbook)\b[\s\S]{0,20}(?:summary|details|copy|pdf|email))|(?:registration|vehicle)\s+(?:summary|details|passbook)/i.test(String(messageText || ''));
 
+        // v1.21.0 — Country Bucket commands (deterministic, zero tokens).
+        const textForCommands = String(messageText || '').trim();
+        const countryChangeMatch = textForCommands.match(/^(?:change|set|switch)\s+country\s+(?:to\s+)?(.+)$/i)
+          || textForCommands.match(/^country\s+(.+)$/i);
+        const wantsCountryInfo = /^(?:my\s+country|country|where\s+am\s+i)$/i.test(textForCommands);
+        const myRulesCommand = /^(?:my\s+rules?|country\s+rules?|what\s+(?:are\s+)?my\s+rules?|compliance\s+rules?)$/i.test(textForCommands);
+        const requiredDocsCommand = /^(?:required\s+(?:documents?|docs?)|what\s+documents?\s+do\s+i\s+need|my\s+document\s+requirements?)$/i.test(textForCommands);
+        const exampleComplianceCommand = /^(?:example\s+(?:compliance|document|submission)|give\s+me\s+an\s+example|example\s+text)$/i.test(textForCommands);
+
+        // Country change is a profile write — resolved before any AI call.
+        let countryCommandResult = null;
+        if (countryChangeMatch) {
+          const resolved = resolveCountryInput(countryChangeMatch[1]);
+          if (!resolved) {
+            countryCommandResult = {
+              intent: 'GENERAL_CHAT',
+              extracted_data: {},
+              reply_message: `🌍 I could not match *${countryChangeMatch[1]}*. Reply *country Kenya* (or another country name) and I will switch your rules, units and documents.`
+            };
+          } else {
+            try {
+              await supabaseClient.from('profiles').update({
+                country: resolved.country,
+                country_code: resolved.country_code,
+                unit_system: resolved.default_units,
+                timezone: resolveTimezoneFromCountry(resolved.country_code),
+                jurisdiction_confirmed: true,
+                jurisdiction_updated_at: new Date().toISOString()
+              }).eq('id', profileData.id);
+              profileData.country_code = resolved.country_code;
+              profileData.country = resolved.country;
+            } catch { /* best-effort */ }
+            countryCommandResult = {
+              intent: 'GENERAL_CHAT',
+              extracted_data: {},
+              reply_message: `🌍 Country bucket updated to *${resolved.country}* (${resolved.country_code}). Your compliance rules, examples, units and documents now follow ${resolved.country}.\n\nReply *required documents* to see what your ${bucketAssetKind.replace(/_/g, ' ')} needs.`
+            };
+          }
+        } else if (wantsCountryInfo) {
+          countryCommandResult = {
+            intent: 'GENERAL_CHAT',
+            extracted_data: {},
+            reply_message: `🌍 Your country bucket is *${countryInfo.country}* (${countryInfo.country_code})${profileData?.jurisdiction_confirmed ? ' ✅ confirmed' : ''}.\n\nIt sets your compliance rules, document examples, currency, units and dates. Reply *country <name>* to change it.`
+          };
+        }
+
         let aiResult;
-        if (summaryCommand) {
+        if (countryCommandResult) {
+          aiResult = countryCommandResult;
+        } else if (myRulesCommand || requiredDocsCommand || exampleComplianceCommand) {
+          const bucket = await loadCountryBucket(supabaseClient, {
+            countryCode: bucketCountryCode,
+            assetKind: bucketAssetKind
+          });
+          const reply = myRulesCommand
+            ? formatCountryRulesReply(bucket)
+            : (requiredDocsCommand
+              ? formatRequiredDocumentsReply(bucket)
+              : formatExampleComplianceReply(bucket, { plate: currentActiveVehicle?.plate_number || null }));
+          aiResult = { intent: 'APP_HELP', extracted_data: {}, reply_message: reply };
+        } else if (summaryCommand) {
           const summaryVehicle = currentActiveVehicle || existingVehicles[0] || null;
           if (!summaryVehicle) {
             aiResult = {
@@ -938,7 +1021,8 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           aiResult = await processSakaMessage(targetLang, messageText, conversationHistory, [], supabaseClient, activeVehicleContext, {
             maxAiTier: entitlements?.maxAiTier ?? null,
             ownerId: profileData?.id || null,
-            planSummary
+            planSummary,
+            jurisdictionContext
           });
         }
         let intent = aiResult.intent;
