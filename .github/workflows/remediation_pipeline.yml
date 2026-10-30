@@ -60,6 +60,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Check CI secrets
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then
+            echo "::error::Missing SUPABASE_URL / SUPABASE_SERVICE_KEY repository secrets. Add them under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
       - name: Prepare audit context
         run: |
           mkdir -p remediation/work-orders

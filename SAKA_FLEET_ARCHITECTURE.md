@@ -1250,7 +1250,7 @@ Three fail-soft, idempotent tiers run in `index.js`:
 - Cloud Scheduler is optional; the in-process timers are primary. No `pg_cron`/`node-cron` dependency was added.
 
 ### 35.4 Plan generation in CI (Cline headless)
-`repository_dispatch: remediation_plan { audit_run_id, cluster_signature?, feedback? }` → job **plan** in `.github/workflows/remediation.yml`:
+`repository_dispatch: remediation_plan { audit_run_id, cluster_signature?, feedback? }` → job **plan** in `.github/workflows/remediation_pipeline.yml`:
 1. `node scripts/remediation_ci.js fetch-audit <id|date> [feedback] [clusterSignature]` emits the audit context (health score, focused cluster, plan schema, forbidden paths).
 2. `cline --auto-approve true -t 1800 -P deepseek -m deepseek-chat "…"` reads `.clinerules`, `SAKA_FLEET_ARCHITECTURE.md` and the audit context, then writes `remediation/work-orders/plan.json` (descriptive JSON only — the plan job never commits).
 3. `node scripts/remediation_ci.js submit-plan <auditId> <planFile> [clusterSignature]` validates the shape, runs `sanitizeRemediationPlan` (≤12 changes, repo-relative paths, ≥1 existing `test_*.js`, forbidden paths/keywords blocked), stores `target_signature`, assigns `FIX-YYYY-MM-DD-NN` and inserts the proposal:
@@ -1267,7 +1267,7 @@ Three fail-soft, idempotent tiers run in `index.js`:
 - All transitions are written to `admin_audit_logs` (`logAdminAudit` / `logRemediationAudit`).
 
 ### 35.6 Execution workflow (GitHub Actions)
-`repository_dispatch: remediation_execute { proposal_code, approval_nonce }` → job **execute** in `.github/workflows/remediation.yml` (concurrency per proposal, `contents: write` only, 45-minute timeout):
+`repository_dispatch: remediation_execute { proposal_code, approval_nonce }` → job **execute** in `.github/workflows/remediation_execute.yml` (fixed concurrency, `contents: write` only, 45-minute timeout):
 1. **Gate** — `node scripts/remediation_ci.js gate <CODE> <NONCE>` re-reads the proposal from Supabase and requires `status=APPROVED`, matching nonce, unexpired TTL and attempts within `REMEDIATION_MAX_ATTEMPTS`; then marks `EXECUTING`. A wrong/expired/replayed nonce fails the job before Cline starts.
 2. **Targeted tests (pre)** — `node scripts/run_tests.js <proposal tests>`; red → no edits.
 3. **Work order** — `node scripts/remediation_ci.js fetch <CODE>` writes `remediation/work-orders/<CODE>.md` (scope, evidence, tests, rollback, forbidden paths, execution rules).
@@ -1310,7 +1310,7 @@ Three fail-soft, idempotent tiers run in `index.js`:
 ### 35.11 Files
 - `src/workers/remediation.js` — continuous scan, throttled synthesis, plan triggers, digest/frequency/urgent logic, sanitizer, dispatch, gate helpers, retry poller.
 - `src/services/githubDispatch.js` — the sole server → GitHub bridge (kill-switch gated, fail-soft).
-- `scripts/remediation_ci.js` + `.github/workflows/remediation.yml` — cluster-focused plan/execute CI lifecycle with a post-edit forbidden-path guard before commit.
+- `scripts/remediation_ci.js` + `.github/workflows/remediation_pipeline.yml` (plan) and `.github/workflows/remediation_execute.yml` (execute) — cluster-focused CI lifecycle with a post-edit forbidden-path guard before commit.
 - `scripts/run_remediation_migration.js` — schema migration.
 - `src/services/superadmin.js` — approval commands, state machine, nonce minting.
 - `src/services/mailer.js` — remediation approval + digest emails.
@@ -1677,9 +1677,11 @@ Subscription math is engine-owned and never AI-generated. No autonomous remediat
 - Migration: `npm run migrate:followups`.
 - Existing wins retained: quiz turns skip the DeepSeek intent call; question renders are cached; the webhook ACKs before processing.
 
-### 40.6 Self-healing pipeline repair
-- `.github/workflows/remediation.yml` was rejected by GitHub (every push produced a 0-job failure run; `repository_dispatch` never spawned a run). It is rewritten minimally (no `types` filter, fixed concurrency, job-level timeouts only) and must be verified with a `workflow_dispatch` run after deploy.
-- New `checkRemediationDispatchVerification()` (15-min tick): any dispatched signature without a proposal after 20 minutes raises `REMEDIATION_DISPATCH_UNVERIFIED` + a Superadmin WhatsApp alert (once per signature).
+### 40.6 Self-healing pipeline repair (root cause + operational prerequisite)
+- **Root cause found:** the legacy `.github/workflows/remediation.yml` was rejected by GitHub Actions (every push produced a 0-job failure run, the workflow list showed the file path instead of its name, and `repository_dispatch` never spawned a run). Two invalid constructs: a **UTF-8 BOM** on line 1 and an artifact `path` entry ending in `/` (`remediation/work-orders/`). Both are fixed by the BOM-free, glob-path rewrite.
+- **Split into two workflows:** `.github/workflows/remediation_pipeline.yml` (plan) and `.github/workflows/remediation_execute.yml` (execute). Verified live: `workflow_dispatch` now returns **204** and the plan job spawns real steps.
+- **Operational prerequisite (human action):** the repository must define the Actions secrets `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `SUPERADMIN_PHONE`, `SUPERADMIN_EMAIL`, `META_PHONE_NUMBER_ID`, `META_WHATSAPP_TOKEN`, `RESEND_API_KEY`, `DEEPSEEK_API_KEY`. Without them the plan job stops at `Check CI secrets` with an explicit error. Secrets can only be added with an admin token; the remediation PAT is deliberately least-privilege.
+- **Watchdog:** `checkRemediationDispatchVerification()` (15-min tick) raises `REMEDIATION_DISPATCH_UNVERIFIED` + a Superadmin WhatsApp alert (once per signature) whenever a dispatched plan produces no proposal within 20 minutes.
 - Superadmin action discovery now enumerates the FULL command surface (exhaustive render, zero truncation).
 
 ### 40.7 Migrations & tests

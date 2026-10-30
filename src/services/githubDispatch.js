@@ -8,7 +8,8 @@
  *   - least-privilege (fine-grained PAT in GH_REMEDIATION_TOKEN, contents:write +
  *     "workflow dispatch" on a single repository).
  *
- * Dispatch events consumed by .github/workflows/remediation.yml:
+ * Dispatch events consumed by .github/workflows/remediation_pipeline.yml (plan)
+ * and .github/workflows/remediation_execute.yml (execute):
  *   - remediation_plan    { audit_run_id, run_date?, feedback?, proposal_code? }
  *   - remediation_execute { proposal_code, approval_nonce }
  */

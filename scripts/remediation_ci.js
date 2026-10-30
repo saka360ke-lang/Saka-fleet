@@ -22,7 +22,8 @@ import {
 /**
  * Saka Fleet — Remediation CI runner (v1.10.0)
  * --------------------------------------------
- * Executed inside .github/workflows/remediation.yml only. Subcommands:
+ * Executed inside .github/workflows/remediation_pipeline.yml (plan) and
+ * .github/workflows/remediation_execute.yml (execute). Subcommands:
  *
  *   fetch-audit <auditRunId|run_date> [modifyFeedback] [clusterSignature]
  *   submit-plan <auditRunId> <planFile> [clusterSignature]

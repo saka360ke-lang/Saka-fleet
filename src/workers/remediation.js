@@ -296,7 +296,7 @@ export async function checkRemediationDispatchVerification(providedSupabase, { n
           const minutes = Math.round(age / 60000);
           await sendProactiveWhatsApp(
             process.env.SUPERADMIN_PHONE,
-            `⚠️ *Remediation CI did not start*\n\nA plan was dispatched ${minutes} min ago for signature \`${String(signature).slice(0, 70)}…\` but no proposal arrived.\n\nCheck \`.github/workflows/remediation.yml\` — the autonomous pipeline is blind until this is fixed.`
+            `⚠️ *Remediation CI did not start*\n\nA plan was dispatched ${minutes} min ago for signature \`${String(signature).slice(0, 70)}…\` but no proposal arrived.\n\nCheck \`.github/workflows/remediation_pipeline.yml\` (and the repo Actions secrets) — the autonomous pipeline is blind until this is fixed.`
           ).catch(() => {});
         }
       }
