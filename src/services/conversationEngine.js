@@ -283,13 +283,16 @@ export async function renderActionDiscovery({
   vehicles = [],
   language = 'English',
   countryInfo = null,
-  profile = null
+  profile = null,
+  exhaustive = false
 }) {
   const facts = {
     roles,
     availableCommands: commands,
     fleet: vehicles.map((v) => `${v.plate_number} (${v.make_model || 'vehicle'})`),
-    instruction: 'Give a short, role-aware capability overview grouped naturally. Mention the 3-5 most useful next steps only; do not dump the entire command list.'
+    instruction: exhaustive
+      ? 'List EVERY available command, grouped naturally by role. Do not omit any command and do not invent one. Keep each line short.'
+      : 'Give a short, role-aware capability overview grouped naturally. Mention the 3-5 most useful next steps only; do not dump the entire command list.'
   };
 
   const fallback = commands.slice(0, 6).map((c) => `• ${c}`).join('\n');

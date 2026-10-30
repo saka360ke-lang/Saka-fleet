@@ -34,14 +34,15 @@ import {
   updateVehicleDetails,
   sanitizeVehicleUpdates,
   deleteVehicle,
-  getOrCreateVinTrial,
+  ensureVinRegistryEntry,
   checkOwnerVehicleTierLimit
 } from './vehicles.js';
-import { scheduleTrialExtensionCoupon, applyTrialExtensionCoupon } from './coupons.js';
+import { applyTrialExtensionCoupon } from './coupons.js';
 import {
   startAccountTrial,
   recordActivationEvent,
-  ACTIVATION_EVENTS
+  ACTIVATION_EVENTS,
+  applyAccountTrialExtensionCoupon
 } from './trialEngine.js';
 import {
   checkoutForTier,
@@ -64,6 +65,7 @@ import {
   categoryForReminderType
 } from './maintenanceReminders.js';
 import { extractWithAI, mergeExtraNotes, formatExtraNotes, isSubstantiveText } from './naturalParser.js';
+import { resolveVehicleComplianceCatalog, submitVehicleCompliance } from './vehicleCompliance.js';
 import {
   createDriverAssignment,
   verifyOwnerAssignmentOtp,
@@ -499,8 +501,19 @@ function driverOnboardingFields(ctx) {
     fields.push(otpQuestionField());
   }
 
-  fields.push(complianceItemField('minimal_compliance', catalog.minimal, ctx, false));
+  // v1.16.0 — never re-ask for compliance already on file (this was the
+  // "Already told you earlier" friction): prefill from the live gate state.
+  const gateStatus = ctx.driverGate?.status || null;
+  const minimalAlreadyValid = gateStatus?.minimal?.valid === true;
+  if (!minimalAlreadyValid) {
+    // Owner self-profile: the minimum is collected immediately after vehicle
+    // onboarding but stays skippable — an owner is never blocked from their
+    // own fleet.
+    fields.push(complianceItemField('minimal_compliance', catalog.minimal, ctx, Boolean(ctx.driverSelfProfile)));
+  }
   for (const item of (catalog.additional || []).slice(0, 3)) {
+    const existing = (gateStatus?.additional || []).find((row) => row.type === item.type);
+    if (existing?.valid) continue;
     fields.push(complianceItemField(`compliance_${item.type}`, item, ctx, true));
   }
   return fields;
@@ -1009,6 +1022,7 @@ function applyTextExtraction(state, def, text, ctx) {
     if (f.key === 'fuel_liters') allowed = hasVolumeMarker;
     else if (f.key === 'current_mileage' || f.key === 'odometer_reading') allowed = hasDistanceMarker;
     else if (f.key === 'yom' || f.key === 'fuel_type' || f.key === 'transmission') allowed = true;
+    else if (f.key === 'plate_number' && def.key === 'vehicle_registration') allowed = true;
     if (!allowed) continue;
 
     let parsed = null;
@@ -1016,6 +1030,22 @@ function applyTextExtraction(state, def, text, ctx) {
       parsed = f.parse(clean, { ...ctx, answers: state.answers }, state.answers);
     } catch {
       parsed = null;
+    }
+
+    // Paragraph-safe plate capture: scan whitespace-delimited tokens so
+    // "KDA 123A Toyota Hilux 1991 diesel …" still fills the plate field.
+    if ((parsed === null || parsed === undefined) && f.key === 'plate_number') {
+      const tokens = clean.toUpperCase().match(/[A-Z0-9][A-Z0-9-]{2,14}(?:\s[A-Z0-9]{1,4})?/g) || [];
+      for (const token of tokens) {
+        try {
+          const candidate = f.parse(token.trim(), { ...ctx, answers: state.answers }, state.answers);
+          if (!candidate) continue;
+          if (f.validate(candidate, { ...ctx, answers: state.answers }, state.answers).ok) {
+            parsed = candidate;
+            break;
+          }
+        } catch { /* keep scanning */ }
+      }
     }
     if (parsed === null || parsed === undefined) continue;
 
@@ -1524,14 +1554,15 @@ export async function handleQuizTurn({
   messageText = '',
   aiExtracted = {},
   ctx = {},
-  startFlow = null
+  startFlow = null,
+  prefill = {}
 }) {
   const clean = String(messageText || '').trim();
   let state = getActiveQuiz(session);
 
   if (!state) {
     if (!startFlow) return { handled: false };
-    const started = startQuiz({ session, flowKey: startFlow, ctx: { ...ctx, aiExtracted } });
+    const started = startQuiz({ session, flowKey: startFlow, ctx: { ...ctx, aiExtracted }, prefill });
     if (!started) return { handled: false };
     state = session.quiz;
     const reply = await askCurrent(state, { ...ctx, aiExtracted });
@@ -1648,6 +1679,37 @@ export async function handleQuizTurn({
     state.lastAcceptedAnswer = `${current.label}: skipped`;
     const reply = await askCurrent(state, vctx);
     return { handled: true, reply, flow: state.flow, active: true };
+  }
+
+  // PARAGRAPH MODE (v1.16.0): a pasted paragraph is read for ALL remaining
+  // fields at once (deterministic + AI) instead of only the current question.
+  // Nothing is written here — the confirmation gate stays untouched.
+  const remainingActive = activeFields(def, state.answers).filter((f) => !(f.key in state.answers));
+  const sentenceBreaks = (clean.match(/[.;\n]/g) || []).length;
+  const looksLikeParagraph = clean.length >= 80 || sentenceBreaks >= 2;
+  if (looksLikeParagraph && remainingActive.length >= 2 && isSubstantiveText(clean)) {
+    const natural = await extractWithAI({ text: clean, flowDef: def, answers: state.answers, ctx: vctx });
+    let paragraphFilled = 0;
+    for (const [key, value] of Object.entries(natural.fields || {})) {
+      if (key in state.answers && state.answers[key] !== undefined) continue;
+      state.answers[key] = value;
+      paragraphFilled += 1;
+    }
+    if (natural.extraNotes?.length) {
+      state.extraNotes = mergeExtraNotes(state.extraNotes || [], natural.extraNotes);
+    }
+    if (paragraphFilled > 0) {
+      const nextAfter = nextField(def, state.answers);
+      // If the paragraph also answered the CURRENT question, advance directly;
+      // otherwise fall through to the normal strict parse for this field.
+      if (!nextAfter || nextAfter.key !== current.key) {
+        state.extractionFailures = 0;
+        state.lastAcceptedAnswer = `Captured ${paragraphFilled} detail(s) from your paragraph`;
+        state.turnNote = 'Acknowledge the details captured from the paragraph briefly. Do not claim anything was saved.';
+        const reply = await askCurrent(state, vctx);
+        return { handled: true, reply, flow: state.flow, active: true };
+      }
+    }
   }
 
   // Extract the answer: AI structured value first, then the field parser
@@ -1930,8 +1992,7 @@ async function executeFlow(state, ctx) {
           year: saved.yom,
           odometer: saved.mileage,
           email: saved.email,
-          passbookToken: saved.token,
-          trialEnds: formatDate(saved.trialEndAt, buildGlobalContext(ctx.countryInfo, ctx.profile).locale)
+          passbookToken: saved.token
         });
         return { handled: true, reply, flow: state.flow, completed: true };
       }
@@ -2382,6 +2443,36 @@ async function executeFlow(state, ctx) {
       }
 
       case 'apply_coupon': {
+        const couponCode = String(a.coupon_code || '').toUpperCase().trim();
+        // v1.16.0 — trial extensions are ACCOUNT-bound. Trial coupons redeem
+        // through the account trial engine (45-day lifetime cap); subscription
+        // discount coupons keep the legacy checkout flow.
+        let couponType = null;
+        try {
+          const { data: couponRow } = await ctx.supabase
+            .from('coupons')
+            .select('applicable_to')
+            .eq('code', couponCode)
+            .maybeSingle();
+          couponType = couponRow?.applicable_to || null;
+        } catch { couponType = null; }
+
+        if (couponType === 'account_trial_extension' || couponType === 'trial_extension') {
+          const extended = await applyAccountTrialExtensionCoupon({
+            supabase: ctx.supabase,
+            ownerId: ctx.profile.id,
+            code: couponCode
+          });
+          if (!extended.ok) return { handled: true, reply: await fail(extended.error), flow: state.flow, active: true };
+          const reply = await ok({
+            couponCode: extended.couponCode,
+            daysAdded: extended.daysAdded,
+            accountTrialEnds: formatDate(extended.endsAt, buildGlobalContext(ctx.countryInfo, ctx.profile).locale),
+            scope: 'Account trial — applies to the whole fleet, not one vehicle'
+          });
+          return { handled: true, reply, flow: state.flow, completed: true };
+        }
+
         const res = await applyTrialExtensionCoupon({
           phone: ctx.formattedPhone,
           couponCode: a.coupon_code,
@@ -2487,26 +2578,32 @@ async function executeFlow(state, ctx) {
         const catalog = await getComplianceCatalog({ supabase: ctx.supabase, countryCode, assetType });
         const minimal = catalog.minimal;
         const parsedMinimal = a.minimal_compliance;
-        if (!parsedMinimal?.ok) {
+        // v1.16.0 — an OWNER building their own profile may skip the licence
+        // step (Saka keeps nudging). A gated DRIVER may never skip it.
+        const minimalSkipped = Boolean(ctx.driverSelfProfile) && (parsedMinimal === null || parsedMinimal === undefined);
+        if (!parsedMinimal?.ok && !minimalSkipped) {
           delete state.answers.minimal_compliance;
           state.phase = 'question';
           return { handled: true, reply: await fail(`Please send your ${minimal.label} number and expiry.`), flow: state.flow, active: true };
         }
 
-        const minimalRes = await submitDriverCompliance({
-          supabase: ctx.supabase,
-          driverId: ctx.profile.id,
-          item: minimal,
-          parsed: parsedMinimal,
-          isMinimal: true,
-          countryCode,
-          assetType,
-          timeZone
-        });
-        if (!minimalRes.ok) {
-          delete state.answers.minimal_compliance;
-          state.phase = 'question';
-          return { handled: true, reply: await fail(minimalRes.error), flow: state.flow, active: true };
+        let minimalRes = { ok: true, skipped: true };
+        if (!minimalSkipped) {
+          minimalRes = await submitDriverCompliance({
+            supabase: ctx.supabase,
+            driverId: ctx.profile.id,
+            item: minimal,
+            parsed: parsedMinimal,
+            isMinimal: true,
+            countryCode,
+            assetType,
+            timeZone
+          });
+          if (!minimalRes.ok) {
+            delete state.answers.minimal_compliance;
+            state.phase = 'question';
+            return { handled: true, reply: await fail(minimalRes.error), flow: state.flow, active: true };
+          }
         }
 
         const collected = [];
@@ -2527,6 +2624,15 @@ async function executeFlow(state, ctx) {
         }
 
         const status = await getDriverComplianceStatus({ supabase: ctx.supabase, driverId: ctx.profile.id, countryCode, assetType });
+        // v1.16.0 — owner driver-profile bookkeeping (best-effort flag update).
+        try {
+          const completed = Boolean(status.canManage);
+          await ctx.supabase.from('profiles').update({
+            driver_profile_pending: !completed,
+            ...(completed ? { driver_profile_completed_at: new Date().toISOString() } : {}),
+            updated_at: new Date().toISOString()
+          }).eq('id', ctx.profile.id);
+        } catch { /* flags are best-effort */ }
         let ownerReported = false;
         if (status.canManage) {
           const assignment = await getActiveAssignment({ supabase: ctx.supabase, driverId: ctx.profile.id, vehicleId: assigned?.id });
@@ -2605,7 +2711,9 @@ async function persistVehicleRegistration(state, ctx) {
   }
 
   const token = `SK-PASSBOOK-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
-  const trial = await getOrCreateVinTrial({ vin: a.vin, ownerId: ctx.profile.id, supabase: ctx.supabase });
+  // v1.16.0: the VIN registry records asset provenance only — trials bind to
+  // the owner account (profiles.trial_used_at + trial_sessions), never to a VIN.
+  await ensureVinRegistryEntry({ vin: a.vin, ownerId: ctx.profile.id, supabase: ctx.supabase });
   const unitSystem = buildGlobalContext(ctx.countryInfo, ctx.profile).unitSystem;
 
   const record = {
@@ -2621,9 +2729,6 @@ async function persistVehicleRegistration(state, ctx) {
     owner_phone: ctx.formattedPhone,
     status: 'ACTIVE',
     vin: a.vin,
-    trial_start_at: trial.trialStartAt,
-    trial_end_at: trial.trialEndAt,
-    trial_status: trial.trialStatus,
     asset_type: /electric|ev/i.test(a.fuel_type) ? 'EV' : (/hybrid/i.test(a.fuel_type) ? 'HYBRID' : 'ICE'),
     unit_system: unitSystem,
     qr_passbook_token: token,
@@ -2673,18 +2778,8 @@ async function persistVehicleRegistration(state, ctx) {
     updated_at: new Date().toISOString()
   }).eq('id', ctx.profile.id);
 
-  try {
-    await scheduleTrialExtensionCoupon({
-      vin: a.vin,
-      ownerId: ctx.profile.id,
-      ownerPhone: ctx.formattedPhone,
-      ownerEmail: a.owner_email,
-      trialEndAt: trial.trialEndAt,
-      supabase: ctx.supabase
-    });
-  } catch (couponErr) {
-    console.warn('[quizEngine] Coupon scheduling skipped:', couponErr.message);
-  }
+  // v1.16.0: registration never schedules a VIN-bound extension coupon.
+  // trialEngine schedules account-bound extension offers when a trial starts.
 
   try {
     await sendPassbookWelcomeEmail({
@@ -2708,27 +2803,29 @@ async function persistVehicleRegistration(state, ctx) {
     .maybeSingle();
 
   if (savedVehicle?.id) {
-    // Register linked compliance items through the universal expiry engine so
-    // insurance / inspection dates always have exactly one reminder row with
-    // the full 30/14/7/24h/overdue notification ladder.
+    // VEHICLE compliance (separate from driver compliance): seed the asset
+    // ledger + linked expiry reminder through one engine.
     const registrationTimeZone = resolveUserTimezone({ countryInfo: ctx.countryInfo, profile: ctx.profile });
-    const linkedExpiries = [
-      { date: a.insurance_expiry, category: 'insurance', reminderType: 'Insurance Renewal', column: 'vehicles.insurance_expiry' },
-      { date: a.inspection_expiry, category: 'inspection', reminderType: 'Inspection', column: 'vehicles.inspection_expiry' }
+    const assetType = /electric|ev/i.test(a.fuel_type) ? 'EV' : (/hybrid/i.test(a.fuel_type) ? 'HYBRID' : 'ICE');
+    const countryCode = ctx.countryInfo?.country_code || ctx.profile.country_code || 'GLOBAL';
+    const vehicleCatalog = resolveVehicleComplianceCatalog({ countryCode, assetType });
+    const seeds = [
+      { type: 'insurance', expiry: a.insurance_expiry, number: a.insurance_policy || null },
+      { type: 'inspection', expiry: a.inspection_expiry, number: null }
     ];
-    for (const item of linkedExpiries) {
-      if (!item.date) continue;
-      const spec = buildExpirySpecFromDate(item.date, { timeZone: registrationTimeZone });
-      if (!spec.ok) continue;
-      await createExpiryReminder({
+    for (const seed of seeds) {
+      if (!seed.expiry) continue;
+      const item = vehicleCatalog.items.find((entry) => entry.type === seed.type);
+      if (!item) continue;
+      await submitVehicleCompliance({
         supabase: ctx.supabase,
-        vehicle: { id: savedVehicle.id },
-        profileId: ctx.profile.id,
-        reminderType: item.reminderType,
-        category: item.category,
-        spec,
-        timeZone: registrationTimeZone,
-        linkedColumn: item.column
+        vehicle: { id: savedVehicle.id, plate_number: a.plate_number },
+        item,
+        parsed: { ok: true, lifetime: false, expiry: seed.expiry, number: seed.number },
+        countryCode,
+        assetType,
+        ownerId: ctx.profile.id,
+        timeZone: registrationTimeZone
       });
     }
   }
@@ -2741,8 +2838,7 @@ async function persistVehicleRegistration(state, ctx) {
     yom: a.yom,
     mileage: a.current_mileage,
     email: a.owner_email,
-    token,
-    trialEndAt: trial.trialEndAt
+    token
   };
 }
 
@@ -2795,6 +2891,7 @@ export function detectQuizStart({
 
   // Explicit deterministic commands win over AI intent — this prevents
   // "Set reminder. Oil change in 2500km" from being misread as LOG_EXPENSE.
+  if (/^(?:driver\s+profile|my\s+driver\s+profile|complete\s+(?:my\s+)?driver\s+profile|driver\s+licen[cs]e|my\s+licen[cs]e)$/i.test(text)) return 'driver_onboarding';
   if (/^(?:remind|reminder|set\s+reminder|remind\s+me)\b/i.test(text)) return 'set_reminder';
   if (/^(?:log|record)\s+(?:an?\s+)?(?:expense|fuel|refuel)\b/i.test(text)) return 'log_expense';
   if (/^(?:log|record)\s+(?:an?\s+)?(?:earning|earnings|income|revenue)\b/i.test(text)) return 'log_earnings';

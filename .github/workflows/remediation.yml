@@ -1,12 +1,11 @@
 name: Autonomous Remediation (Cline)
 
-# Triggered ONLY by the Saka backend (repository_dispatch) or manually (workflow_dispatch).
-# There is deliberately no push/pull_request trigger: a human Superadmin approval in
-# Supabase is the only route to the execute job (gate step verifies it).
+# Triggered ONLY by the Saka backend (repository_dispatch) or manually
+# (workflow_dispatch). There is deliberately no push/pull_request trigger: a
+# human Superadmin approval in Supabase is the only route to the execute job.
 
 on:
   repository_dispatch:
-    types: [remediation_plan, remediation_execute]
   workflow_dispatch:
     inputs:
       mode:
@@ -26,9 +25,7 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  group: remediation-${{ github.event.client_payload.proposal_code || github.event.inputs.proposal_code || github.event.client_payload.audit_run_id || github.event.inputs.audit_run_id || github.run_id }}
-  cancel-in-progress: false
+concurrency: remediation-pipeline
 
 jobs:
   plan:
@@ -73,7 +70,6 @@ jobs:
         run: npm install -g cline
 
       - name: Draft remediation plan with Cline (headless)
-        timeout-minutes: 30
         run: |
           cline --auto-approve true -t 1800 -P deepseek -m deepseek-chat \
             "You are Cline drafting a remediation plan for Saka Fleet inside CI. \
@@ -155,7 +151,6 @@ jobs:
         run: npm install -g cline
 
       - name: Implement approved plan with Cline (headless)
-        timeout-minutes: 30
         run: |
           cline --auto-approve true -t 1800 -P deepseek -m deepseek-chat \
             "You are Cline executing an APPROVED remediation work order for Saka Fleet inside CI. \
@@ -201,4 +196,3 @@ jobs:
             remediation/work-orders/
             remediation/cline-execute.log
           if-no-files-found: warn
-

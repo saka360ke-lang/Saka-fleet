@@ -283,11 +283,75 @@ export async function checkOwnerVehicleTierLimit({ ownerId, subscriptionTier = '
 }
 
 /**
- * Asset-Bound Trial Engine:
- * Every unique vehicle VIN gets a one-time 1-month (30-day) free trial upon its first-ever registration passbook creation.
- * Subsequent registrations or transfers preserve the existing trial or require active subscription slots.
+ * VIN provenance ledger (v1.16.0 — account-bound trial era)
+ * ---------------------------------------------------------
+ * VINs and passbook tokens are permanent ASSET identifiers. Commercial state
+ * (trial, tier, billing) is bound to `profiles.id` only — the VIN registry no
+ * longer grants or tracks asset trials. It records provenance immutably:
+ * first registration, first owner, current vehicle.
+ *
+ * The legacy trial_* columns remain untouched for historical rows and are
+ * never written again (VIN immutability: no history is deleted or rewritten).
+ */
+export async function ensureVinRegistryEntry({ vin, ownerId, vehicleId, supabase }) {
+  if (!vin) return { ok: false, reason: 'vin required', isFirstRegistration: false };
+  const cleanVin = String(vin).toUpperCase().trim();
+  if (!supabase) return { ok: true, isFirstRegistration: false, vin: cleanVin, persisted: false };
+
+  const nowIso = new Date().toISOString();
+  try {
+    const { data: existing } = await supabase
+      .from('vin_registry')
+      .select('vin, first_owner_id, current_vehicle_id')
+      .eq('vin', cleanVin)
+      .maybeSingle();
+
+    if (!existing) {
+      await supabase.from('vin_registry').insert([{
+        vin: cleanVin,
+        first_registered_at: nowIso,
+        first_owner_id: ownerId || null,
+        // Account-bound trials: this row must never mint an asset trial.
+        trial_granted: false,
+        trial_status: 'account_bound',
+        current_vehicle_id: vehicleId || null,
+        updated_at: nowIso
+      }]);
+      return { ok: true, isFirstRegistration: true, vin: cleanVin, persisted: true };
+    }
+
+    if (vehicleId && existing.current_vehicle_id !== vehicleId) {
+      await supabase.from('vin_registry').update({
+        current_vehicle_id: vehicleId,
+        updated_at: nowIso
+      }).eq('vin', cleanVin);
+    }
+    return { ok: true, isFirstRegistration: false, vin: cleanVin, persisted: true };
+  } catch (err) {
+    console.error('[ensureVinRegistryEntry] provenance write skipped:', err.message);
+    return { ok: false, error: err.message, isFirstRegistration: false, vin: cleanVin };
+  }
+}
+
+/**
+ * @deprecated v1.16.0 — the asset-bound trial is RETIRED. Kept as a safe
+ * shim so legacy callers degrade to provenance-only behaviour instead of
+ * minting a phantom vehicle trial. Set LEGACY_VIN_TRIALS=on only for
+ * historical replays/tests.
  */
 export async function getOrCreateVinTrial({ vin, ownerId, vehicleId, supabase }) {
+  if (String(process.env.LEGACY_VIN_TRIALS || 'off').toLowerCase() !== 'on') {
+    const registry = await ensureVinRegistryEntry({ vin, ownerId, vehicleId, supabase });
+    return {
+      isFirstRegistration: registry.isFirstRegistration,
+      trialStartAt: null,
+      trialEndAt: null,
+      trialStatus: 'account_bound',
+      trialExtended: false,
+      accountBound: true,
+      registry
+    };
+  }
   const now = new Date();
   if (!vin) {
     const trialStartAt = now.toISOString();

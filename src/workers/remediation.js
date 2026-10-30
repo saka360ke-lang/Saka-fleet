@@ -244,6 +244,69 @@ export async function logRemediationAudit(supabase, action, details = {}) {
   }
 }
 
+/**
+ * v1.16.0 — Dispatch verification watchdog.
+ * A dispatched plan that never produces a proposal means the CI leg is broken
+ * (e.g. the workflow was rejected by GitHub). Alert the Superadmin ONCE per
+ * signature so a silent dead pipeline can never go unnoticed again.
+ */
+export async function checkRemediationDispatchVerification(providedSupabase, { now = new Date(), windowMs = 20 * 60 * 1000 } = {}) {
+  const supabase = getSupabase(providedSupabase);
+  const result = { checked: 0, unverified: [] };
+  try {
+    const since = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+    const { data: runs } = await supabase
+      .from('sentinel_audit_runs')
+      .select('*')
+      .gte('created_at', since)
+      .order('created_at', { ascending: false })
+      .limit(10);
+
+    for (const run of runs || []) {
+      const dispatches = run.plan_dispatches || {};
+      for (const [signature, dispatchedAt] of Object.entries(dispatches)) {
+        const age = now.getTime() - new Date(dispatchedAt).getTime();
+        if (!Number.isFinite(age) || age < windowMs) continue;
+        result.checked += 1;
+
+        const { data: proposals } = await supabase
+          .from('remediation_proposals')
+          .select('id')
+          .eq('target_signature', signature)
+          .limit(1);
+        if (Array.isArray(proposals) && proposals.length > 0) continue;
+
+        const { data: prior } = await supabase
+          .from('admin_audit_logs')
+          .select('id')
+          .eq('action', 'REMEDIATION_DISPATCH_UNVERIFIED')
+          .contains('details', { signature })
+          .limit(1);
+        if (Array.isArray(prior) && prior.length > 0) continue;
+
+        await logRemediationAudit(supabase, 'REMEDIATION_DISPATCH_UNVERIFIED', {
+          signature,
+          dispatched_at: dispatchedAt,
+          run_date: run.run_date,
+          age_minutes: Math.round(age / 60000)
+        });
+        result.unverified.push(signature);
+
+        if (process.env.SUPERADMIN_PHONE && typeof sendProactiveWhatsApp === 'function') {
+          const minutes = Math.round(age / 60000);
+          await sendProactiveWhatsApp(
+            process.env.SUPERADMIN_PHONE,
+            `⚠️ *Remediation CI did not start*\n\nA plan was dispatched ${minutes} min ago for signature \`${String(signature).slice(0, 70)}…\` but no proposal arrived.\n\nCheck \`.github/workflows/remediation.yml\` — the autonomous pipeline is blind until this is fixed.`
+          ).catch(() => {});
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[Remediation] Dispatch verification skipped:', err.message);
+  }
+  return result;
+}
+
 /** Normalize an error/friction string into a stable clustering signature. */
 export function buildSignature(text = '') {
   return String(text)

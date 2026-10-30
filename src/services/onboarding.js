@@ -1,8 +1,7 @@
 import crypto from 'crypto';
 import { onboardingStore, chatSessions } from '../routes/whatsapp.js';
 import { sendEmailOtp, sendPassbookWelcomeEmail } from './mailer.js';
-import { checkOwnerVehicleTierLimit, getOrCreateVinTrial } from './vehicles.js';
-import { scheduleTrialExtensionCoupon } from './coupons.js';
+import { checkOwnerVehicleTierLimit, ensureVinRegistryEntry } from './vehicles.js';
 import { createExpiryReminder, buildExpirySpecFromDate } from './maintenanceReminders.js';
 import { resolveUserTimezone } from './globalization.js';
 
@@ -130,19 +129,10 @@ export async function saveVehicleAssetRecord({
     ...(obState.custom_attributes || {})
   };
 
-  let trialInfo = {
-    isFirstRegistration: true,
-    trialStartAt: new Date().toISOString(),
-    trialEndAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-    trialStatus: 'active'
-  };
-
+  // v1.16.0: trials bind to the owner ACCOUNT, never to the VIN/passbook.
+  // The VIN registry keeps immutable asset provenance only.
   if (supabaseClient && coreVin) {
-    trialInfo = await getOrCreateVinTrial({
-      vin: coreVin,
-      ownerId: profileData?.id,
-      supabase: supabaseClient
-    });
+    await ensureVinRegistryEntry({ vin: coreVin, ownerId: profileData?.id, supabase: supabaseClient });
   }
 
   const vehRecord = {
@@ -158,9 +148,6 @@ export async function saveVehicleAssetRecord({
     owner_phone: formattedPhone,
     status: 'ACTIVE',
     vin: coreVin,
-    trial_start_at: trialInfo.trialStartAt,
-    trial_end_at: trialInfo.trialEndAt,
-    trial_status: trialInfo.trialStatus,
     asset_type: (/electric|ev/i.test(coreFuel)) ? 'EV' : (/hybrid/i.test(coreFuel) ? 'HYBRID' : 'ICE'),
     unit_system: profileData?.unit_system || countryInfo?.default_units || 'metric',
     qr_passbook_token: token,
@@ -197,17 +184,9 @@ export async function saveVehicleAssetRecord({
       updated_at: new Date().toISOString()
     }).eq('id', profileData.id);
 
-    // Auto-schedule pre-expiry 30-day extension coupon upon email OTP verification
-    if (coreVin) {
-      await scheduleTrialExtensionCoupon({
-        vin: coreVin,
-        ownerId: profileData.id,
-        ownerPhone: formattedPhone,
-        ownerEmail: coreEmail,
-        trialEndAt: trialInfo.trialEndAt,
-        supabase: supabaseClient
-      });
-    }
+    // v1.16.0: no VIN-bound extension coupon is scheduled at registration.
+    // Extension offers are account-bound and scheduled by trialEngine when an
+    // account trial actually starts.
   }
 
   // Automatically dispatch generated passbook details and token directly to verified email address

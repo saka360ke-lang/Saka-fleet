@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.15.1  
+**Version:** 1.16.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -510,12 +510,12 @@ Owners exceeding capacity are prompted with the next-tier upgrade checkout (or t
 
 ## 11. VIN-Tied Trials & Subscription Tier Limits
 
-### 11.1 Asset-Bound 30-Day Free Trial
-- Every unique vehicle VIN receives a one-time **30-day free trial** starting on the day its first passbook is created.
-- Managed via `vin_registry`:
-  - `trial_granted = true`, `trial_start_at = now()`, `trial_end_at = now() + 30 days`.
-  - Re-registering the same VIN preserves the original trial expiration and does NOT grant extra free days.
-  - If a trial has lapsed, the vehicle requires an active subscription slot to continue live updates.
+### 11.1 Asset-Bound 30-Day Free Trial — **RETIRED (v1.16.0)**
+- The asset-bound (VIN/passbook) trial is **retired**. Commercial state — trial, tier, billing, coupons, quotas — binds to the **OWNER ACCOUNT** (`profiles.id`) only; see §39.4.
+- `vin_registry` is now a **provenance ledger**: `first_registered_at`, `first_owner_id`, `current_vehicle_id`. New rows are written with `trial_granted = false` and `trial_status = 'account_bound'`.
+- Legacy `trial_*` columns on `vehicles` and `vin_registry` are **frozen history** — never written again, never deleted (VIN immutability). `getOrCreateVinTrial()` is a deprecated shim that returns `trialStatus: 'account_bound'` with no trial clock (`LEGACY_VIN_TRIALS=on` only for historical replays).
+- No VIN-bound extension coupon is scheduled at registration. `EXT30-*` `trial_extension` rows are superseded by `npm run migrate:trial-unbind`; live offers are `ACCT30-*` `account_trial_extension` coupons scheduled by `trialEngine` at account-trial start (T-3).
+- Capacity always comes from the account tier + `addon_quantity` (§39), never from a vehicle trial clock.
 
 ### 11.2 Slot-Based Capacity & Upgrade Prompt (v1.15.0)
 - Capacity comes from `subscriptionTiers.js` + the owner's Fleet Command add-on quantity:
@@ -1001,7 +1001,7 @@ Alerts are WhatsApp-ready and unit-aware, e.g. "Service Warning (KDA 123A): Oil 
 - DeepSeek calls are fail-fast: SDK `maxRetries: 0`, `AI_TIMEOUT_MS` 12 s. `naturalParser.extractWithAI` races an 8 s cap and degrades to deterministic extraction.
 
 ### 30.3 Bounded AI payloads
-- `naturalParser` clamps extraction input to `MAX_EXTRACTION_TEXT_CHARS` (600) and the collected-fields JSON to `MAX_COLLECTED_JSON_CHARS` (800); deterministic parsing still sees the full text.
+- `naturalParser` clamps extraction input to `MAX_EXTRACTION_TEXT_CHARS` (1200 — paragraph intake) and the collected-fields JSON to `MAX_COLLECTED_JSON_CHARS` (800); deterministic parsing still sees the full text.
 - `naturalParser.extractWithAI` keeps `maxTokens` 600; intent calls keep `maxTokens` 800. Question rendering is cached (`QUIZ_QUESTION_CACHE_MS` 15 min, max 300).
 
 ### 30.4 Cloud Run warm-instance settings (operations)
@@ -1602,7 +1602,7 @@ _End of document — v1.14.1._
 - **Expiry:** trial → `EXPIRED`, account → Free, excess vehicles → `PAUSED` (never deleted), owner prompted to `KEEP_VEHICLE`. The existing 15-day winback worker still fires afterwards.
 - **Extensions:** `account_trial_extension` coupons only; cumulative lifetime capped by `TRIAL_MAX_TOTAL_DAYS` (45); nudges re-arm after an extension.
 - **Funnel:** `getTrialFunnelStats()` + `admin trial-stats [Nd]` (deterministic, audited `ADMIN_TRIAL_STATS`).
-- The VIN-bound 30-day asset trial (§11) remains separate and untouched.
+- The legacy VIN-bound asset trial is **retired** (§11.1): trials, subscriptions, extension coupons and quotas bind to the owner account only. `vin_registry` records provenance, never trial state.
 
 
 ### 39.5 The "Simple Rules" engine
@@ -1648,4 +1648,42 @@ _End of document — v1.14.1._
 
 ### 39.10 Governance
 Subscription math is engine-owned and never AI-generated. No autonomous remediation may edit `paystack.js`, the tier registry, the trial engine or the schema (forbidden-path guard). Migration + schema changes require a human Cline session. `.clinerules` rules 23–28 mirror this section.
+
+---
+
+## 40. v1.16.0 — Compliance Separation, Account-Only Binding & Conversational Speed
+
+### 40.1 Owner driver profiles (every owner, immediately)
+- On `vehicle_registration` completion (quiz_v2 + legacy paths) Saka sets `profiles.driver_profile_pending = true` and **immediately starts the `driver_onboarding` flow** for the owner with the verified email prefilled.
+- The owner's minimum compliance is **skippable** (`ctx.driverSelfProfile` → optional field); a gated driver's minimum is mandatory. `profiles.driver_profile_completed_at` is stamped when email + minimal compliance are valid.
+- `driverOnboardingFields()` skips anything already on file (email/OTP, valid minimal, valid additional) using the live gate state — this fixes the "Already told you earlier" friction cluster.
+- The `"driver profile"` command routes deterministically into the flow; idle discovery nudges owners whose profile is pending.
+
+### 40.2 Vehicle compliance vs driver compliance (permanent separation)
+- **Vehicle** → `vehicle_compliances` + `VEHICLE_COMPLIANCE_CATALOG` (`src/services/vehicleCompliance.js`): insurance (policy + expiry), inspection/MOT, road service licence (PSL), road tax, speed limiter, registration, emissions… region + asset filtered.
+- **Driver** → `driver_compliances` + `COMPLIANCE_CATALOG` (licence, PSV badge, CPC, PDP, operator card).
+- One paragraph can save several vehicle items: `parseVehicleComplianceParagraph()` slices per-item segments so numbers/dates never cross-contaminate. `submitVehicleCompliance()` upserts the ledger row, dual-writes `vehicles.insurance_expiry`/`inspection_expiry`, and creates the linked expiry reminder (`subject_type='vehicle_compliance'`).
+- Registration seeds vehicle compliance rows for insurance/inspection through the same engine.
+- Migration: `npm run migrate:vehicle-compliance` (table + indexes + one-time backfill).
+
+### 40.3 Paragraph intake
+- `MAX_EXTRACTION_TEXT_CHARS` is 1200. Quiz turns enter **paragraph mode** (≥80 chars or ≥2 sentence breaks with ≥2 remaining fields): `extractWithAI()` reads all remaining fields first; strict parsing still applies to the current field. `applyTextExtraction()` now captures a plate embedded in a paragraph.
+
+### 40.4 Account-only commercial binding (deep-audit outcome)
+- The v1.15.0 engine was correct but the legacy VIN trial still ran in parallel (phantom vehicle clock, orphan `EXT30` coupons, duplicate trial/winback workers). v1.16.0 removes it (see §11.1): provenance-only `vin_registry`, no registration coupon, account-bound `ACCT30` offers, one lifecycle worker (`runTrialLifecycleSweep` now also dispatches account offers + the 15-day winback), `coupons.owner_id` (+ phone backfill via `npm run migrate:trial-unbind`), and a single trial-redemption path (`apply_coupon` → `applyAccountTrialExtensionCoupon`).
+
+### 40.5 Background follow-up lane (Saka never stalls)
+- `pending_followups` + `src/services/followups.js`: slow jobs (fleet reports) reply instantly with a deterministic ACK (`followUpAckText`, zero AI tokens) and are executed by a 30s worker, which sends the result as a follow-up while the user keeps chatting. Enqueue failure falls back to the synchronous path.
+- Migration: `npm run migrate:followups`.
+- Existing wins retained: quiz turns skip the DeepSeek intent call; question renders are cached; the webhook ACKs before processing.
+
+### 40.6 Self-healing pipeline repair
+- `.github/workflows/remediation.yml` was rejected by GitHub (every push produced a 0-job failure run; `repository_dispatch` never spawned a run). It is rewritten minimally (no `types` filter, fixed concurrency, job-level timeouts only) and must be verified with a `workflow_dispatch` run after deploy.
+- New `checkRemediationDispatchVerification()` (15-min tick): any dispatched signature without a proposal after 20 minutes raises `REMEDIATION_DISPATCH_UNVERIFIED` + a Superadmin WhatsApp alert (once per signature).
+- Superadmin action discovery now enumerates the FULL command surface (exhaustive render, zero truncation).
+
+### 40.7 Migrations & tests
+- `npm run migrate:trial-unbind`, `migrate:driver-profile`, `migrate:vehicle-compliance`, `migrate:followups` (all idempotent; applied on release).
+- Suites: `test_trial_unbind.js`, `test_vehicle_compliance.js`, `test_driver_profile_onboarding.js`, updated `test_new_features.js`, `test_agent_training.js`.
+
 

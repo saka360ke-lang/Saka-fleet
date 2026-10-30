@@ -28,6 +28,7 @@ import {
   notifyOwnerComplianceCleared
 } from '../services/driverAssignments.js';
 import { resolveBundledCatalog, parseComplianceItem } from '../services/complianceCatalog.js';
+import { parseVehicleComplianceParagraph, submitVehicleCompliance } from '../services/vehicleCompliance.js';
 import { handleStage1CoreCapture, handleStage2OptionalWeaving } from '../services/onboarding.js';
 import { saveChatMessage, getRecentChatHistory } from '../services/chatHistory.js';
 import { sendEmailOtp, sendSupportEscalationEmail, sendMfaEmail } from '../services/mailer.js';
@@ -63,6 +64,7 @@ import { detectCountryFromPhone as detectCountryGlobal, resolveUserTimezone } fr
 import { applyOdometerReading, applyOperatingHours } from '../services/maintenanceReminders.js';
 import { handleQuizTurn, detectQuizStart, shouldPauseQuizForChat, getCurrentQuizField, detectFlowSwitch, getFlowDefinition } from '../services/quizEngine.js';
 import { renderActionDiscovery, composeMessage } from '../services/conversationEngine.js';
+import { enqueueFollowUp, FOLLOWUP_KINDS, followUpAckText } from '../services/followups.js';
 import { enqueueUserMessage } from '../services/messageQueue.js';
 import { loadSessionSnapshot, persistSessionSnapshot } from '../services/sessionStore.js';
 import { createResilientClient } from '../services/supabaseClient.js';
@@ -253,7 +255,16 @@ export function buildRoleContext(profileData, vehicles = [], senderPhone = '') {
 
   const commands = [];
   if (roles.includes('Superadmin')) {
-    commands.push('admin report', 'admin audit <plate or VIN>', 'admin alerts', 'adminrules', 'admin sentinel diagnose', 'adminstart / adminstop');
+    // v1.16.0 — the FULL admin command surface (the AI once summarised a
+    // partial list; admins need the complete index).
+    commands.push(
+      'adminstart', 'adminstop',
+      'admin report', 'admin audit <plate or VIN>', 'admin alerts',
+      'admin ai-stats', 'admin usage [Nh]', 'admin trial-stats [Nd]',
+      'admin accept fix <CODE>', 'admin decline fix <CODE>',
+      'admin modify fix <CODE> <feedback>',
+      'adminrules', 'admin sentinel diagnose'
+    );
   }
   if (roles.includes('Owner')) {
     commands.push('register vehicle', 'my vehicles', 'switch vehicle', 'log expense', 'log earnings', 'update odometer',
@@ -277,7 +288,8 @@ export async function renderRoleActions({ profileData, vehicles, senderPhone, la
     vehicles,
     language,
     countryInfo,
-    profile: profileData
+    profile: profileData,
+    exhaustive: roles.includes('Superadmin')
   });
 }
 
@@ -1071,6 +1083,57 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             language: targetLang,
             countryInfo
           });
+          if (profileData?.driver_profile_pending) {
+            customReply += `\n\n👤 *Your driver profile is incomplete.* Reply *"driver profile"* to add your licence — it powers renewal reminders and driver assignments.`;
+          }
+        }
+
+        // VEHICLE compliance intake — strictly separate from DRIVER compliance.
+        // A vehicle carries asset permits (insurance, inspection/MOT, PSL, road
+        // tax, speed-limiter…); drivers carry licences/badges. One paragraph can
+        // save several vehicle items at once.
+        if (!isSpecialFlowHandled && !session.quiz && supabaseClient && profileData?.id
+          && !['LOG_EXPENSE', 'LOG_EARNINGS'].includes(intent)
+          && /\b(insurance|insured|inspection|mot\b|roadworthy|road\s*service|psl\b|road\s*tax|licence\s*disc|license\s*disc|speed\s*limiter|registration|emissions|policy)\b/i.test(messageText)
+          && /\d/.test(messageText)
+          && (/\b(expires?|expiry|expiring|due|renew|renewal|valid\s+(?:until|till|for))\b/i.test(messageText) || /\b\d{4}-\d{2}-\d{2}\b/.test(messageText))) {
+          const ownedVehicles = existingVehicles.filter((v) => v.owner_id === profileData.id);
+          const targetVehicle = ownedVehicles.find((v) => v.id === currentActiveVehicle?.id)
+            || (ownedVehicles.length === 1 ? ownedVehicles[0] : null);
+          if (targetVehicle) {
+            const assetType = targetVehicle.asset_type || targetVehicle.metadata?.asset_type || null;
+            const countryCode = countryInfo?.country_code || 'GLOBAL';
+            const vehicleTimeZone = resolveUserTimezone({ countryInfo, profile: profileData });
+            const parsedItems = parseVehicleComplianceParagraph(messageText, {
+              countryCode,
+              assetType,
+              locale: countryInfo?.locale || 'en-US',
+              timeZone: vehicleTimeZone
+            });
+            if (parsedItems.length > 0) {
+              isSpecialFlowHandled = true;
+              const savedLines = [];
+              for (const entry of parsedItems) {
+                const result = await submitVehicleCompliance({
+                  supabase: supabaseClient,
+                  vehicle: targetVehicle,
+                  item: entry.item,
+                  parsed: entry.parsed,
+                  countryCode,
+                  assetType,
+                  ownerId: profileData.id,
+                  timeZone: vehicleTimeZone
+                });
+                if (result.ok) {
+                  const expiryLabel = entry.parsed.lifetime ? 'valid for life' : entry.parsed.expiry;
+                  savedLines.push(`• ${entry.item.label}: ${expiryLabel}${entry.parsed.number ? ` (${entry.parsed.number})` : ''}`);
+                }
+              }
+              customReply = savedLines.length
+                ? `🛡️ *Vehicle compliance saved — ${targetVehicle.plate_number}*\n\n${savedLines.join('\n')}\n\n_Vehicle permits are tracked separately from your personal driver compliance._\n\nRenewal reminders are active 30/14/7/24h before expiry.`
+                : 'I could not read those vehicle compliance details. Try: _"Insurance policy ABC123 expires 2027-05-15, PSL 445566 expires 30 Nov 2026"_.';
+            }
+          }
         }
 
         // A driver can add or refresh any compliance item from chat at any
@@ -1295,6 +1358,41 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             onboardingStore.delete(senderPhone);
             session.state = quizTurn.completed ? 'ACTIVE' : 'ONBOARDING';
             if (quizTurn.completed) session.onboardingStep = null;
+
+            // v1.16.0 — EVERY owner immediately starts their own driver profile
+            // at onboarding completion. The email is already verified, so this
+            // is one short step (minimal compliance) and remains skippable.
+            if (quizTurn.completed && supabaseClient) {
+              try {
+                await supabaseClient.from('profiles').update({
+                  driver_profile_pending: true,
+                  updated_at: new Date().toISOString()
+                }).eq('id', profileData.id);
+                const { data: freshProfile } = await supabaseClient
+                  .from('profiles')
+                  .select('*')
+                  .eq('id', profileData.id)
+                  .maybeSingle();
+                const driverProfile = freshProfile || profileData;
+                const driverIntro = await handleQuizTurn({
+                  session,
+                  messageText: '',
+                  startFlow: 'driver_onboarding',
+                  prefill: { driver_email: driverProfile.email || null },
+                  ctx: {
+                    ...quizCtx,
+                    profile: driverProfile,
+                    intent: 'DRIVER_PROFILE',
+                    driverSelfProfile: true
+                  }
+                });
+                if (driverIntro.handled) {
+                  customReply = `${quizTurn.reply}\n\n👤 *One quick thing — your own driver profile*\n\n${driverIntro.reply}`;
+                }
+              } catch (driverErr) {
+                console.warn('[Onboarding] Owner driver profile start skipped:', driverErr.message);
+              }
+            }
           }
 
           if (quizTurn.completed && quizTurn.flow === 'delete_account') {
@@ -2046,33 +2144,60 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
                 customReply = `📊 *Monthly Report Limit Reached*\n\nThe Free plan includes *${quota.limit} report per month* and you have used it (resets monthly).\n\nUnlock unlimited reports, full AI and compliance tracking with *${getTierLabel(entitlements?.nextTierKey || 'solo_pro')}*:\n👉 ${upgrade.ok ? upgrade.checkoutUrl : 'https://sakafleet.com/pricing'}`;
               } else {
               const reportType = resolveReportType(mergedExt.report_type || messageText, 'fleet');
-              const fleetReport = await buildFleetReport({
+              // v1.16.0 — slow-report lane: ACK instantly (zero AI tokens),
+              // build in the background, deliver the result as a follow-up while
+              // the user keeps chatting.
+              const queued = await enqueueFollowUp({
                 supabase: supabaseClient,
-                type: reportType,
-                ownerId: existingVehicles.some((v) => v.owner_id === profileData?.id) ? profileData?.id : null,
-                driverId: existingVehicles.some((v) => v.assigned_driver_id === profileData?.id) ? profileData?.id : null,
-                countryInfo,
-                profile: profileData
+                phone: senderPhone,
+                kind: FOLLOWUP_KINDS.FLEET_REPORT,
+                payload: {
+                  ownerId: existingVehicles.some((v) => v.owner_id === profileData?.id) ? profileData?.id : null,
+                  driverId: existingVehicles.some((v) => v.assigned_driver_id === profileData?.id) ? profileData?.id : null,
+                  profileId: profileData?.id || null,
+                  reportType,
+                  countryCode: countryInfo?.country_code || null,
+                  locale: countryInfo?.locale || 'en-US',
+                  currency: countryInfo?.currency || 'USD',
+                  country: countryInfo?.country || null,
+                  language: targetLang,
+                  unitSystem: profileData?.unit_system || 'metric',
+                  timeZone: resolveUserTimezone({ countryInfo, profile: profileData }),
+                  phone: senderPhone,
+                  email: profileData?.email || null
+                }
               });
-              customReply = fleetReport?.ok && fleetReport.text
-                ? fleetReport.text
-                : `📊 *Fleet Reports & Summary*\n\nYou have ${existingVehicles.length} active vehicle(s).\n\nAsk for *fleet status*, *compliance report*, *maintenance report* or *financial report*.`;
-              if (profileData?.id && fleetReport?.ok) {
-                try {
-                  await recordReportUsage({ supabase: supabaseClient, ownerId: profileData.id });
-                  // Trial activation #3: first fleet report generated.
-                  await recordActivationEvent({
-                    supabase: supabaseClient,
-                    ownerId: profileData.id,
-                    event: ACTIVATION_EVENTS.REPORT_GENERATED
-                  });
-                  entitlements = await getEntitlements({
-                    supabase: supabaseClient,
-                    ownerId: profileData.id,
-                    profile: profileData,
-                    useCache: false
-                  });
-                } catch { /* quota/activation are best-effort */ }
+              if (queued) {
+                customReply = followUpAckText(reportType);
+              } else {
+                const fleetReport = await buildFleetReport({
+                  supabase: supabaseClient,
+                  type: reportType,
+                  ownerId: existingVehicles.some((v) => v.owner_id === profileData?.id) ? profileData?.id : null,
+                  driverId: existingVehicles.some((v) => v.assigned_driver_id === profileData?.id) ? profileData?.id : null,
+                  countryInfo,
+                  profile: profileData
+                });
+                customReply = fleetReport?.ok && fleetReport.text
+                  ? fleetReport.text
+                  : `📊 *Fleet Reports & Summary*\n\nYou have ${existingVehicles.length} active vehicle(s).\n\nAsk for *fleet status*, *compliance report*, *maintenance report* or *financial report*.`;
+                if (profileData?.id && fleetReport?.ok) {
+                  try {
+                    await recordReportUsage({ supabase: supabaseClient, ownerId: profileData.id });
+                    // Trial activation #3: first fleet report generated.
+                    await recordActivationEvent({
+                      supabase: supabaseClient,
+                      ownerId: profileData.id,
+                      event: ACTIVATION_EVENTS.REPORT_GENERATED
+                    });
+                    entitlements = await getEntitlements({
+                      supabase: supabaseClient,
+                      ownerId: profileData.id,
+                      profile: profileData,
+                      useCache: false
+                    });
+                  } catch { /* quota/activation are best-effort */ }
+                }
               }
               }
             }
@@ -2670,16 +2795,33 @@ async function maybeHandleSubscriptionTurn({
   if (wantsExtend) {
     let couponCode = mergedExt.coupon_code || (text.match(/\b[A-Z0-9][A-Z0-9-]{4,}\b/i) || [])[0] || null;
     if (!couponCode) {
-      const { data } = await supabaseClient
-        .from('coupons')
-        .select('code')
-        .eq('assigned_to_phone', senderPhone)
-        .eq('applicable_to', 'account_trial_extension')
-        .neq('status', 'applied')
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      couponCode = data?.code || null;
+      // v1.16.0 — account-first lookup (owner_id), phone as legacy fallback.
+      let openCoupon = null;
+      try {
+        const { data } = await supabaseClient
+          .from('coupons')
+          .select('code')
+          .eq('owner_id', ownerId)
+          .eq('applicable_to', 'account_trial_extension')
+          .neq('status', 'applied')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        openCoupon = data;
+      } catch { openCoupon = null; }
+      if (!openCoupon?.code) {
+        const { data } = await supabaseClient
+          .from('coupons')
+          .select('code')
+          .eq('assigned_to_phone', senderPhone)
+          .eq('applicable_to', 'account_trial_extension')
+          .neq('status', 'applied')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        openCoupon = data;
+      }
+      couponCode = openCoupon?.code || null;
     }
     if (!couponCode) {
       return {

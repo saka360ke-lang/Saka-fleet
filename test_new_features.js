@@ -2,7 +2,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
-import { checkOwnerVehicleTierLimit, getOrCreateVinTrial } from './src/services/vehicles.js';
+import { checkOwnerVehicleTierLimit, ensureVinRegistryEntry } from './src/services/vehicles.js';
 import {
   scheduleTrialExtensionCoupon,
   applyTrialExtensionCoupon,
@@ -50,39 +50,33 @@ async function runTests() {
     if (pErr) throw pErr;
     console.log('✅ Created test owner profile (Free Plan, 1 slot limit)');
 
-    // 1.2 First-Ever Registration of VIN -> Must get 30-day trial
-    const trial1 = await getOrCreateVinTrial({
+    // 1.2 First-Ever Registration of VIN -> provenance only (v1.16.0)
+    const registry1 = await ensureVinRegistryEntry({
       vin: testVin,
       ownerId: ownerProfile.id,
       supabase
     });
-    console.log('VIN Trial 1 Creation:', {
-      isFirstRegistration: trial1.isFirstRegistration,
-      trialStatus: trial1.trialStatus,
-      trialEndAt: trial1.trialEndAt
-    });
-    if (!trial1.isFirstRegistration || trial1.trialStatus !== 'active') {
-      throw new Error('Expected first-ever registration to grant active 30-day trial');
+    console.log('VIN Registry 1 Creation:', { isFirstRegistration: registry1.isFirstRegistration });
+    if (!registry1.isFirstRegistration) {
+      throw new Error('Expected first-ever registration to be recorded in the VIN provenance ledger');
     }
-    const daysDiff1 = Math.round((new Date(trial1.trialEndAt) - new Date(trial1.trialStartAt)) / (1000 * 60 * 60 * 24));
-    if (daysDiff1 !== 30) throw new Error(`Expected 30-day trial interval, got ${daysDiff1} days`);
-    console.log('✅ Asset-bound 30-day trial successfully granted on initial registration');
+    const { data: vinRow1 } = await supabase.from('vin_registry').select('*').eq('vin', testVin).maybeSingle();
+    if (!vinRow1 || vinRow1.trial_granted !== false || vinRow1.trial_status !== 'account_bound') {
+      throw new Error('Expected an account-bound provenance row with NO asset trial granted');
+    }
+    console.log('✅ VIN provenance recorded; no asset-bound trial is minted (trials bind to the owner account)');
 
-    // 1.3 Subsequent registration of same VIN -> Clock must be preserved (No new trial)
-    const trial2 = await getOrCreateVinTrial({
+    // 1.3 Subsequent registration of same VIN -> provenance preserved
+    const registry2 = await ensureVinRegistryEntry({
       vin: testVin,
       ownerId: ownerProfile.id,
       supabase
     });
-    console.log('VIN Trial 2 (Re-query same VIN):', {
-      isFirstRegistration: trial2.isFirstRegistration,
-      trialStatus: trial2.trialStatus,
-      trialEndAt: trial2.trialEndAt
-    });
-    if (trial2.isFirstRegistration !== false || new Date(trial2.trialEndAt).getTime() !== new Date(trial1.trialEndAt).getTime()) {
-      throw new Error('Expected subsequent registration to preserve existing trial clock without granting new trial');
+    console.log('VIN Registry 2 (Re-query same VIN):', { isFirstRegistration: registry2.isFirstRegistration });
+    if (registry2.isFirstRegistration !== false) {
+      throw new Error('Expected subsequent registration to preserve the provenance row');
     }
-    console.log('✅ Asset-bound VIN immutability verified: subsequent registrations do NOT grant extra free trials');
+    console.log('✅ VIN immutability verified: subsequent registrations never mint a second trial artifact');
 
     // 1.4 Register Vehicle in DB
     const { data: testVeh, error: vErr } = await supabase.from('vehicles').insert([{
@@ -95,9 +89,6 @@ async function runTests() {
       fuel_type: 'Diesel',
       current_mileage: 45000,
       vin: testVin,
-      trial_start_at: trial1.trialStartAt,
-      trial_end_at: trial1.trialEndAt,
-      trial_status: 'active',
       qr_passbook_token: 'SK-PASSBOOK-TEST01'
     }]).select().single();
     if (vErr) throw vErr;
@@ -130,7 +121,7 @@ async function runTests() {
       ownerId: ownerProfile.id,
       ownerPhone: testOwnerPhone,
       ownerEmail: testOwnerEmail,
-      trialEndAt: trial1.trialEndAt,
+      trialEndAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
       supabase
     });
     console.log('Scheduled Coupon Result:', {
@@ -161,9 +152,8 @@ async function runTests() {
       throw new Error('Failed to apply extension coupon');
     }
     const newEndMs = new Date(applyRes.newTrialEndAt).getTime();
-    const oldEndMs = new Date(trial1.trialEndAt).getTime();
-    const extendedDays = Math.round((newEndMs - oldEndMs) / (1000 * 60 * 60 * 24));
-    if (extendedDays !== 30) throw new Error(`Expected exactly 30 days added, got ${extendedDays}`);
+    const extendedDays = Math.round((newEndMs - Date.now()) / (1000 * 60 * 60 * 24));
+    if (extendedDays < 29 || extendedDays > 30) throw new Error(`Expected ~30 days added, got ${extendedDays}`);
     console.log('✅ Conversational extension coupon successfully added 30 free days to vehicle trial');
 
     // 2.3 Prevent Duplicate Redemption

@@ -153,7 +153,7 @@ async function run() {
     check(incomplete.missing.some((m) => m.key === 'notes') === false, 'Optional notes are excluded from dynamic prompts');
 
     // AI payload bounds (latency guard for the DeepSeek extraction call)
-    check(MAX_EXTRACTION_TEXT_CHARS === 600, 'Extraction text bound stays tightly capped at 600 chars');
+    check(MAX_EXTRACTION_TEXT_CHARS === 1200, 'Extraction text bound is capped at 1200 chars (paragraph intake)');
     const longText = 'x'.repeat(MAX_EXTRACTION_TEXT_CHARS + 200);
     const clamped = clampExtractionText(longText);
     check(clamped.length <= MAX_EXTRACTION_TEXT_CHARS + 1, 'Long extraction text is clamped to the AI payload bound');

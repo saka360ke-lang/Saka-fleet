@@ -17,7 +17,8 @@
  * T-3d value digest, T-24h urgent, T-0 expiry -> Free (PAUSED vehicles).
  */
 
-import { getTierLocalPrice } from './paystack.js';
+import { getTierLocalPrice, initializePaystackCheckout } from './paystack.js';
+import { generateWinback40Coupon } from './coupons.js';
 import {
   getTierLabel,
   normalizeTierKey,
@@ -89,6 +90,93 @@ async function fetchOwner(supabase, ownerId) {
 }
 
 /**
+ * Find an existing open (scheduled/dispatched) account-trial extension coupon.
+ * Owner-first, phone-fallback for legacy rows without `owner_id`.
+ */
+async function findOpenAccountExtensionCoupon(supabase, ownerId, phone = null) {
+  try {
+    const { data } = await supabase.from('coupons')
+      .select('id, code, status, applicable_to')
+      .eq('applicable_to', 'account_trial_extension')
+      .eq('owner_id', ownerId)
+      .neq('status', 'applied')
+      .limit(1);
+    if (Array.isArray(data) && data.length) return data[0];
+  } catch { /* owner_id column may not exist yet on old schemas */ }
+  if (phone) {
+    try {
+      const { data } = await supabase.from('coupons')
+        .select('id, code, status, applicable_to')
+        .eq('applicable_to', 'account_trial_extension')
+        .eq('assigned_to_phone', phone)
+        .neq('status', 'applied')
+        .limit(1);
+      if (Array.isArray(data) && data.length) return data[0];
+    } catch { /* fail-soft */ }
+  }
+  return null;
+}
+
+/**
+ * v1.16.0 — schedule the T-3 account-trial extension offer. Bound to the
+ * OWNER ACCOUNT (coupons.owner_id + assigned_to_phone), never to a VIN.
+ * Idempotent: an open offer is reused instead of duplicated.
+ */
+export async function scheduleAccountTrialExtensionCoupon({
+  supabase,
+  ownerId,
+  phone = null,
+  email = null,
+  endsAt,
+  days = 30
+} = {}) {
+  if (!supabase || !ownerId || !endsAt) return { ok: false, error: 'ownerId + endsAt required' };
+  const existing = await findOpenAccountExtensionCoupon(supabase, ownerId, phone);
+  if (existing) return { ok: true, coupon: existing, reused: true };
+
+  const endsMs = new Date(endsAt).getTime();
+  if (!Number.isFinite(endsMs)) return { ok: false, error: 'invalid trial end' };
+  const now = new Date();
+  const scheduledAt = new Date(endsMs - 3 * DAY_MS);
+  if (scheduledAt.getTime() <= now.getTime()) {
+    return { ok: false, error: 'trial ends too soon to schedule an extension offer' };
+  }
+
+  const code = `ACCT30-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+  const record = {
+    code,
+    discount_percent: 100,
+    trial_extension_days: Math.max(1, Math.floor(Number(days) || 30)),
+    max_uses: 1,
+    current_uses: 0,
+    created_by: 'ACCOUNT_TRIAL_START',
+    vin: null,
+    assigned_to_phone: phone || null,
+    applicable_to: 'account_trial_extension',
+    scheduled_dispatch_at: scheduledAt.toISOString(),
+    status: 'scheduled',
+    expires_at: new Date(endsMs + 7 * DAY_MS).toISOString(),
+    owner_id: ownerId
+  };
+
+  try {
+    let { data, error } = await supabase.from('coupons').insert([record]).select().single();
+    if (error) {
+      // Pre-migration fallback: retry without the owner_id column.
+      const { owner_id, ...fallback } = record;
+      const retry = await supabase.from('coupons').insert([fallback]).select().single();
+      data = retry.data;
+      error = retry.error;
+    }
+    if (error) return { ok: false, error: error.message };
+    if (email) console.log(`[TrialEngine] Account extension offer ${code} scheduled for ${email}.`);
+    return { ok: true, coupon: data, reused: false };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
  * Start the one-time account trial. Idempotent: an existing active trial is
  * returned as-is; a consumed `trial_used_at` blocks a second trial.
  * NO Paystack call happens here — that is the no-card guarantee.
@@ -144,6 +232,17 @@ export async function startAccountTrial({ supabase, ownerId, tierKey, interval =
   }).eq('id', ownerId);
 
   invalidateEntitlements(ownerId);
+
+  // v1.16.0 — schedule the account-bound T-3 extension offer against the REAL
+  // account trial end (never a VIN). Fire-and-forget: scheduling can never
+  // block or fail the trial start.
+  scheduleAccountTrialExtensionCoupon({
+    supabase,
+    ownerId,
+    phone: owner.phone_number,
+    email: owner.email,
+    endsAt: record.ends_at
+  }).catch(() => {});
 
   return {
     started: true,
@@ -272,6 +371,16 @@ export async function extendAccountTrial({ supabase, ownerId, days = 15, couponC
     updated_at: nowIso
   }).eq('id', trial.id);
   if (error) return { ok: false, error: error.message };
+
+  // Re-arm the T-3 extension offer against the NEW account trial end.
+  const owner = await fetchOwner(supabase, ownerId);
+  scheduleAccountTrialExtensionCoupon({
+    supabase,
+    ownerId,
+    phone: owner?.phone_number || null,
+    email: owner?.email || null,
+    endsAt: newEndIso
+  }).catch(() => {});
 
   return {
     ok: true,
@@ -409,12 +518,137 @@ async function stampTrial(supabase, trialId, patch) {
   } catch { /* fail-soft */ }
 }
 
+/** Deterministic T-3 extension-offer copy (zero AI tokens). */
+function accountExtensionOfferText({ ownerName, coupon, trial }) {
+  const ends = trial?.ends_at ? new Date(trial.ends_at).toLocaleDateString() : 'soon';
+  return `🎁 *Your Saka trial ends in 3 days* — ${ownerName || 'there'}\n\n` +
+    `Your account trial ends ${ends}. Coupon *${coupon.code}* adds 30 free days and applies to the whole account — not one vehicle.\n\n` +
+    `Reply *"extend trial ${coupon.code}"* (or just *"extend trial"*).`;
+}
+
+/** Deterministic 15-day overdue winback copy. */
+function winbackText({ coupon, checkoutUrl }) {
+  return `🎁 *Special offer from Saka Fleet*\n\nYour Saka trial ended 15 days ago. For the next 15 days only, take *40% OFF* your first year:\n\n` +
+    `• Coupon: *${coupon.code}*\n• Expires: ${new Date(coupon.expires_at).toLocaleDateString()}\n\n` +
+    `👉 Claim your offer: ${checkoutUrl || 'https://sakafleet.com/pricing'}`;
+}
+
+async function findActiveTrialByPhone(supabase, phone) {
+  try {
+    const { data: profile } = await supabase.from('profiles').select('id').eq('phone_number', phone).maybeSingle();
+    if (!profile?.id) return null;
+    return await getActiveTrialRow(supabase, profile.id);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Dispatch due account-bound extension offers (scheduled T-3). Only a LIVE
+ * account trial may receive the offer; otherwise the coupon is superseded so
+ * it can never send a phantom message.
+ */
+async function dispatchDueAccountTrialCoupons({ supabase, sendWhatsAppFn, now = new Date(), stats }) {
+  if (!supabase) return;
+  try {
+    const { data: due } = await supabase
+      .from('coupons')
+      .select('*')
+      .eq('applicable_to', 'account_trial_extension')
+      .eq('status', 'scheduled')
+      .lte('scheduled_dispatch_at', now.toISOString())
+      .limit(50);
+    for (const coupon of due || []) {
+      const trial = (coupon.owner_id ? await getActiveTrialRow(supabase, coupon.owner_id) : null)
+        || (coupon.assigned_to_phone ? await findActiveTrialByPhone(supabase, coupon.assigned_to_phone) : null);
+      if (!trial) {
+        await supabase.from('coupons').update({ status: 'superseded', updated_at: now.toISOString() }).eq('id', coupon.id);
+        continue;
+      }
+      const owner = await fetchOwner(supabase, trial.owner_id);
+      const phone = coupon.assigned_to_phone || owner?.phone_number;
+      if (phone && sendWhatsAppFn) {
+        await sendWhatsAppFn(phone, accountExtensionOfferText({ ownerName: owner?.full_name, coupon, trial })).catch(() => {});
+        stats.sent = (stats.sent || 0) + 1;
+        stats.extensionOffers = (stats.extensionOffers || 0) + 1;
+      }
+      await supabase.from('coupons').update({
+        status: 'dispatched',
+        dispatched_at: now.toISOString(),
+        whatsapp_notified: Boolean(phone),
+        updated_at: now.toISOString()
+      }).eq('id', coupon.id);
+    }
+  } catch (err) {
+    console.warn('[TrialEngine] Account coupon dispatch skipped:', err.message);
+  }
+}
+
+/**
+ * 15-day overdue winback, rebased on ACCOUNT state (trial_sessions.EXPIRED).
+ * Never reads vehicles.trial_end_at — the phantom VIN clock is retired.
+ */
+async function processAccountWinbacks({ supabase, sendWhatsAppFn, now = new Date(), stats }) {
+  if (!supabase || !sendWhatsAppFn) return;
+  try {
+    const from = new Date(now.getTime() - 16 * DAY_MS).toISOString();
+    const to = new Date(now.getTime() - 15 * DAY_MS).toISOString();
+    const { data: expiredTrials } = await supabase
+      .from('trial_sessions')
+      .select('*')
+      .eq('status', 'EXPIRED')
+      .gte('ends_at', from)
+      .lte('ends_at', to)
+      .limit(20);
+
+    for (const trial of expiredTrials || []) {
+      const owner = await fetchOwner(supabase, trial.owner_id);
+      if (!owner?.phone_number) continue;
+      const status = String(owner.subscription_status || '').toUpperCase();
+      if (isPaidTierKey(normalizeTierKey(owner.subscription_tier)) && ['ACTIVE', 'TRIALING'].includes(status)) {
+        continue; // converted since expiry — never send a winback
+      }
+      const { data: existing } = await supabase
+        .from('coupons')
+        .select('id')
+        .eq('assigned_to_phone', owner.phone_number)
+        .eq('applicable_to', 'annual_subscription')
+        .limit(1);
+      if (Array.isArray(existing) && existing.length) continue;
+
+      const coupon = await generateWinback40Coupon({
+        ownerPhone: owner.phone_number,
+        ownerId: trial.owner_id,
+        vin: null,
+        supabase
+      });
+      if (!coupon) continue;
+
+      const checkout = await initializePaystackCheckout({
+        supabase,
+        userPhone: owner.phone_number,
+        targetTierKey: normalizeTierKey(trial.tier) || 'solo_pro',
+        billingInterval: 'annual',
+        userEmail: owner.email,
+        userId: trial.owner_id,
+        currency: 'USD'
+      }).catch(() => null);
+
+      await sendWhatsAppFn(owner.phone_number, winbackText({ coupon, checkoutUrl: checkout?.checkoutUrl })).catch(() => {});
+      stats.sent = (stats.sent || 0) + 1;
+      stats.winbacks = (stats.winbacks || 0) + 1;
+    }
+  } catch (err) {
+    console.warn('[TrialEngine] Winback sweep skipped:', err.message);
+  }
+}
+
 /**
  * Trial lifecycle sweep (15-minute tick in index.js).
  * Each stage fires exactly once per trial, guarded by one-shot timestamps.
  */
 export async function runTrialLifecycleSweep({ supabase, sendWhatsAppFn = null, now = new Date(), limit = 100 } = {}) {
-  const stats = { scanned: 0, sent: 0, activationNudges: 0, midpoint: 0, t3: 0, t24: 0, expired: 0 };
+  const stats = { scanned: 0, sent: 0, activationNudges: 0, midpoint: 0, t3: 0, t24: 0, expired: 0, extensionOffers: 0, winbacks: 0 };
   if (!supabase) return stats;
 
   const { data: trials, error } = await supabase
@@ -549,6 +783,11 @@ export async function runTrialLifecycleSweep({ supabase, sendWhatsAppFn = null, 
     }
   }
 
+  // v1.16.0 — account-bound coupon dispatch + winback run in the SAME worker
+  // so trials can never produce two competing message streams.
+  await dispatchDueAccountTrialCoupons({ supabase, sendWhatsAppFn, now, stats });
+  await processAccountWinbacks({ supabase, sendWhatsAppFn, now, stats });
+
   return stats;
 }
 
@@ -674,6 +913,7 @@ export default {
   getTrialStatus,
   recordActivationEvent,
   issueActivationCoupon,
+  scheduleAccountTrialExtensionCoupon,
   extendAccountTrial,
   applyAccountTrialExtensionCoupon,
   formatActivationReward,

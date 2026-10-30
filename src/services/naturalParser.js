@@ -24,7 +24,8 @@ import { chatCompletion, parseJsonSafely } from './aiClient.js';
 export const MAX_EXTRA_NOTE_LENGTH = 280;
 export const MAX_EXTRA_NOTES = 6;
 // AI extraction prompt bounds: keep the DeepSeek payload small and fast.
-export const MAX_EXTRACTION_TEXT_CHARS = 600;
+// Paragraph intake needs a little more room than a single sentence.
+export const MAX_EXTRACTION_TEXT_CHARS = 1200;
 export const MAX_COLLECTED_JSON_CHARS = 800;
 
 const SMALL_TALK_RE = /^(hi|hello|hey|thanks|thank you|ok|okay|cool|great|nice|sure|yes|no|yep|nope|got it|alright|perfect|please)[.! ]*$/i;

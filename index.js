@@ -11,7 +11,6 @@ import { ensureSuperadminTables, isSuperadminPhone, sendMorningExecutiveBriefing
 import { ensureVehicleTableColumns } from './src/services/vehicles.js';
 import whatsappRoutes, { handleWhatsAppWebhook as handleWhatsAppWebhookRoute } from './src/routes/whatsapp.js';
 import { verifyPaystackSignature } from './src/services/paystack.js';
-import { processImpendingTrialReminders } from './src/services/coupons.js';
 import { runReminderSweep } from './src/services/maintenanceReminders.js';
 import { ensureComplianceCatalog, reviewComplianceCatalog, COMPLIANCE_CATALOG_VERSION } from './src/services/complianceCatalog.js';
 import { expireStaleAssignments } from './src/services/driverAssignments.js';
@@ -23,6 +22,7 @@ import {
   maybeSendUrgentRemediationAlert,
   checkRemediationExecutionRetry,
   ensureRemediationTables,
+  checkRemediationDispatchVerification,
   REMEDIATION_SCAN_INTERVAL_MS,
   REMEDIATION_SYNTHESIS_INTERVAL_MS,
   REMEDIATION_DIGEST_HOURS
@@ -31,6 +31,7 @@ import { createResilientClient } from './src/services/supabaseClient.js';
 import { ensureAiUsageLogsTable, installAiUsageSink, installAiBudgetGuard } from './src/services/aiUsageLog.js';
 import { ensureChatSessionsTable } from './src/services/sessionStore.js';
 import { drainQueue, getQueueStats } from './src/services/messageQueue.js';
+import { processPendingFollowUps } from './src/services/followups.js';
 import { handlePaystackEvent } from './src/services/subscriptions.js';
 import { ensureSubscriptionSchema } from './src/db/subscriptionSchema.js';
 import { runTrialLifecycleSweep } from './src/services/trialEngine.js';
@@ -180,15 +181,21 @@ async function processPendingOwnerNotifications() {
 }
 
 setInterval(processPendingOwnerNotifications, 30000); // Check every 30s
-// Worker: Process Impending 3-Day Trial Reminders and 15-Day Overdue Winback Offers
-setInterval(() => {
-  processImpendingTrialReminders({ supabase, sendWhatsAppMessageFn: sendMetaWhatsAppMessage }).catch(err => {
-    console.error('[Worker] Error processing impending trial reminders:', err);
-  });
-}, 15 * 60 * 1000); // Check every 15 minutes
 
-// Worker: Account-trial lifecycle (T+7d activation nudge, T-3d digest,
-// T-24h urgent, T-0 expiry -> Free with PAUSED vehicles). v1.15.0.
+// Worker: background follow-up lane (v1.16.0). Slow jobs (fleet reports, deep
+// audits) finish here and arrive as a follow-up message while the user keeps
+// chatting — Saka never blocks the conversation.
+setInterval(() => {
+  processPendingFollowUps({
+    supabase,
+    sendFn: (phone, text) => sendMetaWhatsAppMessage(phone, text)
+  }).catch((err) => console.warn('[Worker] Follow-up sweep failed:', err.message));
+}, 30000);
+
+// Worker: Account-trial lifecycle — activation reward, T+7 nudge, T-3 digest +
+// account extension-offer dispatch, T-24h, T-0 expiry -> Free with PAUSED
+// vehicles, and the 15-day winback. ONE worker since v1.16.0: the legacy
+// VIN-bound reminder worker was retired so trials never double-message.
 setInterval(() => {
   runTrialLifecycleSweep({ supabase, sendWhatsAppFn: sendMetaWhatsAppMessage }).catch(err => {
     console.error('[Worker] Error processing trial lifecycle sweep:', err);
@@ -685,6 +692,15 @@ setInterval(() => {
     console.warn('[Remediation Retry Warning]:', err.message);
   });
 }, 30 * 60 * 1000);
+
+// Dispatch verification watchdog (v1.16.0): a plan dispatched to GitHub that
+// never produces a proposal means the CI leg is dead. Alert the Superadmin once
+// per signature (this is what caught the silent workflow failure).
+setInterval(() => {
+  checkRemediationDispatchVerification(supabase).catch((err) => {
+    console.warn('[Remediation Dispatch Verify Warning]:', err.message);
+  });
+}, 15 * 60 * 1000);
 
 // AI budget guardrail (v1.14.0): alerts at AI_BUDGET_ALERT_PCT and 100%
 // (deduped per Nairobi day). Notification-only — routing enforcement lives in
