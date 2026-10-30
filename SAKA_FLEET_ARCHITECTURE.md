@@ -2099,6 +2099,7 @@ Every user is placed in ONE **country bucket**, created automatically at onboard
 
 ### 53.4 Migration, files & tests
 - `npm run migrate:country-kb` (`scripts/run_country_kb_migration.js`): `country_kb` + `profiles.jurisdiction_*` + `vehicles.asset_kind/serial_number` + nullable plate; `country_kb` joins `PRESERVED_TABLES` so a slate wipe never deletes legal reference data.
+- **Applied 2026-10-30** on project `wnvbhpykboonygaznhhl`: `country_kb` created (0 override rows — bundled defaults serve), `profiles.jurisdiction_confirmed/jurisdiction_updated_at` present, `vehicles.asset_kind/serial_number` present, `vehicles.plate_number` now NULLABLE (verified through `information_schema.columns`).
 - Files: `src/services/countryBucket.js`, `src/services/quizEngine.js`, `src/routes/whatsapp.js`, `sakaAi.js`, `src/services/flowKnowledge.js`, `scripts/run_country_kb_migration.js`, `scripts/reset-db.js`, `package.json`, README.
 - Tests: `test_country_bucket.js` (54 — asset kinds, bucket resolution/overrides, guidance/examples/disclaimers, onboarding conditional fields), `test_agent_training.js` (80 — jurisdiction boundary), `test_quiz_flow.js` (asset-kind-first registration).
 - Knobs: `COUNTRY_KB_VERSION` (2026.10.1), `KB_VERIFIED_AT` (2026-10-30), `KB_REVIEW_DAYS` (90).
