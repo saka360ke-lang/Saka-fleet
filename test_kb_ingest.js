@@ -12,7 +12,9 @@ import {
   getKbStaleRules,
   formatKbQueueReply,
   formatKbStaleReply,
-  listKbCountries
+  listKbCountries,
+  getKbLegislation,
+  collectCountrySources
 } from './src/services/kbIngest.js';
 import { parseSuperadminCommand } from './src/services/superadmin.js';
 
@@ -209,6 +211,35 @@ async function run() {
   const rejectCmd = await parseSuperadminCommand('admin kb reject 6f1f55aa-1111-2222-3333-444455556666');
   check(rejectCmd.intent === 'ADMIN_KB_REJECT', 'rejection parses the rule id');
   check((await parseSuperadminCommand('admin kb approve not-a-uuid')).intent === 'ADMIN_KB', 'invalid ids fall back to the queue (never a blind write)');
+
+  console.log('\n--- Test 9: traffic-act legislation deep-links ---');
+  const keLaw = getKbLegislation('KE');
+  check(keLaw.verified.some((row) => /Traffic Act \(Cap 403\)/.test(row.law_name)), 'Kenya traffic act is a verified source');
+  check(keLaw.verified[0].url.includes('kenyalaw.org'), 'the Kenya link points at the official law site');
+  const tzLaw = getKbLegislation('TZ');
+  check(tzLaw.pending.length > 0 && tzLaw.verified.length === 0, 'Tanzania ships as pending (law name only, no guessed URL)');
+  check(collectCountrySources({ legislation: [{ label: 'x', law_name: 'Law X', url: 'https://www.legislation.gov.uk/x', status: 'verified' }], sources: [{ label: 'y', url: 'https://www.gov.uk/y' }] })
+    .map((row) => row.kind).join(',') === 'legislation,authority', 'legislation is fetched before authority pages');
+
+  const lawDrafts = buildDraftRules({
+    countryCode: 'GB',
+    authority: 'DVLA / DVSA',
+    sourceUrl: 'https://www.legislation.gov.uk/ukpga/1988/52/contents',
+    text: 'Motor insurance is mandatory for every vehicle. Annual inspection is required for roadworthiness. A valid driving licence is required for the vehicle class.',
+    lawReference: 'Road Traffic Act 1988 (c. 52)'
+  });
+  check(lawDrafts.every((row) => row.law_reference === 'Road Traffic Act 1988 (c. 52)'), 'legislation drafts inherit the exact law reference');
+  check(lawDrafts.some((row) => row.rule_key === 'vehicle_insurance'), 'legislation text produces real rule drafts');
+
+  const fetchedUrls = [];
+  const pendingReport = await runKbIngest(null, {
+    countries: ['TZ'],
+    dryRun: true,
+    fetchImpl: async (url) => { fetchedUrls.push(url); return { text: sourceText, contentType: 'text/html', error: null }; }
+  });
+  check(!fetchedUrls.some((url) => url.includes('null')), 'pending legislation is never fetched');
+  check(pendingReport.pendingLegislation.some((row) => row.country_code === 'TZ' && /Cap 168/.test(row.law_name)), 'the ingest report lists pending legislation by law name');
+
 
   global.fetch = realFetch;
   console.log(`\n🎉 ALL COUNTRY KB INGEST TESTS PASSED (${passed} assertions).`);

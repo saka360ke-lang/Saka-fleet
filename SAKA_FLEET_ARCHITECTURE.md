@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.21.1  
+**Version:** 1.21.2  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -2113,6 +2113,9 @@ Official-source harvesting for the Country Bucket, with a superadmin approval ga
 
 ### 54.1 Source registry & allow-list (`src/data/kb_sources.json`)
 - One entry per country: authority + official HTTPS sources (NTSA, TRA, URA, RRA, FRSC, DoT ZA, GOV.UK, NHTSA/USA.gov, Transport Canada, RTA, Parivahan, infrastructure.gov.au, Mobilité BE).
+- **v1.21.2 — traffic-act deep-links:** each country also carries a `legislation` array with the exact law name and a human-verified official URL where one exists. Fetch order is **verified legislation → authority pages**, so statutory text wins the per-rule dedupe and every draft inherits `law_reference` (e.g. `Road Traffic Act 1988 (c. 52)`).
+  - Verified: **KE** Traffic Act (Cap 403) · **ZA** National Road Traffic Act 93/1996 · **GB** Road Traffic Act 1988 · **US** 49 CFR Part 390 · **CA** Motor Vehicle Safety Act (S.C. 1993, c. 16) · **IN** Motor Vehicles Act 1988 · **BE** Wegcode.
+  - Pending (law name only, **never fetched**): **TZ** Road Traffic Act Cap 168 · **UG** Traffic and Road Safety Act 1998 · **RW** road traffic law · **NG** National Road Traffic Regulations 2004 · **AE** Federal Law No. 21/1995 · **AU** Road Vehicle Standards Act 2018. Bot-protected official pages (Kenya Law, eCFR, India Code) are skipped gracefully when they challenge automated fetches.
 - `kbIngest.js` enforces an **HTTPS + official-host allow-list** (exact base domain or subdomain, `www.` normalised). Anything else is rejected before a request is made.
 - Fetch guards: 20 s timeout, 2 MB cap, HTML → text (scripts/styles removed, entities decoded), PDFs via `pdfTextExtractor`.
 
@@ -2131,7 +2134,7 @@ Official-source harvesting for the Country Bucket, with a superadmin approval ga
 
 ### 54.4 Files, tests & knobs
 - Files: `src/services/kbIngest.js`, `src/data/kb_sources.json`, `scripts/kb_ingest.js`, `src/services/superadmin.js`, `package.json`, `.env.example`, README.
-- Tests: `test_kb_ingest.js` (42 — allow-list, HTML/PDF fetching, draft-only guarantees, dry-run vs apply, approve/reject audits, freshness, command parsing).
+- Tests: `test_kb_ingest.js` (50 — allow-list, HTML/PDF fetching, legislation ordering + law references, pending never fetched, draft-only guarantees, dry-run vs apply, approve/reject audits, freshness, command parsing).
 - Knobs: `KB_MAX_SOURCE_BYTES` (2000000), `KB_FETCH_TIMEOUT_MS` (20000), `KB_REVIEW_DAYS` (90).
 
 

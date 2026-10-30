@@ -80,9 +80,14 @@ async function main() {
   const report = await runKbIngest(supabase, { countries, dryRun });
   console.log(`Sources fetched: ${report.sources} · drafts: ${report.drafts} · skipped: ${report.skipped}`);
   for (const row of report.rows.slice(0, 20)) {
-    console.log(`  • ${row.country_code} · ${row.rule_key} — ${row.summary.slice(0, 90)}`);
+    const law = row.law_reference ? ` [${row.law_reference}]` : '';
+    console.log(`  • ${row.country_code} · ${row.rule_key}${law} — ${row.summary.slice(0, 90)}`);
   }
   for (const error of report.errors.slice(0, 10)) console.log(`  ⚠️ ${error}`);
+  if (report.pendingLegislation?.length) {
+    console.log('⏳ Legislation deep-links pending official verification (never fetched):');
+    for (const item of report.pendingLegislation) console.log(`  • ${item.country_code} — ${item.law_name}`);
+  }
   if (!dryRun) await audit('ADMIN_KB_INGEST', { countries: countries || 'all', drafts: report.drafts });
   console.log(dryRun ? 'No rows were written (dry run).' : '✅ Drafts written — review with --review, publish with --approve.');
   process.exit(0);

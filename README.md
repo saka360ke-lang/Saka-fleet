@@ -112,6 +112,12 @@ ask you to double-check before saving; nothing is ever written without your YES.
   sources into **draft** rules (never live), `npm run kb:ingest -- --review`
   lists them, and superadmin `admin kb approve <id>` publishes a verified rule.
   `admin kb stale` shows rules due for re-verification (90-day window).
+- **Traffic-act deep-links:** verified national laws are registered per country
+  (Kenya Traffic Act Cap 403, SA National Road Traffic Act 93/1996, UK Road
+  Traffic Act 1988, US 49 CFR 390, Canada MVSA, India MV Act 1988, Belgium
+  Wegcode). Legislation is fetched first so drafts carry the exact law
+  reference; pending laws (TZ, UG, RW, NG, AE, AU) are listed by name but never
+  fetched until an official link is verified.
 
 ## Doc Lens — documents by photo or PDF (v1.20.0)
 - Send **any photo or PDF**: logbook/registration certificate, fuel or service

@@ -41,6 +41,27 @@ export function getKbSources(countryCode = '') {
   return entry || null;
 }
 
+/** Verified vs pending legislation for one country (pending is never fetched). */
+export function getKbLegislation(countryCode = '') {
+  const entry = getKbSources(countryCode);
+  const legislation = entry?.legislation || [];
+  return {
+    verified: legislation.filter((row) => row.status === 'verified' && row.url),
+    pending: legislation.filter((row) => row.status !== 'verified' || !row.url)
+  };
+}
+
+/** Fetch order per country: verified legislation first, then authority pages. */
+export function collectCountrySources(country = {}) {
+  const legislation = (country.legislation || [])
+    .filter((row) => row.status === 'verified' && row.url)
+    .map((row) => ({ label: row.label, url: row.url, lawReference: row.law_name || null, kind: 'legislation' }));
+  const authority = (country.sources || [])
+    .filter((row) => row.url)
+    .map((row) => ({ label: row.label, url: row.url, lawReference: null, kind: 'authority' }));
+  return [...legislation, ...authority];
+}
+
 function hostOf(url) {
   try { return new URL(url).hostname.toLowerCase(); } catch { return null; }
 }
@@ -48,8 +69,12 @@ function hostOf(url) {
 export function allowedHosts() {
   const hosts = new Set();
   for (const country of loadKbSourceRegistry().countries) {
-    for (const source of country.sources || []) {
-      const host = hostOf(source.url);
+    const urls = [
+      ...(country.sources || []).map((source) => source.url),
+      ...(country.legislation || []).filter((row) => row.status === 'verified').map((row) => row.url)
+    ];
+    for (const url of urls) {
+      const host = hostOf(url);
       if (host) hosts.add(host);
     }
   }
@@ -155,7 +180,7 @@ function summarySentence(text, pattern) {
  * Deterministically turn one official page into DRAFT rules (never active).
  * @returns {Array<object>} draft rows ready for `country_kb`
  */
-export function buildDraftRules({ countryCode, authority, sourceUrl, text } = {}) {
+export function buildDraftRules({ countryCode, authority, sourceUrl, text, lawReference = null } = {}) {
   const drafts = [];
   if (!countryCode || !text) return drafts;
   for (const pattern of RULE_PATTERNS) {
@@ -173,7 +198,7 @@ export function buildDraftRules({ countryCode, authority, sourceUrl, text } = {}
       example_text: pattern.example,
       required: true,
       renewal_hint: pattern.renewal || null,
-      law_reference: null,
+      law_reference: lawReference || null,
       authority: authority || null,
       source_urls: [sourceUrl],
       verified_at: null,
@@ -194,12 +219,27 @@ export async function runKbIngest(providedSupabase, { countries = null, dryRun =
   const targets = (countries && countries.length
     ? registry.countries.filter((row) => countries.map((c) => c.toUpperCase()).includes(row.country_code))
     : registry.countries);
-  const report = { dryRun, countries: 0, sources: 0, drafts: 0, skipped: 0, errors: [], rows: [] };
+  const report = {
+    dryRun,
+    countries: 0,
+    sources: 0,
+    drafts: 0,
+    skipped: 0,
+    errors: [],
+    pendingLegislation: [],
+    rows: []
+  };
 
   for (const country of targets) {
     report.countries += 1;
+    const pending = getKbLegislation(country.country_code).pending;
+    for (const item of pending) {
+      report.pendingLegislation.push({ country_code: country.country_code, law_name: item.law_name || item.label });
+    }
     const collected = [];
-    for (const source of country.sources || []) {
+    // Verified legislation is fetched first so its rules win the per-key dedupe
+    // and every draft inherits the exact law reference.
+    for (const source of collectCountrySources(country)) {
       report.sources += 1;
       const fetched = fetchImpl
         ? await fetchImpl(source.url)
@@ -212,7 +252,8 @@ export async function runKbIngest(providedSupabase, { countries = null, dryRun =
         countryCode: country.country_code,
         authority: country.authority,
         sourceUrl: source.url,
-        text: fetched.text
+        text: fetched.text,
+        lawReference: source.lawReference
       });
       if (!drafts.length) { report.skipped += 1; continue; }
       collected.push(...drafts);
@@ -372,6 +413,8 @@ export default {
   loadKbSourceRegistry,
   listKbCountries,
   getKbSources,
+  getKbLegislation,
+  collectCountrySources,
   allowedHosts,
   isAllowedSourceUrl,
   stripHtmlToText,

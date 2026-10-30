@@ -1,10 +1,13 @@
 {
-  "version": "2026.10.1",
-  "note": "Official-source registry for the Country Bucket knowledgebase. Only these hosts may be fetched by kb_ingest.js; additions require a reviewed code change.",
+  "version": "2026.10.2",
+  "note": "Official-source registry for the Country Bucket knowledgebase. Only HTTPS hosts listed here may be fetched by kb_ingest.js. Legislation entries must be human-checkable pages; pending entries carry the law name only and are never fetched.",
   "countries": [
     {
       "country_code": "KE",
       "authority": "NTSA (National Transport and Safety Authority)",
+      "legislation": [
+        { "label": "Kenya Law - Traffic Act", "law_name": "Traffic Act (Cap 403)", "url": "https://new.kenyalaw.org/akn/ke/act/1953/25", "status": "verified" }
+      ],
       "sources": [
         { "label": "NTSA", "url": "https://www.ntsa.go.ke/" },
         { "label": "Kenya Law", "url": "https://new.kenyalaw.org/" }
@@ -13,31 +16,49 @@
     {
       "country_code": "TZ",
       "authority": "TRA / Tanzania Police Traffic",
+      "legislation": [
+        { "label": "Road Traffic Act (Cap 168)", "law_name": "Road Traffic Act (Cap 168 R.E. 2002)", "url": null, "status": "pending" }
+      ],
       "sources": [{ "label": "TRA", "url": "https://www.tra.go.tz/" }]
     },
     {
       "country_code": "UG",
       "authority": "URA / Ministry of Works and Transport",
+      "legislation": [
+        { "label": "Traffic and Road Safety Act", "law_name": "Traffic and Road Safety Act 1998 (Cap 361)", "url": null, "status": "pending" }
+      ],
       "sources": [{ "label": "URA", "url": "https://www.ura.go.ug/" }]
     },
     {
       "country_code": "RW",
       "authority": "RRA / Rwanda National Police (Traffic)",
+      "legislation": [
+        { "label": "Rwanda road traffic law", "law_name": "Road traffic law of Rwanda", "url": null, "status": "pending" }
+      ],
       "sources": [{ "label": "RRA", "url": "https://www.rra.gov.rw/" }]
     },
     {
       "country_code": "NG",
       "authority": "FRSC / State Motor Licensing Office",
+      "legislation": [
+        { "label": "National Road Traffic Regulations", "law_name": "National Road Traffic Regulations 2004", "url": null, "status": "pending" }
+      ],
       "sources": [{ "label": "FRSC", "url": "https://frsc.gov.ng/" }]
     },
     {
       "country_code": "ZA",
       "authority": "Department of Transport / provincial licensing",
+      "legislation": [
+        { "label": "National Road Traffic Act 93 of 1996", "law_name": "National Road Traffic Act 93 of 1996", "url": "https://www.gov.za/documents/national-road-traffic-act", "status": "verified" }
+      ],
       "sources": [{ "label": "Department of Transport", "url": "https://www.transport.gov.za/" }]
     },
     {
       "country_code": "GB",
       "authority": "DVLA / DVSA",
+      "legislation": [
+        { "label": "Road Traffic Act 1988", "law_name": "Road Traffic Act 1988 (c. 52)", "url": "https://www.legislation.gov.uk/ukpga/1988/52/contents", "status": "verified" }
+      ],
       "sources": [
         { "label": "GOV.UK vehicle tax", "url": "https://www.gov.uk/vehicle-tax" },
         { "label": "GOV.UK MOT", "url": "https://www.gov.uk/getting-an-mot" },
@@ -47,6 +68,9 @@
     {
       "country_code": "US",
       "authority": "State DMV / NHTSA",
+      "legislation": [
+        { "label": "49 CFR Part 390 (FMCSA)", "law_name": "49 CFR Part 390 - Federal Motor Carrier Safety Regulations", "url": "https://www.ecfr.gov/current/title-49/subtitle-B/chapter-III/subchapter-B/part-390", "status": "verified" }
+      ],
       "sources": [
         { "label": "NHTSA", "url": "https://www.nhtsa.gov/" },
         { "label": "USA.gov vehicle registration", "url": "https://www.usa.gov/vehicle-registration" }
@@ -55,26 +79,41 @@
     {
       "country_code": "CA",
       "authority": "Provincial ministry of transportation",
+      "legislation": [
+        { "label": "Motor Vehicle Safety Act", "law_name": "Motor Vehicle Safety Act (S.C. 1993, c. 16)", "url": "https://laws-lois.justice.gc.ca/eng/acts/M-10.01/", "status": "verified" }
+      ],
       "sources": [{ "label": "Transport Canada", "url": "https://tc.canada.ca/" }]
     },
     {
       "country_code": "AE",
       "authority": "RTA / local traffic department",
+      "legislation": [
+        { "label": "Federal traffic law", "law_name": "Federal Law No. 21 of 1995 on Traffic (as amended)", "url": null, "status": "pending" }
+      ],
       "sources": [{ "label": "RTA Dubai", "url": "https://www.rta.ae/" }]
     },
     {
       "country_code": "IN",
       "authority": "Parivahan / State RTO",
+      "legislation": [
+        { "label": "Motor Vehicles Act 1988", "law_name": "Motor Vehicles Act 1988", "url": "https://www.indiacode.nic.in/handle/123456789/1826", "status": "verified" }
+      ],
       "sources": [{ "label": "Parivahan", "url": "https://parivahan.gov.in/" }]
     },
     {
       "country_code": "AU",
       "authority": "State transport authority",
+      "legislation": [
+        { "label": "Road Vehicle Standards Act 2018", "law_name": "Road Vehicle Standards Act 2018 (Cth)", "url": null, "status": "pending" }
+      ],
       "sources": [{ "label": "infrastructure.gov.au", "url": "https://www.infrastructure.gov.au/" }]
     },
     {
       "country_code": "BE",
       "authority": "SPF Mobilité / DIV",
+      "legislation": [
+        { "label": "Wegcode - Belgian traffic code", "law_name": "Wegverkeerswet / Code de la route", "url": "https://wegcode.be/", "status": "verified" }
+      ],
       "sources": [{ "label": "Mobilité Belgique", "url": "https://mobilit.belgium.be/" }]
     }
   ]
