@@ -45,7 +45,8 @@ function run() {
   console.log('--- Test 3: boot-critical config + governance ledger are preserved ---');
   for (const table of [
     'system_config', 'compliance_catalog', 'sentinel_audit_runs',
-    'remediation_proposals', 'weekly_feature_proposals'
+    'remediation_proposals', 'weekly_feature_proposals',
+    'ai_model_registry', 'model_eval_runs'
   ]) {
     assert(PRESERVED_TABLES.includes(table), `${table} is preserved`);
     assert(!RESET_TABLES.includes(table), `${table} is not in the wipe scope`);

@@ -29,6 +29,13 @@ import {
 } from './src/workers/remediation.js';
 import { createResilientClient } from './src/services/supabaseClient.js';
 import { ensureAiUsageLogsTable, installAiUsageSink, installAiBudgetGuard } from './src/services/aiUsageLog.js';
+import {
+  ensureAiModelRegistryTables,
+  installModelRuntime,
+  runModelScoutCycle,
+  monitorModelHealth,
+  AI_MODEL_SCOUT_INTERVAL_MS
+} from './src/services/aiModelRegistry.js';
 import { ensureChatSessionsTable } from './src/services/sessionStore.js';
 import { drainQueue, getQueueStats } from './src/services/messageQueue.js';
 import { processPendingFollowUps } from './src/services/followups.js';
@@ -711,6 +718,32 @@ setInterval(() => {
   });
 }, 5 * 60 * 1000);
 
+// Model Watchdog (v1.17.0): weekly discovery/benchmark cycle (self-gated by
+// AI_MODEL_SCOUT_ENABLED) + a 30-minute health watchdog that auto-rolls-back a
+// regressed canary. Both are deterministic and cost zero tokens unless a
+// candidate is actually benchmarked.
+setInterval(() => {
+  runModelScoutCycle(supabase).catch((err) => {
+    console.warn('[Model Scout Warning]:', err.message);
+  });
+}, AI_MODEL_SCOUT_INTERVAL_MS);
+
+setInterval(() => {
+  monitorModelHealth(supabase)
+    .then((result) => {
+      for (const rollback of result.rollbacks || []) {
+        if (!rollback.rolledBack || !process.env.SUPERADMIN_PHONE) continue;
+        sendMetaWhatsAppMessage(
+          process.env.SUPERADMIN_PHONE,
+          `🧠 *Model Watchdog auto-rollback*\n\n${rollback.tierSlot}: \`${rollback.from}\` → \`${rollback.to}\`\n` +
+          `Reason: ${rollback.reason} (error rate ${(rollback.activeErrorRate * 100).toFixed(1)}% over ${result.windowHours}h)\n\n` +
+          '_The previous model is active again — no action needed._'
+        ).catch(() => {});
+      }
+    })
+    .catch((err) => console.warn('[Model Health Warning]:', err.message));
+}, 30 * 60 * 1000);
+
 async function checkRemediationDigestSchedule() {
   try {
     const now = new Date();
@@ -920,9 +953,11 @@ const start = async () => {
     await ensureSuperadminTables(supabase);
     await ensureRemediationTables(supabase);
     await ensureAiUsageLogsTable(supabase);
+    await ensureAiModelRegistryTables(supabase);
     await ensureSubscriptionSchema({ label: 'boot.ensureSubscriptionSchema' });
     installAiUsageSink(supabase);
     installAiBudgetGuard(supabase);
+    await installModelRuntime(supabase);
     await ensureVehicleTableColumns(supabase);
     await ensureComplianceCatalog({ supabase });
     await ensureChatSessionsTable(supabase);

@@ -6,6 +6,7 @@ import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
 import { sendAdminNotificationEmail, sendRemediationProposalEmail, sendRemediationDigestEmail } from '../services/mailer.js';
 import { dispatchRepositoryEvent, isRemediationAutonomyEnabled } from '../services/githubDispatch.js';
 import { sendProactiveWhatsApp } from './sentinel.js';
+import { validateAiModelUpdatePlan, verifyModelUpdateAgainstRegistry, getModelWatchdogSummary } from '../services/aiModelRegistry.js';
 
 /**
  * Saka Fleet — Autonomous Sentinel ↔ Cline Remediation Pipeline (v1.10.0)
@@ -227,6 +228,11 @@ export function sanitizeRemediationPlan(plan) {
   if (tests.length === 0) violations.push('Plan must list at least one targeted test suite.');
   const badTest = tests.find((test) => !/^test_[a-z0-9_]+\.js$/i.test(test));
   if (badTest) violations.push(`Tests must be root-level test_*.js suites: ${badTest}`);
+
+  // v1.17.0 — model-update work orders have their own scope (registry-adjacent
+  // files, mandatory model test suites, canary ceiling, rollback documentation).
+  const modelVerdict = validateAiModelUpdatePlan(plan);
+  if (!modelVerdict.ok) violations.push(...modelVerdict.violations);
 
   return { ok: violations.length === 0, violations, plan };
 }
@@ -743,15 +749,30 @@ export async function verifyProposalGate(providedSupabase, proposalCode, approva
   // the same sanitizer used at submit time. A sanitizer-blocked plan can only
   // execute under an explicit, audited Superadmin override.
   const stored = proposal.proposed_changes || {};
-  const verdict = sanitizeRemediationPlan({
+  const storedPlan = {
+    category: proposal.category,
+    model_id: stored.model_id || null,
+    traffic_split: stored.traffic_split,
+    rollback: stored.rollback,
     changes: Array.isArray(stored.changes) ? stored.changes : [],
     tests: Array.isArray(stored.tests) ? stored.tests : []
-  });
+  };
+  const verdict = sanitizeRemediationPlan(storedPlan);
   const overridden = String(proposal.approval_kind || '').toLowerCase() === 'superadmin_override';
   if (!verdict.ok && !overridden) {
     return {
       ok: false,
       error: `Stored plan is blocked by the guardrail sanitizer (${verdict.violations.join(' ')}). Re-plan or approve with an explicit override.`
+    };
+  }
+
+  // v1.17.0 — a model-update proposal must still resolve to a benchmarked
+  // registry row at execution time (the plan may have gone stale).
+  const registryCheck = await verifyModelUpdateAgainstRegistry(supabase, storedPlan);
+  if (!registryCheck.ok && !overridden) {
+    return {
+      ok: false,
+      error: `Model registry gate failed (${registryCheck.violations.join(' ')}). Re-scout or approve with an explicit override.`
     };
   }
 
@@ -1186,6 +1207,18 @@ export async function sendRemediationDigest(providedSupabase, { now = new Date()
   }).format(now);
   const slotLabel = nairobiHour < 12 ? 'Morning' : 'Evening';
 
+  // v1.17.0 — Model Watchdog snapshot (deterministic, zero tokens).
+  let watchdog = null;
+  try {
+    watchdog = await getModelWatchdogSummary(supabase);
+  } catch {
+    watchdog = null;
+  }
+
+  const watchdogLine = watchdog && (watchdog.active.length || watchdog.candidates.length || watchdog.pendingProposals)
+    ? `🧠 *Model Watchdog:* ${watchdog.active.map((row) => `${row.tierSlot}=${row.alias} (${row.trafficSplit}%)`).join(' · ') || 'env-governed'} · ${watchdog.candidates.length} candidate(s) · ${watchdog.pendingProposals} model approval(s) pending`
+    : '';
+
   const lines = [
     `🩺 *Saka Remediation Digest — ${slotLabel}*`,
     `_${dateLabel} • frequency: ${nextFrequency}_`,
@@ -1204,6 +1237,7 @@ export async function sendRemediationDigest(providedSupabase, { now = new Date()
     proposals.length
       ? '✅ `admin accept fix <CODE>`\n⛔ `admin decline fix <CODE>`\n✏️ `admin modify fix <CODE> <guidance>`'
       : '',
+    watchdogLine,
     `_Digest frequency auto-scales with stability (${REMEDIATION_DIGEST_SCALE_DOWN_WINDOW_DAYS}-day events: ${weeklyEvents})._`
   ].filter(Boolean).join('\n');
 

@@ -107,6 +107,21 @@ async function run() {
   check(!sanitizeRemediationPlan({ ...safePlan, tests: [] }).ok, 'Plan without targeted tests is rejected');
   check(!sanitizeRemediationPlan({ ...safePlan, root_cause: 'drop table reminders' }).ok, 'Destructive keyword is rejected');
   check(!sanitizeRemediationPlan({ ...safePlan, changes: [] }).ok, 'Empty change list is rejected');
+
+  // v1.17.0 — model-update work orders carry their own scope gate.
+  const modelPlan = {
+    category: 'ai_model_update',
+    model_id: 'deepseek-chat-test-1017',
+    traffic_split: 25,
+    rollback: 'admin model rollback tier_2',
+    changes: [{ file: 'src/services/aiModelRegistry.js', change: 'activate benchmarked model' }],
+    tests: ['test_model_scout.js', 'test_model_router.js', 'test_agent_training.js']
+  };
+  check(sanitizeRemediationPlan(modelPlan).ok, 'Valid model-update plan passes the sanitizer');
+  check(!sanitizeRemediationPlan({ ...modelPlan, rollback: '' }).ok, 'Model-update plan without rollback is rejected');
+  check(!sanitizeRemediationPlan({ ...modelPlan, traffic_split: 90 }).ok, 'Model-update canary above the ceiling is rejected');
+  check(!sanitizeRemediationPlan({ ...modelPlan, changes: [{ file: 'src/services/transfers.js', change: 'x' }] }).ok, 'Model-update plan touching transfers is rejected');
+  check(!sanitizeRemediationPlan({ ...modelPlan, tests: ['test_model_scout.js'] }).ok, 'Model-update plan must run all model suites');
   check(matchForbiddenRemediationPath('.github/workflows/remediation.yml') === '.github/', 'Forbidden-path helper matches CI workflows');
   check(matchForbiddenRemediationPath('src/services/paystack.js') === 'src/services/paystack.js', 'Forbidden-path helper matches payment services');
   check(matchForbiddenRemediationPath('src/workers/sentinel.js') === null, 'Forbidden-path helper allows normal source files');

@@ -17,10 +17,17 @@
 
 import { chatCompletion } from './aiClient.js';
 import { buildGlobalContext, formatDate, formatMoney, formatNumber } from './globalization.js';
+import { SAKA_TONE_COMPASS } from './flowKnowledge.js';
 
 const LANGUAGE_HINT = (language) => (language && language !== 'English'
   ? `Write in ${language}. If the user writes in another language, mirror it.`
   : 'Reply in the user\'s language (auto-detect; default English).');
+
+// Tone Compass shadow lines for the composer. The authoritative block lives in
+// flowKnowledge (injected into the core prompt); this is the compact mirror so
+// prose renders follow the same poles and floors without duplicating policy.
+const COMPASS_POLES = SAKA_TONE_COMPASS.poles.map((pole) => pole.name.split(' (')[0]).join(' · ');
+const COMPASS_FLOORS = SAKA_TONE_COMPASS.floors.slice(0, 3).join(' ');
 
 /**
  * Map a compose purpose to the AI router purpose (tier + telemetry). Quiz
@@ -59,13 +66,21 @@ export async function composeMessage({
   history = [],
   extraInstructions = '',
   maxTokens = 420,
-  fallbackText = ''
+  fallbackText = '',
+  userTone = null,
+  relationshipStage = null,
+  modelLabel = null
 } = {}) {
   const globalCtx = buildGlobalContext(countryInfo, profile);
 
   const system = [
     'You are Saka, the conversational fleet-operating assistant for Saka Fleet on WhatsApp.',
-    'VOICE & EMPATHY: always warm, empathetic and professional. Mirror the user\'s language and emotional register — a frustrated user gets calm reassurance before any instructions, a happy user gets matching energy.',
+    `VOICE & TONE COMPASS: ${COMPASS_POLES}. Lead with empathy before any instruction whenever the user is frustrated, worried, embarrassed or grieving; validate the emotion without amplifying it; every reassurance carries a fact or an action.`,
+    `TONE FLOORS: ${COMPASS_FLOORS}`,
+    'Mirror the user\'s register and message length: terse → result first with no preamble; verbose → fuller, patient sentences; formal → formal; casual → friendly but professional. Unknown tone defaults to calm professional warmth.',
+    userTone ? `Detected user tone this turn: ${userTone}.` : '',
+    relationshipStage ? `Relationship stage: ${relationshipStage} (stranger → orient briefly; newcomer → encourage milestones; regular → shorthand; veteran → direct results).` : '',
+    modelLabel ? `If the user asks which AI model powers Saka, answer exactly "${modelLabel}". Never invent another model name or version.` : '',
     'Never sound robotic, bureaucratic or template-like: vary phrasing naturally, keep Saka\'s friendly one-question-at-a-time style, and lead with empathy whenever something went wrong.',
     'You write ONE concise WhatsApp message at a time. You never dump long menus.',
     'You serve a GLOBAL audience: always localize units, currency, dates and plate examples to the user\'s region.',

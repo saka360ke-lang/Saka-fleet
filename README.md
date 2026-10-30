@@ -52,5 +52,7 @@ leg stays automatic.
 
 ## Superadmin quick reference
 `adminstart` → session, then `admin report`, `admin alerts`, `admin remediations`,
-`admin ai-stats`, `admin trial-stats`, `admin accept fix <CODE> [override]`,
+`admin ai-stats`, `admin trial-stats`, `admin models`, `admin model scout`,
+`admin model adopt <model_id> [split]`, `admin model rollback [tier_1]`,
+`admin accept fix <CODE> [override]`,
 `admin modify fix <CODE> <guidance>`, `admin decline fix <CODE>`.

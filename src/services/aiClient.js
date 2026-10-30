@@ -50,14 +50,43 @@ export function isRemediationAutonomyOn() {
 }
 
 /**
- * Resolve the model configured for a tier. Premium tiers are provider-aware:
- * an unset AI_MODEL_TIER_2 resolves to the provider's default rather than a
- * DeepSeek model name that the provider would reject. Tier 3 opts into the
- * reasoning model only when REMEDIATION_AUTONOMY=on (explicit opt-in).
+ * Runtime model resolver seam (v1.17.0). The Model Watchdog installs a resolver
+ * that returns the DB-adopted model for a tier. Env overrides ALWAYS win, so an
+ * operator-set AI_MODEL_TIER_* can never be overridden by the registry.
+ */
+let runtimeModelResolver = null;
+
+export function setRuntimeModelResolver(resolver) {
+  runtimeModelResolver = typeof resolver === 'function' ? resolver : null;
+}
+
+export function getRuntimeModelResolver() {
+  return runtimeModelResolver;
+}
+
+function resolveRuntimeModel(tier, provider) {
+  if (!runtimeModelResolver) return null;
+  try {
+    const model = runtimeModelResolver(tier, provider);
+    return typeof model === 'string' && model.trim() ? model.trim() : null;
+  } catch {
+    // A registry outage must never break routing: fall back to env/default.
+    return null;
+  }
+}
+
+/**
+ * Resolve the model configured for a tier. Precedence: explicit env override →
+ * DB-adopted model (Model Watchdog) → provider default. Premium tiers are
+ * provider-aware: an unset AI_MODEL_TIER_2 resolves to the provider's default
+ * rather than a DeepSeek model name that the provider would reject. Tier 3 opts
+ * into the reasoning model only when REMEDIATION_AUTONOMY=on (explicit opt-in).
  */
 export function getTierModel(tier, providerOverride = null) {
   if (tier === AI_TIERS.CONVERSATIONAL) {
     if (process.env.AI_MODEL_TIER_2) return process.env.AI_MODEL_TIER_2;
+    const runtime = resolveRuntimeModel(tier, providerOverride);
+    if (runtime) return runtime;
     if (providerOverride === AI_PROVIDERS.ANTHROPIC) return DEFAULT_ANTHROPIC_TIER2_MODEL;
     if (providerOverride === AI_PROVIDERS.OPENAI) {
       return process.env.AI_MODEL_TIER_2_OPENAI || DEFAULT_OPENAI_TIER2_MODEL;
@@ -66,9 +95,16 @@ export function getTierModel(tier, providerOverride = null) {
   }
   if (tier === AI_TIERS.REASONING) {
     if (process.env.AI_MODEL_TIER_3) return process.env.AI_MODEL_TIER_3;
+    const runtime = resolveRuntimeModel(tier, providerOverride);
+    if (runtime) return runtime;
     return isRemediationAutonomyOn() ? DEFAULT_DEEPSEEK_REASONER : DEFAULT_DEEPSEEK_MODEL;
   }
-  return process.env.AI_MODEL_TIER_1 || process.env.DEEPSEEK_MODEL || DEFAULT_DEEPSEEK_MODEL;
+  if (process.env.AI_MODEL_TIER_1 || process.env.DEEPSEEK_MODEL) {
+    return process.env.AI_MODEL_TIER_1 || process.env.DEEPSEEK_MODEL;
+  }
+  const runtime = resolveRuntimeModel(tier, providerOverride);
+  if (runtime) return runtime;
+  return DEFAULT_DEEPSEEK_MODEL;
 }
 
 /** Provider for the conversational tier (Phase 1 flips this to anthropic/openai). */
@@ -113,6 +149,8 @@ export const AI_PURPOSES = Object.freeze({
   friction_patch: { tier: AI_TIERS.REASONING, jsonMode: true, maxTokens: 600, temperature: 0.4 },
   horizon_synthesis: { tier: AI_TIERS.REASONING, jsonMode: true, maxTokens: 1200, temperature: 0.5 },
   remediation_synthesis: { tier: AI_TIERS.REASONING, jsonMode: true, maxTokens: 1200, temperature: 0.2 },
+  model_benchmark: { tier: AI_TIERS.ROUTER, jsonMode: true, maxTokens: 120, temperature: 0 },
+  model_research: { tier: AI_TIERS.ROUTER, maxTokens: 500, temperature: 0.2 },
   default: { tier: AI_TIERS.ROUTER }
 });
 
@@ -569,7 +607,8 @@ export async function chatCompletion({
   purpose = null,
   tier = null,
   maxTier = null,
-  ownerId = null
+  ownerId = null,
+  webSearch = false
 } = {}) {
   let lastError = null;
   const startedAt = Date.now();
@@ -670,11 +709,35 @@ export async function chatCompletion({
           request.response_format = { type: 'json_object' };
         }
 
-        const response = await ai.chat.completions.create(request, {
-          timeout: timeoutMs,
-          // Fail fast to the deterministic fallback instead of SDK retries.
-          maxRetries: 0
-        });
+        // Capability-gated web search/fetch (v1.17.0): only DeepSeek exposes the
+        // tool surface today, and only callers that explicitly opted in use it.
+        // If the deployment rejects the tool, degrade to a plain completion so a
+        // research leg can never break the scout cycle.
+        const supportsWebSearch = Boolean(webSearch) && attempt.provider === AI_PROVIDERS.DEEPSEEK;
+        if (supportsWebSearch) request.tools = [{ type: 'web_search' }];
+
+        let response;
+        try {
+          response = await ai.chat.completions.create(request, {
+            timeout: timeoutMs,
+            // Fail fast to the deterministic fallback instead of SDK retries.
+            maxRetries: 0
+          });
+        } catch (toolErr) {
+          if (!supportsWebSearch) throw toolErr;
+          delete request.tools;
+          attemptLog.push({
+            provider: attempt.provider,
+            model: attempt.model,
+            outcome: 'web_search_unsupported',
+            latencyMs: Date.now() - attemptStartedAt,
+            error: toolErr?.message || String(toolErr)
+          });
+          response = await ai.chat.completions.create(request, {
+            timeout: timeoutMs,
+            maxRetries: 0
+          });
+        }
         text = response?.choices?.[0]?.message?.content || '';
         promptTokens = response?.usage?.prompt_tokens ?? null;
         completionTokens = response?.usage?.completion_tokens ?? null;
@@ -762,7 +825,9 @@ export async function generateText({
   purpose = null,
   tier = null,
   maxTier = null,
-  ownerId = null
+  ownerId = null,
+  model = null,
+  webSearch = false
 }) {
   const result = await chatCompletion({
     system,
@@ -774,7 +839,9 @@ export async function generateText({
     purpose,
     tier,
     maxTier,
-    ownerId
+    ownerId,
+    model,
+    webSearch
   });
   return result.ok ? result.text : null;
 }

@@ -13,6 +13,7 @@ import {
   chatCompletion,
   setAiUsageSink,
   getAiUsageSink,
+  setRuntimeModelResolver,
   normalizeHistory,
   parseJsonSafely
 } from './src/services/aiClient.js';
@@ -83,6 +84,19 @@ async function runTests() {
     }
   });
   check(isPremiumModelEnabled() === premiumBefore, 'premium switch restored to its pre-test value');
+
+  console.log('\n--- Test 1b: Model Watchdog runtime resolver (env always wins) ---');
+  withEnv({ AI_MODEL_TIER_1: undefined, DEEPSEEK_MODEL: undefined }, () => {
+    setRuntimeModelResolver((tier) => (tier === AI_TIERS.ROUTER ? 'deepseek-watchdog-test' : null));
+    check(resolveTier('extraction').model === 'deepseek-watchdog-test', 'registry-adopted model fills the gap');
+    withEnv({ AI_MODEL_TIER_1: 'deepseek-env-wins' }, () => {
+      check(resolveTier('extraction').model === 'deepseek-env-wins', 'env override beats the registry');
+    });
+    setRuntimeModelResolver(() => { throw new Error('registry outage'); });
+    check(resolveTier('extraction').model === 'deepseek-chat', 'resolver failures fall back to the default model');
+    setRuntimeModelResolver(null);
+    check(resolveTier('extraction').model === 'deepseek-chat', 'resolver detaches cleanly');
+  });
 
   console.log('\n--- Test 2: PREMIUM_MODEL_ENABLED upgrades the conversational tier ---');
   withEnv({

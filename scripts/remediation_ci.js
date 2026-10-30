@@ -18,6 +18,7 @@ import {
   reportRemediationResult,
   logRemediationAudit
 } from '../src/workers/remediation.js';
+import { verifyModelUpdateAgainstRegistry } from '../src/services/aiModelRegistry.js';
 
 /**
  * Saka Fleet — Remediation CI runner (v1.10.0)
@@ -154,7 +155,14 @@ async function submitPlan(supabase, [auditKey, planFile, clusterSignature]) {
   };
 
   const verdict = sanitizeRemediationPlan(plan);
-  const status = verdict.ok ? REMEDIATION_STATUS.PENDING_APPROVAL : REMEDIATION_STATUS.NEEDS_MODIFICATION;
+  // v1.17.0 — model-update work orders must resolve to a benchmarked registry row.
+  const modelRegistryCheck = await verifyModelUpdateAgainstRegistry(supabase, plan);
+  const combinedOk = verdict.ok && modelRegistryCheck.ok;
+  const combinedViolations = [
+    ...verdict.violations,
+    ...(modelRegistryCheck.applicable ? modelRegistryCheck.violations : [])
+  ];
+  const status = combinedOk ? REMEDIATION_STATUS.PENDING_APPROVAL : REMEDIATION_STATUS.NEEDS_MODIFICATION;
 
   let proposalCode = await nextProposalCode(supabase);
   let inserted = null;
@@ -176,11 +184,11 @@ async function submitPlan(supabase, [auditKey, planFile, clusterSignature]) {
           changes: plan.changes,
           tests: plan.tests,
           rollback: plan.rollback,
-          violations: verdict.violations
+          violations: combinedViolations
         },
         risk_level: plan.risk_level,
         status,
-        feedback: verdict.ok ? null : `Blocked by sanitizer: ${verdict.violations.join(' ')}`
+        feedback: combinedOk ? null : `Blocked by sanitizer: ${combinedViolations.join(' ')}`
       }])
       .select('*')
       .maybeSingle();
@@ -201,22 +209,22 @@ async function submitPlan(supabase, [auditKey, planFile, clusterSignature]) {
   await logRemediationAudit(supabase, 'REMEDIATION_PLAN_SUBMITTED', {
     proposal_code: inserted.proposal_code,
     audit_run_id: audit.id,
-    sanitized: verdict.ok,
-    violations: verdict.violations
+    sanitized: combinedOk,
+    violations: combinedViolations
   });
 
-  if (!verdict.ok) {
+  if (!combinedOk) {
     await reportRemediationResult(supabase, inserted.proposal_code, {
       deployed: false,
-      failure: `Plan rejected by the guardrail sanitizer: ${verdict.violations.join(' ')}`
+      failure: `Plan rejected by the guardrail sanitizer: ${combinedViolations.join(' ')}`
     });
   }
 
   console.log(JSON.stringify({
-    ok: verdict.ok,
+    ok: combinedOk,
     proposal_code: inserted.proposal_code,
     status: inserted.status,
-    violations: verdict.violations
+    violations: combinedViolations
   }, null, 2));
 }
 

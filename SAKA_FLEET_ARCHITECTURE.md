@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.16.4  
+**Version:** 1.17.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -40,6 +40,8 @@ All LLM traffic flows through **`src/services/aiClient.js`**. No service talks t
 | Kill switch | `PREMIUM_MODEL_ENABLED` (off; Tier-2 downgrades to Tier 1 while off) |
 | Telemetry analytics | `getAiUsageSummary()` (1–168 h window) → Superadmin `admin ai-stats` digest (§37) |
 | Tier-2 failover chain | `anthropic → openai → deepseek`; per-provider circuit breakers; DeepSeek never skipped (§38) |
+| Model Watchdog | `ai_model_registry` + `model_eval_runs`; weekly discovery, deterministic benchmark, canary adoption, auto-rollback (§45) |
+| Web search/fetch | capability-probed per model, `AI_WEB_SEARCH_ENABLED=off` by default; research evidence only (§45) |
 | Budget guardrail | `AI_DAILY_BUDGET_USD` (unset = off) skips premium legs at 100%; alerts at `AI_BUDGET_ALERT_PCT` + 100% (§38) |
 
 **Exports**
@@ -610,7 +612,7 @@ Owners exceeding capacity are prompted with the next-tier upgrade checkout (or t
   - Dynamic rules: `saka_dynamic_rules` (Sentinel re-patches on its next scan)
   - Fleet ops: `pending_owner_notifications`, `passbook_transfers`, `private_earnings`, `expenses`, `expense_logs`, `expiry_notification_log`, `reminders`, `admin_audit_logs`
   - Support/cache: `support_tickets`, `exchange_rates_cache` (self-repopulates on demand via `paystack.js`)
-- **Preserved (`PRESERVED_TABLES`):** `system_config` (boot-critical `saka_core_prompt`, `last_deployed_revision`, remediation scheduling markers), `compliance_catalog` (bundled + superadmin legal overrides), `weekly_feature_proposals`, `sentinel_audit_runs` and `remediation_proposals` (governance ledger for autonomous changes).
+- **Preserved (`PRESERVED_TABLES`):** `system_config` (boot-critical `saka_core_prompt`, `last_deployed_revision`, remediation scheduling markers), `compliance_catalog` (bundled + superadmin legal overrides), `weekly_feature_proposals`, `sentinel_audit_runs` and `remediation_proposals` (governance ledger for autonomous changes), plus `ai_model_registry` and `model_eval_runs` (runtime model governance — a slate wipe must never silently downgrade the serving model).
 - **Scope regression test:** `test_db_reset_scope.js` (stateless) asserts the wipe/preserve registries are disjoint and that the global `TRUNCATE` block matches `RESET_TABLES` exactly.
 
 ### 15.2 Production & Execution Safeguards
@@ -1035,6 +1037,7 @@ Alerts are WhatsApp-ready and unit-aware, e.g. "Service Warning (KDA 123A): Oil 
 - `SAKA_INTENT_PLAYBOOK` — non-quiz intents (greeting, discovery, analytics, buyer-side transfer, OTP, reminders, onboarding) and the allowed behaviour for each.
 - `SAKA_BOUNDARY_RULES` — VIN/passbook-token immutability, owner-only soft delete, strict 1-to-1 driver assignment, never invent OTP/PIN/amounts/dates, confirmation gate, superadmin interception, Saka/Sentinel division.
 - `buildFlowPlaybook()` is injected into `DEFAULT_SAKA_CORE_PROMPT` via `${SAKA_FLOW_PLAYBOOK}`, so **the prompt can never drift from the code**.
+- `SAKA_TONE_COMPASS` (v1.17.0) — the Tone Compass & Mirror Engine: four poles (Precision/Anchor, Empathy/Healer, Efficiency/Arrow, Warmth↔Professionalism/Weaver), a five-dimension mirror matrix (register, length, emotion, pace, relationship stage), a situation priority matrix, absolute tone floors and role framing. It is rendered by `buildToneCompassBlock()` and appended to the playbook, so the core prompt and `conversationEngine` composer share one voice policy. `test_agent_training.js` asserts `TONE COMPASS`, `MIRROR MATRIX`, `SITUATION PRIORITY MATRIX`, `user_tone`, `relationship_stage` and `MODEL IDENTITY` stay embedded.
 
 ### 31.2 Saka vs Sentinel vs Cline (permanent boundary)
 - **Saka** = front-facing WhatsApp agent: intent classification, structured extraction, localized prose, step-by-step guidance.
@@ -1286,7 +1289,7 @@ Three fail-soft, idempotent tiers run in `index.js`:
 - Both channels are independent (one outage never silences the other), mirroring `scripts/notify_git_push.js`.
 
 ### 35.8 Safety guardrails & kill switches
-- `sanitizeRemediationPlan` (shared by CI submit and server) blocks: VIN/OTP/auth/schema/destructive keywords, `.env`, `.clinerules`, `.github/`, `supabase/`, reset/provision/VIN migrations, `paystack.js`, `transfers.js`, `githubDispatch.js`, `remediation.js`, `remediation_ci.js` and the remediation migration (self-modification guard).
+- `sanitizeRemediationPlan` (shared by CI submit and server) blocks: VIN/OTP/auth/schema/destructive keywords, `.env`, `.clinerules`, `.github/`, `supabase/`, reset/provision/VIN migrations, `paystack.js`, `transfers.js`, `githubDispatch.js`, `remediation.js`, `remediation_ci.js` and the remediation migration (self-modification guard). Since v1.17.0 it also runs `validateAiModelUpdatePlan` (allowlisted files, mandatory model suites, canary ceiling, documented rollback), and `verifyModelUpdateAgainstRegistry` re-checks the benchmark at submit **and** at the execution gate.
 - Execution requires DB-verified approval + fresh single-use nonce (`consumeProposalNonce` nulls it on success).
 - Tests gate both sides of the edit; no green, no push.
 - **Post-edit diff guard:** after the post-change tests, the execute job runs `node scripts/remediation_ci.js guard <CODE>`; any working-tree change matching `REMEDIATION_FORBIDDEN_PATHS` (via the shared `matchForbiddenRemediationPath`, including untracked files and renames) aborts the run before `git add` — nothing is committed or pushed.
@@ -1357,6 +1360,8 @@ All LLM traffic still flows through `src/services/aiClient.js` (the only provide
 | `remediation_synthesis` | `remediation.js` `refreshRemediationSynthesis()` |
 | `admin_parse` | `superadmin.js` `parseSuperadminCommand()` |
 | `health_synthesis` | `superadmin.js` `handleHealthCheckCommand()` |
+| `model_benchmark` | `aiModelRegistry.js` benchmark/probe telemetry (v1.17.0) |
+| `model_research` | `aiModelRegistry.js` `researchModelLandscape()` — capability-gated web search/fetch |
 
 ### 36.4 Telemetry table & retention
 `public.ai_usage_logs` — idempotent `ensureAiUsageLogsTable()` at boot, provisioned by `npm run migrate:staging-schema`, verified in `EXPECTED_TABLES`:
@@ -1396,6 +1401,12 @@ Analytics (v1.13.0): `getAiUsageSummary(supabase, hours = 24)` aggregates a 1–
 | `AI_USAGE_LOGGING_ENABLED` | on | telemetry writes kill switch |
 | `AI_USAGE_LOG_MAX_ROWS` | 10000 | retention cap |
 | `AI_USAGE_TRIM_EVERY` | 250 | writes between retention sweeps |
+| `AI_MODEL_SCOUT_ENABLED` | off | Model Watchdog discovery/benchmark cycle kill switch (§45) |
+| `AI_MODEL_AUTO_ADOPT` | off | auto-canary only (never full adoption); off ⇒ proposals only (§45) |
+| `AI_WEB_SEARCH_ENABLED` | off | web search/fetch research leg (capability-gated) (§45) |
+| `AI_MODEL_SCOUT_INTERVAL_HOURS` | 168 | weekly discovery cadence |
+| `AI_MODEL_MIN_BENCHMARK_SCORE` / `AI_MODEL_MAX_CANARY_PCT` | 0.85 / 25 | adoption threshold + canary ceiling |
+| `AI_MODEL_ROLLBACK_ERROR_RATE` / `AI_MODEL_ROLLBACK_ABSOLUTE_ERROR_RATE` | 3× / 0.25 | health-watchdog auto-rollback triggers |
 
 ### 36.6 Files & tests
 - `src/services/aiClient.js` — purpose registry, tier resolution, provider clients, telemetry sink, Phase 3 failover chain (`buildProviderChain`), per-provider circuit breakers and the budget-guard seam.
@@ -1406,6 +1417,7 @@ Analytics (v1.13.0): `getAiUsageSummary(supabase, hours = 24)` aggregates a 1–
 - `test_phase1_canary.js` — 37 assertions: Anthropic translation/normalization, Tier-2 success, 429/timeout fallback to DeepSeek, `AI_PREMIUM_MAX_CONCURRENCY` cap + overflow, escalation matrix, premium-off downgrade, DB telemetry (fetch-stubbed, zero network).
 - `test_phase2_analytics.js` — 57 assertions: pricing rules, aggregation math (tier/provider/purpose), window clamping, 1,000-row pagination, fail-soft contract, deterministic digest, escalation precision, offline `admin ai-stats` parsing, DB round-trip with self-cleanup.
 - `test_phase3_resilience.js` — 54 assertions: chain order, missing-key skip, autonomy-gated reasoning binding, Anthropic→DeepSeek failover with `attempts`, breaker state machine + bypass, budget gating, budget math/alerts/dedupe, digest fallbacks/budget lines, `attempts` jsonb DB round-trip.
+- `test_model_scout.js` — 52 assertions (v1.17.0): version classification, discovery/probe/benchmark with fetch stubs (zero live calls), model-plan guardrails, offline admin parsing, DB registry gate/rollout/canary/rollback, health-watchdog auto-rollback, proposal dedupe + deterministic digest, self-cleaning.
 
 ### 36.7 Phase roadmap
 | Phase | Scope | Status |
@@ -1784,5 +1796,51 @@ Every path that renders the driver-profile email OTP now shares ONE contract, cl
 - `sakaAi.js` §7d gains the matching operating rule (OTP is one wizard step: mailbox + 6 digits only, then the compliance item; accept resend/change email/owner skip and embedded codes; never reveal or invent a code; never claim verification before the engine confirms). `flowKnowledge.js` `driver_onboarding` `fields`/`rules` were updated in the same commit (rule 13 of `.clinerules`); the never-re-ask-on-file and owner-skippable/gated-mandatory rules are unchanged.
 - Untouched: OTP verification strictness, code expiry, VIN immutability, the driver 1-to-1 gate and all subscription math. Description-only change — no migration, no schema write, no new env knob.
 - Suites: `test_driver_profile_onboarding.js`, `test_agent_training.js`.
+
+---
+
+## 45. v1.17.0 — Model Watchdog & Self-Updating Model Pipeline
+
+### 45.1 Purpose & agent boundary
+Saka Fleet continuously watches for better LLM models that complement the app (e.g. DeepSeek V4.1 Flash → V4.1-Flash-1017) without ever risking the conversation. The **Model Watchdog** is Sentinel tooling: it discovers, benchmarks, proposes and (only with explicit approval) adopts. Saka never discusses or claims model updates; Sentinel never speaks to users; Cline remains the approved code executor.
+
+### 45.2 Registry (data, not deploy)
+- `public.ai_model_registry` — one row per provider model: `model_id`, family, version label, alias, `tier_slot` (`tier_1`/`tier_2`/`tier_3`), `status` (`discovered|benchmarked|active|standby|retired|rejected`), `traffic_split`, `capabilities`, `benchmark`, timestamps. A partial unique index enforces ONE active row per slot.
+- `public.model_eval_runs` — every benchmark run (score, cases, latency, tokens, failures).
+- Migration: `npm run migrate:model-registry`; idempotent boot ensure via `ensureAiModelRegistryTables()` + seed (stable `deepseek-chat` pointer active on `tier_1`, `deepseek-reasoner` discovered).
+- **Adoption is a database flip** (`applyModelRollout`), so a model upgrade needs no deploy; the previous model becomes `standby` and `rollbackModel` reverts instantly. `AI_MODEL_TIER_*` / `DEEPSEEK_MODEL` env overrides always win over the registry (resolver seam in `aiClient.getTierModel`).
+
+### 45.3 Scout cycle (weekly, opt-in)
+`runModelScoutCycle()` (scheduled every `AI_MODEL_SCOUT_INTERVAL_HOURS`, gated by `AI_MODEL_SCOUT_ENABLED=off`):
+1. **Discovery (zero tokens):** `GET /models` lists provider model IDs; new IDs enter as `discovered`.
+2. **Research (optional):** when `AI_WEB_SEARCH_ENABLED=on` AND the probed model advertises `web_search`, one Tier-1 `model_research` call records release-note evidence on the candidate row (never config).
+3. **Probe + benchmark:** JSON mode and web-search/fetch support are **verified** (never assumed); the deterministic 10-case suite covers intent triage, JSON contract, VIN/OTP boundaries, global dates and empathy-first tone. Results persist in `model_eval_runs`.
+4. **Recommendation:** the highest-scoring `benchmarked` candidate above `AI_MODEL_MIN_BENCHMARK_SCORE` that beats the active model.
+5. **Governance:** by default the scout creates an approval-gated `remediation_proposals` row (`category='ai_model_update'`, `PENDING_APPROVAL`) that rides the existing Superadmin gateway. `AI_MODEL_AUTO_ADOPT=on` may only start a canary (`<= AI_MODEL_MAX_CANARY_PCT`); full adoption is always human.
+
+### 45.4 Approval & execution
+- `admin models` — deterministic registry digest (active, candidates, pending model approvals, kill switches).
+- `admin model scout` — force a cycle now.
+- `admin model adopt <model_id> [split]` — direct Superadmin adoption (registry gate enforced; audited `ADMIN_MODEL_ADOPT`).
+- `admin model rollback [tier_1|tier_2|tier_3]` — instant revert to standby.
+- `admin accept fix <CODE>` on a model proposal applies the rollout directly (data change, no CI dispatch, no deploy) and marks the proposal `DEPLOYED` with `execution.mode='registry_rollout'`; `decline`/`modify` behave as usual. This path is intentionally independent of `REMEDIATION_AUTONOMY` (which governs autonomous CODE execution) but still requires an active Superadmin session and writes `admin_audit_logs`.
+- Model work orders are constrained by `validateAiModelUpdatePlan` (allowlisted files, mandatory model suites, canary ceiling, documented rollback) and `verifyModelUpdateAgainstRegistry` (must resolve to a benchmarked row at submit **and** gate time); `scripts/remediation_ci.js` combines both verdicts.
+
+### 45.5 Self-healing loop
+`monitorModelHealth()` runs every 30 minutes: it compares the active model's error rate in `ai_usage_logs` against its standby over `AI_MODEL_HEALTH_WINDOW_HOURS`. A relative breach (`AI_MODEL_ROLLBACK_ERROR_RATE`×) or an absolute breach (`AI_MODEL_ROLLBACK_ABSOLUTE_ERROR_RATE`) with at least `AI_MODEL_ROLLBACK_MIN_SAMPLES` samples triggers an automatic rollback, an audited `MODEL_AUTO_ROLLBACK` row and a Superadmin WhatsApp alert. DeepSeek remains the terminal provider leg; the router never depends on the registry (fail-open to env/defaults).
+
+### 45.6 Ops, files & tests
+- `npm run model:scout` → `scripts/model_scout.js status|scout|adopt <model> [--split N]|rollback [slot]`.
+- Files: `src/services/aiModelRegistry.js`, resolver seam + `model_benchmark`/`model_research` purposes + capability-gated `webSearch` in `src/services/aiClient.js`, scheduling/boot in `index.js`, guards in `src/workers/remediation.js` + `scripts/remediation_ci.js`, commands in `src/services/superadmin.js`, `scripts/run_model_registry_migration.js`, `scripts/model_scout.js`.
+- Tests: `test_model_scout.js` (52 assertions, fetch-stubbed, self-cleaning), extended `test_model_router.js` (resolver precedence), `test_remediation_pipeline.js` (model plan guardrails), `test_agent_training.js` (tone + model identity), `test_db_reset_scope.js` (preserved registry).
+- Env knobs: see §36.5 and the `MODEL WATCHDOG` section in `.env.example`. Kill switches default OFF.
+
+### 45.7 Tone Compass & Mirror Engine (conversational voice)
+The voice policy is data, not prose drift: `SAKA_TONE_COMPASS` in `flowKnowledge.js` renders into the core prompt and mirrors into `conversationEngine`. The classifier now emits `user_tone` (formal/casual/terse/verbose/neutral/frustrated/anxious/celebratory) and the runtime may supply `relationship_stage` (stranger/newcomer/regular/veteran) and `model_label`.
+- **Compass poles:** Precision/Anchor (facts are sacred) · Empathy/Healer (acknowledge before instructing, one next step) · Efficiency/Arrow (shortest message that fully serves) · Warmth↔Professionalism/Weaver (mirror register within floors/ceilings).
+- **Mirror matrix:** register, length, emotion (validate, never amplify), pace (fragmented vs power user) and relationship stage.
+- **Situation matrix:** product error, user mistake, billing anxiety, compliance urgency, routine logging, onboarding, discovery, stalls, escalation.
+- **Floors:** no sarcasm/shame; no empty reassurance; emoji situation-gated; no humour in money/legal/compliance; translation-proof sentences; unknown tone → calm professional warmth.
+- **Honest self-reporting:** Saka states only the `model_label` supplied by the runtime (registry alias); otherwise it says the model is managed by Saka Fleet and never guesses a version.
 
 

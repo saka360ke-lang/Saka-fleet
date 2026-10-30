@@ -78,15 +78,20 @@ export const RESET_TABLES = [
 //   - compliance_catalog: bundled + superadmin-overridden legal reference data.
 //   - sentinel_audit_runs / remediation_proposals / weekly_feature_proposals:
 //     governance ledger for autonomous remediation and the feature backlog.
+//   - ai_model_registry / model_eval_runs: runtime model governance (the active
+//     model binding + benchmark history). Wiring these belongs to system config,
+//     not to onboarding data.
 export const PRESERVED_TABLES = [
   'system_config',
   'compliance_catalog',
   'sentinel_audit_runs',
   'remediation_proposals',
-  'weekly_feature_proposals'
+  'weekly_feature_proposals',
+  'ai_model_registry',
+  'model_eval_runs'
 ];
 
-const BACKUP_TABLES = ['system_config', 'compliance_catalog'];
+const BACKUP_TABLES = ['system_config', 'compliance_catalog', 'ai_model_registry', 'model_eval_runs'];
 
 export function resetBackupFilename(now = new Date()) {
   return `reset-backup-${now.toISOString().replace(/[:.]/g, '-')}.json`;
