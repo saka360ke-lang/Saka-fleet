@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.23.2  
+**Version:** 1.23.3  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.23.3** | Incident registry: track, resolve and silence backend issues | §60 |
 | **1.23.2** | Plain-English admin alerts and deploy-noise decoder | §59 |
 | **1.23.1** | Pricing v2, free-tier vault gating, OCR flow hard-paused | §58 |
 | 1.23.0 | Sonnet-first front conversations with GPT-4o fallback | §57 |
@@ -2276,3 +2277,31 @@ Template for every superadmin alert: what happened -> what it means -> what to d
 
 ### 59.5 Tests
 - test_notifications.js: 11 assertions (plain-English alert + headline, watchdog copy, protobuf/plain noise filtered, genuine errors still alert).
+
+---
+
+## 60. v1.23.3 - Incident Registry (Track, Resolve, Silence)
+
+One row per backend issue signature in `backend_incidents`. Sentinel opens incidents from its audit clusters; superadmins resolve or suppress them; silenced signatures never alert again unless they regress.
+
+### 60.1 Lifecycle
+- `open` -> `acknowledged` (optional) -> `resolved` | `suppressed` (superadmin only, audited ADMIN_INCIDENT_RESOLVE / ADMIN_INCIDENT_SUPPRESS).
+- Signature = the same deterministic normalization Sentinel clusters on (`buildIncidentSignature` mirrors `buildSignature`). 4+ digit numbers become `<n>`, UUIDs `<uuid>`, hex `<hex>`.
+- Recurrence guard: resolved/suppressed signatures stay quiet until they recur `INCIDENT_REOPEN_THRESHOLD` (default 3) times after the fix, then the incident re-opens automatically.
+- Severity: errors high, stalls/loops/frustration medium, everything else low.
+
+### 60.2 Wiring
+- `runRemediationScan()` upserts one incident per audit cluster (source `sentinel_scan`).
+- `scanCloudRunAnomalies()` checks the registry before alerting: silenced signatures produce no friction row, no error_logs row and no WhatsApp alert.
+- Deployment alerts append `Open backend issues: N (text admin incidents)` when any incident is open.
+
+### 60.3 Commands
+- `admin incidents` - open issues with severity chips, counts and ids.
+- `admin incident resolve <id> [note]` - resolved + fixed-in-version stamp; silence begins.
+- `admin incident suppress <id> [note]` - permanent expected-noise suppression.
+
+### 60.4 Migration, files & tests
+- `npm run migrate:incidents` (`scripts/run_incidents_migration.js`); `backend_incidents` is part of the slate-wipe scope (`RESET_TABLES`).
+- Files: `src/services/incidents.js`, `src/workers/remediation.js`, `src/workers/sentinel.js`, `src/services/superadmin.js`, `scripts/notify_git_push.js`.
+- Tests: `test_incidents.js` (19 - stable signatures, open/update/resolve/suppress, post-fix silence, regression re-open, counts, list, plain-English replies, command parsing).
+- Knob: `INCIDENT_REOPEN_THRESHOLD` (3).

@@ -5,6 +5,7 @@ import { composeMessage } from '../services/conversationEngine.js';
 import { getCurrentQuizField } from '../services/quizEngine.js';
 import { detectCountryFromPhone } from '../services/globalization.js';
 import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
+import { buildIncidentSignature, isIncidentSilenced } from '../services/incidents.js';
 
 function getSupabase(providedSupabase) {
   if (providedSupabase) return providedSupabase;
@@ -461,6 +462,9 @@ export async function scanCloudRunAnomalies(providedSupabase) {
     const logText = String(log.text || '').trim();
     if (!logText || logText === '{}' || logText === 'null' || logText === 'undefined') continue;
     if (isDeployNoiseLog(logText)) continue;
+
+    // v1.23.3 - resolved/suppressed incidents stay silent until they recur.
+    if (await isIncidentSilenced(supabase, buildIncidentSignature(logText))) continue;
 
     if (isError || isTimeoutRisk) {
       recentlyAlertedLogHashes.set(hashStr, now);

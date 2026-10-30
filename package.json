@@ -36,7 +36,8 @@
     "migrate:staging-schema": "node scripts/provision_staging_schema.js",
     "migrate:sessions": "node scripts/run_chat_sessions_migration.js",
     "notify:deploy": "node scripts/notify_git_push.js",
-    "postinstall": "node scripts/notify_git_push.js || true"
+    "postinstall": "node scripts/notify_git_push.js || true",
+    "migrate:incidents": "node scripts/run_incidents_migration.js"
   },
   "dependencies": {
     "@fastify/formbody": "^9.0.1",

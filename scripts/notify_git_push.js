@@ -1,5 +1,7 @@
 import { execSync } from 'child_process';
 import fs from 'node:fs';
+import { createClient } from '@supabase/supabase-js';
+import { countOpenIncidents } from '../src/services/incidents.js';
 
 // dotenv is loaded lazily so a missing dependency can never block the primary
 // WhatsApp deployment-notification channel. (Resend was removed in v1.14.1:
@@ -20,7 +22,7 @@ function architectureHeadline(version) {
   } catch { return null; }
 }
 
-export function buildDeploymentAlertText({ version = 'unknown', commitHash = 'HEAD', branch = 'main', author = 'Deploy Bot', timestamp = '' } = {}) {
+export function buildDeploymentAlertText({ version = 'unknown', commitHash = 'HEAD', branch = 'main', author = 'Deploy Bot', timestamp = '', openIssues = 0 } = {}) {
   const headline = architectureHeadline(version) || 'A new version of Saka is running.';
   const needsCheck = /migrat|secret|environment variable|env knob/i.test(headline);
   return [
@@ -30,6 +32,7 @@ export function buildDeploymentAlertText({ version = 'unknown', commitHash = 'HE
     '*What this means:* this is the version now answering WhatsApp conversations.',
     '*Action needed:* ' + (needsCheck ? 'Check the release notes in SAKA_FLEET_ARCHITECTURE.md.' : 'None - everything is automatic.'),
     '',
+    (openIssues > 0 ? '*Open backend issues:* ' + openIssues + ' (text admin incidents)' : ''),
     'Details: commit ' + commitHash + ' - branch ' + branch + ' - by ' + author + ' - ' + timestamp
   ].join('\n');
 }
@@ -71,10 +74,18 @@ export async function sendAdminDeploymentAlert(customData = {}) {
     const archText = fs.readFileSync('SAKA_FLEET_ARCHITECTURE.md', 'utf8');
     const versionMatch = archText.match(/\*\*Version:\*\*\s*([0-9]+\.[0-9]+\.[0-9]+)/);
     if (versionMatch) releaseVersion = versionMatch[1];
-  } catch {}  const timestamp = new Date().toLocaleString('en-US', { timeZone: 'Africa/Nairobi', dateStyle: 'medium', timeStyle: 'short' });
+  } catch {}  let openIssues = 0;
+  try {
+    if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY) {
+      const incidentClient = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
+      openIssues = await countOpenIncidents(incidentClient);
+    }
+  } catch { /* incident count is best-effort */ }
+
+  const timestamp = new Date().toLocaleString('en-US', { timeZone: 'Africa/Nairobi', dateStyle: 'medium', timeStyle: 'short' });
   const cleanPhone = superadminPhone ? superadminPhone.replace(/[^\d]/g, '') : null;
 
-  const waMessage = buildDeploymentAlertText({ version: releaseVersion, commitHash, branch, author, timestamp });
+  const waMessage = buildDeploymentAlertText({ version: releaseVersion, commitHash, branch, author, timestamp, openIssues });
 
   let waSuccess = false;
   if (cleanPhone && phoneNumberId && token) {

@@ -18,6 +18,13 @@ import {
   getAiBudgetAlertPct
 } from './aiUsageLog.js';
 import { formatNairobiDate } from './dateParser.js';
+import {
+  listIncidents,
+  resolveIncident,
+  suppressIncident,
+  formatIncidentsReply,
+  formatIncidentResolvedReply
+} from './incidents.js';
 import { getTrialFunnelStats, formatTrialStatsReply } from './trialEngine.js';
 import { getFeatureRolloutStatus, FEATURE_NOTICE_VERSION } from './featureNotice.js';
 import {
@@ -134,6 +141,7 @@ const ADMIN_INTENTS = new Set([
   'ADMIN_TRIAL_STATS',
   'ADMIN_ROLLOUT',
   'ADMIN_KB', 'ADMIN_KB_REVIEW', 'ADMIN_KB_APPROVE', 'ADMIN_KB_REJECT', 'ADMIN_KB_STALE',
+  'ADMIN_INCIDENTS', 'ADMIN_INCIDENT_RESOLVE', 'ADMIN_INCIDENT_SUPPRESS',
   'ADMIN_MODELS', 'ADMIN_MODEL_SCOUT', 'ADMIN_MODEL_ADOPT', 'ADMIN_MODEL_ROLLBACK',
   'HEALTH_CHECK', 'GENERATE_COUPON', 'PROFILES_REPORT', 'SENTINEL_DIAGNOSE'
 ]);
@@ -208,6 +216,19 @@ export async function parseSuperadminCommand(messageText) {
   }
   if (/^\s*admin\s+kb\b/i.test(lower)) {
     return { intent: 'ADMIN_KB' };
+  }
+
+  // v1.23.3 - backend incident registry commands.
+  const incidentResolveMatch = text.match(/^\s*admin\s+incident\s+resolve\s+([0-9a-f][0-9a-f-]{7,})(?:\s+(.+))?$/i);
+  if (incidentResolveMatch) {
+    return { intent: 'ADMIN_INCIDENT_RESOLVE', incident_id: incidentResolveMatch[1].toLowerCase(), note: incidentResolveMatch[2] ? incidentResolveMatch[2].trim() : null };
+  }
+  const incidentSuppressMatch = text.match(/^\s*admin\s+incident\s+suppress\s+([0-9a-f][0-9a-f-]{7,})(?:\s+(.+))?$/i);
+  if (incidentSuppressMatch) {
+    return { intent: 'ADMIN_INCIDENT_SUPPRESS', incident_id: incidentSuppressMatch[1].toLowerCase(), note: incidentSuppressMatch[2] ? incidentSuppressMatch[2].trim() : null };
+  }
+  if (/^\s*admin\s+incidents?\s*$/i.test(lower)) {
+    return { intent: 'ADMIN_INCIDENTS' };
   }
 
   // Phase 2 (v1.13.0): AI telemetry digest — regex first, zero LLM calls.
@@ -1734,6 +1755,27 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
       reply: result.ok
         ? `🗑️ Draft rejected: ${result.rule.country_code} · ${result.rule.rule_key}`
         : `⚠️ Could not reject that rule: ${result.error}`
+    };
+  }
+
+  if (parsedCommand.intent === 'ADMIN_INCIDENTS') {
+    const list = await listIncidents(supabase, { limit: 10 });
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_INCIDENTS', { open: list.rows?.length || 0 });
+    return { isSuperadmin: true, reply: list.ok ? formatIncidentsReply(list.rows) : `⚠️ ${list.error}` };
+  }
+
+  if (parsedCommand.intent === 'ADMIN_INCIDENT_RESOLVE' || parsedCommand.intent === 'ADMIN_INCIDENT_SUPPRESS') {
+    const isResolve = parsedCommand.intent === 'ADMIN_INCIDENT_RESOLVE';
+    const options = { adminPhone: formattedPhone, note: parsedCommand.note, audit: (phone, action, details) => logAdminAudit(supabase, phone, action, details) };
+    if (isResolve) options.version = FEATURE_NOTICE_VERSION;
+    const result = isResolve
+      ? await resolveIncident(supabase, parsedCommand.incident_id, options)
+      : await suppressIncident(supabase, parsedCommand.incident_id, options);
+    return {
+      isSuperadmin: true,
+      reply: result.ok
+        ? formatIncidentResolvedReply({ status: isResolve ? 'resolved' : 'suppressed', signature: result.incident.signature })
+        : `⚠️ Could not update that incident: ${result.error}`
     };
   }
 

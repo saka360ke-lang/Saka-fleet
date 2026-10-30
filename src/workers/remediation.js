@@ -6,6 +6,7 @@ import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
 import { sendAdminNotificationEmail, sendRemediationProposalEmail, sendRemediationDigestEmail } from '../services/mailer.js';
 import { dispatchRepositoryEvent, isRemediationAutonomyEnabled } from '../services/githubDispatch.js';
 import { sendProactiveWhatsApp } from './sentinel.js';
+import { upsertIncident } from '../services/incidents.js';
 import { validateAiModelUpdatePlan, verifyModelUpdateAgainstRegistry, getModelWatchdogSummary } from '../services/aiModelRegistry.js';
 
 /**
@@ -496,6 +497,16 @@ export async function runRemediationScan(providedSupabase, { now = new Date(), w
   await ensureRemediationTables(supabase);
 
   const { counts, clusters, windowStartIso } = await collectAuditWindow(supabase, now, windowHours);
+
+  // v1.23.3 - register recurring clusters so resolved/suppressed ones stay quiet.
+  for (const cluster of clusters) {
+    await upsertIncident(supabase, {
+      signature: cluster.signature,
+      category: cluster.category,
+      message: cluster.sample,
+      source: 'sentinel_scan'
+    });
+  }
 
   const health_score = computeHealthScore(counts);
   const runDate = formatNairobiDate(now);
