@@ -1,8 +1,26 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.23.0  
+**Version:** 1.23.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
+## Release History (single source of truth)
+
+Every shipped release is tracked HERE and nowhere else. Newest first.
+
+| Version | Headline | Detail |
+|---|---|---|
+| **1.23.1** | Pricing v2, free-tier vault gating, OCR flow hard-paused | §58 |
+| 1.23.0 | Sonnet-first front conversations with GPT-4o fallback | §57 |
+| 1.22.0 | Snappy replies: ack-first media, OCR kill switch, AI latency trims | §56 |
+| 1.21.3 | Wipe-aware first contact + zero-vehicle routing | §55 |
+| 1.21.2 | Countrywise traffic-act deep-links | §54 |
+| 1.21.1 | Country KB ingest, drafts & superadmin approval | §54 |
+| 1.21.0 | Country buckets, jurisdiction KB & global asset kinds | §53 |
+| 1.20.0 | Document Lens: photos + PDFs, confirm-before-save | §52 |
+| 1.19.2 | OCR resilience (Vision retry, no-repeat welcome) | §51 |
+| 1.19.1 | Intent retry, registration-summary PDF, feature rollout | §50 |
+| 1.19.0 | Receipt intelligence (vault, dedupe, low-confidence) | §49 |
+| 1.18.1 | Tone compass, greetings & emoji artistry | §48 |
 
 ---
 
@@ -2203,3 +2221,35 @@ Owner decision: model quality is not a subscription gate - vehicle count is. Eve
 
 ### 57.3 Tests
 - `test_model_router.js` asserts the front/background split, `AI_TIER1_PROVIDER=deepseek` legacy restore, and the chain order Sonnet -> GPT -> DeepSeek (and Sonnet -> DeepSeek without a GPT key).
+---
+
+## 58. v1.23.1 - Pricing v2, Free Vault Gating & OCR Flow Hard-Paused
+
+### 58.1 Pricing v2 (USD list; 30% annual discount everywhere)
+| Tier | Monthly | Annual (-30%) | Assets |
+|---|---|---|---|
+| Free | 0 | - | 1 |
+| Solo Pro | 9.99 | 83.92 | 1 |
+| Team Fleet | 17.99 | 151.12 | 3 |
+| Growth Fleet | 27.99 | 235.12 | 5 |
+| Fleet Command | 27.99 | 235.12 | 5 + add-ons |
+| Fleet Command add-on | 3.99 | 33.52 | +1 asset |
+
+- Add-ons carry BOTH monthly and discounted annual pricing (`getAddonPriceUSD(tier, interval)`), and every paid tier annualises at 30% off (12 x monthly x 0.70).
+- Plan codes stay env-driven (`PAYSTACK_PLAN_<TIER>_<INTERVAL>_<CURRENCY>`), so add-on annual checkout works wherever the plan code exists.
+
+### 58.2 Free tier: parsed data, no document storage
+- New tier flag `receiptVaultStorage`: `false` on Free, `true` on every paid tier (and therefore during the full-featured welcome trial).
+- Doc Lens still parses photos/PDFs and confirms before saving for free users; the ORIGINAL file is not uploaded (`receipts.image_url = null`). Files stored during a trial are retained after lapse (no destructive deletes); only new uploads stop.
+
+### 58.3 Vision OCR hard-paused in code
+- `isOcrEnabled()` now always returns `false`: the WhatsApp photo flow never downloads media or calls Vision, regardless of `OCR_ENABLED`. Photo turns answer instantly with typed/PDF guidance.
+- PDFs remain fully active through the local text-layer extractor. Vision helpers and their unit tests stay inert for a future, deliberate revisit.
+
+### 58.4 Release tracker & deploy confirmation
+- **`SAKA_FLEET_ARCHITECTURE.md` is the single update tracker** (Release History index above + one section per version). No other changelog file may be created.
+- The deployment WhatsApp alert reads `**Version:**` from this file and prints `Release: vX.Y.Z`.
+- `npm run health` now asserts the tracker is committed and its version line parses (`release tracker` check), so every deploy confirms the update file is present and current.
+
+### 58.5 Tests
+- `test_subscription_billing.js` (new prices, 30% annual, add-on annual, paid-only vault flag), `test_ocr_flow.js` (hard pause even with `OCR_ENABLED=on`), `test_doc_lens.js` (PDF intake unchanged), `test_trial_engine.js` (trial keeps paid features).

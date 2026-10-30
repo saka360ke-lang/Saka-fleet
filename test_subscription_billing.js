@@ -70,6 +70,7 @@ async function run() {
   check(TIER_MATRIX.team_fleet.baseLimit === 3, 'Team Fleet = 3 vehicles');
   check(TIER_MATRIX.growth.baseLimit === 5, 'Growth Fleet = 5 vehicles');
   check(TIER_MATRIX.fleet_command.baseLimit === 5 && TIER_MATRIX.fleet_command.addonEligible, 'Fleet Command = 5 + add-ons');
+  check(TIER_MATRIX.free.receiptVaultStorage === false && TIER_MATRIX.solo_pro.receiptVaultStorage === true, 'Receipt/document storage is a paid feature');
   check(TIER_MATRIX.free.maxAiTier === 1 && TIER_MATRIX.growth.maxAiTier === 3, 'Free clamps AI to Tier 1; paid tiers unlock 0-3');
   check(TIER_MATRIX.free.reportsPerMonth === 1 && TIER_MATRIX.solo_pro.reportsPerMonth === Infinity, 'Free = 1 report/month; paid = unlimited');
   check(normalizeTierKey('unlimited') === 'fleet_command', 'Legacy "unlimited" maps to Fleet Command');
@@ -77,10 +78,10 @@ async function run() {
   check(normalizeTierKey('banana') === 'free', 'Unknown tiers fail closed to Free');
 
   console.log('\n--- Test 2: pricing, add-ons & ladder ---');
-  check(getTierPriceUSD('solo_pro', 'monthly') === 7.99 && getTierPriceUSD('solo_pro', 'annual') === 67.12, 'Solo Pro pricing');
-  check(getTierPriceUSD('team_fleet', 'monthly') === 19.99, 'Team Fleet pricing');
-  check(getTierPriceUSD('growth', 'annual') === 251.92, 'Growth annual pricing');
-  check(getAddonPriceUSD('fleet_command', 'monthly') === 4.99, 'Fleet Command add-on unit price');
+  check(getTierPriceUSD('solo_pro', 'monthly') === 9.99 && getTierPriceUSD('solo_pro', 'annual') === 83.92, 'Solo Pro pricing (30% annual)');
+  check(getTierPriceUSD('team_fleet', 'monthly') === 17.99, 'Team Fleet pricing');
+  check(getTierPriceUSD('growth', 'annual') === 235.12, 'Growth annual pricing');
+  check(getAddonPriceUSD('fleet_command', 'monthly') === 3.99 && getAddonPriceUSD('fleet_command', 'annual') === 33.52, 'Fleet Command add-on has monthly + discounted annual pricing');
   check(getAddonPriceUSD('growth', 'monthly') === 0, 'Non-Fleet-Command tiers cannot buy add-ons');
   check(getEffectiveVehicleLimit('fleet_command', 2) === 7, 'Fleet Command capacity = 5 + add-on quantity');
   check(getEffectiveVehicleLimit('growth', 9) === 5, 'Add-ons are ignored outside Fleet Command');
@@ -90,7 +91,7 @@ async function run() {
 
   console.log('\n--- Test 3: backward-compatible SUBSCRIPTION_TIERS view ---');
   check(SUBSCRIPTION_TIERS.solo_pro.vehicleLimit === 1, 'Legacy view derives Solo Pro from the registry');
-  check(SUBSCRIPTION_TIERS.growth.pricing.monthlyUSD === 29.99, 'Legacy pricing view is registry-backed');
+  check(SUBSCRIPTION_TIERS.growth.pricing.monthlyUSD === 27.99, 'Legacy pricing view is registry-backed');
   check(SUBSCRIPTION_TIERS.fleet_command.addonEligible === true, 'Legacy view exposes add-on eligibility');
 
   console.log('\n--- Test 4: Paystack plan codes ---');
@@ -145,6 +146,7 @@ async function run() {
   });
   const trialEnt = await getEntitlements({ supabase: trialingMock.client, ownerId: 'p-1', profile: trialingProfile, useCache: false });
   check(trialEnt.isTrial === true && trialEnt.tierKey === 'growth', 'Active trial gets paid-tier entitlements');
+  check(trialEnt.receiptVaultStorage === true, 'Trial keeps paid document storage');
   check(trialEnt.maxAiTier === 3 && trialEnt.reportsPerMonth === Infinity, 'Trial unlocks full AI + unlimited reports');
   check(trialEnt.effectiveVehicleCapacity === 5, 'Trial capacity follows the trialed tier');
   check(trialEnt.trialDaysLeft >= 27, 'Trial days-left is reported');
@@ -245,8 +247,8 @@ async function run() {
   const annualOnlyMonthly = await validateCouponForCheckout({ supabase: couponMock.client, code: 'WINBACK40', tierKey: 'growth', interval: 'monthly', ownerId: 'p-1', amountUSD: 29.99 });
   check(annualOnlyMonthly.valid === false && /annual/i.test(annualOnlyMonthly.error), 'Annual-only coupon is rejected on monthly billing');
 
-  const annualOnlyAnnual = await validateCouponForCheckout({ supabase: couponMock.client, code: 'WINBACK40', tierKey: 'growth', interval: 'annual', ownerId: 'p-1', amountUSD: 251.92 });
-  check(annualOnlyAnnual.valid === true && annualOnlyAnnual.discountUSD === 100.77, 'Winback coupon applies 40% to the annual plan');
+  const annualOnlyAnnual = await validateCouponForCheckout({ supabase: couponMock.client, code: 'WINBACK40', tierKey: 'growth', interval: 'annual', ownerId: 'p-1', amountUSD: 235.12 });
+  check(annualOnlyAnnual.valid === true && annualOnlyAnnual.discountUSD === 94.05, 'Winback coupon applies 40% to the annual plan');
 
   const extensionCoupon = await validateCouponForCheckout({ supabase: couponMock.client, code: 'EXTEND15', tierKey: 'growth', interval: 'monthly', ownerId: 'p-1', amountUSD: 29.99 });
   check(extensionCoupon.valid === false && /trial/i.test(extensionCoupon.error), 'Trial-extension coupons are not checkout discounts');
@@ -329,7 +331,7 @@ async function run() {
   });
   const gate = await checkOwnerVehicleTierLimit({ ownerId: 'p-1', subscriptionTier: 'fleet_command', supabase: gateMock.client });
   check(gate.limit === 7 && gate.currentCount === 6 && gate.canAdd === true, 'checkOwnerVehicleTierLimit honours add-ons');
-  check(gate.addonEligible === true && gate.addonPriceUSD === 4.99, 'Tier gate exposes add-on pricing');
+  check(gate.addonEligible === true && gate.addonPriceUSD === 3.99, 'Tier gate exposes add-on pricing');
   check(gate.tier === 'fleet_command' && gate.nextTierKey === null, 'Tier gate normalizes the tier key');
 
   const summary = await formatSubscriptionSummary({ supabase: paidMock.client, entitlements: paidEnt, currency: 'USD' });

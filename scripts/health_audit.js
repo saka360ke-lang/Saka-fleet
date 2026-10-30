@@ -119,6 +119,16 @@ function gitState() {
   }
 }
 
+function releaseTracker() {
+  try {
+    const archPath = 'SAKA_FLEET_ARCHITECTURE.md';
+    const arch = fs.readFileSync(archPath, 'utf8');
+    const m = arch.match(/\*\*Version:\*\*\s*([0-9]+\.[0-9]+\.[0-9]+)/);
+    if (!m) { bad('release tracker', 'Version line missing'); return; }
+    execSync('git ls-files --error-unmatch ' + archPath, { encoding: 'utf8' });
+    ok('release tracker', 'v' + m[1] + ' (architecture tracker committed)');
+  } catch (err) { bad('release tracker', err.message); }
+}
 async function main() {
   console.log('🩺 SAKA FLEET HEALTH AUDIT');
   section('Stateless suites');
@@ -129,6 +139,7 @@ async function main() {
 
   section('Git state');
   gitState();
+  releaseTracker();
 
   section('Pipeline & DB snapshot');
   await dbSnapshot();

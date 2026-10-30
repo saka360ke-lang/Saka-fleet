@@ -227,7 +227,9 @@ async function run() {
   assert(paused.skipped === true && /paused/i.test(paused.error), 'paused photo OCR never downloads or calls Vision');
   assert(pausedFetch === false, 'no network call happens while OCR is paused');
   process.env.OCR_ENABLED = 'on';
-  assert(isOcrEnabled() === true, 'OCR_ENABLED=on re-enables Vision');
+  assert(isOcrEnabled() === false, 'v1.23.1: the env knob can no longer re-enable Vision');
+  const stillPaused = await ocrWhatsAppMedia({ mediaId: 'paused-2', mimeType: 'image/jpeg', token: 't' });
+  assert(stillPaused.skipped === true, 'photo flow stays blocked even with OCR_ENABLED=on');
   assert(buildMediaAckText({ mimeType: 'application/pdf' }).includes('PDF'), 'PDF ack copy names the PDF');
   assert(buildMediaAckText({ mimeType: 'image/jpeg' }).includes('photo'), 'photo ack copy names the photo');
   delete process.env.OCR_ENABLED;

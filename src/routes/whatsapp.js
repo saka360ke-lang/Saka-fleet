@@ -866,7 +866,9 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           try {
             duplicateReceipt = await findReceiptByMediaId(supabaseClient, mediaObj.id);
             if (!duplicateReceipt) {
-              const imageUrl = ocrResult?.buffer
+              // v1.23.1 - Free tier keeps the parsed data but NOT the document (no bucket upload without receiptVaultStorage).
+              const vaultAllowed = entitlements?.receiptVaultStorage !== false;
+              const imageUrl = vaultAllowed && ocrResult?.buffer
                 ? await uploadReceiptImage(supabaseClient, ocrResult.buffer, mediaObj.id, ocrResult.mimeType)
                 : null;
               await recordReceipt(supabaseClient, {

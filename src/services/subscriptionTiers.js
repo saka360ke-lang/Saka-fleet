@@ -52,7 +52,8 @@ const FREE_TIER = Object.freeze({
   driverAssignment: false,
   complianceTracking: false,
   fleetReports: 'basic',
-  hasPremiumFeatures: false
+  hasPremiumFeatures: false,
+  receiptVaultStorage: false
 });
 
 const PAID_BASE = Object.freeze({
@@ -64,7 +65,8 @@ const PAID_BASE = Object.freeze({
   driverAssignment: true,
   complianceTracking: true,
   fleetReports: 'full',
-  hasPremiumFeatures: true
+  hasPremiumFeatures: true,
+  receiptVaultStorage: true
 });
 
 export const TIER_MATRIX = Object.freeze({
@@ -74,24 +76,24 @@ export const TIER_MATRIX = Object.freeze({
     key: 'solo_pro',
     label: 'Solo Pro',
     baseLimit: 1,
-    monthlyUSD: 7.99,
-    annualUSD: 67.12
+    monthlyUSD: 9.99,
+    annualUSD: 83.92
   }),
   team_fleet: Object.freeze({
     ...PAID_BASE,
     key: 'team_fleet',
     label: 'Team Fleet',
     baseLimit: 3,
-    monthlyUSD: 19.99,
-    annualUSD: 167.92
+    monthlyUSD: 17.99,
+    annualUSD: 151.12
   }),
   growth: Object.freeze({
     ...PAID_BASE,
     key: 'growth',
     label: 'Growth Fleet',
     baseLimit: 5,
-    monthlyUSD: 29.99,
-    annualUSD: 251.92
+    monthlyUSD: 27.99,
+    annualUSD: 235.12
   }),
   fleet_command: Object.freeze({
     ...PAID_BASE,
@@ -99,10 +101,10 @@ export const TIER_MATRIX = Object.freeze({
     label: 'Fleet Command',
     baseLimit: 5,
     addonEligible: true,
-    addonMonthlyUSD: 4.99,
-    addonAnnualUSD: 41.92,
-    monthlyUSD: 29.99,
-    annualUSD: 251.92
+    addonMonthlyUSD: 3.99,
+    addonAnnualUSD: 33.52,
+    monthlyUSD: 27.99,
+    annualUSD: 235.12
   })
 });
 

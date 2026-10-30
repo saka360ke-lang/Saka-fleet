@@ -1,4 +1,5 @@
 import { execSync } from 'child_process';
+import fs from 'node:fs';
 
 // dotenv is loaded lazily so a missing dependency can never block the primary
 // WhatsApp deployment-notification channel. (Resend was removed in v1.14.1:
@@ -40,13 +41,19 @@ export async function sendAdminDeploymentAlert(customData = {}) {
     }
   }
 
-  const timestamp = new Date().toLocaleString('en-US', { timeZone: 'Africa/Nairobi', dateStyle: 'medium', timeStyle: 'short' });
+  let releaseVersion = 'unknown';
+  try {
+    const archText = fs.readFileSync('SAKA_FLEET_ARCHITECTURE.md', 'utf8');
+    const versionMatch = archText.match(/\*\*Version:\*\*\s*([0-9]+\.[0-9]+\.[0-9]+)/);
+    if (versionMatch) releaseVersion = versionMatch[1];
+  } catch {}  const timestamp = new Date().toLocaleString('en-US', { timeZone: 'Africa/Nairobi', dateStyle: 'medium', timeStyle: 'short' });
   const cleanPhone = superadminPhone ? superadminPhone.replace(/[^\d]/g, '') : null;
 
   const waMessage = 
 `🚀 *Saka Fleet Deployment Alert* 🛠️
 
 A new code version has been pushed/deployed:
+• *Release:* v${releaseVersion}
 • *Commit:* \`${commitHash}\`
 • *Branch:* \`${branch}\`
 • *Author:* ${author}

@@ -37,7 +37,9 @@ export const SUPPORTED_IMAGE_TYPES = Object.freeze([
 
 /** v1.22.0 — Vision OCR kill switch. Default OFF until photo reads are reliable. */
 export function isOcrEnabled() {
-  return /^(?:on|true|1)$/i.test(String(process.env.OCR_ENABLED || 'off'));
+  // v1.23.1 - Vision photo OCR is HARD-PAUSED in code (revisit later). The env
+  // knob is inert; PDFs still use the local text extractor.
+  return false;
 }
 
 /** Re-enabled OCR answers instantly with an ack, then delivers the result. */
