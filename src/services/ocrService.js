@@ -17,12 +17,33 @@ const GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v17.0';
 const MAX_MEDIA_BYTES = Number(process.env.OCR_MAX_MEDIA_BYTES || 5 * 1024 * 1024);
 const FETCH_TIMEOUT_MS = Number(process.env.OCR_TIMEOUT_MS || 15000);
 
+// v1.19.2: Vision gets its own, more generous budget. Dense certificate scans
+// (registration cards, insurance policies) routinely need more than 15 seconds,
+// and the shared timeout aborted 3 of 4 real document reads on 2026-10-30.
+const rawVisionTimeout = Number(process.env.OCR_VISION_TIMEOUT_MS || 25000);
+export const OCR_VISION_TIMEOUT_MS = Number.isFinite(rawVisionTimeout) && rawVisionTimeout > 0
+  ? rawVisionTimeout
+  : 25000;
+const rawVisionAttempts = Number(process.env.OCR_VISION_MAX_ATTEMPTS || 2);
+export const OCR_VISION_MAX_ATTEMPTS = Number.isFinite(rawVisionAttempts)
+  ? Math.max(1, Math.min(3, rawVisionAttempts))
+  : 2;
+
 export const SUPPORTED_IMAGE_TYPES = Object.freeze([
   'image/jpeg', 'image/jpg', 'image/png', 'image/webp'
 ]);
 
 function timeoutSignal(ms = FETCH_TIMEOUT_MS) {
   return AbortSignal.timeout ? AbortSignal.timeout(ms) : undefined;
+}
+
+/** Abort/timeout detection — only these failures are worth a retry. */
+function isTimeoutError(err) {
+  const name = String(err?.name || '');
+  const message = String(err?.message || '');
+  return name === 'AbortError'
+    || name === 'TimeoutError'
+    || /aborted due to timeout|timed? ?out/i.test(message);
 }
 
 function metaHeaders(token) {
@@ -91,10 +112,10 @@ export async function downloadWhatsAppMedia(mediaId, token = process.env.META_WH
  * Auth: GCP_VISION_API_KEY (preferred on Cloud Run) — never logged.
  */
 export async function extractTextFromImage(buffer) {
-  if (!buffer) return { text: null, confidence: null, error: 'No image buffer' };
+  if (!buffer) return { text: null, confidence: null, error: 'No image buffer', attempts: 0 };
 
   const apiKey = process.env.GCP_VISION_API_KEY;
-  if (!apiKey) return { text: null, confidence: null, error: 'GCP_VISION_API_KEY not configured' };
+  if (!apiKey) return { text: null, confidence: null, error: 'GCP_VISION_API_KEY not configured', attempts: 0 };
 
   const endpoint = process.env.GCP_VISION_ENDPOINT || 'https://vision.googleapis.com/v1/images:annotate';
 
@@ -105,36 +126,55 @@ export async function extractTextFromImage(buffer) {
     }]
   };
 
-  try {
-    const res = await fetch(`${endpoint}?key=${encodeURIComponent(apiKey)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody),
-      signal: timeoutSignal()
-    });
+  let attempts = 0;
+  let lastError = null;
 
-    let data = null;
-    try { data = await res.json(); } catch { data = null; }
+  // v1.19.2: document photos are retried ONCE on an abort/timeout. Vision
+  // annotate is idempotent, so a second attempt is safe, and plain HTTP or
+  // credential errors are returned immediately (never retried).
+  while (attempts < OCR_VISION_MAX_ATTEMPTS) {
+    attempts += 1;
+    try {
+      const res = await fetch(`${endpoint}?key=${encodeURIComponent(apiKey)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+        signal: timeoutSignal(OCR_VISION_TIMEOUT_MS)
+      });
 
-    if (!res.ok) {
-      const message = data?.error?.message || `Vision API failed (HTTP ${res.status})`;
-      return { text: null, confidence: null, error: message };
+      let data = null;
+      try { data = await res.json(); } catch { data = null; }
+
+      if (!res.ok) {
+        const message = data?.error?.message || `Vision API failed (HTTP ${res.status})`;
+        return { text: null, confidence: null, error: message, attempts };
+      }
+
+      const response = data?.responses?.[0];
+      if (response?.error?.message) {
+        return { text: null, confidence: null, error: response.error.message, attempts };
+      }
+
+      const text = response?.fullTextAnnotation?.text
+        || response?.textAnnotations?.[0]?.description
+        || null;
+
+      if (!text || !String(text).trim()) {
+        // Vision answered 200 with nothing readable — keep the reason explicit
+        // so receipts.error is never blank and support can diagnose it.
+        return { text: null, confidence: null, error: 'No text detected in the document', attempts };
+      }
+
+      const confidence = response?.fullTextAnnotation?.pages?.[0]?.confidence ?? null;
+      return { text: String(text).trim(), confidence, error: null, attempts };
+    } catch (err) {
+      lastError = `Vision request error: ${err.message}`;
+      if (!isTimeoutError(err)) break;
+      // Timeout/abort → one more attempt while budget allows.
     }
-
-    const response = data?.responses?.[0];
-    if (response?.error?.message) {
-      return { text: null, confidence: null, error: response.error.message };
-    }
-
-    const text = response?.fullTextAnnotation?.text
-      || response?.textAnnotations?.[0]?.description
-      || null;
-
-    const confidence = response?.fullTextAnnotation?.pages?.[0]?.confidence ?? null;
-    return { text: text ? text.trim() : null, confidence, error: null };
-  } catch (err) {
-    return { text: null, confidence: null, error: `Vision request error: ${err.message}` };
   }
+
+  return { text: null, confidence: null, error: lastError || 'Vision request failed', attempts };
 }
 
 /**
@@ -312,5 +352,7 @@ export default {
   extractDocumentHints,
   classifyOcrDocument,
   OCR_CURRENCY_CODES,
+  OCR_VISION_TIMEOUT_MS,
+  OCR_VISION_MAX_ATTEMPTS,
   SUPPORTED_IMAGE_TYPES
 };

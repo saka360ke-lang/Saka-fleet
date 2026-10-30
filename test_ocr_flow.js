@@ -4,10 +4,13 @@ import {
   ocrWhatsAppMedia,
   extractReceiptHints,
   extractDocumentHints,
-  classifyOcrDocument
+  classifyOcrDocument,
+  OCR_VISION_TIMEOUT_MS,
+  OCR_VISION_MAX_ATTEMPTS
 } from './src/services/ocrService.js';
 import {
   OCR_LOW_CONFIDENCE_NOTE,
+  OCR_UNREADABLE_NOTE,
   OCR_CONFIRM_THRESHOLD,
   formatReceiptsReply,
   formatDuplicateReceiptReply
@@ -87,6 +90,43 @@ async function run() {
   const noKey = await extractTextFromImage(Buffer.from('image'));
   assert(noKey.text === null && /GCP_VISION_API_KEY/.test(noKey.error), 'Missing Vision key degrades gracefully');
   process.env.GCP_VISION_API_KEY = 'test-vision-key';
+
+  console.log('\n--- Test 3b: Vision timeout retry & unreadable-document clarity ---');
+  let visionAttempt = 0;
+  global.fetch = async () => {
+    visionAttempt += 1;
+    if (visionAttempt === 1) {
+      const timeoutErr = new Error('The operation was aborted due to timeout');
+      timeoutErr.name = 'AbortError';
+      throw timeoutErr;
+    }
+    return jsonResponse({
+      responses: [{
+        fullTextAnnotation: {
+          text: 'MOTOR INSURANCE POLICY\nPOLICY NO ABC12345\nEXPIRES 2027-05-15',
+          pages: [{ confidence: 0.91 }]
+        }
+      }]
+    });
+  };
+  const retried = await extractTextFromImage(Buffer.from('scan'));
+  assert(retried.error === null && retried.attempts === 2, 'A Vision timeout is retried once and recovers');
+  assert(retried.text.includes('INSURANCE'), 'Retried Vision call returns the document text');
+
+  global.fetch = async () => {
+    const transportErr = new Error('socket hang up');
+    transportErr.name = 'TypeError';
+    throw transportErr;
+  };
+  const noRetry = await extractTextFromImage(Buffer.from('scan'));
+  assert(noRetry.text === null && noRetry.attempts === 1, 'Non-timeout transport errors are never retried');
+  assert(/socket hang up/.test(noRetry.error), 'Transport error is preserved for diagnostics');
+
+  global.fetch = async () => jsonResponse({ responses: [{}] });
+  const blank = await extractTextFromImage(Buffer.from('blank'));
+  assert(blank.text === null && /No text detected/i.test(blank.error), 'Blank Vision reads return an explicit reason');
+  assert(OCR_VISION_TIMEOUT_MS >= 25000 && OCR_VISION_MAX_ATTEMPTS === 2, 'Vision budget and retry knobs are exported');
+  assert(/type the answer/i.test(OCR_UNREADABLE_NOTE) && /Skip/i.test(OCR_UNREADABLE_NOTE), 'Unreadable-photo note offers a typed or skip fallback');
 
   console.log('\n--- Test 4: unsupported media types ---');
   const pdf = await ocrWhatsAppMedia({ mediaId: 'doc-1', mimeType: 'application/pdf', token: 't' });

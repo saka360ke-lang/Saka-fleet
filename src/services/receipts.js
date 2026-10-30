@@ -153,6 +153,13 @@ export async function listReceipts(providedSupabase, { ownerId = null, driverId 
 
 export const OCR_LOW_CONFIDENCE_NOTE = '📸 I read these from the photo — double-check the numbers before saving 🙏';
 
+/**
+ * v1.19.2 — OCR recovery ladder (deterministic, zero tokens).
+ * Two unreadable photos on the same quiz step unlock one plain-language escape
+ * hatch so the user is never trapped in an identical question loop.
+ */
+export const OCR_UNREADABLE_NOTE = '📸 That one came through but the text was too faint to read.\n\nNo stress — type the answer instead (or reply *Skip* if it is optional), and we keep going. 🙏';
+
 function formatWhen(value) {
   const date = value ? new Date(value) : null;
   if (!date || Number.isNaN(date.getTime())) return '—';

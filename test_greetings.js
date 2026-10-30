@@ -3,7 +3,9 @@ import {
   resolveDaypart,
   greetingFor,
   sakaIntroText,
-  isFirstContact
+  isFirstContact,
+  isIntroCopy,
+  wantsIntroduction
 } from './src/services/greetings.js';
 
 /**
@@ -62,6 +64,13 @@ check(isFirstContact({ session: {}, dbHistory: [{ role: 'user' }], hasVehicleReg
 check(isFirstContact({ session: { history: [{ role: 'user' }] }, dbHistory: [], hasVehicleRegistered: false }) === false, 'in-memory history is not first contact');
 check(isFirstContact({ session: { sakaIntroduced: true }, dbHistory: [], hasVehicleRegistered: false }) === false, 'intro never repeats');
 check(isFirstContact({ session: {}, dbHistory: [], hasVehicleRegistered: true }) === false, 'registered users skip the intro');
+
+console.log('--- Test 4b: intro-copy guard (v1.19.2) ---');
+check(isIntroCopy('Karibu to Saka Fleet! I help you keep track of your vehicles') === true, 'a fresh Karibu welcome is detected');
+check(isIntroCopy("Hi! I'm Saka, your vehicle's co-pilot on WhatsApp.") === true, 'the English Saka intro is detected');
+check(isIntroCopy('Your insurance expires on 2027-05-15') === false, 'normal replies are not mistaken for intros');
+check(wantsIntroduction('who are you?') === true, 'an explicit introduction request is recognised');
+check(wantsIntroduction('still waiting') === false, 'a generic nudge is not an introduction request');
 
 console.log('--- Test 5: emoji discipline ---');
 check(emojiCount(sakaIntroText({ countryInfo: usa, nextStep: '' })) <= 4, 'US intro stays within the ceiling');

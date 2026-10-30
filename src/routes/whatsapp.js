@@ -16,7 +16,7 @@ import {
 } from '../services/vehicles.js';
 import { calculateFuelConsumption } from '../services/analytics.js';
 import { normalizeFillType } from '../services/fuelEconomy.js';
-import { sakaIntroText, isFirstContact } from '../services/greetings.js';
+import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction } from '../services/greetings.js';
 import { buildVehicleSummary, emailVehicleSummary } from '../services/vehicleSummary.js';
 import {
   buildFeatureNotice,
@@ -89,7 +89,8 @@ import {
   formatReceiptsReply,
   formatDuplicateReceiptReply,
   OCR_CONFIRM_THRESHOLD,
-  OCR_LOW_CONFIDENCE_NOTE
+  OCR_LOW_CONFIDENCE_NOTE,
+  OCR_UNREADABLE_NOTE
 } from '../services/receipts.js';
 
 let supabaseClient = createResilientClient();
@@ -853,6 +854,11 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         // Deterministic receipt history ("receipts") — zero AI tokens.
         const receiptsCommand = /^(?:my\s+)?receipts?$|^show\s+(?:my\s+)?receipts?$|^last\s+receipt$/i.test(String(messageText || '').trim());
 
+        // Deterministic garage list ("list my cars") — zero AI tokens. Only the
+        // empty state is intercepted here; populated lists keep the numbered
+        // switch menu in the AI branch below.
+        const vehiclesCommand = /^(?:(?:list|show|view)\s+)?(?:my\s+)?(?:cars|vehicles|fleet)$|^(?:vehicle|car)\s+list$|^manage\s+(?:my\s+)?(?:vehicles?|cars?)$/i.test(String(messageText || '').trim());
+
         // Vehicle registration summary ("send me registration summary as PDF").
         const summaryCommand = /(?:(?:send|email|resend|share|mail)\b[\s\S]{0,40}(?:registration|vehicle|passbook)\b[\s\S]{0,20}(?:summary|details|copy|pdf|email))|(?:registration|vehicle)\s+(?:summary|details|passbook)/i.test(String(messageText || ''));
 
@@ -890,6 +896,12 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             }
             aiResult = { intent: 'GENERAL_CHAT', extracted_data: {}, reply_message: reply };
           }
+        } else if (vehiclesCommand && !hasVehicleRegistered) {
+          aiResult = {
+            intent: 'MANAGE_VEHICLE',
+            extracted_data: {},
+            reply_message: `🚗 Your garage is empty for now.\n\nSend your vehicle's number plate (e.g. *${countryInfo.plate_example}*) or type *REGISTER* — setup takes about two minutes.`
+          };
         } else if (receiptsCommand) {
           const isOwner = existingVehicles.some((v) => v.owner_id === profileData?.id);
           const receipts = await listReceipts(supabaseClient, {
@@ -2694,6 +2706,36 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
           finalReply = formatDuplicateReceiptReply(duplicateReceipt, { fallbackCurrency: countryInfo?.currency || null });
         } else if (ocrLowConfidence && session.quiz) {
           finalReply = `${finalReply}\n\n${OCR_LOW_CONFIDENCE_NOTE}`;
+        }
+
+        // v1.19.2 — never re-introduce Saka to an existing conversation. A
+        // failed intent classification used to fall back to a fresh "Karibu"
+        // welcome mid-onboarding (20 of 25 classify calls failed on 2026-10-30).
+        if (!firstContact
+          && conversationHistory.length > 0
+          && !session.quiz
+          && isIntroCopy(finalReply)
+          && !wantsIntroduction(messageText)) {
+          finalReply = '🙂 I\'m still here with you — no need to start over.\n\nSend your next answer in your own words, or type *Help* to see what I can do.';
+        }
+
+        // v1.19.2 — OCR recovery ladder: two unreadable photos on the same quiz
+        // step unlock one typed-or-skip escape so the identical question is
+        // never repeated a third time.
+        if (mediaObj && !ocrText && session.quiz) {
+          const quizKey = `${session.quiz.flow || ''}|${session.quiz.phase || ''}|${JSON.stringify(session.quiz.answers || {})}`;
+          if (session.ocrFailuresStep !== quizKey) {
+            session.ocrFailures = 0;
+            session.ocrFailuresStep = quizKey;
+          }
+          session.ocrFailures = (session.ocrFailures || 0) + 1;
+          if (session.ocrFailures >= 2) {
+            finalReply = `${finalReply}\n\n${OCR_UNREADABLE_NOTE}`;
+            session.ocrFailures = 0;
+          }
+        } else if (!mediaObj) {
+          session.ocrFailures = 0;
+          session.ocrFailuresStep = null;
         }
 
         // Stage 1 (Soft Trip): Prompt repeated 3 times. Grace retry.

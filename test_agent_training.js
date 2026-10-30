@@ -63,6 +63,10 @@ async function run() {
   check(unresolvable.length === 0, 'Every registry flow resolves through quizEngine.getFlowDefinition');
   check(SAKA_INTENT_PLAYBOOK.length >= 15, 'Non-quiz intent playbook is populated');
   check(SAKA_BOUNDARY_RULES.length >= 5, 'Boundary rules are populated');
+  check(SAKA_BOUNDARY_RULES.some((rule) => /never re-introduces herself/i.test(rule)), 'Boundary: the welcome is never repeated mid-conversation');
+  check(SAKA_BOUNDARY_RULES.some((rule) => /typed-or-skip/i.test(rule)), 'Boundary: unreadable photos get a typed-or-skip fallback');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('NEVER re-introduce yourself'), 'Core prompt forbids repeated introductions');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('Never repeat the identical question verbatim'), 'Core prompt forbids repeating an unreadable-photo question');
 
   console.log('\n--- Test 4: mandatory training sections ---');
   const sections = [

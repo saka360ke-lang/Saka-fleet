@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.19.1  
+**Version:** 1.19.2  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -818,14 +818,18 @@ Saka Fleet serves a **global audience**. Every feature, quiz flow and AI prompt 
 | `GCP_VISION_API_KEY` | Google Cloud Vision API key (required for OCR) | — |
 | `GCP_VISION_ENDPOINT` | Override the Vision endpoint | `https://vision.googleapis.com/v1/images:annotate` |
 | `OCR_MAX_MEDIA_BYTES` | Maximum media download size | `5242880` (5 MB) |
-| `OCR_TIMEOUT_MS` | Media/Vision request timeout | `15000` |
+| `OCR_TIMEOUT_MS` | Meta lookup/download request timeout | `15000` |
+| `OCR_VISION_TIMEOUT_MS` | Vision annotate budget for dense document scans (v1.19.2) | `25000` |
+| `OCR_VISION_MAX_ATTEMPTS` | Vision attempts; abort/timeout is retried once (v1.19.2) | `2` (clamped 1–3) |
 | `META_GRAPH_VERSION` | Graph API version | `v17.0` |
 
 ### 24.3 Failure behaviour & limits
 - Missing key, quota errors, unsupported types (PDF in v1) or oversized media never break the turn: Saka AI apologises and asks for a clearer photo or typed details.
+- Vision timeouts are retried once (idempotent annotate); HTTP/credential errors are never retried. A blank 200 response returns the explicit reason `No text detected in the document`, so `receipts.error` is never empty.
+- After two unreadable photos on the same quiz step, the route appends the deterministic `OCR_UNREADABLE_NOTE` typed-or-skip escape (v1.19.2) — the identical question is never repeated a third time.
 - OCR failures are warnings only; no database write occurs.
 - Media messages flow through the same per-phone queue, dedupe and durable session store as text.
-- Test coverage: `test_ocr_flow.js` (38 stateless assertions — Meta download, Vision parsing, size/type guards, document classification, rich hints, receipt vault, quiz prefill).
+- Test coverage: `test_ocr_flow.js` (45 stateless assertions — Meta download, Vision parsing + timeout retry, blank-read reason, size/type guards, document classification, rich hints, receipt vault, quiz prefill).
 
 
 ---
@@ -1926,6 +1930,7 @@ One pure choke point used by the WhatsApp route, the follow-up worker and the PD
 - Intro copy (example, India): *"Namaste! 🙏 I'm Saka — your vehicle's co-pilot on WhatsApp. I keep your fuel ⛽, costs 💰 and service reminders 🔔 in one calm place, so you can focus on the road. To begin, send your vehicle's number plate (e.g. MH 01 AB 1234)."*
 - **Trigger:** a genuinely fresh conversation (no DB history, no in-memory history, no `sakaIntroduced` flag, no registered vehicle). The greeting branch uses the intro verbatim; any other first message (e.g. a plate sent straight away) gets the intro prefixed once, without repeating the plate ask. `buildFirstTimeWelcome()` now introduces Saka by name in both English and Swahili.
 - Never repeats (`session.sakaIntroduced`), never assumes gender/role, and always ends with ONE next step.
+- v1.19.2: `isIntroCopy()` / `wantsIntroduction()` guard AI-generated replies too — a welcome is replaced by a re-engage line whenever history exists and the user did not ask who Saka is (see §51.3).
 
 ### 48.3 Sync, files & tests
 - Files: `src/services/greetings.js`, `flowKnowledge.js` (emojiPolicy + GREETING playbook), `conversationEngine.js` (EMOJI ARTISTRY), `sakaAi.js` (emoji bullet + first-contact behavior), `src/routes/whatsapp.js` (import + first-contact trigger + opener), `.clinerules` rule 31 emoji bullet.
@@ -1995,6 +2000,40 @@ Real request: *"email me the registration summary PDF"*. New deterministic comma
 - Files: `src/services/aiClient.js`, `src/services/vehicleSummary.js`, `src/services/featureNotice.js`, `src/routes/whatsapp.js`, `src/workers/sentinel.js`, `src/services/superadmin.js`, `index.js`, `sakaAi.js`, `src/services/flowKnowledge.js`, `scripts/run_feature_notice_migration.js`, `scripts/feature_rollout.js`, `package.json`, `.env.example`, `README.md`.
 - Tests: `test_feature_notice.js` (24 assertions), `test_vehicle_summary.js` (14), `test_model_router.js` (empty-retry allow-list), `test_agent_training.js` (upload permission token).
 - Knobs: `FEATURE_NOTICE_VERSION` (1.19.1).
+
+
+---
+
+## 51. v1.19.2 — Live-Chat Hardening (OCR Resilience, No-Repeat Welcome)
+
+Evidence base: the 2026-10-30 production transcript (`254734852529`) plus `ai_usage_logs`, `receipts` and `chat_friction_logs` showed 20/25 `intent_classify` failures, 3/4 Vision document reads timing out, and four fresh "Karibu" welcomes in 25 minutes.
+
+### 51.1 Vision resilience (`ocrService.js`)
+- `OCR_VISION_TIMEOUT_MS` (25000) is now separate from `OCR_TIMEOUT_MS` (15000, Meta lookup/download).
+- `extractTextFromImage()` retries **once** on `AbortError`/`TimeoutError` only (`OCR_VISION_MAX_ATTEMPTS`, clamped 1-3); HTTP/credential errors return immediately. Vision annotate is idempotent, so the retry is safe.
+- Every result carries `attempts`; a blank 200 returns `No text detected in the document` (never a null error), so `receipts.error` stays diagnosable.
+- `ocrWhatsAppMedia()` spreads the new fields through unchanged.
+
+### 51.2 OCR recovery ladder (`whatsapp.js` + `receipts.js`)
+- `OCR_UNREADABLE_NOTE` (deterministic) is appended after **two** unreadable photos on the same quiz step (`session.ocrFailures` / `ocrFailuresStep`, keyed by flow + phase + answers). The counter resets on a new step, on a successful read and on non-media turns.
+- The escape offers typing the answer or `Skip`, and changes the reply text so photo failures can never trip the identical-prompt circuit breaker.
+
+### 51.3 No repeated welcome (`greetings.js` + `whatsapp.js`)
+- `isIntroCopy()` / `wantsIntroduction()` (exported, unit-tested) detect fresh-welcome copy and genuine "who are you" requests.
+- When history exists, no quiz is active and the user did not ask who Saka is, an intro reply is replaced with a warm re-engage line plus one next step.
+- Prompt sync: `sakaAi.js` section 6 and `conversationEngine.js` composer instructions forbid re-introducing or repeating an unreadable-photo question; `flowKnowledge.js` adds both as boundary rules.
+
+### 51.4 Deterministic empty garage (`whatsapp.js`)
+- `list my cars|vehicles|fleet` and `manage vehicle` with zero registered vehicles answer deterministically with the country plate example and `REGISTER` — zero tokens, no generic menu.
+- Populated fleets keep the numbered switch menu.
+
+### 51.5 Housekeeping
+- The stale, unversioned `system_config.saka_core_prompt` (6000 chars, ignored at runtime) was deleted; runtime prompts come from `flowKnowledge.js` only.
+
+### 51.6 Files, tests & knobs
+- Files: `src/services/ocrService.js`, `src/services/receipts.js`, `src/services/greetings.js`, `src/routes/whatsapp.js`, `sakaAi.js`, `src/services/conversationEngine.js`, `src/services/flowKnowledge.js`, `.env.example`, `README.md`.
+- Tests: `test_ocr_flow.js` (45 — timeout retry, no-retry transport, blank-read reason, escape copy), `test_greetings.js` (28 — intro-copy guard), `test_agent_training.js` (75 — boundary + prompt sync).
+- Knobs: `OCR_VISION_TIMEOUT_MS` (25000), `OCR_VISION_MAX_ATTEMPTS` (2).
 
 
 

@@ -90,9 +90,29 @@ export function isFirstContact({ session = null, dbHistory = [], profile = null,
   return true;
 }
 
+const INTRO_COPY_RE = /\b(i'?m saka|i am saka|karibu (?:to|kwenye) saka|welcome to saka(?: fleet)?|your (?:fleet|vehicle)(?:'s)? (?:co-pilot|assistant) on whatsapp)\b/i;
+const INTRO_REQUEST_RE = /\b(who are you|what are you|introduce yourself|introduction|what can you do|how do (?:you|things) work|what is saka|about saka)\b/i;
+
+/**
+ * v1.19.2 — detect a fresh-welcome reply so it is never repeated to a user who
+ * already has conversation history. Live evidence (2026-10-30): 20 of 25
+ * intent-classification calls failed, and the prose fallback answered a
+ * mid-onboarding user with a brand-new "Karibu to Saka Fleet" intro.
+ */
+export function isIntroCopy(text = '') {
+  return INTRO_COPY_RE.test(String(text || ''));
+}
+
+/** True when the user genuinely asked who Saka is — then an intro is correct. */
+export function wantsIntroduction(text = '') {
+  return INTRO_REQUEST_RE.test(String(text || ''));
+}
+
 export default {
   resolveDaypart,
   greetingFor,
   sakaIntroText,
-  isFirstContact
+  isFirstContact,
+  isIntroCopy,
+  wantsIntroduction
 };

@@ -95,3 +95,15 @@ ask you to double-check before saving; nothing is ever written without your YES.
 - Existing users receive a once-only ✨ **What's new** digest on their next
   normal turn (never during a quiz), version-stamped by `FEATURE_NOTICE_VERSION`.
   Run `npm run rollout:features -- --apply` to backfill, and `admin rollout` for status.
+
+## Live-chat hardening (v1.19.2)
+- **Document scans get a 25 s Vision budget** (`OCR_VISION_TIMEOUT_MS`) and one
+  retry on timeout; blank reads now report *"No text detected"* instead of an
+  empty error. Fixes the 3-of-4 certificate timeouts seen in production.
+- After two unreadable photos on one quiz step, Saka appends a plain
+  typed-or-*Skip* escape — the same question never repeats a third time.
+- Saka never re-introduces itself mid-conversation: a failed classification
+  degrades to one short clarifying question, never a fresh welcome.
+- `list my cars` with an empty garage answers deterministically (plate example
+  + REGISTER), and the stale unversioned `system_config.saka_core_prompt` was
+  cleared.

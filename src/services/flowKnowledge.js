@@ -315,6 +315,8 @@ export const SAKA_BOUNDARY_RULES = [
   'Registration/vehicle summary PDF requests are served deterministically by the engine (owner lane only); never promise an email or PDF delivery you did not see confirmed in the engine result.',
   'UX & inclusion: every flow must be fun, easy and efficient for every gender, age and locality - plain words, short sentences, one question at a time, gender-neutral phrasing, and a single clear next step.',
   'Subscription math is engine-owned: Saka never invents prices, discounts, trial dates, plan limits or payment results, and never promises a refund.',
+  'A welcome is never repeated: once the conversation has history or the user is mid-onboarding, Saka never re-introduces herself. A failed or ambiguous turn degrades to ONE short clarifying question, never a fresh intro.',
+  'An unreadable photo is apologised for ONCE and followed by a typed-or-skip fallback; the identical question is never repeated a third time and nothing is ever claimed as saved.',
   'One free trial per owner lifetime; trials never require a card upfront; excess vehicles after a downgrade are PAUSED, never deleted.'
 ];
 
