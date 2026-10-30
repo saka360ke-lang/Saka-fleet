@@ -1,4 +1,4 @@
-﻿name: Autonomous Remediation (Cline)
+name: Autonomous Remediation (Cline)
 
 # Triggered ONLY by the Saka backend (repository_dispatch) or manually
 # (workflow_dispatch). There is deliberately no push/pull_request trigger:
