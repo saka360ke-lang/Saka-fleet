@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.16.1  
+**Version:** 1.16.2  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -1688,6 +1688,36 @@ Subscription math is engine-owned and never AI-generated. No autonomous remediat
 ### 40.7 Migrations & tests
 - `npm run migrate:trial-unbind`, `migrate:driver-profile`, `migrate:vehicle-compliance`, `migrate:followups` (all idempotent; applied on release).
 - Suites: `test_trial_unbind.js`, `test_vehicle_compliance.js`, `test_driver_profile_onboarding.js`, updated `test_new_features.js`, `test_agent_training.js`.
+
+---
+
+## 42. v1.16.2 — OTP Loop Closure, Governance Hardening & Revenue Polish
+
+### 42.1 OTP re-ask closure (human session, post-FIX-2026-10-30-01)
+- **Same-message banking:** on the OTP turn, the licence/expiry pasted beside the code is captured deterministically (each remaining field's own parser) with an AI top-up only when strict parsing fails — Saka never asks for something already in the message.
+- **"Already told you" recovery:** a compliance field asked while the user says *already / as I said / I already sent it* never pauses the quiz or re-asks blindly. The engine answers from the STORED record: valid → "on file … let's move on" (marks it answered); expired/invalid → names the expiry and asks once; nothing stored → one precise example.
+- **Owner OTP skip:** an owner self-profile may reply *skip* on the email step (recorded as `emailSkipped`); a gated driver may not.
+
+### 42.2 Governance hardening (closes the loophole the audit found)
+- `remediation_proposals.approval_kind` (`standard` | `superadmin_override`). Accepting a sanitizer-blocked `NEEDS_MODIFICATION` plan now requires the explicit word **`override`**: `admin accept fix <CODE> override`. Without it the Superadmin is guided to `modify`/re-plan.
+- `verifyProposalGate()` re-runs `sanitizeRemediationPlan` on the **stored** plan before `EXECUTING`; a blocked plan can only execute under an audited override.
+
+### 42.3 Friction metric integrity
+- `evaluateConversationalFriction` dedupes by `(user_phone, friction_type, transcript snippet, 24h)`: one frustrating session counts and patches once, so health scores are honest and AI patches are not re-billed.
+
+### 42.4 Revenue
+- **Cancel save-offer:** monthly payers asking to cancel first see the annual switch at the engine's own `getAnnualDiscountPercent()` figure (one word to accept, YES still cancels). Trials skip the offer.
+- **Annual-first prompts:** the report-quota upsell now states the engine's annual saving.
+- `TRIAL_CONVERSION_LADDER=on` (T−14 midpoint nudge + coupon) is the new template default.
+
+### 42.5 Leaner & faster
+- **Action discovery cached** per role+commands+locale (`ACTION_DISCOVERY_CACHE_MS` 15 min, max 200) — the most common free-chat turn costs zero tokens.
+- **Deterministic passbook snapshot:** *"passbook details"* returns plate(s), odometer, plan/trial line and the last 5 expenses instantly with zero AI.
+
+### 42.6 Professional operations
+- `npm run health` — one read-only audit: stateless suites, workflow lint (BOM / non-ASCII / trailing-slash artifact paths), git state, pipeline + DB snapshot.
+- `README.md` + `.editorconfig` (LF, UTF-8, no BOM) so the CI-file corruption class cannot recur.
+
 
 ---
 

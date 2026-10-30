@@ -76,6 +76,7 @@ export const REMEDIATION_MIGRATION_SQL = `
     ALTER TABLE public.remediation_proposals ADD COLUMN IF NOT EXISTS execution_dispatched_at timestamp with time zone;
     ALTER TABLE public.remediation_proposals ADD COLUMN IF NOT EXISTS execution jsonb;
     ALTER TABLE public.remediation_proposals ADD COLUMN IF NOT EXISTS feedback text;
+    ALTER TABLE public.remediation_proposals ADD COLUMN IF NOT EXISTS approval_kind text;
 
     CREATE INDEX IF NOT EXISTS idx_sentinel_audit_runs_date ON public.sentinel_audit_runs(run_date DESC);
     CREATE INDEX IF NOT EXISTS idx_remediation_proposals_status ON public.remediation_proposals(status, created_at DESC);

@@ -114,6 +114,12 @@ const QUESTION_CACHE_TTL_MS = Number(process.env.QUIZ_QUESTION_CACHE_MS || 15 * 
 const QUESTION_CACHE_MAX = Number(process.env.QUIZ_QUESTION_CACHE_MAX || 300);
 const questionCache = new Map();
 
+// Action-discovery renders are role + command + locale stable. Cache them so the
+// most common free-chat turn never pays an AI round trip (v1.16.2).
+const DISCOVERY_CACHE_TTL_MS = Number(process.env.ACTION_DISCOVERY_CACHE_MS || 15 * 60 * 1000);
+const DISCOVERY_CACHE_MAX = Number(process.env.ACTION_DISCOVERY_CACHE_MAX || 200);
+const discoveryCache = new Map();
+
 export function clearQuizQuestionCache() {
   questionCache.clear();
 }
@@ -291,6 +297,16 @@ export async function renderActionDiscovery({
   profile = null,
   exhaustive = false
 }) {
+  const cacheKey = [
+    exhaustive ? 'x' : 's',
+    language,
+    roles.join(','),
+    commands.join('|'),
+    vehicles.map((v) => v.plate_number || '').join(',')
+  ].join('::');
+  const cached = discoveryCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.text;
+
   const facts = {
     roles,
     availableCommands: commands,
@@ -301,7 +317,7 @@ export async function renderActionDiscovery({
   };
 
   const fallback = commands.slice(0, 6).map((c) => `• ${c}`).join('\n');
-  return composeMessage({
+  const text = await composeMessage({
     purpose: 'action_discovery',
     facts,
     language,
@@ -310,6 +326,14 @@ export async function renderActionDiscovery({
     maxTokens: 420,
     fallbackText: fallback
   });
+
+  if (text) {
+    if (discoveryCache.size >= DISCOVERY_CACHE_MAX) {
+      discoveryCache.delete(discoveryCache.keys().next().value);
+    }
+    discoveryCache.set(cacheKey, { text, expiresAt: Date.now() + DISCOVERY_CACHE_TTL_MS });
+  }
+  return text;
 }
 
 /**

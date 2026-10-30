@@ -98,6 +98,7 @@ export const REMEDIATION_TABLE_SQL = `
         status text DEFAULT 'PENDING_APPROVAL',
         target_signature text,
         feedback text,
+        approval_kind text,
         approval_nonce text,
         nonce_expires_at timestamp with time zone,
         attempts integer DEFAULT 0,
@@ -110,6 +111,7 @@ export const REMEDIATION_TABLE_SQL = `
         executed_at timestamp with time zone
     );
     CREATE INDEX IF NOT EXISTS idx_sentinel_audit_runs_date ON public.sentinel_audit_runs(run_date DESC);
+    ALTER TABLE public.remediation_proposals ADD COLUMN IF NOT EXISTS approval_kind text;
     CREATE INDEX IF NOT EXISTS idx_remediation_proposals_status ON public.remediation_proposals(status, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_remediation_proposals_audit ON public.remediation_proposals(audit_run_id);
     CREATE INDEX IF NOT EXISTS idx_remediation_proposals_signature ON public.remediation_proposals(target_signature, status);
@@ -737,7 +739,23 @@ export async function verifyProposalGate(providedSupabase, proposalCode, approva
     return { ok: false, error: `Execution attempt limit reached (${REMEDIATION_MAX_ATTEMPTS}).` };
   }
 
-  return { ok: true, proposal };
+  // v1.16.2 — defense-in-depth: the CI gate re-validates the STORED plan with
+  // the same sanitizer used at submit time. A sanitizer-blocked plan can only
+  // execute under an explicit, audited Superadmin override.
+  const stored = proposal.proposed_changes || {};
+  const verdict = sanitizeRemediationPlan({
+    changes: Array.isArray(stored.changes) ? stored.changes : [],
+    tests: Array.isArray(stored.tests) ? stored.tests : []
+  });
+  const overridden = String(proposal.approval_kind || '').toLowerCase() === 'superadmin_override';
+  if (!verdict.ok && !overridden) {
+    return {
+      ok: false,
+      error: `Stored plan is blocked by the guardrail sanitizer (${verdict.violations.join(' ')}). Re-plan or approve with an explicit override.`
+    };
+  }
+
+  return { ok: true, proposal, sanitizer: verdict.ok ? 'clean' : 'overridden' };
 }
 
 /** Mark a gated proposal EXECUTING (no attempt increment — dispatch owns that). */

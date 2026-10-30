@@ -1683,11 +1683,24 @@ export async function handleQuizTurn({
     return { handled: true, reply, flow: flowKey, active: true };
   }
 
+  // "Already told you" can never pause the quiz on a compliance step: the quiz
+  // engine answers it from the STORED record instead (v1.16.2), so the user is
+  // never bounced into a generic conversational reply and back to the same ask.
+  const pendingForFrustration = state.phase === 'question'
+    ? nextField(getFlowDefinition(state.flow, ctx) || { fields: [] }, state.answers)
+    : null;
+  const complianceFrustration = Boolean(
+    pendingForFrustration
+    && (pendingForFrustration.key === 'minimal_compliance' || pendingForFrustration.key.startsWith('compliance_'))
+    && /\b(already|as i said|i (?:did|sent|gave|shared)|same (?:as|one)|told you)\b/i.test(clean)
+  );
+
   // Quiz ↔ Conversation arbitration: greetings, questions and help are NOT
   // quiz answers. Pause here; the route answers conversationally and nudges
   // the user back to the pending question.
-  if ((state.phase === 'question' || state.phase === 'confirm') &&
-      shouldPauseQuizForChat({ messageText: clean, intent: ctx.intent, quiz: state })) {
+  if (!complianceFrustration
+      && (state.phase === 'question' || state.phase === 'confirm')
+      && shouldPauseQuizForChat({ messageText: clean, intent: ctx.intent, quiz: state })) {
     return { handled: false, pausedForChat: true, flow: state.flow };
   }
 
@@ -1757,6 +1770,38 @@ export async function handleQuizTurn({
     return { handled: true, reply, flow: state.flow, active: true };
   }
 
+  // "Already told you" recovery (v1.16.2): never loop on a compliance item.
+  // Runs BEFORE parsing so it also covers messages whose text parses into an
+  // invalid value. If the user says they already provided it, answer from what
+  // is STORED instead of re-asking the same question.
+  if (current.key === 'minimal_compliance' || current.key.startsWith('compliance_')) {
+    const alreadyGiven = /\b(already|as i said|i (?:did|sent|gave|shared)|same (?:as|one)|told you)\b/i.test(clean);
+    if (alreadyGiven) {
+      const stored = current.key === 'minimal_compliance'
+        ? ctx.driverGate?.status?.minimal
+        : (ctx.driverGate?.status?.additional || []).find((row) => `compliance_${row.type}` === current.key);
+      let line;
+      if (stored?.status === 'valid') {
+        state.answers[current.key] = {
+          ok: true,
+          lifetime: Boolean(stored.lifetime),
+          expiry: stored.expiry || null,
+          number: stored.number || null,
+          alreadyOnFile: true
+        };
+        line = `You already gave me this - it is on file and valid${stored.expiry ? ` until ${stored.expiry}` : ''}. Let's move on.`;
+      } else if (stored) {
+        line = `I have it on file but it shows as ${stored.status}${stored.expiry ? ` (${stored.expiry})` : ''}. Please send a current ${current.label} so renewal reminders stay accurate.`;
+      } else {
+        line = `I could not match that to a stored ${current.label}. Please send it once as "number + expiry" (e.g. "DL-1234567 expires 15 Dec 2028").`;
+      }
+      state.lastAcceptedAnswer = line;
+      state.turnNote = 'Acknowledge the stored compliance honestly, never claim a write, and ask only for what is genuinely missing.';
+      const reply = await askCurrent(state, vctx);
+      return { handled: true, reply, flow: state.flow, active: true };
+    }
+  }
+
   // OTP resend request — offered on ANY OTP turn, whichever path re-rendered it
   // (first ask, expired code or mismatch), so the user is never stuck.
   if (current.kind === 'otp' && isResendRequest(clean)) {
@@ -1779,6 +1824,16 @@ export async function handleQuizTurn({
       const reply = await askCurrent(state, vctx);
       return { handled: true, reply, flow: state.flow, active: true };
     }
+  }
+
+  // Owner self-profile may skip the email OTP step (a gated driver may not).
+  if (current.kind === 'otp' && ctx.driverSelfProfile && isSkipInput(clean)) {
+    state.answers[current.key] = null;
+    state.emailSkipped = true;
+    state.lastAcceptedAnswer = 'Email verification skipped for now';
+    state.turnNote = 'Confirm the email step is skipped for now and ask only the next question.';
+    const reply = await askCurrent(state, vctx);
+    return { handled: true, reply, flow: state.flow, active: true };
   }
 
   // Skip an optional field (or the whole optional group)
@@ -1914,6 +1969,41 @@ export async function handleQuizTurn({
     state.answers[current.key] = true;
     state.otpVerified = true;
     state.lastAcceptedAnswer = 'Email verification code confirmed';
+
+    // v1.16.2 — bank anything else in the same message (e.g. the licence number
+    // and expiry pasted next to the code) so Saka never asks for it again.
+    const bankingText = String(clean).replace(/\b\d{6}\b/, ' ').replace(/\s+/g, ' ').trim();
+    if (bankingText.length >= 6 && isSubstantiveText(bankingText)) {
+      let banked = 0;
+      // Deterministic first (no AI cost): each remaining field's own parser.
+      for (const f of activeFields(def, state.answers)) {
+        if (f.kind === 'otp') continue;
+        if (f.key in state.answers && state.answers[f.key] !== undefined) continue;
+        try {
+          const candidate = f.parse(bankingText, { ...vctx, answers: state.answers }, state.answers);
+          if (candidate === null || candidate === undefined) continue;
+          if (!f.validate(candidate, { ...vctx, answers: state.answers }, state.answers).ok) continue;
+          state.answers[f.key] = candidate;
+          banked += 1;
+        } catch { /* keep trying the next field */ }
+      }
+      // AI top-up only when the strict parsers could not read the remainder.
+      if (banked === 0) {
+        const banking = await extractWithAI({ text: bankingText, flowDef: def, answers: state.answers, ctx: vctx });
+        for (const [key, value] of Object.entries(banking.fields || {})) {
+          if (key in state.answers && state.answers[key] !== undefined) continue;
+          state.answers[key] = value;
+          banked += 1;
+        }
+        if (banking.extraNotes?.length) {
+          state.extraNotes = mergeExtraNotes(state.extraNotes || [], banking.extraNotes);
+        }
+      }
+      if (banked > 0) {
+        state.lastAcceptedAnswer = `Email verified + ${banked} detail(s) captured from the same message`;
+        state.turnNote = 'Confirm the email is verified and that the details sent with the code were captured. Ask only what is still missing.';
+      }
+    }
   } else {
     state.answers[current.key] = parsed;
     state.extractionFailures = 0;

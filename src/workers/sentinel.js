@@ -644,6 +644,23 @@ async function processFrictionPatches(supabase, detectedFrictions) {
 
   for (const friction of detectedFrictions) {
     try {
+      // v1.16.2 — dedupe by (phone, type, snippet, 24h): the same frustrating
+      // session must never inflate the health score or trigger repeated patches.
+      const sinceIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const { data: recent } = await supabase
+        .from('chat_friction_logs')
+        .select('id, transcript_snippet')
+        .eq('user_phone', friction.phone)
+        .eq('friction_type', friction.type)
+        .gte('detected_at', sinceIso)
+        .limit(20);
+      const signature = String(friction.snippet || '').slice(0, 160);
+      const duplicate = (recent || []).some((row) => String(row.transcript_snippet || '').slice(0, 160) === signature);
+      if (duplicate) {
+        console.log(`[Sentinel] Duplicate friction ignored for ${friction.phone} (${friction.type}).`);
+        continue;
+      }
+
       await supabase.from('chat_friction_logs').insert([{
         user_phone: friction.phone,
         session_id: `session_${friction.phone.replace(/[^\d]/g, '')}`,

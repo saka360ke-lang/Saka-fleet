@@ -101,7 +101,7 @@ export const SAKA_QUIZ_FLOWS = [
     fields: 'full name (optional) → email → OTP (states the destination mailbox, with resend / change-email escape hatches) → minimal compliance (regional catalog) → optional asset-aware additional compliances → confirm',
     extracted: ['full_name', 'driver_email', 'otp_code', 'minimal_compliance', 'compliance_<type>'],
     writes: 'profiles (full_name, email_verified, compliance_*), driver_compliances, driver-linked expiry reminders, once-only owner compliance report',
-    rules: 'minimal compliance must be valid at assignment (future expiry, or lifetime where the economy allows); additional items are optional but collected for renewal reminders; 3 expired minimal submissions cancel the assignment and the owner must restart; NEVER re-ask a compliance already on file (prefilled from the live gate); an owner self-profile minimum is skippable, a gated driver minimum is not; a code turn is a single step carrying a quiet "code check n of 3" counter and the mailbox the code went to; a failed dispatch is surfaced with the "resend" / "change email" hint instead of "just sent" prose; a previously accepted or repeated code is never re-asked (a code pasted next to the licence details fills both); "change email" re-asks only the email field and invalidates the pending code; an unexpired code is reused, never silently re-sent'
+    rules: 'minimal compliance must be valid at assignment (future expiry, or lifetime where the economy allows); additional items are optional but collected for renewal reminders; 3 expired minimal submissions cancel the assignment and the owner must restart; NEVER re-ask a compliance already on file (prefilled from the live gate); an owner self-profile minimum is skippable, a gated driver minimum is not; a code turn is a single step carrying a quiet "code check n of 3" counter and the mailbox the code went to; a failed dispatch is surfaced with the "resend" / "change email" hint instead of "just sent" prose; a previously accepted or repeated code is never re-asked (a code pasted next to the licence details fills both); a licence sent beside the code is banked deterministically in the same turn; "already told you" answers from the stored record and never loops; owner self-profiles may skip the OTP step; "change email" re-asks only the email field and invalidates the pending code; an unexpired code is reused, never silently re-sent'
   },
   {
     key: 'unassign_driver',
@@ -267,7 +267,7 @@ export const SAKA_INTENT_PLAYBOOK = [
   { intent: 'LIST_VEHICLES', behavior: 'List the fleet with plate + make/model + active marker.' },
   { intent: 'SWITCH_VEHICLE', behavior: 'Resolve plate/candidate to one vehicle; ambiguous → ask which one.' },
   { intent: 'MANAGE_VEHICLE', behavior: 'Vehicle menu (edit, delete, assign, transfer, reminders) with owner/driver permissions.' },
-  { intent: 'VIEW_PROFILE', behavior: 'Read-only profile snapshot: name, language, units, timezone, email + verified status, roles, subscription tier and driver compliance status. Never start the edit_profile wizard for a viewing request.' },
+  { intent: 'VIEW_PROFILE', behavior: 'Read-only profile snapshot: name, language, units, timezone, email + verified status, roles, subscription tier and driver compliance status. Never start the edit_profile wizard for a viewing request. "passbook details" is answered deterministically by the engine (plates, odometer, plan/trial line, last 5 expenses) with zero AI tokens.' },
   { intent: 'ASSIGN_DRIVER', behavior: 'Owner starts the OTP-gated assign_driver flow; the driver must reply ACCEPT, then verify email + minimal compliance before managing the vehicle.' },
   { intent: 'UNASSIGN_DRIVER', behavior: 'Owner-only unassignment; capture the handback odometer and release the strict 1-to-1 slot.' },
   { intent: 'QUERY_FUEL_EFFICIENCY', behavior: 'Fuel economy (km/L or MPG per unit system) from odometer + fill-up history; ask for a reading if data is missing.' },
@@ -286,7 +286,7 @@ export const SAKA_INTENT_PLAYBOOK = [
   { intent: 'MANAGE_ADDONS', behavior: 'Fleet Command only: explain base 5 vehicles + per-vehicle add-ons and return the add-on checkout link supplied by the engine.' },
   { intent: 'EXTEND_TRIAL', behavior: 'Redeem an account trial-extension coupon through trialEngine; never extend a trial without a valid coupon.' },
   { intent: 'UPGRADE_SUBSCRIPTION', behavior: 'Run the subscription_upgrade flow. First paid upgrade may start the one-time 30-day no-card trial; otherwise the engine returns a Paystack checkout link.' },
-  { intent: 'CANCEL_SUBSCRIPTION', behavior: 'Run the cancel_subscription flow; access continues until the paid period ends and trials cancel immediately.' },
+  { intent: 'CANCEL_SUBSCRIPTION', behavior: 'Run the cancel_subscription flow; access continues until the paid period ends and trials cancel immediately. For monthly payers the engine first offers the annual switch at its own discount — present that save-offer, never invent the percentage.' },
   { intent: 'KEEP_VEHICLE', behavior: 'Run the keep_vehicles flow: choose which vehicle(s) stay active; all others are PAUSED (never deleted).' }
 ];
 

@@ -184,9 +184,13 @@ export async function parseSuperadminCommand(messageText) {
   if (/^\s*admin\s+remediations?\b/i.test(lower)) {
     return { intent: 'ADMIN_REMEDIATIONS' };
   }
-  const acceptFixMatch = text.match(/^\s*admin\s+accept\s+fix\s+([a-zA-Z0-9-]+)/i);
+  const acceptFixMatch = text.match(/^\s*admin\s+accept\s+fix\s+([a-zA-Z0-9-]+)(?:\s+(override))?/i);
   if (acceptFixMatch) {
-    return { intent: 'ADMIN_REMEDIATION_ACCEPT', proposal_code: acceptFixMatch[1].toUpperCase() };
+    return {
+      intent: 'ADMIN_REMEDIATION_ACCEPT',
+      proposal_code: acceptFixMatch[1].toUpperCase(),
+      override: Boolean(acceptFixMatch[2])
+    };
   }
   const declineFixMatch = text.match(/^\s*admin\s+decline\s+fix\s+([a-zA-Z0-9-]+)/i);
   if (declineFixMatch) {
@@ -1021,7 +1025,7 @@ export async function handleAdminRemediationsList(supabase) {
  *                                       | DECLINED
  *                                       | NEEDS_MODIFICATION (feedback stored, re-plan dispatched)
  */
-export async function handleAdminRemediationDecision(supabase, proposalCode, decision, feedback = '') {
+export async function handleAdminRemediationDecision(supabase, proposalCode, decision, feedback = '', { override = false } = {}) {
   const code = String(proposalCode || '').trim().toUpperCase();
   if (!code) {
     return { reply: '⚠️ Please specify a proposal code, e.g. `admin accept fix FIX-2026-10-30-01`.' };
@@ -1050,6 +1054,16 @@ export async function handleAdminRemediationDecision(supabase, proposalCode, dec
       return { reply: `⚠️ \`${code}\` is ${proposal.status}; only PENDING_APPROVAL or NEEDS_MODIFICATION can be approved.` };
     }
 
+    // v1.16.2 — a sanitizer-blocked plan needs an explicit, audited override.
+    // Without it the Superadmin is guided to re-plan instead of silently
+    // bypassing the OTP/auth/VIN boundary.
+    if (proposal.status === REMEDIATION_STATUS.NEEDS_MODIFICATION && !override) {
+      return {
+        reply: `🔒 \`${code}\` was blocked by the guardrail sanitizer.\n\n` +
+          `Reply \`admin modify fix ${code} <guidance>\` to re-draft it, or \`admin accept fix ${code} override\` to approve it explicitly (recorded as a Superadmin override).`
+      };
+    }
+
     const window = buildApprovalWindow();
     const { data: updated, error: updateErr } = await supabase
       .from('remediation_proposals')
@@ -1059,6 +1073,7 @@ export async function handleAdminRemediationDecision(supabase, proposalCode, dec
         nonce_expires_at: window.nonce_expires_at,
         attempts: 0,
         reviewed_at: nowIso,
+        approval_kind: override ? 'superadmin_override' : 'standard',
         feedback: feedback ? String(feedback).trim() : proposal.feedback
       })
       .eq('id', proposal.id)
@@ -1323,11 +1338,13 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
       supabase,
       parsedCommand.proposal_code,
       decision,
-      parsedCommand.feedback || ''
+      parsedCommand.feedback || '',
+      { override: Boolean(parsedCommand.override) }
     );
     await logAdminAudit(supabase, formattedPhone, `ADMIN_REMEDIATION_${decision.toUpperCase()}`, {
       proposal_code: parsedCommand.proposal_code || null,
-      feedback: parsedCommand.feedback || null
+      feedback: parsedCommand.feedback || null,
+      override: Boolean(parsedCommand.override)
     });
     return {
       isSuperadmin: true,

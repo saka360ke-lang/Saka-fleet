@@ -59,7 +59,7 @@ import {
   recordActivationEvent,
   ACTIVATION_EVENTS
 } from '../services/trialEngine.js';
-import { normalizeTierKey, getTierLabel } from '../services/subscriptionTiers.js';
+import { normalizeTierKey, getTierLabel, getAnnualDiscountPercent } from '../services/subscriptionTiers.js';
 import { detectCountryFromPhone as detectCountryGlobal, resolveUserTimezone } from '../services/globalization.js';
 import { applyOdometerReading, applyOperatingHours } from '../services/maintenanceReminders.js';
 import { handleQuizTurn, detectQuizStart, shouldPauseQuizForChat, getCurrentQuizField, detectFlowSwitch, getFlowDefinition } from '../services/quizEngine.js';
@@ -1073,6 +1073,36 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           customReply = subTurn.reply;
           if (subTurn.entitlements) entitlements = subTurn.entitlements;
         }
+        // 4c. PASSBOOK SNAPSHOT (v1.16.2) — deterministic, zero AI tokens.
+        else if (!session.quiz && existingVehicles.length > 0
+          && /^(?:passbook(?:\s+details)?|my\s+passbook|vehicle\s+snapshot)$/i.test(messageText.trim())) {
+          isSpecialFlowHandled = true;
+          const snapshotVehicle = currentActiveVehicle || existingVehicles[0];
+          let expenseLines = [];
+          if (supabaseClient && snapshotVehicle?.id) {
+            try {
+              const { data: recentExpenses } = await supabaseClient
+                .from('expense_logs')
+                .select('expense_type,amount,created_at')
+                .eq('vehicle_id', snapshotVehicle.id)
+                .order('created_at', { ascending: false })
+                .limit(5);
+              expenseLines = (recentExpenses || []).map((row) =>
+                `• ${row.expense_type || 'Expense'}: ${countryInfo?.currency || 'USD'} ${Number(row.amount || 0).toLocaleString()}`
+              );
+            } catch { expenseLines = []; }
+          }
+          const planLine = entitlements?.isTrial
+            ? `🎁 Trial: ${entitlements.tierName} — ${entitlements.trialDaysLeft} day(s) left`
+            : `📦 Plan: ${entitlements?.tierName || 'Free'}${entitlements?.isPaid ? ' (paid)' : ''}`;
+          const vehicleLines = existingVehicles.map((v) =>
+            `• ${v.plate_number} — ${Number(v.current_mileage || v.odometer_reading || 0).toLocaleString()} km${v.id === snapshotVehicle.id ? ' *(active)*' : ''}`
+          ).join('\n');
+          customReply = `📘 *Your Saka passbook*\n\n${vehicleLines}\n\n${planLine}\n\n${expenseLines.length
+            ? `🧾 *Recent expenses — ${snapshotVehicle.plate_number}*\n${expenseLines.join('\n')}`
+            : '🧾 No expenses logged yet — reply *"log expense"* to add your first one.'}`;
+        }
+
         // 5. Action Discovery & Role Help (AI-rendered from the role index)
         else if (!session.quiz && (intent === 'ACTION_DISCOVERY' || intent === 'APP_HELP' || /\b(?:what\s+can\s+i\s+do|show\s+my\s+actions|my\s+actions|show\s+actions|what\s+are\s+my\s+commands|available\s+commands)\b/i.test(messageText.trim()))) {
           isSpecialFlowHandled = true;
@@ -2141,7 +2171,7 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
                   interval: entitlements?.billingInterval || 'annual',
                   currency: countryInfo?.currency || 'USD'
                 });
-                customReply = `📊 *Monthly Report Limit Reached*\n\nThe Free plan includes *${quota.limit} report per month* and you have used it (resets monthly).\n\nUnlock unlimited reports, full AI and compliance tracking with *${getTierLabel(entitlements?.nextTierKey || 'solo_pro')}*:\n👉 ${upgrade.ok ? upgrade.checkoutUrl : 'https://sakafleet.com/pricing'}`;
+                customReply = `📊 *Monthly Report Limit Reached*\n\nThe Free plan includes *${quota.limit} report per month* and you have used it (resets monthly).\n\nUnlock unlimited reports, full AI and compliance tracking with *${getTierLabel(entitlements?.nextTierKey || 'solo_pro')}*:\n👉 ${upgrade.ok ? upgrade.checkoutUrl : 'https://sakafleet.com/pricing'}\n\n💡 Annual billing saves *${getAnnualDiscountPercent(entitlements?.nextTierKey || 'solo_pro')}%* — reply *"upgrade annual"* to see it.`;
               } else {
               const reportType = resolveReportType(mergedExt.report_type || messageText, 'fleet');
               // v1.16.0 — slow-report lane: ACK instantly (zero AI tokens),
@@ -2682,6 +2712,23 @@ async function maybeHandleSubscriptionTurn({
       session.pendingCancelSubscription = null;
       return { handled: true, reply: 'No changes — your plan stays active. 👍' };
     }
+    // v1.16.2 — accepting the annual save-offer from the same turn.
+    if (/\b(annual|yearly|year)\b/i.test(lower)) {
+      session.pendingCancelSubscription = null;
+      const annual = await checkoutForTier({
+        supabase: supabaseClient,
+        owner,
+        targetTierKey: ent.tierKey,
+        interval: 'annual',
+        currency
+      });
+      return {
+        handled: true,
+        reply: annual.ok
+          ? `🚀 *${ent.tierName} — annual*\n\n• Price: ${annual.priceInfo?.formattedPrice || ''} for a full year\n\n👉 *Switch to annual:* ${annual.checkoutUrl}\n\nYour plan never gets cancelled — billing simply moves to annual.`
+          : `⚠️ ${annual.error}`
+      };
+    }
     return { handled: true, reply: 'Please reply *YES* to cancel or *NO* to keep your plan.' };
   }
 
@@ -2728,8 +2775,29 @@ async function maybeHandleSubscriptionTurn({
     if (!ent?.isPaid) {
       return { handled: true, reply: 'You are on the Free plan — there is no paid subscription to cancel. Reply *"upgrade"* to see paid plans.' };
     }
-    session.pendingCancelSubscription = { requestedAt: Date.now(), trial: ent.isTrial };
     const until = ent.currentPeriodEnd ? new Date(ent.currentPeriodEnd).toLocaleDateString() : null;
+
+    // v1.16.2 — save-offer before cancelling: annual switch at the engine's own
+    // discount for monthly payers (never on a trial).
+    const annualPct = getAnnualDiscountPercent(ent.tierKey);
+    if (!ent.isTrial && ent.billingInterval !== 'annual' && annualPct > 0) {
+      const annual = await checkoutForTier({
+        supabase: supabaseClient,
+        owner,
+        targetTierKey: ent.tierKey,
+        interval: 'annual',
+        currency
+      });
+      if (annual.ok) {
+        session.pendingCancelSubscription = { requestedAt: Date.now(), trial: false };
+        return {
+          handled: true,
+          reply: `💡 *Before you cancel — keep ${ent.tierName} and save ${annualPct}%*\n\nSwitch to annual: ${annual.priceInfo?.formattedPrice || ''} for a full year.\n\n👉 *Switch to annual:* ${annual.checkoutUrl}\n\nOr reply *YES* to cancel — ${until ? `you keep access until ${until}` : 'access continues until the paid period ends'}.`
+        };
+      }
+    }
+
+    session.pendingCancelSubscription = { requestedAt: Date.now(), trial: ent.isTrial };
     const detail = ent.isTrial
       ? 'Your trial ends immediately (no payment was taken).'
       : `You keep full access until *${until || 'the end of the paid period'}*.`;
