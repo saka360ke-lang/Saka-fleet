@@ -1,9 +1,5 @@
 name: Autonomous Remediation Execute (Cline)
 
-# Execute leg of the autonomous remediation pipeline. Triggered ONLY by the
-# Saka backend (repository_dispatch remediation_execute) or manually. The
-# Superadmin approval nonce is verified from the database before Cline starts.
-
 on:
   repository_dispatch:
   workflow_dispatch:
@@ -13,10 +9,10 @@ on:
         required: true
         default: 'execute'
       proposal_code:
-        description: 'remediation_proposals.proposal_code'
+        description: 'proposal code'
         required: false
       approval_nonce:
-        description: 'Single-use approval nonce'
+        description: 'approval nonce'
         required: false
 
 permissions:
@@ -67,51 +63,8 @@ jobs:
           test -n "$TESTS"
           echo "TESTS=$TESTS" >> "$GITHUB_ENV"
 
-      - name: Pre-change test pass (must be green before edits)
+      - name: Pre-change test pass
         run: node scripts/run_tests.js $TESTS
 
-      - name: Prepare approved work order
-        run: node scripts/remediation_ci.js fetch "$PROPOSAL_CODE"
-
-      - name: Install Cline CLI
-        run: npm install -g cline
-
-      - name: Implement approved plan with Cline (headless)
-        run: |
-          cline --auto-approve true -t 1800 -P deepseek -m deepseek-chat "You are Cline executing an APPROVED remediation work order for Saka Fleet inside CI. Read .clinerules, SAKA_FLEET_ARCHITECTURE.md and remediation/work-orders/${PROPOSAL_CODE}.md completely first. Implement EXACTLY the approved changes in the work order - no scope expansion. Run 'node scripts/run_tests.js ${TESTS}' and fix only regressions you introduced. Never edit any forbidden path. Never commit, push, force-push or rewrite history. If the scope is impossible or unsafe, make NO changes and explain why." > remediation/cline-execute.log 2>&1 || true
-          echo "Cline execution finished (see remediation/cline-execute.log)"
-
-      - name: Post-change test pass (must be green before push)
-        run: node scripts/run_tests.js $TESTS
-
-      - name: Forbidden-path guard (block sensitive edits before commit)
-        run: node scripts/remediation_ci.js guard "$PROPOSAL_CODE"
-
-      - name: Commit and push to main
-        run: |
-          git config user.name "Saka Remediation Bot"
-          git config user.email "remediation@sakafleet.com"
-          git add -A
-          if git diff --cached --quiet; then
-            echo "::error::Cline produced no changes for $PROPOSAL_CODE"
-            exit 1
-          fi
-          git commit -m "fix(remediation): $PROPOSAL_CODE - approved autonomous remediation"
-          git push origin HEAD:main
-
-      - name: Report success to Superadmin
-        run: node scripts/remediation_ci.js report "$PROPOSAL_CODE" "$(git rev-parse --short HEAD)"
-
-      - name: Report failure to Superadmin (no code pushed)
-        if: failure()
-        run: node scripts/remediation_ci.js fail "$PROPOSAL_CODE" "GitHub Actions run failed: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-
-      - name: Upload execution artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: remediation-execute-${{ github.run_id }}
-          path: |
-            remediation/work-orders/
-            remediation/cline-execute.log
-          if-no-files-found: warn
+      - name: Smoke end
+        run: echo "bisect A ok"
