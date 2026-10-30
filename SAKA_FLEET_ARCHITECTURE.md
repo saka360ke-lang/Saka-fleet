@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.23.3  
+**Version:** 1.24.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.24.0** | Conversation-first Saka: natural intake, instant acks, paragraph parsing | §61 |
 | **1.23.3** | Incident registry: track, resolve and silence backend issues | §60 |
 | **1.23.2** | Plain-English admin alerts and deploy-noise decoder | §59 |
 | **1.23.1** | Pricing v2, free-tier vault gating, OCR flow hard-paused | §58 |
@@ -2305,3 +2306,30 @@ One row per backend issue signature in `backend_incidents`. Sentinel opens incid
 - Files: `src/services/incidents.js`, `src/workers/remediation.js`, `src/workers/sentinel.js`, `src/services/superadmin.js`, `scripts/notify_git_push.js`.
 - Tests: `test_incidents.js` (19 - stable signatures, open/update/resolve/suppress, post-fix silence, regression re-open, counts, list, plain-English replies, command parsing).
 - Knob: `INCIDENT_REOPEN_THRESHOLD` (3).
+
+---
+
+## 61. v1.24.0 - Conversation-First Saka
+
+Saka now gathers data from natural, flowing conversation instead of running a questionnaire. Paragraphs are the default input; the engine extracts everything it can and asks only for what is genuinely missing.
+
+### 61.1 Natural intake (default)
+- The quiz-composer instruction no longer says "state the current question exactly once": it asks for the ONE missing item in a natural, varied sentence, with an explicit ban on form-like wording and listing future questions.
+- `DEFAULT_SAKA_CORE_PROMPT` carries a `NATURAL CONVERSATION FIRST` directive: extract values from paragraphs, celebrate captured data in one short line, then ask at most one natural follow-up.
+- `SAKA_BOUNDARY_RULES` states that natural conversation is the default intake style (no numbered questionnaires).
+- Security flows (OTP, PIN) and the deterministic plate/menu prompts stay exact - never conversational.
+
+### 61.2 Instant acks (perceived speed)
+- Free-form messages of `INSTANT_ACK_CHARS` (180) or more, outside an active quiz, get an immediate "📖 Got it - reading that now." before the turn parses, records and composes. This is the same post-ACK pattern used for documents, now applied to long paragraphs.
+- `INSTANT_ACK_ENABLED` (default on) is the kill switch. The ack is transcript-logged only, never injected into chat history context.
+
+### 61.3 Paragraph parsing
+- Cleaned make/model output for paragraph stories ("Toyota Fielder 2016 diesel at 120,000 km" -> `Toyota Fielder`).
+- Purchase cost is inferred from "bought ... for KES 1,250,000" (6+ digit amounts only) and never from fuel/expense sentences.
+- Existing regex + AI extraction fast-forward merge across turns, so a single paragraph can fill plate, make/model, year, fuel, mileage and cost.
+
+### 61.4 Onboarding document prompts
+- `UPLOAD_HINTS_ENABLED` (default off) gates the document-upload tips on quiz questions. Vision OCR stays hard-paused; PDFs can still be parsed silently if a user sends one unprompted.
+
+### 61.5 Tests
+- `test_natural_intake.js` (13): paragraph stories (two shapes), fuel-spend never becomes purchase cost, core prompt directive, boundary rule.

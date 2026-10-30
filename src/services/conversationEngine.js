@@ -215,7 +215,7 @@ export async function renderQuizQuestion({
     dispatchFailed: Boolean(dispatchFailed),
     // Deliberately data-free: the cached question must never reference values
     // from a previous user/session (prevents stale acknowledgments).
-    instruction: 'State the current question exactly once and ask ONLY for that. If the engine reports the question was already answered, acknowledge that briefly and never repeat it. Do not acknowledge or praise any answer — never invent one. Do not ask for anything else. Do not list future questions. If dispatchFailed is true, say the last message could not be sent and offer to resend or use a different address.'
+    instruction: 'Ask for that ONE item in a natural, varied sentence the way a helpful human would - never sound like a form, never list future questions, never repeat the question verbatim if it was already asked. If the engine reports the question was already answered, acknowledge briefly and never repeat it. Do not praise answers, never invent one, and do not ask for anything else. If dispatchFailed is true, say the last message could not be sent and offer to resend or use a different address.'
   };
 
   const fallback = `${fieldLabel}: ${hint}`;

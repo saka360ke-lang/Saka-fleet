@@ -133,6 +133,11 @@ AGENT ROLES & BEHAVIORAL DIRECTIVES:
    - NEVER re-introduce yourself or repeat the welcome once the conversation has history or the user is mid-onboarding. A confused or unclassified turn gets ONE short clarifying question, never a fresh "Karibu / welcome to Saka Fleet" introduction.
    - When a photo could not be read, apologise ONCE, never claim anything was saved, and offer ONE fallback (type the value or send a clearer photo). Never repeat the identical question verbatim.
 
+6b. NATURAL CONVERSATION FIRST (v1.24.0):
+   - Prefer natural conversation over questionnaires: extract every value the user gives inside paragraphs, and never walk them through rigid field-by-field questions unless something is genuinely missing.
+   - Vary your wording every turn; never sound like a form, never list future questions, never repeat a question verbatim.
+   - Celebrate what you captured in one short warm line, then ask at most ONE natural follow-up for the most valuable missing item.
+
 7. MAINTENANCE & EXPIRY REMINDERS (GLOBAL UNITS):
    - LOG_OPERATING_HOURS: Triggered when a user logs or updates a vehicle/machine hour meter, e.g. "log 1250 engine hours", "update operating hours to 36.5", "hours now 1200". Extract "operating_hours".
    - SET_REMINDER must capture three threshold types: DATE (insurance, inspection/MOT, licensing, permits, driver licences, general deadlines), DISTANCE (km or miles) and OPERATING HOURS. E.g. "oil change in 5000 km", "brake pads in 3000 miles", "spare part change in 36 operating hours".
@@ -401,7 +406,14 @@ export function extractVehicleAttributes(messageText = '') {
   const brandMatch = clean.match(knownBrandsRegex);
   if (brandMatch) {
     let cleanBrand = brandMatch[0].replace(/owner|driver|diesel|petrol|hybrid|electric|km|mileage/gi, '').trim();
-    if (cleanBrand.length >= 2) data.make_model = cleanBrand;
+    if (cleanBrand && cleanBrand.length >= 2) {
+    const cleanModel = cleanBrand
+      .replace(/\b(?:19|20)\d{2}\b/g, ' ')
+      .replace(/\s+(?:at|for)\s+\d[\s\S]*$/i, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (cleanModel.length >= 2) data.make_model = cleanModel;
+  }
   }
   if (!data.make_model) {
     let stripped = clean
@@ -417,11 +429,22 @@ export function extractVehicleAttributes(messageText = '') {
       .replace(/\s+/g, ' ')
       .trim();
 
+    // v1.24.0 - strip trailing years/prices from paragraph-derived models.
+    stripped = stripped.replace(/\b(?:19|20)\d{2}\b/g, ' ').replace(/\s+(?:at|for)\s+\d[\s\S]*$/i, ' ').replace(/\s+/g, ' ').trim();
     if (stripped.length >= 2 && !/^(register|onboard|add car|help|skip|done|resend|great|ok|okay|awesome|cool|thanks|thank you|none|good|perfect|all set)$/i.test(stripped) && !/^\d+$/.test(stripped)) {
       const isPlate = /\b([A-Z]{1,4}\s?\d{1,4}[A-Z]{0,2}|\d[A-Z]{3}\d{3})\b/i.test(stripped);
       if (!isPlate && (!data.plate_number || stripped.replace(/\s+/g, '').toUpperCase() !== data.plate_number.replace(/\s+/g, '').toUpperCase())) {
         data.make_model = stripped;
       }
+    }
+  }
+
+  // v1.24.0 - vehicle purchase inferred from "bought ... for KES 1,250,000".
+  if (!data.purchase_cost && /\b(bought|purchased)\b/i.test(lower)) {
+    const priceMatch = clean.match(/\bfor\s+(?:kes|ksh|usd|eur|gbp|zar|ngn|ugx|tzs|\$)?\s*([\d][\d,]{5,})/i);
+    if (priceMatch) {
+      const priceNum = parseInt(priceMatch[1].replace(/,/g, ''), 10);
+      if (!Number.isNaN(priceNum) && priceNum > 0) data.purchase_cost = priceNum;
     }
   }
 

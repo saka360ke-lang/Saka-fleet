@@ -972,6 +972,18 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           };
         }
 
+        // v1.24.0 - perceived speed: long free-form paragraphs get an instant ack
+        // while this turn parses and records in the background.
+        const instantAckEnabled = !/^(?:off|false|0)$/i.test(String(process.env.INSTANT_ACK_ENABLED || 'on'));
+        const instantAckChars = Number(process.env.INSTANT_ACK_CHARS || 180);
+        if (instantAckEnabled && !mediaObj && !session.quiz && !countryCommandResult
+          && String(messageText || '').trim().length >= instantAckChars) {
+          try {
+            await sendWhatsAppReply(senderPhone, '📖 Got it - reading that now.');
+            if (supabaseClient) await logChatTranscript(supabaseClient, senderPhone, 'assistant', 'Got it - reading that now.');
+          } catch { /* ack is best-effort */ }
+        }
+
         let aiResult;
         if (ocrPaused) {
           aiResult = {
@@ -2835,9 +2847,9 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
           session.sakaIntroduced = true;
         }
 
-        // v1.20.0 — deterministic document-upload hint on the pending quiz
-        // question (zero tokens). Shown once per field so it never nags.
-        if (session.quiz && session.quiz.phase === 'question') {
+        // v1.24.0 - upload hints are OFF by default (OCR paused); opt in via UPLOAD_HINTS_ENABLED=on.
+        // The hint is shown once per field so it never nags.
+        if (/^(?:on|true|1)$/i.test(String(process.env.UPLOAD_HINTS_ENABLED || 'off')) && session.quiz && session.quiz.phase === 'question') {
           const pendingField = getCurrentQuizField(session.quiz, {
             countryInfo,
             vehicles: existingVehicles,
