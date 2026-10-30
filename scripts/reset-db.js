@@ -161,7 +161,9 @@ export async function executeDatabaseReset({ targetPhone = null, verbose = true,
   }
 
   // Method A: Supabase Management API via SQL
+  let usedManagementApi = false;
   if (token && projectRef) {
+    try {
     let sql = '';
     if (targetPhone) {
       const cleanPhone = targetPhone.replace(/[^\d+]/g, '');
@@ -248,9 +250,16 @@ export async function executeDatabaseReset({ targetPhone = null, verbose = true,
       const err = await res.text();
       throw new Error(`Slate reset failed via Supabase API: ${err}`);
     }
+    usedManagementApi = true;
 
     if (verbose) console.log('✅ Database slate successfully cleared via Supabase Management API.');
-  } else if (supabase) {
+    } catch (mgmtErr) {
+      if (!supabase) throw mgmtErr;
+      console.warn(`Management API reset failed (${mgmtErr.message}); falling back to the Supabase JS client.`);
+    }
+  }
+
+  if (!usedManagementApi && supabase) {
     // Method B: Fallback to Supabase JS Client with cascade order
     if (targetPhone) {
       await supabase.from('chat_history').delete().eq('user_phone', targetPhone);
@@ -267,6 +276,7 @@ export async function executeDatabaseReset({ targetPhone = null, verbose = true,
         processed_webhooks: 'wamid',
         vin_registry: 'vin',
         chat_sessions: 'phone_number',
+        superadmin_sessions: 'phone_number',
         saka_dynamic_rules: 'rule_key'
       };
       for (const table of RESET_TABLES) {

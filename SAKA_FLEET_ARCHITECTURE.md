@@ -620,7 +620,8 @@ Owners exceeding capacity are prompted with the next-tier upgrade checkout (or t
 - **Confirmation Flag:** Requires `--confirm` (e.g. `node scripts/reset-db.js --all --confirm`). Without `--confirm`, execution is safely aborted with an informational warning.
 - **Explicit Scope Required:** The script now also requires either `--all` (global slate wipe) or `--phone <number>` (targeted). A bare `--confirm` can no longer wipe the database.
 - **Targeted Reset:** Supports phone-specific clearing: `node scripts/reset-db.js --phone +254712345678 --confirm`. It resolves vehicles by `owner_phone` **and** `owner_id`, releases any driver assignment held by the phone, and clears dependent logs/transfers/notifications.
-- **Fallback Safety:** The Supabase-JS fallback uses per-table primary keys (`processed_webhooks.wamid`, `vin_registry.vin`, otherwise `id`).
+- **Fallback Safety:** The Supabase-JS fallback uses per-table primary keys (`processed_webhooks.wamid`, `vin_registry.vin`, `chat_sessions.phone_number`, `superadmin_sessions.phone_number`, `saka_dynamic_rules.rule_key`, otherwise `id`). **v1.20.0:** an invalid/expired Management API token no longer aborts the wipe — it logs a warning and falls back to the Supabase JS client automatically.
+- **Sentinel repopulation:** the background Sentinel scan can write a fresh `admin_audit_logs` governance row within a minute of a wipe; that is expected telemetry, not residual user data.
 - **Backup Flag (`--backup`):** writes a git-ignored `reset-backup-<ISO>.json` containing pre-wipe row counts plus full `system_config` + `compliance_catalog` rows; aborts before any truncation if the export fails.
 - **Post-Reset Verification (v1.14.2):** asserts every `RESET_TABLES` entry is at zero rows and every `PRESERVED_TABLES` count is unchanged from the pre-wipe baseline, printing clean/intact tables.
 - **Import-safe module:** the production/confirmation guards run only on direct CLI invocation, so `RESET_TABLES` / `PRESERVED_TABLES` are importable by tests without side effects.
@@ -2069,6 +2070,7 @@ Photos **or PDFs**: logbook/registration certificate, fuel receipt, service invo
 - Files: `src/services/pdfTextExtractor.js`, `src/services/documentLens.js`, `src/services/ocrService.js`, `src/routes/whatsapp.js`, `src/services/featureNotice.js` (1.20.0 copy), `sakaAi.js`, `src/services/conversationEngine.js`, `src/services/flowKnowledge.js`, `.env.example`, README.
 - Tests: `test_doc_lens.js` (48 — PDF parsing/extraction/guards, nine families, upload hints, end-to-end PDF intake), `test_agent_training.js` (78 — Document Lens prompt + boundary sync), `test_feature_notice.js` (1.20.0 digest), `test_ocr_flow.js` (45).
 - Knobs: `OCR_PDF_MAX_PAGES` (20), `FEATURE_NOTICE_VERSION` (1.20.0).
+- Clean-slate onboarding test: `node scripts/reset-db.js --all --confirm --backup` cleared all operational tables (with a git-ignored backup); Management API token failures now fall back to the Supabase JS client (§15.2).
 
 
 
