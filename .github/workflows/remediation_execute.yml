@@ -66,5 +66,22 @@ jobs:
       - name: Pre-change test pass
         run: node scripts/run_tests.js $TESTS
 
+      - name: Prepare approved work order
+        run: node scripts/remediation_ci.js fetch "$PROPOSAL_CODE"
+
+      - name: Install Cline CLI
+        run: npm install -g cline
+
+      - name: Implement approved plan with Cline (headless)
+        run: |
+          cline --auto-approve true -t 1800 -P deepseek -m deepseek-chat "You are Cline executing an APPROVED remediation work order for Saka Fleet inside CI. Read .clinerules, SAKA_FLEET_ARCHITECTURE.md and remediation/work-orders/${PROPOSAL_CODE}.md completely first. Implement EXACTLY the approved changes in the work order - no scope expansion. Run 'node scripts/run_tests.js ${TESTS}' and fix only regressions you introduced. Never edit any forbidden path. Never commit, push, force-push or rewrite history. If the scope is impossible or unsafe, make NO changes and explain why." > remediation/cline-execute.log 2>&1 || true
+          echo "Cline execution finished (see remediation/cline-execute.log)"
+
+      - name: Post-change test pass
+        run: node scripts/run_tests.js $TESTS
+
+      - name: Forbidden-path guard
+        run: node scripts/remediation_ci.js guard "$PROPOSAL_CODE"
+
       - name: Smoke end
-        run: echo "bisect A ok"
+        run: echo "bisect B ok"
