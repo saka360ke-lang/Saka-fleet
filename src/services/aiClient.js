@@ -42,6 +42,12 @@ const TRUTHY = new Set(['on', 'true', '1']);
 /** Purposes that get one extra attempt when a provider returns an empty body. */
 export const EMPTY_RETRY_PURPOSES = new Set(['intent_classify', 'question_render', 'prose_render']);
 
+/** v1.23.0 - Sonnet serves FRONT user conversations only; background/system purposes stay DeepSeek. */
+export const USER_FACING_PURPOSES = new Set([
+  'intent_classify', 'extraction', 'question_render', 'prose_render',
+  'small_talk', 'stall_nudge', 'admin_parse'
+]);
+
 /** v1.22.0 — a slow empty answer must not spend a second full timeout. */
 export const EMPTY_RETRY_MAX_FIRST_MS = (() => {
   const raw = Number(process.env.EMPTY_RETRY_MAX_FIRST_MS || 5000);
@@ -121,6 +127,14 @@ export function getTierModel(tier, providerOverride = null) {
     if (runtime) return runtime;
     return isRemediationAutonomyOn() ? DEFAULT_DEEPSEEK_REASONER : DEFAULT_DEEPSEEK_MODEL;
   }
+  // v1.23.0 - Tier 1 is Sonnet-first (owner decision: model quality is not a
+  // subscription gate, vehicle count is). Explicit overrides keep the legacy
+  // DeepSeek behaviour one env var away.
+  if (tier === AI_TIERS.ROUTER && providerOverride === AI_PROVIDERS.ANTHROPIC) {
+    if (process.env.AI_MODEL_TIER_1_ANTHROPIC) return process.env.AI_MODEL_TIER_1_ANTHROPIC;
+    if (process.env.AI_MODEL_TIER_2) return process.env.AI_MODEL_TIER_2;
+    return DEFAULT_ANTHROPIC_TIER2_MODEL;
+  }
   if (process.env.AI_MODEL_TIER_1 || process.env.DEEPSEEK_MODEL) {
     return process.env.AI_MODEL_TIER_1 || process.env.DEEPSEEK_MODEL;
   }
@@ -132,6 +146,21 @@ export function getTierModel(tier, providerOverride = null) {
 /** Provider for the conversational tier (Phase 1 flips this to anthropic/openai). */
 export function getConversationalProvider() {
   return String(process.env.CONVERSATIONAL_PROVIDER || AI_PROVIDERS.DEEPSEEK).toLowerCase();
+}
+
+/**
+ * v1.23.0 - Tier-1 provider (all user-facing router purposes). Sonnet-first
+ * whenever an Anthropic key exists; DeepSeek otherwise. AI_TIER1_PROVIDER
+ * (anthropic | deepseek) pins it explicitly. DeepSeek is ALWAYS the terminal
+ * failover leg regardless.
+ */
+export function getRouterProvider() {
+  const explicit = String(process.env.AI_TIER1_PROVIDER || '').toLowerCase();
+  if (explicit === AI_PROVIDERS.ANTHROPIC || explicit === AI_PROVIDERS.OPENAI || explicit === AI_PROVIDERS.DEEPSEEK) {
+    return explicit;
+  }
+  if (explicit) return AI_PROVIDERS.DEEPSEEK;
+  return hasProviderKey(AI_PROVIDERS.ANTHROPIC) ? AI_PROVIDERS.ANTHROPIC : AI_PROVIDERS.DEEPSEEK;
 }
 
 /** Provider for reasoning/synthesis calls (Phase 3, default DeepSeek). */
@@ -149,7 +178,9 @@ export function getReasoningTimeoutMs() {
 }
 
 export function getPremiumMaxConcurrency() {
-  return Math.max(1, Number(process.env.AI_PREMIUM_MAX_CONCURRENCY || 2));
+  // v1.23.0 - Sonnet now serves ALL Tier-1 traffic, so the in-flight cap
+  // aligns with MESSAGE_MAX_CONCURRENCY; overflow still falls to DeepSeek.
+  return Math.max(1, Number(process.env.AI_PREMIUM_MAX_CONCURRENCY || 8));
 }
 
 /**
@@ -199,9 +230,15 @@ export function resolveTier(purpose = 'default', { tier: forcedTier, maxTier = n
     tier = AI_TIERS.ROUTER;
   }
 
+  // v1.23.0 - Sonnet serves FRONT user conversations only (free plans included).
+  // Background/system router purposes (model bench/research, default) stay on
+  // DeepSeek, which is always the terminal failover leg.
+  const routerProvider = USER_FACING_PURPOSES.has(String(purpose || ''))
+    ? getRouterProvider()
+    : AI_PROVIDERS.DEEPSEEK;
   const provider = tier === AI_TIERS.CONVERSATIONAL
     ? getConversationalProvider()
-    : (tier === AI_TIERS.REASONING ? getReasoningProvider() : AI_PROVIDERS.DEEPSEEK);
+    : (tier === AI_TIERS.REASONING ? getReasoningProvider() : routerProvider);
 
   return { tier, provider, model: getTierModel(tier, provider) };
 }
@@ -532,7 +569,8 @@ export function buildProviderChain(routing = {}, { budgetExceeded = false, now =
   const premiumOrder = [];
   if (routing.explicit && routing.provider && routing.provider !== AI_PROVIDERS.DEEPSEEK) {
     premiumOrder.push(routing.provider);
-  } else if (routing.tier === AI_TIERS.CONVERSATIONAL) {
+  } else if (routing.tier === AI_TIERS.CONVERSATIONAL
+      || (routing.tier === AI_TIERS.ROUTER && routing.provider && routing.provider !== AI_PROVIDERS.DEEPSEEK)) {
     if (routing.provider && routing.provider !== AI_PROVIDERS.DEEPSEEK) premiumOrder.push(routing.provider);
     for (const provider of [AI_PROVIDERS.OPENAI, AI_PROVIDERS.ANTHROPIC]) {
       if (provider !== routing.provider) premiumOrder.push(provider);
@@ -664,9 +702,11 @@ export async function chatCompletion({
       error: null
     }));
 
-  const baseTimeoutMs = routing.tier === AI_TIERS.CONVERSATIONAL
-    ? getPremiumTimeoutMs()
-    : (routing.tier === AI_TIERS.REASONING ? getReasoningTimeoutMs() : Number(process.env.AI_TIMEOUT_MS || 12000));
+  const baseTimeoutMs = routing.tier === AI_TIERS.REASONING
+    ? getReasoningTimeoutMs()
+    : (routing.provider === AI_PROVIDERS.ANTHROPIC || routing.tier === AI_TIERS.CONVERSATIONAL
+      ? getPremiumTimeoutMs()
+      : Number(process.env.AI_TIMEOUT_MS || 12000));
   // v1.22.0 — quiz questions render from the deterministic template if the
   // provider is slow; never let a question block the turn for 19 s.
   const timeoutMs = String(purpose || '') === 'question_render' && routing.tier === AI_TIERS.ROUTER

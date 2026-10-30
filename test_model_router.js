@@ -18,6 +18,8 @@ import {
   parseJsonSafely,
   EMPTY_RETRY_PURPOSES,
   EMPTY_RETRY_MAX_FIRST_MS,
+  USER_FACING_PURPOSES,
+  buildProviderChain,
   shouldRetryEmpty,
   getQuestionTimeoutMs
 } from './src/services/aiClient.js';
@@ -76,21 +78,47 @@ async function runTests() {
   process.env.PREMIUM_MODEL_ENABLED = 'off';
   console.log(`  ℹ️ Premium switch forced off for the suite (local value: ${premiumEnvironmentBefore ? 'on' : 'off'}).\n`);
 
-  console.log('--- Test 1: every purpose resolves to DeepSeek while premium is off ---');
+  console.log('--- Test 1: Tier 1 is Sonnet for every user-facing purpose (v1.23.0) ---');
   const premiumBefore = isPremiumModelEnabled();
-  withEnv({ PREMIUM_MODEL_ENABLED: 'off', CONVERSATIONAL_PROVIDER: undefined, AI_MODEL_TIER_2: undefined }, () => {
+  withEnv({ PREMIUM_MODEL_ENABLED: 'off', CONVERSATIONAL_PROVIDER: undefined, AI_MODEL_TIER_2: undefined, AI_TIER1_PROVIDER: 'anthropic' }, () => {
     check(isPremiumModelEnabled() === false, 'premium routing is off when the kill switch is off');
     for (const purpose of Object.keys(AI_PURPOSES)) {
       const resolved = resolveTier(purpose);
-      check(resolved.provider === AI_PROVIDERS.DEEPSEEK, `${purpose}: provider is deepseek`);
-      check(typeof resolved.model === 'string' && resolved.model.startsWith('deepseek'), `${purpose}: DeepSeek model (${resolved.model})`);
-      check(resolved.tier === AI_TIERS.ROUTER || resolved.tier === AI_TIERS.REASONING, `${purpose}: tier is 1/3 while premium is off`);
+      if (resolved.tier === AI_TIERS.REASONING) {
+        check(resolved.provider === AI_PROVIDERS.DEEPSEEK, `${purpose}: background reasoning stays DeepSeek`);
+      } else if (resolved.tier === AI_TIERS.ROUTER) {
+        if (USER_FACING_PURPOSES.has(purpose)) {
+          check(resolved.provider === AI_PROVIDERS.ANTHROPIC, `${purpose}: front tier is Sonnet`);
+          check(typeof resolved.model === 'string' && resolved.model.startsWith('claude'), `${purpose}: Sonnet model (${resolved.model})`);
+        } else {
+          check(resolved.provider === AI_PROVIDERS.DEEPSEEK, `${purpose}: background router purpose stays DeepSeek`);
+        }
+      }
     }
+  });
+  withEnv({ AI_TIER1_PROVIDER: 'deepseek' }, () => {
+    check(resolveTier('extraction').provider === AI_PROVIDERS.DEEPSEEK, 'AI_TIER1_PROVIDER=deepseek restores legacy routing');
+  });
+
+  console.log('\n--- Test 1c: Sonnet -> GPT -> DeepSeek failover chain (v1.23.0) ---');
+  withEnv({ ANTHROPIC_API_KEY: 'test-a', OPENAI_API_KEY: 'test-o', AI_TIER1_PROVIDER: 'anthropic' }, () => {
+    const chain1 = buildProviderChain(routeModelForPurpose('question_render')).chain.map((step) => step.provider).join(',');
+    check(chain1 === 'anthropic,openai,deepseek', `front chain is Sonnet -> GPT -> DeepSeek (${chain1})`);
+    const background = buildProviderChain(routeModelForPurpose('model_benchmark')).chain.map((step) => step.provider).join(',');
+    check(background === 'deepseek', 'background router purposes never leave DeepSeek');
+  });
+  withEnv({ ANTHROPIC_API_KEY: 'test-a', OPENAI_API_KEY: undefined }, () => {
+    const chain2 = buildProviderChain(routeModelForPurpose('intent_classify')).chain.map((step) => step.provider).join(',');
+    check(chain2 === 'anthropic,deepseek', 'without a GPT key the chain is Sonnet -> DeepSeek');
+  });
+  withEnv({ ANTHROPIC_API_KEY: undefined, AI_TIER1_PROVIDER: 'deepseek' }, () => {
+    const chain3 = buildProviderChain(routeModelForPurpose('extraction')).chain.map((step) => step.provider).join(',');
+    check(chain3 === 'deepseek', 'legacy mode keeps a DeepSeek-only chain');
   });
   check(isPremiumModelEnabled() === premiumBefore, 'premium switch restored to its pre-test value');
 
   console.log('\n--- Test 1b: Model Watchdog runtime resolver (env always wins) ---');
-  withEnv({ AI_MODEL_TIER_1: undefined, DEEPSEEK_MODEL: undefined }, () => {
+  withEnv({ AI_MODEL_TIER_1: undefined, DEEPSEEK_MODEL: undefined, AI_TIER1_PROVIDER: 'deepseek' }, () => {
     setRuntimeModelResolver((tier) => (tier === AI_TIERS.ROUTER ? 'deepseek-watchdog-test' : null));
     check(resolveTier('extraction').model === 'deepseek-watchdog-test', 'registry-adopted model fills the gap');
     withEnv({ AI_MODEL_TIER_1: 'deepseek-env-wins' }, () => {
@@ -113,7 +141,7 @@ async function runTests() {
     check(intent.provider === 'anthropic', 'intent_classify uses the configured provider');
     check(intent.model === 'claude-sonnet-test', 'intent_classify uses AI_MODEL_TIER_2');
     const extraction = resolveTier('extraction');
-    check(extraction.tier === AI_TIERS.ROUTER && extraction.provider === AI_PROVIDERS.DEEPSEEK, 'extraction stays on the DeepSeek router tier');
+    check(extraction.tier === AI_TIERS.ROUTER && extraction.provider === AI_PROVIDERS.ANTHROPIC, 'extraction rides the Sonnet router tier');
   });
   check(isPremiumModelEnabled() === premiumBefore, 'premium toggle restored after the test');
 

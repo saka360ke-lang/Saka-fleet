@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.22.0  
+**Version:** 1.23.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -33,11 +33,11 @@ All LLM traffic flows through **`src/services/aiClient.js`**. No service talks t
 | Primary model | `deepseek-chat` (DeepSeek-V3) |
 | Tier-3 opt-in | `deepseek-reasoner` via `AI_MODEL_TIER_3` |
 | SDK | `openai` (OpenAI-compatible surface) |
-| API key env | `DEEPSEEK_API_KEY` (Tier 1/3) + `ANTHROPIC_API_KEY` (Tier 2) + optional `OPENAI_API_KEY` |
+| API key env | `ANTHROPIC_API_KEY` (Tier 1 front + Tier 2) + `DEEPSEEK_API_KEY` (background + terminal fallback) + optional `OPENAI_API_KEY` (GPT fallback leg) |
 | Tier-2 provider | Anthropic Messages API via native `fetch` (`anthropic-version: 2023-06-01`, `AI_TIMEOUT_MS_PREMIUM` timeout) |
 | Optional model override | `DEEPSEEK_MODEL`, `AI_MODEL_TIER_1/2/3` |
 | Purpose registry | `AI_PURPOSES` (tier + default params per purpose) |
-| Kill switch | `PREMIUM_MODEL_ENABLED` (off; Tier-2 downgrades to Tier 1 while off) |
+| Kill switch | `PREMIUM_MODEL_ENABLED` (off; gates the Tier-2 escalation canary - Tier 1 is Sonnet-first for front conversations, v1.23.0) |
 | Telemetry analytics | `getAiUsageSummary()` (1–168 h window) → Superadmin `admin ai-stats` digest (§37) |
 | Tier-2 failover chain | `anthropic → openai → deepseek`; per-provider circuit breakers; DeepSeek never skipped (§38) |
 | Model Watchdog | `ai_model_registry` + `model_eval_runs`; weekly discovery, deterministic benchmark, canary adoption, auto-rollback (§45) |
@@ -70,7 +70,7 @@ All LLM traffic flows through **`src/services/aiClient.js`**. No service talks t
 
 ### 1.2 Conversational Engine (v1.7 — pure AI, quiz-first)
 
-- **`src/services/conversationEngine.js`** — every user-facing reply is rendered by Saka AI from a structured FACTS payload (`composeMessage`, `renderQuizQuestion`, `renderConfirmationSummary`, `renderOutcome`, `renderActionDiscovery`). The provider is tier-routed: prose renders use Tier 2 (Claude Sonnet 5.5 when `PREMIUM_MODEL_ENABLED=on`, otherwise DeepSeek-V3) while quiz questions and stall nudges stay Tier 1; the system prompt carries explicit **VOICE & TONE COMPASS** guardrails (including UX & Inclusion) so tone stays consistent across providers and failover legs. Hard-coded conversational prose has been removed from the WhatsApp route; deterministic fallbacks remain only for provider outages. Quiz questions are cached per field/language (`seedQuizQuestions`, `isQuizQuestionCacheWarm`) and prefetched in one batch per flow.
+- **`src/services/conversationEngine.js`** — every user-facing reply is rendered by Saka AI from a structured FACTS payload (`composeMessage`, `renderQuizQuestion`, `renderConfirmationSummary`, `renderOutcome`, `renderActionDiscovery`). The provider is tier-routed: every front user conversation (intent, extraction, questions, prose, small talk, nudges, admin parse) is Sonnet-first since v1.23.0 on every plan; background/system work stays DeepSeek; the system prompt carries explicit **VOICE & TONE COMPASS** guardrails (including UX & Inclusion) so tone stays consistent across providers and failover legs. Hard-coded conversational prose has been removed from the WhatsApp route; deterministic fallbacks remain only for provider outages. Quiz questions are cached per field/language (`seedQuizQuestions`, `isQuizQuestionCacheWarm`) and prefetched in one batch per flow.
 - **`src/services/quizEngine.js`** — one-piece-at-a-time wizard engine: declarative flow definitions, per-field validators/extractors, deterministic multi-field fast-forward (`applyTextExtraction`), two-pass conditional extraction (`applyExtraction`), background question prefetch, Cancel/Restart/Help navigation, and a **mandatory confirmation summary before any database write**. VIN and passbook token are never editable.
 - **`src/services/naturalParser.js` (v1.8)** — natural conversational extraction: deterministic field parsing plus a DeepSeek JSON top-up for missing fields, "extra notes" compilation for details that do not map to a database column, missing-field computation for dynamic prompts, and graceful degradation when the provider is unavailable.
 - **`src/services/maintenanceReminders.js` (v1.9)** — universal reminder engine: distance (canonical km), operating hours **and date-based expiries** (insurance, inspection/MOT, licensing, permits, driver licences, general deadlines). Explicit `remaining_value` tracking, 75/25/5/due-now/overdue threshold tiers, 30d/14d/7d/24h/overdue expiry tiers, `due_at` timestamps in the user's confirmed timezone, driver-licence promotion, `expiry_notification_log` audit trail, and a single background sweep worker.
@@ -1516,7 +1516,7 @@ Every LLM turn still starts at `chatCompletion()`; Phase 3 replaces the ad-hoc c
 
 | Route | Chain |
 | :--- | :--- |
-| Tier 1 (router) | DeepSeek candidates only (`AI_MODEL_TIER_1` → `DEEPSEEK_MODEL` → `deepseek-chat`) |
+| Tier 1 (router, front conversations) | Sonnet-first (`AI_MODEL_TIER_1_ANTHROPIC` → `AI_MODEL_TIER_2` → Sonnet default) → OpenAI GPT-4o when keyed → DeepSeek (`AI_MODEL_TIER_1` → `DEEPSEEK_MODEL` → `deepseek-chat`) |
 | Tier 2 (conversational) | primary `CONVERSATIONAL_PROVIDER` → the other premium provider (OpenAI or Anthropic) → DeepSeek |
 | Tier 3 (reasoning) | `AI_REASONING_PROVIDER` (DeepSeek default / Anthropic Opus opt-in) → DeepSeek |
 | explicit `model` | that provider/model → DeepSeek fallbacks |
@@ -2184,6 +2184,22 @@ Live evidence (2026-10-30): reply gaps ranged from 4.9 s to **86.6 s**. `ai_usag
 - Files: `src/services/ocrService.js`, `src/routes/whatsapp.js`, `src/services/aiClient.js`, `.env.example`, README.
 - Tests: `test_ocr_flow.js` (51 — kill switch, no network while paused, ack copy), `test_model_router.js` (91 — retry latency gate, question timeout), `test_doc_lens.js` 48 (PDF intake unaffected), `test_greetings.js` 33.
 - Knobs: `OCR_ENABLED` (off), `OCR_ACK_FIRST` (on), `EMPTY_RETRY_MAX_FIRST_MS` (5000), `AI_TIMEOUT_MS_QUESTION` (10000).
+---
 
+## 57. v1.23.0 - Sonnet-First Front Conversations (All Plans)
 
+Owner decision: model quality is not a subscription gate - vehicle count is. Every FRONT user conversation now runs on Sonnet when an Anthropic key exists, for free and paid plans alike.
 
+### 57.1 Routing
+- `USER_FACING_PURPOSES` allow-list: `intent_classify`, `extraction`, `question_render`, `prose_render`, `small_talk`, `stall_nudge`, `admin_parse` -> Tier-1 Sonnet-first.
+- Background/system purposes (`model_benchmark`, `model_research`, `default`, and the whole Tier-3 reasoning tier) stay DeepSeek.
+- Failover chain: Sonnet -> OpenAI GPT-4o (only when `OPENAI_API_KEY` exists and the breaker is closed) -> DeepSeek (always terminal, never skipped). Missing keys surface as `skipped_missing_key` in `ai_usage_logs.attempts`.
+- `AI_TIER1_PROVIDER` pins the front provider (anthropic | deepseek); `AI_MODEL_TIER_1_ANTHROPIC` overrides the model (default Sonnet); `AI_PREMIUM_MAX_CONCURRENCY` defaults to 8 and overflow still lands on DeepSeek.
+- `PREMIUM_MODEL_ENABLED` now only gates the extra Tier-2 escalation canary; entitlements clamp the tier NUMBER, never the front model.
+
+### 57.2 Production env
+- Cloud Run must carry `ANTHROPIC_API_KEY` (Sonnet) and `OPENAI_API_KEY` (GPT fallback). Without keys the app auto-degrades to DeepSeek - the never-throws contract is unchanged.
+- Production audit defaults: `PREMIUM_MODEL_ENABLED=off`, `REMEDIATION_AUTONOMY=off`, `AI_MODEL_AUTO_ADOPT=off`, `AI_WEB_SEARCH_ENABLED=off`, `OCR_ENABLED=off` (PDFs still read locally), `AI_PREMIUM_MAX_CONCURRENCY=8`.
+
+### 57.3 Tests
+- `test_model_router.js` asserts the front/background split, `AI_TIER1_PROVIDER=deepseek` legacy restore, and the chain order Sonnet -> GPT -> DeepSeek (and Sonnet -> DeepSeek without a GPT key).
