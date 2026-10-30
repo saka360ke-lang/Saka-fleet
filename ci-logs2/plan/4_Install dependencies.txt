@@ -1,0 +1,181 @@
+﻿2026-10-30T06:39:17.4788327Z ##[group]Run npm ci
+2026-10-30T06:39:17.4788698Z [36;1mnpm ci[0m
+2026-10-30T06:39:17.4811043Z shell: /usr/bin/bash -e {0}
+2026-10-30T06:39:17.4811521Z env:
+2026-10-30T06:39:17.4811964Z   SUPABASE_URL: ***
+2026-10-30T06:39:17.4813138Z   SUPABASE_SERVICE_KEY: ***
+2026-10-30T06:39:17.4813429Z   SUPERADMIN_PHONE: ***
+2026-10-30T06:39:17.4813684Z   SUPERADMIN_EMAIL: ***
+2026-10-30T06:39:17.4813946Z   META_PHONE_NUMBER_ID: ***
+2026-10-30T06:39:17.4814956Z   META_WHATSAPP_TOKEN: ***
+2026-10-30T06:39:17.4815257Z   RESEND_API_KEY: ***
+
+2026-10-30T06:39:17.4815536Z   DEEPSEEK_API_KEY: ***
+2026-10-30T06:39:17.4815768Z   AUDIT_RUN_ID: 2026-10-30
+2026-10-30T06:39:17.4816000Z   MODIFY_FEEDBACK: 
+2026-10-30T06:39:17.4816222Z   CLUSTER_SIGNATURE: 
+2026-10-30T06:39:17.4816440Z ##[endgroup]
+2026-10-30T06:39:17.7509016Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7509943Z npm warn EBADENGINE   package: '@google-cloud/common@8.2.2',
+2026-10-30T06:39:17.7510638Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7511641Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7512273Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7512811Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7513482Z npm warn EBADENGINE   package: '@google-cloud/promisify@6.2.1',
+2026-10-30T06:39:17.7514143Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7515232Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7515808Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7516273Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7516846Z npm warn EBADENGINE   package: 'gaxios@8.3.2',
+2026-10-30T06:39:17.7517461Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7518132Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7518659Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7519137Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7519739Z npm warn EBADENGINE   package: 'gcp-metadata@9.2.2',
+2026-10-30T06:39:17.7520380Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7521049Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7521809Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7522263Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7522885Z npm warn EBADENGINE   package: 'google-auth-library@11.3.1',
+2026-10-30T06:39:17.7523555Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7524227Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7524766Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7525222Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7525909Z npm warn EBADENGINE   package: 'google-logging-utils@2.1.0',
+2026-10-30T06:39:17.7526567Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7527246Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7527810Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7528296Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7528949Z npm warn EBADENGINE   package: '@google-cloud/logging@12.3.0',
+2026-10-30T06:39:17.7529599Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7530281Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7530823Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7531487Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7532145Z npm warn EBADENGINE   package: '@google-cloud/logging-api@0.3.0',
+2026-10-30T06:39:17.7532774Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7533439Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7533983Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7534422Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7534975Z npm warn EBADENGINE   package: 'gaxios@8.3.2',
+2026-10-30T06:39:17.7535559Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7536572Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7537123Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7537589Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7538180Z npm warn EBADENGINE   package: 'gcp-metadata@9.2.2',
+2026-10-30T06:39:17.7538779Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7539455Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7539996Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7540440Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7541217Z npm warn EBADENGINE   package: 'google-auth-library@11.3.1',
+2026-10-30T06:39:17.7541887Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7542559Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7543094Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7543560Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7544198Z npm warn EBADENGINE   package: 'google-logging-utils@2.1.0',
+2026-10-30T06:39:17.7544841Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7545493Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7546039Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7546500Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7547145Z npm warn EBADENGINE   package: '@google-cloud/paginator@7.2.0',
+2026-10-30T06:39:17.7548127Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7548802Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7549335Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7549818Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7550581Z npm warn EBADENGINE   package: '@google-cloud/projectify@6.2.1',
+2026-10-30T06:39:17.7551407Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7552090Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7552624Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7553161Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7553805Z npm warn EBADENGINE   package: '@supabase/auth-js@2.117.3',
+2026-10-30T06:39:17.7554468Z npm warn EBADENGINE   required: { node: '>=22.0.0' },
+2026-10-30T06:39:17.7555173Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7555727Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7556214Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7556832Z npm warn EBADENGINE   package: '@supabase/functions-js@2.117.3',
+2026-10-30T06:39:17.7557490Z npm warn EBADENGINE   required: { node: '>=22.0.0' },
+2026-10-30T06:39:17.7558176Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7558709Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7559175Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7559788Z npm warn EBADENGINE   package: '@supabase/postgrest-js@2.117.3',
+2026-10-30T06:39:17.7560452Z npm warn EBADENGINE   required: { node: '>=22.0.0' },
+2026-10-30T06:39:17.7561328Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7561892Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7562338Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7562964Z npm warn EBADENGINE   package: '@supabase/realtime-js@2.117.3',
+2026-10-30T06:39:17.7563622Z npm warn EBADENGINE   required: { node: '>=22.0.0' },
+2026-10-30T06:39:17.7564328Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7564864Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7565321Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7565972Z npm warn EBADENGINE   package: '@supabase/storage-js@2.117.3',
+2026-10-30T06:39:17.7566622Z npm warn EBADENGINE   required: { node: '>=22.0.0' },
+2026-10-30T06:39:17.7567278Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7567791Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7568223Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7569097Z npm warn EBADENGINE   package: '@supabase/supabase-js@2.117.3',
+2026-10-30T06:39:17.7569733Z npm warn EBADENGINE   required: { node: '>=22.0.0' },
+2026-10-30T06:39:17.7570395Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7570940Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7571583Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7572149Z npm warn EBADENGINE   package: 'cookie@2.0.1',
+2026-10-30T06:39:17.7572681Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7573358Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7573894Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7574352Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7574915Z npm warn EBADENGINE   package: 'google-gax@6.13.0',
+2026-10-30T06:39:17.7575523Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7576321Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7576864Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7577322Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7577914Z npm warn EBADENGINE   package: 'gaxios@8.3.2',
+2026-10-30T06:39:17.7578503Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7579136Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7579928Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7580417Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7581020Z npm warn EBADENGINE   package: 'gcp-metadata@9.2.2',
+2026-10-30T06:39:17.7581789Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7582441Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7582972Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7583417Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7584053Z npm warn EBADENGINE   package: 'google-auth-library@11.3.1',
+2026-10-30T06:39:17.7584690Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7585386Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7585899Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7586335Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7586959Z npm warn EBADENGINE   package: 'google-logging-utils@2.1.0',
+2026-10-30T06:39:17.7587573Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7588264Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7588788Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7589235Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7589799Z npm warn EBADENGINE   package: 'openai@7.45.1',
+2026-10-30T06:39:17.7590403Z npm warn EBADENGINE   required: { node: '>=22.0.0' },
+2026-10-30T06:39:17.7591250Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7591802Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7592232Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7592891Z npm warn EBADENGINE   package: 'proto3-json-serializer@4.1.0',
+2026-10-30T06:39:17.7593550Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7594208Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7594749Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7595217Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7595813Z npm warn EBADENGINE   package: 'retry-request@9.1.0',
+2026-10-30T06:39:17.7596399Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7597073Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7597594Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7598040Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7598633Z npm warn EBADENGINE   package: 'teeny-request@11.1.1',
+2026-10-30T06:39:17.7599244Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7599904Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7600689Z npm warn EBADENGINE }
+2026-10-30T06:39:18.9199440Z npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead
+2026-10-30T06:39:20.2675180Z 
+2026-10-30T06:39:20.2676104Z > sakafleet-backend@1.0.0 postinstall
+2026-10-30T06:39:20.2676753Z > node scripts/notify_git_push.js || true
+2026-10-30T06:39:20.2677055Z 
+2026-10-30T06:39:21.0115702Z ✅ WhatsApp deployment alert dispatched to ***. Message ID: wamid.HBgM***FQIAERgSNTM3Q0FGMEI0Rjc5NkU1NzkxAA==
+2026-10-30T06:39:21.0116913Z [deploy] Email deployment alert skipped - quota-protection policy (v1.14.1).
+2026-10-30T06:39:21.0719241Z 
+2026-10-30T06:39:21.0720206Z added 183 packages, and audited 184 packages in 4s
+2026-10-30T06:39:21.0720465Z 
+2026-10-30T06:39:21.0720631Z 36 packages are looking for funding
+2026-10-30T06:39:21.0720916Z   run `npm fund` for details
+2026-10-30T06:39:21.0729543Z 
+2026-10-30T06:39:21.0729720Z found 0 vulnerabilities

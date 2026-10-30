@@ -1,0 +1,32 @@
+﻿2026-10-30T06:39:13.2143480Z ##[group]Run actions/setup-node@v4
+2026-10-30T06:39:13.2144540Z with:
+2026-10-30T06:39:13.2145326Z   node-version: 20
+2026-10-30T06:39:13.2146170Z   always-auth: false
+2026-10-30T06:39:13.2147041Z   check-latest: false
+2026-10-30T06:39:13.2155597Z   token: ***
+2026-10-30T06:39:13.2156400Z env:
+2026-10-30T06:39:13.2157420Z   SUPABASE_URL: ***
+2026-10-30T06:39:13.2161997Z   SUPABASE_SERVICE_KEY: ***
+2026-10-30T06:39:13.2163009Z   SUPERADMIN_PHONE: ***
+2026-10-30T06:39:13.2163979Z   SUPERADMIN_EMAIL: ***
+2026-10-30T06:39:13.2164952Z   META_PHONE_NUMBER_ID: ***
+2026-10-30T06:39:13.2168967Z   META_WHATSAPP_TOKEN: ***
+2026-10-30T06:39:13.2170103Z   RESEND_API_KEY: ***
+
+2026-10-30T06:39:13.2171238Z   DEEPSEEK_API_KEY: ***
+2026-10-30T06:39:13.2172153Z   AUDIT_RUN_ID: 2026-10-30
+2026-10-30T06:39:13.2173081Z   MODIFY_FEEDBACK: 
+2026-10-30T06:39:13.2173939Z   CLUSTER_SIGNATURE: 
+2026-10-30T06:39:13.2174802Z ##[endgroup]
+2026-10-30T06:39:13.3502881Z Attempting to download 20...
+2026-10-30T06:39:13.3622393Z (node:2170) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-30T06:39:13.3625806Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-30T06:39:14.3050976Z Acquiring 20.20.2 - x64 from https://github.com/actions/node-versions/releases/download/20.20.2-23521894959/node-20.20.2-linux-x64.tar.gz
+2026-10-30T06:39:14.7744560Z Extracting ...
+2026-10-30T06:39:14.7854431Z [command]/usr/bin/tar xz --strip 1 --warning=no-unknown-keyword --overwrite -C /home/runner/work/_temp/5438bda8-bb40-44cc-a05c-72988fa8c726 -f /home/runner/work/_temp/3edc4083-dbb1-40d0-94b3-c52eb8c64d29
+2026-10-30T06:39:15.6372293Z Adding to the cache ...
+2026-10-30T06:39:17.2771355Z ##[group]Environment details
+2026-10-30T06:39:17.4608556Z node: v20.20.2
+2026-10-30T06:39:17.4609097Z npm: 10.8.2
+2026-10-30T06:39:17.4609384Z yarn: 1.22.22
+2026-10-30T06:39:17.4611884Z ##[endgroup]

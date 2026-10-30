@@ -1,0 +1,439 @@
+﻿2026-10-30T06:39:11.1038813Z Current runner version: '2.338.0'
+2026-10-30T06:39:11.1061311Z ##[group]Runner Image Provisioner
+2026-10-30T06:39:11.1062201Z Hosted Compute Agent
+2026-10-30T06:39:11.1062824Z Version: 20261021.618
+2026-10-30T06:39:11.1063481Z Commit: 21505ad2541d5be6135ed84fc33697146cf75b8e
+2026-10-30T06:39:11.1064237Z Build Date: 2026-10-21T00:45:21Z
+2026-10-30T06:39:11.1064911Z Worker ID: {a24383d8-bf8c-49be-bc76-f334d20de691}
+2026-10-30T06:39:11.1065890Z Region: westus3
+2026-10-30T06:39:11.1066479Z Cloud: Azure
+2026-10-30T06:39:11.1066983Z ##[endgroup]
+2026-10-30T06:39:11.1068316Z ##[group]Operating System
+2026-10-30T06:39:11.1068902Z Ubuntu
+2026-10-30T06:39:11.1069499Z 24.04.5
+2026-10-30T06:39:11.1070039Z LTS
+2026-10-30T06:39:11.1070601Z ##[endgroup]
+2026-10-30T06:39:11.1071439Z ##[group]Runner Image
+2026-10-30T06:39:11.1072135Z Image: ubuntu-24.04
+2026-10-30T06:39:11.1072697Z Version: 20261025.353.1
+2026-10-30T06:39:11.1073939Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261025.353/images/ubuntu/Ubuntu2404-Readme.md
+2026-10-30T06:39:11.1075212Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261025.353
+2026-10-30T06:39:11.1076158Z ##[endgroup]
+2026-10-30T06:39:11.1077220Z ##[group]GITHUB_TOKEN Permissions
+2026-10-30T06:39:11.1079125Z Contents: write
+2026-10-30T06:39:11.1079770Z Metadata: read
+2026-10-30T06:39:11.1080452Z ##[endgroup]
+2026-10-30T06:39:11.1082495Z Secret source: Actions
+2026-10-30T06:39:11.1083559Z Cache mode: write
+2026-10-30T06:39:11.1084488Z Prepare workflow directory
+2026-10-30T06:39:11.1524236Z Prepare all required actions
+2026-10-30T06:39:11.1563209Z Getting action download info
+2026-10-30T06:39:11.4391581Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-10-30T06:39:11.5378513Z Download action repository 'actions/setup-node@v4' (SHA:49933ea5288caeca8642d1e84afbd3f7d6820020)
+2026-10-30T06:39:11.6527536Z Download action repository 'actions/upload-artifact@v4' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+2026-10-30T06:39:11.9330014Z Complete job name: plan
+2026-10-30T06:39:11.9989360Z ##[group]Run actions/checkout@v4
+2026-10-30T06:39:11.9990038Z with:
+2026-10-30T06:39:11.9990416Z   fetch-depth: 0
+2026-10-30T06:39:11.9990841Z   repository: saka360ke-lang/Saka-fleet
+2026-10-30T06:39:11.9994356Z   token: ***
+2026-10-30T06:39:11.9994755Z   ssh-strict: true
+2026-10-30T06:39:11.9995139Z   ssh-user: git
+2026-10-30T06:39:11.9995547Z   persist-credentials: true
+2026-10-30T06:39:11.9995983Z   clean: true
+2026-10-30T06:39:11.9996391Z   sparse-checkout-cone-mode: true
+2026-10-30T06:39:11.9996847Z   fetch-tags: false
+2026-10-30T06:39:11.9997249Z   show-progress: true
+2026-10-30T06:39:11.9997647Z   lfs: false
+2026-10-30T06:39:11.9998015Z   submodules: false
+2026-10-30T06:39:11.9998416Z   set-safe-directory: true
+2026-10-30T06:39:11.9998855Z   allow-unsafe-pr-checkout: false
+2026-10-30T06:39:11.9999431Z env:
+2026-10-30T06:39:11.9999908Z   SUPABASE_URL: ***
+2026-10-30T06:39:12.0001816Z   SUPABASE_SERVICE_KEY: ***
+2026-10-30T06:39:12.0002330Z   SUPERADMIN_PHONE: ***
+2026-10-30T06:39:12.0002816Z   SUPERADMIN_EMAIL: ***
+2026-10-30T06:39:12.0003255Z   META_PHONE_NUMBER_ID: ***
+2026-10-30T06:39:12.0004884Z   META_WHATSAPP_TOKEN: ***
+2026-10-30T06:39:12.0005387Z   RESEND_API_KEY: ***
+
+2026-10-30T06:39:12.0005880Z   DEEPSEEK_API_KEY: ***
+2026-10-30T06:39:12.0006286Z   AUDIT_RUN_ID: 2026-10-30
+2026-10-30T06:39:12.0006702Z   MODIFY_FEEDBACK: 
+2026-10-30T06:39:12.0007096Z   CLUSTER_SIGNATURE: 
+2026-10-30T06:39:12.0007482Z ##[endgroup]
+2026-10-30T06:39:12.1918210Z Syncing repository: saka360ke-lang/Saka-fleet
+2026-10-30T06:39:12.1919757Z ##[group]Getting Git version info
+2026-10-30T06:39:12.1920377Z Working directory is '/home/runner/work/Saka-fleet/Saka-fleet'
+2026-10-30T06:39:12.1921544Z [command]/usr/bin/git version
+2026-10-30T06:39:12.2127694Z git version 2.56.0
+2026-10-30T06:39:12.2145832Z ##[endgroup]
+2026-10-30T06:39:12.2159207Z Temporarily overriding HOME='/home/runner/work/_temp/179dbd4d-eb8b-40a1-95fd-36c79182ec25' before making global git config changes
+2026-10-30T06:39:12.2160772Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-30T06:39:12.2164614Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/Saka-fleet/Saka-fleet
+2026-10-30T06:39:12.2206859Z Deleting the contents of '/home/runner/work/Saka-fleet/Saka-fleet'
+2026-10-30T06:39:12.2209949Z ##[group]Initializing the repository
+2026-10-30T06:39:12.2214245Z [command]/usr/bin/git init /home/runner/work/Saka-fleet/Saka-fleet
+2026-10-30T06:39:12.2293181Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-10-30T06:39:12.2294632Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-10-30T06:39:12.2296069Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-10-30T06:39:12.2297127Z hint: call:
+2026-10-30T06:39:12.2297866Z hint:
+2026-10-30T06:39:12.2298563Z hint: 	git config --global init.defaultBranch <name>
+2026-10-30T06:39:12.2299251Z hint:
+2026-10-30T06:39:12.2299796Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-10-30T06:39:12.2300729Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-10-30T06:39:12.2301761Z hint:
+2026-10-30T06:39:12.2302133Z hint: 	git branch -m <name>
+2026-10-30T06:39:12.2302733Z hint:
+2026-10-30T06:39:12.2303468Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-10-30T06:39:12.2304690Z Initialized empty Git repository in /home/runner/work/Saka-fleet/Saka-fleet/.git/
+2026-10-30T06:39:12.2311331Z [command]/usr/bin/git remote add origin https://github.com/saka360ke-lang/Saka-fleet
+2026-10-30T06:39:12.2352481Z ##[endgroup]
+2026-10-30T06:39:12.2353274Z ##[group]Disabling automatic garbage collection
+2026-10-30T06:39:12.2356505Z [command]/usr/bin/git config --local gc.auto 0
+2026-10-30T06:39:12.2386196Z ##[endgroup]
+2026-10-30T06:39:12.2386979Z ##[group]Setting up auth
+2026-10-30T06:39:12.2393392Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-30T06:39:12.2425690Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-30T06:39:12.2760761Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-30T06:39:12.2802174Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-30T06:39:12.3015095Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-30T06:39:12.3052339Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-30T06:39:12.3258999Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-10-30T06:39:12.3302814Z ##[endgroup]
+2026-10-30T06:39:12.3303562Z ##[group]Fetching the repository
+2026-10-30T06:39:12.3374435Z [command]/usr/bin/git -c protocol.version=2 fetch --prune --no-recurse-submodules origin +refs/heads/*:refs/remotes/origin/* +refs/tags/*:refs/tags/*
+2026-10-30T06:39:13.1227722Z From https://github.com/saka360ke-lang/Saka-fleet
+2026-10-30T06:39:13.1228752Z  * [new branch]      cline/2r7fhprv -> origin/cline/2r7fhprv
+2026-10-30T06:39:13.1229704Z  * [new branch]      main           -> origin/main
+2026-10-30T06:39:13.1238381Z [command]/usr/bin/git branch --list --remote origin/main
+2026-10-30T06:39:13.1271991Z   origin/main
+2026-10-30T06:39:13.1282405Z [command]/usr/bin/git rev-parse refs/remotes/origin/main
+2026-10-30T06:39:13.1319440Z 1b3e4618e48cc37b023e0d64ae5719ddefd25c58
+2026-10-30T06:39:13.1322982Z ##[endgroup]
+2026-10-30T06:39:13.1324022Z ##[group]Determining the checkout info
+2026-10-30T06:39:13.1325131Z ##[endgroup]
+2026-10-30T06:39:13.1331551Z [command]/usr/bin/git sparse-checkout disable
+2026-10-30T06:39:13.1501396Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-10-30T06:39:13.1536821Z ##[group]Checking out the ref
+2026-10-30T06:39:13.1539383Z [command]/usr/bin/git checkout --progress --force -B main refs/remotes/origin/main
+2026-10-30T06:39:13.1739056Z Switched to a new branch 'main'
+2026-10-30T06:39:13.1743077Z branch 'main' set up to track 'origin/main'.
+2026-10-30T06:39:13.1753840Z ##[endgroup]
+2026-10-30T06:39:13.1798519Z [command]/usr/bin/git log -1 --format=%H
+2026-10-30T06:39:13.1827946Z 1b3e4618e48cc37b023e0d64ae5719ddefd25c58
+2026-10-30T06:39:13.2143511Z ##[group]Run actions/setup-node@v4
+2026-10-30T06:39:13.2144546Z with:
+2026-10-30T06:39:13.2145331Z   node-version: 20
+2026-10-30T06:39:13.2146176Z   always-auth: false
+2026-10-30T06:39:13.2147046Z   check-latest: false
+2026-10-30T06:39:13.2155602Z   token: ***
+2026-10-30T06:39:13.2156404Z env:
+2026-10-30T06:39:13.2157422Z   SUPABASE_URL: ***
+2026-10-30T06:39:13.2162001Z   SUPABASE_SERVICE_KEY: ***
+2026-10-30T06:39:13.2163012Z   SUPERADMIN_PHONE: ***
+2026-10-30T06:39:13.2163989Z   SUPERADMIN_EMAIL: ***
+2026-10-30T06:39:13.2164956Z   META_PHONE_NUMBER_ID: ***
+2026-10-30T06:39:13.2168970Z   META_WHATSAPP_TOKEN: ***
+2026-10-30T06:39:13.2170108Z   RESEND_API_KEY: ***
+
+2026-10-30T06:39:13.2171242Z   DEEPSEEK_API_KEY: ***
+2026-10-30T06:39:13.2172158Z   AUDIT_RUN_ID: 2026-10-30
+2026-10-30T06:39:13.2173086Z   MODIFY_FEEDBACK: 
+2026-10-30T06:39:13.2173943Z   CLUSTER_SIGNATURE: 
+2026-10-30T06:39:13.2174807Z ##[endgroup]
+2026-10-30T06:39:13.3502963Z Attempting to download 20...
+2026-10-30T06:39:13.3622545Z (node:2170) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-30T06:39:13.3625825Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-30T06:39:14.3051029Z Acquiring 20.20.2 - x64 from https://github.com/actions/node-versions/releases/download/20.20.2-23521894959/node-20.20.2-linux-x64.tar.gz
+2026-10-30T06:39:14.7744623Z Extracting ...
+2026-10-30T06:39:14.7854482Z [command]/usr/bin/tar xz --strip 1 --warning=no-unknown-keyword --overwrite -C /home/runner/work/_temp/5438bda8-bb40-44cc-a05c-72988fa8c726 -f /home/runner/work/_temp/3edc4083-dbb1-40d0-94b3-c52eb8c64d29
+2026-10-30T06:39:15.6372481Z Adding to the cache ...
+2026-10-30T06:39:17.2771524Z ##[group]Environment details
+2026-10-30T06:39:17.4608640Z node: v20.20.2
+2026-10-30T06:39:17.4609103Z npm: 10.8.2
+2026-10-30T06:39:17.4609390Z yarn: 1.22.22
+2026-10-30T06:39:17.4611915Z ##[endgroup]
+2026-10-30T06:39:17.4788341Z ##[group]Run npm ci
+2026-10-30T06:39:17.4788702Z [36;1mnpm ci[0m
+2026-10-30T06:39:17.4811219Z shell: /usr/bin/bash -e {0}
+2026-10-30T06:39:17.4811524Z env:
+2026-10-30T06:39:17.4811967Z   SUPABASE_URL: ***
+2026-10-30T06:39:17.4813156Z   SUPABASE_SERVICE_KEY: ***
+2026-10-30T06:39:17.4813432Z   SUPERADMIN_PHONE: ***
+2026-10-30T06:39:17.4813686Z   SUPERADMIN_EMAIL: ***
+2026-10-30T06:39:17.4813949Z   META_PHONE_NUMBER_ID: ***
+2026-10-30T06:39:17.4814959Z   META_WHATSAPP_TOKEN: ***
+2026-10-30T06:39:17.4815261Z   RESEND_API_KEY: ***
+
+2026-10-30T06:39:17.4815538Z   DEEPSEEK_API_KEY: ***
+2026-10-30T06:39:17.4815771Z   AUDIT_RUN_ID: 2026-10-30
+2026-10-30T06:39:17.4816003Z   MODIFY_FEEDBACK: 
+2026-10-30T06:39:17.4816224Z   CLUSTER_SIGNATURE: 
+2026-10-30T06:39:17.4816443Z ##[endgroup]
+2026-10-30T06:39:17.7509078Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7509952Z npm warn EBADENGINE   package: '@google-cloud/common@8.2.2',
+2026-10-30T06:39:17.7510763Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7511651Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7512280Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7512817Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7513489Z npm warn EBADENGINE   package: '@google-cloud/promisify@6.2.1',
+2026-10-30T06:39:17.7514150Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7515242Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7515815Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7516279Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7516854Z npm warn EBADENGINE   package: 'gaxios@8.3.2',
+2026-10-30T06:39:17.7517466Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7518136Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7518664Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7519144Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7519760Z npm warn EBADENGINE   package: 'gcp-metadata@9.2.2',
+2026-10-30T06:39:17.7520388Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7521237Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7521815Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7522270Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7522892Z npm warn EBADENGINE   package: 'google-auth-library@11.3.1',
+2026-10-30T06:39:17.7523562Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7524232Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7524772Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7525227Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7525917Z npm warn EBADENGINE   package: 'google-logging-utils@2.1.0',
+2026-10-30T06:39:17.7526574Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7527264Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7527832Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7528302Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7528957Z npm warn EBADENGINE   package: '@google-cloud/logging@12.3.0',
+2026-10-30T06:39:17.7529607Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7530287Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7530829Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7531495Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7532152Z npm warn EBADENGINE   package: '@google-cloud/logging-api@0.3.0',
+2026-10-30T06:39:17.7532779Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7533447Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7533989Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7534427Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7534982Z npm warn EBADENGINE   package: 'gaxios@8.3.2',
+2026-10-30T06:39:17.7535860Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7536581Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7537129Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7537596Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7538185Z npm warn EBADENGINE   package: 'gcp-metadata@9.2.2',
+2026-10-30T06:39:17.7538786Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7539463Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7540002Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7540448Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7541227Z npm warn EBADENGINE   package: 'google-auth-library@11.3.1',
+2026-10-30T06:39:17.7541895Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7542565Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7543099Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7543568Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7544220Z npm warn EBADENGINE   package: 'google-logging-utils@2.1.0',
+2026-10-30T06:39:17.7544846Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7545500Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7546045Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7546507Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7547151Z npm warn EBADENGINE   package: '@google-cloud/paginator@7.2.0',
+2026-10-30T06:39:17.7548133Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7548807Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7549340Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7549824Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7550589Z npm warn EBADENGINE   package: '@google-cloud/projectify@6.2.1',
+2026-10-30T06:39:17.7551415Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7552095Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7552647Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7553168Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7553814Z npm warn EBADENGINE   package: '@supabase/auth-js@2.117.3',
+2026-10-30T06:39:17.7554475Z npm warn EBADENGINE   required: { node: '>=22.0.0' },
+2026-10-30T06:39:17.7555182Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7555734Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7556220Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7556838Z npm warn EBADENGINE   package: '@supabase/functions-js@2.117.3',
+2026-10-30T06:39:17.7557495Z npm warn EBADENGINE   required: { node: '>=22.0.0' },
+2026-10-30T06:39:17.7558181Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7558714Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7559182Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7559794Z npm warn EBADENGINE   package: '@supabase/postgrest-js@2.117.3',
+2026-10-30T06:39:17.7560473Z npm warn EBADENGINE   required: { node: '>=22.0.0' },
+2026-10-30T06:39:17.7561338Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7561899Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7562343Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7562969Z npm warn EBADENGINE   package: '@supabase/realtime-js@2.117.3',
+2026-10-30T06:39:17.7563629Z npm warn EBADENGINE   required: { node: '>=22.0.0' },
+2026-10-30T06:39:17.7564334Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7564869Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7565327Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7565980Z npm warn EBADENGINE   package: '@supabase/storage-js@2.117.3',
+2026-10-30T06:39:17.7566626Z npm warn EBADENGINE   required: { node: '>=22.0.0' },
+2026-10-30T06:39:17.7567283Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7567795Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7568449Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7569102Z npm warn EBADENGINE   package: '@supabase/supabase-js@2.117.3',
+2026-10-30T06:39:17.7569738Z npm warn EBADENGINE   required: { node: '>=22.0.0' },
+2026-10-30T06:39:17.7570399Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7570945Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7571590Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7572157Z npm warn EBADENGINE   package: 'cookie@2.0.1',
+2026-10-30T06:39:17.7572686Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7573363Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7573898Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7574357Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7574921Z npm warn EBADENGINE   package: 'google-gax@6.13.0',
+2026-10-30T06:39:17.7575528Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7576344Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7576870Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7577328Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7577922Z npm warn EBADENGINE   package: 'gaxios@8.3.2',
+2026-10-30T06:39:17.7578510Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7579141Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7579934Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7580421Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7581024Z npm warn EBADENGINE   package: 'gcp-metadata@9.2.2',
+2026-10-30T06:39:17.7581800Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7582447Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7582977Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7583421Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7584058Z npm warn EBADENGINE   package: 'google-auth-library@11.3.1',
+2026-10-30T06:39:17.7584705Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7585390Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7585904Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7586339Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7586964Z npm warn EBADENGINE   package: 'google-logging-utils@2.1.0',
+2026-10-30T06:39:17.7587589Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7588275Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7588794Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7589242Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7589804Z npm warn EBADENGINE   package: 'openai@7.45.1',
+2026-10-30T06:39:17.7590407Z npm warn EBADENGINE   required: { node: '>=22.0.0' },
+2026-10-30T06:39:17.7591255Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7591806Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7592252Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7592897Z npm warn EBADENGINE   package: 'proto3-json-serializer@4.1.0',
+2026-10-30T06:39:17.7593558Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7594214Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7594757Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7595222Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7595819Z npm warn EBADENGINE   package: 'retry-request@9.1.0',
+2026-10-30T06:39:17.7596405Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7597077Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7597598Z npm warn EBADENGINE }
+2026-10-30T06:39:17.7598043Z npm warn EBADENGINE Unsupported engine {
+2026-10-30T06:39:17.7598638Z npm warn EBADENGINE   package: 'teeny-request@11.1.1',
+2026-10-30T06:39:17.7599249Z npm warn EBADENGINE   required: { node: '>=22' },
+2026-10-30T06:39:17.7600129Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+2026-10-30T06:39:17.7600696Z npm warn EBADENGINE }
+2026-10-30T06:39:18.9199492Z npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead
+2026-10-30T06:39:20.2675242Z 
+2026-10-30T06:39:20.2676110Z > sakafleet-backend@1.0.0 postinstall
+2026-10-30T06:39:20.2676758Z > node scripts/notify_git_push.js || true
+2026-10-30T06:39:20.2677058Z 
+2026-10-30T06:39:21.0115752Z ✅ WhatsApp deployment alert dispatched to ***. Message ID: wamid.HBgM***FQIAERgSNTM3Q0FGMEI0Rjc5NkU1NzkxAA==
+2026-10-30T06:39:21.0116946Z [deploy] Email deployment alert skipped - quota-protection policy (v1.14.1).
+2026-10-30T06:39:21.0719295Z 
+2026-10-30T06:39:21.0720209Z added 183 packages, and audited 184 packages in 4s
+2026-10-30T06:39:21.0720471Z 
+2026-10-30T06:39:21.0720634Z 36 packages are looking for funding
+2026-10-30T06:39:21.0720919Z   run `npm fund` for details
+2026-10-30T06:39:21.0729552Z 
+2026-10-30T06:39:21.0729723Z found 0 vulnerabilities
+2026-10-30T06:39:21.0923669Z ##[group]Run if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then
+2026-10-30T06:39:21.0924379Z [36;1mif [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then[0m
+2026-10-30T06:39:21.0925348Z [36;1m  echo "::error::Missing SUPABASE_URL / SUPABASE_SERVICE_KEY repository secrets. Add them under Settings > Secrets and variables > Actions."[0m
+2026-10-30T06:39:21.0926167Z [36;1m  exit 1[0m
+2026-10-30T06:39:21.0926450Z [36;1mfi[0m
+2026-10-30T06:39:21.0946092Z shell: /usr/bin/bash -e {0}
+2026-10-30T06:39:21.0946324Z env:
+2026-10-30T06:39:21.0946715Z   SUPABASE_URL: ***
+2026-10-30T06:39:21.0947912Z   SUPABASE_SERVICE_KEY: ***
+2026-10-30T06:39:21.0948167Z   SUPERADMIN_PHONE: ***
+2026-10-30T06:39:21.0948427Z   SUPERADMIN_EMAIL: ***
+2026-10-30T06:39:21.0948646Z   META_PHONE_NUMBER_ID: ***
+2026-10-30T06:39:21.0949601Z   META_WHATSAPP_TOKEN: ***
+2026-10-30T06:39:21.0949872Z   RESEND_API_KEY: ***
+
+2026-10-30T06:39:21.0950126Z   DEEPSEEK_API_KEY: ***
+2026-10-30T06:39:21.0950375Z   AUDIT_RUN_ID: 2026-10-30
+2026-10-30T06:39:21.0950581Z   MODIFY_FEEDBACK: 
+2026-10-30T06:39:21.0950778Z   CLUSTER_SIGNATURE: 
+2026-10-30T06:39:21.0950971Z ##[endgroup]
+2026-10-30T06:39:21.1021301Z ##[group]Run mkdir -p remediation/work-orders
+2026-10-30T06:39:21.1021636Z [36;1mmkdir -p remediation/work-orders[0m
+2026-10-30T06:39:21.1022135Z [36;1mnode scripts/remediation_ci.js fetch-audit "$AUDIT_RUN_ID" "$MODIFY_FEEDBACK" "$CLUSTER_SIGNATURE" > remediation/audit-context.json[0m
+2026-10-30T06:39:21.1022653Z [36;1mtest -s remediation/audit-context.json[0m
+2026-10-30T06:39:21.1039231Z shell: /usr/bin/bash -e {0}
+2026-10-30T06:39:21.1039457Z env:
+2026-10-30T06:39:21.1039841Z   SUPABASE_URL: ***
+2026-10-30T06:39:21.1041025Z   SUPABASE_SERVICE_KEY: ***
+2026-10-30T06:39:21.1041457Z   SUPERADMIN_PHONE: ***
+2026-10-30T06:39:21.1041696Z   SUPERADMIN_EMAIL: ***
+2026-10-30T06:39:21.1041915Z   META_PHONE_NUMBER_ID: ***
+2026-10-30T06:39:21.1042864Z   META_WHATSAPP_TOKEN: ***
+2026-10-30T06:39:21.1043142Z   RESEND_API_KEY: ***
+
+2026-10-30T06:39:21.1043393Z   DEEPSEEK_API_KEY: ***
+2026-10-30T06:39:21.1043601Z   AUDIT_RUN_ID: 2026-10-30
+2026-10-30T06:39:21.1043840Z   MODIFY_FEEDBACK: 
+2026-10-30T06:39:21.1044030Z   CLUSTER_SIGNATURE: 
+2026-10-30T06:39:21.1044231Z ##[endgroup]
+2026-10-30T06:39:21.2747551Z ⚠️  Node.js 20 and below are deprecated and will no longer be supported in future versions of @supabase/supabase-js. Please upgrade to Node.js 22 or later. For more information, visit: https://github.com/orgs/supabase/discussions/45715
+2026-10-30T06:39:21.4816862Z [remediation_ci] Fatal: Node.js detected but native WebSocket not found.
+2026-10-30T06:39:21.4817208Z 
+2026-10-30T06:39:21.4817770Z Suggested solution: Ensure you are running Node.js 22+ or provide a WebSocket implementation via the transport option.
+2026-10-30T06:39:21.4898917Z ##[error]Process completed with exit code 1.
+2026-10-30T06:39:21.4992314Z ##[group]Run actions/upload-artifact@v4
+2026-10-30T06:39:21.4992585Z with:
+2026-10-30T06:39:21.4992813Z   name: remediation-plan-41015318759
+2026-10-30T06:39:21.4993238Z   path: remediation/audit-context.json
+remediation/work-orders/plan.json
+remediation/cline-plan.log
+
+2026-10-30T06:39:21.4993652Z   if-no-files-found: warn
+2026-10-30T06:39:21.4993888Z   compression-level: 6
+2026-10-30T06:39:21.4994104Z   overwrite: false
+2026-10-30T06:39:21.4994314Z   include-hidden-files: false
+2026-10-30T06:39:21.4994548Z env:
+2026-10-30T06:39:21.4995033Z   SUPABASE_URL: ***
+2026-10-30T06:39:21.4996188Z   SUPABASE_SERVICE_KEY: ***
+2026-10-30T06:39:21.4996446Z   SUPERADMIN_PHONE: ***
+2026-10-30T06:39:21.4996698Z   SUPERADMIN_EMAIL: ***
+2026-10-30T06:39:21.4996934Z   META_PHONE_NUMBER_ID: ***
+2026-10-30T06:39:21.4998320Z   META_WHATSAPP_TOKEN: ***
+2026-10-30T06:39:21.4998693Z   RESEND_API_KEY: ***
+
+2026-10-30T06:39:21.4998995Z   DEEPSEEK_API_KEY: ***
+2026-10-30T06:39:21.4999268Z   AUDIT_RUN_ID: 2026-10-30
+2026-10-30T06:39:21.4999505Z   MODIFY_FEEDBACK: 
+2026-10-30T06:39:21.4999723Z   CLUSTER_SIGNATURE: 
+2026-10-30T06:39:21.4999934Z ##[endgroup]
+2026-10-30T06:39:21.6369433Z (node:2255) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-30T06:39:21.6370539Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-30T06:39:21.6420282Z Multiple search paths detected. Calculating the least common ancestor of all paths
+2026-10-30T06:39:21.6422721Z The least common ancestor is /home/runner/work/Saka-fleet/Saka-fleet/remediation. This will be the root directory of the artifact
+2026-10-30T06:39:21.6423971Z With the provided path, there will be 1 file uploaded
+2026-10-30T06:39:21.6426719Z Artifact name is valid!
+2026-10-30T06:39:21.6432679Z Root directory input is valid!
+2026-10-30T06:39:21.9938586Z Beginning upload of artifact content to blob storage
+2026-10-30T06:39:22.0100162Z (node:2255) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-10-30T06:39:22.2082814Z Uploaded bytes 152
+2026-10-30T06:39:22.2652211Z Finished uploading artifact content to blob storage!
+2026-10-30T06:39:22.2653153Z SHA256 digest of uploaded artifact zip is 56ab0f5e784570e02c7b3a7c3e9bb3f911ef7d0cb11d2a71207483890292e359
+2026-10-30T06:39:22.2653721Z Finalizing artifact upload
+2026-10-30T06:39:22.7536446Z Artifact remediation-plan-41015318759.zip successfully finalized. Artifact ID 12959570989
+2026-10-30T06:39:22.7537803Z Artifact remediation-plan-41015318759 has been successfully uploaded! Final size is 152 bytes. Artifact ID is 12959570989
+2026-10-30T06:39:22.7542809Z Artifact download URL: https://github.com/saka360ke-lang/Saka-fleet/actions/runs/41015318759/artifacts/12959570989
+2026-10-30T06:39:22.7719880Z Post job cleanup.
+2026-10-30T06:39:22.8449821Z [command]/usr/bin/git version
+2026-10-30T06:39:22.8489615Z git version 2.56.0
+2026-10-30T06:39:22.8521382Z Temporarily overriding HOME='/home/runner/work/_temp/3b0766dc-f327-4cd9-bd7a-22403214312d' before making global git config changes
+2026-10-30T06:39:22.8522530Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-30T06:39:22.8525670Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/Saka-fleet/Saka-fleet
+2026-10-30T06:39:22.8564089Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-30T06:39:22.8597824Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-30T06:39:22.8826118Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-30T06:39:22.8852004Z http.https://github.com/.extraheader
+2026-10-30T06:39:22.8862797Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-10-30T06:39:22.8900257Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-30T06:39:22.9131617Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-30T06:39:22.9173242Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-30T06:39:22.9519177Z Cleaning up orphan processes
+2026-10-30T06:39:22.9840312Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-node@v4, actions/upload-artifact@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

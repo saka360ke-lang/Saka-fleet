@@ -1,0 +1,24 @@
+﻿2026-10-30T06:39:21.1021291Z ##[group]Run mkdir -p remediation/work-orders
+2026-10-30T06:39:21.1021633Z [36;1mmkdir -p remediation/work-orders[0m
+2026-10-30T06:39:21.1022132Z [36;1mnode scripts/remediation_ci.js fetch-audit "$AUDIT_RUN_ID" "$MODIFY_FEEDBACK" "$CLUSTER_SIGNATURE" > remediation/audit-context.json[0m
+2026-10-30T06:39:21.1022650Z [36;1mtest -s remediation/audit-context.json[0m
+2026-10-30T06:39:21.1039225Z shell: /usr/bin/bash -e {0}
+2026-10-30T06:39:21.1039455Z env:
+2026-10-30T06:39:21.1039839Z   SUPABASE_URL: ***
+2026-10-30T06:39:21.1041023Z   SUPABASE_SERVICE_KEY: ***
+2026-10-30T06:39:21.1041456Z   SUPERADMIN_PHONE: ***
+2026-10-30T06:39:21.1041695Z   SUPERADMIN_EMAIL: ***
+2026-10-30T06:39:21.1041913Z   META_PHONE_NUMBER_ID: ***
+2026-10-30T06:39:21.1042862Z   META_WHATSAPP_TOKEN: ***
+2026-10-30T06:39:21.1043139Z   RESEND_API_KEY: ***
+
+2026-10-30T06:39:21.1043391Z   DEEPSEEK_API_KEY: ***
+2026-10-30T06:39:21.1043600Z   AUDIT_RUN_ID: 2026-10-30
+2026-10-30T06:39:21.1043806Z   MODIFY_FEEDBACK: 
+2026-10-30T06:39:21.1044028Z   CLUSTER_SIGNATURE: 
+2026-10-30T06:39:21.1044229Z ##[endgroup]
+2026-10-30T06:39:21.2747505Z ⚠️  Node.js 20 and below are deprecated and will no longer be supported in future versions of @supabase/supabase-js. Please upgrade to Node.js 22 or later. For more information, visit: https://github.com/orgs/supabase/discussions/45715
+2026-10-30T06:39:21.4816817Z [remediation_ci] Fatal: Node.js detected but native WebSocket not found.
+2026-10-30T06:39:21.4817202Z 
+2026-10-30T06:39:21.4817765Z Suggested solution: Ensure you are running Node.js 22+ or provide a WebSocket implementation via the transport option.
+2026-10-30T06:39:21.4898897Z ##[error]Process completed with exit code 1.
