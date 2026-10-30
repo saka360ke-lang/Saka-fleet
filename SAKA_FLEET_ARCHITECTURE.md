@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.18.1  
+**Version:** 1.19.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -710,7 +710,7 @@ Every stateful test or check MUST clear the data it created from the database af
 - `scripts/run_tests.js` (exposed as `npm test`) runs the targeted suite(s) and always performs a final cleanup sweep. `npm run test:cleanup` clears test data without running tests.
 - `test_quiz_flow.js` — stateless suite for the one-piece-at-a-time quiz engine, multi-field fast-forward, confirmation gate, corrections, Cancel/Restart, quiz↔conversation arbitration, and audit regressions (reminder-vs-intent priority, mid-quiz flow switching, bare "No") — 41 assertions.
 - `test_concurrency.js` — stateless suite for per-phone serialization, global concurrency cap, retry/backoff, dead-letter rejection and graceful drain (8 assertions).
-- `test_ocr_flow.js` — stateless OCR suite: Meta media download, Vision parsing, size/type guards, receipt hint extraction and quiz prefill (20 assertions).
+- `test_ocr_flow.js` — stateless OCR suite: Meta media download, Vision parsing, size/type guards, document classification, rich hints (receipt/logbook/insurance/licence), receipt-vault replies and quiz prefill (38 assertions).
 - `test_date_parser.js` — stateless global date suite: ISO, country-resolved DD/MM vs MM/DD, ordinals, natural language, Nairobi normalization and quiz-field integration (24 assertions).
 - `test_sentinel_recovery.js` — stateless Sentinel stall suite with mocked Supabase + Graph API: nudge dispatch, recovery counter, rate limit, nudge cap and idle-session exclusion (15 assertions).
 - `test_maintenance_reminders.js` — stateless maintenance reminder suite with an in-memory Supabase mock: metric/imperial/operating-hours parsing, canonical conversion, explicit remaining tracking, exactly-once tier dispatch (75/25/5/due/overdue), odometer + hours monitoring, sweep aggregation and delivery guards (44 assertions).
@@ -800,7 +800,7 @@ Saka Fleet serves a **global audience**. Every feature, quiz flow and AI prompt 
 
 ---
 
-## 24. OCR Flow (v1.7.4)
+## 24. OCR Flow (v1.7.4 — extended by §49 Receipt Intelligence in v1.19.0)
 
 ### 24.1 Pipeline
 1. The webhook detects `messageObj.image` or `messageObj.document`, capturing `id`, `caption` and `mime_type` (previously image messages were silently ignored).
@@ -825,7 +825,7 @@ Saka Fleet serves a **global audience**. Every feature, quiz flow and AI prompt 
 - Missing key, quota errors, unsupported types (PDF in v1) or oversized media never break the turn: Saka AI apologises and asks for a clearer photo or typed details.
 - OCR failures are warnings only; no database write occurs.
 - Media messages flow through the same per-phone queue, dedupe and durable session store as text.
-- Test coverage: `test_ocr_flow.js` (20 stateless assertions — Meta download, Vision parsing, size/type guards, receipt hints, quiz prefill).
+- Test coverage: `test_ocr_flow.js` (38 stateless assertions — Meta download, Vision parsing, size/type guards, document classification, rich hints, receipt vault, quiz prefill).
 
 
 ---
@@ -1930,5 +1930,36 @@ One pure choke point used by the WhatsApp route, the follow-up worker and the PD
 ### 48.3 Sync, files & tests
 - Files: `src/services/greetings.js`, `flowKnowledge.js` (emojiPolicy + GREETING playbook), `conversationEngine.js` (EMOJI ARTISTRY), `sakaAi.js` (emoji bullet + first-contact behavior), `src/routes/whatsapp.js` (import + first-contact trigger + opener), `.clinerules` rule 31 emoji bullet.
 - Tests: `test_greetings.js` (23 assertions: dayparts, localized greetings, intro content/ceiling, first-contact detection, emoji discipline) and `test_agent_training.js` (68 assertions incl. `EMOJI POLICY`, `EMOJI ARTISTRY`, `Namaste`, `first contact`).
+
+---
+
+## 49. v1.19.0 — Receipt Intelligence (OCR, document types & the receipt vault)
+
+### 49.1 Audit of the original flow
+v1.7.4 delivered Meta's two-step media download (5 MB / 15 s guards), Vision `DOCUMENT_TEXT_DETECTION`, images-only with graceful key/timeout failures, parallel session hydration and receipt hints (TOTAL amount, litres, labelled odometer, vendor + date) that prefill the quiz. Gaps: every photo was treated as a receipt; OCR confidence was captured then ignored; duplicate photos re-entered the expense flow; nothing was stored, so users had no receipt history; failures produced a dry system note.
+
+### 49.2 Document intelligence (`classifyOcrDocument` + `extractDocumentHints`)
+- Families: `receipt_fuel`, `receipt_general`, `logbook`, `insurance`, `drivers_licence`, `odometer_photo`, `unknown` (fuel words/pump/nozzle; VIN/chassis; policy/underwriter; licence/PSV/PDP/DL; lone odometer).
+- Receipt hints: TOTAL amount → max fallback, litres, odometer, **currency** (KES/₹/$/€/£/₦…), vendor, date, pump → notes, `expense_type: Fuel` for fuel receipts.
+- Logbook: VIN + country plate pattern. Insurance: policy number + expiry. Driver licence: licence number, expiry and type (PSV/PDP/Licence). Odometer photo: lone reading fallback.
+- `extractReceiptHints()` remains backward compatible (delegates, receipt fields only).
+
+### 49.3 Confidence gating & confirmation-first
+`OCR_CONFIRM_THRESHOLD=0.85`: below it, the confirmation summary gains *"📸 I read these from the photo — double-check the numbers before saving 🙏"*. Receipt photos **always** route through the quiz confirmation (`receiptQuizStart`), so a paper trail is never silently auto-logged; the existing no-write-before-confirmation rule is preserved.
+
+### 49.4 Receipt vault (`src/services/receipts.js` + `public.receipts`)
+- One row per media id (`media_id` UNIQUE): kind, status (`read` / `low_confidence` / `failed`), confidence, currency, amount, litres, odometer, vendor, image URL, error.
+- Original image uploaded to the `receipts` bucket (best effort); failures never block the chat.
+- **Duplicate suppression:** a re-sent photo returns a warm deterministic reply (*"I've already read this receipt ✅ … reply 'receipts' to see your history"*), cancels any quiz and never re-logs.
+- **`receipts` command:** deterministic, zero-token, role-scoped list of the last 5 receipts with 🟢/🟡/🔴 status chips, amount, vehicle and date. Owners see fleet receipts; drivers see their own.
+- Migration `npm run migrate:receipts`; boot ensure via `ensureReceiptsTable`; the table is operational and is wiped by the slate reset (`RESET_TABLES` + TRUNCATE + test cleanup).
+
+### 49.5 UX (Emoji Artistry)
+OCR failures now speak like Saka: *"📸 I couldn't read that photo clearly 🙏 — try again in good light, or type it: 'Logged 40L at 50350 km for KES 5500 — full tank'."* PDFs remain images-only with friendly guidance; figures stay emoji-free; status chips follow the Emoji Policy.
+
+### 49.6 Files, tests & knobs
+- Files: `src/services/ocrService.js` (classifier + rich hints), `src/services/receipts.js` (vault, dedupe, replies), `src/routes/whatsapp.js` (media → classify → vault → confirmation-gated quiz, `receipts` command, duplicate/low-confidence overrides), `scripts/run_receipts_migration.js`, `scripts/reset-db.js`, `scripts/testCleanup.js`, `sakaAi.js` (`OCR & PHOTOS` training block), `flowKnowledge.js` (OCR confirmation boundary).
+- Tests: `test_ocr_flow.js` (38 assertions), `test_agent_training.js` (`OCR & PHOTOS`, `RECEIPT INTELLIGENCE`), `test_db_reset_scope.js` (receipts wiped).
+- Knobs: `OCR_MAX_MEDIA_BYTES` (5242880), `OCR_TIMEOUT_MS` (15000), `OCR_CONFIRM_THRESHOLD` (0.85), `RECEIPTS_BUCKET` (receipts).
 
 

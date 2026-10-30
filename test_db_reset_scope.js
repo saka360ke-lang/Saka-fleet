@@ -37,7 +37,8 @@ function run() {
   for (const table of [
     'profiles', 'vehicles', 'vin_registry', 'chat_sessions', 'superadmin_sessions',
     'ai_usage_logs', 'support_tickets', 'exchange_rates_cache', 'admin_audit_logs',
-    'trial_sessions', 'subscriptions', 'usage_counters', 'paystack_webhook_events'
+    'trial_sessions', 'subscriptions', 'usage_counters', 'paystack_webhook_events',
+    'receipts'
   ]) {
     assert(RESET_TABLES.includes(table), `${table} is in the wipe scope`);
   }

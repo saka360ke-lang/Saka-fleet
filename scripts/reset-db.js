@@ -51,6 +51,7 @@ export const RESET_TABLES = [
   'private_earnings',
   'expenses',
   'expense_logs',
+  'receipts',
   'driver_compliances',
   'driver_assignments',
   'expiry_notification_log',
@@ -184,6 +185,7 @@ export async function executeDatabaseReset({ targetPhone = null, verbose = true,
         DELETE FROM public.driver_compliances WHERE driver_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}'));
         DELETE FROM public.reminders WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}')));
         DELETE FROM public.expense_logs WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}')));
+    DELETE FROM public.receipts WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}')) OR driver_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}'));
         DELETE FROM public.private_earnings WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}')));
         DELETE FROM public.passbook_transfers WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}')));
         DELETE FROM public.pending_owner_notifications WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}')));
@@ -209,6 +211,7 @@ export async function executeDatabaseReset({ targetPhone = null, verbose = true,
           public.private_earnings,
           public.expenses,
           public.expense_logs,
+          public.receipts,
           public.driver_compliances,
           public.driver_assignments,
           public.expiry_notification_log,

@@ -149,7 +149,7 @@ export async function ocrWhatsAppMedia({ mediaId, mimeType, token } = {}) {
       text: null,
       confidence: null,
       mimeType: normalizedType,
-      error: 'Unsupported media type — please resend as a JPEG or PNG photo.'
+      error: 'Unsupported media type — please resend as a JPEG or PNG photo 📸.'
     };
   }
 
@@ -158,11 +158,11 @@ export async function ocrWhatsAppMedia({ mediaId, mimeType, token } = {}) {
 
   const effectiveType = (download.mimeType || normalizedType || 'image/jpeg').toLowerCase();
   if (!SUPPORTED_IMAGE_TYPES.includes(effectiveType)) {
-    return { text: null, confidence: null, mimeType: effectiveType, error: 'Unsupported media type — please resend as a JPEG or PNG photo.' };
+    return { text: null, confidence: null, mimeType: effectiveType, error: 'Unsupported media type — please resend as a JPEG or PNG photo 📸.' };
   }
 
   const ocr = await extractTextFromImage(download.buffer);
-  return { ...ocr, mimeType: effectiveType };
+  return { ...ocr, mimeType: effectiveType, buffer: download.buffer };
 }
 
 function toNumber(raw) {
@@ -176,55 +176,141 @@ function toNumber(raw) {
  * the conversational quiz (which still requires the user to confirm).
  */
 export function extractReceiptHints(text = '') {
+  return extractDocumentHints(text, classifyOcrDocument(text), { receiptOnly: true });
+}
+
+/** Detect the document family from OCR text (deterministic). */
+export function classifyOcrDocument(text = '') {
+  const raw = String(text || '');
+  const t = raw.toUpperCase();
+  if (!t.trim()) return 'unknown';
+  if (/\b(VIN|CHASSIS|LOG\s?BOOK|REGISTRATION\s+CERT|MOTOR\s+VEHICLE\s+REG)/.test(t) || looksLikeVin(raw)) return 'logbook';
+  if (/\b(POLICY|INSURANCE|COVER\s+NOTE|SUM\s+INSURED|UNDERWRITER)\b/.test(t)) return 'insurance';
+  if (/\b(DRIVING\s+LICEN[CS]E|DRIVER'?S\s+LICEN[CS]E|PSV|PDP|DL\s*(?:NO|NUMBER)|BADGE)\b/.test(t)) return 'drivers_licence';
+  if (/\b(FUEL|DIESEL|PETROL|GASOLINE|PUMP|NOZZLE|LITRE|LITER)\b/.test(t)) return 'receipt_fuel';
+  if (/\b(ODOMETER|MILEAGE|KM\s*READING)\b/.test(t) && !/\b(TOTAL|CASH|AMOUNT|INVOICE)\b/.test(t)) return 'odometer_photo';
+  if (/\b(RECEIPT|INVOICE|TOTAL|AMOUNT|CASH|BALANCE)\b/.test(t)) return 'receipt_general';
+  return 'unknown';
+}
+
+function looksLikeVin(text) {
+  return /\b(?=[A-HJ-NPR-Z0-9]{11,17}\b)(?=[A-Z0-9]*\d)[A-HJ-NPR-Z0-9]{11,17}\b/.test(String(text || '').toUpperCase());
+}
+
+export const OCR_CURRENCY_CODES = Object.freeze(['KES', 'USD', 'EUR', 'GBP', 'NGN', 'ZAR', 'TZS', 'UGX', 'RWF', 'INR', 'AED', 'BRL', 'MXN']);
+const CURRENCY_SYMBOLS = Object.freeze({ '₹': 'INR', $: 'USD', '€': 'EUR', '£': 'GBP', '₦': 'NGN' });
+
+function detectCurrency(raw) {
+  const text = String(raw || '');
+  for (const code of OCR_CURRENCY_CODES) {
+    if (new RegExp(`\\b${code}\\b`, 'i').test(text)) return code;
+  }
+  for (const [symbol, code] of Object.entries(CURRENCY_SYMBOLS)) {
+    if (text.includes(symbol)) return code;
+  }
+  return null;
+}
+
+function firstDateNear(raw, keywordRe) {
+  const lines = String(raw || '').split(/\n+/);
+  const hit = lines.find((line) => keywordRe.test(line));
+  const dateMatch = (hit || raw).match(/\b(\d{4}-\d{2}-\d{2}|\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4})\b/);
+  return dateMatch ? dateMatch[1] : null;
+}
+
+
+/**
+ * Rich document hints for every supported photo type. Numbers are deterministic
+ * and always land in the confirmation gate before any database write.
+ */
+export function extractDocumentHints(text = '', kind = null, { receiptOnly = false } = {}) {
   const raw = String(text || '');
   if (!raw.trim()) return {};
+  const documentKind = kind || classifyOcrDocument(raw);
+  const lines = raw.split(/\n+/).map((line) => line.trim()).filter(Boolean);
 
-  const lines = raw.split(/\n+/).map((l) => l.trim()).filter(Boolean);
-
-  // Amount: prefer the line that mentions total/amount due; otherwise the
-  // largest currency-looking number in the document.
-  const moneyRe = /(?:kes|usd|ngn|zar|tzs|ugx|rwf|gbp|eur|inr|aed|brl|mxn|\$|€|£|₦|r)\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)/gi;
-  const totalLine = lines.find((l) => /\b(total|amount due|grand total|balance due)\b/i.test(l));
-  let amount = null;
-
+  const moneyRe = /(?:kes|usd|ngn|zar|tzs|ugx|rwf|gbp|eur|inr|aed|brl|mxn|\$|€|£|₦|₹)\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)/gi;
+  const toNumber = (value) => {
+    const num = Number(String(value).replace(/[,\s]/g, ''));
+    return Number.isFinite(num) ? num : null;
+  };
   const amountFrom = (line) => {
     const matches = [...String(line).matchAll(moneyRe)];
-    if (matches.length === 0) return null;
-    const values = matches.map((m) => toNumber(m[1])).filter((n) => n !== null && n > 0);
+    if (!matches.length) return null;
+    const values = matches.map((match) => toNumber(match[1])).filter((num) => num !== null && num > 0);
     return values.length ? Math.max(...values) : null;
   };
 
-  if (totalLine) amount = amountFrom(totalLine);
-  if (amount === null) {
-    const all = [...raw.matchAll(moneyRe)].map((m) => toNumber(m[1])).filter((n) => n !== null && n > 0);
+  const totalLine = lines.find((line) => /\b(total|amount due|grand total|balance due)\b/i.test(line));
+  let amount = totalLine ? amountFrom(totalLine) : null;
+  if (amount === null && !receiptOnly) {
+    const all = [...raw.matchAll(moneyRe)].map((match) => toNumber(match[1])).filter((num) => num !== null && num > 0);
     if (all.length) amount = Math.max(...all);
   }
 
   const litersMatch = raw.match(/([0-9]+(?:[.,][0-9]+)?)\s*(?:l\b|lt\b|ltr\b|litre|liter|litres|liters)/i);
   const fuelLiters = litersMatch ? toNumber(litersMatch[1]) : null;
-
   const odoMatch = raw.match(/(?:odo|odometer|mileage|km)\s*[:\-]?\s*([0-9][0-9,]{2,})/i);
   const odometer = odoMatch ? toNumber(odoMatch[1]) : null;
-
-  const dateMatch = raw.match(/\b(\d{4}-\d{2}-\d{2}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})\b/);
-  const date = dateMatch ? dateMatch[1] : null;
-
+  const date = firstDateNear(raw, /(date|time)/i)
+    || (raw.match(/\b(\d{4}-\d{2}-\d{2}|\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4})\b/) || [])[1]
+    || null;
   const vendor = lines[0] && lines[0].length <= 60 ? lines[0] : null;
-  const noteParts = [vendor, date].filter(Boolean);
+  const pumpMatch = raw.match(/\b(?:pump|nozzle)\s*(?:no\.?|#)?\s*(\d{1,3})\b/i);
+  const currency = detectCurrency(raw);
 
-  const hints = {};
+  const hints = { document_kind: documentKind };
   if (amount !== null) hints.amount = amount;
+  if (currency) hints.currency = currency;
   if (fuelLiters !== null) hints.fuel_liters = fuelLiters;
   if (odometer !== null) hints.odometer = odometer;
+
+  const noteParts = [];
+  if (documentKind === 'receipt_fuel') hints.expense_type = 'Fuel';
+  if (vendor) noteParts.push(vendor);
+  if (date) noteParts.push(date);
+  if (pumpMatch) noteParts.push(`Pump ${pumpMatch[1]}`);
   if (noteParts.length) hints.notes = noteParts.join(' | ');
+
+  if (documentKind === 'logbook') {
+    const plateMatch = raw.match(/\b(?:reg(?:istration)?\s*(?:no|number)?|plate)\s*[:\-#]?\s*([A-Z]{1,4}\s?\d{1,4}[A-Z]{0,3})\b/i)
+      || raw.match(/\b([A-Z]{2,3}\s?\d{2,4}\s?[A-Z]{1,3})\b/);
+    const vinMatch = raw.match(/\b(?=[A-HJ-NPR-Z0-9]{11,17}\b)(?=[A-Z0-9]*\d)[A-HJ-NPR-Z0-9]{11,17}\b/i);
+    if (plateMatch) hints.plate_number = plateMatch[1].toUpperCase().replace(/\s+/g, ' ').trim();
+    if (vinMatch) hints.vin = vinMatch[0].toUpperCase();
+  }
+
+  if (documentKind === 'insurance') {
+    const policy = raw.match(/\b(?:policy|cover(?:\s+note)?)\s*(?:no\.?|number|#)?\s*[:\-#]?\s*((?=[A-Z0-9\-\/]*\d)[A-Z0-9][A-Z0-9\-\/]{3,})/i);
+    if (policy) hints.insurance_policy = policy[1];
+    const expiry = firstDateNear(raw, /(expir|valid\s+(?:until|to)|renew|due)/i);
+    if (expiry) hints.insurance_expiry = expiry;
+  }
+
+  if (documentKind === 'drivers_licence') {
+    const licence = raw.match(/\b(?:licen[cs]e|lic|dl|psv|pdp|badge)\s*(?:no\.?|number|#)?\s*[:\-#]?\s*((?=[A-Z0-9\-\/]*\d)[A-Z0-9][A-Z0-9\-\/]{3,})/i);
+    if (licence) hints.compliance_number = licence[1];
+    const expiry = firstDateNear(raw, /(expir|valid\s+(?:until|to)|renew|due)/i);
+    if (expiry) hints.compliance_expiry = expiry;
+    hints.compliance_type = /PSV/i.test(raw) ? 'PSV Badge' : (/PDP/i.test(raw) ? 'PDP' : 'Driver Licence');
+  }
+
+  if (documentKind === 'odometer_photo' && odometer === null) {
+    const lone = raw.match(/\b([0-9]{4,7})\b/);
+    if (lone) hints.odometer = toNumber(lone[1]);
+  }
 
   return hints;
 }
+
 
 export default {
   downloadWhatsAppMedia,
   extractTextFromImage,
   ocrWhatsAppMedia,
   extractReceiptHints,
+  extractDocumentHints,
+  classifyOcrDocument,
+  OCR_CURRENCY_CODES,
   SUPPORTED_IMAGE_TYPES
 };

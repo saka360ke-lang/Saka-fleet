@@ -73,3 +73,11 @@ Saka introduces itself on the first message with a localized greeting
 one next step. Conversations use **emoji artistry**: semantic anchors per line,
 a 🔔→⏰→⚠️→🚨 reminder ladder, 🟢🟡🔴 status chips, figures kept emoji-free, and
 at most 3 emojis per message (4 on the welcome message).
+
+## Receipt intelligence (v1.19.0)
+Send a photo of a **fuel receipt, logbook, insurance policy or driver licence**:
+Saka classifies it, reads the amount/ litres/odometer/VIN/plate/policy/expiry,
+prefills the confirmation summary and asks only what is missing. Duplicate
+photos are recognised, every read lands in the receipt vault, and
+`receipts` shows your last five with 🟢/🟡/🔴 status chips. Low-confidence reads
+ask you to double-check before saving; nothing is ever written without your YES.

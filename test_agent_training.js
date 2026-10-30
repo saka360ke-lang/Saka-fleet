@@ -116,7 +116,9 @@ async function run() {
     'EMOJI POLICY',
     'EMOJI ARTISTRY',
     'Namaste',
-    'first contact'
+    'first contact',
+    'OCR & PHOTOS',
+    'RECEIPT INTELLIGENCE'
   ];
   for (const token of sections) {
     check(DEFAULT_SAKA_CORE_PROMPT.includes(token), `Core prompt retains training section: ${token}`);

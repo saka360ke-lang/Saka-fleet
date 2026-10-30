@@ -73,7 +73,17 @@ import { enqueueFollowUp, FOLLOWUP_KINDS, followUpAckText } from '../services/fo
 import { enqueueUserMessage } from '../services/messageQueue.js';
 import { loadSessionSnapshot, persistSessionSnapshot } from '../services/sessionStore.js';
 import { createResilientClient } from '../services/supabaseClient.js';
-import { ocrWhatsAppMedia, extractReceiptHints } from '../services/ocrService.js';
+import { ocrWhatsAppMedia, extractDocumentHints, classifyOcrDocument } from '../services/ocrService.js';
+import {
+  findReceiptByMediaId,
+  recordReceipt,
+  uploadReceiptImage,
+  listReceipts,
+  formatReceiptsReply,
+  formatDuplicateReceiptReply,
+  OCR_CONFIRM_THRESHOLD,
+  OCR_LOW_CONFIDENCE_NOTE
+} from '../services/receipts.js';
 
 let supabaseClient = createResilientClient();
 
@@ -615,10 +625,17 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
     if (ocrText) {
       messageText = `${baseText ? `${baseText}\n\n` : ''}${ocrText}`.slice(0, 4000);
     } else if (mediaObj && !baseText) {
-      messageText = '[Saka system note: the user sent an image/document that could not be read by OCR. Apologize briefly in their language, do not claim anything was saved, and ask them to resend a clearer photo or type the details.]';
+      messageText = '[Saka system note: the user sent an image/document that could not be read by OCR. Apologize ONCE with 📸 and 🙏, never claim anything was saved, and offer a clearer photo or typed details (e.g. "Logged 40L at 50350 km for KES 5500 — full tank").]';
     }
 
-    const receiptHints = ocrText ? extractReceiptHints(ocrText) : {};
+    const ocrKind = ocrText ? classifyOcrDocument(ocrText) : null;
+    const receiptHints = ocrText ? extractDocumentHints(ocrText, ocrKind) : {};
+    const ocrLowConfidence = Boolean(
+      ocrText
+      && Number.isFinite(Number(ocrResult?.confidence))
+      && Number(ocrResult.confidence) > 0
+      && Number(ocrResult.confidence) < OCR_CONFIRM_THRESHOLD
+    );
 
     if (snapshot) {
       if (snapshot.session && !chatSessions.has(senderPhone)) chatSessions.set(senderPhone, snapshot.session);
@@ -783,6 +800,35 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         }
         const firstContact = isFirstContact({ session, dbHistory, hasVehicleRegistered });
 
+        // --- Receipt intelligence (v1.19.0): dedupe + vault ---
+        let duplicateReceipt = null;
+        if (mediaObj?.id && supabaseClient) {
+          try {
+            duplicateReceipt = await findReceiptByMediaId(supabaseClient, mediaObj.id);
+            if (!duplicateReceipt) {
+              const imageUrl = ocrResult?.buffer
+                ? await uploadReceiptImage(supabaseClient, ocrResult.buffer, mediaObj.id, ocrResult.mimeType)
+                : null;
+              await recordReceipt(supabaseClient, {
+                mediaId: mediaObj.id,
+                ownerId: existingVehicles.some((v) => v.owner_id === profileData?.id) ? profileData?.id : null,
+                driverId: existingVehicles.some((v) => v.assigned_driver_id === profileData?.id) ? profileData?.id : null,
+                vehicleId: currentActiveVehicle?.id || existingVehicles[0]?.id || null,
+                documentKind: ocrKind || 'unknown',
+                status: ocrText ? (ocrLowConfidence ? 'low_confidence' : 'read') : 'failed',
+                confidence: ocrResult?.confidence ?? null,
+                currency: receiptHints.currency || countryInfo?.currency || null,
+                amount: receiptHints.amount ?? null,
+                fuelLiters: receiptHints.fuel_liters ?? null,
+                odometer: receiptHints.odometer ?? null,
+                vendor: receiptHints.notes || null,
+                imageUrl,
+                error: ocrError
+              });
+            }
+          } catch { /* the receipt vault is best-effort */ }
+        }
+
         // Pass message through DeepSeek Intent Classifier (sakaAi.js) with Active Fleet Context
         const activeVehicleContext = hasVehicleRegistered ? {
           activeVehicle: currentActiveVehicle,
@@ -797,8 +843,23 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         const quizPhaseLocked = !!quizForFastPath && (quizForFastPath.phase === 'pin' || quizForFastPath.phase === 'account_otp');
         const fastQuizTurn = !!quizForFastPath && !quizPhaseLocked;
 
+        // Deterministic receipt history ("receipts") — zero AI tokens.
+        const receiptsCommand = /^(?:my\s+)?receipts?$|^show\s+(?:my\s+)?receipts?$|^last\s+receipt$/i.test(String(messageText || '').trim());
+
         let aiResult;
-        if (fastQuizTurn) {
+        if (receiptsCommand) {
+          const isOwner = existingVehicles.some((v) => v.owner_id === profileData?.id);
+          const receipts = await listReceipts(supabaseClient, {
+            ownerId: isOwner ? profileData?.id : null,
+            driverId: isOwner ? null : profileData?.id,
+            vehicleIds: existingVehicles.map((v) => v.id)
+          });
+          aiResult = {
+            intent: 'GENERAL_CHAT',
+            extracted_data: {},
+            reply_message: formatReceiptsReply({ receipts, vehicles: existingVehicles, fallbackCurrency: countryInfo?.currency || null })
+          };
+        } else if (fastQuizTurn) {
           const quick = classifyIntentWithRegex(messageText);
           aiResult = { intent: quick.intent, extracted_data: {}, reply_message: null };
         } else {
@@ -810,6 +871,13 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         }
         let intent = aiResult.intent;
         let customReply = aiResult.reply_message;
+
+        // A receipt photo that was already processed never re-enters the
+        // expense flow — the duplicate reply below is deterministic.
+        if (duplicateReceipt) {
+          intent = 'GENERAL_CHAT';
+          aiResult = { ...aiResult, intent, extracted_data: {}, reply_message: null };
+        }
 
         // Extract and merge structured vehicle attributes
         const regexAttrs = extractVehicleAttributes(messageText);
@@ -1256,6 +1324,12 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           driverOnboardingPending: session.driverOnboarding === true || gateRedirect
         });
 
+        // Receipt photos always confirm before any write — a paper trail is
+        // never silently auto-logged, even when every number is readable.
+        const receiptQuizStart = (mediaObj && receiptHints?.document_kind && intent === 'LOG_EXPENSE')
+          ? 'log_expense'
+          : quizStartFlow;
+
         const quizCtx = {
           supabase: supabaseClient,
           profile: profileData,
@@ -1371,7 +1445,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             session,
             messageText,
             aiExtracted: mergedExt,
-            startFlow: quizStartFlow,
+            startFlow: receiptQuizStart,
             ctx: quizCtx
           });
         }
@@ -2568,6 +2642,15 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
           const plateGiven = Boolean(mergedExt?.plate_number);
           finalReply = `${sakaIntroText({ countryInfo, profile: profileData, nextStep: plateGiven ? '' : undefined })}${finalReply ? `\n\n${finalReply}` : ''}`;
           session.sakaIntroduced = true;
+        }
+
+        // Receipt outcomes override any AI prose: a duplicate is never re-logged,
+        // and a low-confidence read asks the user to double-check first.
+        if (duplicateReceipt) {
+          session.quiz = null;
+          finalReply = formatDuplicateReceiptReply(duplicateReceipt, { fallbackCurrency: countryInfo?.currency || null });
+        } else if (ocrLowConfidence && session.quiz) {
+          finalReply = `${finalReply}\n\n${OCR_LOW_CONFIDENCE_NOTE}`;
         }
 
         // Stage 1 (Soft Trip): Prompt repeated 3 times. Grace retry.

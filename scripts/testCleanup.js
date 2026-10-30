@@ -132,6 +132,8 @@ export async function cleanupTestData({
       const profileIds = (profiles || []).map(p => p.id);
       if (profileIds.length) {
         await client.from('vehicles').update({ assigned_driver_id: null }).in('assigned_driver_id', profileIds);
+        summary.receipts_owner = await deleteIn(client, 'receipts', 'owner_id', profileIds, verbose);
+        summary.receipts_driver = await deleteIn(client, 'receipts', 'driver_id', profileIds, verbose);
       }
     }
   } catch {}

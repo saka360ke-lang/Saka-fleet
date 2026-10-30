@@ -2,8 +2,16 @@ import {
   downloadWhatsAppMedia,
   extractTextFromImage,
   ocrWhatsAppMedia,
-  extractReceiptHints
+  extractReceiptHints,
+  extractDocumentHints,
+  classifyOcrDocument
 } from './src/services/ocrService.js';
+import {
+  OCR_LOW_CONFIDENCE_NOTE,
+  OCR_CONFIRM_THRESHOLD,
+  formatReceiptsReply,
+  formatDuplicateReceiptReply
+} from './src/services/receipts.js';
 import { handleQuizTurn } from './src/services/quizEngine.js';
 
 /**
@@ -17,6 +25,7 @@ function assert(cond, msg) {
   passed += 1;
   console.log(`✅ ${msg}`);
 }
+const check = assert;
 
 const realFetch = global.fetch;
 
@@ -117,7 +126,7 @@ async function run() {
   await handleQuizTurn({
     session,
     messageText: 'Receipt photo',
-    aiExtracted: { expense_type: 'Fuel', ...hints },
+    aiExtracted: { expense_type: 'Fuel', fill_type: 'full', ...hints },
     startFlow: 'log_expense',
     ctx
   });
@@ -126,6 +135,44 @@ async function run() {
   assert(session.quiz.answers.amount === 5500, 'OCR total prefilled the amount');
   assert(session.quiz.answers.fuel_liters === 40.5, 'OCR volume prefilled the fuel litres');
   assert(session.quiz.answers.odometer_reading === 366800, 'OCR odometer prefilled the reading');
+
+  console.log('\n--- Test 7: document classification ---');
+  check(classifyOcrDocument('SHELL KAREN\nPUMP 4\nDIESEL 40.5 L\nTOTAL KES 5,500') === 'receipt_fuel', 'Fuel receipts are classified');
+  check(classifyOcrDocument('TOTAL KES 1,200\nCASH\n12/10/2026') === 'receipt_general', 'General receipts are classified');
+  check(classifyOcrDocument('VIN JTE777A1234567890\nREG NO KDA 123A') === 'logbook', 'Logbooks are classified');
+  check(classifyOcrDocument('MOTOR INSURANCE POLICY\nPOLICY NO ABC12345\nEXPIRES 2027-05-15') === 'insurance', 'Insurance documents are classified');
+  check(classifyOcrDocument('DRIVING LICENCE\nDL NO 123456\nPSV BADGE\nEXPIRES 2027-01-31') === 'drivers_licence', 'Driver licences are classified');
+  check(classifyOcrDocument('ODOMETER 366800') === 'odometer_photo', 'Odometer photos are classified');
+  check(classifyOcrDocument('random text without signals') === 'unknown', 'Unknown documents stay unknown');
+
+  console.log('\n--- Test 8: rich document hints ---');
+  const receiptInr = extractDocumentHints('HP PETROL PUMP\nPETROL 12.5 L\nTOTAL ₹1,850\n2026-10-12');
+  check(receiptInr.amount === 1850 && receiptInr.currency === 'INR', '₹ receipts parse amount and currency');
+  check(receiptInr.expense_type === 'Fuel', 'Fuel receipts prefill the expense type');
+  const logbook = extractDocumentHints('VIN JTE777A1234567890\nREG NO KDA 123A', 'logbook');
+  check(logbook.vin === 'JTE777A1234567890' && logbook.plate_number === 'KDA 123A', 'Logbook VIN + plate extracted');
+  const insurance = extractDocumentHints('MOTOR INSURANCE POLICY\nPOLICY NO ABC12345\nEXPIRES 2027-05-15', 'insurance');
+  check(insurance.insurance_policy === 'ABC12345' && insurance.insurance_expiry === '2027-05-15', 'Insurance policy + expiry extracted');
+  const licence = extractDocumentHints('DRIVING LICENCE\nDL NO 123456\nPSV BADGE\nEXPIRES 2027-01-31', 'drivers_licence');
+  check(licence.compliance_number === '123456' && licence.compliance_expiry === '2027-01-31' && /PSV/.test(licence.compliance_type), 'Licence number, expiry and type extracted');
+  check(OCR_CONFIRM_THRESHOLD === 0.85, 'OCR confirmation threshold is 0.85 by default');
+  check(OCR_LOW_CONFIDENCE_NOTE.includes('🙏') && /double-check/i.test(OCR_LOW_CONFIDENCE_NOTE), 'Low-confidence note is gentle and asks for a double-check');
+
+  console.log('\n--- Test 9: receipt vault replies ---');
+  const emptyReply = formatReceiptsReply({ receipts: [] });
+  check(emptyReply.includes('No receipts yet') && emptyReply.includes('📸'), 'Empty receipt history is friendly');
+  const receiptsReply = formatReceiptsReply({
+    receipts: [
+      { amount: 5500, currency: 'KES', vendor: 'SHELL KAREN | 2026-10-12', status: 'read', created_at: '2026-10-12T08:00:00Z', vehicle_id: 'v1' },
+      { amount: 1200, currency: 'KES', vendor: 'NAIVAS', status: 'low_confidence', created_at: '2026-10-10T08:00:00Z' }
+    ],
+    vehicles: [{ id: 'v1', plate_number: 'KDA 123A' }],
+    fallbackCurrency: 'KES'
+  });
+  check(receiptsReply.includes('🟢') && receiptsReply.includes('🟡'), 'Receipt list uses status chips');
+  check(receiptsReply.includes('KDA 123A') && receiptsReply.includes('5,500'), 'Receipt list shows vehicle and amount');
+  const duplicateReply = formatDuplicateReceiptReply({ vendor: 'SHELL KAREN', amount: 5500, currency: 'KES', created_at: '2026-10-12T08:00:00Z' });
+  check(duplicateReply.includes('already read') && duplicateReply.includes('receipts'), 'Duplicate receipt reply is warm and offers history');
 
   global.fetch = realFetch;
   delete process.env.GCP_VISION_API_KEY;
