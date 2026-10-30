@@ -56,3 +56,13 @@ leg stays automatic.
 `admin model adopt <model_id> [split]`, `admin model rollback [tier_1]`,
 `admin accept fix <CODE> [override]`,
 `admin modify fix <CODE> <guidance>`, `admin decline fix <CODE>`.
+
+## Reports quick reference (v1.18.0)
+Ask Saka: `fleet status report`, `financial report`, `compliance report`,
+`maintenance report`, `fuel economy report`, `driver daybook`, `vehicle health`,
+`compliance card`, `year review`, `eco footprint`, or a one-line bespoke report:
+`custom report: fuel economy, total spend and distance for last 3 months`.
+Owners receive every report for their vehicles; assigned drivers receive their
+driver lane only. Every report can arrive as a branded Saka Pro PDF (link + email).
+Conversations run on **Claude Sonnet 5.5** when premium routing is enabled
+(`PREMIUM_MODEL_ENABLED=on`, `CONVERSATIONAL_PROVIDER=anthropic`).

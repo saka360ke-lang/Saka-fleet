@@ -55,6 +55,17 @@
 29. **Account-only commercial binding (v1.16.0):** trials, subscriptions, coupons and quotas bind to `profiles.id`; `vin_registry` is a provenance ledger only (`trial_granted=false`, `trial_status='account_bound'`) and legacy `vehicles.trial_*` columns are frozen history. Never mint a VIN/passbook trial, never schedule a VIN-bound extension coupon, and never mix VEHICLE compliance (`vehicle_compliances`) with DRIVER compliance (`driver_compliances`). Every owner starts a skippable driver profile at onboarding completion. See `SAKA_FLEET_ARCHITECTURE.md` §11.1 and §40.
 30. **Override discipline (v1.16.2):** a plan blocked by `sanitizeRemediationPlan` is `NEEDS_MODIFICATION` and may only be approved with the explicit word `override` (`admin accept fix <CODE> override`), which stamps `approval_kind='superadmin_override'`; the CI gate re-sanitizes the stored plan before `EXECUTING`. Never bypass this for OTP/auth/VIN/billing boundaries — those stay human-session work (rule 18). Run `npm run health` before any release; it must be fully green.
 
+## UX & INCLUSION (PERMANENT — v1.18.0)
+31. **Saka Fleet must be fun, easy and efficient for every gender, age and locality.** Design every conversational flow, prompt, report and test around this:
+    - **Plain language first:** short sentences, one question at a time, example-first instructions ("reply: Logged 40L at 50350 km — full tank"), no jargon or abbreviations the user did not use.
+    - **Warm and playful, never silly:** light celebration at milestones, gentle nudges, zero guilt. Never condescend, never infantilize, never shame.
+    - **Gender-neutral and culturally aware:** no gendered assumptions (owner/driver are roles, not genders), respect greetings, formality and naming conventions from the user's country.
+    - **Age- and literacy-safe:** readable at any level; numbers always with units and currency; emoji as gentle scaffolding, never clutter; every screen-size friendly (short WhatsApp messages, no walls of text).
+    - **Forgiving inputs:** typos, mixed languages, voice-note style fragments and partial data are expected; never scold, always recover with one clear next step.
+    - **Efficient by default:** the fastest path to the user's goal wins (one-line logs save instantly; bespoke reports are one sentence, not a maze).
+    - **Reports follow the same rule:** colorful, centered, readable at a glance, with a People & Roles panel (owner + drivers) and plain-language labels.
+    This rule is mirrored in `SAKA_TONE_COMPASS` (flowKnowledge), the Saka core prompt, the PDF engine and `test_agent_training.js`.
+
 ## LATENCY & RUNTIME KNOBS (REFERENCE)
 - `MESSAGE_MAX_CONCURRENCY` (8), `MESSAGE_MAX_ATTEMPTS` (3), `MESSAGE_RETRY_BASE_MS` (250) — per-phone serial queue + global cap.
 - `AI_TIMEOUT_MS` (12000), `SUPABASE_TIMEOUT_MS` (15000) — fail-fast provider/DB timeouts.

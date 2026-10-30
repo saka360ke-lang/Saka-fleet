@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.17.1  
+**Version:** 1.18.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -70,7 +70,7 @@ All LLM traffic flows through **`src/services/aiClient.js`**. No service talks t
 
 ### 1.2 Conversational Engine (v1.7 — pure AI, quiz-first)
 
-- **`src/services/conversationEngine.js`** — every user-facing reply is rendered by Saka AI from a structured FACTS payload (`composeMessage`, `renderQuizQuestion`, `renderConfirmationSummary`, `renderOutcome`, `renderActionDiscovery`). The provider is tier-routed: prose renders use Tier 2 (Claude Sonnet 4.5 when `PREMIUM_MODEL_ENABLED=on`, otherwise DeepSeek-V3) while quiz questions and stall nudges stay Tier 1; the system prompt carries explicit **VOICE & EMPATHY** guardrails so tone stays consistent across providers and failover legs. Hard-coded conversational prose has been removed from the WhatsApp route; deterministic fallbacks remain only for provider outages. Quiz questions are cached per field/language (`seedQuizQuestions`, `isQuizQuestionCacheWarm`) and prefetched in one batch per flow.
+- **`src/services/conversationEngine.js`** — every user-facing reply is rendered by Saka AI from a structured FACTS payload (`composeMessage`, `renderQuizQuestion`, `renderConfirmationSummary`, `renderOutcome`, `renderActionDiscovery`). The provider is tier-routed: prose renders use Tier 2 (Claude Sonnet 5.5 when `PREMIUM_MODEL_ENABLED=on`, otherwise DeepSeek-V3) while quiz questions and stall nudges stay Tier 1; the system prompt carries explicit **VOICE & TONE COMPASS** guardrails (including UX & Inclusion) so tone stays consistent across providers and failover legs. Hard-coded conversational prose has been removed from the WhatsApp route; deterministic fallbacks remain only for provider outages. Quiz questions are cached per field/language (`seedQuizQuestions`, `isQuizQuestionCacheWarm`) and prefetched in one batch per flow.
 - **`src/services/quizEngine.js`** — one-piece-at-a-time wizard engine: declarative flow definitions, per-field validators/extractors, deterministic multi-field fast-forward (`applyTextExtraction`), two-pass conditional extraction (`applyExtraction`), background question prefetch, Cancel/Restart/Help navigation, and a **mandatory confirmation summary before any database write**. VIN and passbook token are never editable.
 - **`src/services/naturalParser.js` (v1.8)** — natural conversational extraction: deterministic field parsing plus a DeepSeek JSON top-up for missing fields, "extra notes" compilation for details that do not map to a database column, missing-field computation for dynamic prompts, and graceful degradation when the provider is unavailable.
 - **`src/services/maintenanceReminders.js` (v1.9)** — universal reminder engine: distance (canonical km), operating hours **and date-based expiries** (insurance, inspection/MOT, licensing, permits, driver licences, general deadlines). Explicit `remaining_value` tracking, 75/25/5/due-now/overdue threshold tiers, 30d/14d/7d/24h/overdue expiry tiers, `due_at` timestamps in the user's confirmed timezone, driver-licence promotion, `expiry_notification_log` audit trail, and a single background sweep worker.
@@ -1385,7 +1385,7 @@ Analytics (v1.13.0): `getAiUsageSummary(supabase, hours = 24)` aggregates a 1–
 | :--- | :--- | :--- |
 | `PREMIUM_MODEL_ENABLED` | off | master kill switch for Tier-2 routing |
 | `AI_MODEL_TIER_1` | `DEEPSEEK_MODEL` → `deepseek-chat` | router-tier model |
-| `AI_MODEL_TIER_2` | env → provider default (`claude-sonnet-4-5` / `gpt-4o` / `deepseek-chat`) | conversational-tier model |
+| `AI_MODEL_TIER_2` | env → provider default (`claude-sonnet-5-5` / `gpt-4o` / `deepseek-chat`) | conversational-tier model |
 | `AI_MODEL_TIER_2_OPENAI` | `gpt-4o` | OpenAI secondary Tier-2 leg model |
 | `AI_MODEL_TIER_3` | `deepseek-chat` (`deepseek-reasoner` when autonomy is on) | reasoning-tier model |
 | `AI_REASONING_PROVIDER` | deepseek | Tier-3 provider (`anthropic` = Claude Opus opt-in) |
@@ -1868,5 +1868,44 @@ The legacy `calculateFuelConsumption` treated **every** fuel log as a full tank:
 - Files: `src/services/fuelEconomy.js` (engine, reply, schema ensure), `src/services/analytics.js` (thin DB wrapper; same `calculateFuelConsumption` signature plus `currency`), `src/services/quizEngine.js` (fill-type field + executor + routing guards), `src/routes/whatsapp.js` (quick-path fill type + tip + currency), `sakaAi.js`, `flowKnowledge.js`, `scripts/run_fuel_fill_type_migration.js`, `scripts/provision_staging_schema.js`, boot ensure in `index.js`.
 - Tests: `test_fuel_economy.js` (47 assertions, pure math), `test_quiz_flow.js` (fill-type turn + routing guards), `test_agent_flow.js` (DB wrapper + one-line quick log), `test_agent_training.js` (`fill_type`, `full-tank`). `scripts/testCleanup.js` now also clears `chat_sessions` for test phones (stale quiz state).
 - Knobs (defaults shown): `FUEL_ECON_MIN_SEGMENT_KM=20`, `FUEL_ECON_MAX_PLAUSIBLE_KML=80`, `FUEL_RATING_GOOD_KML=10`, `FUEL_RATING_EXCELLENT_KML=14`.
+
+---
+
+## 47. v1.18.0 — Saka Pro Reports, Report Access Lanes & Sonnet 5.5
+
+### 47.1 Claude Sonnet 5.5 for conversations
+Research against Anthropic's current lineup (Oct 2026): **Claude Sonnet 5.5** is "the best combination of speed and intelligence" — USD $2/$10 per MTok, 1M context, 128K output — the correct Tier-2 conversational model for WhatsApp. Opus 5.5 is for long-running knowledge work; Haiku 5.5 for high-volume routing; Fable 5.1 for demanding reasoning.
+- Wired via `PREMIUM_MODEL_ENABLED=on` + `CONVERSATIONAL_PROVIDER=anthropic` + `AI_MODEL_TIER_2=claude-sonnet-5-5`; `DEFAULT_ANTHROPIC_TIER2_MODEL` updated.
+- Free accounts remain clamped to Tier 1 (DeepSeek) by entitlements; trial/paid receive Tier 2 prose renders. DeepSeek stays the terminal failover leg (anthropic → openai → deepseek) with per-provider breakers, 15 s premium timeout, concurrency 2 and the daily budget guard.
+- `AI_USAGE_COST_RULES` updated (Fable/Opus/Sonnet/Haiku current list prices) so `admin ai-stats` stays honest; smoke test: `node scripts/test_anthropic_connection.js`.
+
+### 47.2 Saka Pro PDF engine (`src/services/pdfEngine.js`)
+Premium, deterministic, engine-only numbers:
+- **Fonts (vendored OFL, offline):** Manrope (body), Barlow SemiBold (display), JetBrains Mono (figures) under `assets/fonts/` with a Helvetica fallback.
+- **Palette:** Ink `#0B1220`, slate/muted text, per-report accents (fleet blue, financial sky, compliance amber, maintenance emerald, fuel violet, driver emerald, custom indigo) and semantic status colors.
+- **Layout:** full-bleed cover (brand, title, period chips, "prepared for" owner card, driver cards), KPI card grid (3-up), vector charts — donut (arc-based with stacked-bar fallback), vertical bars, area/line trend, 90-day progress runway — zebra tables with money/number/status renderers, sections, notes, header band and "Page X of Y" footer on every page.
+- **People & Roles panel:** owner profile (name, email, phone, plan, language) + assigned driver cards (name, plate, licence label, status) wherever data exists.
+- **Determinism:** figures come only from structured report data; the AI never draws or computes charts.
+
+### 47.3 Report catalog & bespoke reports
+- Core: Fleet Status, Compliance & Expiry, Maintenance & Service, Financial & Cost (all now PDF-capable).
+- Creative: Fuel Economy Deep-Dive (full-tank segments/trend), Compliance Radar-style expiry runway, Driver Scorecard, Year-in-Review, Eco-Footprint (est. CO₂ at 2.68 kg/L, labelled estimate), Driver Daybook, Vehicle Health Check-in, My Compliance Card.
+- **Bespoke reports:** one sentence names metrics + period — `"custom report: fuel economy, total spend and distance for last 3 months"`. `src/services/reportMetrics.js` holds the declarative metric registry (access-tagged, formatter-tagged); missing metrics trigger a short access-aware menu (zero tokens). Range presets: this month, last 3 months, this year.
+- **Delivery:** `src/services/reportDelivery.js` resolves → enforces the lane → builds structured data → renders the Saka Pro PDF → uploads to the `fleet-reports` bucket → emails it (Resend) → returns the WhatsApp text plus the link. The background follow-up lane carries it so the chat never blocks.
+
+### 47.4 Report access lanes (`src/services/reportAccess.js`)
+One pure choke point used by the WhatsApp route, the follow-up worker and the PDF builder:
+- **Owner:** every report for vehicles they own. **Driver:** Driver Daybook, Vehicle Health Check-in, My Compliance Card, Maintenance, Fuel Economy — assigned vehicle only. **Admin:** everything.
+- Drivers are denied Fleet Status, Financial & Cost, Driver Scorecard, Year-in-Review, Eco-Footprint, and other drivers' data; denial copy is warm and offers the driver lane.
+- **Report Passes:** `driver_assignments.report_grants` (jsonb, migration `npm run migrate:report-grants`) lets the owner/superadmin grant a driver extra lane reports (e.g. compliance); financials can never be granted. Grants are read automatically by the report worker.
+- Driver custom reports are automatically filtered to driver-safe metrics (no earnings/net profit/total spend).
+
+### 47.5 UX & Inclusion (permanent rule 31)
+`Saka Fleet must be fun, easy and efficient for every gender, age and locality.` Mirrored into `.clinerules` rule 31, `SAKA_TONE_COMPASS.inclusion` (rendered as **UX & INCLUSION** in the playbook), the core prompt's TONE MIRRORING section, the PDF labels/copy and `test_agent_training.js` tokens. Plain words, one question per turn, gender-neutral, example-first, forgiving inputs, gentle celebration, one clear next step.
+
+### 47.6 Files, tests & knobs
+- Files: `src/services/pdfEngine.js`, `reportMetrics.js`, `reportDelivery.js`, `reportAccess.js`, `driverReports.js`; `reports.js` (legacy facade → Pro renderer); integrations in `src/routes/whatsapp.js`, `src/services/followups.js`, `sakaAi.js`, `flowKnowledge.js`; fonts in `assets/fonts/`.
+- Tests: `test_report_access.js` (33 assertions), `test_report_metrics.js` (25, incl. real PDF render), `test_agent_training.js` (64), plus existing fuel/remediation/model suites.
+- Ops: `node scripts/test_anthropic_connection.js`; `npm run migrate:*` unchanged; report PDFs require the `fleet-reports` storage bucket (already used by the legacy audit path).
 
 

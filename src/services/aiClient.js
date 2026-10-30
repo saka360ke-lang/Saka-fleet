@@ -21,7 +21,7 @@ import OpenAI from 'openai';
 export const DEEPSEEK_BASE_URL = 'https://api.deepseek.com';
 export const DEFAULT_DEEPSEEK_MODEL = 'deepseek-chat'; // DeepSeek-V3
 export const DEFAULT_DEEPSEEK_REASONER = 'deepseek-reasoner'; // Tier-3 opt-in
-export const DEFAULT_ANTHROPIC_TIER2_MODEL = 'claude-sonnet-4-5';
+export const DEFAULT_ANTHROPIC_TIER2_MODEL = 'claude-sonnet-5-5';
 export const DEFAULT_OPENAI_TIER2_MODEL = 'gpt-4o';
 
 export const AI_PROVIDERS = Object.freeze({

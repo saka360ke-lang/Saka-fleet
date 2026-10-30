@@ -13,7 +13,7 @@
  * so callers can fall back to the synchronous path.
  */
 
-import { buildFleetReport, resolveReportType } from './fleetReports.js';
+import { resolveAnyReportType, buildReportForLane, loadReportPeople, deliverReportPdf } from './reportDelivery.js';
 import { recordActivationEvent, ACTIVATION_EVENTS } from './trialEngine.js';
 import { recordReportUsage } from './subscriptions.js';
 
@@ -72,27 +72,51 @@ async function runFleetReport(payload = {}) {
       country: payload.country || payload.countryCode
     }
     : null;
-  const profile = {
-    id: payload.profileId || payload.ownerId || null,
+  const reportType = resolveAnyReportType(payload.reportType || 'fleet', 'fleet');
+  const accessProfile = {
+    id: payload.profileId || payload.ownerId || payload.driverId || null,
+    roles: payload.roles || [],
     phone_number: payload.phone || null,
     email: payload.email || null,
     preferred_language: payload.language || 'English',
     unit_system: payload.unitSystem || 'metric',
     timezone: payload.timeZone || null
   };
-
-  const reportType = resolveReportType(payload.reportType || 'fleet', 'fleet');
-  const report = await buildFleetReport({
+  const report = await buildReportForLane({
     supabase: payload.supabase || null,
-    type: reportType,
+    reportType,
     ownerId: payload.ownerId || null,
     driverId: payload.driverId || null,
+    profile: accessProfile,
     countryInfo,
-    profile
+    metricIds: Array.isArray(payload.metricIds) ? payload.metricIds : [],
+    range: payload.range || 'this_month',
+    grants: Array.isArray(payload.grants) ? payload.grants : [],
+    roles: Array.isArray(payload.roles) ? payload.roles : []
   });
-  if (!report?.ok || !report.text) {
-    return '📊 I could not build that report right now. Please try again in a moment.';
+  if (!report?.ok) {
+    return report?.text || '📊 I could not build that report right now. Please try again in a moment.';
   }
+
+  // Saka Pro PDF: render → upload → email (best effort, never blocks the text).
+  let pdfNote = '';
+  try {
+    const people = await loadReportPeople({
+      supabase: payload.supabase,
+      ownerId: payload.ownerId || null,
+      driverId: payload.driverId || null,
+      vehicleIds: report.access?.vehicleIds || []
+    });
+    const delivery = await deliverReportPdf({
+      supabase: payload.supabase,
+      report,
+      people,
+      ownerEmail: payload.email || people.owner?.email || null,
+      plateLabel: payload.plate || people.drivers[0]?.plate || 'Fleet'
+    });
+    if (delivery.ok && delivery.url) pdfNote += `\n\n📄 *PDF report:* ${delivery.url}`;
+    if (delivery.ok && delivery.emailed) pdfNote += `\n📧 Sent to *${payload.email || people.owner?.email}*`;
+  } catch { pdfNote = ''; }
 
   if (payload.profileId) {
     try {
@@ -105,7 +129,7 @@ async function runFleetReport(payload = {}) {
     } catch { /* quota + activation are best-effort */ }
   }
 
-  return report.text;
+  return `${report.text}${pdfNote}`;
 }
 
 /**

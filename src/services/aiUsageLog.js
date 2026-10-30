@@ -31,10 +31,11 @@ export const AI_USAGE_PAGE_SIZE = Math.max(100, Math.min(1000, Number(process.en
 export const AI_USAGE_COST_RULES = Object.freeze([
   { provider: 'deepseek', match: /reasoner/i, input: 0.55, output: 2.19 },
   { provider: 'deepseek', match: null, input: 0.27, output: 1.10 },
-  { provider: 'anthropic', match: /opus/i, input: 15, output: 75 },
-  { provider: 'anthropic', match: /sonnet/i, input: 3, output: 15 },
-  { provider: 'anthropic', match: /haiku/i, input: 1, output: 5 },
-  { provider: 'anthropic', match: null, input: 3, output: 15 },
+  { provider: 'anthropic', match: /fable/i, input: 10, output: 50 },
+  { provider: 'anthropic', match: /opus/i, input: 4, output: 20 },
+  { provider: 'anthropic', match: /sonnet/i, input: 2, output: 10 },
+  { provider: 'anthropic', match: /haiku/i, input: 0.10, output: 0.50 },
+  { provider: 'anthropic', match: null, input: 2, output: 10 },
   { provider: 'openai', match: null, input: 2.5, output: 10 }
 ]);
 

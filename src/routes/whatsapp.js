@@ -17,6 +17,9 @@ import {
 import { calculateFuelConsumption } from '../services/analytics.js';
 import { normalizeFillType } from '../services/fuelEconomy.js';
 import { buildFleetReport, resolveReportType } from '../services/fleetReports.js';
+import { resolveAnyReportType, buildReportForLane } from '../services/reportDelivery.js';
+import { resolveMetricIds, customMetricMenu } from '../services/reportMetrics.js';
+import { resolveReportAccess } from '../services/reportAccess.js';
 import {
   createDriverAssignment,
   verifyOwnerAssignmentOtp,
@@ -2181,11 +2184,15 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
                 });
                 customReply = `📊 *Monthly Report Limit Reached*\n\nThe Free plan includes *${quota.limit} report per month* and you have used it (resets monthly).\n\nUnlock unlimited reports, full AI and compliance tracking with *${getTierLabel(entitlements?.nextTierKey || 'solo_pro')}*:\n👉 ${upgrade.ok ? upgrade.checkoutUrl : 'https://sakafleet.com/pricing'}\n\n💡 Annual billing saves *${getAnnualDiscountPercent(entitlements?.nextTierKey || 'solo_pro')}%* — reply *"upgrade annual"* to see it.`;
               } else {
-              const reportType = resolveReportType(mergedExt.report_type || messageText, 'fleet');
+              const reportType = resolveAnyReportType(mergedExt.report_type || messageText, 'fleet');
+              const metricIds = resolveMetricIds(messageText);
+              const dateRange = /last\s*(?:3|three)\s*months?/i.test(messageText)
+                ? 'last_3_months'
+                : /(this\s*year|yearly|annual|year\s*review)/i.test(messageText) ? 'this_year' : 'this_month';
               // v1.16.0 — slow-report lane: ACK instantly (zero AI tokens),
               // build in the background, deliver the result as a follow-up while
               // the user keeps chatting.
-              const queued = await enqueueFollowUp({
+              const queued = (reportType === 'custom' && metricIds.length === 0) ? false : await enqueueFollowUp({
                 supabase: supabaseClient,
                 phone: senderPhone,
                 kind: FOLLOWUP_KINDS.FLEET_REPORT,
@@ -2194,6 +2201,10 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
                   driverId: existingVehicles.some((v) => v.assigned_driver_id === profileData?.id) ? profileData?.id : null,
                   profileId: profileData?.id || null,
                   reportType,
+                  metricIds,
+                  range: dateRange,
+                  roles: profileData?.roles || [],
+                  plate: targetVeh?.plate_number || null,
                   countryCode: countryInfo?.country_code || null,
                   locale: countryInfo?.locale || 'en-US',
                   currency: countryInfo?.currency || 'USD',
@@ -2207,19 +2218,31 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
               });
               if (queued) {
                 customReply = followUpAckText(reportType);
+              } else if (reportType === 'custom' && metricIds.length === 0) {
+                const access = resolveReportAccess({
+                  reportType: 'custom',
+                  profile: profileData,
+                  vehicles: existingVehicles,
+                  roles: profileData?.roles || []
+                });
+                customReply = `📊 *Bespoke report — pick your metrics*\n\nAvailable: ${customMetricMenu(access)}\n\n` +
+                  'Reply, for example:\n_"custom report: fuel economy, total spend and distance for last 3 months"_\n\n' +
+                  'You can also ask for "fuel economy report", "driver daybook", "vehicle health" or "compliance card".';
               } else {
-                const fleetReport = await buildFleetReport({
+                const laneReport = await buildReportForLane({
                   supabase: supabaseClient,
-                  type: reportType,
+                  reportType,
                   ownerId: existingVehicles.some((v) => v.owner_id === profileData?.id) ? profileData?.id : null,
                   driverId: existingVehicles.some((v) => v.assigned_driver_id === profileData?.id) ? profileData?.id : null,
+                  profile: profileData,
                   countryInfo,
-                  profile: profileData
+                  metricIds,
+                  range: dateRange
                 });
-                customReply = fleetReport?.ok && fleetReport.text
-                  ? fleetReport.text
-                  : `📊 *Fleet Reports & Summary*\n\nYou have ${existingVehicles.length} active vehicle(s).\n\nAsk for *fleet status*, *compliance report*, *maintenance report* or *financial report*.`;
-                if (profileData?.id && fleetReport?.ok) {
+                customReply = laneReport.ok
+                  ? laneReport.text
+                  : (laneReport.text || `📊 *Fleet Reports & Summary*\n\nYou have ${existingVehicles.length} active vehicle(s).\n\nAsk for *fleet status*, *compliance report*, *maintenance report* or *financial report*.`);
+                if (profileData?.id && laneReport?.ok) {
                   try {
                     await recordReportUsage({ supabase: supabaseClient, ownerId: profileData.id });
                     // Trial activation #3: first fleet report generated.
