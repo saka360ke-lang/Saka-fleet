@@ -327,6 +327,18 @@ export async function runAnthropicAttempt({
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY missing in environment');
 
   const translated = toAnthropicMessages(system, messages, jsonMode);
+  const payload = {
+    model,
+    system: translated.system || undefined,
+    messages: translated.messages,
+    max_tokens: maxTokens
+  };
+  // Newer Claude models (Sonnet 5.5+) mark `temperature` as deprecated and
+  // return HTTP 400 when it is sent. Omit it by default; legacy deployments
+  // that still need it can opt in explicitly.
+  if (TRUTHY.has(String(process.env.ANTHROPIC_TEMPERATURE_SUPPORTED || 'off').toLowerCase())) {
+    payload.temperature = temperature;
+  }
   const response = await fetch(`${ANTHROPIC_BASE_URL}/v1/messages`, {
     method: 'POST',
     headers: {
@@ -334,13 +346,7 @@ export async function runAnthropicAttempt({
       'anthropic-version': ANTHROPIC_API_VERSION,
       'content-type': 'application/json'
     },
-    body: JSON.stringify({
-      model,
-      system: translated.system || undefined,
-      messages: translated.messages,
-      max_tokens: maxTokens,
-      temperature
-    }),
+    body: JSON.stringify(payload),
     signal: AbortSignal.timeout(timeoutMs)
   });
 

@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.18.0  
+**Version:** 1.18.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -1878,6 +1878,7 @@ Research against Anthropic's current lineup (Oct 2026): **Claude Sonnet 5.5** is
 - Wired via `PREMIUM_MODEL_ENABLED=on` + `CONVERSATIONAL_PROVIDER=anthropic` + `AI_MODEL_TIER_2=claude-sonnet-5-5`; `DEFAULT_ANTHROPIC_TIER2_MODEL` updated.
 - Free accounts remain clamped to Tier 1 (DeepSeek) by entitlements; trial/paid receive Tier 2 prose renders. DeepSeek stays the terminal failover leg (anthropic → openai → deepseek) with per-provider breakers, 15 s premium timeout, concurrency 2 and the daily budget guard.
 - `AI_USAGE_COST_RULES` updated (Fable/Opus/Sonnet/Haiku current list prices) so `admin ai-stats` stays honest; smoke test: `node scripts/test_anthropic_connection.js`.
+- **Temperature:** newer Claude models (Sonnet 5.5+) return HTTP 400 for `temperature`; `runAnthropicAttempt` omits it by default (opt in with `ANTHROPIC_TEMPERATURE_SUPPORTED=on` only for legacy models). Verified live through `chatCompletion()`.
 
 ### 47.2 Saka Pro PDF engine (`src/services/pdfEngine.js`)
 Premium, deterministic, engine-only numbers:
@@ -1907,5 +1908,27 @@ One pure choke point used by the WhatsApp route, the follow-up worker and the PD
 - Files: `src/services/pdfEngine.js`, `reportMetrics.js`, `reportDelivery.js`, `reportAccess.js`, `driverReports.js`; `reports.js` (legacy facade → Pro renderer); integrations in `src/routes/whatsapp.js`, `src/services/followups.js`, `sakaAi.js`, `flowKnowledge.js`; fonts in `assets/fonts/`.
 - Tests: `test_report_access.js` (33 assertions), `test_report_metrics.js` (25, incl. real PDF render), `test_agent_training.js` (64), plus existing fuel/remediation/model suites.
 - Ops: `node scripts/test_anthropic_connection.js`; `npm run migrate:*` unchanged; report PDFs require the `fleet-reports` storage bucket (already used by the legacy audit path).
+
+---
+
+## 48. v1.18.1 — Emoji Artistry & Saka's First Hello
+
+### 48.1 Emoji Policy (data, not vibes)
+`SAKA_TONE_COMPASS.emojiPolicy` in `flowKnowledge.js` is the single source of truth, rendered into the playbook as **EMOJI POLICY** and mirrored by the composer's **EMOJI ARTISTRY** line and the core prompt:
+- **Principle:** emojis are scaffolding, not decoration — one semantic emoji per line anchors the eye for every reading level; numbers, currency and dates stay emoji-free.
+- **Density:** ≤3 emojis per standard message (max 1 per line); welcome/onboarding messages ≤4; never an emoji wall, never the same emoji twice in a row.
+- **Situation matrix:** greetings 👋 + time-of-day (🌅☀️🌙), local greeting first (Namaste 🙏 in India, Habari in East Africa, Hello elsewhere); onboarding 📋→✅→🎉→🚗; logs ⛽🔢💰✅; reminder ladder 🔔 30d → ⏰ 14d → ⚠️ 7d → 🚨 overdue; status 🟢🟡🔴; errors/frustration exactly ONE gentle 🙏; money/legal/compliance one semantic header emoji with plain figures; celebration max 2, never during bad news.
+- **Banned:** sarcastic/ambiguous emojis (🙄 😏 😒 🤡 💀) and emojis inside amounts, plate numbers, codes or OTPs.
+- **Mirror:** match the user's playfulness inside these limits; formal users still get the light scaffolding version.
+
+### 48.2 First-contact introduction (`src/services/greetings.js`)
+- Deterministic, zero tokens, country-aware: `resolveDaypart()` (in the user's timezone), `greetingFor()` (Namaste 🙏 · Habari · Marhaba · Bonjour · Hola · Olá · Hallo · Ciao · Sawubona; time-of-day fallback), `sakaIntroText()` and `isFirstContact()`.
+- Intro copy (example, India): *"Namaste! 🙏 I'm Saka — your vehicle's co-pilot on WhatsApp. I keep your fuel ⛽, costs 💰 and service reminders 🔔 in one calm place, so you can focus on the road. To begin, send your vehicle's number plate (e.g. MH 01 AB 1234)."*
+- **Trigger:** a genuinely fresh conversation (no DB history, no in-memory history, no `sakaIntroduced` flag, no registered vehicle). The greeting branch uses the intro verbatim; any other first message (e.g. a plate sent straight away) gets the intro prefixed once, without repeating the plate ask. `buildFirstTimeWelcome()` now introduces Saka by name in both English and Swahili.
+- Never repeats (`session.sakaIntroduced`), never assumes gender/role, and always ends with ONE next step.
+
+### 48.3 Sync, files & tests
+- Files: `src/services/greetings.js`, `flowKnowledge.js` (emojiPolicy + GREETING playbook), `conversationEngine.js` (EMOJI ARTISTRY), `sakaAi.js` (emoji bullet + first-contact behavior), `src/routes/whatsapp.js` (import + first-contact trigger + opener), `.clinerules` rule 31 emoji bullet.
+- Tests: `test_greetings.js` (23 assertions: dayparts, localized greetings, intro content/ceiling, first-contact detection, emoji discipline) and `test_agent_training.js` (68 assertions incl. `EMOJI POLICY`, `EMOJI ARTISTRY`, `Namaste`, `first contact`).
 
 

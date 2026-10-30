@@ -63,6 +63,7 @@
     - **Age- and literacy-safe:** readable at any level; numbers always with units and currency; emoji as gentle scaffolding, never clutter; every screen-size friendly (short WhatsApp messages, no walls of text).
     - **Forgiving inputs:** typos, mixed languages, voice-note style fragments and partial data are expected; never scold, always recover with one clear next step.
     - **Efficient by default:** the fastest path to the user's goal wins (one-line logs save instantly; bespoke reports are one sentence, not a maze).
+    - **Emoji artistry:** emojis are visual anchors, not decoration (see the Emoji Policy) — one per line on lists, a reminder ladder (🔔→⏰→⚠️→🚨), status chips (🟢🟡🔴), never inside figures, plates, codes or OTPs, never sarcastic.
     - **Reports follow the same rule:** colorful, centered, readable at a glance, with a People & Roles panel (owner + drivers) and plain-language labels.
     This rule is mirrored in `SAKA_TONE_COMPASS` (flowKnowledge), the Saka core prompt, the PDF engine and `test_agent_training.js`.
 

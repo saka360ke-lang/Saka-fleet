@@ -16,6 +16,7 @@ import {
 } from '../services/vehicles.js';
 import { calculateFuelConsumption } from '../services/analytics.js';
 import { normalizeFillType } from '../services/fuelEconomy.js';
+import { sakaIntroText, isFirstContact } from '../services/greetings.js';
 import { buildFleetReport, resolveReportType } from '../services/fleetReports.js';
 import { resolveAnyReportType, buildReportForLane } from '../services/reportDelivery.js';
 import { resolveMetricIds, customMetricMenu } from '../services/reportMetrics.js';
@@ -305,8 +306,8 @@ export function buildFirstTimeWelcome({ swahili = false, countryInfo = null, sen
   const unitLabel = isImperial ? 'miles/gallons' : 'km/liters';
 
   const opener = swahili
-    ? '👋 *Habari! Karibu Saka Fleet!* 🚗'
-    : '👋 *Welcome to Saka Fleet!* 🚗';
+    ? '👋 *Habari! Karibu Saka Fleet!* Mimi ni Saka, nahodha wa gari lako. 🚗'
+    : '👋 *Welcome to Saka Fleet!* I\'m Saka — your vehicle\'s co-pilot. 🚗';
   return `${opener}\n\n` +
     `Saka tracks your vehicles, fuel, expenses, compliance & maintenance right here on WhatsApp.\n\n` +
     `🚀 *Your First-Time Setup (about 2 minutes):*\n` +
@@ -780,6 +781,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         if (conversationHistory.length === 0 && dbHistory.length > 0) {
           conversationHistory = dbHistory;
         }
+        const firstContact = isFirstContact({ session, dbHistory, hasVehicleRegistered });
 
         // Pass message through DeepSeek Intent Classifier (sakaAi.js) with Active Fleet Context
         const activeVehicleContext = hasVehicleRegistered ? {
@@ -2481,24 +2483,30 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
               fallbackText: 'Apologies for the message overload — I have paused automated prompts. Type Support for help, or send your plate when ready.'
             });
           }
-          // 3. Greetings — AI-rendered first-time introduction
+          // 3. Greetings — Saka introduces itself on first contact (deterministic),
+          // otherwise a warm AI-rendered one-liner.
           else if (/^(habari|mambo|jambo|hujambo|salama)\b/i.test(clean) || intent === 'GREETING') {
-            customReply = aiResult.reply_message && !aiResult.reply_message.includes('I am your Saka Fleet WhatsApp assistant')
-              ? aiResult.reply_message
-              : await composeMessage({
-                  purpose: 'first_time_welcome',
-                  facts: {
-                    prompt: 'Introduce Saka Fleet in one short paragraph, then ask exactly ONE question: the vehicle registration plate (or invite them to type REGISTER).',
-                    region: countryInfo,
-                    plateExample: countryInfo.plate_example,
-                    setupSteps: ['plate number', 'make/model, year, fuel, odometer', 'email OTP', 'VIN-locked passbook'],
-                    helpHint: 'Type Help anytime, Restart or Cancel to recover.'
-                  },
-                  language: targetLang,
-                  countryInfo,
-                  profile: profileData,
-                  fallbackText: `Welcome to Saka Fleet 🚗 What is your vehicle's registration plate? (e.g. ${countryInfo.plate_example})`
-                });
+            if (firstContact) {
+              customReply = sakaIntroText({ countryInfo, profile: profileData });
+              session.sakaIntroduced = true;
+            } else {
+              customReply = aiResult.reply_message && !aiResult.reply_message.includes('I am your Saka Fleet WhatsApp assistant')
+                ? aiResult.reply_message
+                : await composeMessage({
+                    purpose: 'first_time_welcome',
+                    facts: {
+                      prompt: 'Introduce Saka Fleet in one short paragraph, then ask exactly ONE question: the vehicle registration plate (or invite them to type REGISTER).',
+                      region: countryInfo,
+                      plateExample: countryInfo.plate_example,
+                      setupSteps: ['plate number', 'make/model, year, fuel, odometer', 'email OTP', 'VIN-locked passbook'],
+                      helpHint: 'Type Help anytime, Restart or Cancel to recover.'
+                    },
+                    language: targetLang,
+                    countryInfo,
+                    profile: profileData,
+                    fallbackText: `Welcome to Saka Fleet 🚗 What is your vehicle's registration plate? (e.g. ${countryInfo.plate_example})`
+                  });
+            }
           }
           // 4. General informational questions answered by Saka AI
           else if (aiResult.reply_message && !aiResult.reply_message.includes('I am your Saka Fleet WhatsApp assistant. How can I help with your vehicle')) {
@@ -2553,6 +2561,14 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
         }
 
         let finalReply = sanitizedReply;
+
+        // First contact that did not arrive as a greeting (e.g. a plate sent
+        // straight away) still gets Saka's polite introduction once.
+        if (firstContact && !session.sakaIntroduced) {
+          const plateGiven = Boolean(mergedExt?.plate_number);
+          finalReply = `${sakaIntroText({ countryInfo, profile: profileData, nextStep: plateGiven ? '' : undefined })}${finalReply ? `\n\n${finalReply}` : ''}`;
+          session.sakaIntroduced = true;
+        }
 
         // Stage 1 (Soft Trip): Prompt repeated 3 times. Grace retry.
         if (session.consecutivePromptCount === 3) {

@@ -66,3 +66,10 @@ Owners receive every report for their vehicles; assigned drivers receive their
 driver lane only. Every report can arrive as a branded Saka Pro PDF (link + email).
 Conversations run on **Claude Sonnet 5.5** when premium routing is enabled
 (`PREMIUM_MODEL_ENABLED=on`, `CONVERSATIONAL_PROVIDER=anthropic`).
+
+## Tone & first contact (v1.18.1)
+Saka introduces itself on the first message with a localized greeting
+(Namaste 🙏 in India, Habari in East Africa, time-of-day elsewhere), then asks
+one next step. Conversations use **emoji artistry**: semantic anchors per line,
+a 🔔→⏰→⚠️→🚨 reminder ladder, 🟢🟡🔴 status chips, figures kept emoji-free, and
+at most 3 emojis per message (4 on the welcome message).
