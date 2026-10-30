@@ -19,6 +19,7 @@ import {
 } from './aiUsageLog.js';
 import { formatNairobiDate } from './dateParser.js';
 import { getTrialFunnelStats, formatTrialStatsReply } from './trialEngine.js';
+import { getFeatureRolloutStatus, FEATURE_NOTICE_VERSION } from './featureNotice.js';
 import {
   applyModelRollout,
   rollbackModel,
@@ -123,6 +124,7 @@ const ADMIN_INTENTS = new Set([
   'ADMIN_REMEDIATIONS', 'ADMIN_REMEDIATION_ACCEPT', 'ADMIN_REMEDIATION_DECLINE', 'ADMIN_REMEDIATION_MODIFY',
   'ADMIN_AI_STATS',
   'ADMIN_TRIAL_STATS',
+  'ADMIN_ROLLOUT',
   'ADMIN_MODELS', 'ADMIN_MODEL_SCOUT', 'ADMIN_MODEL_ADOPT', 'ADMIN_MODEL_ROLLBACK',
   'HEALTH_CHECK', 'GENERATE_COUPON', 'PROFILES_REPORT', 'SENTINEL_DIAGNOSE'
 ]);
@@ -175,6 +177,9 @@ export async function parseSuperadminCommand(messageText) {
   }
   if (/^\s*admin\s+proposals\b/i.test(lower)) {
     return { intent: 'ADMIN_PROPOSALS' };
+  }
+  if (/^\s*admin\s+rollout(?:\s+status)?\s*$/i.test(lower)) {
+    return { intent: 'ADMIN_ROLLOUT' };
   }
 
   // Phase 2 (v1.13.0): AI telemetry digest — regex first, zero LLM calls.
@@ -237,7 +242,7 @@ export async function parseSuperadminCommand(messageText) {
   }
 
   const prompt = `Classify user's admin request into JSON:
-Intent: "HEALTH_CHECK" | "GENERATE_COUPON" | "PROFILES_REPORT" | "ADMIN_AI_STATS" | "ADMIN_TRIAL_STATS" | "ADMIN_REPORT" | "ADMIN_AUDIT" | "ADMIN_ALERTS" | "ADMIN_RULES_RESET" | "ADMIN_RULES_TOGGLE" | "ADMIN_RULES_LIST" | "ADMIN_HORIZON" | "ADMIN_PROPOSALS" | "ADMIN_REMEDIATIONS" | "ADMIN_REMEDIATION_ACCEPT" | "ADMIN_REMEDIATION_DECLINE" | "ADMIN_REMEDIATION_MODIFY" | "UNKNOWN"
+Intent: "HEALTH_CHECK" | "GENERATE_COUPON" | "PROFILES_REPORT" | "ADMIN_AI_STATS" | "ADMIN_TRIAL_STATS" | "ADMIN_ROLLOUT" | "ADMIN_REPORT" | "ADMIN_AUDIT" | "ADMIN_ALERTS" | "ADMIN_RULES_RESET" | "ADMIN_RULES_TOGGLE" | "ADMIN_RULES_LIST" | "ADMIN_HORIZON" | "ADMIN_PROPOSALS" | "ADMIN_REMEDIATIONS" | "ADMIN_REMEDIATION_ACCEPT" | "ADMIN_REMEDIATION_DECLINE" | "ADMIN_REMEDIATION_MODIFY" | "UNKNOWN"
 Extract: discount_value (e.g. "20%"), target_phone (e.g. "+254712345678"), query (e.g. "KDA 123A" or VIN), rule_key (e.g. "clarify_vin"), proposal_code (e.g. "FIX-2026-10-30-01"), feedback (guidance text), hours (AI telemetry window 1-168, default 24), days (trial funnel window 1-365, default 30)
 Command: "${text}"`;
 
@@ -1382,6 +1387,18 @@ export async function handleModelRollbackCommand(supabase, tierSlot = 'tier_1') 
 /**
  * Main Intercept Flow for Superadmin WhatsApp Messages
  */
+/** Deterministic digest for `admin rollout` (zero tokens). */
+export function formatFeatureRolloutReply(status) {
+  const counts = status?.counts || {};
+  const value = (input) => (input === null || input === undefined ? 'n/a' : String(input));
+  return `🚀 *Saka v${status?.version || FEATURE_NOTICE_VERSION} Rollout*\n\n` +
+    `• 👥 Profiles: ${value(counts.profiles)}\n` +
+    `• ✅ Noticed: ${value(counts.notified)} · pending ${value(status?.pending)}\n` +
+    `• Receipts: ${value(counts.receipts)} · registry ${value(counts.registry)}\n` +
+    `• 🚗 Active vehicles: ${value(counts.vehicles)}\n\n` +
+    '_The digest appends once to each user\'s next normal turn. Run npm run rollout:features -- --apply to backfill the schema._';
+}
+
 export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
   if (!isSuperadminPhone(senderPhone)) {
     return { isSuperadmin: false };
@@ -1624,6 +1641,19 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
     return {
       isSuperadmin: true,
       reply: trialRes.reply
+    };
+  }
+
+  if (parsedCommand.intent === 'ADMIN_ROLLOUT') {
+    const status = await getFeatureRolloutStatus(supabase);
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_ROLLOUT', {
+      version: status.version,
+      counts: status.counts,
+      pending: status.pending
+    });
+    return {
+      isSuperadmin: true,
+      reply: formatFeatureRolloutReply(status)
     };
   }
 

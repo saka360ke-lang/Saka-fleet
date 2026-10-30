@@ -28,6 +28,9 @@ npm run migrate:dunning             # dunning + re-engagement bookkeeping
 npm run migrate:welcome-trial       # trial_sessions.source (welcome | upgrade)
 npm run migrate:remediation         # Sentinel audit + proposals tables
 npm run migrate:sessions            # chat session snapshots
+npm run migrate:receipts            # receipt vault (OCR dedupe + history)
+npm run migrate:feature-notice      # profiles.feature_notice (What's new digest)
+npm run rollout:features            # existing-user backfill (dry-run; -- --apply writes)
 ```
 
 ## Architecture
@@ -53,7 +56,7 @@ leg stays automatic.
 ## Superadmin quick reference
 `adminstart` → session, then `admin report`, `admin alerts`, `admin remediations`,
 `admin ai-stats`, `admin trial-stats`, `admin models`, `admin model scout`,
-`admin model adopt <model_id> [split]`, `admin model rollback [tier_1]`,
+`admin rollout`, `admin model adopt <model_id> [split]`, `admin model rollback [tier_1]`,
 `admin accept fix <CODE> [override]`,
 `admin modify fix <CODE> <guidance>`, `admin decline fix <CODE>`.
 
@@ -81,3 +84,14 @@ prefills the confirmation summary and asks only what is missing. Duplicate
 photos are recognised, every read lands in the receipt vault, and
 `receipts` shows your last five with 🟢/🟡/🔴 status chips. Low-confidence reads
 ask you to double-check before saving; nothing is ever written without your YES.
+
+## Intent resilience, summary PDF & rollout (v1.19.1)
+- `send me my registration summary as a PDF to my email` builds a Saka Pro
+  **Vehicle Registration Summary** (specs, VIN, countdowns, reminders, owner +
+  driver), uploads it and emails it. Owners only; drivers get the health lane.
+- `intent_classify` / `question_render` get one extra attempt when a provider
+  returns an empty body — recorded inside the same `ai_usage_logs` row.
+- Cloud Run revision-conflict chatter is filtered from Sentinel alerts.
+- Existing users receive a once-only ✨ **What's new** digest on their next
+  normal turn (never during a quiz), version-stamped by `FEATURE_NOTICE_VERSION`.
+  Run `npm run rollout:features -- --apply` to backfill, and `admin rollout` for status.

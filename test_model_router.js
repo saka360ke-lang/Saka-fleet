@@ -15,7 +15,8 @@ import {
   getAiUsageSink,
   setRuntimeModelResolver,
   normalizeHistory,
-  parseJsonSafely
+  parseJsonSafely,
+  EMPTY_RETRY_PURPOSES
 } from './src/services/aiClient.js';
 import {
   ensureAiUsageLogsTable,
@@ -193,6 +194,12 @@ async function runTests() {
       check((leftovers || []).length === 0, 'unit-test telemetry rows were cleaned up');
     }
   }
+
+  console.log('--- Test 12: empty-completion retry is purpose-scoped (v1.19.1) ---');
+  check(EMPTY_RETRY_PURPOSES.has('intent_classify') === true, 'intent_classify gets one empty-completion retry');
+  check(EMPTY_RETRY_PURPOSES.has('question_render') === true, 'question_render gets the retry');
+  check(EMPTY_RETRY_PURPOSES.has('general_chat') === false, 'casual chat never pays for a second call');
+  check(EMPTY_RETRY_PURPOSES.size === 3, 'the retry allow-list stays deliberately small');
 
   console.log(`\n=== ALL ${passed} MODEL ROUTER ASSERTIONS PASSED ===`);
 }

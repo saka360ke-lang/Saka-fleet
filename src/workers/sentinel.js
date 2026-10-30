@@ -395,6 +395,15 @@ export async function logChatTranscript(providedSupabase, phoneNumber, sender, m
 const recentlyAlertedLogHashes = new Map();
 const CLOUD_RUN_ALERT_TTL = 15 * 60 * 1000; // 15 minutes
 
+// v1.19.1 — deployment artifacts (Cloud Run revision/traffic conflicts while a
+// new revision rolls out) are not user-facing failures. Ignoring them keeps
+// Sentinel health and Superadmin alerts signal-rich.
+export const DEPLOY_NOISE_RE = /(version\s+'[^']+'\s+was\s+specified\s+but\s+current\s+version\s+is|Conflict\s+for\s+resource|traffic\s+was\s+specified\s+but\s+current\s+traffic)/i;
+
+export function isDeployNoiseLog(text) {
+  return DEPLOY_NOISE_RE.test(String(text || ''));
+}
+
 export async function scanCloudRunAnomalies(providedSupabase) {
   const superadminPhone = process.env.SUPERADMIN_PHONE;
   if (!superadminPhone) return;
@@ -432,6 +441,7 @@ export async function scanCloudRunAnomalies(providedSupabase) {
 
     const logText = String(log.text || '').trim();
     if (!logText || logText === '{}' || logText === 'null' || logText === 'undefined') continue;
+    if (isDeployNoiseLog(logText)) continue;
 
     if (isError || isTimeoutRisk) {
       recentlyAlertedLogHashes.set(hashStr, now);

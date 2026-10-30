@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.19.0  
+**Version:** 1.19.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -1961,5 +1961,40 @@ OCR failures now speak like Saka: *"📸 I couldn't read that photo clearly 🙏
 - Files: `src/services/ocrService.js` (classifier + rich hints), `src/services/receipts.js` (vault, dedupe, replies), `src/routes/whatsapp.js` (media → classify → vault → confirmation-gated quiz, `receipts` command, duplicate/low-confidence overrides), `scripts/run_receipts_migration.js`, `scripts/reset-db.js`, `scripts/testCleanup.js`, `sakaAi.js` (`OCR & PHOTOS` training block), `flowKnowledge.js` (OCR confirmation boundary).
 - Tests: `test_ocr_flow.js` (38 assertions), `test_agent_training.js` (`OCR & PHOTOS`, `RECEIPT INTELLIGENCE`), `test_db_reset_scope.js` (receipts wiped).
 - Knobs: `OCR_MAX_MEDIA_BYTES` (5242880), `OCR_TIMEOUT_MS` (15000), `OCR_CONFIRM_THRESHOLD` (0.85), `RECEIPTS_BUCKET` (receipts).
+
+---
+
+## 50. v1.19.1 — Intent Resilience, Registration Summary PDF & Existing-User Rollout
+
+### 50.1 Purpose-scoped empty-completion retry (`aiClient.js`)
+Live audit showed Tier-1 DeepSeek returning `Empty completion` nine times on `intent_classify` plus one timeout, pushing real turns onto the regex fallback. `chatCompletion()` now performs **one** extra call, same provider/model, when the body is empty **and** the purpose is in `EMPTY_RETRY_PURPOSES` (`intent_classify`, `question_render`, `prose_render`). The retry nudges temperature by +0.05 (capped at 0.9), keeps `maxRetries: 0`, and records `empty_retry_ok` / `empty_retry_failed` inside the **same** `ai_usage_logs.attempts[]` row — no extra telemetry row, no provider hopping, no cost on casual chat. Tier clamping, entitlements and deterministic fallbacks are untouched.
+
+### 50.2 Registration summary PDF by email (`vehicleSummary.js`)
+Real request: *"email me the registration summary PDF"*. New deterministic command path in `src/routes/whatsapp.js`:
+- Triggers on `registration/vehicle summary|details|passbook` or `(send|email|resend|share) … registration`. Zero tokens.
+- Owner lane only: drivers receive a lock notice and are pointed to *vehicle health* / *driver daybook*. VIN/passbook stay owner-visible.
+- `buildVehicleSummary()` assembles plate, VIN, specs, odometer, insurance/inspection countdowns, open reminders, owner + assigned-driver People panel.
+- `emailVehicleSummary()` renders the Saka Pro PDF, uploads to `fleet-reports` and emails via `sendReportByEmail`; failure degrades to the in-chat summary + link, never an error.
+- Plain *"vehicle summary"* returns text with a one-line hint to ask for the PDF. This is a core account document: it does **not** consume the fleet-report quota.
+
+### 50.3 Cloud Run deployment-noise filter (`sentinel.js`)
+`scanCloudRunAnomalies()` ignores revision/traffic conflict artifacts (`Conflict for resource`, `version '…' was specified but current version is …`) through exported `DEPLOY_NOISE_RE` / `isDeployNoiseLog()`. Rollout noise no longer reaches `chat_friction_logs`, `error_logs` or Superadmin WhatsApp alerts; genuine runtime errors still alert.
+
+### 50.4 Once-only "What's new" digest for existing users
+- Schema: `profiles.feature_notice` + `profiles.feature_notice_at`; `npm run migrate:feature-notice` (idempotent) and fail-soft boot `ensureFeatureNoticeSchema`.
+- `FEATURE_NOTICE_VERSION` (default `1.19.1`) is stamped per profile. `isNoticeStale()` compares version parts numerically (1.19.10 > 1.19.1).
+- `buildFeatureNotice({ lane })` is deterministic, ≤4 emoji anchors: owners get receipts/PDF reports/full-tank logging; drivers get Daybook/Vehicle Health/Compliance Card. Drivers never see owner financial prompts.
+- Append rules (`shouldShowFeatureNotice`): registered users only, once per session, never during a quiz/confirmation, circuit-breaker trip or the summary command; session flag + DB stamp both set.
+- Backfill: `npm run rollout:features` (dry-run default) reports profile/notified/pending/vehicles/receipts/registry counts and, with `--apply`, runs the feature-notice + fuel fill-type + receipts + model-registry DDL idempotently.
+- Superadmin: `admin rollout` / `admin rollout status` → deterministic digest, audited `ADMIN_ROLLOUT`, zero tokens.
+
+### 50.5 Upload guidance
+`sakaAi.js` OCR block and `flowKnowledge.js` boundary now state explicitly that users may upload receipts, logbooks, insurance policies and driver licences (one photo at a time) and that nothing saves before confirmation.
+
+### 50.6 Files, tests & knobs
+- Files: `src/services/aiClient.js`, `src/services/vehicleSummary.js`, `src/services/featureNotice.js`, `src/routes/whatsapp.js`, `src/workers/sentinel.js`, `src/services/superadmin.js`, `index.js`, `sakaAi.js`, `src/services/flowKnowledge.js`, `scripts/run_feature_notice_migration.js`, `scripts/feature_rollout.js`, `package.json`, `.env.example`, `README.md`.
+- Tests: `test_feature_notice.js` (24 assertions), `test_vehicle_summary.js` (14), `test_model_router.js` (empty-retry allow-list), `test_agent_training.js` (upload permission token).
+- Knobs: `FEATURE_NOTICE_VERSION` (1.19.1).
+
 
 

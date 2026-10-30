@@ -39,6 +39,9 @@ export const AI_TIERS = Object.freeze({
 
 const TRUTHY = new Set(['on', 'true', '1']);
 
+/** Purposes that get one extra attempt when a provider returns an empty body. */
+export const EMPTY_RETRY_PURPOSES = new Set(['intent_classify', 'question_render', 'prose_render']);
+
 /** Master kill switch for premium conversational routing (default: off). */
 export function isPremiumModelEnabled() {
   return TRUTHY.has(String(process.env.PREMIUM_MODEL_ENABLED || 'off').toLowerCase());
@@ -747,6 +750,59 @@ export async function chatCompletion({
         text = response?.choices?.[0]?.message?.content || '';
         promptTokens = response?.usage?.prompt_tokens ?? null;
         completionTokens = response?.usage?.completion_tokens ?? null;
+      }
+
+      // v1.19.1 — one purpose-scoped retry on empty completions. DeepSeek
+      // occasionally returns an empty body for intent_classify; a single cheap
+      // retry recovers the turn instead of falling straight to the regex path.
+      if ((!text || !text.trim()) && EMPTY_RETRY_PURPOSES.has(String(purpose || '')) && attempt.provider !== AI_PROVIDERS.ANTHROPIC) {
+        try {
+          const ai = getProviderClient(attempt.provider);
+          const retryMessages = [];
+          if (system && system.trim()) retryMessages.push({ role: 'system', content: system });
+          retryMessages.push(...messages);
+          if (jsonMode) retryMessages.push({ role: 'user', content: 'Respond with valid JSON only.' });
+          const retryRequest = {
+            model: attempt.model,
+            messages: retryMessages,
+            max_tokens: maxTokens,
+            temperature: Math.min(0.9, Math.max(0, temperature + 0.05))
+          };
+          if (jsonMode) retryRequest.response_format = { type: 'json_object' };
+          const retryResponse = await ai.chat.completions.create(retryRequest, {
+            timeout: timeoutMs,
+            maxRetries: 0
+          });
+          const retryText = retryResponse?.choices?.[0]?.message?.content || '';
+          if (retryText && retryText.trim()) {
+            text = retryText;
+            promptTokens = (promptTokens || 0) + (retryResponse?.usage?.prompt_tokens || 0);
+            completionTokens = (completionTokens || 0) + (retryResponse?.usage?.completion_tokens || 0);
+            attemptLog.push({
+              provider: attempt.provider,
+              model: attempt.model,
+              outcome: 'empty_retry_ok',
+              latencyMs: Date.now() - attemptStartedAt,
+              error: null
+            });
+          } else {
+            attemptLog.push({
+              provider: attempt.provider,
+              model: attempt.model,
+              outcome: 'empty_retry_failed',
+              latencyMs: Date.now() - attemptStartedAt,
+              error: 'Empty completion returned by provider'
+            });
+          }
+        } catch (retryErr) {
+          attemptLog.push({
+            provider: attempt.provider,
+            model: attempt.model,
+            outcome: 'empty_retry_failed',
+            latencyMs: Date.now() - attemptStartedAt,
+            error: retryErr?.message || String(retryErr)
+          });
+        }
       }
 
       if (text && text.trim()) {

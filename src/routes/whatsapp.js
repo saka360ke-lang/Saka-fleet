@@ -17,6 +17,13 @@ import {
 import { calculateFuelConsumption } from '../services/analytics.js';
 import { normalizeFillType } from '../services/fuelEconomy.js';
 import { sakaIntroText, isFirstContact } from '../services/greetings.js';
+import { buildVehicleSummary, emailVehicleSummary } from '../services/vehicleSummary.js';
+import {
+  buildFeatureNotice,
+  shouldShowFeatureNotice,
+  markFeatureNoticeSeen,
+  ensureFeatureNoticeSchema
+} from '../services/featureNotice.js';
 import { buildFleetReport, resolveReportType } from '../services/fleetReports.js';
 import { resolveAnyReportType, buildReportForLane } from '../services/reportDelivery.js';
 import { resolveMetricIds, customMetricMenu } from '../services/reportMetrics.js';
@@ -846,8 +853,44 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         // Deterministic receipt history ("receipts") — zero AI tokens.
         const receiptsCommand = /^(?:my\s+)?receipts?$|^show\s+(?:my\s+)?receipts?$|^last\s+receipt$/i.test(String(messageText || '').trim());
 
+        // Vehicle registration summary ("send me registration summary as PDF").
+        const summaryCommand = /(?:(?:send|email|resend|share|mail)\b[\s\S]{0,40}(?:registration|vehicle|passbook)\b[\s\S]{0,20}(?:summary|details|copy|pdf|email))|(?:registration|vehicle)\s+(?:summary|details|passbook)/i.test(String(messageText || ''));
+
         let aiResult;
-        if (receiptsCommand) {
+        if (summaryCommand) {
+          const summaryVehicle = currentActiveVehicle || existingVehicles[0] || null;
+          if (!summaryVehicle) {
+            aiResult = {
+              intent: 'GENERAL_CHAT',
+              extracted_data: {},
+              reply_message: '🚗 Register a vehicle first and I will prepare its summary for you.'
+            };
+          } else if (summaryVehicle.owner_id !== profileData?.id && !isSuperadminPhone(senderPhone)) {
+            aiResult = {
+              intent: 'GENERAL_CHAT',
+              extracted_data: {},
+              reply_message: '🔒 That registration summary belongs to the vehicle owner. As the assigned driver you can ask for *vehicle health* 🩺 or *driver daybook* 📓 instead.'
+            };
+          } else {
+            const summary = await buildVehicleSummary({ supabase: supabaseClient, vehicle: summaryVehicle, owner: profileData, countryInfo });
+            let reply = summary.ok ? summary.text : '🙏 I could not build that summary right now.';
+            const wantsEmail = /pdf|email|mail|inbox/i.test(messageText);
+            if (summary.ok && wantsEmail) {
+              const delivery = await emailVehicleSummary({
+                supabase: supabaseClient,
+                summary,
+                ownerEmail: profileData?.email || null,
+                plateNumber: summaryVehicle.plate_number
+              });
+              if (delivery.ok && delivery.emailed) reply += `\n\n📄 Sent to *${profileData.email}* ✅`;
+              else if (delivery.ok && delivery.url) reply += `\n\n📄 *PDF:* ${delivery.url}`;
+              else reply += '\n\n🙏 I could not email it just now — your summary is above.';
+            } else if (summary.ok) {
+              reply += '\n\n💡 Reply *"send summary as PDF to my email"* for a branded copy.';
+            }
+            aiResult = { intent: 'GENERAL_CHAT', extracted_data: {}, reply_message: reply };
+          }
+        } else if (receiptsCommand) {
           const isOwner = existingVehicles.some((v) => v.owner_id === profileData?.id);
           const receipts = await listReceipts(supabaseClient, {
             ownerId: isOwner ? profileData?.id : null,
@@ -2719,6 +2762,21 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
             fallbackText: "I've escalated this step to support@sakafleet.com. Type Restart to begin again, or Cancel to exit."
           });
           session.lastAssistantPrompt = finalReply;
+        }
+
+        // v1.19.1 — once-only "What's new" digest for existing users. Appended to
+        // a normal turn only (never during a quiz/confirmation, breaker trip or
+        // the summary command) and stamped so it can never repeat.
+        if (!summaryCommand && !session.circuitBreakerStage && shouldShowFeatureNotice({
+          profile: profileData,
+          session,
+          hasQuiz: Boolean(session.quiz),
+          hasVehicleRegistered: existingVehicles.length > 0
+        })) {
+          const driverLane = !existingVehicles.some((vehicle) => vehicle.owner_id === profileData?.id);
+          finalReply = `${finalReply}\n\n${buildFeatureNotice({ lane: driverLane ? 'driver' : 'owner' })}`;
+          session.featureNoticeShown = true;
+          if (supabaseClient) markFeatureNoticeSeen(supabaseClient, profileData.id).catch(() => {});
         }
 
         session.history.push({ role: 'user', parts: [{ text: messageText }] });

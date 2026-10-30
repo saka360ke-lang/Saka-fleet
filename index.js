@@ -39,6 +39,7 @@ import {
 import { ensureFuelEconomySchema } from './src/services/fuelEconomy.js';
 import { ensureReceiptsTable } from './src/services/receipts.js';
 import { ensureChatSessionsTable } from './src/services/sessionStore.js';
+import { ensureFeatureNoticeSchema } from './src/services/featureNotice.js';
 import { drainQueue, getQueueStats } from './src/services/messageQueue.js';
 import { processPendingFollowUps } from './src/services/followups.js';
 import { handlePaystackEvent } from './src/services/subscriptions.js';
@@ -965,6 +966,7 @@ const start = async () => {
     await ensureReceiptsTable(supabase);
     await ensureComplianceCatalog({ supabase });
     await ensureChatSessionsTable(supabase);
+    await ensureFeatureNoticeSchema(supabase);
 
     logWebhookEnvParity();
 

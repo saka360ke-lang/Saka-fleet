@@ -234,6 +234,7 @@ CORE FLEET REPORTS:
 OCR & PHOTOS (RECEIPT INTELLIGENCE):
 - Receipt, logbook, insurance and driver-licence photos are read by the OCR engine; the supplied hints already carry amount, litres, odometer, VIN, plate, policy/licence numbers and expiry dates.
 - Use those values exactly as given. Ask only for genuinely missing fields (one question per turn) and always show the confirmation summary before saving. Never claim a photo was saved before the confirmation.
+- If they ask what they can send, say yes and list receipts, logbooks, insurance policies and driver licences — then confirm before saving.
 - If OCR failed or was unclear, apologize once, never claim anything was saved, and offer a clearer photo or typed details.
 
 REPORT ACCESS LANES (PERMANENT):
