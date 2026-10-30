@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.21.3  
+**Version:** 1.22.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -2157,6 +2157,33 @@ Live onboarding evidence (2026-10-30, post-slate-wipe): the first "Hello" receiv
 ### 55.3 Files, tests & knobs
 - Files: `src/services/greetings.js`, `src/routes/whatsapp.js`, `sakaAi.js`, `test_greetings.js`, `test_agent_training.js`, README.
 - Tests: `test_greetings.js` (33 — wipe-aware contact, stale-flag handling, plate-ask detection), `test_agent_training.js` (81 — prompt routing rule), `test_quiz_flow.js` 52, `test_country_bucket.js` 54.
+
+
+---
+
+## 56. v1.22.0 — Snappy Saka (Latency, Ack-First Media & OCR Kill Switch)
+
+Live evidence (2026-10-30): reply gaps ranged from 4.9 s to **86.6 s**. `ai_usage_logs` showed `intent_classify` at 2.7–16.3 s, `question_render` 3.4–19.4 s (one `failed@19400ms`), and empty-retries doubling calls (`empty_retry_ok@8900ms + ok@9000ms`). Both photo uploads returned `No text detected in the document` — the images genuinely had no readable text, while still sitting in the critical path.
+
+### 56.1 Vision photo OCR kill switch
+- `OCR_ENABLED` (`on|true|1`) defaults **off**. Photo turns skip Meta download + Vision entirely and answer instantly: *"Photo reading is paused right now — type the details, or send the PDF."* No receipt row, no error, no waiting.
+- **PDFs are exempt and always enabled** — the local text-layer extractor is fast and provider-free, so Doc Lens PDF intake keeps working with the switch off.
+- `OCR_ACK_FIRST` (default `on`) controls the ack behaviour when Vision is re-enabled.
+
+### 56.2 Ack-first media pipeline
+- With OCR enabled, the route sends a deterministic ack **before** awaiting OCR (*"📸 Reading your photo now — I'll reply with what I find in a moment."* / PDF variant), logged to `chat_transcripts` + `chat_history`.
+- The per-phone serial queue guarantees the parsed follow-up (prefilled quiz question / confirmation) arrives before the next user message is processed, so no merge races.
+- Slow work therefore never blocks the first visible reply; only the follow-up carries the parse result.
+
+### 56.3 AI latency trims
+- Empty-completion retries now require a **fast first attempt** (`EMPTY_RETRY_MAX_FIRST_MS`, default 5000) — a 9 s empty answer is never followed by another 9 s wait. Gate lives in exported `shouldRetryEmpty()`.
+- `question_render` gets a tighter ceiling (`AI_TIMEOUT_MS_QUESTION`, default 10000) so a slow provider lands on the deterministic question template instead of blocking the turn.
+- Quiz questions remain prefetched/cached; `intent_classify` keeps its 12 s fail-fast with the regex fallback.
+
+### 56.4 Files, tests & knobs
+- Files: `src/services/ocrService.js`, `src/routes/whatsapp.js`, `src/services/aiClient.js`, `.env.example`, README.
+- Tests: `test_ocr_flow.js` (51 — kill switch, no network while paused, ack copy), `test_model_router.js` (91 — retry latency gate, question timeout), `test_doc_lens.js` 48 (PDF intake unaffected), `test_greetings.js` 33.
+- Knobs: `OCR_ENABLED` (off), `OCR_ACK_FIRST` (on), `EMPTY_RETRY_MAX_FIRST_MS` (5000), `AI_TIMEOUT_MS_QUESTION` (10000).
 
 
 

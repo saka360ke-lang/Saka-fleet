@@ -35,6 +35,23 @@ export const SUPPORTED_IMAGE_TYPES = Object.freeze([
   'image/jpeg', 'image/jpg', 'image/png', 'image/webp'
 ]);
 
+/** v1.22.0 — Vision OCR kill switch. Default OFF until photo reads are reliable. */
+export function isOcrEnabled() {
+  return /^(?:on|true|1)$/i.test(String(process.env.OCR_ENABLED || 'off'));
+}
+
+/** Re-enabled OCR answers instantly with an ack, then delivers the result. */
+export function isOcrAckFirstEnabled() {
+  return !/^(?:off|false|0)$/i.test(String(process.env.OCR_ACK_FIRST || 'on'));
+}
+
+export function buildMediaAckText({ mimeType = null } = {}) {
+  const isPdf = String(mimeType || '').toLowerCase().includes('pdf');
+  return isPdf
+    ? '📄 Reading your PDF now — I\'ll reply with what I find in a moment.'
+    : '📸 Reading your photo now — I\'ll reply with what I find in a moment.';
+}
+
 function timeoutSignal(ms = FETCH_TIMEOUT_MS) {
   return AbortSignal.timeout ? AbortSignal.timeout(ms) : undefined;
 }
@@ -193,6 +210,19 @@ export async function ocrWhatsAppMedia({ mediaId, mimeType, token } = {}) {
       confidence: null,
       mimeType: normalizedType,
       error: 'Unsupported media type — please resend as a JPEG or PNG photo 📸.'
+    };
+  }
+
+  // v1.22.0 — Vision kill switch. PDFs stay enabled: the local text extractor
+  // is fast and never blocks on a provider. Photo turns answer instantly.
+  if (!declaredPdf && !isOcrEnabled()) {
+    return {
+      text: null,
+      confidence: null,
+      mimeType: normalizedType || null,
+      error: 'OCR paused by configuration',
+      skipped: true,
+      kind: 'skipped'
     };
   }
 
@@ -364,5 +394,8 @@ export default {
   OCR_CURRENCY_CODES,
   OCR_VISION_TIMEOUT_MS,
   OCR_VISION_MAX_ATTEMPTS,
+  isOcrEnabled,
+  isOcrAckFirstEnabled,
+  buildMediaAckText,
   SUPPORTED_IMAGE_TYPES
 };

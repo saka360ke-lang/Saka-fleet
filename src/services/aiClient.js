@@ -42,6 +42,25 @@ const TRUTHY = new Set(['on', 'true', '1']);
 /** Purposes that get one extra attempt when a provider returns an empty body. */
 export const EMPTY_RETRY_PURPOSES = new Set(['intent_classify', 'question_render', 'prose_render']);
 
+/** v1.22.0 — a slow empty answer must not spend a second full timeout. */
+export const EMPTY_RETRY_MAX_FIRST_MS = (() => {
+  const raw = Number(process.env.EMPTY_RETRY_MAX_FIRST_MS || 5000);
+  return Number.isFinite(raw) && raw > 0 ? raw : 5000;
+})();
+
+/** Faster ceiling for quiz question rendering (deterministic fallback follows). */
+export function getQuestionTimeoutMs() {
+  const raw = Number(process.env.AI_TIMEOUT_MS_QUESTION || 10000);
+  return Number.isFinite(raw) && raw > 0 ? Math.min(raw, 30000) : 10000;
+}
+
+/** Purpose/provider/latency gate for the single empty-completion retry. */
+export function shouldRetryEmpty({ purpose = null, provider = null, firstAttemptMs = 0 } = {}) {
+  if (!EMPTY_RETRY_PURPOSES.has(String(purpose || ''))) return false;
+  if (provider === AI_PROVIDERS.ANTHROPIC) return false;
+  return Number(firstAttemptMs) <= EMPTY_RETRY_MAX_FIRST_MS;
+}
+
 /** Master kill switch for premium conversational routing (default: off). */
 export function isPremiumModelEnabled() {
   return TRUTHY.has(String(process.env.PREMIUM_MODEL_ENABLED || 'off').toLowerCase());
@@ -645,9 +664,14 @@ export async function chatCompletion({
       error: null
     }));
 
-  const timeoutMs = routing.tier === AI_TIERS.CONVERSATIONAL
+  const baseTimeoutMs = routing.tier === AI_TIERS.CONVERSATIONAL
     ? getPremiumTimeoutMs()
     : (routing.tier === AI_TIERS.REASONING ? getReasoningTimeoutMs() : Number(process.env.AI_TIMEOUT_MS || 12000));
+  // v1.22.0 — quiz questions render from the deterministic template if the
+  // provider is slow; never let a question block the turn for 19 s.
+  const timeoutMs = String(purpose || '') === 'question_render' && routing.tier === AI_TIERS.ROUTER
+    ? Math.min(baseTimeoutMs, getQuestionTimeoutMs())
+    : baseTimeoutMs;
 
   let lastProvider = routing.provider;
   let lastModel = attempts[0]?.model || null;
@@ -755,7 +779,11 @@ export async function chatCompletion({
       // v1.19.1 — one purpose-scoped retry on empty completions. DeepSeek
       // occasionally returns an empty body for intent_classify; a single cheap
       // retry recovers the turn instead of falling straight to the regex path.
-      if ((!text || !text.trim()) && EMPTY_RETRY_PURPOSES.has(String(purpose || '')) && attempt.provider !== AI_PROVIDERS.ANTHROPIC) {
+      if ((!text || !text.trim()) && shouldRetryEmpty({
+        purpose,
+        provider: attempt.provider,
+        firstAttemptMs: Date.now() - attemptStartedAt
+      })) {
         try {
           const ai = getProviderClient(attempt.provider);
           const retryMessages = [];

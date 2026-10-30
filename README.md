@@ -96,6 +96,15 @@ ask you to double-check before saving; nothing is ever written without your YES.
   normal turn (never during a quiz), version-stamped by `FEATURE_NOTICE_VERSION`.
   Run `npm run rollout:features -- --apply` to backfill, and `admin rollout` for status.
 
+## Snappy Saka — latency & OCR pause (v1.22.0)
+- **Photo OCR is paused by default** (`OCR_ENABLED=off`): photo turns answer
+  instantly with clear guidance to type the details or send a PDF. PDF text
+  extraction stays on (local, instant, provider-free).
+- When Vision is re-enabled, media turns **ack first** ("Reading your photo…")
+  and the parsed result arrives as a follow-up — no more 60–86 s silences.
+- `question_render` caps at 10 s (deterministic fallback) and empty-retries only
+  fire after a fast failed attempt, so one slow provider call can't double the wait.
+
 ## Country Bucket & global assets (v1.21.0)
 - Every user gets a **country bucket** from their WhatsApp number, confirmed at
   onboarding: currency, units, dates, compliance rules and document examples.

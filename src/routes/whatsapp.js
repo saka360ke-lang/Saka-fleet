@@ -80,7 +80,7 @@ import { enqueueFollowUp, FOLLOWUP_KINDS, followUpAckText } from '../services/fo
 import { enqueueUserMessage } from '../services/messageQueue.js';
 import { loadSessionSnapshot, persistSessionSnapshot } from '../services/sessionStore.js';
 import { createResilientClient } from '../services/supabaseClient.js';
-import { ocrWhatsAppMedia, extractDocumentHints } from '../services/ocrService.js';
+import { ocrWhatsAppMedia, extractDocumentHints, isOcrEnabled, isOcrAckFirstEnabled, buildMediaAckText } from '../services/ocrService.js';
 import { parseDocumentFields, uploadHintFor, DOCUMENT_SUPPORT_MENU } from '../services/documentLens.js';
 import {
   normalizeAssetKind,
@@ -618,6 +618,24 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
     const mediaCaption = (imageObj?.caption || documentObj?.caption || '').trim();
     const mediaMimeType = imageObj?.mime_type || documentObj?.mime_type || null;
 
+    // v1.22.0 — Snappy Saka: when Vision is enabled, acknowledge the media
+    // immediately (deterministic, no AI) so the user never waits in silence
+    // while the document is downloaded and read. The parsed result arrives as
+    // the follow-up message.
+    const ocrPaused = Boolean(mediaObj?.id)
+      && !/pdf/i.test(String(mediaMimeType || ''))
+      && !isOcrEnabled();
+    if (mediaObj?.id && !ocrPaused && isOcrAckFirstEnabled()) {
+      try {
+        const ack = buildMediaAckText({ mimeType: mediaMimeType });
+        await sendWhatsAppReply(senderPhone, ack);
+        if (supabaseClient) {
+          await logChatTranscript(supabaseClient, senderPhone, 'assistant', ack);
+          await saveChatMessage(supabaseClient, senderPhone, 'assistant', ack);
+        }
+      } catch { /* the ack is best-effort; the turn still proceeds */ }
+    }
+
     // OCR and session hydration are independent and side-effect free: run them
     // together so media turns do not pay two serial round trips.
     const ocrPromise = mediaObj?.id
@@ -844,7 +862,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
 
         // --- Receipt intelligence (v1.19.0): dedupe + vault ---
         let duplicateReceipt = null;
-        if (mediaObj?.id && supabaseClient) {
+        if (mediaObj?.id && supabaseClient && !ocrPaused) {
           try {
             duplicateReceipt = await findReceiptByMediaId(supabaseClient, mediaObj.id);
             if (!duplicateReceipt) {
@@ -953,7 +971,13 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         }
 
         let aiResult;
-        if (countryCommandResult) {
+        if (ocrPaused) {
+          aiResult = {
+            intent: 'APP_HELP',
+            extracted_data: {},
+            reply_message: '📸 Photo reading is paused right now — please type the details instead (e.g. *"Insurance ABC-123 expires 2027-05-15"*), or send the document as a PDF (PDFs are read instantly).'
+          };
+        } else if (countryCommandResult) {
           aiResult = countryCommandResult;
         } else if (myRulesCommand || requiredDocsCommand || exampleComplianceCommand) {
           const bucket = await loadCountryBucket(supabaseClient, {
@@ -2858,7 +2882,7 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
         // v1.19.2 — OCR recovery ladder: two unreadable photos on the same quiz
         // step unlock one typed-or-skip escape so the identical question is
         // never repeated a third time.
-        if (mediaObj && !ocrText && session.quiz) {
+        if (!ocrPaused && mediaObj && !ocrText && session.quiz) {
           const quizKey = `${session.quiz.flow || ''}|${session.quiz.phase || ''}|${JSON.stringify(session.quiz.answers || {})}`;
           if (session.ocrFailuresStep !== quizKey) {
             session.ocrFailures = 0;

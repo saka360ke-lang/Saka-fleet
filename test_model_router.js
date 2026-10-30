@@ -16,7 +16,10 @@ import {
   setRuntimeModelResolver,
   normalizeHistory,
   parseJsonSafely,
-  EMPTY_RETRY_PURPOSES
+  EMPTY_RETRY_PURPOSES,
+  EMPTY_RETRY_MAX_FIRST_MS,
+  shouldRetryEmpty,
+  getQuestionTimeoutMs
 } from './src/services/aiClient.js';
 import {
   ensureAiUsageLogsTable,
@@ -200,6 +203,12 @@ async function runTests() {
   check(EMPTY_RETRY_PURPOSES.has('question_render') === true, 'question_render gets the retry');
   check(EMPTY_RETRY_PURPOSES.has('general_chat') === false, 'casual chat never pays for a second call');
   check(EMPTY_RETRY_PURPOSES.size === 3, 'the retry allow-list stays deliberately small');
+check(EMPTY_RETRY_MAX_FIRST_MS === 5000, 'slow empty answers are not retried (5s gate)');
+check(shouldRetryEmpty({ purpose: 'intent_classify', provider: 'deepseek', firstAttemptMs: 1200 }) === true, 'a fast empty classify is retried once');
+check(shouldRetryEmpty({ purpose: 'intent_classify', provider: 'deepseek', firstAttemptMs: 9000 }) === false, 'a slow empty classify is not retried (no double timeout)');
+check(shouldRetryEmpty({ purpose: 'general_chat', provider: 'deepseek', firstAttemptMs: 500 }) === false, 'non-allow-listed purposes never retry');
+check(shouldRetryEmpty({ purpose: 'intent_classify', provider: 'anthropic', firstAttemptMs: 500 }) === false, 'premium tiers never retry empty bodies');
+check(getQuestionTimeoutMs() <= 10000, 'quiz questions cap at 10s before the deterministic fallback');
 
   console.log(`\n=== ALL ${passed} MODEL ROUTER ASSERTIONS PASSED ===`);
 }
