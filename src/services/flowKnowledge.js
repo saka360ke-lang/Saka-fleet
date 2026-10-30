@@ -73,7 +73,7 @@ export const SAKA_QUIZ_FLOWS = [
     trigger: 'register / add vehicle, new plate, "Register", first-time onboarding',
     fields: 'plate → make/model → YOM → fuel → odometer → VIN → email → OTP → optional specs → confirm',
     extracted: ['plate_number', 'make_model', 'yom', 'fuel_type', 'current_mileage', 'vin', 'owner_email'],
-    writes: 'vehicles + VIN provenance ledger (no VIN trial) + profile email + passbook email + owner driver-profile start',
+    writes: 'vehicles + VIN provenance ledger (no VIN trial) + profile email + passbook email + the one-time full-featured welcome trial + owner driver-profile start',
     rules: 'VIN is permanent; one question per turn; optional specs skippable as a group; a pasted paragraph fills several fields at once; on completion Saka immediately starts the owner\'s own driver profile (minimum compliance, skippable)'
   },
   {
@@ -300,6 +300,8 @@ export const SAKA_BOUNDARY_RULES = [
   'Trials, subscriptions, coupons and quotas bind to the OWNER ACCOUNT (profiles.id) — never to a VIN, passbook or vehicle.',
   'Vehicle compliance (insurance, inspection/MOT, road service licence, road tax, speed limiter…) is separate from driver compliance (licence, PSV badge, CPC, PDP). Never mix the two or invent an item.',
   'Every owner gets a driver profile at onboarding completion; the owner may skip their minimum for now, but a gated driver may never skip it.',
+  'Every NEW owner starts ONE full-featured welcome trial at registration; lapse returns the account to Free (excess vehicles PAUSED) and an upgrade goes straight to checkout — never promise a second trial.',
+  'When a driver is unassigned (or the vehicle is deleted) the engine notifies that driver on WhatsApp automatically; never claim the notice was sent unless the engine queued it.',
   'Never invent OTPs, PINs, amounts, dates, plate numbers or VINs.',
   'Never claim a write happened until the user explicitly confirmed the summary.',
   'Superadmin commands are intercepted by the system before Saka; Saka never claims admin powers.',

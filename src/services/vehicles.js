@@ -8,6 +8,27 @@ import {
   getNextTierKey,
   getAddonPriceUSD
 } from './subscriptionTiers.js';
+import { notifyDriverUnassigned } from './followups.js';
+
+/**
+ * Resolve the driver phone BEFORE the vehicle row changes (v1.16.4). Metadata
+ * beats a profile lookup; never throws.
+ */
+async function resolveDriverPhone({ supabase, vehicle }) {
+  if (!supabase || !vehicle) return null;
+  let phone = vehicle.metadata?.assigned_driver_phone || null;
+  if (!phone && vehicle.assigned_driver_id) {
+    try {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('phone_number')
+        .eq('id', vehicle.assigned_driver_id)
+        .maybeSingle();
+      phone = profile?.phone_number || null;
+    } catch { phone = null; }
+  }
+  return phone;
+}
 
 export async function ensureVehicleTableColumns(providedSupabase = null) {
   if (hasSqlAccess()) {
@@ -544,6 +565,15 @@ export async function assignDriverToVehicle({ vehicleId, driverId, supabase }) {
  * Unassign driver from vehicle
  */
 export async function unassignDriverFromVehicle({ vehicleId, supabase }) {
+  // Capture the vehicle + driver phone BEFORE the release so the driver can be
+  // notified (the row is mutated by the update).
+  let previous = null;
+  try {
+    const { data } = await supabase.from('vehicles').select('*').eq('id', vehicleId).maybeSingle();
+    previous = data || null;
+  } catch { previous = null; }
+  const previousPhone = await resolveDriverPhone({ supabase, vehicle: previous });
+
   const { data, error } = await supabase
     .from('vehicles')
     .update({ assigned_driver_id: null })
@@ -553,6 +583,19 @@ export async function unassignDriverFromVehicle({ vehicleId, supabase }) {
 
   if (error) {
     return { success: false, error: error.message };
+  }
+
+  if (previousPhone) {
+    try {
+      await notifyDriverUnassigned({
+        supabase,
+        driverPhone: previousPhone,
+        plate: previous?.plate_number,
+        reason: 'owner'
+      });
+    } catch (notifyErr) {
+      console.warn('[vehicles] Driver unassignment notice skipped:', notifyErr.message);
+    }
   }
 
   return { success: true, vehicle: data };
@@ -815,6 +858,7 @@ export async function deleteVehicle({ vehicleId, requesterId, supabase }) {
 
   const nowIso = new Date().toISOString();
   const cleanup = { driverUnassigned: !!vehicle.assigned_driver_id, transfersCancelled: 0 };
+  const driverPhone = cleanup.driverUnassigned ? await resolveDriverPhone({ supabase, vehicle }) : null;
 
   // 1. Cancel in-flight passbook transfers for this vehicle.
   try {
@@ -860,6 +904,15 @@ export async function deleteVehicle({ vehicleId, requesterId, supabase }) {
       .eq('vehicle_id', vehicleId)
       .eq('status', 'active');
   } catch {}
+
+  // 4. Tell the released driver the vehicle is gone (v1.16.4, fail-soft).
+  if (driverPhone) {
+    try {
+      await notifyDriverUnassigned({ supabase, driverPhone, plate: vehicle.plate_number, reason: 'vehicle_deleted' });
+    } catch (notifyErr) {
+      console.warn('[deleteVehicle] Driver notice skipped:', notifyErr.message);
+    }
+  }
 
   return {
     success: true,

@@ -40,6 +40,7 @@ import {
 import { applyTrialExtensionCoupon } from './coupons.js';
 import {
   startAccountTrial,
+  startWelcomeTrial,
   recordActivationEvent,
   ACTIVATION_EVENTS,
   applyAccountTrialExtensionCoupon
@@ -2181,6 +2182,12 @@ async function executeFlow(state, ctx) {
           const reply = await fail(saved.error);
           return { handled: true, reply, flow: state.flow, active: true };
         }
+        // v1.16.4 — every NEW owner starts the full-featured welcome trial
+        // (one per account lifetime; lapse returns the account to Free).
+        let welcomeTrial = null;
+        try {
+          welcomeTrial = await startWelcomeTrial({ supabase: ctx.supabase, ownerId: ctx.profile?.id });
+        } catch { welcomeTrial = null; }
         // Trial activation #1: vehicle registered + passbook issued.
         try {
           await recordActivationEvent({
@@ -2196,7 +2203,13 @@ async function executeFlow(state, ctx) {
           year: saved.yom,
           odometer: saved.mileage,
           email: saved.email,
-          passbookToken: saved.token
+          passbookToken: saved.token,
+          ...(welcomeTrial?.started
+            ? {
+              trialDays: welcomeTrial.days,
+              trialEndsAt: formatDate(welcomeTrial.endsAt, buildGlobalContext(ctx.countryInfo, ctx.profile).locale)
+            }
+            : {})
         });
         return { handled: true, reply, flow: state.flow, completed: true };
       }

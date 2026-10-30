@@ -20,6 +20,7 @@
     "migrate:vehicle-compliance": "node scripts/run_vehicle_compliance_migration.js",
     "migrate:followups": "node scripts/run_followups_migration.js",
     "migrate:dunning": "node scripts/run_dunning_migration.js",
+    "migrate:welcome-trial": "node scripts/run_welcome_trial_migration.js",
     "migrate:remediation": "node scripts/run_remediation_migration.js",
     "remediation:ci": "node scripts/remediation_ci.js",
     "migrate:staging-schema": "node scripts/provision_staging_schema.js",

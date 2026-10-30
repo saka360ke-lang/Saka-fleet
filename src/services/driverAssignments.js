@@ -17,6 +17,7 @@ import crypto from 'crypto';
 import { resolveUserTimezone } from './globalization.js';
 import { sendDriverAssignmentOtp } from './mailer.js';
 import { buildExpirySpecFromDate, createExpiryReminder, daysUntilDue } from './maintenanceReminders.js';
+import { notifyDriverUnassigned } from './followups.js';
 import { SYSTEM_TIMEZONE } from './dateParser.js';
 import { complianceCategory, getComplianceCatalog } from './complianceCatalog.js';
 
@@ -492,6 +493,13 @@ export async function recordInvalidMinimalSubmission({
     } catch (unassignErr) {
       console.warn('[driverAssignments] Cancellation unassign skipped:', unassignErr.message);
     }
+    // v1.16.4 — the driver is told their access ended (follow-up lane).
+    await notifyDriverUnassigned({
+      supabase,
+      driverPhone: assignment.driver_phone,
+      plate,
+      reason: 'compliance'
+    });
     await queueOwnerReport({
       supabase,
       ownerId: assignment.owner_id,

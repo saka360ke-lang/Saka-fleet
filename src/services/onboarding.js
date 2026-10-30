@@ -3,6 +3,7 @@ import { onboardingStore, chatSessions } from '../routes/whatsapp.js';
 import { sendEmailOtp, sendPassbookWelcomeEmail } from './mailer.js';
 import { checkOwnerVehicleTierLimit, ensureVinRegistryEntry } from './vehicles.js';
 import { createExpiryReminder, buildExpirySpecFromDate } from './maintenanceReminders.js';
+import { startWelcomeTrial, recordActivationEvent, ACTIVATION_EVENTS } from './trialEngine.js';
 import { resolveUserTimezone } from './globalization.js';
 
 export async function handleStage2OptionalWeaving({
@@ -183,6 +184,19 @@ export async function saveVehicleAssetRecord({
       email_verified: true,
       updated_at: new Date().toISOString()
     }).eq('id', profileData.id);
+
+    // v1.16.4 — the account's one-time full-featured welcome trial starts here
+    // (lapse returns the account to Free; an upgrade converts it).
+    try {
+      await startWelcomeTrial({ supabase: supabaseClient, ownerId: profileData.id });
+      await recordActivationEvent({
+        supabase: supabaseClient,
+        ownerId: profileData.id,
+        event: ACTIVATION_EVENTS.VEHICLE_REGISTERED
+      });
+    } catch (trialErr) {
+      console.warn('[onboarding] Welcome trial skipped:', trialErr.message);
+    }
 
     // v1.16.0: no VIN-bound extension coupon is scheduled at registration.
     // Extension offers are account-bound and scheduled by trialEngine when an

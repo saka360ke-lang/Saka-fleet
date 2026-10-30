@@ -17,6 +17,7 @@ const STATLESS_SUITES = [
   'test_vehicle_compliance.js',
   'test_driver_profile_onboarding.js',
   'test_dunning_reengagement.js',
+  'test_followups.js',
   'test_subscription_billing.js',
   'test_trial_engine.js',
   'test_agent_training.js'

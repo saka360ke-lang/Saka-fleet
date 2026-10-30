@@ -25,6 +25,7 @@ npm run migrate:driver-profile      # owner driver-profile flags
 npm run migrate:vehicle-compliance  # vehicle_compliances ledger
 npm run migrate:followups           # background follow-up lane
 npm run migrate:dunning             # dunning + re-engagement bookkeeping
+npm run migrate:welcome-trial       # trial_sessions.source (welcome | upgrade)
 npm run migrate:remediation         # Sentinel audit + proposals tables
 npm run migrate:sessions            # chat session snapshots
 ```

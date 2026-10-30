@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.16.3  
+**Version:** 1.16.4  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 
 ---
@@ -1735,6 +1735,29 @@ Subscription math is engine-owned and never AI-generated. No autonomous remediat
 
 ### 43.4 Tests & ops
 - `test_dunning_reengagement.js` (15 assertions: T+1/T+3, two-notice cap, counter healing, silence window, dedupe, vehicle/superadmin guards) is part of `npm run health`, which also reports `past-due accounts`.
+
+---
+
+## 44. v1.16.4 — Driver Unassignment Notices & Free-Tier Welcome Trial
+
+### 44.1 Driver unassignment notices (WhatsApp)
+- The release is centralised in `vehicles.js`; the driver phone is snapshotted **before** the row is cleared (metadata `assigned_driver_phone` → profile fallback).
+- `notifyDriverUnassigned()` queues a `driver_unassigned` job on the existing **follow-up lane** (`pending_followups`, 30s worker) — no new workers or tables. Reasons: `owner` (manual unassign), `vehicle_deleted` (soft delete), `compliance` (3 expired minimal submissions cancelled the assignment).
+- Covered call sites automatically: the `unassign_driver` quiz flow, the legacy `unassign driver` handler, `deleteVehicle()`, and `recordInvalidMinimalSubmission()`. Fail-soft: the release never depends on messaging.
+
+### 44.2 Free-tier Welcome Trial (one per account lifetime)
+- Every **new** owner account starts a full-featured trial at registration:
+  - `startWelcomeTrial()` → `startAccountTrial({ tierKey:'solo_pro', interval:'monthly', source:'welcome' })`.
+  - During TRIALING, `getEntitlements()` already grants **all features** (Tiers 0–3 AI, unlimited reports, driver assignment, compliance tracking) — zero entitlement changes.
+  - Initiation is idempotent (`profiles.trial_used_at`): a second trial is impossible; existing accounts are NOT backfilled.
+- **Lapse = Free:** the existing sweep (`EXPIRED → downgradeToFree`) returns the account to Free and PAUSES excess vehicles (never deletes). Upgrading before lapse converts the trial via `subscription.create`; upgrading after lapse goes straight to checkout.
+- Registration hooks: `quizEngine.persistVehicleRegistration` (with `trialDays`/`trialEndsAt` facts) and legacy `onboarding.saveVehicleAssetRecord`; `recordActivationEvent(VEHICLE_REGISTERED)` fires on both.
+- Schema: `npm run migrate:welcome-trial` (`trial_sessions.source` + index). `admin trial-stats` now reports **welcome vs upgrade** trial counts.
+- Governance: this is the SAME one-time trial — there is no second "upgrade trial" once the welcome trial is consumed (rule 26 updated).
+
+### 44.3 Tests
+- `test_followups.js` (12 assertions: queueing from unassign + delete, metadata/profile phone resolution, worker delivery, compliance reason) and extended `test_trial_engine.js` (welcome source, solo_pro tier, lifetime stamp, second-trial block). Both run inside `npm run health`.
+
 
 
 

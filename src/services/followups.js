@@ -18,8 +18,32 @@ import { recordActivationEvent, ACTIVATION_EVENTS } from './trialEngine.js';
 import { recordReportUsage } from './subscriptions.js';
 
 export const FOLLOWUP_KINDS = Object.freeze({
-  FLEET_REPORT: 'fleet_report'
+  FLEET_REPORT: 'fleet_report',
+  DRIVER_UNASSIGNED: 'driver_unassigned'
 });
+
+/** Deterministic unassignment copy (reason-aware, never claims a write). */
+function driverUnassignedText({ plate, reason = 'owner' }) {
+  const vehicle = plate || 'the vehicle';
+  if (reason === 'vehicle_deleted') {
+    return `🔔 *Vehicle removed* — *${vehicle}* was deleted by its owner, so you are no longer assigned to it.\n\nYour passbook history and records stay intact. Reply *"help"* to see what you can still do.`;
+  }
+  if (reason === 'compliance') {
+    return `🔔 *Assignment ended — ${vehicle}*\n\nYour access was removed because the licence on file expired three times. Ask the owner to reassign you once it is renewed.\n\nYour historical records stay intact.`;
+  }
+  return `🔔 *You've been unassigned* — *${vehicle}* is no longer assigned to you.\n\nThe owner can reassign you at any time; your passbook history stays intact. Reply *"help"* to see what you can still do.`;
+}
+
+/** Queue a WhatsApp notice to a driver who lost a vehicle (fail-soft). */
+export async function notifyDriverUnassigned({ supabase, driverPhone, plate, reason = 'owner' } = {}) {
+  if (!supabase || !driverPhone) return false;
+  return enqueueFollowUp({
+    supabase,
+    phone: driverPhone,
+    kind: FOLLOWUP_KINDS.DRIVER_UNASSIGNED,
+    payload: { plate: plate || null, reason }
+  });
+}
 
 /** Queue a follow-up job. Returns true only when it was persisted. */
 export async function enqueueFollowUp({ supabase, phone, kind, payload = {}, scheduledFor = null } = {}) {
@@ -112,6 +136,8 @@ export async function processPendingFollowUps({ supabase, sendFn, now = new Date
       let text = null;
       if (job.kind === FOLLOWUP_KINDS.FLEET_REPORT) {
         text = await runFleetReport({ ...(job.payload || {}), supabase });
+      } else if (job.kind === FOLLOWUP_KINDS.DRIVER_UNASSIGNED) {
+        text = driverUnassignedText(job.payload || {});
       }
       if (!text) {
         await supabase.from('pending_followups').update({
@@ -148,6 +174,7 @@ export function followUpAckText(reportType = 'fleet') {
 export default {
   FOLLOWUP_KINDS,
   enqueueFollowUp,
+  notifyDriverUnassigned,
   processPendingFollowUps,
   followUpAckText
 };

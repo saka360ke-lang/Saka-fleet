@@ -19,6 +19,7 @@ import {
   getTrialConfig,
   computeTrialEnd,
   startAccountTrial,
+  startWelcomeTrial,
   recordActivationEvent,
   extendAccountTrial,
   applyAccountTrialExtensionCoupon,
@@ -97,6 +98,7 @@ async function run() {
   const eligibleMock = createMockSupabase({ profiles: [ownerProfile()], trial_sessions: [], usage_counters: [], vehicles: [] });
   const started = await startAccountTrial({ supabase: eligibleMock.client, ownerId: 'p-1', tierKey: 'growth', interval: 'annual' });
   check(started.started === true && started.days === 30, 'Eligible owner starts a 30-day trial');
+  check(started.source === 'upgrade', 'Upgrade trials are tagged "upgrade"');
   check(Math.round((new Date(started.endsAt).getTime() - new Date(started.startedAt).getTime()) / DAY) === 30, 'ends_at = started_at + 30 days');
   check(eligibleMock.db.trial_sessions.length === 1 && eligibleMock.db.trial_sessions[0].status === 'ACTIVE', 'trial_sessions row is ACTIVE');
   check(eligibleMock.db.profiles[0].subscription_tier === 'growth' && eligibleMock.db.profiles[0].subscription_status === 'TRIALING', 'Profile becomes TRIALING on the chosen tier');
@@ -125,6 +127,20 @@ async function run() {
 
   const freeAttempt = await startAccountTrial({ supabase: eligibleMock.client, ownerId: 'p-1', tierKey: 'free' });
   check(freeAttempt.started === false && /paid tier/.test(freeAttempt.reason), 'Free tier cannot start a trial');
+
+  console.log('\n--- Test 2b: free-tier welcome trial (full features, once per lifetime) ---');
+  const welcomeMock = createMockSupabase({
+    profiles: [ownerProfile({ subscription_tier: 'free', subscription_status: 'ACTIVE', trial_used_at: null })],
+    trial_sessions: [],
+    usage_counters: [],
+    vehicles: []
+  });
+  const welcome = await startWelcomeTrial({ supabase: welcomeMock.client, ownerId: 'p-1' });
+  check(welcome.started === true && welcome.source === 'welcome', 'Welcome trial starts and is tagged "welcome"');
+  check(welcomeMock.db.trial_sessions[0].tier === 'solo_pro' && welcomeMock.db.trial_sessions[0].source === 'welcome', 'Welcome trial runs on solo_pro (all features)');
+  check(welcomeMock.db.profiles[0].subscription_status === 'TRIALING' && Boolean(welcomeMock.db.profiles[0].trial_used_at), 'Profile is TRIALING and the lifetime stamp is set');
+  const welcomeAgain = await startWelcomeTrial({ supabase: welcomeMock.client, ownerId: 'p-1' });
+  check(welcomeAgain.started === false, 'A second welcome trial is impossible');
 
   console.log('\n--- Test 3: activation (strictly three events) ---');
   const actMock = createMockSupabase({

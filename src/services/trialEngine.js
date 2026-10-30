@@ -181,7 +181,7 @@ export async function scheduleAccountTrialExtensionCoupon({
  * returned as-is; a consumed `trial_used_at` blocks a second trial.
  * NO Paystack call happens here — that is the no-card guarantee.
  */
-export async function startAccountTrial({ supabase, ownerId, tierKey, interval = 'monthly' } = {}) {
+export async function startAccountTrial({ supabase, ownerId, tierKey, interval = 'monthly', source = 'upgrade' } = {}) {
   if (!supabase || !ownerId) return { started: false, reason: 'owner required' };
   const canonicalTier = normalizeTierKey(tierKey);
   if (!isPaidTierKey(canonicalTier)) return { started: false, reason: 'paid tier required' };
@@ -204,6 +204,7 @@ export async function startAccountTrial({ supabase, ownerId, tierKey, interval =
 
   const now = new Date();
   const endsAt = computeTrialEnd(now);
+  const trialSource = source === 'welcome' ? 'welcome' : 'upgrade';
   const record = {
     owner_id: ownerId,
     tier: canonicalTier,
@@ -212,7 +213,8 @@ export async function startAccountTrial({ supabase, ownerId, tierKey, interval =
     started_at: now.toISOString(),
     ends_at: endsAt.toISOString(),
     activated: false,
-    activation_events: []
+    activation_events: [],
+    source: trialSource
   };
 
   const { data: inserted, error } = await supabase
@@ -249,10 +251,30 @@ export async function startAccountTrial({ supabase, ownerId, tierKey, interval =
     trial: inserted || record,
     tierKey: canonicalTier,
     interval: record.interval,
+    source: trialSource,
     startedAt: record.started_at,
     endsAt: record.ends_at,
     days: TRIAL_DAYS
   };
+}
+
+/**
+ * v1.16.4 — Free-tier Welcome Trial.
+ * Every NEW owner account starts a full-featured trial at registration:
+ * `solo_pro` entitlements (Tiers 0-3 AI, unlimited reports, driver assignment +
+ * compliance tracking) for TRIAL_DAYS, no card, one per account lifetime.
+ * Lapse is handled by the existing sweep: EXPIRED -> downgradeToFree (excess
+ * vehicles PAUSED). An upgrade converts the trial via `subscription.create`.
+ */
+export async function startWelcomeTrial({ supabase, ownerId } = {}) {
+  if (!supabase || !ownerId) return { started: false, reason: 'owner required' };
+  return startAccountTrial({
+    supabase,
+    ownerId,
+    tierKey: 'solo_pro',
+    interval: 'monthly',
+    source: 'welcome'
+  });
 }
 
 /** Active trial row + derived status for a profile. */
@@ -1001,19 +1023,21 @@ export async function getTrialFunnelStats({ supabase, windowDays = 30 } = {}) {
   const empty = {
     windowDays,
     started: 0, activated: 0, converted: 0, expired: 0, extended: 0, active: 0,
-    conversionRate: 0, activationRate: 0, byTier: {}
+    conversionRate: 0, activationRate: 0, byTier: {}, bySource: { welcome: 0, upgrade: 0 }
   };
   if (!supabase) return empty;
   const since = new Date(Date.now() - windowDays * DAY_MS).toISOString();
   try {
     const { data } = await supabase
       .from('trial_sessions')
-      .select('tier, status, activated, started_at, converted_at, ends_at')
+      .select('tier, status, activated, started_at, converted_at, ends_at, source')
       .gte('started_at', since);
     const rows = data || [];
-    const stats = { ...empty, started: rows.length };
+    const stats = { ...empty, started: rows.length, bySource: { welcome: 0, upgrade: 0 } };
     for (const row of rows) {
       const tier = normalizeTierKey(row.tier);
+      const source = row.source === 'welcome' ? 'welcome' : 'upgrade';
+      stats.bySource[source] += 1;
       if (!stats.byTier[tier]) stats.byTier[tier] = { started: 0, converted: 0, expired: 0 };
       stats.byTier[tier].started += 1;
       if (row.activated) stats.activated += 1;
@@ -1049,6 +1073,7 @@ export function formatTrialStatsReply(stats) {
     `• Extensions: ${stats.extended}`,
     `• Expired to Free: ${stats.expired}`,
     `• Active now: ${stats.active}`,
+    `• Welcome vs upgrade: ${stats.bySource?.welcome ?? 0} / ${stats.bySource?.upgrade ?? 0}`,
     tierLines.length ? '\nBy tier:' : '',
     ...tierLines
   ].filter(Boolean).join('\n');
@@ -1063,6 +1088,7 @@ export default {
   getTrialConfig,
   computeTrialEnd,
   startAccountTrial,
+  startWelcomeTrial,
   getTrialStatus,
   recordActivationEvent,
   issueActivationCoupon,
