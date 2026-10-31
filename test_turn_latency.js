@@ -15,6 +15,7 @@ const {
 const {
   formatTurnLatencyReply,
   formatAiStatsReply,
+  formatAdminHelpReply,
   handleTurnLatencyCommand,
   parseSuperadminCommand
 } = await import('./src/services/superadmin.js');
@@ -128,6 +129,12 @@ async function runTests() {
   check(parsedDefault.intent === 'ADMIN_TURN_LATENCY' && parsedDefault.hours === 24, 'admin reply latency parses');
   const parsedClamp = await parseSuperadminCommand('admin latency 999h');
   check(parsedClamp.hours === TURN_LATENCY_MAX_WINDOW_HOURS, 'hours clamp to 168');
+  const parsedHelp = await parseSuperadminCommand('superadmin commands');
+  check(parsedHelp.intent === 'ADMIN_HELP', 'superadmin commands parses deterministically');
+  const parsedAdminHelp = await parseSuperadminCommand('admin help');
+  check(parsedAdminHelp.intent === 'ADMIN_HELP', 'admin help parses deterministically');
+  const helpReply = formatAdminHelpReply();
+  check(helpReply.includes('Saka admin commands') && helpReply.includes('admin latency'), 'the help reply lists the command families');
 
   console.log('\n--- Test 7: DB round-trip (optional, self-cleaning) ---');
   const supabase = createTestSupabaseClient();

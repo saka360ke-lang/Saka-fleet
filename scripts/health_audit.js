@@ -20,7 +20,9 @@ const STATLESS_SUITES = [
   'test_followups.js',
   'test_subscription_billing.js',
   'test_trial_engine.js',
-  'test_agent_training.js'
+  'test_agent_training.js',
+  // v1.24.2 — the wipe registry and its TRUNCATE SQL must never drift apart.
+  'test_db_reset_scope.js'
 ];
 
 const WORKFLOW_DIR = '.github/workflows';

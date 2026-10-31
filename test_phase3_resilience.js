@@ -7,11 +7,14 @@ const {
   AI_TIERS,
   buildProviderChain,
   isProviderCircuitOpen,
+  isBillingError,
   recordProviderOutcome,
   resetProviderBreakers,
   setBudgetGuard,
   getBudgetGuard,
   resolveTier,
+  resolveLegTimeout,
+  getChainBudgetMs,
   chatCompletion,
   setAiUsageSink,
   getAiUsageSink
@@ -397,6 +400,70 @@ async function runTests() {
     const reply = formatAiStatsReply(summary, computeAiBudgetStatus(summary));
     check(reply.includes('Fallbacks: 1'), 'digest shows the fallback count');
     check(reply.includes('Budget:') && reply.includes('90.0%'), 'digest shows the budget percentage');
+  });
+
+  console.log('\n--- Test 9b: billing/auth failures open the breaker instantly (v1.24.2) ---');
+  await withEnvAsync({ AI_CB_BILLING_OPEN_MS: '1800000' }, async () => {
+    check(isBillingError(new Error('429 You have no credits remaining. Add credits to continue using the API')) === true, 'no-credits 429 counts as billing');
+    check(isBillingError(Object.assign(new Error('Rate limit reached for gpt-4o'), { status: 429 })) === false, 'a rate-limit 429 stays transient');
+    check(isBillingError(Object.assign(new Error('Invalid API key'), { status: 401 })) === true, '401 counts as billing/auth');
+    check(isBillingError(new Error('Request timed out.')) === false, 'timeouts stay transient');
+    check(isBillingError(new Error('Anthropic API 403: account disabled')) === true, 'status is parsed from the Anthropic message');
+  });
+  resetProviderBreakers();
+  {
+    const base = Date.now();
+    recordProviderOutcome(AI_PROVIDERS.OPENAI, false, base, { billing: true });
+    check(isProviderCircuitOpen(AI_PROVIDERS.OPENAI, base + 1) === true, 'one billing failure opens the breaker');
+    check(isProviderCircuitOpen(AI_PROVIDERS.OPENAI, base + 29 * 60 * 1000) === true, 'the billing breaker holds for the long window');
+    check(isProviderCircuitOpen(AI_PROVIDERS.OPENAI, base + 31 * 60 * 1000) === false, 'the billing breaker re-probes after the window');
+  }
+  resetProviderBreakers();
+
+  console.log('\n--- Test 9c: billing trip is not re-probed every turn ---');
+  resetProviderBreakers();
+  const sinkBeforeBilling = getAiUsageSink();
+  const billingRecords = [];
+  try {
+    await withEnvAsync({ ...PREMIUM_ENV, AI_CB_BILLING_OPEN_MS: '1800000' }, async () => {
+      let anthropicCalls = 0;
+      let deepseekCalls = 0;
+      setFetchHandler(async (url) => {
+        if (url.includes('api.anthropic.com')) {
+          anthropicCalls += 1;
+          return jsonResponse({ error: { type: 'insufficient_quota', message: 'You have no credits remaining.' } }, 429);
+        }
+        if (url.includes('api.deepseek.com')) {
+          deepseekCalls += 1;
+          return deepseekOk('{"ok":true}');
+        }
+        throw new Error(`Unexpected provider call: ${url}`);
+      });
+      setAiUsageSink((record) => billingRecords.push(record));
+      const first = await chatCompletion({ system: 'json', messages: [{ role: 'user', content: 'hi' }], purpose: 'intent_classify' });
+      check(first.ok === true && anthropicCalls === 1 && deepseekCalls === 1, 'the first turn falls back to DeepSeek');
+      const second = await chatCompletion({ system: 'json', messages: [{ role: 'user', content: 'hi' }], purpose: 'intent_classify' });
+      check(second.ok === true && anthropicCalls === 1, 'the next turn skips the billing-dead provider');
+      const attempts = billingRecords[billingRecords.length - 1].attempts || [];
+      check(attempts.some((a) => a.provider === 'anthropic' && a.outcome === 'skipped_circuit_open'), 'the billing trip is visible in telemetry');
+      check(deepseekCalls === 2, 'DeepSeek serves both turns');
+    });
+  } finally {
+    setFetchHandler(null);
+    setAiUsageSink(sinkBeforeBilling);
+    resetProviderBreakers();
+  }
+
+  console.log('\n--- Test 9d: per-leg timeout shaping (v1.24.2) ---');
+  await withEnvAsync({ AI_TIMEOUT_MS: '12000', AI_TIMEOUT_MS_PREMIUM: '30000', AI_TIMEOUT_MS_FALLBACK: '10000', AI_CHAIN_BUDGET_MS: '45000' }, async () => {
+    check(resolveLegTimeout({ provider: AI_PROVIDERS.ANTHROPIC, index: 0, baseTimeoutMs: 30000 }) === 30000, 'the primary premium leg gets the full premium budget');
+    check(resolveLegTimeout({ provider: AI_PROVIDERS.OPENAI, index: 1, baseTimeoutMs: 30000 }) === 10000, 'secondary premium legs are capped by AI_TIMEOUT_MS_FALLBACK');
+    check(resolveLegTimeout({ provider: AI_PROVIDERS.DEEPSEEK, index: 2, baseTimeoutMs: 30000 }) === 12000, 'DeepSeek never inherits the premium budget');
+    check(getChainBudgetMs() === 45000, 'the chain budget is read dynamically');
+  });
+  await withEnvAsync({ AI_TIMEOUT_MS_FALLBACK: '6000', AI_CHAIN_BUDGET_MS: '20000' }, async () => {
+    check(resolveLegTimeout({ provider: AI_PROVIDERS.OPENAI, index: 1, baseTimeoutMs: 30000 }) === 6000, 'the fallback timeout env override applies');
+    check(getChainBudgetMs() === 20000, 'the chain budget env override applies');
   });
 
   console.log('\n--- Test 10: attempts persist + aggregate (DB, self-cleaning) ---');

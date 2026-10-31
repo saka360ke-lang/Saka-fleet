@@ -172,6 +172,40 @@ export function getPremiumTimeoutMs() {
   return Number(process.env.AI_TIMEOUT_MS_PREMIUM || 15000);
 }
 
+/**
+ * v1.24.2 — secondary fallback legs get a shorter leash.
+ *
+ * The primary leg may legitimately need 20-30s on a 20k-token prompt; a
+ * *fallback* that needs more than ~10s to answer is not rescuing the turn, it is
+ * just extending the silence. Capping fallbacks keeps a two-provider outage from
+ * turning one AI call into a two-minute wait.
+ */
+export function getFallbackTimeoutMs() {
+  return Math.max(2000, Number(process.env.AI_TIMEOUT_MS_FALLBACK || 10000));
+}
+
+/**
+ * v1.24.2 — total wall-clock budget for the premium legs of ONE chatCompletion
+ * call. Once spent, remaining premium legs are skipped (logged as
+ * `skipped_chain_budget`) and DeepSeek still gets its full timeout as the
+ * terminal leg. DeepSeek is never budget-gated.
+ */
+export function getChainBudgetMs() {
+  return Math.max(5000, Number(process.env.AI_CHAIN_BUDGET_MS || 45000));
+}
+
+/**
+ * Resolve the timeout for one leg of the failover chain.
+ * Primary premium leg -> tier timeout, later premium legs -> fallback timeout,
+ * DeepSeek -> AI_TIMEOUT_MS (never the premium budget).
+ */
+export function resolveLegTimeout({ provider = null, index = 0, baseTimeoutMs = null } = {}) {
+  const deepseekMs = Math.max(3000, Number(process.env.AI_TIMEOUT_MS || 12000));
+  if (provider === AI_PROVIDERS.DEEPSEEK) return deepseekMs;
+  const base = Math.max(1000, Number(baseTimeoutMs || getPremiumTimeoutMs()));
+  return index === 0 ? base : Math.min(base, getFallbackTimeoutMs());
+}
+
 /** Reasoning calls are background-only, so they get a longer fail-fast budget. */
 export function getReasoningTimeoutMs() {
   return Math.max(1000, Number(process.env.AI_TIMEOUT_MS_REASONING || 45000));
@@ -381,7 +415,8 @@ export async function runAnthropicAttempt({
   jsonMode = false,
   maxTokens = 2048,
   temperature = 0.4,
-  timeoutMs = getPremiumTimeoutMs()
+  timeoutMs = getPremiumTimeoutMs(),
+  externalSignal = null
 } = {}) {
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY missing in environment');
 
@@ -398,6 +433,10 @@ export async function runAnthropicAttempt({
   if (TRUTHY.has(String(process.env.ANTHROPIC_TEMPERATURE_SUPPORTED || 'off').toLowerCase())) {
     payload.temperature = temperature;
   }
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const combinedSignal = externalSignal && AbortSignal.any
+    ? AbortSignal.any([timeoutSignal, externalSignal])
+    : timeoutSignal;
   const response = await fetch(`${ANTHROPIC_BASE_URL}/v1/messages`, {
     method: 'POST',
     headers: {
@@ -406,7 +445,7 @@ export async function runAnthropicAttempt({
       'content-type': 'application/json'
     },
     body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(timeoutMs)
+    signal: combinedSignal
   });
 
   if (!response.ok) {
@@ -446,14 +485,43 @@ export function getModelCandidates() {
 /* Circuit breakers (in-memory, per provider; DeepSeek is exempt)       */
 /* ------------------------------------------------------------------ */
 
-export const AI_BREAKER_DEFAULTS = Object.freeze({ failureThreshold: 3, windowMs: 60000, openMs: 30000 });
+export const AI_BREAKER_DEFAULTS = Object.freeze({
+  failureThreshold: 3,
+  windowMs: 60000,
+  openMs: 30000,
+  // v1.24.2 — a provider that cannot bill (no credits, revoked/disabled key,
+  // unpaid account) fails EVERY call. Probing it every turn just burns the
+  // timeout per message, so billing failures trip the breaker immediately and
+  // for far longer than a transient hiccup. Recovery is automatic: when the
+  // window elapses the leg is probed once more.
+  billingOpenMs: 1800000
+});
 
 function getBreakerConfig() {
   return {
     failureThreshold: Math.max(1, Number(process.env.AI_CB_FAILURE_THRESHOLD || AI_BREAKER_DEFAULTS.failureThreshold)),
     windowMs: Math.max(1000, Number(process.env.AI_CB_WINDOW_MS || AI_BREAKER_DEFAULTS.windowMs)),
-    openMs: Math.max(1000, Number(process.env.AI_CB_OPEN_MS || AI_BREAKER_DEFAULTS.openMs))
+    openMs: Math.max(1000, Number(process.env.AI_CB_OPEN_MS || AI_BREAKER_DEFAULTS.openMs)),
+    billingOpenMs: Math.max(60000, Number(process.env.AI_CB_BILLING_OPEN_MS || AI_BREAKER_DEFAULTS.billingOpenMs))
   };
+}
+
+const BILLING_ERROR_PATTERN = /insufficient[_ ]quota|no credits|credit balance|exceeded your current quota|quota exceeded|add credits|billing|payment required|account (?:is )?(?:suspended|disabled)|invalid (?:api[- ]?key|x-api-key)|api[- ]?key (?:revoked|disabled|expired|invalid)|unauthorized|forbidden/i;
+
+/**
+ * True when a provider failed for a *billing/auth* reason rather than a
+ * transient one. Those failures cannot heal inside a turn (or a day) without a
+ * human topping up an account, so they skip the failure-counting ladder.
+ */
+export function isBillingError(err) {
+  if (!err) return false;
+  const message = String(err.message || err.error?.message || err || '');
+  const statusFromMessage = Number((message.match(/\b(?:API|HTTP)\s*(\d{3})\b/i) || [])[1] || 0);
+  const status = Number(err.status || err.statusCode || err.response?.status || statusFromMessage || 0);
+  if (status === 401 || status === 402 || status === 403) return true;
+  if (status === 429) return BILLING_ERROR_PATTERN.test(message);
+  if (status >= 400 && BILLING_ERROR_PATTERN.test(message)) return true;
+  return status === 0 && BILLING_ERROR_PATTERN.test(message);
 }
 
 const providerBreakers = new Map();
@@ -477,7 +545,7 @@ export function isProviderCircuitOpen(provider, now = Date.now()) {
 }
 
 /** Record one provider outcome; opens the breaker after N failures in-window. */
-export function recordProviderOutcome(provider, ok, now = Date.now()) {
+export function recordProviderOutcome(provider, ok, now = Date.now(), { billing = false } = {}) {
   if (!provider || provider === AI_PROVIDERS.DEEPSEEK) return;
   const breaker = getBreaker(provider);
   if (ok) {
@@ -485,7 +553,13 @@ export function recordProviderOutcome(provider, ok, now = Date.now()) {
     breaker.openedUntil = 0;
     return;
   }
-  const { failureThreshold, windowMs, openMs } = getBreakerConfig();
+  const { failureThreshold, windowMs, openMs, billingOpenMs } = getBreakerConfig();
+  if (billing) {
+    breaker.failures = [];
+    breaker.openedUntil = now + billingOpenMs;
+    console.warn(`[aiClient] Circuit breaker OPEN (billing/auth) for '${provider}' for ${billingOpenMs}ms.`);
+    return;
+  }
   breaker.failures = breaker.failures.filter((timestamp) => now - timestamp <= windowMs);
   breaker.failures.push(now);
   if (breaker.failures.length >= failureThreshold) {
@@ -662,6 +736,36 @@ export function normalizeHistory(history = []) {
  *   - `provider` overrides the provider (legacy calls default to DeepSeek)
  *   - every outcome emits a usage record to the installed telemetry sink
  */
+/* ------------------------------------------------------------------ */
+/* Hard per-leg deadline (v1.24.2)                                      */
+/* ------------------------------------------------------------------ */
+
+const LEG_DEADLINE_GRACE_MS = 2000;
+
+/**
+ * Run one provider leg under a hard wall-clock deadline.
+ *
+ * The SDK/AbortSignal timeout is the first line of defence; this race is the
+ * guarantee. Timers can fire late on CPU-throttled instances and stalled body
+ * reads can outlive the socket timeout — either way the failover chain must move
+ * on, because a dead provider must never turn one message into a 3-minute wait.
+ */
+async function runLegWithDeadline(run, timeoutMs, label) {
+  const controller = new AbortController();
+  let timer = null;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      try { controller.abort(); } catch { /* already aborted */ }
+      reject(new Error(`${label} leg exceeded ${timeoutMs}ms`));
+    }, Math.max(1000, Number(timeoutMs) || 1000) + LEG_DEADLINE_GRACE_MS);
+  });
+  try {
+    return await Promise.race([run(controller.signal), deadline]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export async function chatCompletion({
   system = '',
   messages = [],
@@ -712,11 +816,28 @@ export async function chatCompletion({
   const timeoutMs = String(purpose || '') === 'question_render' && routing.tier === AI_TIERS.ROUTER
     ? Math.min(baseTimeoutMs, getQuestionTimeoutMs())
     : baseTimeoutMs;
+  const chainBudgetMs = getChainBudgetMs();
 
   let lastProvider = routing.provider;
   let lastModel = attempts[0]?.model || null;
 
-  for (const attempt of attempts) {
+  for (let attemptIndex = 0; attemptIndex < attempts.length; attemptIndex += 1) {
+    const attempt = attempts[attemptIndex];
+    const isPremiumLeg = attempt.provider !== AI_PROVIDERS.DEEPSEEK;
+    if (isPremiumLeg && Date.now() - startedAt >= chainBudgetMs) {
+      attemptLog.push({
+        provider: attempt.provider,
+        model: attempt.model,
+        outcome: 'skipped_chain_budget',
+        latencyMs: 0,
+        error: `premium chain budget ${chainBudgetMs}ms exhausted`
+      });
+      continue;
+    }
+    const legBudgetMs = resolveLegTimeout({ provider: attempt.provider, index: attemptIndex, baseTimeoutMs: timeoutMs });
+    const legTimeoutMs = isPremiumLeg
+      ? Math.max(1500, Math.min(legBudgetMs, chainBudgetMs - (Date.now() - startedAt)))
+      : legBudgetMs;
     let premiumSlotHeld = false;
     const attemptStartedAt = Date.now();
     try {
@@ -740,15 +861,20 @@ export async function chatCompletion({
           continue;
         }
         premiumSlotHeld = true;
-        const anthropicResult = await runAnthropicAttempt({
-          model: attempt.model,
-          system,
-          messages,
-          jsonMode,
-          maxTokens,
-          temperature,
-          timeoutMs
-        });
+        const anthropicResult = await runLegWithDeadline(
+          (signal) => runAnthropicAttempt({
+            model: attempt.model,
+            system,
+            messages,
+            jsonMode,
+            maxTokens,
+            temperature,
+            timeoutMs: legTimeoutMs,
+            externalSignal: signal
+          }),
+          legTimeoutMs,
+          'anthropic'
+        );
         text = anthropicResult.text;
         promptTokens = anthropicResult.promptTokens;
         completionTokens = anthropicResult.completionTokens;
@@ -791,11 +917,16 @@ export async function chatCompletion({
 
         let response;
         try {
-          response = await ai.chat.completions.create(request, {
-            timeout: timeoutMs,
-            // Fail fast to the deterministic fallback instead of SDK retries.
-            maxRetries: 0
-          });
+          response = await runLegWithDeadline(
+            (signal) => ai.chat.completions.create(request, {
+              timeout: legTimeoutMs,
+              // Fail fast to the deterministic fallback instead of SDK retries.
+              maxRetries: 0,
+              signal
+            }),
+            legTimeoutMs,
+            attempt.provider
+          );
         } catch (toolErr) {
           if (!supportsWebSearch) throw toolErr;
           delete request.tools;
@@ -806,10 +937,15 @@ export async function chatCompletion({
             latencyMs: Date.now() - attemptStartedAt,
             error: toolErr?.message || String(toolErr)
           });
-          response = await ai.chat.completions.create(request, {
-            timeout: timeoutMs,
-            maxRetries: 0
-          });
+          response = await runLegWithDeadline(
+            (signal) => ai.chat.completions.create(request, {
+              timeout: legTimeoutMs,
+              maxRetries: 0,
+              signal
+            }),
+            legTimeoutMs,
+            attempt.provider
+          );
         }
         text = response?.choices?.[0]?.message?.content || '';
         promptTokens = response?.usage?.prompt_tokens ?? null;
@@ -837,10 +973,15 @@ export async function chatCompletion({
             temperature: Math.min(0.9, Math.max(0, temperature + 0.05))
           };
           if (jsonMode) retryRequest.response_format = { type: 'json_object' };
-          const retryResponse = await ai.chat.completions.create(retryRequest, {
-            timeout: timeoutMs,
-            maxRetries: 0
-          });
+          const retryResponse = await runLegWithDeadline(
+            (signal) => ai.chat.completions.create(retryRequest, {
+              timeout: legTimeoutMs,
+              maxRetries: 0,
+              signal
+            }),
+            legTimeoutMs,
+            attempt.provider
+          );
           const retryText = retryResponse?.choices?.[0]?.message?.content || '';
           if (retryText && retryText.trim()) {
             text = retryText;
@@ -910,7 +1051,7 @@ export async function chatCompletion({
       lastModel = attempt.model;
     } catch (err) {
       lastError = err;
-      recordProviderOutcome(attempt.provider, false);
+      recordProviderOutcome(attempt.provider, false, Date.now(), { billing: isBillingError(err) });
       attemptLog.push({
         provider: attempt.provider,
         model: attempt.model,

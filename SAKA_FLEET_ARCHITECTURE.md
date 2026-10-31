@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.24.1  
+**Version:** 1.24.2  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.24.2** | Provider-outage hardening: billing breaker, per-leg timeouts, slow-turn ack, admin help | §63 |
 | **1.24.1** | Reply-speed telemetry + NATURAL_INTAKE kill switch | §62 |
 | **1.24.0** | Conversation-first Saka: natural intake, instant acks, paragraph parsing | §61 |
 | **1.23.3** | Incident registry: track, resolve and silence backend issues | §60 |
@@ -1048,7 +1049,7 @@ Alerts are WhatsApp-ready and unit-aware, e.g. "Service Warning (KDA 123A): Oil 
 | `PREMIUM_MODEL_ENABLED` | off | Tier-2 premium routing kill switch |
 | `AI_MODEL_TIER_1/2/3` | deepseek-chat | per-tier model overrides (Tier 3 accepts `deepseek-reasoner`) |
 | `CONVERSATIONAL_PROVIDER` | deepseek | Tier-2 provider (`deepseek`/`openai`; `anthropic` Phase 1) |
-| `AI_TIMEOUT_MS_PREMIUM` | 15000 | Tier-2 fail-fast timeout |
+| `AI_TIMEOUT_MS_PREMIUM` | 30000 | primary premium-leg timeout (Anthropic `AbortSignal` / OpenAI SDK) |
 | `AI_USAGE_LOGGING_ENABLED` / `AI_USAGE_LOG_MAX_ROWS` / `AI_USAGE_TRIM_EVERY` | on / 10000 / 250 | telemetry writes + retention |
 | `SUPABASE_TIMEOUT_MS` | 15000 | per-request DB timeout |
 | `SAKA_PROMPT_CACHE_MS` | 60000 | core prompt cache |
@@ -1421,9 +1422,12 @@ Analytics (v1.13.0): `getAiUsageSummary(supabase, hours = 24)` aggregates a 1–
 | `ANTHROPIC_API_KEY` | (unset) | Tier-2/Tier-3 Anthropic key; unset ⇒ DeepSeek-only |
 | `OPENAI_API_KEY` | (unset) | enables the OpenAI Tier-2 fallback leg |
 | `CONVERSATIONAL_PROVIDER` | deepseek | Tier-2 primary provider |
-| `AI_TIMEOUT_MS_PREMIUM` | 15000 | Tier-2 fail-fast timeout (Anthropic `AbortSignal` / OpenAI SDK) |
-| `AI_PREMIUM_MAX_CONCURRENCY` | 2 | Anthropic in-flight cap; overflow → next leg |
+| `AI_TIMEOUT_MS_PREMIUM` | 30000 | primary premium-leg timeout (Anthropic `AbortSignal` / OpenAI SDK) |
+| `AI_TIMEOUT_MS_FALLBACK` | 10000 | secondary premium legs (v1.24.2) |
+| `AI_CHAIN_BUDGET_MS` | 45000 | premium-leg wall-clock budget per AI call (v1.24.2); DeepSeek never gated |
+| `AI_PREMIUM_MAX_CONCURRENCY` | 8 | Anthropic in-flight cap; overflow → next leg |
 | `AI_CB_FAILURE_THRESHOLD` / `AI_CB_WINDOW_MS` / `AI_CB_OPEN_MS` | 3 / 60000 / 30000 | per-provider circuit breaker (DeepSeek exempt) |
+| `AI_CB_BILLING_OPEN_MS` | 1800000 | billing/auth failures open the breaker instantly for 30 min (v1.24.2) |
 | `AI_DAILY_BUDGET_USD` | (unset = off) | rolling-24 h spend cap; over-budget premium legs are skipped |
 | `AI_BUDGET_ALERT_PCT` | 80 | first alert threshold; 100% always alerts |
 | `AI_USAGE_LOGGING_ENABLED` | on | telemetry writes kill switch |
@@ -1550,9 +1554,10 @@ Every LLM turn still starts at `chatCompletion()`; Phase 3 replaces the ad-hoc c
 ### 38.2 Circuit breakers
 Per-provider, in-memory, fixed-cooldown breakers in `aiClient.js`:
 - `AI_CB_FAILURE_THRESHOLD` (3) failures within `AI_CB_WINDOW_MS` (60 s) open the breaker for `AI_CB_OPEN_MS` (30 s).
-- Any success resets the failure window; cooldown expiry resets the breaker (no half-open probing).
+- **Billing/auth failures skip the ladder (v1.24.2).** `isBillingError()` recognises 401/402/403 plus quota/credit 429s ("no credits remaining", `insufficient_quota`, billing, payment required, revoked key) and `recordProviderOutcome(provider, false, now, { billing: true })` opens the breaker on the FIRST failure for `AI_CB_BILLING_OPEN_MS` (30 min). Rate-limit 429s and timeouts stay on the transient ladder.
+- Any success resets the failure window; cooldown expiry resets the breaker (no half-open probing), so a topped-up provider is picked up automatically on the next turn after the window.
 - While open, the provider is omitted from the chain and logged as `skipped_circuit_open`; DeepSeek is exempt.
-- Helpers: `isProviderCircuitOpen()`, `recordProviderOutcome()`, `resetProviderBreakers()` (tests/ops).
+- Helpers: `isProviderCircuitOpen()`, `recordProviderOutcome()`, `isBillingError()`, `resetProviderBreakers()` (tests/ops).
 
 ### 38.3 Tier-3 reasoning binding (autonomy-gated)
 - `resolveTier()` Tier 3 resolves provider = `AI_REASONING_PROVIDER` and model = `AI_MODEL_TIER_3`; when `AI_MODEL_TIER_3` is unset the default is `deepseek-reasoner` **only** while `REMEDIATION_AUTONOMY=on`, otherwise `deepseek-chat` (prior behaviour).
@@ -1569,7 +1574,7 @@ Per-provider, in-memory, fixed-cooldown breakers in `aiClient.js`:
 ### 38.5 Telemetry & `.env` delta
 - `ai_usage_logs.attempts` (`jsonb`) stores the ordered legs per outcome; `ensureAiUsageLogsTable()` detects and adds the column on legacy tables (`ALTER TABLE … ADD COLUMN IF NOT EXISTS`). The one-row-per-turn contract is preserved — no per-leg row spam.
 - `getAiUsageSummary()` exposes `fallbacks` (legs after the first), aggregated across the window and per bucket.
-- `.env` / `.env.example` gain a `FAILOVER, CIRCUIT BREAKERS & BUDGET` block: `AI_CB_FAILURE_THRESHOLD`, `AI_CB_WINDOW_MS`, `AI_CB_OPEN_MS`, `AI_REASONING_PROVIDER`, `AI_MODEL_TIER_2_OPENAI`, `AI_TIMEOUT_MS_REASONING`, `AI_DAILY_BUDGET_USD` (0 = off in the template), `AI_BUDGET_ALERT_PCT`.
+- `.env` / `.env.example` gain a `FAILOVER, CIRCUIT BREAKERS & BUDGET` block: `AI_CB_FAILURE_THRESHOLD`, `AI_CB_WINDOW_MS`, `AI_CB_OPEN_MS`, `AI_CB_BILLING_OPEN_MS` (v1.24.2), `AI_REASONING_PROVIDER`, `AI_MODEL_TIER_2_OPENAI`, `AI_TIMEOUT_MS_REASONING`, `AI_DAILY_BUDGET_USD` (0 = off in the template), `AI_BUDGET_ALERT_PCT`. The TIMEOUT & CONCURRENCY block gains `AI_TIMEOUT_MS_FALLBACK` and `AI_CHAIN_BUDGET_MS` (v1.24.2).
 
 ### 38.6 Files, tests & operations
 - `src/services/aiClient.js` — `buildProviderChain`, breaker registry, budget seam, provider-aware tier models, `attempts` emission, reasoning timeout.
@@ -2324,6 +2329,7 @@ Saka now gathers data from natural, flowing conversation instead of running a qu
 ### 61.2 Instant acks (perceived speed)
 - Free-form messages of `INSTANT_ACK_CHARS` (180) or more, outside an active quiz, get an immediate "📖 Got it - reading that now." before the turn parses, records and composes. This is the same post-ACK pattern used for documents, now applied to long paragraphs.
 - `INSTANT_ACK_ENABLED` (default on) is the kill switch. The ack is transcript-logged only, never injected into chat history context.
+- **Slow-turn ack (v1.24.2):** any turn still unanswered after `SLOW_ACK_MS` (4000) sends "⏳ One moment — still with you." regardless of message length, then proceeds normally. It is cleared the moment the real reply is sent and counted in `turn_latency_logs.ack_sent`.
 
 ### 61.3 Paragraph parsing
 - Cleaned make/model output for paragraph stories ("Toyota Fielder 2016 diesel at 120,000 km" -> `Toyota Fielder`).
@@ -2363,3 +2369,27 @@ The user-perceived reply time is now measured on every answered turn, so the two
 ### 62.5 Files & tests
 - Files: `src/services/turnLatency.js`, `scripts/run_turn_latency_migration.js`, `src/routes/whatsapp.js`, `src/services/superadmin.js`, `src/services/conversationEngine.js`, `index.js`, `scripts/reset-db.js`, `.env.example`.
 - Tests: `test_turn_latency.js` (32 — percentile math, aggregation, paging, fail-soft, digest copy, command parsing, self-cleaning DB round-trip); `test_natural_intake.js` (15 — kill-switch branches). Also repaired pre-existing pricing drift in `test_phase2_analytics.js` (Sonnet $2 / Haiku $0.50 list prices, cost total 0.0083) — it had been stale since v1.23.0.
+
+---
+
+## 63. v1.24.2 - Provider-Outage Hardening (the 3-5 minute reply incident)
+
+### 63.1 Post-mortem (2026-10-31, 03:22-03:31 UTC)
+- `turn_latency_logs` recorded **101 s, 124 s, 162 s and 173 s** turns for two phones.
+- `ai_usage_logs.attempts` showed every turn paying for the whole chain **twice** (`intent_classify` + `prose_render`): Anthropic timed out at 15-24 s on a 13-20k-token classify prompt, OpenAI returned `429 You have no credits remaining` on every call, and the DeepSeek fallback leg inherited the premium timeout (17-30 s).
+- Root causes: (1) a **billing outage** (OpenAI out of credits) was treated like a transient failure, so every call re-probed it; (2) `AI_TIMEOUT_MS_PREMIUM` was too tight for the classify prompt; (3) the DeepSeek terminal leg used the premium timeout instead of `AI_TIMEOUT_MS`; (4) silent waiting with no ack on short messages; (5) `superadmin commands` fell through to the AI chain.
+- Live probes at diagnosis time: Anthropic ✅ 1.6 s, DeepSeek ✅ 1.0 s, OpenAI ❌ 429 no-credits.
+
+### 63.2 Fixes
+- **Billing-aware breaker:** `isBillingError()` classifies 401/402/403 and quota/credit 429s; `recordProviderOutcome(provider, false, now, { billing: true })` opens the breaker on the FIRST failure for `AI_CB_BILLING_OPEN_MS` (30 min). Rate-limit 429s and timeouts keep the transient ladder.
+- **Per-leg timeout shaping:** primary premium leg `AI_TIMEOUT_MS_PREMIUM` (30 s, mirrored in Cloud Run), later premium legs `AI_TIMEOUT_MS_FALLBACK` (10 s), DeepSeek always `AI_TIMEOUT_MS` (12 s). Premium legs are capped by `AI_CHAIN_BUDGET_MS` (45 s); over-budget legs log `skipped_chain_budget`, DeepSeek is never gated.
+- **Hard per-leg deadline:** `runLegWithDeadline()` races every leg against its budget (+2 s grace) with an `AbortController`, so a stalled socket or late timer can never stretch the chain.
+- **Slow-turn ack:** `SLOW_ACK_MS` (4 s) sends "⏳ One moment — still with you." and marks `turn_latency_logs.ack_sent`.
+- **Deterministic admin help:** `admin help` / `superadmin commands` return `formatAdminHelpReply()` with zero AI calls, audited `ADMIN_HELP`.
+- **Runbook for any future provider outage:** confirm with `admin ai-stats` (looking at `skipped_circuit_open` / `skipped_missing_key` / failed attempts), then `admin latency` for user impact. A billing-dead provider now costs one failed call per 30-minute window, not per message.
+
+### 63.3 Tests & operations
+- `test_phase3_resilience` (72): billing detection, instant open/hold/re-probe, end-to-end billing trip with no repeat probing, per-leg timeout shaping.
+- `test_turn_latency` (35): `ADMIN_HELP` parsing + help copy.
+- **Clean-slate hardening:** the global wipe's TRUNCATE block was missing `public.turn_latency_logs` (the registry had it, the SQL did not), so stale telemetry survived a wipe. Fixed, and `test_db_reset_scope.js` is now part of `npm run health`'s stateless suites so the registry and the SQL can never drift apart again.
+- Post-fix baseline: `admin latency` should show p95 back under ~10 s; the two-lane worker stays deferred while the tail is provider-driven.

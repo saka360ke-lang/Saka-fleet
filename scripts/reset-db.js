@@ -206,6 +206,7 @@ export async function executeDatabaseReset({ targetPhone = null, verbose = true,
       sql = `
         TRUNCATE TABLE 
           public.backend_incidents,
+          public.turn_latency_logs,
           public.chat_history,
           public.chat_transcripts,
           public.chat_friction_logs,

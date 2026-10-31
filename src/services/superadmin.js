@@ -134,6 +134,7 @@ export async function ensureSuperadminTables(supabase) {
 }
 
 const ADMIN_INTENTS = new Set([
+  'ADMIN_HELP',
   'ADMIN_REPORT', 'ADMIN_AUDIT', 'ADMIN_ALERTS',
   'ADMIN_RULES_RESET', 'ADMIN_RULES_TOGGLE', 'ADMIN_RULES_LIST',
   'ADMIN_HORIZON', 'ADMIN_PROPOSALS',
@@ -158,6 +159,13 @@ const ADMIN_DIRECTIVE_RE = /^\s*(admin\b|adminrules?\b|check\s+health\b|health\s
 export async function parseSuperadminCommand(messageText) {
   const text = messageText ? messageText.trim() : '';
   const lower = text.toLowerCase();
+
+  // v1.24.2 — help aliases are deterministic. A "superadmin commands" message
+  // used to fall through to the conversational AI chain and could wait minutes
+  // behind provider timeouts; the command list must never cost a token.
+  if (/^\s*(?:superadmin|admin)\s+(?:commands?|help)\s*$/i.test(text)) {
+    return { intent: 'ADMIN_HELP' };
+  }
 
   // Gate: general conversation from the superadmin phone is NOT an admin command.
   if (!ADMIN_DIRECTIVE_RE.test(text)) {
@@ -1527,6 +1535,24 @@ export function formatFeatureRolloutReply(status) {
     '_The digest appends once to each user\'s next normal turn. Run npm run rollout:features -- --apply to backfill the schema._';
 }
 
+/**
+ * Deterministic superadmin command list (v1.24.2). Zero tokens, zero provider
+ * calls — `admin help` / `superadmin commands` must answer instantly even when
+ * every AI provider is timing out.
+ */
+export function formatAdminHelpReply() {
+  return '🛠️ *Saka admin commands*\n\n' +
+    '📊 *Snapshots* — admin report · admin alerts · admin audit <query>\n' +
+    '👥 *Fleet* — profiles report · admin trial-stats · admin ai-stats [24h] · admin latency [24h]\n' +
+    '🛠️ *Fixes* — admin remediations · admin accept|decline|modify fix <CODE>\n' +
+    '🌱 *Growth* — generate coupon 20% · admin horizon · admin proposals\n' +
+    '🩺 *Guardrails* — check health · admin rules list|toggle <key>|reset\n' +
+    '📚 *Knowledge* — admin kb · admin kb review · admin kb stale\n' +
+    '🧠 *Models* — admin models · admin scout · admin adopt <id> [pct] · admin model rollback\n' +
+    '🚀 *Release* — admin rollout · admin incidents\n\n' +
+    '_adminstart opens a session · adminstop closes it._';
+}
+
 export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
   if (!isSuperadminPhone(senderPhone)) {
     return { isSuperadmin: false };
@@ -1636,6 +1662,10 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
     .eq('phone_number', formattedPhone);
 
   // 5. Command Routing
+  if (parsedCommand.intent === 'ADMIN_HELP') {
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_HELP', {});
+    return { isSuperadmin: true, reply: formatAdminHelpReply() };
+  }
   if (parsedCommand.intent === 'ADMIN_REPORT') {
     const reportRes = await handleAdminReportCommand(supabase);
     await logAdminAudit(supabase, formattedPhone, 'ADMIN_REPORT', reportRes.details);

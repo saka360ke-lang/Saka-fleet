@@ -609,6 +609,9 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
 
   // v1.24.1 - user-perceived reply latency (webhook receipt to final reply).
   const turnStartedAt = Date.now();
+  // v1.24.2 - slow-turn ack state (function scope so the final send can clear it).
+  let slowAckTimer = null;
+  let turnFinalized = false;
 
   try {
     const senderPhone = messageObj.from;
@@ -715,6 +718,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
 
     let session = chatSessions.get(senderPhone) || { history: [], lastActive: Date.now() };
     session.lastActive = Date.now();
+    session.slowAckSent = false;
 
     // Circuit Breaker State Check & Reset on user navigation commands
     const cleanCmd = messageText.trim().toLowerCase();
@@ -987,6 +991,25 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             session.instantAckSent = true;
             if (supabaseClient) await logChatTranscript(supabaseClient, senderPhone, 'assistant', 'Got it - reading that now.');
           } catch { /* ack is best-effort */ }
+        }
+
+        // v1.24.2 - slow-turn ack: no user should ever stare at silence while a
+        // provider times out. If the turn is still working after SLOW_ACK_MS,
+        // send one gentle "still with you" line (best-effort, never blocks).
+        const slowAckMs = Number(process.env.SLOW_ACK_MS || 4000);
+        if (instantAckEnabled && !session.instantAckSent && !mediaObj && !session.quiz
+          && !countryCommandResult && slowAckMs > 0) {
+          slowAckTimer = setTimeout(async () => {
+            if (turnFinalized) return;
+            session.slowAckSent = true;
+            try {
+              await sendWhatsAppReply(senderPhone, '⏳ One moment — still with you.');
+              if (supabaseClient) {
+                await logChatTranscript(supabaseClient, senderPhone, 'assistant', 'One moment — still with you.');
+              }
+            } catch { /* ack is best-effort */ }
+          }, slowAckMs);
+          if (typeof slowAckTimer.unref === 'function') slowAckTimer.unref();
         }
 
         let aiResult;
@@ -3005,8 +3028,17 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
         if (session.history.length > 20) session.history = session.history.slice(-20);
         chatSessions.set(senderPhone, session);
 
+        turnFinalized = true;
+        if (slowAckTimer) {
+          clearTimeout(slowAckTimer);
+          slowAckTimer = null;
+        }
         await sendWhatsAppReply(senderPhone, finalReply);
-        void logTurnLatency(supabaseClient, { phone: senderPhone, turnMs: Date.now() - turnStartedAt, ackSent: session.instantAckSent === true });
+        void logTurnLatency(supabaseClient, {
+          phone: senderPhone,
+          turnMs: Date.now() - turnStartedAt,
+          ackSent: session.instantAckSent === true || session.slowAckSent === true
+        });
         await userLogPromise;
         if (supabaseClient) {
           await Promise.all([
@@ -3021,9 +3053,14 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
         return { status: 'success' };
       } catch (err) {
         if (fastify?.log) fastify.log.error(err);
+        turnFinalized = true;
+        if (slowAckTimer) {
+          clearTimeout(slowAckTimer);
+          slowAckTimer = null;
+        }
         await userLogPromise;
         await persistSnap();
-        void logTurnLatency(supabaseClient, { phone: messageObj?.from || null, turnMs: Date.now() - turnStartedAt, ackSent: false });
+        void logTurnLatency(supabaseClient, { phone: messageObj?.from || null, turnMs: Date.now() - turnStartedAt, ackSent: session.slowAckSent === true });
         return { status: 'error', error: err?.message };
       }
 }
