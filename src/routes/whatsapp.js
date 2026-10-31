@@ -612,6 +612,8 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
   // v1.24.2 - slow-turn ack state (function scope so the final send can clear it).
   let slowAckTimer = null;
   let turnFinalized = false;
+  // v1.24.3 - phase markers so a slow turn names its own bottleneck.
+  const phaseMarks = { profileReadyAt: null, aiStartedAt: null, aiDoneAt: null };
 
   try {
     const senderPhone = messageObj.from;
@@ -817,10 +819,17 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             getRecentChatHistory(supabaseClient, senderPhone, 10)
           ]);
           existingVehicles = vehiclesRes?.data || [];
-          dbHistory = historyRes || [];
+          // v1.24.3 — this turn's own user row can land before the history read on
+          // a slow database; filter it out so a first-time user is never mistaken
+          // for a returning one and the current message is not duplicated.
+          dbHistory = (historyRes || []).filter((row) => {
+            const at = row?.created_at ? Date.parse(row.created_at) : NaN;
+            return !Number.isFinite(at) || at < turnStartedAt - 1500;
+          });
         }
 
         const hasVehicleRegistered = existingVehicles.length > 0;
+        phaseMarks.profileReadyAt = Date.now();
         const messageLang = detectMessageLanguage(messageText);
         const targetLang = messageLang !== 'English' ? messageLang : (profileData?.preferred_language || 'English');
         if (messageLang !== 'English' && profileData && messageLang !== profileData.preferred_language && supabaseClient) {
@@ -852,7 +861,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         if (conversationHistory.length === 0 && dbHistory.length > 0) {
           conversationHistory = dbHistory;
         }
-        const firstContact = isFirstContact({ session, dbHistory, hasVehicleRegistered });
+        const firstContact = isFirstContact({ session, dbHistory, hasVehicleRegistered, profile: profileData });
 
         // v1.21.0 — every user lives in a Country Bucket: detected from the
         // WhatsApp number and confirmed at onboarding. The active asset kind
@@ -1013,6 +1022,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         }
 
         let aiResult;
+        phaseMarks.aiStartedAt = Date.now();
         if (ocrPaused) {
           aiResult = {
             intent: 'APP_HELP',
@@ -1100,6 +1110,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             jurisdictionContext
           });
         }
+        phaseMarks.aiDoneAt = Date.now();
         let intent = aiResult.intent;
         let customReply = aiResult.reply_message;
 
@@ -3034,10 +3045,17 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
           slowAckTimer = null;
         }
         await sendWhatsAppReply(senderPhone, finalReply);
+        const phaseMs = {
+          setup: phaseMarks.profileReadyAt ? phaseMarks.profileReadyAt - turnStartedAt : null,
+          preAi: phaseMarks.profileReadyAt && phaseMarks.aiStartedAt ? phaseMarks.aiStartedAt - phaseMarks.profileReadyAt : null,
+          ai: phaseMarks.aiStartedAt && phaseMarks.aiDoneAt ? phaseMarks.aiDoneAt - phaseMarks.aiStartedAt : null,
+          postAi: phaseMarks.aiDoneAt ? Math.max(0, Date.now() - phaseMarks.aiDoneAt) : null
+        };
         void logTurnLatency(supabaseClient, {
           phone: senderPhone,
           turnMs: Date.now() - turnStartedAt,
-          ackSent: session.instantAckSent === true || session.slowAckSent === true
+          ackSent: session.instantAckSent === true || session.slowAckSent === true,
+          phaseMs
         });
         await userLogPromise;
         if (supabaseClient) {

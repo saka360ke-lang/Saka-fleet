@@ -58,9 +58,9 @@ function makeFakeSupabase(rows, { fail = false } = {}) {
 }
 
 const fixtureRows = [
-  { id: 't1', turn_ms: 1200, ack_sent: true },
+  { id: 't1', turn_ms: 1200, ack_sent: true, phase_ms: { setup: 300, preAi: 100, ai: 700, postAi: 100 } },
   { id: 't2', turn_ms: 800, ack_sent: false },
-  { id: 't3', turn_ms: 5000, ack_sent: true },
+  { id: 't3', turn_ms: 5000, ack_sent: true, phase_ms: { setup: 500, preAi: 200, ai: 4000, postAi: 300 } },
   { id: 't4', turn_ms: 300, ack_sent: false },
   { id: 't5', turn_ms: 2500, ack_sent: true }
 ];
@@ -85,6 +85,8 @@ async function runTests() {
   check(summary.p95Ms === 5000, 'p95 latency (slow tail)');
   check(summary.p99Ms === 5000, 'p99 latency');
   check(summary.ackTurns === 3 && Math.abs(summary.ackRate - 0.6) < 1e-9, 'instant-ack rate');
+  check(summary.avgPhaseMs && summary.avgPhaseMs.setup === 400 && summary.avgPhaseMs.preAi === 150, 'phase averages aggregate the setup and pre-AI stages');
+  check(summary.avgPhaseMs.ai === 2350 && summary.avgPhaseMs.postAi === 200, 'phase averages aggregate the AI and post-AI stages');
   check(summary.hours === 24 && summary.since && summary.generatedAt, 'window metadata');
 
   console.log('\n--- Test 3: window clamping & pagination ---');
@@ -111,6 +113,7 @@ async function runTests() {
   check(/Healthy: the slow tail stays under 4 seconds/.test(fast), 'fast tail is called healthy');
   const slow = formatTurnLatencyReply(summary);
   check(/two-lane background worker/.test(slow), 'slow tail recommends the two-lane worker');
+  check(/Phases \(avg\):/.test(slow) && /pre-AI/.test(slow), 'the digest names the slow phase');
   const empty = formatTurnLatencyReply({ ok: true, hours: 24, turns: 0 });
   check(/No replies measured/.test(empty), 'empty window is reassuring');
   const broken = formatTurnLatencyReply({ ok: false, error: 'db down' });
@@ -144,10 +147,11 @@ async function runTests() {
   } else {
     try {
       await ensureTurnLatencyTable(supabase);
-      const written = await logTurnLatency(supabase, { phone, turnMs: 1234, ackSent: true });
+      const written = await logTurnLatency(supabase, { phone, turnMs: 1234, ackSent: true, phaseMs: { setup: 120, preAi: 30, ai: 900, postAi: 40 } });
       check(written === true, 'turn latency row inserts');
       const live = await getTurnLatencySummary(supabase, 1);
       check(live.turns >= 1, 'live summary sees the row');
+      check(live.avgPhaseMs && live.avgPhaseMs.ai >= 900, 'phase breakdown round-trips');
       const digest = await handleTurnLatencyCommand(supabase, 1);
       check(digest.reply.includes('Saka Reply Speed') && digest.details.turns >= 1, 'command handler renders the digest');
     } finally {

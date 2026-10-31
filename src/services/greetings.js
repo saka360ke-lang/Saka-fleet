@@ -82,8 +82,15 @@ export function sakaIntroText({ countryInfo = null, now = new Date(), profile = 
 }
 
 /** True only for a genuinely fresh conversation (no persisted history, no vehicle). */
-export function isFirstContact({ session = null, dbHistory = [], profile = null, hasVehicleRegistered = false } = {}) {
+export function isFirstContact({ session = null, dbHistory = [], profile = null, hasVehicleRegistered = false, now = Date.now(), newProfileWindowMs = 120000 } = {}) {
   if (hasVehicleRegistered) return false;
+  // v1.24.3 — a profile created moments ago is a brand-new account, full stop.
+  // This check runs BEFORE the history check because the turn's own user row can
+  // land in chat_history before the history read on a slow database, which used
+  // to make a first-time user look like a returning one ("no need to start
+  // over" instead of the welcome).
+  const createdAt = profile?.created_at ? Date.parse(profile.created_at) : NaN;
+  if (Number.isFinite(createdAt) && now - createdAt <= newProfileWindowMs) return true;
   // v1.21.3 — wipe-aware: with NO persisted history there is no real
   // conversation to preserve, so stale in-memory flags (e.g. a warm Cloud Run
   // instance that survived a database slate wipe) must never suppress the

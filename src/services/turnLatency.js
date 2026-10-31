@@ -30,9 +30,17 @@ CREATE TABLE IF NOT EXISTS public.turn_latency_logs (
     phone text,
     turn_ms integer,
     ack_sent boolean DEFAULT false,
+    phase_ms jsonb,
     created_at timestamp with time zone DEFAULT now()
 );
+ALTER TABLE public.turn_latency_logs ADD COLUMN IF NOT EXISTS phase_ms jsonb;
 CREATE INDEX IF NOT EXISTS idx_turn_latency_logs_created ON public.turn_latency_logs(created_at DESC);
+NOTIFY pgrst, 'reload schema';
+`;
+
+/** v1.24.3 — phase breakdown migration (idempotent). */
+export const TURN_LATENCY_PHASE_SQL = `
+ALTER TABLE public.turn_latency_logs ADD COLUMN IF NOT EXISTS phase_ms jsonb;
 NOTIFY pgrst, 'reload schema';
 `;
 
@@ -54,7 +62,15 @@ export async function ensureTurnLatencyTable(providedSupabase) {
       const result = await runSql(TURN_LATENCY_SQL, { label: 'ensureTurnLatencyTable' });
       return { [TURN_LATENCY_TABLE]: result.ok ? 'created' : 'missing' };
     }
-    return { [TURN_LATENCY_TABLE]: missing ? 'missing' : 'exists' };
+    if (missing) return { [TURN_LATENCY_TABLE]: 'missing' };
+
+    // v1.24.3 — phase_ms self-migration for tables created by v1.24.1.
+    const { error: phaseError } = await supabase.from(TURN_LATENCY_TABLE).select('phase_ms').limit(1);
+    const phaseMissing = Boolean(phaseError && /phase_ms/i.test(phaseError.message || ''));
+    if (phaseMissing && hasSqlAccess()) {
+      await runSql(TURN_LATENCY_PHASE_SQL, { label: 'ensureTurnLatencyPhaseColumn' });
+    }
+    return { [TURN_LATENCY_TABLE]: 'exists' };
   } catch (err) {
     console.warn('[TurnLatency] Table provisioning notice:', err.message);
     return { [TURN_LATENCY_TABLE]: 'unknown' };
@@ -96,17 +112,24 @@ export async function trimTurnLatencyLogs(providedSupabase) {
 }
 
 /** Persist one turn latency. Never throws; warns and returns false on failure. */
-export async function logTurnLatency(providedSupabase, { phone = null, turnMs = null, ackSent = false } = {}) {
+export async function logTurnLatency(providedSupabase, { phone = null, turnMs = null, ackSent = false, phaseMs = null } = {}) {
   try {
     if (!isTurnLatencyLoggingEnabled()) return false;
     if (!Number.isFinite(turnMs) || turnMs < 0) return false;
     const supabase = getSupabase(providedSupabase);
-    const { error } = await supabase.from(TURN_LATENCY_TABLE).insert([{
+    const cleanPhases = phaseMs && typeof phaseMs === 'object'
+      ? Object.fromEntries(Object.entries(phaseMs)
+        .filter(([, value]) => Number.isFinite(value) && value >= 0)
+        .map(([key, value]) => [String(key).slice(0, 24), Math.round(value)]))
+      : null;
+    const row = {
       phone: phone ? String(phone).slice(0, 32) : null,
       turn_ms: Math.round(turnMs),
       ack_sent: ackSent === true,
       created_at: new Date().toISOString()
-    }]);
+    };
+    if (cleanPhases && Object.keys(cleanPhases).length > 0) row.phase_ms = cleanPhases;
+    const { error } = await supabase.from(TURN_LATENCY_TABLE).insert([row]);
     if (error) {
       console.warn('[TurnLatency] insert skipped:', error.message);
       return false;
@@ -151,6 +174,7 @@ export async function getTurnLatencySummary(providedSupabase, hours = TURN_LATEN
     p50Ms: null,
     p95Ms: null,
     p99Ms: null,
+    avgPhaseMs: null,
     truncated: false,
     error: null
   };
@@ -158,6 +182,8 @@ export async function getTurnLatencySummary(providedSupabase, hours = TURN_LATEN
   try {
     const supabase = getSupabase(providedSupabase);
     const latencies = [];
+    const phaseTotals = {};
+    const phaseCounts = {};
     let ackTurns = 0;
     let fetched = 0;
     let exhausted = false;
@@ -166,7 +192,7 @@ export async function getTurnLatencySummary(providedSupabase, hours = TURN_LATEN
       const pageSize = Math.min(TURN_LATENCY_PAGE_SIZE, TURN_LATENCY_MAX_ROWS - fetched);
       const { data, error } = await supabase
         .from(TURN_LATENCY_TABLE)
-        .select('id,turn_ms,ack_sent')
+        .select('*')
         .gte('created_at', since)
         .order('created_at', { ascending: false })
         .order('id', { ascending: false })
@@ -178,6 +204,13 @@ export async function getTurnLatencySummary(providedSupabase, hours = TURN_LATEN
       for (const row of rows) {
         if (Number.isFinite(row.turn_ms)) latencies.push(row.turn_ms);
         if (row.ack_sent === true) ackTurns += 1;
+        if (row.phase_ms && typeof row.phase_ms === 'object') {
+          for (const [key, value] of Object.entries(row.phase_ms)) {
+            if (!Number.isFinite(value)) continue;
+            phaseTotals[key] = (phaseTotals[key] || 0) + value;
+            phaseCounts[key] = (phaseCounts[key] || 0) + 1;
+          }
+        }
       }
 
       fetched += rows.length;
@@ -196,6 +229,9 @@ export async function getTurnLatencySummary(providedSupabase, hours = TURN_LATEN
     summary.p50Ms = percentile(latencies, 50);
     summary.p95Ms = percentile(latencies, 95);
     summary.p99Ms = percentile(latencies, 99);
+    summary.avgPhaseMs = Object.keys(phaseTotals).length
+      ? Object.fromEntries(Object.keys(phaseTotals).map((key) => [key, Math.round(phaseTotals[key] / phaseCounts[key])]))
+      : null;
     summary.truncated = !exhausted;
 
     return summary;

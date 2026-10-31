@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.24.2  
+**Version:** 1.24.3  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.24.3** | Operator tooling + chat-log fixes: silent admin sessions, revision probe, first-contact race, phase telemetry | §64 |
 | **1.24.2** | Provider-outage hardening: billing breaker, per-leg timeouts, slow-turn ack, admin help | §63 |
 | **1.24.1** | Reply-speed telemetry + NATURAL_INTAKE kill switch | §62 |
 | **1.24.0** | Conversation-first Saka: natural intake, instant acks, paragraph parsing | §61 |
@@ -2350,6 +2351,7 @@ The user-perceived reply time is now measured on every answered turn, so the two
 
 ### 62.1 What is measured
 - `turn_latency_logs` holds one row per answered turn: `phone`, `turn_ms` (webhook receipt to the final reply), `ack_sent` (instant ack fired first) and `created_at`.
+- **v1.24.3 — `phase_ms` jsonb:** `{ setup, preAi, ai, postAi }` millisecond breakdown so a slow turn names its own bottleneck. `admin latency` prints the averages; the migration (`npm run migrate:turn-latency`) adds the column idempotently and `ensureTurnLatencyTable()` self-migrates it.
 - Instrumentation lives in `processIncomingWhatsAppMessage`: `turnStartedAt` at entry, `void logTurnLatency(...)` after the final send and on the error path (never delays the reply).
 - Caps mirror `ai_usage_logs`: `TURN_LATENCY_MAX_ROWS` (10000), `TURN_LATENCY_TRIM_EVERY` (250). `TURN_LATENCY_LOGGING_ENABLED` (on) is the kill switch; writes never throw.
 - Migration: `npm run migrate:turn-latency` (`scripts/run_turn_latency_migration.js`); the table is part of the slate-wipe scope.
@@ -2393,3 +2395,28 @@ The user-perceived reply time is now measured on every answered turn, so the two
 - `test_turn_latency` (35): `ADMIN_HELP` parsing + help copy.
 - **Clean-slate hardening:** the global wipe's TRUNCATE block was missing `public.turn_latency_logs` (the registry had it, the SQL did not), so stale telemetry survived a wipe. Fixed, and `test_db_reset_scope.js` is now part of `npm run health`'s stateless suites so the registry and the SQL can never drift apart again.
 - Post-fix baseline: `admin latency` should show p95 back under ~10 s; the two-lane worker stays deferred while the tail is provider-driven.
+
+---
+
+## 64. v1.24.3 - Operator Tooling & Chat-Log Health
+
+### 64.1 Silent superadmin sessions
+- `adminstart` / `adminstop` no longer send email. The session is initiated by the operator in WhatsApp, so the email was pure noise (and a Resend-quota consumer). `admin_audit_logs` (`SESSION_START` / `SESSION_STOP` / `SESSION_TIMEOUT`) remain the permanent record. Remediation and OTP emails are unchanged.
+
+### 64.2 Revision visibility without console access
+- `GET /healthz` stays metadata-free for the public. A request carrying `x-saka-secret: $SENTINEL_SECRET` additionally returns `revision` (`K_REVISION`), `service` (`K_SERVICE`) and `environment`, so an operator can confirm exactly which Cloud Run revision is serving after a deploy.
+- For full read-only deploy history, grant a service account `roles/run.viewer` and run `gcloud auth activate-service-account --key-file=<json>` then `gcloud config set project <id>`; `gcloud run services describe <svc> --region <region>` / `gcloud run revisions list` are then safe to run from this repo.
+
+### 64.3 First-contact race (found in the 2026-10-31 chat logs)
+- Observed: a brand-new number sent "Hi" and received "🙂 I'm still here with you — no need to start over" instead of the welcome.
+- Cause: the turn's own user row can be persisted before the `chat_history` read (slow DB), so `firstContact` was false and the intro-copy guard replaced the welcome.
+- Fix: `isFirstContact()` now returns true for a profile created within `newProfileWindowMs` (120 s) **before** the history check, and the turn filters its own row out of `dbHistory` (created within 1.5 s of `turnStartedAt`). Regression coverage in `test_greetings.js`.
+
+### 64.4 Phase telemetry (why was that turn slow?)
+- `turn_latency_logs.phase_ms` records `setup` (profile/entitlements/history), `preAi` (country bucket, KB, quiz prep), `ai` (classify + render) and `postAi` (compose + send) per turn.
+- `admin latency` adds `Phases (avg): setup … · pre-AI … · AI … · post-AI …`. On 2026-10-31 the 115 s turn spent its time in `setup`/`preAi` (Supabase round-trips taking 5-10× normal with zero errors), which points at instance CPU, not the providers.
+
+### 64.5 Live-log findings & follow-ups (2026-10-31)
+- Post-wipe traffic: `+254734852529` "Hi" took 115 s (`ack_sent=true`, proving the slow-turn ack and the v1.24.2 revision were live); `+254720641985` "Adminstart" produced no assistant row.
+- Profiles are created before onboarding; the welcome trial (`trial_sessions.source='welcome'`) starts when onboarding completes (`onboarding.js` / `quizEngine.js`), so an empty `trial_sessions` before that is expected — not a bug.
+- **Cloud Run runtime checklist (operator):** `--min-instances=1`, `--cpu-boost`, `--no-cpu-throttling`, instance concurrency ≤ `MESSAGE_MAX_CONCURRENCY` (8). Slow Supabase round-trips with zero errors are the signature of CPU throttling.

@@ -333,12 +333,27 @@ fastify.get('/', async (request, reply) => {
 });
 
 // 5.1 Warm/liveness probe for Cloud Run (cheap, no DB I/O).
-fastify.get('/healthz', async () => ({
-  status: 'ok',
-  uptimeSeconds: Math.round(process.uptime()),
-  queue: getQueueStats(),
-  timestamp: new Date().toISOString()
-}));
+fastify.get('/healthz', async (request) => {
+  const base = {
+    status: 'ok',
+    uptimeSeconds: Math.round(process.uptime()),
+    queue: getQueueStats(),
+    timestamp: new Date().toISOString()
+  };
+  // v1.24.3 — revision visibility for operators. Cloud Run injects K_REVISION /
+  // K_SERVICE; they are only disclosed to a caller holding SENTINEL_SECRET so
+  // the public liveness probe stays metadata-free.
+  const secret = process.env.SENTINEL_SECRET;
+  if (secret && String(request?.headers?.['x-saka-secret'] || '') === secret) {
+    return {
+      ...base,
+      revision: process.env.K_REVISION || null,
+      service: process.env.K_SERVICE || null,
+      environment: process.env.APP_ENV || process.env.NODE_ENV || null
+    };
+  }
+  return base;
+});
 
 // 6. WhatsApp & Email Auth OTP Request Endpoint (Mandatory Email)
 fastify.post('/api/auth/whatsapp/request', async (request, reply) => {

@@ -66,6 +66,23 @@ check(isFirstContact({ session: { history: [{ role: 'user' }] }, dbHistory: [], 
 check(isFirstContact({ session: { sakaIntroduced: true }, dbHistory: [], hasVehicleRegistered: false }) === true, 'a stale introduced flag never suppresses a fresh welcome');
 check(isFirstContact({ session: { sakaIntroduced: true }, dbHistory: [{ role: 'assistant' }], hasVehicleRegistered: false }) === false, 'persisted history still suppresses the intro');
 check(isFirstContact({ session: {}, dbHistory: [], hasVehicleRegistered: true }) === false, 'registered users skip the intro');
+// v1.24.3 — the slow-DB race: this turn's own user row can already be persisted.
+const raceNow = Date.parse('2026-10-31T05:00:00Z');
+check(isFirstContact({
+  dbHistory: [{ role: 'user', message: 'Hi', created_at: '2026-10-31T04:59:59Z' }],
+  profile: { created_at: '2026-10-31T04:59:55Z' },
+  now: raceNow
+}) === true, 'a brand-new profile stays first contact even when its own user row is already persisted');
+check(isFirstContact({
+  dbHistory: [{ role: 'user' }],
+  profile: { created_at: '2026-10-31T03:00:00Z' },
+  now: raceNow
+}) === false, 'an older profile with history is still a returning user');
+check(isFirstContact({
+  dbHistory: [{ role: 'user' }],
+  profile: { created_at: '2026-10-31T04:58:30Z' },
+  now: raceNow
+}) === true, 'the new-profile window covers a 90-second-old account');
 
 console.log('--- Test 4b: zero-vehicle plate guard (v1.21.3) ---');
 check(asksForPlateDirectly("What's the plate number of the vehicle you'd like to work with?") === true, 'a direct plate ask is detected');

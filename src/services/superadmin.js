@@ -668,11 +668,20 @@ export function formatTurnLatencyReply(summary) {
     ? 'Tail is slow (p95 ≥ 4s) — the two-lane background worker is worth building.'
     : 'Healthy: the slow tail stays under 4 seconds.';
   const ackLine = summary.ackRate === null ? 'n/a' : `${(summary.ackRate * 100).toFixed(0)}%`;
+  // v1.24.3 — name the slow phase instead of guessing.
+  const phaseLabels = { setup: 'setup', preAi: 'pre-AI', ai: 'AI', postAi: 'post-AI' };
+  const phaseParts = summary.avgPhaseMs
+    ? Object.keys(phaseLabels).filter((key) => Number.isFinite(summary.avgPhaseMs[key]))
+    : [];
+  const phaseLine = phaseParts.length
+    ? `• Phases (avg): ${phaseParts.map((key) => `${phaseLabels[key]} ${formatReplyDuration(summary.avgPhaseMs[key])}`).join(' · ')}\n`
+    : '';
   return `⏱️ *Saka Reply Speed — Last ${summary.hours}h*\n\n` +
     `• Turns measured: ${formatCount(summary.turns)}\n` +
     `• Typical (p50): ${formatReplyDuration(summary.p50Ms)}\n` +
     `• Slow tail (p95): ${formatReplyDuration(summary.p95Ms)} · worst (p99): ${formatReplyDuration(summary.p99Ms)}\n` +
     `• Average: ${formatReplyDuration(summary.avgMs)}\n` +
+    phaseLine +
     `• Instant ack: ${ackLine} of turns\n\n` +
     `_${verdict}_`;
 }
@@ -752,6 +761,7 @@ export async function handleTurnLatencyCommand(supabase, hours = 24) {
       p50_ms: summary.p50Ms,
       p95_ms: summary.p95Ms,
       p99_ms: summary.p99Ms,
+      avg_phase_ms: summary.avgPhaseMs || null,
       truncated: summary.truncated,
       error: summary.error || null
     }
@@ -1575,9 +1585,6 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
     if (error) console.error('[Superadmin Session Start Error]:', error.message);
 
     await logAdminAudit(supabase, formattedPhone, 'SESSION_START', { command: 'adminstart' });
-    if (process.env.SUPERADMIN_EMAIL) {
-      sendAdminNotificationEmail('🔒 Superadmin Session Started', `<p>Superadmin session was started via WhatsApp from <strong>${formattedPhone}</strong> at ${nowIso}.</p>`).catch(() => {});
-    }
 
     return {
       isSuperadmin: true,
@@ -1599,9 +1606,6 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
     if (error) console.error('[Superadmin Session Stop Error]:', error.message);
 
     await logAdminAudit(supabase, formattedPhone, 'SESSION_STOP', { command: 'adminstop' });
-    if (process.env.SUPERADMIN_EMAIL) {
-      sendAdminNotificationEmail('🔓 Superadmin Session Closed', `<p>Superadmin session was closed via WhatsApp from <strong>${formattedPhone}</strong> at ${nowIso}.</p>`).catch(() => {});
-    }
 
     return {
       isSuperadmin: true,
