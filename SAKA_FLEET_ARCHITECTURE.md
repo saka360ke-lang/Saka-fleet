@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.28.2  
+**Version:** 1.28.3  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.28.3** | No phantom plates: structural plate check, windowed paragraph scan, registration self-heal — the real plate volunteered in a later turn is captured | §71.11 |
 | **1.28.2** | Complete replies: Sonnet thinking disabled by default, `max_tokens` truncation falls back to DeepSeek, retired identity copy blocked, "start again" gets the warm welcome | §71.10 |
 | **1.28.1** | Local-currency-only money answers (no dollar figures anywhere), computed local fleet totals, reply-complaint recovery, "tell me a little about Saka" routing | §71.3, §71.9 |
 | **1.28.0** | Human Saka 2.0: typo-tolerant routing, GREETING LAW + linter, local-currency payment answers, save-my-number nudge, append-only Sentinel learning, generated QA/training docs, scoped multi-part banking | §71 |
@@ -2687,3 +2688,10 @@ The model can never ship a corporate hedge, an empty capacity placeholder (`· v
 - **Truncation can never ship:** `normalizeAnthropicResponse()` surfaces `stop_reason`; `runAnthropicAttempt()` throws on `max_tokens`, so the provider chain falls back to DeepSeek (which always completes) instead of returning half a sentence.
 - **Retired identity blocked:** the regex classifier's canned greeting ("intelligent WhatsApp vehicle & asset management assistant") is gone (`reply_message: null`), `isLegacyWelcomeCopy()` blocks legacy copy at all four route passthroughs, and the core prompt carries an **IDENTITY LAW** (machine's memory, money-saver, paperwork wizard). "Let's start again" now maps to `isFirstTimeMessage()` → the warm sales welcome.
 - **Proof:** new `test_anthropic_payload.js` (13 assertions) in `npm run health` + the Rules Gate; `test_greetings` 81; `test_first_message_flow` adds the restart turn.
+
+### 71.11 No phantom plates — paragraph intake hardening (v1.28.3)
+- **Live evidence (2026-10-31 19:51):** "…register my car A 1991 80 series…" banked the odometer/year fragment **"1991 80"** as the plate, so Saka claimed "plate details you already shared"; the real **"KAS 628T"** volunteered one turn later was skipped and would have been saved wrong.
+- **Structural check:** `isPlateLike()` requires ≥2 letters, 1–6 digits, (≥3 letters OR ≥3 digits), rejects odometer-style digit prefixes and part-groups like "80 SERIES"/"TOYOTA 2016". `parsePlate()` now uses it for direct answers too.
+- **Windowed scan:** paragraph capture tests 1–4-word candidates instead of the greedy character regex that swallowed `KAS` into the previous word. "Car Registration KAS 628T" now banks **KAS 628T** while answering the asset kind.
+- **Self-heal:** registration-only — a previously banked non-plate-like plate is dropped before scanning, so a phantom can never block the real plate or reach the confirmation summary.
+- **Proof:** `test_quiz_flow` 74 assertions (incl. the exact live two-turn sequence); `test_natural_intake` 15.

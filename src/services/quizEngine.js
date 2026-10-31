@@ -95,6 +95,7 @@ const MAX_QUIZ_AGE_MS = 45 * 60 * 1000;
 
 const EMAIL_RE = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
 const PLATE_RE = /^[A-Z0-9][A-Z0-9 -]{2,12}$/i;
+const PLATE_BLOCKLIST_RE = /^(VIN|OTP|FUEL|DIESEL|PETROL|HYBRID|OWNER|DRIVER|REGISTER)$/;
 const VIN_RE = /^[A-HJ-NPR-Z0-9]{11,17}$/i;
 
 function parseEmail(text) {
@@ -110,14 +111,42 @@ function parsePhone(text) {
   return `+${digits}`;
 }
 
+/**
+ * v1.28.3 — structural plate sanity check, shared by the direct answer and the
+ * paragraph scan. A registration plate must contain real letters AND a short
+ * digit group. Live bug (2026-10-31 19:51): the token "1991 80" from
+ * "A 1991 80 series…" was banked as a plate, so the real "KAS 628T" volunteered
+ * one turn later was skipped and would have been saved wrong.
+ */
+export function isPlateLike(value = '') {
+  const raw = String(value || '').trim().toUpperCase().replace(/\s+/g, ' ');
+  if (!PLATE_RE.test(raw)) return false;
+  if (PLATE_BLOCKLIST_RE.test(raw)) return false;
+  if (/^\d+$/.test(raw)) return false;
+  const letters = (raw.match(/[A-Z]/g) || []).length;
+  const digits = (raw.match(/\d/g) || []).length;
+  if (letters < 2) return false;
+  if (digits < 1 || digits > 6) return false;
+  // Fragments like "20TH" (2 letters + 2 digits) are dates, not plates.
+  if (letters < 3 && digits < 3) return false;
+  // Odometer fragments start with a long digit run ("367359KM").
+  if (/^\d{5,}/.test(raw)) return false;
+  // Every space-separated part must carry a digit or be a short (<=3) letter
+  // group: "KDA 123A" and "AB12 CDE" pass, "80 SERIES" and "TOYOTA 2016" do not.
+  for (const part of raw.split(' ')) {
+    if (/\d/.test(part)) continue;
+    if (part.length > 3) return false;
+  }
+  return true;
+}
+
 function parsePlate(text, ctx = {}) {
   const raw = String(text).trim().toUpperCase().replace(/\s+/g, ' ');
   if (ctx.vehicles?.length) {
     const direct = ctx.vehicles.find((v) => v.plate_number?.toUpperCase() === raw);
     if (direct) return direct.plate_number;
   }
-  if (!PLATE_RE.test(raw) || !/\d/.test(raw)) return null;
-  if (/^(VIN|OTP|FUEL|DIESEL|PETROL|HYBRID|OWNER|DRIVER|REGISTER)$/.test(raw)) return null;
+  if (!isPlateLike(raw)) return null;
   return raw;
 }
 
@@ -1067,6 +1096,15 @@ function applyTextExtraction(state, def, text, ctx) {
   const banked = [];
   if (!clean) return banked;
 
+  // v1.28.3 — drop a phantom plate banked from an earlier paragraph before
+  // scanning this message. Registration only: other flows use plates chosen
+  // from the owner's existing fleet, which must never be cleared.
+  if (def?.key === 'vehicle_registration'
+      && state.answers.plate_number !== undefined
+      && !isPlateLike(state.answers.plate_number)) {
+    delete state.answers.plate_number;
+  }
+
   const hasVolumeMarker = /\d\s*(?:l\b|lt\b|ltr\b|litre|liter|gal\b)/i.test(clean);
   const hasDistanceMarker = /(?:km|mi\b|mile|mileage|odo|odometer)/i.test(clean);
   const hasFillMarker = /\b(full tank|full|brimmed|top.?up|partial)\b/i.test(clean);
@@ -1126,19 +1164,24 @@ function applyTextExtraction(state, def, text, ctx) {
       parsed = null;
     }
 
-    // Paragraph-safe plate capture: scan whitespace-delimited tokens so
-    // "KDA 123A Toyota Hilux 1991 diesel …" still fills the plate field.
+    // Paragraph-safe plate capture: scan windowed word candidates (1-4 words)
+    // so "KDA 123A Toyota Hilux 1991 diesel …" still fills the plate field.
+    // v1.28.3 — windowed candidates replaced the greedy character scan, which
+    // swallowed "KAS" into the previous word and missed "KAS 628T".
     if ((parsed === null || parsed === undefined) && f.key === 'plate_number') {
-      const tokens = clean.toUpperCase().match(/[A-Z0-9][A-Z0-9-]{2,14}(?:\s[A-Z0-9]{1,4})?/g) || [];
-      for (const token of tokens) {
-        try {
-          const candidate = f.parse(token.trim(), { ...ctx, answers: state.answers }, state.answers);
-          if (!candidate) continue;
-          if (f.validate(candidate, { ...ctx, answers: state.answers }, state.answers).ok) {
-            parsed = candidate;
-            break;
-          }
-        } catch { /* keep scanning */ }
+      const words = clean.toUpperCase().replace(/[^A-Z0-9\s-]/g, ' ').split(/\s+/).filter(Boolean);
+      outer: for (let index = 0; index < words.length; index += 1) {
+        for (let span = 1; span <= 4 && index + span <= words.length; span += 1) {
+          const candidateText = words.slice(index, index + span).join(' ');
+          try {
+            const candidate = f.parse(candidateText, { ...ctx, answers: state.answers }, state.answers);
+            if (!candidate) continue;
+            if (f.validate(candidate, { ...ctx, answers: state.answers }, state.answers).ok) {
+              parsed = candidate;
+              break outer;
+            }
+          } catch { /* keep scanning */ }
+        }
       }
     }
     if (parsed === null || parsed === undefined) continue;
@@ -3305,6 +3348,7 @@ export default {
   getFlowDefinition,
   getCurrentQuizField,
   shouldPauseQuizForChat,
+  isPlateLike,
   QUIZ_FLOW_KEYS
 };
 

@@ -4,7 +4,12 @@ All notable changes to Saka Fleet. Versions mirror the release tracker at the to
 of `SAKA_FLEET_ARCHITECTURE.md`; every entry names the commit it shipped in.
 Generated from the real git history — never from memory.
 
-## [1.28.2] - 2026-10-31
+## [1.28.3] - 2026-10-31
+- **No phantom plates:** a plate must now contain ≥2 letters, 1–6 digits and a real letter/digit shape — "1991 80", "367359KM", "20TH", "HDJ810007675" and bare numbers are rejected. The live registration paragraph can no longer bank a year/odometer fragment as the plate.
+- **Windowed paragraph scan:** plate capture tests 1–4-word candidates instead of a greedy character scan that swallowed `KAS` into the previous word, so "Car Registration KAS 628T" banks **KAS 628T** in the same turn it answers the asset kind.
+- **Registration self-heal:** a previously banked non-plate-like plate is dropped before scanning, so a phantom can never block the real plate or reach the confirmation summary.
+- **Proof:** quiz engine 74 assertions (incl. the exact live two-turn sequence) · natural intake 15.
+
 - **Truncated replies fixed at the root:** Sonnet 5.5 was spending the whole 420-token output budget on hidden thinking blocks, so real replies were cut mid-word ("…I also remind you before insur", live 19:09). Anthropic calls now turn thinking off with the gateway-supported `thinking: { type: 'between_tools' }` by default (the gateway rejects `disabled` with HTTP 400; `ANTHROPIC_THINKING_MODE` overrides it and `ANTHROPIC_THINKING_ENABLED=on` opts into thinking for deliberate reasoning work).
 - **A truncated answer can never ship:** the provider `stop_reason` is surfaced and a `max_tokens` stop throws, so the chain falls back to DeepSeek (which completes the answer) instead of sending half a sentence.
 - **Retired identity copy blocked:** the regex classifier's canned "I'm your intelligent WhatsApp vehicle & asset management assistant" is removed; `isLegacyWelcomeCopy()` guards all four route passthroughs; the core prompt carries an IDENTITY LAW (machine's memory, money-saver, paperwork wizard).

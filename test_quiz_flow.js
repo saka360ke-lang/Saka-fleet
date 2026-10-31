@@ -5,7 +5,8 @@ import {
   getFlowDefinition,
   getCurrentQuizField,
   shouldPauseQuizForChat,
-  detectFlowSwitch
+  detectFlowSwitch,
+  isPlateLike
 } from './src/services/quizEngine.js';
 
 /**
@@ -130,6 +131,33 @@ async function run() {
   assert(session.quiz.answers.fuel_type === 'Diesel', 'Fuel captured from a multi-field answer');
   assert(session.quiz.answers.current_mileage === 366700, 'Odometer captured from a multi-field answer');
   assert(session.quiz.answers.vin === undefined, 'Fast-forward still asks only the next missing item');
+
+  console.log('\n--- Test 3b: no phantom plates from paragraphs (v1.28.3) ---');
+  assert(isPlateLike('KDA 123A') === true, 'a Kenyan plate is plate-like');
+  assert(isPlateLike('AB12 CDE') === true, 'a UK plate is plate-like');
+  assert(isPlateLike('7ABC123') === true, 'a US plate is plate-like');
+  assert(isPlateLike('MH01AB1234') === true, 'an Indian plate is plate-like');
+  assert(isPlateLike('1991 80') === false, 'the live odometer/year fragment is rejected');
+  assert(isPlateLike('367359KM') === false, 'an odometer reading is rejected');
+  assert(isPlateLike('20TH') === false, 'an ordinal date fragment is rejected');
+  assert(isPlateLike('HDJ810007675') === false, 'a VIN is rejected as a plate');
+  assert(isPlateLike('1234') === false, 'a bare number is rejected');
+
+  const phantomCtx = baseCtx({ vehicles: [] });
+  const phantomSession = {};
+  await handleQuizTurn({
+    session: phantomSession,
+    messageText: "Ok. I'd like to register my car A 1991 80 series land cruiser Current odometer 367359km Insurance expires 20th November 2026, it's a manual transmission. Vin number: HDJ810007675",
+    startFlow: 'vehicle_registration',
+    ctx: phantomCtx
+  });
+  assert(phantomSession.quiz?.flow === 'vehicle_registration', 'the live paragraph starts registration');
+  assert(phantomSession.quiz?.answers?.plate_number === undefined, 'the live registration paragraph banks no phantom plate');
+  const plateTurn = await handleQuizTurn({ session: phantomSession, messageText: 'Car Registration KAS 628T', ctx: phantomCtx });
+  assert(plateTurn.handled === true, 'the asset-kind + registration turn is handled');
+  assert(phantomSession.quiz?.answers?.asset_kind !== undefined, 'the asset kind is parsed from the same sentence');
+  assert(phantomSession.quiz?.answers?.plate_number === 'KAS 628T', 'the real plate is banked when volunteered alongside the asset kind');
+  await handleQuizTurn({ session: phantomSession, messageText: 'cancel', ctx: phantomCtx });
 
   console.log('\n--- Test 6: quiz ↔ conversation arbitration ---');
   const currentField = getCurrentQuizField(session.quiz, ctx);
