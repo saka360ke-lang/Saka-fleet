@@ -6,7 +6,9 @@ import {
   isFirstContact,
   isIntroCopy,
   wantsIntroduction,
-  asksForPlateDirectly
+  asksForPlateDirectly,
+  shouldReplaceIntroCopy,
+  isRepeatedReply
 } from './src/services/greetings.js';
 
 /**
@@ -96,6 +98,16 @@ check(isIntroCopy("Hi! I'm Saka, your vehicle's co-pilot on WhatsApp.") === true
 check(isIntroCopy('Your insurance expires on 2027-05-15') === false, 'normal replies are not mistaken for intros');
 check(wantsIntroduction('who are you?') === true, 'an explicit introduction request is recognised');
 check(wantsIntroduction('still waiting') === false, 'a generic nudge is not an introduction request');
+
+console.log('--- Test 4b: intro-copy replacement only after onboarding ---');
+check(shouldReplaceIntroCopy({ firstContact: false, historyLength: 3, hasQuiz: false, hasVehicle: true, isIntro: true }) === true, 'a returning owner cannot be re-introduced');
+check(shouldReplaceIntroCopy({ firstContact: false, historyLength: 3, hasQuiz: false, hasVehicle: false, isIntro: true }) === false, 'a zero-vehicle user keeps the welcome (REGISTER CTA)');
+check(shouldReplaceIntroCopy({ firstContact: true, historyLength: 0, hasQuiz: false, hasVehicle: false, isIntro: true }) === false, 'first contact always keeps the welcome');
+check(shouldReplaceIntroCopy({ firstContact: false, historyLength: 2, hasQuiz: true, hasVehicle: false, isIntro: true }) === false, 'an active quiz is never replaced');
+check(shouldReplaceIntroCopy({ firstContact: false, historyLength: 2, hasQuiz: false, hasVehicle: true, isIntro: true, wantsIntro: true }) === false, 'an explicit intro request is honoured');
+check(isRepeatedReply({ quizActive: false, reply: 'Same', lastPrompt: 'Same' }) === true, 'identical replies are flagged');
+check(isRepeatedReply({ quizActive: true, reply: 'Same', lastPrompt: 'Same' }) === false, 'quiz questions may repeat');
+check(isRepeatedReply({ quizActive: false, reply: 'A', lastPrompt: 'B' }) === false, 'different replies pass');
 
 console.log('--- Test 5: emoji discipline ---');
 check(emojiCount(sakaIntroText({ countryInfo: usa, nextStep: '' })) <= 4, 'US intro stays within the ceiling');

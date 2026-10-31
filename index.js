@@ -30,6 +30,7 @@ import {
 import { createResilientClient } from './src/services/supabaseClient.js';
 import { ensureAiUsageLogsTable, installAiUsageSink, installAiBudgetGuard } from './src/services/aiUsageLog.js';
 import { ensureTurnLatencyTable } from './src/services/turnLatency.js';
+import { buildStatusResponse } from './src/services/statusProbe.js';
 import {
   ensureAiModelRegistryTables,
   installModelRuntime,
@@ -333,27 +334,17 @@ fastify.get('/', async (request, reply) => {
 });
 
 // 5.1 Warm/liveness probe for Cloud Run (cheap, no DB I/O).
-fastify.get('/healthz', async (request) => {
-  const base = {
-    status: 'ok',
-    uptimeSeconds: Math.round(process.uptime()),
-    queue: getQueueStats(),
-    timestamp: new Date().toISOString()
-  };
-  // v1.24.3 — revision visibility for operators. Cloud Run injects K_REVISION /
-  // K_SERVICE; they are only disclosed to a caller holding SENTINEL_SECRET so
-  // the public liveness probe stays metadata-free.
-  const secret = process.env.SENTINEL_SECRET;
-  if (secret && String(request?.headers?.['x-saka-secret'] || '') === secret) {
-    return {
-      ...base,
-      revision: process.env.K_REVISION || null,
-      service: process.env.K_SERVICE || null,
-      environment: process.env.APP_ENV || process.env.NODE_ENV || null
-    };
-  }
-  return base;
+// Served on /healthz plus /api/health and /internal/status: Google's edge
+// intercepts /healthz on some deployments, so the aliases keep the revision
+// metadata reachable (v1.24.4).
+const statusProbeHandler = async (request) => buildStatusResponse({
+  headers: request?.headers || {},
+  uptimeSeconds: process.uptime(),
+  queue: getQueueStats()
 });
+fastify.get('/healthz', statusProbeHandler);
+fastify.get('/api/health', statusProbeHandler);
+fastify.get('/internal/status', statusProbeHandler);
 
 // 6. WhatsApp & Email Auth OTP Request Endpoint (Mandatory Email)
 fastify.post('/api/auth/whatsapp/request', async (request, reply) => {

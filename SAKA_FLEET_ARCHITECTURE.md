@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.24.3  
+**Version:** 1.24.4  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.24.4** | Status probe aliases (`/api/health`, `/internal/status`) + first-time-user onboarding-loop fix | §64.2, §64.5 |
 | **1.24.3** | Operator tooling + chat-log fixes: silent admin sessions, revision probe, first-contact race, phase telemetry | §64 |
 | **1.24.2** | Provider-outage hardening: billing breaker, per-leg timeouts, slow-turn ack, admin help | §63 |
 | **1.24.1** | Reply-speed telemetry + NATURAL_INTAKE kill switch | §62 |
@@ -2405,6 +2406,7 @@ The user-perceived reply time is now measured on every answered turn, so the two
 
 ### 64.2 Revision visibility without console access
 - `GET /healthz` stays metadata-free for the public. A request carrying `x-saka-secret: $SENTINEL_SECRET` additionally returns `revision` (`K_REVISION`), `service` (`K_SERVICE`) and `environment`, so an operator can confirm exactly which Cloud Run revision is serving after a deploy.
+- **v1.24.4 — probe aliases.** Verified on 2026-10-31 that Google's edge intercepts `/healthz` on `saka-fleet-*.run.app` (Google HTML 404, while `/favicon.ico` and even `/Healthz` reach Fastify). The same payload is therefore also served on `GET /api/health` and `GET /internal/status` (same secret gate), built by `src/services/statusProbe.js` and unit-tested by `test_status_probe.js` (in `npm run health`).
 - For full read-only deploy history, grant a service account `roles/run.viewer` and run `gcloud auth activate-service-account --key-file=<json>` then `gcloud config set project <id>`; `gcloud run services describe <svc> --region <region>` / `gcloud run revisions list` are then safe to run from this repo.
 
 ### 64.3 First-contact race (found in the 2026-10-31 chat logs)
@@ -2420,3 +2422,4 @@ The user-perceived reply time is now measured on every answered turn, so the two
 - Post-wipe traffic: `+254734852529` "Hi" took 115 s (`ack_sent=true`, proving the slow-turn ack and the v1.24.2 revision were live); `+254720641985` "Adminstart" produced no assistant row.
 - Profiles are created before onboarding; the welcome trial (`trial_sessions.source='welcome'`) starts when onboarding completes (`onboarding.js` / `quizEngine.js`), so an empty `trial_sessions` before that is expected — not a bug.
 - **Cloud Run runtime checklist (operator):** `--min-instances=1`, `--cpu-boost`, `--no-cpu-throttling`, instance concurrency ≤ `MESSAGE_MAX_CONCURRENCY` (8). Slow Supabase round-trips with zero errors are the signature of CPU throttling.
+- **v1.24.4 — onboarding loop fixed (found live at 05:32).** A real first-time number sent "Hi", "Hi", "Restart" and received the identical "I'm still here with you — no need to start over" every time (`chat_friction_logs` `LOOPING_PROMPTS`). The v1.19.2 intro-copy guard assumed any intro after history was accidental; for a zero-vehicle user who has not started onboarding the welcome IS the correct answer. `shouldReplaceIntroCopy()` now applies only past onboarding (vehicle registered), `isRepeatedReply()` guarantees a next-step nudge instead of a byte-identical repeat, and `restart`/`menu`/`help` reset `sakaIntroduced` so the welcome (with the REGISTER CTA) is shown again. Covered in `test_greetings.js`.

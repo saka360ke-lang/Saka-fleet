@@ -16,7 +16,7 @@ import {
 } from '../services/vehicles.js';
 import { calculateFuelConsumption } from '../services/analytics.js';
 import { normalizeFillType } from '../services/fuelEconomy.js';
-import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly } from '../services/greetings.js';
+import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly, shouldReplaceIntroCopy, isRepeatedReply } from '../services/greetings.js';
 import { buildVehicleSummary, emailVehicleSummary } from '../services/vehicleSummary.js';
 import {
   buildFeatureNotice,
@@ -729,6 +729,10 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
       session.consecutivePromptCount = 0;
       session.lastAssistantPrompt = null;
       session.loopSignature = null;
+      // v1.24.4 — after an explicit restart/menu request the welcome (and its
+      // REGISTER call to action) is the correct response, not a repeat guard.
+      session.sakaIntroduced = false;
+      session.lastAssistantPrompt = null;
     } else if (session.circuitBreakerStage === 'HARD_TRIP') {
       // Circuit breaker is in hard trip: bypass DeepSeek and send a short,
       // AI-rendered recovery message (deterministic fallback if AI is down).
@@ -2912,15 +2916,25 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
           finalReply = `${finalReply}\n\n${OCR_LOW_CONFIDENCE_NOTE}`;
         }
 
-        // v1.19.2 — never re-introduce Saka to an existing conversation. A
-        // failed intent classification used to fall back to a fresh "Karibu"
-        // welcome mid-onboarding (20 of 25 classify calls failed on 2026-10-30).
-        if (!firstContact
-          && conversationHistory.length > 0
-          && !session.quiz
-          && isIntroCopy(finalReply)
-          && !wantsIntroduction(messageText)) {
+        // v1.19.2 / v1.24.4 — never re-introduce Saka to a conversation that is
+        // already past onboarding. A zero-vehicle user who has NOT started
+        // onboarding keeps the welcome (it carries the REGISTER call to action);
+        // replacing it used to trap first-time users on "still here with you".
+        if (shouldReplaceIntroCopy({
+          firstContact,
+          historyLength: conversationHistory.length,
+          hasQuiz: Boolean(session.quiz),
+          hasVehicle: hasVehicleRegistered,
+          isIntro: isIntroCopy(finalReply),
+          wantsIntro: wantsIntroduction(messageText)
+        })) {
           finalReply = '🙂 I\'m still here with you — no need to start over.\n\nSend your next answer in your own words, or type *Help* to see what I can do.';
+        }
+
+        // v1.24.4 — an identical repeat outside a quiz is a dead end; always hand
+        // the user a next step instead of echoing the same sentence again.
+        if (isRepeatedReply({ quizActive: Boolean(session.quiz), reply: finalReply, lastPrompt: session.lastAssistantPrompt })) {
+          finalReply = '🚗 Let\'s keep moving.\n\nReply *REGISTER* to set up your first asset, or *Help* to see everything I can do.';
         }
 
         // v1.21.3 — a zero-vehicle user must never be asked for a plate before

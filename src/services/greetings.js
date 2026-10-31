@@ -100,6 +100,38 @@ export function isFirstContact({ session = null, dbHistory = [], profile = null,
   return true;
 }
 
+/**
+ * v1.24.4 — should an intro-looking reply be replaced with the "still here"
+ * recovery line?
+ *
+ * Only for conversations that are PAST onboarding. The v1.19.2 guard was meant
+ * to stop re-introducing Saka mid-onboarding; on 2026-10-31 it left a real
+ * first-time user looping on "I'm still here with you" because every message
+ * ("Hi", "Restart") produced intro copy. A zero-vehicle user who has not started
+ * onboarding must always receive the welcome + REGISTER call to action.
+ */
+export function shouldReplaceIntroCopy({
+  firstContact = false,
+  historyLength = 0,
+  hasQuiz = false,
+  hasVehicle = false,
+  isIntro = false,
+  wantsIntro = false
+} = {}) {
+  if (firstContact || hasQuiz) return false;
+  if (hasVehicle !== true) return false;
+  if (!historyLength || wantsIntro) return false;
+  return isIntro === true;
+}
+
+/** v1.24.4 — a byte-identical repeat outside a quiz gets a next-step nudge. */
+export function isRepeatedReply({ quizActive = false, reply = '', lastPrompt = '' } = {}) {
+  if (quizActive) return false;
+  const current = String(reply || '').trim();
+  const previous = String(lastPrompt || '').trim();
+  return Boolean(current && previous && current === previous);
+}
+
 const PLATE_ASK_RE = /\b(?:what(?:'s| is) (?:your|the) (?:vehicle'?s? )?(?:registration |number )?plate|send (?:me )?(?:your|the) (?:vehicle'?s? )?(?:registration |number )?plate|share (?:your|the) (?:vehicle'?s? )?(?:registration )?plate|plate number of (?:the|your) vehicle)\b/i;
 
 /**
