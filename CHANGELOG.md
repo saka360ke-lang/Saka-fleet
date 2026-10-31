@@ -7,6 +7,7 @@ Generated from the real git history — never from memory.
 ## [1.25.3] - 2026-10-31
 - **Deploy alerts carry the commit id in the title** (`✅ Saka update is live - v1.25.3 - <hash>`) plus a GitHub commit link, so every release is identifiable at a glance.
 - **This changelog added** and guarded by `test_doc_sync.js` (its newest entry must equal `package.json`).
+- **Sentinel prompt refinements now stamp the schema marker** (`SAKA-PROMPT-SCHEMA:<current>`), so the weekly refinement is actually accepted by the core-prompt gate instead of being silently ignored (and it can never reintroduce the old corporate prompt).
 - Clean-slate wipe re-run for a fresh onboarding.
 
 ## [1.25.2] - 2026-10-31 — ff82636

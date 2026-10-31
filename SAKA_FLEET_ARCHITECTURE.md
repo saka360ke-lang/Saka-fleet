@@ -2501,3 +2501,6 @@ Stateless suite (in `npm run health`) that fails when:
 ### 67.6 Release identity & changelog (v1.25.3)
 - **Deploy alerts name the commit in the title** — `✅ Saka update is live - v<version> - <hash>` — and append a GitHub commit link (`scripts/notify_git_push.js`, `repoWebUrl()`), so a release is identifiable without reading the footer.
 - **`CHANGELOG.md`** is generated from the real git history (version, date, commit, one-line summary per release, plus earlier milestones). It is guarded by `test_doc_sync.js`: the newest entry must equal `package.json` and historical entries must name their commit. Update it in the same commit as any release (rule 13 sync).
+
+### 67.7 Sentinel refinements must carry the schema marker (v1.25.3)
+- `runConversationRefinement()` wrote the refined prompt **without** the `SAKA-PROMPT-SCHEMA` marker, so the v1.25.1 gate ignored every weekly refinement — and the unmarked 3k-character legacy prompt kept reappearing in `system_config`. The writer now stamps `PROMPT_REFINEMENT_MARKER` and bounds the payload to `MAX_STORED_PROMPT_REFINEMENT_CHARS`, so a refinement can only ever augment the current, trained prompt.

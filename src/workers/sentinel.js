@@ -6,6 +6,7 @@ import { getCurrentQuizField } from '../services/quizEngine.js';
 import { detectCountryFromPhone } from '../services/globalization.js';
 import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
 import { buildIncidentSignature, isIncidentSilenced } from '../services/incidents.js';
+import { PROMPT_REFINEMENT_MARKER, MAX_STORED_PROMPT_REFINEMENT_CHARS } from '../../sakaAi.js';
 
 function getSupabase(providedSupabase) {
   if (providedSupabase) return providedSupabase;
@@ -304,8 +305,12 @@ Return strictly a single valid JSON object matching this schema (no markdown ast
   }
 
   // 3. Update saka_core_prompt inside system_config (bounded to prevent runaway growth)
+  // v1.25.3 — the refinement MUST carry the current schema marker, otherwise the
+  // core-prompt gate correctly ignores it (and the weekly refinement silently
+  // does nothing). Stamp the marker and respect the gate's size bound.
   const nowIso = new Date().toISOString();
-  const persistedPrompt = String(parsedAnalysis.updated_saka_core_prompt).slice(0, MAX_CORE_PROMPT_CHARS);
+  const refinedBody = String(parsedAnalysis.updated_saka_core_prompt).trim();
+  const persistedPrompt = `${PROMPT_REFINEMENT_MARKER}\n${refinedBody}`.slice(0, MAX_STORED_PROMPT_REFINEMENT_CHARS);
   const { error: configErr } = await supabase
     .from('system_config')
     .upsert({
