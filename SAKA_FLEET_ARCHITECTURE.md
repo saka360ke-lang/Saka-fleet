@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.25.7  
+**Version:** 1.25.8  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.25.8** | Root-cause fix: repeat guard compared the reply with itself (every real answer became a nudge); placeholder-name greeting; e2e flow test | §65.11 |
 | **1.25.7** | Deploy telegraph: "building" alert + app-emitted LIVE alert, field-work sync protocol, Rules Gate | §68 |
 | **1.25.6** | Welcome survives the plate guard; "tell me more about…" FAQ routing | §65.10 |
 | **1.25.4** | Flow fixes: "sakafleet" FAQ routing + rotating repeat nudges (no more nudge loop) | §65.9 |
@@ -2538,6 +2539,13 @@ Stateless suite (in `npm run health`) that fails when:
 - **Fix:** the guard is now `shouldReplacePlateAsk()` and is skipped when `firstContact`, when the reply already **is** welcome/intro copy, during an active quiz, for registered users, and for explicit `REGISTER` messages.
 - **FAQ phrase coverage:** `tell me (more) about saka fleet / sakafleet / you` routes to the warm intro card.
 - Evidence: 2026-10-31 12:52–14:40 local (09:52–11:40 UTC) — "Hi" received nudges and "Welcome! Let's get you started" variants instead of the sales welcome.
+
+### 65.11 Root cause: the repeat guard compared the reply with itself (v1.25.8)
+- **The bug:** `session.lastAssistantPrompt` is written to the CURRENT reply at the loop-signature step (line ~2932), and the anti-repeat guard (line ~3002) then read that same field. `isRepeatedReply(reply, lastPrompt)` therefore compared the reply to itself → **always true** → every genuine answer (sales welcome, pricing card, trial card, FAQ card) was replaced by a rotating "newcomer nudge". The nudges then became the next `lastAssistantPrompt`, producing the endless "Let's keep moving" / "Welcome! Let's get you started" loop.
+- **Proof:** a local end-to-end reproduction through `handleWhatsAppWebhook` (real handler, real DB) returned the pricing card on turn 1 and a nudge on turn 2 — matching production exactly — and `session.lastAssistantPrompt` afterwards held the trial card that *should* have been sent.
+- **Fix:** capture `previousAssistantPrompt` BEFORE the loop-signature update and guard against that value. The guard now compares this turn's reply with the previous turn's reply, as designed.
+- **Also fixed:** new profiles no longer get the placeholder `full_name = 'WhatsApp User'` (they start with `null`, and `sakaIntroText` ignores that placeholder), which had produced greetings like "Habari! 👋 WhatsApp I'm Saka".
+- **Permanent regression:** `test_first_message_flow.js` drives the real handler and asserts "Hi" → sales welcome, "How much does it cost?" → pricing card, "What's the trial period?" → trial card, "Tell me more about saka fleet" → intro card, each explicitly NOT replaced by a nudge. Run with `npm run test:flow` (DB-backed, self-cleaning).
 
 
 ### 65.10 Newcomer nudge fix (v1.25.5)

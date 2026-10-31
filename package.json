@@ -1,13 +1,14 @@
 {
   "name": "sakafleet-backend",
   "type": "module",
-  "version": "1.25.7",
+  "version": "1.25.8",
   "description": "Saka Fleet Backend",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
     "test": "node scripts/run_tests.js",
     "test:all": "node scripts/run_all_tests.js",
+    "test:flow": "node test_first_message_flow.js",
     "test:cleanup": "node scripts/run_tests.js --cleanup-only",
     "sync:origin": "git fetch origin && git pull --ff-only origin main",
     "health": "node --env-file=.env scripts/health_audit.js",

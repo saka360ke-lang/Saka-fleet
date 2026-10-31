@@ -4,6 +4,11 @@ All notable changes to Saka Fleet. Versions mirror the release tracker at the to
 of `SAKA_FLEET_ARCHITECTURE.md`; every entry names the commit it shipped in.
 Generated from the real git history — never from memory.
 
+## [1.25.8] - 2026-10-31
+- **Root-cause fix (proven by local reproduction):** the anti-repeat guard compared the reply with ITSELF (`lastAssistantPrompt` was overwritten with the current reply before the guard ran), so the sales welcome, pricing card, trial card and every FAQ answer were replaced by nudges. The guard now compares against the previous turn.
+- **Placeholder name fixed:** new profiles start with `full_name = null` (no more "Habari! 👋 WhatsApp I'm Saka").
+- **New e2e regression:** `npm run test:flow` drives the real WhatsApp handler through "Hi", pricing, trial and FAQ turns.
+
 ## [1.25.7] - 2026-10-31
 - **Two deploy notifications:** a "building" WhatsApp alert on push and an app-emitted **`🚀 Saka is LIVE`** alert per revision (`src/services/deployLiveAlert.js`) — works for local pushes, cline.bot and manual deploys.
 - **Rules-gate failure alert:** `notify_git_push.js --failure` + `.github/workflows/rules_gate.yml`.

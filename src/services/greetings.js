@@ -139,7 +139,9 @@ export function sakaIntroText({ countryInfo = null, now = new Date(), profile = 
   const { text: greeting } = greetingFor({ countryInfo, now });
   const example = plateExample || countryInfo?.plate_example || 'ABC 1234';
   const name = String(profile?.full_name || '').trim().split(/\s+/)[0];
-  const helloName = name ? ` ${name}` : '';
+  // v1.25.8 — never greet someone as the placeholder name "WhatsApp User".
+  const safeName = /^whatsapp$/i.test(name) ? '' : name;
+  const helloName = safeName ? ` ${safeName}` : '';
   const step = nextStep === null
     ? `Send your vehicle's number plate (e.g. *${example}*) and I'll ask one quick question at a time — or type one line like *"Toyota Fielder 2016, diesel, 120,000 km, ${example}"* and I'll pick out every detail myself.`
     : nextStep;

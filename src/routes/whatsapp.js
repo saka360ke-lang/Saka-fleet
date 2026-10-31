@@ -802,7 +802,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               .insert([{
                 id: crypto.randomUUID(),
                 phone_number: formattedPhone,
-                full_name: 'WhatsApp User',
+                full_name: null,
                 country: countryInfo.country,
                 country_code: countryInfo.country_code,
                 unit_system: countryInfo.default_units,
@@ -2918,6 +2918,12 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
         }
 
         const sanitizedReply = customReply.trim();
+        // v1.25.8 — the repeat guard must compare against the PREVIOUS turn's
+        // assistant message. The loop-signature block below overwrites
+        // session.lastAssistantPrompt with THIS turn's reply, so reading it after
+        // that point compared the reply with itself and turned every genuine
+        // answer (pricing card, trial card, welcome) into a "nudge".
+        const previousAssistantPrompt = session.lastAssistantPrompt || null;
 
         // State Machine Circuit Breaker Check: Track consecutive identical assistant prompts
         const normalizedReply = sanitizedReply.toLowerCase().replace(/\s+/g, ' ');
@@ -2999,7 +3005,7 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
         if (isNewcomer && isFirstTimeMessage(messageText)) {
           finalReply = sakaIntroText({ countryInfo, profile: profileData, nextStep: 'Reply *REGISTER* and I\'ll ask one simple question at a time.' });
           session.sakaIntroduced = true;
-        } else if (isRepeatedReply({ quizActive: Boolean(session.quiz), reply: finalReply, lastPrompt: session.lastAssistantPrompt })) {
+        } else if (isRepeatedReply({ quizActive: Boolean(session.quiz), reply: finalReply, lastPrompt: previousAssistantPrompt })) {
           finalReply = isNewcomer ? pickNewcomerNudge(session.nudgeCount || 0) : pickRepeatNudge(session.nudgeCount || 0);
           session.nudgeCount = (session.nudgeCount || 0) + 1;
         }
