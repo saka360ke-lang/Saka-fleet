@@ -92,6 +92,24 @@ one next step. Conversations use **emoji artistry**: semantic anchors per line,
 a 🔔→⏰→⚠️→🚨 reminder ladder, 🟢🟡🔴 status chips, figures kept emoji-free, and
 at most 3 emojis per message (4 on the welcome message).
 
+## Human Saka 2.0 (v1.28.0)
+- **Typo tolerance:** deterministic routers normalize transpositions, doubled
+  letters, missing spaces and punctuation before matching — plates, VINs and
+  amounts are never rewritten (`src/services/textNormalizer.js`).
+- **No re-greeting:** a GREETING LAW plus a reply-linter opener check stop Saka
+  opening every reply with Hi/Habari once the conversation is underway.
+- **Local currency:** pricing and add-on answers show the user's currency,
+  converted with the same cached rate Paystack charges at checkout, with the USD
+  list price kept in brackets.
+- **Save-my-number:** one warm, milestone-anchored contact-save line after the
+  first vehicle (or a lost-chat moment), stamped per profile, never a nag
+  (`src/services/contactNudge.js`).
+- **Append-only learning:** Sentinel can only add bounded, content-gated
+  learnings to the trained prompt — it can never rewrite it.
+- **Generated knowledge:** `docs/PRODUCT_QA.md` and `docs/SAKA_TRAINING.md` are
+  generated from the live registries (`npm run docs:gen`) and drift-guarded in
+  the Rules Gate.
+
 ## Receipt intelligence (v1.19.0)
 Send a photo of a **fuel receipt, logbook, insurance policy or driver licence**:
 Saka classifies it, reads the amount/ litres/odometer/VIN/plate/policy/expiry,

@@ -1,4 +1,5 @@
 import { resolveUserTimezone } from './globalization.js';
+import { prepareRoutingText } from './textNormalizer.js';
 
 /**
  * Saka Fleet — First-contact greetings (v1.18.1)
@@ -127,6 +128,9 @@ export function isStopRequest(text = '') {
   const value = String(text || '').trim();
   if (!value) return false;
   if (/^(?:please\s+)?(?:stop|pause|unsubscribe)\s*[.!]*$/i.test(value)) return true;
+  // v1.28.0 — tolerate typos in the bare opt-out ("sotp", "pse", "unsubscrbe").
+  const route = prepareRoutingText(value);
+  if (/^(?:please\s+)?(?:stop|pause|unsubscribe)$/i.test(route)) return true;
   return /\b(?:stop (?:with )?(?:the )?(?:many )?(?:replies|messages|messaging|replying|spamming|sending)|too many (?:replies|messages)|leave me alone|shut up)\b/i.test(value);
 }
 

@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { handleSuperadminFlow, isSuperadminPhone } from '../services/superadmin.js';
 import { processSakaMessage, extractVehicleAttributes, classifyIntentWithRegex } from '../../sakaAi.js';
 import { logChatTranscript, logSystemError } from '../workers/sentinel.js';
-import { verifyPaystackSignature } from '../services/paystack.js';
+import { verifyPaystackSignature, formatUsdInLocalCurrency } from '../services/paystack.js';
 import {
   ensureVehicleTableColumns,
   unassignDriverFromVehicle,
@@ -17,7 +17,8 @@ import {
 import { calculateFuelConsumption } from '../services/analytics.js';
 import { normalizeFillType } from '../services/fuelEconomy.js';
 import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly, shouldReplaceIntroCopy, isRepeatedReply, isStopRequest, PAUSE_REPLY, pickRepeatNudge, pickNewcomerNudge, isFirstTimeMessage, shouldReplacePlateAsk } from '../services/greetings.js';
-import { matchProductQa, buildProductQaReply, buildProductFactsContext, recommendTierForFleet, sanitizeSakaReply } from '../services/productQa.js';
+import { matchProductQa, buildProductQaReply, buildProductFactsContext, buildLocalPricingFacts, recommendTierForFleet, sanitizeSakaReply } from '../services/productQa.js';
+import { shouldSuggestContactSave, isLostChatMessage, buildContactSaveFacts, markContactSaveSuggested } from '../services/contactNudge.js';
 import { buildUserContextSnapshot } from '../services/userContextSnapshot.js';
 import { resolveSlowAckMs, pickSlowAckLine, shouldSendSlowAck } from '../services/turnAck.js';
 import { buildVehicleSummary, emailVehicleSummary } from '../services/vehicleSummary.js';
@@ -1090,6 +1091,19 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           const fleetCountMatch = messageText.match(/\b(\d{1,3})\s*(?:cars?|vehicles?|units?|machines?|trucks?|bikes?|motorbikes?|matatus?|lorries?|pickups?)\b/i);
           const planTopic = ['pricing', 'packages', 'tier_details', 'addons', 'limits'].includes(productQaMatch.id);
           const recommendation = fleetCountMatch && planTopic ? recommendTierForFleet(Number(fleetCountMatch[1])) : null;
+          // v1.28.0 — payment answers in the user's own currency, converted with
+          // the same cached rate Paystack charges at checkout. Null for USD or
+          // when no rate is available (the USD facts always remain).
+          let localPricingFacts = null;
+          if (planTopic && countryInfo?.currency && String(countryInfo.currency).toUpperCase() !== 'USD') {
+            try {
+              localPricingFacts = await buildLocalPricingFacts({
+                supabase: supabaseClient,
+                currency: countryInfo.currency,
+                locale: countryInfo.locale
+              });
+            } catch { localPricingFacts = null; }
+          }
           let userFacts = '';
           try {
             const snapshot = await buildUserContextSnapshot({
@@ -1100,22 +1114,23 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             });
             userFacts = snapshot.lines.join('\n');
           } catch { userFacts = ''; }
-          const fallbackAnswer = [productFacts, ...(recommendation ? recommendation.lines : [])].join('\n');
+          const fallbackAnswer = [productFacts, ...(recommendation ? recommendation.lines : []), ...(localPricingFacts || [])].join('\n');
           const composedAnswer = await composeMessage({
             purpose: 'product_answer',
             facts: {
               userQuestion: messageText,
               topic: productQaMatch.id,
               verifiedFacts: fallbackAnswer,
+              localPricingFacts: localPricingFacts ? localPricingFacts.join('\n') : 'None supplied — use the USD facts above.',
               userDataFacts: userFacts || 'No account data on file yet.',
-              instruction: 'Answer the user\'s question in 1-3 short conversational lines using ONLY the verified facts. For features or package questions, give the concrete list from the facts (up to 4 short lines). If the user gave a fleet size, use the computed recommendation exactly. Warm and human, at most one emoji per line. End with ONE gentle next step. Do not paste a menu, do not repeat the question back, never ask for the plate, and never say you do not have information — the facts above are complete.'
+              instruction: 'Answer the user\'s question in 1-3 short conversational lines using ONLY the verified facts. When localPricingFacts are present, lead with the local-currency figure and keep the USD list price in brackets (checkout is charged locally). For features or package questions, give the concrete list from the facts (up to 4 short lines). If the user gave a fleet size, use the computed recommendation exactly. Warm and human, at most one emoji per line. End with ONE gentle next step. Do not paste a menu, do not repeat the question back, never ask for the plate, and never say you do not have information — the facts above are complete.'
             },
             language: targetLang,
             countryInfo,
             profile: profileData,
             fallbackText: fallbackAnswer
           });
-          const composedText = sanitizeSakaReply(composedAnswer, fallbackAnswer);
+          const composedText = sanitizeSakaReply(composedAnswer, fallbackAnswer, { historyLength: conversationHistory.length });
           const needsFigures = ['pricing', 'packages', 'trial', 'tier_details', 'addons', 'limits'].includes(productQaMatch.id);
           const usableAnswer = composedText.length >= 60 && (!needsFigures || /\d/.test(composedText))
             ? composedText
@@ -1839,6 +1854,39 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                 console.warn('[Onboarding] Owner driver profile start skipped:', driverErr.message);
               }
             }
+
+            // v1.28.0 — once-only contact-save nudge. Fires at the first real
+            // milestone (vehicle registered + passbook issued), never mid-flow,
+            // never for a frustrated/paused user, and stamped per profile.
+            if (quizTurn.completed && shouldSuggestContactSave({
+              profile: profileData,
+              session,
+              hasVehicle: true,
+              hasQuiz: Boolean(session.quiz),
+              isFrustrated: Boolean(session.circuitBreakerStage)
+            })) {
+              try {
+                const contactFacts = buildContactSaveFacts({
+                  plateNumber: activeQuiz?.answers?.plate_number || mergedExt?.plate_number || null,
+                  name: profileData?.full_name
+                });
+                const contactLine = sanitizeSakaReply(
+                  await composeMessage({
+                    purpose: 'contact_save_nudge',
+                    facts: contactFacts,
+                    language: targetLang,
+                    countryInfo,
+                    profile: profileData,
+                    fallbackText: contactFacts.fallbackLine
+                  }),
+                  contactFacts.fallbackLine,
+                  { historyLength: conversationHistory.length }
+                );
+                customReply = `${customReply}\n\n${contactLine}`;
+                session.contactSaveNudged = true;
+                if (supabaseClient) markContactSaveSuggested(supabaseClient, profileData?.id).catch(() => {});
+              } catch { /* the nudge is best-effort and never blocks registration */ }
+            }
           }
 
           if (quizTurn.completed && quizTurn.flow === 'delete_account') {
@@ -1895,7 +1943,8 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                 interval: entitlements?.billingInterval || 'monthly',
                 currency: countryInfo?.currency || 'USD'
               });
-              customReply = `⚠️ *Garage Full — Fleet Command Add-on Needed*\n\nYour plan allows *${branchCapacity.capacity}* active vehicle(s). Add a slot at *$${branchCapacity.addonPriceUSD || 4.99}/month*:\n👉 ${addon.ok ? addon.checkoutUrl : 'https://sakafleet.com/pricing'}`;
+              const addonPriceLabel = await formatUsdInLocalCurrency(supabaseClient, branchCapacity.addonPriceUSD || 4.99, countryInfo?.currency || 'USD', countryInfo?.locale || 'en-US');
+              customReply = `⚠️ *Garage Full — Fleet Command Add-on Needed*\n\nYour plan allows *${branchCapacity.capacity}* active vehicle(s). Add a slot at *${addonPriceLabel}/month*:\n👉 ${addon.ok ? addon.checkoutUrl : 'https://sakafleet.com/pricing'}`;
             } else {
               const nextTier = branchCapacity.nextTierKey || 'fleet_command';
               const upgrade = await checkoutForTier({
@@ -2042,7 +2091,8 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                     interval,
                     currency: countryInfo?.currency || 'USD'
                   });
-                  customReply = `⚠️ *Garage Full — Fleet Command Add-on Needed*\n\nYour Fleet Command plan includes *${capacity.capacity}* active vehicle slots (base ${entitlements?.baseLimit || 5} + add-ons).\n\nTo add this vehicle, activate *+${Math.max(1, capacity.overBy)} slot${Math.max(1, capacity.overBy) > 1 ? 's' : ''}* at *$${capacity.addonPriceUSD || 4.99}/month each*.\n\n👉 *Add-on Link:* ${addon.ok ? addon.checkoutUrl : 'https://sakafleet.com/pricing'}\n\nOnce payment is confirmed, register the vehicle again.`;
+                  const addonPriceLabel = await formatUsdInLocalCurrency(supabaseClient, capacity.addonPriceUSD || 4.99, countryInfo?.currency || 'USD', countryInfo?.locale || 'en-US');
+                  customReply = `⚠️ *Garage Full — Fleet Command Add-on Needed*\n\nYour Fleet Command plan includes *${capacity.capacity}* active vehicle slots (base ${entitlements?.baseLimit || 5} + add-ons).\n\nTo add this vehicle, activate *+${Math.max(1, capacity.overBy)} slot${Math.max(1, capacity.overBy) > 1 ? 's' : ''}* at *${addonPriceLabel}/month each*.\n\n👉 *Add-on Link:* ${addon.ok ? addon.checkoutUrl : 'https://sakafleet.com/pricing'}\n\nOnce payment is confirmed, register the vehicle again.`;
                 } else {
                   const nextTier = capacity.nextTierKey || 'fleet_command';
                   const upgrade = await checkoutForTier({
@@ -2934,7 +2984,7 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
               countryInfo,
               profile: profileData,
               fallbackText: questionFallback
-            }), questionFallback);
+            }), questionFallback, { historyLength: conversationHistory.length });
           }
           // 2. Conversational feedback / frustration / message looping detected
           // v1.26.0 — a recognised product question always outranks the apology.
@@ -3234,6 +3284,36 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
             fallbackText: "I've escalated this step to support@sakafleet.com. Type Restart to begin again, or Cancel to exit."
           });
           session.lastAssistantPrompt = finalReply;
+        }
+
+        // v1.28.0 — a lost-chat moment ("I can't find you") is the one other
+        // natural time to suggest saving the number. Same 30-day cooldown,
+        // never mid-quiz, never during a breaker trip.
+        if (!summaryCommand && !session.quiz && !session.circuitBreakerStage
+          && existingVehicles.length > 0
+          && isLostChatMessage(messageText)
+          && shouldSuggestContactSave({ profile: profileData, session, hasVehicle: true, hasQuiz: false })) {
+          try {
+            const contactFacts = buildContactSaveFacts({
+              plateNumber: existingVehicles[0]?.plate_number || null,
+              name: profileData?.full_name
+            });
+            const contactLine = sanitizeSakaReply(
+              await composeMessage({
+                purpose: 'contact_save_nudge',
+                facts: contactFacts,
+                language: targetLang,
+                countryInfo,
+                profile: profileData,
+                fallbackText: contactFacts.fallbackLine
+              }),
+              contactFacts.fallbackLine,
+              { historyLength: conversationHistory.length }
+            );
+            finalReply = `${finalReply}\n\n${contactLine}`;
+            session.contactSaveNudged = true;
+            if (supabaseClient) markContactSaveSuggested(supabaseClient, profileData?.id).catch(() => {});
+          } catch { /* best-effort */ }
         }
 
         // v1.19.1 — once-only "What's new" digest for existing users. Appended to

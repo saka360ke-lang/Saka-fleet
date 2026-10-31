@@ -8,6 +8,7 @@ import {
 } from './src/services/aiClient.js';
 import { buildFlowPlaybook } from './src/services/flowKnowledge.js';
 import { buildProductQaContext } from './src/services/productQa.js';
+import { prepareRoutingText } from './src/services/textNormalizer.js';
 
 // DeepSeek client (OpenAI-compatible). Thin alias kept for backward compatibility.
 function getSakaAIClient() {
@@ -51,6 +52,7 @@ You sit directly between the user and the fleet database: collecting, parsing, l
   "As an AI language model", "I understand your frustration"
   (the plate question belongs ONLY inside the registration quiz — never in a chat reply).
 - ANSWER LAW (v1.27.0): when the user asks ANY question — about Saka, cost, plans, features, privacy, or their own vehicles, spending, reminders or plan — answer THAT question first, in your own words, from the supplied facts. Never answer a question with a welcome, a tour, a menu, a template or the registration script. Never hedge when the facts contain the answer; if they truly do not, say what IS true in one line and offer the one best next step.
+- GREETING LAW (v1.28.0): greet ONLY on first contact or when the user greets you in THIS turn. Once a conversation is underway, never open a reply with Hi / Hello / Hey / Habari / Mambo / Jambo / Good morning / Good afternoon / Good evening — lead with the answer or the next useful thing. Re-greeting every turn is the single fastest way to sound like a bot.
 
 INTENT CLASSIFICATION & AGENT ACTIONS:
 Analyze the incoming message, conversation context, and user fleet roster to classify the user's intent into a JSON object matching this schema:
@@ -583,6 +585,9 @@ export function extractVehicleAttributes(messageText = '') {
  */
 export function classifyIntentWithRegex(messageText = '') {
   const clean = messageText.trim().toLowerCase();
+  // v1.28.0 — deterministic routers are typo-tolerant. `route` is normalized
+  // and fuzzy-corrected; `clean`/`messageText` stay raw for extraction.
+  const route = prepareRoutingText(messageText);
 
   // Subscription & trial intents (v1.15.0) — deterministic fast path.
   if (/^(?:extend|extension)\s+(?:my\s+)?trial\b/i.test(clean) || /^trial\s+extension\b/i.test(clean)) {
@@ -630,8 +635,8 @@ export function classifyIntentWithRegex(messageText = '') {
   }
 
   // Conversational Action Discovery (e.g. "What can I do?", "Show my actions as an owner", "Show my actions as a driver")
-  if (/\b(?:what\s+can\s+i\s+do|show\s+my\s+actions|my\s+actions|show\s+actions|what\s+are\s+my\s+commands|available\s+commands|what\s+actions)\b/i.test(clean)) {
-    const roleMatch = clean.match(/\b(owner|driver|admin|superadmin)\b/i);
+  if (/\b(?:what\s+can\s+i\s+do|show\s+my\s+actions|my\s+actions|show\s+actions|what\s+are\s+my\s+commands|available\s+commands|what\s+actions)\b/i.test(route)) {
+    const roleMatch = route.match(/\b(owner|driver|admin|superadmin)\b/i);
     return {
       intent: 'ACTION_DISCOVERY',
       extracted_data: { role: roleMatch ? roleMatch[1].toLowerCase() : null },
@@ -774,7 +779,7 @@ export function classifyIntentWithRegex(messageText = '') {
     };
   }
   
-  if (/^(hi|hello|hey|habari|mambo|greetings|jambo|good morning|good afternoon|good evening)\b/i.test(clean)) {
+  if (/^(hi|hello|hey|habari|mambo|greetings|jambo|good morning|good afternoon|good evening)\b/i.test(route)) {
     return {
       intent: 'GREETING',
       extracted_data: {},

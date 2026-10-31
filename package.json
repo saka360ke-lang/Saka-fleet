@@ -1,7 +1,7 @@
 {
   "name": "sakafleet-backend",
   "type": "module",
-  "version": "1.27.0",
+  "version": "1.28.0",
   "description": "Saka Fleet Backend",
   "main": "index.js",
   "scripts": {
@@ -32,6 +32,9 @@
     "migrate:feature-notice": "node scripts/run_feature_notice_migration.js",
     "migrate:country-kb": "node scripts/run_country_kb_migration.js",
     "kb:ingest": "node scripts/kb_ingest.js",
+  "docs:gen": "node scripts/gen_kb_docs.js",
+  "docs:check": "node scripts/gen_kb_docs.js --check",
+  "migrate:contact-nudge": "node scripts/run_contact_nudge_migration.js",
     "rollout:features": "node scripts/feature_rollout.js",
     "test:anthropic": "node scripts/test_anthropic_connection.js",
     "model:scout": "node scripts/model_scout.js",

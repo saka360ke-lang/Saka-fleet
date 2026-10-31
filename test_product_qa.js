@@ -4,6 +4,7 @@ import {
   buildProductQaReply,
   buildProductQaContext,
   buildProductFactsContext,
+  buildLocalPricingFacts,
   recommendTierForFleet,
   sanitizeSakaReply
 } from './src/services/productQa.js';
@@ -108,5 +109,15 @@ console.log('\n--- Test 8: the universal fact context carries annual prices and 
 const factsContext = buildProductFactsContext();
 check(factsContext.includes(`$${getTierPriceUSD('growth', 'annual').toFixed(2)}/year`), 'the fact context includes annual pricing');
 check(/features:/.test(factsContext), 'the fact context includes the feature list');
+
+console.log('\n--- Test 9: payment answers use the user currency (v1.28.0) ---');
+const kesFacts = await buildLocalPricingFacts({ supabase: null, currency: 'KES', locale: 'en-KE' });
+check(Array.isArray(kesFacts) && kesFacts.length === 3, 'KES produces three local fact lines');
+check(kesFacts.join(' ').includes('KES'), 'the local facts name the checkout currency');
+check(/Solo Pro/.test(kesFacts[0]) && /1,299/.test(kesFacts[0]), 'Solo Pro converts with the KES fallback rate');
+check(/approximate/i.test(kesFacts.join(' ')), 'conversions are labelled approximate');
+check(/extra vehicle/i.test(kesFacts.join(' ')), 'the add-on price is converted too');
+const usdFacts = await buildLocalPricingFacts({ supabase: null, currency: 'USD' });
+check(usdFacts === null, 'USD needs no extra conversion facts');
 
 console.log(`\n🎉 ${passed} product Q&A assertions passed.`);

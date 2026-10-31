@@ -194,6 +194,36 @@ async function run() {
   assert(expenseSession.quiz.answers.amount === 6000, 'Correction updates the collected value');
   assert(amountBefore === 5000 && expenseSession.quiz.phase === 'confirm', 'Correction returns to the confirmation summary');
 
+  console.log('\n--- Test 4b: multi-part banking in one message (v1.28.0) ---');
+  const bankCtx = baseCtx({ vehicles: [vehicle] });
+  const bankSession = {};
+  await handleQuizTurn({ session: bankSession, messageText: 'log fuel', startFlow: 'log_expense', ctx: bankCtx });
+  await handleQuizTurn({ session: bankSession, messageText: 'KDA 123A', aiExtracted: { vehicle_id: vehicle.id }, ctx: bankCtx });
+  await handleQuizTurn({ session: bankSession, messageText: 'Fuel', aiExtracted: { expense_type: 'Fuel' }, ctx: bankCtx });
+  const bankTurn = await handleQuizTurn({
+    session: bankSession,
+    messageText: '5000 for 40 litres at 366900 km, full tank',
+    ctx: bankCtx
+  });
+  assert(bankTurn.handled === true, 'the banking turn is handled');
+  assert(bankSession.quiz.answers.amount === 5000, 'amount is captured from the one-line log');
+  assert(bankSession.quiz.answers.fuel_liters === 40, 'fuel litres are banked from the same sentence');
+  assert(bankSession.quiz.answers.odometer_reading === 366900, 'odometer is banked from the same sentence');
+  assert(bankSession.quiz.answers.fill_type === 'Full tank', 'fill type is banked from the same sentence');
+  await handleQuizTurn({ session: bankSession, messageText: 'skip', ctx: bankCtx });
+  assert(bankSession.quiz.phase === 'confirm', 'banked values flow straight to the confirmation gate');
+  await handleQuizTurn({ session: bankSession, messageText: 'cancel', ctx: bankCtx });
+
+  console.log('\n--- Test 4c: typo-tolerant quiz arbitration (v1.28.0) ---');
+  assert(
+    shouldPauseQuizForChat({ messageText: 'Habbari', intent: 'GENERAL_CHAT', quiz: { phase: 'question' } }) === true,
+    'a mistyped greeting still pauses the quiz for conversation'
+  );
+  assert(
+    shouldPauseQuizForChat({ messageText: 'hepl', intent: 'GENERAL_CHAT', quiz: { phase: 'question' } }) === true,
+    'a mistyped help still pauses the quiz'
+  );
+
   console.log('\n--- Test 5: navigation freedom ---');
   const cancelTurn = await handleQuizTurn({ session: expenseSession, messageText: 'cancel', ctx: expenseCtx });
   assert(cancelTurn.handled && !expenseSession.quiz, 'Cancel clears the active quiz');

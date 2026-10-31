@@ -35,6 +35,9 @@ jobs:
           node test_db_reset_scope.js
           node test_notifications.js
           node test_doc_sync.js
+          node test_text_normalizer.js
+          node test_contact_nudge.js
+          node test_kb_docs.js
 
       - name: Notify failure
         if: failure()

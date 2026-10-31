@@ -47,6 +47,9 @@ const FALLBACK_EXCHANGE_RATES = {
 export async function getEffectiveExchangeRate(supabase, currency = 'USD') {
   const cur = currency.toUpperCase();
   if (cur === 'USD') return 1.0;
+  // No client (unit tests, offline reply paths): use the documented fallback
+  // instead of attempting a database read and logging an error.
+  if (!supabase) return FALLBACK_EXCHANGE_RATES[cur] || 1.0;
 
   try {
     const { data: cached } = await supabase
@@ -119,6 +122,25 @@ export async function getEffectiveExchangeRate(supabase, currency = 'USD') {
     console.error(`Error in getEffectiveExchangeRate for ${cur}:`, err.message);
     return FALLBACK_EXCHANGE_RATES[cur] || 1.0;
   }
+}
+
+/**
+ * v1.28.0 — display a USD list price in the user's currency.
+ * Used by WhatsApp cards (add-on slots, upgrade prompts) so a Kenyan user never
+ * sees a bare "$4.99" when checkout will charge KES. Always shows both figures:
+ * the local amount first, the USD list price in brackets for transparency.
+ */
+export async function formatUsdInLocalCurrency(providedSupabase, usdAmount, currency = 'USD', locale = 'en-US') {
+  const cur = String(currency || 'USD').toUpperCase();
+  const amount = Number(usdAmount) || 0;
+  if (cur === 'USD') return `$${amount.toFixed(2)}`;
+  let rate = FALLBACK_EXCHANGE_RATES[cur] || 1;
+  try {
+    const live = await getEffectiveExchangeRate(providedSupabase, cur);
+    if (Number.isFinite(Number(live)) && Number(live) > 0) rate = Number(live);
+  } catch { /* fallback rate */ }
+  const local = Math.round(amount * rate);
+  return `${cur} ${local.toLocaleString(locale || 'en-US', { maximumFractionDigits: 0 })} (≈ $${amount.toFixed(2)})`;
 }
 
 

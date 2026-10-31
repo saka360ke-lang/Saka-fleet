@@ -7,6 +7,8 @@ import {
   getAnnualDiscountPercent
 } from './subscriptionTiers.js';
 import { TRIAL_DAYS } from './trialEngine.js';
+import { getEffectiveExchangeRate } from './paystack.js';
+import { prepareRoutingText } from './textNormalizer.js';
 
 /**
  * Saka Fleet — Product Q&A (v1.27.0).
@@ -48,6 +50,42 @@ function pricingFacts() {
     `Annual billing saves up to ${maxDiscount}% versus 12 monthly payments.`,
     `Every new account starts with a ${TRIAL_DAYS}-day free trial of the full product — no card, no auto-charge.`,
     `Billed in ${PLAN_CURRENCIES.join(', ')} at checkout; local taxes may apply.`
+  ];
+}
+
+/** Local-currency money string: ISO code first so it reads the same everywhere. */
+function localMoney(usdAmount, rate, currency, locale = 'en-US') {
+  const amount = Math.round(Number(usdAmount) * Number(rate));
+  return `${currency} ${amount.toLocaleString(locale || 'en-US', { maximumFractionDigits: 0 })}`;
+}
+
+/**
+ * v1.28.0 — payment answers in the user's own currency.
+ *
+ * The tier matrix prices in USD; checkout converts with the same cached
+ * `getEffectiveExchangeRate()` used by Paystack, so the numbers a user hears in
+ * chat match what they will be charged. Conversion is display-only and always
+ * labelled approximate ("≈") — the engine never promises an exact FX rate.
+ *
+ * Returns null for USD (the USD facts already carry everything) or when no rate
+ * is available; never throws.
+ */
+export async function buildLocalPricingFacts({ supabase = null, currency = 'USD', locale = 'en-US' } = {}) {
+  const cur = String(currency || 'USD').toUpperCase();
+  if (cur === 'USD') return null;
+  let rate = null;
+  try {
+    rate = await getEffectiveExchangeRate(supabase, cur);
+  } catch { rate = null; }
+  if (!Number.isFinite(Number(rate)) || Number(rate) <= 0) return null;
+
+  const monthly = PAID_TIER_KEYS.map((key) => `${getTierDefinition(key).label} ${localMoney(getTierPriceUSD(key, 'monthly'), rate, cur, locale)}/month`);
+  const annual = PAID_TIER_KEYS.map((key) => `${getTierDefinition(key).label} ${localMoney(getTierPriceUSD(key, 'annual'), rate, cur, locale)}/year`);
+  const addon = localMoney(getAddonPriceUSD('fleet_command', 'monthly'), rate, cur, locale);
+  return [
+    `💳 Approximate prices in ${cur}: ${monthly.join(' · ')}.`,
+    `Annual in ${cur}: ${annual.join(' · ')}.`,
+    `Fleet Command extra vehicle: ≈ ${addon}/month. Checkout is charged in ${cur}; these are approximate conversions of the USD list prices.`
   ];
 }
 
@@ -300,10 +338,16 @@ const SMALL_TALK_PREFIX_RE = /^(?:(?:ok(?:ay)?|nice|cool|great|sure|well|please|
 export function matchProductQa(text = '') {
   const original = String(text || '').trim();
   if (!original) return null;
-  const value = original.replace(SMALL_TALK_PREFIX_RE, '').trim() || original;
+  // v1.28.0 — typo/omission tolerance: route on the corrected text, never on
+  // the raw value used for extraction or storage.
+  const prepared = prepareRoutingText(original) || original;
+  const value = prepared.replace(SMALL_TALK_PREFIX_RE, '').trim() || prepared;
   const entry = PRODUCT_QA.find((candidate) => candidate.topics.test(value)) || null;
   if (!entry) return null;
-  if (!QUESTION_SHAPE_RE.test(value) && !STRONG_PRODUCT_RE.test(value)) return null;
+  // v1.28.0 — the routing text loses punctuation, so trailing-question shape is
+  // checked against BOTH the prepared and the original text ("... available please?").
+  const questionShaped = QUESTION_SHAPE_RE.test(value) || QUESTION_SHAPE_RE.test(original);
+  if (!questionShaped && !STRONG_PRODUCT_RE.test(value)) return null;
   return entry;
 }
 
@@ -341,18 +385,28 @@ const BANNED_HEDGES = [
   /I(?:'m| am) (?:just )?an AI\b/i
 ];
 
+// v1.28.0 — a reply that OPENS with a bare greeting after the first exchange is
+// the "Hi/Habari in every message" habit. Only the opener is checked, so
+// "Habari! Your insurance expires..." style first-contact copy is unaffected
+// (the caller passes historyLength 0 for first contact).
+const GREETING_OPEN_RE = /^(?:hi|hello|hey|hiya|habari|mambo|jambo|hujambo|salama|namaste|marhaba|bonjour|hola|hallo|ciao|sawubona|good (?:morning|afternoon|evening|night))\b[\s!,.…—-]/i;
+
 /**
  * Reply linter (v1.27.0) — the model can never ship corporate hedging, an empty
  * capacity placeholder ("· vehicles") or an unfilled token. On a violation the
  * caller's fact fallback is used instead.
+ *
+ * v1.28.0 — also blocks a repeated greeting opener once a conversation has
+ * history (`historyLength > 0`), keeping Saka's flow lifelike.
  */
-export function sanitizeSakaReply(text, fallback = '') {
+export function sanitizeSakaReply(text, fallback = '', { historyLength = 0 } = {}) {
   const value = String(text || '').trim();
   const safeFallback = String(fallback || '').trim() || value;
   if (!value) return safeFallback;
   if (/\b(?:undefined|null|NaN)\b/.test(value)) return safeFallback;
   if (/·\s*vehicles?\b/i.test(value)) return safeFallback;
   if (BANNED_HEDGES.some((pattern) => pattern.test(value))) return safeFallback;
+  if (historyLength > 0 && GREETING_OPEN_RE.test(value)) return safeFallback;
   return value;
 }
 
@@ -362,6 +416,7 @@ export default {
   buildProductQaReply,
   buildProductQaContext,
   buildProductFactsContext,
+  buildLocalPricingFacts,
   recommendTierForFleet,
   tierFactLines,
   sanitizeSakaReply

@@ -4,7 +4,17 @@ All notable changes to Saka Fleet. Versions mirror the release tracker at the to
 of `SAKA_FLEET_ARCHITECTURE.md`; every entry names the commit it shipped in.
 Generated from the real git history — never from memory.
 
-## [1.27.0] - 2026-10-31
+## [1.28.0] - 2026-10-31
+- **Typo & omission tolerance:** new `src/services/textNormalizer.js` normalizes transpositions, doubled letters, missing spaces, diacritics and punctuation for ROUTING only — `matchProductQa`, the regex intent fallback, stop detection and quiz arbitration now understand "Howmuch is the pricimg?", "Habbari" and "sotp". Plates, VINs, amounts and emails are never rewritten (confirmation still gates writes).
+- **GREETING LAW + linter:** the core prompt and composer forbid opening a reply with Hi/Habari/Good morning once a conversation is underway; `sanitizeSakaReply` replaces a repeated greeting opener with the fact fallback (first contact keeps its greeting).
+- **Local-currency payment answers:** `buildLocalPricingFacts()` converts tier and add-on prices with the same cached FX rate Paystack charges at checkout; product answers lead with KES/INR/etc. and keep the USD list price in brackets. Add-on cards now show the local amount too.
+- **Save-my-number nudge:** one warm, milestone-anchored line after the first vehicle/passbook (or a lost-chat moment), composed from facts, once per profile (`profiles.contact_save_nudged_at`, 30-day cooldown), never during quizzes, frustration or pause.
+- **Learning framework hardened:** `runConversationRefinement()` is now APPEND-ONLY — Sentinel adds bounded `LIVE LEARNINGS` bullets and can never rewrite the trained prompt; `refinementIsSafe()` rejects banned phrases (unless negated), missing schema markers and oversized payloads.
+- **Generated knowledge docs:** `scripts/gen_kb_docs.js` renders `docs/PRODUCT_QA.md` and `docs/SAKA_TRAINING.md` from the live registries; `npm run docs:check` and `test_kb_docs.js` fail on drift.
+- **Scoped multi-part banking:** `applyTextExtraction()` now scopes fragments per field, so "5000 for 40 litres at 366900 km, full tank" banks ₹/KES 5000, 40 L, 366,900 km and Full tank instead of reading 5000 for everything; banked details are acknowledged once.
+- **Per-user memory:** the answer snapshot adds relationship stage and remembered preferences (language, units, timezone, preferred vehicle) without a schema change.
+- **Proof:** text normalizer 24, contact nudge 24, greetings 70, product Q&A 134, agent training 102, quiz engine 60, knowledge docs 36, answer oracle 30.
+
 - **Answer Oracle:** Saka answers any question about Saka Fleet *and* the user's own data, composed fresh every time — no pre-made replies on the happy path.
 - **Facts, not answers:** `productQa` is a fact registry (annual prices, features, packages, limits); the reply is always composed.
 - **Annual pricing** is in the facts (the hedge "I don't have annual details" is impossible).

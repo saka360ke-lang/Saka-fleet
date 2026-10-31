@@ -30,7 +30,11 @@ const STATLESS_SUITES = [
   // v1.25.1 — slow-turn ack copy rotation + anti-spam floor.
   'test_turn_ack.js',
   // v1.25.2 — architecture/README drift guard (version + knob defaults).
-  'test_doc_sync.js'
+  'test_doc_sync.js',
+  // v1.28.0 — typo tolerance, contact-save nudge and generated knowledge docs.
+  'test_text_normalizer.js',
+  'test_contact_nudge.js',
+  'test_kb_docs.js'
 ];
 
 const WORKFLOW_DIR = '.github/workflows';

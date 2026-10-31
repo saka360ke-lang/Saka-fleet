@@ -6,6 +6,7 @@ import { getCurrentQuizField } from '../services/quizEngine.js';
 import { detectCountryFromPhone } from '../services/globalization.js';
 import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
 import { buildIncidentSignature, isIncidentSilenced } from '../services/incidents.js';
+import { SAKA_TONE_COMPASS } from '../services/flowKnowledge.js';
 import { PROMPT_REFINEMENT_MARKER, MAX_STORED_PROMPT_REFINEMENT_CHARS } from '../../sakaAi.js';
 
 function getSupabase(providedSupabase) {
@@ -201,6 +202,44 @@ Format your answer clearly with 'DIAGNOSIS:' and 'MITIGATION SUGGESTION:'.`;
 }
 
 /**
+ * v1.28.0 — content gate for stored prompt refinements.
+ *
+ * Sentinel may only ADD durable learnings. A refinement must never smuggle a
+ * banned phrase (unless the sentence explicitly forbids it), a stale schema or
+ * an oversized payload into the live prompt.
+ */
+export function refinementIsSafe(text = '') {
+  const value = String(text || '');
+  if (!value.includes(PROMPT_REFINEMENT_MARKER)) return false;
+  if (value.length > MAX_STORED_PROMPT_REFINEMENT_CHARS) return false;
+  const lowered = value.toLowerCase();
+  for (const phrase of SAKA_TONE_COMPASS.bannedPhrases) {
+    const needle = String(phrase || '').toLowerCase().trim();
+    if (!needle) continue;
+    let index = lowered.indexOf(needle);
+    while (index !== -1) {
+      const context = lowered.slice(Math.max(0, index - 48), index);
+      const negated = /\b(never|avoid|avoiding|don'?t|do not|not|no|forbidden|banned)\b/.test(context);
+      if (!negated) return false;
+      index = lowered.indexOf(needle, index + needle.length);
+    }
+  }
+  return true;
+}
+
+/** Keep the marker + header + NEWEST learnings inside the stored bound. */
+function boundedRefinementBlock(lines = []) {
+  const kept = [...lines];
+  const render = () => `${PROMPT_REFINEMENT_MARKER}\n${kept.join('\n')}`.trim();
+  let text = render();
+  while (text.length > MAX_STORED_PROMPT_REFINEMENT_CHARS && kept.length > 2) {
+    kept.splice(1, 1); // drop the OLDEST learning (index 0 is the header)
+    text = render();
+  }
+  return text.slice(0, MAX_STORED_PROMPT_REFINEMENT_CHARS);
+}
+
+/**
  * Conversation Refinement Sentinel:
  * Pulls recent chat transcripts from Supabase, analyzes them with DeepSeek to detect changing user conversation patterns,
  * slang, or drop-off points, updates conversation_analytics, and updates the saka_core_prompt inside system_config.
@@ -269,8 +308,9 @@ ${currentCorePrompt || 'Default Saka AI Core Prompt'}
 
 Your Tasks:
 1. Detect changing user conversation patterns, local slang/colloquialisms (e.g. Sheng, regional phrasing), or common drop-off points.
-2. Formulate concise prompt adjustments to make Saka AI clearer, punchier, and better at entity extraction.
-3. Generate a refined, production-ready Saka Core Prompt.
+2. Extract ONLY durable, reusable learnings that would make Saka clearer and better at understanding these users.
+3. NEVER rewrite, restate or replace the core prompt. NEVER propose changes to pricing, trials, billing, OTP/security, VIN/passbook rules or legal/compliance facts — those are engine-owned and immutable.
+4. Learnings must be short imperative style rules (maximum 5, maximum 160 characters each). Example: "In Kenya, 'niaje' is a friendly greeting — treat it as small talk, not a task."
 
 Return strictly a single valid JSON object matching this schema (no markdown asterisks or code fences):
 {
@@ -280,8 +320,8 @@ Return strictly a single valid JSON object matching this schema (no markdown ast
     "drop_off_points": ["string"],
     "key_improvements": ["string"]
   },
-  "prompt_adjustments": "Summary description of prompt refinements made.",
-  "updated_saka_core_prompt": "Complete updated Saka core system prompt text."
+  "prompt_adjustments": "One-line summary of what was learned.",
+  "learnings": ["short imperative rule", "another rule"]
 }`;
 
   let parsedAnalysis = null;
@@ -295,7 +335,7 @@ Return strictly a single valid JSON object matching this schema (no markdown ast
     console.warn('[Sentinel ConversationRefinement] DeepSeek failed:', aiErr.message);
   }
 
-  if (!parsedAnalysis || !parsedAnalysis.updated_saka_core_prompt) {
+  if (!parsedAnalysis) {
     return {
       status: 'warning',
       message: 'Failed to generate refined prompt with DeepSeek AI',
@@ -304,13 +344,50 @@ Return strictly a single valid JSON object matching this schema (no markdown ast
     };
   }
 
-  // 3. Update saka_core_prompt inside system_config (bounded to prevent runaway growth)
-  // v1.25.3 — the refinement MUST carry the current schema marker, otherwise the
-  // core-prompt gate correctly ignores it (and the weekly refinement silently
-  // does nothing). Stamp the marker and respect the gate's size bound.
+  // v1.28.0 — APPEND-ONLY learnings. The trained core prompt is immutable code;
+  // Sentinel can only add a bounded list of durable learnings. This removes the
+  // whole-prompt-rewrite failure mode that let a stale refinement override the
+  // VOICE LAW in October 2026.
   const nowIso = new Date().toISOString();
-  const refinedBody = String(parsedAnalysis.updated_saka_core_prompt).trim();
-  const persistedPrompt = `${PROMPT_REFINEMENT_MARKER}\n${refinedBody}`.slice(0, MAX_STORED_PROMPT_REFINEMENT_CHARS);
+  const existingRefinement = currentCorePrompt && currentCorePrompt.includes(PROMPT_REFINEMENT_MARKER)
+    ? currentCorePrompt.replace(PROMPT_REFINEMENT_MARKER, '')
+    : '';
+  const priorBullets = existingRefinement
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => /^-\s+/.test(line));
+  const rawLearnings = Array.isArray(parsedAnalysis.learnings) && parsedAnalysis.learnings.length
+    ? parsedAnalysis.learnings
+    : (parsedAnalysis.prompt_adjustments ? [String(parsedAnalysis.prompt_adjustments)] : []);
+  const cleanLearnings = rawLearnings
+    .map((learning) => String(learning || '').replace(/\s+/g, ' ').trim())
+    .filter((learning) => learning.length >= 8 && learning.length <= 200)
+    .slice(0, 5)
+    .map((learning) => `- ${learning}`);
+
+  if (cleanLearnings.length === 0) {
+    return {
+      status: 'warning',
+      message: 'Refinement produced no durable learnings; nothing was stored.',
+      insights: parsedAnalysis.insights || null,
+      saka_core_prompt_updated: false
+    };
+  }
+
+  const header = `SENTINEL LIVE LEARNINGS (append-only, ${nowIso.slice(0, 10)}):`;
+  const persistedPrompt = boundedRefinementBlock([header, ...priorBullets, ...cleanLearnings]);
+
+  if (!refinementIsSafe(persistedPrompt)) {
+    console.warn('[Sentinel ConversationRefinement] Refinement rejected by the content gate.');
+    return {
+      status: 'warning',
+      message: 'Refinement rejected: it failed the prompt content gate.',
+      insights: parsedAnalysis.insights || null,
+      saka_core_prompt_updated: false
+    };
+  }
+
+  // 3. Persist the bounded, content-gated learnings block.
   const { error: configErr } = await supabase
     .from('system_config')
     .upsert({

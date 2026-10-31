@@ -12,6 +12,7 @@
 
 import assert from 'assert';
 import { DEFAULT_SAKA_CORE_PROMPT, SAKA_FLOW_PLAYBOOK, getSakaCorePrompt, clearSakaPromptCache, PROMPT_REFINEMENT_MARKER, MAX_STORED_PROMPT_REFINEMENT_CHARS } from './sakaAi.js';
+import { refinementIsSafe } from './src/workers/sentinel.js';
 import {
   SAKA_INTENTS,
   SAKA_QUIZ_FLOWS,
@@ -144,6 +145,8 @@ async function run() {
     'the plate question belongs ONLY inside the registration quiz',
     // v1.27.0 — answer law + corporate hedging is banned.
     'ANSWER LAW',
+    // v1.28.0 — no repeated greeting openers mid-conversation.
+    'GREETING LAW',
     'I don\'t have that information to share',
     'As an AI language model',
     'I understand your frustration'
@@ -200,6 +203,14 @@ async function run() {
   const staleSchemaPrompt = await getSakaCorePrompt(makePromptMock('SAKA-PROMPT-SCHEMA:2026.10.3\nZZZ_STALE keep the old corporate wording.'));
   check(!staleSchemaPrompt.includes('ZZZ_STALE'), 'Stale-schema prompt refinement is ignored');
   check(staleSchemaPrompt.includes('VOICE LAW'), 'the current trained prompt survives a stale refinement');
+  clearSakaPromptCache();
+
+  console.log('\n--- Test 7: Sentinel learning content gate (v1.28.0) ---');
+  check(refinementIsSafe(`${PROMPT_REFINEMENT_MARKER}\nLIVE LEARNINGS:\n- In Kenya, "niaje" is a friendly greeting.`) === true, 'a clean learnings block passes');
+  check(refinementIsSafe('LIVE LEARNINGS without the schema marker') === false, 'a missing schema marker is rejected');
+  check(refinementIsSafe(`${PROMPT_REFINEMENT_MARKER}\n- Always say Let's keep moving`) === false, 'a banned phrase in a positive instruction is rejected');
+  check(refinementIsSafe(`${PROMPT_REFINEMENT_MARKER}\n- Never say Let's keep moving`) === true, 'a negated banned phrase is allowed as guidance');
+  check(refinementIsSafe(`${PROMPT_REFINEMENT_MARKER}\n${'x'.repeat(MAX_STORED_PROMPT_REFINEMENT_CHARS + 10)}`) === false, 'an oversized refinement is rejected');
   clearSakaPromptCache();
 
   console.log(`\n\u2705 ALL AGENT TRAINING TESTS PASSED (${passed} assertions).`);

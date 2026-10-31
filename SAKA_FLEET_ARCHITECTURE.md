@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.27.0  
+**Version:** 1.28.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.28.0** | Human Saka 2.0: typo-tolerant routing, GREETING LAW + linter, local-currency payment answers, save-my-number nudge, append-only Sentinel learning, generated QA/training docs, scoped multi-part banking | §71 |
 | **1.27.0** | Answer Oracle: facts-only registry (annual prices, features, packages, computed capacity), realtime user-data snapshot, universal question path, farewell + feedback paths, reply linter, personality v2 | §70 |
 | **1.26.2** | Free-service pricing routing + a hard no-plate invariant outside registration | §69.7 |
 | **1.26.1** | Human Saka: generic answers removed (AI-composed replies, banned canned lines, no plate ask outside the quiz) | §69.6 |
@@ -2628,3 +2629,42 @@ The model can never ship a corporate hedge, an empty capacity placeholder (`· v
 - A new sign-up (no vehicle, no quiz) never receives "Let's keep moving"; the repeat guard uses `NEWCOMER_NUDGES` / `pickNewcomerNudge()` (REGISTER-oriented) instead.
 - First contact clears stale `lastAssistantPrompt` / `nudgeCount` so a warm instance cannot trigger the repeat guard.
 - `isFirstTimeMessage()` ("this is my first time", "let's keep moving to what?") answers with the welcome + REGISTER step. Covered in `test_greetings.js`.
+
+---
+
+## 71. Human Saka 2.0 (v1.28.0) — typo tolerance, no re-greeting, local prices, contact nudge, append-only learning
+
+### 71.1 Typo & omission tolerance (`src/services/textNormalizer.js`)
+- `prepareRoutingText()` = lowercase → strip diacritics/emoji/punctuation → collapse whitespace → typo map + adjacent transposition + fuzzy Levenshtein (≤1/≤2) + missing-space split, all against a fixed routing dictionary.
+- Applied ONLY to routing: `matchProductQa` (the trailing-question shape is also checked on the raw text), `classifyIntentWithRegex` greeting/action-discovery, `isStopRequest`, `shouldPauseQuizForChat` greetings/help. Extraction, storage and display always use the raw message — plates, VINs and amounts are never rewritten.
+- `test_text_normalizer.js` proves the behaviour and the no-rewrite invariant.
+
+### 71.2 GREETING LAW + reply linter
+- The core prompt (`sakaAi.js`) and composer (`conversationEngine.js`) carry an explicit GREETING LAW: greet only on first contact or when the user greeted this turn; never open a reply with Hi/Hello/Habari/Good morning once the conversation is underway.
+- `sanitizeSakaReply(text, fallback, { historyLength })` rejects a greeting opener when `historyLength > 0`; first contact is unaffected. Covered in `test_greetings.js`.
+
+### 71.3 Payment answers in the user's currency
+- `buildLocalPricingFacts({ supabase, currency, locale })` converts every paid tier + the Fleet Command add-on with `getEffectiveExchangeRate()` (the same cached rate Paystack charges at checkout) and labels the figures approximate. USD needs no extra facts.
+- The `product_answer` path injects the local lines; `formatUsdInLocalCurrency()` renders add-on/garage-full cards as "KES 519 (≈ $3.99)". The USD list price is always retained for transparency.
+- `test_product_qa.js` asserts KES conversion with the documented fallback rate.
+
+### 71.4 Save-my-number nudge (`src/services/contactNudge.js`)
+- Fires once per profile at the first milestone (vehicle registered + passbook issued) and on a lost-chat moment; 30-day cooldown (`CONTACT_NUDGE_COOLDOWN_DAYS`), stamped in `profiles.contact_save_nudged_at` (`npm run migrate:contact-nudge`, fail-soft boot `ensureContactNudgeSchema`).
+- Never during a quiz/confirmation, never to a frustrated or paused user. The line is AI-composed from facts (`purpose: 'contact_save_nudge'`) with a deterministic fallback, and the wording never uses the word "plate".
+- Suggestion: save as "Saka – KDA 123A" or any name the user likes.
+
+### 71.5 Learning framework hardening (`runConversationRefinement`)
+- The worker no longer rewrites the core prompt. It returns up to five short `learnings`, appended under `SENTINEL LIVE LEARNINGS` inside the schema marker and the 2,000-char bound (oldest learnings drop first).
+- `refinementIsSafe()` rejects a missing marker, an oversized payload and any banned phrase that is not explicitly negated. The trained `DEFAULT_SAKA_CORE_PROMPT` remains immutable code.
+- `buildUserContextSnapshot()` adds relationship stage (stranger/newcomer/regular/veteran) and remembered preferences (language, units, timezone, preferred vehicle) — no schema change.
+
+### 71.6 Generated knowledge docs (`scripts/gen_kb_docs.js`)
+- `npm run docs:gen` renders `docs/PRODUCT_QA.md` (every registry topic + generated facts) and `docs/SAKA_TRAINING.md` (prompt schema, tone compass, banned phrases, sales playbook, flow playbook, full core prompt) from live imports.
+- `npm run docs:check` + `test_kb_docs.js` (Rules Gate + `npm run health`) fail when the committed docs drift from the code, so the QA file and Saka's training stay current with every deploy.
+
+### 71.7 Scoped multi-part banking (`quizEngine.applyTextExtraction`)
+- A multi-part sentence is scoped per field before parsing (volume → L/gal fragment, distance → km/mi fragment, amount → currency-adjacent or non-unit number, fill type → phrase, expense type → keyword). Without this, "5000 for 40 litres at 366900 km" filled every numeric field with 5000.
+- Banked fields are collected in `state.bankedThisTurn` and acknowledged once by `askCurrent()`; the confirmation-before-write gate is unchanged. Covered in `test_quiz_flow.js`.
+
+### 71.8 Proof
+`test_text_normalizer` 24 · `test_contact_nudge` 24 · `test_greetings` 70 · `test_product_qa` 134 · `test_agent_training` 102 (incl. the learning content gate) · `test_quiz_flow` 60 · `test_kb_docs` 36 · `test_answer_oracle` 30. `npm run health` green.

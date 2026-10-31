@@ -128,6 +128,11 @@ if (!supabase) {
       check(/KES 4,500/.test(text), 'the money line is formatted with the user currency');
       check(/Insurance Renewal due/.test(text), 'upcoming reminders are listed');
       check(snapshot.data.reminders[0]?.daysLeft >= 29, 'days-left is computed for the reminder');
+      // v1.28.0 — lightweight per-user memory.
+      check(snapshot.data.relationship === 'newcomer', 'a fresh account with a vehicle is a newcomer');
+      check(snapshot.data.memory?.preferredPlate === TEST_PLATE, 'memory remembers the preferred vehicle registration');
+      check(/Relationship: newcomer/.test(text), 'the snapshot tells Saka the relationship stage');
+      check(/Preferred units:/.test(text) || /Preferred language:/.test(text), 'the snapshot carries the remembered preferences it has');
     }
   });
 }

@@ -18,6 +18,7 @@ import {
   isFirstTimeMessage,
   shouldReplacePlateAsk
 } from './src/services/greetings.js';
+import { sanitizeSakaReply } from './src/services/productQa.js';
 
 /**
  * Saka Fleet — First-contact greetings & emoji artistry tests (v1.18.1).
@@ -148,6 +149,13 @@ check(shouldReplacePlateAsk({ asksPlate: false, hasVehicle: false, hasQuiz: fals
 console.log('--- Test 5: emoji discipline ---');
 check(emojiCount(sakaIntroText({ countryInfo: usa, nextStep: '' })) <= 4, 'US intro stays within the ceiling');
 check(!/₹|\$|KES|INR/.test(intro), 'no currency figures inside the intro (figures stay plain)');
+
+console.log('--- Test 6: the greeting linter never re-greets (v1.28.0) ---');
+check(sanitizeSakaReply('Habari! Your insurance expires in 7 days.', 'FACTS', { historyLength: 4 }) === 'FACTS', 'a repeated greeting opener is replaced once the conversation has history');
+check(sanitizeSakaReply('Habari! I am Saka.', 'FACTS', { historyLength: 0 }) === 'Habari! I am Saka.', 'first contact keeps its greeting');
+check(sanitizeSakaReply('Your insurance expires in 7 days.', 'FACTS', { historyLength: 4 }) === 'Your insurance expires in 7 days.', 'a substance-first reply passes untouched');
+check(sanitizeSakaReply('Good — saved.', 'FACTS', { historyLength: 4 }) === 'Good — saved.', 'a non-greeting "Good" is not mistaken for a greeting');
+check(sanitizeSakaReply('Good morning! Your report is ready.', 'FACTS', { historyLength: 2 }) === 'FACTS', 'a time-of-day greeting opener is replaced');
 
 console.log(`\n🎉 ${passed} greeting & emoji assertions passed.`);
 

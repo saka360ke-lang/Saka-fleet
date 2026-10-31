@@ -55,6 +55,7 @@ import {
 import { normalizeTierKey, getTierLabel } from './subscriptionTiers.js';
 import { parseFlexibleDate } from './dateParser.js';
 import { normalizeAssetKind, requiresPlate, requiresVin, meterForAssetKind } from './countryBucket.js';
+import { prepareRoutingText } from './textNormalizer.js';
 import {
   parseThresholdSpec,
   describeThresholdSpec,
@@ -1063,10 +1064,47 @@ function isChangeEmailRequest(text) {
  */
 function applyTextExtraction(state, def, text, ctx) {
   const clean = String(text || '').trim();
-  if (!clean) return;
+  const banked = [];
+  if (!clean) return banked;
 
   const hasVolumeMarker = /\d\s*(?:l\b|lt\b|ltr\b|litre|liter|gal\b)/i.test(clean);
   const hasDistanceMarker = /(?:km|mi\b|mile|mileage|odo|odometer)/i.test(clean);
+  const hasFillMarker = /\b(full tank|full|brimmed|top.?up|partial)\b/i.test(clean);
+  const hasExpenseMarker = /\b(fuel|diesel|petrol|service|repair|tyre|tire|insurance|parking|wash)\b/i.test(clean);
+
+  /**
+   * v1.28.0 — scope a multi-part sentence to the fragment that belongs to THIS
+   * field. Without this, "5000 for 40 litres at 366900 km" made the volume,
+   * odometer and amount parsers all read 5000. Confirmation still gates writes.
+   */
+  const scopedFieldText = (field) => {
+    if (field.key === 'fuel_liters') {
+      const match = clean.match(/\d+(?:[.,]\d+)?\s*(?:l\b|lt\b|ltr\b|litres?|liters?|gal(?:lon)?s?\b)/i);
+      return match ? match[0] : clean;
+    }
+    if (field.key === 'current_mileage' || field.key === 'odometer_reading') {
+      const match = clean.match(/\d[\d,.]*\s*(?:km|kms|kilometres?|kilometers?|mi\b|miles?)\b/i);
+      return match ? match[0] : clean;
+    }
+    if (field.key === 'amount') {
+      const currencyAdjacent = clean.match(/\d[\d,.]*\s*(?:kes|ksh|usd|eur|gbp|shillings?|bob)\b/i);
+      if (currencyAdjacent) return currencyAdjacent[0];
+      const unitWord = /^(l|lt|ltr|litre|litres|liter|liters|km|kms|kilometre|kilometres|kilometer|kilometers|mi|mile|miles|gal|gallon|gallons)$/i;
+      for (const token of clean.matchAll(/(\d[\d,.]*)\s*([a-z]+)?/gi)) {
+        if (!unitWord.test(token[2] || '')) return token[0].trim();
+      }
+      return clean;
+    }
+    if (field.key === 'fill_type') {
+      const match = clean.match(/\b(full tank|full|brimmed|top.?up|partial)\b/i);
+      return match ? match[0] : clean;
+    }
+    if (field.key === 'expense_type') {
+      const match = clean.match(/\b(fuel|diesel|petrol|service|repair|tyre|tire|insurance|parking|wash)\b/i);
+      return match ? match[0] : clean;
+    }
+    return clean;
+  };
 
   for (const f of activeFields(def, state.answers)) {
     if (f.key in state.answers && state.answers[f.key] !== undefined) continue;
@@ -1074,13 +1112,16 @@ function applyTextExtraction(state, def, text, ctx) {
     let allowed = false;
     if (f.key === 'fuel_liters') allowed = hasVolumeMarker;
     else if (f.key === 'current_mileage' || f.key === 'odometer_reading') allowed = hasDistanceMarker;
+    else if (f.key === 'fill_type') allowed = hasFillMarker;
+    else if (f.key === 'expense_type') allowed = hasExpenseMarker;
     else if (f.key === 'yom' || f.key === 'fuel_type' || f.key === 'transmission') allowed = true;
     else if (f.key === 'plate_number' && def.key === 'vehicle_registration') allowed = true;
     if (!allowed) continue;
 
+    const fieldText = scopedFieldText(f);
     let parsed = null;
     try {
-      parsed = f.parse(clean, { ...ctx, answers: state.answers }, state.answers);
+      parsed = f.parse(fieldText, { ...ctx, answers: state.answers }, state.answers);
     } catch {
       parsed = null;
     }
@@ -1103,8 +1144,12 @@ function applyTextExtraction(state, def, text, ctx) {
     if (parsed === null || parsed === undefined) continue;
 
     const check = f.validate(parsed, { ...ctx, answers: state.answers }, state.answers);
-    if (check.ok) state.answers[f.key] = parsed;
+    if (check.ok) {
+      state.answers[f.key] = parsed;
+      banked.push(f.label);
+    }
   }
+  return banked;
 }
 
 /**
@@ -1171,7 +1216,8 @@ export function startQuiz({ session, flowKey, ctx, prefill = {} }) {
   };
 
   applyExtraction(session.quiz, def, ctx.aiExtracted || {}, ctx);
-  applyTextExtraction(session.quiz, def, ctx.messageText || '', ctx);
+  const bankedOnStart = applyTextExtraction(session.quiz, def, ctx.messageText || '', ctx);
+  if (bankedOnStart.length) session.quiz.bankedThisTurn = [...new Set(bankedOnStart)];
 
   // Friction reduction: with a single registered vehicle, auto-select it
   // instead of asking the user to confirm an obvious choice.
@@ -1238,6 +1284,17 @@ async function askCurrent(state, ctx, note = null) {
   }
 
   state.lastNote = note;
+  // v1.28.0 — multi-part banking: if the user volunteered several values in one
+  // message, acknowledge them once instead of re-asking. The confirmation gate
+  // is unchanged; this only improves the prose.
+  if (Array.isArray(state.bankedThisTurn) && state.bankedThisTurn.length) {
+    const labels = [...new Set(state.bankedThisTurn)];
+    state.turnNote = [
+      state.turnNote,
+      `The user also supplied ${labels.join(', ')} in the same message — acknowledge that briefly and do NOT ask for them again.`
+    ].filter(Boolean).join(' ');
+    state.bankedThisTurn = [];
+  }
   const rows = buildSummaryRows(def, state.answers, ctx);
   const upcoming = activeFields(def, state.answers).filter((f) => !(f.key in state.answers) || answersValueMissing(state.answers, f));
   const reply = await renderQuizQuestion({
@@ -1584,6 +1641,9 @@ export function shouldPauseQuizForChat({ messageText = '', intent = '', quiz = n
   if (!quiz) return false;
   const clean = String(messageText || '').trim();
   if (!clean) return false;
+  // v1.28.0 — typo-tolerant routing for greetings and help only; control words
+  // and answers stay strict so a real answer is never misread as chat.
+  const route = prepareRoutingText(clean);
 
   // Security steps always consume the raw input
   if (quiz.phase === 'pin' || quiz.phase === 'account_otp') return false;
@@ -1600,10 +1660,10 @@ export function shouldPauseQuizForChat({ messageText = '', intent = '', quiz = n
   }
 
   // Help is a conversational request
-  if (/^(help|hint|what can i do|what do i do next|guide me)$/i.test(clean)) return true;
+  if (/^(help|hint|what can i do|what do i do next|guide me)$/i.test(route)) return true;
 
   // Greetings
-  if (/^(hi|hello|hey|hiya|habari|mambo|jambo|hujambo|salama|good (morning|afternoon|evening))\b/i.test(clean)) {
+  if (/^(hi|hello|hey|hiya|habari|mambo|jambo|hujambo|salama|good (morning|afternoon|evening))\b/i.test(route)) {
     return true;
   }
 
@@ -1860,7 +1920,10 @@ export async function handleQuizTurn({
       state.turnNote = 'The email is already verified — say so briefly and ask only the next question.';
       // Licence/expiry volunteered in the same message still fills the next field.
       applyExtraction(state, def, aiExtracted || {}, vctx);
-      applyTextExtraction(state, def, clean, vctx);
+      const bankedAfterOtp = applyTextExtraction(state, def, clean, vctx);
+      if (bankedAfterOtp.length) {
+        state.bankedThisTurn = [...new Set([...(state.bankedThisTurn || []), ...bankedAfterOtp])];
+      }
       const reply = await askCurrent(state, vctx);
       return { handled: true, reply, flow: state.flow, active: true };
     }
@@ -2015,6 +2078,7 @@ export async function handleQuizTurn({
     const bankingText = String(clean).replace(/\b\d{6}\b/, ' ').replace(/\s+/g, ' ').trim();
     if (bankingText.length >= 6 && isSubstantiveText(bankingText)) {
       let banked = 0;
+      const bankedLabels = [];
       // Deterministic first (no AI cost): each remaining field's own parser.
       for (const f of activeFields(def, state.answers)) {
         if (f.kind === 'otp') continue;
@@ -2025,6 +2089,7 @@ export async function handleQuizTurn({
           if (!f.validate(candidate, { ...vctx, answers: state.answers }, state.answers).ok) continue;
           state.answers[f.key] = candidate;
           banked += 1;
+          bankedLabels.push(f.label);
         } catch { /* keep trying the next field */ }
       }
       // AI top-up only when the strict parsers could not read the remainder.
@@ -2034,12 +2099,15 @@ export async function handleQuizTurn({
           if (key in state.answers && state.answers[key] !== undefined) continue;
           state.answers[key] = value;
           banked += 1;
+          const fieldDef = activeFields(def, state.answers).find((f) => f.key === key);
+          bankedLabels.push(fieldDef?.label || key);
         }
         if (banking.extraNotes?.length) {
           state.extraNotes = mergeExtraNotes(state.extraNotes || [], banking.extraNotes);
         }
       }
       if (banked > 0) {
+        state.bankedThisTurn = [...new Set([...(state.bankedThisTurn || []), ...bankedLabels])];
         state.lastAcceptedAnswer = `Email verified + ${banked} detail(s) captured from the same message`;
         state.turnNote = 'Confirm the email is verified and that the details sent with the code were captured. Ask only what is still missing.';
       }
@@ -2052,7 +2120,10 @@ export async function handleQuizTurn({
 
   // Fast-forward any other values carried in the same message
   applyExtraction(state, def, aiExtracted || {}, vctx);
-  applyTextExtraction(state, def, clean, vctx);
+  const bankedExtra = applyTextExtraction(state, def, clean, vctx);
+  if (bankedExtra.length) {
+    state.bankedThisTurn = [...new Set([...(state.bankedThisTurn || []), ...bankedExtra])];
+  }
 
   const reply = await askCurrent(state, vctx);
   return { handled: true, reply, flow: state.flow, active: true };

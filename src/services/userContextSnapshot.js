@@ -52,7 +52,9 @@ export async function buildUserContextSnapshot({ supabase, profile = null, vehic
     name: profile?.full_name || null,
     vehicles: [],
     month: null,
-    reminders: []
+    reminders: [],
+    relationship: null,
+    memory: null
   };
 
   try {
@@ -88,6 +90,29 @@ export async function buildUserContextSnapshot({ supabase, profile = null, vehic
     } else {
       lines.push('Vehicles on file: none yet.');
     }
+
+    // v1.28.0 — lightweight per-user memory (no schema change): the details a
+    // human assistant would naturally remember about a returning owner.
+    const createdAt = profile?.created_at ? Date.parse(profile.created_at) : NaN;
+    const ageDays = Number.isFinite(createdAt) ? Math.floor((now.getTime() - createdAt) / 86400000) : null;
+    const relationship = ageDays !== null && ageDays >= 30
+      ? 'veteran'
+      : ageDays !== null && ageDays >= 7
+        ? 'regular'
+        : data.vehicles.length ? 'newcomer' : 'stranger';
+    data.relationship = relationship;
+    data.memory = {
+      name: data.name,
+      language: profile?.preferred_language || null,
+      units: profile?.unit_system || null,
+      timezone: profile?.timezone || null,
+      relationship,
+      preferredPlate: data.vehicles[0]?.plate || null
+    };
+    lines.push(`Relationship: ${relationship}${ageDays === null ? '' : ` (account ${ageDays} day${ageDays === 1 ? '' : 's'} old)`}.`);
+    if (data.memory.language) lines.push(`Preferred language: ${data.memory.language}.`);
+    if (data.memory.units) lines.push(`Preferred units: ${data.memory.units}.`);
+    if (data.memory.timezone) lines.push(`Timezone: ${data.memory.timezone}.`);
 
     const vehicleIds = data.vehicles.map((v) => v.id).filter(Boolean);
     if (supabase && vehicleIds.length) {
