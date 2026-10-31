@@ -249,7 +249,7 @@ function registrationFields() {
   return [
     // v1.21.0 — Country Bucket: the asset kind decides identity (plate/VIN vs
     // serial) and which compliance catalog applies. Asked once, first.
-    choiceField('asset_kind', 'What kind of asset is it?', 'Car, motorcycle, truck, bus, machinery, heavy equipment, generator or boat', [
+    choiceField('asset_kind', 'First things first — what are we taking care of today? 🚗 Car · 🏍️ Bike · 🚛 Truck · 🚌 Bus · 🛠️ Machinery · ⚙️ Generator · 🛥️ Boat — just type it', 'Car, motorcycle, truck, bus, machinery, heavy equipment, generator or boat', [
       { value: 'vehicle', aliases: ['car', 'van', 'suv', 'saloon', 'sedan', 'pickup', 'vehicle'] },
       { value: 'motorcycle', aliases: ['motorcycle', 'motorbike', 'bike', 'boda', 'scooter', 'tuk tuk', 'tuk-tuk'] },
       { value: 'truck', aliases: ['truck', 'lorry', 'hgv', 'tanker', 'trailer'] },
@@ -259,7 +259,7 @@ function registrationFields() {
       { value: 'generator', aliases: ['generator', 'genset', 'power plant', 'standby power'] },
       { value: 'watercraft', aliases: ['boat', 'vessel', 'watercraft', 'ship', 'ferry'] }
     ]),
-    field('plate_number', 'Registration plate number', 'e.g. KDA 123A', {
+    field('plate_number', 'Nice one 🎉 What is its number plate? (e.g. KDA 123A)', 'e.g. KDA 123A', {
       when: (answers) => requiresPlate(answers.asset_kind),
       parse: (text, c) => parsePlate(text, c),
       validate: (value, c) => {
@@ -282,25 +282,25 @@ function registrationFields() {
         ? { ok: true }
         : { ok: false, message: 'Please send the serial or model number (at least 3 characters).' })
     }),
-    field('make_model', 'Make and model', 'e.g. Toyota Land Cruiser 80 series', {
+    field('make_model', 'What make and model is it? (e.g. Toyota Fielder) 🚙', 'e.g. Toyota Land Cruiser 80 series', {
       validate: (value) => (value && value.length >= 2 && value.length <= 80
         ? { ok: true }
         : { ok: false, message: 'Please share the make and model (at least 2 characters).' })
     }),
-    field('yom', 'Year of manufacture', `e.g. 1991 or ${CURRENT_YEAR - 5}`, {
+    field('yom', 'Which year was it made? 📅 (e.g. 2016)', `e.g. 1991 or ${CURRENT_YEAR - 5}`, {
       aliases: ['yom', 'year', 'year_of_manufacture'],
       parse: (text) => parseNumber(text),
       validate: (value) => (value >= 1900 && value <= CURRENT_YEAR + 1
         ? { ok: true }
         : { ok: false, message: `Please give a year between 1900 and ${CURRENT_YEAR + 1}.` })
     }),
-    choiceField('fuel_type', 'Fuel type', 'Diesel, Petrol, Hybrid or Electric', [
+    choiceField('fuel_type', 'What does it drink? ⛽ Diesel · Petrol · Hybrid · Electric', 'Diesel, Petrol, Hybrid or Electric', [
       { value: 'Diesel', aliases: ['diesel'] },
       { value: 'Petrol', aliases: ['petrol', 'gasoline', 'gas'] },
       { value: 'Hybrid', aliases: ['hybrid'] },
       { value: 'Electric', aliases: ['electric', 'ev'] }
     ]),
-    field('current_mileage', 'Current odometer reading', 'e.g. 366700 (in your preferred units)', {
+    field('current_mileage', 'How many kilometres has it done so far? 🛣️ (e.g. 366700)', 'e.g. 366700 (in your preferred units)', {
       when: (answers) => requiresPlate(answers.asset_kind),
       aliases: ['current_mileage', 'odometer', 'odometer_reading', 'mileage'],
       parse: (text, c) => parseOdometer(text, c),
@@ -316,7 +316,7 @@ function registrationFields() {
         ? { ok: true }
         : { ok: false, message: 'Please send the hour-meter reading as a number (e.g. 1250).' })
     }),
-    field('vin', 'VIN / chassis number', '11-17 characters - permanently locked to your passbook', {
+    field('vin', 'Almost done 🎉 The VIN / chassis number (11–17 characters — permanently locked to your passbook)', '11-17 characters - permanently locked to your passbook', {
       when: (answers) => requiresVin(answers.asset_kind),
       aliases: ['vin', 'chassis'],
       parse: (text) => parseVin(text),
@@ -345,12 +345,12 @@ function registrationFields() {
 
 function registrationOptionalFields() {
   return [
-    field('insurance_expiry', 'Insurance expiry date', 'e.g. 2027-05-15 (optional)', {
+    field('insurance_expiry', 'When does the insurance expire? 📄 (e.g. 2027-05-15 — or reply Skip)', 'e.g. 2027-05-15 (optional)', {
       optional: true, group: 'optional', aliases: ['insurance_expiry'],
       parse: (text, c) => parseDateValue(text, c),
       validate: (value) => (value ? { ok: true } : { ok: false, message: 'Please send a valid date, or reply Skip.' })
     }),
-    field('insurance_policy', 'Insurance policy number/provider', 'optional', {
+    field('insurance_policy', 'And the policy number — or just the provider name? (reply Skip if you\'d rather not)', 'optional', {
       optional: true, group: 'optional', aliases: ['insurance_policy']
     }),
     field('inspection_expiry', 'Inspection / NTAC expiry date', 'e.g. 2027-03-01 (optional)', {

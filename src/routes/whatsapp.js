@@ -17,6 +17,7 @@ import {
 import { calculateFuelConsumption } from '../services/analytics.js';
 import { normalizeFillType } from '../services/fuelEconomy.js';
 import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly, shouldReplaceIntroCopy, isRepeatedReply } from '../services/greetings.js';
+import { matchProductQa, buildProductQaReply } from '../services/productQa.js';
 import { buildVehicleSummary, emailVehicleSummary } from '../services/vehicleSummary.js';
 import {
   buildFeatureNotice,
@@ -1025,6 +1026,9 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           if (typeof slowAckTimer.unref === 'function') slowAckTimer.unref();
         }
 
+        const helpMenuCommand = /^(?:help|menu|options|what can you do|what can i do|how (?:do i|can i) (?:use|start|begin))\s*\??$/i.test(String(messageText || '').trim());
+        const productQaMatch = matchProductQa(textForCommands);
+
         let aiResult;
         phaseMarks.aiStartedAt = Date.now();
         if (ocrPaused) {
@@ -1035,6 +1039,27 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           };
         } else if (countryCommandResult) {
           aiResult = countryCommandResult;
+        } else if (helpMenuCommand) {
+          // v1.25.0 — compact deterministic tour. Never a wall of text.
+          aiResult = {
+            intent: 'APP_HELP',
+            extracted_data: {},
+            reply_message: '🙂 Quick tour:\n\n' +
+              '• *REGISTER* — add your machine\n' +
+              '• "Logged 40L at 50350 km for KES 5500" — fuel in one line\n' +
+              '• *reminders* — what\'s due soon\n' +
+              '• *report* — this month\'s numbers\n' +
+              '• *pricing* — plans and your free trial\n\n' +
+              '_Where shall we start?_ 🚗'
+          };
+        } else if (productQaMatch) {
+          // v1.25.0 — product Q&A (pricing, trial, privacy, limits, resale…) is
+          // engine-owned and answered instantly, never guessed by the model.
+          aiResult = {
+            intent: 'GENERAL_CHAT',
+            extracted_data: {},
+            reply_message: buildProductQaReply(productQaMatch)
+          };
         } else if (myRulesCommand || requiredDocsCommand || exampleComplianceCommand) {
           const bucket = await loadCountryBucket(supabaseClient, {
             countryCode: bucketCountryCode,
@@ -1164,7 +1189,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             customReply = "I've forwarded your message to our support team at support@sakafleet.com. They will reach out to you shortly!";
           }
         } else if (
-          /\b(support|human|agent|representative|talk to a person|admin intervention|file a complaint|escalat(e|ion)|dispute|help from human|talk to support|contact support|human help|customer care)\b/i.test(messageText)
+          /\b(support team|contact support|talk to support|human help|help from (?:a )?human|talk to (?:a )?(?:human|person|agent|representative)|human (?:agent|support)|customer (?:care|support)|file a complaint|escalat(?:e|ion)|dispute|admin intervention)\b/i.test(messageText)
         ) {
           isSupportFlow = true;
           session.pendingSupportEscalation = true;

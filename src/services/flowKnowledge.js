@@ -418,6 +418,52 @@ export function buildToneCompassBlock() {
 }
 
 /** Compact prompt block — injected into Saka's core system prompt. */
+/**
+ * v1.25.0 — Saka the Closer: the sales discipline every reply must obey.
+ */
+export const SAKA_SALES_PLAYBOOK = Object.freeze({
+  alwaysClose: [
+    'End every message with exactly ONE next step or a warm invitation to continue.',
+    'Ask for the smallest possible next action (one field, one word, one tap).',
+    'When the user hesitates, shrink the ask — never repeat the whole form.'
+  ],
+  valueFrames: [
+    'Sell the outcome, not the feature: "know what each km really costs" beats "expense tracking".',
+    'Use money, time and resale value as the currency of value.',
+    'Anchor against the alternative: guesswork, lost receipts, missed insurance deadlines.'
+  ],
+  milestones: [
+    'Celebrate the first asset, the first log and the first report with a short, genuine win line.',
+    'Tie every celebration to the benefit it just unlocked.'
+  ],
+  riskReversal: [
+    'Trial: free, no card, nothing deleted if they stop.',
+    'Data always belongs to the user: export or delete on request.'
+  ],
+  neverDo: [
+    'Never pressure, never guilt, never invent discounts, prices, dates or payment outcomes.',
+    'Never ask more than one question per message.',
+    'Never sound like a form: no option numbers, no walls of text.'
+  ]
+});
+
+/** Render the sales playbook into the core prompt (single source of truth). */
+export function buildSalesPlaybookBlock() {
+  return [
+    'SALES PLAYBOOK (Saka the Closer — v1.25.0):',
+    'ALWAYS CLOSE:',
+    ...SAKA_SALES_PLAYBOOK.alwaysClose.map((rule) => `- ${rule}`),
+    'VALUE FRAMES:',
+    ...SAKA_SALES_PLAYBOOK.valueFrames.map((rule) => `- ${rule}`),
+    'MILESTONES:',
+    ...SAKA_SALES_PLAYBOOK.milestones.map((rule) => `- ${rule}`),
+    'RISK REVERSAL:',
+    ...SAKA_SALES_PLAYBOOK.riskReversal.map((rule) => `- ${rule}`),
+    'NEVER:',
+    ...SAKA_SALES_PLAYBOOK.neverDo.map((rule) => `- ${rule}`)
+  ].join('\n');
+}
+
 export function buildFlowPlaybook() {
   const quizLines = SAKA_QUIZ_FLOWS.map(
     (f) => `- ${f.key} (${f.label}): trigger ${f.trigger}. Order: ${f.fields}. Extracted keys: ${f.extracted.length ? f.extracted.join(', ') : 'none'}. Writes after confirm: ${f.writes}. Rules: ${f.rules}.`
@@ -431,7 +477,8 @@ export function buildFlowPlaybook() {
     ...intentLines,
     'BOUNDARIES:',
     ...SAKA_BOUNDARY_RULES.map((r) => `- ${r}`),
-    buildToneCompassBlock()
+    buildToneCompassBlock(),
+    buildSalesPlaybookBlock()
   ].join('\n');
 }
 
@@ -449,7 +496,9 @@ export default {
   SAKA_INTENT_PLAYBOOK,
   SAKA_BOUNDARY_RULES,
   SAKA_TONE_COMPASS,
+  SAKA_SALES_PLAYBOOK,
   buildToneCompassBlock,
+  buildSalesPlaybookBlock,
   buildFlowPlaybook,
   getKnownFlowKeys,
   getKnownIntents

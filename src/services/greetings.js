@@ -68,16 +68,22 @@ export function greetingFor({ countryInfo = null, now = new Date(), timeZone = n
 }
 
 /**
- * Polite first-contact introduction. Ends with exactly ONE next step.
+ * Warm, sales-crafted first-contact introduction (v1.25.0).
+ * Ends with exactly ONE next step, keeps the welcome emoji ceiling (≤4 total),
+ * and always offers the one-line paragraph shortcut that shows off the product.
  */
 export function sakaIntroText({ countryInfo = null, now = new Date(), profile = null, plateExample = null, nextStep = null } = {}) {
   const { text: greeting } = greetingFor({ countryInfo, now });
   const example = plateExample || countryInfo?.plate_example || 'ABC 1234';
   const name = String(profile?.full_name || '').trim().split(/\s+/)[0];
   const helloName = name ? ` ${name}` : '';
-  const step = nextStep === null ? `To begin, send your vehicle's number plate (e.g. *${example}*).` : nextStep;
-  return `${greeting}${helloName ? ` ${helloName}` : ''} I'm *Saka* — your vehicle's co-pilot on WhatsApp.\n\n` +
-    'I keep your fuel ⛽, costs 💰 and service reminders 🔔 in one calm place, so you can focus on the road.' +
+  const step = nextStep === null
+    ? `Send your vehicle's number plate (e.g. *${example}*) and I'll ask one quick question at a time — or type one line like *"Toyota Fielder 2016, diesel, 120,000 km, ${example}"* and I'll pick out every detail myself.`
+    : nextStep;
+  return `${greeting}${helloName} I'm *Saka* — your machine's memory, money-saver and paperwork wizard, right here on WhatsApp.` +
+    '\n\n⛽ Every litre and every shilling, remembered for you' +
+    '\n💰 What each kilometre really costs, so you can trim the waste' +
+    '\n🔔 Service, insurance and inspection reminders — before they bite' +
     (step ? `\n\n${step}` : '');
 }
 

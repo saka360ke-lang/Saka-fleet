@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.24.4  
+**Version:** 1.25.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.25.0** | Conversational-first onboarding: sales welcome, VOICE LAW, warm quiz copy, Product Q&A | §65, §66 |
 | **1.24.4** | Status probe aliases (`/api/health`, `/internal/status`) + first-time-user onboarding-loop fix | §64.2, §64.5 |
 | **1.24.3** | Operator tooling + chat-log fixes: silent admin sessions, revision probe, first-contact race, phase telemetry | §64 |
 | **1.24.2** | Provider-outage hardening: billing breaker, per-leg timeouts, slow-turn ack, admin help | §63 |
@@ -2423,3 +2424,37 @@ The user-perceived reply time is now measured on every answered turn, so the two
 - Profiles are created before onboarding; the welcome trial (`trial_sessions.source='welcome'`) starts when onboarding completes (`onboarding.js` / `quizEngine.js`), so an empty `trial_sessions` before that is expected — not a bug.
 - **Cloud Run runtime checklist (operator):** `--min-instances=1`, `--cpu-boost`, `--no-cpu-throttling`, instance concurrency ≤ `MESSAGE_MAX_CONCURRENCY` (8). Slow Supabase round-trips with zero errors are the signature of CPU throttling.
 - **v1.24.4 — onboarding loop fixed (found live at 05:32).** A real first-time number sent "Hi", "Hi", "Restart" and received the identical "I'm still here with you — no need to start over" every time (`chat_friction_logs` `LOOPING_PROMPTS`). The v1.19.2 intro-copy guard assumed any intro after history was accidental; for a zero-vehicle user who has not started onboarding the welcome IS the correct answer. `shouldReplaceIntroCopy()` now applies only past onboarding (vehicle registered), `isRepeatedReply()` guarantees a next-step nudge instead of a byte-identical repeat, and `restart`/`menu`/`help` reset `sakaIntroduced` so the welcome (with the REGISTER CTA) is shown again. Covered in `test_greetings.js`.
+
+---
+
+## 65. v1.25.0 - Conversational-First Onboarding & Sales Voice
+
+### 65.1 The complaint (2026-10-31 chat logs)
+- "Tell me more about saka fleet" produced a corporate blurb with zero emojis and jumped straight into a form.
+- "Restart" produced a blunt option list; the insurance step asked "What is the insurance policy number and provider?" verbatim.
+- "Help" produced a long wall of text; "Did you save my car?" was deflected to support.
+
+### 65.2 The welcome (`sakaIntroText`)
+Country-aware greeting → name → **hook** ("your machine's memory, money-saver and paperwork wizard") → three value anchors (⛽ every litre and shilling · 💰 cost per kilometre · 🔔 reminders before they bite) → **one next step** that also teaches the shortcut: *"type one line like 'Toyota Fielder 2016, diesel, 120,000 km, KDA 123A' and I'll pick out every detail myself"*. Emoji ceiling stays ≤4; `test_greetings.js` asserts the hook, the plate example and the ceiling.
+
+### 65.3 VOICE LAW (top of the core prompt)
+Six hard rules sit immediately after the identity lines (where models attend most): short lines · one question per message · 1–3 emojis one per line · warm opener → point → **exactly one next step** · never form-like, never more than four options, banned corporate words · mirror language/register. Two before/after examples use the exact failures observed in production. `test_agent_training.js` asserts `VOICE LAW` stays embedded.
+
+### 65.4 Sales playbook (`SAKA_SALES_PLAYBOOK`)
+Always close with the smallest next action; sell outcomes (cost per km, resale value, no missed deadlines); celebrate the first asset/log/report; risk reversal (free trial, no card, data never held hostage); never pressure, never invent prices, never ask two questions. Rendered by `buildSalesPlaybookBlock()` into the flow playbook (single source of truth) and asserted as `SALES PLAYBOOK` / `Saka the Closer`.
+
+### 65.5 Onboarding copy
+Registration and compliance quiz questions are conversational with one emoji anchor each ("First things first — what are we taking care of today? 🚗 Car · 🏍️ Bike …", "Almost done 🎉 The VIN / chassis number…", "When does the insurance expire? 📄 …"). The deterministic templates remain the floor so a provider outage can never mute onboarding.
+
+### 65.6 Help menu & support routing
+`help` / `menu` / `what can you do` → a five-line tour with one example line and a closing question. The support escalation trigger no longer fires on a bare "agent"/"human"/"support" word: only explicit phrases (`support team`, `talk to a person`, `file a complaint`, `escalate`, …) route to `support@sakafleet.com`.
+
+---
+
+## 66. v1.25.0 - Product Q&A (Saka answers anything about herself)
+
+- `src/services/productQa.js` is the user-facing answer engine: pricing, trial, what Saka is, what can be logged, privacy, countries/units, fleet limits, passbook/resale value and support.
+- **Facts are engine-owned:** prices come from `TIER_MATRIX`/`getTierPriceUSD` and the trial length from `TRIAL_DAYS` — a pricing change can never leave stale copy. `test_product_qa.js` (in `npm run health`) asserts the generated price equals the registry and that no answer mentions providers, databases, env knobs, admin tooling or remediation.
+- **Deterministic first:** question-shaped messages ("what is cost of this service?", "is my data safe?", "how many cars can I add?") are answered instantly with zero tokens; statement messages ("I paid 5000 for fuel") are never hijacked into the pricing card.
+- **AI long-tail with a gate:** the core prompt carries `buildProductQaContext()` — the canonical answers plus `BACKEND GATE` (never reveal servers, APIs, databases, providers, env vars, admin tools) and the graceful deflection line ("that's all under the hood 🙂 — what it means for you is …").
+- **Why not feed the architecture document?** It is the backend reference (env knobs, superadmin commands, remediation pipeline). Injecting it would blow the prompt budget and leak internals; the registry is its curated, user-safe mirror, kept in sync by the versioned tests instead.

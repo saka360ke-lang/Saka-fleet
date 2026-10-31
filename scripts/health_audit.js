@@ -24,7 +24,9 @@ const STATLESS_SUITES = [
   // v1.24.2 — the wipe registry and its TRUNCATE SQL must never drift apart.
   'test_db_reset_scope.js',
   // v1.24.4 — operator status probes (public vs secret-gated payloads).
-  'test_status_probe.js'
+  'test_status_probe.js',
+  // v1.25.0 — engine-owned product answers (pricing bound to the tier matrix).
+  'test_product_qa.js'
 ];
 
 const WORKFLOW_DIR = '.github/workflows';

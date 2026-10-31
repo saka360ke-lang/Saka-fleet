@@ -129,7 +129,13 @@ async function run() {
     'first contact',
     'OCR & PHOTOS',
     'RECEIPT INTELLIGENCE',
-    'driver licences'
+    'driver licences',
+    // v1.25.0 — conversational-first voice, sales discipline and product answers.
+    'VOICE LAW',
+    'SALES PLAYBOOK',
+    'Saka the Closer',
+    'PRODUCT ANSWERS',
+    'BACKEND GATE'
   ];
   for (const token of sections) {
     check(DEFAULT_SAKA_CORE_PROMPT.includes(token), `Core prompt retains training section: ${token}`);
