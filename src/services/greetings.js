@@ -67,6 +67,18 @@ export function greetingFor({ countryInfo = null, now = new Date(), timeZone = n
   return { text: `Good ${daypart}! ${DAYPART_EMOJI[daypart]}`, daypart, local: null };
 }
 
+/** v1.25.4 — repeat nudges rotate so a stuck user never sees the same line twice. */
+export const REPEAT_NUDGES = Object.freeze([
+  '🚗 Let\'s keep moving.\n\nReply *REGISTER* to set up your first asset, or *Help* to see everything I can do.',
+  '🙂 I\'m here.\n\n*REGISTER* to set up your machine, *pricing* to see plans, or just tell me what you drive.'
+]);
+
+export function pickRepeatNudge(seed = 0) {
+  const length = REPEAT_NUDGES.length;
+  const raw = Math.trunc(Number(seed) || 0);
+  return REPEAT_NUDGES[((raw % length) + length) % length];
+}
+
 /** v1.25.2 — one-shot pause confirmation (anti-spam opt-out). */
 export const PAUSE_REPLY = '🔇 *Paused.* I\'ll stay quiet — message me anytime and I\'ll pick up where we left off.';
 

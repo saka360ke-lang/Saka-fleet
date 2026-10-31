@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.25.3  
+**Version:** 1.25.4  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.25.4** | Flow fixes: "sakafleet" FAQ routing + rotating repeat nudges (no more nudge loop) | §65.9 |
 | **1.25.3** | Commit ID in deploy alerts, generated CHANGELOG.md + doc-sync guard, fresh clean slate | §67.6 |
 | **1.25.2** | Full app audit: exhaustive suite runner, doc-sync guard, package version alignment | §67 |
 | **1.25.1** | Stale prompt-refinement gate + slow-ack polish (8s, rotating, 60s floor) | §65.7 |
@@ -2505,3 +2506,8 @@ Stateless suite (in `npm run health`) that fails when:
 ### 67.7 Sentinel refinements must carry the schema marker (v1.25.3)
 - `runConversationRefinement()` wrote the refined prompt **without** the `SAKA-PROMPT-SCHEMA` marker, so the v1.25.1 gate ignored every weekly refinement — and the unmarked 3k-character legacy prompt kept reappearing in `system_config`. The writer now stamps `PROMPT_REFINEMENT_MARKER` and bounds the payload to `MAX_STORED_PROMPT_REFINEMENT_CHARS`, so a refinement can only ever augment the current, trained prompt.
 - **Admin help aliases (v1.25.3):** `list commands`, `list superadmin commands` and `show admin commands` also route to the deterministic command list (`ADMIN_HELP`); before this they fell through to the AI chain and produced the "Let's keep moving" nudge.
+
+### 65.9 Live-chat flow fixes (v1.25.4)
+- **Product FAQ reaches "sakafleet":** `what_is_saka` now matches `sakafleet` and `saka fleet` as phrases, so *"Tell me about sakafleet"* answers instantly with the warm intro instead of falling through to the AI and being eaten by a guard.
+- **Repeat nudges rotate:** the anti-repeat replacement is no longer one fixed sentence. `pickRepeatNudge()` alternates between "Let's keep moving…" and a warm options line (*REGISTER* / *pricing* / tell me what you drive), and `session.nudgeCount` resets on real progress (quiz start, vehicle registered, restart/menu). A confused user ("???") always receives a next step, never the same line twice.
+- Evidence: 2026-10-31 09:01–09:02 UTC, a prospect asked "Tell me about sakafleet" and "???" three times and received the identical nudge each turn.

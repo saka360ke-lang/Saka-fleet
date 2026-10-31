@@ -16,7 +16,7 @@ import {
 } from '../services/vehicles.js';
 import { calculateFuelConsumption } from '../services/analytics.js';
 import { normalizeFillType } from '../services/fuelEconomy.js';
-import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly, shouldReplaceIntroCopy, isRepeatedReply, isStopRequest, PAUSE_REPLY } from '../services/greetings.js';
+import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly, shouldReplaceIntroCopy, isRepeatedReply, isStopRequest, PAUSE_REPLY, pickRepeatNudge } from '../services/greetings.js';
 import { matchProductQa, buildProductQaReply } from '../services/productQa.js';
 import { resolveSlowAckMs, pickSlowAckLine, shouldSendSlowAck } from '../services/turnAck.js';
 import { buildVehicleSummary, emailVehicleSummary } from '../services/vehicleSummary.js';
@@ -758,6 +758,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
       // v1.24.4 — after an explicit restart/menu request the welcome (and its
       // REGISTER call to action) is the correct response, not a repeat guard.
       session.sakaIntroduced = false;
+      session.nudgeCount = 0;
       session.lastAssistantPrompt = null;
     } else if (session.circuitBreakerStage === 'HARD_TRIP') {
       // Circuit breaker is in hard trip: bypass DeepSeek and send a short,
@@ -2986,8 +2987,11 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
 
         // v1.24.4 — an identical repeat outside a quiz is a dead end; always hand
         // the user a next step instead of echoing the same sentence again.
+        // v1.25.4 — the nudge ROTATES, so a stuck user never sees one line on loop.
+        if (session.quiz || hasVehicleRegistered) session.nudgeCount = 0;
         if (isRepeatedReply({ quizActive: Boolean(session.quiz), reply: finalReply, lastPrompt: session.lastAssistantPrompt })) {
-          finalReply = '🚗 Let\'s keep moving.\n\nReply *REGISTER* to set up your first asset, or *Help* to see everything I can do.';
+          finalReply = pickRepeatNudge(session.nudgeCount || 0);
+          session.nudgeCount = (session.nudgeCount || 0) + 1;
         }
 
         // v1.21.3 — a zero-vehicle user must never be asked for a plate before

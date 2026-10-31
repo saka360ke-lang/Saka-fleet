@@ -49,7 +49,7 @@ export const PRODUCT_QA = Object.freeze([
   },
   {
     id: 'what_is_saka',
-    topics: /\b(what is saka|about saka|who is saka|who are you|what are you|how does (?:it|this) work|what do you do|tell me about (?:saka|the service|this service))\b/i,
+    topics: /\b(what is saka(?:\s*fleet)?|about saka(?:\s*fleet)?|who is saka|who are you|what are you|how does (?:it|this) work|what do you do|tell me about (?:saka(?:\s*fleet)?|sakafleet|the service|this service))\b/i,
     build: () => '🙂 I\'m *Saka* — your machine\'s memory, money-saver and paperwork wizard, right here on WhatsApp.\n\n' +
       '⛽ Every fuel-up, expense and service — remembered for you\n' +
       '💰 What each kilometre really costs, so you can trim waste\n' +

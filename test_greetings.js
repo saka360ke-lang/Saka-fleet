@@ -10,7 +10,9 @@ import {
   shouldReplaceIntroCopy,
   isRepeatedReply,
   isStopRequest,
-  PAUSE_REPLY
+  PAUSE_REPLY,
+  REPEAT_NUDGES,
+  pickRepeatNudge
 } from './src/services/greetings.js';
 
 /**
@@ -119,6 +121,15 @@ check(isStopRequest('stop with the many replies') === true, 'frustration phrasin
 check(isStopRequest('Stop at the petrol station') === false, 'a business sentence is not an opt-out');
 check(isStopRequest('I want to cancel my subscription') === false, 'subscription cancellation stays with its flow');
 check(/\bPaused\b/.test(PAUSE_REPLY) && /[\p{Extended_Pictographic}]/u.test(PAUSE_REPLY), 'the pause reply is warm and emoji-anchored');
+
+console.log('--- Test 4d: repeat nudges rotate (v1.25.4) ---');
+check(REPEAT_NUDGES.length >= 2, 'at least two nudges exist');
+check(pickRepeatNudge(0) === REPEAT_NUDGES[0], 'the first repeat uses the first nudge');
+check(pickRepeatNudge(1) === REPEAT_NUDGES[1], 'the second repeat uses a different nudge');
+check(pickRepeatNudge(2) === REPEAT_NUDGES[0], 'the rotation wraps around');
+for (const nudge of REPEAT_NUDGES) {
+  check(/REGISTER/.test(nudge) && /[\p{Extended_Pictographic}]/u.test(nudge), 'every nudge carries the CTA and an emoji anchor');
+}
 
 console.log('--- Test 5: emoji discipline ---');
 check(emojiCount(sakaIntroText({ countryInfo: usa, nextStep: '' })) <= 4, 'US intro stays within the ceiling');

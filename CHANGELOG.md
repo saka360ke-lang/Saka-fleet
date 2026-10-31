@@ -4,6 +4,11 @@ All notable changes to Saka Fleet. Versions mirror the release tracker at the to
 of `SAKA_FLEET_ARCHITECTURE.md`; every entry names the commit it shipped in.
 Generated from the real git history — never from memory.
 
+## [1.25.4] - 2026-10-31
+- **"Tell me about sakafleet" now routes to the Product Q&A intro** (`sakafleet`/`saka fleet` recognised as phrases) instead of falling into a guard.
+- **Repeat nudges rotate** (`pickRepeatNudge`) and reset on progress, so a stuck or confused user never sees the same line twice.
+- Both bugs were observed live on 2026-10-31 09:01–09:02 UTC.
+
 ## [1.25.3] - 2026-10-31
 - **Deploy alerts carry the commit id in the title** (`✅ Saka update is live - v1.25.3 - <hash>`) plus a GitHub commit link, so every release is identifiable at a glance.
 - **This changelog added** and guarded by `test_doc_sync.js` (its newest entry must equal `package.json`).
