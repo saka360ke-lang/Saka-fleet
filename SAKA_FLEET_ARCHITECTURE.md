@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.25.5  
+**Version:** 1.25.6  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.25.6** | Welcome survives the plate guard; "tell me more about…" FAQ routing | §65.10 |
 | **1.25.4** | Flow fixes: "sakafleet" FAQ routing + rotating repeat nudges (no more nudge loop) | §65.9 |
 | **1.25.3** | Commit ID in deploy alerts, generated CHANGELOG.md + doc-sync guard, fresh clean slate | §67.6 |
 | **1.25.2** | Full app audit: exhaustive suite runner, doc-sync guard, package version alignment | §67 |
@@ -2511,6 +2512,12 @@ Stateless suite (in `npm run health`) that fails when:
 - **Product FAQ reaches "sakafleet":** `what_is_saka` now matches `sakafleet` and `saka fleet` as phrases, so *"Tell me about sakafleet"* answers instantly with the warm intro instead of falling through to the AI and being eaten by a guard.
 - **Repeat nudges rotate:** the anti-repeat replacement is no longer one fixed sentence. `pickRepeatNudge()` alternates between "Let's keep moving…" and a warm options line (*REGISTER* / *pricing* / tell me what you drive), and `session.nudgeCount` resets on real progress (quiz start, vehicle registered, restart/menu). A confused user ("???") always receives a next step, never the same line twice.
 - Evidence: 2026-10-31 09:01–09:02 UTC, a prospect asked "Tell me about sakafleet" and "???" three times and received the identical nudge each turn.
+
+### 65.10 The welcome survives the plate guard (v1.25.6)
+- **Bug:** the v1.21.3 zero-vehicle guard replaced any reply that asked for a plate — including the v1.25.0 **sales welcome** (which offers the plate example as one option). Plain "Hi" therefore never showed the welcome; it showed "Let's set up your first asset".
+- **Fix:** the guard is now `shouldReplacePlateAsk()` and is skipped when `firstContact`, when the reply already **is** welcome/intro copy, during an active quiz, for registered users, and for explicit `REGISTER` messages.
+- **FAQ phrase coverage:** `tell me (more) about saka fleet / sakafleet / you` routes to the warm intro card.
+- Evidence: 2026-10-31 12:52–14:40 local (09:52–11:40 UTC) — "Hi" received nudges and "Welcome! Let's get you started" variants instead of the sales welcome.
 
 
 ### 65.10 Newcomer nudge fix (v1.25.5)

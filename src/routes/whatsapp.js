@@ -16,7 +16,7 @@ import {
 } from '../services/vehicles.js';
 import { calculateFuelConsumption } from '../services/analytics.js';
 import { normalizeFillType } from '../services/fuelEconomy.js';
-import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly, shouldReplaceIntroCopy, isRepeatedReply, isStopRequest, PAUSE_REPLY, pickRepeatNudge, pickNewcomerNudge, isFirstTimeMessage } from '../services/greetings.js';
+import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly, shouldReplaceIntroCopy, isRepeatedReply, isStopRequest, PAUSE_REPLY, pickRepeatNudge, pickNewcomerNudge, isFirstTimeMessage, shouldReplacePlateAsk } from '../services/greetings.js';
 import { matchProductQa, buildProductQaReply } from '../services/productQa.js';
 import { resolveSlowAckMs, pickSlowAckLine, shouldSendSlowAck } from '../services/turnAck.js';
 import { buildVehicleSummary, emailVehicleSummary } from '../services/vehicleSummary.js';
@@ -3006,10 +3006,14 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
 
         // v1.21.3 — a zero-vehicle user must never be asked for a plate before
         // the Country Bucket onboarding (asset kind first). Route to REGISTER.
-        if (!hasVehicleRegistered
-          && !session.quiz
-          && asksForPlateDirectly(finalReply)
-          && !/^\s*(?:register|onboard|add)\b/i.test(messageText)) {
+        if (shouldReplacePlateAsk({
+          asksPlate: asksForPlateDirectly(finalReply),
+          hasVehicle: hasVehicleRegistered,
+          hasQuiz: Boolean(session.quiz),
+          firstContact,
+          isWelcome: isIntroCopy(finalReply),
+          explicitRegister: /^\s*(?:register|onboard|add)\b/i.test(messageText)
+        })) {
           finalReply = '🚗 Let\'s set up your first asset.\n\nReply *REGISTER* and I\'ll start with one question: what kind of asset it is (car, truck, bus, motorcycle, machinery, generator…). Then the plate or serial — or send a document and I\'ll read it.';
         }
 

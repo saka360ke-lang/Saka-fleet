@@ -15,7 +15,8 @@ import {
   pickRepeatNudge,
   NEWCOMER_NUDGES,
   pickNewcomerNudge,
-  isFirstTimeMessage
+  isFirstTimeMessage,
+  shouldReplacePlateAsk
 } from './src/services/greetings.js';
 
 /**
@@ -133,6 +134,15 @@ check(pickRepeatNudge(2) === REPEAT_NUDGES[0], 'the rotation wraps around');
 for (const nudge of REPEAT_NUDGES) {
   check(/REGISTER/.test(nudge) && /[\p{Extended_Pictographic}]/u.test(nudge), 'every nudge carries the CTA and an emoji anchor');
 }
+
+console.log('--- Test 4e: the welcome survives the plate guard (v1.25.6) ---');
+check(shouldReplacePlateAsk({ asksPlate: true, hasVehicle: false, hasQuiz: false, firstContact: true, isWelcome: false }) === false, 'a first-contact reply is never replaced');
+check(shouldReplacePlateAsk({ asksPlate: true, hasVehicle: false, hasQuiz: false, firstContact: false, isWelcome: true }) === false, 'welcome copy is never replaced');
+check(shouldReplacePlateAsk({ asksPlate: true, hasVehicle: false, hasQuiz: false, firstContact: false, isWelcome: false }) === true, 'a plain plate ask to a zero-vehicle user is replaced');
+check(shouldReplacePlateAsk({ asksPlate: true, hasVehicle: true, hasQuiz: false, firstContact: false, isWelcome: false }) === false, 'registered users are never re-routed');
+check(shouldReplacePlateAsk({ asksPlate: true, hasVehicle: false, hasQuiz: true, firstContact: false, isWelcome: false }) === false, 'an active quiz owns the plate question');
+check(shouldReplacePlateAsk({ asksPlate: true, hasVehicle: false, hasQuiz: false, firstContact: false, isWelcome: false, explicitRegister: true }) === false, 'an explicit REGISTER is honoured');
+check(shouldReplacePlateAsk({ asksPlate: false, hasVehicle: false, hasQuiz: false, firstContact: false }) === false, 'replies without a plate ask are untouched');
 
 console.log('--- Test 5: emoji discipline ---');
 check(emojiCount(sakaIntroText({ countryInfo: usa, nextStep: '' })) <= 4, 'US intro stays within the ceiling');

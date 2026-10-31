@@ -46,6 +46,8 @@ check(matchProductQa('How many cars can I add?')?.id === 'limits', 'vehicle limi
 check(matchProductQa('Can I sell my car with the passbook?')?.id === 'resale', 'resale questions route to the passbook answer');
 check(matchProductQa('Who are you?')?.id === 'what_is_saka', 'identity questions route to the intro');
 check(matchProductQa('Tell me about sakafleet')?.id === 'what_is_saka', 'the live "Tell me about sakafleet" phrasing routes to the intro');
+check(matchProductQa('Tell me more about saka fleet')?.id === 'what_is_saka', '"tell me MORE about saka fleet" routes to the intro');
+check(matchProductQa('tell me more about you')?.id === 'what_is_saka', '"tell me more about you" routes to the intro');
 check(matchProductQa('What is Saka fleet?')?.id === 'what_is_saka', '"Saka fleet" is recognised as a single phrase');
 check(matchProductQa('I paid 5000 for fuel') === null, 'a fuel statement never triggers the pricing card');
 check(matchProductQa('Logged 40L at 50350 km for KES 5500') === null, 'a log line never triggers product Q&A');

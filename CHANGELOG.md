@@ -4,6 +4,14 @@ All notable changes to Saka Fleet. Versions mirror the release tracker at the to
 of `SAKA_FLEET_ARCHITECTURE.md`; every entry names the commit it shipped in.
 Generated from the real git history — never from memory.
 
+## [1.25.6] - 2026-10-31
+- **The sales welcome now survives the zero-vehicle plate guard** (`shouldReplacePlateAsk`) — plain "Hi" shows the welcome, not "Let's set up your first asset".
+- **"Tell me more about …" routes to the Product Q&A intro** (saka fleet, sakafleet, you).
+
+## [1.25.5] - 2026-10-31 — cf9e51d (shipped via cline.bot)
+- Newcomers never receive the "Let's keep moving" nudge; they get onboarding-oriented copy (`NEWCOMER_NUDGES`).
+- First-time phrases ("this is my first time", "where do I start") trigger the full welcome; first contact clears stale in-memory repeat state.
+
 ## [1.25.4] - 2026-10-31
 - **"Tell me about sakafleet" now routes to the Product Q&A intro** (`sakafleet`/`saka fleet` recognised as phrases) instead of falling into a guard.
 - **Repeat nudges rotate** (`pickRepeatNudge`) and reset on progress, so a stuck or confused user never sees the same line twice.

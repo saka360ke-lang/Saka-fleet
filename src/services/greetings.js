@@ -101,6 +101,20 @@ export function isFirstTimeMessage(text = '') {
   return FIRST_TIME_RE.test(String(text || ''));
 }
 
+/** v1.25.6 — the sales welcome must survive the zero-vehicle plate guard. */
+export function shouldReplacePlateAsk({
+  asksPlate = false,
+  hasVehicle = false,
+  hasQuiz = false,
+  firstContact = false,
+  isWelcome = false,
+  explicitRegister = false
+} = {}) {
+  if (!asksPlate) return false;
+  if (hasVehicle || hasQuiz || firstContact || isWelcome || explicitRegister) return false;
+  return true;
+}
+
 /** v1.25.2 — one-shot pause confirmation (anti-spam opt-out). */
 export const PAUSE_REPLY = '🔇 *Paused.* I\'ll stay quiet — message me anytime and I\'ll pick up where we left off.';
 
