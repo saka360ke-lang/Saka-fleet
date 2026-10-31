@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.28.1  
+**Version:** 1.28.2  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.28.2** | Complete replies: Sonnet thinking disabled by default, `max_tokens` truncation falls back to DeepSeek, retired identity copy blocked, "start again" gets the warm welcome | §71.10 |
 | **1.28.1** | Local-currency-only money answers (no dollar figures anywhere), computed local fleet totals, reply-complaint recovery, "tell me a little about Saka" routing | §71.3, §71.9 |
 | **1.28.0** | Human Saka 2.0: typo-tolerant routing, GREETING LAW + linter, local-currency payment answers, save-my-number nudge, append-only Sentinel learning, generated QA/training docs, scoped multi-part banking | §71 |
 | **1.27.0** | Answer Oracle: facts-only registry (annual prices, features, packages, computed capacity), realtime user-data snapshot, universal question path, farewell + feedback paths, reply linter, personality v2 | §70 |
@@ -2679,3 +2680,10 @@ The model can never ship a corporate hedge, an empty capacity placeholder (`· v
 - **Complaint recovery:** `isIncompleteReplyComplaint()` recognises *"your last reply/brief/answer was incomplete / cut off / cut short"*. The route acknowledges, logs `INCOMPLETE_REPLY_COMPLAINT`, and — if a fleet count is present — delivers the full local-currency answer immediately. It never re-introduces Saka or shows the welcome.
 - **"Tell me a little about Saka"** now routes to the warm intro facts (`what_is_saka`) instead of the generic greeting fallback.
 - **Proof:** product Q&A 142 · greetings 75 · answer oracle 31 · `test_first_message_flow` extended with local-only annual/7-vehicle turns and the complaint turn.
+
+### 71.10 Complete replies — thinking budget & truncation guard (v1.28.2)
+- **Live evidence (2026-10-31 19:09):** Saka's reply ended mid-word at *"…I also remind you before insur"*. `ai_usage_logs` showed `prose_render · anthropic · claude-sonnet-5-5 · completion_tokens 420/420`; the intent call also maxed its 800-token cap. Sonnet 5.5 was spending the shared output budget on hidden `thinking` blocks, so the visible text was chopped.
+- **Fix:** `buildAnthropicPayload()` turns thinking off with the gateway-supported `thinking: { type: 'between_tools' }` (the live gateway rejects `disabled` with HTTP 400; a probe after the fix returned `stop=end_turn`). `ANTHROPIC_THINKING_MODE` overrides the mode, and `ANTHROPIC_THINKING_ENABLED=on` opts into provider-default thinking for deliberate reasoning work. Temperature remains opt-in via `ANTHROPIC_TEMPERATURE_SUPPORTED`.
+- **Truncation can never ship:** `normalizeAnthropicResponse()` surfaces `stop_reason`; `runAnthropicAttempt()` throws on `max_tokens`, so the provider chain falls back to DeepSeek (which always completes) instead of returning half a sentence.
+- **Retired identity blocked:** the regex classifier's canned greeting ("intelligent WhatsApp vehicle & asset management assistant") is gone (`reply_message: null`), `isLegacyWelcomeCopy()` blocks legacy copy at all four route passthroughs, and the core prompt carries an **IDENTITY LAW** (machine's memory, money-saver, paperwork wizard). "Let's start again" now maps to `isFirstTimeMessage()` → the warm sales welcome.
+- **Proof:** new `test_anthropic_payload.js` (13 assertions) in `npm run health` + the Rules Gate; `test_greetings` 81; `test_first_message_flow` adds the restart turn.

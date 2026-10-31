@@ -294,7 +294,7 @@ export const PRODUCT_QA = Object.freeze([
     topics: /\b(why do you need|why (?:my|the) (?:vin|plate|email|otp)|why ask|why is it needed|why do you ask)\b/i,
     facts: () => [
       '🔐 The VIN is the vehicle permanent identity — it locks the passbook to that machine.',
-      '🚗 The plate is how you and your driver recognise the vehicle day to day.',
+      '🚗 The registration number is how you and your driver recognise the vehicle day to day.',
       '✉️ Your email receives the passbook, the reports and the verification codes.',
       '🔢 The OTP proves it is really you before anything sensitive changes.'
     ]

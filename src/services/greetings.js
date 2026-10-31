@@ -95,7 +95,7 @@ export function pickNewcomerNudge(seed = 0) {
   return NEWCOMER_NUDGES[((raw % length) + length) % length];
 }
 
-const FIRST_TIME_RE = /\b(?:first time|new here|i(?:'m| am) new|just (?:signed|joined|registered)|new (?:user|sign ?up)|where do i start|how do i start|get started)\b|^\s*let'?s keep moving to what\b/i;
+const FIRST_TIME_RE = /\b(?:first time|new here|i(?:'m| am) new|just (?:signed|joined|registered)|new (?:user|sign ?up)|where do i start|how do i start|get started|start again|begin again|start fresh|fresh start|let'?s restart)\b|^\s*let'?s keep moving to what\b/i;
 
 /** v1.25.5 — "this is my first time" style messages deserve the welcome, not a nudge. */
 export function isFirstTimeMessage(text = '') {
@@ -120,6 +120,17 @@ export function shouldReplacePlateAsk({
 export const PAUSE_REPLY = '🔇 *Paused.* I\'ll stay quiet — message me anytime and I\'ll pick up where we left off.';
 
 const INCOMPLETE_REPLY_RE = /\b(?:incomplete|cut off|cut short|truncated|not finished|didn'?t finish|did not finish|stopped mid)\b/i;
+
+/**
+ * v1.28.2 — the OLD corporate identity must never reach a user again. Live
+ * evidence 2026-10-31 19:08: the regex classifier's canned greeting shipped
+ * "I'm your intelligent WhatsApp vehicle & asset management assistant".
+ */
+const LEGACY_WELCOME_RE = /\b(?:intelligent whatsapp vehicle|asset management assistant|welcome to saka fleet|your fleet assistant|whatsapp assistant)\b/i;
+
+export function isLegacyWelcomeCopy(text = '') {
+  return LEGACY_WELCOME_RE.test(String(text || ''));
+}
 
 /**
  * v1.28.1 — "Your last reply was incomplete" is a COMPLAINT, not a greeting.
@@ -259,5 +270,6 @@ export default {
   isIntroCopy,
   wantsIntroduction,
   asksForPlateDirectly,
-  isIncompleteReplyComplaint
+  isIncompleteReplyComplaint,
+  isLegacyWelcomeCopy
 };

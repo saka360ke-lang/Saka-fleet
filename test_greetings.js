@@ -17,7 +17,8 @@ import {
   pickNewcomerNudge,
   isFirstTimeMessage,
   shouldReplacePlateAsk,
-  isIncompleteReplyComplaint
+  isIncompleteReplyComplaint,
+  isLegacyWelcomeCopy
 } from './src/services/greetings.js';
 import { sanitizeSakaReply } from './src/services/productQa.js';
 
@@ -164,6 +165,14 @@ check(isIncompleteReplyComplaint('Your last brief on my 7 vehicles was incomplet
 check(isIncompleteReplyComplaint('That answer was cut off') === true, '"cut off" is recognised');
 check(isIncompleteReplyComplaint('Half tank') === false, 'a fuel statement is not a reply complaint');
 check(isIncompleteReplyComplaint('My report is incomplete') === false, 'an unrelated incomplete item is not a reply complaint');
+
+console.log('--- Test 8: legacy identity copy is banned (v1.28.2) ---');
+check(isLegacyWelcomeCopy("👋 Welcome to Saka Fleet! I'm your intelligent WhatsApp vehicle & asset management assistant.") === true, 'the live legacy welcome is detected');
+check(isLegacyWelcomeCopy('I am your fleet assistant for fuel and mileage') === true, '"your fleet assistant" is detected');
+check(isLegacyWelcomeCopy("I'm Saka — your machine's memory, money-saver and paperwork wizard") === false, 'the warm identity passes');
+check(isFirstTimeMessage("Hello. Let's start again 😊") === true, '"start again" requests the welcome');
+check(isFirstTimeMessage('start fresh') === true, '"start fresh" requests the welcome');
+check(isFirstTimeMessage('How much is insurance?') === false, 'a normal question is not a restart');
 
 console.log(`\n🎉 ${passed} greeting & emoji assertions passed.`);
 

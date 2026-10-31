@@ -147,6 +147,9 @@ async function run() {
     'ANSWER LAW',
     // v1.28.0 — no repeated greeting openers mid-conversation.
     'GREETING LAW',
+    // v1.28.2 — the retired corporate identity is banned and truncation is guarded.
+    'IDENTITY LAW',
+    'an intelligent WhatsApp vehicle & asset management assistant',
     'I don\'t have that information to share',
     'As an AI language model',
     'I understand your frustration'

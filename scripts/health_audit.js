@@ -34,7 +34,9 @@ const STATLESS_SUITES = [
   // v1.28.0 — typo tolerance, contact-save nudge and generated knowledge docs.
   'test_text_normalizer.js',
   'test_contact_nudge.js',
-  'test_kb_docs.js'
+  'test_kb_docs.js',
+  // v1.28.2 — Anthropic thinking/truncation guard.
+  'test_anthropic_payload.js'
 ];
 
 const WORKFLOW_DIR = '.github/workflows';

@@ -341,7 +341,9 @@ export const SAKA_TONE_COMPASS = {
     'Let\'s keep moving', 'Happy to help you begin', 'Welcome! Let\'s get you started', 'I\'m still here with you',
     'no need to start over', 'send me your registration plate',
     'I don\'t have that information to share', 'I don\'t have any details to confirm',
-    'As an AI language model', 'I understand your frustration'
+    'As an AI language model', 'I understand your frustration',
+    // v1.28.2 — the retired corporate identity must never resurface.
+    'intelligent WhatsApp vehicle & asset management assistant', 'your fleet assistant'
   ],
   poles: [
     { id: 'anchor', name: 'Precision (Anchor)', law: 'Numbers, dates, currency and units are sacred: use only supplied facts, never approximate database values, and state exactly what was saved.' },

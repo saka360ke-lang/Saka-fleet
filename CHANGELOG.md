@@ -4,7 +4,13 @@ All notable changes to Saka Fleet. Versions mirror the release tracker at the to
 of `SAKA_FLEET_ARCHITECTURE.md`; every entry names the commit it shipped in.
 Generated from the real git history — never from memory.
 
-## [1.28.1] - 2026-10-31
+## [1.28.2] - 2026-10-31
+- **Truncated replies fixed at the root:** Sonnet 5.5 was spending the whole 420-token output budget on hidden thinking blocks, so real replies were cut mid-word ("…I also remind you before insur", live 19:09). Anthropic calls now turn thinking off with the gateway-supported `thinking: { type: 'between_tools' }` by default (the gateway rejects `disabled` with HTTP 400; `ANTHROPIC_THINKING_MODE` overrides it and `ANTHROPIC_THINKING_ENABLED=on` opts into thinking for deliberate reasoning work).
+- **A truncated answer can never ship:** the provider `stop_reason` is surfaced and a `max_tokens` stop throws, so the chain falls back to DeepSeek (which completes the answer) instead of sending half a sentence.
+- **Retired identity copy blocked:** the regex classifier's canned "I'm your intelligent WhatsApp vehicle & asset management assistant" is removed; `isLegacyWelcomeCopy()` guards all four route passthroughs; the core prompt carries an IDENTITY LAW (machine's memory, money-saver, paperwork wizard).
+- **"Let's start again" is a restart:** it now routes to the warm sales welcome instead of a generic greeting.
+- **Proof:** new `test_anthropic_payload.js` 13 assertions (health + Rules Gate) · greetings 81 · flow adds the restart turn.
+
 - **Local currency only:** when a user's currency is not USD, money answers never contain a dollar figure. Local facts are the only money facts passed to the composer, the instruction forbids `$`/`USD`, and `stripUsdFigures()` scrubs any leak (including bracketed `($83.92)` and `USD 9.99`). `formatUsdInLocalCurrency()` now returns "KES 519", not "KES 519 (≈ $3.99)".
 - **Computed local fleet totals:** `buildLocalPricingFacts(..., fleetCount)` answers "What if I have 7 vehicles?" with `For 7 vehicles: Fleet Command ≈ KES 4,676/month (5 included + 2 extra slots)` — the live pure-USD card is gone.
 - **Reply-complaint recovery:** "Your last reply was incomplete" is now recognised as a complaint, acknowledged, logged (`INCOMPLETE_REPLY_COMPLAINT`), and answered — with the full local-currency fleet answer when a count is present. It never re-introduces Saka or shows the welcome.

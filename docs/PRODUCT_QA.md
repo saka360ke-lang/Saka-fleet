@@ -1,6 +1,6 @@
 # Saka Fleet — Product QA (generated)
 
-Generated from code at version **1.28.1** — do not edit by hand. Run `npm run docs:gen`.
+Generated from code at version **1.28.2** — do not edit by hand. Run `npm run docs:gen`.
 
 Registry: `src/services/productQa.js` · 19 topics · prices from `src/services/subscriptionTiers.js`
 
@@ -107,7 +107,7 @@ They are added to your base plan and can be adjusted when your fleet changes.
 ## why_details
 
 🔐 The VIN is the vehicle permanent identity — it locks the passbook to that machine.
-🚗 The plate is how you and your driver recognise the vehicle day to day.
+🚗 The registration number is how you and your driver recognise the vehicle day to day.
 ✉️ Your email receives the passbook, the reports and the verification codes.
 🔢 The OTP proves it is really you before anything sensitive changes.
 

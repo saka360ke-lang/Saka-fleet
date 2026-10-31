@@ -170,6 +170,11 @@ async function run() {
     check(!/Karibu|I(?:'m| am) Saka|what do you drive/i.test(complaint), 'a complaint is never answered with the welcome');
     check(/sorry|apolog|cut short|redo|again|full answer|complete/i.test(complaint), 'a complaint gets an acknowledgement and a recovery step');
 
+    console.log('\n--- Test 4g: restart never returns legacy identity copy (v1.28.2) ---');
+    const restart = await say("Hello. Let's start again 😊");
+    check(/machine's memory|REGISTER/i.test(restart), 'a restart gets the warm sales welcome');
+    check(!/intelligent WhatsApp vehicle|asset management assistant|your fleet assistant/i.test(restart), 'the legacy identity copy never ships');
+
     console.log(`\n🎉 ${passed} first-message flow assertions passed.`);
   } finally {
     await cleanup();

@@ -397,15 +397,66 @@ export function normalizeAnthropicResponse(payload = {}) {
     .trim();
   return {
     text,
+    // v1.28.2 — surface the provider stop reason so a truncated answer can never
+    // be shipped as if it were complete (live: "…before insur" at 19:09).
+    stopReason: payload?.stop_reason || null,
     promptTokens: Number.isFinite(payload?.usage?.input_tokens) ? payload.usage.input_tokens : null,
     completionTokens: Number.isFinite(payload?.usage?.output_tokens) ? payload.usage.output_tokens : null
   };
 }
 
+/** True when the provider stopped because it hit the output cap. */
+export function isTruncatedStop(stopReason = '') {
+  return String(stopReason || '').toLowerCase() === 'max_tokens';
+}
+
+/**
+ * v1.28.2 — build the Anthropic Messages payload.
+ *
+ * Extended thinking is turned OFF by default. On Sonnet 5.5 the hidden thinking
+ * blocks consume the same `max_tokens` budget as the visible text, which cut
+ * real WhatsApp replies mid-word (live evidence 2026-10-31 19:09:
+ * prose_render → claude-sonnet-5-5, completion_tokens 420/420, text ended at
+ * "…before insur").
+ *
+ * The live gateway rejects `{ type: 'disabled' }` with HTTP 400 and requires
+ * `{ type: 'between_tools' }`; that is the default here. Override the mode with
+ * ANTHROPIC_THINKING_MODE for a different gateway, or opt into provider-default
+ * thinking with ANTHROPIC_THINKING_ENABLED=on (deliberate reasoning work only).
+ */
+export function buildAnthropicPayload({
+  model,
+  system = '',
+  messages = [],
+  jsonMode = false,
+  maxTokens = 2048,
+  temperature = 0.4
+} = {}) {
+  const translated = toAnthropicMessages(system, messages, jsonMode);
+  const payload = {
+    model,
+    system: translated.system || undefined,
+    messages: translated.messages,
+    max_tokens: maxTokens
+  };
+  const thinkingEnabled = TRUTHY.has(String(process.env.ANTHROPIC_THINKING_ENABLED || 'off').toLowerCase());
+  if (!thinkingEnabled) {
+    payload.thinking = { type: String(process.env.ANTHROPIC_THINKING_MODE || 'between_tools').trim() || 'between_tools' };
+  }
+  // Newer Claude models (Sonnet 5.5+) mark `temperature` as deprecated and
+  // return HTTP 400 when it is sent. Omit it by default; legacy deployments
+  // that still need it can opt in explicitly.
+  if (TRUTHY.has(String(process.env.ANTHROPIC_TEMPERATURE_SUPPORTED || 'off').toLowerCase())) {
+    payload.temperature = temperature;
+  }
+  return payload;
+}
+
 /**
  * Call Anthropic's Messages API. Throws on a missing key, non-2xx status,
- * timeout (AbortSignal) or network failure — chatCompletion() then falls back
- * to DeepSeek, preserving the never-throws contract for callers.
+ * timeout (AbortSignal), network failure or a truncated (max_tokens) answer —
+ * chatCompletion() then falls back to DeepSeek, preserving the never-throws
+ * contract for callers.
  */
 export async function runAnthropicAttempt({
   apiKey = process.env.ANTHROPIC_API_KEY,
@@ -420,19 +471,7 @@ export async function runAnthropicAttempt({
 } = {}) {
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY missing in environment');
 
-  const translated = toAnthropicMessages(system, messages, jsonMode);
-  const payload = {
-    model,
-    system: translated.system || undefined,
-    messages: translated.messages,
-    max_tokens: maxTokens
-  };
-  // Newer Claude models (Sonnet 5.5+) mark `temperature` as deprecated and
-  // return HTTP 400 when it is sent. Omit it by default; legacy deployments
-  // that still need it can opt in explicitly.
-  if (TRUTHY.has(String(process.env.ANTHROPIC_TEMPERATURE_SUPPORTED || 'off').toLowerCase())) {
-    payload.temperature = temperature;
-  }
+  const payload = buildAnthropicPayload({ model, system, messages, jsonMode, maxTokens, temperature });
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   const combinedSignal = externalSignal && AbortSignal.any
     ? AbortSignal.any([timeoutSignal, externalSignal])
@@ -453,7 +492,11 @@ export async function runAnthropicAttempt({
     throw new Error(`Anthropic API ${response.status}: ${body.slice(0, 200)}`);
   }
 
-  return normalizeAnthropicResponse(await response.json());
+  const normalized = normalizeAnthropicResponse(await response.json());
+  if (isTruncatedStop(normalized.stopReason)) {
+    throw new Error('Anthropic response truncated at max_tokens — falling back to the next provider.');
+  }
+  return normalized;
 }
 
 /* ------------------------------------------------------------------ */

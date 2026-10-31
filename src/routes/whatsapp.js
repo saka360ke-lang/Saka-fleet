@@ -16,7 +16,7 @@ import {
 } from '../services/vehicles.js';
 import { calculateFuelConsumption } from '../services/analytics.js';
 import { normalizeFillType } from '../services/fuelEconomy.js';
-import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly, shouldReplaceIntroCopy, isRepeatedReply, isStopRequest, PAUSE_REPLY, pickRepeatNudge, pickNewcomerNudge, isFirstTimeMessage, shouldReplacePlateAsk, isIncompleteReplyComplaint } from '../services/greetings.js';
+import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly, shouldReplaceIntroCopy, isRepeatedReply, isStopRequest, PAUSE_REPLY, pickRepeatNudge, pickNewcomerNudge, isFirstTimeMessage, shouldReplacePlateAsk, isIncompleteReplyComplaint, isLegacyWelcomeCopy } from '../services/greetings.js';
 import { matchProductQa, buildProductQaReply, buildProductFactsContext, buildLocalPricingFacts, stripUsdFigures, recommendTierForFleet, sanitizeSakaReply } from '../services/productQa.js';
 import { shouldSuggestContactSave, isLostChatMessage, buildContactSaveFacts, markContactSaveSuggested } from '../services/contactNudge.js';
 import { buildUserContextSnapshot } from '../services/userContextSnapshot.js';
@@ -1131,9 +1131,10 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               verifiedFacts: fallbackAnswer,
               localPricingFacts: localPricingFacts ? localPricingFacts.join('\n') : 'None supplied — use the verified facts above.',
               userDataFacts: userFacts || 'No account data on file yet.',
+              accountVehicles: existingVehicles.length,
               instruction: localPricingFacts
-                ? 'Answer the user\'s question in 1-3 short conversational lines using ONLY the verified facts. Quote ONLY the local-currency figures supplied in localPricingFacts. NEVER mention $, USD or any dollar amount, not even in brackets. For features or package questions, give the concrete list from the facts (up to 4 short lines). If the user gave a fleet size, use the computed local total exactly. Warm and human, at most one emoji per line. End with ONE gentle next step. Do not paste a menu, do not repeat the question back, never ask for the plate, and never say you do not have information — the facts above are complete.'
-                : 'Answer the user\'s question in 1-3 short conversational lines using ONLY the verified facts. For features or package questions, give the concrete list from the facts (up to 4 short lines). If the user gave a fleet size, use the computed recommendation exactly. Warm and human, at most one emoji per line. End with ONE gentle next step. Do not paste a menu, do not repeat the question back, never ask for the plate, and never say you do not have information — the facts above are complete.'
+                ? 'Answer the user\'s question in 1-3 short conversational lines using ONLY the verified facts. Quote ONLY the local-currency figures supplied in localPricingFacts. NEVER mention $, USD or any dollar amount, not even in brackets. Never use the word "plate" — say "registration number". If accountVehicles is 0, end by inviting REGISTER — never ask the user to send a registration number directly. For features or package questions, give the concrete list from the facts (up to 4 short lines). If the user gave a fleet size, use the computed local total exactly. Warm and human, at most one emoji per line. End with ONE gentle next step. Do not paste a menu, do not repeat the question back, and never say you do not have information — the facts above are complete.'
+                : 'Answer the user\'s question in 1-3 short conversational lines using ONLY the verified facts. Never use the word "plate" — say "registration number". If accountVehicles is 0, end by inviting REGISTER — never ask the user to send a registration number directly. For features or package questions, give the concrete list from the facts (up to 4 short lines). If the user gave a fleet size, use the computed recommendation exactly. Warm and human, at most one emoji per line. End with ONE gentle next step. Do not paste a menu, do not repeat the question back, and never say you do not have information — the facts above are complete.'
             },
             language: targetLang,
             countryInfo,
@@ -2471,7 +2472,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                 : `Could not retrieve the fleet summary right now.`;
             }
             else if (activeIntent === 'GREETING') {
-              customReply = aiResult.reply_message && !aiResult.reply_message.includes('I am your Saka Fleet WhatsApp assistant')
+              customReply = aiResult.reply_message && !aiResult.reply_message.includes('I am your Saka Fleet WhatsApp assistant') && !isLegacyWelcomeCopy(aiResult.reply_message)
                 ? aiResult.reply_message
                 : await composeMessage({
                     purpose: 'greeting',
@@ -2898,7 +2899,7 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
               });
             }
             else {
-              if (aiResult.reply_message && !aiResult.reply_message.includes('I am your Saka Fleet WhatsApp assistant. How can I help with your vehicle')) {
+              if (aiResult.reply_message && !aiResult.reply_message.includes('I am your Saka Fleet WhatsApp assistant. How can I help with your vehicle') && !isLegacyWelcomeCopy(aiResult.reply_message)) {
                 customReply = aiResult.reply_message;
               } else {
                 customReply = await composeMessage({
@@ -3108,7 +3109,7 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
               customReply = sakaIntroText({ countryInfo, profile: profileData });
               session.sakaIntroduced = true;
             } else {
-              customReply = aiResult.reply_message && !aiResult.reply_message.includes('I am your Saka Fleet WhatsApp assistant')
+              customReply = aiResult.reply_message && !aiResult.reply_message.includes('I am your Saka Fleet WhatsApp assistant') && !isLegacyWelcomeCopy(aiResult.reply_message)
                 ? aiResult.reply_message
                 : await composeMessage({
                     purpose: 'first_time_welcome',
@@ -3127,7 +3128,7 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
             }
           }
           // 4. General informational questions answered by Saka AI
-          else if (aiResult.reply_message && !aiResult.reply_message.includes('I am your Saka Fleet WhatsApp assistant. How can I help with your vehicle')) {
+          else if (aiResult.reply_message && !aiResult.reply_message.includes('I am your Saka Fleet WhatsApp assistant. How can I help with your vehicle') && !isLegacyWelcomeCopy(aiResult.reply_message)) {
             customReply = aiResult.reply_message;
           }
           // 5. Default: AI-rendered single next step

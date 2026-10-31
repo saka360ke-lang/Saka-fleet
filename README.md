@@ -113,6 +113,11 @@ at most 3 emojis per message (4 on the welcome message).
 - **Generated knowledge:** `docs/PRODUCT_QA.md` and `docs/SAKA_TRAINING.md` are
   generated from the live registries (`npm run docs:gen`) and drift-guarded in
   the Rules Gate.
+- **Complete replies (v1.28.2):** Sonnet extended thinking is disabled by
+  default, and a `max_tokens` stop falls back to DeepSeek — a cut-off sentence
+  can never be sent. The retired "intelligent WhatsApp vehicle & asset
+  management assistant" identity is blocked, and "let's start again" gets the
+  warm welcome.
 
 ## Receipt intelligence (v1.19.0)
 Send a photo of a **fuel receipt, logbook, insurance policy or driver licence**:

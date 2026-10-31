@@ -38,6 +38,7 @@ jobs:
           node test_text_normalizer.js
           node test_contact_nudge.js
           node test_kb_docs.js
+          node test_anthropic_payload.js
 
       - name: Notify failure
         if: failure()
