@@ -433,10 +433,20 @@ export async function checkoutForTier({
 
     if (owner.id && supabase) {
       try {
-        await supabase.from('trial_sessions').update({
-          checkout_started_at: new Date().toISOString(),
-          coupon_code: coupon?.valid ? coupon.code : null
-        }).eq('owner_id', owner.id).in('status', ['ACTIVE', 'EXTENDED']);
+        // v1.28.8 — keep the FIRST checkout-open time for abandonment detection;
+        // repeat link generation (nudges) must not reset the ladder clock.
+        const { data: trialRow } = await supabase
+          .from('trial_sessions')
+          .select('id, checkout_started_at')
+          .eq('owner_id', owner.id)
+          .in('status', ['ACTIVE', 'EXTENDED'])
+          .maybeSingle();
+        const existingStarted = trialRow?.checkout_started_at ? Date.parse(trialRow.checkout_started_at) : NaN;
+        const patch = { coupon_code: coupon?.valid ? coupon.code : null };
+        if (!Number.isFinite(existingStarted) || Date.now() - existingStarted > 60 * 60 * 1000) {
+          patch.checkout_started_at = new Date().toISOString();
+        }
+        await supabase.from('trial_sessions').update(patch).eq('owner_id', owner.id).in('status', ['ACTIVE', 'EXTENDED']);
       } catch { /* fail-soft */ }
     }
 

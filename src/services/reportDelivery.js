@@ -264,7 +264,7 @@ export async function buildReportForLane({
   return { ...report, type: reportType, access };
 }
 
-/** Render, upload and email the branded PDF (best effort). */
+/** Render, upload and email the branded PDF (best effort, never throws). */
 export async function deliverReportPdf({ supabase, report, people = {}, ownerEmail = null, plateLabel = 'Fleet' } = {}) {
   if (!supabase || !report?.data) return { ok: false, error: 'No report data' };
   try {
@@ -275,16 +275,20 @@ export async function deliverReportPdf({ supabase, report, people = {}, ownerEma
       drivers: people.drivers || []
     });
     let url = null;
+    let uploadError = null;
     try {
       url = await uploadReportToSupabase(supabase, pdfBuffer, `Saka_${report.type || 'report'}_${plateLabel}`.replace(/\s+/g, '_'));
-    } catch { url = null; }
+    } catch (err) {
+      uploadError = err.message;
+      url = null;
+    }
     let emailed = false;
     if (ownerEmail) {
       try {
         emailed = await sendReportByEmail(ownerEmail, plateLabel, pdfBuffer);
       } catch { emailed = false; }
     }
-    return { ok: true, url, emailed, bytes: pdfBuffer.length };
+    return { ok: true, url, emailed, bytes: pdfBuffer.length, uploadError };
   } catch (err) {
     return { ok: false, error: err.message };
   }

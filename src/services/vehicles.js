@@ -226,6 +226,14 @@ export async function ensureVehicleTableColumns(providedSupabase = null) {
             EXECUTE 'CREATE INDEX IF NOT EXISTS idx_reminders_due_active ON public.reminders(status, due_date)';
             EXECUTE 'CREATE INDEX IF NOT EXISTS idx_reminders_subject ON public.reminders(subject_type, subject_id)';
           END IF;
+          IF to_regclass('public.trial_sessions') IS NOT NULL THEN
+            EXECUTE 'ALTER TABLE public.trial_sessions ADD COLUMN IF NOT EXISTS checkout_reminder_count integer DEFAULT 0';
+            EXECUTE 'ALTER TABLE public.trial_sessions ADD COLUMN IF NOT EXISTS last_checkout_reminder_at timestamp with time zone';
+          END IF;
+          IF to_regclass('public.profiles') IS NOT NULL THEN
+            EXECUTE 'ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS renewal_nudge_count integer DEFAULT 0';
+            EXECUTE 'ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS last_renewal_nudge_at timestamp with time zone';
+          END IF;
           IF to_regclass('public.expiry_notification_log') IS NULL THEN
             EXECUTE 'CREATE TABLE public.expiry_notification_log (
               id uuid DEFAULT gen_random_uuid() PRIMARY KEY,

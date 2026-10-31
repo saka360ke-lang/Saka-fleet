@@ -98,28 +98,46 @@ export function generateFleetReport(reportData = {}) {
 
 /** Uploads PDF buffer to Supabase Storage and returns a public URL. */
 export async function uploadReportToSupabase(supabase, pdfBuffer, plateNumber) {
+  const BUCKET = 'fleet-reports';
   const fileName = `report-${String(plateNumber || 'fleet').replace(/\s+/g, '_')}-${Date.now()}.pdf`;
 
-  const { data, error } = await supabase.storage
-    .from('fleet-reports')
-    .upload(fileName, pdfBuffer, {
-      contentType: 'application/pdf',
-      upsert: true
-    });
+  const doUpload = () => supabase.storage.from(BUCKET).upload(fileName, pdfBuffer, {
+    contentType: 'application/pdf',
+    upsert: true
+  });
+
+  let { data, error } = await doUpload();
+
+  // v1.28.7 — self-heal a missing/private bucket once, then retry. A missing
+  // bucket used to fail every report silently (the user never got the file).
+  if (error) {
+    try {
+      await supabase.storage.createBucket(BUCKET, {
+        public: true,
+        fileSizeLimit: 10 * 1024 * 1024,
+        allowedMimeTypes: ['application/pdf']
+      });
+    } catch { /* already exists or storage unavailable */ }
+    ({ data, error } = await doUpload());
+  }
 
   if (error) {
     throw new Error(`Supabase Storage Upload Failed: ${error.message}`);
   }
 
   const { data: publicUrlData } = supabase.storage
-    .from('fleet-reports')
+    .from(BUCKET)
     .getPublicUrl(data.path);
 
-  if (!publicUrlData || !publicUrlData.publicUrl) {
-    throw new Error('Failed to generate public URL for report.');
-  }
+  if (publicUrlData && publicUrlData.publicUrl) return publicUrlData.publicUrl;
 
-  return publicUrlData.publicUrl;
+  // Last resort: a signed link (works even when the bucket is not public).
+  try {
+    const { data: signed } = await supabase.storage.from(BUCKET).createSignedUrl(data.path, 60 * 60 * 24);
+    if (signed?.signedUrl) return signed.signedUrl;
+  } catch { /* fall through */ }
+
+  throw new Error('Failed to generate a link for the report.');
 }
 
 export default {

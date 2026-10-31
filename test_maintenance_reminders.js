@@ -129,8 +129,10 @@ async function run() {
   check(parseOperatingHours('log 1250 engine hours') === 1250, 'Operating hours parse before the unit ("1250 engine hours")');
   check(parseOperatingHours('hours now 36.5') === 36.5, 'Operating hours parse after the unit ("hours now 36.5")');
   check(parseOperatingHours('skip') === null, 'Non-numeric hours input is rejected');
-  check(describeThresholdSpec(hoursSpec) === '36 operating hours', 'Threshold description uses operating hours');
-  check(describeThresholdSpec(miSpec) === '3,000 mi', 'Threshold description uses the user unit (miles)');
+  check(describeThresholdSpec(hoursSpec) === 'in 36 operating hours', 'Relative threshold reads "in N operating hours"');
+  check(describeThresholdSpec(miSpec) === 'in 3,000 mi', 'Relative distance reads "in N <user unit>"');
+  check(describeThresholdSpec({ ...miSpec, relative: false }) === 'at 3,000 mi', 'Absolute odometer target reads "at N <user unit>"');
+  check(describeThresholdSpec({ kind: 'distance', value: 370000, displayUnit: 'km', relative: false }) === 'at 370,000 km', 'Absolute mileage reminder states the odometer reading');
 
   console.log('\n--- Test 2: structured reminder creation with explicit remaining tracking ---');
   const mock1 = createMockSupabase();

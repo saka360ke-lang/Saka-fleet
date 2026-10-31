@@ -4,6 +4,7 @@ import { generateText, parseJsonSafely } from '../services/aiClient.js';
 import { composeMessage } from '../services/conversationEngine.js';
 import { getCurrentQuizField } from '../services/quizEngine.js';
 import { detectCountryFromPhone } from '../services/globalization.js';
+import { deriveCountryCommStyles, upsertCountryCommStyles } from '../services/countryCommStyles.js';
 import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
 import { buildIncidentSignature, isIncidentSilenced } from '../services/incidents.js';
 import { SAKA_TONE_COMPASS } from '../services/flowKnowledge.js';
@@ -30,7 +31,8 @@ export async function ensureSentinelTables(providedSupabase) {
     'conversation_analytics',
     'chat_transcripts',
     'chat_friction_logs',
-    'saka_dynamic_rules'
+    'saka_dynamic_rules',
+    'country_comm_styles'
   ];
   const statusMap = {};
 
@@ -97,6 +99,17 @@ export async function ensureSentinelTables(providedSupabase) {
         );
         CREATE INDEX IF NOT EXISTS idx_friction_logs_phone ON public.chat_friction_logs(user_phone, detected_at DESC);
         CREATE INDEX IF NOT EXISTS idx_dynamic_rules_active ON public.saka_dynamic_rules(is_active);
+        CREATE TABLE IF NOT EXISTS public.country_comm_styles (
+            id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+            country_code text NOT NULL UNIQUE,
+            message_count integer DEFAULT 0,
+            top_greeting text,
+            emoji_rate numeric DEFAULT 0,
+            short_reply_rate numeric DEFAULT 0,
+            formal_rate numeric DEFAULT 0,
+            notes text,
+            updated_at timestamp with time zone DEFAULT now()
+        );
       `;
 
       await runSql(sql, { label: 'ensureSentinelTables' });
@@ -418,6 +431,18 @@ Return strictly a single valid JSON object matching this schema (no markdown ast
 
   if (analyticsErr) {
     console.error('[Sentinel ConversationRefinement] Failed to insert conversation_analytics:', analyticsErr.message);
+  }
+
+  // 5. v1.28.8 — derive per-country communication styles from the same
+  // transcripts (deterministic, zero AI tokens) so prompts mirror local tone.
+  try {
+    const styles = deriveCountryCommStyles(transcripts || []);
+    if (styles.length) {
+      const saved = await upsertCountryCommStyles({ supabase, styles });
+      if (!saved.ok) console.warn('[Sentinel ConversationRefinement] Country styles not persisted.');
+    }
+  } catch (styleErr) {
+    console.warn('[Sentinel ConversationRefinement] Country style derivation skipped:', styleErr.message);
   }
 
   return {

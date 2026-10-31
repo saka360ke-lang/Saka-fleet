@@ -77,6 +77,7 @@ import {
 } from '../services/trialEngine.js';
 import { normalizeTierKey, getTierLabel, getAnnualDiscountPercent } from '../services/subscriptionTiers.js';
 import { detectCountryFromPhone as detectCountryGlobal, resolveUserTimezone, resolveTimezoneFromCountry } from '../services/globalization.js';
+import { getCountryCommStyleLine } from '../services/countryCommStyles.js';
 import { applyOdometerReading, applyOperatingHours } from '../services/maintenanceReminders.js';
 import { handleQuizTurn, detectQuizStart, shouldPauseQuizForChat, getCurrentQuizField, detectFlowSwitch, getFlowDefinition, looksLikeReportRequest } from '../services/quizEngine.js';
 import { renderActionDiscovery, composeMessage } from '../services/conversationEngine.js';
@@ -906,9 +907,16 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           || 'vehicle'
         );
         const bucketCountryCode = profileData?.country_code || countryInfo.country_code;
-        const jurisdictionContext = buildJurisdictionContext(
+        let jurisdictionContext = buildJurisdictionContext(
           getCountryBucket({ countryCode: bucketCountryCode, assetKind: bucketAssetKind })
         );
+        // v1.28.8 — country communication style (cached, deterministic) rides
+        // with the jurisdiction context so Saka mirrors local register.
+        const commStyleLine = await getCountryCommStyleLine({
+          supabase: supabaseClient,
+          countryCode: bucketCountryCode
+        }).catch(() => '');
+        if (commStyleLine) jurisdictionContext = `${jurisdictionContext}\n${commStyleLine}`;
 
         // --- Receipt intelligence (v1.19.0): dedupe + vault ---
         let duplicateReceipt = null;
@@ -3210,9 +3218,10 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
           session.sakaIntroduced = true;
         }
 
-        // v1.24.0 - upload hints are OFF by default (OCR paused); opt in via UPLOAD_HINTS_ENABLED=on.
-        // The hint is shown once per field so it never nags.
-        if (/^(?:on|true|1)$/i.test(String(process.env.UPLOAD_HINTS_ENABLED || 'off')) && session.quiz && session.quiz.phase === 'question') {
+        // v1.28.8 - upload hints follow the OCR unpause: ON by default; opt out
+        // with UPLOAD_HINTS_ENABLED=off. The hint is shown once per field so it
+        // never nags.
+        if (/^(?:on|true|1)$/i.test(String(process.env.UPLOAD_HINTS_ENABLED || 'on')) && session.quiz && session.quiz.phase === 'question') {
           const pendingField = getCurrentQuizField(session.quiz, {
             countryInfo,
             vehicles: existingVehicles,

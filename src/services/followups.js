@@ -62,7 +62,7 @@ export async function enqueueFollowUp({ supabase, phone, kind, payload = {}, sch
   }
 }
 
-/** Build + send a fleet report for a queued job. */
+/** Build + send a fleet report for a queued job (never throws, never silent). */
 async function runFleetReport(payload = {}) {
   const countryInfo = payload.countryCode
     ? {
@@ -82,23 +82,28 @@ async function runFleetReport(payload = {}) {
     unit_system: payload.unitSystem || 'metric',
     timezone: payload.timeZone || null
   };
-  const report = await buildReportForLane({
-    supabase: payload.supabase || null,
-    reportType,
-    ownerId: payload.ownerId || null,
-    driverId: payload.driverId || null,
-    profile: accessProfile,
-    countryInfo,
-    metricIds: Array.isArray(payload.metricIds) ? payload.metricIds : [],
-    range: payload.range || 'this_month',
-    grants: Array.isArray(payload.grants) ? payload.grants : [],
-    roles: Array.isArray(payload.roles) ? payload.roles : []
-  });
+  let report = null;
+  try {
+    report = await buildReportForLane({
+      supabase: payload.supabase || null,
+      reportType,
+      ownerId: payload.ownerId || null,
+      driverId: payload.driverId || null,
+      profile: accessProfile,
+      countryInfo,
+      metricIds: Array.isArray(payload.metricIds) ? payload.metricIds : [],
+      range: payload.range || 'this_month',
+      grants: Array.isArray(payload.grants) ? payload.grants : [],
+      roles: Array.isArray(payload.roles) ? payload.roles : []
+    });
+  } catch (err) {
+    console.warn('[FollowUp] Report build failed:', err.message);
+  }
   if (!report?.ok) {
     return report?.text || '📊 I could not build that report right now. Please try again in a moment.';
   }
 
-  // Saka Pro PDF: render → upload → email (best effort, never blocks the text).
+  // PDF: render → upload → email (best effort, never blocks the text).
   let pdfNote = '';
   try {
     const people = await loadReportPeople({
@@ -114,9 +119,18 @@ async function runFleetReport(payload = {}) {
       ownerEmail: payload.email || people.owner?.email || null,
       plateLabel: payload.plate || people.drivers[0]?.plate || 'Fleet'
     });
-    if (delivery.ok && delivery.url) pdfNote += `\n\n📄 *PDF report:* ${delivery.url}`;
-    if (delivery.ok && delivery.emailed) pdfNote += `\n📧 Sent to *${payload.email || people.owner?.email}*`;
-  } catch { pdfNote = ''; }
+    if (delivery.ok && delivery.url) {
+      pdfNote += `\n\n📄 *PDF report:* ${delivery.url}`;
+      if (delivery.emailed) pdfNote += `\n📧 Sent to *${payload.email || people.owner?.email}*`;
+    } else if (delivery.ok) {
+      // The summary already went out; never leave the user with an empty link.
+      pdfNote += '\n\n📄 The PDF could not be linked this time — the summary above is complete. Reply *"report pdf"* to retry the file.';
+    } else {
+      pdfNote += '\n\n📄 The PDF hit a snag while rendering — the summary above is complete. Reply *"report pdf"* to retry the file.';
+    }
+  } catch {
+    pdfNote += '\n\n📄 The PDF could not be generated this time — the summary above is complete. Reply *"report pdf"* to retry the file.';
+  }
 
   if (payload.profileId) {
     try {
@@ -156,22 +170,37 @@ export async function processPendingFollowUps({ supabase, sendFn, now = new Date
 
   for (const job of jobs) {
     stats.processed += 1;
+    let text = null;
+    let runError = null;
     try {
-      let text = null;
       if (job.kind === FOLLOWUP_KINDS.FLEET_REPORT) {
         text = await runFleetReport({ ...(job.payload || {}), supabase });
       } else if (job.kind === FOLLOWUP_KINDS.DRIVER_UNASSIGNED) {
         text = driverUnassignedText(job.payload || {});
       }
-      if (!text) {
-        await supabase.from('pending_followups').update({
-          status: 'failed',
-          processed_at: new Date().toISOString(),
-          error: `unknown or empty follow-up: ${job.kind}`
-        }).eq('id', job.id);
-        stats.failed += 1;
-        continue;
+    } catch (err) {
+      runError = err.message;
+    }
+
+    // v1.28.7 — the user must ALWAYS receive something. A failed background job
+    // used to die silently (the "building your report…" ACK was the last thing
+    // they ever saw), so a report job now sends a deterministic recovery line.
+    if (!text) {
+      if (job.kind === FOLLOWUP_KINDS.FLEET_REPORT) {
+        try {
+          await sendFn(job.phone, '📊 Your report hit a snag while building — nothing was lost. Reply *"report"* and I will run it again right away.');
+        } catch { /* best effort */ }
       }
+      await supabase.from('pending_followups').update({
+        status: 'failed',
+        processed_at: new Date().toISOString(),
+        error: runError || `unknown or empty follow-up: ${job.kind}`
+      }).eq('id', job.id);
+      stats.failed += 1;
+      continue;
+    }
+
+    try {
       await sendFn(job.phone, text);
       await supabase.from('pending_followups').update({
         status: 'sent',

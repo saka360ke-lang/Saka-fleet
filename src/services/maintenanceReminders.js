@@ -285,11 +285,13 @@ export function parseOperatingHours(text) {
   return null;
 }
 
-/** Human-readable description of a parsed threshold spec. */
-export function describeThresholdSpec(spec) {
+/** Human-readable description of a parsed threshold spec (v1.28.7). */
+export function describeThresholdSpec(spec, { relative = null } = {}) {
   if (!spec || spec.ok === false) return '';
-  if (spec.kind === 'hours') return `${formatNumber(spec.value)} operating hours`;
-  return `${formatNumber(spec.value)} ${spec.displayUnit || 'km'}`;
+  const isRelative = relative === null ? Boolean(spec.relative) : Boolean(relative);
+  const prefix = isRelative ? 'in ' : 'at ';
+  if (spec.kind === 'hours') return `${prefix}${formatNumber(spec.value)} operating hours`;
+  return `${prefix}${formatNumber(spec.value)} ${spec.displayUnit || 'km'}`;
 }
 
 /**

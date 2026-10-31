@@ -218,18 +218,22 @@ async function run() {
   const duplicateReply = formatDuplicateReceiptReply({ vendor: 'SHELL KAREN', amount: 5500, currency: 'KES', created_at: '2026-10-12T08:00:00Z' });
   check(duplicateReply.includes('already read') && duplicateReply.includes('receipts'), 'Duplicate receipt reply is warm and offers history');
 
-  console.log('\n--- Test 10: OCR kill switch & ack-first (v1.22.0) ---');
-  delete process.env.OCR_ENABLED;
-  assert(isOcrEnabled() === false, 'Vision OCR is paused by default');
+  console.log('\n--- Test 10: OCR switch & ack-first (v1.28.8) ---');
+  process.env.OCR_ENABLED = 'off';
+  assert(isOcrEnabled() === false, 'OCR_ENABLED=off pauses Vision photo OCR');
   let pausedFetch = false;
   global.fetch = async () => { pausedFetch = true; return jsonResponse({}); };
   const paused = await ocrWhatsAppMedia({ mediaId: 'paused-1', mimeType: 'image/jpeg', token: 't' });
   assert(paused.skipped === true && /paused/i.test(paused.error), 'paused photo OCR never downloads or calls Vision');
   assert(pausedFetch === false, 'no network call happens while OCR is paused');
   process.env.OCR_ENABLED = 'on';
-  assert(isOcrEnabled() === false, 'v1.23.1: the env knob can no longer re-enable Vision');
-  const stillPaused = await ocrWhatsAppMedia({ mediaId: 'paused-2', mimeType: 'image/jpeg', token: 't' });
-  assert(stillPaused.skipped === true, 'photo flow stays blocked even with OCR_ENABLED=on');
+  assert(isOcrEnabled() === true, 'OCR_ENABLED=on re-enables Vision (v1.28.8 unpause)');
+  process.env.OCR_ENABLED = 'true';
+  assert(isOcrEnabled() === true, 'OCR_ENABLED=true is accepted');
+  process.env.OCR_ENABLED = '0';
+  assert(isOcrEnabled() === false, 'OCR_ENABLED=0 pauses');
+  delete process.env.OCR_ENABLED;
+  assert(isOcrEnabled() === true, 'Vision OCR defaults ON while testing');
   assert(buildMediaAckText({ mimeType: 'application/pdf' }).includes('PDF'), 'PDF ack copy names the PDF');
   assert(buildMediaAckText({ mimeType: 'image/jpeg' }).includes('photo'), 'photo ack copy names the photo');
   delete process.env.OCR_ENABLED;

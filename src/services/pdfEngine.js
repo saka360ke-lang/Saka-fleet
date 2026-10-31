@@ -41,6 +41,44 @@ export function getReportAccent(reportType = 'fleet') {
   return SAKA_PDF_THEME.accents[reportType] || SAKA_PDF_THEME.accents.default;
 }
 
+/**
+ * v1.28.7 — PDF glyph safety.
+ *
+ * The embedded Manrope/Barlow/JetBrains fonts (and the Helvetica fallback) cannot
+ * render WhatsApp emoji or many Unicode symbols: they were the source of the
+ * "boxes / garbled text" reports. Every string drawn into the PDF passes through
+ * this sanitiser: common symbols become readable ASCII, emoji are removed and
+ * characters outside Latin-1 are dropped instead of rendering as tofu.
+ */
+const PDF_GLYPH_MAP = Object.freeze({
+  '—': '-', '–': '-', '‑': '-', '−': '-', '·': '-', '→': '->', '←': '<-',
+  '≥': '>=', '≤': '<=', '≈': '~', '×': 'x',
+  '✓': 'ok', '✔': 'ok', '☑': 'ok',
+  '’': "'", '‘': "'", '“': '"', '”': '"', '…': '...',
+  '€': 'EUR', '£': 'GBP', '¥': 'JPY', '₹': 'INR', '₦': 'NGN', '₨': 'Rs'
+});
+
+export function pdfSafeText(value) {
+  let text = String(value ?? '');
+  if (!text) return '';
+  // 1. Map every glyph we KNOW a readable equivalent for (before emoji stripping,
+  //    because several mapped symbols live inside the pictograph ranges).
+  for (const [glyph, replacement] of Object.entries(PDF_GLYPH_MAP)) {
+    if (text.includes(glyph)) text = text.split(glyph).join(replacement);
+  }
+  // 2. Remove emoji / pictographs (the historical tofu-box source).
+  text = text
+    .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE00}-\u{FE0F}\u{200D}\u{20E3}]/gu, '')
+    .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+    .replace(/[\u2026]/g, '...')
+    .replace(/[\u2022\u25CF\u25AA]/g, '-')
+    .replace(/[^\x09\x0A\x20-\xFF]/g, (ch) => PDF_GLYPH_MAP[ch] ?? '')
+    .replace(/[^\S\n]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n');
+  return text.trim();
+}
+
 const PAGE_MARGIN = 48;
 const PAGE_WIDTH = 595.28;
 const PAGE_HEIGHT = 841.89;
@@ -527,6 +565,15 @@ export function buildProReportPdf(report = {}) {
         ...report,
         generatedAt: report.generatedAt || new Date().toLocaleString('en-GB', { timeZone: 'Africa/Nairobi' })
       };
+
+      // v1.28.7 — sanitise EVERY string drawn into the document (cover, KPI
+      // cards, charts, tables, sections, footer) so no emoji or unsupported
+      // glyph can ever reach the page as a tofu box.
+      const rawText = doc.text.bind(doc);
+      doc.text = (value, ...args) => rawText(
+        Array.isArray(value) ? value.map(pdfSafeText) : pdfSafeText(value),
+        ...args
+      );
 
       drawCover(doc, fonts, prepared, accent);
 

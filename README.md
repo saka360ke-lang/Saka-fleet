@@ -90,7 +90,8 @@ Saka introduces itself on the first message with a localized greeting
 (Namaste 🙏 in India, Habari in East Africa, time-of-day elsewhere), then asks
 one next step. Conversations use **emoji artistry**: semantic anchors per line,
 a 🔔→⏰→⚠️→🚨 reminder ladder, 🟢🟡🔴 status chips, figures kept emoji-free, and
-at most 3 emojis per message (4 on the welcome message).
+at most 3 emojis per message (the welcome capability list uses one anchor per
+operation line).
 
 ## Human Saka 2.0 (v1.28.0)
 - **Typo tolerance:** deterministic routers normalize transpositions, doubled
@@ -129,6 +130,22 @@ at most 3 emojis per message (4 on the welcome message).
   threshold in one turn.
 - **Report requests stay reports (v1.28.6):** "Give me a fuel report" routes to
   the report engine instead of starting the expense quiz.
+- **Reports always deliver, PDFs always legible (v1.28.7):** a background report
+  can no longer die silently (a recovery message is guaranteed), the storage
+  bucket self-heals and falls back to a signed link, and every PDF string is
+  glyph-sanitised so emoji can never turn into boxes. Trial rewards now quote
+  the owner's local currency and locale date for **monthly and yearly**, state
+  that the coupon discounts the first payment (not free days), and the checkout
+  carries the coupon. The welcome (and the on-demand **help** menu) lists every
+  operation Saka can do, and reminders read "in 5,000 km" vs "at 370,000 km".
+- **OCR, learning and recovery ladders (v1.28.8):** Vision photo OCR is ON again
+  (receipts, logbooks, policies, licences; `OCR_ENABLED=off` pauses it), quiz
+  upload hints are on, and self-learning runs every 15 minutes inside the app.
+  Sentinel derives per-country communication styles (greeting, brevity,
+  formality, emoji rate) that shape each turn, abandoned checkouts get a
+  3-step recovery ladder (30 min / 24 h / coupon T-2d), and expired plans get
+  soft D+7 and D+30 benefit nudges around the D+15 winback — always capped and
+  always stopped by a renewal.
 
 ## Receipt intelligence (v1.19.0)
 Send a photo of a **fuel receipt, logbook, insurance policy or driver licence**:

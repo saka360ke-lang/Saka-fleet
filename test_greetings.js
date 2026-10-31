@@ -35,7 +35,10 @@ function check(condition, message) {
 }
 
 function emojiCount(text) {
-  return (String(text).match(/\p{Extended_Pictographic}/gu) || []).length;
+  // Count emoji SEQUENCES (🧑‍✈️ is one anchor, not two pictographs).
+  const normalized = String(text)
+    .replace(/\p{Extended_Pictographic}(?:\uFE0F|\u200D\p{Extended_Pictographic})*/gu, '\u0001');
+  return (normalized.match(/\u0001/g) || []).length;
 }
 
 const india = { country_code: 'IN', country: 'India', currency: 'INR', plate_example: 'MH 01 AB 1234' };
@@ -67,7 +70,8 @@ check(intro.includes('MH 01 AB 1234'), 'intro uses the country plate example');
 check(intro.includes('⛽') && intro.includes('💰') && intro.includes('🔔'), 'intro uses semantic anchors for fuel, costs and reminders');
 check(/REGISTER/i.test(intro), 'intro ends with ONE clear next step');
 check(!/send your vehicle'?s? (?:number |registration )?plate/i.test(intro), 'the intro never asks for a plate');
-check(emojiCount(intro) <= 4, `intro respects the welcome emoji ceiling (${emojiCount(intro)})`);
+check(/I can help you with/i.test(intro) && /Fuel & expense logs/i.test(intro) && /VIN passbook/i.test(intro), 'intro presents the full operations list (v1.28.7)');
+check(intro.split('\n').every((line) => emojiCount(line) <= 1), 'welcome keeps at most one emoji per line');
 const noStep = sakaIntroText({ countryInfo: india, nextStep: '' });
 check(!/REGISTER|number plate/i.test(noStep), 'next step can be omitted when the plate is already known');
 const named = sakaIntroText({ countryInfo: kenya, profile: { full_name: 'Amina Yusuf' } });
@@ -149,7 +153,8 @@ check(shouldReplacePlateAsk({ asksPlate: true, hasVehicle: false, hasQuiz: false
 check(shouldReplacePlateAsk({ asksPlate: false, hasVehicle: false, hasQuiz: false, firstContact: false }) === false, 'replies without a plate ask are untouched');
 
 console.log('--- Test 5: emoji discipline ---');
-check(emojiCount(sakaIntroText({ countryInfo: usa, nextStep: '' })) <= 4, 'US intro stays within the ceiling');
+check(emojiCount(sakaIntroText({ countryInfo: usa, nextStep: '' })) <= 16, 'US intro stays within the operations-list sanity ceiling');
+check(sakaIntroText({ countryInfo: usa, nextStep: '', profile: { roles: ['Driver'] } }).includes('Compliance card & daybook'), 'drivers receive the driver-lane operations list');
 check(!/₹|\$|KES|INR/.test(intro), 'no currency figures inside the intro (figures stay plain)');
 
 console.log('--- Test 6: the greeting linter never re-greets (v1.28.0) ---');

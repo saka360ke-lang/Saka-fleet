@@ -36,7 +36,11 @@ const STATLESS_SUITES = [
   'test_contact_nudge.js',
   'test_kb_docs.js',
   // v1.28.2 — Anthropic thinking/truncation guard.
-  'test_anthropic_payload.js'
+  'test_anthropic_payload.js',
+  // v1.28.7 — PDF glyph safety (valid PDF, no emoji tofu, nullish data safe).
+  'test_pdf_engine.js',
+  // v1.28.8 — abandoned-cart + post-expiry ladders and country comm styles.
+  'test_recovery_ladders.js'
 ];
 
 const WORKFLOW_DIR = '.github/workflows';

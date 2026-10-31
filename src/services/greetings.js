@@ -1,5 +1,6 @@
 import { resolveUserTimezone } from './globalization.js';
 import { prepareRoutingText } from './textNormalizer.js';
+import { buildOperationsBlock } from './flowKnowledge.js';
 
 /**
  * Saka Fleet — First-contact greetings (v1.18.1)
@@ -161,9 +162,10 @@ export function isStopRequest(text = '') {
 }
 
 /**
- * Warm, sales-crafted first-contact introduction (v1.25.0).
- * Ends with exactly ONE next step, keeps the welcome emoji ceiling (≤4 total),
- * and always offers the one-line paragraph shortcut that shows off the product.
+ * Warm, sales-crafted first-contact introduction (v1.25.0, v1.28.7).
+ * Ends with exactly ONE next step and presents the full operations list so a
+ * brand-new user sees everything Saka can do for them at a glance. The list is
+ * the same registry the on-demand "help" menu uses (SAKA_OPERATIONS).
  */
 export function sakaIntroText({ countryInfo = null, now = new Date(), profile = null, plateExample = null, nextStep = null } = {}) {
   const { text: greeting } = greetingFor({ countryInfo, now });
@@ -179,6 +181,7 @@ export function sakaIntroText({ countryInfo = null, now = new Date(), profile = 
     '\n\n⛽ Every litre and every shilling, remembered for you' +
     '\n💰 What each kilometre really costs, so you can trim the waste' +
     '\n🔔 Service, insurance and inspection reminders — before they bite' +
+    `\n\n${buildOperationsBlock({ roles: profile?.roles || [] })}` +
     (step ? `\n\n${step}` : '');
 }
 

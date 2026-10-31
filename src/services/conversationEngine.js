@@ -322,6 +322,8 @@ export async function renderOutcome({
   });
 }
 
+import { buildOperationsBlock, buildOperationsList } from './flowKnowledge.js';
+
 /**
  * Role-aware action discovery, rendered by AI from the permitted command list.
  * Replaces the static command-center menus.
@@ -333,10 +335,12 @@ export async function renderActionDiscovery({
   language = 'English',
   countryInfo = null,
   profile = null,
-  exhaustive = false
+  exhaustive = false,
+  includeOperations = true
 }) {
   const cacheKey = [
     exhaustive ? 'x' : 's',
+    includeOperations ? 'ops' : 'noops',
     language,
     roles.join(','),
     commands.join('|'),
@@ -345,16 +349,20 @@ export async function renderActionDiscovery({
   const cached = discoveryCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.text;
 
+  const operations = buildOperationsList({ roles });
   const facts = {
     roles,
     availableCommands: commands,
+    operations,
     fleet: vehicles.map((v) => `${v.plate_number} (${v.make_model || 'vehicle'})`),
     instruction: exhaustive
-      ? 'List EVERY available command, grouped naturally by role. Do not omit any command and do not invent one. Keep each line short.'
-      : 'Give a short, role-aware capability overview grouped naturally. Mention the 3-5 most useful next steps only; do not dump the entire command list.'
+      ? 'List EVERY available command, grouped naturally by role, and include every operation supplied in operations. Do not omit any command and do not invent one. Keep each line short, one emoji per line.'
+      : 'Give a short, role-aware capability overview grouped naturally. Mention the 3-5 most useful next steps only; do not dump the entire command list. One emoji per line, no emoji walls.'
   };
 
-  const fallback = commands.slice(0, 6).map((c) => `• ${c}`).join('\n');
+  const fallback = includeOperations
+    ? `${buildOperationsBlock({ roles })}\n\n${commands.slice(0, 6).map((c) => `• ${c}`).join('\n')}`
+    : commands.slice(0, 6).map((c) => `• ${c}`).join('\n');
   const text = await composeMessage({
     purpose: 'action_discovery',
     facts,
@@ -365,13 +373,20 @@ export async function renderActionDiscovery({
     fallbackText: fallback
   });
 
-  if (text) {
+  // v1.28.7 — the operations list is guaranteed on demand: if the model left it
+  // out, append the deterministic registry block so "help" never under-delivers.
+  let finalText = text || fallback;
+  if (includeOperations && !/i can help you with/i.test(finalText)) {
+    finalText = `${finalText}\n\n${buildOperationsBlock({ roles })}`;
+  }
+
+  if (finalText) {
     if (discoveryCache.size >= DISCOVERY_CACHE_MAX) {
       discoveryCache.delete(discoveryCache.keys().next().value);
     }
-    discoveryCache.set(cacheKey, { text, expiresAt: Date.now() + DISCOVERY_CACHE_TTL_MS });
+    discoveryCache.set(cacheKey, { text: finalText, expiresAt: Date.now() + DISCOVERY_CACHE_TTL_MS });
   }
-  return text;
+  return finalText;
 }
 
 /**

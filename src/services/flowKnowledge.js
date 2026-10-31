@@ -325,6 +325,49 @@ export const SAKA_BOUNDARY_RULES = [
 ];
 
 /**
+ * OPERATIONS REGISTRY (v1.28.7) — single source of truth for everything Saka
+ * can do. Used by the first-contact welcome, the on-demand "help" menu and the
+ * QA facts so the three can never drift apart.
+ *
+ * One semantic emoji per line (see the Emoji Policy), no figures, no jargon.
+ */
+export const SAKA_OPERATIONS = Object.freeze({
+  owner: Object.freeze([
+    '⛽ Fuel & expense logs — one line, remembered forever',
+    '💰 Earnings & income — see the real profit per vehicle',
+    '🔢 Odometer & mileage — keep every reading current',
+    '🔔 Reminders — by date, by distance (in 5,000 km) or engine hours',
+    '📊 Reports — fleet, fuel, costs and a PDF copy',
+    '📘 VIN passbook — service history that protects resale value',
+    '🧑‍✈️ Drivers & compliance — assign, track licences, get alerts',
+    '📄 Documents — send a photo or PDF and Saka files it',
+    '🚚 Passbook transfer — hand a vehicle to a buyer safely'
+  ]),
+  driver: Object.freeze([
+    '⛽ Fuel & expense logs — send one line or a receipt photo',
+    '💰 Earnings & income — keep a clean daily record',
+    '🔢 Odometer — update your reading in seconds',
+    '🔔 Your reminders — licence, service and inspection dates',
+    '📄 Compliance card & daybook — shareable proof of your work',
+    '🆘 Support — reach your owner or the Saka team'
+  ])
+});
+
+/** Role-aware operation lines (owner lane by default, driver lane for drivers). */
+export function buildOperationsList({ roles = [], limit = 9 } = {}) {
+  const roleList = Array.isArray(roles) ? roles : [];
+  const driverOnly = roleList.includes('Driver') && !roleList.includes('Owner');
+  const list = driverOnly ? SAKA_OPERATIONS.driver : SAKA_OPERATIONS.owner;
+  const cap = Math.max(1, Math.min(Number(limit) || list.length, list.length));
+  return list.slice(0, cap);
+}
+
+/** Ready-to-send operation block for the welcome and the on-demand help menu. */
+export function buildOperationsBlock({ roles = [], limit = 9 } = {}) {
+  return ['*I can help you with:*', ...buildOperationsList({ roles, limit })].join('\n');
+}
+
+/**
  * TONE COMPASS & MIRROR ENGINE (v1.17.0) — single source of truth.
  * The Compass keeps Saka true (values that never bend). The Mirror keeps Saka
  * human (adaptive register for different personalities, roles and cultures).
@@ -391,7 +434,7 @@ export const SAKA_TONE_COMPASS = {
   ],
   emojiPolicy: {
     principle: 'Emojis are scaffolding, not decoration: one semantic emoji per line anchors the eye and helps every reading level; numbers, currency and dates stay emoji-free.',
-    density: 'Standard messages use at most 3 emojis (max 1 per line); welcome/onboarding messages may use up to 4. Never an emoji wall, never the same emoji twice in a row.',
+    density: 'Standard messages use at most 3 emojis (max 1 per line); welcome/onboarding messages follow the same one-anchor-per-line rule for the capability list — one emoji per operation line, no fixed total ceiling (v1.28.7). Never two anchors on one line, never an emoji wall, never the same emoji twice in a row.',
     situations: [
       'Greetings & first contact: 👋 with time-of-day (🌅 morning, ☀️ afternoon, 🌙 evening); local greeting first — Namaste 🙏 in India, Habari in East Africa, Hello elsewhere.',
       'Onboarding milestones: 📋 started · ✅ verified · 🎉 passbook issued · 🚗 vehicle active.',

@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.28.6  
+**Version:** 1.28.8  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,8 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.28.8** | OCR unpaused end to end, always-on self-learning tick, country communication styles, abandoned-checkout recovery (30 min/24 h/T-2d), post-expiry benefit nudges (D+7/D+30) | §71.17 |
+| **1.28.7** | Reports always deliver (guaranteed fallback + storage self-heal), PDF glyph-safe rendering, locale/currency-correct trial reward with the coupon attached, operations list in the welcome + on demand, "in 5,000 km" vs "at 370,000 km" | §71.16 |
 | **1.28.6** | Report requests never become logging flows: "Give me a fuel report" routes to the report engine, not the expense quiz | §71.15 |
 | **1.28.5** | Mileage reminders save: `reminders.due_date` relaxed to NULL, trigger sentence banks type + threshold, threshold insert proven by tests | §71.14 |
 | **1.28.4** | Write-time plate guard + fuel volume derivation: confirming a phantom plate re-asks; "1000kes @227kes per liter" logs 4.41 L instead of asking | §71.12, §71.13 |
@@ -2721,3 +2723,21 @@ The model can never ship a corporate hedge, an empty capacity placeholder (`· v
 - **Guard:** `looksLikeReportRequest()` treats any message containing report/summary/statement/analysis/breakdown/overview (unless it starts with log/record/add/save) as a report request. `detectQuizStart()` returns null for it, and the route upgrades a misclassified LOG_EXPENSE / LOG_EARNINGS / UPDATE_MILEAGE / QUERY_FUEL_EFFICIENCY intent to `REQUEST_REPORT`, so the report engine (and its quota/access rules) owns the turn.
 - The REQUEST_REPORT playbook line now states the rule explicitly, so the model never reclassifies a report request as a log.
 - **Proof:** `test_quiz_flow` 95 assertions (the two live report messages never start the quiz; "log fuel" still does).
+
+### 71.16 Reports never vanish, PDFs are glyph-safe, trials speak local money (v1.28.7)
+- **Silent report loss fixed:** the live 21:06:33 / 21:07:03 "fuel report" / "fleet report" turns replied with the background ACK and then delivered nothing. `runFleetReport` now wraps `buildReportForLane` in try/catch, `deliverReportPdf` always reports a status (and a recovery line when the PDF cannot be linked), and `processPendingFollowUps` sends a deterministic "report hit a snag — reply report" message for any failed report job, so a user can never be left with silence.
+- **Storage self-heal + link fallback:** `uploadReportToSupabase()` (reports.js) retries once after `createBucket('fleet-reports', { public: true })` and falls back to a 24-hour signed URL, so the "empty link" can no longer happen.
+- **PDF glyph safety:** `pdfSafeText()` in `pdfEngine.js` maps em dash / arrows / comparators / check marks to ASCII, removes every emoji/pictograph range and drops characters outside Latin-1; `buildProReportPdf()` wraps `doc.text` with it, covering cover pages, KPI cards, charts, tables, sections and footers. `test_pdf_engine.js` renders an emoji-heavy report and asserts a valid `%PDF-` header, a `%%EOF` trailer and at least one page object.
+- **Trial award localization:** `ownerLocaleContext()` (trialEngine) resolves currency, locale and timezone from the profile or the phone's country; `trialDateLabel()` formats every trial date in that locale/timezone. `activationRewardText()` shows monthly **and** yearly local prices, states explicitly that ACTIVATE20 discounts the first payment (monthly or yearly) and is **not** extra free days, and invites "extend trial". `issueActivationCoupon()` stamps `trial_sessions.coupon_code`, fixing the nudge checkout that previously went out at full price. The winback checkout now uses the owner's currency instead of USD.
+- **Operations registry:** `SAKA_OPERATIONS` (owner + driver lanes) + `buildOperationsList()` / `buildOperationsBlock()` in `flowKnowledge.js`, rendered by `sakaIntroText()` (first contact), guaranteed in `renderActionDiscovery()` (on-demand help; appends the deterministic block when the model omits it) and injected into the core prompt as `SAKA_OPERATIONS_PROMPT_BLOCK`. Emoji policy: one anchor per operation line, no fixed total ceiling for the welcome list.
+- **Reminder phrasing:** `describeThresholdSpec(spec)` now emits "in 5,000 km" for relative intervals and "at 370,000 km" for absolute targets (plus "in 36 operating hours"), so a user can tell an interval from an odometer reading.
+- **Proof:** `test_pdf_engine` 15 · `test_greetings` 83 · `test_quiz_flow` 95 · `test_trial_engine` 73 · `test_maintenance_reminders` 46 · `test_followups` 12 · `test_agent_training` asserts the capability registry is embedded.
+
+### 71.17 OCR unpaused, continuous learning, country tone and recovery ladders (v1.28.8)
+- **OCR end to end:** `isOcrEnabled()` (ocrService.js) is env-driven again and defaults ON (`OCR_ENABLED=off|false|0` pauses); `UPLOAD_HINTS_ENABLED` defaults ON, so quiz turns can offer a photo for the pending document. PDFs still use the local text layer, ack-first still answers instantly, low confidence still asks for confirmation and nothing is written without YES. Applies to: receipt photos, logbooks, insurance/inspection documents, driver licences and odometer photos.
+- **Self-learning runs on its own:** `index.js` ticks `runConversationRefinement(supabase)` every `SENTINEL_LEARN_INTERVAL_MS` (default 15 min) behind an in-flight guard. Previously refinement only ran via the external `/api/sentinel/run`, so `saka_core_prompt` and `conversation_analytics` stayed empty.
+- **Country communication styles:** `src/services/countryCommStyles.js` derives deterministic per-country profiles from transcripts (`deriveCountryCommStyles`), persists them in `country_comm_styles` (Sentinel upsert + `ensureSentinelTables` DDL), and `getCountryCommStyleLine()` (10-minute cache) appends a `COUNTRY COMMUNICATION STYLE (XX…)` line to the per-turn jurisdiction context in the WhatsApp route.
+- **Abandoned-checkout recovery:** `processAbandonedCheckouts()` runs inside the 15-minute trial sweep. Stage resolver `resolveAbandonedCheckoutStage()`: T+30 min (`CHECKOUT_ABANDONED_AFTER_MIN`), T+24 h, coupon T-2 days; capped by `CHECKOUT_REMINDER_MAX` (3) and stopped when the trial converts. `checkoutForTier()` keeps the FIRST `checkout_started_at` (resets only after an hour) so nudges cannot rewind the ladder. Copy (`abandonedCheckoutText`) is deterministic, local-currency and repeats the same link.
+- **Post-expiry benefit nudges:** `processExpiredRenewalNudges()` sends `renewalBenefitText()` at D+7 (benefits + data safety) and D+30 (final, gentle), with the existing D+15 WINBACK40 between them; `RENEWAL_NUDGE_MAX` (3) caps it, and renewed/canceling/opted-out accounts are skipped. Counters: `profiles.renewal_nudge_count` / `last_renewal_nudge_at`.
+- **Schema:** `npm run migrate:recovery` (`scripts/run_recovery_migration.js`) adds the four columns + `country_comm_styles`; the boot DDL in `vehicles.js` mirrors the column adds so new environments heal automatically.
+- **Proof:** `test_recovery_ladders` 30 · `test_ocr_flow` 54 · `test_trial_engine` 73 · `test_subscription_billing` 75 · flow suite.

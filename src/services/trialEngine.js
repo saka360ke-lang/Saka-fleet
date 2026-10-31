@@ -19,6 +19,7 @@
 
 import { getTierLocalPrice, initializePaystackCheckout } from './paystack.js';
 import { generateWinback40Coupon } from './coupons.js';
+import { detectCountryFromPhone, resolveUserTimezone } from './globalization.js';
 import {
   getTierLabel,
   normalizeTierKey,
@@ -83,10 +84,33 @@ async function fetchOwner(supabase, ownerId) {
   if (!supabase || !ownerId) return null;
   const { data } = await supabase
     .from('profiles')
-    .select('id, phone_number, email, full_name, subscription_tier, subscription_status, billing_interval, trial_used_at')
+    .select('id, phone_number, email, full_name, subscription_tier, subscription_status, billing_interval, trial_used_at, currency, country_code, locale, timezone, preferred_language')
     .eq('id', ownerId)
     .maybeSingle();
   return data || null;
+}
+
+/**
+ * v1.28.7 — resolve the owner's money/date context from the profile, falling
+ * back to the WhatsApp number's country. Trial copy must never quote USD or a
+ * server-locale date to a non-US owner.
+ */
+function ownerLocaleContext(owner = {}) {
+  const detected = detectCountryFromPhone(owner?.phone_number || '') || {};
+  const currency = String(owner?.currency || detected?.currency || 'USD').toUpperCase();
+  const locale = owner?.locale || detected?.locale || 'en-US';
+  const timeZone = owner?.timezone || resolveUserTimezone({ countryInfo: detected }) || 'Africa/Nairobi';
+  return { currency, locale, timeZone };
+}
+
+/** Locale-aware, timezone-normalised date label for every trial message. */
+function trialDateLabel(dateLike, { locale = 'en-US', timeZone = 'Africa/Nairobi' } = {}) {
+  if (!dateLike) return 'soon';
+  try {
+    return new Date(dateLike).toLocaleDateString(locale, { timeZone, day: 'numeric', month: 'short', year: 'numeric' });
+  } catch {
+    return new Date(dateLike).toISOString().slice(0, 10);
+  }
 }
 
 /**
@@ -317,6 +341,13 @@ export async function issueActivationCoupon({ supabase, trial, owner = null, per
       status: 'dispatched',
       expires_at: expiresAt
     }]).select().single();
+    if (inserted?.code) {
+      // v1.28.7 — attach the activation coupon to the trial so every nudge
+      // checkout carries the discount instead of a full-price link.
+      await supabase.from('trial_sessions')
+        .update({ coupon_code: inserted.code, updated_at: now.toISOString() })
+        .eq('id', trial.id);
+    }
     return inserted || null;
   } catch {
     return null;
@@ -471,23 +502,40 @@ function activationNudgeText(ownerName, tierLabel) {
   return `👋 *Getting the most from your Saka ${tierLabel} trial*\n\nYour 30-day trial is running, ${ownerName || 'there'}. The fastest way to see Saka's value:\n\n1️⃣ Reply *"log expense"* — track your first fuel/service cost\n2️⃣ Reply *"register car"* — add a vehicle + passbook\n3️⃣ Reply *"report"* — get a fleet report\n\nEverything is unlocked: full AI, unlimited reports, compliance tracking.`;
 }
 
-function activationRewardText({ ownerName, tierLabel, coupon, checkoutUrl, priceLabel }) {
+function activationRewardText({
+  ownerName,
+  tierLabel,
+  coupon,
+  checkoutUrl,
+  monthlyLabel,
+  annualLabel,
+  locale = 'en-US',
+  timeZone = 'Africa/Nairobi'
+}) {
   const lines = [
-    `🎉 *You just unlocked the full Saka experience!*`,
+    '🎉 *You just unlocked the full Saka experience!*',
     '',
-    `${ownerName || 'Your'} ${tierLabel} trial is live and your first value moment is done.`,
-    ''
+    `${ownerName || 'Your'} ${tierLabel} trial is live and your first value moment is done.`
   ];
   if (coupon?.code) {
-    lines.push(`🎁 *Your reward:* \`${coupon.code}\` — ${coupon.discount_percent}% off your first paid cycle (expires ${new Date(coupon.expires_at).toLocaleDateString()}).`);
+    lines.push(
+      '',
+      `🎁 *Your reward:* \`${coupon.code}\` — ${coupon.discount_percent}% off your *first payment*, monthly or yearly (expires ${trialDateLabel(coupon.expires_at, { locale, timeZone })}).`,
+      '_This coupon discounts your first payment — it does not add free days._'
+    );
   }
-  if (priceLabel) lines.push(`Plan price: ${priceLabel}`);
+  if (monthlyLabel) lines.push('', `💳 Monthly: ${monthlyLabel}`);
+  if (annualLabel) lines.push(`📅 Yearly: ${annualLabel}`);
+  if (monthlyLabel || annualLabel) {
+    lines.push('_Prices shown in your local currency; the coupon is applied at checkout._');
+  }
   if (checkoutUrl) lines.push(`\n👉 *Lock in your plan:* ${checkoutUrl}`);
   lines.push('\nNo card is needed until you decide to convert — keep exploring.');
+  lines.push('Want more free days instead? Reply *"extend trial"*.');
   return lines.join('\n');
 }
 
-function t3DigestText({ ownerName, tierLabel, trial, metrics, priceLabel, annualLabel, checkoutUrl }) {
+function t3DigestText({ ownerName, tierLabel, trial, metrics, priceLabel, annualLabel, checkoutUrl, locale = 'en-US', timeZone = 'Africa/Nairobi' }) {
   return `📊 *Your Saka Fleet ${tierLabel} trial ends in 3 days!*\n\nHere's what you built, ${ownerName || 'there'}:\n` +
     `• 🚗 ${metrics.vehicles} vehicle(s) managed\n` +
     `• 💰 ${metrics.expenses} expense(s) logged\n` +
@@ -495,13 +543,13 @@ function t3DigestText({ ownerName, tierLabel, trial, metrics, priceLabel, annual
     `• 📄 ${metrics.reports} report(s) generated\n` +
     `• 🧠 ${metrics.aiAnswers} question(s) answered by Saka\n` +
     `• ⏱️ ≈${metrics.hoursSaved} hour(s) saved vs manual tracking\n\n` +
-    `Keep everything unlocked: *${priceLabel || `${tierLabel} plan`}*${annualLabel ? ` (or ${annualLabel} annually)` : ''}.\n` +
+    `Keep everything unlocked: *${priceLabel || `${tierLabel} plan`}*${annualLabel ? ` (or ${annualLabel} yearly)` : ''}.\n` +
     `👉 ${checkoutUrl || 'https://sakafleet.com/pricing'}\n\n` +
-    `Trial ends ${new Date(trial.ends_at).toLocaleDateString()}.`;
+    `Trial ends ${trialDateLabel(trial.ends_at, { locale, timeZone })}.`;
 }
 
-function t24Text({ tierLabel, trial, checkoutUrl }) {
-  return `⏳ *24 hours left on your ${tierLabel} trial*\n\nYour trial ends ${new Date(trial.ends_at).toLocaleDateString()}. After that your account moves to Free (1 vehicle, 1 report/month, Tier-1 AI) and extra vehicles are paused — nothing is deleted.\n\n👉 Activate your plan: ${checkoutUrl || 'https://sakafleet.com/pricing'}`;
+function t24Text({ tierLabel, trial, checkoutUrl, locale = 'en-US', timeZone = 'Africa/Nairobi' }) {
+  return `⏳ *24 hours left on your ${tierLabel} trial*\n\nYour trial ends ${trialDateLabel(trial.ends_at, { locale, timeZone })}. After that your account moves to Free (1 vehicle, 1 report/month, Tier-1 AI) and extra vehicles are paused — nothing is deleted.\n\n👉 Activate your plan: ${checkoutUrl || 'https://sakafleet.com/pricing'}`;
 }
 
 function expiryText({ tierLabel, pausedPlates, checkoutUrl }) {
@@ -540,18 +588,17 @@ async function stampTrial(supabase, trialId, patch) {
   } catch { /* fail-soft */ }
 }
 
-/** Deterministic T-3 extension-offer copy (zero AI tokens). */
-function accountExtensionOfferText({ ownerName, coupon, trial }) {
-  const ends = trial?.ends_at ? new Date(trial.ends_at).toLocaleDateString() : 'soon';
+function accountExtensionOfferText({ ownerName, coupon, trial, locale = 'en-US', timeZone = 'Africa/Nairobi' }) {
+  const ends = trial?.ends_at ? trialDateLabel(trial.ends_at, { locale, timeZone }) : 'soon';
   return `🎁 *Your Saka trial ends in 3 days* — ${ownerName || 'there'}\n\n` +
     `Your account trial ends ${ends}. Coupon *${coupon.code}* adds 30 free days and applies to the whole account — not one vehicle.\n\n` +
     `Reply *"extend trial ${coupon.code}"* (or just *"extend trial"*).`;
 }
 
 /** Deterministic 15-day overdue winback copy. */
-function winbackText({ coupon, checkoutUrl }) {
+function winbackText({ coupon, checkoutUrl, locale = 'en-US', timeZone = 'Africa/Nairobi' }) {
   return `🎁 *Special offer from Saka Fleet*\n\nYour Saka trial ended 15 days ago. For the next 15 days only, take *40% OFF* your first year:\n\n` +
-    `• Coupon: *${coupon.code}*\n• Expires: ${new Date(coupon.expires_at).toLocaleDateString()}\n\n` +
+    `• Coupon: *${coupon.code}*\n• Expires: ${trialDateLabel(coupon.expires_at, { locale, timeZone })}\n\n` +
     `👉 Claim your offer: ${checkoutUrl || 'https://sakafleet.com/pricing'}`;
 }
 
@@ -590,7 +637,10 @@ async function dispatchDueAccountTrialCoupons({ supabase, sendWhatsAppFn, now = 
       const owner = await fetchOwner(supabase, trial.owner_id);
       const phone = coupon.assigned_to_phone || owner?.phone_number;
       if (phone && sendWhatsAppFn) {
-        await sendWhatsAppFn(phone, accountExtensionOfferText({ ownerName: owner?.full_name, coupon, trial })).catch(() => {});
+        const ctx = ownerLocaleContext(owner || { phone_number: phone });
+        await sendWhatsAppFn(phone, accountExtensionOfferText({
+          ownerName: owner?.full_name, coupon, trial, locale: ctx.locale, timeZone: ctx.timeZone
+        })).catch(() => {});
         stats.sent = (stats.sent || 0) + 1;
         stats.extensionOffers = (stats.extensionOffers || 0) + 1;
       }
@@ -646,6 +696,7 @@ async function processAccountWinbacks({ supabase, sendWhatsAppFn, now = new Date
       });
       if (!coupon) continue;
 
+      const ctx = ownerLocaleContext(owner);
       const checkout = await initializePaystackCheckout({
         supabase,
         userPhone: owner.phone_number,
@@ -653,10 +704,12 @@ async function processAccountWinbacks({ supabase, sendWhatsAppFn, now = new Date
         billingInterval: 'annual',
         userEmail: owner.email,
         userId: trial.owner_id,
-        currency: 'USD'
+        currency: ctx.currency
       }).catch(() => null);
 
-      await sendWhatsAppFn(owner.phone_number, winbackText({ coupon, checkoutUrl: checkout?.checkoutUrl })).catch(() => {});
+      await sendWhatsAppFn(owner.phone_number, winbackText({
+        coupon, checkoutUrl: checkout?.checkoutUrl, locale: ctx.locale, timeZone: ctx.timeZone
+      })).catch(() => {});
       stats.sent = (stats.sent || 0) + 1;
       stats.winbacks = (stats.winbacks || 0) + 1;
     }
@@ -815,12 +868,214 @@ export async function processSilentReengagement({ supabase, sendWhatsAppFn, now 
   }
 }
 
+export const CHECKOUT_ABANDONED_AFTER_MIN = clampNumber(process.env.CHECKOUT_ABANDONED_AFTER_MIN, 5, 24 * 60, 30);
+export const CHECKOUT_REMINDER_MAX = clampNumber(process.env.CHECKOUT_REMINDER_MAX, 1, 5, 3);
+export const RENEWAL_NUDGE_MAX = clampNumber(process.env.RENEWAL_NUDGE_MAX, 1, 5, 3);
+
+/** Deterministic abandoned-checkout copy: value first, never guilt. */
+export function abandonedCheckoutText({
+  stage = 0,
+  tierLabel = 'Saka plan',
+  priceLabel = null,
+  coupon = null,
+  couponExpiryLabel = null,
+  checkoutUrl = null
+} = {}) {
+  const link = checkoutUrl || process.env.PUBLIC_PRICING_URL || 'https://sakafleet.com/pricing';
+  if (stage === 0) {
+    return `🛒 *Still deciding on ${tierLabel}?*\n\nYour link is still open — everything you unlocked stays yours: unlimited reports, every reminder and full compliance tracking.` +
+      (priceLabel ? `\n\n💳 ${priceLabel}` : '') +
+      (coupon?.code ? `\n🎁 Coupon *${coupon.code}* is applied at checkout.` : '') +
+      `\n\n👉 ${link}`;
+  }
+  if (stage === 1) {
+    return `⏳ *A quick reminder about your ${tierLabel} plan*\n\nYour trial keeps running, and these stay unlocked the moment you activate:\n• 📊 Unlimited reports with PDF copies\n• 🔔 Reminders by date, distance or engine hours\n• 🧑‍✈️ Driver assignment and licence tracking` +
+      (priceLabel ? `\n\n💳 ${priceLabel}` : '') +
+      (coupon?.code ? `\n🎁 *${coupon.code}* still applies — it discounts your first payment.` : '') +
+      `\n\n👉 ${link}`;
+  }
+  return `🎁 *Your ${coupon?.code || 'discount'} expires${couponExpiryLabel ? ` ${couponExpiryLabel}` : ' soon'}*\n\n` +
+    `This is your last reminder — ${coupon?.discount_percent || 20}% off your first payment, monthly or yearly. It does not add free days, and it will not be reissued.` +
+    (priceLabel ? `\n\n💳 ${priceLabel}` : '') +
+    `\n\n👉 ${link}`;
+}
+
+async function findActivationCouponForPhone(supabase, phone) {
+  if (!supabase || !phone) return null;
+  try {
+    const { data } = await supabase
+      .from('coupons')
+      .select('*')
+      .eq('assigned_to_phone', phone)
+      .eq('created_by', 'TRIAL_ACTIVATION')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    return data || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Pure stage resolver for the abandoned-checkout ladder (testable). */
+export function resolveAbandonedCheckoutStage({ reminderCount = 0, elapsedMs = 0, couponLeftMs = null, max = CHECKOUT_REMINDER_MAX } = {}) {
+  if (reminderCount >= max) return null;
+  if (reminderCount === 0 && elapsedMs >= CHECKOUT_ABANDONED_AFTER_MIN * 60 * 1000) return 0;
+  if (reminderCount === 1 && elapsedMs >= DAY_MS) return 1;
+  if (reminderCount >= 2 && couponLeftMs !== null && couponLeftMs > 0 && couponLeftMs <= 2 * DAY_MS) return 2;
+  return null;
+}
+
+/** Pure stage resolver for the post-expiry benefit ladder (testable). */
+export function resolveRenewalNudgeStage({ nudgeCount = 0, daysSince = 0, max = RENEWAL_NUDGE_MAX } = {}) {
+  if (nudgeCount >= max) return null;
+  if (nudgeCount === 0 && daysSince >= 7) return 0;
+  if (nudgeCount === 1 && daysSince >= 30) return 1;
+  return null;
+}
+
+/**
+ * Abandoned-checkout recovery (v1.28.8): owner opened a checkout link but did
+ * not convert. Ladder = T+30 min, T+24 h, coupon T-2 days. Max 3 sends; stops
+ * the moment the trial is no longer ACTIVE/EXTENDED (i.e. converted).
+ */
+export async function processAbandonedCheckouts({ supabase, sendWhatsAppFn, now = new Date(), stats } = {}) {
+  if (!supabase || !sendWhatsAppFn) return;
+  try {
+    const { data: trials } = await supabase
+      .from('trial_sessions')
+      .select('*')
+      .in('status', ['ACTIVE', 'EXTENDED'])
+      .limit(100);
+    for (const trial of trials || []) {
+      if (!trial.checkout_started_at) continue;
+      const count = Number(trial.checkout_reminder_count || 0);
+      if (count >= CHECKOUT_REMINDER_MAX) continue;
+      const startedMs = new Date(trial.checkout_started_at).getTime();
+      if (!Number.isFinite(startedMs)) continue;
+      const elapsedMs = now.getTime() - startedMs;
+      const owner = await fetchOwner(supabase, trial.owner_id);
+      const phone = owner?.phone_number;
+      if (!phone) continue;
+      const coupon = await findActivationCouponForPhone(supabase, phone);
+      if (coupon?.status === 'applied') continue;
+
+      let stage = null;
+      const couponLeftMs = coupon?.expires_at
+        ? new Date(coupon.expires_at).getTime() - now.getTime()
+        : null;
+      stage = resolveAbandonedCheckoutStage({
+        reminderCount: count,
+        elapsedMs,
+        couponLeftMs
+      });
+      if (stage === null) continue;
+
+      const ctx = ownerLocaleContext(owner);
+      const monthly = await getTierLocalPrice(supabase, trial.tier, ctx.currency, 'monthly').catch(() => null);
+      const checkoutUrl = await buildNudgeCheckout({ supabase, owner, trial, currency: ctx.currency });
+      await sendWhatsAppFn(phone, abandonedCheckoutText({
+        stage,
+        tierLabel: getTierLabel(trial.tier),
+        priceLabel: monthly?.formattedPrice ? `${monthly.formattedPrice}/month` : null,
+        coupon: coupon ? { code: coupon.code, discount_percent: coupon.discount_percent } : null,
+        couponExpiryLabel: coupon?.expires_at ? trialDateLabel(coupon.expires_at, ctx) : null,
+        checkoutUrl
+      })).catch(() => {});
+      await stampTrial(supabase, trial.id, {
+        checkout_reminder_count: count + 1,
+        last_checkout_reminder_at: now.toISOString()
+      });
+      stats.sent += 1;
+      stats.abandonedRecoveries = (stats.abandonedRecoveries || 0) + 1;
+    }
+  } catch (err) {
+    console.warn('[TrialEngine] Abandoned-checkout sweep skipped:', err.message);
+  }
+}
+
+/** Deterministic post-expiry benefit copy (soft, never guilt). */
+export function renewalBenefitText({
+  stage = 0,
+  tierLabel = 'Saka plan',
+  priceLabel = null,
+  annualLabel = null,
+  checkoutUrl = null
+} = {}) {
+  const link = checkoutUrl || process.env.PUBLIC_PRICING_URL || 'https://sakafleet.com/pricing';
+  if (stage === 0) {
+    return `🌱 *A gentle reminder about ${tierLabel}*\n\nSince your plan ended, here is what is waiting for you:\n• 📊 Unlimited reports with PDF copies\n• 🔔 Distance and date reminders before they bite\n• 🧑‍✈️ Driver compliance tracking\n\nYour logs, passbooks and documents are safe — nothing was deleted.` +
+      (priceLabel ? `\n\n💳 ${priceLabel}` : '') +
+      (annualLabel ? `\n📅 or ${annualLabel} yearly` : '') +
+      `\n\n👉 ${link}`;
+  }
+  return `💚 *Your data is safe — and your fleet is still here*\n\nEvery log, receipt, passbook and reminder is preserved. One tap brings the full plan back:` +
+    (priceLabel ? `\n💳 ${priceLabel}` : '') +
+    (annualLabel ? `\n📅 or ${annualLabel} yearly` : '') +
+    `\n\n👉 ${link}\n\n_No pressure — I will only send this once._`;
+}
+
+/**
+ * Post-expiry benefit nudges (v1.28.8): a plan that ended and was not renewed
+ * gets two soft value reminders (D+7 and D+30). The D+15 winback coupon rides
+ * the same worker, so the full ladder is 7 / 15 / 30 — never more.
+ */
+export async function processExpiredRenewalNudges({ supabase, sendWhatsAppFn, now = new Date(), stats } = {}) {
+  if (!supabase || !sendWhatsAppFn) return;
+  try {
+    const { data: trials } = await supabase
+      .from('trial_sessions')
+      .select('*')
+      .eq('status', 'EXPIRED')
+      .limit(100);
+    for (const trial of trials || []) {
+      const endsMs = new Date(trial.ends_at).getTime();
+      if (!Number.isFinite(endsMs)) continue;
+      const daysSince = Math.floor((now.getTime() - endsMs) / DAY_MS);
+      if (daysSince < 7) continue;
+      const owner = await fetchOwner(supabase, trial.owner_id);
+      if (!owner?.phone_number) continue;
+      const status = String(owner.subscription_status || '').toUpperCase();
+      if (isPaidTierKey(normalizeTierKey(owner.subscription_tier)) && ['ACTIVE', 'TRIALING', 'CANCELING'].includes(status)) {
+        continue;
+      }
+      const count = Number(owner.renewal_nudge_count || 0);
+      if (count >= RENEWAL_NUDGE_MAX) continue;
+      const stage = resolveRenewalNudgeStage({ nudgeCount: count, daysSince });
+      if (stage === null) continue;
+
+      const ctx = ownerLocaleContext(owner);
+      const monthly = await getTierLocalPrice(supabase, trial.tier, ctx.currency, 'monthly').catch(() => null);
+      const annual = await getTierLocalPrice(supabase, trial.tier, ctx.currency, 'annual').catch(() => null);
+      const checkoutUrl = await buildNudgeCheckout({ supabase, owner, trial, currency: ctx.currency });
+      await sendWhatsAppFn(owner.phone_number, renewalBenefitText({
+        stage,
+        tierLabel: getTierLabel(trial.tier),
+        priceLabel: monthly?.formattedPrice ? `${monthly.formattedPrice}/month` : null,
+        annualLabel: annual?.formattedPrice ? `${annual.formattedPrice}/year` : null,
+        checkoutUrl
+      })).catch(() => {});
+      try {
+        await supabase.from('profiles').update({
+          renewal_nudge_count: count + 1,
+          last_renewal_nudge_at: now.toISOString(),
+          updated_at: now.toISOString()
+        }).eq('id', owner.id);
+      } catch { /* fail-soft */ }
+      stats.sent += 1;
+      stats.renewalNudges = (stats.renewalNudges || 0) + 1;
+    }
+  } catch (err) {
+    console.warn('[TrialEngine] Renewal nudge sweep skipped:', err.message);
+  }
+}
+
 /**
  * Trial lifecycle sweep (15-minute tick in index.js).
  * Each stage fires exactly once per trial, guarded by one-shot timestamps.
  */
 export async function runTrialLifecycleSweep({ supabase, sendWhatsAppFn = null, now = new Date(), limit = 100 } = {}) {
-  const stats = { scanned: 0, sent: 0, activationNudges: 0, midpoint: 0, t3: 0, t24: 0, expired: 0, extensionOffers: 0, winbacks: 0, dunning: 0, reengaged: 0 };
+  const stats = { scanned: 0, sent: 0, activationNudges: 0, midpoint: 0, t3: 0, t24: 0, expired: 0, extensionOffers: 0, winbacks: 0, dunning: 0, reengaged: 0, abandonedRecoveries: 0, renewalNudges: 0 };
   if (!supabase) return stats;
 
   const { data: trials, error } = await supabase
@@ -835,6 +1090,7 @@ export async function runTrialLifecycleSweep({ supabase, sendWhatsAppFn = null, 
     const owner = await fetchOwner(supabase, trial.owner_id);
     const phone = owner?.phone_number || null;
     const tierLabel = getTierLabel(trial.tier);
+    const ownerCtx = ownerLocaleContext(owner || { phone_number: phone });
     const endsMs = new Date(trial.ends_at).getTime();
     const startedMs = new Date(trial.started_at).getTime();
     const nowMs = now.getTime();
@@ -847,7 +1103,7 @@ export async function runTrialLifecycleSweep({ supabase, sendWhatsAppFn = null, 
       stats.expired += 1;
       if (phone && sendWhatsAppFn) {
         const pausedPlates = (downgraded.paused || []).map((v) => v.plate_number).filter(Boolean);
-        const checkoutUrl = await buildNudgeCheckout({ supabase, owner, trial, currency: owner?.currency || 'USD' });
+        const checkoutUrl = await buildNudgeCheckout({ supabase, owner, trial, currency: ownerCtx.currency });
         await sendWhatsAppFn(phone, expiryText({ tierLabel, pausedPlates, checkoutUrl })).catch(() => {});
         stats.sent += 1;
       }
@@ -870,8 +1126,9 @@ export async function runTrialLifecycleSweep({ supabase, sendWhatsAppFn = null, 
             .maybeSingle();
           coupon = couponRow || null;
         } catch { /* coupon is optional */ }
-        const currency = owner?.currency || 'USD';
-        const price = await getTierLocalPrice(supabase, trial.tier, currency, trial.interval || 'monthly').catch(() => null);
+        const currency = ownerCtx.currency;
+        const monthly = await getTierLocalPrice(supabase, trial.tier, currency, 'monthly').catch(() => null);
+        const annual = await getTierLocalPrice(supabase, trial.tier, currency, 'annual').catch(() => null);
         const checkoutUrl = await buildNudgeCheckout({ supabase, owner, trial, currency });
         await sendWhatsAppFn(phone, activationRewardText({
           ownerName: owner?.full_name,
@@ -882,9 +1139,10 @@ export async function runTrialLifecycleSweep({ supabase, sendWhatsAppFn = null, 
             expires_at: coupon.expires_at
           } : null,
           checkoutUrl,
-          priceLabel: price?.formattedPrice
-            ? `${price.formattedPrice}/${trial.interval === 'annual' ? 'year' : 'month'}`
-            : null
+          monthlyLabel: monthly?.formattedPrice ? `${monthly.formattedPrice}/month` : null,
+          annualLabel: annual?.formattedPrice ? `${annual.formattedPrice}/year` : null,
+          locale: ownerCtx.locale,
+          timeZone: ownerCtx.timeZone
         })).catch(() => {});
         stats.sent += 1;
         stats.activationRewards = (stats.activationRewards || 0) + 1;
@@ -910,10 +1168,11 @@ export async function runTrialLifecycleSweep({ supabase, sendWhatsAppFn = null, 
       await stampTrial(supabase, trial.id, { nudge_midpoint_sent_at: nowIso });
       if (phone && sendWhatsAppFn) {
         const metrics = await buildTrialMetrics({ supabase, ownerId: trial.owner_id, trial });
-        const checkoutUrl = await buildNudgeCheckout({ supabase, owner, trial, currency: owner?.currency || 'USD' });
+        const checkoutUrl = await buildNudgeCheckout({ supabase, owner, trial, currency: ownerCtx.currency });
         await sendWhatsAppFn(phone, t3DigestText({
           ownerName: owner?.full_name, tierLabel, trial, metrics,
-          priceLabel: null, annualLabel: null, checkoutUrl
+          priceLabel: null, annualLabel: null, checkoutUrl,
+          locale: ownerCtx.locale, timeZone: ownerCtx.timeZone
         })).catch(() => {});
         stats.sent += 1;
         stats.midpoint += 1;
@@ -925,7 +1184,7 @@ export async function runTrialLifecycleSweep({ supabase, sendWhatsAppFn = null, 
     if (!trial.nudge_t3_sent_at && nowMs >= endsMs - 3 * DAY_MS) {
       await stampTrial(supabase, trial.id, { nudge_t3_sent_at: nowIso });
       if (phone && sendWhatsAppFn) {
-        const currency = owner?.currency || 'USD';
+        const currency = ownerCtx.currency;
         const metrics = await buildTrialMetrics({ supabase, ownerId: trial.owner_id, trial });
         const monthly = await getTierLocalPrice(supabase, trial.tier, currency, 'monthly').catch(() => null);
         const annual = await getTierLocalPrice(supabase, trial.tier, currency, 'annual').catch(() => null);
@@ -934,7 +1193,8 @@ export async function runTrialLifecycleSweep({ supabase, sendWhatsAppFn = null, 
           ownerName: owner?.full_name, tierLabel, trial, metrics,
           priceLabel: monthly?.formattedPrice ? `${monthly.formattedPrice}/month` : null,
           annualLabel: annual?.formattedPrice ? `${annual.formattedPrice}/year` : null,
-          checkoutUrl
+          checkoutUrl,
+          locale: ownerCtx.locale, timeZone: ownerCtx.timeZone
         })).catch(() => {});
         stats.sent += 1;
         stats.t3 += 1;
@@ -946,8 +1206,10 @@ export async function runTrialLifecycleSweep({ supabase, sendWhatsAppFn = null, 
     if (!trial.nudge_t24_sent_at && nowMs >= endsMs - DAY_MS) {
       await stampTrial(supabase, trial.id, { nudge_t24_sent_at: nowIso });
       if (phone && sendWhatsAppFn) {
-        const checkoutUrl = await buildNudgeCheckout({ supabase, owner, trial, currency: owner?.currency || 'USD' });
-        await sendWhatsAppFn(phone, t24Text({ tierLabel, trial, checkoutUrl })).catch(() => {});
+        const checkoutUrl = await buildNudgeCheckout({ supabase, owner, trial, currency: ownerCtx.currency });
+        await sendWhatsAppFn(phone, t24Text({
+          tierLabel, trial, checkoutUrl, locale: ownerCtx.locale, timeZone: ownerCtx.timeZone
+        })).catch(() => {});
         stats.sent += 1;
         stats.t24 += 1;
       }
@@ -958,6 +1220,9 @@ export async function runTrialLifecycleSweep({ supabase, sendWhatsAppFn = null, 
   // v1.16.0 — account-bound coupon dispatch + winback run in the SAME worker
   // so trials can never produce two competing message streams.
   await dispatchDueAccountTrialCoupons({ supabase, sendWhatsAppFn, now, stats });
+  // v1.28.8 — conversion recovery + post-expiry benefit nudges.
+  await processAbandonedCheckouts({ supabase, sendWhatsAppFn, now, stats });
+  await processExpiredRenewalNudges({ supabase, sendWhatsAppFn, now, stats });
   await processAccountWinbacks({ supabase, sendWhatsAppFn, now, stats });
   // v1.16.3 — revenue recovery + re-engagement ride the SAME worker.
   await processPastDueDunning({ supabase, sendWhatsAppFn, now, stats });
@@ -1008,13 +1273,26 @@ export async function applyAccountTrialExtensionCoupon({ supabase, ownerId, code
 }
 
 /** Deterministic activation reward copy (WhatsApp-ready). */
-export function formatActivationReward({ ownerName, tierKey, coupon = null, checkoutUrl = null, priceLabel = null } = {}) {
+export function formatActivationReward({
+  ownerName,
+  tierKey,
+  coupon = null,
+  checkoutUrl = null,
+  priceLabel = null,
+  monthlyLabel = null,
+  annualLabel = null,
+  locale = 'en-US',
+  timeZone = 'Africa/Nairobi'
+} = {}) {
   return activationRewardText({
     ownerName,
     tierLabel: getTierLabel(tierKey),
     coupon,
     checkoutUrl,
-    priceLabel
+    monthlyLabel: monthlyLabel || priceLabel,
+    annualLabel,
+    locale,
+    timeZone
   });
 }
 

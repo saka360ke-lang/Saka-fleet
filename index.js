@@ -216,6 +216,30 @@ setInterval(() => {
   });
 }, 15 * 60 * 1000); // Check every 15 minutes
 
+// Worker: always-on self-learning (v1.28.8). Before this, conversation
+// refinement only ran through the external Sentinel endpoint — the database had
+// no stored learnings at all. The tick is bounded, overlap-guarded and can be
+// tuned with SENTINEL_LEARN_INTERVAL_MS (default 15 min).
+const SENTINEL_LEARN_INTERVAL_MS = Math.max(
+  60 * 1000,
+  Number(process.env.SENTINEL_LEARN_INTERVAL_MS || 15 * 60 * 1000)
+);
+let learnTickInFlight = false;
+setInterval(async () => {
+  if (learnTickInFlight) return;
+  learnTickInFlight = true;
+  try {
+    const result = await runConversationRefinement(supabase);
+    if (result?.status === 'success') {
+      console.log(`[Worker] Self-learning tick complete (prompt updated: ${Boolean(result.saka_core_prompt_updated)}).`);
+    }
+  } catch (err) {
+    console.warn('[Worker] Self-learning tick skipped:', err.message);
+  } finally {
+    learnTickInFlight = false;
+  }
+}, SENTINEL_LEARN_INTERVAL_MS);
+
 // Worker: Universal Reminder Sweep — evaluates distance (km/mi) and
 // operating-hours thresholds against live readings AND the date-based expiry
 // ladder (insurance, inspection/MOT, licensing, permits, driver licences,

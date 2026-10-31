@@ -11,7 +11,7 @@
  */
 
 import assert from 'assert';
-import { DEFAULT_SAKA_CORE_PROMPT, SAKA_FLOW_PLAYBOOK, getSakaCorePrompt, clearSakaPromptCache, PROMPT_REFINEMENT_MARKER, MAX_STORED_PROMPT_REFINEMENT_CHARS } from './sakaAi.js';
+import { DEFAULT_SAKA_CORE_PROMPT, SAKA_FLOW_PLAYBOOK, SAKA_OPERATIONS_PROMPT_BLOCK, getSakaCorePrompt, clearSakaPromptCache, PROMPT_REFINEMENT_MARKER, MAX_STORED_PROMPT_REFINEMENT_CHARS } from './sakaAi.js';
 import { refinementIsSafe } from './src/workers/sentinel.js';
 import {
   SAKA_INTENTS,
@@ -48,6 +48,9 @@ async function run() {
   console.log('--- Test 1: single-source flow playbook injection ---');
   check(SAKA_FLOW_PLAYBOOK === buildFlowPlaybook(), 'Core prompt uses the generated flow playbook verbatim');
   check(DEFAULT_SAKA_CORE_PROMPT.includes(SAKA_FLOW_PLAYBOOK), 'Full flow playbook is embedded in the core prompt');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes(SAKA_OPERATIONS_PROMPT_BLOCK), 'Capability registry is embedded in the core prompt (v1.28.7)');
+  check(/VIN passbook/.test(DEFAULT_SAKA_CORE_PROMPT) && /Drivers & compliance/.test(DEFAULT_SAKA_CORE_PROMPT), 'Core prompt lists the full owner operations');
+  check(/on-demand help menu/i.test(DEFAULT_SAKA_CORE_PROMPT), 'Core prompt knows the operations list is available on demand');
 
   console.log('\n--- Test 2: every intent is trained ---');
   check(SAKA_INTENTS.length === 39, 'Registry declares all 39 classifier intents');
