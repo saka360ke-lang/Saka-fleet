@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.28.3  
+**Version:** 1.28.4  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.28.4** | Write-time plate guard + fuel volume derivation: confirming a phantom plate re-asks; "1000kes @227kes per liter" logs 4.41 L instead of asking | §71.12, §71.13 |
 | **1.28.3** | No phantom plates: structural plate check, windowed paragraph scan, registration self-heal — the real plate volunteered in a later turn is captured | §71.11 |
 | **1.28.2** | Complete replies: Sonnet thinking disabled by default, `max_tokens` truncation falls back to DeepSeek, retired identity copy blocked, "start again" gets the warm welcome | §71.10 |
 | **1.28.1** | Local-currency-only money answers (no dollar figures anywhere), computed local fleet totals, reply-complaint recovery, "tell me a little about Saka" routing | §71.3, §71.9 |
@@ -2651,7 +2652,7 @@ The model can never ship a corporate hedge, an empty capacity placeholder (`· v
 - **v1.28.1 — local currency is exclusive:** when a local currency is available, dollar figures are removed from the verified facts, the composer is instructed to quote local only, and the finished reply is scrubbed by `stripUsdFigures()` — a hard invariant (like the plate guard). `formatUsdInLocalCurrency()` now returns "KES 519", never "KES 519 (≈ $3.99)".
 - A fleet-size question gets a computed local total (`For 7 vehicles: Fleet Command ≈ KES 4,676/month …`), so plan math is never shown in USD.
 - The `product_answer` and `user_data_answer` paths both inject the local facts; USD users keep the USD facts unchanged.
-- `test_product_qa.js` asserts KES conversion, the computed 7-vehicle total, the absence of `$`/`USD`, and the scrubber.
+- `test_product_qa.js` asserts KES conversion, the computed 7-vehicle total, the absence of `$`/`USD`, and the scrubber. v1.28.4 adds `hasLocalFigure()`: a money answer must contain a numeric local figure ("KES 1,298"), not merely the currency name, or the complete local fact lines are used.
 
 ### 71.4 Save-my-number nudge (`src/services/contactNudge.js`)
 - Fires once per profile at the first milestone (vehicle registered + passbook issued) and on a lost-chat moment; 30-day cooldown (`CONTACT_NUDGE_COOLDOWN_DAYS`), stamped in `profiles.contact_save_nudged_at` (`npm run migrate:contact-nudge`, fail-soft boot `ensureContactNudgeSchema`).
@@ -2695,3 +2696,13 @@ The model can never ship a corporate hedge, an empty capacity placeholder (`· v
 - **Windowed scan:** paragraph capture tests 1–4-word candidates instead of the greedy character regex that swallowed `KAS` into the previous word. "Car Registration KAS 628T" now banks **KAS 628T** while answering the asset kind.
 - **Self-heal:** registration-only — a previously banked non-plate-like plate is dropped before scanning, so a phantom can never block the real plate or reach the confirmation summary.
 - **Proof:** `test_quiz_flow` 74 assertions (incl. the exact live two-turn sequence); `test_natural_intake` 15.
+
+### 71.12 Write-time plate guard (v1.28.4)
+- **Live evidence (2026-10-31 20:09):** the confirmation summary for the same session showed `🔢 Plate: 1991 80` — a phantom captured before v1.28.3 was deployed. Had the user replied YES, the wrong plate would have been written.
+- **Guard:** `executeFlow('vehicle_registration')` now refuses to persist when `requiresPlate(asset_kind)` is true and `isPlateLike(plate_number)` is false: it deletes the plate, returns to the question phase and re-asks for it (nothing is written). This also protects sessions created by older builds and keeps the confirmation summary honest.
+- **Proof:** `test_quiz_flow` 77 assertions (adds the confirmation-refusal case).
+
+### 71.13 Fuel volume derived from spend ÷ price (v1.28.4)
+- **Live evidence (2026-10-31 20:14):** "Topped up fuel; 1000kes @227kes per liter, @367365km" was answered with "How many litres did you put in?" — the message already contains the arithmetic.
+- `extractVehicleAttributes()` now derives `fuel_liters = round(spend / price-per-litre, 2)` when no explicit volume is present, flags it as `derived_fuel_liters`, and never overwrites a stated volume ("Logged 40L …" stays 40). The one-line quick log therefore saves immediately instead of starting the quiz.
+- **Proof:** `test_natural_intake` adds the live message (4.41 L) and the explicit-volume guard.

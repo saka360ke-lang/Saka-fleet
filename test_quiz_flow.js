@@ -159,6 +159,30 @@ async function run() {
   assert(phantomSession.quiz?.answers?.plate_number === 'KAS 628T', 'the real plate is banked when volunteered alongside the asset kind');
   await handleQuizTurn({ session: phantomSession, messageText: 'cancel', ctx: phantomCtx });
 
+  console.log('\n--- Test 3c: confirmation refuses a phantom plate (v1.28.4) ---');
+  const guardSession = {
+    quiz: {
+      flow: 'vehicle_registration',
+      phase: 'confirm',
+      startedAt: Date.now(),
+      answers: {
+        asset_kind: 'vehicle',
+        plate_number: '1991 80',
+        make_model: 'Toyota Land Cruiser 80 series',
+        yom: 1991,
+        vin: 'HDJ810007675',
+        owner_email: 'tester@example.com',
+        otp: true
+      },
+      extraNotes: []
+    }
+  };
+  const guardTurn = await handleQuizTurn({ session: guardSession, messageText: 'yes', ctx: baseCtx({ vehicles: [] }) });
+  assert(guardTurn.handled === true, 'the confirmation turn is handled');
+  assert(guardSession.quiz && guardSession.quiz.phase === 'question', 'the quiz returns to the question phase instead of writing');
+  assert(guardSession.quiz.answers.plate_number === undefined, 'the phantom plate is removed before any write');
+  await handleQuizTurn({ session: guardSession, messageText: 'cancel', ctx: baseCtx({ vehicles: [] }) });
+
   console.log('\n--- Test 6: quiz ↔ conversation arbitration ---');
   const currentField = getCurrentQuizField(session.quiz, ctx);
   assert(currentField && /vin/i.test(currentField.label), 'Current pending field is VIN');

@@ -99,8 +99,8 @@ async function run() {
 
     console.log('\n--- Test 2: pricing answers with the pricing card ---');
     const pricing = await say('How much does it cost?');
-    check(/(?:KES|Ksh)\s?\d/.test(pricing) && /free|trial/i.test(pricing), 'pricing question returns a local-currency pricing answer with real figures');
-    check(!/\$\s?\d/.test(pricing), 'a Kenyan user never sees a dollar figure');
+    check(/(?:KES|Ksh)\s?\d/.test(pricing) && /free|trial/i.test(pricing), `pricing question returns a local-currency pricing answer with real figures (reply: ${pricing.replace(/\s+/g, ' ').slice(0, 160)})`);
+    check(!/\$\s?\d/.test(pricing), `a Kenyan user never sees a dollar figure (reply: ${pricing.replace(/\s+/g, ' ').slice(0, 160)})`);
     check(!/keep moving|Happy to help you begin|Let's get you started/i.test(pricing), 'pricing is NOT a canned nudge');
     check(!/registration plate/i.test(pricing), 'pricing never asks for a plate');
     check(!/\bplates?\b/i.test(pricing), 'pricing never mentions the word plate');

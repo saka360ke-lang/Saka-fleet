@@ -4,7 +4,12 @@ All notable changes to Saka Fleet. Versions mirror the release tracker at the to
 of `SAKA_FLEET_ARCHITECTURE.md`; every entry names the commit it shipped in.
 Generated from the real git history — never from memory.
 
-## [1.28.3] - 2026-10-31
+## [1.28.4] - 2026-10-31
+- **Write-time plate guard:** a registration confirmation carrying a non-plate-like plate (live confirmation showed `Plate: 1991 80`) is refused — the plate is cleared, the question is re-asked and nothing is written. This protects quiz sessions created before v1.28.3.
+- **Fuel volume derived from spend ÷ price:** "Topped up fuel; 1000kes @227kes per liter, @367365km" now logs **4.41 L** immediately (spend ÷ price-per-litre) instead of asking "how many litres?"; an explicit volume is never overwritten.
+- **Money answers must carry a figure:** `hasLocalFigure()` requires a numeric local amount ("KES 1,298") — merely naming the currency falls back to the complete local fact lines.
+- **Proof:** quiz engine 77 assertions (confirmation-refusal case) · natural intake 19 (adds the live fuel message) · product Q&A 147.
+
 - **No phantom plates:** a plate must now contain ≥2 letters, 1–6 digits and a real letter/digit shape — "1991 80", "367359KM", "20TH", "HDJ810007675" and bare numbers are rejected. The live registration paragraph can no longer bank a year/odometer fragment as the plate.
 - **Windowed paragraph scan:** plate capture tests 1–4-word candidates instead of a greedy character scan that swallowed `KAS` into the previous word, so "Car Registration KAS 628T" banks **KAS 628T** in the same turn it answers the asset kind.
 - **Registration self-heal:** a previously banked non-plate-like plate is dropped before scanning, so a phantom can never block the real plate or reach the confirmation summary.

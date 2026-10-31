@@ -17,7 +17,7 @@ import {
 import { calculateFuelConsumption } from '../services/analytics.js';
 import { normalizeFillType } from '../services/fuelEconomy.js';
 import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly, shouldReplaceIntroCopy, isRepeatedReply, isStopRequest, PAUSE_REPLY, pickRepeatNudge, pickNewcomerNudge, isFirstTimeMessage, shouldReplacePlateAsk, isIncompleteReplyComplaint, isLegacyWelcomeCopy } from '../services/greetings.js';
-import { matchProductQa, buildProductQaReply, buildProductFactsContext, buildLocalPricingFacts, stripUsdFigures, recommendTierForFleet, sanitizeSakaReply } from '../services/productQa.js';
+import { matchProductQa, buildProductQaReply, buildProductFactsContext, buildLocalPricingFacts, stripUsdFigures, hasLocalFigure, recommendTierForFleet, sanitizeSakaReply } from '../services/productQa.js';
 import { shouldSuggestContactSave, isLostChatMessage, buildContactSaveFacts, markContactSaveSuggested } from '../services/contactNudge.js';
 import { buildUserContextSnapshot } from '../services/userContextSnapshot.js';
 import { resolveSlowAckMs, pickSlowAckLine, shouldSendSlowAck } from '../services/turnAck.js';
@@ -1147,7 +1147,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             : sanitizedText;
           const needsFigures = ['pricing', 'packages', 'trial', 'tier_details', 'addons', 'limits'].includes(productQaMatch.id);
           const currencyCode = String(countryInfo?.currency || '').toUpperCase();
-          const carriesLocalFigure = !localPricingFacts || (currencyCode && composedText.includes(currencyCode));
+          const carriesLocalFigure = !localPricingFacts || hasLocalFigure(composedText, currencyCode);
           const usableAnswer = composedText.length >= 60 && (!needsFigures || /\d/.test(composedText)) && carriesLocalFigure
             ? composedText
             : stripUsdFigures(fallbackAnswer, { currency: countryInfo?.currency });

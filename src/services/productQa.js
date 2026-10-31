@@ -103,6 +103,17 @@ export async function buildLocalPricingFacts({ supabase = null, currency = 'USD'
 }
 
 /**
+ * v1.28.4 — a money answer is only acceptable when it carries a NUMERIC figure in
+ * the user's currency ("KES 1,298"); merely naming the currency is not enough.
+ * The route falls back to the complete local fact lines otherwise.
+ */
+export function hasLocalFigure(text = '', currency = '') {
+  const code = String(currency || '').toUpperCase().replace(/[^A-Z]/g, '');
+  if (!code) return false;
+  return new RegExp(`\\b${code}\\b\\s*\\d`, 'i').test(String(text || ''));
+}
+
+/**
  * v1.28.1 — hard-invariant scrubber. When Saka quotes local currency, NO dollar
  * value may survive in the reply: "$12.34", "(≈ $9.99)" and "USD 9.99" are
  * removed, and a bare "USD" becomes the local currency code when supplied.
@@ -449,6 +460,7 @@ export default {
   buildProductFactsContext,
   buildLocalPricingFacts,
   stripUsdFigures,
+  hasLocalFigure,
   recommendTierForFleet,
   tierFactLines,
   sanitizeSakaReply

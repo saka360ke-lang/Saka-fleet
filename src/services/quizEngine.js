@@ -2330,6 +2330,17 @@ async function executeFlow(state, ctx) {
   try {
     switch (state.flow) {
       case 'vehicle_registration': {
+        // v1.28.4 — never write a registration with a non-plate-like plate.
+        // Last line of defence: a confirmation summary created by an older build
+        // can still carry a phantom ("1991 80") captured from a paragraph.
+        if (requiresPlate(a.asset_kind) && !isPlateLike(a.plate_number)) {
+          delete state.answers.plate_number;
+          state.phase = 'question';
+          state.lastAcceptedAnswer = null;
+          state.turnNote = 'The saved registration is not a valid plate. Ask for it again with a country example; do not write anything yet.';
+          const reply = await askCurrent(state, ctx);
+          return { handled: true, reply, flow: state.flow, active: true };
+        }
         const saved = await persistVehicleRegistration(state, ctx);
         if (!saved.success) {
           const reply = await fail(saved.error);

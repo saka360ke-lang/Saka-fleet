@@ -118,9 +118,12 @@ at most 3 emojis per message (4 on the welcome message).
   can never be sent. The retired "intelligent WhatsApp vehicle & asset
   management assistant" identity is blocked, and "let's start again" gets the
   warm welcome.
-- **No phantom plates (v1.28.3):** paragraph intake only accepts plate-shaped
-  values; "A 1991 80 series…" can no longer be saved as a plate, and a real
-  registration volunteered later in the same answer is captured immediately.
+- **No phantom plates (v1.28.3–1.28.4):** paragraph intake only accepts
+  plate-shaped values; "A 1991 80 series…" can no longer be saved as a plate, a
+  real registration volunteered later in the same answer is captured
+  immediately, and confirmation refuses to write a non-plate-like value.
+  Fuel messages that give spend + price per litre ("1000kes @227kes per liter")
+  derive the litres (4.41 L) instead of asking for them.
 
 ## Receipt intelligence (v1.19.0)
 Send a photo of a **fuel receipt, logbook, insurance policy or driver licence**:

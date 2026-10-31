@@ -568,6 +568,25 @@ export function extractVehicleAttributes(messageText = '') {
     }
   }
 
+  // 10b. Derived fuel volume (v1.28.4) — "1000kes @227kes per liter" carries no
+  // explicit litres. Derive litres = spend / price-per-litre instead of asking
+  // the user to repeat arithmetic the message already contains. An explicit
+  // volume is never overwritten.
+  if (!data.fuel_liters && data.amount) {
+    const priceMatch = clean.match(/(?:@|at|for)?\s*(\d[\d,]*(?:\.\d+)?)\s*(?:kes|ksh|usd|eur|gbp|shs|shillings?)?\s*(?:per|\/|a)\s*(?:l\b|lt\b|ltr\b|litres?|liters?)/i);
+    if (priceMatch) {
+      const price = parseFloat(priceMatch[1].replace(/,/g, ''));
+      if (Number.isFinite(price) && price > 0) {
+        const derived = Math.round((Number(data.amount) / price) * 100) / 100;
+        if (derived > 0) {
+          data.fuel_liters = derived;
+          data.liters = derived;
+          data.derived_fuel_liters = true;
+        }
+      }
+    }
+  }
+
   // 11. Vehicle Switching Target
   const switchTargetMatch = clean.match(/(?:switch(?:\s+to)?|manage|select)\s+(?:car|vehicle)?\s*([A-Za-z0-9\s-]+)$/i);
   if (switchTargetMatch && !/^(skip|done|cancel|resend|help)$/i.test(switchTargetMatch[1].trim())) {

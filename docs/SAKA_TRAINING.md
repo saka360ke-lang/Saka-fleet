@@ -1,6 +1,6 @@
 # Saka Fleet — Training Snapshot (generated)
 
-Generated from code at version **1.28.3** — do not edit by hand. Run `npm run docs:gen`.
+Generated from code at version **1.28.4** — do not edit by hand. Run `npm run docs:gen`.
 
 - Prompt schema: `SAKA-PROMPT-SCHEMA:2026.11.0` (version 2026.11.0)
 - Intents trained: **39**

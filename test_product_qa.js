@@ -6,6 +6,7 @@ import {
   buildProductFactsContext,
   buildLocalPricingFacts,
   stripUsdFigures,
+  hasLocalFigure,
   recommendTierForFleet,
   sanitizeSakaReply
 } from './src/services/productQa.js';
@@ -135,5 +136,9 @@ check(!/\$|\bUSD\b/.test(scrubbed) && scrubbed.includes('KES 10,901/year'), 'a b
 const scrubbedPlain = stripUsdFigures('5 vehicles at $27.99/month and 2 slots at $3.99/month', { currency: 'KES' });
 check(!/\$\d/.test(scrubbedPlain), 'bare dollar amounts are removed');
 check(matchProductQa('Cool. First tell me a little about Saka')?.id === 'what_is_saka', '"tell me a little about Saka" returns the intro');
+check(hasLocalFigure('Solo Pro is KES 1,298/month', 'KES') === true, 'a local answer with a figure is accepted');
+check(hasLocalFigure('Plans are billed in KES at checkout', 'KES') === false, 'merely naming the currency is not a figure');
+check(hasLocalFigure('KES\n1,298 per month', 'KES') === true, 'a figure on the next line still counts');
+check(hasLocalFigure('$9.99/month', 'KES') === false, 'a dollar amount is never a local figure');
 
 console.log(`\n🎉 ${passed} product Q&A assertions passed.`);

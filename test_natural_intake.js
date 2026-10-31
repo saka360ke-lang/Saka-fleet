@@ -44,6 +44,13 @@ check('second story mileage', secondStory.current_mileage === 88500, secondStory
 const fuelStory = extractVehicleAttributes('I bought fuel for KES 5,500 yesterday');
 check('fuel spend never becomes purchase cost', !fuelStory.purchase_cost, fuelStory.purchase_cost);
 
+const derivedFuel = extractVehicleAttributes('Topped up fuel; 1000kes @227kes per liter, @367365km');
+check('live fuel spend parsed', derivedFuel.amount === 1000, derivedFuel.amount);
+check('litres derived from spend / price per litre', derivedFuel.fuel_liters === 4.41, derivedFuel.fuel_liters);
+check('derived volume is flagged', derivedFuel.derived_fuel_liters === true, derivedFuel.derived_fuel_liters);
+const explicitFuel = extractVehicleAttributes('Logged 40L at 50350 km for KES 5500');
+check('an explicit volume is never overwritten', explicitFuel.fuel_liters === 40, explicitFuel.fuel_liters);
+
 console.log('=== Natural intake: prompt & boundary rules ===');
 
 check(
