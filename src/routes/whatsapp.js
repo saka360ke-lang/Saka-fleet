@@ -18,6 +18,7 @@ import { calculateFuelConsumption } from '../services/analytics.js';
 import { normalizeFillType } from '../services/fuelEconomy.js';
 import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly, shouldReplaceIntroCopy, isRepeatedReply } from '../services/greetings.js';
 import { matchProductQa, buildProductQaReply } from '../services/productQa.js';
+import { resolveSlowAckMs, pickSlowAckLine, shouldSendSlowAck } from '../services/turnAck.js';
 import { buildVehicleSummary, emailVehicleSummary } from '../services/vehicleSummary.js';
 import {
   buildFeatureNotice,
@@ -1008,18 +1009,21 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         }
 
         // v1.24.2 - slow-turn ack: no user should ever stare at silence while a
-        // provider times out. If the turn is still working after SLOW_ACK_MS,
-        // send one gentle "still with you" line (best-effort, never blocks).
-        const slowAckMs = Number(process.env.SLOW_ACK_MS || 4000);
+        // provider times out. v1.25.1 — 8s threshold, rotating copy and a 60s
+        // anti-spam floor so it never feels like a metronome.
+        const slowAckMs = resolveSlowAckMs(process.env);
         if (instantAckEnabled && !session.instantAckSent && !mediaObj && !session.quiz
           && !countryCommandResult && slowAckMs > 0) {
           slowAckTimer = setTimeout(async () => {
-            if (turnFinalized) return;
+            if (!shouldSendSlowAck({ turnFinalized, now: Date.now(), lastAckAt: session.lastSlowAckAt || 0 })) return;
             session.slowAckSent = true;
+            session.lastSlowAckAt = Date.now();
+            const line = pickSlowAckLine(session.slowAckCount || 0);
+            session.slowAckCount = (session.slowAckCount || 0) + 1;
             try {
-              await sendWhatsAppReply(senderPhone, '⏳ One moment — still with you.');
+              await sendWhatsAppReply(senderPhone, line);
               if (supabaseClient) {
-                await logChatTranscript(supabaseClient, senderPhone, 'assistant', 'One moment — still with you.');
+                await logChatTranscript(supabaseClient, senderPhone, 'assistant', line);
               }
             } catch { /* ack is best-effort */ }
           }, slowAckMs);

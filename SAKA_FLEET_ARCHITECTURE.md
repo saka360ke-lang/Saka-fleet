@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.25.0  
+**Version:** 1.25.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.25.1** | Stale prompt-refinement gate + slow-ack polish (8s, rotating, 60s floor) | §65.7 |
 | **1.25.0** | Conversational-first onboarding: sales welcome, VOICE LAW, warm quiz copy, Product Q&A | §65, §66 |
 | **1.24.4** | Status probe aliases (`/api/health`, `/internal/status`) + first-time-user onboarding-loop fix | §64.2, §64.5 |
 | **1.24.3** | Operator tooling + chat-log fixes: silent admin sessions, revision probe, first-contact race, phase telemetry | §64 |
@@ -2448,6 +2449,10 @@ Registration and compliance quiz questions are conversational with one emoji anc
 
 ### 65.6 Help menu & support routing
 `help` / `menu` / `what can you do` → a five-line tour with one example line and a closing question. The support escalation trigger no longer fires on a bare "agent"/"human"/"support" word: only explicit phrases (`support team`, `talk to a person`, `file a complaint`, `escalate`, …) route to `support@sakafleet.com`.
+
+### 65.7 v1.25.1 — stale prompt refinements retired + ack polish
+- **Prompt schema gate:** `SAKA_PROMPT_SCHEMA_VERSION` is now `2026.11.0`. Because the marker embeds the version, `includes(PROMPT_REFINEMENT_MARKER)` is an exact-version check — the 2026-10-28 refinement in `system_config.saka_core_prompt` (which pulled replies back to "Let's keep moving" and corporate copy) is now ignored. `test_agent_training.js` asserts a stale-schema refinement is dropped while `VOICE LAW` survives. Bump this constant on any prompt-breaking release.
+- **Slow-turn ack:** `SLOW_ACK_MS` default 4000 → **8000**; the line rotates per session (`⏳ Still with you…` → `🙂 One sec — checking your garage…` → `📒 Flipping through your passbook…` → `🚗 Almost there…`) and at most one ack is sent per 60 s (`src/services/turnAck.js`). `test_turn_ack.js` (in `npm run health`) covers the threshold, rotation wrap and the anti-spam floor.
 
 ---
 

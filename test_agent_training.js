@@ -184,6 +184,12 @@ async function run() {
   const oversizedPrompt = await getSakaCorePrompt(makePromptMock(`${PROMPT_REFINEMENT_MARKER}\nZZZ_OVERSIZE ${'x'.repeat(MAX_STORED_PROMPT_REFINEMENT_CHARS + 50)}`));
   check(!oversizedPrompt.includes('ZZZ_OVERSIZE'), 'Oversized prompt refinement is ignored');
   clearSakaPromptCache();
+  // v1.25.1 — a refinement written for an older schema must never override the
+  // current trained prompt (the 2026-10-28 refinement did exactly that).
+  const staleSchemaPrompt = await getSakaCorePrompt(makePromptMock('SAKA-PROMPT-SCHEMA:2026.10.3\nZZZ_STALE keep the old corporate wording.'));
+  check(!staleSchemaPrompt.includes('ZZZ_STALE'), 'Stale-schema prompt refinement is ignored');
+  check(staleSchemaPrompt.includes('VOICE LAW'), 'the current trained prompt survives a stale refinement');
+  clearSakaPromptCache();
 
   console.log(`\n\u2705 ALL AGENT TRAINING TESTS PASSED (${passed} assertions).`);
   console.log('Stateless suite: no real database rows were created, so no cleanup is required.');

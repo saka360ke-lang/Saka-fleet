@@ -285,11 +285,16 @@ CRITICAL CONTEXT & TIME-AWARENESS:
  */
 const CORE_PROMPT_TTL_MS = Number(process.env.SAKA_PROMPT_CACHE_MS || 60000);
 /**
- * Stored prompt refinements must be small and tagged with the current schema
+ * Stored prompt refinements must be small and tagged with the CURRENT schema
  * version. This prevents a stale pre-v1.7 mega-prompt in system_config from
  * silently contradicting the trained core prompt and flow playbook.
+ *
+ * v1.25.1 — the version is part of the marker, so `includes(PROMPT_REFINEMENT_MARKER)`
+ * is an exact-version check: bumping this constant retires every refinement
+ * written for an older prompt (the 2026-10-28 refinement was overriding the
+ * v1.25.0 VOICE LAW with old copy).
  */
-export const SAKA_PROMPT_SCHEMA_VERSION = '2026.10.3';
+export const SAKA_PROMPT_SCHEMA_VERSION = '2026.11.0';
 export const MAX_STORED_PROMPT_REFINEMENT_CHARS = Number(process.env.SAKA_MAX_PROMPT_REFINEMENT_CHARS || 2000);
 export const PROMPT_REFINEMENT_MARKER = `SAKA-PROMPT-SCHEMA:${SAKA_PROMPT_SCHEMA_VERSION}`;
 let corePromptCache = { text: null, expiresAt: 0 };
@@ -324,8 +329,8 @@ export async function getSakaCorePrompt(providedSupabase = null) {
         basePrompt = `${basePrompt}\n\nSENTINEL PROMPT REFINEMENT:\n${stored}`;
       } else {
         console.warn(
-          `[sakaAi] Ignoring stored saka_core_prompt refinement (${stored.length} chars, versioned=${isVersioned}). ` +
-          `Store a <=${MAX_STORED_PROMPT_REFINEMENT_CHARS}-char refinement prefixed with ${PROMPT_REFINEMENT_MARKER}.`
+          `[sakaAi] Ignoring stored saka_core_prompt refinement (${stored.length} chars, currentSchema=${isVersioned}). ` +
+          `Stale refinements cannot override the trained prompt. Store a <=${MAX_STORED_PROMPT_REFINEMENT_CHARS}-char refinement prefixed with ${PROMPT_REFINEMENT_MARKER}.`
         );
       }
     }
