@@ -33,7 +33,7 @@ function pricingLines() {
 export const PRODUCT_QA = Object.freeze([
   {
     id: 'pricing',
-    topics: /\b(costs?|price[sd]?|pricing|how much|charge[sd]?|fee[s]?|pay|paid|payment|subscription|plan[s]?|tier[s]?|premium|upgrade|billing|expensive)\b/i,
+    topics: /\b(costs?|price[sd]?|pricing|how much|charge[sd]?|fee[s]?|free|pay|paid|payment|subscription|plan[s]?|tier[s]?|premium|upgrade|billing|expensive)\b/i,
     build: () => '💳 *Saka is free to start* — one vehicle with reminders, receipts and monthly reports. No card, no catch.\n\n' +
       `When you want more:\n${pricingLines()}\n\n` +
       `Every new account begins with a *${TRIAL_DAYS}-day free trial of the full product* 😊\n` +

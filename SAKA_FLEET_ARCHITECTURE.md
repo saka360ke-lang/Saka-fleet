@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.26.1  
+**Version:** 1.26.2  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.26.2** | Free-service pricing routing + a hard no-plate invariant outside registration | §69.7 |
 | **1.26.1** | Human Saka: generic answers removed (AI-composed replies, banned canned lines, no plate ask outside the quiz) | §69.6 |
 | **1.26.0** | Conversational Answer Engine: answer-first rule, anticipated-question matrix, friction resolver fix, trust lines on sensitive asks | §69 |
 | **1.25.8** | Root-cause fix: repeat guard compared the reply with itself (every real answer became a nudge); placeholder-name greeting; e2e flow test | §65.11 |
@@ -2556,6 +2557,11 @@ The quiz copy now reassures at the exact moment of hesitation: plate (`only to k
 - **No plate ask outside the registration quiz.** The welcome, greeting, and default compose prompts now ask *"What do you drive? One line is enough"*; the plate question exists only inside the deterministic registration quiz. `test_first_message_flow` asserts the welcome, the intro and every FAQ answer never ask for a plate.
 - **Small talk no longer hides a question.** `matchProductQa` strips leading interjections ("Nice.", "Ok", "Cool", "Please"), so *"Nice. Tell me more about Saka"* reaches the intro answer instead of the AI's generic script.
 - Proof: `npm run test:flow` is now **30 assertions** (welcome, pricing, trial, intro + the 8-question matrix, each checked for no canned line and no plate ask); `test_product_qa` 103; `test_agent_training` 92; `test_greetings` green.
+
+### 69.7 v1.26.2 — free-service routing + the no-plate invariant
+- **"Is this a free service?" / "Is it free to use Saka?"** now route to the pricing answer — the pricing matcher was missing the word `free`.
+- **Hard no-plate invariant (code-enforced):** after composition, if the user is not inside the registration quiz, has no vehicle and did not type REGISTER, any reply that mentions "plate" is replaced with a warm one-line invitation ("Tell me what you drive — one line is enough… Or reply REGISTER"). The model can never re-introduce the plate ask outside registration. The intro prompts additionally forbid the word itself.
+- Proof: `npm run test:flow` is now **37 assertions** — every turn (welcome, pricing, trial, intro, the 8-question matrix and both free-service turns) asserts the reply contains no "plate". `test_product_qa` 105.
 
 ### 67.7 Sentinel refinements must carry the schema marker (v1.25.3)
 - `runConversationRefinement()` wrote the refined prompt **without** the `SAKA-PROMPT-SCHEMA` marker, so the v1.25.1 gate ignored every weekly refinement — and the unmarked 3k-character legacy prompt kept reappearing in `system_config`. The writer now stamps `PROMPT_REFINEMENT_MARKER` and bounds the payload to `MAX_STORED_PROMPT_REFINEMENT_CHARS`, so a refinement can only ever augment the current, trained prompt.

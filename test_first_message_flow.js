@@ -70,6 +70,7 @@ async function run() {
     check(hi.includes('⛽') && hi.includes('💰') && hi.includes('🔔'), 'the welcome carries the three value anchors');
     check(/REGISTER/i.test(hi), 'the welcome ends with a next step');
     check(!/send your vehicle'?s? (?:number |registration )?plate/i.test(hi), 'the welcome never asks for a plate');
+    check(!/\bplates?\b/i.test(hi), 'the welcome never mentions the word plate');
     check(!/keep moving|Happy to help you begin|Let's get you started/i.test(hi), 'the welcome is NOT replaced by a nudge');
     check(!/WhatsApp I'm/.test(hi), 'the placeholder name "WhatsApp User" is never used as a greeting');
 
@@ -78,6 +79,7 @@ async function run() {
     check(/\$\d/.test(pricing) && /free|trial/i.test(pricing), 'pricing question returns a conversational pricing answer with real figures');
     check(!/keep moving|Happy to help you begin|Let's get you started/i.test(pricing), 'pricing is NOT a canned nudge');
     check(!/registration plate/i.test(pricing), 'pricing never asks for a plate');
+    check(!/\bplates?\b/i.test(pricing), 'pricing never mentions the word plate');
 
     console.log('\n--- Test 3: trial answers with the trial card ---');
     const trial = await say("What's the trial period?");
@@ -89,6 +91,7 @@ async function run() {
     check(/Saka/i.test(intro) && /(machine|vehicle|passbook|fuel)/i.test(intro), 'the intro answer describes what Saka does');
     check(!/registration plate/i.test(intro), 'the intro never asks for a plate');
     check(!/keep moving|Happy to help you begin|Let's get you started/i.test(intro), 'the intro is not a canned nudge');
+    check(!/\bplates?\b/i.test(intro), 'the intro never mentions the word plate');
 
     console.log('\n--- Test 4b: the anticipated-question matrix (v1.26.0) ---');
     const matrix = [
@@ -104,7 +107,14 @@ async function run() {
     for (const [question, expected, label] of matrix) {
       const answer = await say(question);
       check(expected.test(answer), `"${question}" answers the ${label} question`);
-      check(!/registration plate|Send your vehicle's number plate/i.test(answer), `"${question}" is NOT answered with the plate script`);
+      check(!/\bplates?\b/i.test(answer), `"${question}" never mentions the word plate`);
+    }
+
+    console.log('\n--- Test 4c: free-service questions (v1.26.2) ---');
+    for (const question of ['Nice. Is this a free service?', 'Is it free to use saka?']) {
+      const answer = await say(question);
+      check(/\$\d|free|trial/i.test(answer), `"${question}" is answered with pricing facts`);
+      check(!/\bplates?\b/i.test(answer), `"${question}" never mentions the word plate`);
     }
 
     console.log(`\n🎉 ${passed} first-message flow assertions passed.`);

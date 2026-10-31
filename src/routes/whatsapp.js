@@ -2892,7 +2892,7 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
                 : await composeMessage({
                     purpose: 'first_time_welcome',
                     facts: {
-                      prompt: 'Introduce Saka warmly in two short lines (what it does for their machine) and ask exactly ONE natural question: what do they drive? Invite REGISTER as an alternative. NEVER ask them to send a plate.',
+                      prompt: 'Introduce Saka warmly in two short lines (what it does for their machine) and ask exactly ONE natural question: what do they drive? Invite REGISTER as an alternative. The word "plate" must not appear in your reply.',
                       region: countryInfo,
                       plateExample: countryInfo.plate_example,
                       setupSteps: ['plate number', 'make/model, year, fuel, odometer', 'email OTP', 'VIN-locked passbook'],
@@ -2914,7 +2914,7 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
             customReply = await composeMessage({
               purpose: 'first_time_default',
               facts: {
-                prompt: 'Give exactly ONE warm next step: ask what they drive (one line is enough), or invite REGISTER. Never ask them to send a plate.',
+                prompt: 'Give exactly ONE warm next step: ask what they drive (one line is enough), or invite REGISTER. The word "plate" must not appear in your reply.',
                 plateExample: countryInfo.plate_example,
                 region: countryInfo
               },
@@ -3043,6 +3043,15 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
             profile: profileData,
             fallbackText: '🙂 Let me put that differently — what would help most right now?'
           });
+        }
+
+        // v1.26.2 — the plate ask belongs ONLY to the registration quiz. If any
+        // composed reply mentions "plate" outside registration, it is replaced by
+        // a warm one-line invitation instead. The model can never re-add it.
+        if (!session.quiz && !hasVehicleRegistered
+          && !/^\s*(?:register|onboard|add)\b/i.test(messageText)
+          && /\bplates?\b/i.test(finalReply)) {
+          finalReply = 'Tell me what you drive — one line is enough (e.g. *"Toyota Fielder 2016, diesel, 120,000 km"*). Or reply *REGISTER* and I\'ll ask a few quick questions. 🙂';
         }
 
         // v1.21.3 — a zero-vehicle user must never be asked for a plate before

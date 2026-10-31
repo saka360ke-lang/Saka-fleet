@@ -4,6 +4,11 @@ All notable changes to Saka Fleet. Versions mirror the release tracker at the to
 of `SAKA_FLEET_ARCHITECTURE.md`; every entry names the commit it shipped in.
 Generated from the real git history — never from memory.
 
+## [1.26.2] - 2026-10-31
+- **"Is this a free service?" now answers pricing** — `free` was missing from the pricing matcher.
+- **Hard no-plate invariant:** outside the registration quiz, any reply mentioning "plate" is replaced by a warm "tell me what you drive" line — the model can never re-add the plate ask.
+- **Proof:** `npm run test:flow` 37 assertions (every turn asserts no "plate"); product Q&A 105.
+
 ## [1.26.1] - 2026-10-31
 - **Generic answers removed:** product replies are now composed fresh from verified facts (cards only as an outage fallback); the nudge family is banned at the prompt level; a repeat asks for a different, warmer phrasing instead of a canned line.
 - **No plate ask outside registration:** welcome, greeting and default prompts now ask "What do you drive?", and the welcome no longer mentions sending a plate.

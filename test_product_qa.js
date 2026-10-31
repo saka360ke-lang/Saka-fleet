@@ -60,6 +60,8 @@ check(matchProductQa('Why do you need my VIN?')?.id === 'why_details', '"why do 
 check(matchProductQa('Can I skip this?')?.id === 'progress', '"can I skip" returns the progress answer');
 check(matchProductQa('Is there an app?')?.id === 'technical', '"is there an app" returns the WhatsApp-only answer');
 check(matchProductQa('Can I delete my data?')?.id === 'data_control', '"can I delete my data" returns the data-control answer');
+check(matchProductQa('Nice. Is this a free service?')?.id === 'pricing', '"is this a free service" (with small talk) returns pricing');
+check(matchProductQa('Is it free to use saka?')?.id === 'pricing', '"is it free to use saka" returns pricing');
 check(/ANSWER-FIRST RULE/.test(buildProductQaContext()), 'the answer-first rule is injected into the AI context');
 check(/never reply with the registration/i.test(buildProductQaContext()), 'the plate-script default is explicitly forbidden');
 check(matchProductQa('I paid 5000 for fuel') === null, 'a fuel statement never triggers the pricing card');
