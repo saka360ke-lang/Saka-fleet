@@ -88,6 +88,23 @@ async function run() {
     check(/machine's memory/i.test(intro), 'the FAQ intro card is returned');
     check(!/keep moving|Happy to help you begin|Let's get you started/i.test(intro), 'the intro is NOT replaced by a nudge');
 
+    console.log('\n--- Test 4b: the anticipated-question matrix (v1.26.0) ---');
+    const matrix = [
+      ['What are the costs of using Saka?', /free to start/i, 'pricing'],
+      ['How do I use saka?', /just talk to me like a person/i, 'tour'],
+      ['What are the details of Solo Pro?', /Solo Pro/i, 'plan details'],
+      ['How do the add ons work?', /Add-ons are extra vehicle slots/i, 'add-ons'],
+      ['How do I subscribe to growth fleet?', /Reply \*UPGRADE\*/i, 'subscribe steps'],
+      ['Why do you need my VIN?', /locks the passbook to you alone/i, 'trust'],
+      ['Is there an app?', /No app, no download/i, 'whatsapp-only'],
+      ['Can I delete my data?', /Your data belongs to you/i, 'data control']
+    ];
+    for (const [question, expected, label] of matrix) {
+      const answer = await say(question);
+      check(expected.test(answer), `"${question}" answers the ${label} question`);
+      check(!/registration plate|Send your vehicle's number plate/i.test(answer), `"${question}" is NOT answered with the plate script`);
+    }
+
     console.log(`\n🎉 ${passed} first-message flow assertions passed.`);
   } finally {
     await cleanup();

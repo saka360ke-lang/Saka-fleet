@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.25.8  
+**Version:** 1.26.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.26.0** | Conversational Answer Engine: answer-first rule, anticipated-question matrix, friction resolver fix, trust lines on sensitive asks | §69 |
 | **1.25.8** | Root-cause fix: repeat guard compared the reply with itself (every real answer became a nudge); placeholder-name greeting; e2e flow test | §65.11 |
 | **1.25.7** | Deploy telegraph: "building" alert + app-emitted LIVE alert, field-work sync protocol, Rules Gate | §68 |
 | **1.25.6** | Welcome survives the plate guard; "tell me more about…" FAQ routing | §65.10 |
@@ -2509,7 +2510,6 @@ Stateless suite (in `npm run health`) that fails when:
 ---
 
 ## 68. v1.25.7 - Deploy Telegraph, Field-Work Sync & Rules Gate
-
 ### 68.1 Two notifications, every deploy path
 - **Building:** `deploy_notify.yml` (push to main) sends `Saka update building - v<version> - <hash>` with a plain-English headline and the promise of a second message (`scripts/notify_git_push.js`).
 - **LIVE:** the app itself announces the revision at boot — `announceRevisionLive()` (`src/services/deployLiveAlert.js`) compares `K_REVISION` with `system_config.last_deployed_revision`; on change it upserts the key and sends `🚀 Saka is LIVE - v<version> · <revision>` exactly once. This works for local pushes, **cline.bot pipelines** and manual console deploys, and survives restarts without repeating.
@@ -2524,6 +2524,30 @@ Stateless suite (in `npm run health`) that fails when:
 
 ### 68.4 Operator CLI
 - GitHub CLI is available for run inspection (`gh run list`, `gh run view`). Installation is a machine-level setup step; `gh auth login` is required once per workstation.
+
+---
+
+## 69. v1.26.0 - Conversational Answer Engine (answer first, anticipate always)
+
+### 69.1 The failure it fixes (live evidence 2026-10-31 14:36-14:40 UTC)
+- "What are the costs of using Saka?" → "Logged expense of amount." (plural "costs" missed the matcher; the AI read it as an expense log).
+- "How do I use saka?", "What are the details of Solo Pro?", "How do the add ons work?" → the **plate script** ("send me your vehicle's registration plate").
+- "Why do you need my VIN?" → an **apology + automated prompts paused** (the friction detector treated "why do you" as frustration).
+- Root causes: the AI had no answer-first instruction; the FAQ registry had gaps; `checkIsConversationalFeedback` contained question-shaped keywords (`why do you`, `why are you`, `again`, `wrong`, `huh`).
+
+### 69.2 Anticipated-question matrix (new `PRODUCT_QA` entries)
+`how_to_use` · `how_to_subscribe` · `tier_details` (built from `TIER_MATRIX`) · `addons` (price from `TIER_MATRIX.fleet_command.addonMonthlyUSD`) · `why_details` (why plate/VIN/email) · `mistakes` (edit/undo, VIN exception) · `progress` (how many questions, skipping) · `technical` (no app, low data) · `data_control` (export/delete) — plus `costs?`/`price[sd]?` coverage in the pricing matcher.
+These are exactly the questions a person asks **right before sharing personal vehicle details**, so they are answered instantly, deterministically and without a plate ask.
+
+### 69.3 Answer-first enforcement
+- `buildProductQaContext()` now carries an **ANSWER-FIRST RULE** and an explicit prohibition: *never reply with the registration/plate script unless the user asked to register, said REGISTER, or sent a plate.* `test_agent_training` asserts both strings in the assembled prompt.
+- The recognised product question **outranks the friction apology** in the unregistered branch (`!productQaMatch` guard).
+
+### 69.4 Trust lines on sensitive asks
+The quiz copy now reassures at the exact moment of hesitation: plate (`only to keep *your* records, never shared 🔒`), VIN (`locks into your private passbook forever`), email (`only for your OTP`), OTP (`10 seconds`).
+
+### 69.5 Proof
+`npm run test:flow` drives the real handler through today's exact conversation plus the anticipated matrix (28 assertions): each question gets its card and **none** may contain the plate script. `test_product_qa` is now 102 assertions.
 
 ### 67.7 Sentinel refinements must carry the schema marker (v1.25.3)
 - `runConversationRefinement()` wrote the refined prompt **without** the `SAKA-PROMPT-SCHEMA` marker, so the v1.25.1 gate ignored every weekly refinement — and the unmarked 3k-character legacy prompt kept reappearing in `system_config`. The writer now stamps `PROMPT_REFINEMENT_MARKER` and bounds the payload to `MAX_STORED_PROMPT_REFINEMENT_CHARS`, so a refinement can only ever augment the current, trained prompt.

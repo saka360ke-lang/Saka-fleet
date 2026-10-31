@@ -33,7 +33,7 @@ function pricingLines() {
 export const PRODUCT_QA = Object.freeze([
   {
     id: 'pricing',
-    topics: /\b(cost|price|pricing|how much|charge[sd]?|fee[s]?|pay|paid|payment|subscription|plan[s]?|tier[s]?|premium|upgrade|billing|expensive)\b/i,
+    topics: /\b(costs?|price[sd]?|pricing|how much|charge[sd]?|fee[s]?|pay|paid|payment|subscription|plan[s]?|tier[s]?|premium|upgrade|billing|expensive)\b/i,
     build: () => '💳 *Saka is free to start* — one vehicle with reminders, receipts and monthly reports. No card, no catch.\n\n' +
       `When you want more:\n${pricingLines()}\n\n` +
       `Every new account begins with a *${TRIAL_DAYS}-day free trial of the full product* 😊\n` +
@@ -67,6 +67,78 @@ export const PRODUCT_QA = Object.freeze([
       '🔔 Reminders — service, expiries, renewals\n' +
       '📊 Reports — cost per km, fuel economy, monthly summary\n\n' +
       'Try the easy way: *"Logged 40L at 50350 km for KES 5500 — full tank"* and I\'ll do the rest. 🚗'
+  },
+  {
+    id: 'how_to_use',
+    topics: /\b(how (?:do i|can i|to) use|how does (?:saka(?:\s*fleet)?|this) work|what do i do|where do i start)\b/i,
+    build: () => '🚗 Easy — just talk to me like a person.\n\n' +
+      '• Send a sentence: *"Toyota Fielder 2016, diesel, 120,000 km"* — I set it up\n' +
+      '• Or reply *REGISTER* and I ask one short question at a time\n' +
+      '• Later: *"Logged 40L at 50350 km for KES 5500 — full tank"*\n' +
+      '• *reminders*, *report*, *pricing* work anytime\n\n' +
+      '_What do you drive? Tell me and I\'ll take it from there._ 🙂'
+  },
+  {
+    id: 'how_to_subscribe',
+    topics: /\b(how (?:do i|can i|to) (?:subscribe|upgrade|pay)|subscribe to|upgrade to|sign ?up for)\b/i,
+    build: () => '💳 Two steps, all inside WhatsApp:\n\n' +
+      '1. Reply *UPGRADE*\n' +
+      '2. Pick your plan and pay on the secure checkout page\n\n' +
+      'Your *30-day free trial* keeps running to the end, then your plan takes over. No card needed today.\n\n' +
+      '_Want to see the plans first? Say *pricing*._ 🚗'
+  },
+  {
+    id: 'tier_details',
+    topics: /\b(solo ?pro|team fleet|growth(?: fleet)?|fleet command)\b/i,
+    build: () => 'Here\'s what each plan unlocks 👇\n\n' +
+      pricingLines() + '\n\n' +
+      'Every plan includes the full passbook, reminders, receipts, reports and driver tools.\n\n' +
+      `_All start with a *${TRIAL_DAYS}-day free trial*. Reply *UPGRADE* when you're ready._ 🙂`
+  },
+  {
+    id: 'addons',
+    topics: /\b(add.?ons?|extra vehicles?|more vehicle slots?)\b/i,
+    build: () => '🧩 Add-ons are extra vehicle slots — only on *Fleet Command*.\n\n' +
+      `Each extra vehicle is $${Number(TIER_MATRIX.fleet_command.addonMonthlyUSD || 0).toFixed(2)}/month (or the annual equivalent), added to your base plan.\n\n` +
+      '_Reply *pricing* to see the plans, or *UPGRADE* to get started._ 🙂'
+  },
+  {
+    id: 'why_details',
+    topics: /\b(why (?:do you|does saka|would you) need|why my (?:plate|vin|email)|what do you need my|safe to share|share my (?:vin|plate|details)|who sees)\b/i,
+    build: () => '🔒 Great question — here\'s exactly why:\n\n' +
+      '• *Plate* — finds your machine\'s records\n' +
+      '• *VIN* — locks the passbook to you alone, permanently\n' +
+      '• *Email* — only for the OTP that proves it\'s you\n\n' +
+      'Nothing is shared or sold, and you can view or delete your data anytime.\n\n' +
+      '_Shall we continue? Reply *REGISTER*._ 🙂'
+  },
+  {
+    id: 'mistakes',
+    topics: /\b(made a mistake|wrong (?:vin|plate|number|details?)|fix (?:it|that|a typo)|undo|edit (?:it|that)|can i change)\b/i,
+    build: () => '🙂 No stress — almost everything can be fixed later (edit the plate, mileage, costs, expiry dates).\n\n' +
+      'The *VIN* is the one exception: it locks permanently the moment it\'s saved, so double-check it before you send it.\n\n' +
+      '_Need a change now? Just tell me — I\'ll walk you through it._ 🚗'
+  },
+  {
+    id: 'progress',
+    topics: /\b(how many questions|how long (?:will|does) (?:this|it) take|what happens next|how much more|can i skip|skip (?:it|this))\b/i,
+    build: () => '⏱️ About two minutes — a few short questions: what it is, the plate, then a few specs.\n\n' +
+      'Optional bits (insurance, colour…) can be skipped with *Skip* — I\'ll never force them.\n\n' +
+      '_Ready? Reply *REGISTER* (or just type what you drive)._ 🙂'
+  },
+  {
+    id: 'technical',
+    topics: /\b(do i need an app|is there an app|download|smart ?phone|technical|tech savvy|low data)\b/i,
+    build: () => '📱 No app, no download — I live right here in WhatsApp.\n\n' +
+      'Any phone works, even on a slow connection. If you can type a sentence (or send a voice note), you can use Saka.\n\n' +
+      '_What do you drive? One line and I\'ll set it up._ 🚗'
+  },
+  {
+    id: 'data_control',
+    topics: /\b(delete (?:my|the) (?:data|account)|export (?:my )?data|who owns my data|stop using|remove my data)\b/i,
+    build: () => '🔐 Your data belongs to you, always.\n\n' +
+      'Ask me to *export* your passbook (PDF/CSV) or *delete my account* — both are honoured, and deletion removes your personal records.\n\n' +
+      '_Anything else you\'d like to know?_ 🙂'
   },
   {
     id: 'privacy',
@@ -145,6 +217,8 @@ export function buildProductQaContext() {
     'PRODUCT ANSWERS (authoritative user-facing facts — never invent anything beyond these):',
     ...PRODUCT_QA.map((entry) => `- ${entry.id}: ${String(buildProductQaReply(entry) || '').replace(/\n/g, ' ')}`),
     'BACKEND GATE: never mention servers, APIs, databases, providers, environment variables, admin tools, pipelines or internal processes.',
+    'ANSWER-FIRST RULE (v1.26.0): whenever the user asks a question — about Saka, cost, privacy, features, how to use, what happens next — answer THAT question first, warmly, in 1-3 short lines, using the PRODUCT ANSWERS above.',
+    'NEVER reply with the registration / plate script unless the user asked to register, said REGISTER, or sent a plate. Answering a question with "send me your plate" is forbidden.',
     'If asked about internals, reply: "That\'s all under the hood 🙂 — what it means for you is …" and give the user-facing benefit.'
   ].join('\n');
 }

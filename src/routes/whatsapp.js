@@ -195,12 +195,12 @@ export function checkIsConversationalFeedback(text = '', step = 1) {
   if (/^(cancel|exit|stop|reset|start over)$/i.test(clean)) return false;
 
   const feedbackKeywords = [
-    'looping', 'loop', 'stuck', 'again', 'broken', 'bug', 'error', 'wrong',
-    'why are you', 'why do you', 'what is going on', 'not working', 'confused',
-    'what?', 'huh', 'dont know', "don't know", 'no idea', 'this is stupid',
-    'repeating', 'stop asking', 'already gave', 'already told', 'help me',
+    // v1.26.0 — only genuine frustration signals. Questions like "why do you
+    // need my VIN?" are answered, never apologised at or paused.
+    'looping', 'loop', 'stuck', 'broken', 'bug', 'error', 'not working',
+    'repeating', 'stop asking', 'already gave', 'already told',
     'lot of responses', 'many responses', 'many replies', 'frustrating',
-    'frustrated', 'too many messages', 'too many', 'stop replying', 'stop sending',
+    'frustrated', 'too many messages', 'stop replying', 'stop sending',
     'stop with the many replies', 'too many replies'
   ];
 
@@ -2833,7 +2833,8 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
             });
           }
           // 2. Conversational feedback / frustration / message looping detected
-          else if (checkIsConversationalFeedback(messageText, 1) || /\b(many replies|lot of responses|too many messages|repeating|looping|frustrat|bot broken|why so many)\b/i.test(clean)) {
+          // v1.26.0 — a recognised product question always outranks the apology.
+          else if (!productQaMatch && (checkIsConversationalFeedback(messageText, 1) || /\b(many replies|lot of responses|too many messages|repeating|looping|frustrat|bot broken|why so many)\b/i.test(clean))) {
             if (supabaseClient) {
               try {
                 await supabaseClient.from('chat_friction_logs').insert([{

@@ -49,6 +49,18 @@ check(matchProductQa('Tell me about sakafleet')?.id === 'what_is_saka', 'the liv
 check(matchProductQa('Tell me more about saka fleet')?.id === 'what_is_saka', '"tell me MORE about saka fleet" routes to the intro');
 check(matchProductQa('tell me more about you')?.id === 'what_is_saka', '"tell me more about you" routes to the intro');
 check(matchProductQa('What is Saka fleet?')?.id === 'what_is_saka', '"Saka fleet" is recognised as a single phrase');
+// v1.26.0 — anticipated-question matrix (from the live 14:36-14:40 conversation).
+check(matchProductQa('What are the costs of using Saka?')?.id === 'pricing', '"costs of using Saka" returns the pricing card');
+check(matchProductQa('How do I use saka?')?.id === 'how_to_use', '"how do I use Saka" returns the tour');
+check(matchProductQa('What are the details of Solo Pro?')?.id === 'tier_details', '"details of Solo Pro" returns the plan details');
+check(matchProductQa('How do the add ons work?')?.id === 'addons', '"how do the add ons work" returns the add-ons answer');
+check(matchProductQa('How do I subscribe to growth fleet?')?.id === 'how_to_subscribe', '"how do I subscribe to growth fleet" returns the subscribe steps');
+check(matchProductQa('Why do you need my VIN?')?.id === 'why_details', '"why do you need my VIN" returns the trust answer');
+check(matchProductQa('Can I skip this?')?.id === 'progress', '"can I skip" returns the progress answer');
+check(matchProductQa('Is there an app?')?.id === 'technical', '"is there an app" returns the WhatsApp-only answer');
+check(matchProductQa('Can I delete my data?')?.id === 'data_control', '"can I delete my data" returns the data-control answer');
+check(/ANSWER-FIRST RULE/.test(buildProductQaContext()), 'the answer-first rule is injected into the AI context');
+check(/never reply with the registration/i.test(buildProductQaContext()), 'the plate-script default is explicitly forbidden');
 check(matchProductQa('I paid 5000 for fuel') === null, 'a fuel statement never triggers the pricing card');
 check(matchProductQa('Logged 40L at 50350 km for KES 5500') === null, 'a log line never triggers product Q&A');
 check(matchProductQa('') === null, 'empty text matches nothing');

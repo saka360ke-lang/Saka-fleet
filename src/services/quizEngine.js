@@ -259,7 +259,7 @@ function registrationFields() {
       { value: 'generator', aliases: ['generator', 'genset', 'power plant', 'standby power'] },
       { value: 'watercraft', aliases: ['boat', 'vessel', 'watercraft', 'ship', 'ferry'] }
     ]),
-    field('plate_number', 'Nice one 🎉 What is its number plate? (e.g. KDA 123A)', 'e.g. KDA 123A', {
+    field('plate_number', 'Nice one 🎉 What is its number plate? (e.g. KDA 123A) — I only use it to keep *your* records, never shared 🔒', 'e.g. KDA 123A', {
       when: (answers) => requiresPlate(answers.asset_kind),
       parse: (text, c) => parsePlate(text, c),
       validate: (value, c) => {
@@ -316,7 +316,7 @@ function registrationFields() {
         ? { ok: true }
         : { ok: false, message: 'Please send the hour-meter reading as a number (e.g. 1250).' })
     }),
-    field('vin', 'Almost done 🎉 The VIN / chassis number (11–17 characters — permanently locked to your passbook)', '11-17 characters - permanently locked to your passbook', {
+    field('vin', 'Almost done 🎉 The VIN / chassis number (11–17 characters — it locks into your private passbook forever 🔒)', '11-17 characters - permanently locked to your passbook', {
       when: (answers) => requiresVin(answers.asset_kind),
       aliases: ['vin', 'chassis'],
       parse: (text) => parseVin(text),
@@ -324,14 +324,14 @@ function registrationFields() {
         ? { ok: true }
         : { ok: false, message: 'A VIN is 11â€“17 letters/numbers (I, O and Q are not used). Please resend it.' })
     }),
-    field('owner_email', 'Email address', 'for OTP verification and passbook delivery', {
+    field('owner_email', 'Email address — only for your OTP, so nobody else can open your passbook 🔐', 'for OTP verification and passbook delivery', {
       aliases: ['owner_email', 'email'],
       parse: (text) => parseEmail(text),
       validate: (value) => (value && EMAIL_RE.test(value)
         ? { ok: true }
         : { ok: false, message: 'That email does not look valid. Please resend it.' })
     }),
-    field('otp', '6-digit verification code', 'we just emailed it to you (reply "resend" for a new code)', {
+    field('otp', '6-digit verification code — 10 seconds 🔐', 'we just emailed it to you (reply "resend" for a new code)', {
       kind: 'otp',
       when: (answers) => !!answers.owner_email,
       parse: (text) => {

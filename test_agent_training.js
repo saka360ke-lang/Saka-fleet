@@ -135,7 +135,10 @@ async function run() {
     'SALES PLAYBOOK',
     'Saka the Closer',
     'PRODUCT ANSWERS',
-    'BACKEND GATE'
+    'BACKEND GATE',
+    // v1.26.0 — anticipate questions and never answer with the plate script.
+    'ANSWER-FIRST RULE',
+    'NEVER reply with the registration'
   ];
   for (const token of sections) {
     check(DEFAULT_SAKA_CORE_PROMPT.includes(token), `Core prompt retains training section: ${token}`);

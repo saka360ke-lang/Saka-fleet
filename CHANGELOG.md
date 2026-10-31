@@ -4,6 +4,12 @@ All notable changes to Saka Fleet. Versions mirror the release tracker at the to
 of `SAKA_FLEET_ARCHITECTURE.md`; every entry names the commit it shipped in.
 Generated from the real git history — never from memory.
 
+## [1.26.0] - 2026-10-31
+- **Conversational Answer Engine:** answer-first rule in the AI context, anticipated-question matrix (how-to-use, tier details, add-ons, subscribe steps, why-VIN/plate/email, mistakes, progress, WhatsApp-only, data control), plural pricing coverage.
+- **Friction resolver fixed:** "why do you need my VIN?" and similar questions are answered instead of triggering an apology + pause.
+- **Trust lines** on plate/VIN/email/OTP asks; a recognised question always outranks the apology.
+- **Proof:** `npm run test:flow` now runs today's full conversation (28 assertions) — no answer may contain the plate script unless registration is happening.
+
 ## [1.25.8] - 2026-10-31
 - **Root-cause fix (proven by local reproduction):** the anti-repeat guard compared the reply with ITSELF (`lastAssistantPrompt` was overwritten with the current reply before the guard ran), so the sales welcome, pricing card, trial card and every FAQ answer were replaced by nudges. The guard now compares against the previous turn.
 - **Placeholder name fixed:** new profiles start with `full_name = null` (no more "Habari! 👋 WhatsApp I'm Saka").
