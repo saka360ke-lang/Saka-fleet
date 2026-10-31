@@ -8,7 +8,8 @@ import {
   getCurrentQuizField,
   shouldPauseQuizForChat,
   detectFlowSwitch,
-  isPlateLike
+  isPlateLike,
+  looksLikeReportRequest
 } from './src/services/quizEngine.js';
 
 /**
@@ -219,6 +220,24 @@ async function run() {
   assert(!('due_date' in reminderRow), 'a mileage reminder carries no due_date (schema must allow NULL)');
   assert(/ALTER COLUMN due_date DROP NOT NULL/.test(REMINDER_DUE_DATE_SQL), 'the migration relaxes reminders.due_date');
   assert(/ALTER COLUMN due_date DROP NOT NULL/.test(fs.readFileSync('./src/services/vehicles.js', 'utf8')), 'the boot DDL also heals due_date nullability');
+
+  console.log('\n--- Test 3e: report requests never start a logging quiz (v1.28.6) ---');
+  assert(looksLikeReportRequest('Give me a fuel report for kas') === true, 'a fuel report request is recognised');
+  assert(looksLikeReportRequest('Give me fuel report') === true, 'a bare fuel report request is recognised');
+  assert(looksLikeReportRequest('log fuel') === false, 'a logging command is not a report request');
+  assert(looksLikeReportRequest('Logged 40L at 50350 km for KES 5500') === false, 'a log line is not a report request');
+  assert(
+    detectQuizStart({ intent: 'LOG_EXPENSE', messageText: 'Give me a fuel report for kas', hasVehicleRegistered: true }) === null,
+    'the live "fuel report" message never starts the expense quiz'
+  );
+  assert(
+    detectQuizStart({ intent: 'LOG_EXPENSE', messageText: 'Give me fuel report', hasVehicleRegistered: true }) === null,
+    'a bare "fuel report" message never starts the expense quiz'
+  );
+  assert(
+    detectQuizStart({ intent: 'LOG_EXPENSE', messageText: 'log fuel', hasVehicleRegistered: true }) === 'log_expense',
+    'a real logging command still starts the expense quiz'
+  );
 
   console.log('\n--- Test 6: quiz ↔ conversation arbitration ---');
   const currentField = getCurrentQuizField(session.quiz, ctx);

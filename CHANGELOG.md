@@ -4,7 +4,10 @@ All notable changes to Saka Fleet. Versions mirror the release tracker at the to
 of `SAKA_FLEET_ARCHITECTURE.md`; every entry names the commit it shipped in.
 Generated from the real git history — never from memory.
 
-## [1.28.5] - 2026-10-31
+## [1.28.6] - 2026-10-31
+- **Report requests are never logging flows:** "Give me a fuel report for kas" / "Give me fuel report" were misclassified as LOG_EXPENSE and started the expense quiz. `looksLikeReportRequest()` now blocks the quiz and the route upgrades the intent to REQUEST_REPORT, so the report engine (with its quota/access rules) answers.
+- **Proof:** quiz engine 95 assertions (the live report messages never start the quiz; "log fuel" still does).
+
 - **Mileage reminders now save:** a distance-based reminder ("due at 370,000 km") was collected correctly but the insert was rejected because the legacy `reminders.due_date` column is NOT NULL. `npm run migrate:reminder-due-date` relaxes it (and the boot DDL applies the same ALTER), so threshold reminders persist with `threshold_unit`, `target_value` and no date.
 - **Trigger sentence banking:** "Log an oil change reminder. To happen @370,000km" now fills the reminder type and the 370,000 km threshold in one turn — no re-asking type or due.
 - **Phantom-plate guard widened:** prose like "CAR A 1991" can no longer pass as a plate (common-word part blocklist).

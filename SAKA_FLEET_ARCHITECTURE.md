@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.28.5  
+**Version:** 1.28.6  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.28.6** | Report requests never become logging flows: "Give me a fuel report" routes to the report engine, not the expense quiz | §71.15 |
 | **1.28.5** | Mileage reminders save: `reminders.due_date` relaxed to NULL, trigger sentence banks type + threshold, threshold insert proven by tests | §71.14 |
 | **1.28.4** | Write-time plate guard + fuel volume derivation: confirming a phantom plate re-asks; "1000kes @227kes per liter" logs 4.41 L instead of asking | §71.12, §71.13 |
 | **1.28.3** | No phantom plates: structural plate check, windowed paragraph scan, registration self-heal — the real plate volunteered in a later turn is captured | §71.11 |
@@ -2714,3 +2715,9 @@ The model can never ship a corporate hedge, an empty capacity placeholder (`· v
 - **Fix:** `npm run migrate:reminder-due-date` runs `ALTER TABLE public.reminders ALTER COLUMN due_date DROP NOT NULL`; the same statement is inside the boot `$v18$` DDL so new environments heal automatically.
 - **Trigger banking:** the flow-start path now passes the triggering message into `startQuiz`, so `applyTextExtraction` banks `reminder_type` and the `due` threshold from the first sentence (`set_reminder` only). A part blocklist prevents prose like "CAR A 1991" from looking plate-shaped.
 - **Proof:** `test_quiz_flow` 88 assertions — the live sentence reaches confirm with `Oil change` + 370,000 km, and the confirmed row is inserted with `threshold_unit='distance'`, `target_value=370000` and **no `due_date` key**; both the migration and the boot DDL are asserted.
+
+### 71.15 Report requests never become logging flows (v1.28.6)
+- **Live evidence (2026-10-31 20:53–20:54):** "Give me a fuel report for kas" and "Give me fuel report" both started the expense quiz ("How much did it come to?"). The classifier leaned LOG_EXPENSE because the message mentions fuel.
+- **Guard:** `looksLikeReportRequest()` treats any message containing report/summary/statement/analysis/breakdown/overview (unless it starts with log/record/add/save) as a report request. `detectQuizStart()` returns null for it, and the route upgrades a misclassified LOG_EXPENSE / LOG_EARNINGS / UPDATE_MILEAGE / QUERY_FUEL_EFFICIENCY intent to `REQUEST_REPORT`, so the report engine (and its quota/access rules) owns the turn.
+- The REQUEST_REPORT playbook line now states the rule explicitly, so the model never reclassifies a report request as a log.
+- **Proof:** `test_quiz_flow` 95 assertions (the two live report messages never start the quiz; "log fuel" still does).

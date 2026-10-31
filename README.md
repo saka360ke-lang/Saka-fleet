@@ -127,6 +127,8 @@ at most 3 emojis per message (4 on the welcome message).
 - **Mileage reminders save (v1.28.5):** a distance reminder ("due at 370,000 km")
   persists without a date, and the trigger sentence fills both type and
   threshold in one turn.
+- **Report requests stay reports (v1.28.6):** "Give me a fuel report" routes to
+  the report engine instead of starting the expense quiz.
 
 ## Receipt intelligence (v1.19.0)
 Send a photo of a **fuel receipt, logbook, insurance policy or driver licence**:

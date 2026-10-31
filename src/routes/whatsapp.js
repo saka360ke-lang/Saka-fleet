@@ -78,7 +78,7 @@ import {
 import { normalizeTierKey, getTierLabel, getAnnualDiscountPercent } from '../services/subscriptionTiers.js';
 import { detectCountryFromPhone as detectCountryGlobal, resolveUserTimezone, resolveTimezoneFromCountry } from '../services/globalization.js';
 import { applyOdometerReading, applyOperatingHours } from '../services/maintenanceReminders.js';
-import { handleQuizTurn, detectQuizStart, shouldPauseQuizForChat, getCurrentQuizField, detectFlowSwitch, getFlowDefinition } from '../services/quizEngine.js';
+import { handleQuizTurn, detectQuizStart, shouldPauseQuizForChat, getCurrentQuizField, detectFlowSwitch, getFlowDefinition, looksLikeReportRequest } from '../services/quizEngine.js';
 import { renderActionDiscovery, composeMessage } from '../services/conversationEngine.js';
 import { enqueueFollowUp, FOLLOWUP_KINDS, followUpAckText } from '../services/followups.js';
 import { enqueueUserMessage } from '../services/messageQueue.js';
@@ -1244,6 +1244,15 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         if (duplicateReceipt) {
           intent = 'GENERAL_CHAT';
           aiResult = { ...aiResult, intent, extracted_data: {}, reply_message: null };
+        }
+
+        // v1.28.6 — report/summary/analysis requests always route to the report
+        // engine, even when the classifier leans LOG_EXPENSE because the
+        // message mentions fuel ("Give me a fuel report for kas").
+        if (looksLikeReportRequest(messageText)
+            && ['LOG_EXPENSE', 'LOG_EARNINGS', 'UPDATE_MILEAGE', 'QUERY_FUEL_EFFICIENCY'].includes(intent)) {
+          intent = 'REQUEST_REPORT';
+          aiResult = { ...aiResult, intent, reply_message: null };
         }
 
         // Extract and merge structured vehicle attributes

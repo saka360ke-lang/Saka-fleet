@@ -3285,6 +3285,18 @@ export function looksLikeCompleteFuelLog(text = '') {
   return hasVolume && hasOdometer;
 }
 
+/**
+ * v1.28.6 — a report/summary/analysis request is never a logging flow, even
+ * when it mentions fuel or mileage. Live bug (2026-10-31 20:53): "Give me a
+ * fuel report" started the expense quiz and asked for an amount.
+ */
+export function looksLikeReportRequest(text = '') {
+  const clean = String(text || '').trim();
+  if (!clean) return false;
+  if (/^(?:log|record|add|save)\b/i.test(clean)) return false;
+  return /\b(?:report|summary|statement|analysis|breakdown|overview|review)\b/i.test(clean);
+}
+
 export function detectQuizStart({
   intent,
   messageText = '',
@@ -3337,6 +3349,8 @@ export function detectQuizStart({
   if (/^(?:log|record|update|set)\s+(?:the\s+)?(?:operating|engine|machine|running)?\s*hours?\b/i.test(text)) return 'log_operating_hours';
   // Vehicle switching / management is owned by the route, never the expense quiz.
   if (/^(?:switch|manage|select)\s+/i.test(text)) return null;
+  // v1.28.6 — report/summary/analysis requests never start a logging quiz.
+  if (looksLikeReportRequest(text)) return null;
   if (/^transfer\s+passbook\b/i.test(text)) return 'transfer_seller';
   if (/^(?:assign\s+driver|assign)\b/i.test(text)) return 'assign_driver';
   if (/^(?:unassign\s+driver|remove\s+driver)\b/i.test(text)) return 'unassign_driver';
@@ -3373,6 +3387,7 @@ export default {
   getCurrentQuizField,
   shouldPauseQuizForChat,
   isPlateLike,
+  looksLikeReportRequest,
   QUIZ_FLOW_KEYS
 };
 
