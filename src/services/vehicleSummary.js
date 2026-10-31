@@ -2,6 +2,7 @@ import { buildProReportPdf } from './pdfEngine.js';
 import { sendReportByEmail } from './mailer.js';
 import { uploadReportToSupabase } from '../../reports.js';
 import { formatDate, formatNumber } from './globalization.js';
+import { assetMetricSummaryLines } from './assetMetrics.js';
 
 /**
  * Saka Fleet — Vehicle Registration Summary (v1.19.1)
@@ -50,6 +51,17 @@ export async function buildVehicleSummary({ supabase, vehicle, owner = null, cou
   }
 
   const odometer = Number(vehicle.current_mileage ?? vehicle.odometer_reading) || 0;
+  // v1.28.9 — the summary's primary meter comes from the asset metric registry:
+  // a generator or excavator shows engine hours, never a hardcoded odometer.
+  const metricLines = assetMetricSummaryLines({
+    assetKind: vehicle.asset_kind,
+    vehicle,
+    unitSystem: vehicle.unit_system === 'imperial' ? 'imperial' : 'metric',
+    locale,
+    currency
+  });
+  const primaryMetric = metricLines[0];
+  const energyKpi = metricLines.find((line) => line.metricId === 'energy_volume');
   const specs = [
     { label: 'Make & model', value: vehicle.make_model || '—' },
     { label: 'Year of manufacture', value: vehicle.yom ? String(vehicle.yom) : '—' },
@@ -63,7 +75,8 @@ export async function buildVehicleSummary({ supabase, vehicle, owner = null, cou
   const insuranceDays = daysLeft(vehicle.insurance_expiry, now);
   const inspectionDays = daysLeft(vehicle.inspection_expiry, now);
   const kpis = [
-    { label: 'Odometer', value: `${formatNumber(odometer, locale)} km`, hint: 'current reading' },
+    { label: primaryMetric?.label || 'Odometer', value: primaryMetric?.value || `${formatNumber(odometer, locale)} km`, hint: primaryMetric?.hint || 'current reading' },
+    ...(energyKpi ? [{ label: energyKpi.label, value: energyKpi.value, hint: energyKpi.hint }] : []),
     { label: 'Insurance', value: insuranceDays === null ? 'Not set' : (insuranceDays < 0 ? 'Expired' : `${insuranceDays} days`), hint: vehicle.insurance_expiry ? formatDate(vehicle.insurance_expiry, locale) : 'add a date anytime' },
     { label: 'Inspection', value: inspectionDays === null ? 'Not set' : (inspectionDays < 0 ? 'Expired' : `${inspectionDays} days`), hint: vehicle.inspection_expiry ? formatDate(vehicle.inspection_expiry, locale) : 'add a date anytime' },
     { label: 'Open reminders', value: String(reminders.length), hint: 'active items' }
@@ -71,7 +84,7 @@ export async function buildVehicleSummary({ supabase, vehicle, owner = null, cou
 
   const data = {
     title: 'Vehicle Registration Summary',
-    subtitle: `${vehicle.plate_number || 'Vehicle'}${vehicle.make_model ? ` · ${vehicle.make_model}` : ''}`,
+    subtitle: `${vehicle.plate_number || vehicle.serial_number || 'Asset'}${vehicle.make_model ? ` · ${vehicle.make_model}` : ''}`,
     reportType: 'fleet',
     periodLabel: 'Current',
     owner: owner ? {
@@ -122,10 +135,11 @@ export async function buildVehicleSummary({ supabase, vehicle, owner = null, cou
     notes: ['VIN and passbook identifiers are permanent. Figures are engine-calculated from your fleet records.']
   };
 
-  const text = `🚗 *Vehicle Summary — ${vehicle.plate_number || 'Vehicle'}*\n\n` +
+  const text = `🚗 *Vehicle Summary — ${vehicle.plate_number || vehicle.serial_number || 'Asset'}*\n\n` +
     `• *Make & model:* ${vehicle.make_model || '—'}\n` +
     `• *Year:* ${vehicle.yom || '—'} · *Fuel:* ${vehicle.fuel_type || '—'}\n` +
-    `• *Odometer:* ${formatNumber(odometer, locale)} km\n` +
+    `• *${primaryMetric?.label || 'Odometer'}:* ${primaryMetric?.value || `${formatNumber(odometer, locale)} km`}\n` +
+    (energyKpi ? `• *${energyKpi.label}:* ${energyKpi.value}\n` : '') +
     `• *VIN:* ${vehicle.vin || '—'}\n` +
     (insuranceDays === null ? '' : `• *Insurance:* ${insuranceDays < 0 ? 'expired' : `${insuranceDays} days left`}\n`) +
     (reminders.length ? `• *Open reminders:* ${reminders.length}\n` : '') +

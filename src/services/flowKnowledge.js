@@ -1,3 +1,5 @@
+import { buildMetricGlossaryBlock } from './assetMetrics.js';
+
 /**
  * Saka Fleet — Authoritative Flow & Intent Knowledge Base (v1.8.1)
  * -----------------------------------------------------------------
@@ -366,6 +368,13 @@ export function buildOperationsList({ roles = [], limit = 9 } = {}) {
 export function buildOperationsBlock({ roles = [], limit = 9 } = {}) {
   return ['*I can help you with:*', ...buildOperationsList({ roles, limit })].join('\n');
 }
+
+/**
+ * v1.28.9 — metric glossary (single source: assetMetrics.js). Injected into the
+ * core prompt so Saka never forces an odometer on an hours-based asset and never
+ * invents litres for an EV.
+ */
+export const SAKA_METRIC_GLOSSARY = buildMetricGlossaryBlock();
 
 /**
  * TONE COMPASS & MIRROR ENGINE (v1.17.0) — single source of truth.

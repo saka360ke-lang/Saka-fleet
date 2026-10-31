@@ -1,47 +1,61 @@
 import { buildProReportPdf } from './src/services/pdfEngine.js';
+import { normalizeAssetKind } from './src/services/countryBucket.js';
+import {
+  getAssetMetricProfile,
+  formatMetricValue,
+  isElectricFuel
+} from './src/services/assetMetrics.js';
 
 /**
- * Saka Fleet — Legacy report facade (v1.18.0)
- * -------------------------------------------
+ * Saka Fleet — Legacy report facade (v1.18.0, metric-registry v1.28.9)
+ * -------------------------------------------------------------------
  * `generateFleetReport(reportData)` is retained for the Cloud Run monthly audit
  * path, but now renders through the Saka Pro PDF design system (fonts, KPI
- * cards, charts, owner/driver panel) instead of the old plain-Helvetica page.
+ * cards, charts, owner/driver panel) and takes its KPIs from the shared
+ * ASSET_METRIC_PROFILES registry, so a generator reports hours/kWh and a truck
+ * reports km/litres. No metric list is re-declared here.
  */
 
-const ASSET_METRICS = {
-  EV: (data, units) => [
-    { label: 'Energy consumed', value: `${data.kwhCharged || 0} kWh` },
-    { label: 'Charge cycles', value: String(data.chargeCycles || 0) },
-    { label: 'Total expenditure', value: `${data.currency || 'USD'} ${Number(data.totalCost || 0).toLocaleString()}` },
-    { label: 'Energy efficiency', value: `${data.burnRate || 0} ${units.imperial ? 'mi/kWh' : 'km/kWh'}` },
-    { label: 'Operational status', value: data.status || 'Active & verified' }
-  ],
-  HEAVY: (data, units) => [
-    { label: 'Operating hours', value: `${data.operatingHours || 0} h` },
-    { label: 'Fuel consumed', value: `${data.fuelLiters || 0} ${units.imperial ? 'gal' : 'L'}` },
-    { label: 'Total expenditure', value: `${data.currency || 'USD'} ${Number(data.totalCost || 0).toLocaleString()}` },
-    { label: 'Hourly consumption', value: `${data.burnRate || 0} ${units.imperial ? 'gal' : 'L'}/h` },
-    { label: 'Operational status', value: data.status || 'Active & verified' }
-  ],
-  ICE: (data, units) => [
-    { label: 'Fuel consumed', value: `${data.fuelLiters || 0} ${units.imperial ? 'gal' : 'L'}` },
-    { label: 'Total expenditure', value: `${data.currency || 'USD'} ${Number(data.totalCost || 0).toLocaleString()}` },
-    { label: 'Fuel efficiency', value: `${data.burnRate || 0} ${units.imperial ? 'MPG' : 'km/L'}` },
-    { label: 'Operational status', value: data.status || 'Active & verified' }
-  ]
-};
+/** Build KPI lines for any asset kind from the shared metric registry. */
+export function assetMetricKpis(reportData = {}) {
+  const unitSystem = String(reportData.unitSystem || 'metric').toLowerCase() === 'imperial' ? 'imperial' : 'metric';
+  const locale = reportData.locale || 'en-US';
+  const currency = reportData.currency || 'USD';
+  const assetKind = normalizeAssetKind(reportData.assetType);
+  const profile = getAssetMetricProfile(assetKind);
+  const electric = isElectricFuel(reportData.fuelType) || /^(?:ev|electric)$/i.test(String(reportData.assetType || ''));
 
-function assetFamily(assetType) {
-  const clean = String(assetType || 'ICE').toUpperCase();
-  if (clean === 'EV' || clean === 'ELECTRIC') return 'EV';
-  if (clean.includes('HEAVY') || clean.includes('MACHINERY')) return 'HEAVY';
-  return 'ICE';
+  const fmt = (metricId, value) => formatMetricValue({ metricId, value, unitSystem, locale, currency });
+  const kpis = [];
+  if (profile.primaryMeter === 'odometer') {
+    kpis.push({ label: 'Distance', value: fmt('distance', reportData.distanceKm ?? reportData.odometer ?? 0), hint: 'verified engine data' });
+  } else {
+    kpis.push({ label: 'Operating hours', value: fmt('engine_hours', reportData.operatingHours ?? 0), hint: 'verified engine data' });
+  }
+  if (electric) {
+    kpis.push({ label: 'Energy consumed', value: fmt('energy_volume', reportData.kwhCharged ?? 0), hint: 'verified engine data' });
+    kpis.push({ label: 'Energy efficiency', value: fmt('energy_economy', reportData.burnRate ?? 0), hint: 'verified engine data' });
+  } else {
+    kpis.push({ label: 'Fuel consumed', value: fmt('fuel_volume', reportData.fuelLiters ?? 0), hint: 'verified engine data' });
+    if (profile.primaryMeter === 'hours') {
+      kpis.push({ label: 'Fuel burn', value: fmt('fuel_burn_per_hour', reportData.burnRate ?? 0), hint: 'verified engine data' });
+      if (profile.metrics.some((metric) => metric.id === 'energy_output')) {
+        kpis.push({ label: 'Energy output', value: fmt('energy_output', reportData.kwhCharged ?? 0), hint: 'verified engine data' });
+      }
+    } else {
+      kpis.push({ label: 'Fuel efficiency', value: fmt('fuel_economy', reportData.burnRate ?? 0), hint: 'verified engine data' });
+    }
+  }
+  kpis.push({ label: 'Total expenditure', value: formatMetricValue({ metricId: 'earnings', value: reportData.totalCost ?? 0, unitSystem, locale, currency }), hint: 'verified engine data' });
+  kpis.push({ label: 'Operational status', value: reportData.status || 'Active & verified', hint: 'verified engine data' });
+  return kpis;
 }
 
 export function generateFleetReport(reportData = {}) {
-  const imperial = String(reportData.unitSystem || 'metric').toLowerCase() === 'imperial';
-  const family = assetFamily(reportData.assetType);
-  const metrics = (ASSET_METRICS[family] || ASSET_METRICS.ICE)(reportData, { imperial });
+  const unitSystem = String(reportData.unitSystem || 'metric').toLowerCase() === 'imperial' ? 'imperial' : 'metric';
+  const assetKind = normalizeAssetKind(reportData.assetType);
+  const profile = getAssetMetricProfile(assetKind);
+  const metrics = assetMetricKpis(reportData);
 
   const reminders = (reportData.reminders || []).map((reminder) => ({
     item: reminder.reminder_type || reminder.category || 'Reminder',
@@ -57,14 +71,14 @@ export function generateFleetReport(reportData = {}) {
 
   return buildProReportPdf({
     title: 'Vehicle & Asset Audit',
-    subtitle: `${reportData.plateNumber || 'Fleet asset'} · ${family === 'ICE' ? 'Internal combustion' : family === 'EV' ? 'Electric' : 'Heavy equipment'}`,
+    subtitle: `${reportData.plateNumber || reportData.serialNumber || 'Fleet asset'} · ${profile.label} · ${unitSystem === 'imperial' ? 'imperial units' : 'metric units'}`,
     reportType: 'fleet',
     periodLabel: String(reportData.reportType || 'Standard audit').replace(/_/g, ' '),
     owner: reportData.owner || null,
     drivers: reportData.assignedDriver
       ? [{ name: reportData.assignedDriver, plate: reportData.plateNumber || '', status: 'active' }]
       : [],
-    kpis: metrics.map((metric) => ({ label: metric.label, value: metric.value, hint: 'verified engine data' })),
+    kpis: metrics,
     tables: [
       reminders.length ? {
         title: 'Reminders & expirations',
@@ -88,7 +102,7 @@ export function generateFleetReport(reportData = {}) {
     sections: [{
       title: 'Audit notes',
       lines: [
-        'Figures are engine-calculated from logged fuel, service and odometer records.',
+        `Figures are engine-calculated from logged ${profile.primaryMeter === 'hours' ? 'hours, fuel and service' : 'fuel, service and odometer'} records.`,
         'VIN and passbook identifiers are immutable and never edited by reports.',
         'Questions? Reply to this email or message Saka on WhatsApp.'
       ]

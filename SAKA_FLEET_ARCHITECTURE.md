@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.28.8  
+**Version:** 1.28.9  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.28.9** | Asset metric registry: all 8 kinds populated (odometer vs engine hours, litres vs kWh, L/h, MPG, km/kWh) and wired into reports, summaries, bespoke menus, prompt and QA facts | §71.18 |
 | **1.28.8** | OCR unpaused end to end, always-on self-learning tick, country communication styles, abandoned-checkout recovery (30 min/24 h/T-2d), post-expiry benefit nudges (D+7/D+30) | §71.17 |
 | **1.28.7** | Reports always deliver (guaranteed fallback + storage self-heal), PDF glyph-safe rendering, locale/currency-correct trial reward with the coupon attached, operations list in the welcome + on demand, "in 5,000 km" vs "at 370,000 km" | §71.16 |
 | **1.28.6** | Report requests never become logging flows: "Give me a fuel report" routes to the report engine, not the expense quiz | §71.15 |
@@ -2741,3 +2742,11 @@ The model can never ship a corporate hedge, an empty capacity placeholder (`· v
 - **Post-expiry benefit nudges:** `processExpiredRenewalNudges()` sends `renewalBenefitText()` at D+7 (benefits + data safety) and D+30 (final, gentle), with the existing D+15 WINBACK40 between them; `RENEWAL_NUDGE_MAX` (3) caps it, and renewed/canceling/opted-out accounts are skipped. Counters: `profiles.renewal_nudge_count` / `last_renewal_nudge_at`.
 - **Schema:** `npm run migrate:recovery` (`scripts/run_recovery_migration.js`) adds the four columns + `country_comm_styles`; the boot DDL in `vehicles.js` mirrors the column adds so new environments heal automatically.
 - **Proof:** `test_recovery_ladders` 30 · `test_ocr_flow` 54 · `test_trial_engine` 73 · `test_subscription_billing` 75 · flow suite.
+
+### 71.18 One metric registry for every asset kind (v1.28.9)
+- **Why:** Saka supports eight asset kinds (`vehicle`, `motorcycle`, `truck`, `bus`, `heavy_equipment`, `machinery`, `generator`, `watercraft`) that measure different things. Before this release the metric knowledge was split: `countryBucket.ASSET_KINDS` only knew identity tracks, `reports.js` kept a private EV/HEAVY/ICE map, and summaries hardcoded odometers.
+- **Registry:** `src/services/assetMetrics.js` — `ASSET_METRIC_PROFILES` declares, per kind, the primary meter (`odometer` or `hours`), fuel family, accepted fuel types, and the complete metric list (`distance`, `engine_hours`, `fuel_volume`, `energy_volume`, `fuel_economy`, `fuel_burn_per_hour`, `energy_economy`, `energy_output`, `earnings`, `trips`). Each metric carries a canonical unit, metric/imperial display units and the flows it serves.
+- **Population rules:** road kinds -> odometer + litres + km/L (+ hours optional, + trips for truck/bus); heavy equipment/machinery -> hours + litres + L/h; generator -> hours + litres + L/h + kWh output; watercraft -> hours + litres + L/h; electric road vehicles swap litres/km-L for kWh/km-kWh through `metricsForAssetKind(kind, { fuelType })`.
+- **Surgical integration:** `reports.js` (`assetMetricKpis`) renders the legacy audit PDF from the registry; `reportMetrics.metricsForAccess()` filters bespoke menus by `access.assetKinds` (new `operating_hours` and `energy_kwh` metrics, `metricAppliesToAssetKinds()` exported); `vehicleSummary.js` takes its primary KPI/text line from `assetMetricSummaryLines()` (engine hours for hours-led assets, Energy charged for EVs, serial fallback in the title); `flowKnowledge.SAKA_METRIC_GLOSSARY` is embedded in `DEFAULT_SAKA_CORE_PROMPT` and re-exported by `sakaAi.js`; `productQa.ASSET_METRIC_FACTS` publishes one “what can I log for a <kind>” fact per asset kind.
+- **Formatting:** `formatMetricValue()` converts km↔mi, L↔gal, km/L↔MPG, L/h↔gal/h and km/kWh↔mi/kWh, renders hours as `h`, uses the local currency for money and returns `—` for nullish values. Canonical storage stays km/litres/hours/kWh.
+- **Proof:** `test_asset_metrics` 70 · `test_agent_training` 109 (glossary embedded) · `test_report_metrics` 25 · `test_vehicle_summary` 14 · `test_fleet_reports` 42 · `test_product_qa` 147.

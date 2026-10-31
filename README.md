@@ -146,6 +146,13 @@ operation line).
   3-step recovery ladder (30 min / 24 h / coupon T-2d), and expired plans get
   soft D+7 and D+30 benefit nudges around the D+15 winback — always capped and
   always stopped by a renewal.
+- **Every asset measures what it really has (v1.28.9):** one registry
+  (`assetMetrics.js`) covers all eight asset kinds — cars/motorcycles/trucks/buses
+  use the odometer, litres and km/L (or kWh and km/kWh when electric), while
+  heavy equipment, machinery, generators and boats use **engine hours**, litres
+  and L/h (generators add kWh output). Registration summaries, PDF audit reports,
+  bespoke-report menus, the core prompt and the QA facts all read that registry,
+  so Saka never asks a generator for kilometres or an EV for litres.
 
 ## Receipt intelligence (v1.19.0)
 Send a photo of a **fuel receipt, logbook, insurance policy or driver licence**:

@@ -26,7 +26,7 @@ console.log('--- Test 1: metric registry integrity ---');
 check(CUSTOM_METRICS.length >= 12, 'metric catalog is populated');
 check(new Set(CUSTOM_METRICS.map((metric) => metric.id)).size === CUSTOM_METRICS.length, 'metric ids are unique');
 check(CUSTOM_METRICS.every((metric) => ['owner', 'both'].includes(metric.access)), 'every metric declares its access lane');
-check(CUSTOM_METRICS.every((metric) => ['money', 'litres', 'economy', 'number', 'text'].includes(metric.kind)), 'every metric declares a formatter kind');
+check(CUSTOM_METRICS.every((metric) => ['money', 'litres', 'economy', 'number', 'text', 'kwh'].includes(metric.kind)), 'every metric declares a formatter kind');
 check(CUSTOM_METRIC_CATEGORIES.includes('Financial') && CUSTOM_METRIC_CATEGORIES.includes('Compliance'), 'categories are derived correctly');
 
 console.log('--- Test 2: natural-language metric resolution ---');

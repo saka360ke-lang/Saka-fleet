@@ -31,6 +31,7 @@ jobs:
           node test_greetings.js
           node test_pdf_engine.js
           node test_recovery_ladders.js
+          node test_asset_metrics.js
           node test_product_qa.js
           node test_turn_ack.js
           node test_status_probe.js

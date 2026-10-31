@@ -40,7 +40,9 @@ const STATLESS_SUITES = [
   // v1.28.7 — PDF glyph safety (valid PDF, no emoji tofu, nullish data safe).
   'test_pdf_engine.js',
   // v1.28.8 — abandoned-cart + post-expiry ladders and country comm styles.
-  'test_recovery_ladders.js'
+  'test_recovery_ladders.js',
+  // v1.28.9 — every asset kind's metric profile (odometer vs hours, litres vs kWh).
+  'test_asset_metrics.js'
 ];
 
 const WORKFLOW_DIR = '.github/workflows';

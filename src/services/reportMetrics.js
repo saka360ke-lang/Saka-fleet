@@ -1,5 +1,6 @@
 import { formatNumber } from './globalization.js';
 import { analyzeFuelEconomy } from './fuelEconomy.js';
+import { getAssetMetricProfile } from './assetMetrics.js';
 
 /**
  * Saka Fleet — Bespoke Report Metric Registry (v1.18.0)
@@ -18,6 +19,9 @@ export const CUSTOM_METRICS = Object.freeze([
   { id: 'earnings', label: 'Earnings', category: 'Financial', access: 'owner', kind: 'money', aliases: ['earnings', 'revenue', 'income'] },
   { id: 'net_profit', label: 'Net profit', category: 'Financial', access: 'owner', kind: 'money', aliases: ['profit', 'net', 'margin'] },
   { id: 'distance', label: 'Distance covered', category: 'Operations', access: 'both', kind: 'number', aliases: ['distance', 'km', 'miles', 'mileage'] },
+  // v1.28.9 — metric-registry additions: hours-led assets and electric assets.
+  { id: 'operating_hours', label: 'Operating hours', category: 'Operations', access: 'both', kind: 'number', aliases: ['hours', 'engine hours', 'operating hours', 'hour meter'] },
+  { id: 'energy_kwh', label: 'Energy (kWh)', category: 'Fuel', access: 'both', kind: 'kwh', aliases: ['kwh', 'energy', 'charge', 'charging'] },
   { id: 'expiring_30', label: 'Expiring in 30 days', category: 'Compliance', access: 'both', kind: 'number', aliases: ['expiring', 'expiry', 'renewals'] },
   { id: 'overdue', label: 'Overdue items', category: 'Compliance', access: 'both', kind: 'number', aliases: ['overdue', 'past due'] },
   { id: 'top_category', label: 'Top expense category', category: 'Financial', access: 'owner', kind: 'text', aliases: ['top category', 'biggest expense'] },
@@ -40,10 +44,32 @@ export function resolveMetricIds(text = '') {
   return [...new Set(found)];
 }
 
-/** Metrics a lane may request. */
+/** Metrics a lane may request (v1.28.9 — filtered by the fleet's asset kinds). */
 export function metricsForAccess(access = {}) {
   const driverLane = access?.lane === 'driver' || access?.driverSafeOnly;
-  return driverLane ? CUSTOM_METRICS.filter((metric) => metric.access === 'both') : CUSTOM_METRICS;
+  let metrics = driverLane ? CUSTOM_METRICS.filter((metric) => metric.access === 'both') : CUSTOM_METRICS;
+  const kinds = Array.isArray(access?.assetKinds) ? access.assetKinds.filter(Boolean) : [];
+  if (kinds.length) metrics = metrics.filter((metric) => metricAppliesToAssetKinds(metric, kinds));
+  return metrics;
+}
+
+/**
+ * Does this bespoke metric make sense for at least one asset kind in scope?
+ * A generator-only fleet never sees "distance"; an EV fleet never sees "litres".
+ */
+export function metricAppliesToAssetKinds(metric, assetKinds = []) {
+  if (!Array.isArray(assetKinds) || assetKinds.length === 0) return true;
+  const profiles = assetKinds.map((kind) => getAssetMetricProfile(kind));
+  const has = (metricId) => profiles.some((profile) =>
+    profile.metrics.some((entry) => entry.id === metricId)
+    || (profile.electricMetrics || []).some((entry) => entry.id === metricId)
+  );
+  if (metric?.id === 'distance') return profiles.some((profile) => profile.distance !== 'never');
+  if (metric?.id === 'fuel_litres' || metric?.id === 'fuel_spend') return has('fuel_volume');
+  if (metric?.id === 'fuel_economy') return has('fuel_economy') || has('energy_economy');
+  if (metric?.id === 'energy_kwh') return has('energy_volume') || has('energy_output');
+  if (metric?.id === 'operating_hours') return has('engine_hours');
+  return true;
 }
 
 /** Human menu for the quiz prompt (one line, easy to scan). */
@@ -72,6 +98,7 @@ function formatMetricValue(metric, raw, { currency, locale }) {
   if (raw === null || raw === undefined) return '—';
   if (metric.kind === 'money') return money(raw, currency, locale);
   if (metric.kind === 'litres') return `${formatNumber(raw, locale)} L`;
+  if (metric.kind === 'kwh') return `${formatNumber(raw, locale)} kWh`;
   if (metric.kind === 'economy') return `${Number(raw).toFixed(2)} km/L`;
   if (metric.kind === 'text') return String(raw);
   return formatNumber(raw, locale);

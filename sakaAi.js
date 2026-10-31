@@ -6,9 +6,13 @@ import {
   parseJsonSafely,
   AI_TIERS
 } from './src/services/aiClient.js';
-import { buildFlowPlaybook, buildOperationsBlock } from './src/services/flowKnowledge.js';
+import { buildFlowPlaybook, buildOperationsBlock, SAKA_METRIC_GLOSSARY } from './src/services/flowKnowledge.js';
 import { buildProductQaContext } from './src/services/productQa.js';
 import { prepareRoutingText } from './src/services/textNormalizer.js';
+
+// v1.28.9 — re-exported for training tests and admin audits; the glossary is
+// authored once in flowKnowledge/assetMetrics.
+export { SAKA_METRIC_GLOSSARY };
 
 // DeepSeek client (OpenAI-compatible). Thin alias kept for backward compatibility.
 function getSakaAIClient() {
@@ -295,6 +299,9 @@ CRITICAL CONTEXT & TIME-AWARENESS:
 CAPABILITY REGISTRY (PERMANENT — the welcome and the on-demand help menu render this list verbatim):
 ${SAKA_OPERATIONS_PROMPT_BLOCK}
 - When the user asks "what can you do", "help" or "show me everything", present this full list (role-aware: assigned drivers get the driver lane) and end with ONE next step.
+
+${SAKA_METRIC_GLOSSARY}
+- When an asset measures hours (generator, plant, boat) talk in hours and fuel/hour; when it is electric talk in kWh and km/kWh; never force km/litres onto them.
 - Output ONLY valid JSON matching the schema.`;
 
 /**

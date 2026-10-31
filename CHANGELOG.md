@@ -4,6 +4,14 @@ All notable changes to Saka Fleet. Versions mirror the release tracker at the to
 of `SAKA_FLEET_ARCHITECTURE.md`; every entry names the commit it shipped in.
 Generated from the real git history — never from memory.
 
+## [1.28.9] - 2026-11-01
+- **Asset metrics are now a first-class registry:** `src/services/assetMetrics.js` is the single source of truth for what each of the eight asset kinds can measure. Road assets (vehicle, motorcycle, truck, bus) use odometer + litres + km/L (or kWh + km/kWh when electric); heavy equipment, machinery, generators and watercraft use engine hours + litres + L/h; generators add kWh output; trucks and buses add trips/jobs.
+- **No more odometer-on-a-generator:** registration summaries and PDFs take the primary meter from the registry (`assetMetricSummaryLines`), electric assets show “Energy charged” instead of a fuel type, and the legacy Cloud Run audit report (`reports.js`) renders EV/HEAVY/ICE KPIs from the same registry instead of its own private map.
+- **Bespoke reports fit the fleet:** `metricsForAccess()` now filters by asset kinds — a generator-only fleet never sees “Distance”, and hours/kWh metrics are offered instead (`operating_hours`, `energy_kwh` added to the metric catalog). `metricAppliesToAssetKinds()` is exported for reuse.
+- **Saka speaks the right metric everywhere:** `SAKA_METRIC_GLOSSARY` (generated from the registry) is embedded in the core prompt and re-exported through `sakaAi.js`, `productQa` publishes one authoritative “what can I log for my <asset>” fact per kind, and the training suite asserts both.
+- **Formatting is canonical + localized:** `formatMetricValue()` converts km↔mi, L↔gal, km/L↔MPG, L/h↔gal/h and km/kWh↔mi/kWh, always storing km/litres/hours/kWh; nullish values render “—”, never “0”.
+- **Proof:** new `test_asset_metrics.js` 70 assertions (coverage of all 8 kinds, electric swap, hours-led rules, conversions, summaries, report menus, glossary) · agent training 109 · report metrics 25 · vehicle summary 14 · fleet reports 42 · product Q&A 147.
+
 ## [1.28.8] - 2026-11-01
 - **OCR unpaused, end to end:** `isOcrEnabled()` is env-driven again (`OCR_ENABLED=on` by default; `off|false|0` pauses). Receipt photos, logbooks, insurance policies and odometer photos are read by Vision, PDFs keep using the local text layer, and quiz upload hints are ON by default (`UPLOAD_HINTS_ENABLED=on`). Ack-first stays on, low-confidence reads still ask for confirmation and nothing is written without YES.
 - **Always-on self-learning:** a 15-minute internal tick (`SENTINEL_LEARN_INTERVAL_MS`) runs `runConversationRefinement` with an overlap guard — learning no longer depends on the external Sentinel endpoint, so gated prompt learnings actually accumulate.

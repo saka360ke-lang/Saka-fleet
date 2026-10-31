@@ -6,6 +6,18 @@ import {
   getAddonPriceUSD,
   getAnnualDiscountPercent
 } from './subscriptionTiers.js';
+import { ASSET_METRIC_PROFILES } from './assetMetrics.js';
+
+/**
+ * v1.28.9 — one authoritative fact line per asset kind so "what can I log for my
+ * generator?" is answered from the same registry the reports use.
+ */
+export const ASSET_METRIC_FACTS = Object.freeze(
+  Object.entries(ASSET_METRIC_PROFILES).map(([kind, profile]) => {
+    const metrics = profile.metrics.map((metric) => metric.label.toLowerCase()).join(', ');
+    return `what_can_i_log_${kind}: ${profile.label} logs and reports ${metrics}. Primary meter: ${profile.primaryMeter === 'odometer' ? 'odometer' : 'engine hours'}.${profile.electricMetrics ? ' Electric versions use kWh and km/kWh instead of litres.' : ''}`;
+  })
+);
 import { TRIAL_DAYS } from './trialEngine.js';
 import { getEffectiveExchangeRate } from './paystack.js';
 import { prepareRoutingText } from './textNormalizer.js';
@@ -402,7 +414,10 @@ export function buildProductQaReply(entry) {
 
 /** All product knowledge as compact fact lines (universal question path). */
 export function buildProductFactsContext() {
-  return PRODUCT_QA.map((entry) => `${entry.id}: ${buildProductQaReply(entry).replace(/\n/g, ' ')}`).join('\n');
+  return [
+    ...PRODUCT_QA.map((entry) => `${entry.id}: ${buildProductQaReply(entry).replace(/\n/g, ' ')}`),
+    ...ASSET_METRIC_FACTS
+  ].join('\n');
 }
 
 /**
@@ -413,6 +428,8 @@ export function buildProductQaContext() {
   return [
     'PRODUCT ANSWERS (authoritative user-facing facts — never invent anything beyond these):',
     ...PRODUCT_QA.map((entry) => `- ${entry.id}: ${buildProductQaReply(entry).replace(/\n/g, ' ')}`),
+    'ASSET METRIC ANSWERS (authoritative — assets measure different things):',
+    ...ASSET_METRIC_FACTS.map((fact) => `- ${fact}`),
     'BACKEND GATE: never mention servers, APIs, databases, providers, environment variables, admin tools, pipelines or internal processes.',
     'ANSWER-FIRST RULE (v1.26.0): whenever the user asks a question — about Saka, cost, privacy, features, how to use, what happens next — answer THAT question first, warmly, in 1-3 short lines, using the PRODUCT ANSWERS above.',
     'NEVER reply with the registration / plate script unless the user asked to register, said REGISTER, or sent a plate. Answering a question with "send me your plate" is forbidden.',
