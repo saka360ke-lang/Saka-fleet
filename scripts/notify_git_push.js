@@ -33,16 +33,30 @@ function repoWebUrl() {
   return null;
 }
 
-export function buildDeploymentAlertText({ version = 'unknown', commitHash = 'HEAD', branch = 'main', author = 'Deploy Bot', timestamp = '', openIssues = 0 } = {}) {
+/** v1.25.7 — the rules gate failed on a push (send this instead of the deploy alert). */
+export function buildRuleFailureText({ commitHash = 'HEAD', branch = 'main', timestamp = '' } = {}) {
+  return [
+    `⚠️ *Saka build rules check FAILED* - ${commitHash}`,
+    '',
+    'A push to ' + branch + ' did not pass the health/rules gate.',
+    'Open the GitHub Actions run (workflow: Rules Gate) to see the failing suite.',
+    '_Nothing was rolled back automatically._',
+    'Details: commit ' + commitHash + ' - branch ' + branch + ' - ' + timestamp
+  ].join('\n');
+}
+
+export function buildDeploymentAlertText({ version = 'unknown', commitHash = 'HEAD', branch = 'main', author = 'Deploy Bot', timestamp = '', openIssues = 0, mode = 'deploy' } = {}) {
   const headline = architectureHeadline(version) || 'A new version of Saka is running.';
   const needsCheck = /migrat|secret|environment variable|env knob/i.test(headline);
   const repo = repoWebUrl();
+  if (mode === 'failure') return buildRuleFailureText({ commitHash, branch, timestamp });
   return [
-    '✅ *Saka update is live* - v' + version + ' - ' + commitHash,
+    '*Saka update building* - v' + version + ' - ' + commitHash,
     '',
     '*In plain words:* ' + headline,
-    '*What this means:* this is the version now answering WhatsApp conversations.',
-    '*Action needed:* ' + (needsCheck ? 'Check the release notes in SAKA_FLEET_ARCHITECTURE.md.' : 'None - everything is automatic.'),
+    '*What this means:* a new build is rolling out now.',
+    '*Next:* you will get a second message the moment it is LIVE.'
+      + (needsCheck ? ' (Check the release notes in SAKA_FLEET_ARCHITECTURE.md.)' : ''),
     '',
     (openIssues > 0 ? '*Open backend issues:* ' + openIssues + ' (text admin incidents)' : ''),
     'Details: commit ' + commitHash + ' - branch ' + branch + ' - by ' + author + ' - ' + timestamp,
@@ -98,7 +112,7 @@ export async function sendAdminDeploymentAlert(customData = {}) {
   const timestamp = new Date().toLocaleString('en-US', { timeZone: 'Africa/Nairobi', dateStyle: 'medium', timeStyle: 'short' });
   const cleanPhone = superadminPhone ? superadminPhone.replace(/[^\d]/g, '') : null;
 
-  const waMessage = buildDeploymentAlertText({ version: releaseVersion, commitHash, branch, author, timestamp, openIssues });
+  const waMessage = buildDeploymentAlertText({ version: releaseVersion, commitHash, branch, author, timestamp, openIssues, mode: customData.mode || 'deploy' });
 
   let waSuccess = false;
   if (cleanPhone && phoneNumberId && token) {
@@ -140,7 +154,8 @@ export async function sendAdminDeploymentAlert(customData = {}) {
 
 // Direct CLI invocation
 if (process.argv[1] && process.argv[1].endsWith('notify_git_push.js')) {
-  sendAdminDeploymentAlert()
+  const mode = process.argv.includes('--failure') ? 'failure' : 'deploy';
+  sendAdminDeploymentAlert({ mode })
     .then(() => process.exit(0))
     .catch((err) => {
       console.error('Fatal deployment alert error:', err);

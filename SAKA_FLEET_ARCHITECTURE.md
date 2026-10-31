@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.25.6  
+**Version:** 1.25.7  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.25.7** | Deploy telegraph: "building" alert + app-emitted LIVE alert, field-work sync protocol, Rules Gate | §68 |
 | **1.25.6** | Welcome survives the plate guard; "tell me more about…" FAQ routing | §65.10 |
 | **1.25.4** | Flow fixes: "sakafleet" FAQ routing + rotating repeat nudges (no more nudge loop) | §65.9 |
 | **1.25.3** | Commit ID in deploy alerts, generated CHANGELOG.md + doc-sync guard, fresh clean slate | §67.6 |
@@ -2503,6 +2504,25 @@ Stateless suite (in `npm run health`) that fails when:
 ### 67.6 Release identity & changelog (v1.25.3)
 - **Deploy alerts name the commit in the title** — `✅ Saka update is live - v<version> - <hash>` — and append a GitHub commit link (`scripts/notify_git_push.js`, `repoWebUrl()`), so a release is identifiable without reading the footer.
 - **`CHANGELOG.md`** is generated from the real git history (version, date, commit, one-line summary per release, plus earlier milestones). It is guarded by `test_doc_sync.js`: the newest entry must equal `package.json` and historical entries must name their commit. Update it in the same commit as any release (rule 13 sync).
+
+---
+
+## 68. v1.25.7 - Deploy Telegraph, Field-Work Sync & Rules Gate
+
+### 68.1 Two notifications, every deploy path
+- **Building:** `deploy_notify.yml` (push to main) sends `Saka update building - v<version> - <hash>` with a plain-English headline and the promise of a second message (`scripts/notify_git_push.js`).
+- **LIVE:** the app itself announces the revision at boot — `announceRevisionLive()` (`src/services/deployLiveAlert.js`) compares `K_REVISION` with `system_config.last_deployed_revision`; on change it upserts the key and sends `🚀 Saka is LIVE - v<version> · <revision>` exactly once. This works for local pushes, **cline.bot pipelines** and manual console deploys, and survives restarts without repeating.
+- GitHub does not chain-trigger workflows for pushes made with the Actions `GITHUB_TOKEN`; cline.bot's merges therefore may skip the "building" alert, which is why the in-app LIVE alert is the guaranteed channel.
+
+### 68.2 Field-work protocol (remote fixes)
+- `.clinerules` rule 32-34: a local session must `git fetch origin && git pull --ff-only origin main` (or `npm run sync:origin`) before any work; every field fix ships targeted suites + `npm run health`, a version/history/changelog sync in the same commit and the `v<X.Y.Z>: …` commit style.
+- `npm run health` now warns `branch sync - local is N commit(s) behind origin/main` so a stale checkout can never go unnoticed.
+
+### 68.3 Rules Gate
+- `.github/workflows/rules_gate.yml` runs the stateless rule suites (agent training, greetings, product QA, ack, status probes, reset scope, notifications, doc sync) on every push to main and every PR. Failure dispatches `⚠️ Saka build rules check FAILED - <hash>` through `notify_git_push.js --failure` so remote fixes that break the rules are immediately visible.
+
+### 68.4 Operator CLI
+- GitHub CLI is available for run inspection (`gh run list`, `gh run view`). Installation is a machine-level setup step; `gh auth login` is required once per workstation.
 
 ### 67.7 Sentinel refinements must carry the schema marker (v1.25.3)
 - `runConversationRefinement()` wrote the refined prompt **without** the `SAKA-PROMPT-SCHEMA` marker, so the v1.25.1 gate ignored every weekly refinement — and the unmarked 3k-character legacy prompt kept reappearing in `system_config`. The writer now stamps `PROMPT_REFINEMENT_MARKER` and bounds the payload to `MAX_STORED_PROMPT_REFINEMENT_CHARS`, so a refinement can only ever augment the current, trained prompt.

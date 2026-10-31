@@ -4,6 +4,12 @@ All notable changes to Saka Fleet. Versions mirror the release tracker at the to
 of `SAKA_FLEET_ARCHITECTURE.md`; every entry names the commit it shipped in.
 Generated from the real git history — never from memory.
 
+## [1.25.7] - 2026-10-31
+- **Two deploy notifications:** a "building" WhatsApp alert on push and an app-emitted **`🚀 Saka is LIVE`** alert per revision (`src/services/deployLiveAlert.js`) — works for local pushes, cline.bot and manual deploys.
+- **Rules-gate failure alert:** `notify_git_push.js --failure` + `.github/workflows/rules_gate.yml`.
+- **Field-work protocol:** `npm run sync:origin`, `.clinerules` rules 32-34, and a health warning when the checkout is behind origin/main.
+- **GitHub CLI** installed locally for deploy/run inspection.
+
 ## [1.25.6] - 2026-10-31
 - **The sales welcome now survives the zero-vehicle plate guard** (`shouldReplacePlateAsk`) — plain "Hi" shows the welcome, not "Let's set up your first asset".
 - **"Tell me more about …" routes to the Product Q&A intro** (saka fleet, sakafleet, you).

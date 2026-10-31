@@ -1,0 +1,45 @@
+name: Rules Gate
+
+# v1.25.7 - runs the stateless build rules on every push to main and every PR,
+# so a remote fix (cline.bot) can never silently break the trained prompt, the
+# product answers, the docs sync or the reset scope. Failure alerts WhatsApp.
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  rules:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Stateless rule suites
+        run: |
+          set -e
+          node test_agent_training.js
+          node test_greetings.js
+          node test_product_qa.js
+          node test_turn_ack.js
+          node test_status_probe.js
+          node test_db_reset_scope.js
+          node test_notifications.js
+          node test_doc_sync.js
+
+      - name: Notify failure
+        if: failure()
+        env:
+          SUPERADMIN_PHONE: ${{ secrets.SUPERADMIN_PHONE }}
+          META_PHONE_NUMBER_ID: ${{ secrets.META_PHONE_NUMBER_ID }}
+          META_WHATSAPP_TOKEN: ${{ secrets.META_WHATSAPP_TOKEN }}
+        run: node scripts/notify_git_push.js --failure || true

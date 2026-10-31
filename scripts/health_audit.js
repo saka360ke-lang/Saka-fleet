@@ -49,6 +49,11 @@ function bad(label, detail = '') {
   console.log(`  ❌ ${label}${detail ? ` — ${detail}` : ''}`);
 }
 
+/** v1.25.7 — advisory finding: visible, but never fails the audit. */
+function warn(label, detail = '') {
+  console.log(`  ⚠️ ${label}${detail ? ` — ${detail}` : ''}`);
+}
+
 function runSuite(file) {
   const res = spawnSync(process.execPath, ['--env-file=.env', file], { encoding: 'utf8' });
   const output = `${res.stdout || ''}${res.stderr || ''}`;
@@ -124,6 +129,16 @@ function gitState() {
     const head = execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim();
     const dirty = execSync('git status --porcelain', { encoding: 'utf8' }).trim();
     ok('git', `${branch} @ ${head}${dirty ? ' (uncommitted changes)' : ' (clean)'}`);
+    // v1.25.7 — field-work guard: warn when this checkout is behind origin/main
+    // (cline.bot or another operator shipped fixes that are not pulled yet).
+    try {
+      execSync('git fetch --quiet origin main', { encoding: 'utf8', stdio: 'ignore', timeout: 15000 });
+      const behind = Number(execSync('git rev-list --count HEAD..origin/main', { encoding: 'utf8' }).trim());
+      if (behind > 0) warn('branch sync', `local is ${behind} commit(s) behind origin/main - run npm run sync:origin`);
+      else ok('branch sync', 'up to date with origin/main');
+    } catch {
+      warn('branch sync', 'origin/main not reachable (offline or no remote)');
+    }
   } catch (err) {
     bad('git', err.message);
   }
