@@ -138,6 +138,17 @@ async function runReliabilityTests() {
 
   // Test 4: State Machine Circuit Breaker
   console.log('--- Test 4: State Machine Circuit Breaker (3-Strike Rule) ---');
+  // v1.25.2 — the strike detector needs DETERMINISTIC replies. With live provider
+  // keys the assistant varies its wording and the loop never repeats; clear the
+  // keys so the deterministic fallback exercises the 3-strike ladder.
+  const savedAiKeys = {
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY
+  };
+  delete process.env.ANTHROPIC_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
   const circuitPhone = '+254788334455';
   chatSessions.delete(circuitPhone);
   onboardingStore.delete(circuitPhone);

@@ -3,6 +3,20 @@
 WhatsApp-native fleet operating system: vehicles, expenses, reminders, driver &
 vehicle compliance, reports, subscriptions and an autonomous Sentinel supervisor.
 
+**Release v1.25.2.** Recent highlights:
+- **Conversational-first onboarding** (v1.25.0): sales-crafted welcome (`sakaIntroText`),
+  VOICE LAW at the top of the core prompt, warm quiz copy, five-line help tour.
+- **Product Q&A** (v1.25.0): `src/services/productQa.js` answers cost, trial, privacy,
+  countries, limits and resale questions deterministically — prices are bound to
+  `subscriptionTiers.js`, so they can never go stale.
+- **Stale prompt refinement gate** (v1.25.1): only a refinement carrying the current
+  `SAKA-PROMPT-SCHEMA` version may augment the trained prompt.
+- **Slow-turn ack** (v1.25.1): 8 s threshold, rotating copy, 60 s anti-spam floor.
+- **Operator probes** (v1.24.4): `GET /api/health` and `/internal/status` mirror `/healthz`;
+  a secret header (`x-saka-secret`) returns the live Cloud Run revision.
+- **Reply-speed telemetry** (v1.24.1): `turn_latency_logs` + `admin latency` (p50/p95/p99
+  plus per-phase averages), and `admin ai-stats` shows reply speed.
+
 ## Quick start
 ```bash
 npm install
@@ -12,8 +26,9 @@ npm start                 # Fastify on :3000, GET /healthz is DB-free
 
 ## Tests
 ```bash
-npm test                  # all suites (always cleans up test rows)
-npm run health            # stateless suites + workflow lint + DB/CI snapshot
+npm test                  # targeted suites (always cleans up test rows)
+npm run test:all          # EVERY test_*.js suite, pass/fail table + cleanup sweep
+npm run health            # stateless suites + workflow lint + doc-sync + DB/CI snapshot
 ```
 
 ## Database migrations

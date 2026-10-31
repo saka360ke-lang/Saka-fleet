@@ -8,7 +8,9 @@ import {
   wantsIntroduction,
   asksForPlateDirectly,
   shouldReplaceIntroCopy,
-  isRepeatedReply
+  isRepeatedReply,
+  isStopRequest,
+  PAUSE_REPLY
 } from './src/services/greetings.js';
 
 /**
@@ -108,6 +110,15 @@ check(shouldReplaceIntroCopy({ firstContact: false, historyLength: 2, hasQuiz: f
 check(isRepeatedReply({ quizActive: false, reply: 'Same', lastPrompt: 'Same' }) === true, 'identical replies are flagged');
 check(isRepeatedReply({ quizActive: true, reply: 'Same', lastPrompt: 'Same' }) === false, 'quiz questions may repeat');
 check(isRepeatedReply({ quizActive: false, reply: 'A', lastPrompt: 'B' }) === false, 'different replies pass');
+
+console.log('--- Test 4c: stop/pause recognition (v1.25.2) ---');
+check(isStopRequest('Stop') === true, 'a bare stop pauses');
+check(isStopRequest('please pause') === true, 'please pause pauses');
+check(isStopRequest('unsubscribe') === true, 'unsubscribe pauses');
+check(isStopRequest('stop with the many replies') === true, 'frustration phrasing pauses');
+check(isStopRequest('Stop at the petrol station') === false, 'a business sentence is not an opt-out');
+check(isStopRequest('I want to cancel my subscription') === false, 'subscription cancellation stays with its flow');
+check(/\bPaused\b/.test(PAUSE_REPLY) && /[\p{Extended_Pictographic}]/u.test(PAUSE_REPLY), 'the pause reply is warm and emoji-anchored');
 
 console.log('--- Test 5: emoji discipline ---');
 check(emojiCount(sakaIntroText({ countryInfo: usa, nextStep: '' })) <= 4, 'US intro stays within the ceiling');

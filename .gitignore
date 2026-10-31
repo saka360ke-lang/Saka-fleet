@@ -7,4 +7,7 @@ remediation/cline-execute.log
 reset-backup-*.json
 ci-logs*/
 ci-logs*.zip
+test-all.log
+test-all.err.log
+test-all-report.json
 

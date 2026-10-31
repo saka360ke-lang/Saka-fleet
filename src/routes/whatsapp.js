@@ -16,7 +16,7 @@ import {
 } from '../services/vehicles.js';
 import { calculateFuelConsumption } from '../services/analytics.js';
 import { normalizeFillType } from '../services/fuelEconomy.js';
-import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly, shouldReplaceIntroCopy, isRepeatedReply } from '../services/greetings.js';
+import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly, shouldReplaceIntroCopy, isRepeatedReply, isStopRequest, PAUSE_REPLY } from '../services/greetings.js';
 import { matchProductQa, buildProductQaReply } from '../services/productQa.js';
 import { resolveSlowAckMs, pickSlowAckLine, shouldSendSlowAck } from '../services/turnAck.js';
 import { buildVehicleSummary, emailVehicleSummary } from '../services/vehicleSummary.js';
@@ -724,8 +724,32 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
     session.lastActive = Date.now();
     session.slowAckSent = false;
 
-    // Circuit Breaker State Check & Reset on user navigation commands
     const cleanCmd = messageText.trim().toLowerCase();
+
+    // v1.25.2 — explicit stop/pause: acknowledge once, stay quiet, and resume on
+    // the user's next message. Deterministic (no AI, no marketing follow-up).
+    if (isStopRequest(cleanCmd)) {
+      session.paused = true;
+      session.history = session.history || [];
+      session.history.push({ role: 'user', parts: [{ text: messageText }] });
+      session.history.push({ role: 'model', parts: [{ text: PAUSE_REPLY }] });
+      if (session.history.length > 20) session.history = session.history.slice(-20);
+      chatSessions.set(senderPhone, session);
+      try { await sendWhatsAppReply(senderPhone, PAUSE_REPLY); } catch { /* best-effort */ }
+      if (supabaseClient) {
+        try {
+          await logChatTranscript(supabaseClient, senderPhone, 'assistant', PAUSE_REPLY);
+          await saveChatMessage(supabaseClient, senderPhone, 'assistant', PAUSE_REPLY);
+        } catch { /* best-effort */ }
+      }
+      await userLogPromise;
+      await persistSnap();
+      return { status: 'paused' };
+    }
+    // A paused user simply writing again resumes the conversation.
+    if (session.paused) session.paused = false;
+
+    // Circuit Breaker State Check & Reset on user navigation commands
     if (/^(cancel|exit|stop|reset|restart|start over|start again|1|2|3|4|5)$/i.test(cleanCmd) || /^(log|update|set|request|help)/i.test(cleanCmd)) {
       session.circuitBreakerStage = null;
       session.consecutivePromptCount = 0;

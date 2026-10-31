@@ -101,10 +101,13 @@ async function run() {
 
   assert(result.status === 'success', 'Monitor completes successfully');
   assert(result.nudged === 1, 'Exactly one stalled session is nudged');
-  assert(sentBodies.length === 1, 'One WhatsApp nudge dispatched');
-  assert(sentBodies[0].url.includes('graph.facebook.com'), 'Nudge uses the Meta Graph API');
-  assert(sentBodies[0].body.to === '254700000001', 'Nudge targets the stalled phone');
-  assert(typeof sentBodies[0].body.text?.body === 'string' && sentBodies[0].body.text.body.length > 10, 'Nudge text is present');
+  // v1.25.2 — front AI purposes now run on Anthropic, so the fetch stub also sees
+  // the (failed, stubbed) provider call. Count only the real Meta dispatch.
+  const metaSends = sentBodies.filter((entry) => entry.url.includes('graph.facebook.com'));
+  assert(metaSends.length === 1, 'One WhatsApp nudge dispatched');
+  assert(metaSends[0].url.includes('graph.facebook.com'), 'Nudge uses the Meta Graph API');
+  assert(metaSends[0].body.to === '254700000001', 'Nudge targets the stalled phone');
+  assert(typeof metaSends[0].body.text?.body === 'string' && metaSends[0].body.text.body.length > 10, 'Nudge text is present');
   assert(first.inserts.friction.length === 1, 'CONVERSATION_STALL friction logged');
   assert(first.inserts.friction[0].friction_type === 'CONVERSATION_STALL', 'Friction type is CONVERSATION_STALL');
   assert(first.updates.length === 1, 'Session snapshot updated with recovery state');
@@ -115,7 +118,7 @@ async function run() {
   const second = makeSupabase(first.rowRef.rows[0].state);
   const result2 = await monitorActiveConversations(second.client);
   assert(result2.nudged === 0, 'No second nudge inside the stall window');
-  assert(sentBodies.length === 1, 'No additional WhatsApp message sent');
+  assert(sentBodies.filter((entry) => entry.url.includes('graph.facebook.com')).length === 1, 'No additional WhatsApp message sent');
 
   console.log('\n--- Test 3: max nudges respected ---');
   const capped = makeSupabase({

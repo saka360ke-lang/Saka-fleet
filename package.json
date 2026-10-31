@@ -1,12 +1,13 @@
 {
   "name": "sakafleet-backend",
   "type": "module",
-  "version": "1.0.0",
+  "version": "1.25.2",
   "description": "Saka Fleet Backend",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
     "test": "node scripts/run_tests.js",
+    "test:all": "node scripts/run_all_tests.js",
     "test:cleanup": "node scripts/run_tests.js --cleanup-only",
     "health": "node --env-file=.env scripts/health_audit.js",
     "check:supabase": "node scripts/check_supabase_connection.js",

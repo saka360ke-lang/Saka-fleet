@@ -97,6 +97,9 @@ const PREMIUM_ENV = {
   CONVERSATIONAL_PROVIDER: 'anthropic',
   AI_MODEL_TIER_2: 'claude-test',
   ANTHROPIC_API_KEY: 'test-anthropic-key',
+  // v1.25.2 — a real .env key would make OpenAI a live Tier-2 leg and steal the
+  // "falls through to DeepSeek" assertion.
+  OPENAI_API_KEY: undefined,
   DEEPSEEK_API_KEY: 'test-deepseek-key'
 };
 
@@ -127,7 +130,8 @@ async function runTests() {
     check(intent.tier === AI_TIERS.CONVERSATIONAL, 'premium on → intent_classify resolves Tier 2');
     check(intent.provider === AI_PROVIDERS.ANTHROPIC && intent.model === 'claude-test', 'Tier 2 binds to Anthropic + AI_MODEL_TIER_2');
     const extraction = resolveTier('extraction');
-    check(extraction.tier === AI_TIERS.ROUTER && extraction.provider === AI_PROVIDERS.DEEPSEEK, 'extraction stays Tier 1 DeepSeek');
+    // v1.23.0 — every front purpose (including extraction) is Sonnet-first.
+    check(extraction.tier === AI_TIERS.ROUTER && extraction.provider === AI_PROVIDERS.ANTHROPIC, 'extraction is Sonnet-first for front conversations');
   });
 
   console.log('\n--- Test 3: Tier-2 Anthropic success path ---');
@@ -266,7 +270,7 @@ async function runTests() {
   check(classifyIntentTier('why is my report missing', sixTurns) === AI_TIERS.CONVERSATIONAL, 'deep-history why-question escalates to Tier 2');
   check(classifyIntentTier('why is my report missing', []) === AI_TIERS.ROUTER, 'why-question without history stays Tier 1');
 
-  console.log('\n--- Test 8: premium off downgrades the canary tier (Phase 0 invariant) ---');
+  console.log('\n--- Test 8: front tier stays Sonnet with the premium canary off (v1.23.0) ---');
   let anthropicTouched = 0;
   let deepseekTouched = 0;
   const downgradeSink = getAiUsageSink();
@@ -286,6 +290,9 @@ async function runTests() {
       CONVERSATIONAL_PROVIDER: 'anthropic',
       AI_MODEL_TIER_2: 'claude-test',
       ANTHROPIC_API_KEY: 'test-anthropic-key',
+      // v1.25.2 — keep the OpenAI leg out of the chain (a real .env key would
+      // answer before DeepSeek and break the assertion).
+      OPENAI_API_KEY: undefined,
       DEEPSEEK_API_KEY: 'test-deepseek-key'
     }, () => chatCompletion({
       messages: [{ role: 'user', content: 'hello' }],
@@ -295,9 +302,12 @@ async function runTests() {
       purpose: 'intent_classify',
       tier: AI_TIERS.CONVERSATIONAL
     }));
-    check(result.ok === true && result.model === 'deepseek-chat', 'premium off keeps Tier-2 turns on DeepSeek');
-    check(anthropicTouched === 0 && deepseekTouched === 1, 'Anthropic is never contacted while premium is off');
-    check(downgradeRecords.length === 1 && downgradeRecords[0].tier === AI_TIERS.ROUTER, 'telemetry records the downgraded tier');
+    // v1.23.0 superseded the Phase-0 "premium off → DeepSeek" invariant: every
+    // front purpose is Sonnet-first on every plan, and the canary flag only
+    // gates Tier-2 escalation for background work.
+    check(result.ok === true && result.model === 'claude-test', 'the front turn is served by Sonnet');
+    check(anthropicTouched === 1 && deepseekTouched === 0, 'Anthropic serves the front leg');
+    check(downgradeRecords.length === 1 && downgradeRecords[0].provider === AI_PROVIDERS.ANTHROPIC, 'telemetry records the Anthropic front leg');
   } finally {
     setFetchHandler(null);
     setAiUsageSink(downgradeSink);

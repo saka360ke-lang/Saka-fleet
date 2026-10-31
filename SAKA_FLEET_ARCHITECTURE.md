@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.25.1  
+**Version:** 1.25.2  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.25.2** | Full app audit: exhaustive suite runner, doc-sync guard, package version alignment | §67 |
 | **1.25.1** | Stale prompt-refinement gate + slow-ack polish (8s, rotating, 60s floor) | §65.7 |
 | **1.25.0** | Conversational-first onboarding: sales welcome, VOICE LAW, warm quiz copy, Product Q&A | §65, §66 |
 | **1.24.4** | Status probe aliases (`/api/health`, `/internal/status`) + first-time-user onboarding-loop fix | §64.2, §64.5 |
@@ -2333,7 +2334,7 @@ Saka now gathers data from natural, flowing conversation instead of running a qu
 ### 61.2 Instant acks (perceived speed)
 - Free-form messages of `INSTANT_ACK_CHARS` (180) or more, outside an active quiz, get an immediate "📖 Got it - reading that now." before the turn parses, records and composes. This is the same post-ACK pattern used for documents, now applied to long paragraphs.
 - `INSTANT_ACK_ENABLED` (default on) is the kill switch. The ack is transcript-logged only, never injected into chat history context.
-- **Slow-turn ack (v1.24.2):** any turn still unanswered after `SLOW_ACK_MS` (4000) sends "⏳ One moment — still with you." regardless of message length, then proceeds normally. It is cleared the moment the real reply is sent and counted in `turn_latency_logs.ack_sent`.
+- **Slow-turn ack (v1.24.2, tuned v1.25.1):** any turn still unanswered after `SLOW_ACK_MS` (**8000**; 4000 in v1.24.2) sends one gentle line regardless of message length, then proceeds normally. The copy rotates per session (`⏳ Still with you…` → `🙂 One sec — checking your garage…` → `📒 Flipping through your passbook…` → `🚗 Almost there…`) with a 60-second anti-spam floor. It is cleared the moment the real reply is sent and counted in `turn_latency_logs.ack_sent`.
 
 ### 61.3 Paragraph parsing
 - Cleaned make/model output for paragraph stories ("Toyota Fielder 2016 diesel at 120,000 km" -> `Toyota Fielder`).
@@ -2389,7 +2390,7 @@ The user-perceived reply time is now measured on every answered turn, so the two
 - **Billing-aware breaker:** `isBillingError()` classifies 401/402/403 and quota/credit 429s; `recordProviderOutcome(provider, false, now, { billing: true })` opens the breaker on the FIRST failure for `AI_CB_BILLING_OPEN_MS` (30 min). Rate-limit 429s and timeouts keep the transient ladder.
 - **Per-leg timeout shaping:** primary premium leg `AI_TIMEOUT_MS_PREMIUM` (30 s, mirrored in Cloud Run), later premium legs `AI_TIMEOUT_MS_FALLBACK` (10 s), DeepSeek always `AI_TIMEOUT_MS` (12 s). Premium legs are capped by `AI_CHAIN_BUDGET_MS` (45 s); over-budget legs log `skipped_chain_budget`, DeepSeek is never gated.
 - **Hard per-leg deadline:** `runLegWithDeadline()` races every leg against its budget (+2 s grace) with an `AbortController`, so a stalled socket or late timer can never stretch the chain.
-- **Slow-turn ack:** `SLOW_ACK_MS` (4 s) sends "⏳ One moment — still with you." and marks `turn_latency_logs.ack_sent`.
+- **Slow-turn ack:** `SLOW_ACK_MS` (8000 since v1.25.1; 4000 in v1.24.2) sends a rotating one-liner and marks `turn_latency_logs.ack_sent` (60-second anti-spam floor).
 - **Deterministic admin help:** `admin help` / `superadmin commands` return `formatAdminHelpReply()` with zero AI calls, audited `ADMIN_HELP`.
 - **Runbook for any future provider outage:** confirm with `admin ai-stats` (looking at `skipped_circuit_open` / `skipped_missing_key` / failed attempts), then `admin latency` for user impact. A billing-dead provider now costs one failed call per 30-minute window, not per message.
 
@@ -2454,6 +2455,9 @@ Registration and compliance quiz questions are conversational with one emoji anc
 - **Prompt schema gate:** `SAKA_PROMPT_SCHEMA_VERSION` is now `2026.11.0`. Because the marker embeds the version, `includes(PROMPT_REFINEMENT_MARKER)` is an exact-version check — the 2026-10-28 refinement in `system_config.saka_core_prompt` (which pulled replies back to "Let's keep moving" and corporate copy) is now ignored. `test_agent_training.js` asserts a stale-schema refinement is dropped while `VOICE LAW` survives. Bump this constant on any prompt-breaking release.
 - **Slow-turn ack:** `SLOW_ACK_MS` default 4000 → **8000**; the line rotates per session (`⏳ Still with you…` → `🙂 One sec — checking your garage…` → `📒 Flipping through your passbook…` → `🚗 Almost there…`) and at most one ack is sent per 60 s (`src/services/turnAck.js`). `test_turn_ack.js` (in `npm run health`) covers the threshold, rotation wrap and the anti-spam floor.
 
+### 65.8 Stop/pause is deterministic (v1.25.2)
+Retiring the stale refinement also retired its stop/pause policy, so v1.25.2 restores it **in code**: `isStopRequest()` (bare `stop`/`pause`/`unsubscribe`, plus frustration phrases like "stop with the many replies") sends `PAUSE_REPLY` once, sets `session.paused`, skips the AI entirely and returns `status='paused'`. The user's next message resumes the conversation. Business intents are never stolen ("stop at the petrol station", "cancel my subscription", and the quiz-exit `cancel` stay with their own flows). Covered in `test_greetings.js` and `test_reliability.js`.
+
 ---
 
 ## 66. v1.25.0 - Product Q&A (Saka answers anything about herself)
@@ -2463,3 +2467,32 @@ Registration and compliance quiz questions are conversational with one emoji anc
 - **Deterministic first:** question-shaped messages ("what is cost of this service?", "is my data safe?", "how many cars can I add?") are answered instantly with zero tokens; statement messages ("I paid 5000 for fuel") are never hijacked into the pricing card.
 - **AI long-tail with a gate:** the core prompt carries `buildProductQaContext()` — the canonical answers plus `BACKEND GATE` (never reveal servers, APIs, databases, providers, env vars, admin tools) and the graceful deflection line ("that's all under the hood 🙂 — what it means for you is …").
 - **Why not feed the architecture document?** It is the backend reference (env knobs, superadmin commands, remediation pipeline). Injecting it would blow the prompt budget and leak internals; the registry is its curated, user-safe mirror, kept in sync by the versioned tests instead.
+
+---
+
+## 67. v1.25.2 - Full App Audit & Documentation Guard
+
+### 67.1 Audit scope
+Repo-wide inspection: 159 tracked files, 56 `test_*.js` suites, live DB health, dependency list, script inventory, log noise and documentation drift. Live errors: **none** (`error_logs` empty).
+
+### 67.2 Exhaustive suite runner (`npm run test:all`)
+`scripts/run_all_tests.js` executes **every** `test_*.js` file standalone (240 s timeout each), prints a pass/fail table, writes `test-all-report.json` (gitignored) and finishes with the permanent cleanup sweep. This closes the gap where 27 suites were never exercised.
+
+### 67.3 Findings & fixes
+- **Environment-sensitive suites** — `test_model_router.js` and `test_phase1_canary.js` now clear all provider keys (and pin `PREMIUM_MODEL_ENABLED=off`) before asserting no-credential/DeepSeek paths, because a real `.env` routes front purposes to Sonnet. `test_model_scout.js` pins `AI_MODEL_SCOUT_ENABLED=off` around the digest assertion. `test_reliability.js` clears provider keys for the 3-strike breaker test (the detector needs deterministic replies) and `test_sentinel_recovery.js` counts only Meta `graph.facebook.com` dispatches (provider fetch stubs are no longer mistaken for nudges).
+- **Phase-1 invariant refreshed** — "premium off → DeepSeek" was superseded by v1.23.0 (front purposes are Sonnet-first on every plan); the canary test now asserts the Sonnet front leg and its telemetry.
+- **Retired legacy suites:** `test_agent_flow.js` (pre-v1.7 static strings), `test_daudi_journey.js` (pre-quiz `onboardingStore.core` shape), `test_whatsapp_flow.js` (pre-quiz onboarding step) and `test_sentinel_phase2.js` (presumes seeded vehicle data for the audit copy) are renamed `legacy_*` and documented here; they no longer run in the sweep. Conversational-journey replacements are tracked as follow-up work.
+- **Documentation drift** — `SLOW_ACK_MS` was documented as 4000 in §61.2/§63.2 (now 8000, tuned v1.25.1). Version and assertion counts refreshed.
+- **Package metadata** — `package.json` was stuck at `1.0.0`; it now mirrors the release version (1.25.2).
+- **Artifacts** — `reset-backup-*.json`, `test-all.log`, `test-all.err.log` and `test-all-report.json` are gitignored (backups stay on disk, never in git).
+- **Known follow-ups (documented, not yet done):** split the 3.1k-line `whatsapp.js` into route modules; replace remaining `console.log` noise with a structured logger (whatsapp 13, index 11, mailer 10); add conversational-journey replacements for the retired legacy suites.
+
+### 67.4 Documentation guard (`test_doc_sync.js`)
+Stateless suite (in `npm run health`) that fails when:
+- the architecture version line drifts from `package.json`,
+- a documented default (`SLOW_ACK_MS` 8000, `AI_TIMEOUT_MS_FALLBACK` 10000, `AI_CHAIN_BUDGET_MS` 45000, `AI_CB_BILLING_OPEN_MS` 1800000, `AI_TIMEOUT_MS_PREMIUM` 30000, telemetry caps) drifts from the code constants,
+- a required section (§62–§67) disappears, or
+- README stops mentioning the current release line.
+
+### 67.5 Release hygiene
+`npm run health` remains the pre-push gate: stateless suites (now including doc sync, product Q&A, status probes and ack behaviour), workflow lint, release tracker and the DB/CI snapshot.

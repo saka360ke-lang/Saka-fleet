@@ -159,8 +159,16 @@ async function runTests() {
   const captured = [];
   const previousSink = getAiUsageSink();
   const savedKey = process.env.DEEPSEEK_API_KEY;
+  const savedAnthropicKey = process.env.ANTHROPIC_API_KEY;
+  const savedOpenAiKey = process.env.OPENAI_API_KEY;
+  const savedPremiumFlag = process.env.PREMIUM_MODEL_ENABLED;
   try {
+    // v1.25.2 — a real .env carries premium keys, which would route this
+    // purpose to Sonnet and make the "no credentials" case unreachable.
     delete process.env.DEEPSEEK_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    process.env.PREMIUM_MODEL_ENABLED = 'off';
     setAiUsageSink((record) => captured.push(record));
     const result = await chatCompletion({
       system: 'Return json only.',
@@ -178,6 +186,12 @@ async function runTests() {
   } finally {
     if (savedKey === undefined) delete process.env.DEEPSEEK_API_KEY;
     else process.env.DEEPSEEK_API_KEY = savedKey;
+    if (savedAnthropicKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = savedAnthropicKey;
+    if (savedOpenAiKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = savedOpenAiKey;
+    if (savedPremiumFlag === undefined) delete process.env.PREMIUM_MODEL_ENABLED;
+    else process.env.PREMIUM_MODEL_ENABLED = savedPremiumFlag;
     setAiUsageSink(previousSink);
   }
   check(getAiUsageSink() === previousSink, 'previous sink restored');

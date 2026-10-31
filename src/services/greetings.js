@@ -67,6 +67,21 @@ export function greetingFor({ countryInfo = null, now = new Date(), timeZone = n
   return { text: `Good ${daypart}! ${DAYPART_EMOJI[daypart]}`, daypart, local: null };
 }
 
+/** v1.25.2 — one-shot pause confirmation (anti-spam opt-out). */
+export const PAUSE_REPLY = '🔇 *Paused.* I\'ll stay quiet — message me anytime and I\'ll pick up where we left off.';
+
+/**
+ * v1.25.2 — recognise an explicit stop/pause request WITHOUT stealing real
+ * business intents: "cancel my subscription" and a bare "cancel" (quiz exit)
+ * stay with their own flows; "stop at the petrol station" is not an opt-out.
+ */
+export function isStopRequest(text = '') {
+  const value = String(text || '').trim();
+  if (!value) return false;
+  if (/^(?:please\s+)?(?:stop|pause|unsubscribe)\s*[.!]*$/i.test(value)) return true;
+  return /\b(?:stop (?:with )?(?:the )?(?:many )?(?:replies|messages|messaging|replying|spamming|sending)|too many (?:replies|messages)|leave me alone|shut up)\b/i.test(value);
+}
+
 /**
  * Warm, sales-crafted first-contact introduction (v1.25.0).
  * Ends with exactly ONE next step, keeps the welcome emoji ceiling (≤4 total),

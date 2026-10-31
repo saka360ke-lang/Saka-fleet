@@ -252,9 +252,16 @@ async function runSuite() {
   const duplicate = await createModelUpdateProposal(supabase, nextRecommendation);
   check(duplicate.ok === true && duplicate.duplicate === true, 'duplicate proposal suppressed');
 
+  // v1.25.2 — the summary/digest render the LIVE kill-switch state; pin it off
+  // before the read so a developer .env (AI_MODEL_SCOUT_ENABLED=on) cannot flip
+  // the assertion.
+  const savedScoutFlag = process.env.AI_MODEL_SCOUT_ENABLED;
+  process.env.AI_MODEL_SCOUT_ENABLED = 'off';
   const summary = await getModelWatchdogSummary(supabase);
   check(summary.candidates.some((row) => row.modelId === MODEL_B), 'summary lists the benchmarked candidate');
   const digest = formatModelRegistryReply(summary);
+  if (savedScoutFlag === undefined) delete process.env.AI_MODEL_SCOUT_ENABLED;
+  else process.env.AI_MODEL_SCOUT_ENABLED = savedScoutFlag;
   check(digest.includes('Saka Model Watchdog') && digest.includes('admin model scout'), 'digest is deterministic and actionable');
   check(digest.includes('Scout OFF'), 'digest reports the kill-switch state truthfully');
 
