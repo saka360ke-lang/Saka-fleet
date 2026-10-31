@@ -136,6 +136,8 @@ async function runTests() {
   check(parsedHelp.intent === 'ADMIN_HELP', 'superadmin commands parses deterministically');
   const parsedAdminHelp = await parseSuperadminCommand('admin help');
   check(parsedAdminHelp.intent === 'ADMIN_HELP', 'admin help parses deterministically');
+  check((await parseSuperadminCommand('list superadmin commands')).intent === 'ADMIN_HELP', '"list superadmin commands" parses deterministically');
+  check((await parseSuperadminCommand('list commands')).intent === 'ADMIN_HELP', '"list commands" parses deterministically');
   const helpReply = formatAdminHelpReply();
   check(helpReply.includes('Saka admin commands') && helpReply.includes('admin latency'), 'the help reply lists the command families');
 

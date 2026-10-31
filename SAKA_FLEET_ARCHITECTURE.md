@@ -2504,3 +2504,4 @@ Stateless suite (in `npm run health`) that fails when:
 
 ### 67.7 Sentinel refinements must carry the schema marker (v1.25.3)
 - `runConversationRefinement()` wrote the refined prompt **without** the `SAKA-PROMPT-SCHEMA` marker, so the v1.25.1 gate ignored every weekly refinement — and the unmarked 3k-character legacy prompt kept reappearing in `system_config`. The writer now stamps `PROMPT_REFINEMENT_MARKER` and bounds the payload to `MAX_STORED_PROMPT_REFINEMENT_CHARS`, so a refinement can only ever augment the current, trained prompt.
+- **Admin help aliases (v1.25.3):** `list commands`, `list superadmin commands` and `show admin commands` also route to the deterministic command list (`ADMIN_HELP`); before this they fell through to the AI chain and produced the "Let's keep moving" nudge.

@@ -163,7 +163,9 @@ export async function parseSuperadminCommand(messageText) {
   // v1.24.2 — help aliases are deterministic. A "superadmin commands" message
   // used to fall through to the conversational AI chain and could wait minutes
   // behind provider timeouts; the command list must never cost a token.
-  if (/^\s*(?:superadmin|admin)\s+(?:commands?|help)\s*$/i.test(text)) {
+  // v1.25.3 — accept the natural phrasings too ("list commands",
+  // "list superadmin commands", "show admin commands").
+  if (/^\s*(?:(?:superadmin|admin)\s+(?:commands?|help)|(?:list|show|see)\s+(?:me\s+)?(?:all\s+)?(?:superadmin\s+|admin\s+)?commands?|commands?\s+list)\s*$/i.test(text)) {
     return { intent: 'ADMIN_HELP' };
   }
 

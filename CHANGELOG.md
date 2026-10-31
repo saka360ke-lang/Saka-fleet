@@ -8,6 +8,7 @@ Generated from the real git history — never from memory.
 - **Deploy alerts carry the commit id in the title** (`✅ Saka update is live - v1.25.3 - <hash>`) plus a GitHub commit link, so every release is identifiable at a glance.
 - **This changelog added** and guarded by `test_doc_sync.js` (its newest entry must equal `package.json`).
 - **Sentinel prompt refinements now stamp the schema marker** (`SAKA-PROMPT-SCHEMA:<current>`), so the weekly refinement is actually accepted by the core-prompt gate instead of being silently ignored (and it can never reintroduce the old corporate prompt).
+- **Admin help aliases:** `list commands`, `list superadmin commands` and `show admin commands` route to the deterministic command list instead of the conversational nudge.
 - Clean-slate wipe re-run for a fresh onboarding.
 
 ## [1.25.2] - 2026-10-31 — ff82636
