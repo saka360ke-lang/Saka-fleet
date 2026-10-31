@@ -1,4 +1,6 @@
 import 'dotenv/config';
+import fs from 'node:fs';
+import { REMINDER_DUE_DATE_SQL } from './scripts/run_reminder_due_date_migration.js';
 import {
   detectQuizStart,
   handleQuizTurn,
@@ -183,6 +185,41 @@ async function run() {
   assert(guardSession.quiz.answers.plate_number === undefined, 'the phantom plate is removed before any write');
   await handleQuizTurn({ session: guardSession, messageText: 'cancel', ctx: baseCtx({ vehicles: [] }) });
 
+  console.log('\n--- Test 3d: mileage reminder banks from the trigger + saves without a date (v1.28.5) ---');
+  const reminderCtx = baseCtx({ vehicles: [vehicle] });
+  const reminderSession = {};
+  await handleQuizTurn({
+    session: reminderSession,
+    messageText: 'Log an oil change reminder. To happen @370,000km',
+    startFlow: 'set_reminder',
+    ctx: reminderCtx
+  });
+  assert(reminderSession.quiz?.answers?.reminder_type === 'Oil change', 'the reminder type is banked from the trigger sentence');
+  assert(reminderSession.quiz?.answers?.due?.kind === 'distance', 'the mileage threshold is banked from the trigger sentence');
+  assert(reminderSession.quiz?.answers?.due?.canonicalValue === 370000, 'the threshold target is 370,000 km');
+  assert(reminderSession.quiz?.phase === 'confirm', 'the flow reaches confirmation without re-asking');
+
+  const inserted = [];
+  const mockSupabase = {
+    from(table) {
+      return {
+        insert: async (rows) => { inserted.push({ table, rows }); return { error: null, data: rows }; },
+        update: () => ({ eq: async () => ({ error: null }) }),
+        select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) })
+      };
+    }
+  };
+  const confirmCtx = baseCtx({ vehicles: [vehicle], supabase: mockSupabase });
+  const reminderConfirmTurn = await handleQuizTurn({ session: reminderSession, messageText: 'yes', ctx: confirmCtx });
+  assert(reminderConfirmTurn.handled === true, 'the confirmation is handled');
+  const reminderRow = inserted.find((entry) => entry.table === 'reminders')?.rows?.[0] || null;
+  assert(Boolean(reminderRow), 'a reminders row is inserted');
+  assert(reminderRow.threshold_unit === 'distance', 'the row is a distance threshold reminder');
+  assert(reminderRow.target_value === 370000, 'the row targets 370,000 km');
+  assert(!('due_date' in reminderRow), 'a mileage reminder carries no due_date (schema must allow NULL)');
+  assert(/ALTER COLUMN due_date DROP NOT NULL/.test(REMINDER_DUE_DATE_SQL), 'the migration relaxes reminders.due_date');
+  assert(/ALTER COLUMN due_date DROP NOT NULL/.test(fs.readFileSync('./src/services/vehicles.js', 'utf8')), 'the boot DDL also heals due_date nullability');
+
   console.log('\n--- Test 6: quiz ↔ conversation arbitration ---');
   const currentField = getCurrentQuizField(session.quiz, ctx);
   assert(currentField && /vin/i.test(currentField.label), 'Current pending field is VIN');
@@ -250,8 +287,6 @@ async function run() {
   const bankCtx = baseCtx({ vehicles: [vehicle] });
   const bankSession = {};
   await handleQuizTurn({ session: bankSession, messageText: 'log fuel', startFlow: 'log_expense', ctx: bankCtx });
-  await handleQuizTurn({ session: bankSession, messageText: 'KDA 123A', aiExtracted: { vehicle_id: vehicle.id }, ctx: bankCtx });
-  await handleQuizTurn({ session: bankSession, messageText: 'Fuel', aiExtracted: { expense_type: 'Fuel' }, ctx: bankCtx });
   const bankTurn = await handleQuizTurn({
     session: bankSession,
     messageText: '5000 for 40 litres at 366900 km, full tank',

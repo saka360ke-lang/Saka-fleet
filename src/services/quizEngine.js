@@ -96,6 +96,7 @@ const MAX_QUIZ_AGE_MS = 45 * 60 * 1000;
 const EMAIL_RE = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
 const PLATE_RE = /^[A-Z0-9][A-Z0-9 -]{2,12}$/i;
 const PLATE_BLOCKLIST_RE = /^(VIN|OTP|FUEL|DIESEL|PETROL|HYBRID|OWNER|DRIVER|REGISTER)$/;
+const PLATE_STOP_PARTS = new Set(['A', 'AN', 'THE', 'MY', 'OUR', 'YOUR', 'CAR', 'VAN', 'BUS', 'NEW', 'OLD', 'IS', 'IT', 'AT', 'ON', 'IN', 'TO', 'FOR', 'OF', 'AND', 'PER']);
 const VIN_RE = /^[A-HJ-NPR-Z0-9]{11,17}$/i;
 
 function parseEmail(text) {
@@ -136,6 +137,10 @@ export function isPlateLike(value = '') {
   for (const part of raw.split(' ')) {
     if (/\d/.test(part)) continue;
     if (part.length > 3) return false;
+  }
+  // Common words/articles can make prose look plate-shaped ("CAR A 1991").
+  for (const part of raw.split(' ')) {
+    if (PLATE_STOP_PARTS.has(part)) return false;
   }
   return true;
 }
@@ -931,7 +936,7 @@ export function getFlowDefinition(flowKey, ctx) {
             { value: 'Other', aliases: ['other'] }
           ]),
           field('due', 'Due date, distance or operating hours', 'e.g. 2027-05-15, 15th Dec 2026, next month, in 14 days, 5000 km, 3000 miles or 36 operating hours', {
-            aliases: ['due', 'due_date', 'due_mileage', 'threshold'],
+            aliases: ['due', 'due_date', 'due_mileage', 'threshold', 'reminder_threshold', 'reminder_due_date'],
             parse: (text, c) => {
               const countryCode = c?.countryInfo?.country_code || 'GLOBAL';
               const locale = c?.countryInfo?.locale || 'en-US';
@@ -1154,6 +1159,14 @@ function applyTextExtraction(state, def, text, ctx) {
     else if (f.key === 'expense_type') allowed = hasExpenseMarker;
     else if (f.key === 'yom' || f.key === 'fuel_type' || f.key === 'transmission') allowed = true;
     else if (f.key === 'plate_number' && def.key === 'vehicle_registration') allowed = true;
+    // v1.28.5 — bank the reminder type and the due threshold from the trigger
+    // sentence ("Log an oil change reminder. To happen @370,000km").
+    else if (def.key === 'set_reminder' && f.key === 'reminder_type') {
+      allowed = /\b(oil|service|maintenance|insurance|inspection|mot|ntac|licen[cs]e|permit|deadline|renewal|expir)/i.test(clean);
+    } else if (def.key === 'set_reminder' && f.key === 'due') {
+      allowed = /\b\d+\s*(?:km|kms|kilometres?|kilometers?|mi|miles?|hours?|hrs?)\b/i.test(clean)
+        || /\b(expires?|expiry|due|renews?|renewal|valid until|until|by|on)\b/i.test(clean);
+    }
     if (!allowed) continue;
 
     const fieldText = scopedFieldText(f);
@@ -1785,7 +1798,7 @@ export async function handleQuizTurn({
 
   if (!state) {
     if (!startFlow) return { handled: false };
-    const started = startQuiz({ session, flowKey: startFlow, ctx: { ...ctx, aiExtracted }, prefill });
+    const started = startQuiz({ session, flowKey: startFlow, ctx: { ...ctx, aiExtracted, messageText: clean }, prefill });
     if (!started) return { handled: false };
     state = session.quiz;
     const reply = await askCurrent(state, { ...ctx, aiExtracted });

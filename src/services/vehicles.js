@@ -221,6 +221,7 @@ export async function ensureVehicleTableColumns(providedSupabase = null) {
             EXECUTE 'ALTER TABLE public.reminders ADD COLUMN IF NOT EXISTS notified_14d boolean DEFAULT false';
             EXECUTE 'ALTER TABLE public.reminders ADD COLUMN IF NOT EXISTS notified_24h boolean DEFAULT false';
             EXECUTE 'ALTER TABLE public.reminders ADD COLUMN IF NOT EXISTS expiry_tier_at timestamp with time zone';
+            EXECUTE 'ALTER TABLE public.reminders ALTER COLUMN due_date DROP NOT NULL';
             EXECUTE 'CREATE INDEX IF NOT EXISTS idx_reminders_active_threshold ON public.reminders(status, threshold_unit)';
             EXECUTE 'CREATE INDEX IF NOT EXISTS idx_reminders_due_active ON public.reminders(status, due_date)';
             EXECUTE 'CREATE INDEX IF NOT EXISTS idx_reminders_subject ON public.reminders(subject_type, subject_id)';

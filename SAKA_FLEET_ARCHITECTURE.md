@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.28.4  
+**Version:** 1.28.5  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.28.5** | Mileage reminders save: `reminders.due_date` relaxed to NULL, trigger sentence banks type + threshold, threshold insert proven by tests | §71.14 |
 | **1.28.4** | Write-time plate guard + fuel volume derivation: confirming a phantom plate re-asks; "1000kes @227kes per liter" logs 4.41 L instead of asking | §71.12, §71.13 |
 | **1.28.3** | No phantom plates: structural plate check, windowed paragraph scan, registration self-heal — the real plate volunteered in a later turn is captured | §71.11 |
 | **1.28.2** | Complete replies: Sonnet thinking disabled by default, `max_tokens` truncation falls back to DeepSeek, retired identity copy blocked, "start again" gets the warm welcome | §71.10 |
@@ -2706,3 +2707,10 @@ The model can never ship a corporate hedge, an empty capacity placeholder (`· v
 - **Live evidence (2026-10-31 20:14):** "Topped up fuel; 1000kes @227kes per liter, @367365km" was answered with "How many litres did you put in?" — the message already contains the arithmetic.
 - `extractVehicleAttributes()` now derives `fuel_liters = round(spend / price-per-litre, 2)` when no explicit volume is present, flags it as `derived_fuel_liters`, and never overwrites a stated volume ("Logged 40L …" stays 40). The one-line quick log therefore saves immediately instead of starting the quiz.
 - **Proof:** `test_natural_intake` adds the live message (4.41 L) and the explicit-volume guard.
+
+### 71.14 Mileage reminders actually save (v1.28.5)
+- **Live evidence (2026-10-31 20:17–20:20):** "Log an oil change reminder. To happen @370,000km" → type and distance were collected, the summary showed "Due at: 370,000 km", but CONFIRM failed with a date-flavoured error and the user cancelled.
+- **Root cause:** threshold reminders intentionally omit `due_date`, while the legacy `reminders.due_date` column is `NOT NULL` — the insert was rejected (the composer paraphrased the constraint error as "the due date didn't come through"). The columns themselves already existed.
+- **Fix:** `npm run migrate:reminder-due-date` runs `ALTER TABLE public.reminders ALTER COLUMN due_date DROP NOT NULL`; the same statement is inside the boot `$v18$` DDL so new environments heal automatically.
+- **Trigger banking:** the flow-start path now passes the triggering message into `startQuiz`, so `applyTextExtraction` banks `reminder_type` and the `due` threshold from the first sentence (`set_reminder` only). A part blocklist prevents prose like "CAR A 1991" from looking plate-shaped.
+- **Proof:** `test_quiz_flow` 88 assertions — the live sentence reaches confirm with `Oil change` + 370,000 km, and the confirmed row is inserted with `threshold_unit='distance'`, `target_value=370000` and **no `due_date` key**; both the migration and the boot DDL are asserted.

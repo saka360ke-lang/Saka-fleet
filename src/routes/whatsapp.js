@@ -2981,9 +2981,15 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
                 ? `You are right — that reply was cut short. ${recoveryTotal}`
                 : 'You are right — that reply was cut short. Tell me again and I will give you the full answer in one message. 🙏'
             });
+            const acknowledgementRe = /(?:sorry|apolog|cut short|incomplete|again|redo|full answer|complete)/i;
+            const ackReply = acknowledgementRe.test(String(recoveryReply || ''))
+              ? recoveryReply
+              : (recoveryTotal
+                ? `You are right — that reply was cut short. ${recoveryTotal}`
+                : 'You are right — that reply was cut short. Tell me again and I will give you the full answer in one message. 🙏');
             customReply = recoveryFacts
-              ? stripUsdFigures(recoveryReply, { currency: countryInfo.currency })
-              : recoveryReply;
+              ? stripUsdFigures(ackReply, { currency: countryInfo.currency })
+              : ackReply;
             if (supabaseClient) {
               try {
                 await supabaseClient.from('chat_friction_logs').insert([{

@@ -124,6 +124,9 @@ at most 3 emojis per message (4 on the welcome message).
   immediately, and confirmation refuses to write a non-plate-like value.
   Fuel messages that give spend + price per litre ("1000kes @227kes per liter")
   derive the litres (4.41 L) instead of asking for them.
+- **Mileage reminders save (v1.28.5):** a distance reminder ("due at 370,000 km")
+  persists without a date, and the trigger sentence fills both type and
+  threshold in one turn.
 
 ## Receipt intelligence (v1.19.0)
 Send a photo of a **fuel receipt, logbook, insurance policy or driver licence**:

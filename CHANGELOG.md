@@ -4,7 +4,12 @@ All notable changes to Saka Fleet. Versions mirror the release tracker at the to
 of `SAKA_FLEET_ARCHITECTURE.md`; every entry names the commit it shipped in.
 Generated from the real git history — never from memory.
 
-## [1.28.4] - 2026-10-31
+## [1.28.5] - 2026-10-31
+- **Mileage reminders now save:** a distance-based reminder ("due at 370,000 km") was collected correctly but the insert was rejected because the legacy `reminders.due_date` column is NOT NULL. `npm run migrate:reminder-due-date` relaxes it (and the boot DDL applies the same ALTER), so threshold reminders persist with `threshold_unit`, `target_value` and no date.
+- **Trigger sentence banking:** "Log an oil change reminder. To happen @370,000km" now fills the reminder type and the 370,000 km threshold in one turn — no re-asking type or due.
+- **Phantom-plate guard widened:** prose like "CAR A 1991" can no longer pass as a plate (common-word part blocklist).
+- **Proof:** quiz engine 88 assertions (live reminder sequence + threshold row without `due_date` + migration/DDL guards).
+
 - **Write-time plate guard:** a registration confirmation carrying a non-plate-like plate (live confirmation showed `Plate: 1991 80`) is refused — the plate is cleared, the question is re-asked and nothing is written. This protects quiz sessions created before v1.28.3.
 - **Fuel volume derived from spend ÷ price:** "Topped up fuel; 1000kes @227kes per liter, @367365km" now logs **4.41 L** immediately (spend ÷ price-per-litre) instead of asking "how many litres?"; an explicit volume is never overwritten.
 - **Money answers must carry a figure:** `hasLocalFigure()` requires a numeric local amount ("KES 1,298") — merely naming the currency falls back to the complete local fact lines.
