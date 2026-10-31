@@ -17,7 +17,8 @@ import {
 import { calculateFuelConsumption } from '../services/analytics.js';
 import { normalizeFillType } from '../services/fuelEconomy.js';
 import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly, shouldReplaceIntroCopy, isRepeatedReply, isStopRequest, PAUSE_REPLY, pickRepeatNudge, pickNewcomerNudge, isFirstTimeMessage, shouldReplacePlateAsk } from '../services/greetings.js';
-import { matchProductQa, buildProductQaReply } from '../services/productQa.js';
+import { matchProductQa, buildProductQaReply, buildProductFactsContext, recommendTierForFleet, sanitizeSakaReply } from '../services/productQa.js';
+import { buildUserContextSnapshot } from '../services/userContextSnapshot.js';
 import { resolveSlowAckMs, pickSlowAckLine, shouldSendSlowAck } from '../services/turnAck.js';
 import { buildVehicleSummary, emailVehicleSummary } from '../services/vehicleSummary.js';
 import {
@@ -1082,30 +1083,43 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               '_Where shall we start?_ 🚗'
           };
         } else if (productQaMatch) {
-          // v1.26.1 — answer conversationally, not with a canned card. The facts
-          // are engine-owned; the wording is composed fresh for this user, this
-          // moment. The card itself is only the outage fallback.
+          // v1.27.0 — Answer Path. The question is answered from verified facts
+          // (live tier registry + the user's own realtime data snapshot) and the
+          // prose is composed fresh. The fact lines are only the outage fallback.
           const productFacts = buildProductQaReply(productQaMatch);
+          const fleetCountMatch = messageText.match(/\b(\d{1,3})\s*(?:cars?|vehicles?|units?|machines?|trucks?|bikes?|motorbikes?|matatus?|lorries?|pickups?)\b/i);
+          const planTopic = ['pricing', 'packages', 'tier_details', 'addons', 'limits'].includes(productQaMatch.id);
+          const recommendation = fleetCountMatch && planTopic ? recommendTierForFleet(Number(fleetCountMatch[1])) : null;
+          let userFacts = '';
+          try {
+            const snapshot = await buildUserContextSnapshot({
+              supabase: supabaseClient,
+              profile: profileData,
+              vehicles: existingVehicles,
+              currency: countryInfo?.currency || 'USD'
+            });
+            userFacts = snapshot.lines.join('\n');
+          } catch { userFacts = ''; }
+          const fallbackAnswer = [productFacts, ...(recommendation ? recommendation.lines : [])].join('\n');
           const composedAnswer = await composeMessage({
             purpose: 'product_answer',
             facts: {
               userQuestion: messageText,
               topic: productQaMatch.id,
-              verifiedFacts: productFacts,
-              instruction: 'Answer the user\'s question in 1-3 short conversational lines using ONLY the verified facts. Warm and human, at most one emoji per line. End with ONE gentle next step. Do not paste a menu, do not repeat the question back, and never ask for the plate.'
+              verifiedFacts: fallbackAnswer,
+              userDataFacts: userFacts || 'No account data on file yet.',
+              instruction: 'Answer the user\'s question in 1-3 short conversational lines using ONLY the verified facts. For features or package questions, give the concrete list from the facts (up to 4 short lines). If the user gave a fleet size, use the computed recommendation exactly. Warm and human, at most one emoji per line. End with ONE gentle next step. Do not paste a menu, do not repeat the question back, never ask for the plate, and never say you do not have information — the facts above are complete.'
             },
             language: targetLang,
             countryInfo,
             profile: profileData,
-            fallbackText: productFacts
+            fallbackText: fallbackAnswer
           });
-          // v1.26.1 — a short or fact-less composition is not an answer; fall back
-          // to the complete verified card (which is still warm, just richer).
-          const composedText = typeof composedAnswer === 'string' ? composedAnswer.trim() : '';
-          const needsFigures = ['pricing', 'trial', 'tier_details', 'addons'].includes(productQaMatch.id);
+          const composedText = sanitizeSakaReply(composedAnswer, fallbackAnswer);
+          const needsFigures = ['pricing', 'packages', 'trial', 'tier_details', 'addons', 'limits'].includes(productQaMatch.id);
           const usableAnswer = composedText.length >= 60 && (!needsFigures || /\d/.test(composedText))
             ? composedText
-            : productFacts;
+            : fallbackAnswer;
           aiResult = {
             intent: 'GENERAL_CHAT',
             extracted_data: {},
@@ -2853,6 +2867,74 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
               profile: profileData,
               fallbackText: 'Paused — message me anytime to continue.'
             });
+          }
+          // 1b. Farewell — a goodbye must never fall through to the welcome.
+          else if (/^(?:ok(?:ay)?[\s.,!]*)?(?:bye|goodbye|good bye|see you|see ya|talk later|good ?night|kwaheri|tutaonana)\b[\s!.…]*$/i.test(messageText.trim())) {
+            customReply = await composeMessage({
+              purpose: 'farewell',
+              facts: { note: 'One warm line of goodbye. No sales pitch, no question, keep the door open.' },
+              language: targetLang,
+              countryInfo,
+              profile: profileData,
+              fallbackText: '👋 Anytime — I am here whenever you need me. Just say Hi. 🚗'
+            });
+          }
+          // 1c. Feedback / tester notes v1.27.0 — acknowledge the specific point,
+          // never a canned apology for an opinion. Logged for the team.
+          else if (/\b(feedback|tester|testing|notes?|suggestion|improve|improvement|canned|templates?|robotic|scripted)\b/i.test(messageText)
+            && /\b(stupid|bad|wrong|hate|annoy|boring|canned|template|robotic|scripted|pre-?made|prewritten|pre-written|dumb)\b/i.test(messageText)) {
+            if (supabaseClient) {
+              try {
+                await supabaseClient.from('chat_friction_logs').insert([{
+                  user_phone: senderPhone,
+                  session_id: senderPhone,
+                  friction_type: 'USER_FEEDBACK',
+                  transcript_snippet: `Feedback: "${messageText}"`.slice(0, 500)
+                }]);
+              } catch { /* logging is best effort */ }
+            }
+            customReply = await composeMessage({
+              purpose: 'feedback_ack',
+              facts: {
+                userNote: messageText,
+                instruction: 'Answer in 1-2 short lines. Acknowledge their specific point in plain words, no apology theatre, no corporate phrasing, no defensiveness. State the one concrete thing you will do about it. Thank them once, briefly.'
+              },
+              language: targetLang,
+              countryInfo,
+              profile: profileData,
+              fallbackText: 'Noted — fair point. I will keep the answers fresh and specific instead of scripted. 🙏'
+            });
+          }
+          // 1d. ANY question — product or the user's own data — gets a composed
+          // answer from realtime facts (v1.27.0). Never the welcome, never a menu.
+          else if (!productQaMatch && messageText.trim().length >= 5
+            && (/^(?:what|how|why|when|where|which|who|is|are|was|were|do|does|did|can|could|should|would|tell me|explain|show me|give me|list|any)\b/i.test(messageText.trim()) || /\?\s*$/.test(messageText.trim()))) {
+            let userFacts = [];
+            try {
+              const snapshot = await buildUserContextSnapshot({
+                supabase: supabaseClient,
+                profile: profileData,
+                vehicles: existingVehicles,
+                currency: countryInfo?.currency || 'USD'
+              });
+              userFacts = snapshot.lines;
+            } catch { userFacts = []; }
+            const questionFallback = userFacts.length
+              ? userFacts.slice(0, 3).join('\n')
+              : 'I do not have that on file yet — tell me in one line what you need and I will handle it.';
+            customReply = sanitizeSakaReply(await composeMessage({
+              purpose: 'user_data_answer',
+              facts: {
+                userQuestion: messageText,
+                userDataFacts: userFacts.length ? userFacts.join('\n') : 'No account data on file yet.',
+                productFacts: buildProductFactsContext(),
+                instruction: 'Answer the question directly in 1-4 short conversational lines using ONLY these facts. Account data lives in userDataFacts; product knowledge in productFacts. If neither can answer it, say so plainly in one line and offer the single most useful next step. No menus, no corporate phrasing, never the word plate, and never claim you lack information when the facts above contain it.'
+              },
+              language: targetLang,
+              countryInfo,
+              profile: profileData,
+              fallbackText: questionFallback
+            }), questionFallback);
           }
           // 2. Conversational feedback / frustration / message looping detected
           // v1.26.0 — a recognised product question always outranks the apology.

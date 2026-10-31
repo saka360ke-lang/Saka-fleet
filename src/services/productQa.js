@@ -1,184 +1,287 @@
-import { TIER_MATRIX, getTierPriceUSD, PLAN_CURRENCIES } from './subscriptionTiers.js';
+import {
+  PLAN_CURRENCIES,
+  getTierDefinition,
+  getBaseVehicleLimit,
+  getTierPriceUSD,
+  getAddonPriceUSD,
+  getAnnualDiscountPercent
+} from './subscriptionTiers.js';
 import { TRIAL_DAYS } from './trialEngine.js';
 
 /**
- * Saka Fleet — Product Q&A (v1.25.0).
+ * Saka Fleet — Product Q&A (v1.27.0).
  *
- * The user-facing answer engine for questions about Saka itself: cost, trial,
- * what gets logged, privacy, countries, limits, support, resale value.
- *
- * Design rules:
- *  - Facts are ENGINE-OWNED: prices come from subscriptionTiers (the single
- *    tier matrix) and the trial length from trialEngine. Nothing is hardcoded
- *    here, so a pricing change can never leave Saka quoting stale numbers.
- *  - Answers are deterministic first (zero tokens, instant), AI only for the
- *    long tail with this registry injected as context.
- *  - Backend is gated: env knobs, infrastructure, providers, databases and admin
- *    tooling are never disclosed.
+ * FACTS ONLY. Every string here is a plain, verifiable statement assembled from
+ * the live tier registry and the trial engine. The AI composes the actual reply
+ * every time (`purpose: 'product_answer'` / `'user_data_answer'`); these facts
+ * are (a) the composer's context and (b) the outage fallback. No marketing copy,
+ * no pre-written answer to paste.
  */
 
 const usd = (value) => `$${Number(value).toFixed(2)}`;
 
-function pricingLines() {
-  const paid = ['solo_pro', 'team_fleet', 'growth', 'fleet_command'];
-  return paid.map((key) => {
-    const tier = TIER_MATRIX[key];
-    const label = tier?.label || key;
-    const limit = tier?.vehicleLimit ? `${tier.vehicleLimit} vehicle(s)` : 'vehicles';
-    const addons = tier?.addonMonthlyUSD ? ' + add-ons' : '';
-    return `• ${label} — ${usd(getTierPriceUSD(key, 'monthly'))}/month · ${limit}${addons}`;
-  }).join('\n');
+const PAID_TIER_KEYS = Object.freeze(['solo_pro', 'team_fleet', 'growth', 'fleet_command']);
+
+function capacityText(key) {
+  const base = getBaseVehicleLimit(key);
+  if (key === 'fleet_command') {
+    return `${base} vehicles included, + ${usd(getAddonPriceUSD('fleet_command', 'monthly'))}/month per extra vehicle`;
+  }
+  return `${base} vehicle${base === 1 ? '' : 's'}`;
+}
+
+/** One factual line per paid tier: monthly + annual price and capacity. */
+export function tierFactLines() {
+  return PAID_TIER_KEYS.map((key) => {
+    const tier = getTierDefinition(key);
+    const monthly = getTierPriceUSD(key, 'monthly');
+    const annual = getTierPriceUSD(key, 'annual');
+    return `${tier.label} — ${usd(monthly)}/month or ${usd(annual)}/year, ${capacityText(key)}.`;
+  });
+}
+
+function pricingFacts() {
+  const maxDiscount = Math.max(...PAID_TIER_KEYS.map((key) => getAnnualDiscountPercent(key)));
+  return [
+    '💳 Saka is free to start — 1 vehicle, essential expense logs, 1 report per month.',
+    ...tierFactLines(),
+    `Annual billing saves up to ${maxDiscount}% versus 12 monthly payments.`,
+    `Every new account starts with a ${TRIAL_DAYS}-day free trial of the full product — no card, no auto-charge.`,
+    `Billed in ${PLAN_CURRENCIES.join(', ')} at checkout; local taxes may apply.`
+  ];
+}
+
+function packageFacts() {
+  const free = getTierDefinition('free');
+  return [
+    `📦 Free — $0, ${free.baseLimit} vehicle, essential logs, ${free.reportsPerMonth} report/month.`,
+    'Solo Pro — 1 vehicle, every feature, unlimited reports, premium AI.',
+    'Team Fleet — 3 vehicles, every feature, unlimited reports.',
+    'Growth — 5 vehicles, every feature, unlimited reports.',
+    `Fleet Command — 5 vehicles included, plus ${usd(getAddonPriceUSD('fleet_command', 'monthly'))}/month per extra vehicle, every feature.`
+  ];
+}
+
+function featureFacts() {
+  return [
+    '⛽ One-line logging from WhatsApp, e.g. "Logged 40L at 50350 km for KES 5500" — nothing to install.',
+    '💰 Fuel, service, repairs, tyres, insurance and earnings, remembered per vehicle.',
+    '🔔 Service, insurance and inspection reminders before the date, not after.',
+    '📊 Running cost per kilometre, fuel efficiency and monthly PDF reports.',
+    '📘 A VIN-locked passbook that proves the vehicle history when you sell.',
+    '🧑‍✈️ Driver assignment with licence and compliance reminders, scoped access.',
+    '🚚 Multi-vehicle fleet view with owner controls and driver oversight.'
+  ];
+}
+
+/**
+ * Capacity math, computed in code. "I have 8 cars" -> Fleet Command + 3 add-ons.
+ * The model never does this arithmetic; it receives the finished recommendation.
+ */
+export function recommendTierForFleet(count) {
+  const n = Math.max(0, Math.floor(Number(count) || 0));
+  if (n <= 0) {
+    return { tierKey: 'free', addons: 0, lines: ['No vehicle count was given, so no plan can be recommended.'] };
+  }
+  if (n <= 1) {
+    return {
+      tierKey: 'free',
+      addons: 0,
+      lines: [
+        'For 1 vehicle the Free plan is enough: 1 vehicle, essential logs, 1 report/month.',
+        `Solo Pro adds every feature and unlimited reports for ${usd(getTierPriceUSD('solo_pro', 'monthly'))}/month.`
+      ]
+    };
+  }
+  if (n <= 3) {
+    return {
+      tierKey: 'team_fleet',
+      addons: 0,
+      lines: [`For ${n} vehicles the fit is Team Fleet: 3 vehicles, every feature, ${usd(getTierPriceUSD('team_fleet', 'monthly'))}/month.`]
+    };
+  }
+  if (n <= 5) {
+    return {
+      tierKey: 'growth',
+      addons: 0,
+      lines: [`For ${n} vehicles the fit is Growth: 5 vehicles, every feature, ${usd(getTierPriceUSD('growth', 'monthly'))}/month.`]
+    };
+  }
+  const addons = n - 5;
+  const monthly = getTierPriceUSD('fleet_command', 'monthly') + addons * getAddonPriceUSD('fleet_command', 'monthly');
+  const annual = getTierPriceUSD('fleet_command', 'annual') + addons * getAddonPriceUSD('fleet_command', 'annual');
+  return {
+    tierKey: 'fleet_command',
+    addons,
+    lines: [
+      `For ${n} vehicles the fit is Fleet Command: 5 vehicles included + ${addons} extra vehicle slots at ${usd(getAddonPriceUSD('fleet_command', 'monthly'))}/month each.`,
+      `Total ${usd(monthly)}/month or ${usd(annual)}/year for ${n} vehicles.`
+    ]
+  };
 }
 
 export const PRODUCT_QA = Object.freeze([
   {
+    id: 'packages',
+    topics: /(?:details?|info|breakdown|list|describe|explain|compare).{0,24}(?:packages?|plans?|tiers?|subscriptions?)|(?:all|each|every|both).{0,16}(?:packages?|plans?|tiers?)/i,
+    facts: packageFacts
+  },
+  {
+    id: 'tier_details',
+    topics: /\b(details? of|what is in|what does .* include|tell me\s+(?:more\s+)?about\s+(?:the\s+)?(?:solo|team|growth|fleet command)|compare (?:the )?(?:plans?|tiers?))\b/i,
+    facts: () => [...packageFacts(), '💳 Every paid plan includes driver assignment, compliance tracking and unlimited reports.']
+  },
+  {
     id: 'pricing',
-    topics: /\b(costs?|price[sd]?|pricing|how much|charge[sd]?|fee[s]?|free|pay|paid|payment|subscription|plan[s]?|tier[s]?|premium|upgrade|billing|expensive)\b/i,
-    build: () => '💳 *Saka is free to start* — one vehicle with reminders, receipts and monthly reports. No card, no catch.\n\n' +
-      `When you want more:\n${pricingLines()}\n\n` +
-      `Every new account begins with a *${TRIAL_DAYS}-day free trial of the full product* 😊\n` +
-      `Billed in ${PLAN_CURRENCIES.join(', ')} at checkout. Local taxes may apply.\n\n` +
-      '_Want the full experience? Say *REGISTER* and I\'ll set you up in two minutes._ 🚗'
+    topics: /\b(costs?|price[sd]?|pricing|how much|charge[sd]?|fee[s]?|free|pay|paid|payment|subscription|plan[s]?|tier[s]?|premium|upgrade|billing|expensive|annual|annually|yearly|per year)\b/i,
+    facts: pricingFacts
   },
   {
     id: 'trial',
     topics: /\b(trial|free trial|try it|test it|how long|expire)\b/i,
-    build: () => `🎁 Your first *${TRIAL_DAYS} days are on us* — the full product: unlimited reports, premium AI, driver tools.\n\n` +
-      'No card. No auto-charge. If it is not for you, walk away and your passbook stays yours.\n\n' +
-      'Shall we start? Just say *REGISTER*. 🚗'
+    facts: () => [
+      `🎁 Your first ${TRIAL_DAYS} days are on us — the full product: unlimited reports, premium AI, driver tools.`,
+      'No card. No auto-charge. If it is not for you, walk away and your passbook stays yours.',
+      'The trial is one per owner lifetime.'
+    ]
   },
   {
     id: 'what_is_saka',
     topics: /\b(what is saka(?:\s*fleet)?|about saka(?:\s*fleet)?|who is saka|who are you|what are you|how does (?:it|this) work|what do you do|tell me\s+(?:more\s+)?about\s+(?:saka(?:\s*fleet)?|sakafleet|you|the service|this service))\b/i,
-    build: () => '🙂 I\'m *Saka* — your machine\'s memory, money-saver and paperwork wizard, right here on WhatsApp.\n\n' +
-      '⛽ Every fuel-up, expense and service — remembered for you\n' +
-      '💰 What each kilometre really costs, so you can trim waste\n' +
-      '🔔 Insurance, inspection and service reminders before they bite\n' +
-      '📘 A passbook that proves the vehicle\'s history when you sell\n\n' +
-      'Start with one line — e.g. *"Toyota Fielder 2016, diesel, 120,000 km"* — and I\'ll take it from there. 🚗'
+    facts: () => [
+      '🙂 Saka is your machine memory, money-saver and paperwork wizard, on WhatsApp.',
+      '⛽ Every fuel-up, expense and service is remembered for you.',
+      '💰 You see what each kilometre really costs, so waste is easy to trim.',
+      '🔔 Insurance, inspection and service reminders arrive before they bite.',
+      '📘 A passbook proves the vehicle history when you sell.'
+    ]
+  },
+  {
+    id: 'features',
+    topics: /\b(features?|what can (?:it|saka|you) do|capabilit(?:y|ies)|modules?|what else can (?:it|you) do)\b/i,
+    facts: featureFacts
   },
   {
     id: 'what_can_i_log',
     topics: /\b(what can i|can i log|log (?:fuel|expense|service)|track|record|receipts?|documents?|reminders?)\b/i,
-    build: () => 'Here\'s what I do best 👇\n\n' +
-      '⛽ Fuel — litres, price, odometer, full tank or top-up\n' +
-      '💰 Expenses — service, repairs, insurance, tyres\n' +
-      '📄 Documents — insurance, inspection, licences (send a photo)\n' +
-      '🔔 Reminders — service, expiries, renewals\n' +
-      '📊 Reports — cost per km, fuel economy, monthly summary\n\n' +
-      'Try the easy way: *"Logged 40L at 50350 km for KES 5500 — full tank"* and I\'ll do the rest. 🚗'
+    facts: () => [
+      '⛽ Fuel — litres, price, odometer, full tank or top-up.',
+      '💰 Expenses — service, repairs, insurance, tyres.',
+      '📄 Documents — insurance, inspection, licences and expiry dates.',
+      '🔔 Reminders — by date, distance or engine hours.',
+      '📊 Reports — monthly PDF and per-kilometre costs.'
+    ]
   },
   {
-    id: 'how_to_use',
-    topics: /\b(how (?:do i|can i|to) use|how does (?:saka(?:\s*fleet)?|this) work|what do i do|where do i start)\b/i,
-    build: () => '🚗 Easy — just talk to me like a person.\n\n' +
-      '• Send a sentence: *"Toyota Fielder 2016, diesel, 120,000 km"* — I set it up\n' +
-      '• Or reply *REGISTER* and I ask one short question at a time\n' +
-      '• Later: *"Logged 40L at 50350 km for KES 5500 — full tank"*\n' +
-      '• *reminders*, *report*, *pricing* work anytime\n\n' +
-      '_What do you drive? Tell me and I\'ll take it from there._ 🙂'
+    id: 'privacy',
+    topics: /\b(privacy|data safe|secure|security|who can see|share my (?:data|info)|gdpr|confidential)\b/i,
+    facts: () => [
+      '🔒 Your data is yours. Only you (and a driver you assign, scoped to their vehicle) can see your records.',
+      '📘 A buyer sees the passbook you choose to transfer, nothing else.',
+      '🚫 We never sell data and never post to your WhatsApp timeline.',
+      '🗑️ You can export or delete everything at any time.'
+    ]
   },
   {
-    id: 'how_to_subscribe',
-    topics: /\b(how (?:do i|can i|to) (?:subscribe|upgrade|pay)|subscribe to|upgrade to|sign ?up for)\b/i,
-    build: () => '💳 Two steps, all inside WhatsApp:\n\n' +
-      '1. Reply *UPGRADE*\n' +
-      '2. Pick your plan and pay on the secure checkout page\n\n' +
-      'Your *30-day free trial* keeps running to the end, then your plan takes over. No card needed today.\n\n' +
-      '_Want to see the plans first? Say *pricing*._ 🚗'
-  },
-  {
-    id: 'tier_details',
-    topics: /\b(solo ?pro|team fleet|growth(?: fleet)?|fleet command)\b/i,
-    build: () => 'Here\'s what each plan unlocks 👇\n\n' +
-      pricingLines() + '\n\n' +
-      'Every plan includes the full passbook, reminders, receipts, reports and driver tools.\n\n' +
-      `_All start with a *${TRIAL_DAYS}-day free trial*. Reply *UPGRADE* when you're ready._ 🙂`
+    id: 'limits',
+    topics: /\b(how many (?:cars|vehicles)|vehicle limit|add (?:a )?(?:car|vehicle)|limit of|maximum (?:cars|vehicles)|extra vehicle)\b/i,
+    facts: () => [
+      `🚗 Free covers ${getBaseVehicleLimit('free')} vehicle; Solo Pro ${getBaseVehicleLimit('solo_pro')}; Team Fleet ${getBaseVehicleLimit('team_fleet')}; Growth ${getBaseVehicleLimit('growth')}.`,
+      `Fleet Command covers ${getBaseVehicleLimit('fleet_command')} vehicles plus extra slots at ${usd(getAddonPriceUSD('fleet_command', 'monthly'))}/month each.`,
+      'After a downgrade, extra vehicles are paused, never deleted.'
+    ]
   },
   {
     id: 'addons',
     topics: /\b(add.?ons?|extra vehicles?|more vehicle slots?)\b/i,
-    build: () => '🧩 Add-ons are extra vehicle slots — only on *Fleet Command*.\n\n' +
-      `Each extra vehicle is $${Number(TIER_MATRIX.fleet_command.addonMonthlyUSD || 0).toFixed(2)}/month (or the annual equivalent), added to your base plan.\n\n` +
-      '_Reply *pricing* to see the plans, or *UPGRADE* to get started._ 🙂'
+    facts: () => [
+      '🧩 Add-ons are extra vehicle slots, available on Fleet Command only.',
+      `Each extra vehicle is ${usd(getAddonPriceUSD('fleet_command', 'monthly'))}/month or ${usd(getAddonPriceUSD('fleet_command', 'annual'))}/year.`,
+      'They are added to your base plan and can be adjusted when your fleet changes.'
+    ]
+  },
+  {
+    id: 'how_to_use',
+    topics: /\b(how do i use|how to use|how do i start|how to start|get started|begin|onboard)\b/i,
+    facts: () => [
+      '🚀 Reply REGISTER and answer one simple question at a time.',
+      '⛽ Then log in one line: "Logged 40L at 50350 km for KES 5500".',
+      '🔔 Ask "reminders" to see what is due, or "report" for this month.',
+      '💬 Everything else is plain language — ask me anything.'
+    ]
+  },
+  {
+    id: 'how_to_subscribe',
+    topics: /\b(how do i subscribe|how to subscribe|upgrade|pay for|checkout|payment link|switch plan|change plan)\b/i,
+    facts: () => [
+      '💳 Say UPGRADE (or the plan name) and I will send a secure Paystack checkout link.',
+      '📱 Pay by card or mobile money, in your currency.',
+      '✅ Access switches on immediately; annual billing saves up to 25%.',
+      '🔁 Cancel anytime — you keep access until the paid period ends.'
+    ]
   },
   {
     id: 'why_details',
-    topics: /\b(why (?:do you|does saka|would you) need|why my (?:plate|vin|email)|what do you need my|safe to share|share my (?:vin|plate|details)|who sees)\b/i,
-    build: () => '🔒 Great question — here\'s exactly why:\n\n' +
-      '• *Plate* — finds your machine\'s records\n' +
-      '• *VIN* — locks the passbook to you alone, permanently\n' +
-      '• *Email* — only for the OTP that proves it\'s you\n\n' +
-      'Nothing is shared or sold, and you can view or delete your data anytime.\n\n' +
-      '_Shall we continue? Reply *REGISTER*._ 🙂'
+    topics: /\b(why do you need|why (?:my|the) (?:vin|plate|email|otp)|why ask|why is it needed|why do you ask)\b/i,
+    facts: () => [
+      '🔐 The VIN is the vehicle permanent identity — it locks the passbook to that machine.',
+      '🚗 The plate is how you and your driver recognise the vehicle day to day.',
+      '✉️ Your email receives the passbook, the reports and the verification codes.',
+      '🔢 The OTP proves it is really you before anything sensitive changes.'
+    ]
   },
   {
     id: 'mistakes',
-    topics: /\b(made a mistake|wrong (?:vin|plate|number|details?)|fix (?:it|that|a typo)|undo|edit (?:it|that)|can i change)\b/i,
-    build: () => '🙂 No stress — almost everything can be fixed later (edit the plate, mileage, costs, expiry dates).\n\n' +
-      'The *VIN* is the one exception: it locks permanently the moment it\'s saved, so double-check it before you send it.\n\n' +
-      '_Need a change now? Just tell me — I\'ll walk you through it._ 🚗'
+    topics: /\b(mistake|wrong (?:entry|amount|log)|edit|change (?:the |my )?(?:amount|odometer|record)|undo|delete (?:a )?(?:log|entry))\b/i,
+    facts: () => [
+      '✏️ Say "edit last log" and tell me the correction — I will fix it.',
+      '🔐 Only the VIN cannot be changed; it is the vehicle permanent identity.',
+      '🗑️ You can delete a log or a vehicle at any time; history is preserved for audit.'
+    ]
   },
   {
     id: 'progress',
-    topics: /\b(how many questions|how long (?:will|does) (?:this|it) take|what happens next|how much more|can i skip|skip (?:it|this))\b/i,
-    build: () => '⏱️ About two minutes — a few short questions: what it is, the plate, then a few specs.\n\n' +
-      'Optional bits (insurance, colour…) can be skipped with *Skip* — I\'ll never force them.\n\n' +
-      '_Ready? Reply *REGISTER* (or just type what you drive)._ 🙂'
+    topics: /\b(how many questions|skip this|can i skip|how long does (?:this|registration) take|pause)\b/i,
+    facts: () => [
+      '📋 Registration is a few short questions, one at a time.',
+      '⏭️ Optional specs can be skipped as a group.',
+      '⏸️ Say pause to stop and resume whenever you like.'
+    ]
   },
   {
     id: 'technical',
-    topics: /\b(do i need an app|is there an app|download|smart ?phone|technical|tech savvy|low data)\b/i,
-    build: () => '📱 No app, no download — I live right here in WhatsApp.\n\n' +
-      'Any phone works, even on a slow connection. If you can type a sentence (or send a voice note), you can use Saka.\n\n' +
-      '_What do you drive? One line and I\'ll set it up._ 🚗'
+    topics: /\b(is there an app|need (?:an )?app|internet|data bundle|offline|low data|download|play store|app store)\b/i,
+    facts: () => [
+      '📱 No app to install — Saka lives in this WhatsApp chat.',
+      '📶 Works on a normal data bundle; text messages are tiny.',
+      '🖼️ Photos and PDFs are optional extras.'
+    ]
   },
   {
     id: 'data_control',
-    topics: /\b(delete (?:my|the) (?:data|account)|export (?:my )?data|who owns my data|stop using|remove my data)\b/i,
-    build: () => '🔐 Your data belongs to you, always.\n\n' +
-      'Ask me to *export* your passbook (PDF/CSV) or *delete my account* — both are honoured, and deletion removes your personal records.\n\n' +
-      '_Anything else you\'d like to know?_ 🙂'
-  },
-  {
-    id: 'privacy',
-    topics: /\b(privacy|private|safe|secure|security|who sees|data|delete my|gdpr)\b/i,
-    build: () => '🔒 Your data is yours, full stop.\n\n' +
-      '• Your passbook is private to you (and drivers you invite)\n' +
-      '• We never sell or share it\n' +
-      '• Ask me to export or delete your data anytime\n\n' +
-      '_The plain version of our policy is right above._ 🙂'
-  },
-  {
-    id: 'countries',
-    topics: /\b(country|currency|units|km|miles|language|which countries|available|timezone)\b/i,
-    build: () => '🌍 I work anywhere on WhatsApp — and I adapt to where you are.\n\n' +
-      '• Currency: I use yours (KES, NGN, ZAR, USD…)\n' +
-      '• Units: kilometres or miles, litres or gallons\n' +
-      '• Dates: 15/10 or 10/15 or "next Monday" — I understand all of them\n' +
-      '• Language: write in your language and I\'ll follow\n\n' +
-      '_Want to change your country bucket? Say *country Kenya* (or yours)._ 🚗'
-  },
-  {
-    id: 'limits',
-    topics: /\b(how many (?:cars|vehicles|machines)|vehicle limit|add (?:a )?(?:car|vehicle)|more than one|fleet)\b/i,
-    build: () => '🚗 Your free account covers one vehicle — plenty to fall in love with.\n\n' +
-      'Growing? Team Fleet handles 3, Growth 5, and Fleet Command 5+ with per-vehicle add-ons — all in one passbook.\n\n' +
-      '_Say *pricing* to see the plans, or *REGISTER* to start your first machine._ 🙂'
+    topics: /\b(delete my (?:data|account)|export my data|download my (?:data|records)|data control|gdpr|take my data)\b/i,
+    facts: () => [
+      '📤 Say "export my data" and I will prepare your records.',
+      '🗑️ Say "delete my account" — nothing is removed without your explicit confirmation.',
+      '📘 A transferred passbook stays with the vehicle, by design.'
+    ]
   },
   {
     id: 'resale',
     topics: /\b(resale|sell|value|passbook|history|proof|buyer)\b/i,
-    build: () => '📘 Here\'s the quiet superpower: every fill-up, service and repair builds a *passbook* for your machine.\n\n' +
-      'Buyers pay more when they can see the full, honest history — and handing it over takes one tap.\n\n' +
-      'Start the passbook now; future-you (and the future buyer) will thank you. 🚗'
+    facts: () => [
+      '📘 Every fill-up, service and repair builds a passbook for your machine.',
+      '💰 Buyers pay more when they can see the full, honest history.',
+      '🤝 Handing it over takes one tap and keeps the record intact.'
+    ]
   },
   {
     id: 'support',
     topics: /\b(support|contact|talk to (?:someone|a human|a person)|human help|customer care)\b/i,
-    build: () => '🙋 I\'m here for you first — most things I can fix in one message.\n\n' +
-      'If you truly need a human, type *email support* and I\'ll pass it to support@sakafleet.com with the context.\n\n' +
-      '_What would you like to sort out right now?_ 🙂'
+    facts: () => [
+      '🙋 I am here first — most things I can fix in one message.',
+      '✉️ If you need a human, type "email support" and I will pass it to support@sakafleet.com with the context.'
+    ]
   }
 ]);
 
@@ -186,11 +289,11 @@ export const PRODUCT_QA = Object.freeze([
  * Which product question, if any, is being asked? Ordered — pricing first.
  *
  * v1.25.0 — statements are NOT questions: "I paid 5000 for fuel" must log the
- * expense, not trigger the pricing card. Only question-shaped messages (or the
+ * expense, not trigger the pricing facts. Only question-shaped messages (or the
  * unmistakable "how much / pricing / subscription / trial" phrasing) qualify.
  */
 const QUESTION_SHAPE_RE = /^(?:what|how|how much|why|when|who|where|which|is|are|do|does|can|could|should|tell me|explain|any)\b|\?\s*$/i;
-const STRONG_PRODUCT_RE = /\b(how much|pricing|price list|subscription|plans?|free trial|trial|cost of (?:this|the) service|tell me\s+(?:more\s+)?about)\b/i;
+const STRONG_PRODUCT_RE = /\b(how much|pricing|price list|subscription|plans?|free trial|trial|cost of (?:this|the) service|tell me\s+(?:more\s+)?about|details? of|features?)\b/i;
 // v1.26.0 — small talk in front of a real question ("Nice. Tell me more about Saka").
 const SMALL_TALK_PREFIX_RE = /^(?:(?:ok(?:ay)?|nice|cool|great|sure|well|please|hi|hello|hey|thanks?|thank you|alright|got it)[\s,.!…]+)+/i;
 
@@ -204,11 +307,16 @@ export function matchProductQa(text = '') {
   return entry;
 }
 
-/** Deterministic customer-ready answer for a matched entry. */
+/** Deterministic, fact-only fallback for a matched entry (outage path). */
 export function buildProductQaReply(entry) {
   if (!entry) return null;
-  if (typeof entry.build === 'function') return entry.build();
-  return entry.answer || null;
+  const facts = typeof entry.facts === 'function' ? entry.facts() : (entry.facts || []);
+  return facts.join('\n');
+}
+
+/** All product knowledge as compact fact lines (universal question path). */
+export function buildProductFactsContext() {
+  return PRODUCT_QA.map((entry) => `${entry.id}: ${buildProductQaReply(entry).replace(/\n/g, ' ')}`).join('\n');
 }
 
 /**
@@ -218,7 +326,7 @@ export function buildProductQaReply(entry) {
 export function buildProductQaContext() {
   return [
     'PRODUCT ANSWERS (authoritative user-facing facts — never invent anything beyond these):',
-    ...PRODUCT_QA.map((entry) => `- ${entry.id}: ${String(buildProductQaReply(entry) || '').replace(/\n/g, ' ')}`),
+    ...PRODUCT_QA.map((entry) => `- ${entry.id}: ${buildProductQaReply(entry).replace(/\n/g, ' ')}`),
     'BACKEND GATE: never mention servers, APIs, databases, providers, environment variables, admin tools, pipelines or internal processes.',
     'ANSWER-FIRST RULE (v1.26.0): whenever the user asks a question — about Saka, cost, privacy, features, how to use, what happens next — answer THAT question first, warmly, in 1-3 short lines, using the PRODUCT ANSWERS above.',
     'NEVER reply with the registration / plate script unless the user asked to register, said REGISTER, or sent a plate. Answering a question with "send me your plate" is forbidden.',
@@ -226,9 +334,36 @@ export function buildProductQaContext() {
   ].join('\n');
 }
 
+const BANNED_HEDGES = [
+  /I don'?t have (?:any |an )?[^.\n]{0,70}(?:to share|to confirm|to give|available|on file)/i,
+  /as an AI(?: language)? model/i,
+  /I understand your frustration/i,
+  /I(?:'m| am) (?:just )?an AI\b/i
+];
+
+/**
+ * Reply linter (v1.27.0) — the model can never ship corporate hedging, an empty
+ * capacity placeholder ("· vehicles") or an unfilled token. On a violation the
+ * caller's fact fallback is used instead.
+ */
+export function sanitizeSakaReply(text, fallback = '') {
+  const value = String(text || '').trim();
+  const safeFallback = String(fallback || '').trim() || value;
+  if (!value) return safeFallback;
+  if (/\b(?:undefined|null|NaN)\b/.test(value)) return safeFallback;
+  if (/·\s*vehicles?\b/i.test(value)) return safeFallback;
+  if (BANNED_HEDGES.some((pattern) => pattern.test(value))) return safeFallback;
+  return value;
+}
+
 export default {
   PRODUCT_QA,
   matchProductQa,
   buildProductQaReply,
-  buildProductQaContext
+  buildProductQaContext,
+  buildProductFactsContext,
+  recommendTierForFleet,
+  tierFactLines,
+  sanitizeSakaReply
 };
+

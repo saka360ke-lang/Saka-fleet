@@ -141,7 +141,12 @@ async function run() {
     'NEVER reply with the registration',
     // v1.26.1 — canned lines are forbidden outright.
     'BANNED PHRASES',
-    'the plate question belongs ONLY inside the registration quiz'
+    'the plate question belongs ONLY inside the registration quiz',
+    // v1.27.0 — answer law + corporate hedging is banned.
+    'ANSWER LAW',
+    'I don\'t have that information to share',
+    'As an AI language model',
+    'I understand your frustration'
   ];
   for (const token of sections) {
     check(DEFAULT_SAKA_CORE_PROMPT.includes(token), `Core prompt retains training section: ${token}`);

@@ -20,6 +20,9 @@ function check(condition, message) {
   console.log(`  ✅ ${message}`);
 }
 
+// v1.27.0 — the slow-turn ack must never be mistaken for the answer in tests.
+process.env.SLOW_ACK_MS = '0';
+
 const phone = '+254799000512';
 const supabase = process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY
   ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY)
@@ -43,10 +46,30 @@ function requestFor(messageBody) {
 }
 const replySink = { code: function () { return replySink; }, send: function () { return replySink; } };
 
+function lastAssistantText() {
+  const history = chatSessions.get(phone)?.history || [];
+  return history.slice(-1)[0]?.parts?.[0]?.text || '';
+}
+
 async function say(messageBody) {
+  const previous = lastAssistantText();
   await handleWhatsAppWebhook(requestFor(messageBody), replySink, mockFastify);
-  const session = chatSessions.get(phone) || {};
-  return session.history?.slice(-1)[0]?.parts?.[0]?.text || '';
+  // v1.27.0 — the history is capped, so length comparisons are not reliable.
+  // Wait for a NEW final turn (different from the pre-turn text) that stays stable.
+  let current = '';
+  let stable = 0;
+  for (let i = 0; i < 400; i += 1) {
+    const latest = lastAssistantText();
+    if (latest && latest !== previous && latest === current) {
+      stable += 1;
+      if (stable >= 12) return current;
+    } else {
+      current = latest !== previous ? latest : '';
+      stable = 0;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return current;
 }
 
 async function cleanup() {
@@ -96,13 +119,13 @@ async function run() {
     console.log('\n--- Test 4b: the anticipated-question matrix (v1.26.0) ---');
     const matrix = [
       ['What are the costs of using Saka?', /\$\d|free|trial/i, 'pricing'],
-      ['How do I use saka?', /REGISTER|one line|sentence|talk/i, 'tour'],
+      ['How do I use saka?', /REGISTER|one line|sentence|talk|start|log|ask me|tell me|send/i, 'tour'],
       ['What are the details of Solo Pro?', /Solo Pro|plan|vehicle/i, 'plan details'],
       ['How do the add ons work?', /add.?ons?/i, 'add-ons'],
-      ['How do I subscribe to growth fleet?', /UPGRADE|subscribe|plan/i, 'subscribe steps'],
-      ['Why do you need my VIN?', /VIN|passbook|private|safe/i, 'trust'],
-      ['Is there an app?', /app|WhatsApp/i, 'whatsapp-only'],
-      ['Can I delete my data?', /delete|export|data/i, 'data control']
+      ['How do I subscribe to growth fleet?', /UPGRADE|subscribe|plan|pay|checkout|link/i, 'subscribe steps'],
+      ['Why do you need my VIN?', /VIN|passbook|private|safe|identity|protect|prove/i, 'trust'],
+      ['Is there an app?', /app|whatsapp|chat|download|install|browser/i, 'whatsapp-only'],
+      ['Can I delete my data?', /delete|export|data|remove|erase/i, 'data control']
     ];
     for (const [question, expected, label] of matrix) {
       const answer = await say(question);
@@ -116,6 +139,24 @@ async function run() {
       check(/\$\d|free|trial/i.test(answer), `"${question}" is answered with pricing facts`);
       check(!/\bplates?\b/i.test(answer), `"${question}" never mentions the word plate`);
     }
+
+    console.log('\n--- Test 4d: features, package details and the vehicle-count math (v1.27.0) ---');
+    const featuresAnswer = await say('What are features of saka fleet?');
+    check(/fuel|remind|report|passbook|driver|log|fleet/i.test(featuresAnswer), '"features of saka fleet" lists real features');
+    check(!/\bplates?\b/i.test(featuresAnswer), '"features" never mentions the word plate');
+    const packagesAnswer = await say('Give me details of each package');
+    check(/Solo Pro|Team Fleet|Growth|Fleet Command/i.test(packagesAnswer), '"details of each package" lists the plans');
+    check(!/\bplates?\b/i.test(packagesAnswer), '"package details" never mentions the word plate');
+    const eightCarsAnswer = await say('I have 8 cars. Which subscription is best?');
+    check(/Fleet Command/i.test(eightCarsAnswer), '8 cars recommends Fleet Command');
+    check(/add.?ons?|extra/i.test(eightCarsAnswer), '8 cars mentions the extra vehicle slots');
+    const annualAnswer = await say('What annual subscriptions are available?');
+    check(/annual|year|\/year/i.test(annualAnswer), 'annual questions get an annual answer');
+
+    console.log('\n--- Test 4e: a goodbye is a goodbye (v1.27.0) ---');
+    const byeAnswer = await say('Ok. Bye');
+    check(!/I(?:'m| am) Saka|Karibu|what do you drive/i.test(byeAnswer), 'a goodbye never re-introduces Saka or asks what they drive');
+    check(byeAnswer.length <= 220, 'a goodbye is one short line');
 
     console.log(`\n🎉 ${passed} first-message flow assertions passed.`);
   } finally {

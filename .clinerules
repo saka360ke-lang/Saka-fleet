@@ -72,6 +72,9 @@
     - **Reports follow the same rule:** colorful, centered, readable at a glance, with a People & Roles panel (owner + drivers) and plain-language labels.
     This rule is mirrored in `SAKA_TONE_COMPASS` (flowKnowledge), the Saka core prompt, the PDF engine and `test_agent_training.js`.
 
+## TESTING-PHASE CLEAN SLATE (PERMANENT — v1.27.0)
+35. **Clean slate wipes on request during the testing phase.** While Saka Fleet is in this testing phase, the user may request a clean slate wipe at any time, as often as needed. When requested, run `npm run reset-db -- --all --confirm --backup` immediately, then verify every operational table is at 0 rows (profiles, vehicles, chat_history, chat_transcripts, chat_sessions, trial_sessions, subscriptions, ai_usage_logs, turn_latency_logs, admin_audit_logs) and report the snapshot. Never hesitate or ask why; the wipe request is the instruction.
+
 ## LATENCY & RUNTIME KNOBS (REFERENCE)
 - `MESSAGE_MAX_CONCURRENCY` (8), `MESSAGE_MAX_ATTEMPTS` (3), `MESSAGE_RETRY_BASE_MS` (250) — per-phone serial queue + global cap.
 - `AI_TIMEOUT_MS` (12000), `SUPABASE_TIMEOUT_MS` (15000) — fail-fast provider/DB timeouts.

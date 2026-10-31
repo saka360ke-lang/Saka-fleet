@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.26.2  
+**Version:** 1.27.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.27.0** | Answer Oracle: facts-only registry (annual prices, features, packages, computed capacity), realtime user-data snapshot, universal question path, farewell + feedback paths, reply linter, personality v2 | §70 |
 | **1.26.2** | Free-service pricing routing + a hard no-plate invariant outside registration | §69.7 |
 | **1.26.1** | Human Saka: generic answers removed (AI-composed replies, banned canned lines, no plate ask outside the quiz) | §69.6 |
 | **1.26.0** | Conversational Answer Engine: answer-first rule, anticipated-question matrix, friction resolver fix, trust lines on sensitive asks | §69 |
@@ -2562,6 +2563,43 @@ The quiz copy now reassures at the exact moment of hesitation: plate (`only to k
 - **"Is this a free service?" / "Is it free to use Saka?"** now route to the pricing answer — the pricing matcher was missing the word `free`.
 - **Hard no-plate invariant (code-enforced):** after composition, if the user is not inside the registration quiz, has no vehicle and did not type REGISTER, any reply that mentions "plate" is replaced with a warm one-line invitation ("Tell me what you drive — one line is enough… Or reply REGISTER"). The model can never re-introduce the plate ask outside registration. The intro prompts additionally forbid the word itself.
 - Proof: `npm run test:flow` is now **37 assertions** — every turn (welcome, pricing, trial, intro, the 8-question matrix and both free-service turns) asserts the reply contains no "plate". `test_product_qa` 105.
+
+## 70. Answer Oracle (v1.27.0) — answer ANY question, zero pre-made replies
+
+### 70.1 Why training alone was not enough
+`test_agent_training` proves the registry is embedded in the prompt; it cannot prove the model follows it. The live 16:00–16:07 test failures were fact and routing gaps, not training gaps:
+- annual prices were absent from the Q&A facts → the model hedged;
+- no capacity math → "8 cars" recommended Team Fleet (3 cars);
+- no matcher topic for "details of each package" / "features" → fell to the generic intro;
+- no farewell path → "Ok. Bye" re-triggered the welcome;
+- a tester's opinion triggered the canned friction apology.
+
+### 70.2 Facts, not answers (`src/services/productQa.js`)
+The registry now stores **plain fact lines only** (no marketing copy). Prices, limits and the annual figures come live from `subscriptionTiers.js`; the trial length from `trialEngine.js`. New ids: `features`, `packages`; `pricing` now renders monthly **and** annual prices, so an annual question can never be hedged. `buildProductQaReply()` is the outage fallback and the composer's context.
+
+### 70.3 Computed capacity (`recommendTierForFleet`)
+"I have 8 cars" is arithmetic, not model work: 1 → Free · 2–3 → Team Fleet · 4–5 → Growth · 6+ → Fleet Command (5 included + N−5 add-ons) with the exact monthly/annual total. The result is injected as a fact and must be used verbatim.
+
+### 70.4 Realtime user data (`src/services/userContextSnapshot.js`)
+Builds the account facts a user can ask about: name, plan + status, vehicles (model, plate, odometer, fuel), this month's expense count/total/fuel litres, and the next four reminders with days remaining. Numbers are computed in code; the service never throws (a failed query removes that fact line only).
+
+### 70.5 The Answer Path (`src/routes/whatsapp.js`)
+- **Product questions** (`matchProductQa`) → topic facts + computed recommendation + user snapshot → `composeMessage({ purpose: 'product_answer' })` → `sanitizeSakaReply`.
+- **Any other question** (interrogative shape or "?") in the idle branch → all product facts + the user snapshot → `composeMessage({ purpose: 'user_data_answer' })`. A product match always outranks this path.
+- **Farewell** ("Ok. Bye") → one warm goodbye; never the welcome.
+- **Feedback** (tester notes, "templates are stupid") → acknowledged in plain words and logged as `USER_FEEDBACK`; the apology flow is reserved for genuinely broken flows.
+
+### 70.6 Personality v2 (`SAKA_TONE_COMPASS.voice` + `bannedPhrases`)
+Saka is "your machine's memory, money-saver and paperwork wizard — never a support assistant". Answer first, one next step, plain words, the number attached. **Banned hedge family:** "I don't have that information to share", "I don't have any details to confirm", "As an AI language model", "I understand your frustration" (plus the whole nudge family). The core prompt now carries an **ANSWER LAW**: never answer a question with a welcome, tour, menu or template.
+
+### 70.7 Reply linter (`sanitizeSakaReply`)
+The model can never ship a corporate hedge, an empty capacity placeholder (`· vehicles`) or an unfilled token (`undefined`/`null`/`NaN`); a violation falls back to the verified fact lines.
+
+### 70.8 Testing-phase clean slate rule
+`.clinerules` rule 35: during this testing phase, clean slate wipes may be requested at any time, as often as needed; `npm run reset-db -- --all --confirm --backup` runs immediately and every operational table is verified at 0 rows.
+
+### 70.9 Proof
+`test_product_qa` **128 assertions** (annual pricing, features, packages, capacity math, linter, no empty placeholders) · `test_answer_oracle` **26 assertions** (live routing + seeded DB snapshot: plan, vehicles, month spend, reminders, days-left) · `test_first_message_flow` now includes features, package details, the 8-car recommendation, an annual question and a goodbye that must never be a welcome · `test_agent_training` asserts the ANSWER LAW and the banned hedges.
 
 ### 67.7 Sentinel refinements must carry the schema marker (v1.25.3)
 - `runConversationRefinement()` wrote the refined prompt **without** the `SAKA-PROMPT-SCHEMA` marker, so the v1.25.1 gate ignored every weekly refinement — and the unmarked 3k-character legacy prompt kept reappearing in `system_config`. The writer now stamps `PROMPT_REFINEMENT_MARKER` and bounds the payload to `MAX_STORED_PROMPT_REFINEMENT_CHARS`, so a refinement can only ever augment the current, trained prompt.

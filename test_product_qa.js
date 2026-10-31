@@ -2,9 +2,12 @@ import {
   PRODUCT_QA,
   matchProductQa,
   buildProductQaReply,
-  buildProductQaContext
+  buildProductQaContext,
+  buildProductFactsContext,
+  recommendTierForFleet,
+  sanitizeSakaReply
 } from './src/services/productQa.js';
-import { TIER_MATRIX, getTierPriceUSD } from './src/services/subscriptionTiers.js';
+import { TIER_MATRIX, getTierPriceUSD, getAddonPriceUSD } from './src/services/subscriptionTiers.js';
 import { TRIAL_DAYS } from './src/services/trialEngine.js';
 
 /**
@@ -76,5 +79,34 @@ for (const entry of PRODUCT_QA) {
   check(/[\p{Extended_Pictographic}]/u.test(answer), `${entry.id} uses at least one emoji anchor`);
   check(answer.length <= 700, `${entry.id} is concise (${answer.length} chars)`);
 }
+
+console.log('\n--- Test 5: v1.27.0 — every live question routes and the facts are complete ---');
+check(matchProductQa('What are features of saka fleet?')?.id === 'features', '"features of saka fleet" returns the features facts');
+check(matchProductQa('Give me details of each package')?.id === 'packages', '"details of each package" returns the package facts');
+check(matchProductQa('What annual subscriptions are available!!???')?.id === 'pricing', '"annual subscriptions available" returns pricing (never the country facts)');
+check(matchProductQa('Annual subscriptions available please?')?.id === 'pricing', '"annual subscriptions available please" returns pricing');
+check(matchProductQa('Tell me more about the Team fleet tier')?.id === 'tier_details', '"tell me more about the Team fleet tier" returns plan details');
+check(pricingReply.includes(`$${getTierPriceUSD('solo_pro', 'annual').toFixed(2)}`), 'pricing includes the annual price from the registry');
+check(!/·\s*vehicles?\b/i.test(pricingReply), 'pricing never renders an empty "· vehicles" placeholder');
+check(!/I don'?t have/i.test(pricingReply), 'pricing never hedges');
+
+console.log('\n--- Test 6: capacity math is computed in code ---');
+const eight = recommendTierForFleet(8);
+check(eight.tierKey === 'fleet_command' && eight.addons === 3, '8 vehicles -> Fleet Command + 3 extra slots');
+check(eight.lines.join(' ').includes(`$${(getTierPriceUSD('fleet_command', 'monthly') + 3 * getAddonPriceUSD('fleet_command', 'monthly')).toFixed(2)}/month`), 'the 8-vehicle monthly total is computed exactly');
+check(recommendTierForFleet(2).tierKey === 'team_fleet', '2 vehicles -> Team Fleet');
+check(recommendTierForFleet(4).tierKey === 'growth', '4 vehicles -> Growth');
+check(recommendTierForFleet(1).tierKey === 'free', '1 vehicle -> Free');
+
+console.log('\n--- Test 7: the reply linter blocks hedging and broken placeholders ---');
+check(sanitizeSakaReply('I don\'t have any annual details to confirm.', 'FACTS') === 'FACTS', 'a hedge is replaced by the fact fallback');
+check(sanitizeSakaReply('Solo Pro — $9.99/month · vehicles.', 'FACTS') === 'FACTS', 'an empty capacity placeholder is replaced');
+check(sanitizeSakaReply('Solo Pro is $9.99/month for one vehicle.', 'FACTS') === 'Solo Pro is $9.99/month for one vehicle.', 'a clean answer passes untouched');
+check(sanitizeSakaReply('Price: undefined', 'FACTS') === 'FACTS', 'an unfilled token is replaced');
+
+console.log('\n--- Test 8: the universal fact context carries annual prices and features ---');
+const factsContext = buildProductFactsContext();
+check(factsContext.includes(`$${getTierPriceUSD('growth', 'annual').toFixed(2)}/year`), 'the fact context includes annual pricing');
+check(/features:/.test(factsContext), 'the fact context includes the feature list');
 
 console.log(`\n🎉 ${passed} product Q&A assertions passed.`);

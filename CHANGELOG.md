@@ -4,6 +4,16 @@ All notable changes to Saka Fleet. Versions mirror the release tracker at the to
 of `SAKA_FLEET_ARCHITECTURE.md`; every entry names the commit it shipped in.
 Generated from the real git history — never from memory.
 
+## [1.27.0] - 2026-10-31
+- **Answer Oracle:** Saka answers any question about Saka Fleet *and* the user's own data, composed fresh every time — no pre-made replies on the happy path.
+- **Facts, not answers:** `productQa` is a fact registry (annual prices, features, packages, limits); the reply is always composed.
+- **Annual pricing** is in the facts (the hedge "I don't have annual details" is impossible).
+- **Computed capacity:** "I have 8 cars" → Fleet Command + 3 add-ons, with the exact total.
+- **Realtime user-data snapshot:** plan, vehicles, this month's spend/fuel, next reminders — numbers computed in code.
+- **Universal question path** + **farewell path** + **feedback path** (no canned apology for opinions).
+- **Personality v2** and a **reply linter** that blocks corporate hedging and broken placeholders.
+- **Proof:** product Q&A 128, answer-oracle 26 (seeded DB, cleaned), flow suite extended (features, packages, 8-car math, annual, goodbye).
+
 ## [1.26.2] - 2026-10-31
 - **"Is this a free service?" now answers pricing** — `free` was missing from the pricing matcher.
 - **Hard no-plate invariant:** outside the registration quiz, any reply mentioning "plate" is replaced by a warm "tell me what you drive" line — the model can never re-add the plate ask.
