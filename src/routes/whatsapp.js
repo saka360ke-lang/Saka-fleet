@@ -1082,12 +1082,34 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               '_Where shall we start?_ 🚗'
           };
         } else if (productQaMatch) {
-          // v1.25.0 — product Q&A (pricing, trial, privacy, limits, resale…) is
-          // engine-owned and answered instantly, never guessed by the model.
+          // v1.26.1 — answer conversationally, not with a canned card. The facts
+          // are engine-owned; the wording is composed fresh for this user, this
+          // moment. The card itself is only the outage fallback.
+          const productFacts = buildProductQaReply(productQaMatch);
+          const composedAnswer = await composeMessage({
+            purpose: 'product_answer',
+            facts: {
+              userQuestion: messageText,
+              topic: productQaMatch.id,
+              verifiedFacts: productFacts,
+              instruction: 'Answer the user\'s question in 1-3 short conversational lines using ONLY the verified facts. Warm and human, at most one emoji per line. End with ONE gentle next step. Do not paste a menu, do not repeat the question back, and never ask for the plate.'
+            },
+            language: targetLang,
+            countryInfo,
+            profile: profileData,
+            fallbackText: productFacts
+          });
+          // v1.26.1 — a short or fact-less composition is not an answer; fall back
+          // to the complete verified card (which is still warm, just richer).
+          const composedText = typeof composedAnswer === 'string' ? composedAnswer.trim() : '';
+          const needsFigures = ['pricing', 'trial', 'tier_details', 'addons'].includes(productQaMatch.id);
+          const usableAnswer = composedText.length >= 60 && (!needsFigures || /\d/.test(composedText))
+            ? composedText
+            : productFacts;
           aiResult = {
             intent: 'GENERAL_CHAT',
             extracted_data: {},
-            reply_message: buildProductQaReply(productQaMatch)
+            reply_message: usableAnswer
           };
         } else if (myRulesCommand || requiredDocsCommand || exampleComplianceCommand) {
           const bucket = await loadCountryBucket(supabaseClient, {
@@ -2870,7 +2892,7 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
                 : await composeMessage({
                     purpose: 'first_time_welcome',
                     facts: {
-                      prompt: 'Introduce Saka Fleet in one short paragraph, then ask exactly ONE question: the vehicle registration plate (or invite them to type REGISTER).',
+                      prompt: 'Introduce Saka warmly in two short lines (what it does for their machine) and ask exactly ONE natural question: what do they drive? Invite REGISTER as an alternative. NEVER ask them to send a plate.',
                       region: countryInfo,
                       plateExample: countryInfo.plate_example,
                       setupSteps: ['plate number', 'make/model, year, fuel, odometer', 'email OTP', 'VIN-locked passbook'],
@@ -2879,7 +2901,7 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
                     language: targetLang,
                     countryInfo,
                     profile: profileData,
-                    fallbackText: `Welcome to Saka Fleet 🚗 What is your vehicle's registration plate? (e.g. ${countryInfo.plate_example})`
+                    fallbackText: `Welcome to Saka Fleet 🚗 What do you drive? One line is enough — or type REGISTER.`
                   });
             }
           }
@@ -2892,14 +2914,14 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
             customReply = await composeMessage({
               purpose: 'first_time_default',
               facts: {
-                prompt: 'Give exactly ONE next step: ask for the vehicle registration plate (or invite REGISTER). Optionally mention ACCEPT for a transferred passbook.',
+                prompt: 'Give exactly ONE warm next step: ask what they drive (one line is enough), or invite REGISTER. Never ask them to send a plate.',
                 plateExample: countryInfo.plate_example,
                 region: countryInfo
               },
               language: targetLang,
               countryInfo,
               profile: profileData,
-              fallbackText: `Send your vehicle registration plate (e.g. ${countryInfo.plate_example}) — or type REGISTER — to get started.`
+              fallbackText: `What do you drive? Tell me in one line — or type REGISTER.`
             });
           }
         }
@@ -3007,8 +3029,20 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
           finalReply = sakaIntroText({ countryInfo, profile: profileData, nextStep: 'Reply *REGISTER* and I\'ll ask one simple question at a time.' });
           session.sakaIntroduced = true;
         } else if (isRepeatedReply({ quizActive: Boolean(session.quiz), reply: finalReply, lastPrompt: previousAssistantPrompt })) {
-          finalReply = isNewcomer ? pickNewcomerNudge(session.nudgeCount || 0) : pickRepeatNudge(session.nudgeCount || 0);
-          session.nudgeCount = (session.nudgeCount || 0) + 1;
+          // v1.26.1 — never swap in a canned nudge. Ask for a fresh, different,
+          // warmer phrasing; the short line below is only the AI-outage fallback.
+          finalReply = await composeMessage({
+            purpose: 'repeat_variation',
+            facts: {
+              lastReply: previousAssistantPrompt,
+              userMessage: messageText,
+              instruction: 'You already said something very similar last turn. Say it differently now — warmer, shorter, with one concrete next step. Never repeat the same sentence.'
+            },
+            language: targetLang,
+            countryInfo,
+            profile: profileData,
+            fallbackText: '🙂 Let me put that differently — what would help most right now?'
+          });
         }
 
         // v1.21.3 — a zero-vehicle user must never be asked for a plate before

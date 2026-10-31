@@ -143,7 +143,7 @@ export function sakaIntroText({ countryInfo = null, now = new Date(), profile = 
   const safeName = /^whatsapp$/i.test(name) ? '' : name;
   const helloName = safeName ? ` ${safeName}` : '';
   const step = nextStep === null
-    ? `Send your vehicle's number plate (e.g. *${example}*) and I'll ask one quick question at a time — or type one line like *"Toyota Fielder 2016, diesel, 120,000 km, ${example}"* and I'll pick out every detail myself.`
+    ? `Tell me what you drive — one line like *"Toyota Fielder 2016, diesel, 120,000 km, ${example}"* — and I'll pick out every detail. Or reply *REGISTER* and I'll ask a few quick questions.`
     : nextStep;
   return `${greeting}${helloName} I'm *Saka* — your machine's memory, money-saver and paperwork wizard, right here on WhatsApp.` +
     '\n\n⛽ Every litre and every shilling, remembered for you' +

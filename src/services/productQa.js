@@ -190,11 +190,14 @@ export const PRODUCT_QA = Object.freeze([
  * unmistakable "how much / pricing / subscription / trial" phrasing) qualify.
  */
 const QUESTION_SHAPE_RE = /^(?:what|how|how much|why|when|who|where|which|is|are|do|does|can|could|should|tell me|explain|any)\b|\?\s*$/i;
-const STRONG_PRODUCT_RE = /\b(how much|pricing|price list|subscription|plans?|free trial|trial|cost of (?:this|the) service)\b/i;
+const STRONG_PRODUCT_RE = /\b(how much|pricing|price list|subscription|plans?|free trial|trial|cost of (?:this|the) service|tell me\s+(?:more\s+)?about)\b/i;
+// v1.26.0 — small talk in front of a real question ("Nice. Tell me more about Saka").
+const SMALL_TALK_PREFIX_RE = /^(?:(?:ok(?:ay)?|nice|cool|great|sure|well|please|hi|hello|hey|thanks?|thank you|alright|got it)[\s,.!…]+)+/i;
 
 export function matchProductQa(text = '') {
-  const value = String(text || '').trim();
-  if (!value) return null;
+  const original = String(text || '').trim();
+  if (!original) return null;
+  const value = original.replace(SMALL_TALK_PREFIX_RE, '').trim() || original;
   const entry = PRODUCT_QA.find((candidate) => candidate.topics.test(value)) || null;
   if (!entry) return null;
   if (!QUESTION_SHAPE_RE.test(value) && !STRONG_PRODUCT_RE.test(value)) return null;

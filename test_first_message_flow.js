@@ -68,36 +68,38 @@ async function run() {
     const hi = await say('Hi');
     check(/\*Saka\*/.test(hi), 'the welcome introduces Saka');
     check(hi.includes('⛽') && hi.includes('💰') && hi.includes('🔔'), 'the welcome carries the three value anchors');
-    check(/REGISTER|number plate/i.test(hi), 'the welcome ends with a next step');
+    check(/REGISTER/i.test(hi), 'the welcome ends with a next step');
+    check(!/send your vehicle'?s? (?:number |registration )?plate/i.test(hi), 'the welcome never asks for a plate');
     check(!/keep moving|Happy to help you begin|Let's get you started/i.test(hi), 'the welcome is NOT replaced by a nudge');
     check(!/WhatsApp I'm/.test(hi), 'the placeholder name "WhatsApp User" is never used as a greeting');
 
     console.log('\n--- Test 2: pricing answers with the pricing card ---');
     const pricing = await say('How much does it cost?');
-    check(/free to start/i.test(pricing), 'pricing question returns the pricing card');
-    check(/Solo Pro/i.test(pricing) && /\$\d/.test(pricing), 'the card lists live tier prices');
-    check(!/keep moving|Happy to help you begin|Let's get you started/i.test(pricing), 'pricing is NOT replaced by a nudge');
+    check(/\$\d/.test(pricing) && /free|trial/i.test(pricing), 'pricing question returns a conversational pricing answer with real figures');
+    check(!/keep moving|Happy to help you begin|Let's get you started/i.test(pricing), 'pricing is NOT a canned nudge');
+    check(!/registration plate/i.test(pricing), 'pricing never asks for a plate');
 
     console.log('\n--- Test 3: trial answers with the trial card ---');
     const trial = await say("What's the trial period?");
-    check(/30 days? (?:are )?on us|30-day/i.test(trial), 'trial question returns the trial card');
-    check(!/keep moving|Happy to help you begin|Let's get you started/i.test(trial), 'trial is NOT replaced by a nudge');
+    check(/30[-\s]?day|30 days|free trial/i.test(trial), 'trial question returns the trial answer');
+    check(!/keep moving|Happy to help you begin|Let's get you started/i.test(trial), 'trial is NOT a canned nudge');
 
-    console.log('\n--- Test 4: "Tell me more about saka fleet" returns the intro card ---');
-    const intro = await say('Tell me more about saka fleet');
-    check(/machine's memory/i.test(intro), 'the FAQ intro card is returned');
-    check(!/keep moving|Happy to help you begin|Let's get you started/i.test(intro), 'the intro is NOT replaced by a nudge');
+    console.log('\n--- Test 4: "Tell me more about saka fleet" returns the intro answer ---');
+    const intro = await say('Nice. Tell me more about Saka');
+    check(/Saka/i.test(intro) && /(machine|vehicle|passbook|fuel)/i.test(intro), 'the intro answer describes what Saka does');
+    check(!/registration plate/i.test(intro), 'the intro never asks for a plate');
+    check(!/keep moving|Happy to help you begin|Let's get you started/i.test(intro), 'the intro is not a canned nudge');
 
     console.log('\n--- Test 4b: the anticipated-question matrix (v1.26.0) ---');
     const matrix = [
-      ['What are the costs of using Saka?', /free to start/i, 'pricing'],
-      ['How do I use saka?', /just talk to me like a person/i, 'tour'],
-      ['What are the details of Solo Pro?', /Solo Pro/i, 'plan details'],
-      ['How do the add ons work?', /Add-ons are extra vehicle slots/i, 'add-ons'],
-      ['How do I subscribe to growth fleet?', /Reply \*UPGRADE\*/i, 'subscribe steps'],
-      ['Why do you need my VIN?', /locks the passbook to you alone/i, 'trust'],
-      ['Is there an app?', /No app, no download/i, 'whatsapp-only'],
-      ['Can I delete my data?', /Your data belongs to you/i, 'data control']
+      ['What are the costs of using Saka?', /\$\d|free|trial/i, 'pricing'],
+      ['How do I use saka?', /REGISTER|one line|sentence|talk/i, 'tour'],
+      ['What are the details of Solo Pro?', /Solo Pro|plan|vehicle/i, 'plan details'],
+      ['How do the add ons work?', /add.?ons?/i, 'add-ons'],
+      ['How do I subscribe to growth fleet?', /UPGRADE|subscribe|plan/i, 'subscribe steps'],
+      ['Why do you need my VIN?', /VIN|passbook|private|safe/i, 'trust'],
+      ['Is there an app?', /app|WhatsApp/i, 'whatsapp-only'],
+      ['Can I delete my data?', /delete|export|data/i, 'data control']
     ];
     for (const [question, expected, label] of matrix) {
       const answer = await say(question);

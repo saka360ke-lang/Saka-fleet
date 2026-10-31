@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.26.0  
+**Version:** 1.26.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.26.1** | Human Saka: generic answers removed (AI-composed replies, banned canned lines, no plate ask outside the quiz) | §69.6 |
 | **1.26.0** | Conversational Answer Engine: answer-first rule, anticipated-question matrix, friction resolver fix, trust lines on sensitive asks | §69 |
 | **1.25.8** | Root-cause fix: repeat guard compared the reply with itself (every real answer became a nudge); placeholder-name greeting; e2e flow test | §65.11 |
 | **1.25.7** | Deploy telegraph: "building" alert + app-emitted LIVE alert, field-work sync protocol, Rules Gate | §68 |
@@ -2548,6 +2549,13 @@ The quiz copy now reassures at the exact moment of hesitation: plate (`only to k
 
 ### 69.5 Proof
 `npm run test:flow` drives the real handler through today's exact conversation plus the anticipated matrix (28 assertions): each question gets its card and **none** may contain the plate script. `test_product_qa` is now 102 assertions.
+
+### 69.6 v1.26.1 — generic answers removed at the root
+- **Product answers are composed, not pasted.** The `productQa` registry is now *knowledge*: the AI writes each answer fresh from the verified facts (`purpose: 'product_answer'`). The canned card is retained only as the outage/short-answer fallback (a composition under 60 chars, or a pricing/trial/tier/add-on answer without any figure, is replaced by the complete verified card).
+- **The nudge family is gone from the happy path.** "Let's keep moving", "Happy to help you begin", "Welcome! Let's get you started", "I'm still here with you" are listed as **BANNED PHRASES** in the core prompt. A repeat no longer swaps in a canned line — it asks the composer for a genuinely different, warmer phrasing (`purpose: 'repeat_variation'`).
+- **No plate ask outside the registration quiz.** The welcome, greeting, and default compose prompts now ask *"What do you drive? One line is enough"*; the plate question exists only inside the deterministic registration quiz. `test_first_message_flow` asserts the welcome, the intro and every FAQ answer never ask for a plate.
+- **Small talk no longer hides a question.** `matchProductQa` strips leading interjections ("Nice.", "Ok", "Cool", "Please"), so *"Nice. Tell me more about Saka"* reaches the intro answer instead of the AI's generic script.
+- Proof: `npm run test:flow` is now **30 assertions** (welcome, pricing, trial, intro + the 8-question matrix, each checked for no canned line and no plate ask); `test_product_qa` 103; `test_agent_training` 92; `test_greetings` green.
 
 ### 67.7 Sentinel refinements must carry the schema marker (v1.25.3)
 - `runConversationRefinement()` wrote the refined prompt **without** the `SAKA-PROMPT-SCHEMA` marker, so the v1.25.1 gate ignored every weekly refinement — and the unmarked 3k-character legacy prompt kept reappearing in `system_config`. The writer now stamps `PROMPT_REFINEMENT_MARKER` and bounds the payload to `MAX_STORED_PROMPT_REFINEMENT_CHARS`, so a refinement can only ever augment the current, trained prompt.

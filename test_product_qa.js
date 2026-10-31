@@ -47,6 +47,7 @@ check(matchProductQa('Can I sell my car with the passbook?')?.id === 'resale', '
 check(matchProductQa('Who are you?')?.id === 'what_is_saka', 'identity questions route to the intro');
 check(matchProductQa('Tell me about sakafleet')?.id === 'what_is_saka', 'the live "Tell me about sakafleet" phrasing routes to the intro');
 check(matchProductQa('Tell me more about saka fleet')?.id === 'what_is_saka', '"tell me MORE about saka fleet" routes to the intro');
+check(matchProductQa('Nice. Tell me more about Saka')?.id === 'what_is_saka', 'small talk before the question does not hide it');
 check(matchProductQa('tell me more about you')?.id === 'what_is_saka', '"tell me more about you" routes to the intro');
 check(matchProductQa('What is Saka fleet?')?.id === 'what_is_saka', '"Saka fleet" is recognised as a single phrase');
 // v1.26.0 — anticipated-question matrix (from the live 14:36-14:40 conversation).

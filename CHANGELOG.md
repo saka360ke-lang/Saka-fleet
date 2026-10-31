@@ -4,6 +4,12 @@ All notable changes to Saka Fleet. Versions mirror the release tracker at the to
 of `SAKA_FLEET_ARCHITECTURE.md`; every entry names the commit it shipped in.
 Generated from the real git history — never from memory.
 
+## [1.26.1] - 2026-10-31
+- **Generic answers removed:** product replies are now composed fresh from verified facts (cards only as an outage fallback); the nudge family is banned at the prompt level; a repeat asks for a different, warmer phrasing instead of a canned line.
+- **No plate ask outside registration:** welcome, greeting and default prompts now ask "What do you drive?", and the welcome no longer mentions sending a plate.
+- **Small talk tolerance:** "Nice. Tell me more about Saka" now reaches the intro answer.
+- **Proof:** `npm run test:flow` 30 assertions · product Q&A 103 · agent training 92.
+
 ## [1.26.0] - 2026-10-31
 - **Conversational Answer Engine:** answer-first rule in the AI context, anticipated-question matrix (how-to-use, tier details, add-ons, subscribe steps, why-VIN/plate/email, mistakes, progress, WhatsApp-only, data control), plural pricing coverage.
 - **Friction resolver fixed:** "why do you need my VIN?" and similar questions are answered instead of triggering an apology + pause.

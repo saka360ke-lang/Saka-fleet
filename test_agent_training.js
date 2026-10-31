@@ -138,7 +138,10 @@ async function run() {
     'BACKEND GATE',
     // v1.26.0 — anticipate questions and never answer with the plate script.
     'ANSWER-FIRST RULE',
-    'NEVER reply with the registration'
+    'NEVER reply with the registration',
+    // v1.26.1 — canned lines are forbidden outright.
+    'BANNED PHRASES',
+    'the plate question belongs ONLY inside the registration quiz'
   ];
   for (const token of sections) {
     check(DEFAULT_SAKA_CORE_PROMPT.includes(token), `Core prompt retains training section: ${token}`);

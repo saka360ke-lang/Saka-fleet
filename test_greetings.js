@@ -62,10 +62,11 @@ const intro = sakaIntroText({ countryInfo: india, now: new Date('2026-10-30T04:0
 check(intro.includes('Namaste!') && intro.includes('*Saka*'), 'intro includes the localized greeting and the name Saka');
 check(intro.includes('MH 01 AB 1234'), 'intro uses the country plate example');
 check(intro.includes('⛽') && intro.includes('💰') && intro.includes('🔔'), 'intro uses semantic anchors for fuel, costs and reminders');
-check(/number plate/i.test(intro), 'intro ends with ONE clear next step');
+check(/REGISTER/i.test(intro), 'intro ends with ONE clear next step');
+check(!/send your vehicle'?s? (?:number |registration )?plate/i.test(intro), 'the intro never asks for a plate');
 check(emojiCount(intro) <= 4, `intro respects the welcome emoji ceiling (${emojiCount(intro)})`);
 const noStep = sakaIntroText({ countryInfo: india, nextStep: '' });
-check(!/number plate/i.test(noStep), 'next step can be omitted when the plate is already known');
+check(!/REGISTER|number plate/i.test(noStep), 'next step can be omitted when the plate is already known');
 const named = sakaIntroText({ countryInfo: kenya, profile: { full_name: 'Amina Yusuf' } });
 check(named.includes('Amina'), 'returning profile name is used warmly');
 
