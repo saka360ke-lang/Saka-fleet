@@ -5,7 +5,8 @@ import {
   matchProductQa,
   recommendTierForFleet,
   sanitizeSakaReply,
-  buildProductFactsContext
+  buildProductFactsContext,
+  buildLocalPricingFacts
 } from './src/services/productQa.js';
 import { buildUserContextSnapshot } from './src/services/userContextSnapshot.js';
 import { runWithCleanup } from './scripts/testCleanup.js';
@@ -65,6 +66,8 @@ console.log('\n--- Test 3: no hedging can be shipped ---');
 check(sanitizeSakaReply('I don\'t have any annual-plan discount to confirm.', 'FACTS') === 'FACTS', 'annual hedge is replaced by facts');
 check(/annual/i.test(buildProductFactsContext()), 'the fact context carries annual pricing');
 check(/features:/i.test(buildProductFactsContext()), 'the fact context carries the feature list');
+const kesSeven = await buildLocalPricingFacts({ supabase: null, currency: 'KES', fleetCount: 7 });
+check(/\bKES\b/.test(kesSeven.join(' ')) && !/\$|\bUSD\b/.test(kesSeven.join(' ')), 'the 7-car local answer carries no dollar figure');
 
 if (!supabase) {
   console.log('\n⚠️  Supabase credentials missing — snapshot test skipped.');

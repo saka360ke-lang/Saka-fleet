@@ -119,6 +119,21 @@ export function shouldReplacePlateAsk({
 /** v1.25.2 — one-shot pause confirmation (anti-spam opt-out). */
 export const PAUSE_REPLY = '🔇 *Paused.* I\'ll stay quiet — message me anytime and I\'ll pick up where we left off.';
 
+const INCOMPLETE_REPLY_RE = /\b(?:incomplete|cut off|cut short|truncated|not finished|didn'?t finish|did not finish|stopped mid)\b/i;
+
+/**
+ * v1.28.1 — "Your last reply was incomplete" is a COMPLAINT, not a greeting.
+ * Live evidence (2026-10-31 18:42–18:43) showed the user receiving the welcome
+ * twice after complaining that an answer was cut short. This helper lets the
+ * route acknowledge and recover instead of re-introducing Saka.
+ */
+export function isIncompleteReplyComplaint(text = '') {
+  const value = String(text || '');
+  if (!value || !INCOMPLETE_REPLY_RE.test(value)) return false;
+  return /\b(?:reply|replies|answer|message|brief|response|summary|you)\b/i.test(value)
+    || /^\s*(?:your|that|this)\b/i.test(value);
+}
+
 /**
  * v1.25.2 — recognise an explicit stop/pause request WITHOUT stealing real
  * business intents: "cancel my subscription" and a bare "cancel" (quiz exit)
@@ -243,5 +258,6 @@ export default {
   isFirstContact,
   isIntroCopy,
   wantsIntroduction,
-  asksForPlateDirectly
+  asksForPlateDirectly,
+  isIncompleteReplyComplaint
 };

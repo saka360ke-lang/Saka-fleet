@@ -127,8 +127,10 @@ export async function getEffectiveExchangeRate(supabase, currency = 'USD') {
 /**
  * v1.28.0 — display a USD list price in the user's currency.
  * Used by WhatsApp cards (add-on slots, upgrade prompts) so a Kenyan user never
- * sees a bare "$4.99" when checkout will charge KES. Always shows both figures:
- * the local amount first, the USD list price in brackets for transparency.
+ * sees a bare "$4.99" when checkout will charge KES.
+ *
+ * v1.28.1 — local currency ONLY: the dollar reference is never shown alongside
+ * a local figure. USD users still see the dollar amount (cur === 'USD').
  */
 export async function formatUsdInLocalCurrency(providedSupabase, usdAmount, currency = 'USD', locale = 'en-US') {
   const cur = String(currency || 'USD').toUpperCase();
@@ -140,7 +142,7 @@ export async function formatUsdInLocalCurrency(providedSupabase, usdAmount, curr
     if (Number.isFinite(Number(live)) && Number(live) > 0) rate = Number(live);
   } catch { /* fallback rate */ }
   const local = Math.round(amount * rate);
-  return `${cur} ${local.toLocaleString(locale || 'en-US', { maximumFractionDigits: 0 })} (≈ $${amount.toFixed(2)})`;
+  return `${cur} ${local.toLocaleString(locale || 'en-US', { maximumFractionDigits: 0 })}`;
 }
 
 

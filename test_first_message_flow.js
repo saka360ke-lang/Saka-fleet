@@ -99,7 +99,8 @@ async function run() {
 
     console.log('\n--- Test 2: pricing answers with the pricing card ---');
     const pricing = await say('How much does it cost?');
-    check(/\$\d/.test(pricing) && /free|trial/i.test(pricing), 'pricing question returns a conversational pricing answer with real figures');
+    check(/(?:KES|Ksh)\s?\d/.test(pricing) && /free|trial/i.test(pricing), 'pricing question returns a local-currency pricing answer with real figures');
+    check(!/\$\s?\d/.test(pricing), 'a Kenyan user never sees a dollar figure');
     check(!/keep moving|Happy to help you begin|Let's get you started/i.test(pricing), 'pricing is NOT a canned nudge');
     check(!/registration plate/i.test(pricing), 'pricing never asks for a plate');
     check(!/\bplates?\b/i.test(pricing), 'pricing never mentions the word plate');
@@ -118,7 +119,7 @@ async function run() {
 
     console.log('\n--- Test 4b: the anticipated-question matrix (v1.26.0) ---');
     const matrix = [
-      ['What are the costs of using Saka?', /\$\d|free|trial/i, 'pricing'],
+      ['What are the costs of using Saka?', /(?:KES|Ksh)\s?\d|free|trial/i, 'pricing'],
       ['How do I use saka?', /REGISTER|one line|sentence|talk|start|log|ask me|tell me|send/i, 'tour'],
       ['What are the details of Solo Pro?', /Solo Pro|plan|vehicle/i, 'plan details'],
       ['How do the add ons work?', /add.?ons?/i, 'add-ons'],
@@ -136,7 +137,7 @@ async function run() {
     console.log('\n--- Test 4c: free-service questions (v1.26.2) ---');
     for (const question of ['Nice. Is this a free service?', 'Is it free to use saka?']) {
       const answer = await say(question);
-      check(/\$\d|free|trial/i.test(answer), `"${question}" is answered with pricing facts`);
+      check(/(?:KES|Ksh)\s?\d|free|trial/i.test(answer), `"${question}" is answered with pricing facts`);
       check(!/\bplates?\b/i.test(answer), `"${question}" never mentions the word plate`);
     }
 
@@ -157,6 +158,17 @@ async function run() {
     const byeAnswer = await say('Ok. Bye');
     check(!/I(?:'m| am) Saka|Karibu|what do you drive/i.test(byeAnswer), 'a goodbye never re-introduces Saka or asks what they drive');
     check(byeAnswer.length <= 220, 'a goodbye is one short line');
+
+    console.log('\n--- Test 4f: local-currency only + complaint recovery (v1.28.1) ---');
+    const annualPlans = await say('Any annual plans?');
+    check(/(?:KES|Ksh)\s?\d/.test(annualPlans), 'annual plans are quoted in local currency');
+    check(!/\$\s?\d/.test(annualPlans), 'annual plans never mix in dollar figures');
+    const sevenVehicles = await say('What if I have 7 vehicles?');
+    check(/(?:KES|Ksh)\s?\d/.test(sevenVehicles), 'a 7-vehicle question is answered in local currency');
+    check(!/\$\s?\d/.test(sevenVehicles), 'the 7-vehicle answer has no dollar figure');
+    const complaint = await say('Your last reply was incomplete');
+    check(!/Karibu|I(?:'m| am) Saka|what do you drive/i.test(complaint), 'a complaint is never answered with the welcome');
+    check(/sorry|apolog|cut short|redo|again|full answer|complete/i.test(complaint), 'a complaint gets an acknowledgement and a recovery step');
 
     console.log(`\n🎉 ${passed} first-message flow assertions passed.`);
   } finally {

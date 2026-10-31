@@ -70,7 +70,7 @@ function localMoney(usdAmount, rate, currency, locale = 'en-US') {
  * Returns null for USD (the USD facts already carry everything) or when no rate
  * is available; never throws.
  */
-export async function buildLocalPricingFacts({ supabase = null, currency = 'USD', locale = 'en-US' } = {}) {
+export async function buildLocalPricingFacts({ supabase = null, currency = 'USD', locale = 'en-US', fleetCount = null } = {}) {
   const cur = String(currency || 'USD').toUpperCase();
   if (cur === 'USD') return null;
   let rate = null;
@@ -82,11 +82,42 @@ export async function buildLocalPricingFacts({ supabase = null, currency = 'USD'
   const monthly = PAID_TIER_KEYS.map((key) => `${getTierDefinition(key).label} ${localMoney(getTierPriceUSD(key, 'monthly'), rate, cur, locale)}/month`);
   const annual = PAID_TIER_KEYS.map((key) => `${getTierDefinition(key).label} ${localMoney(getTierPriceUSD(key, 'annual'), rate, cur, locale)}/year`);
   const addon = localMoney(getAddonPriceUSD('fleet_command', 'monthly'), rate, cur, locale);
-  return [
+  const freeTier = getTierDefinition('free');
+  const lines = [
+    `📦 Free — no cost, ${freeTier.baseLimit} vehicle, essential logs, ${freeTier.reportsPerMonth} report/month.`,
     `💳 Approximate prices in ${cur}: ${monthly.join(' · ')}.`,
     `Annual in ${cur}: ${annual.join(' · ')}.`,
-    `Fleet Command extra vehicle: ≈ ${addon}/month. Checkout is charged in ${cur}; these are approximate conversions of the USD list prices.`
+    `Fleet Command extra vehicle: ≈ ${addon}/month. Checkout is charged in ${cur}; these figures are approximate.`
   ];
+
+  // v1.28.1 — a fleet-size question must be answered in local currency too.
+  // "I have 7 vehicles" now produces the full local total, never a USD card.
+  const count = Math.floor(Number(fleetCount));
+  const included = getBaseVehicleLimit('fleet_command');
+  if (Number.isFinite(count) && count > included) {
+    const extra = count - included;
+    const totalUsd = getTierPriceUSD('fleet_command', 'monthly') + extra * getAddonPriceUSD('fleet_command', 'monthly');
+    lines.push(`💡 For ${count} vehicles: Fleet Command ≈ ${localMoney(totalUsd, rate, cur, locale)}/month (${included} included + ${extra} extra slot${extra === 1 ? '' : 's'}).`);
+  }
+  return lines;
+}
+
+/**
+ * v1.28.1 — hard-invariant scrubber. When Saka quotes local currency, NO dollar
+ * value may survive in the reply: "$12.34", "(≈ $9.99)" and "USD 9.99" are
+ * removed, and a bare "USD" becomes the local currency code when supplied.
+ * Used for non-USD users on money answers, so the model can never leak USD.
+ */
+export function stripUsdFigures(text = '', { currency = null } = {}) {
+  let out = String(text || '');
+  out = out.replace(/\s*\(\s*(?:≈|~)?\s*(?:US\$|\$)\s*\d[\d,.]*(?:\s*\/\s*[a-z]+)?\s*\)/gi, '');
+  out = out.replace(/(?:≈|~)?\s*(?:US\$|\$)\s*\d[\d,.]*(?:\s*\/\s*(?:mo|month|months|yr|year|years|annual|annually))?/gi, '');
+  out = out.replace(/\bUSD\s*\d[\d,.]*/gi, '');
+  out = out.replace(/\s+([.,;:!?])/g, '$1').replace(/\(\s*\)/g, '').replace(/\s{2,}/g, ' ').trim();
+  if (currency && String(currency).toUpperCase() !== 'USD') {
+    out = out.replace(/\bUSD\b/gi, String(currency).toUpperCase());
+  }
+  return out;
 }
 
 function packageFacts() {
@@ -185,7 +216,7 @@ export const PRODUCT_QA = Object.freeze([
   },
   {
     id: 'what_is_saka',
-    topics: /\b(what is saka(?:\s*fleet)?|about saka(?:\s*fleet)?|who is saka|who are you|what are you|how does (?:it|this) work|what do you do|tell me\s+(?:more\s+)?about\s+(?:saka(?:\s*fleet)?|sakafleet|you|the service|this service))\b/i,
+    topics: /\b(what is saka(?:\s*fleet)?|about saka(?:\s*fleet)?|who is saka|who are you|what are you|how does (?:it|this) work|what do you do|(?:first\s+)?tell me\s+(?:(?:more|a little|a bit|something)\s+)?about\s+(?:saka(?:\s*fleet)?|sakafleet|you|the service|this service))\b/i,
     facts: () => [
       '🙂 Saka is your machine memory, money-saver and paperwork wizard, on WhatsApp.',
       '⛽ Every fuel-up, expense and service is remembered for you.',
@@ -333,7 +364,7 @@ export const PRODUCT_QA = Object.freeze([
 const QUESTION_SHAPE_RE = /^(?:what|how|how much|why|when|who|where|which|is|are|do|does|can|could|should|tell me|explain|any)\b|\?\s*$/i;
 const STRONG_PRODUCT_RE = /\b(how much|pricing|price list|subscription|plans?|free trial|trial|cost of (?:this|the) service|tell me\s+(?:more\s+)?about|details? of|features?)\b/i;
 // v1.26.0 — small talk in front of a real question ("Nice. Tell me more about Saka").
-const SMALL_TALK_PREFIX_RE = /^(?:(?:ok(?:ay)?|nice|cool|great|sure|well|please|hi|hello|hey|thanks?|thank you|alright|got it)[\s,.!…]+)+/i;
+const SMALL_TALK_PREFIX_RE = /^(?:(?:ok(?:ay)?|nice|cool|great|sure|well|please|first|hi|hello|hey|thanks?|thank you|alright|got it)[\s,.!…]+)+/i;
 
 export function matchProductQa(text = '') {
   const original = String(text || '').trim();
@@ -417,6 +448,7 @@ export default {
   buildProductQaContext,
   buildProductFactsContext,
   buildLocalPricingFacts,
+  stripUsdFigures,
   recommendTierForFleet,
   tierFactLines,
   sanitizeSakaReply

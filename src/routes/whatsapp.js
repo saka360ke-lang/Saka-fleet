@@ -16,8 +16,8 @@ import {
 } from '../services/vehicles.js';
 import { calculateFuelConsumption } from '../services/analytics.js';
 import { normalizeFillType } from '../services/fuelEconomy.js';
-import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly, shouldReplaceIntroCopy, isRepeatedReply, isStopRequest, PAUSE_REPLY, pickRepeatNudge, pickNewcomerNudge, isFirstTimeMessage, shouldReplacePlateAsk } from '../services/greetings.js';
-import { matchProductQa, buildProductQaReply, buildProductFactsContext, buildLocalPricingFacts, recommendTierForFleet, sanitizeSakaReply } from '../services/productQa.js';
+import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly, shouldReplaceIntroCopy, isRepeatedReply, isStopRequest, PAUSE_REPLY, pickRepeatNudge, pickNewcomerNudge, isFirstTimeMessage, shouldReplacePlateAsk, isIncompleteReplyComplaint } from '../services/greetings.js';
+import { matchProductQa, buildProductQaReply, buildProductFactsContext, buildLocalPricingFacts, stripUsdFigures, recommendTierForFleet, sanitizeSakaReply } from '../services/productQa.js';
 import { shouldSuggestContactSave, isLostChatMessage, buildContactSaveFacts, markContactSaveSuggested } from '../services/contactNudge.js';
 import { buildUserContextSnapshot } from '../services/userContextSnapshot.js';
 import { resolveSlowAckMs, pickSlowAckLine, shouldSendSlowAck } from '../services/turnAck.js';
@@ -1089,21 +1089,29 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           // prose is composed fresh. The fact lines are only the outage fallback.
           const productFacts = buildProductQaReply(productQaMatch);
           const fleetCountMatch = messageText.match(/\b(\d{1,3})\s*(?:cars?|vehicles?|units?|machines?|trucks?|bikes?|motorbikes?|matatus?|lorries?|pickups?)\b/i);
+          const fleetCount = fleetCountMatch ? Number(fleetCountMatch[1]) : null;
           const planTopic = ['pricing', 'packages', 'tier_details', 'addons', 'limits'].includes(productQaMatch.id);
-          const recommendation = fleetCountMatch && planTopic ? recommendTierForFleet(Number(fleetCountMatch[1])) : null;
-          // v1.28.0 — payment answers in the user's own currency, converted with
-          // the same cached rate Paystack charges at checkout. Null for USD or
-          // when no rate is available (the USD facts always remain).
+          const recommendation = fleetCount && planTopic ? recommendTierForFleet(fleetCount) : null;
+          // v1.28.0/1.28.1 — payment answers in the user's own currency. When the
+          // user's currency is not USD, dollar figures are REMOVED entirely: the
+          // facts are filtered, the composer is instructed to quote local only,
+          // and the finished reply is scrubbed as a hard invariant.
           let localPricingFacts = null;
           if (planTopic && countryInfo?.currency && String(countryInfo.currency).toUpperCase() !== 'USD') {
             try {
               localPricingFacts = await buildLocalPricingFacts({
                 supabase: supabaseClient,
                 currency: countryInfo.currency,
-                locale: countryInfo.locale
+                locale: countryInfo.locale,
+                fleetCount
               });
             } catch { localPricingFacts = null; }
           }
+          const usdFree = (line) => !/\$|\bUSD\b/i.test(String(line || ''));
+          const verifiedFactLines = localPricingFacts ? productFacts.split('\n').filter(usdFree) : productFacts.split('\n');
+          const recommendationLines = recommendation
+            ? recommendation.lines.filter((line) => !localPricingFacts || usdFree(line))
+            : [];
           let userFacts = '';
           try {
             const snapshot = await buildUserContextSnapshot({
@@ -1114,27 +1122,34 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             });
             userFacts = snapshot.lines.join('\n');
           } catch { userFacts = ''; }
-          const fallbackAnswer = [productFacts, ...(recommendation ? recommendation.lines : []), ...(localPricingFacts || [])].join('\n');
+          const fallbackAnswer = [...verifiedFactLines, ...recommendationLines, ...(localPricingFacts || [])].join('\n');
           const composedAnswer = await composeMessage({
             purpose: 'product_answer',
             facts: {
               userQuestion: messageText,
               topic: productQaMatch.id,
               verifiedFacts: fallbackAnswer,
-              localPricingFacts: localPricingFacts ? localPricingFacts.join('\n') : 'None supplied — use the USD facts above.',
+              localPricingFacts: localPricingFacts ? localPricingFacts.join('\n') : 'None supplied — use the verified facts above.',
               userDataFacts: userFacts || 'No account data on file yet.',
-              instruction: 'Answer the user\'s question in 1-3 short conversational lines using ONLY the verified facts. When localPricingFacts are present, lead with the local-currency figure and keep the USD list price in brackets (checkout is charged locally). For features or package questions, give the concrete list from the facts (up to 4 short lines). If the user gave a fleet size, use the computed recommendation exactly. Warm and human, at most one emoji per line. End with ONE gentle next step. Do not paste a menu, do not repeat the question back, never ask for the plate, and never say you do not have information — the facts above are complete.'
+              instruction: localPricingFacts
+                ? 'Answer the user\'s question in 1-3 short conversational lines using ONLY the verified facts. Quote ONLY the local-currency figures supplied in localPricingFacts. NEVER mention $, USD or any dollar amount, not even in brackets. For features or package questions, give the concrete list from the facts (up to 4 short lines). If the user gave a fleet size, use the computed local total exactly. Warm and human, at most one emoji per line. End with ONE gentle next step. Do not paste a menu, do not repeat the question back, never ask for the plate, and never say you do not have information — the facts above are complete.'
+                : 'Answer the user\'s question in 1-3 short conversational lines using ONLY the verified facts. For features or package questions, give the concrete list from the facts (up to 4 short lines). If the user gave a fleet size, use the computed recommendation exactly. Warm and human, at most one emoji per line. End with ONE gentle next step. Do not paste a menu, do not repeat the question back, never ask for the plate, and never say you do not have information — the facts above are complete.'
             },
             language: targetLang,
             countryInfo,
             profile: profileData,
             fallbackText: fallbackAnswer
           });
-          const composedText = sanitizeSakaReply(composedAnswer, fallbackAnswer, { historyLength: conversationHistory.length });
+          const sanitizedText = sanitizeSakaReply(composedAnswer, fallbackAnswer, { historyLength: conversationHistory.length });
+          const composedText = localPricingFacts
+            ? stripUsdFigures(sanitizedText, { currency: countryInfo.currency })
+            : sanitizedText;
           const needsFigures = ['pricing', 'packages', 'trial', 'tier_details', 'addons', 'limits'].includes(productQaMatch.id);
-          const usableAnswer = composedText.length >= 60 && (!needsFigures || /\d/.test(composedText))
+          const currencyCode = String(countryInfo?.currency || '').toUpperCase();
+          const carriesLocalFigure = !localPricingFacts || (currencyCode && composedText.includes(currencyCode));
+          const usableAnswer = composedText.length >= 60 && (!needsFigures || /\d/.test(composedText)) && carriesLocalFigure
             ? composedText
-            : fallbackAnswer;
+            : stripUsdFigures(fallbackAnswer, { currency: countryInfo?.currency });
           aiResult = {
             intent: 'GENERAL_CHAT',
             extracted_data: {},
@@ -2929,6 +2944,56 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
               fallbackText: '👋 Anytime — I am here whenever you need me. Just say Hi. 🚗'
             });
           }
+          // 1b-2. Reply-quality complaint ("your last reply was incomplete") —
+          // v1.28.1. NEVER answer this with the welcome. Recover the answer, and
+          // if the complaint mentions a fleet size, answer it now in local currency.
+          else if (isIncompleteReplyComplaint(messageText)) {
+            const complaintFleet = messageText.match(/\b(\d{1,3})\s*(?:cars?|vehicles?|units?|machines?|trucks?|bikes?|motorbikes?|matatus?|lorries?|pickups?)\b/i);
+            let recoveryFacts = null;
+            if (complaintFleet && countryInfo?.currency && String(countryInfo.currency).toUpperCase() !== 'USD') {
+              try {
+                recoveryFacts = await buildLocalPricingFacts({
+                  supabase: supabaseClient,
+                  currency: countryInfo.currency,
+                  locale: countryInfo.locale,
+                  fleetCount: Number(complaintFleet[1])
+                });
+              } catch { recoveryFacts = null; }
+            }
+            const recoveryTotal = recoveryFacts
+              ? (recoveryFacts.find((line) => /For \d+ vehicles/.test(line)) || recoveryFacts[0])
+              : null;
+            const recoveryReply = await composeMessage({
+              purpose: 'complaint_recovery',
+              facts: {
+                userNote: messageText,
+                fleetCount: complaintFleet ? Number(complaintFleet[1]) : null,
+                pricedAnswer: recoveryTotal || 'None supplied.',
+                instruction: recoveryTotal
+                  ? 'In 1-2 short lines, acknowledge the previous reply was cut short and give the full recommendation now using pricedAnswer ONLY. Never mention $, USD or any dollar amount. No re-introduction, no welcome, no menu.'
+                  : 'In 1-2 short lines, acknowledge the previous reply was cut short and say you will give the full answer now. Ask for the one detail you need, if any. No re-introduction, no welcome, no menu, no defensiveness.'
+              },
+              language: targetLang,
+              countryInfo,
+              profile: profileData,
+              fallbackText: recoveryTotal
+                ? `You are right — that reply was cut short. ${recoveryTotal}`
+                : 'You are right — that reply was cut short. Tell me again and I will give you the full answer in one message. 🙏'
+            });
+            customReply = recoveryFacts
+              ? stripUsdFigures(recoveryReply, { currency: countryInfo.currency })
+              : recoveryReply;
+            if (supabaseClient) {
+              try {
+                await supabaseClient.from('chat_friction_logs').insert([{
+                  user_phone: senderPhone,
+                  session_id: senderPhone,
+                  friction_type: 'INCOMPLETE_REPLY_COMPLAINT',
+                  transcript_snippet: `Reply complaint: "${messageText}"`.slice(0, 500)
+                }]);
+              } catch { /* logging is best effort */ }
+            }
+          }
           // 1c. Feedback / tester notes v1.27.0 — acknowledge the specific point,
           // never a canned apology for an opinion. Logged for the team.
           else if (/\b(feedback|tester|testing|notes?|suggestion|improve|improvement|canned|templates?|robotic|scripted)\b/i.test(messageText)
@@ -2972,19 +3037,43 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
             const questionFallback = userFacts.length
               ? userFacts.slice(0, 3).join('\n')
               : 'I do not have that on file yet — tell me in one line what you need and I will handle it.';
-            customReply = sanitizeSakaReply(await composeMessage({
+            // v1.28.1 — money questions from a non-USD user are answered in their
+            // currency only; no dollar figure may appear anywhere in the reply.
+            let localPricingFacts = null;
+            const dataFleetMatch = messageText.match(/\b(\d{1,3})\s*(?:cars?|vehicles?|units?|machines?|trucks?|bikes?|motorbikes?|matatus?|lorries?|pickups?)\b/i);
+            if (countryInfo?.currency && String(countryInfo.currency).toUpperCase() !== 'USD') {
+              try {
+                localPricingFacts = await buildLocalPricingFacts({
+                  supabase: supabaseClient,
+                  currency: countryInfo.currency,
+                  locale: countryInfo.locale,
+                  fleetCount: dataFleetMatch ? Number(dataFleetMatch[1]) : null
+                });
+              } catch { localPricingFacts = null; }
+            }
+            const dataAnswer = await composeMessage({
               purpose: 'user_data_answer',
               facts: {
                 userQuestion: messageText,
                 userDataFacts: userFacts.length ? userFacts.join('\n') : 'No account data on file yet.',
-                productFacts: buildProductFactsContext(),
-                instruction: 'Answer the question directly in 1-4 short conversational lines using ONLY these facts. Account data lives in userDataFacts; product knowledge in productFacts. If neither can answer it, say so plainly in one line and offer the single most useful next step. No menus, no corporate phrasing, never the word plate, and never claim you lack information when the facts above contain it.'
+                productFacts: localPricingFacts
+                  ? buildProductFactsContext().split('\n').filter((line) => !/\$|\bUSD\b/i.test(line)).join('\n')
+                  : buildProductFactsContext(),
+                localPricingFacts: localPricingFacts ? localPricingFacts.join('\n') : 'None supplied.',
+                instruction: localPricingFacts
+                  ? 'Answer the question directly in 1-4 short conversational lines using ONLY these facts. Account data lives in userDataFacts; product knowledge in productFacts. If the answer involves money, quote ONLY the local-currency figures in localPricingFacts — NEVER mention $, USD or any dollar amount. If neither can answer it, say so plainly in one line and offer the single most useful next step. No menus, no corporate phrasing, never the word plate, and never claim you lack information when the facts above contain it.'
+                  : 'Answer the question directly in 1-4 short conversational lines using ONLY these facts. Account data lives in userDataFacts; product knowledge in productFacts. If neither can answer it, say so plainly in one line and offer the single most useful next step. No menus, no corporate phrasing, never the word plate, and never claim you lack information when the facts above contain it.'
               },
               language: targetLang,
               countryInfo,
               profile: profileData,
               fallbackText: questionFallback
-            }), questionFallback, { historyLength: conversationHistory.length });
+            });
+            customReply = sanitizeSakaReply(
+              localPricingFacts ? stripUsdFigures(dataAnswer, { currency: countryInfo.currency }) : dataAnswer,
+              questionFallback,
+              { historyLength: conversationHistory.length }
+            );
           }
           // 2. Conversational feedback / frustration / message looping detected
           // v1.26.0 — a recognised product question always outranks the apology.

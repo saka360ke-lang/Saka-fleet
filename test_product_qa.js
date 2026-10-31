@@ -5,6 +5,7 @@ import {
   buildProductQaContext,
   buildProductFactsContext,
   buildLocalPricingFacts,
+  stripUsdFigures,
   recommendTierForFleet,
   sanitizeSakaReply
 } from './src/services/productQa.js';
@@ -112,12 +113,27 @@ check(/features:/.test(factsContext), 'the fact context includes the feature lis
 
 console.log('\n--- Test 9: payment answers use the user currency (v1.28.0) ---');
 const kesFacts = await buildLocalPricingFacts({ supabase: null, currency: 'KES', locale: 'en-KE' });
-check(Array.isArray(kesFacts) && kesFacts.length === 3, 'KES produces three local fact lines');
+check(Array.isArray(kesFacts) && kesFacts.length >= 3, 'KES produces the local fact lines');
+check(/Free/.test(kesFacts.join(' ')), 'the free tier is stated without any dollar figure');
 check(kesFacts.join(' ').includes('KES'), 'the local facts name the checkout currency');
-check(/Solo Pro/.test(kesFacts[0]) && /1,299/.test(kesFacts[0]), 'Solo Pro converts with the KES fallback rate');
+check(/Solo Pro/.test(kesFacts.join(' ')) && /1,299/.test(kesFacts.join(' ')), 'Solo Pro converts with the KES fallback rate');
 check(/approximate/i.test(kesFacts.join(' ')), 'conversions are labelled approximate');
 check(/extra vehicle/i.test(kesFacts.join(' ')), 'the add-on price is converted too');
 const usdFacts = await buildLocalPricingFacts({ supabase: null, currency: 'USD' });
 check(usdFacts === null, 'USD needs no extra conversion facts');
+
+console.log('\n--- Test 10: local currency is exclusive — no dollar figures (v1.28.1) ---');
+const localNoFleet = await buildLocalPricingFacts({ supabase: null, currency: 'KES', locale: 'en-KE' });
+check(localNoFleet.join(' ').includes('KES'), 'local facts quote KES');
+check(!/\$|\bUSD\b/.test(localNoFleet.join(' ')), 'local facts contain no dollar sign and no USD');
+const localFleet = await buildLocalPricingFacts({ supabase: null, currency: 'KES', locale: 'en-KE', fleetCount: 7 });
+check(/For 7 vehicles/.test(localFleet.join(' ')), 'a 7-vehicle question gets a computed local total');
+check(/4,676/.test(localFleet.join(' ')), 'the 7-vehicle total is 4,676 KES at the fallback rate');
+check(!/\$|\bUSD\b/.test(localFleet.join(' ')), 'the 7-vehicle local total carries no dollar figure');
+const scrubbed = stripUsdFigures('Solo Pro: KES 10,901/year ($83.92), 1 vehicle', { currency: 'KES' });
+check(!/\$|\bUSD\b/.test(scrubbed) && scrubbed.includes('KES 10,901/year'), 'a bracketed dollar value is removed from a local answer');
+const scrubbedPlain = stripUsdFigures('5 vehicles at $27.99/month and 2 slots at $3.99/month', { currency: 'KES' });
+check(!/\$\d/.test(scrubbedPlain), 'bare dollar amounts are removed');
+check(matchProductQa('Cool. First tell me a little about Saka')?.id === 'what_is_saka', '"tell me a little about Saka" returns the intro');
 
 console.log(`\n🎉 ${passed} product Q&A assertions passed.`);

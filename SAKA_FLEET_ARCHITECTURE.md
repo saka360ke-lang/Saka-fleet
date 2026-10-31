@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.28.0  
+**Version:** 1.28.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.28.1** | Local-currency-only money answers (no dollar figures anywhere), computed local fleet totals, reply-complaint recovery, "tell me a little about Saka" routing | §71.3, §71.9 |
 | **1.28.0** | Human Saka 2.0: typo-tolerant routing, GREETING LAW + linter, local-currency payment answers, save-my-number nudge, append-only Sentinel learning, generated QA/training docs, scoped multi-part banking | §71 |
 | **1.27.0** | Answer Oracle: facts-only registry (annual prices, features, packages, computed capacity), realtime user-data snapshot, universal question path, farewell + feedback paths, reply linter, personality v2 | §70 |
 | **1.26.2** | Free-service pricing routing + a hard no-plate invariant outside registration | §69.7 |
@@ -2644,9 +2645,11 @@ The model can never ship a corporate hedge, an empty capacity placeholder (`· v
 - `sanitizeSakaReply(text, fallback, { historyLength })` rejects a greeting opener when `historyLength > 0`; first contact is unaffected. Covered in `test_greetings.js`.
 
 ### 71.3 Payment answers in the user's currency
-- `buildLocalPricingFacts({ supabase, currency, locale })` converts every paid tier + the Fleet Command add-on with `getEffectiveExchangeRate()` (the same cached rate Paystack charges at checkout) and labels the figures approximate. USD needs no extra facts.
-- The `product_answer` path injects the local lines; `formatUsdInLocalCurrency()` renders add-on/garage-full cards as "KES 519 (≈ $3.99)". The USD list price is always retained for transparency.
-- `test_product_qa.js` asserts KES conversion with the documented fallback rate.
+- `buildLocalPricingFacts({ supabase, currency, locale, fleetCount })` converts every paid tier + the Fleet Command add-on with `getEffectiveExchangeRate()` (the same cached rate Paystack charges at checkout), states the free tier without a price, and labels the figures approximate. USD needs no extra facts.
+- **v1.28.1 — local currency is exclusive:** when a local currency is available, dollar figures are removed from the verified facts, the composer is instructed to quote local only, and the finished reply is scrubbed by `stripUsdFigures()` — a hard invariant (like the plate guard). `formatUsdInLocalCurrency()` now returns "KES 519", never "KES 519 (≈ $3.99)".
+- A fleet-size question gets a computed local total (`For 7 vehicles: Fleet Command ≈ KES 4,676/month …`), so plan math is never shown in USD.
+- The `product_answer` and `user_data_answer` paths both inject the local facts; USD users keep the USD facts unchanged.
+- `test_product_qa.js` asserts KES conversion, the computed 7-vehicle total, the absence of `$`/`USD`, and the scrubber.
 
 ### 71.4 Save-my-number nudge (`src/services/contactNudge.js`)
 - Fires once per profile at the first milestone (vehicle registered + passbook issued) and on a lost-chat moment; 30-day cooldown (`CONTACT_NUDGE_COOLDOWN_DAYS`), stamped in `profiles.contact_save_nudged_at` (`npm run migrate:contact-nudge`, fail-soft boot `ensureContactNudgeSchema`).
@@ -2667,4 +2670,12 @@ The model can never ship a corporate hedge, an empty capacity placeholder (`· v
 - Banked fields are collected in `state.bankedThisTurn` and acknowledged once by `askCurrent()`; the confirmation-before-write gate is unchanged. Covered in `test_quiz_flow.js`.
 
 ### 71.8 Proof
-`test_text_normalizer` 24 · `test_contact_nudge` 24 · `test_greetings` 70 · `test_product_qa` 134 · `test_agent_training` 102 (incl. the learning content gate) · `test_quiz_flow` 60 · `test_kb_docs` 36 · `test_answer_oracle` 30. `npm run health` green.
+`test_text_normalizer` 24 · `test_contact_nudge` 24 · `test_greetings` 75 · `test_product_qa` 142 · `test_agent_training` 102 (incl. the learning content gate) · `test_quiz_flow` 60 · `test_kb_docs` 36 · `test_answer_oracle` 31. `npm run health` green.
+
+### 71.9 Local-currency-only rule + reply-complaint recovery (v1.28.1)
+- **Live evidence (2026-10-31 18:40–18:43):** a Kenyan prospect saw `KES 10,901/year ($83.92)` on an annual question, a pure-USD `$27.99/$3.99/$35.97` card on "What if I have 7 vehicles?", and was re-welcomed twice ("Karibu! I'm Saka…") after saying *"Your last reply was incomplete"*.
+- **No dollar values:** `stripUsdFigures(text, { currency })` removes `$12.34`, `(≈ $9.99)` and `USD 9.99` and rewrites a bare `USD` to the local code. It is applied to product and user-data money answers whenever local facts exist; the verified-fact lines are filtered of `$`/`USD` first, and the composer is told to quote local only. Replies without a local currency code fall back to the complete local fact lines.
+- **Computed local fleet totals:** `buildLocalPricingFacts(..., fleetCount)` adds `💡 For N vehicles: Fleet Command ≈ <local>/month (5 included + N-5 extra slots)`.
+- **Complaint recovery:** `isIncompleteReplyComplaint()` recognises *"your last reply/brief/answer was incomplete / cut off / cut short"*. The route acknowledges, logs `INCOMPLETE_REPLY_COMPLAINT`, and — if a fleet count is present — delivers the full local-currency answer immediately. It never re-introduces Saka or shows the welcome.
+- **"Tell me a little about Saka"** now routes to the warm intro facts (`what_is_saka`) instead of the generic greeting fallback.
+- **Proof:** product Q&A 142 · greetings 75 · answer oracle 31 · `test_first_message_flow` extended with local-only annual/7-vehicle turns and the complaint turn.

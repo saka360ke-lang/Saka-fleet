@@ -1,0 +1,6 @@
+﻿
+> sakafleet-backend@1.28.1 docs:check
+> node scripts/gen_kb_docs.js --check
+
+Γ£à Product QA and training docs match the code.
+DOCS_EXIT=0

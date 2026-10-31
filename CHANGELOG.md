@@ -4,7 +4,13 @@ All notable changes to Saka Fleet. Versions mirror the release tracker at the to
 of `SAKA_FLEET_ARCHITECTURE.md`; every entry names the commit it shipped in.
 Generated from the real git history — never from memory.
 
-## [1.28.0] - 2026-10-31
+## [1.28.1] - 2026-10-31
+- **Local currency only:** when a user's currency is not USD, money answers never contain a dollar figure. Local facts are the only money facts passed to the composer, the instruction forbids `$`/`USD`, and `stripUsdFigures()` scrubs any leak (including bracketed `($83.92)` and `USD 9.99`). `formatUsdInLocalCurrency()` now returns "KES 519", not "KES 519 (≈ $3.99)".
+- **Computed local fleet totals:** `buildLocalPricingFacts(..., fleetCount)` answers "What if I have 7 vehicles?" with `For 7 vehicles: Fleet Command ≈ KES 4,676/month (5 included + 2 extra slots)` — the live pure-USD card is gone.
+- **Reply-complaint recovery:** "Your last reply was incomplete" is now recognised as a complaint, acknowledged, logged (`INCOMPLETE_REPLY_COMPLAINT`), and answered — with the full local-currency fleet answer when a count is present. It never re-introduces Saka or shows the welcome.
+- **"Tell me a little about Saka":** now routes to the warm intro facts instead of the generic greeting fallback.
+- **Proof:** product Q&A 142 · greetings 75 · answer oracle 31 · `npm run test:flow` extended with local-only annual/7-vehicle turns and the complaint turn.
+
 - **Typo & omission tolerance:** new `src/services/textNormalizer.js` normalizes transpositions, doubled letters, missing spaces, diacritics and punctuation for ROUTING only — `matchProductQa`, the regex intent fallback, stop detection and quiz arbitration now understand "Howmuch is the pricimg?", "Habbari" and "sotp". Plates, VINs, amounts and emails are never rewritten (confirmation still gates writes).
 - **GREETING LAW + linter:** the core prompt and composer forbid opening a reply with Hi/Habari/Good morning once a conversation is underway; `sanitizeSakaReply` replaces a repeated greeting opener with the fact fallback (first contact keeps its greeting).
 - **Local-currency payment answers:** `buildLocalPricingFacts()` converts tier and add-on prices with the same cached FX rate Paystack charges at checkout; product answers lead with KES/INR/etc. and keep the USD list price in brackets. Add-on cards now show the local amount too.

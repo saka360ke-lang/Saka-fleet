@@ -98,9 +98,13 @@ at most 3 emojis per message (4 on the welcome message).
   amounts are never rewritten (`src/services/textNormalizer.js`).
 - **No re-greeting:** a GREETING LAW plus a reply-linter opener check stop Saka
   opening every reply with Hi/Habari once the conversation is underway.
-- **Local currency:** pricing and add-on answers show the user's currency,
-  converted with the same cached rate Paystack charges at checkout, with the USD
-  list price kept in brackets.
+- **Local currency only:** pricing and add-on answers show the user's currency,
+  converted with the same cached rate Paystack charges at checkout — no dollar
+  figures anywhere (a hard scrubber enforces it). Fleet-size questions get the
+  computed local total.
+- **Complaint recovery:** "your last reply was incomplete" is acknowledged and
+  recovered (with the full local-currency answer when a fleet count is given),
+  never answered with the welcome.
 - **Save-my-number:** one warm, milestone-anchored contact-save line after the
   first vehicle (or a lost-chat moment), stamped per profile, never a nag
   (`src/services/contactNudge.js`).

@@ -16,7 +16,8 @@ import {
   NEWCOMER_NUDGES,
   pickNewcomerNudge,
   isFirstTimeMessage,
-  shouldReplacePlateAsk
+  shouldReplacePlateAsk,
+  isIncompleteReplyComplaint
 } from './src/services/greetings.js';
 import { sanitizeSakaReply } from './src/services/productQa.js';
 
@@ -156,6 +157,13 @@ check(sanitizeSakaReply('Habari! I am Saka.', 'FACTS', { historyLength: 0 }) ===
 check(sanitizeSakaReply('Your insurance expires in 7 days.', 'FACTS', { historyLength: 4 }) === 'Your insurance expires in 7 days.', 'a substance-first reply passes untouched');
 check(sanitizeSakaReply('Good — saved.', 'FACTS', { historyLength: 4 }) === 'Good — saved.', 'a non-greeting "Good" is not mistaken for a greeting');
 check(sanitizeSakaReply('Good morning! Your report is ready.', 'FACTS', { historyLength: 2 }) === 'FACTS', 'a time-of-day greeting opener is replaced');
+
+console.log('--- Test 7: reply-quality complaints are never greetings (v1.28.1) ---');
+check(isIncompleteReplyComplaint('Your last reply was incomplete') === true, 'the live complaint is recognised');
+check(isIncompleteReplyComplaint('Your last brief on my 7 vehicles was incomplete') === true, 'a complaint with fleet context is recognised');
+check(isIncompleteReplyComplaint('That answer was cut off') === true, '"cut off" is recognised');
+check(isIncompleteReplyComplaint('Half tank') === false, 'a fuel statement is not a reply complaint');
+check(isIncompleteReplyComplaint('My report is incomplete') === false, 'an unrelated incomplete item is not a reply complaint');
 
 console.log(`\n🎉 ${passed} greeting & emoji assertions passed.`);
 
