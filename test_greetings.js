@@ -12,7 +12,10 @@ import {
   isStopRequest,
   PAUSE_REPLY,
   REPEAT_NUDGES,
-  pickRepeatNudge
+  pickRepeatNudge,
+  NEWCOMER_NUDGES,
+  pickNewcomerNudge,
+  isFirstTimeMessage
 } from './src/services/greetings.js';
 
 /**
@@ -136,3 +139,9 @@ check(emojiCount(sakaIntroText({ countryInfo: usa, nextStep: '' })) <= 4, 'US in
 check(!/₹|\$|KES|INR/.test(intro), 'no currency figures inside the intro (figures stay plain)');
 
 console.log(`\n🎉 ${passed} greeting & emoji assertions passed.`);
+
+check(NEWCOMER_NUDGES.every((n) => !/keep moving/i.test(n)), 'newcomer nudges never say keep moving');
+check(pickNewcomerNudge(0) !== pickNewcomerNudge(1), 'newcomer nudges rotate');
+check(isFirstTimeMessage('This is my first time!!!!') === true, 'first-time message detected');
+check(isFirstTimeMessage("Let's keep moving to what?") === true, 'confused reply to the nudge gets the welcome');
+check(isFirstTimeMessage('Logged 40L at 50350 km') === false, 'normal log is not a first-time message');

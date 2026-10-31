@@ -79,6 +79,28 @@ export function pickRepeatNudge(seed = 0) {
   return REPEAT_NUDGES[((raw % length) + length) % length];
 }
 
+/**
+ * v1.25.5 — newcomer nudges: a user with no vehicle and no quiz is NEW, never
+ * "mid-way". They get onboarding-oriented copy, not "Let's keep moving".
+ */
+export const NEWCOMER_NUDGES = Object.freeze([
+  '👋 Welcome! Let\'s get you started — it takes about a minute.\n\nReply *REGISTER* and I\'ll ask one simple question at a time.',
+  '🙂 Happy to help you begin.\n\n*REGISTER* to add your first vehicle or machine, *pricing* to see plans, or just tell me what you drive.'
+]);
+
+export function pickNewcomerNudge(seed = 0) {
+  const length = NEWCOMER_NUDGES.length;
+  const raw = Math.trunc(Number(seed) || 0);
+  return NEWCOMER_NUDGES[((raw % length) + length) % length];
+}
+
+const FIRST_TIME_RE = /\b(?:first time|new here|i(?:'m| am) new|just (?:signed|joined|registered)|new (?:user|sign ?up)|where do i start|how do i start|get started)\b|^\s*let'?s keep moving to what\b/i;
+
+/** v1.25.5 — "this is my first time" style messages deserve the welcome, not a nudge. */
+export function isFirstTimeMessage(text = '') {
+  return FIRST_TIME_RE.test(String(text || ''));
+}
+
 /** v1.25.2 — one-shot pause confirmation (anti-spam opt-out). */
 export const PAUSE_REPLY = '🔇 *Paused.* I\'ll stay quiet — message me anytime and I\'ll pick up where we left off.';
 

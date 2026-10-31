@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.25.4  
+**Version:** 1.25.5  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -2511,3 +2511,9 @@ Stateless suite (in `npm run health`) that fails when:
 - **Product FAQ reaches "sakafleet":** `what_is_saka` now matches `sakafleet` and `saka fleet` as phrases, so *"Tell me about sakafleet"* answers instantly with the warm intro instead of falling through to the AI and being eaten by a guard.
 - **Repeat nudges rotate:** the anti-repeat replacement is no longer one fixed sentence. `pickRepeatNudge()` alternates between "Let's keep moving…" and a warm options line (*REGISTER* / *pricing* / tell me what you drive), and `session.nudgeCount` resets on real progress (quiz start, vehicle registered, restart/menu). A confused user ("???") always receives a next step, never the same line twice.
 - Evidence: 2026-10-31 09:01–09:02 UTC, a prospect asked "Tell me about sakafleet" and "???" three times and received the identical nudge each turn.
+
+
+### 65.10 Newcomer nudge fix (v1.25.5)
+- A new sign-up (no vehicle, no quiz) never receives "Let's keep moving"; the repeat guard uses `NEWCOMER_NUDGES` / `pickNewcomerNudge()` (REGISTER-oriented) instead.
+- First contact clears stale `lastAssistantPrompt` / `nudgeCount` so a warm instance cannot trigger the repeat guard.
+- `isFirstTimeMessage()` ("this is my first time", "let's keep moving to what?") answers with the welcome + REGISTER step. Covered in `test_greetings.js`.

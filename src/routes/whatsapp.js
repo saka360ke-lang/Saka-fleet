@@ -16,7 +16,7 @@ import {
 } from '../services/vehicles.js';
 import { calculateFuelConsumption } from '../services/analytics.js';
 import { normalizeFillType } from '../services/fuelEconomy.js';
-import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly, shouldReplaceIntroCopy, isRepeatedReply, isStopRequest, PAUSE_REPLY, pickRepeatNudge } from '../services/greetings.js';
+import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly, shouldReplaceIntroCopy, isRepeatedReply, isStopRequest, PAUSE_REPLY, pickRepeatNudge, pickNewcomerNudge, isFirstTimeMessage } from '../services/greetings.js';
 import { matchProductQa, buildProductQaReply } from '../services/productQa.js';
 import { resolveSlowAckMs, pickSlowAckLine, shouldSendSlowAck } from '../services/turnAck.js';
 import { buildVehicleSummary, emailVehicleSummary } from '../services/vehicleSummary.js';
@@ -2988,9 +2988,19 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
         // v1.24.4 — an identical repeat outside a quiz is a dead end; always hand
         // the user a next step instead of echoing the same sentence again.
         // v1.25.4 — the nudge ROTATES, so a stuck user never sees one line on loop.
+        // v1.25.5 — newcomers (no vehicle, no quiz) never get the "Let's keep
+        // moving" line; a first contact also drops stale in-memory repeat state.
+        const isNewcomer = !hasVehicleRegistered && !session.quiz;
+        if (firstContact && !session.sakaIntroduced) {
+          session.lastAssistantPrompt = null;
+          session.nudgeCount = 0;
+        }
         if (session.quiz || hasVehicleRegistered) session.nudgeCount = 0;
-        if (isRepeatedReply({ quizActive: Boolean(session.quiz), reply: finalReply, lastPrompt: session.lastAssistantPrompt })) {
-          finalReply = pickRepeatNudge(session.nudgeCount || 0);
+        if (isNewcomer && isFirstTimeMessage(messageText)) {
+          finalReply = sakaIntroText({ countryInfo, profile: profileData, nextStep: 'Reply *REGISTER* and I\'ll ask one simple question at a time.' });
+          session.sakaIntroduced = true;
+        } else if (isRepeatedReply({ quizActive: Boolean(session.quiz), reply: finalReply, lastPrompt: session.lastAssistantPrompt })) {
+          finalReply = isNewcomer ? pickNewcomerNudge(session.nudgeCount || 0) : pickRepeatNudge(session.nudgeCount || 0);
           session.nudgeCount = (session.nudgeCount || 0) + 1;
         }
 
