@@ -22,18 +22,31 @@ function architectureHeadline(version) {
   } catch { return null; }
 }
 
+/** Best-effort GitHub web URL for the commit link (v1.25.3). */
+function repoWebUrl() {
+  if (process.env.GITHUB_REPOSITORY) return `https://github.com/${process.env.GITHUB_REPOSITORY}`;
+  try {
+    const remote = execSync('git remote get-url origin', { encoding: 'utf8' }).trim();
+    const match = remote.match(/github\.com[:/](.+?)(?:\.git)?$/);
+    if (match) return `https://github.com/${match[1]}`;
+  } catch { /* no remote */ }
+  return null;
+}
+
 export function buildDeploymentAlertText({ version = 'unknown', commitHash = 'HEAD', branch = 'main', author = 'Deploy Bot', timestamp = '', openIssues = 0 } = {}) {
   const headline = architectureHeadline(version) || 'A new version of Saka is running.';
   const needsCheck = /migrat|secret|environment variable|env knob/i.test(headline);
+  const repo = repoWebUrl();
   return [
-    '✅ *Saka update is live* - v' + version,
+    '✅ *Saka update is live* - v' + version + ' - ' + commitHash,
     '',
     '*In plain words:* ' + headline,
     '*What this means:* this is the version now answering WhatsApp conversations.',
     '*Action needed:* ' + (needsCheck ? 'Check the release notes in SAKA_FLEET_ARCHITECTURE.md.' : 'None - everything is automatic.'),
     '',
     (openIssues > 0 ? '*Open backend issues:* ' + openIssues + ' (text admin incidents)' : ''),
-    'Details: commit ' + commitHash + ' - branch ' + branch + ' - by ' + author + ' - ' + timestamp
+    'Details: commit ' + commitHash + ' - branch ' + branch + ' - by ' + author + ' - ' + timestamp,
+    (repo ? 'Commit: ' + repo + '/commit/' + commitHash : '')
   ].join('\n');
 }
 

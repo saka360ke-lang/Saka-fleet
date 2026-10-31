@@ -21,6 +21,7 @@ function check(condition, message) {
 
 const doc = fs.readFileSync('SAKA_FLEET_ARCHITECTURE.md', 'utf8');
 const readme = fs.readFileSync('README.md', 'utf8');
+const changelog = fs.readFileSync('CHANGELOG.md', 'utf8');
 const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
 
 console.log('=== SAKA FLEET — DOC SYNC TESTS (v1.25.2) ===\n');
@@ -49,5 +50,13 @@ console.log('\n--- Test 4: cross-document sync ---');
 check(/v1\.25/.test(readme), 'README mentions the current release line');
 check(Boolean(pkg.scripts?.health) && Boolean(pkg.scripts?.['test:all']), 'package scripts expose health and test:all');
 check(/VOICE LAW/.test(doc) && /PRODUCT ANSWERS|Product Q&A/.test(doc), 'the voice and product-answer policies are documented');
+
+console.log('\n--- Test 5: changelog mirrors the release (v1.25.3) ---');
+const topVersion = (changelog.match(/^## \[([0-9.]+)\]/m) || [])[1];
+check(Boolean(topVersion), 'the changelog declares a newest release');
+check(topVersion === pkg.version, `changelog ${topVersion} equals package.json ${pkg.version}`);
+check(changelog.includes('## [1.13.0]') && /Earlier milestones/.test(changelog), 'historical releases are recorded');
+check(changelog.includes('ff82636') && changelog.includes('4774e21'), 'entries name the commit they shipped in');
+check(/commit id in the title/.test(changelog), 'the current release is described in plain English');
 
 console.log(`\n🎉 ${passed} doc-sync assertions passed.`);

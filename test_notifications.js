@@ -15,6 +15,7 @@ console.log('=== SAKA FLEET - SUPERADMIN NOTIFICATIONS TESTS ===');
 console.log('--- Test 1: deploy alert in plain English ---');
 const alert = buildDeploymentAlertText({ version: '1.23.1', commitHash: '88a4cc6', branch: 'main', author: 'saka360ke-lang', timestamp: 'Oct 30, 2026' });
 check(alert.includes('Saka update is live') && alert.includes('v1.23.1'), 'deploy alert names the release');
+check(alert.includes('v1.23.1 - 88a4cc6'), 'deploy alert surfaces the commit id in the title');
 check(alert.includes('In plain words:') && alert.includes('Pricing v2'), 'deploy alert pulls the plain-English headline from the release history');
 check(alert.includes('Action needed:') && alert.includes('None'), 'deploy alert says when no action is needed');
 check(alert.includes('Details: commit 88a4cc6'), 'deploy alert keeps a compact details footer');
