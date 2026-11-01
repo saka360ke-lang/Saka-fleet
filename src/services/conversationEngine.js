@@ -55,6 +55,36 @@ function globalizationLines(globalCtx) {
 }
 
 /**
+ * v1.32.4 — contentless-reply guard.
+ *
+ * Live failure 2026-11-01: "Summary for 21/10/2026" was answered with
+ * "Got your vehicle details!" — a bare acknowledgement that contains no answer.
+ * A composer reply is rejected when it is only an acknowledgement, or when it is
+ * a short acknowledgement-shaped line while the facts carried real content.
+ */
+const BARE_ACK_RE = /^\s*(?:got\s+(?:it|that|you)|noted|okay|ok|sure|alright|cool|great|perfect|thanks|thank\s+you|done|will\s+do|got\s+your\s+[a-z ]{2,24}(?:details?)?)\s*[.!…\u{1F600}-\u{1FAFF}\s]*$/iu;
+
+function hasMeaningfulFacts(facts) {
+  return Object.values(facts || {}).some((value) => {
+    if (value === null || value === undefined || value === '') return false;
+    if (Array.isArray(value)) return value.length > 0;
+    if (typeof value === 'object') return Object.keys(value).length > 0;
+    return true;
+  });
+}
+
+export function isContentlessReply(text, { facts = {} } = {}) {
+  const clean = String(text || '').trim();
+  if (!clean) return true;
+  if (BARE_ACK_RE.test(clean)) return true;
+  if (hasMeaningfulFacts(facts) && clean.length < 28 && !/[0-9]/.test(clean) && !/[*_`]/.test(clean)
+      && /^(?:got|noted|okay|ok|sure|alright|done)\b/i.test(clean)) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * Core AI composer. Returns plain WhatsApp-ready text (never JSON).
  */
 export async function composeMessage({
@@ -88,6 +118,7 @@ export async function composeMessage({
     'After a photo that could not be read, apologise once and offer a typed or clearer-photo fallback — never repeat the same question verbatim and never claim the photo was saved.',
     'Documents (photos or PDFs) are read by the engine: reflect only the supplied fields, never ask for data the document already provides, and always confirm before saving.',
     'You write ONE concise WhatsApp message at a time. You never dump long menus.',
+    'NEVER send a bare acknowledgement (no "Got it", "Noted", "Okay", "Got your vehicle details!"): every reply either answers the question from the facts or asks exactly one next question.',
     'You serve a GLOBAL audience: always localize units, currency, dates and plate examples to the user\'s region.',
     'Use only the FACTS provided. Never invent values, codes, amounts or dates. Never omit security-critical facts.',
     'The FACTS block is the only source of truth for flow state: reflect every collected item, and never add, drop or reorder required items.',
@@ -121,7 +152,14 @@ export async function composeMessage({
     purpose: routerPurposeForCompose(purpose)
   });
   if (result.ok && result.text && result.text.trim()) {
-    return result.text.trim();
+    const composed = result.text.trim();
+    // v1.32.4 — a contentless reply ("Noted.", "Got your vehicle details!") is
+    // never acceptable: fall back to the deterministic, fact-bearing text.
+    if (isContentlessReply(composed, { facts })) {
+      if (fallbackText && !isContentlessReply(fallbackText, { facts })) return fallbackText;
+      return '';
+    }
+    return composed;
   }
   return fallbackText;
 }

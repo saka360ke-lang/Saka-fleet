@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.32.3  
+**Version:** 1.32.4  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.32.4** | Report legibility (paint-scoped alpha, real KPI rows, no-wrap cells, 722 pt cover), self-verifying short links (`/r/__saka_probe__`, honest 404), env/secret parity audit (`admin env`, `/internal/status` env block, `npm run env:audit`), chat friction rules (pdf = report, no empty replies, real receipt vendors) | §78 |
 | **1.32.3** | Stale-state hijack fix: 45-min chat-history window, 20-min quiz expiry + auto-parking drafts, read commands always answered, coupon gated on a prior offer, dedicated compliance PDF layout | §77 |
 | **1.32.2** | Short links gated on the verified `app.sakafleet.com` subdomain, deterministic compliance/reminder answers, typed expiry corrections, days-left confirmations, deploy LIVE-alert fix | §76 |
 | **1.32.1** | OCR audit remediation: silent-crash fix, insurance≠logbook + expiry-label precedence, Kenya e-TIMS profile (Rule 36), three-layer duplicate guard, `ocr_requests` telemetry + `admin ocr-stats`, HEIC | §75 |
@@ -3020,3 +3021,49 @@ HEIC/HEIF accepted (`SUPPORTED_IMAGE_TYPES`); insurance receipt rows carry `Poli
 - **Tests:** `test_quiz_flow.js` (**107** — quiz expiry/parking + 45-min history window), `test_vehicle_compliance.js` (**62** — read-command detectors, negation and date-bearing exclusions), `test_pdf_engine.js` (**50** — compliance itemization + non-compliance regression), `test_agent_training.js` (prompt/registry sync).
 - **Knobs:** `CHAT_HISTORY_MAX_AGE_MINUTES` (45), `QUIZ_MAX_AGE_MINUTES` (20, 5–240).
 
+---
+
+## 78. Report Legibility, Verified Short Links, Env Parity & Chat Friction (v1.32.4)
+
+### 78.1 Live evidence (2026-11-01)
+- The delivered `report-Saka_financial_KAS_628T` PDF was unreadable: pages drew text at faded alpha, KPI cards walked down the page one card at a time and ledger/table cells wrapped over the following row.
+- `https://app.sakafleet.com/r/<code>` answered, but unknown codes **302'd to the marketing page** while every new report link was still emitted as a raw Supabase signed URL (`SHORT_LINK_DOMAIN_READY` was unset).
+- The live revision was missing keys the code degrades on silently (`PUBLIC_APP_URL`, `SHORT_LINK_DOMAIN_READY`, `PUBLIC_PRICING_URL`, `PAYSTACK_CALLBACK_URL`, `OCR_ACK_FIRST`, `UPLOAD_HINTS_ENABLED` …). 167 env reads existed in code, only 121 were documented.
+- Chat frictions in one session: "Send me as a detailed pdf" → generic menu, "Summary for 21/10/2026" → "Got your vehicle details!", receipt vendors printed as raw OCR note lines.
+
+### 78.2 Graphics-state contract (`pdfEngine.js`)
+- **`paintAlpha(doc, hex, alpha, draw)` replaces `withAlpha`.** `doc.fillColor(rgb, alpha)` writes the alpha into the PAGE graphics state (`/GSn gs`) and never resets it, so the fade leaked into every later fill, stroke AND text op. Alpha is now applied only inside `save()/restore()` (`q … Q`), which restores `ca`. Decorative alphas (cover glows, highlight pills, badges, line-chart fill) are preserved; the fade can no longer escape its shape.
+- **Absolute-position helpers never move the cursor:** `kpiCard`, `chip`, `plateBadge` and `drawBadge` capture and restore `doc.y`. `drawKpiGrid` is now a pure exported `computeKpiGrid({count, startY, …})` returning one shared `y` per row (the 85 → 143.8 → 202.7 → 337.5 staircase is impossible).
+- **One measured advance per block:** `drawChartHeading` sets `doc.y = startY + titleH + noteH + 4` (no double `+=`); `drawProgressChart` captures one `y` per row; `drawSegmentedBar` gives the label `colWidth − 124` so it can never collide with the value.
+- **No-wrap cells:** ledger rows/headers are 21 pt (was 19) with `lineBreak: false`, `height: rowH − 9`, `ellipsis: true`; badge 6.6 pt / 13 pt tall; body 7.6 pt, mono 7.2 pt. `drawTable` uses 22/24 pt header/row and 8.2 pt body with the same single-line contract.
+- **Cover composition:** the ink band runs to `PAGE_HEIGHT − 120` (722 pt, was ~484 pt) closed by a solid accent rule; the hero title auto-shrinks 30 → 26 → 22 pt to stay within two lines; the drivers panel moved inside the band with a legible `#94A3B8` label; the subtitle is clamped above the chips.
+
+### 78.3 Legibility regression sensor (`pdfTextExtractor.js`)
+- `listDecodedStreams(buffer)`, `contentOperators(stream)`, `readExtGStates(buffer)` and `analyzeAlphaUsage(buffer)` walk the decoded content streams, resolve `/GSn gs` through the page resources and count text ops drawn while `ca < 1`. A legible report MUST report `lowAlphaTextOps === 0`; the suite also renders a deliberately leaking document to prove the sensor fires.
+
+### 78.4 Verified short links (`linkShortener.js`, `index.js`, `reportDelivery.js`)
+- **Probe route:** `GET /r/__saka_probe__` (registered BEFORE `/r/:code`) answers `{service:'saka-shortlink'}` with header `x-saka-shortlink: saka-shortlink`.
+- **`verifyShortLinkRoute({force})`** fetches `${shortLinkBase()}/r/__saka_probe__` (3 s timeout, cached `SHORT_LINK_PROBE_CACHE_MS` 600000, fail-soft) and records `{ready, base, reason, checkedAt}`. `shortLinkReady()` is the only gate `shortenUrl()` consults: `flag-off` → never; `probe-disabled` (`SHORT_LINK_PROBE=off`) → trust the explicit signal; otherwise the probe decides. A 302, a 200 without the tag, or a network error all mean NOT ready, and the original working URL is delivered.
+- **`deliverReportPdf()` shortens the uploaded URL at the single source of truth**, so the WhatsApp reply, the follow-up worker and the email all carry the branded link (`shortenUrl` is idempotent on an existing `/r/` link). Boot warms the probe fire-and-forget; `/internal/status` publishes `shortLinks {ready, base, reason, checkedAt}`.
+- **Unknown/expired codes** return `HTTP 404` with `shortLinkNotFoundHtml()` ("expired or does not exist", 90-day lifetime, pricing link) instead of silently bouncing to the marketing site.
+
+
+
+
+### 78.5 Env & secret parity (`envAudit.js`, `scripts/env_audit.js`)
+- **`ENV_REGISTRY`** (154 knobs in 21 canonical sections: SERVER → … → FUEL ECONOMY) is the single source of truth; **`ENV_IGNORE`** lists 35 platform/CI/alias names (`K_REVISION`, `GITHUB_SHA`, `DATABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` …) that are never knobs.
+- **`auditEnv(env, {templateKeys, codeKeys})`** reports `missingRequired`, `missingRecommended`, `undocumented`, `templateDrift`, `undocumentedTemplate`, `codeDrift`, `placeholders` (untouched template values such as `sk_test_xxx`, `your-service-role-key`, `choose-a-verify-token`) and a `fingerprint` (sha256 over sorted `NAME:length` pairs). **No value is ever serialised.**
+- **Endpoints/commands:** `/internal/status` adds an `env` block (`envStatusSummary`, `values:'redacted'`) for a caller holding `SENTINEL_SECRET` — the public payload keeps its shape; `admin env` (`ADMIN_ENV_AUDIT`) returns the deterministic digest and is audited.
+- **CLI:** `npm run env:audit` (local `.env` vs `.env.example` + code scan), `--remote` (live revision through `/internal/status`), `--cloud` (optional gcloud describe → flag secrets mounted as plain env vars instead of `--set-secrets`), `--json`. Exit 1 on a missing required key or registry drift. `npm run health` runs the same audit (required = red, recommended/template values = amber) and runs `test_env_audit.js` (44 assertions) in the stateless set.
+- `.env.example` gained the "v1.32.4 — ENV PARITY" section documenting the short-link probe, Sentinel stall, remediation, hot-path cache, admin paging and legacy-VIN knobs the code already read.
+
+### 78.6 Chat quick wins (from the live transcript)
+- `looksLikeReportRequest()` treats deliverable-shaped requests ("send me as a detailed pdf", "email me the full pdf", "prepare a document") as report requests, so they can never start an expense quiz.
+- `composeMessage()` rejects contentless renders through the exported `isContentlessReply(text, {facts})` — a bare "Got it / Noted / Got your vehicle details!" falls back to the deterministic, fact-bearing text (or is dropped) instead of being sent. The core prompt and the composer system prompt both carry the NO EMPTY REPLIES rule plus four friction rules (pdf = report, dated summary = query, follow-up total = correction, competing drafts = ask, never merge).
+- The receipt vault stored `receiptHints.notes` in the `vendor` column; it now stores the real merchant from `extractDocumentHints().vendor`, so receipt lists and duplicate notices print a shop name instead of an OCR note blob.
+- **Deferred to v1.33.0** (planned with the editable ledger, same surfaces): notes keyword search, single-day digest for "summary for <date>", and the non-fuel odometer policy. They all touch the quiz/entry pipeline that v1.33.0 rewrites, so they ship there rather than being half-wired twice.
+
+### 78.7 Files, tests, knobs
+- **Files:** `src/services/pdfEngine.js`, `pdfTextExtractor.js`, `linkShortener.js`, `reportDelivery.js`, `envAudit.js` (new), `statusProbe.js`, `conversationEngine.js`, `quizEngine.js`, `superadmin.js`, `src/routes/whatsapp.js`, `index.js`, `sakaAi.js`, `scripts/env_audit.js` (new), `scripts/health_audit.js`, `package.json`, `.env.example`.
+- **Tests:** `test_pdf_engine.js` (**68** — alpha guard, KPI geometry, no-wrap cells, 722 pt cover band, leak sensor), `test_link_shortener.js` (**45** — probe verdicts, caching, 404 page), `test_env_audit.js` (**44**, new — registry ≡ template, no value leaks), `test_agent_training.js` (**121** — prompt + composer friction rules), `test_quiz_flow.js` (**112** — pdf-shaped report routing), plus `test_status_probe.js` (14) and the report suites.
+- **Knobs:** `SHORT_LINK_PROBE` (on), `SHORT_LINK_PROBE_CACHE_MS` (600000), `SHORT_LINK_PROBE_TIMEOUT_MS` (3000).

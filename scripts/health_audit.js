@@ -11,6 +11,7 @@ import { spawnSync, execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createClient } from '@supabase/supabase-js';
+import { auditEnv, envTemplateKeys } from '../src/services/envAudit.js';
 
 const STATLESS_SUITES = [
   'test_trial_unbind.js',
@@ -51,7 +52,9 @@ const STATLESS_SUITES = [
   'test_variable_catalogs.js',
   'test_demo_seed.js',
   // v1.32.0 — branded short links (PDF reports, checkout URLs).
-  'test_link_shortener.js'
+  'test_link_shortener.js',
+  // v1.32.4 — env/secret parity: registry ≡ .env.example, no value ever leaks.
+  'test_env_audit.js'
 ];
 
 const WORKFLOW_DIR = '.github/workflows';
@@ -105,6 +108,26 @@ function lintWorkflows() {
       continue;
     }
     ok(`${name} lint`, 'BOM-free, ASCII, artifact paths safe');
+  }
+}
+
+/**
+ * v1.32.4 — env parity: missing REQUIRED keys are red, missing recommended are
+ * amber, and registry/template drift is red (names only, never a value).
+ */
+function envParity() {
+  try {
+    const templateKeys = envTemplateKeys();
+    const audit = auditEnv(process.env, { templateKeys });
+    if (audit.missingRequired.length) bad('env required keys', audit.missingRequired.join(', '));
+    else ok('env required keys', `${audit.presentCount}/${audit.totalKeys} registered set`);
+    if (audit.missingRecommended.length) warn('env recommended keys', audit.missingRecommended.join(', '));
+    if (audit.templateDrift.length) bad('env registry drift', `${audit.templateDrift.length} registered knob(s) missing from .env.example`);
+    if (audit.undocumentedTemplate.length) bad('env template drift', audit.undocumentedTemplate.join(', '));
+    if (audit.placeholders.length) warn('env template values', audit.placeholders.join(', '));
+    ok('env fingerprint', audit.fingerprint);
+  } catch (err) {
+    bad('env parity', err.message);
   }
 }
 
@@ -186,6 +209,9 @@ async function main() {
   section('Git state');
   gitState();
   releaseTracker();
+
+  section('Env parity');
+  envParity();
 
   section('Pipeline & DB snapshot');
   await dbSnapshot();

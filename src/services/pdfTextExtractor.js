@@ -239,5 +239,135 @@ export function extractPdfText(buffer) {
   }
 }
 
-export default { extractPdfText, extractTextFromContentStream, OCR_PDF_MAX_PAGES };
+/* ------------------------------------------------------------------ */
+/* v1.32.4 — graphics-state introspection (report legibility guard)     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Every decodable, non-image content stream in a PDF, in file order.
+ * Zero-dependency counterpart to `extractPdfText` — it returns the raw
+ * operators instead of the text, so tests can audit the graphics state.
+ */
+export function listDecodedStreams(buffer) {
+  const streams = [];
+  if (!buffer || !buffer.length) return streams;
+  try {
+    const raw = buffer.toString('latin1');
+    let cursor = 0;
+    while (streams.length < 400) {
+      const start = raw.indexOf('stream', cursor);
+      if (start === -1) break;
+      let dataStart = start + 'stream'.length;
+      if (raw[dataStart] === '\r') dataStart += 1;
+      if (raw[dataStart] === '\n') dataStart += 1;
+      const end = raw.indexOf('endstream', dataStart);
+      if (end === -1) break;
+      const dictStart = raw.lastIndexOf('<<', start);
+      const dictionary = dictStart === -1 ? '' : raw.slice(dictStart, start);
+      const isFlate = /\/FlateDecode/.test(dictionary);
+      const isImage = /\/Subtype\s*\/Image/.test(dictionary);
+      const segment = buffer.slice(dataStart, end);
+      let decoded = null;
+      if (!isImage) {
+        if (isFlate) decoded = inflateStream(segment);
+        else if (!/\/Filter/.test(dictionary)) decoded = segment;
+      }
+      if (decoded) streams.push({ index: streams.length, dictionary, content: decoded.toString('latin1') });
+      cursor = end + 'endstream'.length;
+    }
+  } catch { /* never throws */ }
+  return streams;
+}
+
+/** Graphics operators of one content stream (literal/hex strings stripped). */
+export function contentOperators(content) {
+  const stripped = String(content || '')
+    .replace(/\((?:\\.|[^\\()])*\)/g, '()')
+    .replace(/<[0-9A-Fa-f\s]*>/g, '<>');
+  const tokens = [];
+  const re = /(\bq\b)|(\bQ\b)|\/([A-Za-z0-9_.+-]+)\s+gs\b|(\bTj\b|\bTJ\b)|(')/g;
+  let match;
+  while ((match = re.exec(stripped)) !== null) {
+    if (match[1]) tokens.push({ type: 'save' });
+    else if (match[2]) tokens.push({ type: 'restore' });
+    else if (match[3]) tokens.push({ type: 'gs', name: match[3] });
+    else tokens.push({ type: 'text' });
+  }
+  return tokens;
+}
+
+/** ExtGState resource name → fill alpha (`ca`). Unreadable states default to 1. */
+export function readExtGStates(buffer) {
+  const names = new Map();
+  if (!buffer || !buffer.length) return names;
+  try {
+    const raw = buffer.toString('latin1');
+    const objects = new Map();
+    const objRe = /(\d+)\s+0\s+obj\s*([\s\S]*?)endobj/g;
+    let match;
+    while ((match = objRe.exec(raw)) !== null) {
+      if (/\/ExtGState/.test(match[2])) {
+        const ca = match[2].match(/\/ca\s+([\d.]+)/);
+        objects.set(match[1], ca ? Number(ca[1]) : 1);
+      }
+    }
+    const resRe = /\/ExtGState\s*<<([\s\S]*?)>>/g;
+    while ((match = resRe.exec(raw)) !== null) {
+      const entryRe = /\/([A-Za-z0-9_.+-]+)\s+(\d+)\s+0\s+R/g;
+      let entry;
+      while ((entry = entryRe.exec(match[1])) !== null) {
+        if (!names.has(entry[1])) names.set(entry[1], objects.has(entry[2]) ? objects.get(entry[2]) : 1);
+      }
+    }
+  } catch { /* never throws */ }
+  return names;
+}
+
+/**
+ * Walk every content stream and count text drawn while the graphics state had a
+ * non-opaque fill alpha. A legible report MUST report `lowAlphaTextOps === 0`;
+ * a non-zero value is exactly the defect that made reports unreadable.
+ */
+export function analyzeAlphaUsage(buffer) {
+  const states = readExtGStates(buffer);
+  const pages = [];
+  for (const stream of listDecodedStreams(buffer)) {
+    // Only page content streams carry text objects; embedded font programs are
+    // also Flate streams and must never be walked as operators.
+    if (!/\bBT\b/.test(stream.content)) continue;
+    let alpha = 1;
+    const stack = [];
+    const page = { index: stream.index, textOps: 0, lowAlphaTextOps: 0, lowAlphaStates: [] };
+    for (const token of contentOperators(stream.content)) {
+      if (token.type === 'save') stack.push(alpha);
+      else if (token.type === 'restore') alpha = stack.length ? stack.pop() : 1;
+      else if (token.type === 'gs') alpha = states.has(token.name) ? states.get(token.name) : 1;
+      else {
+        page.textOps += 1;
+        if (alpha < 0.999) {
+          page.lowAlphaTextOps += 1;
+          if (!page.lowAlphaStates.includes(alpha)) page.lowAlphaStates.push(alpha);
+        }
+      }
+    }
+    pages.push(page);
+  }
+  return {
+    pages,
+    totals: pages.reduce((acc, page) => ({
+      textOps: acc.textOps + page.textOps,
+      lowAlphaTextOps: acc.lowAlphaTextOps + page.lowAlphaTextOps
+    }), { textOps: 0, lowAlphaTextOps: 0 })
+  };
+}
+
+export default {
+  extractPdfText,
+  extractTextFromContentStream,
+  listDecodedStreams,
+  contentOperators,
+  readExtGStates,
+  analyzeAlphaUsage,
+  OCR_PDF_MAX_PAGES
+};
 

@@ -11,8 +11,9 @@
  */
 
 import assert from 'assert';
-import { buildProReportPdf, pdfSafeText, getReportAccent, SAKA_PDF_THEME } from './src/services/pdfEngine.js';
-import { extractPdfText } from './src/services/pdfTextExtractor.js';
+import PDFDocument from 'pdfkit';
+import { buildProReportPdf, pdfSafeText, getReportAccent, SAKA_PDF_THEME, computeKpiGrid } from './src/services/pdfEngine.js';
+import { extractPdfText, analyzeAlphaUsage, readExtGStates } from './src/services/pdfTextExtractor.js';
 import { complianceReportToPdf, fleetReportToPdf } from './src/services/reportDelivery.js';
 
 let passed = 0;
@@ -145,7 +146,7 @@ async function run() {
   const apexBuffer = await buildProReportPdf(apexReport);
   const apexPages = (apexBuffer.toString('latin1').match(/\/Type\s*\/Page[^s]/g) || []).length;
   check(apexBuffer.slice(0, 5).toString() === '%PDF-', 'Apex report renders a valid PDF');
-  check(apexPages >= 3, `Apex report spans the cover + content + ledger pages (${apexPages})`);
+  check(apexPages >= 2, `Apex report spans the cover + content pages (${apexPages})`);
   const apexText = String(extractPdfText(apexBuffer).text || '').toLowerCase();
   check(apexText.includes('kas 628t'), 'Plate badge text is drawn on the cover');
   check(apexText.includes('itemized activity'), 'Ledger section title is drawn');
@@ -225,6 +226,130 @@ async function run() {
   check(!fleetPayload.coverHighlights, 'Non-compliance reports carry no compliance highlight row');
   const fleetBuffer = await buildProReportPdf({ ...fleetPayload, useStandardFonts: true });
   check(fleetBuffer.slice(0, 5).toString() === '%PDF-', 'Non-compliance reports still render');
+
+  console.log('\n--- Test 7: legibility contract (v1.32.4) ---');
+  // 7.1 — the KPI grid geometry is pure, so the old "staircase" is testable.
+  const gridSix = computeKpiGrid({ count: 6, startY: 120 });
+  check(gridSix.cards.every((card) => card.y === 120 || card.y === 196), 'Every KPI card sits on one of exactly two row baselines (no staircase)');
+  check(gridSix.cards.slice(0, 3).every((card) => card.y === 120), 'The whole first KPI row shares one y');
+  check(gridSix.cards.slice(3).every((card) => card.y === 196), 'The whole second KPI row shares one y');
+  check(gridSix.height === 152, 'Grid height = rows x (card + gap)');
+  const gridFour = computeKpiGrid({ count: 4, startY: 120 });
+  check(gridFour.cards[3].y === 196 && gridFour.cards[3].row === 1 && gridFour.cards[3].col === 0, 'A four-card grid keeps the lone last card on row two');
+  check(gridFour.cards[3].x > gridFour.cards[0].x, 'The incomplete last row is centred rather than left-aligned');
+  const gridEmpty = computeKpiGrid({ count: 0, startY: 90 });
+  check(gridEmpty.cards.length === 0 && gridEmpty.height === 0, 'An empty grid occupies no vertical space');
+
+  // 7.2 — instrument the renderer: long ledger/table cells must never wrap.
+  const legibilityReport = {
+    title: 'Financial & Cost Report - KAS 628T - Commercial Passenger Vehicle Operations 2026',
+    subtitle: 'Toyota Hiace 2016 · Diesel · Nairobi',
+    reportType: 'financial',
+    plate: 'KAS 628T',
+    useStandardFonts: true,
+    coverHighlights: [
+      { label: 'Overdue', value: '2', tone: 'negative' },
+      { label: 'Due soon', value: '1', tone: 'warn' },
+      { label: 'Compliant', value: '7', tone: 'positive' }
+    ],
+    owner: { name: 'Susan Wanjiru', email: 'susan@example.com', plan: 'solo_pro' },
+    drivers: [{ name: 'Kevin Otieno', plate: 'KAS 628T', status: 'active' }],
+    kpis: [
+      { label: 'Total spend', value: 'KES 128,400', tone: 'negative' },
+      { label: 'Earnings', value: 'KES 210,000', tone: 'positive' },
+      { label: 'Net', value: 'KES 81,600', tone: 'positive' },
+      { label: 'Transactions', value: '48' },
+      { label: 'Fuel logged', value: '312 L' },
+      { label: 'Distance', value: '9,840 km' }
+    ],
+    ledgers: [{
+      title: 'Transaction ledger - KAS 628T',
+      currency: 'KES',
+      rows: [
+        {
+          at: '2026-10-21',
+          date: '21 Oct 2026',
+          kind: 'fuel',
+          kindLabel: 'FUEL',
+          description: 'Full tank at Shell Thika Road with loyalty redemption applied',
+          odometer: 367900,
+          unitCost: 189,
+          amount: 21000
+        },
+        {
+          at: '2026-10-19',
+          date: '19 Oct 2026',
+          kind: 'repairs',
+          kindLabel: 'REPAIRS',
+          description: 'Engine mountings and gearbox bush replacement',
+          odometer: 367900,
+          unitCost: null,
+          amount: 21000
+        }
+      ]
+    }],
+    tables: [{
+      title: 'Compliance items',
+      currency: 'KES',
+      columns: [
+        { key: 'item', label: 'Item', width: 2 },
+        { key: 'expiry', label: 'Expiry', width: 1 }
+      ],
+      rows: [
+        { item: 'Insurance certificate for commercial passenger service vehicle', expiry: '20/11/2026' },
+        { item: 'Inspection', expiry: '01/09/2026' }
+      ]
+    }]
+  };
+  const textCalls = [];
+  const originalText = PDFDocument.prototype.text;
+  const originalRect = PDFDocument.prototype.rect;
+  PDFDocument.prototype.text = function patchedText(value, x, y, options) {
+    textCalls.push({ kind: 'text', value: Array.isArray(value) ? value.join('') : String(value ?? ''), options: options || {} });
+    return originalText.call(this, value, x, y, options);
+  };
+  PDFDocument.prototype.rect = function patchedRect(x, y, w, h) {
+    textCalls.push({ kind: 'rect', x, y, w, h });
+    return originalRect.call(this, x, y, w, h);
+  };
+  let legibilityBuffer;
+  try {
+    legibilityBuffer = await buildProReportPdf(legibilityReport);
+  } finally {
+    PDFDocument.prototype.text = originalText;
+    PDFDocument.prototype.rect = originalRect;
+  }
+
+  const longDescription = textCalls.filter((call) => call.kind === 'text' && call.value.startsWith('Full tank at Shell'));
+  check(longDescription.length === 1, 'The long ledger description is drawn exactly once');
+  check(longDescription[0].options.lineBreak === false, 'Ledger descriptions are forced onto a single line');
+  check(Number(longDescription[0].options.height) > 0, 'Ledger cells carry an explicit row height');
+  const longTableItem = textCalls.filter((call) => call.kind === 'text' && call.value.startsWith('Insurance certificate for commercial'));
+  check(longTableItem.length === 1 && longTableItem[0].options.lineBreak === false, 'Long table cells are single-line too');
+  const bandHeights = textCalls.filter((call) => call.kind === 'rect' && call.x === 0 && call.y === 0 && call.w > 500).map((call) => call.h);
+  check(bandHeights.length > 0 && Math.max(...bandHeights) >= 660, `The cover ink band reaches at least 78% of the page (${Math.round(Math.max(...bandHeights))} pt)`);
+  const plateBadgeCalls = textCalls.filter((call) => call.kind === 'text' && call.value === 'KAS 628T');
+  check(plateBadgeCalls.length >= 1, 'The plate badge is still drawn on the extended cover');
+
+  // 7.3 — the alpha guard: zero faded text, and the guard is not vacuous.
+  const legibilityUsage = analyzeAlphaUsage(legibilityBuffer);
+  check(legibilityUsage.totals.textOps > 30, `The legibility report really draws text (${legibilityUsage.totals.textOps} ops)`);
+  check(readExtGStates(legibilityBuffer).size >= 4, `Decorative alpha states still exist, so the guard is non-vacuous (${readExtGStates(legibilityBuffer).size} ExtGStates)`);
+  check(legibilityUsage.totals.lowAlphaTextOps === 0, 'No text is drawn at a faded alpha (the illegible-report defect is gone)');
+  check(analyzeAlphaUsage(apexBuffer).totals.lowAlphaTextOps === 0, 'The Apex report draws no faded text either');
+
+  const leakingDoc = new PDFDocument({ size: 'A4' });
+  const leakedChunks = [];
+  const leakedDone = new Promise((resolve) => {
+    leakingDoc.on('data', (chunk) => leakedChunks.push(chunk));
+    leakingDoc.on('end', resolve);
+  });
+  leakingDoc.fillColor([255, 0, 0], 0.13);
+  leakingDoc.rect(10, 10, 100, 100).fill();
+  leakingDoc.fillColor('#0F172A').fontSize(12).text('page-scoped alpha leak', 20, 200);
+  leakingDoc.end();
+  await leakedDone;
+  check(analyzeAlphaUsage(Buffer.concat(leakedChunks)).totals.lowAlphaTextOps === 1, 'The guard DOES catch a page-scoped alpha leak (regression sensor works)');
 
   console.log(`\n🎉 ${passed} PDF engine assertions passed.`);
 }

@@ -55,9 +55,26 @@ export function isStatusAuthorized(headers = {}, secret = process.env.SENTINEL_S
 }
 
 /** Full response for a status route. */
-export function buildStatusResponse({ headers = {}, secret = process.env.SENTINEL_SECRET, uptimeSeconds = 0, queue = null, env = process.env, now = new Date() } = {}) {
+export function buildStatusResponse({
+  headers = {},
+  secret = process.env.SENTINEL_SECRET,
+  uptimeSeconds = 0,
+  queue = null,
+  env = process.env,
+  now = new Date(),
+  shortLinks = null,
+  envAudit = null
+} = {}) {
   const base = buildPublicStatus({ uptimeSeconds, queue, now });
-  return isStatusAuthorized(headers, secret) ? { ...base, ...buildRevisionInfo({ env }) } : base;
+  // v1.32.4 — short-link readiness is operational (not secret) and answers
+  // "why did that report arrive as a long URL?" without a shell on the box.
+  if (shortLinks) base.shortLinks = shortLinks;
+  if (!isStatusAuthorized(headers, secret)) return base;
+  const extra = { ...buildRevisionInfo({ env }) };
+  // v1.32.4 — env/secret parity: names, sections and booleans ONLY. Values are
+  // never serialised (see src/services/envAudit.js).
+  if (envAudit) extra.env = envAudit;
+  return { ...base, ...extra };
 }
 
 export default {

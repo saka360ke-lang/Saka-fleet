@@ -12,12 +12,20 @@ import assert from 'assert';
 import {
   SHORT_CODE_LENGTH,
   SHORT_LINK_TTL_DAYS,
+  SHORT_LINK_PROBE_PATH,
+  SHORT_LINK_PROBE_TAG,
   generateShortCode,
   shortenUrl,
   resolveShortCode,
   isShortLink,
   shortLinkBase,
-  isShortLinkDomainReady
+  shortLinkProbeUrl,
+  shortLinkProbeEnabled,
+  shortLinkStatus,
+  shortLinkNotFoundHtml,
+  isShortLinkDomainReady,
+  verifyShortLinkRoute,
+  shortLinkReady
 } from './src/services/linkShortener.js';
 
 let passed = 0;
@@ -106,7 +114,11 @@ async function run() {
   const gated = await shortenUrl(createMockSupabase().client, LONG_URL);
   check(gated === LONG_URL, 'While the gate is off, the original working URL is sent (never a dead link)');
   process.env.SHORT_LINK_DOMAIN_READY = 'on';
+  // v1.32.4 — the readiness probe needs a network round-trip; the stateless
+  // suite pins it off so the shortening contract itself is what gets tested.
+  process.env.SHORT_LINK_PROBE = 'off';
   check(isShortLinkDomainReady() === true, 'SHORT_LINK_DOMAIN_READY=on activates short links');
+  check(shortLinkProbeEnabled() === false, 'SHORT_LINK_PROBE=off disables the network probe');
 
   console.log('\n--- Test 2: shortening long links ---');
   const mock = createMockSupabase();
@@ -152,6 +164,65 @@ async function run() {
   if (previousBase === undefined) delete process.env.PUBLIC_APP_URL;
   else process.env.PUBLIC_APP_URL = previousBase;
   delete process.env.SHORT_LINK_DOMAIN_READY;
+
+  delete process.env.SHORT_LINK_DOMAIN_READY;
+
+  console.log('\n--- Test 7: self-verifying probe route (v1.32.4) ---');
+  const probeBase = process.env.PUBLIC_APP_URL;
+  process.env.PUBLIC_APP_URL = 'https://probe.test';
+  delete process.env.SHORT_LINK_DOMAIN_READY;
+  delete process.env.SHORT_LINK_PROBE;
+  check(shortLinkProbeUrl() === 'https://probe.test/r/__saka_probe__', 'The probe URL is built on the branded base');
+  check(SHORT_LINK_PROBE_PATH === '/r/__saka_probe__' && SHORT_LINK_PROBE_TAG === 'saka-shortlink', 'Probe path + header tag are a stable contract');
+
+  const originalFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  const stubFetch = (impl) => {
+    fetchCalls = 0;
+    globalThis.fetch = async (...args) => {
+      fetchCalls += 1;
+      return impl(...args);
+    };
+  };
+  try {
+    stubFetch(async () => ({ status: 200, headers: { get: (name) => (String(name).toLowerCase() === 'x-saka-shortlink' ? 'saka-shortlink' : null) } }));
+    const verified = await verifyShortLinkRoute({ force: true });
+    check(verified.ready === true && verified.reason === 'verified', '200 + x-saka-shortlink means the base really serves short links');
+    check(fetchCalls === 1, 'The probe hits the network exactly once');
+    const cachedProbe = await verifyShortLinkRoute();
+    check(cachedProbe.ready === true && fetchCalls === 1, 'The verdict is cached (no second request)');
+
+    stubFetch(async () => ({ status: 302, headers: { get: () => null } }));
+    const bounced = await verifyShortLinkRoute({ force: true });
+    check(bounced.ready === false && bounced.reason === 'probe-mismatch', 'The 302-to-marketing incident is detected as NOT ready');
+    check((await shortLinkReady()).ready === false, 'An unverified base never yields a short link');
+    check(await shortenUrl(createMockSupabase().client, LONG_URL) === LONG_URL, 'Unverified base means the original working URL is delivered');
+
+    stubFetch(async () => { throw new Error('getaddrinfo ENOTFOUND probe.test'); });
+    const dead = await verifyShortLinkRoute({ force: true });
+    check(dead.ready === false && /probe-error/.test(dead.reason), 'A probe network failure fails soft (never throws)');
+    const snapshot = shortLinkStatus();
+    check(snapshot.base === 'https://probe.test' && snapshot.ready === false && Boolean(snapshot.checkedAt), 'shortLinkStatus exposes base/ready/checkedAt for /internal/status');
+
+    stubFetch(async () => ({ status: 200, headers: { get: () => null } }));
+    check((await verifyShortLinkRoute({ force: true })).ready === false, 'A 200 without the tag is never trusted');
+
+    process.env.SHORT_LINK_PROBE = 'off';
+    const bypass = await verifyShortLinkRoute({ force: true });
+    check(bypass.ready === true && bypass.reason === 'probe-disabled', 'SHORT_LINK_PROBE=off trusts an explicit operator signal');
+    delete process.env.SHORT_LINK_PROBE;
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (probeBase === undefined) delete process.env.PUBLIC_APP_URL;
+    else process.env.PUBLIC_APP_URL = probeBase;
+    delete process.env.SHORT_LINK_DOMAIN_READY;
+  }
+
+  const notFound = shortLinkNotFoundHtml({ pricingUrl: 'https://sakafleet.com/pricing' });
+  check(/link has expired or does not exist/i.test(notFound), 'Unknown/expired codes get an honest 404 page');
+  check(notFound.includes('https://sakafleet.com/pricing'), 'The 404 page links back to pricing');
+  check(notFound.includes('90 days'), 'The 404 page explains the 90-day link lifetime');
+  check(!/http-equiv="refresh"/i.test(notFound), 'The 404 page never bounces the user silently');
 
   console.log(`\n🎉 ${passed} link-shortener assertions passed.`);
   console.log('Stateless suite: only an in-memory mock was used; no database rows were written.');

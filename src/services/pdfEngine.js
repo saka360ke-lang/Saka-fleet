@@ -126,9 +126,30 @@ function hexToRgb(hex) {
   };
 }
 
-function withAlpha(doc, hex, alpha) {
+/**
+ * v1.32.4 — PAINT-SCOPED alpha (the illegible-report root cause).
+ *
+ * The old `withAlpha(doc, hex, alpha)` called `doc.fillColor(rgb, alpha)`, which
+ * writes the alpha into the PAGE graphics state (`/GSn gs`) and NEVER resets it.
+ * Every later fill, stroke and text op on that page inherited the fade: the
+ * cover drew 9 of 20 text ops at `ca < 1`, and the ledger page 22 of 40 after a
+ * badge tint leaked `ca 0.13`.
+ *
+ * Alpha is now applied only inside a save()/restore() pair, which PDFKit
+ * compiles to `q … Q` — the graphics state (including `ca`) is restored, so the
+ * fade can never escape the shape it was meant for.
+ */
+function paintAlpha(doc, hex, alpha, draw = null) {
   const { r, g, b } = hexToRgb(hex);
-  doc.fillColor([r, g, b], alpha);
+  const clamped = Math.max(0, Math.min(1, Number(alpha)));
+  doc.save();
+  try {
+    doc.fillColor([r, g, b], clamped);
+    if (typeof draw === 'function') draw();
+    else doc.fill();
+  } finally {
+    doc.restore();
+  }
 }
 
 function money(value, currency) {
@@ -222,6 +243,8 @@ function sectionTitle(doc, fonts, text, accent, subtitle = null) {
 
 function chip(doc, fonts, x, y, text, color, { filled = false } = {}) {
   const label = String(text || '');
+  // v1.32.4 — absolute-position helper: never leak the cursor it moves.
+  const cursorY = doc.y;
   doc.font(fonts.body).fontSize(7.6);
   const width = Math.min(doc.widthOfString(label) + 16, 150);
   if (filled) {
@@ -231,21 +254,26 @@ function chip(doc, fonts, x, y, text, color, { filled = false } = {}) {
     doc.roundedRect(x, y, width, 16, 8).lineWidth(0.8).strokeColor(color).stroke();
     doc.fillColor(color).font(fonts.body).fontSize(7.4).text(label, x + 8, y + 4.6, { width: width - 16, ellipsis: true, lineBreak: false });
   }
+  doc.y = cursorY;
   return width;
 }
 
 function kpiCard(doc, fonts, { x, y, w, h, label, value, hint, accent, tone = null }) {
+  // v1.32.4 — the card is absolutely positioned; the cursor must not move, or
+  // the KPI grid walked down the page one card at a time (the "staircase").
+  const cursorY = doc.y;
   doc.roundedRect(x, y, w, h, 10).fill(SAKA_PDF_THEME.white);
   doc.roundedRect(x, y, w, h, 10).lineWidth(0.8).strokeColor(SAKA_PDF_THEME.line).stroke();
   doc.rect(x, y, 3.2, h).fill(accent);
   doc.fillColor(SAKA_PDF_THEME.muted).font(fonts.body).fontSize(7.6)
-    .text(String(label || '').toUpperCase(), x + 14, y + 11, { width: w - 22, characterSpacing: 0.6, ellipsis: true });
+    .text(String(label || '').toUpperCase(), x + 14, y + 11, { width: w - 22, characterSpacing: 0.6, ellipsis: true, lineBreak: false, height: 12 });
   doc.fillColor(tone ? toneColor(tone) : SAKA_PDF_THEME.ink).font(fonts.bold).fontSize(15)
-    .text(String(value ?? '—'), x + 14, y + 24, { width: w - 22, ellipsis: true });
+    .text(String(value ?? '—'), x + 14, y + 24, { width: w - 22, ellipsis: true, lineBreak: false, height: 20 });
   if (hint) {
     doc.fillColor(SAKA_PDF_THEME.muted).font(fonts.body).fontSize(7.2)
-      .text(String(hint), x + 14, y + h - 17, { width: w - 22, ellipsis: true });
+      .text(String(hint), x + 14, y + h - 17, { width: w - 22, ellipsis: true, lineBreak: false, height: 12 });
   }
+  doc.y = cursorY;
 }
 
 function reportTypeLabel(type) {
@@ -263,6 +291,7 @@ function reportTypeLabel(type) {
 function plateBadge(doc, fonts, x, y, plate) {
   const label = pdfSafeText(plate).toUpperCase();
   if (!label) return 0;
+  const cursorY = doc.y;
   doc.font(fonts.mono).fontSize(10);
   const width = Math.max(96, Math.min(doc.widthOfString(label) + 26, 170));
   const height = 30;
@@ -270,7 +299,19 @@ function plateBadge(doc, fonts, x, y, plate) {
   doc.roundedRect(x, y, width, height, 6).lineWidth(1).strokeColor(SAKA_PDF_THEME.ink).stroke();
   doc.fillColor(SAKA_PDF_THEME.ink).font(fonts.mono).fontSize(10)
     .text(label, x + 8, y + 10, { width: width - 16, align: 'center', characterSpacing: 1.2, lineBreak: false });
+  doc.y = cursorY;
   return width;
+}
+
+const COVER_BAND_FLOOR = 120;
+
+/** v1.32.4 — shrink the hero title until it fits two lines (30 → 26 → 22 pt). */
+function coverTitleSize(doc, fonts, text, maxWidth) {
+  for (let size = 30; size >= 22; size -= 2) {
+    doc.font(fonts.display).fontSize(size);
+    if (doc.heightOfString(text, { width: maxWidth, lineGap: 2 }) <= size * 2.7) return size;
+  }
+  return 22;
 }
 
 function drawCover(doc, fonts, report, accent) {
@@ -282,23 +323,29 @@ function drawCover(doc, fonts, report, accent) {
   const highlightH = 56;
   const cardY = highlights.length ? highlightY + highlightH + 16 : 348;
   const cardH = 58;
-  const bandHeight = cardY + cardH + 24;
+  // v1.32.4 — the band carries the whole top of the page (842 - 120 = 722 pt,
+  // instead of stopping at ~484 pt and leaving 42% of the cover blank), closed
+  // by a solid accent rule.
+  const bandHeight = PAGE_HEIGHT - COVER_BAND_FLOOR;
   doc.rect(0, 0, PAGE_WIDTH, bandHeight).fill(SAKA_PDF_THEME.ink);
-  withAlpha(doc, accent, 0.18);
-  doc.circle(PAGE_WIDTH - 70, 70, 150).fill();
-  withAlpha(doc, accent, 0.10);
-  doc.circle(PAGE_WIDTH - 10, 250, 210).fill();
+  doc.rect(0, bandHeight - 8, PAGE_WIDTH, 8).fill(accent);
+  paintAlpha(doc, accent, 0.18, () => doc.circle(PAGE_WIDTH - 70, 70, 150).fill());
+  paintAlpha(doc, accent, 0.1, () => doc.circle(PAGE_WIDTH - 10, 430, 250).fill());
 
   doc.fillColor(SAKA_PDF_THEME.white).font(fonts.bold).fontSize(15)
     .text('SAKA FLEET', PAGE_MARGIN, 64, { characterSpacing: 2.4 });
   doc.fillColor(SAKA_PDF_THEME.status.info).font(fonts.body).fontSize(8.5)
     .text('FLEET INTELLIGENCE  ·  APEX REPORT', PAGE_MARGIN, 86, { characterSpacing: 1.8 });
 
-  doc.fillColor(SAKA_PDF_THEME.white).font(fonts.display).fontSize(30)
-    .text(String(title || 'Fleet Report'), PAGE_MARGIN, 150, { width: CONTENT_WIDTH - 40, lineGap: 2 });
+  const titleText = String(title || 'Fleet Report');
+  const titleWidth = CONTENT_WIDTH - 40;
+  doc.fillColor(SAKA_PDF_THEME.white).font(fonts.display)
+    .fontSize(coverTitleSize(doc, fonts, titleText, titleWidth))
+    .text(titleText, PAGE_MARGIN, 150, { width: titleWidth, lineGap: 2 });
   if (subtitle) {
+    // Chips own y = 300, so the subtitle is clamped and single-line.
     doc.fillColor('#CBD5E1').font(fonts.body).fontSize(10.5)
-      .text(String(subtitle), PAGE_MARGIN, doc.y + 10, { width: CONTENT_WIDTH - 90 });
+      .text(String(subtitle), PAGE_MARGIN, Math.min(doc.y + 10, 284), { width: CONTENT_WIDTH - 90, lineBreak: false, ellipsis: true });
   }
   let chipX = PAGE_MARGIN;
   const chipY = 300;
@@ -320,12 +367,9 @@ function drawCover(doc, fonts, report, accent) {
     const w = (CONTENT_WIDTH - gap * (highlights.length - 1)) / highlights.length;
     highlights.forEach((item, index) => {
       const x = PAGE_MARGIN + index * (w + gap);
-      withAlpha(doc, SAKA_PDF_THEME.white, 0.07);
-      doc.roundedRect(x, highlightY, w, highlightH, 10).fill();
-      withAlpha(doc, toneColor(item.tone), 0.20);
-      doc.roundedRect(x, highlightY, w, highlightH, 10).fill();
-      withAlpha(doc, toneColor(item.tone), 0.95);
-      doc.rect(x, highlightY + 14, 3, highlightH - 28).fill();
+      paintAlpha(doc, SAKA_PDF_THEME.white, 0.07, () => doc.roundedRect(x, highlightY, w, highlightH, 10).fill());
+      paintAlpha(doc, toneColor(item.tone), 0.2, () => doc.roundedRect(x, highlightY, w, highlightH, 10).fill());
+      paintAlpha(doc, toneColor(item.tone), 0.95, () => doc.rect(x, highlightY + 14, 3, highlightH - 28).fill());
       doc.fillOpacity(1);
       doc.fillColor('#94A3B8').font(fonts.body).fontSize(7)
         .text(pdfSafeText(String(item.label || '')).toUpperCase(), x + 15, highlightY + 13, {
@@ -349,10 +393,12 @@ function drawCover(doc, fonts, report, accent) {
   doc.fillColor(accent).font(fonts.bold).fontSize(8)
     .text(String(owner?.language || 'English').toUpperCase(), PAGE_WIDTH - PAGE_MARGIN - 130, cardY + 24, { width: 114, align: 'right' });
 
-  let peopleY = bandHeight;
+  // v1.32.4 — the drivers panel sits INSIDE the extended band, right under the
+  // "prepared for" card, with a label that stays legible on dark ink.
+  let peopleY = cardY + cardH + 26;
   if (drivers?.length) {
-    doc.fillColor(SAKA_PDF_THEME.muted).font(fonts.body).fontSize(8)
-      .text('DRIVERS ON THIS FLEET', PAGE_MARGIN, peopleY + 10, { characterSpacing: 1 });
+    doc.fillColor('#94A3B8').font(fonts.body).fontSize(8)
+      .text('DRIVERS ON THIS FLEET', PAGE_MARGIN, peopleY + 10, { characterSpacing: 1, lineBreak: false });
     peopleY += 28;
     let x = PAGE_MARGIN;
     for (const driver of drivers.slice(0, 3)) {
@@ -378,42 +424,89 @@ function drawCover(doc, fonts, report, accent) {
   doc.page.margins.bottom = previousBottom;
 }
 
+const KPI_GAP = 10;
+const KPI_CARD_H = 66;
+
+/**
+ * v1.32.4 — PURE KPI grid geometry (exported so the layout can be tested
+ * without rendering a PDF). `startY` is the top of the first row; every card in
+ * a row shares that exact y, which is what stops the old "staircase" where each
+ * card drifted a further `cardH + gap` down the page.
+ */
+export function computeKpiGrid({
+  count = 0,
+  contentWidth = CONTENT_WIDTH,
+  startY = 0,
+  gap = KPI_GAP,
+  cardH = KPI_CARD_H
+} = {}) {
+  const total = Math.max(0, Math.min(Number(count) || 0, 6));
+  const cardW = (contentWidth - gap * 2) / 3;
+  const cards = [];
+  for (let i = 0; i < total; i += 1) {
+    const row = Math.floor(i / 3);
+    const col = i % 3;
+    // Centre an incomplete last row instead of leaving a ragged gap.
+    const itemsInRow = Math.min(3, total - row * 3);
+    const offset = ((3 - itemsInRow) * (cardW + gap)) / 2;
+    cards.push({
+      index: i,
+      row,
+      col,
+      x: PAGE_MARGIN + offset + col * (cardW + gap),
+      y: startY + row * (cardH + gap),
+      w: cardW,
+      h: cardH
+    });
+  }
+  const rows = Math.ceil(total / 3);
+  return {
+    cards,
+    rows,
+    cardW,
+    cardH,
+    gap,
+    startY,
+    height: rows ? rows * (cardH + gap) : 0
+  };
+}
+
 function drawKpiGrid(doc, fonts, kpis, accent) {
   const items = (kpis || []).slice(0, 6);
   if (!items.length) return;
-  const gap = 10;
-  const cardW = (CONTENT_WIDTH - gap * 2) / 3;
-  const cardH = 66;
-  const rows = Math.ceil(items.length / 3);
-  for (let i = 0; i < items.length; i += 1) {
-    const row = Math.floor(i / 3);
-    const col = i % 3;
-    // v1.32.0 — centre an incomplete last row instead of leaving a ragged gap.
-    const itemsInRow = Math.min(3, items.length - row * 3);
-    const offset = ((3 - itemsInRow) * (cardW + gap)) / 2;
-    ensureSpace(doc, cardH + gap, fonts, accent, 'Key metrics');
+  ensureSpace(doc, KPI_CARD_H + KPI_GAP, fonts, accent, 'Key metrics');
+  const startY = doc.y;
+  const grid = computeKpiGrid({ count: items.length, startY });
+  for (const card of grid.cards) {
+    const item = items[card.index];
     kpiCard(doc, fonts, {
-      x: PAGE_MARGIN + offset + col * (cardW + gap),
-      y: doc.y,
-      w: cardW,
-      h: cardH,
-      label: items[i].label,
-      value: items[i].value,
-      hint: items[i].hint,
-      tone: items[i].tone || null,
+      x: card.x,
+      y: card.y,
+      w: card.w,
+      h: card.h,
+      label: item.label,
+      value: item.value,
+      hint: item.hint,
+      tone: item.tone || null,
       accent
     });
-    if (col === 2 || i === items.length - 1) doc.y += cardH + gap;
   }
-  doc.y += 6;
+  doc.y = startY + grid.height + 6;
 }
 
 function drawChartHeading(doc, fonts, chart, accent) {
-  doc.fillColor(SAKA_PDF_THEME.ink).font(fonts.bold).fontSize(9.5).text(String(chart.title || ''), PAGE_MARGIN, doc.y, { width: CONTENT_WIDTH });
+  // v1.32.4 — deterministic cursor: one measured block, one advance, no double
+  // `doc.y +=` (the old code advanced from the post-text cursor AND added 16).
+  const startY = doc.y;
+  const titleH = 12;
+  const noteH = chart.note ? 10 : 0;
+  doc.fillColor(SAKA_PDF_THEME.ink).font(fonts.bold).fontSize(9.5)
+    .text(String(chart.title || ''), PAGE_MARGIN, startY, { width: CONTENT_WIDTH, lineBreak: false, ellipsis: true });
   if (chart.note) {
-    doc.fillColor(SAKA_PDF_THEME.muted).font(fonts.body).fontSize(7.4).text(String(chart.note), PAGE_MARGIN, doc.y + 1, { width: CONTENT_WIDTH });
+    doc.fillColor(SAKA_PDF_THEME.muted).font(fonts.body).fontSize(7.4)
+      .text(String(chart.note), PAGE_MARGIN, startY + titleH, { width: CONTENT_WIDTH, lineBreak: false, ellipsis: true });
   }
-  doc.y += chart.note ? 16 : 6;
+  doc.y = startY + titleH + noteH + 4;
 }
 
 function drawBarChart(doc, fonts, chart, accent) {
@@ -513,8 +606,10 @@ function drawLineChart(doc, fonts, chart, accent) {
   points.forEach((point) => doc.lineTo(point.x, point.y));
   doc.lineTo(points[points.length - 1].x, baseY);
   doc.closePath();
-  withAlpha(doc, accent, 0.14);
+  // v1.32.4 — the fill alpha stays inside this q/Q block and is reset explicitly.
+  doc.fillOpacity(0.14);
   doc.fill();
+  doc.fillOpacity(1);
   doc.restore();
   doc.moveTo(points[0].x, points[0].y);
   points.slice(1).forEach((point) => doc.lineTo(point.x, point.y));
@@ -535,15 +630,18 @@ function drawProgressChart(doc, fonts, chart, accent) {
   ensureSpace(doc, 40 + series.length * 20, fonts, accent, chart.title);
   drawChartHeading(doc, fonts, chart, accent);
   series.forEach((item) => {
+    // v1.32.4 — one row = one captured y. Reading `doc.y` after each `text()`
+    // call made the label, bar and value drift apart inside the same row.
+    const y = doc.y;
     const ratio = Math.max(0, Math.min(1, Number(item.value) / (Number(chart.max) || 100)));
     const color = item.color || (ratio > 0.5 ? SAKA_PDF_THEME.status.good : ratio > 0.2 ? SAKA_PDF_THEME.status.warn : SAKA_PDF_THEME.status.bad);
     doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.body).fontSize(7.4)
-      .text(String(item.label).slice(0, 34), PAGE_MARGIN, doc.y, { width: 150, ellipsis: true });
-    doc.roundedRect(PAGE_MARGIN + 158, doc.y + 1, CONTENT_WIDTH - 210, 8, 4).fill(SAKA_PDF_THEME.panel);
-    doc.roundedRect(PAGE_MARGIN + 158, doc.y + 1, Math.max(4, (CONTENT_WIDTH - 210) * ratio), 8, 4).fill(color);
+      .text(String(item.label).slice(0, 34), PAGE_MARGIN, y, { width: 150, ellipsis: true, lineBreak: false });
+    doc.roundedRect(PAGE_MARGIN + 158, y + 1, CONTENT_WIDTH - 210, 8, 4).fill(SAKA_PDF_THEME.panel);
+    doc.roundedRect(PAGE_MARGIN + 158, y + 1, Math.max(4, (CONTENT_WIDTH - 210) * ratio), 8, 4).fill(color);
     doc.fillColor(SAKA_PDF_THEME.ink).font(fonts.mono).fontSize(7)
-      .text(String(item.text || number(item.value)), PAGE_WIDTH - PAGE_MARGIN - 44, doc.y - 1, { width: 44, align: 'right' });
-    doc.y += 18;
+      .text(String(item.text || number(item.value)), PAGE_WIDTH - PAGE_MARGIN - 44, y - 1, { width: 44, align: 'right', lineBreak: false });
+    doc.y = y + 18;
   });
   doc.y += 4;
 }
@@ -565,18 +663,22 @@ function drawTable(doc, fonts, table, accent) {
   sectionTitle(doc, fonts, table.title || 'Details', accent, table.subtitle || null);
   const totalWeight = columns.reduce((sum, column) => sum + (Number(column.width) || 1), 0);
   const widths = columns.map((column) => ((Number(column.width) || 1) / totalWeight) * CONTENT_WIDTH);
-  const headerH = 20;
-  const rowH = 22;
+  // v1.32.4 — taller rows + single-line cells: a 90-character value used to
+  // wrap into 2-3 lines inside a 22 pt row and print on top of the next row.
+  const headerH = 22;
+  const rowH = 24;
   ensureSpace(doc, headerH + rowH * Math.min(rows.length, 4) + 10, fonts, accent, table.title);
   const headerY = doc.y;
   doc.rect(PAGE_MARGIN, headerY, CONTENT_WIDTH, headerH).fill(SAKA_PDF_THEME.ink);
   let cellX = PAGE_MARGIN;
   columns.forEach((column, index) => {
-    doc.fillColor(SAKA_PDF_THEME.white).font(fonts.bold).fontSize(7.2)
-      .text(String(column.label || '').toUpperCase(), cellX + 8, headerY + 6.5, {
+    doc.fillColor(SAKA_PDF_THEME.white).font(fonts.bold).fontSize(7.8)
+      .text(String(column.label || '').toUpperCase(), cellX + 8, headerY + 7.6, {
         width: widths[index] - 16,
         align: column.align === 'right' ? 'right' : 'left',
-        ellipsis: true
+        ellipsis: true,
+        lineBreak: false,
+        height: headerH - 9
       });
     cellX += widths[index];
   });
@@ -598,12 +700,14 @@ function drawTable(doc, fonts, table, accent) {
           : String(raw ?? '—');
       const isStatus = column.type === 'status';
       const color = isStatus ? statusColor(raw) : SAKA_PDF_THEME.slate;
-      if (isStatus) doc.circle(x + 12, rowY + 11, 2.6).fill(color);
-      doc.fillColor(color).font(isStatus ? fonts.bold : fonts.body).fontSize(7.6)
-        .text(value, x + (isStatus ? 19 : 8), rowY + 7, {
+      if (isStatus) doc.circle(x + 12, rowY + 12, 2.6).fill(color);
+      doc.fillColor(color).font(isStatus ? fonts.bold : fonts.body).fontSize(8.2)
+        .text(value, x + (isStatus ? 19 : 8), rowY + 7.8, {
           width: widths[columnIndex] - (isStatus ? 25 : 16),
           align: column.align === 'right' ? 'right' : 'left',
-          ellipsis: true
+          ellipsis: true,
+          lineBreak: false,
+          height: rowH - 9
         });
       x += widths[columnIndex];
     });
@@ -624,8 +728,7 @@ function drawBadge(doc, fonts, x, y, text, tone = 'neutral', { size = 6.4, heigh
   const cursorY = doc.y;
   doc.font(fonts.bold).fontSize(size);
   const width = Math.max(24, Math.min(doc.widthOfString(label) + 12, maxWidth));
-  withAlpha(doc, color, 0.13);
-  doc.roundedRect(x, y, width, height, height / 2).fill();
+  paintAlpha(doc, color, 0.13, () => doc.roundedRect(x, y, width, height, height / 2).fill());
   doc.roundedRect(x, y, width, height, height / 2).lineWidth(0.6).strokeColor(color).stroke();
   doc.fillColor(color).font(fonts.bold).fontSize(size)
     .text(label, x + 5, y + (height - size) / 2 + 0.6, { width: width - 10, align: 'center', ellipsis: true, lineBreak: false });
@@ -671,11 +774,11 @@ function drawSegmentedBar(doc, fonts, chart, accent) {
     const color = item.color || palette[index % palette.length];
     doc.circle(lx + 3.5, ly + 4, 3.2).fill(color);
     doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.body).fontSize(7.2)
-      .text(pdfSafeText(item.label).slice(0, 26), lx + 11, ly, { width: colWidth - 106, ellipsis: true });
+      .text(pdfSafeText(item.label).slice(0, 26), lx + 11, ly, { width: colWidth - 124, ellipsis: true, lineBreak: false });
     const pct = Math.round((Math.abs(item.value) / total) * 100);
     const valueText = `${chart.currency ? `${money(item.value, chart.currency)}  ` : ''}${pct}%`;
     doc.fillColor(SAKA_PDF_THEME.ink).font(fonts.mono).fontSize(6.6)
-      .text(pdfSafeText(valueText), lx + colWidth - 100, ly, { width: 96, align: 'right', ellipsis: true });
+      .text(pdfSafeText(valueText), lx + colWidth - 100, ly, { width: 96, align: 'right', ellipsis: true, lineBreak: false });
   });
   doc.y = barY + barH + 16 + Math.ceil(segments.length / columns) * 15;
 }
@@ -788,8 +891,10 @@ function drawLedger(doc, fonts, ledger, accent) {
   const title = ledger.title || 'Itemized activity & ledger';
   const totalWeight = columns.reduce((sum, column) => sum + column.width, 0);
   const widths = columns.map((column) => (column.width / totalWeight) * CONTENT_WIDTH);
-  const headerH = 19;
-  const rowH = 19;
+  // v1.32.4 — 21 pt rows (was 19) with single-line cells: descriptions were
+  // wrapping into a second line and printing over the following row.
+  const headerH = 21;
+  const rowH = 21;
 
   sectionTitle(doc, fonts, title, accent, ledger.subtitle || null);
 
@@ -798,11 +903,13 @@ function drawLedger(doc, fonts, ledger, accent) {
     doc.rect(PAGE_MARGIN, y, CONTENT_WIDTH, headerH).fill(SAKA_PDF_THEME.ink);
     let x = PAGE_MARGIN;
     columns.forEach((column, index) => {
-      doc.fillColor(SAKA_PDF_THEME.white).font(fonts.bold).fontSize(6.8)
-        .text(pdfSafeText(column.label).toUpperCase(), x + 5, y + 6.4, {
+      doc.fillColor(SAKA_PDF_THEME.white).font(fonts.bold).fontSize(7.4)
+        .text(pdfSafeText(column.label).toUpperCase(), x + 5, y + 6.8, {
           width: widths[index] - 10,
           align: column.align === 'right' ? 'right' : 'left',
-          ellipsis: true
+          ellipsis: true,
+          lineBreak: false,
+          height: headerH - 9
         });
       x += widths[index];
     });
@@ -823,24 +930,26 @@ function drawLedger(doc, fonts, ledger, accent) {
     const rows = group.rows || [];
     if (!rows.length) continue;
     allRows.push(...rows);
-    ensureRow(22 + rowH);
+    ensureRow(24 + rowH);
     const bandY = doc.y;
-    doc.rect(PAGE_MARGIN, bandY, CONTENT_WIDTH, 17).fill(SAKA_PDF_THEME.line);
-    doc.fillColor(SAKA_PDF_THEME.ink).font(fonts.bold).fontSize(7.2)
-      .text(pdfSafeText(group.label || 'Activity'), PAGE_MARGIN + 6, bandY + 5.2, { width: CONTENT_WIDTH * 0.4, ellipsis: true });
+    doc.rect(PAGE_MARGIN, bandY, CONTENT_WIDTH, 19).fill(SAKA_PDF_THEME.line);
+    doc.fillColor(SAKA_PDF_THEME.ink).font(fonts.bold).fontSize(7.4)
+      .text(pdfSafeText(group.label || 'Activity'), PAGE_MARGIN + 6, bandY + 5.6, { width: CONTENT_WIDTH * 0.4, ellipsis: true, lineBreak: false, height: 12 });
     const groupExpenses = Number(group.expenseTotal ?? 0);
     const groupEarnings = Number(group.earningTotal ?? 0);
     const groupParts = [];
     if (groupExpenses) groupParts.push(`Spent ${money(groupExpenses, currency)}`);
     if (groupEarnings) groupParts.push(`Earned ${money(groupEarnings, currency)}`);
     if (!groupParts.length) groupParts.push(`${rows.length} record${rows.length === 1 ? '' : 's'}`);
-    doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.mono).fontSize(6.6)
-      .text(pdfSafeText(groupParts.join('  ·  ')), PAGE_MARGIN + CONTENT_WIDTH * 0.4, bandY + 5.4, {
+    doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.mono).fontSize(6.8)
+      .text(pdfSafeText(groupParts.join('  ·  ')), PAGE_MARGIN + CONTENT_WIDTH * 0.4, bandY + 5.8, {
         width: CONTENT_WIDTH * 0.6 - 6,
         align: 'right',
-        ellipsis: true
+        ellipsis: true,
+        lineBreak: false,
+        height: 12
       });
-    doc.y = bandY + 19;
+    doc.y = bandY + 21;
 
     for (const row of rows) {
       ensureRow(rowH);
@@ -850,34 +959,35 @@ function drawLedger(doc, fonts, ledger, accent) {
       const kindLabel = row.kindLabel || row.kind || 'LOG';
       columns.forEach((column, index) => {
         const width = widths[index];
+        const cellText = { width: width - (column.align === 'right' ? 8 : 10), ellipsis: true, lineBreak: false, height: rowH - 9 };
         if (column.key === 'kindLabel') {
           drawBadge(doc, fonts, x + 4, y + 4, kindLabel, ledgerTone(row.kind || kindLabel), {
-            size: 5.9,
-            height: 11,
+            size: 6.6,
+            height: 13,
             maxWidth: width - 8
           });
         } else if (column.key === 'date') {
-          doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.body).fontSize(6.9)
-            .text(pdfSafeText(row.date ?? '—'), x + 5, y + 6, { width: width - 10, ellipsis: true });
+          doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.body).fontSize(7.6)
+            .text(pdfSafeText(row.date ?? '—'), x + 5, y + 6.4, cellText);
         } else if (column.key === 'vehicle') {
-          doc.fillColor(SAKA_PDF_THEME.ink).font(fonts.bold).fontSize(6.8)
-            .text(pdfSafeText(row.vehicle ?? '—'), x + 5, y + 6, { width: width - 10, ellipsis: true });
+          doc.fillColor(SAKA_PDF_THEME.ink).font(fonts.bold).fontSize(7.4)
+            .text(pdfSafeText(row.vehicle ?? '—'), x + 5, y + 6.4, cellText);
         } else if (column.key === 'description') {
-          doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.body).fontSize(6.9)
-            .text(pdfSafeText(row.description ?? '—'), x + 5, y + 6, { width: width - 10, ellipsis: true });
+          doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.body).fontSize(7.6)
+            .text(pdfSafeText(row.description ?? '—'), x + 5, y + 6.4, cellText);
         } else if (column.key === 'odometer') {
-          doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.mono).fontSize(6.6)
-            .text(numberCell(row.odometer), x + 4, y + 6.2, { width: width - 8, align: 'right', ellipsis: true });
+          doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.mono).fontSize(7.2)
+            .text(numberCell(row.odometer), x + 4, y + 6.6, { ...cellText, align: 'right' });
         } else if (column.key === 'unitCost') {
-          doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.mono).fontSize(6.6)
-            .text(moneyCell(row.unitCost, row.unitCurrency || currency), x + 4, y + 6.2, { width: width - 8, align: 'right', ellipsis: true });
+          doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.mono).fontSize(7.2)
+            .text(moneyCell(row.unitCost, row.unitCurrency || currency), x + 4, y + 6.6, { ...cellText, align: 'right' });
         } else if (column.key === 'amount') {
           const earning = /earning|revenue|income/i.test(String(row.kind || ''));
-          doc.fillColor(earning ? SAKA_PDF_THEME.positive : SAKA_PDF_THEME.ink).font(fonts.mono).fontSize(6.9)
-            .text(moneyCell(row.amount, row.currency || currency), x + 4, y + 6, { width: width - 8, align: 'right', ellipsis: true });
+          doc.fillColor(earning ? SAKA_PDF_THEME.positive : SAKA_PDF_THEME.ink).font(fonts.mono).fontSize(7.4)
+            .text(moneyCell(row.amount, row.currency || currency), x + 4, y + 6.4, { ...cellText, align: 'right' });
         } else {
-          doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.body).fontSize(6.9)
-            .text(pdfSafeText(row[column.key] ?? '—'), x + 5, y + 6, { width: width - 10, ellipsis: true });
+          doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.body).fontSize(7.6)
+            .text(pdfSafeText(row[column.key] ?? '—'), x + 5, y + 6.4, cellText);
         }
         x += width;
       });
@@ -1051,6 +1161,7 @@ export default {
   SAKA_PDF_THEME,
   getReportAccent,
   registerReportFonts,
+  computeKpiGrid,
   buildProReportPdf
 };
 

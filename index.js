@@ -30,7 +30,8 @@ import {
 import { createResilientClient } from './src/services/supabaseClient.js';
 import { ensureAiUsageLogsTable, installAiUsageSink, installAiBudgetGuard } from './src/services/aiUsageLog.js';
 import { ensureTurnLatencyTable } from './src/services/turnLatency.js';
-import { buildStatusResponse } from './src/services/statusProbe.js';
+import { buildStatusResponse, isStatusAuthorized } from './src/services/statusProbe.js';
+import { auditEnv, envTemplateKeys, envStatusSummary } from './src/services/envAudit.js';
 import { announceRevisionLive } from './src/services/deployLiveAlert.js';
 import {
   ensureAiModelRegistryTables,
@@ -41,7 +42,16 @@ import {
 } from './src/services/aiModelRegistry.js';
 import { ensureFuelEconomySchema } from './src/services/fuelEconomy.js';
 import { ensureEarningTypeSchema } from './src/services/earningCatalog.js';
-import { ensureShortLinksTable, resolveShortCode, shortenUrl } from './src/services/linkShortener.js';
+import {
+  ensureShortLinksTable,
+  resolveShortCode,
+  shortenUrl,
+  shortLinkStatus,
+  verifyShortLinkRoute,
+  shortLinkNotFoundHtml,
+  SHORT_LINK_PROBE_PATH,
+  SHORT_LINK_PROBE_TAG
+} from './src/services/linkShortener.js';
 import { ensureReceiptsTable } from './src/services/receipts.js';
 import { ensureOcrRequestsTable } from './src/services/ocrTelemetry.js';
 import { ensureChatSessionsTable } from './src/services/sessionStore.js';
@@ -366,21 +376,43 @@ fastify.get('/', async (request, reply) => {
 // Served on /healthz plus /api/health and /internal/status: Google's edge
 // intercepts /healthz on some deployments, so the aliases keep the revision
 // metadata reachable (v1.24.4).
-const statusProbeHandler = async (request) => buildStatusResponse({
-  headers: request?.headers || {},
-  uptimeSeconds: process.uptime(),
-  queue: getQueueStats()
-});
+const statusProbeHandler = async (request) => {
+  const headers = request?.headers || {};
+  // v1.32.4 — env/secret parity is disclosed to a secret-bearing operator only,
+  // and only as names/booleans (never a value, see src/services/envAudit.js).
+  const envAudit = isStatusAuthorized(headers)
+    ? envStatusSummary(auditEnv(process.env, { templateKeys: envTemplateKeys() }))
+    : null;
+  return buildStatusResponse({
+    headers,
+    uptimeSeconds: process.uptime(),
+    queue: getQueueStats(),
+    // v1.32.4 — is the branded short-link base actually serving /r/<code>?
+    shortLinks: shortLinkStatus(),
+    envAudit
+  });
+};
 fastify.get('/healthz', statusProbeHandler);
 fastify.get('/api/health', statusProbeHandler);
 fastify.get('/internal/status', statusProbeHandler);
 
-// 5.2 Short links (v1.32.0): every long user-facing URL is presented as
-// https://sakafleet.com/r/<code>; this route resolves it and redirects.
+// 5.2 Short links (v1.32.0): every long user-facing URL is presented as a
+// short, branded URL; this route resolves it and redirects.
+// v1.32.4 — a probe route lets the app verify ITSELF that short links work on
+// the branded base before it sends any (an unverified domain shipped dead links
+// on 2026-11-01). Unknown/expired codes now get an honest 404 page instead of a
+// silent redirect to the marketing site.
+fastify.get(SHORT_LINK_PROBE_PATH, async (request, reply) => {
+  reply.header('x-saka-shortlink', SHORT_LINK_PROBE_TAG);
+  reply.header('cache-control', 'no-store');
+  return { service: 'saka-shortlink', route: SHORT_LINK_PROBE_PATH, ok: true };
+});
+
 fastify.get('/r/:code', async (request, reply) => {
   const target = await resolveShortCode(supabase, request.params?.code);
   if (target) return reply.redirect(target);
-  return reply.redirect(process.env.PUBLIC_PRICING_URL || 'https://sakafleet.com');
+  reply.header('cache-control', 'no-store');
+  return reply.code(404).type('text/html; charset=utf-8').send(shortLinkNotFoundHtml());
 });
 
 // 6. WhatsApp & Email Auth OTP Request Endpoint (Mandatory Email)
@@ -1011,6 +1043,12 @@ const start = async () => {
     await ensureFuelEconomySchema(supabase);
     await ensureEarningTypeSchema(supabase);
     await ensureShortLinksTable(supabase);
+    // v1.32.4 — warm the short-link readiness probe (fire-and-forget): the very
+    // first report after a deploy must not be the one that discovers a dead base.
+    verifyShortLinkRoute().then((probe) => {
+      if (probe.ready) console.log(`🔗 Short links verified on ${probe.base}.`);
+      else console.log(`🔗 Short links parked (${probe.reason}) — messages keep the full URL.`);
+    }).catch(() => {});
     await ensureOcrRequestsTable(supabase);
     await ensureReceiptsTable(supabase);
     await ensureComplianceCatalog({ supabase });

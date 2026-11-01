@@ -28,6 +28,7 @@ import {
 import { getTrialFunnelStats, formatTrialStatsReply } from './trialEngine.js';
 import { getTurnLatencySummary } from './turnLatency.js';
 import { getOcrUsageSummary } from './ocrTelemetry.js';
+import { auditEnv, formatEnvDigest, parseEnvKeys, envTemplateKeys } from './envAudit.js';
 import { getFeatureRolloutStatus, FEATURE_NOTICE_VERSION } from './featureNotice.js';
 import {
   listKbDrafts,
@@ -141,6 +142,7 @@ const ADMIN_INTENTS = new Set([
   'ADMIN_HORIZON', 'ADMIN_PROPOSALS',
   'ADMIN_REMEDIATIONS', 'ADMIN_REMEDIATION_ACCEPT', 'ADMIN_REMEDIATION_DECLINE', 'ADMIN_REMEDIATION_MODIFY',
   'ADMIN_AI_STATS',
+  'ADMIN_ENV_AUDIT',
   'ADMIN_OCR_STATS',
   'ADMIN_TURN_LATENCY',
   'ADMIN_TRIAL_STATS',
@@ -257,6 +259,11 @@ export async function parseSuperadminCommand(messageText) {
     return { intent: 'ADMIN_AI_STATS', hours: Math.min(168, Math.max(1, requestedHours)) };
   }
 
+  // v1.32.4 — env & secret parity digest (names/booleans only, zero values).
+  if (/^\s*admin\s+(?:env|environment|secrets?)(?:\s+(?:audit|parity|status|check|report))?\s*$/i.test(lower)) {
+    return { intent: 'ADMIN_ENV_AUDIT' };
+  }
+
   // v1.32.1 — OCR request digest (deterministic, zero LLM calls).
   const ocrStatsMatch = text.match(/^\s*admin\s+ocr[\s_-]*(?:stats?|usage|requests?)(?:\s+(\d{1,3})\s*h(?:ours?|rs?)?)?\s*$/i);
   if (ocrStatsMatch) {
@@ -346,6 +353,9 @@ Command: "${text}"`;
   }
   if (/\bocr\s+(?:stats?|usage|requests?)\b/i.test(lower)) {
     return { intent: 'ADMIN_OCR_STATS', hours: 24 };
+  }
+  if (/\b(?:env|environment|secrets?)\s+(?:audit|parity)\b/i.test(lower)) {
+    return { intent: 'ADMIN_ENV_AUDIT' };
   }
   if (/\b(ai[\s_-]*(?:stats?|usage|telemetry)|usage\s+stats?)\b/i.test(lower)) {
     return { intent: 'ADMIN_AI_STATS', hours: 24 };
@@ -810,6 +820,33 @@ export async function handleAiStatsCommand(supabase, hours = 24) {
       error: summary.error || null
     }
   };
+}
+
+/**
+ * Superadmin env & secret parity digest (v1.32.4). Deterministic, zero tokens.
+ * Publishes names, sections and booleans ONLY — never a single value.
+ */
+export async function handleEnvAuditCommand(env = process.env, { templateKeys = [], label = 'Environment' } = {}) {
+  const audit = auditEnv(env, { templateKeys });
+  return {
+    reply: formatEnvDigest(audit, { label }),
+    details: {
+      ok: audit.ok,
+      missing_required: audit.missingRequired,
+      missing_recommended: audit.missingRecommended,
+      undocumented: audit.undocumented,
+      placeholders: audit.placeholders,
+      template_drift: audit.templateDrift,
+      present_keys: audit.presentCount,
+      total_keys: audit.totalKeys,
+      fingerprint: audit.fingerprint
+    }
+  };
+}
+
+/** Read `.env.example` key names from disk (best effort; never throws). */
+export function readTemplateEnvKeys(filePath = '.env.example') {
+  return envTemplateKeys(filePath);
 }
 
 /**
@@ -1621,7 +1658,7 @@ export function formatFeatureRolloutReply(status) {
 export function formatAdminHelpReply() {
   return '🛠️ *Saka admin commands*\n\n' +
     '📊 *Snapshots* — admin report · admin alerts · admin audit <query>\n' +
-    '👥 *Fleet* — profiles report · admin trial-stats · admin ai-stats [24h] · admin ocr-stats [24h] · admin latency [24h]\n' +
+    '👥 *Fleet* — profiles report · admin trial-stats · admin ai-stats [24h] · admin ocr-stats [24h] · admin latency [24h] · admin env\n' +
     '🛠️ *Fixes* — admin remediations · admin accept|decline|modify fix <CODE>\n' +
     '🌱 *Growth* — generate coupon 20% · admin horizon · admin proposals\n' +
     '🩺 *Guardrails* — check health · admin rules list|toggle <key>|reset\n' +
@@ -1862,6 +1899,15 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
     return {
       isSuperadmin: true,
       reply: statsRes.reply
+    };
+  }
+
+  if (parsedCommand.intent === 'ADMIN_ENV_AUDIT') {
+    const envRes = await handleEnvAuditCommand(process.env, { templateKeys: readTemplateEnvKeys() });
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_ENV_AUDIT', envRes.details);
+    return {
+      isSuperadmin: true,
+      reply: envRes.reply
     };
   }
 

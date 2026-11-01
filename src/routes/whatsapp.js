@@ -1002,7 +1002,10 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                 amount: receiptHints.amount ?? null,
                 fuelLiters: receiptHints.fuel_liters ?? null,
                 odometer: receiptHints.odometer ?? null,
-                vendor: receiptHints.notes || null,
+                // v1.32.4 — the vendor column carried the raw OCR notes line
+                // ("Shell Thika|Diesel"), so receipts printed junk. `vendor` is
+                // the real merchant (ocrService.extractDocumentHints).
+                vendor: receiptHints.vendor || null,
                 imageUrl,
                 textSha: ocrTextSha,
                 error: ocrError

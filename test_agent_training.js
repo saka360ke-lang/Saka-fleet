@@ -22,6 +22,7 @@ import {
   getKnownFlowKeys
 } from './src/services/flowKnowledge.js';
 import { getFlowDefinition, startQuiz } from './src/services/quizEngine.js';
+import { isContentlessReply } from './src/services/conversationEngine.js';
 
 let passed = 0;
 function check(condition, message) {
@@ -220,6 +221,23 @@ async function run() {
   check(refinementIsSafe(`${PROMPT_REFINEMENT_MARKER}\n- Never say Let's keep moving`) === true, 'a negated banned phrase is allowed as guidance');
   check(refinementIsSafe(`${PROMPT_REFINEMENT_MARKER}\n${'x'.repeat(MAX_STORED_PROMPT_REFINEMENT_CHARS + 10)}`) === false, 'an oversized refinement is rejected');
   clearSakaPromptCache();
+
+  console.log('\n--- Test 8: live-chat friction rules (v1.32.4) ---');
+  // These are the 2026-11-01 failures; the prompt must forbid them explicitly.
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('NO EMPTY REPLIES'), 'the core prompt bans empty acknowledgement replies');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('Got your vehicle details!'), 'the exact contentless reply from the live chat is named as banned');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('Send me as a detailed pdf'), 'deliverable-shaped requests are named as report requests');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('never silently merge'), 'draft-conflict merging is forbidden');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('CORRECTIONS to the entry under discussion'), 'follow-up totals are corrections, not new entries');
+
+  // The composer enforces the same rule at runtime (not just in the prompt).
+  check(isContentlessReply('Got your vehicle details!') === true, 'an empty acknowledgement is rejected by the composer');
+  check(isContentlessReply('Noted.') === true, 'a one-word acknowledgement is rejected');
+  check(isContentlessReply('Okay 🚗') === true, 'an acknowledgement with an emoji is still empty');
+  check(isContentlessReply('', {}) === true, 'an empty render is rejected');
+  check(isContentlessReply('You spent *KES 21,000* on repairs on 21 Oct 2026 — that is 31% of October spend.') === false, 'a fact-bearing reply passes');
+  check(isContentlessReply('Repairs totals: KES 21,000 (21 Oct). Fuel: KES 21,000 (21 Oct). Want the full ledger?') === false, 'a data list with a next step passes');
+  check(isContentlessReply('Got it — KES 21,000 logged against KAS 628T at 367,900 km. Anything else for that trip?') === false, 'a short but factual confirmation passes');
 
   console.log(`\n\u2705 ALL AGENT TRAINING TESTS PASSED (${passed} assertions).`);
   console.log('Stateless suite: no real database rows were created, so no cleanup is required.');

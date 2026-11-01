@@ -231,6 +231,13 @@ async function run() {
   assert(looksLikeReportRequest('Give me fuel report') === true, 'a bare fuel report request is recognised');
   assert(looksLikeReportRequest('log fuel') === false, 'a logging command is not a report request');
   assert(looksLikeReportRequest('Logged 40L at 50350 km for KES 5500') === false, 'a log line is not a report request');
+  // v1.32.4 — live failure 2026-11-01 10:18: a deliverable-shaped request with no
+  // word "report" fell through to a generic menu.
+  assert(looksLikeReportRequest('Send me as a detailed pdf') === true, '"send me as a detailed pdf" is a report request');
+  assert(looksLikeReportRequest('email me the full pdf') === true, '"email me the full pdf" is a report request');
+  assert(looksLikeReportRequest('prepare a document for the bank') === true, '"prepare a document" is a report request');
+  assert(looksLikeReportRequest('I bought a PDF manual for 2000') === false, 'a purchase mention is not a report request');
+  assert(looksLikeReportRequest('log 2000 for the document renewal') === false, 'a logging command with "document" stays a log');
   assert(
     detectQuizStart({ intent: 'LOG_EXPENSE', messageText: 'Give me a fuel report for kas', hasVehicleRegistered: true }) === null,
     'the live "fuel report" message never starts the expense quiz'

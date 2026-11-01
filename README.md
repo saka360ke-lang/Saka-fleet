@@ -3,7 +3,10 @@
 WhatsApp-native fleet operating system: vehicles, expenses, reminders, driver &
 vehicle compliance, reports, subscriptions and an autonomous Sentinel supervisor.
 
-**Release v1.25.2.** Recent highlights:
+**Release v1.32.4.** Recent highlights:
+- **Legible reports** (v1.32.4): paint-scoped alpha, one y per KPI row, single-line ledger/table cells and a cover band that fills the page.
+- **Verified short links** (v1.32.4): `/r/__saka_probe__` + `verifyShortLinkRoute()` gate every branded link; unknown codes get an honest 404.
+- **Env & secret parity** (v1.32.4): `src/services/envAudit.js`, `npm run env:audit [-- --remote|--cloud]`, `admin env` and an env parity section in `npm run health`.
 - **Conversational-first onboarding** (v1.25.0): sales-crafted welcome (`sakaIntroText`),
   VOICE LAW at the top of the core prompt, warm quiz copy, five-line help tour.
 - **Product Q&A** (v1.25.0): `src/services/productQa.js` answers cost, trial, privacy,

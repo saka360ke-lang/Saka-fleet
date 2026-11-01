@@ -7,6 +7,7 @@ import { resolveReportAccess, reportAccessDeniedText } from './reportAccess.js';
 import { buildProReportPdf } from './pdfEngine.js';
 import { sendReportByEmail } from './mailer.js';
 import { uploadReportToSupabase } from '../../reports.js';
+import { shortenUrl } from './linkShortener.js';
 import { EXPENSE_CATEGORIES } from './expenseCatalog.js';
 
 /**
@@ -650,6 +651,11 @@ export async function deliverReportPdf({ supabase, report, people = {}, ownerEma
     let uploadError = null;
     try {
       url = await uploadReportToSupabase(supabase, pdfBuffer, `Saka_${report.type || 'report'}_${plateLabel}`.replace(/\s+/g, '_'));
+      // v1.32.4 — the delivered link is shortened HERE, at the single source of
+      // truth, so every caller (WhatsApp reply, follow-up worker, email) gets the
+      // branded URL. Fail-soft and idempotent: `shortenUrl` returns the original
+      // string for an already-short link or an unverified base.
+      if (url) url = await shortenUrl(supabase, url);
     } catch (err) {
       uploadError = err.message;
       url = null;

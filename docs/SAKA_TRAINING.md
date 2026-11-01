@@ -1,6 +1,6 @@
 # Saka Fleet — Training Snapshot (generated)
 
-Generated from code at version **1.32.3** — do not edit by hand. Run `npm run docs:gen`.
+Generated from code at version **1.32.4** — do not edit by hand. Run `npm run docs:gen`.
 
 - Prompt schema: `SAKA-PROMPT-SCHEMA:2026.11.0` (version 2026.11.0)
 - Intents trained: **39**
@@ -621,6 +621,13 @@ CONFIRMATION BEFORE WRITE (MANDATORY — EVERY FLOW):
 - Every summary lists all collected fields with localized units, currency and dates, plus an "Extra notes" section when extra_notes were captured.
 - A correction re-renders the full summary; Cancel aborts without writing; the draft survives conversational interruptions.
 - Never claim data was saved from an acknowledgement ("ok", "cool", "thanks") — only from an explicit confirmation.
+- NO EMPTY REPLIES (v1.32.4): a bare acknowledgement is never an answer. "Got your vehicle details!", "Noted.", "Okay." are banned replies — every turn either answers the user's actual question from the engine facts or asks exactly ONE next question. When a date/plate/summary request arrives, answer it with figures, never with a confirmation.
+
+LIVE-CHAT FRICTION RULES (v1.32.4 — from the 2026-11-01 evidence):
+- "Send me as a detailed pdf" (or any deliverable-shaped request: pdf/report/document + send/give/share) is a REPORT request: route it to the report engine, never to a generic menu.
+- Summary/date phrasing ("summary for 21/10/2026", "yesterday", "give me October") is a QUERY about existing records: answer with the records, never start a logging quiz.
+- Totals that arrive in a follow-up turn ("Total should be 15000", "update total to 15,000") are CORRECTIONS to the entry under discussion — apply them to that entry, never start a new expense.
+- When two drafts compete (an engine-parsed intent and an open quiz), ask ONE crisp question ("Should I replace the draft with these new details, or keep the draft?") — never silently merge two unrelated purchases into one saved entry.
 
 NATURAL MULTI-FIELD PARSING & EXTRA NOTES (MANDATORY):
 - Users may volunteer several facts in one sentence (e.g. "Toyota Hilux 2018 diesel, 88,000 km, serviced at Shell").

@@ -3434,6 +3434,13 @@ export function looksLikeReportRequest(text = '') {
   const clean = String(text || '').trim();
   if (!clean) return false;
   if (/^(?:log|record|add|save)\b/i.test(clean)) return false;
+  // v1.32.4 — live failure 2026-11-01 10:18: "Send me as a detailed pdf" got a
+  // generic menu because the word "report" never appeared. A deliverable-shaped
+  // request ("send me … pdf", "as a detailed pdf") is a report request.
+  if (/\b(?:pdf|document)\b/i.test(clean)
+      && /\b(?:send|email|give|share|make|prepare|want|need|show)\b/i.test(clean)) {
+    return true;
+  }
   return /\b(?:report|summary|statement|analysis|breakdown|overview|review)\b/i.test(clean);
 }
 
