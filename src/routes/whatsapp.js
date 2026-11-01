@@ -114,6 +114,18 @@ import {
 } from '../services/receipts.js';
 import { recordOcrRequest, buildOcrTextSha } from '../services/ocrTelemetry.js';
 import { isDuplicateExpense } from '../services/expenseGuard.js';
+import {
+  detectRemindersListCommand,
+  detectComplianceStatusCommand,
+  detectComplianceExpiryQuestion,
+  detectComplianceCorrection,
+  detectComplianceItemAsked,
+  buildComplianceExpiryAnswer,
+  buildComplianceStatusReply,
+  buildRemindersListReply,
+  applyComplianceCorrection,
+  formatComplianceDate
+} from '../services/complianceAnswers.js';
 import { logTurnLatency } from '../services/turnLatency.js';
 
 let supabaseClient = createResilientClient();
@@ -1024,6 +1036,15 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         // v1.20.0 — deterministic document menu ("what documents can I send?").
         const uploadMenuCommand = /^(?:upload|send|share|scan)\s+(?:a\s+)?(?:document|doc|documents|photo|file|files)s?$|^what\s+(?:documents?|files?)\s+(?:can|may|do)\s+(?:i|you)\s+(?:send|upload|accept)\b|^(?:documents?|docs?)\s+(?:list|supported)$/i.test(String(messageText || '').trim());
 
+        // v1.32.2 — deterministic compliance & reminder answers (zero AI tokens).
+        // Live evidence 2026-11-01: three unanswered "when does insurance
+        // expire?" questions and an ignored typed correction.
+        const commandText = String(messageText || '').trim();
+        const remindersListCommand = !session.quiz && detectRemindersListCommand(commandText);
+        const complianceStatusCommand = !session.quiz && detectComplianceStatusCommand(commandText);
+        const complianceExpiryQuestion = !session.quiz && detectComplianceExpiryQuestion(commandText);
+        const complianceCorrection = !session.quiz ? detectComplianceCorrection(commandText) : { isCorrection: false };
+
         // Vehicle registration summary ("send me registration summary as PDF").
         const summaryCommand = /(?:(?:send|email|resend|share|mail)\b[\s\S]{0,40}(?:registration|vehicle|passbook)\b[\s\S]{0,20}(?:summary|details|copy|pdf|email))|(?:registration|vehicle)\s+(?:summary|details|passbook)/i.test(String(messageText || ''));
 
@@ -1270,6 +1291,55 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             extracted_data: {},
             reply_message: `🚗 Your garage is empty for now.\n\nSend your vehicle's number plate (e.g. *${countryInfo.plate_example}*) or type *REGISTER* — setup takes about two minutes.`
           };
+        } else if (remindersListCommand || complianceStatusCommand || complianceExpiryQuestion || complianceCorrection.isCorrection) {
+          // v1.32.2 — deterministic compliance/reminder answers (zero AI tokens).
+          // Every date comes from the ledger; nothing is improvised.
+          const ownedVehicles = existingVehicles.filter((v) => v.owner_id === profileData?.id);
+          const targetVehicle = ownedVehicles.find((v) => v.id === currentActiveVehicle?.id)
+            || (ownedVehicles.length === 1 ? ownedVehicles[0] : ownedVehicles[0] || null);
+          let reply = null;
+          if (!targetVehicle) {
+            reply = `🚗 I do not have a vehicle on file yet.\n\nSend the plate (e.g. *${countryInfo?.plate_example || 'KDA 123A'}*) to register it, then I can track compliance and reminders.`;
+          } else if (complianceCorrection.isCorrection) {
+            const corrected = await applyComplianceCorrection({
+              supabase: supabaseClient,
+              vehicle: targetVehicle,
+              kind: complianceCorrection.kind,
+              text: commandText,
+              countryCode: countryInfo?.country_code || 'GLOBAL',
+              locale: countryInfo?.locale || 'en-US',
+              timeZone: resolveUserTimezone({ countryInfo, profile: profileData }),
+              ownerId: profileData?.id
+            });
+            reply = corrected.ok
+              ? `✅ *Corrected — ${targetVehicle.plate_number} ${corrected.label}*\n\nExpiry is now *${formatComplianceDate(corrected.expiry)}*${corrected.number ? ` (${corrected.number})` : ''}.\n\nThe linked renewal reminders were moved to the corrected date.`
+              : '⚠️ I could not find an expiry date in that message. Try: _"insurance expires 20/11/2026"_.';
+          } else if (complianceExpiryQuestion) {
+            const { data: rows } = await supabaseClient
+              .from('vehicle_compliances')
+              .select('type,label,number,expiry,lifetime')
+              .eq('vehicle_id', targetVehicle.id);
+            reply = buildComplianceExpiryAnswer({
+              vehicle: targetVehicle,
+              rows: rows || [],
+              asked: detectComplianceItemAsked(commandText)
+            });
+          } else if (complianceStatusCommand) {
+            const { data: rows } = await supabaseClient
+              .from('vehicle_compliances')
+              .select('type,label,number,expiry,lifetime')
+              .eq('vehicle_id', targetVehicle.id);
+            reply = buildComplianceStatusReply({ vehicle: targetVehicle, rows: rows || [] });
+          } else {
+            const { data: reminders } = await supabaseClient
+              .from('reminders')
+              .select('reminder_type,due_date,status,vehicle_id')
+              .eq('status', 'active')
+              .in('vehicle_id', existingVehicles.map((v) => v.id))
+              .limit(50);
+            reply = buildRemindersListReply({ reminders: reminders || [], vehicles: existingVehicles });
+          }
+          aiResult = { intent: 'GENERAL_CHAT', extracted_data: {}, reply_message: reply };
         } else if (receiptsCommand) {
           const isOwner = existingVehicles.some((v) => v.owner_id === profileData?.id);
           const receipts = await listReceipts(supabaseClient, {
@@ -1664,7 +1734,12 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                 });
                 if (result.ok) {
                   const expiryLabel = entry.parsed.lifetime ? 'valid for life' : entry.parsed.expiry;
-                  savedLines.push(`• ${entry.item.label}: ${expiryLabel}${entry.parsed.number ? ` (${entry.parsed.number})` : ''}`);
+                  // v1.32.2 — show days-left so a misread date is visible instantly.
+                  const days = Number(entry.parsed.daysLeft);
+                  const when = Number.isFinite(days)
+                    ? (days < 0 ? ` — expired ${Math.abs(days)} day${Math.abs(days) === 1 ? '' : 's'} ago` : ` — in ${days} day${days === 1 ? '' : 's'}`)
+                    : '';
+                  savedLines.push(`• ${entry.item.label}: ${expiryLabel}${when}${entry.parsed.number ? ` (${entry.parsed.number})` : ''}`);
                 }
               }
               customReply = savedLines.length

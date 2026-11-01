@@ -487,8 +487,13 @@ export function extractDocumentHints(text = '', kind = null, { receiptOnly = fal
     const expiry = (raw.match(/\b(?:expir\w*|valid\s+(?:until|to))\s*[:]?\s*(\d{4}-\d{2}-\d{2}|\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4})/i) || [])[1]
       || firstDateNear(raw, /(expir|valid\s+(?:until|to)|renew|due)/i);
     if (expiry) hints.insurance_expiry = expiry;
-    if (hints.insurance_policy) {
-      hints.notes = [hints.notes, `Policy ${hints.insurance_policy}`].filter(Boolean).join(' | ');
+    if (hints.insurance_policy || hints.insurance_expiry) {
+      // v1.32.2 — the vault note shows the LABELLED expiry, never the
+      // commencement date that also appears on the certificate.
+      hints.notes = [
+        hints.insurance_policy ? `Policy ${hints.insurance_policy}` : null,
+        hints.insurance_expiry ? `Expires ${hints.insurance_expiry}` : null
+      ].filter(Boolean).join(' | ') || hints.notes;
     }
   }
 

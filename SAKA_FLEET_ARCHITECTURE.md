@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.32.1  
+**Version:** 1.32.2  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.32.2** | Short links gated on the verified `app.sakafleet.com` subdomain, deterministic compliance/reminder answers, typed expiry corrections, days-left confirmations, deploy LIVE-alert fix | §76 |
 | **1.32.1** | OCR audit remediation: silent-crash fix, insurance≠logbook + expiry-label precedence, Kenya e-TIMS profile (Rule 36), three-layer duplicate guard, `ocr_requests` telemetry + `admin ocr-stats`, HEIC | §75 |
 | **1.32.0** | Presentation polish from the real KAS 628T PDF (plate cover, honest zero tones, 6-card grid, vehicle snapshot, clean callouts) + self-hosted short links for every report/checkout URL | §74 |
 | **1.31.0** | Populate the variables: asset-aware reminder catalog, typed earnings (+ migration), 17 global compliance catalogs, driver compliance registry, expanded vehicle attributes, guarded demo fleet seeder | §73 |
@@ -2952,3 +2953,35 @@ HEIC/HEIF accepted (`SUPPORTED_IMAGE_TYPES`); insurance receipt rows carry `Poli
 - **Files:** `ocrService.js`, `documentLens.js`, `receipts.js`, `ocrTelemetry.js` (new), `expenseGuard.js` (new), `complianceCatalog.js`, `src/routes/whatsapp.js`, `quizEngine.js`, `superadmin.js`, `flowKnowledge.js`, `sakaAi.js`, `index.js`, `scripts/run_ocr_requests_migration.js` (new), `scripts/provision_staging_schema.js`, `scripts/reset-db.js`, `.env.example`, `.clinerules` (Rule 36).
 - **Tests:** `test_ocr_flow.js` (87 — e-TIMS KE vs GLOBAL, Bima certificate, Buyer-PIN family, duplicate comparator, OCR digest, crash regression), `test_vehicle_compliance.js` (30 — expiry label precedence), `test_quiz_flow.js` (95), `test_agent_training.js` (109), `test_turn_latency.js` (41), `test_phase2_analytics.js`.
 - **Knobs:** `OCR_DUPLICATE_WINDOW_HOURS` (48), `OCR_EXPENSE_DEDUPE_HOURS` (3); existing OCR knobs unchanged.
+
+---
+
+## 76. Dead-Link Fix & Deterministic Compliance Answers (v1.32.2)
+
+### 76.1 Live evidence (2026-11-01, phone 254734852529)
+- **Every short link 404'd.** `sakafleet.com` resolves to parked Hostinger IPs; `https://sakafleet.com/r/QHiTC3it` → HTTP 404 while the PDF objects were healthy (18–30 KB, HTTP 200 in Supabase storage). `PUBLIC_APP_URL` was unset, so the shortener defaulted to a domain the app does not serve.
+- **Three unanswered questions:** "When does KAS insurance expires?", "Please tell me insurance expiry date" → canned "all set" replies.
+- **Typed correction ignored:** "You read the document wrong … the expiry is 2026-11-20" → "Got your vehicle details!", no write.
+- **Reminder quiz hijack:** "Tired alerts report" and "List recent tiered alerts" started a new-reminder quiz instead of listing reminders.
+- **Deploy marker frozen:** `system_config.last_deployed_revision` stuck at the 2026-10-28 revision.
+
+### 76.2 Short links: verified-domain gate (`linkShortener.js`)
+- `SHORT_LINK_DEFAULT_BASE = https://app.sakafleet.com` (Cloud Run custom subdomain; the root remains the marketing site).
+- `isShortLinkDomainReady()` — true when `SHORT_LINK_DOMAIN_READY=on|true|1` or an explicit `PUBLIC_APP_URL` is set; **default off**. While off, `shortenUrl()` returns the original (working) URL, so a message can never carry a dead link.
+- `GET /r/:code` redirect is unchanged; once the subdomain serves HTTPS the operator flips the flag and every new link is `https://app.sakafleet.com/r/<code>`.
+
+### 76.3 Deterministic compliance answers (`complianceAnswers.js`, new)
+- **Detectors (zero tokens):** reminders list (`alerts`, `list my reminders`, `alerts report`, typo-tolerant), compliance card (`my compliance`), expiry question ("when does insurance expire?"), typed correction (correction marker + date + compliance reference, including the insurance-only word "commencement").
+- **Replies:** expiry answer for the asked item, full compliance card, reminders list — all with 🟢🟡🔴 chips and plain-language days-left.
+- **Correction writer:** `applyComplianceCorrection()` resolves the catalog item, reads the existing number, and saves through `submitVehicleCompliance()` so the ledger, `vehicles.insurance_expiry` legacy column AND the linked reminder move to the corrected date together.
+- **Wiring (`whatsapp.js`):** one deterministic branch before the AI call, active only when no quiz owns the turn; "compliance report"/"expiry report" keep routing to the PDF report engine, and reminder-creation wording is never captured as a list.
+
+### 76.4 Visibility
+- Compliance save confirmations now include days-left (`Insurance: 2026-11-20 — in 19 days (C35343842)`), so a misread date is caught in the same message.
+- Insurance receipt-vault notes carry `Expires <date>` (never the commencement date).
+- `announceRevisionLive()` persists the revision with `onConflict: 'key'` and warns on failure — the LIVE alert fires once per revision again.
+
+### 76.5 Files, tests, knobs
+- **Files:** `linkShortener.js`, `complianceAnswers.js` (new), `src/routes/whatsapp.js`, `deployLiveAlert.js`, `ocrService.js`, `flowKnowledge.js`, `sakaAi.js`, `.env.example`, `.clinerules`.
+- **Tests:** `test_link_shortener.js` (28 — readiness gate, app subdomain base), `test_vehicle_compliance.js` (44 — detectors, replies, correction writes), `test_ocr_flow.js` (88 — expiry note), `test_quiz_flow.js` (95).
+- **Knobs:** `SHORT_LINK_DOMAIN_READY` (off; on|true|1 enables short links), `PUBLIC_APP_URL` (optional explicit base).

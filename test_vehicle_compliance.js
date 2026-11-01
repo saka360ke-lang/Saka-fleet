@@ -18,6 +18,17 @@ import {
   getVehicleComplianceStatus
 } from './src/services/vehicleCompliance.js';
 import { resolveBundledCatalog } from './src/services/complianceCatalog.js';
+import {
+  detectRemindersListCommand,
+  detectComplianceStatusCommand,
+  detectComplianceExpiryQuestion,
+  detectComplianceCorrection,
+  detectComplianceItemAsked,
+  buildComplianceExpiryAnswer,
+  buildComplianceStatusReply,
+  buildRemindersListReply,
+  applyComplianceCorrection
+} from './src/services/complianceAnswers.js';
 
 let passed = 0;
 function check(condition, label) {
@@ -138,6 +149,65 @@ async function run() {
   check(byType.inspection.status === 'valid', 'Future inspection is valid');
   check(byType.road_service_licence.status === 'missing', 'Missing PSL is surfaced as missing');
   check(status.missing.includes('Road Service Licence (PSL)'), 'Missing list names the PSL');
+
+  // v1.32.2 — deterministic answers for the three unanswered live questions and
+  // the ignored typed correction (chat evidence 2026-11-01 07:02–07:04).
+  console.log('\n--- Test 6: deterministic compliance/reminder answers (v1.32.2) ---');
+  check(detectRemindersListCommand('List recent tiered alerts'), 'Alerts list is recognised (typo-tolerant wording)');
+  check(detectRemindersListCommand('alerts report'), 'Alerts report routes to the list, not a reminder quiz');
+  check(!detectRemindersListCommand('set reminder insurance'), 'Reminder creation is never captured as a list');
+  check(detectComplianceStatusCommand('my compliance'), 'Compliance card command is recognised');
+  check(!detectComplianceStatusCommand('compliance report'), 'Compliance PDF report stays with the report engine');
+  check(detectComplianceExpiryQuestion('When does KAS insurance expires?'), 'Insurance-expiry question is recognised');
+  check(detectComplianceItemAsked('Please tell me insurance expiry date') === 'insurance', 'Insurance item is identified');
+  const typedCorrection = detectComplianceCorrection('You read the document wrong. 2026-10-21 is the commencement date. The expiry is 2026-11-20');
+  check(typedCorrection.isCorrection === true && typedCorrection.kind === 'insurance', 'Typed correction is detected as insurance');
+  const answer = buildComplianceExpiryAnswer({
+    vehicle: { plate_number: 'KAS 628T' },
+    rows: [{ type: 'insurance', label: 'Insurance', number: 'C35343842', expiry: '2026-11-20', lifetime: false }],
+    asked: 'insurance',
+    now: NOW
+  });
+  check(answer.includes('20 Nov 2026') && answer.includes('C35343842'), 'Expiry answer renders the labelled date and policy');
+  const card = buildComplianceStatusReply({
+    vehicle: { plate_number: 'KAS 628T' },
+    rows: [
+      { type: 'insurance', label: 'Insurance', number: 'C35343842', expiry: '2026-11-20', lifetime: false },
+      { type: 'inspection', label: 'Inspection', expiry: '2026-01-01', lifetime: false }
+    ],
+    now: NOW
+  });
+  check(card.includes('Insurance') && card.includes('Inspection') && card.includes('🔴'), 'Compliance card lists items with status chips');
+  const reminderList = buildRemindersListReply({
+    reminders: [
+      { reminder_type: 'Insurance', due_date: '2026-11-20T00:00:00Z', status: 'active', vehicle_id: 'v1' }
+    ],
+    vehicles: [{ id: 'v1', plate_number: 'KAS 628T' }],
+    now: NOW
+  });
+  check(reminderList.includes('Insurance') && reminderList.includes('KAS 628T') && reminderList.includes('🟡'), 'Reminders list shows the item, plate and chip');
+
+  const correctionMock = createMockSupabase({
+    vehicle_compliances: [{ id: 'c1', vehicle_id: 'v1', type: 'insurance', label: 'Insurance', number: 'C35343842', expiry: '2026-10-21', lifetime: false }],
+    reminders: [],
+    vehicles: [{ id: 'v1', plate_number: 'KAS 628T', insurance_expiry: '2026-10-21' }]
+  });
+  const corrected = await applyComplianceCorrection({
+    supabase: correctionMock.client,
+    vehicle: { id: 'v1', plate_number: 'KAS 628T' },
+    kind: 'insurance',
+    text: 'you read it wrong, the expiry is 20/11/2026',
+    countryCode: 'KE',
+    locale: 'en-KE',
+    timeZone: 'Africa/Nairobi',
+    ownerId: 'owner-1',
+    now: NOW
+  });
+  check(corrected.ok === true && corrected.expiry === '2026-11-20', 'Typed correction writes the expiry date');
+  const savedRow = correctionMock.db.vehicle_compliances.find((row) => row.type === 'insurance');
+  check(savedRow?.expiry === '2026-11-20', 'Compliance ledger carries the corrected expiry');
+  const legacyRow = correctionMock.db.vehicles.find((row) => row.id === 'v1');
+  check(legacyRow?.insurance_expiry === '2026-11-20', 'Legacy insurance column follows the correction');
 
   console.log(`\n🎉 ${passed} vehicle-compliance assertions passed.`);
 }

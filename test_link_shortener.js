@@ -16,7 +16,8 @@ import {
   shortenUrl,
   resolveShortCode,
   isShortLink,
-  shortLinkBase
+  shortLinkBase,
+  isShortLinkDomainReady
 } from './src/services/linkShortener.js';
 
 let passed = 0;
@@ -95,21 +96,29 @@ async function run() {
   check(code.length === SHORT_CODE_LENGTH, `Codes are ${SHORT_CODE_LENGTH} characters`);
   check(/^[a-zA-Z0-9]+$/.test(code), 'Codes are URL-safe alphanumerics');
   check(new Set(Array.from({ length: 40 }, () => generateShortCode())).size > 30, 'Codes are collision-resistant in practice');
-  check(shortLinkBase() === 'https://sakafleet.com', 'Default base is sakafleet.com');
-  check(isShortLink('https://sakafleet.com/r/abcd1234'), 'Branded short links are recognised');
+  check(shortLinkBase() === 'https://app.sakafleet.com', 'Default base is the app.sakafleet.com custom domain');
+  check(isShortLink('https://app.sakafleet.com/r/abcd1234'), 'Branded short links are recognised');
   check(!isShortLink(LONG_URL), 'Long provider URLs are not short links');
+
+  console.log('\n--- Test 1b: domain readiness gate (v1.32.2) ---');
+  delete process.env.SHORT_LINK_DOMAIN_READY;
+  check(isShortLinkDomainReady() === false, 'Short links are OFF until the branded domain is verified');
+  const gated = await shortenUrl(createMockSupabase().client, LONG_URL);
+  check(gated === LONG_URL, 'While the gate is off, the original working URL is sent (never a dead link)');
+  process.env.SHORT_LINK_DOMAIN_READY = 'on';
+  check(isShortLinkDomainReady() === true, 'SHORT_LINK_DOMAIN_READY=on activates short links');
 
   console.log('\n--- Test 2: shortening long links ---');
   const mock = createMockSupabase();
   const shortPdf = await shortenUrl(mock.client, LONG_URL);
-  check(shortPdf.startsWith('https://sakafleet.com/r/'), 'PDF storage URL becomes a branded short link');
+  check(shortPdf.startsWith('https://app.sakafleet.com/r/'), 'PDF storage URL becomes a branded short link');
   check(shortPdf.length < 60, `Short link is compact (${shortPdf.length} chars vs ${LONG_URL.length})`);
   check(mock.table.length === 1 && mock.table[0].url === LONG_URL, 'The original URL is stored for the redirect');
   const ttlDays = (new Date(mock.table[0].expires_at).getTime() - Date.now()) / 86400000;
   check(ttlDays > SHORT_LINK_TTL_DAYS - 1 && ttlDays <= SHORT_LINK_TTL_DAYS, 'Links carry the 90-day TTL');
 
   const shortPaystack = await shortenUrl(mock.client, PAYSTACK_URL);
-  check(shortPaystack.startsWith('https://sakafleet.com/r/'), 'Paystack checkout URLs are shortened too');
+  check(shortPaystack.startsWith('https://app.sakafleet.com/r/'), 'Paystack checkout URLs are shortened too');
   check(mock.table.length === 2, 'Each distinct URL gets its own code');
 
   console.log('\n--- Test 3: reuse + pass-through ---');
@@ -142,6 +151,7 @@ async function run() {
   check(custom.startsWith('https://short.test/r/'), 'PUBLIC_APP_URL overrides the branded base');
   if (previousBase === undefined) delete process.env.PUBLIC_APP_URL;
   else process.env.PUBLIC_APP_URL = previousBase;
+  delete process.env.SHORT_LINK_DOMAIN_READY;
 
   console.log(`\n🎉 ${passed} link-shortener assertions passed.`);
   console.log('Stateless suite: only an in-memory mock was used; no database rows were written.');

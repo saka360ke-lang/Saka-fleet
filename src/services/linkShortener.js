@@ -15,8 +15,24 @@ export const SHORT_LINK_TTL_DAYS = 90;
 const CODE_ALPHABET = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 /** Public base for short links (PUBLIC_APP_URL overrides the default). */
+export const SHORT_LINK_DEFAULT_BASE = 'https://app.sakafleet.com';
+
+/**
+ * v1.32.2 — short links only go out when the branded domain is verified.
+ * The live 2026-11-01 incident: sakafleet.com was a parked marketing domain,
+ * so every https://sakafleet.com/r/<code> link 404'd while the PDFs were fine.
+ * `SHORT_LINK_DOMAIN_READY=off` (default) keeps sending the original working
+ * URL; set it to `on` once app.sakafleet.com serves HTTPS. An explicit
+ * PUBLIC_APP_URL implies the operator already chose a ready base.
+ */
+export function isShortLinkDomainReady() {
+  const flag = String(process.env.SHORT_LINK_DOMAIN_READY || '').toLowerCase();
+  if (['on', 'true', '1'].includes(flag)) return true;
+  return Boolean(String(process.env.PUBLIC_APP_URL || '').trim());
+}
+
 export function shortLinkBase() {
-  return String(process.env.PUBLIC_APP_URL || 'https://sakafleet.com').replace(/\/+$/, '');
+  return String(process.env.PUBLIC_APP_URL || SHORT_LINK_DEFAULT_BASE).replace(/\/+$/, '');
 }
 
 export function isShortLink(url) {
@@ -69,6 +85,8 @@ export async function shortenUrl(supabase, url, { ttlDays = SHORT_LINK_TTL_DAYS 
     if (!/^https?:\/\//i.test(original)) return original;
     if (original.length <= 80 || isShortLink(original)) return original;
     if (!supabase) return original;
+    // v1.32.2 — never send a link on an unverified domain (see isShortLinkDomainReady).
+    if (!isShortLinkDomainReady()) return original;
 
     // Reuse a live code for the same target (keeps the table tidy).
     try {

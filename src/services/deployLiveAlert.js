@@ -37,7 +37,14 @@ export async function announceRevisionLive({ supabase, revision, version = readR
     if (!supabase || !revision) return { sent: false, reason: 'missing input' };
     const { data: config } = await supabase.from('system_config').select('value').eq('key', 'last_deployed_revision').maybeSingle();
     if (config && config.value === revision) return { sent: false, reason: 'already announced' };
-    await supabase.from('system_config').upsert([{ key: 'last_deployed_revision', value: revision }]);
+    const { error: configError } = await supabase
+      .from('system_config')
+      .upsert([{ key: 'last_deployed_revision', value: revision }], { onConflict: 'key' });
+    // v1.32.2 — a missing onConflict silently failed the upsert, so the marker
+    // stayed frozen at the 2026-10-28 revision and every boot re-announced.
+    if (configError && logger?.warn) {
+      logger.warn('[deployLiveAlert] revision marker not persisted:', configError.message);
+    }
     const text = buildDeployLiveText({ version, revision, now });
     if (typeof send === 'function') await send(text);
     if (logger?.log) logger.log(`[deployLiveAlert] LIVE announcement sent for revision ${revision}.`);

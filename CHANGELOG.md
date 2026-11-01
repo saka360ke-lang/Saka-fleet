@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.32.2] - 2026-11-01
+
+- **Short links are now domain-verified (live fix):** the default base moved to `https://app.sakafleet.com` (the Cloud Run custom subdomain; the root site stays marketing). New `SHORT_LINK_DOMAIN_READY` gate (default **off**) means messages carry the original working URL until the branded domain serves HTTPS — the 2026-11-01 dead-link incident (`sakafleet.com` parked → every `/r/<code>` 404) can never repeat.
+- **Deterministic compliance & reminder answers (zero tokens):** "when does insurance expire?", "my compliance" and "my reminders"/"alerts report" are answered from `vehicle_compliances` + `reminders` with 🟢🟡🔴 chips and days-left — the three unanswered questions from the live chat are closed.
+- **Typed expiry corrections are written:** "you read the document wrong … expiry is 2026-11-20" now updates the compliance ledger, the legacy vehicle column and the linked reminder through the same engine the document flow uses.
+- **Compliance confirmations show days-left** ("Insurance: 2026-11-20 — in 19 days (C35343842)") so a misread date is visible instantly; insurance vault notes now carry `Expires <date>` instead of the commencement date.
+- **Deploy LIVE alert fixed:** the `last_deployed_revision` upsert was missing `onConflict: 'key'`, so the marker stayed frozen at the 2026-10-28 revision. It now persists and warns on failure.
+- **Prompt/doc sync:** `flowKnowledge` + `DEFAULT_SAKA_CORE_PROMPT` describe the ledger-facts contract; `.env.example` documents the new short-link knobs; tests: `test_link_shortener` (28), `test_vehicle_compliance` (44), `test_ocr_flow` (88), `test_quiz_flow` (95).
+
 ## [1.32.1] - 2026-11-01
 
 - **OCR audit remediation (live evidence 2026-11-01):**

@@ -290,6 +290,7 @@ async function run() {
   const insuranceHints = extractDocumentHints(insuranceCert, 'insurance', { countryCode: 'KE' });
   check(insuranceHints.insurance_policy === 'C35343842', 'Certificate number is captured as the policy reference');
   check(insuranceHints.insurance_expiry === '20/11/2026', 'EXPIRING date wins over the COMMENCING date');
+  check(/Expires 20\/11\/2026/.test(String(insuranceHints.notes)), 'Insurance vault note carries the labelled expiry (not the commencement date)');
   const insuredLens = parseDocumentFields(insuranceCert, { countryCode: 'KE' });
   check(insuredLens.family === 'insurance', 'Lens family is insurance');
   check(String(insuredLens.fields?.insurance_expiry?.value || '') === '2026-11-20', 'Lens normalizes the expiry to ISO (Africa/Nairobi)');
