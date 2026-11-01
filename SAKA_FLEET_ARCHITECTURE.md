@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.28.9  
+**Version:** 1.29.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.29.0** | Saka Apex PDF design system: vehicle deep-dive, owner portfolio, driver performance, itemized ledgers, type badges, segmented/vs bars, insight callouts, zero-transparency contract | §47.2–§47.7 |
 | **1.28.9** | Asset metric registry: all 8 kinds populated (odometer vs engine hours, litres vs kWh, L/h, MPG, km/kWh) and wired into reports, summaries, bespoke menus, prompt and QA facts | §71.18 |
 | **1.28.8** | OCR unpaused end to end, always-on self-learning tick, country communication styles, abandoned-checkout recovery (30 min/24 h/T-2d), post-expiry benefit nudges (D+7/D+30) | §71.17 |
 | **1.28.7** | Reports always deliver (guaranteed fallback + storage self-heal), PDF glyph-safe rendering, locale/currency-correct trial reward with the coupon attached, operations list in the welcome + on demand, "in 5,000 km" vs "at 370,000 km" | §71.16 |
@@ -1937,24 +1938,29 @@ Research against Anthropic's current lineup (Oct 2026): **Claude Sonnet 5.5** is
 - `AI_USAGE_COST_RULES` updated (Fable/Opus/Sonnet/Haiku current list prices) so `admin ai-stats` stays honest; smoke test: `node scripts/test_anthropic_connection.js`.
 - **Temperature:** newer Claude models (Sonnet 5.5+) return HTTP 400 for `temperature`; `runAnthropicAttempt` omits it by default (opt in with `ANTHROPIC_TEMPERATURE_SUPPORTED=on` only for legacy models). Verified live through `chatCompletion()`.
 
-### 47.2 Saka Pro PDF engine (`src/services/pdfEngine.js`)
+### 47.2 Saka Apex PDF engine (`src/services/pdfEngine.js`)
 Premium, deterministic, engine-only numbers:
-- **Fonts (vendored OFL, offline):** Manrope (body), Barlow SemiBold (display), JetBrains Mono (figures) under `assets/fonts/` with a Helvetica fallback.
-- **Palette:** Ink `#0B1220`, slate/muted text, per-report accents (fleet blue, financial sky, compliance amber, maintenance emerald, fuel violet, driver emerald, custom indigo) and semantic status colors.
-- **Layout:** full-bleed cover (brand, title, period chips, "prepared for" owner card, driver cards), KPI card grid (3-up), vector charts — donut (arc-based with stacked-bar fallback), vertical bars, area/line trend, 90-day progress runway — zebra tables with money/number/status renderers, sections, notes, header band and "Page X of Y" footer on every page.
+- **Fonts (vendored OFL, offline):** Manrope (body), Barlow SemiBold (display), JetBrains Mono (figures) under `assets/fonts/`, Helvetica/Courier fallback. `useStandardFonts: true` renders a report with the built-in fonts (used by the test/QA suite to verify drawn text).
+- **Palette (v1.29.0 Apex):** Deep Midnight Slate ink `#0F172A`, Tech Teal brand `#0EA5E9`, Emerald positive `#10B981`, Coral negative `#EF4444`, Amber warn `#F59E0B`, neutral panels `#F8FAFC`, hairlines `#E2E8F0`, plus per-report accents and semantic status colours. Money and meter figures use the mono face for tabular alignment.
+- **Layout:** full-bleed cover (brand, title, period chips, licence-plate badge for vehicle-scoped reports, "prepared for" owner card, driver cards), KPI grid with semantic value tones, vector charts — bar, donut, line/area, progress runway, **segmented proportional bar**, **earnings-vs-expenses bars** — zebra tables, sections, **insight callouts**, notes, header band and "Page X of Y" footer on every page.
+- **Itemized ledger (v1.29.0):** Date · Type badge · Description · Odometer · Unit cost · Total (plus an optional Vehicle column for multi-asset ledgers); month groups with subtotals, zebra rows, a bold TOTAL band and a transparent footer ("All N record(s) … shown — nothing hidden"). No truncation: pagination handles size and re-draws the column header after each page break.
+- **Full transparency contract:** a real numeric zero renders an explicit amount (`KES 0`, `0.00`); only missing/unpopulated values render `—`. Every Apex builder also emits a **Data completeness** panel (records scanned, rows shown, lane exclusions) and engine-owned totals.
 - **People & Roles panel:** owner profile (name, email, phone, plan, language) + assigned driver cards (name, plate, licence label, status) wherever data exists.
-- **Determinism:** figures come only from structured report data; the AI never draws or computes charts.
+- **Determinism:** figures come only from structured report data; the AI never draws or computes charts. Every string passes through `pdfSafeText()` (emoji stripped, symbols mapped), and fixed cover/footer text draws with a zeroed bottom margin so pdfkit never spawns phantom pages.
 
 ### 47.3 Report catalog & bespoke reports
-- Core: Fleet Status, Compliance & Expiry, Maintenance & Service, Financial & Cost (all now PDF-capable).
-- Creative: Fuel Economy Deep-Dive (full-tank segments/trend), Compliance Radar-style expiry runway, Driver Scorecard, Year-in-Review, Eco-Footprint (est. CO₂ at 2.68 kg/L, labelled estimate), Driver Daybook, Vehicle Health Check-in, My Compliance Card.
-- **Bespoke reports:** one sentence names metrics + period — `"custom report: fuel economy, total spend and distance for last 3 months"`. `src/services/reportMetrics.js` holds the declarative metric registry (access-tagged, formatter-tagged); missing metrics trigger a short access-aware menu (zero tokens). Range presets: this month, last 3 months, this year.
-- **Delivery:** `src/services/reportDelivery.js` resolves → enforces the lane → builds structured data → renders the Saka Pro PDF → uploads to the `fleet-reports` bucket → emails it (Resend) → returns the WhatsApp text plus the link. The background follow-up lane carries it so the chat never blocks.
+- Core: Fleet Status, Compliance & Expiry, Maintenance & Service, Financial & Cost (all PDF-capable; fleet/financial carry a fleet financial-health block and the full ledger).
+- Creative: Fuel Economy Deep-Dive (full-tank segments/trend), Compliance Radar-style expiry runway, Driver Scorecard, Year-in-Review, Eco-Footprint (est. CO₂ at 2.68 kg/L, labelled estimate), Driver Daybook (now with its own activity ledger), Vehicle Health Check-in, My Compliance Card.
+- **Apex set (v1.29.0):** Vehicle Deep-Dive (`vehicle_deep_dive` — one asset, plate badge, cost/km or cost/hour, fuel economy, earnings vs expenses, compliance runway, full ledger), Owner Portfolio (`owner_portfolio` — every owned asset, multi-vehicle distribution, per-vehicle performance table, consolidated ledger, net payouts) and Driver Performance & Compliance (`driver_performance` — activity, active-day adherence, fill-type discipline, compliance verification, daily activity log, driver ledger). Owner-lane only.
+- **Itemized ledger everywhere:** every vehicle, driver, fleet/financial and bespoke report carries the month-grouped transaction ledger built by `src/services/reportLedger.js` (`buildLedgerGroups`), with type badges (FUEL · SERVICE · PARTS · TOLLS · EARNING · OTHER · COMPLIANCE), unit cost derivation for fuel, and `scanned === shown` transparency totals.
+- **Bespoke reports:** one sentence names metrics + period — `"custom report: fuel economy, total spend and distance for last 3 months"`. `src/services/reportMetrics.js` holds the declarative metric registry (access-tagged, formatter-tagged); missing metrics trigger a short access-aware menu (zero tokens). Range presets: this month, last 3 months, this year. Bespoke PDFs now include the filtered ledger and an earnings-vs-expenses chart.
+- **Delivery:** `src/services/reportDelivery.js` resolves → enforces the lane → builds structured data → renders the Saka Apex PDF → uploads to the `fleet-reports` bucket → emails it (Resend) → returns the WhatsApp text plus the link. The background follow-up lane carries it (and the active plate) so the chat never blocks.
+- **Routing keys:** aliases resolve to `vehicle_deep_dive` ("deep dive", "vehicle report", "car report"), `owner_portfolio` ("portfolio", "my assets", "asset report") and `driver_performance` ("driver performance"). Underscore registry keys resolve exactly (e.g. `report_type = vehicle_deep_dive`); fuel aliases still win for "fuel deep dive".
 
 ### 47.4 Report access lanes (`src/services/reportAccess.js`)
 One pure choke point used by the WhatsApp route, the follow-up worker and the PDF builder:
-- **Owner:** every report for vehicles they own. **Driver:** Driver Daybook, Vehicle Health Check-in, My Compliance Card, Maintenance, Fuel Economy — assigned vehicle only. **Admin:** everything.
-- Drivers are denied Fleet Status, Financial & Cost, Driver Scorecard, Year-in-Review, Eco-Footprint, and other drivers' data; denial copy is warm and offers the driver lane.
+- **Owner:** every report for vehicles they own — including the Apex set (`vehicle_deep_dive`, `owner_portfolio`, `driver_performance`). **Driver:** Driver Daybook, Vehicle Health Check-in, My Compliance Card, Maintenance, Fuel Economy — assigned vehicle only. **Admin:** everything.
+- Drivers are denied Fleet Status, Financial & Cost, Driver Scorecard, Year-in-Review, Eco-Footprint, the Apex owner set, and other drivers' data; denial copy is warm and offers the driver lane.
 - **Report Passes:** `driver_assignments.report_grants` (jsonb, migration `npm run migrate:report-grants`) lets the owner/superadmin grant a driver extra lane reports (e.g. compliance); financials can never be granted. Grants are read automatically by the report worker.
 - Driver custom reports are automatically filtered to driver-safe metrics (no earnings/net profit/total spend).
 
@@ -1962,9 +1968,47 @@ One pure choke point used by the WhatsApp route, the follow-up worker and the PD
 `Saka Fleet must be fun, easy and efficient for every gender, age and locality.` Mirrored into `.clinerules` rule 31, `SAKA_TONE_COMPASS.inclusion` (rendered as **UX & INCLUSION** in the playbook), the core prompt's TONE MIRRORING section, the PDF labels/copy and `test_agent_training.js` tokens. Plain words, one question per turn, gender-neutral, example-first, forgiving inputs, gentle celebration, one clear next step.
 
 ### 47.6 Files, tests & knobs
-- Files: `src/services/pdfEngine.js`, `reportMetrics.js`, `reportDelivery.js`, `reportAccess.js`, `driverReports.js`; `reports.js` (legacy facade → Pro renderer); integrations in `src/routes/whatsapp.js`, `src/services/followups.js`, `sakaAi.js`, `flowKnowledge.js`; fonts in `assets/fonts/`.
-- Tests: `test_report_access.js` (33 assertions), `test_report_metrics.js` (25, incl. real PDF render), `test_agent_training.js` (64), plus existing fuel/remediation/model suites.
+- Files: `src/services/pdfEngine.js` (Apex renderer), `reportLedger.js` (transaction ledger builder), `vehicleDeepDive.js`, `ownerPortfolio.js`, `driverReports.js` (daybook ledger + driver performance), `fleetReports.js` (fleet financial block + ledgers), `reportMetrics.js`, `reportDelivery.js`, `reportAccess.js`; `reports.js` (legacy facade → Apex renderer); integrations in `src/routes/whatsapp.js`, `src/services/followups.js`, `sakaAi.js`, `flowKnowledge.js`; fonts in `assets/fonts/`. No new npm dependencies — the renderer stays pdfkit-based.
+- Tests: `test_pdf_engine.js` (29 assertions: glyph safety, theme, Apex components, real drawn text via `useStandardFonts`, zero-vs-missing, phantom-page guard), `test_report_builders.js` (67: ledger mapping, deep-dive, portfolio, driver performance, aliases, lane guards, lane wiring, adapter PDF renders), `test_report_metrics.js` (25), `test_report_access.js` (33), `test_fleet_reports.js` (42), `test_agent_training.js` (109), `test_doc_sync.js` (24).
 - Ops: `node scripts/test_anthropic_connection.js`; `npm run migrate:*` unchanged; report PDFs require the `fleet-reports` storage bucket (already used by the legacy audit path).
+
+### 47.7 Apex report spec — data mapping blueprint
+Every builder returns `{ ok, type, data, text }`; `data` is the single renderer contract:
+```json
+{
+  "title": "Vehicle Deep-Dive - KAS 628T",
+  "subtitle": "Toyota Hilux - engine-calculated figures, nothing hidden",
+  "reportType": "vehicle_deep_dive",
+  "plate": "KAS 628T",
+  "periodLabel": "All recorded activity",
+  "generatedAt": "2026-11-01T00:00:00.000Z",
+  "currency": "KES",
+  "kpis": [{ "label": "Total spend", "value": "KES 23,000", "hint": "3 expense record(s)", "tone": "negative" }],
+  "charts": [
+    { "type": "segment", "title": "Spend by category", "currency": "KES", "segments": [{ "label": "Fuel", "value": 11000 }] },
+    { "type": "vs", "title": "Earnings vs expenses", "currency": "KES", "earnings": 25000, "expenses": 23000 },
+    { "type": "bar|donut|line|progress", "series": [{ "label": "W1", "value": 12 }] }
+  ],
+  "ledgers": [{
+    "title": "Itemized activity - KAS 628T",
+    "currency": "KES",
+    "showVehicle": false,
+    "groups": [{ "label": "November 2026", "expenseTotal": 6000, "earningTotal": 25000,
+      "rows": [{ "date": "2 Nov 2026", "kind": "fuel", "kindLabel": "FUEL", "description": "Fuel - 45 L - Shell Westlands",
+                 "odometer": 50800, "unitCost": 133.33, "amount": 6000 }] }],
+    "totals": { "scanned": 4, "shown": 4, "expenseTotal": 23000, "earningTotal": 25000, "net": 2000 },
+    "footnote": "All 4 record(s) in this period are shown — nothing hidden."
+  }],
+  "tables": [{ "title": "Portfolio performance", "currency": "KES", "columns": [{ "key": "plate", "label": "Vehicle" }], "rows": [] }],
+  "callouts": [{ "tone": "positive", "title": "Financial health: surplus", "body": "…" }],
+  "sections": [{ "title": "Data completeness", "rows": [{ "label": "Ledger rows shown", "value": "4" }], "lines": ["…"] }],
+  "notes": ["Generated by Saka Fleet on … - Africa/Nairobi"]
+}
+```
+- `kpis[].tone`: `positive` (emerald), `negative` (coral), `warn` (amber), `brand` (teal) or omitted (ink).
+- `charts[].type`: `bar`, `donut`/`pie`, `line`, `progress`, `segment`/`segmented`/`split`, `vs`/`compare`.
+- Ledger `kind` drives the badge tone: `earning` → emerald, `fuel` → teal, `service|maintenance|parts` → amber, `compliance` → amber, `tolls|other` → coral/neutral.
+- Real zeros stay `0`; missing values stay `null`. The renderer owns formatting (`KES 0` vs `—`), so builders never pre-format ledger amounts.
 
 ---
 

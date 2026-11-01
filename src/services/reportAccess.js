@@ -34,6 +34,9 @@ export const REPORT_ACCESS_MATRIX = Object.freeze({
   driver_scorecard: { label: 'Driver Scorecard', owner: true, driver: false },
   year_review: { label: 'Year-in-Review Digest', owner: true, driver: false },
   eco_footprint: { label: 'Eco-Footprint Summary', owner: true, driver: false },
+  vehicle_deep_dive: { label: 'Vehicle Deep-Dive Report', owner: true, driver: false },
+  owner_portfolio: { label: 'Owner Portfolio Report', owner: true, driver: false },
+  driver_performance: { label: 'Driver Performance & Compliance Report', owner: true, driver: false },
   custom: { label: 'Bespoke Report', owner: true, driver: true, driverSafeOnly: true }
 });
 

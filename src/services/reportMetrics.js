@@ -1,6 +1,7 @@
-import { formatNumber } from './globalization.js';
+import { buildGlobalContext, formatNumber } from './globalization.js';
 import { analyzeFuelEconomy } from './fuelEconomy.js';
 import { getAssetMetricProfile } from './assetMetrics.js';
+import { buildLedgerGroups } from './reportLedger.js';
 
 /**
  * Saka Fleet — Bespoke Report Metric Registry (v1.18.0)
@@ -215,6 +216,17 @@ export async function buildCustomReport({
   });
 
   const chartSeries = Object.entries(categories).map(([label, value]) => ({ label, value }));
+  const ctx = buildGlobalContext(countryInfo, profile);
+  const ledger = buildLedgerGroups({
+    expenses,
+    earnings,
+    vehicles,
+    ctx,
+    includeEarnings: access?.lane !== 'driver',
+    includeVehicle: vehicles.length > 1,
+    title: 'Itemized activity ledger',
+    subtitle: `${bounds.label} - every transaction in scope`
+  });
   return {
     ok: true,
     type: 'custom',
@@ -225,6 +237,13 @@ export async function buildCustomReport({
       kpis: selectedMetrics.slice(0, 6),
       charts: [
         ...(chartSeries.length ? [{ type: 'donut', title: 'Spend by category', totalLabel: 'total', series: chartSeries }] : []),
+        ...(access?.lane !== 'driver' && (totalSpend > 0 || earned > 0) ? [{
+          type: 'vs',
+          title: 'Earnings vs expenses',
+          currency,
+          earnings: Math.round(earned * 100) / 100,
+          expenses: Math.round(totalSpend * 100) / 100
+        }] : []),
         ...(economy.segments?.length >= 2 ? [{
           type: 'line',
           title: 'Fuel economy trend',
@@ -232,6 +251,7 @@ export async function buildCustomReport({
           series: economy.segments.map((segment, index) => ({ label: `#${index + 1}`, value: segment.kmPerLiter }))
         }] : [])
       ],
+      ledgers: [ledger],
       tables: [{
         title: 'Selected metrics',
         columns: [

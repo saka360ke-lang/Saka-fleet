@@ -23,6 +23,7 @@ import {
   resolveUserTimezone
 } from './globalization.js';
 import { detectExpiryCategory, reminderDueDate, daysUntilDue } from './maintenanceReminders.js';
+import { buildLedgerGroups } from './reportLedger.js';
 
 export const REPORT_TYPES = Object.freeze({
   fleet: { label: 'Fleet Status Report', aliases: ['fleet', 'status', 'overview', 'executive', 'rollup', 'summary'] },
@@ -277,7 +278,7 @@ export async function buildFleetStatusReport({ supabase, ownerId = null, driverI
   if (!supabase) return { ok: false, type: 'fleet', error: 'Database unavailable.' };
   const ctx = buildGlobalContext(countryInfo, profile);
   const dataset = await loadFleetData({ supabase, ownerId, driverId, vehicleId });
-  const { vehicles, reminders, expenses, transfers } = dataset;
+  const { vehicles, reminders, expenses, earnings, transfers } = dataset;
 
   const activeVehicles = vehicles.filter(isActiveVehicle);
   const unassignedVehicles = vehicles.filter((v) => !v.assigned_driver_id).length;
@@ -305,12 +306,44 @@ export async function buildFleetStatusReport({ supabase, ownerId = null, driverI
     ...sortedExpenses.slice(0, 3).map((e) => ({ type: 'expense_logged', label: `${plateFor(e.vehicle_id, vehicles)} ${e.expense_type || 'expense'} ${formatMoney(toNumber(e.amount), ctx.currency, ctx.locale)}`, at: e.created_at || null }))
   ].filter((item) => item.at).sort((a, b) => new Date(b.at) - new Date(a.at)).slice(0, 5);
 
+  // v1.29.0 — the executive summary now surfaces fleet financial health and
+  // the full itemized ledger, never a hidden aggregate.
+  const fleetExpenseTotals = { fuel: 0, maintenance: 0, parts: 0, tolls: 0, other: 0 };
+  for (const expense of expenses || []) {
+    fleetExpenseTotals[expenseCategory(expense.expense_type)] += toNumber(expense.amount);
+  }
+  const fleetTotalExpenses = Math.round(Object.values(fleetExpenseTotals).reduce((sum, value) => sum + value, 0) * 100) / 100;
+  const fleetTotalEarnings = Math.round((earnings || []).reduce((sum, row) => sum + toNumber(row.revenue_amount ?? row.amount), 0) * 100) / 100;
+  const ledger = buildLedgerGroups({
+    expenses,
+    earnings,
+    vehicles,
+    ctx,
+    includeEarnings: true,
+    includeVehicle: vehicles.length > 1,
+    title: 'Fleet activity ledger',
+    subtitle: 'Every transaction across the fleet, grouped by month'
+  });
+
   const data = {
     type: 'fleet',
     generatedAt: now.toISOString(),
     timeZone: ctx.timeZone,
     scope: ownerId ? 'owner' : 'fleet',
     currency: ctx.currency,
+    financial: {
+      expenses: {
+        fuel: Math.round(fleetExpenseTotals.fuel * 100) / 100,
+        maintenance: Math.round(fleetExpenseTotals.maintenance * 100) / 100,
+        parts: Math.round(fleetExpenseTotals.parts * 100) / 100,
+        tolls: Math.round(fleetExpenseTotals.tolls * 100) / 100,
+        other: Math.round(fleetExpenseTotals.other * 100) / 100,
+        total: fleetTotalExpenses
+      },
+      earnings: fleetTotalEarnings,
+      net: Math.round((fleetTotalEarnings - fleetTotalExpenses) * 100) / 100
+    },
+    ledger,
     overview: {
       totalVehicles: vehicles.length,
       activeVehicles: activeVehicles.length,
@@ -693,12 +726,24 @@ export async function buildFinancialReport({ supabase, ownerId = null, driverId 
   const distanceDisplay = ctx.unitSystem === 'imperial' ? kmToUserDistance(distanceKm, 'imperial') : distanceKm;
   const operatingHours = vehicles.reduce((sum, v) => sum + toNumber(v.operating_hours), 0);
 
+  const ledger = buildLedgerGroups({
+    expenses,
+    earnings,
+    vehicles,
+    ctx,
+    includeEarnings: true,
+    includeVehicle: vehicles.length > 1,
+    title: 'Fleet financial ledger',
+    subtitle: 'Every transaction behind these totals'
+  });
+
   const data = {
     type: 'financial',
     generatedAt: now.toISOString(),
     timeZone: ctx.timeZone,
     currency: ctx.currency,
     locale: ctx.locale,
+    ledger,
     expenses: {
       fuel: Math.round(expenseTotals.fuel * 100) / 100,
       maintenance: Math.round(expenseTotals.maintenance * 100) / 100,

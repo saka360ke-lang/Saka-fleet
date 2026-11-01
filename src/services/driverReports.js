@@ -1,11 +1,13 @@
-import { formatDate, formatNumber } from './globalization.js';
+import { buildGlobalContext, formatDate, formatNumber } from './globalization.js';
 import { daysUntilDue, reminderDueDate } from './maintenanceReminders.js';
+import { buildLedgerGroups, expenseKind } from './reportLedger.js';
 
 /**
- * Saka Fleet — Driver-first reports (v1.18.0)
+ * Saka Fleet — Driver-first reports (v1.29.0)
  * ------------------------------------------
  * Driver lane only: scoped to the assigned vehicle and the driver's own
  * activity. No owner earnings, no net profit, no other vehicles/drivers.
+ * Owner lane adds the Driver Performance & Compliance report with a ledger.
  */
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -27,8 +29,8 @@ function money(value, currency, locale) {
   }
 }
 
-function kpi(label, value, hint) {
-  return { label, value: String(value ?? '—'), hint };
+function kpi(label, value, hint, tone = null) {
+  return { label, value: String(value ?? '—'), hint, ...(tone ? { tone } : {}) };
 }
 
 function maskNumber(value) {
@@ -58,6 +60,7 @@ export async function buildDriverDaybook({
   if (!supabase || !driverId) return { ok: false, type: 'driver_daybook', error: 'Missing driver context' };
   const currency = currencyOf(countryInfo, profile);
   const locale = localeOf(countryInfo);
+  const ctx = buildGlobalContext(countryInfo, profile);
   const since = new Date(now.getTime() - days * DAY_MS).toISOString();
 
   let vehicles = [];
@@ -132,6 +135,15 @@ export async function buildDriverDaybook({
         { type: 'bar', title: 'Daily activity', note: 'Entries you logged each day', series: daily },
         { type: 'donut', title: 'Spend by category', totalLabel: 'total', series: categorySeries.length ? categorySeries : [{ label: 'No activity', value: 1 }] }
       ],
+      ledgers: [buildLedgerGroups({
+        expenses,
+        earnings,
+        vehicles,
+        ctx,
+        includeEarnings: true,
+        title: 'Your activity ledger',
+        subtitle: `Every entry you logged in the last ${days} days - nothing hidden`
+      })],
       tables: [{
         title: 'Recent activity',
         currency,
@@ -346,10 +358,294 @@ export async function buildDriverComplianceCard({
   };
 }
 
+/**
+ * 🧑‍✈️ Driver Performance & Compliance (owner lane, v1.29.0)
+ * Activity, adherence, fill discipline, compliance verification, a daily
+ * activity log and the driver's full itemized ledger. Never cross-driver.
+ */
+export async function buildDriverPerformance({
+  supabase,
+  ownerId = null,
+  driverId = null,
+  now = new Date(),
+  days = 90,
+  countryInfo = null,
+  profile = null
+} = {}) {
+  if (!supabase) return { ok: false, type: 'driver_performance', error: 'Database unavailable.' };
+  const ctx = buildGlobalContext(countryInfo, profile);
+  const since = new Date(now.getTime() - days * DAY_MS).toISOString();
+
+  let vehicles = [];
+  try {
+    let query = supabase.from('vehicles').select('*').is('deleted_at', null).limit(200);
+    if (driverId) query = query.eq('assigned_driver_id', driverId);
+    if (ownerId) query = query.eq('owner_id', ownerId);
+    const { data } = await query;
+    vehicles = data || [];
+  } catch { vehicles = []; }
+
+  if (!driverId && ownerId) {
+    const candidate = vehicles.find((vehicle) => vehicle.assigned_driver_id);
+    if (candidate) {
+      driverId = candidate.assigned_driver_id;
+      vehicles = vehicles.filter((vehicle) => vehicle.assigned_driver_id === driverId);
+    }
+  }
+  if (!driverId) {
+    return { ok: false, type: 'driver_performance', error: 'No driver is assigned to this fleet yet. Assign a driver to unlock this report.' };
+  }
+  if (ownerId && !vehicles.some((vehicle) => vehicle.owner_id === ownerId && vehicle.assigned_driver_id === driverId)) {
+    return { ok: false, type: 'driver_performance', denied: true, error: 'That driver is not assigned to any of your vehicles.' };
+  }
+
+  let driverProfile = null;
+  try {
+    const { data } = await supabase.from('profiles').select('id, full_name, phone_number, email').eq('id', driverId).maybeSingle();
+    driverProfile = data || null;
+  } catch { driverProfile = null; }
+
+  const scopeIds = vehicles.map((vehicle) => vehicle.id);
+  let expenses = [];
+  try {
+    const { data } = await supabase.from('expense_logs').select('*').eq('driver_id', driverId).gte('created_at', since).limit(2000);
+    expenses = (data || []).filter((row) => !scopeIds.length || scopeIds.includes(row.vehicle_id));
+  } catch { expenses = []; }
+  let earnings = [];
+  try {
+    const { data } = await supabase.from('private_earnings').select('*').eq('driver_id', driverId).gte('created_at', since).limit(2000);
+    earnings = (data || []).filter((row) => !scopeIds.length || scopeIds.includes(row.vehicle_id));
+  } catch { earnings = []; }
+  let compliances = [];
+  try {
+    const { data } = await supabase.from('driver_compliances').select('*').eq('driver_id', driverId).limit(50);
+    compliances = data || [];
+  } catch { compliances = []; }
+
+  // Engine-owned performance math.
+  const fuelRows = expenses.filter((row) => expenseKind(row.expense_type) === 'fuel');
+  const spend = expenses.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
+  const earned = earnings.reduce((sum, row) => sum + (Number(row.revenue_amount ?? row.amount) || 0), 0);
+  const odometers = expenses
+    .map((row) => Number(row.odometer_reading))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const distanceKm = odometers.length >= 2 ? Math.max(...odometers) - Math.min(...odometers) : null;
+  const distanceDisplay = distanceKm === null ? null : (ctx.unitSystem === 'imperial' ? distanceKm / 1.609344 : distanceKm);
+  const labelledFills = fuelRows.filter((row) => row.fill_type).length;
+  const fullFills = fuelRows.filter((row) => String(row.fill_type || '').toLowerCase() === 'full').length;
+  const fillDiscipline = fuelRows.length ? Math.round((fullFills / fuelRows.length) * 100) : null;
+
+  const dayKeys = new Set();
+  for (const row of [...expenses, ...earnings]) {
+    const at = row.created_at || row.logged_at;
+    if (at) dayKeys.add(String(at).slice(0, 10));
+  }
+  const activeDays = dayKeys.size;
+  const adherence = Math.round((activeDays / days) * 100);
+
+  const daily = [];
+  for (let offset = 13; offset >= 0; offset -= 1) {
+    const day = new Date(now.getTime() - offset * DAY_MS);
+    const key = day.toISOString().slice(0, 10);
+    const count = [...expenses, ...earnings]
+      .filter((row) => String(row.created_at || row.logged_at || '').slice(0, 10) === key).length;
+    daily.push({ label: day.toLocaleDateString('en-GB', { weekday: 'short' }), value: count });
+  }
+
+  const categoryLabels = { fuel: 'Fuel', maintenance: 'Maintenance', parts: 'Parts', tolls: 'Tolls & parking', compliance: 'Compliance', other: 'Other' };
+  const categoryTotals = { fuel: 0, maintenance: 0, parts: 0, tolls: 0, compliance: 0, other: 0 };
+  for (const row of expenses) categoryTotals[expenseKind(row.expense_type)] += Number(row.amount) || 0;
+  const categorySeries = Object.entries(categoryTotals)
+    .filter(([, value]) => value > 0)
+    .map(([key, value]) => ({ label: categoryLabels[key] || key, value: Math.round(value * 100) / 100 }));
+
+  const complianceItems = compliances.map((row) => {
+    const left = row.lifetime ? null : daysUntilDue(row.expiry, now);
+    const status = row.lifetime ? 'valid' : (left === null ? 'unknown' : left < 0 ? 'expired' : left <= 30 ? 'due' : 'valid');
+    return {
+      label: row.label || row.type || 'Compliance',
+      number: maskNumber(row.number),
+      expiry: row.lifetime ? 'Valid for life' : (row.expiry ? formatDate(row.expiry, localeOf(countryInfo), { timeZone: ctx.timeZone }) : 'Not set'),
+      status,
+      daysLeft: left
+    };
+  });
+  const complianceValid = complianceItems.filter((item) => item.status === 'valid').length;
+  const complianceDue = complianceItems.filter((item) => item.status === 'due').length;
+  const complianceExpired = complianceItems.filter((item) => item.status === 'expired').length;
+
+  const dayMap = new Map();
+  for (const row of expenses) {
+    const key = String(row.created_at || '').slice(0, 10);
+    if (!key) continue;
+    if (!dayMap.has(key)) dayMap.set(key, { entries: 0, spend: 0, min: null, max: null });
+    const day = dayMap.get(key);
+    day.entries += 1;
+    day.spend += Number(row.amount) || 0;
+    const odometer = Number(row.odometer_reading);
+    if (Number.isFinite(odometer) && odometer > 0) {
+      day.min = day.min === null ? odometer : Math.min(day.min, odometer);
+      day.max = day.max === null ? odometer : Math.max(day.max, odometer);
+    }
+  }
+  const activityRows = [...dayMap.entries()]
+    .sort((a, b) => String(b[0]).localeCompare(String(a[0])))
+    .slice(0, 31)
+    .map(([key, value]) => ({
+      date: formatDate(key, localeOf(countryInfo), { timeZone: ctx.timeZone }),
+      entries: value.entries,
+      distance: value.min !== null && value.max !== null ? Math.round((value.max - value.min) * 10) / 10 : null,
+      spend: Math.round(value.spend * 100) / 100
+    }));
+
+  const ledger = buildLedgerGroups({
+    expenses,
+    earnings,
+    vehicles,
+    ctx,
+    includeEarnings: true,
+    title: `Activity ledger - ${driverProfile?.full_name || 'driver'}`,
+    subtitle: 'Every log and earning submitted by this driver in the period'
+  });
+
+  const complianceProgress = complianceItems
+    .filter((item) => Number.isFinite(item.daysLeft))
+    .slice(0, 6)
+    .map((item) => ({ label: item.label, value: Math.max(0, item.daysLeft), text: item.daysLeft < 0 ? 'expired' : `${item.daysLeft}d` }));
+
+  const callouts = [
+    {
+      tone: adherence >= 50 ? 'positive' : 'warn',
+      title: 'Logging adherence',
+      body: `${activeDays} active day(s) out of ${days} (${adherence}%). Daily logs build the clearest vehicle history and the strongest passbook.`
+    },
+    ...(fuelRows.length ? [{
+      tone: fillDiscipline >= 60 ? 'positive' : 'warn',
+      title: 'Fuel data discipline',
+      body: `${fullFills} of ${fuelRows.length} fuel fill(s) marked full tank (${fillDiscipline}%; ${labelledFills} labelled). Full-to-full fills give exact km/L.`
+    }] : []),
+    ...(complianceItems.length ? [{
+      tone: complianceExpired ? 'negative' : (complianceDue ? 'warn' : 'positive'),
+      title: 'Compliance verification',
+      body: `${complianceValid} valid document(s), ${complianceDue} expiring within 30 days, ${complianceExpired} expired.`
+    }] : [{
+      tone: 'warn',
+      title: 'Compliance not on file',
+      body: 'No driver documents are recorded yet. Add the licence and badge so this report can verify compliance.'
+    }])
+  ];
+
+  const driverLocale = localeOf(countryInfo);
+  const driverCurrency = currencyOf(countryInfo, profile);
+  const kpis = [
+    kpi('Entries logged', formatNumber(expenses.length + earnings.length, driverLocale), `last ${days} days`),
+    kpi('Active days', `${activeDays} of ${days}`, `${adherence}% adherence`),
+    kpi('Distance logged', distanceDisplay === null ? '—' : `${formatNumber(Math.round(distanceDisplay), driverLocale)} ${ctx.labels.distance}`, 'between odometer readings'),
+    kpi('Spend recorded', money(spend, driverCurrency, driverLocale), 'driver logs', 'negative'),
+    kpi('Earnings submitted', money(earned, driverCurrency, driverLocale), 'driver logs', 'positive'),
+    kpi('Compliance valid', complianceItems.length ? `${complianceValid}/${complianceItems.length}` : '—', complianceExpired ? `${complianceExpired} expired` : 'no expired documents', complianceExpired ? 'negative' : 'positive')
+  ];
+
+  const data = {
+    title: `Driver Performance - ${driverProfile?.full_name || 'Driver'}`,
+    subtitle: `Activity, adherence and compliance over the last ${days} days`,
+    reportType: 'driver_performance',
+    plate: vehicles.length === 1 ? vehicles[0].plate_number : null,
+    periodLabel: `Last ${days} days`,
+    generatedAt: now.toISOString(),
+    currency: driverCurrency,
+    kpis,
+    charts: [
+      { type: 'bar', title: 'Daily activity', note: 'Entries this driver logged each day (14-day window)', series: daily },
+      ...(categorySeries.length ? [{
+        type: 'segment',
+        title: 'Spend by category',
+        note: 'This driver\'s logged expenses',
+        currency: driverCurrency,
+        segments: categorySeries
+      }] : []),
+      ...(complianceProgress.length ? [{
+        type: 'progress',
+        title: 'Compliance runway',
+        max: 90,
+        series: complianceProgress
+      }] : [])
+    ],
+    ledgers: [ledger],
+    callouts,
+    tables: [
+      {
+        title: 'Daily activity log',
+        subtitle: 'Every day this driver logged activity - nothing omitted',
+        currency: driverCurrency,
+        columns: [
+          { key: 'date', label: 'Date', width: 1.2 },
+          { key: 'entries', label: 'Entries', width: 0.8, type: 'number', align: 'right' },
+          { key: 'distance', label: 'Distance', width: 0.9, type: 'number', align: 'right' },
+          { key: 'spend', label: 'Spend', width: 1, type: 'money', align: 'right' }
+        ],
+        rows: activityRows
+      },
+      ...(complianceItems.length ? [{
+        title: 'Compliance documents',
+        columns: [
+          { key: 'label', label: 'Document', width: 1.4 },
+          { key: 'number', label: 'Number', width: 1.1 },
+          { key: 'expiry', label: 'Expiry', width: 1.1 },
+          { key: 'status', label: 'Status', width: 0.9, type: 'status' }
+        ],
+        rows: complianceItems
+      }] : [])
+    ],
+    sections: [
+      {
+        title: 'Driver profile',
+        rows: [
+          { label: 'Driver', value: driverProfile?.full_name || 'Assigned driver' },
+          { label: 'Phone', value: driverProfile?.phone_number || '—' },
+          { label: 'Email', value: driverProfile?.email || '—' },
+          { label: 'Assigned vehicle(s)', value: vehicles.map((vehicle) => vehicle.plate_number).filter(Boolean).join(', ') || '—' },
+          { label: 'Period', value: `Last ${days} days` }
+        ]
+      },
+      {
+        title: 'Data completeness',
+        rows: [
+          { label: 'Expense records scanned', value: String(expenses.length) },
+          { label: 'Earning records scanned', value: String(earnings.length) },
+          { label: 'Ledger rows shown', value: String(ledger.totals.shown) },
+          { label: 'Compliance documents', value: String(complianceItems.length) }
+        ],
+        lines: ['Only this driver\'s own logs are shown - no other driver and no owner-only data.']
+      }
+    ],
+    notes: [
+      `Generated by Saka Fleet on ${formatDate(now, ctx.locale, { timeZone: ctx.timeZone })} - ${ctx.timeZone}`,
+      'Engine-calculated from the driver\'s logged records. Adherence counts days with at least one log.'
+    ]
+  };
+
+  const text = [
+    `🧑‍✈️ *Driver Performance - ${driverProfile?.full_name || 'Driver'}*`,
+    `_Last ${days} days_`,
+    '',
+    `• Entries logged: *${formatNumber(expenses.length + earnings.length, driverLocale)}*`,
+    `• Active days: *${activeDays} of ${days}* (${adherence}%)`,
+    distanceDisplay === null ? null : `• Distance logged: *${formatNumber(Math.round(distanceDisplay), driverLocale)} ${ctx.labels.distance}*`,
+    `• Spend recorded: *${money(spend, driverCurrency, driverLocale)}*`,
+    `• Compliance: *${complianceItems.length ? `${complianceValid}/${complianceItems.length} valid` : 'not on file'}*`,
+    '',
+    '📄 A branded PDF with the daily activity log and itemized ledger is attached/linked where email is available.'
+  ].filter((line) => line !== null).join('\n');
+
+  return { ok: true, type: 'driver_performance', data, text };
+}
+
 export default {
   buildDriverDaybook,
   buildVehicleHealthCheck,
-  buildDriverComplianceCard
+  buildDriverComplianceCard,
+  buildDriverPerformance
 };
 
 

@@ -7,11 +7,11 @@ import {
 } from './src/services/assetMetrics.js';
 
 /**
- * Saka Fleet — Legacy report facade (v1.18.0, metric-registry v1.28.9)
- * -------------------------------------------------------------------
+ * Saka Fleet — Legacy report facade (v1.29.0 Apex, metric-registry v1.28.9)
+ * ------------------------------------------------------------------------
  * `generateFleetReport(reportData)` is retained for the Cloud Run monthly audit
- * path, but now renders through the Saka Pro PDF design system (fonts, KPI
- * cards, charts, owner/driver panel) and takes its KPIs from the shared
+ * path, but now renders through the Saka Apex PDF design system (fonts, KPI
+ * cards, charts, ledgers, owner/driver panel) and takes its KPIs from the shared
  * ASSET_METRIC_PROFILES registry, so a generator reports hours/kWh and a truck
  * reports km/litres. No metric list is re-declared here.
  */

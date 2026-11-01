@@ -1,5 +1,7 @@
 import { buildFleetReport, resolveReportType } from './fleetReports.js';
-import { buildDriverDaybook, buildVehicleHealthCheck, buildDriverComplianceCard } from './driverReports.js';
+import { buildDriverDaybook, buildVehicleHealthCheck, buildDriverComplianceCard, buildDriverPerformance } from './driverReports.js';
+import { buildVehicleDeepDive } from './vehicleDeepDive.js';
+import { buildOwnerPortfolio } from './ownerPortfolio.js';
 import { buildCustomReport, metricsForAccess } from './reportMetrics.js';
 import { resolveReportAccess, reportAccessDeniedText } from './reportAccess.js';
 import { buildProReportPdf } from './pdfEngine.js';
@@ -7,10 +9,10 @@ import { sendReportByEmail } from './mailer.js';
 import { uploadReportToSupabase } from '../../reports.js';
 
 /**
- * Saka Fleet — Report delivery pipeline (v1.18.0)
+ * Saka Fleet — Report delivery pipeline (v1.29.0)
  * ----------------------------------------------
  * resolve → enforce the access lane → build structured data → render the
- * Saka Pro PDF → upload + email → return the WhatsApp text with a link.
+ * Saka Apex PDF → upload + email → return the WhatsApp text with a link.
  */
 
 export const REPORT_TYPE_ALIASES = Object.freeze({
@@ -18,15 +20,19 @@ export const REPORT_TYPE_ALIASES = Object.freeze({
   driver_daybook: ['daybook', 'driver report', 'my report', 'my daybook', 'shift report', 'activity report'],
   vehicle_health: ['vehicle health', 'health check', 'pre trip', 'pre-trip', 'car health', 'check in'],
   driver_compliance_card: ['compliance card', 'licence card', 'license card', 'my compliance', 'my documents'],
-  custom: ['custom report', 'bespoke report', 'build a report', 'choose metrics', 'my metrics'],
-  driver_scorecard: ['driver scorecard', 'driver score card', 'driver performance'],
+  vehicle_deep_dive: ['vehicle deep dive', 'deep dive', 'vehicle report', 'car report', 'full vehicle report', 'asset deep dive'],
+  owner_portfolio: ['owner portfolio', 'portfolio report', 'asset portfolio', 'my assets', 'asset report', 'portfolio'],
+  driver_performance: ['driver performance and compliance', 'driver performance & compliance', 'driver performance report', 'driver performance', 'driver audit', 'performance report'],
+  driver_scorecard: ['driver scorecard', 'driver score card'],
   year_review: ['year review', 'year in review', 'annual report', 'yearly report'],
-  eco_footprint: ['eco footprint', 'emissions report', 'carbon report', 'co2 report']
+  eco_footprint: ['eco footprint', 'emissions report', 'carbon report', 'co2 report'],
+  custom: ['custom report', 'bespoke report', 'build a report', 'choose metrics', 'my metrics']
 });
 
-/** Resolve any report type (core four + new creative types). */
+/** Resolve any report type (core four + creative + Apex types). */
 export function resolveAnyReportType(text, fallback = 'fleet') {
-  const clean = String(text || '').toLowerCase();
+  const clean = String(text || '').toLowerCase().trim();
+  if (REPORT_TYPE_ALIASES[clean]) return clean; // exact registry key (report_type = vehicle_deep_dive)
   for (const [type, aliases] of Object.entries(REPORT_TYPE_ALIASES)) {
     if (aliases.some((alias) => clean.includes(alias))) return type;
   }
@@ -109,56 +115,88 @@ function money(value, currency = 'USD') {
   }
 }
 
-/** Adapt a core fleet-report payload into Saka Pro PDF sections. */
+/** Adapt a core fleet-report payload into Saka Apex PDF sections. */
 function fleetReportToPdf(report, reportType) {
   const data = report?.data || {};
+  const currency = data.currency || 'USD';
   const kpis = [];
   const charts = [];
   const tables = [];
+  const callouts = [];
+  const ledgers = data.ledger ? [data.ledger] : [];
+
+  const financial = data.financial || null;
+  const expenseBreakdown = data.expenses || (financial ? { ...financial.expenses } : null);
+  const expenseTotal = expenseBreakdown ? Number(expenseBreakdown.total ?? 0) : 0;
+  const earningTotal = expenseBreakdown ? Number((data.earnings?.total ?? financial?.earnings) || 0) : 0;
+  const netTotal = expenseBreakdown ? Number((data.net?.total ?? financial?.net) || 0) : 0;
+
   if (data.overview) {
     kpis.push(
       { label: 'Vehicles', value: String(data.overview.totalVehicles ?? data.overview.vehicles ?? '—'), hint: 'in scope' },
-      { label: 'Active', value: String(data.overview.activeVehicles ?? '—'), hint: 'available now' },
-      { label: 'Assigned drivers', value: String(data.overview.activeDrivers ?? '—'), hint: 'on duty' }
+      { label: 'Active', value: String(data.overview.activeVehicles ?? '—'), hint: 'available now' }
+    );
+  }
+  if (expenseBreakdown) {
+    kpis.push(
+      { label: 'Total spend', value: money(expenseTotal, currency), hint: 'operating expenses', tone: 'negative' },
+      { label: 'Earnings', value: money(earningTotal, currency), hint: 'recorded revenue', tone: 'positive' },
+      { label: 'Net', value: money(netTotal, currency), hint: 'earnings - spend', tone: netTotal >= 0 ? 'positive' : 'negative' }
     );
   }
   if (data.health) {
-    kpis.push(
-      { label: 'Availability', value: `${data.health.availabilityRate ?? '—'}%`, hint: 'fleet readiness' },
-      { label: 'Distance this month', value: `${data.health.distanceThisMonth ?? '—'} ${data.health.distanceUnit || 'km'}`, hint: 'odometer movement' }
-    );
+    kpis.push({ label: 'Availability', value: `${data.health.availabilityRate ?? '—'}%`, hint: 'fleet readiness' });
+  } else if (data.overview) {
+    kpis.push({ label: 'Assigned drivers', value: String(data.overview.activeDrivers ?? '—'), hint: 'on duty' });
   }
-  if (data.expenses) {
-    const total = data.expenses.total ?? (data.expenses.fuel + data.expenses.maintenance + data.expenses.parts + data.expenses.tolls + data.expenses.other);
-    kpis.push(
-      { label: 'Total spend', value: money(total, data.currency), hint: 'operating expenses' },
-      { label: 'Earnings', value: money(data.earnings?.total || 0, data.currency), hint: 'recorded revenue' },
-      { label: 'Net', value: money(data.net?.total || 0, data.currency), hint: 'earnings − spend' }
-    );
-    charts.push({
-      type: 'donut',
-      title: 'Spend by category',
-      totalLabel: 'spend',
-      series: [
-        { label: 'Fuel', value: data.expenses.fuel || 0 },
-        { label: 'Maintenance', value: data.expenses.maintenance || 0 },
-        { label: 'Parts', value: data.expenses.parts || 0 },
-        { label: 'Tolls', value: data.expenses.tolls || 0 },
-        { label: 'Other', value: data.expenses.other || 0 }
-      ]
+  if (!data.overview && data.efficiency) {
+    kpis.push({
+      label: `Distance (${data.efficiency.distanceUnit || 'km'})`,
+      value: String(data.efficiency.distance ?? '—'),
+      hint: 'this month'
+    });
+  }
+
+  if (expenseBreakdown) {
+    const segments = [
+      { label: 'Fuel', value: expenseBreakdown.fuel || 0 },
+      { label: 'Maintenance', value: expenseBreakdown.maintenance || 0 },
+      { label: 'Parts', value: expenseBreakdown.parts || 0 },
+      { label: 'Tolls', value: expenseBreakdown.tolls || 0 },
+      { label: 'Other', value: expenseBreakdown.other || 0 }
+    ].filter((item) => Number(item.value) > 0);
+    if (segments.length) charts.push({ type: 'segment', title: 'Spend by category', currency, segments });
+    if (expenseTotal > 0 || earningTotal > 0) {
+      charts.push({ type: 'vs', title: 'Earnings vs expenses', currency, earnings: earningTotal, expenses: expenseTotal });
+    }
+    callouts.push({
+      tone: netTotal >= 0 ? 'positive' : 'negative',
+      title: netTotal >= 0 ? 'Financial health: surplus' : 'Financial health: shortfall',
+      body: `${money(earningTotal, currency)} earnings against ${money(expenseTotal, currency)} spend - a ${netTotal >= 0 ? 'surplus' : 'shortfall'} of ${money(Math.abs(netTotal), currency)}.`
+    });
+    const top = [...segments].sort((a, b) => b.value - a.value)[0];
+    if (top) {
+      callouts.push({ tone: 'brand', title: 'Largest cost line', body: `${top.label} leads fleet spend at ${money(top.value, currency)}.` });
+    }
+  }
+  if (data.efficiency) {
+    callouts.push({
+      tone: 'brand',
+      title: 'Cost efficiency',
+      body: `Cost per ${data.efficiency.distanceUnit || 'km'}: ${data.efficiency.costPerDistance === null || data.efficiency.costPerDistance === undefined ? '—' : money(data.efficiency.costPerDistance, currency)} - cost per operating hour: ${data.efficiency.costPerHour === null || data.efficiency.costPerHour === undefined ? '—' : money(data.efficiency.costPerHour, currency)}.`
     });
   }
   if (data.net?.byVehicle?.length) {
     tables.push({
       title: 'Per-vehicle performance',
-      currency: data.currency,
+      currency,
       columns: [
         { key: 'plate', label: 'Vehicle', width: 1.2 },
         { key: 'earnings', label: 'Earnings', width: 1, type: 'money', align: 'right' },
         { key: 'expenses', label: 'Expenses', width: 1, type: 'money', align: 'right' },
         { key: 'net', label: 'Net', width: 1, type: 'money', align: 'right' }
       ],
-      rows: data.net.byVehicle.slice(0, 12)
+      rows: data.net.byVehicle.slice(0, 40)
     });
   }
   const summary = stripRichText(report?.text).slice(0, 40);
@@ -169,6 +207,8 @@ function fleetReportToPdf(report, reportType) {
     reportType,
     kpis: kpis.slice(0, 6),
     charts,
+    ledgers,
+    callouts,
     tables,
     sections: summary.length ? [{ title: 'Summary', lines: summary }] : [],
     notes: ['Figures are engine-calculated from your fleet records. Saka never estimates silently.']
@@ -183,6 +223,7 @@ export async function buildReportForLane({
   reportType = 'fleet',
   ownerId = null,
   driverId = null,
+  plate = null,
   profile = null,
   countryInfo = null,
   metricIds = [],
@@ -230,6 +271,44 @@ export async function buildReportForLane({
   }
   if (reportType === 'driver_compliance_card') {
     const report = await buildDriverComplianceCard({ supabase, driverId: laneDriverId || driverId, now, countryInfo });
+    return { ...report, access };
+  }
+
+  // v1.29.0 — Apex report types.
+  if (reportType === 'vehicle_deep_dive') {
+    const report = await buildVehicleDeepDive({
+      supabase,
+      vehicleId: plate ? null : (access.vehicleIds[0] || null),
+      plate,
+      ownerId: laneOwnerId,
+      driverId: laneDriverId,
+      countryInfo,
+      profile,
+      access,
+      now
+    });
+    return { ...report, access };
+  }
+  if (reportType === 'owner_portfolio') {
+    const report = await buildOwnerPortfolio({
+      supabase,
+      ownerId: laneOwnerId || profile?.id || null,
+      countryInfo,
+      profile,
+      access,
+      now
+    });
+    return { ...report, access };
+  }
+  if (reportType === 'driver_performance') {
+    const report = await buildDriverPerformance({
+      supabase,
+      ownerId: laneOwnerId,
+      driverId: driverId || null,
+      countryInfo,
+      profile,
+      now
+    });
     return { ...report, access };
   }
 

@@ -3,24 +3,31 @@ import path from 'node:path';
 import PDFDocument from 'pdfkit';
 
 /**
- * Saka Fleet — "Saka Pro" PDF Design System (v1.18.0)
+ * Saka Fleet — "Saka Apex" PDF Design System (v1.29.0)
  * ---------------------------------------------------
  * A deterministic, premium report renderer: embedded open-source fonts,
- * a calm professional palette, KPI cards, vector charts (bar / donut / line /
- * progress) and centered A4 layouts with page headers and footers.
+ * a calm professional palette (Midnight Slate / Tech Teal / Emerald / Coral),
+ * KPI cards, vector charts (bar / donut / line / progress / segmented / vs),
+ * itemized transaction ledgers with type badges, insight callouts and centered
+ * A4 layouts with page headers and footers.
  *
  * No AI touches the numbers: every figure comes from structured report data.
+ * Full transparency: real zeros are surfaced ("KES 0"), only missing data is "—".
  */
 
 export const SAKA_PDF_THEME = Object.freeze({
-  ink: '#0B1220',
-  slate: '#334155',
-  muted: '#64748B',
-  line: '#E2E8F0',
-  panel: '#F8FAFC',
+  ink: '#0F172A',        // Deep Midnight Slate — structure & primary text
+  slate: '#334155',      // secondary text
+  muted: '#64748B',      // labels, hints
+  line: '#E2E8F0',       // hairlines & card borders
+  panel: '#F8FAFC',      // neutral card containers
   white: '#FFFFFF',
+  brand: '#0EA5E9',      // Vibrant Tech Teal — brand accent
+  positive: '#10B981',   // Emerald — earnings, healthy balances
+  negative: '#EF4444',   // Coral — expenses, net losses
+  warn: '#F59E0B',       // Warm Amber — expiring / attention
   accents: Object.freeze({
-    fleet: '#2563EB',
+    fleet: '#0EA5E9',
     financial: '#0EA5E9',
     compliance: '#F59E0B',
     maintenance: '#10B981',
@@ -31,10 +38,13 @@ export const SAKA_PDF_THEME = Object.freeze({
     driver_scorecard: '#6366F1',
     year_review: '#EC4899',
     eco_footprint: '#22C55E',
+    vehicle_deep_dive: '#2563EB',
+    owner_portfolio: '#0EA5E9',
+    driver_performance: '#6366F1',
     custom: '#6366F1',
-    default: '#2563EB'
+    default: '#0EA5E9'
   }),
-  status: Object.freeze({ good: '#10B981', warn: '#F59E0B', bad: '#EF4444', info: '#38BDF8' })
+  status: Object.freeze({ good: '#10B981', warn: '#F59E0B', bad: '#EF4444', info: '#0EA5E9' })
 });
 
 export function getReportAccent(reportType = 'fleet') {
@@ -139,9 +149,45 @@ function number(value) {
 function statusColor(status) {
   const clean = String(status || '').toLowerCase();
   if (/(expired|overdue|critical|bad|failed)/.test(clean)) return SAKA_PDF_THEME.status.bad;
-  if (/(due|warn|pending|soon|attention)/.test(clean)) return SAKA_PDF_THEME.status.warn;
+  if (/(inactive|paused|due|warn|pending|soon|attention|missing|invalid)/.test(clean)) return SAKA_PDF_THEME.status.warn;
   if (/(active|good|valid|ok|paid|completed)/.test(clean)) return SAKA_PDF_THEME.status.good;
   return SAKA_PDF_THEME.status.info;
+}
+
+/** Semantic tone → color (v1.29.0 Apex design system). */
+function toneColor(tone) {
+  switch (String(tone || '').toLowerCase()) {
+    case 'positive': case 'good': case 'earning': return SAKA_PDF_THEME.positive;
+    case 'negative': case 'bad': case 'expense': case 'loss': return SAKA_PDF_THEME.negative;
+    case 'warn': case 'warning': case 'compliance': return SAKA_PDF_THEME.warn;
+    case 'brand': case 'info': case 'fuel': return SAKA_PDF_THEME.brand;
+    default: return SAKA_PDF_THEME.slate;
+  }
+}
+
+/** Ledger badge tone from a transaction kind (never colour-only meaning). */
+function ledgerTone(kind) {
+  const clean = String(kind || '').toLowerCase();
+  if (/(earning|revenue|income)/.test(clean)) return 'positive';
+  if (/(fuel|energy|charge)/.test(clean)) return 'brand';
+  if (/(service|maintenance|repair|part|tyre|tire|battery)/.test(clean)) return 'warn';
+  if (/(compliance|insurance|inspection|licence|license|permit)/.test(clean)) return 'warn';
+  if (/(expense|cost|toll|parking)/.test(clean)) return 'negative';
+  return 'neutral';
+}
+
+/**
+ * v1.29.0 — Full transparency: an ACTUAL numeric zero is a real, surfaced
+ * figure ("KES 0", "0"); only missing/unpopulated values render "—".
+ */
+function moneyCell(value, currency) {
+  if (value === null || value === undefined || value === '') return '—';
+  return money(value, currency);
+}
+
+function numberCell(value) {
+  if (value === null || value === undefined || value === '') return '—';
+  return number(value);
 }
 
 function ensureSpace(doc, needed, fonts, accent, title) {
@@ -180,21 +226,21 @@ function chip(doc, fonts, x, y, text, color, { filled = false } = {}) {
   const width = Math.min(doc.widthOfString(label) + 16, 150);
   if (filled) {
     doc.roundedRect(x, y, width, 16, 8).fill(color);
-    doc.fillColor(SAKA_PDF_THEME.white).font(fonts.bold).fontSize(7.4).text(label, x + 8, y + 4.6, { width: width - 16, ellipsis: true });
+    doc.fillColor(SAKA_PDF_THEME.white).font(fonts.bold).fontSize(7.4).text(label, x + 8, y + 4.6, { width: width - 16, ellipsis: true, lineBreak: false });
   } else {
     doc.roundedRect(x, y, width, 16, 8).lineWidth(0.8).strokeColor(color).stroke();
-    doc.fillColor(color).font(fonts.body).fontSize(7.4).text(label, x + 8, y + 4.6, { width: width - 16, ellipsis: true });
+    doc.fillColor(color).font(fonts.body).fontSize(7.4).text(label, x + 8, y + 4.6, { width: width - 16, ellipsis: true, lineBreak: false });
   }
   return width;
 }
 
-function kpiCard(doc, fonts, { x, y, w, h, label, value, hint, accent }) {
+function kpiCard(doc, fonts, { x, y, w, h, label, value, hint, accent, tone = null }) {
   doc.roundedRect(x, y, w, h, 10).fill(SAKA_PDF_THEME.white);
   doc.roundedRect(x, y, w, h, 10).lineWidth(0.8).strokeColor(SAKA_PDF_THEME.line).stroke();
   doc.rect(x, y, 3.2, h).fill(accent);
   doc.fillColor(SAKA_PDF_THEME.muted).font(fonts.body).fontSize(7.6)
     .text(String(label || '').toUpperCase(), x + 14, y + 11, { width: w - 22, characterSpacing: 0.6, ellipsis: true });
-  doc.fillColor(SAKA_PDF_THEME.ink).font(fonts.bold).fontSize(15)
+  doc.fillColor(tone ? toneColor(tone) : SAKA_PDF_THEME.ink).font(fonts.bold).fontSize(15)
     .text(String(value ?? '—'), x + 14, y + 24, { width: w - 22, ellipsis: true });
   if (hint) {
     doc.fillColor(SAKA_PDF_THEME.muted).font(fonts.body).fontSize(7.2)
@@ -207,9 +253,24 @@ function reportTypeLabel(type) {
     fleet: 'Fleet status', financial: 'Financial & cost', compliance: 'Compliance & expiry',
     maintenance: 'Maintenance & service', fuel_economy: 'Fuel economy', driver_daybook: 'Driver daybook',
     vehicle_health: 'Vehicle health', driver_compliance_card: 'Compliance card', custom: 'Bespoke report',
-    driver_scorecard: 'Driver scorecard', year_review: 'Year in review', eco_footprint: 'Eco footprint'
+    driver_scorecard: 'Driver scorecard', year_review: 'Year in review', eco_footprint: 'Eco footprint',
+    vehicle_deep_dive: 'Vehicle deep dive', owner_portfolio: 'Owner portfolio', driver_performance: 'Driver performance'
   };
   return labels[type] || 'Fleet report';
+}
+
+/** Licence-plate style badge used on covers for vehicle-scoped reports. */
+function plateBadge(doc, fonts, x, y, plate) {
+  const label = pdfSafeText(plate).toUpperCase();
+  if (!label) return 0;
+  doc.font(fonts.mono).fontSize(10);
+  const width = Math.max(96, Math.min(doc.widthOfString(label) + 26, 170));
+  const height = 30;
+  doc.roundedRect(x, y, width, height, 6).fill('#FDE68A');
+  doc.roundedRect(x, y, width, height, 6).lineWidth(1).strokeColor(SAKA_PDF_THEME.ink).stroke();
+  doc.fillColor(SAKA_PDF_THEME.ink).font(fonts.mono).fontSize(10)
+    .text(label, x + 8, y + 10, { width: width - 16, align: 'center', characterSpacing: 1.2, lineBreak: false });
+  return width;
 }
 
 function drawCover(doc, fonts, report, accent) {
@@ -236,6 +297,15 @@ function drawCover(doc, fonts, report, accent) {
   chipX += chip(doc, fonts, chipX, chipY, reportTypeLabel(reportType), accent, { filled: true }) + 8;
   if (periodLabel) chipX += chip(doc, fonts, chipX, chipY, periodLabel, SAKA_PDF_THEME.status.info) + 8;
   chip(doc, fonts, chipX, chipY, 'Verified data', SAKA_PDF_THEME.status.good);
+
+  // v1.29.0 — licence-plate badge for vehicle-scoped reports (KAS 628T).
+  const plateLabel = pdfSafeText(report.plate || '').toUpperCase();
+  if (plateLabel) {
+    doc.font(fonts.mono).fontSize(10);
+    const plateWidth = Math.max(96, Math.min(doc.widthOfString(plateLabel) + 26, 170));
+    const badgeX = PAGE_WIDTH - PAGE_MARGIN - plateWidth;
+    if (chipX + 12 < badgeX) plateBadge(doc, fonts, badgeX, chipY - 7, report.plate);
+  }
 
   const cardY = 348;
   doc.roundedRect(PAGE_MARGIN, cardY, CONTENT_WIDTH, 58, 12).fill(SAKA_PDF_THEME.white);
@@ -270,8 +340,11 @@ function drawCover(doc, fonts, report, accent) {
     }
   }
 
+  const previousBottom = doc.page.margins.bottom;
+  doc.page.margins.bottom = 0;
   doc.fillColor(SAKA_PDF_THEME.muted).font(fonts.body).fontSize(7.4)
-    .text(`Generated ${report.generatedAt || new Date().toLocaleString()}  ·  sakafleet.com`, PAGE_MARGIN, PAGE_HEIGHT - 46, { width: CONTENT_WIDTH, align: 'center' });
+    .text(`Generated ${report.generatedAt || new Date().toLocaleString()}  ·  sakafleet.com`, PAGE_MARGIN, PAGE_HEIGHT - 46, { width: CONTENT_WIDTH, align: 'center', lineBreak: false });
+  doc.page.margins.bottom = previousBottom;
 }
 
 function drawKpiGrid(doc, fonts, kpis, accent) {
@@ -292,6 +365,7 @@ function drawKpiGrid(doc, fonts, kpis, accent) {
       label: items[i].label,
       value: items[i].value,
       hint: items[i].hint,
+      tone: items[i].tone || null,
       accent
     });
   }
@@ -443,6 +517,8 @@ function drawChart(doc, fonts, chart, accent) {
   if (type === 'donut' || type === 'pie') return drawDonut(doc, fonts, chart, accent);
   if (type === 'line') return drawLineChart(doc, fonts, chart, accent);
   if (type === 'progress') return drawProgressChart(doc, fonts, chart, accent);
+  if (type === 'segment' || type === 'segmented' || type === 'split') return drawSegmentedBar(doc, fonts, chart, accent);
+  if (type === 'vs' || type === 'compare' || type === 'earnings_vs_expenses') return drawVsBars(doc, fonts, chart, accent);
   return drawBarChart(doc, fonts, chart, accent);
 }
 
@@ -480,9 +556,9 @@ function drawTable(doc, fonts, table, accent) {
     columns.forEach((column, columnIndex) => {
       const raw = row[column.key];
       const value = column.type === 'money'
-        ? money(raw, table.currency)
+        ? moneyCell(raw, table.currency)
         : column.type === 'number'
-          ? number(raw)
+          ? numberCell(raw)
           : String(raw ?? '—');
       const isStatus = column.type === 'status';
       const color = isStatus ? statusColor(raw) : SAKA_PDF_THEME.slate;
@@ -498,6 +574,322 @@ function drawTable(doc, fonts, table, accent) {
     doc.y = rowY + rowH;
   });
   doc.y += 10;
+}
+
+/* ------------------------------------------------------------------ */
+/* v1.29.0 — Apex components: badges, segmented bars, callouts, ledger  */
+/* ------------------------------------------------------------------ */
+
+/** Pill badge: tinted fill + coloured text + hairline border. */
+function drawBadge(doc, fonts, x, y, text, tone = 'neutral', { size = 6.4, height = 12, maxWidth = 96 } = {}) {
+  const label = pdfSafeText(text).toUpperCase();
+  if (!label) return 0;
+  const color = toneColor(tone);
+  const cursorY = doc.y;
+  doc.font(fonts.bold).fontSize(size);
+  const width = Math.max(24, Math.min(doc.widthOfString(label) + 12, maxWidth));
+  withAlpha(doc, color, 0.13);
+  doc.roundedRect(x, y, width, height, height / 2).fill();
+  doc.roundedRect(x, y, width, height, height / 2).lineWidth(0.6).strokeColor(color).stroke();
+  doc.fillColor(color).font(fonts.bold).fontSize(size)
+    .text(label, x + 5, y + (height - size) / 2 + 0.6, { width: width - 10, align: 'center', ellipsis: true, lineBreak: false });
+  doc.y = cursorY;
+  return width;
+}
+
+/** Horizontal proportional split (Fuel vs maintenance vs other, per vehicle…). */
+function drawSegmentedBar(doc, fonts, chart, accent) {
+  const raw = chart.segments || chart.series || [];
+  const segments = raw
+    .map((item) => ({ label: String(item.label || ''), value: Number(item.value) || 0, color: item.color }))
+    .filter((item) => item.value !== 0);
+  ensureSpace(doc, 100, fonts, accent, chart.title);
+  drawChartHeading(doc, fonts, chart, accent);
+  const total = segments.reduce((sum, item) => sum + Math.abs(item.value), 0);
+  if (!total) {
+    doc.fillColor(SAKA_PDF_THEME.muted).font(fonts.body).fontSize(8)
+      .text('No activity recorded in this period.', PAGE_MARGIN, doc.y, { width: CONTENT_WIDTH });
+    doc.y += 24;
+    return;
+  }
+  const palette = ['#0EA5E9', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#14B8A6', '#6366F1', '#64748B'];
+  const barY = doc.y;
+  const barH = 18;
+  doc.save();
+  doc.roundedRect(PAGE_MARGIN, barY, CONTENT_WIDTH, barH, 9).clip();
+  let x = PAGE_MARGIN;
+  segments.forEach((item, index) => {
+    const width = (Math.abs(item.value) / total) * CONTENT_WIDTH;
+    doc.rect(x, barY, Math.max(width, 2), barH).fill(item.color || palette[index % palette.length]);
+    x += width;
+  });
+  doc.restore();
+
+  const columns = segments.length > 4 ? 2 : 1;
+  const colWidth = CONTENT_WIDTH / columns;
+  segments.forEach((item, index) => {
+    const col = index % columns;
+    const row = Math.floor(index / columns);
+    const lx = PAGE_MARGIN + col * colWidth;
+    const ly = barY + barH + 10 + row * 15;
+    const color = item.color || palette[index % palette.length];
+    doc.circle(lx + 3.5, ly + 4, 3.2).fill(color);
+    doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.body).fontSize(7.2)
+      .text(pdfSafeText(item.label).slice(0, 26), lx + 11, ly, { width: colWidth - 106, ellipsis: true });
+    const pct = Math.round((Math.abs(item.value) / total) * 100);
+    const valueText = `${chart.currency ? `${money(item.value, chart.currency)}  ` : ''}${pct}%`;
+    doc.fillColor(SAKA_PDF_THEME.ink).font(fonts.mono).fontSize(6.6)
+      .text(pdfSafeText(valueText), lx + colWidth - 100, ly, { width: 96, align: 'right', ellipsis: true });
+  });
+  doc.y = barY + barH + 16 + Math.ceil(segments.length / columns) * 15;
+}
+
+/** Earnings vs expenses pair bars with an explicit net verdict. */
+function drawVsBars(doc, fonts, chart, accent) {
+  const earnings = Number(chart.earnings ?? chart.income ?? 0) || 0;
+  const expenses = Number(chart.expenses ?? 0) || 0;
+  ensureSpace(doc, 96, fonts, accent, chart.title);
+  drawChartHeading(doc, fonts, chart, accent);
+  const max = Math.max(Math.abs(earnings), Math.abs(expenses), 1);
+  const barMaxW = CONTENT_WIDTH - 190;
+  [
+    { label: 'Earnings', value: earnings, color: SAKA_PDF_THEME.positive },
+    { label: 'Expenses', value: expenses, color: SAKA_PDF_THEME.negative }
+  ].forEach((item) => {
+    const y = doc.y;
+    doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.body).fontSize(7.6)
+      .text(item.label, PAGE_MARGIN, y + 2, { width: 80 });
+    doc.roundedRect(PAGE_MARGIN + 84, y + 1, barMaxW, 10, 5).fill(SAKA_PDF_THEME.panel);
+    doc.roundedRect(PAGE_MARGIN + 84, y + 1, Math.max(3, (Math.abs(item.value) / max) * barMaxW), 10, 5).fill(item.color);
+    doc.fillColor(SAKA_PDF_THEME.ink).font(fonts.mono).fontSize(7.2)
+      .text(moneyCell(item.value, chart.currency), PAGE_MARGIN + 84 + barMaxW + 8, y + 1, { width: 92, align: 'right' });
+    doc.y = y + 17;
+  });
+  const net = earnings - expenses;
+  doc.fillColor(net >= 0 ? SAKA_PDF_THEME.positive : SAKA_PDF_THEME.negative).font(fonts.bold).fontSize(8)
+    .text(`${net >= 0 ? 'Net surplus' : 'Net shortfall'}: ${money(Math.abs(net), chart.currency)}`, PAGE_MARGIN, doc.y + 2, { width: CONTENT_WIDTH });
+  doc.y += 22;
+}
+
+/** Insight callout: accent rail + plain-language verdict. */
+function drawCallout(doc, fonts, callout, accent) {
+  const color = toneColor(callout.tone || 'brand');
+  const title = pdfSafeText(callout.title || '');
+  const body = pdfSafeText(callout.body || '');
+  if (!title && !body) return;
+  doc.font(fonts.body).fontSize(8.2);
+  const bodyHeight = body ? doc.heightOfString(body, { width: CONTENT_WIDTH - 40 }) : 0;
+  const height = 18 + (title ? 12 : 0) + bodyHeight + 10;
+  ensureSpace(doc, height + 10, fonts, accent, 'Insight');
+  const y = doc.y;
+  doc.roundedRect(PAGE_MARGIN, y, CONTENT_WIDTH, height, 9).fill(SAKA_PDF_THEME.panel);
+  doc.roundedRect(PAGE_MARGIN, y, CONTENT_WIDTH, height, 9).lineWidth(0.7).strokeColor(SAKA_PDF_THEME.line).stroke();
+  doc.rect(PAGE_MARGIN, y, 4, height).fill(color);
+  let textY = y + 10;
+  if (title) {
+    doc.fillColor(color).font(fonts.bold).fontSize(8.4)
+      .text(title.toUpperCase(), PAGE_MARGIN + 16, textY, { width: CONTENT_WIDTH - 32, characterSpacing: 0.5, ellipsis: true });
+    textY += 13;
+  }
+  if (body) {
+    doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.body).fontSize(8.2)
+      .text(body, PAGE_MARGIN + 16, textY, { width: CONTENT_WIDTH - 32, lineGap: 1 });
+  }
+  doc.y = y + height + 8;
+}
+
+const LEDGER_COLUMNS = Object.freeze([
+  { key: 'date', label: 'Date', width: 0.9 },
+  { key: 'kindLabel', label: 'Type', width: 0.85 },
+  { key: 'description', label: 'Description', width: 2.5 },
+  { key: 'odometer', label: 'Odometer', width: 0.9, align: 'right' },
+  { key: 'unitCost', label: 'Unit cost', width: 0.9, align: 'right' },
+  { key: 'amount', label: 'Total', width: 1.05, align: 'right' }
+]);
+
+const LEDGER_COLUMNS_WITH_VEHICLE = Object.freeze([
+  { key: 'date', label: 'Date', width: 0.8 },
+  { key: 'vehicle', label: 'Vehicle', width: 0.8 },
+  { key: 'kindLabel', label: 'Type', width: 0.8 },
+  { key: 'description', label: 'Description', width: 2.05 },
+  { key: 'odometer', label: 'Odometer', width: 0.8, align: 'right' },
+  { key: 'unitCost', label: 'Unit cost', width: 0.8, align: 'right' },
+  { key: 'amount', label: 'Total', width: 0.95, align: 'right' }
+]);
+
+function monthLabelFromKey(key) {
+  const date = new Date(`${key}-01T12:00:00Z`);
+  if (Number.isNaN(date.getTime())) return 'Activity';
+  return date.toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+}
+
+/** Groups supplied by builders win; otherwise derive month groups from ISO dates. */
+function ledgerGroups(ledger) {
+  if (Array.isArray(ledger.groups) && ledger.groups.length) return ledger.groups;
+  const rows = Array.isArray(ledger.rows) ? ledger.rows : [];
+  if (!rows.length) return [];
+  const map = new Map();
+  for (const row of rows) {
+    const at = String(row.at || row.date || '');
+    const match = at.match(/^(\d{4})-(\d{2})/);
+    const key = match ? `${match[1]}-${match[2]}` : 'activity';
+    if (!map.has(key)) map.set(key, { key, label: match ? monthLabelFromKey(key) : 'Activity', rows: [] });
+    map.get(key).rows.push(row);
+  }
+  return [...map.values()].sort((a, b) => String(b.key).localeCompare(String(a.key)));
+}
+
+/**
+ * Itemized Activity & Ledger (v1.29.0): Date | Vehicle? | Type badge |
+ * Description | Odometer | Unit cost | Total, month groups with subtotals,
+ * zebra rows, a bold total band and an explicit "nothing hidden" footer.
+ */
+function drawLedger(doc, fonts, ledger, accent) {
+  const groups = ledgerGroups(ledger);
+  if (!groups.length) return;
+  const currency = ledger.currency || null;
+  const columns = ledger.showVehicle ? LEDGER_COLUMNS_WITH_VEHICLE : LEDGER_COLUMNS;
+  const title = ledger.title || 'Itemized activity & ledger';
+  const totalWeight = columns.reduce((sum, column) => sum + column.width, 0);
+  const widths = columns.map((column) => (column.width / totalWeight) * CONTENT_WIDTH);
+  const headerH = 19;
+  const rowH = 19;
+
+  sectionTitle(doc, fonts, title, accent, ledger.subtitle || null);
+
+  const drawHeader = () => {
+    const y = doc.y;
+    doc.rect(PAGE_MARGIN, y, CONTENT_WIDTH, headerH).fill(SAKA_PDF_THEME.ink);
+    let x = PAGE_MARGIN;
+    columns.forEach((column, index) => {
+      doc.fillColor(SAKA_PDF_THEME.white).font(fonts.bold).fontSize(6.8)
+        .text(pdfSafeText(column.label).toUpperCase(), x + 5, y + 6.4, {
+          width: widths[index] - 10,
+          align: column.align === 'right' ? 'right' : 'left',
+          ellipsis: true
+        });
+      x += widths[index];
+    });
+    doc.y = y + headerH;
+  };
+
+  const ensureRow = (needed) => {
+    ensureSpace(doc, needed, fonts, accent, title);
+    if (doc.y <= 78) drawHeader();
+  };
+
+  ensureRow(headerH + rowH * 3);
+  drawHeader();
+
+  let zebra = 0;
+  const allRows = [];
+  for (const group of groups) {
+    const rows = group.rows || [];
+    if (!rows.length) continue;
+    allRows.push(...rows);
+    ensureRow(22 + rowH);
+    const bandY = doc.y;
+    doc.rect(PAGE_MARGIN, bandY, CONTENT_WIDTH, 17).fill(SAKA_PDF_THEME.line);
+    doc.fillColor(SAKA_PDF_THEME.ink).font(fonts.bold).fontSize(7.2)
+      .text(pdfSafeText(group.label || 'Activity'), PAGE_MARGIN + 6, bandY + 5.2, { width: CONTENT_WIDTH * 0.4, ellipsis: true });
+    const groupExpenses = Number(group.expenseTotal ?? 0);
+    const groupEarnings = Number(group.earningTotal ?? 0);
+    const groupParts = [];
+    if (groupExpenses) groupParts.push(`Spent ${money(groupExpenses, currency)}`);
+    if (groupEarnings) groupParts.push(`Earned ${money(groupEarnings, currency)}`);
+    if (!groupParts.length) groupParts.push(`${rows.length} record${rows.length === 1 ? '' : 's'}`);
+    doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.mono).fontSize(6.6)
+      .text(pdfSafeText(groupParts.join('  ·  ')), PAGE_MARGIN + CONTENT_WIDTH * 0.4, bandY + 5.4, {
+        width: CONTENT_WIDTH * 0.6 - 6,
+        align: 'right',
+        ellipsis: true
+      });
+    doc.y = bandY + 19;
+
+    for (const row of rows) {
+      ensureRow(rowH);
+      const y = doc.y;
+      if (zebra % 2 === 1) doc.rect(PAGE_MARGIN, y, CONTENT_WIDTH, rowH).fill(SAKA_PDF_THEME.panel);
+      let x = PAGE_MARGIN;
+      const kindLabel = row.kindLabel || row.kind || 'LOG';
+      columns.forEach((column, index) => {
+        const width = widths[index];
+        if (column.key === 'kindLabel') {
+          drawBadge(doc, fonts, x + 4, y + 4, kindLabel, ledgerTone(row.kind || kindLabel), {
+            size: 5.9,
+            height: 11,
+            maxWidth: width - 8
+          });
+        } else if (column.key === 'date') {
+          doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.body).fontSize(6.9)
+            .text(pdfSafeText(row.date ?? '—'), x + 5, y + 6, { width: width - 10, ellipsis: true });
+        } else if (column.key === 'vehicle') {
+          doc.fillColor(SAKA_PDF_THEME.ink).font(fonts.bold).fontSize(6.8)
+            .text(pdfSafeText(row.vehicle ?? '—'), x + 5, y + 6, { width: width - 10, ellipsis: true });
+        } else if (column.key === 'description') {
+          doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.body).fontSize(6.9)
+            .text(pdfSafeText(row.description ?? '—'), x + 5, y + 6, { width: width - 10, ellipsis: true });
+        } else if (column.key === 'odometer') {
+          doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.mono).fontSize(6.6)
+            .text(numberCell(row.odometer), x + 4, y + 6.2, { width: width - 8, align: 'right', ellipsis: true });
+        } else if (column.key === 'unitCost') {
+          doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.mono).fontSize(6.6)
+            .text(moneyCell(row.unitCost, row.unitCurrency || currency), x + 4, y + 6.2, { width: width - 8, align: 'right', ellipsis: true });
+        } else if (column.key === 'amount') {
+          const earning = /earning|revenue|income/i.test(String(row.kind || ''));
+          doc.fillColor(earning ? SAKA_PDF_THEME.positive : SAKA_PDF_THEME.ink).font(fonts.mono).fontSize(6.9)
+            .text(moneyCell(row.amount, row.currency || currency), x + 4, y + 6, { width: width - 8, align: 'right', ellipsis: true });
+        } else {
+          doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.body).fontSize(6.9)
+            .text(pdfSafeText(row[column.key] ?? '—'), x + 5, y + 6, { width: width - 10, ellipsis: true });
+        }
+        x += width;
+      });
+      doc.strokeColor(SAKA_PDF_THEME.line).lineWidth(0.35)
+        .moveTo(PAGE_MARGIN, y + rowH).lineTo(PAGE_WIDTH - PAGE_MARGIN, y + rowH).stroke();
+      doc.y = y + rowH;
+      zebra += 1;
+    }
+  }
+
+  const totals = ledger.totals || {};
+  const isEarningRow = (row) => /earning|revenue|income/i.test(String(row.kind || ''));
+  const expenseTotal = Number(totals.expenseTotal ?? allRows.reduce((sum, row) => sum + (isEarningRow(row) ? 0 : Number(row.amount) || 0), 0));
+  const earningTotal = Number(totals.earningTotal ?? allRows.reduce((sum, row) => sum + (isEarningRow(row) ? Number(row.amount) || 0 : 0), 0));
+  const net = earningTotal - expenseTotal;
+
+  ensureSpace(doc, 42, fonts, accent, title);
+  const totalY = doc.y;
+  doc.rect(PAGE_MARGIN, totalY, CONTENT_WIDTH, 23).fill(SAKA_PDF_THEME.ink);
+  doc.fillColor(SAKA_PDF_THEME.white).font(fonts.bold).fontSize(7)
+    .text(`TOTAL · ${allRows.length} RECORD${allRows.length === 1 ? '' : 'S'}`, PAGE_MARGIN + 8, totalY + 7.6, {
+      width: CONTENT_WIDTH * 0.4,
+      characterSpacing: 0.5
+    });
+  const totalParts = [];
+  if (expenseTotal || earningTotal) {
+    totalParts.push(`Spent ${money(expenseTotal, currency)}`);
+    if (earningTotal) totalParts.push(`Earned ${money(earningTotal, currency)}`, `Net ${money(net, currency)}`);
+  } else {
+    totalParts.push('No amounts recorded');
+  }
+  doc.fillColor(SAKA_PDF_THEME.white).font(fonts.mono).fontSize(6.8)
+    .text(pdfSafeText(totalParts.join('  ·  ')), PAGE_MARGIN + CONTENT_WIDTH * 0.3, totalY + 7.7, {
+      width: CONTENT_WIDTH * 0.7 - 8,
+      align: 'right',
+      ellipsis: true
+    });
+  doc.y = totalY + 23 + 6;
+
+  const scanned = Number(totals.scanned ?? allRows.length);
+  const shown = Number(totals.shown ?? allRows.length);
+  const footnote = ledger.footnote
+    || (scanned > shown
+      ? `Showing ${shown} of ${scanned} records scanned in this period.`
+      : `All ${shown} record(s) in this period are shown — nothing hidden.`);
+  doc.fillColor(SAKA_PDF_THEME.muted).font(fonts.body).fontSize(6.8)
+    .text(pdfSafeText(footnote), PAGE_MARGIN, doc.y, { width: CONTENT_WIDTH });
+  doc.y += 18;
 }
 
 function drawSection(doc, fonts, section, accent) {
@@ -527,11 +919,14 @@ function drawSection(doc, fonts, section, accent) {
 }
 
 function drawFooter(doc, fonts, pageNumber, pageCount, accent) {
+  const previousBottom = doc.page.margins.bottom;
+  doc.page.margins.bottom = 0;
   doc.strokeColor(SAKA_PDF_THEME.line).lineWidth(0.5).moveTo(PAGE_MARGIN, PAGE_HEIGHT - 44).lineTo(PAGE_WIDTH - PAGE_MARGIN, PAGE_HEIGHT - 44).stroke();
   doc.fillColor(SAKA_PDF_THEME.muted).font(fonts.body).fontSize(7)
-    .text('SAKA FLEET  ·  PRO REPORT', PAGE_MARGIN, PAGE_HEIGHT - 34, { width: CONTENT_WIDTH * 0.6, characterSpacing: 0.6 });
+    .text('SAKA FLEET  ·  PRO REPORT', PAGE_MARGIN, PAGE_HEIGHT - 34, { width: CONTENT_WIDTH * 0.6, characterSpacing: 0.6, lineBreak: false });
   doc.fillColor(accent).font(fonts.bold).fontSize(7)
-    .text(`Page ${pageNumber} of ${pageCount}`, PAGE_WIDTH - PAGE_MARGIN - 110, PAGE_HEIGHT - 34, { width: 110, align: 'right' });
+    .text(`Page ${pageNumber} of ${pageCount}`, PAGE_WIDTH - PAGE_MARGIN - 110, PAGE_HEIGHT - 34, { width: 110, align: 'right', lineBreak: false });
+  doc.page.margins.bottom = previousBottom;
 }
 
 /**
@@ -550,7 +945,7 @@ export function buildProReportPdf(report = {}) {
         info: {
           Title: report.title || 'Saka Fleet Report',
           Author: 'Saka Fleet',
-          Creator: 'Saka Fleet Pro Reports v1.18.0',
+          Creator: 'Saka Fleet Apex Reports v1.29.0',
           Subject: report.subtitle || 'Fleet intelligence report'
         }
       });
@@ -559,7 +954,9 @@ export function buildProReportPdf(report = {}) {
       doc.on('end', () => resolve(Buffer.concat(buffers)));
       doc.on('error', reject);
 
-      const fonts = registerReportFonts(doc);
+      const fonts = report.useStandardFonts
+        ? { body: 'Helvetica', bold: 'Helvetica-Bold', display: 'Helvetica-Bold', mono: 'Courier' }
+        : registerReportFonts(doc);
       const accent = getReportAccent(report.reportType);
       const prepared = {
         ...report,
@@ -577,7 +974,8 @@ export function buildProReportPdf(report = {}) {
 
       drawCover(doc, fonts, prepared, accent);
 
-      const hasContent = (report.kpis?.length || report.charts?.length || report.tables?.length || report.sections?.length || report.notes?.length);
+      const hasContent = (report.kpis?.length || report.charts?.length || report.ledgers?.length
+        || report.tables?.length || report.callouts?.length || report.sections?.length || report.notes?.length);
       if (hasContent) {
         doc.addPage();
         contentHeader(doc, fonts, accent, report.title);
@@ -586,7 +984,9 @@ export function buildProReportPdf(report = {}) {
           ensureSpace(doc, 150, fonts, accent, report.title);
           drawChart(doc, fonts, chart, accent);
         }
+        for (const ledger of report.ledgers || []) drawLedger(doc, fonts, ledger, accent);
         for (const table of report.tables || []) drawTable(doc, fonts, table, accent);
+        for (const callout of report.callouts || []) drawCallout(doc, fonts, callout, accent);
         for (const section of report.sections || []) drawSection(doc, fonts, section, accent);
         if (report.notes?.length) {
           sectionTitle(doc, fonts, 'Notes', accent);

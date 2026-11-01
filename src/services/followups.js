@@ -89,6 +89,7 @@ async function runFleetReport(payload = {}) {
       reportType,
       ownerId: payload.ownerId || null,
       driverId: payload.driverId || null,
+      plate: payload.plate || null,
       profile: accessProfile,
       countryInfo,
       metricIds: Array.isArray(payload.metricIds) ? payload.metricIds : [],

@@ -1,16 +1,18 @@
 /**
- * Saka Fleet — PDF engine glyph-safety & structure tests (v1.28.7)
- * ----------------------------------------------------------------
- * Offline. Proves the Saka Pro renderer produces a valid PDF even when the
+ * Saka Fleet — PDF engine glyph-safety, Apex components & structure tests (v1.29.0)
+ * --------------------------------------------------------------------------------
+ * Offline. Proves the Saka Apex renderer produces a valid PDF even when the
  * report data contains WhatsApp emoji and Unicode symbols (the cause of the
- * "boxes / illegible" reports), and that the sanitiser never leaks a glyph the
- * embedded fonts cannot draw.
+ * "boxes / illegible" reports), that the sanitiser never leaks a glyph the
+ * embedded fonts cannot draw, and that ledgers, badges, segmented bars, vs bars
+ * and callouts draw real, readable content (standard-font preview mode).
  *
  * Run: node test_pdf_engine.js
  */
 
 import assert from 'assert';
 import { buildProReportPdf, pdfSafeText, getReportAccent, SAKA_PDF_THEME } from './src/services/pdfEngine.js';
+import { extractPdfText } from './src/services/pdfTextExtractor.js';
 
 let passed = 0;
 function check(condition, label) {
@@ -20,7 +22,7 @@ function check(condition, label) {
 }
 
 async function run() {
-  console.log('=== SAKA FLEET — PDF ENGINE TESTS (v1.28.7) ===\n');
+  console.log('=== SAKA FLEET — PDF ENGINE TESTS (v1.29.0) ===\n');
 
   console.log('--- Test 1: glyph sanitiser ---');
   check(pdfSafeText('⛽ Fuel — 40 L ✓') === 'Fuel - 40 L ok', 'Emoji removed, em dash and check mapped to ASCII');
@@ -91,6 +93,71 @@ async function run() {
   check(Buffer.isBuffer(minimal) && minimal.slice(0, 5).toString() === '%PDF-', 'Minimal report still renders a valid PDF');
   const nullish = await buildProReportPdf({ title: null, kpis: [{ label: null, value: null }], tables: [{ columns: [{ key: 'x', label: null }], rows: [{ x: null }] }] });
   check(Buffer.isBuffer(nullish) && nullish.length > 1000, 'Nullish fields degrade gracefully');
+
+  console.log('\n--- Test 5: Apex components render real content ---');
+  const apexReport = {
+    title: 'Apex Component Proof',
+    subtitle: 'Ledger, badges, segments, vs bars and callouts',
+    reportType: 'vehicle_deep_dive',
+    plate: 'KAS 628T',
+    useStandardFonts: true,
+    kpis: [
+      { label: 'Real zero spend', value: 'KES 0', hint: 'surfaced, never hidden', tone: 'negative' },
+      { label: 'Earnings', value: 'KES 12,000', hint: 'surplus', tone: 'positive' }
+    ],
+    charts: [
+      {
+        type: 'segment',
+        title: 'Spend split',
+        currency: 'KES',
+        segments: [{ label: 'Fuel', value: 7000 }, { label: 'Service', value: 3000 }]
+      },
+      { type: 'vs', title: 'Earnings vs expenses', currency: 'KES', earnings: 12000, expenses: 10000 },
+      { type: 'segment', title: 'Empty split', currency: 'KES', segments: [{ label: 'None', value: 0 }] }
+    ],
+    ledgers: [{
+      title: 'Itemized activity & ledger',
+      currency: 'KES',
+      groups: [{
+        label: 'November 2026',
+        expenseTotal: 10000,
+        earningTotal: 12000,
+        rows: [
+          { date: '2 Nov 2026', kind: 'fuel', kindLabel: 'FUEL', description: 'Fuel - 45 L', odometer: 50350, unitCost: 133.33, amount: 6000 },
+          { date: '3 Nov 2026', kind: 'earning', kindLabel: 'EARNING', description: 'Daily earnings', odometer: 50380, unitCost: null, amount: 12000 },
+          { date: '4 Nov 2026', kind: 'maintenance', kindLabel: 'SERVICE', description: 'Brake pads', odometer: null, unitCost: null, amount: 4000 }
+        ]
+      }],
+      totals: { scanned: 3, shown: 3, expenseTotal: 10000, earningTotal: 12000, net: 2000 }
+    }],
+    callouts: [{ tone: 'positive', title: 'Financial health', body: 'Surplus of KES 2,000 after all recorded costs.' }],
+    tables: [{
+      title: 'Zero vs missing proof',
+      currency: 'KES',
+      columns: [
+        { key: 'realZero', label: 'Real zero', type: 'money', align: 'right' },
+        { key: 'missing', label: 'Missing', type: 'money', align: 'right' }
+      ],
+      rows: [{ realZero: 0, missing: null }]
+    }]
+  };
+  const apexBuffer = await buildProReportPdf(apexReport);
+  const apexPages = (apexBuffer.toString('latin1').match(/\/Type\s*\/Page[^s]/g) || []).length;
+  check(apexBuffer.slice(0, 5).toString() === '%PDF-', 'Apex report renders a valid PDF');
+  check(apexPages >= 3, `Apex report spans the cover + content + ledger pages (${apexPages})`);
+  const apexText = String(extractPdfText(apexBuffer).text || '').toLowerCase();
+  check(apexText.includes('kas 628t'), 'Plate badge text is drawn on the cover');
+  check(apexText.includes('itemized activity'), 'Ledger section title is drawn');
+  check(apexText.includes('fuel'), 'Ledger FUEL badge is drawn');
+  check(apexText.includes('earning'), 'Ledger EARNING badge is drawn');
+  check(apexText.includes('odometer'), 'Ledger column headers are drawn');
+  check(apexText.includes('total'), 'Ledger TOTAL band is drawn');
+  check(apexText.includes('nothing hidden'), 'Transparency footer is drawn');
+  check(apexText.includes('kes 0'), 'A real numeric zero renders as an explicit KES 0');
+  check(!apexText.includes('kes -'), 'A missing amount never renders as a currency figure');
+  check(apexText.includes('no activity recorded'), 'An empty segmented chart degrades with plain copy');
+  check(apexText.includes('financial health'), 'Insight callouts are drawn');
+  check(apexText.includes('recorded costs'), 'Callout body copy is drawn');
 
   console.log(`\n🎉 ${passed} PDF engine assertions passed.`);
 }

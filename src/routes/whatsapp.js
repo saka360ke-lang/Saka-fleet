@@ -2729,6 +2729,7 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
                   reportType,
                   ownerId: existingVehicles.some((v) => v.owner_id === profileData?.id) ? profileData?.id : null,
                   driverId: existingVehicles.some((v) => v.assigned_driver_id === profileData?.id) ? profileData?.id : null,
+                  plate: targetVeh?.plate_number || null,
                   profile: profileData,
                   countryInfo,
                   metricIds,
