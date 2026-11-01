@@ -104,7 +104,7 @@ import { detectCountryFromPhone as detectCountryGlobal, resolveUserTimezone, res
 import { getCountryCommStyleLine } from '../services/countryCommStyles.js';
 import { applyOdometerReading, applyOperatingHours } from '../services/maintenanceReminders.js';
 import { handleQuizTurn, detectQuizStart, shouldPauseQuizForChat, getCurrentQuizField, detectFlowSwitch, getFlowDefinition, looksLikeReportRequest, getActiveQuiz, markQuizTurn, abandonQuiz } from '../services/quizEngine.js';
-import { buildNarrativeDraft, narrativeDraftFields, narrativeDraftExtras, shouldPrefillNarrativeDraft, isNarrativeIntakeEnabled, isNarrativeEligibleText } from '../services/narrativeDraft.js';
+import { buildNarrativeDraft, narrativeDraftFields, narrativeDraftExtras, shouldPrefillNarrativeDraft, isNarrativeIntakeEnabled, isNarrativeEligibleText, buildNarrativeParagraphDrafts, renderNarrativeBatchCard, resolveNarrativeBatchTurn, describeNarrativeDraft } from '../services/narrativeDraft.js';
 import { parseRecordQuestion, formatRecordAnswer } from '../services/recordAnswers.js';
 import { queryRecordLedger } from '../services/recordQuery.js';
 import { renderActionDiscovery, composeMessage } from '../services/conversationEngine.js';
@@ -2065,6 +2065,9 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         // pre-fills the quiz. Deterministic fields always win over AI output.
         let narrativeDraft = null;
         let narrativeExt = mergedExt;
+        let narrativeBatchCardReply = null;
+        let narrativeSuppressQuiz = false;
+        let forcedNarrativeFlow = null;
         if (isNarrativeIntakeEnabled()
             && !session.quiz
             && !mediaObj
@@ -2084,6 +2087,22 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                 ...narrativeDraftFields(candidate),
                 _narrative: narrativeDraftExtras(candidate)
               };
+            } else {
+              // v1.38.0 (D4) — one paragraph, several records: show a numbered
+              // plan card and keep a 15-minute batch state for SAVE ALL.
+              const paragraph = buildNarrativeParagraphDrafts({
+                text: messageText,
+                ctx: { countryInfo, profile: profileData },
+                vehicles: existingVehicles,
+                activeVehicle: currentActiveVehicle
+              });
+              if (paragraph.ok && paragraph.drafts.length >= 2) {
+                session.narrativeBatch = { drafts: paragraph.drafts, at: new Date().toISOString() };
+                narrativeBatchCardReply = renderNarrativeBatchCard(paragraph.drafts, {
+                  locale: countryInfo?.locale || 'en-US',
+                  currency: countryInfo?.currency || 'USD'
+                });
+              }
             }
           } catch (narrativeErr) {
             console.warn('[narrative] draft skipped:', narrativeErr.message);
@@ -2106,6 +2125,74 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           driverGate,
           sendWhatsApp: sendWhatsAppReply
         };
+
+        // v1.38.0 (D4) — the pending multi-record batch answers its own turns:
+        // SAVE ALL writes every row through the normal audited quiz path, edit N
+        // reopens that row's draft card, cancel clears without a write.
+        const pendingBatch = session.narrativeBatch || null;
+        const batchTurn = pendingBatch
+          ? resolveNarrativeBatchTurn({ batch: pendingBatch, text: messageText })
+          : { type: 'none' };
+        if (batchTurn.dropBatch) session.narrativeBatch = null;
+        if (pendingBatch && batchTurn.type !== 'none') {
+          if (batchTurn.type === 'save-all') {
+            const saved = [];
+            for (const draft of pendingBatch.drafts) {
+              try {
+                const flow = draft.kind === 'earning' ? 'log_earnings' : (draft.kind === 'mileage' ? 'log_mileage' : 'log_expense');
+                const batchSession = {};
+                await handleQuizTurn({
+                  session: batchSession,
+                  messageText: '',
+                  startFlow: flow,
+                  aiExtracted: { ...narrativeDraftFields(draft), _narrative: narrativeDraftExtras(draft) },
+                  ctx: quizCtx
+                });
+                const confirmed = await handleQuizTurn({ session: batchSession, messageText: '1', ctx: quizCtx });
+                if (confirmed.completed) {
+                  saved.push(describeNarrativeDraft(draft, {
+                    locale: countryInfo?.locale || 'en-US',
+                    currency: countryInfo?.currency || 'USD'
+                  }));
+                }
+              } catch (batchErr) {
+                console.warn('[narrative] batch row failed:', batchErr.message);
+              }
+            }
+            session.narrativeBatch = null;
+            customReply = saved.length
+              ? `✅ *Saved ${saved.length} of ${pendingBatch.drafts.length} records* 📝\n\n${saved.map((line, i) => `${i + 1}. ${line}`).join('\n')}`
+              : '⚠️ I could not save those records just now — nothing was written.';
+            isSpecialFlowHandled = true;
+            narrativeSuppressQuiz = true;
+          } else if (batchTurn.type === 'cancel') {
+            customReply = '❌ Nothing was saved.';
+            isSpecialFlowHandled = true;
+            narrativeSuppressQuiz = true;
+          } else if (batchTurn.type === 'invalid-edit') {
+            customReply = renderNarrativeBatchCard(pendingBatch.drafts, {
+              locale: countryInfo?.locale || 'en-US',
+              currency: countryInfo?.currency || 'USD'
+            });
+            isSpecialFlowHandled = true;
+            narrativeSuppressQuiz = true;
+          } else if (batchTurn.type === 'edit') {
+            const editDraft = pendingBatch.drafts[batchTurn.index];
+            forcedNarrativeFlow = editDraft.kind === 'earning' ? 'log_earnings' : (editDraft.kind === 'mileage' ? 'log_mileage' : 'log_expense');
+            narrativeExt = {
+              ...(mergedExt || {}),
+              ...narrativeDraftFields(editDraft),
+              _narrative: narrativeDraftExtras(editDraft)
+            };
+            quizCtx.aiExtracted = narrativeExt;
+          }
+        } else if (narrativeBatchCardReply) {
+          // The plan card was rendered for this paragraph; suppress the quiz so
+          // the card is the ONLY reply and the batch waits for its turn.
+          isSpecialFlowHandled = true;
+          customReply = narrativeBatchCardReply;
+          narrativeSuppressQuiz = true;
+        }
 
         // Quiz ↔ Conversation arbitration — a greeting/question mid-quiz is
         // answered conversationally and the quiz resumes where it paused.
@@ -2201,13 +2288,15 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             quizTurn.reply = `${switchNote}\n\n${quizTurn.reply}`;
           }
         } else {
-          quizTurn = await handleQuizTurn({
-            session,
-            messageText,
-            aiExtracted: mergedExt,
-            startFlow: receiptQuizStart,
-            ctx: quizCtx
-          });
+          quizTurn = narrativeSuppressQuiz
+            ? { handled: false }
+            : await handleQuizTurn({
+                session,
+                messageText,
+                aiExtracted: narrativeExt,
+                startFlow: forcedNarrativeFlow || receiptQuizStart,
+                ctx: quizCtx
+              });
         }
         // v1.32.3 — every handled quiz turn refreshes the inactivity clock, so an
         // abandoned draft expires within QUIZ_MAX_AGE_MINUTES (default 20) instead

@@ -21,6 +21,9 @@ import {
   matchNarrativeVehicle,
   isNarrativeIntakeEnabled,
   isNarrativeEligibleText,
+  buildNarrativeParagraphDrafts,
+  renderNarrativeBatchCard,
+  resolveNarrativeBatchTurn,
   NARRATIVE_DRAFT_VERSION
 } from './src/services/narrativeDraft.js';
 import { parseMoneyStory } from './src/services/moneyLexicon.js';
@@ -206,6 +209,44 @@ check('a full-tank word is narrative', isNarrativeEligibleText('full tank') === 
 check('a vendor mention is narrative', isNarrativeEligibleText('diesel at Shell') === true);
 check('narrative extras carry the record kind', narrativeDraftExtras(draftFor('earned 4500 today')).kind === 'earning', narrativeDraftExtras(draftFor('earned 4500 today')));
 
+console.log('=== Multi-record paragraphs (v1.38.0, D4) ===');
+const paragraph = buildNarrativeParagraphDrafts({
+  text: 'yesterday I filled 40L for 5500 at Shell and paid 300 for parking',
+  ctx: KE, vehicles: VEHICLES, activeVehicle: VEHICLES[0], now: NOW
+});
+check('a two-record paragraph splits', paragraph.ok && paragraph.drafts.length === 2, paragraph.drafts.length);
+check('first record keeps its own amount', paragraph.drafts[0]?.money.amount === 5500, paragraph.drafts[0]?.money);
+check('second record keeps its own amount', paragraph.drafts[1]?.money.amount === 300, paragraph.drafts[1]?.money);
+check('the first record carries the past date', paragraph.drafts[0]?.occurredAt?.localDate === '2026-10-31', paragraph.drafts[0]?.occurredAt);
+check('the second record has no invented date', paragraph.drafts[1]?.occurredAt === null, paragraph.drafts[1]?.occurredAt);
+
+const threeWay = buildNarrativeParagraphDrafts({
+  text: 'fuel 4500 at total. parking 300. tyres 12000',
+  ctx: KE, vehicles: VEHICLES, activeVehicle: VEHICLES[0], now: NOW
+});
+check('sentence breaks make three records', threeWay.ok && threeWay.drafts.length === 3, threeWay.drafts.length);
+
+const oneLine = buildNarrativeParagraphDrafts({
+  text: 'brakes 4500 plus labour 2500',
+  ctx: KE, vehicles: VEHICLES, activeVehicle: VEHICLES[0], now: NOW
+});
+check('an additive line stays ONE record', oneLine.drafts.length === 1 && oneLine.drafts[0].money.amount === 7000, oneLine.drafts.length);
+
+const mixed = buildNarrativeParagraphDrafts({
+  text: 'earned 4500 today and spent 300 on parking',
+  ctx: KE, vehicles: VEHICLES, activeVehicle: VEHICLES[0], now: NOW
+});
+check('earning + expense split into two kinds', mixed.drafts.length === 2 && mixed.drafts[0].kind === 'earning' && mixed.drafts[1].kind === 'expense', mixed.drafts.map((d) => d.kind));
+
+const batchCard = renderNarrativeBatchCard(paragraph.drafts, { locale: 'en-KE', currency: 'KES' });
+check('batch card lists numbered rows', /1\./.test(batchCard) && /2\./.test(batchCard) && /Save all/.test(batchCard), batchCard);
+const batchNow = Date.now();
+const freshAt = new Date().toISOString();
+check('batch turn resolves SAVE ALL', resolveNarrativeBatchTurn({ batch: { drafts: [{}], at: freshAt }, text: 'save all', now: batchNow }).type === 'save-all');
+check('batch turn resolves edit N', resolveNarrativeBatchTurn({ batch: { drafts: [{}, {}], at: freshAt }, text: 'edit 2', now: batchNow }).index === 1);
+check('batch turn resolves cancel', resolveNarrativeBatchTurn({ batch: { drafts: [{}], at: freshAt }, text: 'cancel', now: batchNow }).type === 'cancel');
+check('an expired batch drops', resolveNarrativeBatchTurn({ batch: { drafts: [{}], at: new Date(batchNow - 16 * 60 * 1000).toISOString() }, text: 'save all', now: batchNow }).dropBatch === true);
+
 console.log(`\n${pass} passed, ${fail} failed (deterministic section)`);
 
 // ---------------------------------------------------------------------------
@@ -310,6 +351,31 @@ async function runLiveRoundTrip() {
   check('live: retro date only exists on fresh writes', draft.occurredAt.localDate < new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Africa/Nairobi', year: 'numeric', month: '2-digit', day: '2-digit'
   }).format(new Date()), 'retro date is in the past');
+
+  // v1.38.0 — SAVE ALL: the same per-row write path, one row per draft.
+  const batchParagraph = buildNarrativeParagraphDrafts({
+    text: 'yesterday fuel 2000 at 50300km and parking 250 at 50300km',
+    ctx: { countryInfo: { country_code: 'KE', currency: 'KES', locale: 'en-KE' } },
+    vehicles: [{ id: vehicle.id, plate: vehicle.plate_number, make_model: vehicle.make_model }],
+    activeVehicle: { id: vehicle.id }
+  });
+  check('live: batch paragraph splits into two drafts', batchParagraph.ok && batchParagraph.drafts.length === 2, batchParagraph.drafts.length);
+  const savedBatch = [];
+  for (const batchDraft of batchParagraph.drafts) {
+    const batchSession = {};
+    await handleQuizTurn({
+      session: batchSession,
+      messageText: '',
+      startFlow: 'log_expense',
+      aiExtracted: { ...narrativeDraftFields(batchDraft), _narrative: narrativeDraftExtras(batchDraft) },
+      ctx
+    });
+    const confirmed = await handleQuizTurn({ session: batchSession, messageText: '1', ctx });
+    if (confirmed.completed) savedBatch.push(batchDraft);
+  }
+  check('live: every batch row saves', savedBatch.length === 2, savedBatch.length);
+  const { data: batchRows } = await supabase.from('expense_logs').select('id,amount,expense_type').eq('vehicle_id', vehicle.id);
+  check('live: three rows total after the batch', batchRows?.length === 3, batchRows?.length);
 
   console.log('✅ Live narrative round-trip complete.');
 }

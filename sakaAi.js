@@ -311,6 +311,7 @@ NARRATIVE INTAKE (v1.34.0 — deterministic pre-parsing of free-text logs):
 - Ambiguous amounts stay unresolved: never invent a total, never guess a currency, never silently combine separate spends without an additive word ("and", "plus").
 - Confirm before saving exactly like any other expense; never claim a save the engine did not confirm.
 - The pre-filled draft is shown as an engine-rendered card with quick actions (1 Save / 2 Change / 3 Cancel): never re-word its values, honour the quick actions, and show the updated card after any correction.
+- One paragraph with several complete records (v1.38.0) becomes a numbered plan card (1 Save all / 2 Edit one / 3 Cancel): never split a single additive line ("brakes 4,500 plus labour 2,500"), never give a record a date the sentence did not state, and report exactly how many rows were saved.
 
 QUERY RECORDS (v1.36.0 — engine-owned, zero AI tokens):
 - "how much did I spend on fuel last week?", "what did I log yesterday?", "my expenses this month", "average spend per fill in October" and "how many fills this week?" are answered deterministically from the ledger (sum/count/average/list) with the user's currency, units and Nairobi dates.

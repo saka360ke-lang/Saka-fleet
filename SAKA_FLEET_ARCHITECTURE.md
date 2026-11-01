@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.37.0  
+**Version:** 1.38.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.38.0** | Multi-record paragraphs (D4): one message → numbered plan card (1 Save all / 2 Edit one / 3 Cancel), per-row audited writes, additive lines never split, no invented dates | §84 |
 | **1.37.0** | Corrections 2.0 (D1): ledger edits are delete & re-log — fresh row, original entry date, DELETE audit consumed via `relogged_entry_id` so `restore` can never duplicate a corrected row | §83 |
 | **1.36.0** | Record Answers + `QUERY_RECORDS` (intent 42): "how much did I spend on fuel last week?" is answered deterministically from the ledger (sum/count/average/list, Nairobi date ranges, zero AI tokens) | §82 |
 | **1.35.0** | Draft Cards: narrative pre-fills confirm through an engine-rendered card (1 Save / 2 Change / 3 Cancel, zero AI tokens) with live re-render on corrections, optional-field auto-skip, and a narrative eligibility threshold (D5) | §81 |
@@ -3384,3 +3385,45 @@ right one — and the restore window can never resurrect the superseded row.
   plain delete → restore → double-restore contract is unchanged; new copy
   assertions for the correction headline. Cleans its own rows.
 - **Still deferred:** multi-record paragraphs (v1.38.0).
+---
+
+### 84.1 Multi-record paragraphs (v1.38.0, D4)
+
+One paragraph describing several complete records becomes a numbered plan
+card — deterministically, with every row written through the normal audited
+path.
+
+- **Splitter** — `buildNarrativeParagraphDrafts()` in
+  `src/services/narrativeDraft.js`: splits on sentence breaks, and on an
+  "and" between two amount-bearing parts; each chunk then runs the exact
+  single-draft machinery (money lexicon, plate masking, per-chunk past
+  dates). A single additive line ("brakes 4,500 plus labour 2,500") stays
+  ONE record; a chunk that cannot pre-fill safely is rejected (never
+  guessed); a chunk without its own date simply has none.
+- **Plan card** — `renderNarrativeBatchCard()` lists the numbered rows via
+  `describeNarrativeDraft` with actions `1 ✅ Save all · 2 ✏️ Edit one ·
+  3 ❌ Cancel`. Deterministic, zero AI tokens.
+- **Batch state** — `session.narrativeBatch = { drafts, at }` with a
+  15-minute TTL (same pattern as the editable ledger's pending state);
+  `resolveNarrativeBatchTurn()` owns save-all / edit N / cancel / expiry.
+- **Route** (`src/routes/whatsapp.js`): SAVE ALL loops the drafts and
+  drives each one through `startQuiz` + the confirm action of the same
+  quiz engine write path (dedupe guard, trial activation, retro
+  `created_at`), then reports "Saved N of M" with the row summaries. Edit N
+  reopens that draft's confirmation card; cancel writes nothing. A fresh
+  single-record line always outranks a stale batch.
+- **Wiring fix** — the route's quiz call now passes the narrative
+  `aiExtracted` (deterministic fields + `_narrative` extras) instead of
+  the raw AI extraction, so retro dates and pre-fills ride through in
+  production exactly as the unit tests have always asserted.
+
+### 84.2 Files, tests
+
+- **Files:** `src/services/narrativeDraft.js`,
+  `src/routes/whatsapp.js`, `sakaAi.js`, `src/services/flowKnowledge.js`.
+- **Tests:** `test_narrative_draft` (**115** — two/three-record splits,
+  additive keep-together, earning+expense kinds, per-chunk dates, batch card
+  rendering, turn resolver incl. TTL expiry, and a live SAVE-ALL round-trip
+  writing two rows with cleanup).
+- **Roadmap complete:** v1.34 intake → v1.35 draft cards → v1.36 record
+  answers → v1.37 corrections 2.0 → v1.38 multi-record.

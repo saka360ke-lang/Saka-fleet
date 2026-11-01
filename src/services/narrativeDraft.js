@@ -488,6 +488,81 @@ export function shouldPrefillNarrativeDraft(draft) {
   return false;
 }
 
+/**
+ * v1.38.0 (D4) — split one paragraph into several single-record drafts.
+ * Sentence breaks and additive conjunctions between two complete record
+ * shapes ("yesterday I filled 40L for 5500 at Shell and paid 300 for
+ * parking") each become their own draft, reusing the exact single-draft
+ * machinery (money lexicon, plate masking, per-chunk past dates). Chunks that
+ * are not prefillable are flagged rather than guessed.
+ */
+export function buildNarrativeParagraphDrafts({ text = '', ctx = {}, vehicles = [], activeVehicle = null, now = new Date() } = {}) {
+  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!clean) return { ok: false, reason: 'empty', drafts: [], rejected: [] };
+
+  // Sentence breaks split first; an "and" between two amount-bearing parts
+  // splits only when each side carries its own money figure.
+  const parts = [];
+  const sentenceParts = clean.split(/(?<=[.!?;])\s+/);
+  for (const part of sentenceParts) {
+    const sub = part.split(/\band\b|,?\s+then\s+/i)
+      .map((piece) => piece.trim())
+      .filter(Boolean)
+      .filter((piece) => /.*/.test(piece));
+    if (sub.length > 1 && sub.every((piece) => /\d/.test(piece))) parts.push(...sub);
+    else parts.push(part.trim());
+  }
+
+  const drafts = [];
+  const rejected = [];
+  for (const part of parts.filter(Boolean)) {
+    const draft = buildNarrativeDraft({ text: part, ctx, vehicles, activeVehicle, now });
+    if (!draft.ok) { rejected.push({ text: part, reason: draft.reason }); continue; }
+    if (shouldPrefillNarrativeDraft(draft)) drafts.push(draft);
+    else rejected.push({ text: part, reason: draft.warnings.join(',') || 'not-prefillable' });
+  }
+
+  if (drafts.length === 0) return { ok: false, reason: 'no_prefillable_drafts', drafts, rejected };
+  return { ok: true, drafts, rejected };
+}
+
+/** Numbered plan card for a multi-record paragraph (deterministic). */
+export function renderNarrativeBatchCard(drafts, { locale = 'en-US', currency = 'USD' } = {}) {
+  const lines = ['📋 *I found these records in your message*', ''];
+  drafts.forEach((draft, index) => {
+    const summary = describeNarrativeDraft(draft, { locale, currency }) || 'a record';
+    lines.push(`${index + 1}. ${summary}`);
+  });
+  const skipped = drafts.some((draft) => draft.warnings?.length);
+  lines.push('');
+  lines.push('1 ✅ Save all');
+  lines.push(`2 ✏️ Edit one (reply the number, e.g. *edit 1*)`);
+  lines.push('3 ❌ Cancel');
+  if (skipped) lines.push('', '⚠️ Anything I could not read safely was left out — edit the row to add it.');
+  return lines.join('\n');
+}
+
+/** Resolve the next turn while a multi-record batch is pending. */
+export function resolveNarrativeBatchTurn({ batch = null, text = '', now = Date.now() } = {}) {
+  const BATCH_TTL_MINUTES = 15;
+  const clean = String(text || '').trim();
+  if (!batch || !Array.isArray(batch.drafts) || batch.drafts.length === 0) {
+    return { type: 'none' };
+  }
+  const expired = batch.at && (Number(now) - Number(new Date(batch.at).getTime())) > BATCH_TTL_MINUTES * 60 * 1000;
+  if (expired) return { type: 'none', dropBatch: true };
+
+  if (/^(1|1️⃣|save all|save them all|yes|confirm all)$/i.test(clean)) return { type: 'save-all' };
+  if (/^(3|3️⃣|cancel|no|stop)$/i.test(clean)) return { type: 'cancel', dropBatch: true };
+  const editMatch = clean.match(/^(?:2|2️⃣|edit|change)\s+(\d{1,2})$/i) || clean.match(/^(\d{1,2})\s*(?:✏️)?$/i);
+  if (editMatch) {
+    const index = Number(editMatch[1]) - 1;
+    if (index >= 0 && index < batch.drafts.length) return { type: 'edit', index, dropBatch: true };
+    return { type: 'invalid-edit' };
+  }
+  return { type: 'none' };
+}
+
 /** One-line summary for the confirmation card / acknowledgement. */
 export function describeNarrativeDraft(draft, { locale = 'en-US', currency = 'USD' } = {}) {
   if (!draft?.ok) return null;
@@ -520,5 +595,8 @@ export default {
   narrativeDraftFields,
   narrativeDraftExtras,
   shouldPrefillNarrativeDraft,
-  describeNarrativeDraft
+  describeNarrativeDraft,
+  buildNarrativeParagraphDrafts,
+  renderNarrativeBatchCard,
+  resolveNarrativeBatchTurn
 };

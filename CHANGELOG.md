@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.38.0] - 2026-11-01
+
+- **One message, several records (D4).** "yesterday I filled 40L for 5500 at Shell and paid 300 for parking" becomes a numbered plan card — *1 ✅ Save all · 2 ✏️ Edit one · 3 ❌ Cancel* — rendered deterministically, zero AI tokens.
+- **Every row goes through the normal write path.** SAVE ALL runs each draft through the same quiz engine write as a single record (dedupe guard, trial activation, retro `created_at`), and the reply reports exactly how many rows were saved — never a blanket "done".
+- **Honest splitting.** `buildNarrativeParagraphDrafts()` splits on sentence breaks and on an "and" between two amount-bearing parts; a single additive line ("brakes 4,500 plus labour 2,500") stays ONE record; a chunk that cannot be pre-filled safely is rejected rather than guessed; and a chunk without its own date simply has none.
+- **A 15-minute batch state** (`session.narrativeBatch`, same TTL pattern as the editable ledger) owns SAVE ALL / edit N / cancel; a fresh single-record line always outranks a stale batch.
+- **Wiring fix (v1.34 carry-over):** the route's quiz call now passes the narrative `aiExtracted` (deterministic fields + `_narrative` extras) instead of the raw AI extraction — retro dates and pre-fills now genuinely ride through in production, matching the unit-tested contract.
+- **Files:** `src/services/narrativeDraft.js` (+`buildNarrativeParagraphDrafts`, `renderNarrativeBatchCard`, `resolveNarrativeBatchTurn`), `src/routes/whatsapp.js` (batch lane + prefill fix), `sakaAi.js`, `src/services/flowKnowledge.js`.
+- **Tests:** `test_narrative_draft` (**115** — split/keep-together fixtures, per-chunk dates, batch card + turn resolver + TTL, live SAVE-ALL round-trip writing two rows; cleans its own rows).
+- **This completes the Narrative Interaction Engine roadmap:** v1.34 intake → v1.35 draft cards → v1.36 record answers → v1.37 corrections 2.0 → v1.38 multi-record.
+
+
 ## [1.37.0] - 2026-11-01
 
 - **Corrections are one honest operation: delete & re-log (D1).** `relogLedgerEntry()` replaces the in-place edit: the old row is hard-deleted with its full snapshot audit, a **fresh** row carries the corrected values while keeping the original entry date (`created_at` rides the fresh insert, exactly like the v1.34 retro-date rule), and the engine audits `LEDGER_ENTRY_UPDATED` with `via: 'relog'` + `old_entry_id`/`new_entry_id`.
