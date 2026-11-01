@@ -24,6 +24,7 @@ import {
 } from './globalization.js';
 import { detectExpiryCategory, reminderDueDate, daysUntilDue } from './maintenanceReminders.js';
 import { buildLedgerGroups } from './reportLedger.js';
+import { EXPENSE_CATEGORY_KEYS, expenseCategoryLabel, expenseCategoryOf } from './expenseCatalog.js';
 
 export const REPORT_TYPES = Object.freeze({
   fleet: { label: 'Fleet Status Report', aliases: ['fleet', 'status', 'overview', 'executive', 'rollup', 'summary'] },
@@ -68,12 +69,7 @@ function normalizeCategory(...values) {
 }
 
 function expenseCategory(expenseType) {
-  const clean = String(expenseType || '').toLowerCase();
-  if (/fuel|petrol|diesel|gas|charge/.test(clean)) return 'fuel';
-  if (/part|tyre|tire|battery|filter/.test(clean)) return 'parts';
-  if (/toll|parking|gate|road fee/.test(clean)) return 'tolls';
-  if (/repair|service|maintenance|mechanic|workshop/.test(clean)) return 'maintenance';
-  return 'other';
+  return expenseCategoryOf(expenseType);
 }
 
 function vehicleDisplay(vehicle, ctx) {
@@ -308,9 +304,10 @@ export async function buildFleetStatusReport({ supabase, ownerId = null, driverI
 
   // v1.29.0 — the executive summary now surfaces fleet financial health and
   // the full itemized ledger, never a hidden aggregate.
-  const fleetExpenseTotals = { fuel: 0, maintenance: 0, parts: 0, tolls: 0, other: 0 };
+  const fleetExpenseTotals = Object.fromEntries(EXPENSE_CATEGORY_KEYS.map((key) => [key, 0]));
   for (const expense of expenses || []) {
-    fleetExpenseTotals[expenseCategory(expense.expense_type)] += toNumber(expense.amount);
+    const category = expenseCategory(expense.expense_type);
+    fleetExpenseTotals[category] = (fleetExpenseTotals[category] || 0) + toNumber(expense.amount);
   }
   const fleetTotalExpenses = Math.round(Object.values(fleetExpenseTotals).reduce((sum, value) => sum + value, 0) * 100) / 100;
   const fleetTotalEarnings = Math.round((earnings || []).reduce((sum, row) => sum + toNumber(row.revenue_amount ?? row.amount), 0) * 100) / 100;
@@ -333,11 +330,7 @@ export async function buildFleetStatusReport({ supabase, ownerId = null, driverI
     currency: ctx.currency,
     financial: {
       expenses: {
-        fuel: Math.round(fleetExpenseTotals.fuel * 100) / 100,
-        maintenance: Math.round(fleetExpenseTotals.maintenance * 100) / 100,
-        parts: Math.round(fleetExpenseTotals.parts * 100) / 100,
-        tolls: Math.round(fleetExpenseTotals.tolls * 100) / 100,
-        other: Math.round(fleetExpenseTotals.other * 100) / 100,
+        ...Object.fromEntries(Object.entries(fleetExpenseTotals).map(([key, value]) => [key, Math.round(value * 100) / 100])),
         total: fleetTotalExpenses
       },
       earnings: fleetTotalEarnings,
@@ -693,12 +686,12 @@ export async function buildFinancialReport({ supabase, ownerId = null, driverId 
   const dataset = await loadFleetData({ supabase, ownerId, driverId, vehicleId });
   const { vehicles, expenses, earnings } = dataset;
 
-  const expenseTotals = { fuel: 0, maintenance: 0, parts: 0, tolls: 0, other: 0 };
+  const expenseTotals = Object.fromEntries(EXPENSE_CATEGORY_KEYS.map((key) => [key, 0]));
   const expenseByVehicle = new Map();
   for (const expense of expenses || []) {
     const category = expenseCategory(expense.expense_type);
     const amount = toNumber(expense.amount);
-    expenseTotals[category] += amount;
+    expenseTotals[category] = (expenseTotals[category] || 0) + amount;
     expenseByVehicle.set(expense.vehicle_id, (expenseByVehicle.get(expense.vehicle_id) || 0) + amount);
   }
   const totalExpenses = Object.values(expenseTotals).reduce((sum, value) => sum + value, 0);
@@ -745,11 +738,7 @@ export async function buildFinancialReport({ supabase, ownerId = null, driverId 
     locale: ctx.locale,
     ledger,
     expenses: {
-      fuel: Math.round(expenseTotals.fuel * 100) / 100,
-      maintenance: Math.round(expenseTotals.maintenance * 100) / 100,
-      parts: Math.round(expenseTotals.parts * 100) / 100,
-      tolls: Math.round(expenseTotals.tolls * 100) / 100,
-      other: Math.round(expenseTotals.other * 100) / 100,
+      ...Object.fromEntries(Object.entries(expenseTotals).map(([key, value]) => [key, Math.round(value * 100) / 100])),
       total: Math.round(totalExpenses * 100) / 100
     },
     earnings: {
@@ -779,11 +768,10 @@ function formatFinancialText(data, ctx) {
     `_${formatDate(data.generatedAt, ctx.locale, { timeZone: ctx.timeZone })} • ${ctx.timeZone}_`,
     '',
     '💸 *Operating Expenses*',
-    `• Fuel: ${money(data.expenses.fuel)}`,
-    `• Maintenance: ${money(data.expenses.maintenance)}`,
-    `• Parts: ${money(data.expenses.parts)}`,
-    `• Tolls / parking: ${money(data.expenses.tolls)}`,
-    `• Other: ${money(data.expenses.other)}`,
+    ...EXPENSE_CATEGORY_KEYS
+      .filter((key) => key !== 'other' && Number(data.expenses[key]) > 0)
+      .map((key) => `• ${expenseCategoryLabel(key)}: ${money(data.expenses[key])}`),
+    `• Other: ${money(data.expenses.other || 0)}`,
     `• *Total: ${money(data.expenses.total)}*`,
     '',
     `📥 *Earnings:* ${money(data.earnings.total)}`,

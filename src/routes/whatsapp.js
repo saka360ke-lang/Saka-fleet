@@ -16,6 +16,7 @@ import {
 } from '../services/vehicles.js';
 import { calculateFuelConsumption } from '../services/analytics.js';
 import { normalizeFillType } from '../services/fuelEconomy.js';
+import { resolveExpenseType, normalizeExpenseType, hasExpenseTypeMarker } from '../services/expenseCatalog.js';
 import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly, shouldReplaceIntroCopy, isRepeatedReply, isStopRequest, PAUSE_REPLY, pickRepeatNudge, pickNewcomerNudge, isFirstTimeMessage, shouldReplacePlateAsk, isIncompleteReplyComplaint, isLegacyWelcomeCopy } from '../services/greetings.js';
 import { matchProductQa, buildProductQaReply, buildProductFactsContext, buildLocalPricingFacts, stripUsdFigures, hasLocalFigure, recommendTierForFleet, sanitizeSakaReply } from '../services/productQa.js';
 import { shouldSuggestContactSave, isLostChatMessage, buildContactSaveFacts, markContactSaveSuggested } from '../services/contactNudge.js';
@@ -2509,7 +2510,12 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               const extAmount = mergedExt.amount || extractNumberFromText(messageText);
               const extLiters = mergedExt.fuel_liters || mergedExt.liters || null;
               const extOdo = mergedExt.odometer || mergedExt.current_mileage || extractOdometerFromText(messageText);
-              const expType = mergedExt.expense_type || (/fuel|petrol|diesel|gas/i.test(messageText) ? 'Fuel' : 'Expense');
+              // v1.30.0 — canonicalise the expense type from the catalog so a
+              // one-liner like "repaired a puncture... front tyre" lands in Tyres.
+              const expType = normalizeExpenseType(
+                mergedExt.expense_type
+                || (hasExpenseTypeMarker(messageText) ? resolveExpenseType(messageText) : null)
+              );
               const extFillType = normalizeFillType(mergedExt.fill_type) || normalizeFillType(messageText);
 
               if ((extAmount && extAmount > 0) || (extLiters && extLiters > 0)) {

@@ -7,6 +7,7 @@ import { resolveReportAccess, reportAccessDeniedText } from './reportAccess.js';
 import { buildProReportPdf } from './pdfEngine.js';
 import { sendReportByEmail } from './mailer.js';
 import { uploadReportToSupabase } from '../../reports.js';
+import { EXPENSE_CATEGORIES } from './expenseCatalog.js';
 
 /**
  * Saka Fleet — Report delivery pipeline (v1.29.0)
@@ -158,13 +159,9 @@ function fleetReportToPdf(report, reportType) {
   }
 
   if (expenseBreakdown) {
-    const segments = [
-      { label: 'Fuel', value: expenseBreakdown.fuel || 0 },
-      { label: 'Maintenance', value: expenseBreakdown.maintenance || 0 },
-      { label: 'Parts', value: expenseBreakdown.parts || 0 },
-      { label: 'Tolls', value: expenseBreakdown.tolls || 0 },
-      { label: 'Other', value: expenseBreakdown.other || 0 }
-    ].filter((item) => Number(item.value) > 0);
+    const segments = Object.entries(expenseBreakdown)
+      .filter(([key, value]) => key !== 'total' && Number(value) > 0)
+      .map(([key, value]) => ({ label: EXPENSE_CATEGORIES[key]?.label || key, value: Number(value) }));
     if (segments.length) charts.push({ type: 'segment', title: 'Spend by category', currency, segments });
     if (expenseTotal > 0 || earningTotal > 0) {
       charts.push({ type: 'vs', title: 'Earnings vs expenses', currency, earnings: earningTotal, expenses: expenseTotal });

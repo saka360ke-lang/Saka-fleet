@@ -170,9 +170,9 @@ function ledgerTone(kind) {
   const clean = String(kind || '').toLowerCase();
   if (/(earning|revenue|income)/.test(clean)) return 'positive';
   if (/(fuel|energy|charge)/.test(clean)) return 'brand';
-  if (/(service|maintenance|repair|part|tyre|tire|battery)/.test(clean)) return 'warn';
+  if (/(service|maintenance|repair|part|tyre|tire|battery|body|wash|consumable|accessor)/.test(clean)) return 'warn';
   if (/(compliance|insurance|inspection|licence|license|permit)/.test(clean)) return 'warn';
-  if (/(expense|cost|toll|parking)/.test(clean)) return 'negative';
+  if (/(expense|cost|toll|parking|fine|wage|towing|subscription|berth)/.test(clean)) return 'negative';
   return 'neutral';
 }
 

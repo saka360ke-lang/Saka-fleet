@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.29.0  
+**Version:** 1.30.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.30.0** | Expense DNA: exhaustive 19-type catalog across all 8 asset kinds, asset-aware quiz menus, real-chat alias resolution (puncture/filters/parts), unified report classifiers and ledger badges | §72 |
 | **1.29.0** | Saka Apex PDF design system: vehicle deep-dive, owner portfolio, driver performance, itemized ledgers, type badges, segmented/vs bars, insight callouts, zero-transparency contract | §47.2–§47.7 |
 | **1.28.9** | Asset metric registry: all 8 kinds populated (odometer vs engine hours, litres vs kWh, L/h, MPG, km/kWh) and wired into reports, summaries, bespoke menus, prompt and QA facts | §71.18 |
 | **1.28.8** | OCR unpaused end to end, always-on self-learning tick, country communication styles, abandoned-checkout recovery (30 min/24 h/T-2d), post-expiry benefit nudges (D+7/D+30) | §71.17 |
@@ -2794,3 +2795,42 @@ The model can never ship a corporate hedge, an empty capacity placeholder (`· v
 - **Surgical integration:** `reports.js` (`assetMetricKpis`) renders the legacy audit PDF from the registry; `reportMetrics.metricsForAccess()` filters bespoke menus by `access.assetKinds` (new `operating_hours` and `energy_kwh` metrics, `metricAppliesToAssetKinds()` exported); `vehicleSummary.js` takes its primary KPI/text line from `assetMetricSummaryLines()` (engine hours for hours-led assets, Energy charged for EVs, serial fallback in the title); `flowKnowledge.SAKA_METRIC_GLOSSARY` is embedded in `DEFAULT_SAKA_CORE_PROMPT` and re-exported by `sakaAi.js`; `productQa.ASSET_METRIC_FACTS` publishes one “what can I log for a <kind>” fact per asset kind.
 - **Formatting:** `formatMetricValue()` converts km↔mi, L↔gal, km/L↔MPG, L/h↔gal/h and km/kWh↔mi/kWh, renders hours as `h`, uses the local currency for money and returns `—` for nullish values. Canonical storage stays km/litres/hours/kWh.
 - **Proof:** `test_asset_metrics` 70 · `test_agent_training` 109 (glossary embedded) · `test_report_metrics` 25 · `test_vehicle_summary` 14 · `test_fleet_reports` 42 · `test_product_qa` 147.
+
+---
+
+## 72. Expense Catalog (v1.30.0) — every expense, every asset kind
+
+### 72.1 Why (chat-driven audit)
+Before this release the expense taxonomy was split across three private classifiers (`fleetReports.expenseCategory`, `reportLedger.expenseKind`, `reportMetrics` category reduce) and the quiz offered only **Fuel / Maintenance / Insurance / Other**. Recent live chats showed the gaps directly:
+- A user answered the type question with **"Parts"** - not an option.
+- *"I repaired a puncture in Nanyuki. Front left tyre. Cost me 300kes..."* - a tyre expense that would land in "Other".
+- *"The odometer reading for the maintenance is not for fill up but an odometer reading at time of repair"* - the label always said "at fill-up".
+- *"Remind to Change fuel filter and air filter"*, *"Log an oil change reminder"*, *"Front tyre change reminder"* - filters/oil/tyres vocabulary the engine did not classify.
+- *"Topped up fuel; 1000kes @227kes per liter"*, *"Diesel..."* - fuel synonyms beyond the four choices.
+
+### 72.2 The registry (`src/services/expenseCatalog.js`)
+Single source of truth, pure and deterministic:
+- **18 report categories:** fuel, maintenance, parts, tyres, repairs, bodywork, washing, parking, tolls, fines, compliance, accessories, subscriptions, towing, wages, consumables, berthing, other - each with a human label, ledger badge (`FUEL`, `SERVICE`, `PARTS`, `TYRES`, `REPAIRS`, `BODY`, `WASH`, `PARKING`, `TOLLS`, `FINES`, `COMPLIANCE`, `ACCESSORY`, `SUBS`, `TOWING`, `WAGES`, `FLUIDS`, `MOORING`, `OTHER`) and a semantic tone.
+- **19 canonical expense types**, each with aliases, applicable asset kinds and optional electric-only flags: Fuel, Charging, Maintenance, Parts, Tyres, Repairs, Bodywork & Paint, Washing, Parking, Tolls, Fines, Insurance, Accessories, Subscriptions, Towing & Recovery, Crew Wages, Consumables, Mooring & Berthing, Other.
+- **Longest-alias-first resolution:** "fuel filter" is Parts (not Fuel), "oil change" is Maintenance (not Consumables), "hydraulic oil" is Consumables, "brake pads" is Parts while "brake fluid" is Consumables, "engine oil" is Maintenance while "engine repair" is Repairs.
+- **Canonical legacy values preserved** (`Fuel`, `Maintenance`, `Insurance`, `Tolls`, `Other`), so stored rows and every existing report keep working.
+- Exports: `EXPENSE_CATEGORIES`, `EXPENSE_CATEGORY_KEYS`, `EXPENSE_TYPES`, `expenseTypeChoices(assetKind, { fuelType })`, `expenseTypeMenu()`, `resolveExpenseType()`, `normalizeExpenseType()`, `hasExpenseTypeMarker()`, `expenseCategoryOf/Label/Badge/Tone`, `expenseTypesForAssetKind()`.
+
+### 72.3 Asset-kind-aware quiz
+- The `log_expense` type menu is built from the catalog: road assets get **Fuel · Maintenance · Parts · Tyres · Repairs · Parking · Insurance · Other** (8, WhatsApp-short); EV fleets swap Fuel for **Charging**; generators/machinery/watercraft get **Consumables + Crew Wages** and never Tyres/Parking.
+- Free text always resolves even when outside the menu ("tolls", "fines", "berthing") through a `fallbackParse/accept` extension on `choiceField`.
+- **Odometer label fixed:** "Odometer at the time of this expense" with the hint "the reading when it happened - fill-up, service or repair" (no longer implies every expense is a fill-up).
+- Quick-path markers now come from the catalog (`hasExpenseTypeMarker`), and every write normalises the type at source (`normalizeExpenseType`), so `diesel` → Fuel, `puncture` → Tyres, `wash` → Washing in `expense_logs`.
+
+### 72.4 Unified classifiers (no more private copies)
+`fleetReports.expenseCategory`, `reportLedger.expenseKind`/`ledgerKindLabel`, `reportMetrics` category series + top-category, `analytics.buildVehicleSummary` grouping, and the driver/vehicle-deep-dive/owner-portfolio category accumulators all delegate to `expenseCategoryOf()`. Financial totals are now **additive**: the legacy fuel/maintenance/parts/tolls/other keys stay, and the new categories appear alongside them in the WhatsApp text, the Apex PDF segmented bars and the itemized ledger badges. Category accumulators are initialised from `EXPENSE_CATEGORY_KEYS`, so a new type can never produce `NaN`.
+
+### 72.5 Chat-driven tweaks
+- "Parts" is a first-class menu choice; puncture/tyre phrases become **Tyres**; fuel/air filter phrases become **Parts**; oil change becomes **Maintenance**; wash/parking/tolls/fines/licences all classify.
+- The trigger sentence "log expense" must never pre-fill a type: the word "expense" is deliberately **not** an alias (regression covered by `test_expense_catalog` and `test_quiz_flow`).
+- The odometer complaint is fixed in copy and in the flow order (type → amount → [fuel volume/fill type] → odometer → notes → confirm).
+
+### 72.6 Files, tests & knobs
+- Files: `src/services/expenseCatalog.js` (new), `quizEngine.js` (menu, label, markers, write normalisation), `src/routes/whatsapp.js` (quick-path normalisation), `reportLedger.js`, `fleetReports.js`, `reportMetrics.js`, `reportDelivery.js`, `analytics.js`, `driverReports.js`, `vehicleDeepDive.js`, `ownerPortfolio.js`, `pdfEngine.js` (badge tones), `flowKnowledge.js`, `sakaAi.js`.
+- Tests: new `test_expense_catalog.js` (66 assertions: 25 real-chat phrases, longest-alias precedence, asset-kind menus, quiz/ledger integration, trigger-word regression) plus `test_quiz_flow.js` (95), `test_fleet_reports.js` (42), `test_report_metrics.js` (25), `test_report_builders.js` (67), `test_pdf_engine.js` (29), `test_agent_training.js` (109), `test_doc_sync.js`, `test_kb_docs.js`.
+- No schema/DDL change, no new dependency, no new env knob. WhatsApp menus stay at 8 choices; every other type is reachable by free text.

@@ -20,6 +20,13 @@ import {
 import { chatCompletion, parseJsonSafely } from './aiClient.js';
 import { normalizeFillType } from './fuelEconomy.js';
 import {
+  EXPENSE_TYPES,
+  expenseTypeChoices,
+  resolveExpenseType,
+  normalizeExpenseType,
+  hasExpenseTypeMarker
+} from './expenseCatalog.js';
+import {
   buildGlobalContext,
   userDistanceToKm,
   kmToUserDistance,
@@ -228,9 +235,16 @@ function choiceField(key, label, hint, choices, options = {}) {
         if (clean === c.value.toLowerCase()) return c.value;
         if (c.aliases.some((a) => clean.includes(a))) return c.value;
       }
+      // v1.30.0 — free-text escape: any catalog type resolves even when it is
+      // not one of the eight menu choices (e.g. "tolls", "berthing", "fines").
+      if (typeof options.fallbackParse === 'function') {
+        const fallback = options.fallbackParse(text);
+        if (fallback) return fallback;
+      }
       return null;
     },
     validate: (value) => (normalized.some((c) => c.value === value)
+      || (typeof options.accept === 'function' && options.accept(value))
       ? { ok: true }
       : { ok: false, message: `Please choose one of: ${normalized.map((c) => c.value).join(', ')}` })
   });
@@ -449,14 +463,24 @@ function editVehicleNewValueParser(editField) {
 }
 
 function expenseFields(ctx) {
+  // v1.30.0 — the menu follows the asset kind (an EV sees Charging, a
+  // generator sees Consumables + Crew Wages); free text always resolves.
+  const vehicles = ctx?.vehicles || [];
+  const vehicle = vehicles.find((v) => v.id === ctx?.answers?.vehicle_id) || vehicles[0] || null;
+  const assetKind = vehicle?.asset_type || vehicle?.vehicle_type || 'vehicle';
+  const choices = expenseTypeChoices(assetKind, { fuelType: vehicle?.fuel_type });
   return [
     vehicleField(ctx),
-    choiceField('expense_type', 'Expense type', 'Fuel, Maintenance, Insurance or Other', [
-      { value: 'Fuel', aliases: ['fuel', 'petrol', 'diesel', 'refuel', 'gas'] },
-      { value: 'Maintenance', aliases: ['maintenance', 'service', 'repair', 'oil', 'tyre', 'tire'] },
-      { value: 'Insurance', aliases: ['insurance'] },
-      { value: 'Other', aliases: ['other', 'misc', 'parking', 'fine'] }
-    ]),
+    choiceField(
+      'expense_type',
+      'Expense type',
+      `${choices.map((choice) => choice.value).join(' · ')} — or just say it in your own words`,
+      choices,
+      {
+        fallbackParse: (text) => resolveExpenseType(text),
+        accept: (value) => EXPENSE_TYPES.some((type) => type.value === value)
+      }
+    ),
     field('amount', 'Amount spent', 'e.g. 5500', {
       aliases: ['amount', 'cost', 'price'],
       parse: (text) => parseNumber(text),
@@ -477,7 +501,7 @@ function expenseFields(ctx) {
       { value: 'Full tank', aliases: ['full tank', 'full', 'filled up', 'fill up', 'brim', 'filled to full', 'to the top'] },
       { value: 'Top-up', aliases: ['top up', 'top-up', 'topped up', 'partial', 'half tank', 'not full', 'some fuel'] }
     ], { optional: true, when: (answers) => answers.expense_type === 'Fuel' }),
-    field('odometer_reading', 'Odometer at fill-up', 'must be at least the last recorded reading', {
+    field('odometer_reading', 'Odometer at the time of this expense', 'the reading when it happened — fill-up, service or repair', {
       aliases: ['odometer', 'odometer_reading', 'current_mileage', 'mileage'],
       parse: (text, c) => parseOdometer(text, c),
       validate: (value, c) => {
@@ -488,7 +512,7 @@ function expenseFields(ctx) {
         return { ok: true };
       }
     }),
-    field('notes', 'Notes', 'optional â€” e.g. full tank, Shell station', {
+    field('notes', 'Notes', 'optional — e.g. Shell station, front-left tyre', {
       optional: true, aliases: ['notes'], parse: (text) => String(text).trim() || null
     })
   ];
@@ -1113,7 +1137,7 @@ function applyTextExtraction(state, def, text, ctx) {
   const hasVolumeMarker = /\d\s*(?:l\b|lt\b|ltr\b|litre|liter|gal\b)/i.test(clean);
   const hasDistanceMarker = /(?:km|mi\b|mile|mileage|odo|odometer)/i.test(clean);
   const hasFillMarker = /\b(full tank|full|brimmed|top.?up|partial)\b/i.test(clean);
-  const hasExpenseMarker = /\b(fuel|diesel|petrol|service|repair|tyre|tire|insurance|parking|wash)\b/i.test(clean);
+  const hasExpenseMarker = hasExpenseTypeMarker(clean);
 
   /**
    * v1.28.0 — scope a multi-part sentence to the fragment that belongs to THIS
@@ -1143,8 +1167,9 @@ function applyTextExtraction(state, def, text, ctx) {
       return match ? match[0] : clean;
     }
     if (field.key === 'expense_type') {
-      const match = clean.match(/\b(fuel|diesel|petrol|service|repair|tyre|tire|insurance|parking|wash)\b/i);
-      return match ? match[0] : clean;
+      // v1.30.0 — the catalog resolver scans the full sentence (longest alias
+      // wins), so a scoped fragment would only hide context like "fuel filter".
+      return clean;
     }
     return clean;
   };
@@ -2594,10 +2619,13 @@ async function executeFlow(state, ctx) {
 
       case 'log_expense': {
         if (!vehicle) return { handled: true, reply: await fail('Vehicle not found.'), flow: state.flow, active: true };
+        // v1.30.0 — canonicalise the type at write time ("diesel" → Fuel,
+        // "puncture" → Tyres) so every report and ledger classifies correctly.
+        const canonicalExpenseType = normalizeExpenseType(a.expense_type);
         const { error: logErr } = await ctx.supabase.from('expense_logs').insert([{
           vehicle_id: vehicle.id,
           driver_id: ctx.profile?.id,
-          expense_type: a.expense_type,
+          expense_type: canonicalExpenseType,
           amount: a.amount,
           fuel_liters: a.fuel_liters || 0,
           fill_type: normalizeFillType(a.fill_type),
@@ -2617,7 +2645,7 @@ async function executeFlow(state, ctx) {
 
         await ctx.supabase.from('expenses').insert([{
           plate: vehicle.plate_number,
-          expense_type: a.expense_type,
+          expense_type: canonicalExpenseType,
           amount: a.amount,
           liters: a.fuel_liters || 0,
           odometer_reading: a.odometer_reading

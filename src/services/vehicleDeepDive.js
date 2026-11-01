@@ -3,6 +3,7 @@ import { assetMetricSummaryLines, formatMetricValue, getAssetMetricProfile } fro
 import { analyzeFuelEconomy } from './fuelEconomy.js';
 import { getVehicleComplianceStatus } from './vehicleCompliance.js';
 import { buildLedgerGroups, expenseKind } from './reportLedger.js';
+import { EXPENSE_CATEGORIES, EXPENSE_CATEGORY_KEYS } from './expenseCatalog.js';
 
 /**
  * Saka Fleet — Individual Vehicle Deep-Dive (v1.29.0)
@@ -157,13 +158,15 @@ export async function buildVehicleDeepDive({
   const costPerDistance = distanceDisplay > 0 ? totalSpend / distanceDisplay : null;
   const costPerHour = operatingHours > 0 ? totalSpend / operatingHours : null;
 
-  const categories = { fuel: 0, maintenance: 0, parts: 0, tolls: 0, compliance: 0, other: 0 };
-  for (const row of expenses) categories[expenseKind(row.expense_type)] += Number(row.amount) || 0;
-  const categoryLabels = { fuel: 'Fuel', maintenance: 'Maintenance', parts: 'Parts', tolls: 'Tolls & parking', compliance: 'Compliance', other: 'Other' };
+  const categories = Object.fromEntries(EXPENSE_CATEGORY_KEYS.map((key) => [key, 0]));
+  for (const row of expenses) {
+    const key = expenseKind(row.expense_type);
+    categories[key] = (categories[key] || 0) + (Number(row.amount) || 0);
+  }
   const categorySeries = Object.entries(categories)
     .filter(([, value]) => value > 0)
     .sort((a, b) => b[1] - a[1])
-    .map(([key, value]) => ({ label: categoryLabels[key] || key, value: Math.round(value * 100) / 100 }));
+    .map(([key, value]) => ({ label: EXPENSE_CATEGORIES[key]?.label || key, value: Math.round(value * 100) / 100 }));
   const topCategory = categorySeries[0] || null;
 
   const meterLines = assetMetricSummaryLines({ assetKind, vehicle, unitSystem: ctx.unitSystem, locale: ctx.locale, currency: ctx.currency });

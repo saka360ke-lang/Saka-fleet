@@ -126,11 +126,11 @@ export const SAKA_QUIZ_FLOWS = [
   {
     key: 'log_expense',
     label: 'Log expense',
-    trigger: 'log expense, fuel, service, repair, paid, receipt photo',
-    fields: 'vehicle → type → amount → fuel volume → fill type (full tank or top-up) → odometer at fill-up → notes → confirm',
+    trigger: 'log expense, fuel, service, repair, parts, tyres, puncture, filters, oil change, insurance, parking, tolls, wash, fine, paid, receipt photo',
+    fields: 'vehicle → type → amount → fuel volume → fill type (full tank or top-up) → odometer at the time of the expense → notes → confirm',
     extracted: ['plate_number', 'expense_type', 'amount', 'fuel_liters', 'fill_type', 'odometer', 'notes'],
     writes: 'expense_logs + expenses + vehicle odometer',
-    rules: 'fuel volume and fill type only when type is fuel; top-ups are valid but only full tanks anchor an exact km/L segment; receipt OCR pre-fills hints'
+    rules: 'expense types come from the shared expenseCatalog (Fuel, Charging, Maintenance, Parts, Tyres, Repairs, Bodywork & Paint, Washing, Parking, Tolls, Fines, Insurance, Accessories, Subscriptions, Towing & Recovery, Crew Wages, Consumables, Mooring & Berthing, Other); the menu follows the asset kind and any free-text alias resolves (puncture → Tyres, fuel filter → Parts, oil change → Maintenance, hydraulic oil → Consumables); fuel volume and fill type only when type is fuel; top-ups are valid but only full tanks anchor an exact km/L segment; receipt OCR pre-fills hints'
   },
   {
     key: 'log_earnings',

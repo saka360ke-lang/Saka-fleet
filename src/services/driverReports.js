@@ -1,6 +1,7 @@
 import { buildGlobalContext, formatDate, formatNumber } from './globalization.js';
 import { daysUntilDue, reminderDueDate } from './maintenanceReminders.js';
 import { buildLedgerGroups, expenseKind } from './reportLedger.js';
+import { EXPENSE_CATEGORIES, EXPENSE_CATEGORY_KEYS } from './expenseCatalog.js';
 
 /**
  * Saka Fleet — Driver-first reports (v1.29.0)
@@ -100,10 +101,13 @@ export async function buildDriverDaybook({
 
   const categories = {};
   expenses.forEach((row) => {
-    const key = String(row.expense_type || 'other').toLowerCase();
+    const key = expenseKind(row.expense_type);
     categories[key] = (categories[key] || 0) + (Number(row.amount) || 0);
   });
-  const categorySeries = Object.entries(categories).map(([label, value]) => ({ label, value }));
+  const categorySeries = Object.entries(categories).map(([key, value]) => ({
+    label: EXPENSE_CATEGORIES[key]?.label || key,
+    value
+  }));
 
   const recent = [...expenses]
     .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
@@ -452,12 +456,14 @@ export async function buildDriverPerformance({
     daily.push({ label: day.toLocaleDateString('en-GB', { weekday: 'short' }), value: count });
   }
 
-  const categoryLabels = { fuel: 'Fuel', maintenance: 'Maintenance', parts: 'Parts', tolls: 'Tolls & parking', compliance: 'Compliance', other: 'Other' };
-  const categoryTotals = { fuel: 0, maintenance: 0, parts: 0, tolls: 0, compliance: 0, other: 0 };
-  for (const row of expenses) categoryTotals[expenseKind(row.expense_type)] += Number(row.amount) || 0;
+  const categoryTotals = Object.fromEntries(EXPENSE_CATEGORY_KEYS.map((key) => [key, 0]));
+  for (const row of expenses) {
+    const key = expenseKind(row.expense_type);
+    categoryTotals[key] = (categoryTotals[key] || 0) + (Number(row.amount) || 0);
+  }
   const categorySeries = Object.entries(categoryTotals)
     .filter(([, value]) => value > 0)
-    .map(([key, value]) => ({ label: categoryLabels[key] || key, value: Math.round(value * 100) / 100 }));
+    .map(([key, value]) => ({ label: EXPENSE_CATEGORIES[key]?.label || key, value: Math.round(value * 100) / 100 }));
 
   const complianceItems = compliances.map((row) => {
     const left = row.lifetime ? null : daysUntilDue(row.expiry, now);

@@ -2,6 +2,7 @@ import { buildGlobalContext, formatNumber } from './globalization.js';
 import { analyzeFuelEconomy } from './fuelEconomy.js';
 import { getAssetMetricProfile } from './assetMetrics.js';
 import { buildLedgerGroups } from './reportLedger.js';
+import { EXPENSE_CATEGORIES, expenseCategoryOf } from './expenseCatalog.js';
 
 /**
  * Saka Fleet — Bespoke Report Metric Registry (v1.18.0)
@@ -183,7 +184,7 @@ export async function buildCustomReport({
 
   const categories = {};
   expenses.forEach((row) => {
-    const key = String(row.expense_type || 'other').toLowerCase();
+    const key = expenseCategoryOf(row.expense_type);
     categories[key] = (categories[key] || 0) + (Number(row.amount) || 0);
   });
   const topCategory = Object.entries(categories).sort((a, b) => b[1] - a[1])[0];
@@ -199,7 +200,7 @@ export async function buildCustomReport({
     distance,
     expiring_30: expiring30,
     overdue,
-    top_category: topCategory ? topCategory[0] : '—',
+    top_category: topCategory ? (EXPENSE_CATEGORIES[topCategory[0]]?.label || topCategory[0]) : '—',
     driver_entries: expenses.length + earnings.length,
     co2: fuelLitres * 2.68
   };
@@ -215,7 +216,10 @@ export async function buildCustomReport({
     };
   });
 
-  const chartSeries = Object.entries(categories).map(([label, value]) => ({ label, value }));
+  const chartSeries = Object.entries(categories).map(([key, value]) => ({
+    label: EXPENSE_CATEGORIES[key]?.label || key,
+    value
+  }));
   const ctx = buildGlobalContext(countryInfo, profile);
   const ledger = buildLedgerGroups({
     expenses,

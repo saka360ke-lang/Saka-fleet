@@ -1,40 +1,27 @@
 import { formatDate, formatNumber } from './globalization.js';
+import { EXPENSE_CATEGORIES, expenseCategoryOf } from './expenseCatalog.js';
 
 /**
- * Saka Fleet — Transaction Ledger Builder (v1.29.0)
+ * Saka Fleet — Transaction Ledger Builder (v1.30.0)
  * ------------------------------------------------
  * One pure module that turns raw expense_logs / private_earnings rows into the
  * month-grouped, badge-tagged itemized ledger consumed by the Apex PDF engine.
- * Full transparency: every row in scope is surfaced (no truncation) and totals
- * are engine-calculated. Missing values stay null (rendered "—"), real zeros
- * stay 0 (rendered as an explicit amount).
+ * Expense classification is delegated to `expenseCatalog.js` (single source of
+ * truth). Full transparency: every row in scope is surfaced (no truncation) and
+ * totals are engine-calculated. Missing values stay null (rendered "—"), real
+ * zeros stay 0 (rendered as an explicit amount).
  */
+
+/** Expense type → canonical report/ledger category (fuel, parts, tyres…). */
+export function expenseKind(expenseType) {
+  return expenseCategoryOf(expenseType);
+}
 
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
-/** Expense type → canonical ledger kind. */
-export function expenseKind(expenseType) {
-  const clean = String(expenseType || '').toLowerCase();
-  if (/fuel|petrol|diesel|gas|charge|energy/.test(clean)) return 'fuel';
-  if (/part|tyre|tire|battery|filter/.test(clean)) return 'parts';
-  if (/toll|parking|gate|road fee/.test(clean)) return 'tolls';
-  if (/repair|service|maintenance|mechanic|workshop/.test(clean)) return 'maintenance';
-  if (/insurance|inspection|licence|license|permit|compliance/.test(clean)) return 'compliance';
-  return 'other';
-}
-
-const KIND_LABELS = Object.freeze({
-  fuel: 'FUEL',
-  parts: 'PARTS',
-  tolls: 'TOLLS',
-  maintenance: 'SERVICE',
-  compliance: 'COMPLIANCE',
-  earning: 'EARNING',
-  other: 'OTHER'
-});
-
 export function ledgerKindLabel(kind) {
-  return KIND_LABELS[String(kind || '').toLowerCase()] || 'OTHER';
+  if (String(kind || '').toLowerCase() === 'earning') return 'EARNING';
+  return EXPENSE_CATEGORIES[kind]?.badge || EXPENSE_CATEGORIES.other.badge;
 }
 
 function trimText(value, max = 64) {

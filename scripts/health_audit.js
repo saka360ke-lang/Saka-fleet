@@ -42,7 +42,11 @@ const STATLESS_SUITES = [
   // v1.28.8 — abandoned-cart + post-expiry ladders and country comm styles.
   'test_recovery_ladders.js',
   // v1.28.9 — every asset kind's metric profile (odometer vs hours, litres vs kWh).
-  'test_asset_metrics.js'
+  'test_asset_metrics.js',
+  // v1.29.0 — Apex report builders (ledgers, deep-dive, portfolio, driver performance).
+  'test_report_builders.js',
+  // v1.30.0 — exhaustive expense catalog (real chats, asset-kind menus, badges).
+  'test_expense_catalog.js'
 ];
 
 const WORKFLOW_DIR = '.github/workflows';

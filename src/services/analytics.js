@@ -3,6 +3,7 @@
  */
 
 import { analyzeFuelEconomy, buildFuelEconomyReply } from './fuelEconomy.js';
+import { expenseCategoryOf } from './expenseCatalog.js';
 
 export async function calculateFuelConsumption({ supabase, vehicleId, plateNumber, targetUnit = 'metric', currency = null }) {
   if (!supabase) {
@@ -159,9 +160,10 @@ export async function getVehicleSummaryReport({ supabase, vehicleId, plateNumber
   if (expenses && expenses.length > 0) {
     for (const exp of expenses) {
       const amt = Number(exp.amount) || 0;
-      const type = (exp.expense_type || '').toLowerCase();
-      if (type.includes('fuel')) fuelTotal += amt;
-      else if (type.includes('repair') || type.includes('service') || type.includes('maintenance')) maintenanceTotal += amt;
+      // v1.30.0 — catalog classification (fuel; service/repairs; everything else).
+      const category = expenseCategoryOf(exp.expense_type);
+      if (category === 'fuel') fuelTotal += amt;
+      else if (category === 'maintenance' || category === 'repairs') maintenanceTotal += amt;
       else otherTotal += amt;
     }
   }

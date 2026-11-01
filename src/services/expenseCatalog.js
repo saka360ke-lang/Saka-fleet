@@ -1,0 +1,255 @@
+/**
+ * Saka Fleet — Expense Catalog (v1.30.0)
+ * -------------------------------------
+ * One deterministic registry for every expense Saka accepts, across every asset
+ * kind (vehicle, motorcycle, truck, bus, heavy equipment, machinery, generator,
+ * watercraft). It replaces the three private classifiers that used to live in
+ * fleetReports/reportLedger/reportMetrics and is the single source of truth for
+ * the quiz menu, quick-path detection, report categories and ledger badges.
+ *
+ * Canonical values already stored in expense_logs ('Fuel', 'Maintenance',
+ * 'Insurance', 'Tolls', 'Other') are preserved exactly; everything else is
+ * additive. Resolution is longest-alias-first, so "fuel filter" is Parts while
+ * "fuel" is Fuel, and "oil change" is Maintenance while "hydraulic oil" is
+ * Consumables.
+ */
+
+const ALL_KINDS = Object.freeze(['vehicle', 'motorcycle', 'truck', 'bus', 'heavy_equipment', 'machinery', 'generator', 'watercraft']);
+const ROAD_KINDS = Object.freeze(['vehicle', 'motorcycle', 'truck', 'bus']);
+const HOURS_KINDS = Object.freeze(['heavy_equipment', 'machinery', 'generator', 'watercraft']);
+
+/** Report-level categories: label, ledger badge text and semantic tone. */
+export const EXPENSE_CATEGORIES = Object.freeze({
+  fuel: { label: 'Fuel & energy', badge: 'FUEL', tone: 'brand' },
+  maintenance: { label: 'Service & maintenance', badge: 'SERVICE', tone: 'warn' },
+  parts: { label: 'Parts & filters', badge: 'PARTS', tone: 'warn' },
+  tyres: { label: 'Tyres & wheels', badge: 'TYRES', tone: 'warn' },
+  repairs: { label: 'Repairs', badge: 'REPAIRS', tone: 'warn' },
+  bodywork: { label: 'Bodywork & paint', badge: 'BODY', tone: 'warn' },
+  washing: { label: 'Washing & cleaning', badge: 'WASH', tone: 'neutral' },
+  parking: { label: 'Parking', badge: 'PARKING', tone: 'negative' },
+  tolls: { label: 'Tolls & road fees', badge: 'TOLLS', tone: 'negative' },
+  fines: { label: 'Fines & penalties', badge: 'FINES', tone: 'negative' },
+  compliance: { label: 'Insurance & licences', badge: 'COMPLIANCE', tone: 'warn' },
+  accessories: { label: 'Accessories', badge: 'ACCESSORY', tone: 'neutral' },
+  subscriptions: { label: 'Tracking & subscriptions', badge: 'SUBS', tone: 'negative' },
+  towing: { label: 'Towing & recovery', badge: 'TOWING', tone: 'negative' },
+  wages: { label: 'Crew wages', badge: 'WAGES', tone: 'negative' },
+  consumables: { label: 'Consumables & fluids', badge: 'FLUIDS', tone: 'warn' },
+  berthing: { label: 'Mooring & berthing', badge: 'MOORING', tone: 'negative' },
+  other: { label: 'Other', badge: 'OTHER', tone: 'neutral' }
+});
+
+export const EXPENSE_CATEGORY_KEYS = Object.freeze(Object.keys(EXPENSE_CATEGORIES));
+
+/**
+ * Canonical expense types. `menu` types appear in the WhatsApp quiz (max 8 per
+ * asset kind); every type is still reachable by free text through its aliases.
+ */
+export const EXPENSE_TYPES = Object.freeze([
+  {
+    value: 'Fuel', category: 'fuel', kinds: ALL_KINDS, menu: true,
+    aliases: ['fuel', 'fuels', 'fuelling', 'fueling', 'refuel', 'refuelling', 'refueling', 'diesel', 'petrol', 'gasoline', 'gas', 'cng', 'lpg', 'top up', 'top-up', 'topped up', 'full tank']
+  },
+  {
+    value: 'Charging', category: 'fuel', kinds: ROAD_KINDS, menu: true, electric: true,
+    aliases: ['charging', 'charge', 'recharge', 'electricity', 'kwh', 'ev charge', 'charger']
+  },
+  {
+    value: 'Maintenance', category: 'maintenance', kinds: ALL_KINDS, menu: true,
+    aliases: ['maintenance', 'service', 'servicing', 'oil change', 'engine oil', 'tune up', 'tune-up', 'checkup', 'check up', 'check-up', 'ac service', 'aircon service', 'greasing', 'lubrication', 'oil']
+  },
+  {
+    value: 'Parts', category: 'parts', kinds: ALL_KINDS, menu: true,
+    aliases: ['parts', 'part', 'spare part', 'spare parts', 'spares', 'spare', 'filter', 'filters', 'oil filter', 'air filter', 'fuel filter', 'battery', 'batteries', 'brake pad', 'brake pads', 'brakes', 'brake disc', 'bulb', 'bulbs', 'wiper', 'wipers', 'belt', 'belts', 'alternator', 'starter', 'spark plug', 'spark plugs', 'mirror', 'horn']
+  },
+  {
+    value: 'Tyres', category: 'tyres', kinds: ROAD_KINDS, menu: true,
+    aliases: ['tyre', 'tyres', 'tire', 'tires', 'puncture', 'tube', 'tubeless', 'tyre rotation', 'tire rotation', 'alignment', 'wheel alignment', 'balancing', 'tread', 'rims']
+  },
+  {
+    value: 'Repairs', category: 'repairs', kinds: ALL_KINDS, menu: true,
+    aliases: ['repair', 'repairs', 'mechanic', 'workshop', 'engine repair', 'engine', 'gearbox', 'clutch', 'transmission', 'suspension', 'shock absorber', 'shocks', 'radiator', 'exhaust', 'electrical', 'wiring', 'overhaul', 'differential', 'axle', 'turbo', 'injector', 'pump', 'bearing', 'seal', 'welding', 'injector pump']
+  },
+  {
+    value: 'Bodywork & Paint', category: 'bodywork', kinds: ROAD_KINDS, menu: false,
+    aliases: ['bodywork', 'body work', 'paint', 'respray', 'dent', 'dents', 'bumper', 'windscreen', 'windshield', 'glass', 'panel beating', 'panel', 'rust']
+  },
+  {
+    value: 'Washing', category: 'washing', kinds: ROAD_KINDS, menu: false,
+    aliases: ['washing', 'wash', 'carwash', 'car wash', 'cleaning', 'detailing', 'valet', 'polish']
+  },
+  {
+    value: 'Parking', category: 'parking', kinds: ROAD_KINDS, menu: true,
+    aliases: ['parking', 'parking fee', 'parking fees', 'parking charge', 'parking charges']
+  },
+  {
+    value: 'Tolls', category: 'tolls', kinds: ALL_KINDS, menu: false,
+    aliases: ['toll', 'tolls', 'toll fee', 'toll fees', 'gate fee', 'gate fees', 'road fee', 'road fees', 'expressway', 'highway fee']
+  },
+  {
+    value: 'Fines', category: 'fines', kinds: ALL_KINDS, menu: false,
+    aliases: ['fine', 'fines', 'penalty', 'penalties', 'ticket', 'tickets', 'offence', 'offense', 'citation', 'court']
+  },
+  {
+    value: 'Insurance', category: 'compliance', kinds: ALL_KINDS, menu: true,
+    aliases: ['insurance', 'insurer', 'policy', 'premium', 'licence', 'license', 'road licence', 'road license', 'inspection', 'mot', 'permit', 'speed limiter', 'sticker', 'renewal', 'compliance']
+  },
+  {
+    value: 'Accessories', category: 'accessories', kinds: ALL_KINDS, menu: false,
+    aliases: ['accessory', 'accessories', 'bullbar', 'bull bar', 'winch', 'snorkel', 'roof rack', 'lift kit', 'dashcam', 'dash cam', 'radio', 'stereo', 'seat cover', 'seat covers', 'mats', 'tracker device', 'gps']
+  },
+  {
+    value: 'Subscriptions', category: 'subscriptions', kinds: ALL_KINDS, menu: false,
+    aliases: ['subscription', 'subscriptions', 'tracking fee', 'tracking subscription', 'telematics', 'security subscription', 'airtime', 'data bundle', 'sim card', 'software subscription']
+  },
+  {
+    value: 'Towing & Recovery', category: 'towing', kinds: ALL_KINDS, menu: false,
+    aliases: ['towing', 'tow', 'tow truck', 'recovery', 'breakdown', 'jump start', 'breakdown recovery']
+  },
+  {
+    value: 'Crew Wages', category: 'wages', kinds: HOURS_KINDS, menu: true,
+    aliases: ['wages', 'wage', 'salary', 'salaries', 'crew', 'driver allowance', 'allowance', 'operator wages', 'operator pay', 'staff', 'labour', 'labor']
+  },
+  {
+    value: 'Consumables', category: 'consumables', kinds: HOURS_KINDS, menu: true,
+    aliases: ['consumables', 'consumable', 'hydraulic oil', 'hydraulic fluid', 'coolant', 'antifreeze', 'grease', 'lubricant', 'urea', 'adblue', 'def fluid', 'distilled water', 'battery water', 'gear oil', 'transmission fluid', 'brake fluid']
+  },
+  {
+    value: 'Mooring & Berthing', category: 'berthing', kinds: ['watercraft'], menu: false,
+    aliases: ['mooring', 'berthing', 'harbour', 'harbor', 'marina', 'slipway', 'dock', 'docking', 'anchorage', 'port fee', 'port fees']
+  },
+  {
+    value: 'Other', category: 'other', kinds: ALL_KINDS, menu: true,
+    aliases: ['other', 'others', 'misc', 'miscellaneous', 'sundry', 'sundries']
+  }
+]);
+
+function normalizeKind(assetKind) {
+  const clean = String(assetKind || 'vehicle').toLowerCase().replace(/[\s-]+/g, '_');
+  if (clean === 'car' || clean === 'van' || clean === 'suv' || clean === 'pickup') return 'vehicle';
+  if (clean === 'bike' || clean === 'motorbike' || clean === 'boda') return 'motorcycle';
+  if (clean === 'lorry') return 'truck';
+  if (clean === 'matatu' || clean === 'minibus') return 'bus';
+  if (clean === 'excavator' || clean === 'heavy' || clean === 'equipment') return 'heavy_equipment';
+  if (clean === 'genset') return 'generator';
+  if (clean === 'boat' || clean === 'vessel' || clean === 'ship') return 'watercraft';
+  return ALL_KINDS.includes(clean) ? clean : 'vehicle';
+}
+
+function isElectric(fuelType) {
+  return /^(?:electric|ev|bev)$/i.test(String(fuelType || '').trim());
+}
+
+/** Quiz menu for the asset kind (max 8, always including an "Other" escape). */
+export function expenseTypeChoices(assetKind = 'vehicle', { fuelType = null } = {}) {
+  const kind = normalizeKind(assetKind);
+  const electric = isElectric(fuelType);
+  return EXPENSE_TYPES
+    .filter((type) => {
+      if (!type.menu) return false;
+      if (!type.kinds.includes(kind)) return false;
+      if (type.value === 'Fuel' && electric) return false;
+      if (type.electric && !electric) return false;
+      return true;
+    })
+    .slice(0, 8)
+    .map((type) => ({ value: type.value, aliases: [...type.aliases] }));
+}
+
+/** One-line menu copy for prompts and hints. */
+export function expenseTypeMenu(assetKind = 'vehicle', options = {}) {
+  return expenseTypeChoices(assetKind, options).map((choice) => choice.value).join(' · ');
+}
+
+// Longest alias first: "fuel filter" must beat "fuel", "oil change" must beat "oil".
+const ALIAS_INDEX = (() => {
+  const entries = [];
+  for (const type of EXPENSE_TYPES) {
+    for (const alias of type.aliases) entries.push({ alias: alias.toLowerCase(), value: type.value });
+  }
+  entries.sort((a, b) => b.alias.length - a.alias.length);
+  return entries;
+})();
+
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+const ALIAS_MATCHERS = ALIAS_INDEX.map((entry) => ({
+  ...entry,
+  re: new RegExp(`(?:^|[^a-z0-9])${escapeRegex(entry.alias)}(?:[^a-z0-9]|$)`, 'i')
+}));
+
+/** Free text → canonical expense type (longest alias wins). Null when unknown. */
+export function resolveExpenseType(text) {
+  const clean = String(text || '').trim();
+  if (!clean) return null;
+  const lower = clean.toLowerCase();
+  const exact = EXPENSE_TYPES.find((type) => type.value.toLowerCase() === lower);
+  if (exact) return exact.value;
+  if (EXPENSE_CATEGORIES[lower]) {
+    const byCategory = EXPENSE_TYPES.find((type) => type.category === lower);
+    if (byCategory) return byCategory.value;
+  }
+  for (const matcher of ALIAS_MATCHERS) {
+    if (matcher.re.test(clean)) return matcher.value;
+  }
+  return null;
+}
+
+/** Write-time normaliser: never returns null (falls back to Other). */
+export function normalizeExpenseType(value, { fallback = 'Other' } = {}) {
+  return resolveExpenseType(value) || fallback;
+}
+
+/** Does this text name any known expense type? (quick-path marker) */
+export function hasExpenseTypeMarker(text) {
+  return resolveExpenseType(text) !== null;
+}
+
+/** Canonical type → report category key. */
+export function expenseCategoryOf(value) {
+  const clean = String(value || '').trim().toLowerCase();
+  if (EXPENSE_CATEGORIES[clean]) return clean;
+  const resolved = resolveExpenseType(value);
+  if (resolved) {
+    const type = EXPENSE_TYPES.find((entry) => entry.value === resolved);
+    if (type) return type.category;
+  }
+  return 'other';
+}
+
+export function expenseCategoryLabel(category) {
+  return EXPENSE_CATEGORIES[category]?.label || EXPENSE_CATEGORIES.other.label;
+}
+
+export function expenseCategoryBadge(category) {
+  return EXPENSE_CATEGORIES[category]?.badge || EXPENSE_CATEGORIES.other.badge;
+}
+
+export function expenseCategoryTone(category) {
+  return EXPENSE_CATEGORIES[category]?.tone || EXPENSE_CATEGORIES.other.tone;
+}
+
+/** Types that apply to an asset kind (used by tests and bespoke menus). */
+export function expenseTypesForAssetKind(assetKind = 'vehicle') {
+  const kind = normalizeKind(assetKind);
+  return EXPENSE_TYPES.filter((type) => type.kinds.includes(kind)).map((type) => type.value);
+}
+
+export default {
+  EXPENSE_CATEGORIES,
+  EXPENSE_CATEGORY_KEYS,
+  EXPENSE_TYPES,
+  expenseTypeChoices,
+  expenseTypeMenu,
+  resolveExpenseType,
+  normalizeExpenseType,
+  hasExpenseTypeMarker,
+  expenseCategoryOf,
+  expenseCategoryLabel,
+  expenseCategoryBadge,
+  expenseCategoryTone,
+  expenseTypesForAssetKind
+};

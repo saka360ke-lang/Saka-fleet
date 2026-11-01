@@ -1,5 +1,6 @@
 import { buildGlobalContext, formatDate, formatMoney, formatNumber, kmToUserDistance } from './globalization.js';
 import { buildLedgerGroups, expenseKind } from './reportLedger.js';
+import { EXPENSE_CATEGORIES, EXPENSE_CATEGORY_KEYS } from './expenseCatalog.js';
 
 /**
  * Saka Fleet — Owner Profile & Asset Portfolio Report (v1.29.0)
@@ -111,13 +112,15 @@ export async function buildOwnerPortfolio({
     .filter((row) => expenseKind(row.expense_type) === 'fuel')
     .reduce((sum, row) => sum + (Number(row.fuel_liters ?? row.liters ?? row.fuel_litres) || 0), 0);
 
-  const categoryTotals = { fuel: 0, maintenance: 0, parts: 0, tolls: 0, compliance: 0, other: 0 };
-  for (const row of expenses) categoryTotals[expenseKind(row.expense_type)] += Number(row.amount) || 0;
-  const categoryLabels = { fuel: 'Fuel', maintenance: 'Maintenance', parts: 'Parts', tolls: 'Tolls & parking', compliance: 'Compliance', other: 'Other' };
+  const categoryTotals = Object.fromEntries(EXPENSE_CATEGORY_KEYS.map((key) => [key, 0]));
+  for (const row of expenses) {
+    const key = expenseKind(row.expense_type);
+    categoryTotals[key] = (categoryTotals[key] || 0) + (Number(row.amount) || 0);
+  }
   const categorySeries = Object.entries(categoryTotals)
     .filter(([, value]) => value > 0)
     .sort((a, b) => b[1] - a[1])
-    .map(([key, value]) => ({ label: categoryLabels[key] || key, value: Math.round(value * 100) / 100 }));
+    .map(([key, value]) => ({ label: EXPENSE_CATEGORIES[key]?.label || key, value: Math.round(value * 100) / 100 }));
 
   const vehicleSpendSeries = rows
     .filter((row) => row.expenses > 0)
