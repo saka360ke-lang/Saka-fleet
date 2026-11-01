@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.34.0] - 2026-11-01
+
+- **One sentence is a whole record now (Narrative Intake).** "spent 5500 on diesel yesterday at Shell, 40L at 50350km, full tank" is parsed deterministically — zero AI tokens — into amount, expense type, volume, fill type, odometer, vendor, per-litre price and the stated past date, then pre-fills the existing quiz and saves on the usual confirmation. `NARRATIVE_INTAKE` is the kill switch (default on).
+- **The money never guesses.** `src/services/moneyLexicon.js` classifies every number in the sentence: unit-suffixed numbers are measurements (40L, 50350 km), bare 6-digit integers are odometers, 4-digit model years are years, counts stay counts, per-litre prices (`@227`) are separated from the spend, and additive words ("and", "plus", "total") combine or total line items. Without a marker the draft is flagged ambiguous and Saka asks — the engine never invents a figure.
+- **Retro dates land in `created_at`.** `extractPastDatePhrase()` (in `dateParser.js`, rule 36) resolves yesterday / last Friday / 3 days ago / 28/10 — country-resolved DD/MM vs MM/DD — and the quiz writer sets `created_at` on the **fresh insert** only (no DDL, edits never touch the date). Future dates are dropped and two different days in one message ask "which day?" instead of silently picking one.
+- **Country-aware throughout.** Currency, locale, gallons→litres, miles→km and date conventions come from the E.164 country; a plate mentioned in the sentence is masked before number parsing so "KCB 456B" never reads as an amount.
+- **Deterministic wins, always.** Narrative fields overwrite nothing after AI output is merged — the deterministic draft is the authority (`narrativeDraftFields()` spread last), and `test_narrative_draft` proves it with a hostile AI guess.
+- **Files:** `src/services/moneyLexicon.js`, `src/services/narrativeDraft.js` (new); `src/services/dateParser.js` (+`extractPastDatePhrase`), `src/services/quizEngine.js` (narrative extras + retro `created_at` writes for expenses and earnings), `src/routes/whatsapp.js` (narrative branch), `sakaAi.js`, `src/services/flowKnowledge.js`, `scripts/health_audit.js`, `.env.example`.
+- **Tests:** `test_narrative_draft.js` (**91**, new — determinism corpus + live retro-date round-trip that cleans its own rows).
+- **Still deferred:** draft cards (v1.35.0), record answers + `QUERY_RECORDS` (v1.36.0), corrections 2.0 (v1.37.0), multi-record paragraphs (v1.38.0).
+
+
 ## [1.33.0] - 2026-11-01
 
 - **The ledger is editable at last.** `my entries` prints the last six rows (expenses + earnings) numbered, newest first. `edit 2` opens that row, `delete 2` shows it and waits for the literal word `DELETE`, and `restore` brings the last deletion back for 30 minutes. Every step is deterministic — zero AI tokens, no improvising.

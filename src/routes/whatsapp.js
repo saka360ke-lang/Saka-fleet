@@ -103,6 +103,7 @@ import { detectCountryFromPhone as detectCountryGlobal, resolveUserTimezone, res
 import { getCountryCommStyleLine } from '../services/countryCommStyles.js';
 import { applyOdometerReading, applyOperatingHours } from '../services/maintenanceReminders.js';
 import { handleQuizTurn, detectQuizStart, shouldPauseQuizForChat, getCurrentQuizField, detectFlowSwitch, getFlowDefinition, looksLikeReportRequest, getActiveQuiz, markQuizTurn, abandonQuiz } from '../services/quizEngine.js';
+import { buildNarrativeDraft, narrativeDraftFields, narrativeDraftExtras, shouldPrefillNarrativeDraft, isNarrativeIntakeEnabled } from '../services/narrativeDraft.js';
 import { renderActionDiscovery, composeMessage } from '../services/conversationEngine.js';
 import { enqueueFollowUp, FOLLOWUP_KINDS, followUpAckText } from '../services/followups.js';
 import { enqueueUserMessage } from '../services/messageQueue.js';
@@ -2014,6 +2015,36 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           ? 'log_expense'
           : quizStartFlow;
 
+        // --- NARRATIVE INTAKE (v1.34.0) ---
+        // One free-text sentence ("spent 5500 on diesel yesterday at Shell,
+        // 40L at 50350km, full tank") becomes a deterministic draft that
+        // pre-fills the quiz. Deterministic fields always win over AI output.
+        let narrativeDraft = null;
+        let narrativeExt = mergedExt;
+        if (isNarrativeIntakeEnabled()
+            && !session.quiz
+            && !mediaObj
+            && ['LOG_EXPENSE', 'LOG_EARNINGS', 'UPDATE_MILEAGE'].includes(intent)) {
+          try {
+            const candidate = buildNarrativeDraft({
+              text: messageText,
+              ctx: { countryInfo, profile: profileData },
+              vehicles: existingVehicles,
+              activeVehicle: currentActiveVehicle
+            });
+            if (candidate.ok && shouldPrefillNarrativeDraft(candidate)) {
+              narrativeDraft = candidate;
+              narrativeExt = {
+                ...(mergedExt || {}),
+                ...narrativeDraftFields(candidate),
+                _narrative: narrativeDraftExtras(candidate)
+              };
+            }
+          } catch (narrativeErr) {
+            console.warn('[narrative] draft skipped:', narrativeErr.message);
+          }
+        }
+
         const quizCtx = {
           supabase: supabaseClient,
           profile: profileData,
@@ -2024,7 +2055,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           formattedPhone,
           language: targetLang,
           intent,
-          aiExtracted: mergedExt,
+          aiExtracted: narrativeExt,
           messageText,
           fastQuiz: fastQuizTurn,
           driverGate,

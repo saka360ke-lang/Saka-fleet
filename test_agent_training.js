@@ -66,6 +66,10 @@ async function run() {
   check(SAKA_INTENT_PLAYBOOK.some((row) => row.intent === 'DELETE_ENTRY' && /30-minute "restore"/.test(row.behavior)), 'Delete intent playbook names the restore window');
   check(SAKA_BOUNDARY_RULES.some((rule) => /LEDGER_ENTRY_DELETED/.test(rule)), 'Boundary: every ledger edit/delete is audited');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('EDITABLE LEDGER (v1.33.0'), 'Core prompt teaches the editable ledger');
+check(DEFAULT_SAKA_CORE_PROMPT.includes('NARRATIVE INTAKE (v1.34.0'), 'Core prompt teaches narrative intake');
+const narrativeFlow = SAKA_QUIZ_FLOWS.find((flow) => flow.key === 'log_expense');
+check(Boolean(narrativeFlow && /narrative intake/.test(narrativeFlow.rules)), 'log_expense flow knowledge carries the narrative intake rules');
+check(/Narrative pre-fills are engine-determined facts/.test(await import('./src/services/conversationEngine.js').then((m) => m.QUIZ_INSTRUCTION_NATURAL)), 'Quiz composer honours narrative pre-fills');
 
   console.log('\n--- Test 3: every quiz flow is trained and resolvable ---');
   check(SAKA_QUIZ_FLOWS.length === 21, 'Registry declares all 21 quiz flows');

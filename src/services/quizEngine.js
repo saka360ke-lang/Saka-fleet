@@ -1167,6 +1167,37 @@ function buildSummaryRows(def, answers, ctx) {
     }));
 }
 
+/**
+ * v1.34.0 — narrative extras ride the quiz but are not flow fields: the retro
+ * occurrence date, vendor and per-unit price captured deterministically from
+ * one free-text sentence.
+ */
+function pickNarrativeExtras(ext = {}) {
+  const src = ext && typeof ext._narrative === 'object' && ext._narrative ? ext._narrative : ext || {};
+  const out = {};
+  for (const key of ['occurred_at', 'occurred_at_iso', 'vendor', 'unit_price', 'occurred_at_label']) {
+    const value = src[key];
+    if (value !== undefined && value !== null && value !== '') out[key] = value;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+/**
+ * A retro timestamp is only ever written for the past or the present moment —
+ * a future value is dropped entirely (never invented, never shifted).
+ */
+function sanitizeRetroTimestamp(isoValue, dateValue) {
+  for (const raw of [isoValue, dateValue]) {
+    if (typeof raw !== 'string' || !raw) continue;
+    const candidate = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? `${raw}T12:00:00+03:00` : raw;
+    const parsed = Date.parse(candidate);
+    if (!Number.isFinite(parsed)) continue;
+    if (parsed > Date.now() + 5 * 60 * 1000) continue;
+    return new Date(parsed).toISOString();
+  }
+  return null;
+}
+
 function applyExtraction(state, def, ext, ctx) {
   if (!ext) return;
   // Two passes: conditional fields (e.g. fuel volume when expense_type = Fuel)
@@ -1387,6 +1418,8 @@ export function startQuiz({ session, flowKey, ctx, prefill = {} }) {
   };
 
   applyExtraction(session.quiz, def, ctx.aiExtracted || {}, ctx);
+  const narrativeExtras = pickNarrativeExtras(ctx.aiExtracted || {});
+  if (narrativeExtras) session.quiz.narrativeExtras = narrativeExtras;
   const bankedOnStart = applyTextExtraction(session.quiz, def, ctx.messageText || '', ctx);
   if (bankedOnStart.length) session.quiz.bankedThisTurn = [...new Set(bankedOnStart)];
 
@@ -2712,6 +2745,12 @@ async function executeFlow(state, ctx) {
         // v1.30.0 — canonicalise the type at write time ("diesel" → Fuel,
         // "puncture" → Tyres) so every report and ledger classifies correctly.
         const canonicalExpenseType = normalizeExpenseType(a.expense_type);
+        // v1.34.0 — a narrative retro date rides the quiz and lands in
+        // created_at at insert (fresh rows only; future values are dropped).
+        const retroIso = sanitizeRetroTimestamp(
+          state.narrativeExtras?.occurred_at_iso,
+          state.narrativeExtras?.occurred_at
+        );
         // v1.32.1 — duplicate guard: a re-uploaded receipt must never create a
         // second expense row. Different odometer reading = separate fill → passes.
         const duplicate = await isDuplicateExpense(ctx.supabase, {
@@ -2738,6 +2777,7 @@ async function executeFlow(state, ctx) {
           fill_type: normalizeFillType(a.fill_type),
           odometer_reading: a.odometer_reading,
           notes: [a.notes, formatExtraNotes(state.extraNotes || [])].filter(Boolean).join(' | ') || null,
+          ...(retroIso ? { created_at: retroIso } : {})
         }]);
         if (logErr) return { handled: true, reply: await fail(logErr.message), flow: state.flow, active: true };
 
@@ -2755,7 +2795,8 @@ async function executeFlow(state, ctx) {
           expense_type: canonicalExpenseType,
           amount: a.amount,
           liters: a.fuel_liters || 0,
-          odometer_reading: a.odometer_reading
+          odometer_reading: a.odometer_reading,
+          ...(retroIso ? { created_at: retroIso } : {})
         }]);
 
         if (a.odometer_reading > Number(vehicle.current_mileage || 0)) {
@@ -2785,6 +2826,11 @@ async function executeFlow(state, ctx) {
         if (earningType) noteParts.push(`Type: ${earningType}`);
         const compiledEarningNotes = formatExtraNotes(state.extraNotes || []);
         if (compiledEarningNotes) noteParts.push(compiledEarningNotes);
+        // v1.34.0 — narrative retro date for earnings rides the same extras.
+        const earningRetroIso = sanitizeRetroTimestamp(
+          state.narrativeExtras?.occurred_at_iso,
+          state.narrativeExtras?.occurred_at
+        );
         const { error } = await ctx.supabase.from('private_earnings').insert([{
           vehicle_id: vehicle.id,
           driver_id: ctx.profile?.id,
@@ -2792,7 +2838,8 @@ async function executeFlow(state, ctx) {
           currency: ctx.countryInfo?.currency || 'USD',
           earning_type: earningType,
           notes: noteParts.join(' | '),
-          logged_at: new Date().toISOString()
+          logged_at: earningRetroIso || new Date().toISOString(),
+          ...(earningRetroIso ? { created_at: earningRetroIso } : {})
         }]);
         if (error) return { handled: true, reply: await fail(error.message), flow: state.flow, active: true };
 

@@ -128,11 +128,11 @@ export const SAKA_QUIZ_FLOWS = [
   {
     key: 'log_expense',
     label: 'Log expense',
-    trigger: 'log expense, fuel, service, repair, parts, tyres, puncture, filters, oil change, insurance, parking, tolls, wash, fine, paid, receipt photo',
+    trigger: 'log expense, fuel, service, repair, parts, tyres, puncture, filters, oil change, insurance, parking, tolls, wash, fine, paid, receipt photo, any pasted free-text sentence describing a spend ("spent 5500 on diesel yesterday at Shell, 40L at 50350km, full tank")',
     fields: 'vehicle → type → amount → fuel volume → fill type (full tank or top-up) → odometer at the time of the expense → notes → confirm',
-    extracted: ['plate_number', 'expense_type', 'amount', 'fuel_liters', 'fill_type', 'odometer', 'notes'],
-    writes: 'expense_logs + expenses + vehicle odometer',
-    rules: 'expense types come from the shared expenseCatalog (Fuel, Charging, Maintenance, Parts, Tyres, Repairs, Bodywork & Paint, Washing, Parking, Tolls, Fines, Insurance, Accessories, Subscriptions, Towing & Recovery, Crew Wages, Consumables, Mooring & Berthing, Other); the menu follows the asset kind and any free-text alias resolves (puncture → Tyres, fuel filter → Parts, oil change → Maintenance, hydraulic oil → Consumables); fuel volume and fill type only when type is fuel; top-ups are valid but only full tanks anchor an exact km/L segment; receipt OCR pre-fills hints'
+    extracted: ['plate_number', 'expense_type', 'amount', 'fuel_liters', 'fill_type', 'odometer', 'notes', '_narrative: occurred_at, vendor, unit_price'],
+    writes: 'expense_logs + expenses + vehicle odometer; a narrative stated past date lands in created_at on the fresh write',
+    rules: 'expense types come from the shared expenseCatalog (Fuel, Charging, Maintenance, Parts, Tyres, Repairs, Bodywork & Paint, Washing, Parking, Tolls, Fines, Insurance, Accessories, Subscriptions, Towing & Recovery, Crew Wages, Consumables, Mooring & Berthing, Other); the menu follows the asset kind and any free-text alias resolves (puncture → Tyres, fuel filter → Parts, oil change → Maintenance, hydraulic oil → Consumables); fuel volume and fill type only when type is fuel; top-ups are valid but only full tanks anchor an exact km/L segment; receipt OCR pre-fills hints; narrative intake (v1.34.0) deterministically pre-fills a pasted sentence — the engine resolves the money, volume, odometer, vendor, per-litre price and a stated PAST date (never a future one), two different days in one message ask the user which day, ambiguous amounts stay unresolved and are never invented'
   },
   {
     key: 'log_earnings',

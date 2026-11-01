@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.33.0  
+**Version:** 1.34.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.34.0** | Narrative Intake: one free-text sentence is deterministically parsed (money lexicon, past dates, vendor, volume, odometer) and pre-fills the log quiz; stated past dates land in `created_at` on the fresh write â€” zero AI tokens, never a guessed figure | Â§80 |
 | **1.33.0** | Editable ledger: `my entries` â†’ `edit 2` / `delete 2` (DELETE confirm) â†’ before/after diff, hard delete + `admin_audit_logs` snapshot + 30-minute `restore`, whitelist-locked fields (VIN/plate/date never editable), fresh-log safety and PIN/OTP guard | Â§79 |
 | **1.32.4** | Report legibility (paint-scoped alpha, real KPI rows, no-wrap cells, 722 pt cover), self-verifying short links (`/r/__saka_probe__`, honest 404), env/secret parity audit (`admin env`, `/internal/status` env block, `npm run env:audit`), chat friction rules (pdf = report, no empty replies, real receipt vendors) | Â§78 |
 | **1.32.3** | Stale-state hijack fix: 45-min chat-history window, 20-min quiz expiry + auto-parking drafts, read commands always answered, coupon gated on a prior offer, dedicated compliance PDF layout | Â§77 |
@@ -3171,3 +3172,72 @@ or on a report request â€” the suite pins those exclusions.
   (30), `ENTRY_LIST_LIMIT` (6) â€” exported constants, no env surface (they are
   UX guarantees, not deployment knobs).
 
+---
+
+### 80.1 Narrative Intake engine (v1.34.0)
+
+One pasted free-text sentence becomes a whole draft — deterministically, with
+zero AI tokens, and with AI output never allowed to overwrite it.
+
+- **Money lexicon** (`src/services/moneyLexicon.js`): classifies every number
+  in the sentence. Unit-suffixed numbers are measurements (`40L`, `50350 km`),
+  bare 6+ digit integers are odometers, 4-digit model years are years, counts
+  stay counts (`2 tyres`), `@227`-style per-litre prices are separated from
+  the spend, and additive words (`and`, `plus`, `total`) combine or total
+  line items with labels (`brakes 4,500 + labour 2,500` -> 7,000, derived).
+  Currency words resolve by country (`50 bob` -> KES, `45 dollars` -> USD).
+  Without a marker the draft is `ambiguous` and is never auto-prefilled.
+  Dates/years are blanked before scanning so `28/10/2026` never yields 28, 10
+  or 2026 as money, and `fuel 2000` is a spend while `Toyota Fielder 2016` is
+  a year.
+- **Past-date resolver** (`extractPastDatePhrase` in
+  `src/services/dateParser.js`, rule 36): resolves yesterday / last Friday /
+  3 days ago / `28/10` with country-resolved DD/MM vs MM/DD, normalized to
+  Africa/Nairobi. Future phrases are rejected (`future: true`) and two
+  different days in one message yield `multi-date` — the draft refuses to
+  pick a day and the flow asks instead.
+- **Draft builder** (`src/services/narrativeDraft.js`):
+  `buildNarrativeDraft()` resolves the kind (expense | earning | mileage),
+  expense type (shared catalog), amount, fuel volume (gallons converted by
+  the user's unit system), fill type, odometer (miles converted), vendor,
+  vehicle (plate > ordinal > make/model token > single > active-default,
+  flagged when defaulted) and the retro date. A mentioned plate is masked
+  before number parsing so `KCB 456B` never reads as money.
+  `shouldPrefillNarrativeDraft()` gates: ambiguous money or `multi-date`
+  never pre-fill. `narrativeDraftFields()` is the deterministic authority —
+  the route merges it AFTER any AI extraction so AI can never overwrite it.
+- **Write path** (`src/services/quizEngine.js`): `startQuiz()` stashes
+  `session.quiz.narrativeExtras` (`occurred_at`, `occurred_at_iso`, vendor,
+  unit price) from `aiExtracted._narrative`. The `log_expense` and
+  `log_earnings` writers run `sanitizeRetroTimestamp()` (past or now only;
+  future dropped) and set `created_at` (and `logged_at` for earnings) on the
+  FRESH insert only — no DDL, and the editable ledger can never change a
+  date (rule 37).
+- **Route wiring** (`src/routes/whatsapp.js`): after ledger and receipts,
+  before the generic quiz turn — for `LOG_EXPENSE` / `LOG_EARNINGS` /
+  `UPDATE_MILEAGE` when no quiz and no media is in flight, the draft is
+  built and passed as `aiExtracted` (deterministic fields + `_narrative`).
+  Not pre-fillable drafts fall through to the existing behavior unchanged.
+
+### 80.2 Files, tests, knobs
+
+- **Files (new):** `src/services/moneyLexicon.js`,
+  `src/services/narrativeDraft.js`, `test_narrative_draft.js`.
+  **Modified:** `src/services/dateParser.js` (+`extractPastDatePhrase`),
+  `src/services/quizEngine.js` (narrative extras, retro `created_at`/
+  `logged_at` writes), `src/routes/whatsapp.js` (narrative branch),
+  `sakaAi.js` (NARRATIVE INTAKE prompt block), `src/services/flowKnowledge.js`
+  (log_expense trigger/extracted/rules), `src/services/conversationEngine.js`
+  (quiz instruction honours pre-fills), `src/services/envAudit.js`,
+  `.env.example`, `scripts/health_audit.js`.
+- **Tests:** `test_narrative_draft.js` (**91 assertions** — money/volume/
+  odometer/vendor/vehicle/date determinism, never-guess corpus, KE/US
+  country conventions, AI-never-overwrites guard, kill switch, and a live
+  pre-fill -> confirm -> write round-trip proving `created_at` equals the
+  stated Nairobi day; cleans its own rows).
+- **Knobs:** `NARRATIVE_INTAKE` (on by default; `off|false|0|no|disabled`
+  disables narrative pre-fill). Registered in `envAudit` GROWTH &
+  RE-ENGAGEMENT section next to `NATURAL_INTAKE`.
+- **Still deferred:** draft confirmation cards (v1.35.0), record answers +
+  `QUERY_RECORDS` intent (v1.36.0), corrections 2.0 incl. the re-log
+  collision fix (v1.37.0), multi-record paragraphs (v1.38.0).

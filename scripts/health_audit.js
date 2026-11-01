@@ -56,7 +56,9 @@ const STATLESS_SUITES = [
   // v1.32.4 — env/secret parity: registry ≡ .env.example, no value ever leaks.
   'test_env_audit.js',
   // v1.33.0 — editable ledger: detectors, whitelist, audit + restore round-trip.
-  'test_entry_ledger.js'
+  'test_entry_ledger.js',
+  // v1.34.0 — narrative draft engine: deterministic one-sentence records.
+  'test_narrative_draft.js'
 ];
 
 const WORKFLOW_DIR = '.github/workflows';

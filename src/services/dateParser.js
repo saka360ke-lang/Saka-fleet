@@ -344,6 +344,97 @@ export function parseFlexibleDate(input, { countryCode = 'GLOBAL', locale = 'en-
   return fail('Unrecognised date format — try YYYY-MM-DD, DD/MM/YYYY or a phrase like "next Monday"');
 }
 
+function pastFail(error, phrase = null, extra = {}) {
+  return {
+    ...fail(error),
+    phrase,
+    daysAgo: null,
+    future: false,
+    futureDays: null,
+    ...extra
+  };
+}
+
+function pastResult(parsed, phrase, daysAgo) {
+  if (!parsed || !parsed.ok) return pastFail(parsed?.error || 'Unrecognised date format', phrase);
+  return { ...parsed, phrase, daysAgo, future: false, futureDays: 0 };
+}
+
+/**
+ * Resolve a date phrase pinned to the PRESENT or the PAST — exactly what a
+ * retro-logged fleet record needs ("yesterday", "last Friday", "3 days ago",
+ * "on 28/10"). Future phrases are rejected (`future: true`) so Saka can ask
+ * again instead of writing a record into next month.
+ *
+ * Never throws.
+ */
+export function extractPastDatePhrase(input, { countryCode = 'GLOBAL', locale = 'en-US', now = new Date() } = {}) {
+  try {
+    const text = String(input || '').trim();
+    if (!text) return pastFail('Empty date');
+
+    const todayParts = getNairobiParts(now);
+    const todayIso = formatNairobiDate(now);
+
+    const relative = [
+      { re: /\b(?:the\s+)?day\s+before\s+yesterday\b/i, days: -2 },
+      { re: /\b(?:last\s+night|last\s+evening|yesternight)\b/i, days: -1 },
+      { re: /\byesterday\b/i, days: -1 },
+      { re: /\b(?:this\s+morning|today\s+morning|earlier\s+today|today|tonight|just\s+now)\b/i, days: 0 },
+      { re: /\blast\s+week\b/i, days: -7 }
+    ];
+    for (const entry of relative) {
+      const match = text.match(entry.re);
+      if (!match) continue;
+      const parts = addDaysToParts(todayParts, entry.days);
+      const parsed = fromParts(parts.year, parts.month, parts.day, 'relative-past', 'high');
+      return pastResult(parsed, match[0], Math.abs(entry.days));
+    }
+
+    const agoMatch = text.match(/\b(\d{1,3})\s+(days?|weeks?)\s+ago\b/i);
+    if (agoMatch) {
+      const count = Number(agoMatch[1]);
+      if (!Number.isFinite(count) || count < 0 || count > 730) return pastFail('Relative date out of range', agoMatch[0]);
+      const days = agoMatch[2].toLowerCase().startsWith('week') ? count * 7 : count;
+      const parts = addDaysToParts(todayParts, -days);
+      const parsed = fromParts(parts.year, parts.month, parts.day, 'relative-past', 'high');
+      return pastResult(parsed, agoMatch[0], days);
+    }
+
+    // "next Monday" is a future plan, never a record date.
+    const futureWeekday = text.match(new RegExp(`\\bnext\\s+${WEEKDAY_WORD}\\b`, 'i'));
+    if (futureWeekday) return pastFail('Date is in the future', futureWeekday[0], { future: true });
+
+    // "last Friday" / a bare weekday → the most recent past occurrence.
+    const weekdayMatch = text.match(new RegExp(`\\b(?:(last|this|on)\\s+)?(${WEEKDAY_WORD})\\b`, 'i'));
+    if (weekdayMatch) {
+      const word = (weekdayMatch[2] || '').toLowerCase();
+      const target = WEEKDAYS[word];
+      if (target !== undefined) {
+        const todayUtc = new Date(Date.UTC(todayParts.year, todayParts.month - 1, todayParts.day));
+        const delta = (todayUtc.getUTCDay() - target + 7) % 7;
+        const daysAgo = delta === 0 && (weekdayMatch[1] || '').toLowerCase() === 'last' ? 7 : delta;
+        const parts = addDaysToParts(todayParts, -daysAgo);
+        const parsed = fromParts(parts.year, parts.month, parts.day, 'weekday-past', 'medium');
+        return pastResult(parsed, weekdayMatch[0].trim(), daysAgo);
+      }
+    }
+
+    const explicit = extractDatePhrase(text, { countryCode, locale, now });
+    if (explicit.ok) {
+      const futureDays = diffCalendarDays(todayIso, explicit.localDate);
+      if (futureDays > 0) {
+        return pastFail('Date is in the future', explicit.phrase, { future: true, futureDays });
+      }
+      return pastResult(explicit, explicit.phrase, Math.abs(futureDays));
+    }
+
+    return pastFail(explicit.error || 'No date phrase found in the message');
+  } catch {
+    return pastFail('Date parsing failed');
+  }
+}
+
 export default {
   SYSTEM_TIMEZONE,
   parseFlexibleDate,
@@ -352,5 +443,7 @@ export default {
   getTimeZoneOffsetMs,
   zonedDateTimeToUtcIso,
   diffCalendarDays,
-  extractDatePhrase
+  extractDatePhrase,
+  extractPastDatePhrase
 };
+
