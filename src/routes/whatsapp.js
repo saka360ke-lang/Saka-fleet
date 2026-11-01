@@ -18,6 +18,7 @@ import { calculateFuelConsumption } from '../services/analytics.js';
 import { normalizeFillType } from '../services/fuelEconomy.js';
 import { resolveExpenseType, normalizeExpenseType, hasExpenseTypeMarker } from '../services/expenseCatalog.js';
 import { resolveEarningType, normalizeEarningType, hasEarningTypeMarker } from '../services/earningCatalog.js';
+import { shortenUrl } from '../services/linkShortener.js';
 import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly, shouldReplaceIntroCopy, isRepeatedReply, isStopRequest, PAUSE_REPLY, pickRepeatNudge, pickNewcomerNudge, isFirstTimeMessage, shouldReplacePlateAsk, isIncompleteReplyComplaint, isLegacyWelcomeCopy } from '../services/greetings.js';
 import { matchProductQa, buildProductQaReply, buildProductFactsContext, buildLocalPricingFacts, stripUsdFigures, hasLocalFigure, recommendTierForFleet, sanitizeSakaReply } from '../services/productQa.js';
 import { shouldSuggestContactSave, isLostChatMessage, buildContactSaveFacts, markContactSaveSuggested } from '../services/contactNudge.js';
@@ -1494,7 +1495,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                 interval: entitlements?.billingInterval || 'monthly',
                 currency: countryInfo?.currency || 'USD'
               });
-              customReply = `⚠️ *Upgrade needed to accept this passbook*\n\nYour *${cap.tierName || 'current'}* plan allows ${cap.capacity || 1} active vehicle(s) and you already have ${cap.currentCount || 0}.\n\nUpgrade to *${getTierLabel(cap.nextTierKey || 'team_fleet')}* to accept the transfer:\n👉 ${upgrade.ok ? upgrade.checkoutUrl : 'https://sakafleet.com/pricing'}\n\nAfter payment, reply *resend* to get a fresh verification code and finish the handover. The seller's vehicle stays untouched until then.`;
+              customReply = `⚠️ *Upgrade needed to accept this passbook*\n\nYour *${cap.tierName || 'current'}* plan allows ${cap.capacity || 1} active vehicle(s) and you already have ${cap.currentCount || 0}.\n\nUpgrade to *${getTierLabel(cap.nextTierKey || 'team_fleet')}* to accept the transfer:\n👉 ${await shortenUrl(supabaseClient, upgrade.ok ? upgrade.checkoutUrl : 'https://sakafleet.com/pricing')}\n\nAfter payment, reply *resend* to get a fresh verification code and finish the handover. The seller's vehicle stays untouched until then.`;
             }
           }
         }
@@ -1979,7 +1980,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                 currency: countryInfo?.currency || 'USD'
               });
               const addonPriceLabel = await formatUsdInLocalCurrency(supabaseClient, branchCapacity.addonPriceUSD || 4.99, countryInfo?.currency || 'USD', countryInfo?.locale || 'en-US');
-              customReply = `⚠️ *Garage Full — Fleet Command Add-on Needed*\n\nYour plan allows *${branchCapacity.capacity}* active vehicle(s). Add a slot at *${addonPriceLabel}/month*:\n👉 ${addon.ok ? addon.checkoutUrl : 'https://sakafleet.com/pricing'}`;
+              customReply = `⚠️ *Garage Full — Fleet Command Add-on Needed*\n\nYour plan allows *${branchCapacity.capacity}* active vehicle(s). Add a slot at *${addonPriceLabel}/month*:\n👉 ${await shortenUrl(supabaseClient, addon.ok ? addon.checkoutUrl : 'https://sakafleet.com/pricing')}`;
             } else {
               const nextTier = branchCapacity.nextTierKey || 'fleet_command';
               const upgrade = await checkoutForTier({
@@ -1989,7 +1990,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                 interval: entitlements?.billingInterval || 'monthly',
                 currency: countryInfo?.currency || 'USD'
               });
-              customReply = `⚠️ *Vehicle Capacity Limit Reached*\n\nYour current plan (*${branchCapacity.tierName}*) allows ${branchCapacity.capacity} vehicle(s).\n\nUpgrade to *${getTierLabel(nextTier)}*:\n👉 ${upgrade.ok ? upgrade.checkoutUrl : 'https://sakafleet.com/pricing'}`;
+              customReply = `⚠️ *Vehicle Capacity Limit Reached*\n\nYour current plan (*${branchCapacity.tierName}*) allows ${branchCapacity.capacity} vehicle(s).\n\nUpgrade to *${getTierLabel(nextTier)}*:\n👉 ${await shortenUrl(supabaseClient, upgrade.ok ? upgrade.checkoutUrl : 'https://sakafleet.com/pricing')}`;
             }
             onboardingStore.delete(senderPhone);
             session.state = hasVehicleRegistered ? 'ACTIVE' : 'IDLE';
@@ -2127,7 +2128,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                     currency: countryInfo?.currency || 'USD'
                   });
                   const addonPriceLabel = await formatUsdInLocalCurrency(supabaseClient, capacity.addonPriceUSD || 4.99, countryInfo?.currency || 'USD', countryInfo?.locale || 'en-US');
-                  customReply = `⚠️ *Garage Full — Fleet Command Add-on Needed*\n\nYour Fleet Command plan includes *${capacity.capacity}* active vehicle slots (base ${entitlements?.baseLimit || 5} + add-ons).\n\nTo add this vehicle, activate *+${Math.max(1, capacity.overBy)} slot${Math.max(1, capacity.overBy) > 1 ? 's' : ''}* at *${addonPriceLabel}/month each*.\n\n👉 *Add-on Link:* ${addon.ok ? addon.checkoutUrl : 'https://sakafleet.com/pricing'}\n\nOnce payment is confirmed, register the vehicle again.`;
+                  customReply = `⚠️ *Garage Full — Fleet Command Add-on Needed*\n\nYour Fleet Command plan includes *${capacity.capacity}* active vehicle slots (base ${entitlements?.baseLimit || 5} + add-ons).\n\nTo add this vehicle, activate *+${Math.max(1, capacity.overBy)} slot${Math.max(1, capacity.overBy) > 1 ? 's' : ''}* at *${addonPriceLabel}/month each*.\n\n👉 *Add-on Link:* ${await shortenUrl(supabaseClient, addon.ok ? addon.checkoutUrl : 'https://sakafleet.com/pricing')}\n\nOnce payment is confirmed, register the vehicle again.`;
                 } else {
                   const nextTier = capacity.nextTierKey || 'fleet_command';
                   const upgrade = await checkoutForTier({
@@ -2137,7 +2138,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                     interval,
                     currency: countryInfo?.currency || 'USD'
                   });
-                  customReply = `⚠️ *Vehicle Capacity Limit Reached*\n\nYour current plan (*${capacity.tierName}*) allows ${capacity.capacity} active vehicle(s).\n\nUpgrade to *${getTierLabel(nextTier)}* to add more vehicles.\n👉 *Upgrade Link:* ${upgrade.ok ? upgrade.checkoutUrl : 'https://sakafleet.com/pricing'}\n\n💡 Reply *"subscription"* to review your plan.`;
+                  customReply = `⚠️ *Vehicle Capacity Limit Reached*\n\nYour current plan (*${capacity.tierName}*) allows ${capacity.capacity} active vehicle(s).\n\nUpgrade to *${getTierLabel(nextTier)}* to add more vehicles.\n👉 *Upgrade Link:* ${await shortenUrl(supabaseClient, upgrade.ok ? upgrade.checkoutUrl : 'https://sakafleet.com/pricing')}\n\n💡 Reply *"subscription"* to review your plan.`;
                 }
               } else {
                 const initPlate = mergedExt.plate_number ? mergedExt.plate_number.toUpperCase().trim() : null;
@@ -2688,7 +2689,7 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
                   interval: entitlements?.billingInterval || 'annual',
                   currency: countryInfo?.currency || 'USD'
                 });
-                customReply = `📊 *Monthly Report Limit Reached*\n\nThe Free plan includes *${quota.limit} report per month* and you have used it (resets monthly).\n\nUnlock unlimited reports, full AI and compliance tracking with *${getTierLabel(entitlements?.nextTierKey || 'solo_pro')}*:\n👉 ${upgrade.ok ? upgrade.checkoutUrl : 'https://sakafleet.com/pricing'}\n\n💡 Annual billing saves *${getAnnualDiscountPercent(entitlements?.nextTierKey || 'solo_pro')}%* — reply *"upgrade annual"* to see it.`;
+                customReply = `📊 *Monthly Report Limit Reached*\n\nThe Free plan includes *${quota.limit} report per month* and you have used it (resets monthly).\n\nUnlock unlimited reports, full AI and compliance tracking with *${getTierLabel(entitlements?.nextTierKey || 'solo_pro')}*:\n👉 ${await shortenUrl(supabaseClient, upgrade.ok ? upgrade.checkoutUrl : 'https://sakafleet.com/pricing')}\n\n💡 Annual billing saves *${getAnnualDiscountPercent(entitlements?.nextTierKey || 'solo_pro')}%* — reply *"upgrade annual"* to see it.`;
               } else {
               const reportType = resolveAnyReportType(mergedExt.report_type || messageText, 'fleet');
               const metricIds = resolveMetricIds(messageText);
@@ -3614,7 +3615,7 @@ async function maybeHandleSubscriptionTurn({
       return {
         handled: true,
         reply: annual.ok
-          ? `🚀 *${ent.tierName} — annual*\n\n• Price: ${annual.priceInfo?.formattedPrice || ''} for a full year\n\n👉 *Switch to annual:* ${annual.checkoutUrl}\n\nYour plan never gets cancelled — billing simply moves to annual.`
+          ? `🚀 *${ent.tierName} — annual*\n\n• Price: ${annual.priceInfo?.formattedPrice || ''} for a full year\n\n👉 *Switch to annual:* ${await shortenUrl(supabaseClient, annual.checkoutUrl)}\n\nYour plan never gets cancelled — billing simply moves to annual.`
           : `⚠️ ${annual.error}`
       };
     }
@@ -3681,7 +3682,7 @@ async function maybeHandleSubscriptionTurn({
         session.pendingCancelSubscription = { requestedAt: Date.now(), trial: false };
         return {
           handled: true,
-          reply: `💡 *Before you cancel — keep ${ent.tierName} and save ${annualPct}%*\n\nSwitch to annual: ${annual.priceInfo?.formattedPrice || ''} for a full year.\n\n👉 *Switch to annual:* ${annual.checkoutUrl}\n\nOr reply *YES* to cancel — ${until ? `you keep access until ${until}` : 'access continues until the paid period ends'}.`
+          reply: `💡 *Before you cancel — keep ${ent.tierName} and save ${annualPct}%*\n\nSwitch to annual: ${annual.priceInfo?.formattedPrice || ''} for a full year.\n\n👉 *Switch to annual:* ${await shortenUrl(supabaseClient, annual.checkoutUrl)}\n\nOr reply *YES* to cancel — ${until ? `you keep access until ${until}` : 'access continues until the paid period ends'}.`
         };
       }
     }
@@ -3710,7 +3711,7 @@ async function maybeHandleSubscriptionTurn({
       });
       return {
         handled: true,
-        reply: `🚚 *Fleet Command* is the plan with per-vehicle add-ons: it covers *5 vehicles* and then *$4.99/month per extra car*.\n\n👉 Switch to Fleet Command: ${upgrade.ok ? upgrade.checkoutUrl : 'https://sakafleet.com/pricing'}\n\nAlready on Fleet Command? Reply *"add-on"* to buy extra slots.`
+        reply: `🚚 *Fleet Command* is the plan with per-vehicle add-ons: it covers *5 vehicles* and then *$4.99/month per extra car*.\n\n👉 Switch to Fleet Command: ${await shortenUrl(supabaseClient, upgrade.ok ? upgrade.checkoutUrl : 'https://sakafleet.com/pricing')}\n\nAlready on Fleet Command? Reply *"add-on"* to buy extra slots.`
       };
     }
     const qtyMatch = lower.match(/(\d+)\s*(?:car|vehicle|slot)/);
@@ -3725,7 +3726,7 @@ async function maybeHandleSubscriptionTurn({
     if (!addon.ok) return { handled: true, reply: `⚠️ ${addon.error}` };
     return {
       handled: true,
-      reply: `➕ *Fleet Command add-on*\n\n+${quantity} garage slot(s) — $${addon.amountUSD} for this cycle.\n\n👉 ${addon.checkoutUrl}\n\nYour slots activate automatically after payment.`
+      reply: `➕ *Fleet Command add-on*\n\n+${quantity} garage slot(s) — $${addon.amountUSD} for this cycle.\n\n👉 ${await shortenUrl(supabaseClient, addon.checkoutUrl)}\n\nYour slots activate automatically after payment.`
     };
   }
 
@@ -3829,7 +3830,7 @@ async function maybeHandleSubscriptionTurn({
     const couponLine = checkout.coupon?.code ? `\n🎟️ Coupon *${checkout.coupon.code}* applied` : '';
     return {
       handled: true,
-      reply: `🚀 *${getTierLabel(tierFromText)} — ${interval}*\n\n• Price: ${checkout.priceInfo?.formattedPrice || ''}${couponLine}\n\n👉 *Activate now:* ${checkout.checkoutUrl}\n\n${checkout.recurring ? 'Billing renews automatically — cancel anytime.' : 'One-time payment; renewal reminders keep you posted.'}`
+      reply: `🚀 *${getTierLabel(tierFromText)} — ${interval}*\n\n• Price: ${checkout.priceInfo?.formattedPrice || ''}${couponLine}\n\n👉 *Activate now:* ${await shortenUrl(supabaseClient, checkout.checkoutUrl)}\n\n${checkout.recurring ? 'Billing renews automatically — cancel anytime.' : 'One-time payment; renewal reminders keep you posted.'}`
     };
   }
 

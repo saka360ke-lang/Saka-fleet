@@ -16,6 +16,7 @@
 import { resolveAnyReportType, buildReportForLane, loadReportPeople, deliverReportPdf } from './reportDelivery.js';
 import { recordActivationEvent, ACTIVATION_EVENTS } from './trialEngine.js';
 import { recordReportUsage } from './subscriptions.js';
+import { shortenUrl } from './linkShortener.js';
 
 export const FOLLOWUP_KINDS = Object.freeze({
   FLEET_REPORT: 'fleet_report',
@@ -121,7 +122,8 @@ async function runFleetReport(payload = {}) {
       plateLabel: payload.plate || people.drivers[0]?.plate || 'Fleet'
     });
     if (delivery.ok && delivery.url) {
-      pdfNote += `\n\n📄 *PDF report:* ${delivery.url}`;
+      const shortUrl = await shortenUrl(payload.supabase, delivery.url);
+      pdfNote += `\n\n📄 *PDF report:* ${shortUrl}`;
       if (delivery.emailed) pdfNote += `\n📧 Sent to *${payload.email || people.owner?.email}*`;
     } else if (delivery.ok) {
       // The summary already went out; never leave the user with an empty link.

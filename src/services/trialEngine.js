@@ -31,6 +31,7 @@ import {
   checkoutForTier,
   invalidateEntitlements
 } from './subscriptions.js';
+import { shortenUrl } from './linkShortener.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -576,7 +577,8 @@ async function buildNudgeCheckout({ supabase, owner, trial, currency }) {
       currency,
       couponCode: trial.coupon_code || null
     });
-    return res.ok ? res.checkoutUrl : (process.env.PUBLIC_PRICING_URL || 'https://sakafleet.com/pricing');
+    if (!res.ok) return process.env.PUBLIC_PRICING_URL || 'https://sakafleet.com/pricing';
+    return await shortenUrl(supabase, res.checkoutUrl) || (process.env.PUBLIC_PRICING_URL || 'https://sakafleet.com/pricing');
   } catch {
     return process.env.PUBLIC_PRICING_URL || 'https://sakafleet.com/pricing';
   }
@@ -773,7 +775,7 @@ export async function processPastDueDunning({ supabase, sendWhatsAppFn, now = ne
         tierLabel: getTierLabel(tierKey),
         daysPast,
         daysLeft: PAST_DUE_GRACE_DAYS - daysPast,
-        checkoutUrl: checkout?.checkoutUrl
+        checkoutUrl: await shortenUrl(supabase, checkout?.checkoutUrl)
       })).catch(() => {});
 
       await supabase.from('profiles').update({

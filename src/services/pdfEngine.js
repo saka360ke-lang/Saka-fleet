@@ -353,13 +353,17 @@ function drawKpiGrid(doc, fonts, kpis, accent) {
   const gap = 10;
   const cardW = (CONTENT_WIDTH - gap * 2) / 3;
   const cardH = 66;
+  const rows = Math.ceil(items.length / 3);
   for (let i = 0; i < items.length; i += 1) {
     const row = Math.floor(i / 3);
     const col = i % 3;
+    // v1.32.0 — centre an incomplete last row instead of leaving a ragged gap.
+    const itemsInRow = Math.min(3, items.length - row * 3);
+    const offset = ((3 - itemsInRow) * (cardW + gap)) / 2;
     ensureSpace(doc, cardH + gap, fonts, accent, 'Key metrics');
     kpiCard(doc, fonts, {
-      x: PAGE_MARGIN + col * (cardW + gap),
-      y: doc.y + row * (cardH + gap),
+      x: PAGE_MARGIN + offset + col * (cardW + gap),
+      y: doc.y,
       w: cardW,
       h: cardH,
       label: items[i].label,
@@ -368,8 +372,9 @@ function drawKpiGrid(doc, fonts, kpis, accent) {
       tone: items[i].tone || null,
       accent
     });
+    if (col === 2 || i === items.length - 1) doc.y += cardH + gap;
   }
-  doc.y += Math.ceil(items.length / 3) * (cardH + gap) + 6;
+  doc.y += 6;
 }
 
 function drawChartHeading(doc, fonts, chart, accent) {
@@ -923,7 +928,7 @@ function drawFooter(doc, fonts, pageNumber, pageCount, accent) {
   doc.page.margins.bottom = 0;
   doc.strokeColor(SAKA_PDF_THEME.line).lineWidth(0.5).moveTo(PAGE_MARGIN, PAGE_HEIGHT - 44).lineTo(PAGE_WIDTH - PAGE_MARGIN, PAGE_HEIGHT - 44).stroke();
   doc.fillColor(SAKA_PDF_THEME.muted).font(fonts.body).fontSize(7)
-    .text('SAKA FLEET  ·  PRO REPORT', PAGE_MARGIN, PAGE_HEIGHT - 34, { width: CONTENT_WIDTH * 0.6, characterSpacing: 0.6, lineBreak: false });
+    .text('SAKA FLEET  ·  APEX REPORT', PAGE_MARGIN, PAGE_HEIGHT - 34, { width: CONTENT_WIDTH * 0.6, characterSpacing: 0.6, lineBreak: false });
   doc.fillColor(accent).font(fonts.bold).fontSize(7)
     .text(`Page ${pageNumber} of ${pageCount}`, PAGE_WIDTH - PAGE_MARGIN - 110, PAGE_HEIGHT - 34, { width: 110, align: 'right', lineBreak: false });
   doc.page.margins.bottom = previousBottom;

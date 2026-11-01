@@ -718,6 +718,9 @@ export async function buildFinancialReport({ supabase, ownerId = null, driverId 
   const distanceKm = distanceThisMonth(expenses, now);
   const distanceDisplay = ctx.unitSystem === 'imperial' ? kmToUserDistance(distanceKm, 'imperial') : distanceKm;
   const operatingHours = vehicles.reduce((sum, v) => sum + toNumber(v.operating_hours), 0);
+  const fuelLitres = (expenses || [])
+    .filter((row) => expenseCategory(row.expense_type) === 'fuel')
+    .reduce((sum, row) => sum + toNumber(row.fuel_liters ?? row.liters ?? row.fuel_litres), 0);
 
   const ledger = buildLedgerGroups({
     expenses,
@@ -726,7 +729,9 @@ export async function buildFinancialReport({ supabase, ownerId = null, driverId 
     ctx,
     includeEarnings: true,
     includeVehicle: vehicles.length > 1,
-    title: 'Fleet financial ledger',
+    title: vehicles.length === 1
+      ? `Transaction ledger - ${vehicles[0].plate_number || 'vehicle'}`
+      : 'Fleet financial ledger',
     subtitle: 'Every transaction behind these totals'
   });
 
@@ -737,6 +742,18 @@ export async function buildFinancialReport({ supabase, ownerId = null, driverId 
     currency: ctx.currency,
     locale: ctx.locale,
     ledger,
+    counts: {
+      expenses: (expenses || []).length,
+      earnings: (earnings || []).length
+    },
+    fuelLitres: Math.round(fuelLitres * 10) / 10,
+    vehicles: vehicles.map((vehicle) => ({
+      plate: vehicle.plate_number || 'Fleet vehicle',
+      make_model: vehicle.make_model || null,
+      fuel_type: vehicle.fuel_type || null,
+      asset_kind: vehicle.asset_kind || vehicle.asset_type || null,
+      odometer: Math.round(toNumber(vehicle.current_mileage ?? vehicle.odometer_reading))
+    })),
     expenses: {
       ...Object.fromEntries(Object.entries(expenseTotals).map(([key, value]) => [key, Math.round(value * 100) / 100])),
       total: Math.round(totalExpenses * 100) / 100

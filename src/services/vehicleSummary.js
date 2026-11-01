@@ -1,6 +1,7 @@
 import { buildProReportPdf } from './pdfEngine.js';
 import { sendReportByEmail } from './mailer.js';
 import { uploadReportToSupabase } from '../../reports.js';
+import { shortenUrl } from './linkShortener.js';
 import { formatDate, formatNumber } from './globalization.js';
 import { assetMetricSummaryLines } from './assetMetrics.js';
 
@@ -156,6 +157,7 @@ export async function emailVehicleSummary({ supabase, summary, ownerEmail = null
     let url = null;
     try {
       url = await uploadReportToSupabase(supabase, pdfBuffer, `Vehicle_Summary_${plateNumber}`.replace(/\s+/g, '_'));
+      url = await shortenUrl(supabase, url);
     } catch { url = null; }
     let emailed = false;
     if (ownerEmail) {

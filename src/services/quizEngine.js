@@ -19,6 +19,7 @@ import {
 } from './conversationEngine.js';
 import { chatCompletion, parseJsonSafely } from './aiClient.js';
 import { normalizeFillType } from './fuelEconomy.js';
+import { shortenUrl } from './linkShortener.js';
 import {
   EXPENSE_TYPES,
   expenseTypeChoices,
@@ -2597,7 +2598,7 @@ async function executeFlow(state, ctx) {
         const reply = await ok({
           plan: getTierLabel(tierKey),
           billing: interval,
-          checkoutUrl: checkout.checkoutUrl,
+          checkoutUrl: await shortenUrl(ctx.supabase, checkout.checkoutUrl),
           payable: checkout.priceInfo?.formattedPrice,
           coupon: checkout.coupon?.code,
           trialUsed: trial.reason === 'trial_already_used'

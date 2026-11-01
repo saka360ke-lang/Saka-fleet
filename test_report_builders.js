@@ -18,7 +18,7 @@ import { buildVehicleDeepDive } from './src/services/vehicleDeepDive.js';
 import { buildOwnerPortfolio } from './src/services/ownerPortfolio.js';
 import { buildDriverPerformance } from './src/services/driverReports.js';
 import { buildLedgerGroups, expenseToLedgerRow } from './src/services/reportLedger.js';
-import { resolveAnyReportType, buildReportForLane, deliverReportPdf } from './src/services/reportDelivery.js';
+import { resolveAnyReportType, buildReportForLane, deliverReportPdf, fleetReportToPdf } from './src/services/reportDelivery.js';
 import { REPORT_ACCESS_MATRIX } from './src/services/reportAccess.js';
 import { buildProReportPdf } from './src/services/pdfEngine.js';
 import { extractPdfText } from './src/services/pdfTextExtractor.js';
@@ -344,6 +344,51 @@ async function run() {
     plateLabel: 'Fleet'
   });
   check(fleetDelivery.ok && fleetDelivery.bytes > 5000, 'Fleet executive PDF renders with its financial block + ledger');
+
+  console.log('\n--- Test 5c: financial PDF presentation (v1.32.0) ---');
+  const singleVehicleFinancial = {
+    data: {
+      type: 'financial',
+      currency: 'KES',
+      expenses: { fuel: 5300, total: 5300 },
+      earnings: { total: 0 },
+      net: { total: -5300, byVehicle: [{ plate: 'KAS 628T', expenses: 5300, earnings: 0, net: -5300 }] },
+      counts: { expenses: 3, earnings: 0 },
+      fuelLitres: 22.5,
+      vehicles: [{ plate: 'KAS 628T', make_model: 'Toyota Land Cruiser', fuel_type: 'Diesel', asset_kind: 'vehicle', odometer: 367359 }],
+      efficiency: { distance: 0, distanceUnit: 'km', costPerDistance: null, costPerHour: null },
+      ledger: { title: 'Transaction ledger - KAS 628T', currency: 'KES', groups: [], totals: { scanned: 3, shown: 3 } }
+    },
+    text: 'Financial & Cost Report\nOperating Expenses\nTotal: KES 5,300\nNet: -KES 5,300'
+  };
+  const singlePdf = fleetReportToPdf(singleVehicleFinancial, 'financial');
+  check(singlePdf.title === 'Financial & Cost Report - KAS 628T', 'Single-vehicle title names the report and plate');
+  check(singlePdf.plate === 'KAS 628T', 'Plate badge data reaches the cover');
+  check(singlePdf.periodLabel === 'All recorded activity', 'Cover period is a period, never a timezone');
+  check(/Toyota Land Cruiser/.test(singlePdf.subtitle), 'Subtitle carries the vehicle identity');
+  check(singlePdf.kpis.length === 6, 'Six KPI cards fill the grid');
+  check(singlePdf.kpis.find((k) => k.label === 'Earnings')?.tone === undefined, 'Zero earnings are neutral, never emerald');
+  check(singlePdf.kpis.find((k) => k.label === 'Net')?.tone === 'negative', 'A negative net stays coral');
+  check(singlePdf.kpis.find((k) => k.label === 'Transactions')?.value === '3', 'Transactions KPI counts records in scope');
+  check(singlePdf.kpis.find((k) => k.label === 'Distance (km)')?.hint === 'no odometer movement logged this month', 'Zero distance explains itself');
+  check(singlePdf.tables.length === 0, 'The redundant one-row per-vehicle table is removed');
+  check(singlePdf.sections.some((s) => s.title === 'Vehicle snapshot'), 'Vehicle snapshot panel replaces it');
+  check(singlePdf.callouts.every((c) => c.title !== 'Cost efficiency'), 'No cost-efficiency callout when cost metrics are null');
+  check(singlePdf.callouts.every((c) => !/—/.test(c.body || '')), 'No dash-only callout bodies');
+  check(singlePdf.callouts.some((c) => /Financial health/.test(c.title)), 'Financial-health callout survives');
+  check(singlePdf.ledgers[0].title.startsWith('Transaction ledger'), 'Ledger title is scope-aware');
+
+  const positiveEarnings = {
+    ...singleVehicleFinancial,
+    data: {
+      ...singleVehicleFinancial.data,
+      earnings: { total: 2000 },
+      net: { total: -3300, byVehicle: [{ plate: 'KAS 628T', expenses: 5300, earnings: 2000, net: -3300 }] },
+      counts: { expenses: 3, earnings: 1 }
+    }
+  };
+  const positivePdf = fleetReportToPdf(positiveEarnings, 'financial');
+  check(positivePdf.kpis.find((k) => k.label === 'Earnings')?.tone === 'positive', 'Non-zero earnings keep the positive tone');
 
   console.log('\n--- Test 6: Apex PDF rendering + readable ledger text ---');
   for (const [label, data] of [

@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.31.0  
+**Version:** 1.32.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.32.0** | Presentation polish from the real KAS 628T PDF (plate cover, honest zero tones, 6-card grid, vehicle snapshot, clean callouts) + self-hosted short links for every report/checkout URL | §74 |
 | **1.31.0** | Populate the variables: asset-aware reminder catalog, typed earnings (+ migration), 17 global compliance catalogs, driver compliance registry, expanded vehicle attributes, guarded demo fleet seeder | §73 |
 | **1.30.0** | Expense DNA: exhaustive 19-type catalog across all 8 asset kinds, asset-aware quiz menus, real-chat alias resolution (puncture/filters/parts), unified report classifiers and ledger badges | §72 |
 | **1.29.0** | Saka Apex PDF design system: vehicle deep-dive, owner portfolio, driver performance, itemized ledgers, type badges, segmented/vs bars, insight callouts, zero-transparency contract | §47.2–§47.7 |
@@ -2872,3 +2873,34 @@ The category layer stays `EXPIRY_CATEGORIES` (maintenanceReminders.js); the new 
 - **Files:** `reminderCatalog.js` (new), `earningCatalog.js` (new), `driverComplianceCatalog.js` (new), `quizEngine.js` (menus, catalog-first parse, write normalisation), `src/routes/whatsapp.js` (earning type), `reportLedger.js` (earning description), `driverReports.js` (driver compliance labels), `vehicleCompliance.js` (catalogs + version), `sakaAi.js` (attributes + prompt), `flowKnowledge.js`, `index.js` (boot ensure), `scripts/seed_demo_fleet.js` (new), `scripts/run_earning_type_migration.js` (new), `scripts/provision_staging_schema.js`, `scripts/health_audit.js`.
 - **Ops:** `npm run migrate:earning-type` (one-time, idempotent), `npm run demo:seed -- --confirm` (explicit demo data). No new environment knobs.
 - **Tests:** `test_variable_catalogs.js` (96), `test_demo_seed.js` (30), `test_expense_catalog.js` (66), `test_quiz_flow.js` (95), `test_maintenance_reminders.js` (46), `test_vehicle_compliance.js` (28), `test_agent_training.js` (109), `test_fleet_reports.js` (42), `test_report_builders.js` (67), `test_report_metrics.js` (25), `test_pdf_engine.js` (29), `test_natural_intake.js` (19).
+
+---
+
+## 74. PDF Presentation Polish + Short Links (v1.32.0)
+
+### 74.1 Why (audit of the real KAS 628T PDF)
+The attached 4-page `report-Saka_financial_KAS_628T` artifact exposed presentation defects: the cover period chip rendered **`Africa/Nairobi`** (a timezone, not a period), the title was lowercase "Financial report" with no plate/vehicle identity, **zero earnings were emerald (positive)**, the KPI grid had four cards, a one-row "Per-vehicle performance" table duplicated the KPIs, the "Cost efficiency" callout rendered as two em dashes, the ledger was titled "Fleet financial ledger" for one vehicle, and the Summary dumped ~40 raw WhatsApp lines.
+
+### 74.2 Adapter rewrite (`reportDelivery.fleetReportToPdf`, now exported)
+- **Single-vehicle detection** from `data.vehicles` (new) or `net.byVehicle`; the cover gets `plate` (plate badge), title **"Financial & Cost Report - <plate>"**, subtitle with make/model, and `periodLabel` "All recorded activity" (financial) or "This month" (others) - never a timezone.
+- **Honest KPI tones:** earnings/net are emerald/coral only for non-zero values; zero is neutral. The grid is filled to six cards from spend, earnings, net, transactions (`counts`), fuel logged (`fuelLitres`) and distance (zero distance hint: "no odometer movement logged this month").
+- **Vehicle snapshot** replaces the one-row per-vehicle table (plate, vehicle, asset kind, fuel type, odometer, records in scope, ledger rows shown); the multi-vehicle table only renders for 2+ vehicles.
+- **Clean callouts:** the "Cost efficiency" callout is only created when `costPerDistance` or `costPerHour` is non-null; the financial-health callout only when there is real money movement.
+- **Scope-aware ledger title** is set in `buildFinancialReport` ("Transaction ledger - <plate>" vs "Fleet financial ledger"); the Summary is condensed to eight plain-language lines.
+- **Chat-driven alias:** "vehicle profile report" / "profile report" route to `vehicle_deep_dive`.
+
+### 74.3 Engine polish (`pdfEngine.js`)
+- KPI grid centres an incomplete last row instead of leaving a ragged gap.
+- Footer reads "SAKA FLEET · APEX REPORT".
+
+### 74.4 Self-hosted short links (`src/services/linkShortener.js`)
+- **API:** `shortenUrl(supabase, url)`, `resolveShortCode(supabase, code)`, `ensureShortLinksTable`, `generateShortCode` (8-char, unambiguous alphabet), `shortLinkBase()` (`PUBLIC_APP_URL`, default `https://sakafleet.com`).
+- **Behaviour:** links under 80 chars and existing `/r/` links pass through; identical URLs reuse their code; expired codes are purged opportunistically; TTL 90 days; every failure returns the ORIGINAL url (a message never loses a link). Codes are unique-indexed with collision retries.
+- **Redirect:** `GET /r/:code` (index.js) resolves and 302s; a miss lands on the pricing page.
+- **Storage:** `public.short_links(code PK, url, created_at, expires_at)` via `npm run migrate:short-links` (idempotent), boot ensure, staging DDL and `RESET_TABLES` clean-slate coverage.
+- **Coverage:** report PDF links (follow-up worker, vehicle summary email/WhatsApp, monthly fleet audit) and ALL Paystack checkout presentations (upgrade, switch-to-annual, add-on, cancel-save, trial digests, winback, dunning, renewal, quiz checkout) are shortened.
+
+### 74.5 Files, tests, ops
+- **Files:** `linkShortener.js` (new), `reportDelivery.js`, `fleetReports.js`, `pdfEngine.js`, `followups.js`, `vehicleSummary.js`, `trialEngine.js`, `quizEngine.js`, `src/routes/whatsapp.js`, `index.js`, `scripts/run_short_links_migration.js` (new), `scripts/provision_staging_schema.js`, `scripts/reset-db.js`, `.env.example`.
+- **Ops:** `npm run migrate:short-links` (one-time, idempotent); optional `PUBLIC_APP_URL` to change the branded base. No other knobs.
+- **Tests:** `test_link_shortener.js` (25), `test_report_builders.js` (83 incl. the financial presentation contract), `test_pdf_engine.js` (29), `test_fleet_reports.js` (42), `test_quiz_flow.js` (95), `test_trial_engine.js` (73), `test_subscription_billing.js` (75), `test_dunning_reengagement.js` (15), `test_followups.js` (12), `test_vehicle_summary.js` (14), `test_report_metrics.js` (25), plus the v1.30/1.31 catalog suites.

@@ -168,6 +168,15 @@ CREATE TABLE IF NOT EXISTS public.private_earnings (
   created_at timestamp with time zone DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS public.short_links (
+  code text PRIMARY KEY,
+  url text NOT NULL,
+  created_at timestamp with time zone DEFAULT now(),
+  expires_at timestamp with time zone DEFAULT (now() + interval '90 days')
+);
+
+CREATE INDEX IF NOT EXISTS idx_short_links_url ON public.short_links(url);
+
 CREATE TABLE IF NOT EXISTS public.pending_owner_notifications (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   owner_id uuid REFERENCES public.profiles(id) ON DELETE CASCADE,

@@ -49,7 +49,9 @@ const STATLESS_SUITES = [
   'test_expense_catalog.js',
   // v1.31.0 — reminder/earning/compliance/attribute catalogs + demo seed payload.
   'test_variable_catalogs.js',
-  'test_demo_seed.js'
+  'test_demo_seed.js',
+  // v1.32.0 — branded short links (PDF reports, checkout URLs).
+  'test_link_shortener.js'
 ];
 
 const WORKFLOW_DIR = '.github/workflows';

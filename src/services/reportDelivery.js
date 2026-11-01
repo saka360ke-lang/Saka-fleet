@@ -21,7 +21,7 @@ export const REPORT_TYPE_ALIASES = Object.freeze({
   driver_daybook: ['daybook', 'driver report', 'my report', 'my daybook', 'shift report', 'activity report'],
   vehicle_health: ['vehicle health', 'health check', 'pre trip', 'pre-trip', 'car health', 'check in'],
   driver_compliance_card: ['compliance card', 'licence card', 'license card', 'my compliance', 'my documents'],
-  vehicle_deep_dive: ['vehicle deep dive', 'deep dive', 'vehicle report', 'car report', 'full vehicle report', 'asset deep dive'],
+  vehicle_deep_dive: ['vehicle deep dive', 'deep dive', 'vehicle report', 'car report', 'vehicle profile report', 'profile report', 'full vehicle report', 'asset deep dive'],
   owner_portfolio: ['owner portfolio', 'portfolio report', 'asset portfolio', 'my assets', 'asset report', 'portfolio'],
   driver_performance: ['driver performance and compliance', 'driver performance & compliance', 'driver performance report', 'driver performance', 'driver audit', 'performance report'],
   driver_scorecard: ['driver scorecard', 'driver score card'],
@@ -116,21 +116,46 @@ function money(value, currency = 'USD') {
   }
 }
 
-/** Adapt a core fleet-report payload into Saka Apex PDF sections. */
-function fleetReportToPdf(report, reportType) {
+const CORE_REPORT_TITLES = Object.freeze({
+  fleet: 'Fleet Status Report',
+  financial: 'Financial & Cost Report',
+  compliance: 'Compliance & Expiry Report',
+  maintenance: 'Maintenance & Service Report'
+});
+
+/**
+ * Adapt a core fleet-report payload into Saka Apex PDF sections (v1.32.0).
+ * Single-vehicle scopes get a plate badge, vehicle identity, a snapshot panel
+ * and no redundant one-row table; zero values keep honest, neutral tones.
+ */
+export function fleetReportToPdf(report, reportType) {
   const data = report?.data || {};
   const currency = data.currency || 'USD';
   const kpis = [];
   const charts = [];
   const tables = [];
   const callouts = [];
+  const sections = [];
   const ledgers = data.ledger ? [data.ledger] : [];
+
+  const byVehicle = Array.isArray(data.net?.byVehicle) ? data.net.byVehicle : [];
+  const scopedVehicles = Array.isArray(data.vehicles) ? data.vehicles : [];
+  const single = scopedVehicles.length === 1
+    ? scopedVehicles[0]
+    : (byVehicle.length === 1 ? { plate: byVehicle[0].plate } : null);
+  const plate = single?.plate || null;
 
   const financial = data.financial || null;
   const expenseBreakdown = data.expenses || (financial ? { ...financial.expenses } : null);
   const expenseTotal = expenseBreakdown ? Number(expenseBreakdown.total ?? 0) : 0;
   const earningTotal = expenseBreakdown ? Number((data.earnings?.total ?? financial?.earnings) || 0) : 0;
   const netTotal = expenseBreakdown ? Number((data.net?.total ?? financial?.net) || 0) : 0;
+  const distance = Number(data.efficiency?.distance ?? data.health?.distanceThisMonth ?? 0);
+  const distanceUnit = data.efficiency?.distanceUnit || data.health?.distanceUnit || 'km';
+  const costPerDistance = data.efficiency?.costPerDistance;
+  const costPerHour = data.efficiency?.costPerHour;
+  const counts = data.counts || null;
+  const fuelLitres = Number(data.fuelLitres) || 0;
 
   if (data.overview) {
     kpis.push(
@@ -141,21 +166,41 @@ function fleetReportToPdf(report, reportType) {
   if (expenseBreakdown) {
     kpis.push(
       { label: 'Total spend', value: money(expenseTotal, currency), hint: 'operating expenses', tone: 'negative' },
-      { label: 'Earnings', value: money(earningTotal, currency), hint: 'recorded revenue', tone: 'positive' },
-      { label: 'Net', value: money(netTotal, currency), hint: 'earnings - spend', tone: netTotal >= 0 ? 'positive' : 'negative' }
+      {
+        label: 'Earnings',
+        value: money(earningTotal, currency),
+        hint: earningTotal > 0 ? 'recorded revenue' : 'none recorded yet',
+        ...(earningTotal > 0 ? { tone: 'positive' } : {})
+      },
+      {
+        label: 'Net',
+        value: money(netTotal, currency),
+        hint: 'earnings - spend',
+        ...(netTotal > 0 ? { tone: 'positive' } : (netTotal < 0 ? { tone: 'negative' } : {}))
+      }
     );
+    if (counts) {
+      kpis.push({
+        label: 'Transactions',
+        value: String((counts.expenses || 0) + (counts.earnings || 0)),
+        hint: 'records in scope'
+      });
+    }
+    if (fuelLitres > 0) {
+      kpis.push({ label: 'Fuel logged', value: `${fuelLitres.toLocaleString('en-US')} L`, hint: 'in scope' });
+    }
+    if (!data.overview) {
+      kpis.push({
+        label: `Distance (${distanceUnit})`,
+        value: String(distance),
+        hint: distance > 0 ? 'this month' : 'no odometer movement logged this month'
+      });
+    }
   }
   if (data.health) {
     kpis.push({ label: 'Availability', value: `${data.health.availabilityRate ?? '—'}%`, hint: 'fleet readiness' });
   } else if (data.overview) {
     kpis.push({ label: 'Assigned drivers', value: String(data.overview.activeDrivers ?? '—'), hint: 'on duty' });
-  }
-  if (!data.overview && data.efficiency) {
-    kpis.push({
-      label: `Distance (${data.efficiency.distanceUnit || 'km'})`,
-      value: String(data.efficiency.distance ?? '—'),
-      hint: 'this month'
-    });
   }
 
   if (expenseBreakdown) {
@@ -165,25 +210,41 @@ function fleetReportToPdf(report, reportType) {
     if (segments.length) charts.push({ type: 'segment', title: 'Spend by category', currency, segments });
     if (expenseTotal > 0 || earningTotal > 0) {
       charts.push({ type: 'vs', title: 'Earnings vs expenses', currency, earnings: earningTotal, expenses: expenseTotal });
+      callouts.push({
+        tone: netTotal >= 0 ? 'positive' : 'negative',
+        title: netTotal >= 0 ? 'Financial health: surplus' : 'Financial health: shortfall',
+        body: `${money(earningTotal, currency)} earnings against ${money(expenseTotal, currency)} spend - a ${netTotal >= 0 ? 'surplus' : 'shortfall'} of ${money(Math.abs(netTotal), currency)}.`
+      });
     }
-    callouts.push({
-      tone: netTotal >= 0 ? 'positive' : 'negative',
-      title: netTotal >= 0 ? 'Financial health: surplus' : 'Financial health: shortfall',
-      body: `${money(earningTotal, currency)} earnings against ${money(expenseTotal, currency)} spend - a ${netTotal >= 0 ? 'surplus' : 'shortfall'} of ${money(Math.abs(netTotal), currency)}.`
-    });
     const top = [...segments].sort((a, b) => b.value - a.value)[0];
     if (top) {
-      callouts.push({ tone: 'brand', title: 'Largest cost line', body: `${top.label} leads fleet spend at ${money(top.value, currency)}.` });
+      callouts.push({
+        tone: 'brand',
+        title: 'Largest cost line',
+        body: `${top.label} ${single ? 'is' : 'leads'} ${single ? "this vehicle's" : 'fleet'} spend at ${money(top.value, currency)}.`
+      });
     }
   }
-  if (data.efficiency) {
-    callouts.push({
-      tone: 'brand',
-      title: 'Cost efficiency',
-      body: `Cost per ${data.efficiency.distanceUnit || 'km'}: ${data.efficiency.costPerDistance === null || data.efficiency.costPerDistance === undefined ? '—' : money(data.efficiency.costPerDistance, currency)} - cost per operating hour: ${data.efficiency.costPerHour === null || data.efficiency.costPerHour === undefined ? '—' : money(data.efficiency.costPerHour, currency)}.`
-    });
+  // Only surface the efficiency callout when there is a real cost metric.
+  if (data.efficiency && ((costPerDistance !== null && costPerDistance !== undefined) || (costPerHour !== null && costPerHour !== undefined))) {
+    const parts = [];
+    if (costPerDistance !== null && costPerDistance !== undefined) parts.push(`cost per ${distanceUnit}: ${money(costPerDistance, currency)}`);
+    if (costPerHour !== null && costPerHour !== undefined) parts.push(`cost per operating hour: ${money(costPerHour, currency)}`);
+    callouts.push({ tone: 'brand', title: 'Cost efficiency', body: `${parts.join(' - ')}.` });
   }
-  if (data.net?.byVehicle?.length) {
+
+  if (single) {
+    const rows = [
+      { label: 'Plate', value: plate || '—' },
+      { label: 'Vehicle', value: single.make_model || '—' },
+      { label: 'Asset kind', value: single.asset_kind ? String(single.asset_kind).replace(/_/g, ' ') : '—' },
+      { label: 'Fuel type', value: single.fuel_type || '—' }
+    ];
+    if (Number(single.odometer) > 0) rows.push({ label: 'Odometer', value: `${Number(single.odometer).toLocaleString('en-US')} km` });
+    if (counts) rows.push({ label: 'Records in scope', value: String((counts.expenses || 0) + (counts.earnings || 0)) });
+    if (ledgers[0]?.totals) rows.push({ label: 'Ledger rows shown', value: String(ledgers[0].totals.shown) });
+    sections.push({ title: 'Vehicle snapshot', rows });
+  } else if (byVehicle.length > 1) {
     tables.push({
       title: 'Per-vehicle performance',
       currency,
@@ -193,21 +254,32 @@ function fleetReportToPdf(report, reportType) {
         { key: 'expenses', label: 'Expenses', width: 1, type: 'money', align: 'right' },
         { key: 'net', label: 'Net', width: 1, type: 'money', align: 'right' }
       ],
-      rows: data.net.byVehicle.slice(0, 40)
+      rows: byVehicle.slice(0, 40)
     });
   }
-  const summary = stripRichText(report?.text).slice(0, 40);
+
+  // Condensed plain-language summary (never a raw 40-line WhatsApp dump).
+  const summary = stripRichText(report?.text)
+    .filter((line) => !/report|^_|engine-calculated/i.test(line) || /KES|spend|net/i.test(line))
+    .slice(0, 8);
+  if (summary.length) sections.push({ title: 'Summary', lines: summary });
+
+  const titleBase = CORE_REPORT_TITLES[reportType]
+    || (data.type ? `${String(data.type).charAt(0).toUpperCase()}${String(data.type).slice(1)} report` : 'Fleet report');
   return {
-    title: report?.data?.type ? `${report.data.type[0].toUpperCase()}${report.data.type.slice(1)} report` : 'Fleet report',
-    subtitle: 'Verified fleet data, beautifully delivered',
-    periodLabel: data.timeZone || 'This month',
+    title: plate ? `${titleBase} - ${plate}` : titleBase,
+    subtitle: plate
+      ? `${single.make_model || 'Vehicle'} - engine-calculated figures, nothing hidden`
+      : 'Verified fleet data, beautifully delivered',
+    periodLabel: reportType === 'financial' ? 'All recorded activity' : 'This month',
+    plate,
     reportType,
     kpis: kpis.slice(0, 6),
     charts,
     ledgers,
     callouts,
     tables,
-    sections: summary.length ? [{ title: 'Summary', lines: summary }] : [],
+    sections,
     notes: ['Figures are engine-calculated from your fleet records. Saka never estimates silently.']
   };
 }

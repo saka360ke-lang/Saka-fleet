@@ -41,6 +41,7 @@ import {
 } from './src/services/aiModelRegistry.js';
 import { ensureFuelEconomySchema } from './src/services/fuelEconomy.js';
 import { ensureEarningTypeSchema } from './src/services/earningCatalog.js';
+import { ensureShortLinksTable, resolveShortCode, shortenUrl } from './src/services/linkShortener.js';
 import { ensureReceiptsTable } from './src/services/receipts.js';
 import { ensureChatSessionsTable } from './src/services/sessionStore.js';
 import { ensureFeatureNoticeSchema } from './src/services/featureNotice.js';
@@ -373,6 +374,14 @@ fastify.get('/healthz', statusProbeHandler);
 fastify.get('/api/health', statusProbeHandler);
 fastify.get('/internal/status', statusProbeHandler);
 
+// 5.2 Short links (v1.32.0): every long user-facing URL is presented as
+// https://sakafleet.com/r/<code>; this route resolves it and redirects.
+fastify.get('/r/:code', async (request, reply) => {
+  const target = await resolveShortCode(supabase, request.params?.code);
+  if (target) return reply.redirect(target);
+  return reply.redirect(process.env.PUBLIC_PRICING_URL || 'https://sakafleet.com');
+});
+
 // 6. WhatsApp & Email Auth OTP Request Endpoint (Mandatory Email)
 fastify.post('/api/auth/whatsapp/request', async (request, reply) => {
   const { phone, email } = request.body || {};
@@ -583,7 +592,8 @@ async function processAutoAudits() {
       try {
         const pdfBuffer = await generateFleetReport(reportData);
         const reportUrl = await uploadReportToSupabase(supabase, pdfBuffer, `Fleet_${Date.now()}`);
-        const msg = `ðŸ“Š Your Fleet Auto-Audit Report is ready.\n\nNet Earnings Today: KES ${(fleetTotalEarnings - fleetTotalExpenses).toFixed(2)}\nView PDF: ${reportUrl}`;
+        const shortReportUrl = await shortenUrl(supabase, reportUrl);
+        const msg = `ðŸ“Š Your Fleet Auto-Audit Report is ready.\n\nNet Earnings Today: KES ${(fleetTotalEarnings - fleetTotalExpenses).toFixed(2)}\nView PDF: ${shortReportUrl}`;
         await sendMetaWhatsAppMessage(phone, msg);
         fastify.log.info(`Auto-audit sent to ${phone} for entire fleet.`);
       } catch (repErr) {
@@ -999,6 +1009,7 @@ const start = async () => {
     await ensureVehicleTableColumns(supabase);
     await ensureFuelEconomySchema(supabase);
     await ensureEarningTypeSchema(supabase);
+    await ensureShortLinksTable(supabase);
     await ensureReceiptsTable(supabase);
     await ensureComplianceCatalog({ supabase });
     await ensureChatSessionsTable(supabase);
