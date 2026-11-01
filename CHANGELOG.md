@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.32.1] - 2026-11-01
+
+- **OCR audit remediation (live evidence 2026-11-01):**
+  - **Silent photo deaths fixed:** `session is not defined` in the route catch block masked the real error on two uploads (logbook) and left the user with only an ack. `session` is hoisted, the catch is optional-chained, and the original error is now persisted to `error_logs`.
+  - **Insurance certificate ≠ logbook:** strong insurance markers (`CERTIFICATE OF INSURANCE`, `POLICY HOLDER`, `COMMENCING DATE`, `EXPIRING`, `ISSUED BY`, `COVER NOTE`, `UNDERWRITER`) now win over bare CHASSIS/VIN; e-TIMS fuel receipts no longer become `purchase_invoice` ("Buyer PIN" excluded).
+  - **Kenya e-TIMS profile (Rule 36):** country-gated parsing reads the merchant after the legal marker, the TOTAL/CASH figure on the following line (VAT lines ignored) and qty×price litres; the GLOBAL profile is unchanged and a non-KE regression fixture proves no leakage.
+  - **Duplicate protection (three layers):** OCR text hash stored on every receipt + 48 h content dedupe (`OCR_DUPLICATE_WINDOW_HOURS`), re-upload short-circuit (warm "already read" reply, no second quiz), and a write-time expense guard (same plate + amount + type + Nairobi day, 3 h; `OCR_EXPENSE_DEDUPE_HOURS`) — a different odometer reading proves a separate fill.
+  - **OCR telemetry:** `public.ocr_requests` (status, provider, kind, confidence, attempts, latency, country — never text), one row per media turn written before any crash-prone branch; `admin ocr-stats [Nh]` deterministic digest (audited `ADMIN_OCR_STATS`).
+  - **HEIC/HEIF** photos accepted; insurance hints gain the certificate-number label and label-first expiry (COMMENCING date never becomes expiry); backfill migration corrects the three audited vault rows.
+- **Rule 36 — Global-audience parsing & dedupe design** added to `.clinerules`; `test_ocr_flow.js` covers the e-TIMS fixture, the Bima Yangu insurance fixture, a non-KE regression, Buyer-PIN classification, duplicate comparator and OCR digest formatting.
+
 All notable changes to Saka Fleet. Versions mirror the release tracker at the top
 of `SAKA_FLEET_ARCHITECTURE.md`; every entry names the commit it shipped in.
 Generated from the real git history — never from memory.

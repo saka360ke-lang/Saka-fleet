@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.32.0  
+**Version:** 1.32.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.32.1** | OCR audit remediation: silent-crash fix, insurance≠logbook + expiry-label precedence, Kenya e-TIMS profile (Rule 36), three-layer duplicate guard, `ocr_requests` telemetry + `admin ocr-stats`, HEIC | §75 |
 | **1.32.0** | Presentation polish from the real KAS 628T PDF (plate cover, honest zero tones, 6-card grid, vehicle snapshot, clean callouts) + self-hosted short links for every report/checkout URL | §74 |
 | **1.31.0** | Populate the variables: asset-aware reminder catalog, typed earnings (+ migration), 17 global compliance catalogs, driver compliance registry, expanded vehicle attributes, guarded demo fleet seeder | §73 |
 | **1.30.0** | Expense DNA: exhaustive 19-type catalog across all 8 asset kinds, asset-aware quiz menus, real-chat alias resolution (puncture/filters/parts), unified report classifiers and ledger badges | §72 |
@@ -2904,3 +2905,50 @@ The attached 4-page `report-Saka_financial_KAS_628T` artifact exposed presentati
 - **Files:** `linkShortener.js` (new), `reportDelivery.js`, `fleetReports.js`, `pdfEngine.js`, `followups.js`, `vehicleSummary.js`, `trialEngine.js`, `quizEngine.js`, `src/routes/whatsapp.js`, `index.js`, `scripts/run_short_links_migration.js` (new), `scripts/provision_staging_schema.js`, `scripts/reset-db.js`, `.env.example`.
 - **Ops:** `npm run migrate:short-links` (one-time, idempotent); optional `PUBLIC_APP_URL` to change the branded base. No other knobs.
 - **Tests:** `test_link_shortener.js` (25), `test_report_builders.js` (83 incl. the financial presentation contract), `test_pdf_engine.js` (29), `test_fleet_reports.js` (42), `test_quiz_flow.js` (95), `test_trial_engine.js` (73), `test_subscription_billing.js` (75), `test_dunning_reengagement.js` (15), `test_followups.js` (12), `test_vehicle_summary.js` (14), `test_report_metrics.js` (25), plus the v1.30/1.31 catalog suites.
+
+---
+
+## 75. OCR Audit Remediation (v1.32.1)
+
+### 75.1 Live evidence (2026-11-01, phone 254734852529)
+- **Two photo turns died silently:** acks sent at 06:35:25 and 06:38:08, then nothing. `error_logs` recorded `ReferenceError: session is not defined` at `whatsapp.js:3505` — the catch block referenced a `session` binding declared inside the try, masking the original error. No receipt row, no reply.
+- **Insurance certificate filed as a logbook:** media `949674331278052` (Bima Yangu / Monarch, policy C35343842) stored `document_kind='logbook'` because `CHASSIS NUMBER` matched the logbook regex before insurance markers.
+- **Expiry saved as the commencement date:** the compliance engine used the FIRST date in the segment (COMMENCING 21/10/2026) instead of the EXPIRING label (20/11/2026). The owner corrected Saka in chat and then could not get the expiry answered.
+- **e-TIMS fuel receipts** were stored as `purchase_invoice` (the KRA "Buyer PIN" token matched the buyer rule) and produced `amount=NULL, litres=NULL` because TOTAL sat alone on its line.
+- **No OCR telemetry** existed: `ai_usage_logs` had zero OCR purposes.
+
+### 75.2 Silent-crash fix (`src/routes/whatsapp.js`)
+`session` is hoisted to function scope (`let session = null` before the try) and the catch uses `session?.slowAckSent`; the original error is persisted with `logSystemError(..., '/webhook/whatsapp')`. A regression test reads the route source and asserts all three properties.
+
+### 75.3 Document-family precedence (`ocrService.js`, `documentLens.js`)
+- Strong insurance markers (`CERTIFICATE OF INSURANCE`, `POLICY HOLDER`, `POLICY NO/NUMBER`, `COMMENCING DATE`, `COVER NOTE`, `SUM INSURED`, `UNDERWRITER`, `ISSUED BY`, or `EXPIRY` + `POLICY`) win over bare `VIN`/`CHASSIS`.
+- `looksLikeVin()` strips KRA tax PINs (`P051141264M`) and `PIN:` labels first, so a fiscal receipt never looks like a logbook.
+- `classifyDocumentFamily()` keeps receipt families and excludes `buyer(?!\s*pin)` from the purchase-invoice rule.
+
+### 75.4 Country receipt profiles — Rule 36
+`extractDocumentHints(text, kind, { receiptOnly, countryCode })` resolves a profile from the WhatsApp country:
+- **KE (e-TIMS):** merchant line after the legal-receipt marker, TOTAL/CASH figure on the following 1–2 lines (VAT/NET/TAX rows skipped), litres from `<fuel product>` + `qty x unit-price`, `KES` when the receipt omits a code, dates resolved DD/MM/YYYY through `dateParser`.
+- **GLOBAL:** neutral heuristics plus one universal improvement — a bare `TOTAL` label now reads the figure from the next 1–2 lines (every market), and address/PIN/phone/serial numbers are never treated as money.
+- Ambiguous OCR tokens (`3.000.00`) are rejected instead of guessed. The route merges `{ ...lens.hints, ...countryHints }` so a labelled deterministic value can never be overridden by a lens misread.
+- Certificate policy labels now include `CERTIFICATE OF INSURANCE No:` and expiry is read label-first (COMMENCING never becomes expiry) in BOTH `extractDocumentHints` and `Document Lens.parseInsurance` (ISO via `dateParser`).
+
+### 75.5 Duplicate protection (three layers)
+1. **Content hash:** `buildOcrTextSha()` (whitespace-normalised SHA-256) is stored in `receipts.text_sha`; `findRecentReceiptByTextSha()` matches within `OCR_DUPLICATE_WINDOW_HOURS` (48).
+2. **Re-upload short-circuit:** media-id OR recent text-hash match sets `duplicateReceipt` → quiz cancelled + warm `formatDuplicateReceiptReply` ("already read").
+3. **Write-time expense guard (`expenseGuard.js`):** before BOTH expense insert sites (`quizEngine` log_expense and the route's quick path) the engine checks same plate + amount + type + **Africa/Nairobi calendar day** within `OCR_EXPENSE_DEDUPE_HOURS` (3 h). A different odometer reading proves a separate fill and passes; the user is told once that nothing was saved twice and offered the odometer path.
+
+### 75.6 OCR telemetry & admin digest
+- `public.ocr_requests` (one row per media turn, written right after OCR completes and BEFORE any crash-prone branch): `media_id, phone, country_code, mime_type, provider (google_vision|local_pdf), document_kind, status (read|low_confidence|failed|paused|pdf_text|pdf_scanned|unsupported), confidence, attempts, latency_ms, error` — never document text.
+- `getOcrUsageSummary()` is fail-soft; `admin ocr-stats [Nh]` renders a deterministic digest (outcomes, documents, countries, avg confidence/latency) and audits `ADMIN_OCR_STATS`.
+- Migration `npm run migrate:ocr-requests` creates the table, adds `idx_receipts_text_sha` and backfills the audited rows (`1796235211499272`, `2892848571100840` → receipt_fuel; `949674331278052`, `1189365943417791` → insurance).
+
+### 75.7 Compliance expiry precedence
+`parseComplianceItem()` (complianceCatalog) now anchors date extraction on `expir*|valid until/to/till|due` when present, so a certificate's COMMENCING/ISSUE date can never be stored as the expiry. Data repaired for KAS 628T on 2026-11-01: `vehicle_compliances.insurance.expiry`, `vehicles.insurance_expiry` and the linked Insurance reminder all set to `2026-11-20`.
+
+### 75.8 Also shipped
+HEIC/HEIF accepted (`SUPPORTED_IMAGE_TYPES`); insurance receipt rows carry `Policy <number>` in notes; `admin ocr-stats` added to help text and the ML intent fallback; `flowKnowledge` + `DEFAULT_SAKA_CORE_PROMPT` describe the duplicate contract and country-resolved formats.
+
+### 75.9 Files, tests, knobs
+- **Files:** `ocrService.js`, `documentLens.js`, `receipts.js`, `ocrTelemetry.js` (new), `expenseGuard.js` (new), `complianceCatalog.js`, `src/routes/whatsapp.js`, `quizEngine.js`, `superadmin.js`, `flowKnowledge.js`, `sakaAi.js`, `index.js`, `scripts/run_ocr_requests_migration.js` (new), `scripts/provision_staging_schema.js`, `scripts/reset-db.js`, `.env.example`, `.clinerules` (Rule 36).
+- **Tests:** `test_ocr_flow.js` (87 — e-TIMS KE vs GLOBAL, Bima certificate, Buyer-PIN family, duplicate comparator, OCR digest, crash regression), `test_vehicle_compliance.js` (30 — expiry label precedence), `test_quiz_flow.js` (95), `test_agent_training.js` (109), `test_turn_latency.js` (41), `test_phase2_analytics.js`.
+- **Knobs:** `OCR_DUPLICATE_WINDOW_HOURS` (48), `OCR_EXPENSE_DEDUPE_HOURS` (3); existing OCR knobs unchanged.

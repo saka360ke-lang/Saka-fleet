@@ -31,8 +31,10 @@ export const OCR_VISION_MAX_ATTEMPTS = Number.isFinite(rawVisionAttempts)
   ? Math.max(1, Math.min(3, rawVisionAttempts))
   : 2;
 
+// v1.32.1 — HEIC/HEIF added: iPhone default capture format, read natively by
+// Google Vision. Global audience must not be turned away by a phone's codec.
 export const SUPPORTED_IMAGE_TYPES = Object.freeze([
-  'image/jpeg', 'image/jpg', 'image/png', 'image/webp'
+  'image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/heic', 'image/heif'
 ]);
 
 /** v1.28.8 — Vision OCR is ON by default (testing phase); OCR_ENABLED=off pauses it. */
@@ -262,11 +264,20 @@ export function extractReceiptHints(text = '') {
   return extractDocumentHints(text, classifyOcrDocument(text), { receiptOnly: true });
 }
 
-/** Detect the document family from OCR text (deterministic). */
+/**
+ * Detect the document family from OCR text (deterministic).
+ *
+ * v1.32.1 — STRONG insurance markers win over bare CHASSIS/VIN. Every motor
+ * insurance certificate prints the registration + chassis number, so the older
+ * order filed insurance certificates as logbooks (live evidence 2026-11-01).
+ * A logbook is only claimed when no insurance wording is present.
+ */
 export function classifyOcrDocument(text = '') {
   const raw = String(text || '');
   const t = raw.toUpperCase();
   if (!t.trim()) return 'unknown';
+  if (/\b(CERTIFICATE\s+OF\s+INSURANCE|POLICY\s+HOLDER|POLICY\s+(?:NO|NUMBER)|COMMENCING\s+DATE|COVER\s+NOTE|SUM\s+INSURED|UNDERWRITER|ISSUED\s+BY)\b/.test(t)
+    || /\bEXPIR(?:Y|ING|ES)\b/.test(t) && /\bPOLICY\b/.test(t)) return 'insurance';
   if (/\b(VIN|CHASSIS|LOG\s?BOOK|REGISTRATION\s+CERT|MOTOR\s+VEHICLE\s+REG)/.test(t) || looksLikeVin(raw)) return 'logbook';
   if (/\b(POLICY|INSURANCE|COVER\s+NOTE|SUM\s+INSURED|UNDERWRITER)\b/.test(t)) return 'insurance';
   if (/\b(DRIVING\s+LICEN[CS]E|DRIVER'?S\s+LICEN[CS]E|PSV|PDP|DL\s*(?:NO|NUMBER)|BADGE)\b/.test(t)) return 'drivers_licence';
@@ -276,8 +287,16 @@ export function classifyOcrDocument(text = '') {
   return 'unknown';
 }
 
+/**
+ * VIN-shaped tokens only. KRA tax PINs (e.g. P051141264M) and fiscal serials
+ * are stripped first — an insurance/fuel certificate must never look like a
+ * logbook (v1.32.1, live 2026-11-01).
+ */
 function looksLikeVin(text) {
-  return /\b(?=[A-HJ-NPR-Z0-9]{11,17}\b)(?=[A-Z0-9]*\d)[A-HJ-NPR-Z0-9]{11,17}\b/.test(String(text || '').toUpperCase());
+  const cleaned = String(text || '').toUpperCase()
+    .replace(/\b(?:BUYER\s+)?PIN\s*[:#]?\s*[A-Z0-9]+/g, ' ')
+    .replace(/\bP\d{9}[A-Z]\b/g, ' ');
+  return /\b(?=[A-HJ-NPR-Z0-9]{11,17}\b)(?=[A-Z0-9]*\d)[A-HJ-NPR-Z0-9]{11,17}\b/.test(cleaned);
 }
 
 export const OCR_CURRENCY_CODES = Object.freeze(['KES', 'USD', 'EUR', 'GBP', 'NGN', 'ZAR', 'TZS', 'UGX', 'RWF', 'INR', 'AED', 'BRL', 'MXN']);
@@ -301,16 +320,95 @@ function firstDateNear(raw, keywordRe) {
   return dateMatch ? dateMatch[1] : null;
 }
 
+/* ------------------------------------------------------------------ */
+/* Country receipt profiles (v1.32.1 — Rule 36)                        */
+/*                                                                     */
+/* Country-specific fiscal-receipt structures live ONLY inside their   */
+/* own profile. The universal path below never assumes a country.      */
+/* ------------------------------------------------------------------ */
+
+const LEGAL_RECEIPT_MARKER_RE = /\b(?:START|END)\s+OF\s+LEGAL\s+RECEIPT\b|\bFISCAL\s+RECEIPT\b|\*{3}/i;
+
+/** True when the text carries Kenya e-TIMS (KRA fiscal receipt) markers. */
+export function isKenyaEtimesText(text = '') {
+  return /\b(?:LEGAL\s+RECEIPT|FISCAL\s+RECEIPT|KRA\s*\/?\s*ETI|BUYER\s+PIN|ETIMS)\b/i.test(String(text || ''));
+}
+
+/**
+ * Normalise an OCR numeric token. Grouped values ("3,000.00") parse; ambiguous
+ * OCR noise ("3.000.00") returns null — Saka never guesses a wrong figure.
+ */
+function normalizeOcrNumber(raw) {
+  const token = String(raw || '').replace(/\s/g, '');
+  if (!token) return null;
+  if (/^\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?$/.test(token) || /^\d+(?:\.\d{1,2})?$/.test(token) || /^\d{3,}$/.test(token)) {
+    return toNumber(token.replace(/,/g, ''));
+  }
+  return null;
+}
+
+/**
+ * Kenya e-TIMS profile: merchant line after the legal marker, TOTAL/CASH amount
+ * (the figure often sits on the FOLLOWING line), and litres from a
+ * product + "qty x unit-price" pair. VAT breakdown lines are never amounts.
+ */
+function extractKenyaEtimesHints(raw, rows) {
+  const hints = {};
+  const clean = (line) => String(line || '').replace(/\s+/g, ' ').trim();
+  const lines = rows.map(clean).filter(Boolean);
+
+  const merchant = lines.find((line) => {
+    if (line.length < 3 || line.length > 60) return false;
+    if (LEGAL_RECEIPT_MARKER_RE.test(line)) return false;
+    if (/^(?:KE\b|PIN\b|BUYER|P\.?\s*O\.?\s*BOX|DATE|TIME|KRA\b|CU\s|RECEIPT\s+NUMBER|CONTROL\s+UNIT|ITEMS\s+NUMBER|SIGNED|SCAN\b)/i.test(line)) return false;
+    return /[A-Z]{3,}/i.test(line) && !/^[\d.,\s\-/]+$/.test(line);
+  });
+  if (merchant) hints.vendor = merchant.slice(0, 60);
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (!/\b(?:total|cash|amount)\b/i.test(line)) continue;
+    if (/%|\bTAX\b|\bNET\b|\bBALANCE\b/i.test(line)) continue;
+    const sameLine = normalizeOcrNumber((line.match(/(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+\.\d{1,2})/) || [])[1]);
+    if (sameLine !== null && sameLine > 0) { hints.amount = sameLine; break; }
+    for (let k = 1; k <= 2 && i + k < lines.length; k += 1) {
+      const next = lines[i + k];
+      if (!next || /%|\bTAX\b|\bNET\b/i.test(next)) continue;
+      const value = normalizeOcrNumber((next.match(/^(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+\.\d{1,2})$/) || [])[1]);
+      if (value !== null && value > 0) { hints.amount = value; break; }
+    }
+    if (hints.amount) break;
+  }
+
+  const fuelProductRe = /^(?:DIESEL|PETROL|PREMIUM|SUPER|KEROSENE|FUEL)\b/i;
+  for (let i = 0; i < lines.length && hints.fuel_liters == null; i += 1) {
+    if (!fuelProductRe.test(lines[i])) continue;
+    for (let j = i + 1; j < Math.min(i + 4, lines.length); j += 1) {
+      const pair = lines[j].match(/([\d][\d,.]*)\s*[x×]\s*([\d][\d,.]*)/i);
+      if (!pair) continue;
+      const qty = normalizeOcrNumber(pair[1]);
+      if (qty !== null && qty > 0 && qty <= 500) { hints.fuel_liters = qty; break; }
+    }
+  }
+
+  return hints;
+}
+
+
 
 /**
  * Rich document hints for every supported photo type. Numbers are deterministic
  * and always land in the confirmation gate before any database write.
  */
-export function extractDocumentHints(text = '', kind = null, { receiptOnly = false } = {}) {
+export function extractDocumentHints(text = '', kind = null, { receiptOnly = false, countryCode = 'GLOBAL' } = {}) {
   const raw = String(text || '');
   if (!raw.trim()) return {};
   const documentKind = kind || classifyOcrDocument(raw);
   const lines = raw.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  // v1.32.1 — Rule 36: country profiles are resolved from the caller's
+  // country (WhatsApp number) and never leak into the universal path.
+  const isKenya = String(countryCode || 'GLOBAL').toUpperCase() === 'KE';
+  const etimesHints = isKenya && isKenyaEtimesText(raw) ? extractKenyaEtimesHints(raw, lines) : null;
 
   const moneyRe = /(?:kes|usd|ngn|zar|tzs|ugx|rwf|gbp|eur|inr|aed|brl|mxn|\$|€|£|₦|₹)\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)/gi;
   const toNumber = (value) => {
@@ -326,21 +424,37 @@ export function extractDocumentHints(text = '', kind = null, { receiptOnly = fal
 
   const totalLine = lines.find((line) => /\b(total|amount due|grand total|balance due)\b/i.test(line));
   let amount = totalLine ? amountFrom(totalLine) : null;
+  // v1.32.1 — a bare "TOTAL" label with the figure on the next line is common
+  // in every market (e-TIMS included). VAT breakdown rows are never amounts.
+  if (amount === null && totalLine) {
+    const idx = lines.indexOf(totalLine);
+    for (let k = 1; k <= 2 && idx >= 0 && idx + k < lines.length; k += 1) {
+      const row = lines[idx + k];
+      if (/%|\bTAX\b|\bNET\b/i.test(row)) continue;
+      const bare = normalizeOcrNumber((row.match(/(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+\.\d{1,2})/) || [])[1]);
+      if (bare !== null && bare > 0) { amount = bare; break; }
+    }
+  }
+  if (amount === null && etimesHints?.amount) amount = etimesHints.amount;
   if (amount === null && !receiptOnly) {
     const all = [...raw.matchAll(moneyRe)].map((match) => toNumber(match[1])).filter((num) => num !== null && num > 0);
     if (all.length) amount = Math.max(...all);
   }
 
   const litersMatch = raw.match(/([0-9]+(?:[.,][0-9]+)?)\s*(?:l\b|lt\b|ltr\b|litre|liter|litres|liters)/i);
-  const fuelLiters = litersMatch ? toNumber(litersMatch[1]) : null;
+  let fuelLiters = litersMatch ? toNumber(litersMatch[1]) : null;
+  if (fuelLiters === null && etimesHints?.fuel_liters) fuelLiters = etimesHints.fuel_liters;
   const odoMatch = raw.match(/(?:odo|odometer|mileage|km)\s*[:\-]?\s*([0-9][0-9,]{2,})/i);
   const odometer = odoMatch ? toNumber(odoMatch[1]) : null;
   const date = firstDateNear(raw, /(date|time)/i)
     || (raw.match(/\b(\d{4}-\d{2}-\d{2}|\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4})\b/) || [])[1]
     || null;
-  const vendor = lines[0] && lines[0].length <= 60 ? lines[0] : null;
+  // v1.32.1 — never treat a legal-receipt marker line as the merchant name.
+  const firstLine = lines[0] || '';
+  let vendor = firstLine && firstLine.length <= 60 && !LEGAL_RECEIPT_MARKER_RE.test(firstLine) ? firstLine : null;
+  if (!vendor && etimesHints?.vendor) vendor = etimesHints.vendor;
   const pumpMatch = raw.match(/\b(?:pump|nozzle)\s*(?:no\.?|#)?\s*(\d{1,3})\b/i);
-  const currency = detectCurrency(raw);
+  const currency = detectCurrency(raw) || (etimesHints ? 'KES' : null);
 
   const hints = { document_kind: documentKind };
   if (amount !== null) hints.amount = amount;
@@ -364,16 +478,25 @@ export function extractDocumentHints(text = '', kind = null, { receiptOnly = fal
   }
 
   if (documentKind === 'insurance') {
-    const policy = raw.match(/\b(?:policy|cover(?:\s+note)?)\s*(?:no\.?|number|#)?\s*[:\-#]?\s*((?=[A-Z0-9\-\/]*\d)[A-Z0-9][A-Z0-9\-\/]{3,})/i);
+    // v1.32.1 — accept "CERTIFICATE OF INSURANCE No:" labels too (Kenyan motor
+    // certificates print the certificate number first, the policy number later).
+    const policy = raw.match(/\b(?:policy|cover(?:\s+note)?|certificate(?:\s+of\s+insurance)?)\s*(?:no\.?|number|#)?\s*[:\-#]?\s*((?=[A-Z0-9\-\/]*\d)[A-Z0-9][A-Z0-9\-\/]{3,})/i);
     if (policy) hints.insurance_policy = policy[1];
-    const expiry = firstDateNear(raw, /(expir|valid\s+(?:until|to)|renew|due)/i);
+    // Expiry is read from the EXPIRING/VALID UNTIL label first — a certificate
+    // also prints a COMMENCING date, which must never become the expiry.
+    const expiry = (raw.match(/\b(?:expir\w*|valid\s+(?:until|to))\s*[:]?\s*(\d{4}-\d{2}-\d{2}|\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4})/i) || [])[1]
+      || firstDateNear(raw, /(expir|valid\s+(?:until|to)|renew|due)/i);
     if (expiry) hints.insurance_expiry = expiry;
+    if (hints.insurance_policy) {
+      hints.notes = [hints.notes, `Policy ${hints.insurance_policy}`].filter(Boolean).join(' | ');
+    }
   }
 
   if (documentKind === 'drivers_licence') {
     const licence = raw.match(/\b(?:licen[cs]e|lic|dl|psv|pdp|badge)\s*(?:no\.?|number|#)?\s*[:\-#]?\s*((?=[A-Z0-9\-\/]*\d)[A-Z0-9][A-Z0-9\-\/]{3,})/i);
     if (licence) hints.compliance_number = licence[1];
-    const expiry = firstDateNear(raw, /(expir|valid\s+(?:until|to)|renew|due)/i);
+    const expiry = (raw.match(/\b(?:expir\w*|valid\s+(?:until|to))\s*[:]?\s*(\d{4}-\d{2}-\d{2}|\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4})/i) || [])[1]
+      || firstDateNear(raw, /(expir|valid\s+(?:until|to)|renew|due)/i);
     if (expiry) hints.compliance_expiry = expiry;
     hints.compliance_type = /PSV/i.test(raw) ? 'PSV Badge' : (/PDP/i.test(raw) ? 'PDP' : 'Driver Licence');
   }

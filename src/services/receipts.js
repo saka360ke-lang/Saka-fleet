@@ -38,6 +38,7 @@ export const RECEIPTS_SQL = `
     );
     CREATE INDEX IF NOT EXISTS idx_receipts_owner ON public.receipts(owner_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_receipts_driver ON public.receipts(driver_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_receipts_text_sha ON public.receipts(text_sha);
 `;
 
 function getClient(providedSupabase) {
@@ -68,6 +69,30 @@ export async function findReceiptByMediaId(providedSupabase, mediaId) {
   try {
     const { data } = await supabase.from(RECEIPTS_TABLE).select('*').eq('media_id', String(mediaId)).maybeSingle();
     return data || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * v1.32.1 — content dedupe: the SAME document re-uploaded gets a fresh WhatsApp
+ * media id, so media-id matching alone never catches it. The OCR text hash does.
+ * Never throws; returns the most recent match inside the window or null.
+ */
+export async function findRecentReceiptByTextSha(providedSupabase, { textSha = null, windowHours = 48 } = {}) {
+  const supabase = getClient(providedSupabase);
+  if (!supabase || !textSha) return null;
+  const hours = Number.isFinite(Number(windowHours)) ? Math.max(1, Math.min(720, Number(windowHours))) : 48;
+  try {
+    const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+    const { data } = await supabase
+      .from(RECEIPTS_TABLE)
+      .select('*')
+      .eq('text_sha', String(textSha))
+      .gte('created_at', cutoff)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    return (data && data[0]) || null;
   } catch {
     return null;
   }

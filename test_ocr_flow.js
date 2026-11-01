@@ -8,8 +8,13 @@ import {
   OCR_VISION_TIMEOUT_MS,
   OCR_VISION_MAX_ATTEMPTS,
   isOcrEnabled,
-  buildMediaAckText
+  buildMediaAckText,
+  SUPPORTED_IMAGE_TYPES
 } from './src/services/ocrService.js';
+import { classifyDocumentFamily, parseDocumentFields } from './src/services/documentLens.js';
+import { buildOcrTextSha, getOcrUsageSummary } from './src/services/ocrTelemetry.js';
+import { isSameExpenseCandidate, nairobiDateKey } from './src/services/expenseGuard.js';
+import { readFileSync } from 'fs';
 import {
   OCR_LOW_CONFIDENCE_NOTE,
   OCR_UNREADABLE_NOTE,
@@ -237,6 +242,95 @@ async function run() {
   assert(buildMediaAckText({ mimeType: 'application/pdf' }).includes('PDF'), 'PDF ack copy names the PDF');
   assert(buildMediaAckText({ mimeType: 'image/jpeg' }).includes('photo'), 'photo ack copy names the photo');
   delete process.env.OCR_ENABLED;
+
+  console.log('\n--- Test 11: Kenya e-TIMS receipt profile (Rule 36) ---');
+  const etimsText = [
+    'KE ***START OF LEGAL RECEIPT →',
+    'ASTROL PETROLEUM LIMITED',
+    'P.O. BOX 11823-00400',
+    'NAIROBI',
+    'RUNDA VIEW',
+    'PIN:P051141264M',
+    'Buyer PIN:P052358408G',
+    'KRA/ETI/181021/MINI/017',
+    'FISCAL RECEIPT',
+    'DIESEL',
+    '3.000.00x 1.00',
+    '3.000.00B',
+    'TOTAL',
+    '3,000.00',
+    'TOTAL B- 8.00%',
+    'NET B',
+    '2.777.78',
+    'TOTAL TAX 222.22',
+    'CASH',
+    '3.000.00',
+    'Date:26/10/2026',
+    'Time:22:20:28',
+    'END OF LEGAL RECEIPT***'
+  ].join('\n');
+  check(classifyOcrDocument(etimsText) === 'receipt_fuel', 'e-TIMS fuel receipt classifies as receipt_fuel (PIN token is not a VIN)');
+  check(classifyDocumentFamily(etimsText) === 'receipt_fuel', 'Buyer PIN does not turn a fuel receipt into a purchase invoice');
+  const etimsKe = extractDocumentHints(etimsText, 'receipt_fuel', { countryCode: 'KE' });
+  check(etimsKe.amount === 3000, 'KE profile reads the TOTAL figure on the following line (KES 3,000)');
+  check(etimsKe.currency === 'KES', 'KE profile supplies KES when the receipt omits the code');
+  check(/ASTROL PETROLEUM/.test(String(etimsKe.notes)), 'KE profile names the merchant after the legal marker');
+  check(etimsKe.expense_type === 'Fuel', 'Fuel receipts prefill the expense type');
+  check(etimsKe.fuel_liters === undefined, 'Ambiguous OCR quantities are never guessed into litres');
+  const etimsGlobal = extractDocumentHints(etimsText, 'receipt_fuel', { countryCode: 'GLOBAL' });
+  check(!etimsGlobal.currency, 'GLOBAL profile never assumes KES (no country leakage)');
+  check(!/ASTROL/.test(String(etimsGlobal.notes || '')), 'GLOBAL profile does not apply the e-TIMS merchant rule');
+  check(etimsGlobal.amount === 3000, 'GLOBAL still reads a bare TOTAL + next-line figure (universal rule)');
+  check(SUPPORTED_IMAGE_TYPES.includes('image/heic') && SUPPORTED_IMAGE_TYPES.includes('image/heif'), 'HEIC/HEIF photos are accepted');
+
+  console.log('\n--- Test 12: insurance certificate is not a logbook (v1.32.1) ---');
+  const insuranceCert = 'Bima Yangu INSTANT: Claims Reporting Emergency Assistance | Certificate Verification FILE COPY AKI 607675 CERTIFICATE OF INSURANCE No: C35343842 POLICY HOLDER: DAVID MWAURA NJONJO Bima Yangu POLICY No HDO/0703/143296/2026 (TPO) COMMENCING DATE 21/10/2026; 00:00 EAT EXPIRING: 20/11/2026 REGISTRATION No: KAS628T CHASSIS NUMBER: HDJ810007675 ISSUED BY The Monarch Insurance Company Ltd. PHONE NO: +254705426931';
+  check(classifyOcrDocument(insuranceCert) === 'insurance', 'Insurance certificate classifies as insurance even with CHASSIS + REGISTRATION No');
+  check(classifyDocumentFamily(insuranceCert) === 'insurance', 'Document Lens agrees: insurance, not logbook');
+  const insuranceHints = extractDocumentHints(insuranceCert, 'insurance', { countryCode: 'KE' });
+  check(insuranceHints.insurance_policy === 'C35343842', 'Certificate number is captured as the policy reference');
+  check(insuranceHints.insurance_expiry === '20/11/2026', 'EXPIRING date wins over the COMMENCING date');
+  const insuredLens = parseDocumentFields(insuranceCert, { countryCode: 'KE' });
+  check(insuredLens.family === 'insurance', 'Lens family is insurance');
+  check(String(insuredLens.fields?.insurance_expiry?.value || '') === '2026-11-20', 'Lens normalizes the expiry to ISO (Africa/Nairobi)');
+  check(/Monarch/.test(String(insuredLens.fields?.insurer?.value || '')), 'ISSUED BY names the insurer cleanly');
+
+  console.log('\n--- Test 13: duplicate protection (v1.32.1) ---');
+  const shaA = buildOcrTextSha('TOTAL  3,000.00\nDIESEL');
+  const shaB = buildOcrTextSha('TOTAL 3,000.00 DIESEL');
+  check(shaA && shaA === shaB, 'Content hash ignores whitespace differences');
+  check(buildOcrTextSha('TOTAL 2,000.00') !== shaA, 'Different receipts hash differently');
+  check(buildOcrTextSha('   ') === null, 'Empty OCR text has no content hash');
+  const sameDay = { plate: 'KAS 628T', amount: 3000, expense_type: 'Fuel', odometer_reading: 367480, created_at: '2026-11-01T06:34:18Z' };
+  check(isSameExpenseCandidate(sameDay, { plate: 'KAS 628T', amount: 3000, expenseType: 'fuel', odometer: 367480 }), 'Same plate + amount + type + Nairobi day is a duplicate');
+  check(!isSameExpenseCandidate(sameDay, { plate: 'KAS 628T', amount: 3000, expenseType: 'Fuel', odometer: 367500 }), 'A different odometer reading proves a separate fill');
+  check(!isSameExpenseCandidate(sameDay, { plate: 'KAS 628T', amount: 3100, expenseType: 'Fuel' }), 'A different amount is never a duplicate');
+  check(nairobiDateKey('2026-11-01T21:30:00Z') === '2026-11-02', 'Day comparison uses Africa/Nairobi (UTC+3)');
+  const ocrSummary = await getOcrUsageSummary(null, 24);
+  check(ocrSummary.ok === false && ocrSummary.error === 'no-client', 'OCR summary is fail-soft without a client');
+  const { parseSuperadminCommand, formatOcrStatsReply } = await import('./src/services/superadmin.js');
+  const ocrCommand = await parseSuperadminCommand('admin ocr-stats 12h');
+  check(ocrCommand.intent === 'ADMIN_OCR_STATS' && ocrCommand.hours === 12, 'admin ocr-stats parses with a custom window');
+  const ocrDigest = formatOcrStatsReply({
+    ok: true,
+    hours: 24,
+    total: 4,
+    byStatus: { read: 2, failed: 1, pdf_text: 1 },
+    byKind: { receipt_fuel: 2, logbook: 1 },
+    byCountry: { KE: 3, US: 1 },
+    byProvider: { google_vision: 3, local_pdf: 1 },
+    avgConfidence: 0.91,
+    avgLatencyMs: 2400
+  });
+  check(ocrDigest.includes('Saka OCR Stats') && ocrDigest.includes('Countries') && ocrDigest.includes('KE'), 'OCR digest reports outcomes, documents and countries');
+  check(ocrDigest.includes('unusable: 1'), 'OCR digest counts unusable reads');
+
+  console.log('\n--- Test 14: silent-crash regression guard (v1.32.1) ---');
+  const whatsappSource = readFileSync(new URL('./src/routes/whatsapp.js', import.meta.url), 'utf8');
+  check(/let session = null;/.test(whatsappSource), 'session is hoisted before the try block');
+  check(/session\?\.slowAckSent === true/.test(whatsappSource), 'catch block uses optional chaining (no masking ReferenceError)');
+  check(!/ackSent: session\.slowAckSent/.test(whatsappSource), 'no bare session reference remains in the latency call');
+  check(/logSystemError\(supabaseClient, err, '\/webhook\/whatsapp'\)/.test(whatsappSource), 'the original error is persisted to error_logs');
 
   global.fetch = realFetch;
   delete process.env.GCP_VISION_API_KEY;

@@ -263,7 +263,12 @@ export function parseComplianceItem(text, {
   if (!clean || /^(skip|later|none|no|n\/a)$/i.test(clean)) return null;
 
   const lifetime = /\b(lifetime|for life|no expiry|never expires|non[- ]expiring|permanent)\b/i.test(clean);
-  const extracted = lifetime ? null : extractDatePhrase(clean, { countryCode, locale, now });
+  // v1.32.1 — motor certificates print COMMENCING / ISSUE dates as well; the
+  // expiry must be read from the EXPIRING / VALID UNTIL / DUE label when one
+  // exists (live evidence 2026-11-01: expiry saved as the commencement date).
+  const expiryAnchor = clean.search(/\b(?:expir\w*|valid\s*(?:until|to|till)|\bdue\b)/i);
+  const dateSource = expiryAnchor >= 0 ? clean.slice(expiryAnchor) : clean;
+  const extracted = lifetime ? null : extractDatePhrase(dateSource, { countryCode, locale, now });
 
   let number = null;
   if (extracted?.ok) {

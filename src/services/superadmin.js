@@ -27,6 +27,7 @@ import {
 } from './incidents.js';
 import { getTrialFunnelStats, formatTrialStatsReply } from './trialEngine.js';
 import { getTurnLatencySummary } from './turnLatency.js';
+import { getOcrUsageSummary } from './ocrTelemetry.js';
 import { getFeatureRolloutStatus, FEATURE_NOTICE_VERSION } from './featureNotice.js';
 import {
   listKbDrafts,
@@ -140,6 +141,7 @@ const ADMIN_INTENTS = new Set([
   'ADMIN_HORIZON', 'ADMIN_PROPOSALS',
   'ADMIN_REMEDIATIONS', 'ADMIN_REMEDIATION_ACCEPT', 'ADMIN_REMEDIATION_DECLINE', 'ADMIN_REMEDIATION_MODIFY',
   'ADMIN_AI_STATS',
+  'ADMIN_OCR_STATS',
   'ADMIN_TURN_LATENCY',
   'ADMIN_TRIAL_STATS',
   'ADMIN_ROLLOUT',
@@ -250,11 +252,16 @@ export async function parseSuperadminCommand(messageText) {
     return { intent: 'ADMIN_TURN_LATENCY', hours: Math.min(168, Math.max(1, requestedHours)) };
   }
 
-  // Phase 2 (v1.13.0): AI telemetry digest — regex first, zero LLM calls.
-  const aiStatsMatch = text.match(/^\s*admin\s+(?:ai[\s_-]*(?:stats?|usage|telemetry)|usage)(?:\s+(\d{1,3})\s*h(?:ours?|rs?)?)?\s*$/i);
-  if (aiStatsMatch) {
-    const requestedHours = aiStatsMatch[1] ? Number(aiStatsMatch[1]) : 24;
+  if (/^\s*admin\s+(?:ai[\s_-]*(?:stats?|usage|telemetry)|usage)(?:\s+(\d{1,3})\s*h(?:ours?|rs?)?)?\s*$/i.test(text)) {
+    const requestedHours = Number(text.match(/(\d{1,3})\s*h(?:ours?|rs?)?/i)?.[1] || 24);
     return { intent: 'ADMIN_AI_STATS', hours: Math.min(168, Math.max(1, requestedHours)) };
+  }
+
+  // v1.32.1 — OCR request digest (deterministic, zero LLM calls).
+  const ocrStatsMatch = text.match(/^\s*admin\s+ocr[\s_-]*(?:stats?|usage|requests?)(?:\s+(\d{1,3})\s*h(?:ours?|rs?)?)?\s*$/i);
+  if (ocrStatsMatch) {
+    const requestedHours = ocrStatsMatch[1] ? Number(ocrStatsMatch[1]) : 24;
+    return { intent: 'ADMIN_OCR_STATS', hours: Math.min(168, Math.max(1, requestedHours)) };
   }
 
   // v1.15.0: trial funnel digest (deterministic, zero LLM calls).
@@ -310,8 +317,8 @@ export async function parseSuperadminCommand(messageText) {
   }
 
   const prompt = `Classify user's admin request into JSON:
-Intent: "HEALTH_CHECK" | "GENERATE_COUPON" | "PROFILES_REPORT" | "ADMIN_AI_STATS" | "ADMIN_TURN_LATENCY" | "ADMIN_TRIAL_STATS" | "ADMIN_ROLLOUT" | "ADMIN_REPORT" | "ADMIN_AUDIT" | "ADMIN_ALERTS" | "ADMIN_RULES_RESET" | "ADMIN_RULES_TOGGLE" | "ADMIN_RULES_LIST" | "ADMIN_HORIZON" | "ADMIN_PROPOSALS" | "ADMIN_REMEDIATIONS" | "ADMIN_REMEDIATION_ACCEPT" | "ADMIN_REMEDIATION_DECLINE" | "ADMIN_REMEDIATION_MODIFY" | "UNKNOWN"
-Extract: discount_value (e.g. "20%"), target_phone (e.g. "+254712345678"), query (e.g. "KDA 123A" or VIN), rule_key (e.g. "clarify_vin"), proposal_code (e.g. "FIX-2026-10-30-01"), feedback (guidance text), hours (AI telemetry window 1-168, default 24), days (trial funnel window 1-365, default 30)
+Intent: "HEALTH_CHECK" | "GENERATE_COUPON" | "PROFILES_REPORT" | "ADMIN_AI_STATS" | "ADMIN_OCR_STATS" | "ADMIN_TURN_LATENCY" | "ADMIN_TRIAL_STATS" | "ADMIN_ROLLOUT" | "ADMIN_REPORT" | "ADMIN_AUDIT" | "ADMIN_ALERTS" | "ADMIN_RULES_RESET" | "ADMIN_RULES_TOGGLE" | "ADMIN_RULES_LIST" | "ADMIN_HORIZON" | "ADMIN_PROPOSALS" | "ADMIN_REMEDIATIONS" | "ADMIN_REMEDIATION_ACCEPT" | "ADMIN_REMEDIATION_DECLINE" | "ADMIN_REMEDIATION_MODIFY" | "UNKNOWN"
+Extract: discount_value (e.g. "20%"), target_phone (e.g. "+254712345678"), query (e.g. "KDA 123A" or VIN), rule_key (e.g. "clarify_vin"), proposal_code (e.g. "FIX-2026-10-30-01"), feedback (guidance text), hours (AI/OCR telemetry window 1-168, default 24), days (trial funnel window 1-365, default 30)
 Command: "${text}"`;
 
   try {
@@ -336,6 +343,9 @@ Command: "${text}"`;
   }
   if (/\b(reply|turn)\s+latency\b/i.test(lower)) {
     return { intent: 'ADMIN_TURN_LATENCY', hours: 24 };
+  }
+  if (/\bocr\s+(?:stats?|usage|requests?)\b/i.test(lower)) {
+    return { intent: 'ADMIN_OCR_STATS', hours: 24 };
   }
   if (/\b(ai[\s_-]*(?:stats?|usage|telemetry)|usage\s+stats?)\b/i.test(lower)) {
     return { intent: 'ADMIN_AI_STATS', hours: 24 };
@@ -642,6 +652,62 @@ export function formatAiStatsReply(summary, budget = null, latency = null) {
     `*By Provider*\n${providerLines || '• none'}\n\n` +
     `*Top Purposes*\n${purposeLines || '• none'}\n\n` +
     `_Window: ${summary.hours}h${capNote} · retention cap ${formatCount(AI_USAGE_LOG_MAX_ROWS)} rows_`;
+}
+
+/**
+ * v1.32.1 — deterministic OCR digest (zero tokens). Global audience: the
+ * per-country breakdown comes from the WhatsApp number, never a default.
+ */
+export function formatOcrStatsReply(summary) {
+  if (!summary || summary.ok !== true) {
+    return `📉 *Saka OCR Stats*\n\nTelemetry unavailable: ${summary?.error || 'unknown error'}\n\n_Verify Supabase connectivity and the ocr_requests table._`;
+  }
+  if (summary.total === 0) {
+    return `📊 *Saka OCR Stats — Last ${summary.hours}h*\n\nNo document reads were recorded in this window.\n\n_Photos, PDFs and their outcomes are logged automatically._`;
+  }
+  const statusLines = Object.entries(summary.byStatus)
+    .sort((a, b) => b[1] - a[1])
+    .map(([key, count]) => `• ${key}: ${formatCount(count)}`)
+    .join('\n');
+  const kindLines = Object.entries(summary.byKind)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([key, count]) => `• ${key}: ${formatCount(count)}`)
+    .join('\n');
+  const countryLines = Object.entries(summary.byCountry)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([key, count]) => `• ${key}: ${formatCount(count)}`)
+    .join('\n');
+  const confidence = summary.avgConfidence === null ? 'n/a' : `${(summary.avgConfidence * 100).toFixed(1)}%`;
+  const latency = summary.avgLatencyMs === null ? 'n/a' : formatReplyDuration(summary.avgLatencyMs);
+  const failures = (summary.byStatus.failed || 0) + (summary.byStatus.pdf_scanned || 0) + (summary.byStatus.unsupported || 0);
+  return `📸 *Saka OCR Stats — Last ${summary.hours}h*\n\n` +
+    `• Reads: ${formatCount(summary.total)} · ❌ unusable: ${formatCount(failures)}\n` +
+    `• Avg confidence: ${confidence} · Avg latency: ${latency}\n\n` +
+    `*Outcomes*\n${statusLines}\n\n` +
+    `*Documents*\n${kindLines || '• none'}\n\n` +
+    `*Countries*\n${countryLines || '• none'}\n\n` +
+    `_Deterministic digest · zero tokens · Vision calls only via ocrService._`;
+}
+
+/** Superadmin OCR stats command handler (v1.32.1). */
+export async function handleOcrStatsCommand(supabase, hours = 24) {
+  const summary = await getOcrUsageSummary(supabase, hours);
+  return {
+    reply: formatOcrStatsReply(summary),
+    details: {
+      hours: summary.hours,
+      ok: summary.ok,
+      total: summary.total,
+      by_status: summary.byStatus,
+      by_kind: summary.byKind,
+      by_country: summary.byCountry,
+      avg_confidence: summary.avgConfidence,
+      avg_latency_ms: summary.avgLatencyMs,
+      error: summary.error
+    }
+  };
 }
 
 /**
@@ -1555,7 +1621,7 @@ export function formatFeatureRolloutReply(status) {
 export function formatAdminHelpReply() {
   return '🛠️ *Saka admin commands*\n\n' +
     '📊 *Snapshots* — admin report · admin alerts · admin audit <query>\n' +
-    '👥 *Fleet* — profiles report · admin trial-stats · admin ai-stats [24h] · admin latency [24h]\n' +
+    '👥 *Fleet* — profiles report · admin trial-stats · admin ai-stats [24h] · admin ocr-stats [24h] · admin latency [24h]\n' +
     '🛠️ *Fixes* — admin remediations · admin accept|decline|modify fix <CODE>\n' +
     '🌱 *Growth* — generate coupon 20% · admin horizon · admin proposals\n' +
     '🩺 *Guardrails* — check health · admin rules list|toggle <key>|reset\n' +
@@ -1796,6 +1862,15 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
     return {
       isSuperadmin: true,
       reply: statsRes.reply
+    };
+  }
+
+  if (parsedCommand.intent === 'ADMIN_OCR_STATS') {
+    const ocrRes = await handleOcrStatsCommand(supabase, parsedCommand.hours || 24);
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_OCR_STATS', ocrRes.details);
+    return {
+      isSuperadmin: true,
+      reply: ocrRes.reply
     };
   }
 

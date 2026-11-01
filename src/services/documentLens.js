@@ -97,8 +97,22 @@ function amountFrom(text) {
   if (totalLine) {
     const match = totalLine.match(/([A-Z]{3})?\s*([\d][\d,]{2,}(?:\.\d{1,2})?)/);
     if (match) return toNumber(match[2]);
+    // v1.32.1 — bare "TOTAL" label with the figure on the next line.
+    const idx = rows.indexOf(totalLine);
+    for (let k = 1; k <= 2 && idx >= 0 && idx + k < rows.length; k += 1) {
+      const row = rows[idx + k];
+      if (/%|\bTAX\b|\bNET\b/i.test(row)) continue;
+      const next = row.match(/^([\d][\d,]*(?:\.\d{1,2})?)$/);
+      const value = next ? toNumber(next[1]) : null;
+      if (value !== null && value > 0) return value;
+    }
   }
+  // v1.32.1 — address / PIN / phone / serial numbers are never money.
   const all = [...String(text || '').matchAll(/([A-Z]{3})?\s*([\d][\d,]{3,}(?:\.\d{1,2})?)/g)]
+    .filter((match) => {
+      const context = String(text || '').slice(Math.max(0, match.index - 24), match.index);
+      return !/(p\.?\s*o\.?\s*box|pin\b|phone|serial|invoice\s*(?:no|number)|receipt\s*(?:no|number)|h\.?\s*p\.?)/i.test(context);
+    })
     .map((match) => toNumber(match[2])).filter(Boolean);
   return all.length ? Math.max(...all) : null;
 }
@@ -137,10 +151,14 @@ function parseLogbook(text, countryCode) {
 function parseInsurance(text, countryCode) {
   const fields = {};
   pushField(fields, 'insurance_policy', labeled(text, 'policy|cover\\s*note'), 0.9);
-  const insurer = String(text).match(/(?:insurer|insurance\s*(?:company|co\.?)|underwriter)\s*[:\-]?\s*([A-Za-z][A-Za-z0-9 &.\-]{2,50})/i)
-    || String(text).match(/\b([A-Z][A-Za-z&.\- ]{2,40}(?:INSURANCE|ASSURANCE|UNDERWRITERS?))\b/);
+  const issuedBy = String(text).match(/\bISSUED\s+BY\s+([A-Za-z][A-Za-z0-9 &.\-']{2,60}?)(?=\s+(?:PHONE|SIGNED|SCAN|POLICY|TEL|EMAIL)\b|$)/i);
+  const insurer = issuedBy
+    || String(text).match(/(?:insurer|underwriter)\s*[:\-]?\s*([A-Za-z][A-Za-z0-9 &.\-]{2,50})/i)
+    || String(text).match(/\b([A-Z][A-Za-z&.\- ]{2,40}(?:INSURANCE|ASSURANCE|UNDERWRITERS?))\b/i);
   pushField(fields, 'insurer', insurer ? cleanLine(insurer[1]) : null, 0.85);
-  pushField(fields, 'insurance_expiry', firstDateNear(text, /(expir|valid\s*(?:until|to|till)|renew|due)/i, countryCode), 0.9);
+  const expiryLabel = (String(text).match(/\b(?:expir\w*|valid\s*(?:until|to|till))\s*:?\s*(\d{4}-\d{2}-\d{2}|\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4})/i) || [])[1];
+  const expiryParsed = expiryLabel ? parseFlexibleDate(expiryLabel, { countryCode }) : null;
+  pushField(fields, 'insurance_expiry', expiryParsed?.ok && expiryParsed.iso ? expiryParsed.iso.slice(0, 10) : firstDateNear(text, /(expir|valid\s*(?:until|to|till)|renew|due)/i, countryCode), 0.9);
   const premium = String(text).match(/(?:premium|sum\s*insured|insured\s*value)\s*[:\-]?\s*([A-Z]{3})?\s*([\d][\d,]{2,})/i);
   pushField(fields, 'insurance_premium', premium ? toNumber(premium[2]) : null, 0.78);
   return fields;
@@ -227,7 +245,9 @@ export function classifyDocumentFamily(text = '') {
   if (/\b(road\s*service\s*licen[cs]e|transport\s*licen[cs]e|operating\s*permit|road\s*tax)\b/i.test(raw)) return 'road_licence';
   if (base === 'receipt_general' && SERVICE_WORDS.test(raw) && !FUEL_WORDS.test(raw)) return 'service_receipt';
   if (base === 'receipt_fuel' && SERVICE_WORDS.test(raw) && !FUEL_WORDS.test(raw)) return 'service_receipt';
-  if (/\b(purchase\s*invoice|sale\s*agreement|sold\s*to|buyer)\b/i.test(raw) && !SERVICE_WORDS.test(raw)) return 'purchase_invoice';
+  // v1.32.1 — receipts keep their receipt family; "Buyer PIN" is a tax field,
+  // not a purchase-invoice signal (Kenyan e-TIMS receipts print it).
+  if (!/^receipt_/.test(base) && /\b(purchase\s*invoice|sale\s*agreement|sold\s*to|buyer(?!\s*pin))\b/i.test(raw) && !SERVICE_WORDS.test(raw)) return 'purchase_invoice';
   if (/\b(service|maintenance|garage|workshop)\b/i.test(raw) && /\b(invoice|total|cash|amount)\b/i.test(raw)) return 'service_receipt';
   return base;
 }

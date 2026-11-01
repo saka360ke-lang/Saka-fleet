@@ -43,6 +43,7 @@ import { ensureFuelEconomySchema } from './src/services/fuelEconomy.js';
 import { ensureEarningTypeSchema } from './src/services/earningCatalog.js';
 import { ensureShortLinksTable, resolveShortCode, shortenUrl } from './src/services/linkShortener.js';
 import { ensureReceiptsTable } from './src/services/receipts.js';
+import { ensureOcrRequestsTable } from './src/services/ocrTelemetry.js';
 import { ensureChatSessionsTable } from './src/services/sessionStore.js';
 import { ensureFeatureNoticeSchema } from './src/services/featureNotice.js';
 import { ensureContactNudgeSchema } from './src/services/contactNudge.js';
@@ -1010,6 +1011,7 @@ const start = async () => {
     await ensureFuelEconomySchema(supabase);
     await ensureEarningTypeSchema(supabase);
     await ensureShortLinksTable(supabase);
+    await ensureOcrRequestsTable(supabase);
     await ensureReceiptsTable(supabase);
     await ensureComplianceCatalog({ supabase });
     await ensureChatSessionsTable(supabase);

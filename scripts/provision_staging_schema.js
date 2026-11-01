@@ -177,6 +177,26 @@ CREATE TABLE IF NOT EXISTS public.short_links (
 
 CREATE INDEX IF NOT EXISTS idx_short_links_url ON public.short_links(url);
 
+-- 2.8b ocr_requests (v1.32.1 — one row per OCR turn; metadata only, never text)
+CREATE TABLE IF NOT EXISTS public.ocr_requests (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  media_id text,
+  phone text,
+  country_code text,
+  mime_type text,
+  provider text,
+  document_kind text,
+  status text,
+  confidence numeric,
+  attempts integer,
+  latency_ms integer,
+  error text,
+  created_at timestamp with time zone DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ocr_requests_created ON public.ocr_requests(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ocr_requests_status ON public.ocr_requests(status, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS public.pending_owner_notifications (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   owner_id uuid REFERENCES public.profiles(id) ON DELETE CASCADE,

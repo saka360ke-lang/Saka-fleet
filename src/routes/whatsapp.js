@@ -102,6 +102,7 @@ import {
 } from '../services/countryBucket.js';
 import {
   findReceiptByMediaId,
+  findRecentReceiptByTextSha,
   recordReceipt,
   uploadReceiptImage,
   listReceipts,
@@ -111,6 +112,8 @@ import {
   OCR_LOW_CONFIDENCE_NOTE,
   OCR_UNREADABLE_NOTE
 } from '../services/receipts.js';
+import { recordOcrRequest, buildOcrTextSha } from '../services/ocrTelemetry.js';
+import { isDuplicateExpense } from '../services/expenseGuard.js';
 import { logTurnLatency } from '../services/turnLatency.js';
 
 let supabaseClient = createResilientClient();
@@ -620,6 +623,10 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
   // v1.24.2 - slow-turn ack state (function scope so the final send can clear it).
   let slowAckTimer = null;
   let turnFinalized = false;
+  // v1.32.1 — `session` is hoisted to function scope so the catch block can
+  // never reference an undeclared binding (live crash 2026-11-01: the masking
+  // ReferenceError "session is not defined" silently killed two photo uploads).
+  let session = null;
   // v1.24.3 - phase markers so a slow turn names its own bottleneck.
   const phaseMarks = { profileReadyAt: null, aiStartedAt: null, aiDoneAt: null };
 
@@ -662,6 +669,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           token: process.env.META_WHATSAPP_TOKEN
         }).catch((err) => ({ text: '', error: err?.message || 'ocr_failed' }))
       : Promise.resolve({ text: '', error: null });
+    const ocrStartedAt = Date.now();
 
     // Durable session hydration — restores quiz/onboarding/OTP state from
     // Supabase so any Cloud Run instance can continue the conversation.
@@ -688,8 +696,14 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
       : null;
     const ocrKind = lens?.family || null;
     // Deterministic Vision hints + the richer Document Lens field map (v1.20.0).
+    // v1.32.1 — the country-aware extractor wins on the keys it knows (amount,
+    // vendor, policy, expiry), so a lens misread can never override a labelled
+    // value (e.g. EXPIRING vs COMMENCING on an insurance certificate).
     const receiptHints = ocrText
-      ? { ...extractDocumentHints(ocrText, ocrKind), ...(lens?.hints || {}) }
+      ? {
+        ...(lens?.hints || {}),
+        ...extractDocumentHints(ocrText, ocrKind, { countryCode: ocrCountry?.country_code || 'GLOBAL' })
+      }
       : {};
     const ocrLowConfidence = Boolean(
       ocrText
@@ -697,6 +711,31 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
       && Number(ocrResult.confidence) > 0
       && Number(ocrResult.confidence) < OCR_CONFIRM_THRESHOLD
     );
+
+    // v1.32.1 — OCR request telemetry (Rule 36): one durable row per media turn,
+    // written BEFORE any crash-prone branch. A dead turn is now diagnosable and
+    // countable; country_code always comes from the WhatsApp number (E.164).
+    const ocrTextSha = buildOcrTextSha(ocrText);
+    if (mediaObj?.id) {
+      const ocrStatus = ocrPaused
+        ? 'paused'
+        : (ocrResult?.kind === 'pdf'
+          ? (ocrText ? 'pdf_text' : 'pdf_scanned')
+          : (ocrText ? (ocrLowConfidence ? 'low_confidence' : 'read') : 'failed'));
+      void recordOcrRequest(supabaseClient, {
+        mediaId: mediaObj.id,
+        phone: senderPhone,
+        countryCode: ocrCountry?.country_code || null,
+        mimeType: mediaMimeType,
+        provider: ocrResult?.kind === 'pdf' ? 'local_pdf' : 'google_vision',
+        documentKind: ocrKind || null,
+        status: ocrStatus,
+        confidence: ocrResult?.confidence ?? null,
+        attempts: ocrResult?.attempts ?? null,
+        latencyMs: Math.max(0, Date.now() - ocrStartedAt),
+        error: ocrError
+      }).catch(() => {});
+    }
 
     if (snapshot) {
       if (snapshot.session && !chatSessions.has(senderPhone)) chatSessions.set(senderPhone, snapshot.session);
@@ -726,7 +765,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
       }
     }
 
-    let session = chatSessions.get(senderPhone) || { history: [], lastActive: Date.now() };
+    session = chatSessions.get(senderPhone) || { history: [], lastActive: Date.now() };
     session.lastActive = Date.now();
     session.slowAckSent = false;
 
@@ -925,7 +964,14 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         let duplicateReceipt = null;
         if (mediaObj?.id && supabaseClient && !ocrPaused) {
           try {
-            duplicateReceipt = await findReceiptByMediaId(supabaseClient, mediaObj.id);
+            // v1.32.1 — a re-uploaded document gets a NEW WhatsApp media id, so
+            // content matching (text hash, 48 h) is what actually stops the
+            // second quiz/expense. Media-id matching stays for Meta retries.
+            duplicateReceipt = await findReceiptByMediaId(supabaseClient, mediaObj.id)
+              || await findRecentReceiptByTextSha(supabaseClient, {
+                textSha: ocrTextSha,
+                windowHours: Number(process.env.OCR_DUPLICATE_WINDOW_HOURS || 48)
+              });
             if (!duplicateReceipt) {
               // v1.23.1 - Free tier keeps the parsed data but NOT the document (no bucket upload without receiptVaultStorage).
               const vaultAllowed = entitlements?.receiptVaultStorage !== false;
@@ -946,6 +992,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                 odometer: receiptHints.odometer ?? null,
                 vendor: receiptHints.notes || null,
                 imageUrl,
+                textSha: ocrTextSha,
                 error: ocrError
               });
             }
@@ -2521,7 +2568,22 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               const extFillType = normalizeFillType(mergedExt.fill_type) || normalizeFillType(messageText);
 
               if ((extAmount && extAmount > 0) || (extLiters && extLiters > 0)) {
-                if (supabaseClient && targetVeh) {
+                // v1.32.1 — write-time duplicate guard: the same expense (plate +
+                // amount + type + Nairobi day, within 3 h) is never written twice,
+                // even when a receipt is uploaded repeatedly. A different odometer
+                // reading proves a separate fill and passes through.
+                const duplicateExpense = (supabaseClient && targetVeh && extAmount && extAmount > 0)
+                  ? await isDuplicateExpense(supabaseClient, {
+                    plate: targetVeh.plate_number,
+                    amount: extAmount,
+                    expenseType: expType,
+                    odometer: extOdo || null,
+                    windowHours: Number(process.env.OCR_EXPENSE_DEDUPE_HOURS || 3)
+                  })
+                  : { duplicate: false };
+                if (duplicateExpense.duplicate) {
+                  customReply = `⚠️ *Already logged* — I found *${countryInfo.currency} ${Number(extAmount).toLocaleString()}* (${expType}) for *${targetVeh.plate_number}* in the last few hours, so I did *not* save a duplicate. ✅\n\nIf this is a genuinely separate fill, send the new odometer reading (e.g. *"Logged ${extLiters || ''}L at 367,500 km"*) and I will log it.`;
+                } else if (supabaseClient && targetVeh) {
                   await supabaseClient.from('expense_logs').insert([{
                     vehicle_id: targetVeh.id,
                     driver_id: profileData?.id,
@@ -3502,7 +3564,11 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
         }
         await userLogPromise;
         await persistSnap();
-        void logTurnLatency(supabaseClient, { phone: messageObj?.from || null, turnMs: Date.now() - turnStartedAt, ackSent: session.slowAckSent === true });
+        // v1.32.1 — never mask the original failure: `session` is hoisted, and
+        // the real error is persisted to error_logs (the 2026-11-01 photo turns
+        // died silently because this line threw "session is not defined").
+        await logSystemError(supabaseClient, err, '/webhook/whatsapp').catch(() => {});
+        void logTurnLatency(supabaseClient, { phone: messageObj?.from || null, turnMs: Date.now() - turnStartedAt, ackSent: session?.slowAckSent === true });
         return { status: 'error', error: err?.message };
       }
 }

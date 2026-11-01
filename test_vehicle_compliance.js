@@ -63,6 +63,16 @@ async function run() {
   check(psl?.parsed?.expiry === '2026-11-30', 'PSL expiry is isolated from its own segment');
   check(psl?.parsed?.number === '445566', 'PSL number is captured');
 
+  // v1.32.1 — a motor certificate prints COMMENCING + EXPIRING dates; the
+  // labelled expiry must win (live evidence 2026-11-01: saved as 2026-10-21).
+  const certificate = parseVehicleComplianceParagraph(
+    'CERTIFICATE OF INSURANCE No: C35343842 POLICY HOLDER: DAVID MWAURA NJONJO COMMENCING DATE 21/10/2026 EXPIRING: 20/11/2026',
+    { countryCode: 'KE', assetType: 'ICE', timeZone: 'Africa/Nairobi', now: NOW }
+  );
+  const certificateInsurance = certificate.find((entry) => entry.item.type === 'insurance');
+  check(certificateInsurance?.parsed?.expiry === '2026-11-20', 'Expiry label wins over the COMMENCING date on a certificate');
+  check(certificateInsurance?.parsed?.number === 'C35343842', 'Certificate number is captured for the insurance item');
+
   console.log('\n--- Test 3: vehicle compliance saves + dual-writes legacy columns ---');
   const mock = createMockSupabase({
     vehicle_compliances: [],

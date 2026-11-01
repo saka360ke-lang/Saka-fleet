@@ -19,6 +19,7 @@ import {
 } from './conversationEngine.js';
 import { chatCompletion, parseJsonSafely } from './aiClient.js';
 import { normalizeFillType } from './fuelEconomy.js';
+import { isDuplicateExpense } from './expenseGuard.js';
 import { shortenUrl } from './linkShortener.js';
 import {
   EXPENSE_TYPES,
@@ -2649,6 +2650,23 @@ async function executeFlow(state, ctx) {
         // v1.30.0 — canonicalise the type at write time ("diesel" → Fuel,
         // "puncture" → Tyres) so every report and ledger classifies correctly.
         const canonicalExpenseType = normalizeExpenseType(a.expense_type);
+        // v1.32.1 — duplicate guard: a re-uploaded receipt must never create a
+        // second expense row. Different odometer reading = separate fill → passes.
+        const duplicate = await isDuplicateExpense(ctx.supabase, {
+          plate: vehicle.plate_number,
+          amount: a.amount,
+          expenseType: canonicalExpenseType,
+          odometer: a.odometer_reading,
+          windowHours: Number(process.env.OCR_EXPENSE_DEDUPE_HOURS || 3)
+        });
+        if (duplicate.duplicate) {
+          return {
+            handled: true,
+            reply: `⚠️ *Already logged* — *${canonicalExpenseType}* of *${formatMoney(a.amount, buildGlobalContext(ctx.countryInfo, ctx.profile).currency)}* for *${vehicle.plate_number}* is already saved today, so I did not create a duplicate. ✅\n\nIf this is a separate expense, send it with the new odometer reading.`,
+            flow: state.flow,
+            completed: true
+          };
+        }
         const { error: logErr } = await ctx.supabase.from('expense_logs').insert([{
           vehicle_id: vehicle.id,
           driver_id: ctx.profile?.id,

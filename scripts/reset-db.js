@@ -42,6 +42,8 @@ if (isDirectInvocation) {
 export const RESET_TABLES = [
   'backend_incidents',
   'short_links',
+  'ocr_requests',
+
   'turn_latency_logs',
   'chat_history',
   'chat_transcripts',
@@ -209,6 +211,7 @@ export async function executeDatabaseReset({ targetPhone = null, verbose = true,
           public.backend_incidents,
           public.turn_latency_logs,
           public.short_links,
+          public.ocr_requests,
           public.chat_history,
           public.chat_transcripts,
           public.chat_friction_logs,
