@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.36.0] - 2026-11-01
+
+- **Your records answer back.** `QUERY_RECORDS` (the 42nd intent) turns questions like "how much did I spend on fuel last week?", "what did I log yesterday?", "average spend per fill in October" and "how many fills this month?" into deterministic ledger answers — sums, counts, averages and lists read straight from `expense_logs` / `private_earnings`. Zero AI tokens: a figure can never be invented.
+- **Date ranges stay in the parser (rule 36).** New `resolveDateRange()` in `dateParser.js`: yesterday, last Friday, last week (trailing 7 days), last N days/weeks/months, this/last month, this year, "in October" (with year rollback), and "from 1 Oct to 15 Oct" — endpoints country-resolved (DD/MM vs MM/DD), ends clamped to today, width capped at two years.
+- **Catalog-aware types.** The question's own words resolve expense types through the shared catalog ("fuel" → Fuel, "parking" → Parking, "tyres" → Tyres); "my earnings last month" flips to the earnings ledger; an explicit plate is captured for future scoping.
+- **Plain, localized answers.** `formatRecordAnswer()` renders Ksh/$, litre totals, record counts, 6-row lists with "…and N more (reply *my entries*)", multi-vehicle scope lines and an honest "Nothing logged" when the period is empty.
+- **Route lane with the same guards as the ledger.** The QUERY_RECORDS lane runs only outside PIN/OTP phases, parks (never destroys) an abandoned draft, and an unparseable records question gets a deterministic nudge instead of an AI answer.
+- **Files:** `src/services/recordAnswers.js`, `src/services/recordQuery.js` (new); `src/services/dateParser.js` (+`resolveDateRange`), `src/routes/whatsapp.js`, `sakaAi.js` (schema + rule + QUERY RECORDS prompt block), `src/services/flowKnowledge.js` (intent 42 + playbook), `scripts/health_audit.js`.
+- **Tests:** `test_record_answers.js` (**35**, new — parsing, country-resolved ranges, rendering, live seeded-ledger round-trip with cleanup), `test_agent_training` (**133**).
+- **Still deferred:** corrections 2.0 (v1.37.0), multi-record paragraphs (v1.38.0).
+
+
 ## [1.35.0] - 2026-11-01
 
 - **Draft Cards: the pre-fill you can see before you save.** A narrative draft now confirms through an engine-rendered card — Vehicle · Type · Amount · Volume · Fill · Odometer · When · Place — with quick actions *1 ✅ Save it · 2 ✏️ Change something · 3 ❌ Cancel*. Zero AI tokens: the card is rendered deterministically and re-rendered live after any correction ("Updated: Amount spent" then the fresh card).

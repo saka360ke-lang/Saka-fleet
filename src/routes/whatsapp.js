@@ -104,6 +104,8 @@ import { getCountryCommStyleLine } from '../services/countryCommStyles.js';
 import { applyOdometerReading, applyOperatingHours } from '../services/maintenanceReminders.js';
 import { handleQuizTurn, detectQuizStart, shouldPauseQuizForChat, getCurrentQuizField, detectFlowSwitch, getFlowDefinition, looksLikeReportRequest, getActiveQuiz, markQuizTurn, abandonQuiz } from '../services/quizEngine.js';
 import { buildNarrativeDraft, narrativeDraftFields, narrativeDraftExtras, shouldPrefillNarrativeDraft, isNarrativeIntakeEnabled, isNarrativeEligibleText } from '../services/narrativeDraft.js';
+import { parseRecordQuestion, formatRecordAnswer } from '../services/recordAnswers.js';
+import { queryRecordLedger } from '../services/recordQuery.js';
 import { renderActionDiscovery, composeMessage } from '../services/conversationEngine.js';
 import { enqueueFollowUp, FOLLOWUP_KINDS, followUpAckText } from '../services/followups.js';
 import { enqueueUserMessage } from '../services/messageQueue.js';
@@ -1103,6 +1105,17 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           // never destroyed (same contract as the read commands above).
           abandonQuiz(session, { reason: 'ledger_command' });
         }
+        // v1.36.0 — Record answers (QUERY_RECORDS): deterministic zero-token
+        // answers from the ledger. Same guards as the ledger lane above.
+        const recordQuestion = quizPhaseLocked
+          ? { ok: false }
+          : parseRecordQuestion(commandText, {
+            countryCode: countryInfo?.country_code || 'GLOBAL',
+            locale: countryInfo?.locale || 'en-US'
+          });
+        if (recordQuestion.ok && quizForFastPath && !quizPhaseLocked) {
+          abandonQuiz(session, { reason: 'record_query' });
+        }
 
 
 
@@ -1512,6 +1525,26 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
 
           aiResult = { intent: ledgerIntent, extracted_data: {}, reply_message: reply };
 
+        } else if (recordQuestion.ok && supabaseClient && profileData?.id) {
+          // v1.36.0 — record answers: every figure comes from the ledger rows.
+          const laneOwner = existingVehicles.some((v) => v.owner_id === profileData?.id);
+          const recordResult = await queryRecordLedger(supabaseClient, {
+            ownerId: laneOwner ? profileData?.id : null,
+            driverId: laneOwner ? null : profileData?.id,
+            vehicleIds: existingVehicles.map((v) => v.id),
+            question: recordQuestion
+          });
+          aiResult = {
+            intent: 'QUERY_RECORDS',
+            extracted_data: {},
+            __deterministicRecords: true,
+            reply_message: formatRecordAnswer(recordResult, recordQuestion, {
+              vehicles: existingVehicles,
+              currency: countryInfo?.currency || 'USD',
+              locale: countryInfo?.locale || 'en-US'
+            })
+          };
+
         } else if (receiptsCommand) {
           const isOwner = existingVehicles.some((v) => v.owner_id === profileData?.id);
           const receipts = await listReceipts(supabaseClient, {
@@ -1538,6 +1571,12 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         phaseMarks.aiDoneAt = Date.now();
         let intent = aiResult.intent;
         let customReply = aiResult.reply_message;
+
+        // v1.36.0 — a QUERY_RECORDS message the engine could not parse gets a
+        // deterministic nudge instead of an AI answer (figures are never invented).
+        if (intent === 'QUERY_RECORDS' && !aiResult.__deterministicRecords) {
+          customReply = '📊 Ask me like this: *"how much did I spend on fuel last week?"* or *"what did I log yesterday?"* — I read the numbers straight from your ledger.';
+        }
 
         // A receipt photo that was already processed never re-enters the
         // expense flow — the duplicate reply below is deterministic.

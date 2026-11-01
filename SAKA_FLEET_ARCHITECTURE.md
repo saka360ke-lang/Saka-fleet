@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.35.0  
+**Version:** 1.36.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.36.0** | Record Answers + `QUERY_RECORDS` (intent 42): "how much did I spend on fuel last week?" is answered deterministically from the ledger (sum/count/average/list, Nairobi date ranges, zero AI tokens) | §82 |
 | **1.35.0** | Draft Cards: narrative pre-fills confirm through an engine-rendered card (1 Save / 2 Change / 3 Cancel, zero AI tokens) with live re-render on corrections, optional-field auto-skip, and a narrative eligibility threshold (D5) | §81 |
 | **1.34.0** | Narrative Intake: one free-text sentence is deterministically parsed (money lexicon, past dates, vendor, volume, odometer) and pre-fills the log quiz; stated past dates land in `created_at` on the fresh write — zero AI tokens, never a guessed figure | §80 |
 | **1.33.0** | Editable ledger: `my entries` → `edit 2` / `delete 2` (DELETE confirm) → before/after diff, hard delete + `admin_audit_logs` snapshot + 30-minute `restore`, whitelist-locked fields (VIN/plate/date never editable), fresh-log safety and PIN/OTP guard | §79 |
@@ -3290,3 +3291,54 @@ engine-rendered card the user checks before anything is written.
   actions). No new env knobs.
 - **Still deferred:** record answers + `QUERY_RECORDS` (v1.36.0),
   corrections 2.0 (v1.37.0), multi-record paragraphs (v1.38.0).
+---
+
+### 82.1 Record Answers (v1.36.0)
+
+Questions about the user's own logged records are answered deterministically
+from the ledger — zero AI tokens, figures never invented.
+
+- **Parser** — `parseRecordQuestion()` in `src/services/recordAnswers.js`
+  (pure): classifies the question (total | count | average | list), resolves
+  expense types through the shared catalog ("fuel" → Fuel, "parking" →
+  Parking), flips to the earnings ledger on earning words, captures an
+  explicit plate, and resolves the period through
+  `dateParser.resolveDateRange()` — yesterday, last Friday, last week
+  (trailing 7 days), last N days/weeks/months, this/last month, this year,
+  "in October" (year rollback when the month is ahead), and "from 1 Oct to
+  15 Oct". Endpoints are country-resolved (DD/MM vs MM/DD), ends clamp to
+  today, and the width is capped at 730 days. Never throws.
+- **Query** — `queryRecordLedger()` in `src/services/recordQuery.js`
+  (DB): scoped to the caller's vehicles (owner/driver lane like the editable
+  ledger), Nairobi calendar-day boundaries converted to UTC range ends, rows
+  capped at 100, sums/counts/averages/litre totals computed in code. Reads
+  `expense_logs` or `private_earnings` by question side.
+- **Renderer** — `formatRecordAnswer()` (pure): localized money via
+  `formatMoney`, litre totals, 6-row lists with a "my entries" pointer,
+  multi-vehicle scope line, and an honest "Nothing logged" for empty periods.
+- **Route lane** (`src/routes/whatsapp.js`) — sits beside the v1.33 ledger
+  lane with the same guards: never inside a PIN/OTP phase
+  (`quizPhaseLocked`), parks an abandoned draft (`record_query` reason),
+  and answers only when the parser matched. An AI-classified QUERY_RECORDS
+  that the engine could not parse gets a deterministic "ask me like this"
+  nudge — never an AI answer with invented figures.
+- **Intent (42)** — `QUERY_RECORDS` registered in `SAKA_INTENTS`, the
+  classifier JSON schema, `SAKA_INTENT_PLAYBOOK`, the core-prompt QUERY
+  RECORDS block and `test_agent_training` (registry stays the single source
+  of truth, rule 13).
+
+### 82.2 Files, tests
+
+- **Files (new):** `src/services/recordAnswers.js`,
+  `src/services/recordQuery.js`, `test_record_answers.js`.
+  **Modified:** `src/services/dateParser.js` (+`resolveDateRange`),
+  `src/routes/whatsapp.js`, `sakaAi.js`, `src/services/flowKnowledge.js`,
+  `scripts/health_audit.js` (the suite joined the health gate).
+- **Tests:** `test_record_answers.js` (**35 assertions** — question parsing
+  incl. type/earning/plate resolution, country-resolved date ranges, all four
+  renderers, and a live seeded-ledger round-trip proving "yesterday" totals
+  exactly 5,800 and fuel-only filters to 5,500 · 40 L; cleans its own rows),
+  `test_agent_training.js` (**133** — 42 intents, QUERY RECORDS prompt block
+  and playbook entry).
+- **Still deferred:** corrections 2.0 incl. the re-log collision fix
+  (v1.37.0), multi-record paragraphs (v1.38.0).

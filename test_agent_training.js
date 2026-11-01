@@ -56,12 +56,15 @@ async function run() {
   check(/primary meter = hours/.test(DEFAULT_SAKA_CORE_PROMPT) && /km\/kWh/.test(DEFAULT_SAKA_CORE_PROMPT), 'Core prompt teaches hours-led and electric metrics');
 
   console.log('\n--- Test 2: every intent is trained ---');
-  check(SAKA_INTENTS.length === 41, 'Registry declares all 41 classifier intents');
+  check(SAKA_INTENTS.length === 42, 'Registry declares all 42 classifier intents');
   const missingIntents = SAKA_INTENTS.filter((intent) => !DEFAULT_SAKA_CORE_PROMPT.includes(intent));
   check(missingIntents.length === 0, `All intents appear in the core prompt (${SAKA_INTENTS.length})`);
   const missingSchema = SAKA_INTENTS.filter((intent) => !DEFAULT_SAKA_CORE_PROMPT.includes(`"${intent}"`));
   check(missingSchema.length === 0, 'Every intent is present in the JSON schema');
   check(SAKA_INTENTS.includes('EDIT_ENTRY') && SAKA_INTENTS.includes('DELETE_ENTRY'), 'v1.33.0 editable-ledger intents are registered');
+check(SAKA_INTENTS.includes('QUERY_RECORDS'), 'v1.36.0 record-answers intent is registered');
+check(DEFAULT_SAKA_CORE_PROMPT.includes('QUERY RECORDS (v1.36.0'), 'Core prompt teaches the record-answers lane');
+check(SAKA_INTENT_PLAYBOOK.some((row) => row.intent === 'QUERY_RECORDS' && /recordAnswers/.test(row.behavior)), 'Record-answers playbook names the deterministic engine');
   check(SAKA_INTENT_PLAYBOOK.some((row) => row.intent === 'EDIT_ENTRY' && /whitelisted fields/i.test(row.behavior)), 'Edit intent playbook names the editable whitelist');
   check(SAKA_INTENT_PLAYBOOK.some((row) => row.intent === 'DELETE_ENTRY' && /30-minute "restore"/.test(row.behavior)), 'Delete intent playbook names the restore window');
   check(SAKA_BOUNDARY_RULES.some((rule) => /LEDGER_ENTRY_DELETED/.test(rule)), 'Boundary: every ledger edit/delete is audited');

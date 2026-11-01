@@ -435,6 +435,128 @@ export function extractPastDatePhrase(input, { countryCode = 'GLOBAL', locale = 
   }
 }
 
+const RANGE_MAX_DAYS = 730;
+
+function isoDateFromParts(parts) {
+  return `${String(parts.year).padStart(4, '0')}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`;
+}
+
+function partsFromIso(localDate) {
+  const m = String(localDate || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? { year: Number(m[1]), month: Number(m[2]), day: Number(m[3]) } : null;
+}
+
+/**
+ * Resolve a DATE RANGE phrase for ledger queries ("last week", "this month",
+ * "in October", "last 3 months", "from 1 Oct to 15 Oct", single days like
+ * "yesterday"). Both ends are Nairobi calendar days, `to` is clamped to today
+ * (a future end never queries future data), and the width is capped at
+ * RANGE_MAX_DAYS. Never throws.
+ */
+export function resolveDateRange(input, { countryCode = 'GLOBAL', locale = 'en-US', now = new Date() } = {}) {
+  try {
+    const text = String(input || '').trim().toLowerCase();
+    if (!text) return fail('Empty range');
+    const todayParts = getNairobiParts(now);
+    const todayKey = isoDateFromParts(todayParts);
+    const dayKeyOf = (parts) => isoDateFromParts(parts);
+    const withinCap = (fromParts, toParts) => {
+      const fromMs = Date.UTC(fromParts.year, fromParts.month - 1, fromParts.day);
+      const toMs = Date.UTC(toParts.year, toParts.month - 1, toParts.day);
+      return (toMs - fromMs) / 86400000 <= RANGE_MAX_DAYS;
+    };
+    const finish = (fromParts, toParts, source, label) => {
+      const clampedTo = dayKeyOf(toParts) > todayKey ? todayParts : toParts;
+      if (!withinCap(fromParts, clampedTo)) return fail('Range wider than two years');
+      return { ok: true, from: dayKeyOf(fromParts), to: dayKeyOf(clampedTo), source, label, error: null };
+    };
+    const sameDay = (parts, source) => finish(parts, parts, source, 'single-day');
+
+    // 1) Explicit endpoints: "from 1 Oct to 15 Oct", "28/10 to 31/10".
+    const endpointMatch = text.match(/\b(?:from\s+)?(\d{1,2}(?:st|nd|rd|th)?[\s/-]+[a-z]{3,}(?:[\s,/]*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}-\d{2}-\d{2})\s+(?:to|till|until|through|-)\s+(\d{1,2}(?:st|nd|rd|th)?[\s/-]+[a-z]{3,}(?:[\s,/]*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}-\d{2}-\d{2})\b/i);
+    if (endpointMatch) {
+      const fromParsed = parseFlexibleDate(endpointMatch[1], { countryCode, locale, now });
+      const toParsed = parseFlexibleDate(endpointMatch[2], { countryCode, locale, now });
+      if (fromParsed.ok && toParsed.ok) {
+        const fromParts = partsFromIso(fromParsed.localDate);
+        const toParts = partsFromIso(toParsed.localDate);
+        if (fromParts && toParts) {
+          if (dayKeyOf(fromParts) > dayKeyOf(toParts)) return fail('Start date is after the end date');
+          return finish(fromParts, toParts, 'explicit-endpoints', `from ${fromParsed.localDate} to ${toParsed.localDate}`);
+        }
+      }
+    }
+
+    // 2) Named month (with optional year): "in October", "october 2025".
+    // The month word must be introduced by a preposition or carry a year —
+    // a bare "may" in "how much may I have spent" is never a month.
+    const monthWord = '(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)';
+    const monthMatch = text.match(new RegExp(`\\b(?:in|for|during|on)\\s+${monthWord}\\b(?:[\\s,]*(\\d{4}))?`, 'i'))
+      || text.match(new RegExp(`\\b${monthWord}\\s+(\\d{4})\\b`, 'i'));
+    if (monthMatch) {
+      const month = MONTHS[monthMatch[1]];
+      let year = monthMatch[2] ? normalizeYear(monthMatch[2]) : todayParts.year;
+      if (!year) year = todayParts.year;
+      if (month > todayParts.month && year === todayParts.year) year -= 1;
+      const lastDay = daysInMonth(year, month);
+      return finish(
+        { year, month, day: 1 },
+        { year, month, day: lastDay },
+        'named-month',
+        `${monthMatch[1]} ${year}`
+      );
+    }
+
+    // 3) Trailing windows: "last N days/weeks/months".
+    const trailing = text.match(/\b(?:last|past)\s+(\d{1,3})\s+(days?|weeks?|months?)\b/i);
+    if (trailing) {
+      const count = Math.min(Number(trailing[1]), 60);
+      const unit = trailing[2];
+      let fromParts;
+      if (unit.startsWith('month')) {
+        fromParts = addMonthsToParts(todayParts, -(count - 1));
+        fromParts = { ...fromParts, day: 1 };
+      } else if (unit.startsWith('week')) {
+        fromParts = addDaysToParts(todayParts, -(count * 7 - 1));
+      } else {
+        fromParts = addDaysToParts(todayParts, -(count - 1));
+      }
+      return finish(fromParts, todayParts, 'trailing-window', `last ${count} ${unit}`);
+    }
+
+    // 4) Calendar windows: last week / this week / last month / this month / this year.
+    if (/\b(?:last|this|past)\s+week\b/.test(text)) {
+      return finish(addDaysToParts(todayParts, -6), todayParts, 'trailing-window', 'the last 7 days');
+    }
+    if (/\bthis\s+month\b/.test(text)) {
+      return finish({ year: todayParts.year, month: todayParts.month, day: 1 }, todayParts, 'calendar-window', 'this month');
+    }
+    if (/\blast\s+month\b/.test(text)) {
+      const prev = addMonthsToParts(todayParts, -1);
+      return finish(
+        { year: prev.year, month: prev.month, day: 1 },
+        { year: prev.year, month: prev.month, day: daysInMonth(prev.year, prev.month) },
+        'calendar-window',
+        'last month'
+      );
+    }
+    if (/\b(?:this|current)\s+year\b/.test(text)) {
+      return finish({ year: todayParts.year, month: 1, day: 1 }, todayParts, 'calendar-window', 'this year');
+    }
+
+    // 5) Single days: yesterday, last Friday, "3 days ago", a plain date.
+    const single = extractPastDatePhrase(input, { countryCode, locale, now });
+    if (single.ok && !/\b(week|month|year)s?\b/i.test(text)) {
+      const parts = partsFromIso(single.localDate);
+      if (parts) return sameDay(parts, single.phrase);
+    }
+
+    return fail('No date range found in the message');
+  } catch {
+    return fail('Date range parsing failed');
+  }
+}
+
 export default {
   SYSTEM_TIMEZONE,
   parseFlexibleDate,
@@ -444,6 +566,7 @@ export default {
   zonedDateTimeToUtcIso,
   diffCalendarDays,
   extractDatePhrase,
-  extractPastDatePhrase
+  extractPastDatePhrase,
+  resolveDateRange
 };
 

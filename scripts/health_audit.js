@@ -58,7 +58,9 @@ const STATLESS_SUITES = [
   // v1.33.0 — editable ledger: detectors, whitelist, audit + restore round-trip.
   'test_entry_ledger.js',
   // v1.34.0 — narrative draft engine: deterministic one-sentence records.
-  'test_narrative_draft.js'
+  'test_narrative_draft.js',
+  // v1.36.0 — record answers: deterministic ledger Q&A (sum/count/avg/list).
+  'test_record_answers.js'
 ];
 
 const WORKFLOW_DIR = '.github/workflows';
