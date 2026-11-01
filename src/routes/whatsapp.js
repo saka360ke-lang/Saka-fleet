@@ -111,6 +111,7 @@ import { renderActionDiscovery, composeMessage } from '../services/conversationE
 import { enqueueFollowUp, FOLLOWUP_KINDS, followUpAckText } from '../services/followups.js';
 import { enqueueUserMessage } from '../services/messageQueue.js';
 import { loadSessionSnapshot, persistSessionSnapshot } from '../services/sessionStore.js';
+import { tryVerifyPendingEmailCode } from '../services/webOnboarding.js';
 import { createResilientClient } from '../services/supabaseClient.js';
 import { ocrWhatsAppMedia, extractDocumentHints, isOcrEnabled, isOcrAckFirstEnabled, buildMediaAckText } from '../services/ocrService.js';
 import { parseDocumentFields, uploadHintFor, DOCUMENT_SUPPORT_MENU } from '../services/documentLens.js';
@@ -949,6 +950,39 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             await supabaseClient.from('profiles').update({ preferred_language: messageLang }).eq('id', profileData.id);
             profileData.preferred_language = messageLang;
           } catch {}
+        }
+
+        // v1.39.0 — WEB SIGNUP CODE CHECK: a user who signed up on
+        // sakafleet.com may have an unverified email and a pending 6-digit
+        // code. Only when NO quiz / onboarding / OTP / PIN / edit phase is
+        // active, a bare 6-digit code completes their web verification here
+        // (a quiz or onboarding OTP always takes priority — never hijacked).
+        if (
+          supabaseClient
+          && profileData
+          && profileData.email_verified !== true
+          && /^\d{6}$/.test(messageText.trim())
+          && !session.quiz
+          && !onboardingStore.get(senderPhone)
+          && !session.otp
+          && !session.pendingEntryAction
+          && !session.pendingEmailUpdate
+          && (session.state === undefined || session.state === 'ACTIVE')
+        ) {
+          const webVerify = await tryVerifyPendingEmailCode(supabaseClient, formattedPhone, messageText.trim());
+          if (webVerify.verified) {
+            const webVerifyReply = `✅ *Email verified!* 🎉\n\nYour account is secured and reports will reach ${webVerify.email}.\n\nNext up: reply with your vehicle details — or type *Register* — and your 30-day full-featured trial begins. 🚗`;
+            await sendWhatsAppReply(senderPhone, webVerifyReply);
+            if (supabaseClient) {
+              try {
+                await supabaseClient.from('chat_transcripts').insert([{ phone_number: senderPhone, sender: 'assistant', message_text: webVerifyReply }]);
+                await supabaseClient.from('chat_history').insert([{ user_phone: senderPhone, role: 'assistant', message: webVerifyReply }]);
+              } catch {}
+            }
+            await userLogPromise;
+            await persistSnap();
+            return { status: 'web_otp_verified' };
+          }
         }
 
         let currentActiveVehicle = null;

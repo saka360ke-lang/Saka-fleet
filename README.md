@@ -49,6 +49,7 @@ npm run migrate:remediation         # Sentinel audit + proposals tables
 npm run migrate:sessions            # chat session snapshots
 npm run migrate:receipts            # receipt vault (OCR dedupe + history)
 npm run migrate:feature-notice      # profiles.feature_notice (What's new digest)
+npm run migrate:web-onboard         # web_onboard_otps (sakafleet.com signup handshake)
 npm run rollout:features            # existing-user backfill (dry-run; -- --apply writes)
 ```
 

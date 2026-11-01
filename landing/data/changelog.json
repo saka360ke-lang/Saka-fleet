@@ -1,0 +1,41 @@
+{
+  "latest": "1.38.0",
+  "entries": [
+    {
+      "version": "1.38.0",
+      "date": "2026-11-01",
+      "title": "Multi-record paragraphs",
+      "summary": "Paste a whole day of records in one message and Saka replies with a numbered plan card - 1 Save all, 2 Edit one, 3 Cancel. Every row is written and audited separately; no invented dates."
+    },
+    {
+      "version": "1.37.0",
+      "date": "2026-11-01",
+      "title": "Corrections 2.0",
+      "summary": "Ledger edits are now delete & re-log: the original entry date is kept, the old row is removed with a full audit snapshot, and restore can never duplicate a corrected row."
+    },
+    {
+      "version": "1.36.0",
+      "date": "2026-11-01",
+      "title": "Your records answer back",
+      "summary": "\"How much did I spend on fuel last week?\" is answered instantly from your ledger - sums, counts and averages, zero guesswork."
+    },
+    {
+      "version": "1.35.0",
+      "date": "2026-11-01",
+      "title": "Draft cards",
+      "summary": "Narrative logs confirm through a clean card - Vehicle, Type, Amount, Volume, Fill, Odometer, When, Place - with 1 Save / 2 Change / 3 Cancel."
+    },
+    {
+      "version": "1.34.0",
+      "date": "2026-11-01",
+      "title": "One sentence is a whole record",
+      "summary": "\"Spent 5500 on diesel yesterday at Shell, 40L at 50350 km, full tank\" is parsed deterministically into a ready-to-save log."
+    },
+    {
+      "version": "1.33.0",
+      "date": "2026-11-01",
+      "title": "Editable ledger",
+      "summary": "my entries → edit 2 / delete 2 → before/after diff and a 30-minute restore. Locked fields (VIN, plate, date) can never be changed."
+    }
+  ]
+}

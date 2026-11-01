@@ -32,6 +32,7 @@ import { ensureVehicleTableColumns } from '../src/services/vehicles.js';
 import { ensureSuperadminTables } from '../src/services/superadmin.js';
 import { ensureSentinelTables } from '../src/workers/sentinel.js';
 import { ensureChatSessionsTable } from '../src/services/sessionStore.js';
+import { ensureWebOnboardOtpTable } from '../src/services/webOnboarding.js';
 import { ensureRemediationTables } from '../src/workers/remediation.js';
 import { ensureAiUsageLogsTable } from '../src/services/aiUsageLog.js';
 import { ensureSubscriptionSchema } from '../src/db/subscriptionSchema.js';
@@ -327,6 +328,7 @@ async function main() {
     console.log('   ✅ via', r.via);
   });
   await step('ensureChatSessionsTable()', async () => console.log('   ->', JSON.stringify(await ensureChatSessionsTable(supabase))));
+  await step('ensureWebOnboardOtpTable()', async () => console.log('   ->', JSON.stringify(await ensureWebOnboardOtpTable(supabase))));
   await step('applySentinelMigration()', async () => {
     const r = await applySentinelMigration();
     if (!r.success) throw new Error(r.error || r.body || 'sentinel migration failed');

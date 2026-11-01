@@ -4,7 +4,7 @@ import rateLimit from '@fastify/rate-limit';
 import crypto from 'crypto';
 
 import { generateFleetReport, uploadReportToSupabase } from './reports.js';
-import { sendReportByEmail, sendMfaEmail } from './src/services/mailer.js';
+import { sendReportByEmail, sendMfaEmail, sendEmailOtp } from './src/services/mailer.js';
 import { processSakaMessage } from './sakaAi.js';
 import { runHealthCheck, runConversationRefinement, evaluateConversationalFriction, monitorActiveConversations, logSystemError, logChatTranscript, ensureSentinelTables, scanCloudRunAnomalies } from './src/workers/sentinel.js';
 import { ensureSuperadminTables, isSuperadminPhone, sendMorningExecutiveBriefing, maybeSendAiBudgetAlert } from './src/services/superadmin.js';
@@ -55,6 +55,14 @@ import {
 import { ensureReceiptsTable } from './src/services/receipts.js';
 import { ensureOcrRequestsTable } from './src/services/ocrTelemetry.js';
 import { ensureChatSessionsTable } from './src/services/sessionStore.js';
+import {
+  sanitizeOnboardPayload,
+  createWebOnboardSession,
+  verifyWebOnboardCode,
+  resendWebOnboardCode,
+  completeWebOnboarding,
+  ensureWebOnboardOtpTable
+} from './src/services/webOnboarding.js';
 import { ensureFeatureNoticeSchema } from './src/services/featureNotice.js';
 import { ensureContactNudgeSchema } from './src/services/contactNudge.js';
 import { drainQueue, getQueueStats } from './src/services/messageQueue.js';
@@ -79,6 +87,25 @@ await fastify.register(rateLimit, {
       date: new Date().toISOString()
     };
   }
+});
+
+// v1.39.0 — CORS for the marketing site only: the web onboarding surface and
+// the public health probe. Every other route stays closed to browsers.
+const LANDING_ORIGINS = (process.env.LANDING_ORIGINS || 'https://sakafleet.com,https://www.sakafleet.com')
+  .split(',').map((s) => s.trim()).filter(Boolean);
+const CORS_PATHS = ['/api/onboard', '/api/onboard/verify', '/api/onboard/resend', '/healthz', '/api/health'];
+fastify.addHook('onRequest', async (request, reply) => {
+  const origin = request.headers.origin;
+  if (!origin) return;
+  const path = (request.raw.url || '').split('?')[0];
+  if (!CORS_PATHS.includes(path)) return;
+  const allowed = LANDING_ORIGINS.includes(origin) || /^http:\/\/localhost(:\d+)?$/.test(origin);
+  if (!allowed) return;
+  reply.header('access-control-allow-origin', origin);
+  reply.header('access-control-allow-methods', 'GET,POST,OPTIONS');
+  reply.header('access-control-allow-headers', 'content-type');
+  reply.header('access-control-max-age', '600');
+  if (request.method === 'OPTIONS') reply.code(204).send();
 });
 
 // Attach Sentinel Error Handler
@@ -363,6 +390,40 @@ async function sendMetaWhatsAppMessage(toPhone, messageBody) {
   }
 }
 
+/**
+ * v1.39.0 — template-based WhatsApp message for business-initiated contact
+ * (the web-signup welcome). Only fires when an approved template name is
+ * configured; otherwise the website's wa.me deep link and Saka's first-message
+ * greeting carry the flow. Dispatch failures are logged, never fatal.
+ */
+async function sendMetaWhatsAppTemplate(toPhone, templateName, { languageCode = 'en', components = [] } = {}) {
+  const phoneNumberId = process.env.META_PHONE_NUMBER_ID;
+  const token = process.env.META_WHATSAPP_TOKEN;
+  if (!phoneNumberId || !token || !templateName) return null;
+  const cleanTo = String(toPhone || '').replace('whatsapp:', '').replace('+', '').trim();
+  try {
+    const response = await fetch(`https://graph.facebook.com/v17.0/${phoneNumberId}/messages`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        to: cleanTo,
+        type: 'template',
+        template: { name: templateName, language: { code: languageCode }, components }
+      })
+    });
+    const data = await response.json();
+    if (!response.ok) console.error('Meta WhatsApp Template Error:', data);
+    return data;
+  } catch (err) {
+    console.error('Failed to dispatch Meta WhatsApp template:', err.message);
+    return null;
+  }
+}
+
 // 5. Health Check Route
 fastify.get('/', async (request, reply) => {
   return { 
@@ -517,6 +578,77 @@ fastify.post('/api/auth/whatsapp/verify', async (request, reply) => {
     message: 'Authentication and mandatory email verification successful.',
     profile: profile || { phone_number: cleanPhone, email: lowerEmail, email_verified: true, subscription_tier: 'free', full_name: 'Asset Owner' }
   };
+});
+
+// ==========================================
+// 8. WEB ONBOARDING (v1.39.0) — sakafleet.com signup handshake.
+// The welcome trial is NOT started here (rule 26): trials begin when the user
+// registers their first asset with Saka on WhatsApp.
+// ==========================================
+
+fastify.post('/api/onboard', async (request, reply) => {
+  const clean = sanitizeOnboardPayload(request.body);
+  if (!clean.ok) return reply.status(400).send({ success: false, error: clean.error });
+  const { firstName, lastName, email, phone } = clean.data;
+  if (!supabase) return reply.status(503).send({ success: false, error: 'Database unavailable. Please try again shortly.' });
+
+  const sessionRow = await createWebOnboardSession(supabase, { email, phone, firstName, lastName });
+  if (!sessionRow.ok) return reply.status(502).send({ success: false, error: 'We could not start your onboarding. Please try again.' });
+
+  try {
+    await sendEmailOtp(email, sessionRow.code);
+  } catch (emailErr) {
+    console.error('[WebOnboard] OTP email failed:', emailErr.message);
+    return reply.status(502).send({ success: false, error: 'The verification email could not be sent. Please check the address and try again.' });
+  }
+
+  const profileResult = await completeWebOnboarding(supabase, { email, phone, firstName, lastName, verified: false });
+  return {
+    success: true,
+    onboard_token: sessionRow.token,
+    profile_created: profileResult.ok,
+    message: 'Verification code sent to your email.'
+  };
+});
+
+fastify.post('/api/onboard/verify', async (request, reply) => {
+  const { onboard_token, code } = request.body || {};
+  if (!onboard_token || !/^\d{6}$/.test(String(code || ''))) {
+    return reply.status(400).send({ success: false, error: 'A valid session token and 6-digit code are required.' });
+  }
+  if (!supabase) return reply.status(503).send({ success: false, error: 'Database unavailable. Please try again shortly.' });
+
+  const result = await verifyWebOnboardCode(supabase, { token: onboard_token, code: String(code) });
+  if (!result.ok) return reply.status(400).send({ success: false, error: result.error || 'Invalid or expired code.' });
+
+  // Concurrent welcome: fire an approved WhatsApp template if configured
+  // (business-initiated); the website's wa.me deep link covers the rest.
+  const templateName = process.env.META_WELCOME_TEMPLATE_NAME;
+  if (templateName && result.phone) {
+    sendMetaWhatsAppTemplate(result.phone, templateName).catch((err) => console.warn('[WebOnboard] Welcome template failed:', err.message));
+  }
+
+  return { success: true, message: 'Email verified. Welcome to Saka Fleet!' };
+});
+
+fastify.post('/api/onboard/resend', async (request, reply) => {
+  const { onboard_token } = request.body || {};
+  if (!onboard_token) return reply.status(400).send({ success: false, error: 'A session token is required.' });
+  if (!supabase) return reply.status(503).send({ success: false, error: 'Database unavailable. Please try again shortly.' });
+
+  const result = await resendWebOnboardCode(supabase, { token: onboard_token });
+  if (!result.ok) {
+    const status = result.retryAfterSeconds ? 429 : 400;
+    return reply.status(status).send({ success: false, error: result.error, retry_after: result.retryAfterSeconds || null });
+  }
+
+  try {
+    await sendEmailOtp(result.email, result.code);
+  } catch (emailErr) {
+    console.error('[WebOnboard] Resend email failed:', emailErr.message);
+    return reply.status(502).send({ success: false, error: 'The verification email could not be sent. Please try again.' });
+  }
+  return { success: true, message: 'A new code is on its way.' };
 });
 
 // ==========================================
@@ -1055,6 +1187,7 @@ const start = async () => {
     await ensureChatSessionsTable(supabase);
     await ensureFeatureNoticeSchema(supabase);
     await ensureContactNudgeSchema(supabase);
+    await ensureWebOnboardOtpTable(supabase);
 
     logWebhookEnvParity();
 

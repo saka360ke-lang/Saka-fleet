@@ -26,7 +26,10 @@ import {
   expenseTypeChoices,
   resolveExpenseType,
   normalizeExpenseType,
-  hasExpenseTypeMarker
+  hasExpenseTypeMarker,
+  odometerModeForType,
+  isHoursLedKind,
+  isFullFillAnswer
 } from './expenseCatalog.js';
 import {
   REMINDER_TYPES,
@@ -521,6 +524,62 @@ function fuelTypeFromContext(ctx = {}) {
   return vehicle?.fuel_type || null;
 }
 
+/**
+ * v1.39.0 — catalog-driven reading question (odometer policy, §85 research).
+ * Full-tank fuel fills REQUIRE the odometer (it anchors the brim-to-brim km/L
+ * segment); service events and charging ask with a Skip escape; parking, tolls,
+ * fines, washing, insurance, subscriptions, wages and the rest are NEVER asked.
+ * Hours-led assets (machines, generators, watercraft) read the ENGINE HOURS
+ * meter instead, and the hours land in the entry notes at write time.
+ */
+function expenseReadingFields(ctx) {
+  const vehicles = ctx?.vehicles || [];
+  const vehicleFor = (answers) => vehicles.find((v) => v.id === answers?.vehicle_id) || vehicles[0] || null;
+  const kindOf = (answers) => {
+    const v = vehicleFor(answers);
+    return v?.asset_kind || v?.asset_type || v?.vehicle_type || 'vehicle';
+  };
+  const hoursLed = (answers) => isHoursLedKind(kindOf(answers));
+  const modeOf = (answers) => odometerModeForType(answers?.expense_type);
+  const fullFill = (answers) => modeOf(answers) === 'fuel' && isFullFillAnswer(answers?.fill_type);
+
+  const odometerValidate = (value, c) => {
+    const selected = (c.vehicles || []).find((v) => v.id === c.answers?.vehicle_id);
+    const last = Number(selected?.current_mileage || selected?.odometer_reading || 0);
+    if (!Number.isFinite(value) || value < 0) return { ok: false, message: 'Please send the odometer as a number.' };
+    if (last > 0 && value < last) return { ok: false, message: `That is below the last recorded reading (${last}). Please resend.` };
+    return { ok: true };
+  };
+
+  return [
+    // Full-tank fuel on a road asset: REQUIRED (no Skip) so km/L stays exact.
+    field('odometer_reading', 'Odometer at this fill-up', 'needed for exact km/L — the reading when you filled up', {
+      when: (answers) => fullFill(answers) && !hoursLed(answers),
+      aliases: ['odometer', 'odometer_reading', 'current_mileage', 'mileage'],
+      parse: (text, c) => parseOdometer(text, c),
+      validate: odometerValidate
+    }),
+    // Service events, charging and top-ups on a road asset: asked, Skip works.
+    field('odometer_reading', 'Odometer at the time of this expense', 'the reading when it happened — reply Skip if unsure', {
+      when: (answers) => !fullFill(answers) && modeOf(answers) !== 'never' && !hoursLed(answers),
+      optional: true,
+      aliases: ['odometer', 'odometer_reading', 'current_mileage', 'mileage'],
+      parse: (text, c) => parseOdometer(text, c),
+      validate: odometerValidate
+    }),
+    // Hours-led assets: the hour meter is the metric that matters (optional).
+    field('operating_hours', 'Engine hours at the time of this expense', 'the hour-meter reading when it happened — reply Skip if unsure', {
+      when: (answers) => modeOf(answers) !== 'never' && hoursLed(answers),
+      optional: true,
+      aliases: ['operating_hours', 'engine_hours', 'hours', 'hour_meter'],
+      parse: (text) => parseNumber(text),
+      validate: (value) => (value === null || value === undefined || (Number.isFinite(value) && value > 0)
+        ? { ok: true }
+        : { ok: false, message: 'Please send the hour-meter reading as a positive number, or reply Skip.' })
+    })
+  ];
+}
+
 function expenseFields(ctx) {
   // v1.30.0 — the menu follows the asset kind (an EV sees Charging, a
   // generator sees Consumables + Crew Wages); free text always resolves.
@@ -559,17 +618,7 @@ function expenseFields(ctx) {
       { value: 'Full tank', aliases: ['full tank', 'full', 'filled up', 'fill up', 'brim', 'filled to full', 'to the top'] },
       { value: 'Top-up', aliases: ['top up', 'top-up', 'topped up', 'partial', 'half tank', 'not full', 'some fuel'] }
     ], { optional: true, when: (answers) => answers.expense_type === 'Fuel' }),
-    field('odometer_reading', 'Odometer at the time of this expense', 'the reading when it happened — fill-up, service or repair', {
-      aliases: ['odometer', 'odometer_reading', 'current_mileage', 'mileage'],
-      parse: (text, c) => parseOdometer(text, c),
-      validate: (value, c) => {
-        const selected = (c.vehicles || []).find((v) => v.id === c.answers?.vehicle_id);
-        const last = Number(selected?.current_mileage || selected?.odometer_reading || 0);
-        if (!Number.isFinite(value) || value < 0) return { ok: false, message: 'Please send the odometer as a number.' };
-        if (last > 0 && value < last) return { ok: false, message: `That is below the last recorded reading (${last}). Please resend.` };
-        return { ok: true };
-      }
-    }),
+    ...expenseReadingFields(ctx),
     field('notes', 'Notes', 'optional — e.g. Shell station, front-left tyre', {
       optional: true, aliases: ['notes'], parse: (text) => String(text).trim() || null
     })
@@ -2853,7 +2902,11 @@ async function executeFlow(state, ctx) {
           fuel_liters: a.fuel_liters || 0,
           fill_type: normalizeFillType(a.fill_type),
           odometer_reading: a.odometer_reading,
-          notes: [a.notes, formatExtraNotes(state.extraNotes || [])].filter(Boolean).join(' | ') || null,
+          notes: [
+            a.operating_hours ? `Engine hours: ${a.operating_hours} h` : null,
+            a.notes,
+            formatExtraNotes(state.extraNotes || [])
+          ].filter(Boolean).join(' | ') || null,
           ...(retroIso ? { created_at: retroIso } : {})
         }]);
         if (logErr) return { handled: true, reply: await fail(logErr.message), flow: state.flow, active: true };

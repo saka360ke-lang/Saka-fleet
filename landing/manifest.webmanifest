@@ -1,0 +1,12 @@
+{
+  "name": "Saka Fleet — WhatsApp Fleet Management",
+  "short_name": "Saka Fleet",
+  "description": "Run your entire fleet from WhatsApp. Log fuel, expenses and odometer in plain language; get Apex PDF reports, reminders and compliance tracking.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#070913",
+  "theme_color": "#070913",
+  "icons": [
+    { "src": "/assets/img/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

@@ -226,6 +226,10 @@ export const QUIZ_INSTRUCTION_NATURAL = 'Ask for that ONE item in a natural, var
 
 export const QUIZ_INSTRUCTION_STRICT = 'State the current question exactly once and ask ONLY for that. If the engine reports the question was already answered, acknowledge that briefly and never repeat it. Do not acknowledge or praise any answer - never invent one. Do not ask for anything else. Do not list future questions. If dispatchFailed is true, say the last message could not be sent and offer to resend or use a different address.';
 
+/** v1.39.0 — reading-policy + web-signup composer notes (rule 13 sync). */
+export const READING_POLICY_NOTE = 'The odometer/hour-meter question is engine-policy (v1.39.0): a full-tank fuel fill REQUIRES the reading and Skip is refused; top-ups, Charging and service events accept Skip; Parking, Tolls, Fines, Washing, Insurance, Accessories, Subscriptions, Towing, Wages, Mooring, Bodywork and Other are never asked. Hours-led assets ask ENGINE HOURS, never odometer. Never re-ask or contradict a reading the engine already accepted.';
+export const WEB_SIGNUP_NOTE = 'Web signups (v1.39.0): a sakafleet.com signup may have a pending email verification. If the user mentions the website or a code, offer the one next step: reply with their 6-digit code here or finish on the website. Never invent a code, never nag twice in one conversation.';
+
 export function isNaturalIntakeEnabled() {
   return !['off', 'false', '0', 'no', 'disabled'].includes(String(process.env.NATURAL_INTAKE || 'on').toLowerCase());
 }

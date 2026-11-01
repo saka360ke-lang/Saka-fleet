@@ -48,79 +48,79 @@ export const EXPENSE_CATEGORY_KEYS = Object.freeze(Object.keys(EXPENSE_CATEGORIE
  */
 export const EXPENSE_TYPES = Object.freeze([
   {
-    value: 'Fuel', category: 'fuel', kinds: ALL_KINDS, menu: true,
+    value: 'Fuel', category: 'fuel', kinds: ALL_KINDS, menu: true, odometerMode: 'fuel',
     aliases: ['fuel', 'fuels', 'fuelling', 'fueling', 'refuel', 'refuelling', 'refueling', 'diesel', 'petrol', 'gasoline', 'gas', 'cng', 'lpg', 'top up', 'top-up', 'topped up', 'full tank']
   },
   {
-    value: 'Charging', category: 'fuel', kinds: ROAD_KINDS, menu: true, electric: true,
+    value: 'Charging', category: 'fuel', kinds: ROAD_KINDS, menu: true, electric: true, odometerMode: 'optional',
     aliases: ['charging', 'charge', 'recharge', 'electricity', 'kwh', 'ev charge', 'charger']
   },
   {
-    value: 'Maintenance', category: 'maintenance', kinds: ALL_KINDS, menu: true,
+    value: 'Maintenance', category: 'maintenance', kinds: ALL_KINDS, menu: true, odometerMode: 'optional',
     aliases: ['maintenance', 'service', 'servicing', 'oil change', 'engine oil', 'tune up', 'tune-up', 'checkup', 'check up', 'check-up', 'ac service', 'aircon service', 'greasing', 'lubrication', 'oil']
   },
   {
-    value: 'Parts', category: 'parts', kinds: ALL_KINDS, menu: true,
+    value: 'Parts', category: 'parts', kinds: ALL_KINDS, menu: true, odometerMode: 'optional',
     aliases: ['parts', 'part', 'spare part', 'spare parts', 'spares', 'spare', 'filter', 'filters', 'oil filter', 'air filter', 'fuel filter', 'battery', 'batteries', 'brake pad', 'brake pads', 'brakes', 'brake disc', 'bulb', 'bulbs', 'wiper', 'wipers', 'belt', 'belts', 'alternator', 'starter', 'spark plug', 'spark plugs', 'mirror', 'horn']
   },
   {
-    value: 'Tyres', category: 'tyres', kinds: ROAD_KINDS, menu: true,
+    value: 'Tyres', category: 'tyres', kinds: ROAD_KINDS, menu: true, odometerMode: 'optional',
     aliases: ['tyre', 'tyres', 'tire', 'tires', 'puncture', 'tube', 'tubeless', 'tyre rotation', 'tire rotation', 'alignment', 'wheel alignment', 'balancing', 'tread', 'rims']
   },
   {
-    value: 'Repairs', category: 'repairs', kinds: ALL_KINDS, menu: true,
+    value: 'Repairs', category: 'repairs', kinds: ALL_KINDS, menu: true, odometerMode: 'optional',
     aliases: ['repair', 'repairs', 'mechanic', 'workshop', 'engine repair', 'engine', 'gearbox', 'clutch', 'transmission', 'suspension', 'shock absorber', 'shocks', 'radiator', 'exhaust', 'electrical', 'wiring', 'overhaul', 'differential', 'axle', 'turbo', 'injector', 'pump', 'bearing', 'seal', 'welding', 'injector pump']
   },
   {
-    value: 'Bodywork & Paint', category: 'bodywork', kinds: ROAD_KINDS, menu: false,
+    value: 'Bodywork & Paint', category: 'bodywork', kinds: ROAD_KINDS, menu: false, odometerMode: 'never',
     aliases: ['bodywork', 'body work', 'paint', 'respray', 'dent', 'dents', 'bumper', 'windscreen', 'windshield', 'glass', 'panel beating', 'panel', 'rust']
   },
   {
-    value: 'Washing', category: 'washing', kinds: ROAD_KINDS, menu: false,
+    value: 'Washing', category: 'washing', kinds: ROAD_KINDS, menu: false, odometerMode: 'never',
     aliases: ['washing', 'wash', 'carwash', 'car wash', 'cleaning', 'detailing', 'valet', 'polish']
   },
   {
-    value: 'Parking', category: 'parking', kinds: ROAD_KINDS, menu: true,
+    value: 'Parking', category: 'parking', kinds: ROAD_KINDS, menu: true, odometerMode: 'never',
     aliases: ['parking', 'parking fee', 'parking fees', 'parking charge', 'parking charges']
   },
   {
-    value: 'Tolls', category: 'tolls', kinds: ALL_KINDS, menu: false,
+    value: 'Tolls', category: 'tolls', kinds: ALL_KINDS, menu: false, odometerMode: 'never',
     aliases: ['toll', 'tolls', 'toll fee', 'toll fees', 'gate fee', 'gate fees', 'road fee', 'road fees', 'expressway', 'highway fee']
   },
   {
-    value: 'Fines', category: 'fines', kinds: ALL_KINDS, menu: false,
+    value: 'Fines', category: 'fines', kinds: ALL_KINDS, menu: false, odometerMode: 'never',
     aliases: ['fine', 'fines', 'penalty', 'penalties', 'ticket', 'tickets', 'offence', 'offense', 'citation', 'court']
   },
   {
-    value: 'Insurance', category: 'compliance', kinds: ALL_KINDS, menu: true,
+    value: 'Insurance', category: 'compliance', kinds: ALL_KINDS, menu: true, odometerMode: 'never',
     aliases: ['insurance', 'insurer', 'policy', 'premium', 'licence', 'license', 'road licence', 'road license', 'inspection', 'mot', 'permit', 'speed limiter', 'sticker', 'renewal', 'compliance']
   },
   {
-    value: 'Accessories', category: 'accessories', kinds: ALL_KINDS, menu: false,
+    value: 'Accessories', category: 'accessories', kinds: ALL_KINDS, menu: false, odometerMode: 'never',
     aliases: ['accessory', 'accessories', 'bullbar', 'bull bar', 'winch', 'snorkel', 'roof rack', 'lift kit', 'dashcam', 'dash cam', 'radio', 'stereo', 'seat cover', 'seat covers', 'mats', 'tracker device', 'gps']
   },
   {
-    value: 'Subscriptions', category: 'subscriptions', kinds: ALL_KINDS, menu: false,
+    value: 'Subscriptions', category: 'subscriptions', kinds: ALL_KINDS, menu: false, odometerMode: 'never',
     aliases: ['subscription', 'subscriptions', 'tracking fee', 'tracking subscription', 'telematics', 'security subscription', 'airtime', 'data bundle', 'sim card', 'software subscription']
   },
   {
-    value: 'Towing & Recovery', category: 'towing', kinds: ALL_KINDS, menu: false,
+    value: 'Towing & Recovery', category: 'towing', kinds: ALL_KINDS, menu: false, odometerMode: 'never',
     aliases: ['towing', 'tow', 'tow truck', 'recovery', 'breakdown', 'jump start', 'breakdown recovery']
   },
   {
-    value: 'Crew Wages', category: 'wages', kinds: HOURS_KINDS, menu: true,
+    value: 'Crew Wages', category: 'wages', kinds: HOURS_KINDS, menu: true, odometerMode: 'never',
     aliases: ['wages', 'wage', 'salary', 'salaries', 'crew', 'driver allowance', 'allowance', 'operator wages', 'operator pay', 'staff', 'labour', 'labor']
   },
   {
-    value: 'Consumables', category: 'consumables', kinds: HOURS_KINDS, menu: true,
+    value: 'Consumables', category: 'consumables', kinds: HOURS_KINDS, menu: true, odometerMode: 'optional',
     aliases: ['consumables', 'consumable', 'hydraulic oil', 'hydraulic fluid', 'coolant', 'antifreeze', 'grease', 'lubricant', 'urea', 'adblue', 'def fluid', 'distilled water', 'battery water', 'gear oil', 'transmission fluid', 'brake fluid']
   },
   {
-    value: 'Mooring & Berthing', category: 'berthing', kinds: ['watercraft'], menu: false,
+    value: 'Mooring & Berthing', category: 'berthing', kinds: ['watercraft'], menu: false, odometerMode: 'never',
     aliases: ['mooring', 'berthing', 'harbour', 'harbor', 'marina', 'slipway', 'dock', 'docking', 'anchorage', 'port fee', 'port fees']
   },
   {
-    value: 'Other', category: 'other', kinds: ALL_KINDS, menu: true,
+    value: 'Other', category: 'other', kinds: ALL_KINDS, menu: true, odometerMode: 'never',
     aliases: ['other', 'others', 'misc', 'miscellaneous', 'sundry', 'sundries']
   }
 ]);
@@ -237,6 +237,43 @@ export function expenseTypesForAssetKind(assetKind = 'vehicle') {
   const kind = normalizeKind(assetKind);
   return EXPENSE_TYPES.filter((type) => type.kinds.includes(kind)).map((type) => type.value);
 }
+
+/* ============================================================
+ * Odometer / hour-meter policy (v1.39.0)
+ * ------------------------------------------------------------
+ * Research-backed reading tiers (see SAKA_FLEET_ARCHITECTURE.md §85):
+ *   'fuel'     — Fuel: REQUIRED on full-tank fills (the reading anchors the
+ *                brim-to-brim km/L segment); optional on top-ups.
+ *   'optional' — Service events (Maintenance/Parts/Tyres/Repairs/Charging/
+ *                Consumables): asked with a Skip escape, because distance or
+ *                hour based service intervals want the reading but a skipped
+ *                one never blocks the log.
+ *   'never'    — Parking, tolls, fines, washing, insurance, accessories,
+ *                subscriptions, towing, wages, mooring, bodywork, other:
+ *                the reading adds no signal — asking is pure friction.
+ * Hours-led assets (heavy equipment, machinery, generators, watercraft)
+ * substitute the ENGINE HOURS meter wherever a reading is collected.
+ * ============================================================ */
+
+export const ODOMETER_MODES = Object.freeze(['fuel', 'optional', 'never']);
+
+/** Canonical odometer mode for an expense type (falls back to 'never'). */
+export function odometerModeForType(expenseType) {
+  const resolved = resolveExpenseType(expenseType) || String(expenseType || '').trim();
+  const type = EXPENSE_TYPES.find((entry) => entry.value === resolved);
+  return ODOMETER_MODES.includes(type?.odometerMode) ? type.odometerMode : 'never';
+}
+
+/** Road assets read kilometres; machines/generators/boats read engine hours. */
+export function isHoursLedKind(assetKind) {
+  return HOURS_KINDS.includes(normalizeKind(assetKind));
+}
+
+/** A fill answer counts as a full tank when the user said full/brim. */
+export function isFullFillAnswer(fillType) {
+  return /full|brim/i.test(String(fillType || ''));
+}
+
 
 export default {
   EXPENSE_CATEGORIES,

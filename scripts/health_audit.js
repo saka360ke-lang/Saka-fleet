@@ -60,7 +60,10 @@ const STATLESS_SUITES = [
   // v1.34.0 — narrative draft engine: deterministic one-sentence records.
   'test_narrative_draft.js',
   // v1.36.0 — record answers: deterministic ledger Q&A (sum/count/avg/list).
-  'test_record_answers.js'
+  'test_record_answers.js',
+  // v1.39.0 — marketing site contract + web onboarding handshake.
+  'test_landing_static.js',
+  'test_web_onboarding.js'
 ];
 
 const WORKFLOW_DIR = '.github/workflows';

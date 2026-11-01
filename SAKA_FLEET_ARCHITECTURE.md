@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.38.0  
+**Version:** 1.39.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.39.0** | Marketing website + web onboarding (`landing/`, `/api/onboard`, Hostinger FTP deploy) + research-backed odometer policy (full-tank fuel required, zero-signal types never asked, hours-led assets use engine hours) | §85, §86 |
 | **1.38.0** | Multi-record paragraphs (D4): one message → numbered plan card (1 Save all / 2 Edit one / 3 Cancel), per-row audited writes, additive lines never split, no invented dates | §84 |
 | **1.37.0** | Corrections 2.0 (D1): ledger edits are delete & re-log — fresh row, original entry date, DELETE audit consumed via `relogged_entry_id` so `restore` can never duplicate a corrected row | §83 |
 | **1.36.0** | Record Answers + `QUERY_RECORDS` (intent 42): "how much did I spend on fuel last week?" is answered deterministically from the ledger (sum/count/average/list, Nairobi date ranges, zero AI tokens) | §82 |
@@ -3427,3 +3428,95 @@ path.
   writing two rows with cleanup).
 - **Roadmap complete:** v1.34 intake → v1.35 draft cards → v1.36 record
   answers → v1.37 corrections 2.0 → v1.38 multi-record.
+
+---
+
+## 85. Odometer & hour-meter reading policy (v1.39.0)
+
+Research-backed answer to "is a mileage reading really necessary for every
+submission?" — **no**. Readings are tiered, catalog-driven and enforced by the
+quiz engine:
+
+| Tier | Types / events | Policy | Why |
+| --- | --- | --- | --- |
+| **Required** | Full-tank fuel fills (road assets) | The quiz REFUSES Skip | The reading anchors the brim-to-brim km/L segment; without it the economy engine quarantines the fill (`full_fill_missing_odometer`) |
+| **Required (flow-enforced elsewhere)** | Vehicle registration, driver handover/handback, passbook transfer | Already mandatory in those flows | Baseline + distance-driven audits + sale record |
+| **Optional (Skip works)** | Top-ups, Charging, Maintenance, Parts, Tyres, Repairs, Consumables | Asked, skip allowed | Service intervals want the reading, but a skipped one must never block a log |
+| **Never asked** | Parking, Tolls, Fines, Washing, Insurance, Accessories, Subscriptions, Towing & Recovery, Crew Wages, Mooring & Berthing, Bodywork & Paint, Other | Question absent | The reading adds no signal — asking is pure friction |
+| **Hours-led assets** | Heavy equipment, machinery, generators, watercraft | ENGINE HOURS replaces the odometer | Matches `assetMetrics.js` (L/h, fuel burn/hour); the hours ride the entry notes (`Engine hours: N h`) — no DDL |
+
+- **Registry:** every `EXPENSE_TYPES` entry carries `odometerMode: 'fuel' |
+  'optional' | 'never'`; helpers `odometerModeForType()`, `isHoursLedKind()`,
+  `isFullFillAnswer()` live in `expenseCatalog.js`.
+- **Engine:** `quizEngine.expenseReadingFields()` renders three mutually
+  exclusive questions (required full-fill odometer, optional odometer,
+  optional engine hours) gated by `when` on the answered type + fill + asset
+  kind; the expense write path merges hours into notes.
+- **Prompt/docs sync (rule 13):** `flowKnowledge` log_expense fields/rules,
+  `DEFAULT_SAKA_CORE_PROMPT` ODOMETER POLICY directive,
+  `conversationEngine.READING_POLICY_NOTE`.
+- **Tests:** `test_expense_catalog` (82), `test_quiz_flow` (128),
+  `test_agent_training` (137).
+
+---
+
+## 86. Marketing website & web onboarding (v1.39.0)
+
+### 86.1 `landing/` — the sakafleet.com static site
+
+- **Pages:** `index.html` (hero, WhatsApp chat mock, features, pricing from
+  `subscriptionTiers.js` facts, live changelog, live uptime probe), full
+  `privacy.html` (KDPA 2019 + GDPR), full `terms.html` (Saka 360, Kenya),
+  `404.html`.
+- **Conversion architecture:** multi-step modal — details (E.164 phone,
+  default +254) → exhaustive legal gate (mandatory checkbox; submit disabled
+  until ticked) → inline 6-digit OTP card (resend 60 s cooldown) → success
+  with wa.me deep link. Honeypot + global rate limiting.
+- **SEO/AEO/AI legibility:** semantic HTML, JSON-LD (Organization, WebSite,
+  SoftwareApplication, FAQPage), `sitemap.xml`, `robots.txt` (welcomes
+  GPTBot/ClaudeBot/PerplexityBot/Google-Extended), `llms.txt`, OpenGraph +
+  Twitter cards, canonical URLs, `manifest.webmanifest`, `humans.txt`.
+- **Isolation (rule 6):** zero secrets client-side; `test_landing_static.js`
+  scans every static file for key patterns and verifies local references,
+  structured data and AI files (49 assertions).
+- **Styling:** single self-contained `styles.css` (dark navy + cyan/lime,
+  Outfit/Inter, CSS-only animations, reduced-motion safe). No frameworks.
+
+### 86.2 Web onboarding handshake (Fastify + Supabase)
+
+- **Routes:** `POST /api/onboard` (validate → `web_onboard_otps` session →
+  `sendEmailOtp` via Resend → profile upsert with `email_verified=false`),
+  `POST /api/onboard/verify` (3 attempts, 10-min TTL, lockout → profile
+  `email_verified=true` + audit + optional WhatsApp template),
+  `POST /api/onboard/resend` (60 s cooldown).
+- **Service:** `src/services/webOnboarding.js` (sanitize, session, verify,
+  resend, complete, `tryVerifyPendingEmailCode`). **The welcome trial is
+  NEVER started here (rule 26)** — it begins at vehicle registration in
+  WhatsApp.
+- **Schema:** `public.web_onboard_otps` via `npm run migrate:web-onboard`
+  (idempotent) + boot-time `ensureWebOnboardOtpTable()`.
+- **CORS:** `LANDING_ORIGINS` (default `https://sakafleet.com,
+  https://www.sakafleet.com`; localhost always allowed in dev) opens ONLY
+  `/api/onboard*` + `/healthz` + `/api/health` — every other route stays
+  closed to browsers.
+- **Omnichannel fallback:** in WhatsApp, a bare 6-digit code from a
+  registered-but-unverified user (and only when no quiz/onboarding/OTP/PIN
+  phase is active) verifies their web code in chat; the core prompt's WEB
+  SIGNUPS directive teaches Saka the same.
+- **Welcome message:** `META_WELCOME_TEMPLATE_NAME` (optional, approved Meta
+  template) fires on verification; the guaranteed channel is the site's
+  wa.me deep link + Saka's first-message greeting.
+- **Tests:** `test_web_onboarding.js` (30, stateless in-memory double);
+  both new suites registered in `scripts/health_audit.js`.
+
+### 86.3 Hostinger deployment (shared hosting + GitHub Actions FTP)
+
+- `.github/workflows/deploy_landing.yml` deploys **only `landing/**`** to
+  Hostinger on push to `main` (path-filtered) via
+  `SamKirkland/FTP-Deploy-Action`; credentials live in GitHub secrets
+  (`HOSTINGER_FTP_SERVER/USERNAME/PASSWORD`); the job self-skips until the
+  secrets exist. The backend repo never reaches Hostinger.
+- `landing/.htaccess` ships HTTPS redirect, canonical host, security headers,
+  cache policy and a custom 404.
+- Operator walkthrough: `docs/LANDING_DEPLOYMENT.md`.
+

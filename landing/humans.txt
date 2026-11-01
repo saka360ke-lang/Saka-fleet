@@ -1,0 +1,6 @@
+# humans.txt — the people behind Saka Fleet
+Team: Saka Fleet (a Saka 360 brand, registered in Kenya)
+Site: https://sakafleet.com
+App: https://app.sakafleet.com
+Contact: support@sakafleet.com
+Built with: plain HTML, CSS and JavaScript. No frameworks, no bloat - fast for everyone.

@@ -22,7 +22,11 @@ import {
   expenseCategoryOf,
   expenseCategoryBadge,
   expenseCategoryLabel,
-  expenseTypesForAssetKind
+  expenseTypesForAssetKind,
+  ODOMETER_MODES,
+  odometerModeForType,
+  isHoursLedKind,
+  isFullFillAnswer
 } from './src/services/expenseCatalog.js';
 import { getFlowDefinition } from './src/services/quizEngine.js';
 import { buildLedgerGroups } from './src/services/reportLedger.js';
@@ -119,13 +123,36 @@ console.log('\n--- Test 6: quiz + ledger integration ---');
 const ctx = { profile: PROFILE, vehicles: [VEHICLE], countryInfo: COUNTRY, language: 'English' };
 const def = getFlowDefinition('log_expense', ctx);
 const typeField = def.fields.find((field) => field.key === 'expense_type');
-const odoField = def.fields.find((field) => field.key === 'odometer_reading');
+const odoRequired = def.fields.find((field) => field.key === 'odometer_reading' && field.optional !== true);
+const odoOptional = def.fields.find((field) => field.key === 'odometer_reading' && field.optional === true);
 check(typeField.parse('Parts', ctx) === 'Parts', 'The quiz accepts the live "Parts" answer');
 check(typeField.parse('puncture', ctx) === 'Tyres', 'The quiz resolves free-text "puncture" to Tyres');
 check(typeField.validate('Mooring & Berthing', ctx).ok === true, 'Free-text catalog types validate even outside the menu');
 check(typeField.validate('Other', ctx).ok === true, 'The Other escape validates');
-check(!/fill-up/i.test(odoField.label), 'The odometer label no longer says "fill-up" for every type');
-check(/fill-up, service or repair/i.test(odoField.hint), 'The odometer hint names fill-up, service and repair');
+check(Boolean(odoRequired) && Boolean(odoOptional), 'The expense quiz carries required + optional odometer questions');
+check(odoRequired.when({ expense_type: 'Fuel', fill_type: 'Full tank' }) === true, 'A full-tank fill REQUIRES the odometer');
+check(odoRequired.when({ expense_type: 'Fuel', fill_type: 'Top-up' }) === false, 'A top-up does not use the required question');
+check(odoOptional.when({ expense_type: 'Fuel', fill_type: 'Top-up' }) === true, 'A top-up uses the optional odometer question');
+check(odoOptional.when({ expense_type: 'Tyres' }) === true, 'Tyres ask the optional odometer (Skip works)');
+check(odoOptional.when({ expense_type: 'Parking' }) === false, 'Parking never asks for a reading');
+check(odoOptional.when({ expense_type: 'Washing' }) === false, 'Washing never asks for a reading');
+
+const genCtx = { profile: PROFILE, vehicles: [{ ...VEHICLE, id: 'v2', asset_type: 'generator' }], countryInfo: COUNTRY, language: 'English' };
+const genDef = getFlowDefinition('log_expense', genCtx);
+const genHours = genDef.fields.find((field) => field.key === 'operating_hours');
+check(Boolean(genHours), 'Hours-led assets get the engine-hours question');
+check(genHours.when({ expense_type: 'Consumables' }) === true, 'Machines ask engine hours for consumables');
+check(genHours.when({ expense_type: 'Parking' }) === false, 'Machines never ask hours for parking');
+check(genHours.optional === true, 'The engine-hours reading is optional');
+
+console.log('\n--- Test 7: odometer policy registry (v1.39.0) ---');
+check(EXPENSE_TYPES.every((type) => ODOMETER_MODES.includes(type.odometerMode)), 'Every type declares a valid odometer mode');
+check(odometerModeForType('diesel') === 'fuel', 'Fuel resolves to the fuel mode (full fills required)');
+check(odometerModeForType('Charging') === 'optional' && odometerModeForType('Maintenance') === 'optional' && odometerModeForType('Parts') === 'optional', 'Service/energy events are optional');
+check(odometerModeForType('Parking') === 'never' && odometerModeForType('Fines') === 'never' && odometerModeForType('Insurance') === 'never' && odometerModeForType('Crew Wages') === 'never', 'Zero-signal types are never asked');
+check(odometerModeForType('UnknownThing') === 'never', 'Unknown types default to never');
+check(isHoursLedKind('generator') === true && isHoursLedKind('watercraft') === true && isHoursLedKind('vehicle') === false, 'Hours-led kinds are detected');
+check(isFullFillAnswer('Full tank') === true && isFullFillAnswer('Top-up') === false, 'Full fills are detected');
 
 const ledger = buildLedgerGroups({
   expenses: [{ id: 'e1', vehicle_id: 'v1', expense_type: 'puncture', amount: 300, created_at: '2026-11-01T09:00:00Z' }],

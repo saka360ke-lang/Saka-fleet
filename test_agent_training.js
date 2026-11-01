@@ -252,6 +252,12 @@ check(/Narrative pre-fills are engine-determined facts/.test(await import('./src
   check(isContentlessReply('Repairs totals: KES 21,000 (21 Oct). Fuel: KES 21,000 (21 Oct). Want the full ledger?') === false, 'a data list with a next step passes');
   check(isContentlessReply('Got it — KES 21,000 logged against KAS 628T at 367,900 km. Anything else for that trip?') === false, 'a short but factual confirmation passes');
 
+  console.log('\n--- Test: v1.39.0 prompt sync (odometer policy + web signups) ---');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('ODOMETER POLICY (v1.39.0'), 'the core prompt carries the engine-enforced odometer policy');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('WEB SIGNUPS (v1.39.0'), 'the core prompt carries the web-signup verification guidance');
+  check(SAKA_FLOW_PLAYBOOK.includes('THE ODOMETER POLICY (v1.39.0, catalog-driven)'), 'the flow playbook carries the catalog-driven odometer policy');
+  check(SAKA_FLOW_PLAYBOOK.includes('operating_hours'), 'the playbook names the engine-hours substitute for machines');
+
   console.log(`\n\u2705 ALL AGENT TRAINING TESTS PASSED (${passed} assertions).`);
   console.log('Stateless suite: no real database rows were created, so no cleanup is required.');
 }
