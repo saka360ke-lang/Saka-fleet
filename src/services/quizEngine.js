@@ -27,6 +27,21 @@ import {
   hasExpenseTypeMarker
 } from './expenseCatalog.js';
 import {
+  REMINDER_TYPES,
+  reminderTypeChoices,
+  reminderTypeMenu,
+  resolveReminderType,
+  normalizeReminderType,
+  hasReminderTypeMarker,
+  reminderCategoryOf
+} from './reminderCatalog.js';
+import {
+  earningTypeChoices,
+  earningTypeMenu,
+  resolveEarningType,
+  normalizeEarningType
+} from './earningCatalog.js';
+import {
   buildGlobalContext,
   userDistanceToKm,
   kmToUserDistance,
@@ -231,15 +246,16 @@ function choiceField(key, label, hint, choices, options = {}) {
     choices: normalized.map((c) => c.value),
     parse: (text) => {
       const clean = String(text).trim().toLowerCase();
+      // v1.31.0 — catalog resolvers are authoritative: they run BEFORE the
+      // menu aliases so "fuel filter" (Parts) is never caught by "fuel", and
+      // "hydraulic service" is never caught by "service".
+      if (typeof options.fallbackParse === 'function') {
+        const resolved = options.fallbackParse(text);
+        if (resolved) return resolved;
+      }
       for (const c of normalized) {
         if (clean === c.value.toLowerCase()) return c.value;
         if (c.aliases.some((a) => clean.includes(a))) return c.value;
-      }
-      // v1.30.0 — free-text escape: any catalog type resolves even when it is
-      // not one of the eight menu choices (e.g. "tolls", "berthing", "fines").
-      if (typeof options.fallbackParse === 'function') {
-        const fallback = options.fallbackParse(text);
-        if (fallback) return fallback;
       }
       return null;
     },
@@ -462,13 +478,25 @@ function editVehicleNewValueParser(editField) {
   return (text) => String(text).trim();
 }
 
+/** Asset kind of the vehicle in scope (first vehicle until one is chosen). */
+function assetKindFromContext(ctx = {}) {
+  const vehicles = ctx?.vehicles || [];
+  const vehicle = vehicles.find((v) => v.id === ctx?.answers?.vehicle_id) || vehicles[0] || null;
+  return vehicle?.asset_kind || vehicle?.asset_type || vehicle?.vehicle_type || 'vehicle';
+}
+
+function fuelTypeFromContext(ctx = {}) {
+  const vehicles = ctx?.vehicles || [];
+  const vehicle = vehicles.find((v) => v.id === ctx?.answers?.vehicle_id) || vehicles[0] || null;
+  return vehicle?.fuel_type || null;
+}
+
 function expenseFields(ctx) {
   // v1.30.0 — the menu follows the asset kind (an EV sees Charging, a
   // generator sees Consumables + Crew Wages); free text always resolves.
   const vehicles = ctx?.vehicles || [];
   const vehicle = vehicles.find((v) => v.id === ctx?.answers?.vehicle_id) || vehicles[0] || null;
-  const assetKind = vehicle?.asset_type || vehicle?.vehicle_type || 'vehicle';
-  const choices = expenseTypeChoices(assetKind, { fuelType: vehicle?.fuel_type });
+  const choices = expenseTypeChoices(assetKindFromContext(ctx), { fuelType: vehicle?.fuel_type });
   return [
     vehicleField(ctx),
     choiceField(
@@ -823,6 +851,11 @@ export function getFlowDefinition(flowKey, ctx) {
               ? { ok: true }
               : { ok: false, message: 'Please send the amount as a number greater than zero.' })
           }),
+          choiceField('earning_type', 'What kind of earnings?', `${earningTypeMenu()} — optional, reply Skip`, earningTypeChoices(), {
+            optional: true,
+            fallbackParse: (text) => resolveEarningType(text),
+            accept: (value) => normalizeEarningType(value) !== null
+          }),
           field('odometer_reading', 'Odometer at end of trip', 'must be at least the last recorded reading', {
             aliases: ['odometer', 'odometer_reading', 'current_mileage', 'mileage'],
             parse: (text, c) => parseOdometer(text, c),
@@ -948,17 +981,10 @@ export function getFlowDefinition(flowKey, ctx) {
         label,
         fields: [
           vehicleField(ctx),
-          choiceField('reminder_type', 'Reminder type', 'Service, Insurance, Inspection/MOT, Driver License, Road License, Permit, Deadline or Other', [
-            { value: 'Oil change', aliases: ['oil'] },
-            { value: 'Service', aliases: ['service', 'maintenance'] },
-            { value: 'Insurance Renewal', aliases: ['insurance', 'insure', 'policy'] },
-            { value: 'Inspection', aliases: ['inspection', 'mot', 'ntac', 'roadworthiness'] },
-            { value: 'Driver License', aliases: ['driver license', 'driver licence', 'drivers license', 'driving licence'] },
-            { value: 'Road License', aliases: ['license', 'licence', 'licensing', 'road tax', 'road license'] },
-            { value: 'Permit', aliases: ['permit', 'transport permit', 'operator permit'] },
-            { value: 'Deadline', aliases: ['deadline', 'renewal', 'expiry', 'expires'] },
-            { value: 'Other', aliases: ['other'] }
-          ]),
+          choiceField('reminder_type', 'Reminder type', `${reminderTypeMenu(assetKindFromContext(ctx))} — or just say it in your own words`, reminderTypeChoices(assetKindFromContext(ctx)), {
+            fallbackParse: (text) => resolveReminderType(text),
+            accept: (value) => REMINDER_TYPES.some((type) => type.value === value)
+          }),
           field('due', 'Due date, distance or operating hours', 'e.g. 2027-05-15, 15th Dec 2026, next month, in 14 days, 5000 km, 3000 miles or 36 operating hours', {
             aliases: ['due', 'due_date', 'due_mileage', 'threshold', 'reminder_threshold', 'reminder_due_date'],
             parse: (text, c) => {
@@ -1187,7 +1213,7 @@ function applyTextExtraction(state, def, text, ctx) {
     // v1.28.5 — bank the reminder type and the due threshold from the trigger
     // sentence ("Log an oil change reminder. To happen @370,000km").
     else if (def.key === 'set_reminder' && f.key === 'reminder_type') {
-      allowed = /\b(oil|service|maintenance|insurance|inspection|mot|ntac|licen[cs]e|permit|deadline|renewal|expir)/i.test(clean);
+      allowed = hasReminderTypeMarker(clean);
     } else if (def.key === 'set_reminder' && f.key === 'due') {
       allowed = /\b\d+\s*(?:km|kms|kilometres?|kilometers?|mi|miles?|hours?|hrs?)\b/i.test(clean)
         || /\b(expires?|expiry|due|renews?|renewal|valid until|until|by|on)\b/i.test(clean);
@@ -2672,8 +2698,10 @@ async function executeFlow(state, ctx) {
 
       case 'log_earnings': {
         if (!vehicle) return { handled: true, reply: await fail('Vehicle not found.'), flow: state.flow, active: true };
+        const earningType = a.earning_type ? normalizeEarningType(a.earning_type) : null;
         const noteParts = [`Odometer: ${a.odometer_reading} km`];
         if (a.period) noteParts.push(`Period: ${a.period}`);
+        if (earningType) noteParts.push(`Type: ${earningType}`);
         const compiledEarningNotes = formatExtraNotes(state.extraNotes || []);
         if (compiledEarningNotes) noteParts.push(compiledEarningNotes);
         const { error } = await ctx.supabase.from('private_earnings').insert([{
@@ -2681,6 +2709,7 @@ async function executeFlow(state, ctx) {
           driver_id: ctx.profile?.id,
           revenue_amount: a.amount,
           currency: ctx.countryInfo?.currency || 'USD',
+          earning_type: earningType,
           notes: noteParts.join(' | '),
           logged_at: new Date().toISOString()
         }]);
@@ -2698,7 +2727,8 @@ async function executeFlow(state, ctx) {
           vehicle: vehicle.plate_number,
           revenue: formatMoney(a.amount, buildGlobalContext(ctx.countryInfo, ctx.profile).currency),
           odometer: a.odometer_reading,
-          period: a.period || undefined
+          period: a.period || undefined,
+          earningType: earningType || undefined
         });
         return { handled: true, reply, flow: state.flow, completed: true };
       }
@@ -2915,13 +2945,14 @@ async function executeFlow(state, ctx) {
       case 'set_reminder': {
         if (!vehicle) return { handled: true, reply: await fail('Vehicle not found.'), flow: state.flow, active: true };
         const due = a.due;
+        const normalizedReminderType = normalizeReminderType(a.reminder_type) || a.reminder_type;
         const extraNotes = formatExtraNotes(state.extraNotes || []);
         if (due?.kind === 'date') {
           // Universal expiry reminder: insurance, inspection/MOT, licensing,
           // permits, driver licences and general deadlines share one ladder.
           const timeZone = due.timeZone || resolveUserTimezone({ countryInfo: ctx.countryInfo, profile: ctx.profile });
           const textCategory = due.category && due.category !== 'other' ? due.category : null;
-          const category = textCategory || categoryForReminderType(a.reminder_type);
+          const category = textCategory || reminderCategoryOf(normalizedReminderType) || categoryForReminderType(normalizedReminderType);
           const spec = due.dueAt
             ? { ok: true, kind: 'date', localDate: due.value, dueAt: due.dueAt, timeZone }
             : buildExpirySpecFromDate(due.value, { timeZone });
@@ -2929,7 +2960,7 @@ async function executeFlow(state, ctx) {
             supabase: ctx.supabase,
             vehicle,
             profileId: ctx.profile?.id,
-            reminderType: a.reminder_type,
+            reminderType: normalizedReminderType,
             category,
             spec,
             notes: extraNotes,
@@ -2953,7 +2984,7 @@ async function executeFlow(state, ctx) {
 
           const reply = await ok({
             vehicle: vehicle.plate_number,
-            reminder: a.reminder_type,
+            reminder: normalizedReminderType,
             due: describeExpirySpec(spec, { locale: ctx.countryInfo?.locale || 'en-US' })
           });
           return { handled: true, reply, flow: state.flow, completed: true };
@@ -2966,12 +2997,12 @@ async function executeFlow(state, ctx) {
           supabase: ctx.supabase,
           vehicle,
           profileId: ctx.profile?.id,
-          reminderType: a.reminder_type,
+          reminderType: normalizedReminderType,
           spec: due,
           notes: extraNotes
         });
         if (!created.ok) return { handled: true, reply: await fail(created.error), flow: state.flow, active: true };
-        const reply = await ok({ vehicle: vehicle.plate_number, reminder: a.reminder_type, due: describeThresholdSpec(due) });
+        const reply = await ok({ vehicle: vehicle.plate_number, reminder: normalizedReminderType, due: describeThresholdSpec(due) });
         return { handled: true, reply, flow: state.flow, completed: true };
       }
 

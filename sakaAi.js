@@ -130,6 +130,8 @@ AGENT ROLES & BEHAVIORAL DIRECTIVES:
    - When a user logs data (fuel, expenses, odometer, earnings), extract the numbers, volume in liters, odometer, cost, and notes.
    - For every fuel log (intent LOG_EXPENSE only — never a fuel-economy question), capture whether the tank was filled to FULL or it was a TOP-UP ("full tank", "filled to full", "brimmed" → fill_type "full"; "topped up", "half tank", "20 litres on top" → fill_type "partial"). If the user does not say, leave fill_type null and ask ONE follow-up question later.
    - Expense types come from the shared catalog: Fuel, Charging, Maintenance, Parts, Tyres, Repairs, Bodywork & Paint, Washing, Parking, Tolls, Fines, Insurance, Accessories, Subscriptions, Towing & Recovery, Crew Wages, Consumables, Mooring & Berthing, Other. Extract the closest canonical type: "puncture"/"front tyre" -> Tyres, "fuel filter"/"air filter" -> Parts, "oil change" -> Maintenance, "hydraulic oil" -> Consumables, "parking" -> Parking, "fine" -> Fines. Never invent a type outside the catalog; when unsure use Other.
+   - Earnings have a type too: Trip fares, Daily takings, Cargo & freight, Vehicle hire, Equipment hire, Contract & charter, Transport service, Other. Map real words: "matatu fares"/"rides" -> Trip fares, "daily takings"/"collections" -> Daily takings, "freight"/"load" -> Cargo & freight, "generator hire" -> Equipment hire, "school run" -> Transport service.
+   - Reminder types come from the shared reminder catalog and follow the asset kind: Oil change, Service, Fuel filter, Air filter, Brake pads, Tyres, Battery, Timing belt, Hydraulic service, Undercarriage, Generator service, Hull service, Engine service, Insurance Renewal, Inspection, Road License, Road Service Licence (PSL), Driver License, Permit (speed limiter), Deadline, Other. "fuel filter and air filter" -> Fuel filter, "hydraulic service" -> Hydraulic service, "front tyres" -> Tyres, "PSL expires" -> Road Service Licence.
    - ALWAYS explicitly mention in reply_message which vehicle/machine the data will be or has been logged under (e.g., "Logged 40L fuel under KDA 123A (Toyota Land Cruiser)").
    - If the user has multiple vehicles and neither specifies a plate nor has a clear active vehicle context, prompt them politely to clarify which vehicle they are managing.
 
@@ -449,7 +451,7 @@ export function extractVehicleAttributes(messageText = '') {
   else if (/\bowner\b/i.test(lower)) data.role = 'Owner';
 
   // 7. Make & Model
-  const knownBrandsRegex = /(?:toyota|nissan|honda|mazda|isuzu|subaru|mitsubishi|mercedes|bmw|volkswagen|vw|audi|ford|hyundai|kia|peugeot|suzuki|volvo|byd|land\s+rover|lexus|porsche|jeep)\s+[A-Za-z0-9\s-]+/i;
+  const knownBrandsRegex = /(?:toyota|nissan|honda|mazda|isuzu|subaru|mitsubishi|mercedes|bmw|volkswagen|vw|audi|ford|hyundai|kia|peugeot|suzuki|volvo|byd|land\s+rover|lexus|porsche|jeep|renault|fiat|chevrolet|gmc|tesla|tata|mahindra|jac|foton|shacman|sinotruk|scania|daf|iveco|hino|fuso|proton|geely|changan|dongfeng|citroen|skoda|opel|mack|kenworth|freightliner|peterbilt|ashok\s+leyland|eicher|bajaj|tvs|yamaha|kawasaki|ram\s+\d{3,4}|man\s+(?:tgx|tga|tgs|tgm))\s+[A-Za-z0-9\s-]+/i;
   const brandMatch = clean.match(knownBrandsRegex);
   if (brandMatch) {
     let cleanBrand = brandMatch[0].replace(/owner|driver|diesel|petrol|hybrid|electric|km|mileage/gi, '').trim();
@@ -499,7 +501,7 @@ export function extractVehicleAttributes(messageText = '') {
   if (/\b(automatic|auto)\b/i.test(lower)) data.transmission = 'Automatic';
   else if (/\bmanual\b/i.test(lower)) data.transmission = 'Manual';
 
-  const colorMatch = clean.match(/\b(white|black|silver|grey|gray|blue|red|green|yellow|gold|brown|orange|maroon|beige)\b/i);
+  const colorMatch = clean.match(/\b(white|black|silver|grey|gray|blue|red|green|yellow|gold|brown|orange|maroon|beige|navy|teal|purple|pink|champagne|ivory|bronze|burgundy|turquoise|pearl)\b/i);
   if (colorMatch) data.color = colorMatch[1].charAt(0).toUpperCase() + colorMatch[1].slice(1).toLowerCase();
 
   const phoneMatchPattern = /(?:\+?254|0)[17]\d{8}|\+?\d{9,15}/;
@@ -560,6 +562,17 @@ export function extractVehicleAttributes(messageText = '') {
     if (/dual\s*batter(y|ies)/i.test(clean)) accessories.push('Dual Battery System');
     if (/refrigerat(ion|or)|fridge/i.test(clean)) accessories.push('Refrigeration Unit');
     if (/tow\s*(bar|hitch)/i.test(clean)) accessories.push('Tow Hitch');
+    if (/trailer/i.test(clean)) accessories.push('Trailer');
+    if (/tool\s*box|toolbox/i.test(clean)) accessories.push('Toolbox');
+    if (/canopy/i.test(clean)) accessories.push('Canopy');
+    if (/bike\s*rack/i.test(clean)) accessories.push('Bike Rack');
+    if (/fire\s*extinguisher/i.test(clean)) accessories.push('Fire Extinguisher');
+    if (/first\s*aid/i.test(clean)) accessories.push('First Aid Kit');
+    if (/reflector|warning\s*triangle/i.test(clean)) accessories.push('Reflectors');
+    if (/spare\s*(wheel|tyre|tire)/i.test(clean)) accessories.push('Spare Wheel');
+    if (/dash\s*cam|dashcam/i.test(clean)) accessories.push('Dashcam');
+    if (/gps|tracker/i.test(clean)) accessories.push('GPS Tracker');
+    if (/seat\s*cover/i.test(clean)) accessories.push('Seat Covers');
     if (accessories.length > 0) {
       data.custom_attributes = { modifications: accessories.join(', ') };
     }

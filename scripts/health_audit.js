@@ -46,7 +46,10 @@ const STATLESS_SUITES = [
   // v1.29.0 — Apex report builders (ledgers, deep-dive, portfolio, driver performance).
   'test_report_builders.js',
   // v1.30.0 — exhaustive expense catalog (real chats, asset-kind menus, badges).
-  'test_expense_catalog.js'
+  'test_expense_catalog.js',
+  // v1.31.0 — reminder/earning/compliance/attribute catalogs + demo seed payload.
+  'test_variable_catalogs.js',
+  'test_demo_seed.js'
 ];
 
 const WORKFLOW_DIR = '.github/workflows';

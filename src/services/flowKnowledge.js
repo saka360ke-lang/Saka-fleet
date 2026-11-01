@@ -135,11 +135,11 @@ export const SAKA_QUIZ_FLOWS = [
   {
     key: 'log_earnings',
     label: 'Log earnings',
-    trigger: 'log earnings, income, made, trip revenue',
-    fields: 'vehicle → amount → odometer at trip end → period → confirm',
-    extracted: ['plate_number', 'amount', 'odometer', 'notes'],
-    writes: 'private_earnings (+ compiled extra notes) + vehicle odometer',
-    rules: 'earnings are private to the owner/driver who logged them'
+    trigger: 'log earnings, income, made, trip revenue, fares, takings, cargo, hire, contract',
+    fields: 'vehicle → amount → type (optional) → odometer at trip end → period → confirm',
+    extracted: ['plate_number', 'amount', 'earning_type', 'odometer', 'notes'],
+    writes: 'private_earnings (earning_type + notes) + vehicle odometer',
+    rules: 'earning types come from the shared earningCatalog (Trip fares, Daily takings, Cargo & freight, Vehicle hire, Equipment hire, Contract & charter, Transport service, Other); free text resolves (matatu → Trip fares, generator hire → Equipment hire); earnings are private to the owner/driver who logged them'
   },
   {
     key: 'log_mileage',
@@ -207,11 +207,11 @@ export const SAKA_QUIZ_FLOWS = [
   {
     key: 'set_reminder',
     label: 'Set maintenance or expiry reminder',
-    trigger: 'remind me, service due, next oil change, insurance expires, inspection due, license renewal, permit expiry, deadline',
-    fields: 'vehicle → type (service/insurance/inspection/MOT/driver licence/road licence/permit/deadline) → due date OR distance OR operating-hours threshold → timezone confirmation → confirm',
+    trigger: 'remind me, service due, next oil change, filter, brake pads, tyres, insurance expires, inspection due, license renewal, PSL, permit expiry, deadline',
+    fields: 'vehicle → type (catalog menu for the asset kind) → due date OR distance OR operating-hours threshold → timezone confirmation → confirm',
     extracted: ['plate_number', 'reminder_type', 'reminder_category', 'reminder_due_date', 'reminder_threshold', 'timezone', 'notes'],
     writes: 'reminders (category, kind, due_date, due_at, timezone, linked_column, threshold_unit, target_value, last_service_value, remaining_value)',
-    rules: 'dates via dateParser + extractDatePhrase (Africa/Nairobi, user timezone confirmed); distance canonical km (miles converted); hours for hour-meter assets; linked insurance/inspection rows upserted per vehicle and tier flags reset on date change'
+    rules: 'reminder types come from the shared reminderCatalog (Oil change, Service, Fuel filter, Air filter, Brake pads, Tyres, Battery, Timing belt, Hydraulic service, Undercarriage, Generator service, Hull service, Engine service, Insurance Renewal, Inspection, Road License, Road Service Licence, Driver License, Permit, Deadline, Other); the menu follows the asset kind and free text resolves (fuel filter → Fuel filter, hydraulic service → Hydraulic service with hours, PSL → Road Service Licence); dates via dateParser + extractDatePhrase (Africa/Nairobi, user timezone confirmed); distance canonical km (miles converted); hours for hour-meter assets; linked insurance/inspection rows upserted per vehicle and tier flags reset on date change'
   },
   {
     key: 'contact_support',

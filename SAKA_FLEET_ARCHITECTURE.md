@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.30.0  
+**Version:** 1.31.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.31.0** | Populate the variables: asset-aware reminder catalog, typed earnings (+ migration), 17 global compliance catalogs, driver compliance registry, expanded vehicle attributes, guarded demo fleet seeder | §73 |
 | **1.30.0** | Expense DNA: exhaustive 19-type catalog across all 8 asset kinds, asset-aware quiz menus, real-chat alias resolution (puncture/filters/parts), unified report classifiers and ledger badges | §72 |
 | **1.29.0** | Saka Apex PDF design system: vehicle deep-dive, owner portfolio, driver performance, itemized ledgers, type badges, segmented/vs bars, insight callouts, zero-transparency contract | §47.2–§47.7 |
 | **1.28.9** | Asset metric registry: all 8 kinds populated (odometer vs engine hours, litres vs kWh, L/h, MPG, km/kWh) and wired into reports, summaries, bespoke menus, prompt and QA facts | §71.18 |
@@ -2834,3 +2835,40 @@ Single source of truth, pure and deterministic:
 - Files: `src/services/expenseCatalog.js` (new), `quizEngine.js` (menu, label, markers, write normalisation), `src/routes/whatsapp.js` (quick-path normalisation), `reportLedger.js`, `fleetReports.js`, `reportMetrics.js`, `reportDelivery.js`, `analytics.js`, `driverReports.js`, `vehicleDeepDive.js`, `ownerPortfolio.js`, `pdfEngine.js` (badge tones), `flowKnowledge.js`, `sakaAi.js`.
 - Tests: new `test_expense_catalog.js` (66 assertions: 25 real-chat phrases, longest-alias precedence, asset-kind menus, quiz/ledger integration, trigger-word regression) plus `test_quiz_flow.js` (95), `test_fleet_reports.js` (42), `test_report_metrics.js` (25), `test_report_builders.js` (67), `test_pdf_engine.js` (29), `test_agent_training.js` (109), `test_doc_sync.js`, `test_kb_docs.js`.
 - No schema/DDL change, no new dependency, no new env knob. WhatsApp menus stay at 8 choices; every other type is reachable by free text.
+
+---
+
+## 73. Populate the Variables (v1.31.0) — reminders, earnings, compliance, attributes and demo data
+
+### 73.1 Reminder catalog (`src/services/reminderCatalog.js`)
+The category layer stays `EXPIRY_CATEGORIES` (maintenanceReminders.js); the new registry adds the concrete reminder TYPES with aliases, the meter each uses and an asset-kind menu:
+- **Maintenance:** Oil change (distance), Service, Fuel filter, Air filter, Brake pads, Tyres, Battery, Timing belt (road); Hydraulic service, Undercarriage (hours); Generator service, Hull service, Engine service (machine/watercraft).
+- **Compliance:** Insurance Renewal, Inspection (MOT/NTSA/TÜV/ITV/APK/Shaken/Puspakom aliases), Road License, Road Service Licence (PSL), Driver License, Permit (speed limiter), Deadline.
+- **Resolver:** longest-alias-first (`fuel filter` beats `oil`, `hydraulic service` beats `service`); generic words (`reminder`, `expires`) are deliberately NOT aliases so they can never hijack a specific type.
+- **Quiz:** `set_reminder` builds its menu with `reminderTypeChoices(assetKind)` (max 8 + Other) and accepts any catalog type by free text; catalog resolution runs BEFORE menu-alias matching (`choiceField` `fallbackParse` first). Writes normalise `reminder_type` and derive the category through `reminderCategoryOf()` before `categoryForReminderType()`.
+- **Examples:** "Log an oil change reminder" → Oil change; "Change fuel filter and air filter" → Fuel filter; "Front tyre change reminder" → Tyres; "hydraulic service in 36 hours" → Hydraulic service (hours); "PSL 445566 expires 30 Nov 2026" → Road Service Licence.
+
+### 73.2 Earning catalog + `earning_type` (`src/services/earningCatalog.js`)
+- **8 canonical types:** Trip fares, Daily takings, Cargo & freight, Vehicle hire, Equipment hire, Contract & charter, Transport service, Other. Aliases: matatu/fares/rides → Trip fares; takings/collections → Daily takings; freight/load → Cargo & freight; generator hire → Equipment hire; school run → Transport service.
+- **Capture:** `log_earnings` gains ONE optional choice (skippable) after the amount; the WhatsApp one-liner quick path resolves the same aliases from the message.
+- **Storage:** `private_earnings.earning_type` (plus `notes` parity) via `npm run migrate:earning-type` (`EARNING_TYPE_SQL`, idempotent), a boot ensure (`ensureEarningTypeSchema`, fail-soft), and the staging DDL. The same migration repairs `reminders.updated_at`, which the live table lacked while `createExpiryReminder` writes it — date reminders could not be saved before this release. No other schema changes.
+- **Reporting:** `earningToLedgerRow()` prefixes the type into the ledger description ("Cargo & freight - Nairobi to Mombasa"); the EARNING badge is unchanged, so every Apex report shows what the money came from.
+
+### 73.3 Global compliance catalogs + driver compliance
+- **17 new vehicle catalogs** (DE, FR, ES, IT, NL, BR, MX, GH, EG, SA, PK, BD, MY, SG, JP, PH, TR, CN, ID, NZ) join the existing 12; each carries 3 local items (TÜV/HU, contrôle technique, ITV, revisione, APK, CRLV, tenencia, DVLA roadworthy, istimara, token tax, BRTA fitness, Puspakom, COE, Shaken, LTO, TÜVTÜRK, annual inspection, KIR, WoF) mapped to the universal insurance/inspection/licensing/permit categories through `CATEGORY_BY_TYPE`. `VEHICLE_COMPLIANCE_CATALOG_VERSION` is now `2026.17.0`. Unknown countries still fall back to the global catalog.
+- **`driverComplianceCatalog.js`:** driving licence, PSV badge, PDP, CPC, operator card, medical certificate, defensive driving, other; `driverComplianceChoices({ countryCode })` returns the East-African professional set for KE/TZ/UG/RW/NG/ZA and the operator card elsewhere. Driver report labels now resolve stored types through the registry.
+
+### 73.4 Vehicle attribute expansion (`sakaAi.extractVehicleAttributes`)
+- **Brands:** adds Renault, Fiat, Chevrolet, GMC, Tesla, Tata, Mahindra, JAC, Foton, Shacman, Sinotruk, Scania, DAF, Iveco, Hino, Fuso, Proton, Geely, Changan, Dongfeng, Citroën, Skoda, Opel, Mack, Kenworth, Freightliner, Peterbilt, Ashok Leyland, Eicher, Bajaj, TVS, Yamaha, Kawasaki, RAM 1500-style and MAN TGX/TGA/TGS/TGM.
+- **Colours:** navy, teal, purple, pink, champagne, ivory, bronze, burgundy, turquoise, pearl.
+- **Accessories:** trailer, toolbox, canopy, bike rack, fire extinguisher, first aid kit, reflectors, spare wheel, dashcam, GPS tracker, seat covers (alongside bullbar/winch/snorkel/roof rack/lift kit/dual battery/refrigeration/tow hitch).
+
+### 73.5 Guarded demo fleet seeder (`scripts/seed_demo_fleet.js`, `npm run demo:seed`)
+- **Payload (deterministic, pure):** one demo owner (+254700999999) and driver, **eight asset kinds + one EV**, **~31 expenses covering all 19 expense types**, **8 earnings covering all 8 types**, 7 reminders (date/distance/hours incl. PSL and hydraulic service), 4 Kenya vehicle compliance rows and 2 driver compliance rows.
+- **Safety:** refuses to run without `--confirm`; removes its previous demo rows first (vehicles by demo owner, legacy `expenses` by demo plates); uses a dedicated phone and DEMO-prefixed 17-char VINs that never collide with test fixtures; real users are never touched. Wipe anytime with `npm run reset:slate` / `npm run reset:db -- --all --confirm --backup`.
+- **Proof:** `test_demo_seed.js` (30 assertions) proves coverage, determinism and identifier safety without a database connection.
+
+### 73.6 Files, tests & knobs
+- **Files:** `reminderCatalog.js` (new), `earningCatalog.js` (new), `driverComplianceCatalog.js` (new), `quizEngine.js` (menus, catalog-first parse, write normalisation), `src/routes/whatsapp.js` (earning type), `reportLedger.js` (earning description), `driverReports.js` (driver compliance labels), `vehicleCompliance.js` (catalogs + version), `sakaAi.js` (attributes + prompt), `flowKnowledge.js`, `index.js` (boot ensure), `scripts/seed_demo_fleet.js` (new), `scripts/run_earning_type_migration.js` (new), `scripts/provision_staging_schema.js`, `scripts/health_audit.js`.
+- **Ops:** `npm run migrate:earning-type` (one-time, idempotent), `npm run demo:seed -- --confirm` (explicit demo data). No new environment knobs.
+- **Tests:** `test_variable_catalogs.js` (96), `test_demo_seed.js` (30), `test_expense_catalog.js` (66), `test_quiz_flow.js` (95), `test_maintenance_reminders.js` (46), `test_vehicle_compliance.js` (28), `test_agent_training.js` (109), `test_fleet_reports.js` (42), `test_report_builders.js` (67), `test_report_metrics.js` (25), `test_pdf_engine.js` (29), `test_natural_intake.js` (19).

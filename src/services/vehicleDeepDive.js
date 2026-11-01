@@ -153,7 +153,7 @@ export async function buildVehicleDeepDive({
   const economyValue = economy.status === 'CALCULATED'
     ? economy.averageKmPerLiter
     : (economy.status === 'ESTIMATED' ? economy.estimate?.kmPerLiter : null);
-  const assetKind = vehicle.asset_type || vehicle.vehicle_type || vehicle.asset_kind || 'vehicle';
+  const assetKind = vehicle.asset_kind || vehicle.asset_type || vehicle.vehicle_type || 'vehicle';
   const assetProfile = getAssetMetricProfile(assetKind);
   const costPerDistance = distanceDisplay > 0 ? totalSpend / distanceDisplay : null;
   const costPerHour = operatingHours > 0 ? totalSpend / operatingHours : null;

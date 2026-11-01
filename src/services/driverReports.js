@@ -2,6 +2,7 @@ import { buildGlobalContext, formatDate, formatNumber } from './globalization.js
 import { daysUntilDue, reminderDueDate } from './maintenanceReminders.js';
 import { buildLedgerGroups, expenseKind } from './reportLedger.js';
 import { EXPENSE_CATEGORIES, EXPENSE_CATEGORY_KEYS } from './expenseCatalog.js';
+import { driverComplianceLabel } from './driverComplianceCatalog.js';
 
 /**
  * Saka Fleet — Driver-first reports (v1.29.0)
@@ -302,7 +303,7 @@ export async function buildDriverComplianceCard({
   const items = rows.map((row) => {
     const left = row.lifetime ? null : daysLeft(row.expiry, now);
     return {
-      label: row.label || row.type || 'Compliance',
+      label: row.label || (row.type ? driverComplianceLabel(row.type) : 'Compliance'),
       number: maskNumber(row.number),
       expiry: row.lifetime ? 'Valid for life' : (row.expiry ? formatDate(row.expiry, locale) : 'Not set'),
       status: row.lifetime ? 'valid' : statusFromDays(left),
@@ -469,7 +470,7 @@ export async function buildDriverPerformance({
     const left = row.lifetime ? null : daysUntilDue(row.expiry, now);
     const status = row.lifetime ? 'valid' : (left === null ? 'unknown' : left < 0 ? 'expired' : left <= 30 ? 'due' : 'valid');
     return {
-      label: row.label || row.type || 'Compliance',
+      label: row.label || driverComplianceLabel(row.type),
       number: maskNumber(row.number),
       expiry: row.lifetime ? 'Valid for life' : (row.expiry ? formatDate(row.expiry, localeOf(countryInfo), { timeZone: ctx.timeZone }) : 'Not set'),
       status,

@@ -80,17 +80,19 @@ export function expenseToLedgerRow(row = {}, { ctx = {}, vehiclePlate = null } =
   };
 }
 
-/** Earnings row → ledger row. */
+/** Earnings row → ledger row (earning type + note as the description). */
 export function earningToLedgerRow(row = {}, { ctx = {}, vehiclePlate = null } = {}) {
   const at = row.logged_at || row.created_at || null;
   const amount = Number(row.revenue_amount ?? row.amount) || 0;
+  const typeLabel = row.earning_type ? String(row.earning_type).trim() : '';
+  const note = trimText(row.notes || row.source || '', 64);
   return {
     at,
     date: at ? formatDate(at, ctx.locale || 'en-US', { timeZone: ctx.timeZone }) : '—',
     vehicle: vehiclePlate || null,
     kind: 'earning',
     kindLabel: ledgerKindLabel('earning'),
-    description: trimText(row.notes || row.source || 'Earnings recorded', 64) || 'Earnings recorded',
+    description: [typeLabel, note].filter(Boolean).join(' - ') || 'Earnings recorded',
     odometer: odometerOf(row),
     unitCost: null,
     unitCurrency: null,

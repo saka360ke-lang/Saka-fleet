@@ -23,7 +23,7 @@ import { parseComplianceItem } from './complianceCatalog.js';
 import { createExpiryReminder, buildExpirySpecFromDate, daysUntilDue } from './maintenanceReminders.js';
 import { SYSTEM_TIMEZONE } from './dateParser.js';
 
-export const VEHICLE_COMPLIANCE_CATALOG_VERSION = '2026.16.1';
+export const VEHICLE_COMPLIANCE_CATALOG_VERSION = '2026.17.0';
 
 function vItem(type, label, aliases = [], { lifetimeAllowed = false, assetTypes = null } = {}) {
   return Object.freeze({ type, label, aliases, lifetimeAllowed, assetTypes });
@@ -124,6 +124,146 @@ export const VEHICLE_COMPLIANCE_CATALOG = Object.freeze({
       vItem('registration', 'Registration', ['registration', 'rego']),
       vItem('roadworthy', 'Roadworthy certificate', ['roadworthy', 'pink slip'])
     ]
+  },
+  DE: {
+    items: [
+      vItem('insurance', 'Kfz-Versicherung', ['insurance', 'versicherung', 'insured', 'policy']),
+      vItem('tuv', 'TÜV / HU inspection', ['tuv', 'hu', 'hauptuntersuchung', 'inspection']),
+      vItem('kfz_tax', 'Kfz-Steuer', ['kfz steuer', 'road tax', 'vehicle tax'])
+    ]
+  },
+  FR: {
+    items: [
+      vItem('insurance', 'Assurance', ['insurance', 'assurance', 'insured', 'policy']),
+      vItem('controle_technique', 'Contrôle technique', ['controle technique', 'control technique', 'inspection']),
+      vItem('carte_grise', 'Carte grise', ['carte grise', 'registration', 'grey card'])
+    ]
+  },
+  ES: {
+    items: [
+      vItem('insurance', 'Seguro', ['insurance', 'seguro', 'insured', 'policy']),
+      vItem('itv', 'ITV inspection', ['itv', 'inspection']),
+      vItem('circulation_tax', 'Impuesto de circulación', ['circulation tax', 'road tax', 'impuesto'])
+    ]
+  },
+  IT: {
+    items: [
+      vItem('insurance', 'Assicurazione', ['insurance', 'assicurazione', 'insured', 'policy']),
+      vItem('revisione', 'Revisione', ['revisione', 'inspection']),
+      vItem('bollo', 'Bollo auto', ['bollo', 'road tax', 'vehicle tax'])
+    ]
+  },
+  NL: {
+    items: [
+      vItem('insurance', 'Verzekering', ['insurance', 'verzekering', 'insured', 'policy']),
+      vItem('apk', 'APK inspection', ['apk', 'inspection']),
+      vItem('mrb', 'Wegenbelasting (MRB)', ['mrb', 'wegenbelasting', 'road tax'])
+    ]
+  },
+  BR: {
+    items: [
+      vItem('insurance', 'Seguro', ['insurance', 'seguro', 'insured', 'policy']),
+      vItem('licenciamento', 'Licenciamento (CRLV)', ['licenciamento', 'crlv', 'registration']),
+      vItem('vistoria', 'Vistoria', ['vistoria', 'inspection'])
+    ]
+  },
+  MX: {
+    items: [
+      vItem('insurance', 'Seguro', ['insurance', 'seguro', 'insured', 'policy']),
+      vItem('tenencia', 'Tenencia / refrendo', ['tenencia', 'refrendo', 'road tax']),
+      vItem('verificacion', 'Verificación vehicular', ['verificacion', 'verification', 'inspection'])
+    ]
+  },
+  GH: {
+    items: [
+      vItem('insurance', 'Insurance', ['insurance', 'insured', 'policy']),
+      vItem('roadworthy', 'DVLA roadworthy', ['roadworthy', 'dvla', 'inspection']),
+      vItem('vehicle_licence', 'Vehicle licence', ['vehicle licence', 'vehicle license', 'road tax'])
+    ]
+  },
+  EG: {
+    items: [
+      vItem('insurance', 'Insurance', ['insurance', 'insured', 'policy']),
+      vItem('traffic_licence', 'Traffic licence', ['traffic licence', 'traffic license', 'vehicle licence', 'registration']),
+      vItem('periodic_inspection', 'Periodic inspection', ['inspection', 'periodic inspection'])
+    ]
+  },
+  SA: {
+    items: [
+      vItem('insurance', 'Insurance', ['insurance', 'insured', 'policy', 'tamin']),
+      vItem('istimara', 'Istimara (periodic inspection)', ['istimara', 'periodic inspection', 'inspection']),
+      vItem('registration', 'Registration (Muroor)', ['registration', 'muroor', 'istimara renewal'])
+    ]
+  },
+  PK: {
+    items: [
+      vItem('insurance', 'Insurance', ['insurance', 'insured', 'policy']),
+      vItem('fitness_certificate', 'Fitness certificate', ['fitness', 'fitness certificate']),
+      vItem('token_tax', 'Token tax', ['token tax', 'road tax', 'vehicle tax'])
+    ]
+  },
+  BD: {
+    items: [
+      vItem('insurance', 'Insurance', ['insurance', 'insured', 'policy']),
+      vItem('fitness', 'BRTA fitness', ['fitness', 'brta', 'inspection']),
+      vItem('tax_token', 'Tax token', ['tax token', 'road tax', 'vehicle tax'])
+    ]
+  },
+  MY: {
+    items: [
+      vItem('insurance', 'Insurance', ['insurance', 'insured', 'policy']),
+      vItem('puspakom', 'Puspakom inspection', ['puspakom', 'inspection']),
+      vItem('road_tax', 'Road tax', ['road tax', 'vehicle tax', 'road licence'])
+    ]
+  },
+  SG: {
+    items: [
+      vItem('insurance', 'Insurance', ['insurance', 'insured', 'policy']),
+      vItem('coe', 'COE / registration', ['coe', 'certificate of entitlement', 'registration']),
+      vItem('inspection', 'Periodic inspection', ['inspection', 'vicom', 'periodic inspection'])
+    ]
+  },
+  JP: {
+    items: [
+      vItem('insurance', 'Insurance (jibaiseki)', ['insurance', 'jibaiseki', 'insured', 'policy']),
+      vItem('shaken', 'Shaken inspection', ['shaken', 'inspection']),
+      vItem('automobile_tax', 'Automobile tax', ['automobile tax', 'road tax', 'vehicle tax'])
+    ]
+  },
+  PH: {
+    items: [
+      vItem('insurance', 'Insurance', ['insurance', 'insured', 'policy']),
+      vItem('lto_registration', 'LTO registration', ['lto', 'registration']),
+      vItem('emission_test', 'Emission test', ['emission', 'smoke test', 'inspection'])
+    ]
+  },
+  TR: {
+    items: [
+      vItem('insurance', 'Insurance (trafik/kasko)', ['insurance', 'trafik', 'kasko', 'insured', 'policy']),
+      vItem('tuvturk', 'TÜVTÜRK inspection', ['tuvturk', 'tuv', 'inspection']),
+      vItem('mtv', 'Motorlu Taşıtlar Vergisi (MTV)', ['mtv', 'road tax', 'vehicle tax'])
+    ]
+  },
+  CN: {
+    items: [
+      vItem('insurance', 'Insurance', ['insurance', 'insured', 'policy']),
+      vItem('annual_inspection', 'Annual inspection', ['inspection', 'annual inspection']),
+      vItem('vehicle_tax', 'Vehicle and vessel tax', ['vehicle tax', 'road tax', 'vessel tax'])
+    ]
+  },
+  ID: {
+    items: [
+      vItem('insurance', 'Insurance', ['insurance', 'insured', 'policy']),
+      vItem('uji_kelayakan', 'Uji kelayakan (KIR)', ['kir', 'uji kelayakan', 'inspection']),
+      vItem('pajak', 'Pajak kendaraan', ['pajak', 'road tax', 'vehicle tax'])
+    ]
+  },
+  NZ: {
+    items: [
+      vItem('insurance', 'Insurance', ['insurance', 'insured', 'policy']),
+      vItem('wof', 'Warrant of Fitness (WoF)', ['wof', 'warrant of fitness', 'inspection']),
+      vItem('registration', 'Registration', ['registration', 'rego'])
+    ]
   }
 });
 
@@ -144,7 +284,41 @@ const CATEGORY_BY_TYPE = Object.freeze({
   registration: 'licensing',
   speed_limiter: 'permit',
   road_worthiness: 'inspection',
-  fitness_certificate: 'inspection'
+  fitness_certificate: 'inspection',
+  // v1.31.0 — global compliance catalogs.
+  tuv: 'inspection',
+  kfz_tax: 'licensing',
+  controle_technique: 'inspection',
+  carte_grise: 'licensing',
+  itv: 'inspection',
+  circulation_tax: 'licensing',
+  revisione: 'inspection',
+  bollo: 'licensing',
+  apk: 'inspection',
+  mrb: 'licensing',
+  licenciamento: 'licensing',
+  vistoria: 'inspection',
+  tenencia: 'licensing',
+  verificacion: 'inspection',
+  traffic_licence: 'licensing',
+  periodic_inspection: 'inspection',
+  istimara: 'inspection',
+  token_tax: 'licensing',
+  fitness: 'inspection',
+  tax_token: 'licensing',
+  puspakom: 'inspection',
+  coe: 'licensing',
+  shaken: 'inspection',
+  automobile_tax: 'licensing',
+  lto_registration: 'licensing',
+  emission_test: 'inspection',
+  tuvturk: 'inspection',
+  mtv: 'licensing',
+  annual_inspection: 'inspection',
+  vehicle_tax: 'licensing',
+  uji_kelayakan: 'inspection',
+  pajak: 'licensing',
+  wof: 'inspection'
 });
 
 function normalizeAssetType(assetType) {

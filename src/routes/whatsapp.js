@@ -17,6 +17,7 @@ import {
 import { calculateFuelConsumption } from '../services/analytics.js';
 import { normalizeFillType } from '../services/fuelEconomy.js';
 import { resolveExpenseType, normalizeExpenseType, hasExpenseTypeMarker } from '../services/expenseCatalog.js';
+import { resolveEarningType, normalizeEarningType, hasEarningTypeMarker } from '../services/earningCatalog.js';
 import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly, shouldReplaceIntroCopy, isRepeatedReply, isStopRequest, PAUSE_REPLY, pickRepeatNudge, pickNewcomerNudge, isFirstTimeMessage, shouldReplacePlateAsk, isIncompleteReplyComplaint, isLegacyWelcomeCopy } from '../services/greetings.js';
 import { matchProductQa, buildProductQaReply, buildProductFactsContext, buildLocalPricingFacts, stripUsdFigures, hasLocalFigure, recommendTierForFleet, sanitizeSakaReply } from '../services/productQa.js';
 import { shouldSuggestContactSave, isLostChatMessage, buildContactSaveFacts, markContactSaveSuggested } from '../services/contactNudge.js';
@@ -2645,16 +2646,20 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
             }
             else if (activeIntent === 'LOG_EARNINGS') {
               const extAmount = mergedExt.amount || extractNumberFromText(messageText);
+              const earnType = mergedExt.earning_type
+                ? normalizeEarningType(mergedExt.earning_type)
+                : (hasEarningTypeMarker(messageText) ? resolveEarningType(messageText) : null);
               if (extAmount && extAmount > 0) {
                 if (supabaseClient && targetVeh) {
                   await supabaseClient.from('private_earnings').insert([{
                     vehicle_id: targetVeh.id,
                     revenue_amount: extAmount,
                     currency: countryInfo.currency,
+                    earning_type: earnType,
                     logged_at: new Date().toISOString()
                   }]);
                 }
-                customReply = `💰 *Earnings Logged!* 🎉\n\n• *Vehicle:* *${targetVeh?.plate_number || 'Fleet'}*\n• *Revenue:* ${countryInfo.currency} ${Number(extAmount).toLocaleString()}\n\n✅ Recorded under *${targetVeh.plate_number}*!`;
+                customReply = `💰 *Earnings Logged!* 🎉\n\n• *Vehicle:* *${targetVeh?.plate_number || 'Fleet'}*\n• *Revenue:* ${countryInfo.currency} ${Number(extAmount).toLocaleString()}${earnType ? `\n• *Type:* ${earnType}` : ''}\n\n✅ Recorded under *${targetVeh.plate_number}*!`;
                 if (existingVehicles.length > 1) {
                   customReply += `\n*(Active vehicle: ${targetVeh.plate_number})*`;
                 }

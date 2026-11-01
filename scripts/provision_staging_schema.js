@@ -162,6 +162,8 @@ CREATE TABLE IF NOT EXISTS public.private_earnings (
   revenue_amount numeric DEFAULT 0,
   amount numeric DEFAULT 0,
   currency text DEFAULT 'KES',
+  earning_type text,
+  notes text,
   logged_at timestamp with time zone DEFAULT now(),
   created_at timestamp with time zone DEFAULT now()
 );

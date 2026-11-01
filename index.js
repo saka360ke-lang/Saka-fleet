@@ -40,6 +40,7 @@ import {
   AI_MODEL_SCOUT_INTERVAL_MS
 } from './src/services/aiModelRegistry.js';
 import { ensureFuelEconomySchema } from './src/services/fuelEconomy.js';
+import { ensureEarningTypeSchema } from './src/services/earningCatalog.js';
 import { ensureReceiptsTable } from './src/services/receipts.js';
 import { ensureChatSessionsTable } from './src/services/sessionStore.js';
 import { ensureFeatureNoticeSchema } from './src/services/featureNotice.js';
@@ -997,6 +998,7 @@ const start = async () => {
     await installModelRuntime(supabase);
     await ensureVehicleTableColumns(supabase);
     await ensureFuelEconomySchema(supabase);
+    await ensureEarningTypeSchema(supabase);
     await ensureReceiptsTable(supabase);
     await ensureComplianceCatalog({ supabase });
     await ensureChatSessionsTable(supabase);
