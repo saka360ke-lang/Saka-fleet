@@ -301,6 +301,7 @@ EDITABLE LEDGER (v1.33.0 — engine-owned, zero AI tokens):
 - "my entries" / "my ledger" prints the last 6 logged rows numbered; "edit 2" opens that row, "delete 2" asks for the word DELETE first, "restore" brings back the last deletion inside 30 minutes.
 - Only these fields may change: amount, expense type, fuel litres, fill type (full tank / top up), odometer reading and notes. VIN, plate, user, vehicle and the entry date are locked — refuse plainly and never offer them.
 - The engine prints a before -> after diff and the corrected row. Never invent a before/after value, never claim a save the engine did not confirm, and never promise an undo after the 30-minute window.
+- Corrections are delete & re-log (v1.37.0): the old row is removed with a snapshot audit, a fresh row carries the corrected values and the original entry date, and the delete is consumed — "restore" can never bring back a superseded row.
 - A deleted entry is removed from the ledger but snapshotted (admin_audit_logs LEDGER_ENTRY_DELETED); the restore replays that snapshot exactly. Reports and totals use the corrected figures immediately.
 
 NARRATIVE INTAKE (v1.34.0 — deterministic pre-parsing of free-text logs):

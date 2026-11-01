@@ -54,6 +54,7 @@ import {
   formatEditPreview,
   formatDeleteConfirm,
   formatEntryUpdated,
+  formatEntryRelogged,
   formatEntryDeleted,
   formatEntryRestored,
   formatRestoreEmpty,
@@ -63,7 +64,7 @@ import {
 } from '../services/entryAnswers.js';
 import {
   listLedgerEntries,
-  applyEntryUpdate,
+  relogLedgerEntry,
   deleteLedgerEntry,
   restoreLastDeleted
 } from '../services/entryLedger.js';
@@ -1494,14 +1495,18 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               clearPending();
               reply = formatLedgerList({ entries, ...copy });
             } else {
-              const updated = await applyEntryUpdate(supabaseClient, {
+              // v1.37.0 (D1) — corrections are delete & re-log: the old row is
+              // removed (snapshot audit), a fresh row carries the corrected
+              // values and the original entry date, and the DELETE audit row is
+              // consumed so `restore` can never duplicate the corrected row.
+              const updated = await relogLedgerEntry(supabaseClient, {
                 entry: target,
                 patch: ledgerTurn.changes,
                 actorPhone: senderPhone
               });
               if (updated.ok) {
                 clearPending();
-                reply = formatEntryUpdated({ entry: target, patch: updated.patch, ...copy });
+                reply = formatEntryRelogged({ entry: target, patch: updated.patch, ...copy });
               } else {
                 const blocked = (updated.rejected || []).join(', ');
                 reply = `⚠️ I could not save that change${blocked ? ` (locked or invalid: ${blocked})` : ''}.\n\n`

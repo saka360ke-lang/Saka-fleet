@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.37.0] - 2026-11-01
+
+- **Corrections are one honest operation: delete & re-log (D1).** `relogLedgerEntry()` replaces the in-place edit: the old row is hard-deleted with its full snapshot audit, a **fresh** row carries the corrected values while keeping the original entry date (`created_at` rides the fresh insert, exactly like the v1.34 retro-date rule), and the engine audits `LEDGER_ENTRY_UPDATED` with `via: 'relog'` + `old_entry_id`/`new_entry_id`.
+- **The restore collision is fixed.** `markDeletedEntryRelogged()` stamps the superseding row's id into the DELETE audit row (`details.relogged_entry_id`), and `restoreLastDeleted()` skips consumed rows — so `restore` after a correction returns "nothing to restore" instead of resurrecting a duplicate of the corrected row. A plain delete still restores for 30 minutes exactly as before.
+- **Copy tells the truth.** `formatEntryRelogged()` renders "Entry corrected — the old row was removed and the corrected one re-logged" with the same before → after diff; VIN, plate, user, vehicle and the entry date remain permanently locked (rule 8/37), and blocked attempts still report the locked fields.
+- **Files:** `src/services/entryLedger.js` (+`relogLedgerEntry`, +`markDeletedEntryRelogged`, restore consumed-filter), `src/services/entryAnswers.js` (+`formatEntryRelogged`), `src/routes/whatsapp.js` (edit-apply branch now re-logs), `sakaAi.js`, `src/services/flowKnowledge.js`.
+- **Tests:** `test_entry_ledger` (live round-trip rewritten: relog → old row gone, fresh row + date preserved, restore blocked; copy checks; cleans its own rows), `test_agent_training` (playbook + prompt carry the re-log rule).
+- **Still deferred:** multi-record paragraphs (v1.38.0).
+
+
 ## [1.36.0] - 2026-11-01
 
 - **Your records answer back.** `QUERY_RECORDS` (the 42nd intent) turns questions like "how much did I spend on fuel last week?", "what did I log yesterday?", "average spend per fill in October" and "how many fills this month?" into deterministic ledger answers — sums, counts, averages and lists read straight from `expense_logs` / `private_earnings`. Zero AI tokens: a figure can never be invented.

@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.36.0  
+**Version:** 1.37.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.37.0** | Corrections 2.0 (D1): ledger edits are delete & re-log — fresh row, original entry date, DELETE audit consumed via `relogged_entry_id` so `restore` can never duplicate a corrected row | §83 |
 | **1.36.0** | Record Answers + `QUERY_RECORDS` (intent 42): "how much did I spend on fuel last week?" is answered deterministically from the ledger (sum/count/average/list, Nairobi date ranges, zero AI tokens) | §82 |
 | **1.35.0** | Draft Cards: narrative pre-fills confirm through an engine-rendered card (1 Save / 2 Change / 3 Cancel, zero AI tokens) with live re-render on corrections, optional-field auto-skip, and a narrative eligibility threshold (D5) | §81 |
 | **1.34.0** | Narrative Intake: one free-text sentence is deterministically parsed (money lexicon, past dates, vendor, volume, odometer) and pre-fills the log quiz; stated past dates land in `created_at` on the fresh write — zero AI tokens, never a guessed figure | §80 |
@@ -3342,3 +3343,44 @@ from the ledger — zero AI tokens, figures never invented.
   and playbook entry).
 - **Still deferred:** corrections 2.0 incl. the re-log collision fix
   (v1.37.0), multi-record paragraphs (v1.38.0).
+---
+
+### 83.1 Corrections 2.0 — delete & re-log (v1.37.0, D1)
+
+A ledger correction is one honest operation: remove the wrong row, log the
+right one — and the restore window can never resurrect the superseded row.
+
+- **`relogLedgerEntry()`** (`src/services/entryLedger.js`): reads the row,
+  hard-deletes it with its full snapshot audit (`LEDGER_ENTRY_DELETED` +
+  `restore_until`), inserts a FRESH row built from the snapshot + the
+  sanitized patch (whitelist unchanged: `expense_type, amount, fuel_liters,
+  fill_type, odometer_reading, notes` / earnings `earning_type, amount,
+  notes`), keeps the ORIGINAL entry date (`created_at` rides the fresh
+  insert — the v1.34 retro-date rule), and audits
+  `LEDGER_ENTRY_UPDATED` with `via: 'relog'`, `old_entry_id`,
+  `new_entry_id` and the consumed audit id. VIN, plate, user, vehicle and
+  date stay locked (rule 8/37).
+- **D1 collision fix** — `markDeletedEntryRelogged()` stamps
+  `details.relogged_entry_id` onto the matching DELETE audit row, and
+  `restoreLastDeleted()` skips any DELETE row carrying that marker.
+  `restore` after a correction therefore returns `nothing_to_restore`
+  instead of duplicating the corrected row; a plain delete keeps the normal
+  30-minute restore.
+- **Copy** — `formatEntryRelogged()` (deterministic) renders "Entry
+  corrected" with the same before → after diff and states that the old row
+  was removed and the corrected one re-logged.
+- **Route** — the ledger lane's `edit-apply` branch now calls
+  `relogLedgerEntry` (was `applyEntryUpdate`); blocked patches fall back
+  to the edit preview with the locked-field list, unchanged.
+
+### 83.2 Files, tests
+
+- **Files:** `src/services/entryLedger.js`, `src/services/entryAnswers.js`,
+  `src/routes/whatsapp.js`, `sakaAi.js` (EDITABLE LEDGER block),
+  `src/services/flowKnowledge.js` (EDIT_ENTRY playbook).
+- **Tests:** `test_entry_ledger` — the live round-trip now proves relog
+  (old row gone, fresh row with corrected values + preserved date, locked
+  fields rejected), that restore-after-correction is blocked, and that the
+  plain delete → restore → double-restore contract is unchanged; new copy
+  assertions for the correction headline. Cleans its own rows.
+- **Still deferred:** multi-record paragraphs (v1.38.0).

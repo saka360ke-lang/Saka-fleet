@@ -13,13 +13,14 @@ import {
   formatDeleteConfirm,
   formatEntryDiff,
   formatEntryUpdated,
+  formatEntryRelogged,
   formatEntryDeleted,
   formatEntryRestored,
   ENTRY_RESTORE_WINDOW_MINUTES
 } from './src/services/entryAnswers.js';
 import {
   listLedgerEntries,
-  applyEntryUpdate,
+  relogLedgerEntry,
   deleteLedgerEntry,
   restoreLastDeleted,
   sanitizeEntryUpdate,
@@ -163,6 +164,8 @@ async function runTests() {
   assert(/Entry updated/.test(formatEntryUpdated({ entry: SAMPLE, patch: { amount: 4800 }, ...COPY })), 'update copy missing headline');
   assert(new RegExp(`${ENTRY_RESTORE_WINDOW_MINUTES} minutes`).test(formatEntryDeleted({ entry: SAMPLE, ...COPY })), 'delete copy omits the restore window');
   assert(/restored/i.test(formatEntryRestored({ entry: SAMPLE, ...COPY })), 'restore copy missing');
+  assert(/Entry corrected/.test(formatEntryRelogged({ entry: SAMPLE, patch: { amount: 4800 }, ...COPY })), 'relog copy is missing the correction headline');
+  assert(/re-logged/.test(formatEntryRelogged({ entry: SAMPLE, patch: { amount: 4800 }, ...COPY })), 'relog copy does not say the row was re-logged');
   console.log('✅ List, preview, diff, delete and restore copy are deterministic.');
 
 
@@ -213,22 +216,33 @@ async function runTests() {
   assert(listed.length === 1 && listed[0].id === seededExpense.id, 'seeded expense was not listed');
   assert(listed[0].kind === 'expense', 'listed row lost its kind');
 
-  const updated = await applyEntryUpdate(supabase, {
+  // v1.37.0 (D1) — corrections are delete & re-log: the old row is removed
+  // with a snapshot audit, a FRESH row carries the corrected values and the
+  // original entry date, and the DELETE audit row is consumed so `restore`
+  // can never duplicate the corrected row.
+  const relogged = await relogLedgerEntry(supabase, {
     entry: listed[0],
     patch: { amount: 4800, expense_type: 'Parts', vin: 'HACKVIN', created_at: '2000-01-01' },
     actorPhone: OWNER_PHONE
   });
-  assert(updated.ok, `Update failed: ${updated.reason}`);
-  assert(updated.patch.amount === 4800 && updated.patch.expense_type === 'Parts', 'update patch was not applied');
-  assert(updated.rejected.includes('vin') && updated.rejected.includes('created_at'), 'protected fields were not rejected');
+  assert(relogged.ok, `Relog failed: ${relogged.reason}`);
+  assert(relogged.patch.amount === 4800 && relogged.patch.expense_type === 'Parts', 'relog patch was not applied');
+  assert(relogged.rejected.includes('vin') && relogged.rejected.includes('created_at'), 'protected fields were not rejected');
+  assert(relogged.relogged === true && relogged.entry.id !== seededExpense.id, 'the correction is a fresh row, not an in-place edit');
 
-  const { data: afterUpdate } = await supabase.from('expense_logs').select('amount,expense_type').eq('id', seededExpense.id).single();
-  assert(Number(afterUpdate.amount) === 4800 && afterUpdate.expense_type === 'Parts', 'database row was not updated');
-  console.log('✅ Edit applied to the row; VIN/date attempts rejected.');
+  const { data: oldGone } = await supabase.from('expense_logs').select('id').eq('id', seededExpense.id);
+  assert(!oldGone || oldGone.length === 0, 'the old row was removed');
+  const { data: freshRows } = await supabase.from('expense_logs').select('id,amount,expense_type,created_at').eq('id', relogged.entry.id);
+  assert(freshRows?.length === 1 && Number(freshRows[0].amount) === 4800 && freshRows[0].expense_type === 'Parts', 'the fresh row carries the corrected values');
+  assert(String(freshRows[0].created_at).startsWith(String(seededExpense.created_at).slice(0, 10)), 'the fresh row keeps the original entry date');
+  console.log('✅ Correction = delete & re-log; locked fields rejected, date preserved.');
 
-  const removed = await deleteLedgerEntry(supabase, { entry: listed[0], actorPhone: OWNER_PHONE });
+  const restoreAfterRelog = await restoreLastDeleted(supabase, { actorPhone: OWNER_PHONE, vehicleIds: [vehicle.id] });
+  assert(!restoreAfterRelog.ok, 'a corrected (re-logged) row can never be restored into a duplicate');
+
+  const removed = await deleteLedgerEntry(supabase, { entry: relogged.entry, actorPhone: OWNER_PHONE });
   assert(removed.ok, `Delete failed: ${removed.reason}`);
-  const { data: goneRows } = await supabase.from('expense_logs').select('id').eq('id', seededExpense.id);
+  const { data: goneRows } = await supabase.from('expense_logs').select('id').eq('id', relogged.entry.id);
   assert(!goneRows || goneRows.length === 0, 'row was not hard-deleted');
 
   const { data: auditRows } = await supabase.from('admin_audit_logs')
@@ -238,15 +252,15 @@ async function runTests() {
     .order('created_at', { ascending: false })
     .limit(1);
   assert(auditRows?.length === 1, 'delete was not audited');
-  assert(auditRows[0].details?.snapshot?.id === seededExpense.id, 'audit snapshot is missing the deleted row');
+  assert(auditRows[0].details?.snapshot?.id === relogged.entry.id, 'audit snapshot is missing the deleted row');
   console.log('✅ Hard delete + audit snapshot of the full row.');
 
   const restored = await restoreLastDeleted(supabase, { actorPhone: OWNER_PHONE, vehicleIds: [vehicle.id] });
   assert(restored.ok, `Restore failed: ${restored.reason}`);
-  assert(restored.entry.id === seededExpense.id, 'restore did not bring back the same row id');
-  const { data: backRows } = await supabase.from('expense_logs').select('id,amount').eq('id', seededExpense.id);
+  assert(restored.entry.id === relogged.entry.id, 'restore did not bring back the same row id');
+  const { data: backRows } = await supabase.from('expense_logs').select('id,amount').eq('id', relogged.entry.id);
   assert(backRows?.length === 1, 'restored row is not in the ledger');
-  assert(Number(backRows[0].amount) === 4800, 'restore lost the edited amount');
+  assert(Number(backRows[0].amount) === 4800, 'restore lost the corrected amount');
   console.log('✅ Restore replays the snapshot exactly.');
 
   const restoredTwice = await restoreLastDeleted(supabase, { actorPhone: OWNER_PHONE, vehicleIds: [vehicle.id] });

@@ -1,6 +1,6 @@
 # Saka Fleet — Training Snapshot (generated)
 
-Generated from code at version **1.36.0** — do not edit by hand. Run `npm run docs:gen`.
+Generated from code at version **1.37.0** — do not edit by hand. Run `npm run docs:gen`.
 
 - Prompt schema: `SAKA-PROMPT-SCHEMA:2026.11.0` (version 2026.11.0)
 - Intents trained: **42**
@@ -107,7 +107,7 @@ NON-QUIZ INTENTS:
 - UPGRADE_SUBSCRIPTION: Run the subscription_upgrade flow. First paid upgrade may start the one-time 30-day no-card trial; otherwise the engine returns a Paystack checkout link.
 - CANCEL_SUBSCRIPTION: Run the cancel_subscription flow; access continues until the paid period ends and trials cancel immediately. For monthly payers the engine first offers the annual switch at its own discount — present that save-offer, never invent the percentage.
 - KEEP_VEHICLE: Run the keep_vehicles flow: choose which vehicle(s) stay active; all others are PAUSED (never deleted).
-- EDIT_ENTRY: Editable ledger (engine-owned, zero AI tokens): "my entries" prints the last 6 numbered rows, "edit 2" opens that row, and the engine applies only whitelisted fields (amount, type, litres, fill type, odometer, notes). Never invent the before/after values, never edit VIN, plate, user, vehicle or entry date, and never claim a saved change unless the engine result confirmed it. Totals and reports use the corrected figure immediately.
+- EDIT_ENTRY: Editable ledger (engine-owned, zero AI tokens): "my entries" prints the last 6 numbered rows, "edit 2" opens that row, and the engine applies only whitelisted fields (amount, type, litres, fill type, odometer, notes). Corrections are delete & re-log (v1.37.0): the old row is removed with a snapshot audit, a fresh row carries the corrected values and the original entry date, and the delete is consumed so "restore" can never duplicate it. Never invent the before/after values, never edit VIN, plate, user, vehicle or entry date, and never claim a saved change unless the engine result confirmed it. Totals and reports use the corrected figure immediately.
 - DELETE_ENTRY: Editable ledger (engine-owned): "delete 2" shows the row and waits for the word DELETE; the engine hard-deletes, snapshots the full row into admin_audit_logs and offers a 30-minute "restore". Never delete before that confirmation and never promise an undo after the window passed.
 BOUNDARIES:
 - VIN and passbook QR token are permanent and immutable — never offer to change them.
@@ -356,7 +356,7 @@ NON-QUIZ INTENTS:
 - UPGRADE_SUBSCRIPTION: Run the subscription_upgrade flow. First paid upgrade may start the one-time 30-day no-card trial; otherwise the engine returns a Paystack checkout link.
 - CANCEL_SUBSCRIPTION: Run the cancel_subscription flow; access continues until the paid period ends and trials cancel immediately. For monthly payers the engine first offers the annual switch at its own discount — present that save-offer, never invent the percentage.
 - KEEP_VEHICLE: Run the keep_vehicles flow: choose which vehicle(s) stay active; all others are PAUSED (never deleted).
-- EDIT_ENTRY: Editable ledger (engine-owned, zero AI tokens): "my entries" prints the last 6 numbered rows, "edit 2" opens that row, and the engine applies only whitelisted fields (amount, type, litres, fill type, odometer, notes). Never invent the before/after values, never edit VIN, plate, user, vehicle or entry date, and never claim a saved change unless the engine result confirmed it. Totals and reports use the corrected figure immediately.
+- EDIT_ENTRY: Editable ledger (engine-owned, zero AI tokens): "my entries" prints the last 6 numbered rows, "edit 2" opens that row, and the engine applies only whitelisted fields (amount, type, litres, fill type, odometer, notes). Corrections are delete & re-log (v1.37.0): the old row is removed with a snapshot audit, a fresh row carries the corrected values and the original entry date, and the delete is consumed so "restore" can never duplicate it. Never invent the before/after values, never edit VIN, plate, user, vehicle or entry date, and never claim a saved change unless the engine result confirmed it. Totals and reports use the corrected figure immediately.
 - DELETE_ENTRY: Editable ledger (engine-owned): "delete 2" shows the row and waits for the word DELETE; the engine hard-deletes, snapshots the full row into admin_audit_logs and offers a 30-minute "restore". Never delete before that confirmation and never promise an undo after the window passed.
 BOUNDARIES:
 - VIN and passbook QR token are permanent and immutable — never offer to change them.
@@ -676,6 +676,7 @@ EDITABLE LEDGER (v1.33.0 — engine-owned, zero AI tokens):
 - "my entries" / "my ledger" prints the last 6 logged rows numbered; "edit 2" opens that row, "delete 2" asks for the word DELETE first, "restore" brings back the last deletion inside 30 minutes.
 - Only these fields may change: amount, expense type, fuel litres, fill type (full tank / top up), odometer reading and notes. VIN, plate, user, vehicle and the entry date are locked — refuse plainly and never offer them.
 - The engine prints a before -> after diff and the corrected row. Never invent a before/after value, never claim a save the engine did not confirm, and never promise an undo after the 30-minute window.
+- Corrections are delete & re-log (v1.37.0): the old row is removed with a snapshot audit, a fresh row carries the corrected values and the original entry date, and the delete is consumed — "restore" can never bring back a superseded row.
 - A deleted entry is removed from the ledger but snapshotted (admin_audit_logs LEDGER_ENTRY_DELETED); the restore replays that snapshot exactly. Reports and totals use the corrected figures immediately.
 
 NARRATIVE INTAKE (v1.34.0 — deterministic pre-parsing of free-text logs):

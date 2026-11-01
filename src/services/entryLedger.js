@@ -240,6 +240,123 @@ export async function applyEntryUpdate(supabase, { entry = null, patch = {}, act
   return { ok: true, entry: { ...entry, ...clean }, patch: clean, rejected };
 }
 
+/**
+ * v1.37.0 (D1) — mark a DELETE audit row consumed once its snapshot has been
+ * superseded by a correction re-log, so `restore` can never resurrect a
+ * duplicate of the corrected row.
+ */
+export async function markDeletedEntryRelogged(supabase, { deletedEntryId = null, reloggedEntryId = null, actorPhone = null } = {}) {
+  if (!supabase || !deletedEntryId || !reloggedEntryId) return { ok: false, reason: 'missing_ids' };
+  try {
+    const { data: rows, error: readError } = await supabase.from('admin_audit_logs')
+      .select('id,details')
+      .eq('action', LEDGER_AUDIT_ACTIONS.DELETED)
+      .order('created_at', { ascending: false })
+      .limit(25);
+    if (readError) return { ok: false, reason: 'read_failed', message: readError.message };
+    const target = (rows || []).find((row) => (
+      String(row.details?.entry_id || '') === String(deletedEntryId) && !row.details?.relogged_entry_id
+    ));
+    if (!target) return { ok: false, reason: 'audit_row_not_found' };
+    const details = { ...(target.details || {}), relogged_entry_id: reloggedEntryId };
+    const { error: updateError } = await supabase.from('admin_audit_logs').update({ details }).eq('id', target.id);
+    if (updateError) return { ok: false, reason: 'write_failed', message: updateError.message };
+    await writeAudit(supabase, {
+      action: LEDGER_AUDIT_ACTIONS.UPDATED,
+      actorPhone,
+      details: {
+        kind: 'ledger_audit',
+        relogged_entry_id: reloggedEntryId,
+        consumed_audit_id: target.id,
+        note: 'DELETE snapshot consumed by correction re-log'
+      }
+    });
+    return { ok: true, auditId: target.id };
+  } catch (err) {
+    return { ok: false, reason: 'write_failed', message: err.message };
+  }
+}
+
+/**
+ * v1.37.0 (D1) — corrections are "delete & re-log": the old row is hard-
+ * deleted (with its full snapshot audit), a FRESH row carries the corrected
+ * values while keeping the original entry date (created_at rides the fresh
+ * insert, exactly like the narrative retro-date rule), and the DELETE audit
+ * row is marked consumed so `restore` can never duplicate it.
+ */
+export async function relogLedgerEntry(supabase, { entry = null, patch = {}, actorPhone = null } = {}) {
+  if (!supabase || !entry) return { ok: false, reason: 'no_entry' };
+  const kind = entry.kind === 'earning' ? 'earning' : 'expense';
+  const { ok, patch: clean, rejected } = sanitizeEntryUpdate(kind, patch);
+  if (!ok) return { ok: false, reason: 'no_valid_change', rejected };
+
+  // Earnings keep their money in `revenue_amount` and have no fuel columns.
+  const write = { ...clean };
+  if (kind === 'earning') {
+    if (write.amount !== undefined) { write.revenue_amount = write.amount; delete write.amount; }
+    delete write.fuel_liters;
+    delete write.fill_type;
+    delete write.odometer_reading;
+  }
+
+  try {
+    const { data, error: readError } = await supabase.from(LEDGER_TABLES[kind]).select('*').eq('id', entry.id).limit(1);
+    if (readError) return { ok: false, reason: 'read_failed', message: readError.message };
+    if (!data?.length) return { ok: false, reason: 'not_found' };
+    const snapshot = data[0];
+
+    const { error: deleteError } = await supabase.from(LEDGER_TABLES[kind]).delete().eq('id', entry.id);
+    if (deleteError) return { ok: false, reason: 'delete_failed', message: deleteError.message };
+
+    await writeAudit(supabase, {
+      action: LEDGER_AUDIT_ACTIONS.DELETED,
+      actorPhone,
+      details: {
+        kind,
+        table: LEDGER_TABLES[kind],
+        entry_id: entry.id,
+        vehicle_id: entry.vehicle_id,
+        snapshot,
+        restore_until: new Date(Date.now() + ENTRY_RESTORE_WINDOW_MINUTES * 60 * 1000).toISOString()
+      }
+    });
+
+    // Fresh insert: strip the old id, keep the original entry date, apply the patch.
+    const fresh = { ...snapshot, ...write };
+    delete fresh.id;
+    fresh.created_at = snapshot.created_at || new Date().toISOString();
+    const { data: inserted, error: insertError } = await supabase.from(LEDGER_TABLES[kind]).insert([fresh]).select().maybeSingle();
+    if (insertError) return { ok: false, reason: 'relog_failed', message: insertError.message };
+    if (!inserted) return { ok: false, reason: 'relog_failed', message: 'no row returned' };
+
+    const consumed = await markDeletedEntryRelogged(supabase, {
+      deletedEntryId: entry.id,
+      reloggedEntryId: inserted.id,
+      actorPhone
+    });
+
+    await writeAudit(supabase, {
+      action: LEDGER_AUDIT_ACTIONS.UPDATED,
+      actorPhone,
+      details: {
+        kind,
+        table: LEDGER_TABLES[kind],
+        entry_id: inserted.id,
+        vehicle_id: inserted.vehicle_id,
+        via: 'relog',
+        old_entry_id: entry.id,
+        before: { ...snapshot },
+        after: clean,
+        consumed_audit_id: consumed.ok ? consumed.auditId : null
+      }
+    });
+
+    return { ok: true, entry: shapeRow(inserted, kind), patch: clean, rejected, relogged: true, oldId: entry.id };
+  } catch (err) {
+    return { ok: false, reason: 'relog_failed', message: err.message };
+  }
+}
+
 
 /**
  * Hard delete + full-row snapshot in `admin_audit_logs`. The snapshot is what
@@ -300,7 +417,9 @@ export async function restoreLastDeleted(supabase, { key = null, actorPhone = nu
     const details = row.details || {};
     const idOk = wantedId ? String(details.entry_id) === String(wantedId) : true;
     const scopeOk = scoped.length ? scoped.includes(details.vehicle_id) : true;
-    return idOk && scopeOk && details.snapshot;
+    // v1.37.0 (D1) — a DELETE whose row was superseded by a correction re-log
+    // is consumed and can never be resurrected as a duplicate.
+    return idOk && scopeOk && details.snapshot && !details.relogged_entry_id;
   });
   if (!match) return { ok: false, reason: 'nothing_to_restore' };
 

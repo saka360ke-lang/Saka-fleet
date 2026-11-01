@@ -321,6 +321,14 @@ export function formatEntryUpdated({ entry, patch = {}, vehicles = [], currency 
     + 'Reports and totals use the corrected figure right away.';
 }
 
+/** v1.37.0 — a correction is a delete & re-log; the copy says exactly that. */
+export function formatEntryRelogged({ entry, patch = {}, vehicles = [], currency = null, locale = 'en-US' } = {}) {
+  const diff = formatEntryDiff(entry, patch, { currency, locale });
+  const body = diff.length ? diff.join('\n') : '- corrected (no visible change)';
+  return `*Entry corrected*\n\n${body}\n\nNow: ${describeEntry({ ...entry, ...patch }, { vehicles, currency, locale })}\n\n`
+    + 'The old row was removed and the corrected one re-logged. Reports and totals use the corrected figure right away.';
+}
+
 export function formatEntryDeleted({ entry, vehicles = [], currency = null, locale = 'en-US', restoreMinutes = ENTRY_RESTORE_WINDOW_MINUTES } = {}) {
   return `*Entry deleted*\n\n${describeEntry(entry, { vehicles, currency, locale })}\n\n`
     + `Changed your mind? Reply *restore* within ${restoreMinutes} minutes and I will put it back exactly as it was.`;
