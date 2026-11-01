@@ -47,6 +47,26 @@ import {
   notifyOwnerComplianceCleared
 } from '../services/driverAssignments.js';
 import { resolveBundledCatalog, parseComplianceItem } from '../services/complianceCatalog.js';
+import {
+  resolveLedgerTurn,
+  ledgerEntryKey,
+  formatLedgerList,
+  formatEditPreview,
+  formatDeleteConfirm,
+  formatEntryUpdated,
+  formatEntryDeleted,
+  formatEntryRestored,
+  formatRestoreEmpty,
+  formatNoEntryForSelection,
+  ENTRY_LIST_LIMIT,
+  ENTRY_RESTORE_WINDOW_MINUTES
+} from '../services/entryAnswers.js';
+import {
+  listLedgerEntries,
+  applyEntryUpdate,
+  deleteLedgerEntry,
+  restoreLastDeleted
+} from '../services/entryLedger.js';
 import { parseVehicleComplianceParagraph, submitVehicleCompliance } from '../services/vehicleCompliance.js';
 import { handleStage1CoreCapture, handleStage2OptionalWeaving } from '../services/onboarding.js';
 import { saveChatMessage, getRecentChatHistory } from '../services/chatHistory.js';
@@ -1068,6 +1088,22 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         if (complianceReadCommand && quizForFastPath && !quizPhaseLocked) {
           abandonQuiz(session, { reason: 'deterministic_read_command' });
         }
+        // v1.33.0 — Editable ledger. One decision point (resolveLedgerTurn)
+        // covers the list, the numbered selection, the pending edit/delete
+        // confirmation and the restore window. Zero AI tokens, and a PIN/OTP
+        // phase is never hijacked.
+        const pendingEntryAction = session?.pendingEntryAction || null;
+        const ledgerTurn = quizPhaseLocked
+          ? { type: 'none' }
+          : resolveLedgerTurn({ pending: pendingEntryAction, text: commandText });
+        if (ledgerTurn.dropPending && session) session.pendingEntryAction = null;
+        if (ledgerTurn.type !== 'none' && quizForFastPath && !quizPhaseLocked) {
+          // A ledger command outranks an abandoned draft; the draft is parked,
+          // never destroyed (same contract as the read commands above).
+          abandonQuiz(session, { reason: 'ledger_command' });
+        }
+
+
 
         // Vehicle registration summary ("send me registration summary as PDF").
         const summaryCommand = /(?:(?:send|email|resend|share|mail)\b[\s\S]{0,40}(?:registration|vehicle|passbook)\b[\s\S]{0,20}(?:summary|details|copy|pdf|email))|(?:registration|vehicle)\s+(?:summary|details|passbook)/i.test(String(messageText || ''));
@@ -1364,6 +1400,117 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             reply = buildRemindersListReply({ reminders: reminders || [], vehicles: existingVehicles });
           }
           aiResult = { intent: 'GENERAL_CHAT', extracted_data: {}, reply_message: reply };
+        } else if (ledgerTurn.type !== 'none') {
+          // v1.33.0 — editable ledger (deterministic, zero AI tokens).
+          // Every figure comes from the row itself; nothing is improvised.
+          const laneOwner = existingVehicles.some((v) => v.owner_id === profileData?.id);
+          const ledgerScope = {
+            ownerId: laneOwner ? profileData?.id : null,
+            driverId: laneOwner ? null : profileData?.id,
+            vehicleIds: existingVehicles.map((v) => v.id),
+            limit: ENTRY_LIST_LIMIT
+          };
+          const locale = countryInfo?.locale || 'en-US';
+          const currency = countryInfo?.currency || null;
+          const copy = { vehicles: existingVehicles, currency, locale };
+          const remember = (mode, key) => {
+            if (session) session.pendingEntryAction = { mode, key, at: new Date().toISOString() };
+          };
+          const clearPending = () => {
+            if (session) session.pendingEntryAction = null;
+          };
+          const entries = await listLedgerEntries(supabaseClient, ledgerScope);
+          const atIndex = (index) => (index ? entries[Number(index) - 1] || null : null);
+          const pendingKey = pendingEntryAction?.key || null;
+          const pendingEntry = pendingKey
+            ? entries.find((entry) => ledgerEntryKey(entry) === pendingKey) || null
+            : null;
+          let reply = null;
+          let ledgerIntent = 'GENERAL_CHAT';
+
+          if (ledgerTurn.type === 'cancel') {
+            clearPending();
+            reply = 'No changes made. Everything is still as you logged it.';
+          } else if (ledgerTurn.type === 'command' && ledgerTurn.action === 'list') {
+            clearPending();
+            reply = formatLedgerList({ entries, ...copy });
+          } else if (ledgerTurn.type === 'command' && ledgerTurn.action === 'restore') {
+            clearPending();
+            const restored = await restoreLastDeleted(supabaseClient, {
+              actorPhone: senderPhone,
+              vehicleIds: ledgerScope.vehicleIds
+            });
+            reply = restored.ok
+              ? formatEntryRestored({ entry: restored.entry, ...copy })
+              : formatRestoreEmpty(ENTRY_RESTORE_WINDOW_MINUTES);
+          } else if (ledgerTurn.type === 'command') {
+            // "edit my last entry" / "delete entry 2" — resolve the target now.
+            const target = atIndex(ledgerTurn.index) || (ledgerTurn.index ? null : entries[0] || null);
+            if (!target) {
+              const head = ledgerTurn.index
+                ? formatNoEntryForSelection(ledgerTurn.index)
+                : 'I could not find an entry to change.';
+              reply = `${head}\n\n${formatLedgerList({ entries, ...copy })}`;
+            } else if (ledgerTurn.action === 'edit') {
+              ledgerIntent = 'EDIT_ENTRY';
+              remember('edit', ledgerEntryKey(target));
+              reply = formatEditPreview(target, copy);
+            } else {
+              ledgerIntent = 'DELETE_ENTRY';
+              remember('delete', ledgerEntryKey(target));
+              reply = formatDeleteConfirm(target, copy);
+            }
+          } else if (ledgerTurn.type === 'select') {
+            const target = atIndex(ledgerTurn.index);
+            if (!target) {
+              reply = `${formatNoEntryForSelection(ledgerTurn.index)}\n\n${formatLedgerList({ entries, ...copy })}`;
+            } else if (ledgerTurn.mode === 'delete') {
+              ledgerIntent = 'DELETE_ENTRY';
+              remember('delete', ledgerEntryKey(target));
+              reply = formatDeleteConfirm(target, copy);
+            } else {
+              ledgerIntent = 'EDIT_ENTRY';
+              remember('edit', ledgerEntryKey(target));
+              reply = formatEditPreview(target, copy);
+            }
+          } else if (ledgerTurn.type === 'edit-apply') {
+            ledgerIntent = 'EDIT_ENTRY';
+            const target = pendingEntry || entries[0] || null;
+            if (!target) {
+              clearPending();
+              reply = formatLedgerList({ entries, ...copy });
+            } else {
+              const updated = await applyEntryUpdate(supabaseClient, {
+                entry: target,
+                patch: ledgerTurn.changes,
+                actorPhone: senderPhone
+              });
+              if (updated.ok) {
+                clearPending();
+                reply = formatEntryUpdated({ entry: target, patch: updated.patch, ...copy });
+              } else {
+                const blocked = (updated.rejected || []).join(', ');
+                reply = `⚠️ I could not save that change${blocked ? ` (locked or invalid: ${blocked})` : ''}.\n\n`
+                  + formatEditPreview(target, copy);
+              }
+            }
+          } else if (ledgerTurn.type === 'delete-confirm') {
+            ledgerIntent = 'DELETE_ENTRY';
+            const target = pendingEntry || entries[0] || null;
+            if (!target) {
+              clearPending();
+              reply = formatLedgerList({ entries, ...copy });
+            } else {
+              const removed = await deleteLedgerEntry(supabaseClient, { entry: target, actorPhone: senderPhone });
+              clearPending();
+              reply = removed.ok
+                ? formatEntryDeleted({ entry: target, ...copy })
+                : '⚠️ I could not delete that entry just now. Nothing was changed — please try again in a moment.';
+            }
+          }
+
+          aiResult = { intent: ledgerIntent, extracted_data: {}, reply_message: reply };
+
         } else if (receiptsCommand) {
           const isOwner = existingVehicles.some((v) => v.owner_id === profileData?.id);
           const receipts = await listReceipts(supabaseClient, {

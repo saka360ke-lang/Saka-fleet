@@ -3,7 +3,8 @@
 WhatsApp-native fleet operating system: vehicles, expenses, reminders, driver &
 vehicle compliance, reports, subscriptions and an autonomous Sentinel supervisor.
 
-**Release v1.32.4.** Recent highlights:
+**Release v1.33.0.** Recent highlights:
+- **Editable ledger** (v1.33.0): `my entries` → `edit 2` / `delete 2` (literal `DELETE`) → before/after diff, with a 30-minute `restore` replayed from the `admin_audit_logs` snapshot. VIN, plate and entry date stay locked.
 - **Legible reports** (v1.32.4): paint-scoped alpha, one y per KPI row, single-line ledger/table cells and a cover band that fills the page.
 - **Verified short links** (v1.32.4): `/r/__saka_probe__` + `verifyShortLinkRoute()` gate every branded link; unknown codes get an honest 404.
 - **Env & secret parity** (v1.32.4): `src/services/envAudit.js`, `npm run env:audit [-- --remote|--cloud]`, `admin env` and an env parity section in `npm run health`.

@@ -54,7 +54,9 @@ const STATLESS_SUITES = [
   // v1.32.0 — branded short links (PDF reports, checkout URLs).
   'test_link_shortener.js',
   // v1.32.4 — env/secret parity: registry ≡ .env.example, no value ever leaks.
-  'test_env_audit.js'
+  'test_env_audit.js',
+  // v1.33.0 — editable ledger: detectors, whitelist, audit + restore round-trip.
+  'test_entry_ledger.js'
 ];
 
 const WORKFLOW_DIR = '.github/workflows';

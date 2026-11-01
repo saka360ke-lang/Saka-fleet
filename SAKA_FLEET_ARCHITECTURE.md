@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.32.4  
+**Version:** 1.33.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.33.0** | Editable ledger: `my entries` → `edit 2` / `delete 2` (DELETE confirm) → before/after diff, hard delete + `admin_audit_logs` snapshot + 30-minute `restore`, whitelist-locked fields (VIN/plate/date never editable), fresh-log safety and PIN/OTP guard | §79 |
 | **1.32.4** | Report legibility (paint-scoped alpha, real KPI rows, no-wrap cells, 722 pt cover), self-verifying short links (`/r/__saka_probe__`, honest 404), env/secret parity audit (`admin env`, `/internal/status` env block, `npm run env:audit`), chat friction rules (pdf = report, no empty replies, real receipt vendors) | §78 |
 | **1.32.3** | Stale-state hijack fix: 45-min chat-history window, 20-min quiz expiry + auto-parking drafts, read commands always answered, coupon gated on a prior offer, dedicated compliance PDF layout | §77 |
 | **1.32.2** | Short links gated on the verified `app.sakafleet.com` subdomain, deterministic compliance/reminder answers, typed expiry corrections, days-left confirmations, deploy LIVE-alert fix | §76 |
@@ -3067,3 +3068,106 @@ HEIC/HEIF accepted (`SUPPORTED_IMAGE_TYPES`); insurance receipt rows carry `Poli
 - **Files:** `src/services/pdfEngine.js`, `pdfTextExtractor.js`, `linkShortener.js`, `reportDelivery.js`, `envAudit.js` (new), `statusProbe.js`, `conversationEngine.js`, `quizEngine.js`, `superadmin.js`, `src/routes/whatsapp.js`, `index.js`, `sakaAi.js`, `scripts/env_audit.js` (new), `scripts/health_audit.js`, `package.json`, `.env.example`.
 - **Tests:** `test_pdf_engine.js` (**68** — alpha guard, KPI geometry, no-wrap cells, 722 pt cover band, leak sensor), `test_link_shortener.js` (**45** — probe verdicts, caching, 404 page), `test_env_audit.js` (**44**, new — registry ≡ template, no value leaks), `test_agent_training.js` (**121** — prompt + composer friction rules), `test_quiz_flow.js` (**112** — pdf-shaped report routing), plus `test_status_probe.js` (14) and the report suites.
 - **Knobs:** `SHORT_LINK_PROBE` (on), `SHORT_LINK_PROBE_CACHE_MS` (600000), `SHORT_LINK_PROBE_TIMEOUT_MS` (3000).
+
+---
+
+## 79. Editable Ledger (v1.33.0)
+
+The user could log everything and change nothing: a wrong amount, a wrong fuel
+type or a receipt booked twice had no WhatsApp escape hatch. v1.33.0 gives the
+ledger a deterministic edit/delete/restore surface — zero AI tokens, no DDL.
+
+### 79.1 Command grammar (engine-owned)
+| The user says | The engine does |
+|---|---|
+| `my entries` / `show my ledger` / `entries` | Last 6 rows (expenses + earnings) numbered, newest first, with an `edit 2` / `delete 2` hint |
+| `edit 2`, `edit my last entry`, `I made a mistake on the fuel entry` | Opens that row: current values + editable vocabulary + `cancel` |
+| `amount 4800, type parts, odometer 50,350, 42 litres, full tank, notes: …` | Applies only the whitelisted fields in one pass, prints a before -> after diff |
+| `delete 2`, `remove my last expense`, `wrong amount … delete it` | Shows the row, waits for the literal word `DELETE` |
+| `restore` / `undo the delete` | Replays the last deletion snapshot (30-minute window) |
+| `cancel` / `stop` / `no` | Leaves everything untouched |
+
+`detectLedgerCommand()` never fires on a fresh log (`logged 40L at 50,350 km`),
+on a subscription/account cancel (`cancel my subscription`, `delete my account`)
+or on a report request — the suite pins those exclusions.
+
+### 79.2 `src/services/entryAnswers.js` (pure, no I/O)
+- **Detectors:** `detectLedgerCommand()`, `parseEntrySelection()` (`2`, `#2`,
+  `entry 3`, `the second one`, `last`), `parseEntryEditRequest()` (amounts with
+  or without a currency word, `from repairs to parts`, odometer, litres, fill
+  type, notes).
+- **Expense types are canonicalised through `resolveExpenseType()`** (rule 23 —
+  one catalog); a small `EXTRA_TYPE_ALIASES` map only adds conversational words
+  the catalog lacks (`fix`, `garage`, `spares`).
+- **`resolveLedgerTurn({ pending, text, now })`** is the single decision point:
+  `none | command | select | edit-apply | delete-confirm | cancel`. It owns the
+  15-minute pending TTL, and it returns `{ type:'none', dropPending:true }` when
+  a fresh log line arrives mid-edit — an abandoned edit prompt can never swallow
+  `Logged 40L at 50,350 km`.
+- **Copy:** `formatLedgerList()`, `formatEditPreview()`, `formatDeleteConfirm()`,
+  `formatEntryDiff()`, `formatEntryUpdated()`, `formatEntryDeleted()`,
+  `formatEntryRestored()`, `formatRestoreEmpty()`, `formatNoEntryForSelection()`,
+  `formatLedgerHelp()`. Money/volume always carry units via `globalization.js`.
+
+
+### 79.3 `src/services/entryLedger.js` (database)
+- **Two halves of one ledger:** `expense_logs` (kind `expense`) and
+  `private_earnings` (kind `earning`, stored as `revenue_amount` + `logged_at`);
+  `shapeRow()` normalises earnings so callers see one shape.
+- **`sanitizeEntryUpdate(kind, patch)` is the wall:** expense whitelist
+  `expense_type, amount, fuel_liters, fill_type, odometer_reading, notes`;
+  earning whitelist `earning_type, amount, notes`. `LEDGER_PROTECTED_FIELDS`
+  (`id`, `vehicle_id`, `driver_id`, `owner_id`, `created_at`, `logged_at`,
+  `vin`, `plate_number`, `qr_passbook_token`) are always rejected and reported.
+  Sane bounds: amount 0 < a <= 1e9, litres 0-5000, odometer 0-10,000,000,
+  `fill_type` in {full_tank, top_up}.
+- **Lane checks:** `listLedgerEntries()` scopes by the caller's vehicles (a
+  driver lane only sees rows it logged); `getLedgerEntry()` re-proves visibility
+  before any write.
+- **`deleteLedgerEntry()` is a hard delete** preceded by a full-row `SELECT`
+  snapshot. **`restoreLastDeleted()`** finds the newest `LEDGER_ENTRY_DELETED`
+  audit row inside the window, scoped to the caller's vehicles, and re-inserts
+  the snapshot with its original id — a second restore cannot duplicate the row.
+- **Audit trail:** `LEDGER_ENTRY_UPDATED` (before + after), `LEDGER_ENTRY_DELETED`
+  (full snapshot + `restore_until`), `LEDGER_ENTRY_RESTORED` (source audit id) in
+  `admin_audit_logs` (`admin_phone` = the acting WhatsApp number).
+- **Never throws.** Every function returns `{ ok, reason }` so a ledger command
+  degrades into one friendly sentence.
+
+### 79.4 Route wiring (`src/routes/whatsapp.js`)
+- The turn is resolved once, before any AI call, right after the compliance read
+  commands; the branch sits immediately before `receiptsCommand` in the
+  deterministic chain.
+- **`quizPhaseLocked` (PIN / account OTP) is never hijacked** — the ledger stays
+  silent while a security code is expected. An abandoned draft is *parked*
+  (`abandonQuiz(..., { reason:'ledger_command' })`), exactly like read commands.
+- Pending state lives on the chat session (`session.pendingEntryAction =
+  { mode, key, at }`) and therefore survives Cloud Run restarts through
+  `chat_sessions` (sessionStore). It expires after 15 minutes.
+- Intents: `EDIT_ENTRY` / `DELETE_ENTRY` (registered in `SAKA_INTENTS`, the JSON
+  schema, `SAKA_INTENT_PLAYBOOK`, the boundary rules and the core prompt's
+  EDITABLE LEDGER block); list/cancel/restore answer as `GENERAL_CHAT`.
+
+### 79.5 Locked fields & known limits
+- VIN, plate, vehicle, user, driver and the entry date are **not editable** —
+  the same immutability doctrine as the vehicle (rule 8) applied to the ledger.
+- Deleting an expense does **not** roll the vehicle odometer back: `current_mileage`
+  is a high-water mark used for reminders and fuel economy. A wrong odometer is
+  *edited*, not deleted, so history stays monotonic.
+- Still deferred to the next release: notes keyword search, single-day digest
+  for `summary for <date>` and the non-fuel odometer policy (see 78.6).
+
+### 79.6 Files, tests, knobs
+- **Files (new):** `src/services/entryAnswers.js`, `src/services/entryLedger.js`,
+  `test_entry_ledger.js`. **Modified:** `src/routes/whatsapp.js`,
+  `src/services/flowKnowledge.js`, `sakaAi.js`, `test_agent_training.js`,
+  `scripts/health_audit.js` (the ledger suite joined the health gate).
+- **Tests:** `test_entry_ledger.js` (**89 assertions** — detectors, selection,
+  edit parsing, pending state machine + TTL + fresh-log guard, whitelist and
+  immutability, copy, and a live edit -> delete -> restore round-trip that
+  cleans its own rows), `test_agent_training.js` (**126** — 41 intents,
+  playbook, boundary rule and prompt block).
+- **Knobs:** `ENTRY_PENDING_TTL_MINUTES` (15), `ENTRY_RESTORE_WINDOW_MINUTES`
+  (30), `ENTRY_LIST_LIMIT` (6) — exported constants, no env surface (they are
+  UX guarantees, not deployment knobs).
+

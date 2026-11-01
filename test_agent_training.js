@@ -56,11 +56,16 @@ async function run() {
   check(/primary meter = hours/.test(DEFAULT_SAKA_CORE_PROMPT) && /km\/kWh/.test(DEFAULT_SAKA_CORE_PROMPT), 'Core prompt teaches hours-led and electric metrics');
 
   console.log('\n--- Test 2: every intent is trained ---');
-  check(SAKA_INTENTS.length === 39, 'Registry declares all 39 classifier intents');
+  check(SAKA_INTENTS.length === 41, 'Registry declares all 41 classifier intents');
   const missingIntents = SAKA_INTENTS.filter((intent) => !DEFAULT_SAKA_CORE_PROMPT.includes(intent));
   check(missingIntents.length === 0, `All intents appear in the core prompt (${SAKA_INTENTS.length})`);
   const missingSchema = SAKA_INTENTS.filter((intent) => !DEFAULT_SAKA_CORE_PROMPT.includes(`"${intent}"`));
   check(missingSchema.length === 0, 'Every intent is present in the JSON schema');
+  check(SAKA_INTENTS.includes('EDIT_ENTRY') && SAKA_INTENTS.includes('DELETE_ENTRY'), 'v1.33.0 editable-ledger intents are registered');
+  check(SAKA_INTENT_PLAYBOOK.some((row) => row.intent === 'EDIT_ENTRY' && /whitelisted fields/i.test(row.behavior)), 'Edit intent playbook names the editable whitelist');
+  check(SAKA_INTENT_PLAYBOOK.some((row) => row.intent === 'DELETE_ENTRY' && /30-minute "restore"/.test(row.behavior)), 'Delete intent playbook names the restore window');
+  check(SAKA_BOUNDARY_RULES.some((rule) => /LEDGER_ENTRY_DELETED/.test(rule)), 'Boundary: every ledger edit/delete is audited');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('EDITABLE LEDGER (v1.33.0'), 'Core prompt teaches the editable ledger');
 
   console.log('\n--- Test 3: every quiz flow is trained and resolvable ---');
   check(SAKA_QUIZ_FLOWS.length === 21, 'Registry declares all 21 quiz flows');

@@ -1,0 +1,278 @@
+import dotenv from 'dotenv';
+dotenv.config();
+import crypto from 'crypto';
+import { createClient } from '@supabase/supabase-js';
+import {
+  detectLedgerCommand,
+  parseEntrySelection,
+  parseEntryEditRequest,
+  resolveLedgerTurn,
+  ledgerEntryKey,
+  formatLedgerList,
+  formatEditPreview,
+  formatDeleteConfirm,
+  formatEntryDiff,
+  formatEntryUpdated,
+  formatEntryDeleted,
+  formatEntryRestored,
+  ENTRY_RESTORE_WINDOW_MINUTES
+} from './src/services/entryAnswers.js';
+import {
+  listLedgerEntries,
+  applyEntryUpdate,
+  deleteLedgerEntry,
+  restoreLastDeleted,
+  sanitizeEntryUpdate,
+  LEDGER_AUDIT_ACTIONS
+} from './src/services/entryLedger.js';
+import { runWithCleanup } from './scripts/testCleanup.js';
+
+const OWNER_PHONE = '+254799123458';
+const TEST_VIN = 'JT111UJ800012399';
+const TEST_PLATE = 'KZL 331Z';
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+const VEHICLES = [{ id: 'veh-1', plate_number: TEST_PLATE, owner_id: 'owner-1' }];
+const COPY = { vehicles: VEHICLES, currency: 'KES', locale: 'en-KE' };
+const SAMPLE = {
+  id: 41,
+  kind: 'expense',
+  vehicle_id: 'veh-1',
+  expense_type: 'Fuel',
+  amount: 4500,
+  fuel_liters: 40,
+  fill_type: 'full_tank',
+  odometer_reading: 50350,
+  notes: null,
+  created_at: '2026-11-01T07:15:00.000Z'
+};
+
+async function runTests() {
+  console.log('=== EDITABLE LEDGER TESTS (v1.33.0) ===\n');
+
+  // 1. Command detection
+  console.log('--- Test 1: ledger command detection ---');
+  assert(detectLedgerCommand('my entries')?.action === 'list', '"my entries" not detected as list');
+  assert(detectLedgerCommand('show my ledger')?.action === 'list', '"show my ledger" not detected as list');
+  assert(detectLedgerCommand('edit my last entry')?.action === 'edit', '"edit my last entry" not an edit');
+  assert(detectLedgerCommand('edit my last entry')?.index === 1, 'last entry did not resolve to index 1');
+  assert(detectLedgerCommand('delete entry 2')?.action === 'delete', '"delete entry 2" not a delete');
+  assert(detectLedgerCommand('delete entry 2')?.index === 2, 'delete index not parsed');
+  assert(detectLedgerCommand('remove my last expense')?.action === 'delete', '"remove my last expense" not a delete');
+  assert(detectLedgerCommand('I made a mistake on the fuel entry')?.action === 'edit', 'mistake phrasing not an edit');
+  assert(detectLedgerCommand('wrong amount on my last expense, delete it')?.action === 'delete', 'wrong+delete phrasing not a delete');
+  assert(detectLedgerCommand('restore')?.action === 'restore', '"restore" not detected');
+  assert(detectLedgerCommand('undo my last entry')?.action === 'delete', '"undo my last entry" not a delete');
+  assert(detectLedgerCommand('logged 40L at 50350 km') === null, 'a fresh log must not be a ledger command');
+  assert(detectLedgerCommand('cancel my subscription') === null, 'a subscription cancel must not be a ledger command');
+  assert(detectLedgerCommand('delete my account') === null, '"delete my account" must not be a ledger delete');
+  assert(detectLedgerCommand('give me a fuel report') === null, 'a report request must not be a ledger command');
+  console.log('✅ Ledger commands, misspellings and look-alike phrases are split correctly.');
+
+  // 2. Selection parsing
+  console.log('\n--- Test 2: entry selection ---');
+  assert(parseEntrySelection('2') === 2, 'bare number not parsed');
+  assert(parseEntrySelection('#3') === 3, '#n not parsed');
+  assert(parseEntrySelection('entry 4') === 4, 'entry n not parsed');
+  assert(parseEntrySelection('the second one') === 2, 'ordinal word not parsed');
+  assert(parseEntrySelection('last') === 1, '"last" not parsed');
+  assert(parseEntrySelection('hello there') === null, 'a plain sentence returned a selection');
+  console.log('✅ Numbers, #ids and ordinals all resolve.');
+
+  // 3. Edit parsing
+  console.log('\n--- Test 3: edit request parsing ---');
+  const full = parseEntryEditRequest('amount 10500 kes, type parts, odometer 50350, 42 litres, full tank, notes: changed receipt');
+  assert(full.amount === 10500, `amount not parsed (${full.amount})`);
+  assert(full.expense_type === 'Parts', `type not canonicalised (${full.expense_type})`);
+  assert(full.odometer_reading === 50350, `odometer not parsed (${full.odometer_reading})`);
+  assert(full.fuel_liters === 42, `litres not parsed (${full.fuel_liters})`);
+  assert(full.fill_type === 'full_tank', 'fill type not parsed');
+  assert(full.notes === 'changed receipt', `notes not parsed (${full.notes})`);
+  const money = parseEntryEditRequest('the amount should be 4,800');
+  assert(money.amount === 4800, `comma amount not parsed (${money.amount})`);
+  const fromTo = parseEntryEditRequest('change the type from repairs to parts');
+  assert(fromTo.expense_type === 'Parts', `"from x to y" type not parsed (${fromTo.expense_type})`);
+  const odometerOnly = parseEntryEditRequest('odometer was 50,900');
+  assert(odometerOnly.odometer_reading === 50900, 'odometer sentence not parsed');
+  assert(Object.keys(parseEntryEditRequest('thank you')).length === 0, 'a thank-you produced a change');
+  assert(Object.keys(parseEntryEditRequest('change my name')).length === 0, 'a profile edit leaked into the ledger');
+  console.log('✅ Amounts, canonical types, litres, fill type, odometer and notes parse in one turn.');
+
+
+  // 4. Turn resolution incl. pending state
+  console.log('\n--- Test 4: ledger turn resolution ---');
+  const now = new Date('2026-11-01T09:00:00.000Z');
+  const stamp = new Date('2026-11-01T08:59:00.000Z').toISOString();
+  const pendingEdit = { mode: 'edit', key: ledgerEntryKey(SAMPLE), at: stamp };
+  const pendingDelete = { mode: 'delete', key: ledgerEntryKey(SAMPLE), at: stamp };
+  assert(resolveLedgerTurn({ pending: pendingEdit, text: 'amount 4800', now }).type === 'edit-apply', 'pending edit did not accept a change');
+  assert(resolveLedgerTurn({ pending: pendingEdit, text: 'cancel', now }).type === 'cancel', 'cancel not honoured mid-edit');
+  assert(resolveLedgerTurn({ pending: pendingEdit, text: '2', now }).type === 'select', 'a number did not re-target the pending edit');
+  assert(resolveLedgerTurn({ pending: pendingDelete, text: 'DELETE', now }).type === 'delete-confirm', 'DELETE did not confirm');
+  assert(resolveLedgerTurn({ pending: pendingDelete, text: 'yes', now }).type === 'delete-confirm', '"yes" did not confirm');
+  assert(resolveLedgerTurn({ pending: pendingDelete, text: 'no', now }).type === 'cancel', '"no" did not cancel');
+  const freshLog = resolveLedgerTurn({ pending: pendingEdit, text: 'Logged 40L at 50,350 km for 4,500', now });
+  assert(freshLog.type === 'none' && freshLog.dropPending === true, 'a fresh log did not drop the stale edit prompt');
+  const expired = resolveLedgerTurn({
+    pending: { ...pendingEdit, at: new Date('2026-11-01T08:00:00.000Z').toISOString() },
+    text: 'amount 4800',
+    now
+  });
+  assert(expired.type === 'none', 'an expired edit prompt still captured the message');
+  assert(resolveLedgerTurn({ text: 'my entries', now }).type === 'command', 'a plain list command was not resolved');
+  console.log('✅ Pending edit/delete state, expiry and fresh-log protection all behave.');
+
+  // 5. Sanitizer: whitelist + immutability
+  console.log('\n--- Test 5: sanitizeEntryUpdate whitelist ---');
+  const locked = sanitizeEntryUpdate('expense', {
+    amount: 5000, vin: 'HACKVIN', plate_number: 'XXX 111X', vehicle_id: 'other',
+    driver_id: 'someone', created_at: '2000-01-01', id: 999
+  });
+  assert(locked.ok && locked.patch.amount === 5000, 'a valid amount was dropped');
+  for (const field of ['vin', 'plate_number', 'vehicle_id', 'driver_id', 'created_at', 'id']) {
+    assert(!(field in locked.patch), `${field} was writable through the ledger`);
+    assert(locked.rejected.includes(field), `${field} was not reported as rejected`);
+  }
+  assert(sanitizeEntryUpdate('expense', { amount: -5 }).ok === false, 'a negative amount was accepted');
+  assert(sanitizeEntryUpdate('expense', { amount: 999999999999 }).ok === false, 'an absurd amount was accepted');
+  assert(sanitizeEntryUpdate('expense', { fuel_liters: 9000 }).ok === false, 'an absurd litre count was accepted');
+  assert(sanitizeEntryUpdate('expense', { fill_type: 'half' }).ok === false, 'an invalid fill type was accepted');
+  const typed = sanitizeEntryUpdate('expense', { expense_type: 'repairs' });
+  assert(typed.patch.expense_type === 'Repairs', `expense type not canonicalised (${typed.patch.expense_type})`);
+  const earningGuard = sanitizeEntryUpdate('earning', { fuel_liters: 40, odometer_reading: 100 });
+  assert(!('fuel_liters' in earningGuard.patch) && !('odometer_reading' in earningGuard.patch), 'fuel fields leaked into an earning');
+  console.log('✅ Only whitelisted, sane values reach the database.');
+
+  // 6. Copy
+  console.log('\n--- Test 6: deterministic copy ---');
+  const list = formatLedgerList({
+    entries: [SAMPLE, { ...SAMPLE, id: 42, expense_type: 'Parts', amount: 3200 }],
+    ...COPY
+  });
+  assert(/\*1\./.test(list) && /\*2\./.test(list), 'numbered list missing numbers');
+  assert(/edit 2/.test(list) && /delete 2/.test(list), 'list does not teach the next step');
+  assert(/Ksh|KES/.test(list), `currency missing from the list (${list.split('\n')[2]})`);
+  assert(/Nothing logged yet/.test(formatLedgerList({ entries: [], ...COPY })), 'empty state not handled');
+  assert(/cancel/i.test(formatEditPreview(SAMPLE, COPY)), 'edit preview has no cancel path');
+  assert(/\*DELETE\*/.test(formatDeleteConfirm(SAMPLE, COPY)), 'delete confirm does not ask for DELETE');
+  const diff = formatEntryDiff(SAMPLE, { amount: 4800, expense_type: 'Parts' }, COPY);
+  assert(diff.some((line) => /Amount:.*->/.test(line)), 'diff has no before->after line');
+  assert(/Entry updated/.test(formatEntryUpdated({ entry: SAMPLE, patch: { amount: 4800 }, ...COPY })), 'update copy missing headline');
+  assert(new RegExp(`${ENTRY_RESTORE_WINDOW_MINUTES} minutes`).test(formatEntryDeleted({ entry: SAMPLE, ...COPY })), 'delete copy omits the restore window');
+  assert(/restored/i.test(formatEntryRestored({ entry: SAMPLE, ...COPY })), 'restore copy missing');
+  console.log('✅ List, preview, diff, delete and restore copy are deterministic.');
+
+
+  // 7. Live round-trip (skipped without credentials)
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY) {
+    console.log('\n⚠️ Supabase credentials missing — live round-trip skipped.');
+    return;
+  }
+  const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+  console.log('\n--- Test 7: live edit -> delete -> restore round-trip ---');
+
+  const { data: owner, error: ownerErr } = await supabase.from('profiles').insert([{
+    id: crypto.randomUUID(),
+    phone_number: OWNER_PHONE,
+    full_name: 'Editable Ledger Owner',
+    is_active: true
+  }]).select().single();
+  assert(!ownerErr && owner, `Profile seed failed: ${ownerErr?.message}`);
+
+  const { data: vehicle, error: vehErr } = await supabase.from('vehicles').insert([{
+    id: crypto.randomUUID(),
+    owner_id: owner.id,
+    owner_phone: OWNER_PHONE,
+    plate_number: TEST_PLATE,
+    make_model: 'Isuzu NQR',
+    yom: 2020,
+    fuel_type: 'Diesel',
+    current_mileage: 50000,
+    odometer_reading: 50000,
+    vin: TEST_VIN,
+    status: 'ACTIVE'
+  }]).select().single();
+  assert(!vehErr && vehicle, `Vehicle seed failed: ${vehErr?.message}`);
+
+  const { data: seededExpense, error: expErr } = await supabase.from('expense_logs').insert([{
+    vehicle_id: vehicle.id,
+    driver_id: owner.id,
+    expense_type: 'Fuel',
+    amount: 4500,
+    fuel_liters: 40,
+    fill_type: 'full_tank',
+    odometer_reading: 50350,
+    notes: 'seeded by test_entry_ledger'
+  }]).select().single();
+  assert(!expErr && seededExpense, `Expense seed failed: ${expErr?.message}`);
+
+  const listed = await listLedgerEntries(supabase, { ownerId: owner.id, vehicleIds: [vehicle.id], limit: 6 });
+  assert(listed.length === 1 && listed[0].id === seededExpense.id, 'seeded expense was not listed');
+  assert(listed[0].kind === 'expense', 'listed row lost its kind');
+
+  const updated = await applyEntryUpdate(supabase, {
+    entry: listed[0],
+    patch: { amount: 4800, expense_type: 'Parts', vin: 'HACKVIN', created_at: '2000-01-01' },
+    actorPhone: OWNER_PHONE
+  });
+  assert(updated.ok, `Update failed: ${updated.reason}`);
+  assert(updated.patch.amount === 4800 && updated.patch.expense_type === 'Parts', 'update patch was not applied');
+  assert(updated.rejected.includes('vin') && updated.rejected.includes('created_at'), 'protected fields were not rejected');
+
+  const { data: afterUpdate } = await supabase.from('expense_logs').select('amount,expense_type').eq('id', seededExpense.id).single();
+  assert(Number(afterUpdate.amount) === 4800 && afterUpdate.expense_type === 'Parts', 'database row was not updated');
+  console.log('✅ Edit applied to the row; VIN/date attempts rejected.');
+
+  const removed = await deleteLedgerEntry(supabase, { entry: listed[0], actorPhone: OWNER_PHONE });
+  assert(removed.ok, `Delete failed: ${removed.reason}`);
+  const { data: goneRows } = await supabase.from('expense_logs').select('id').eq('id', seededExpense.id);
+  assert(!goneRows || goneRows.length === 0, 'row was not hard-deleted');
+
+  const { data: auditRows } = await supabase.from('admin_audit_logs')
+    .select('action,details')
+    .eq('admin_phone', OWNER_PHONE)
+    .eq('action', LEDGER_AUDIT_ACTIONS.DELETED)
+    .order('created_at', { ascending: false })
+    .limit(1);
+  assert(auditRows?.length === 1, 'delete was not audited');
+  assert(auditRows[0].details?.snapshot?.id === seededExpense.id, 'audit snapshot is missing the deleted row');
+  console.log('✅ Hard delete + audit snapshot of the full row.');
+
+  const restored = await restoreLastDeleted(supabase, { actorPhone: OWNER_PHONE, vehicleIds: [vehicle.id] });
+  assert(restored.ok, `Restore failed: ${restored.reason}`);
+  assert(restored.entry.id === seededExpense.id, 'restore did not bring back the same row id');
+  const { data: backRows } = await supabase.from('expense_logs').select('id,amount').eq('id', seededExpense.id);
+  assert(backRows?.length === 1, 'restored row is not in the ledger');
+  assert(Number(backRows[0].amount) === 4800, 'restore lost the edited amount');
+  console.log('✅ Restore replays the snapshot exactly.');
+
+  const restoredTwice = await restoreLastDeleted(supabase, { actorPhone: OWNER_PHONE, vehicleIds: [vehicle.id] });
+  assert(!restoredTwice.ok, 'a deleted row was restored twice into a duplicate');
+
+  console.log('\n🎉 All editable ledger tests passed.');
+}
+
+runWithCleanup({
+  testFn: async () => {
+    try {
+      await runTests();
+    } finally {
+      // admin_audit_logs is not VIN/phone scoped by the shared cleaner.
+      if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY) {
+        try {
+          const client = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+          await client.from('admin_audit_logs').delete().eq('admin_phone', OWNER_PHONE);
+        } catch { /* best-effort */ }
+      }
+    }
+  },
+  phones: [OWNER_PHONE],
+  vins: [TEST_VIN]
+}).catch(err => {
+  console.error('\n❌ Test suite failed:', err.message);
+  process.exit(1);
+});
+

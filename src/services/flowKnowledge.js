@@ -42,6 +42,8 @@ export const SAKA_INTENTS = [
   'LOG_EXPENSE',
   'UPDATE_MILEAGE',
   'LOG_EARNINGS',
+  'EDIT_ENTRY',
+  'DELETE_ENTRY',
   'SET_REMINDER',
   'COMPLETE_REMINDER',
   'LOG_OPERATING_HOURS',
@@ -289,12 +291,15 @@ export const SAKA_INTENT_PLAYBOOK = [
   { intent: 'EXTEND_TRIAL', behavior: 'Redeem an account trial-extension coupon through trialEngine; never extend a trial without a valid coupon.' },
   { intent: 'UPGRADE_SUBSCRIPTION', behavior: 'Run the subscription_upgrade flow. First paid upgrade may start the one-time 30-day no-card trial; otherwise the engine returns a Paystack checkout link.' },
   { intent: 'CANCEL_SUBSCRIPTION', behavior: 'Run the cancel_subscription flow; access continues until the paid period ends and trials cancel immediately. For monthly payers the engine first offers the annual switch at its own discount — present that save-offer, never invent the percentage.' },
-  { intent: 'KEEP_VEHICLE', behavior: 'Run the keep_vehicles flow: choose which vehicle(s) stay active; all others are PAUSED (never deleted).' }
+  { intent: 'KEEP_VEHICLE', behavior: 'Run the keep_vehicles flow: choose which vehicle(s) stay active; all others are PAUSED (never deleted).' },
+  { intent: 'EDIT_ENTRY', behavior: 'Editable ledger (engine-owned, zero AI tokens): "my entries" prints the last 6 numbered rows, "edit 2" opens that row, and the engine applies only whitelisted fields (amount, type, litres, fill type, odometer, notes). Never invent the before/after values, never edit VIN, plate, user, vehicle or entry date, and never claim a saved change unless the engine result confirmed it. Totals and reports use the corrected figure immediately.' },
+  { intent: 'DELETE_ENTRY', behavior: 'Editable ledger (engine-owned): "delete 2" shows the row and waits for the word DELETE; the engine hard-deletes, snapshots the full row into admin_audit_logs and offers a 30-minute "restore". Never delete before that confirmation and never promise an undo after the window passed.' }
 ];
 
 /** Immutable boundaries every prompt version must state. */
 export const SAKA_BOUNDARY_RULES = [
   'VIN and passbook QR token are permanent and immutable — never offer to change them.',
+  'Ledger edits (v1.33.0) only touch amount, expense type, litres, fill type, odometer and notes for the row the user picked by number; VIN, plate, vehicle, user and the entry date are locked, and every edit/delete is audited (LEDGER_ENTRY_UPDATED / LEDGER_ENTRY_DELETED / LEDGER_ENTRY_RESTORED). Deletion needs the explicit word DELETE and can be undone for 30 minutes.',
   'Only the vehicle owner may delete a vehicle; deletion is soft and preserves history.',
   'A driver can never be assigned to two vehicles, and a vehicle can never have two drivers.',
   'Driver assignments require an owner email OTP and the driver\'s ACCEPT; a driver whose email or minimal compliance is not valid can never manage the vehicle.',

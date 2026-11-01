@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.33.0] - 2026-11-01
+
+- **The ledger is editable at last.** `my entries` prints the last six rows (expenses + earnings) numbered, newest first. `edit 2` opens that row, `delete 2` shows it and waits for the literal word `DELETE`, and `restore` brings the last deletion back for 30 minutes. Every step is deterministic — zero AI tokens, no improvising.
+- **Only the right fields move.** `sanitizeEntryUpdate()` is the wall: expense → `expense_type, amount, fuel_liters, fill_type, odometer_reading, notes`; earning → `earning_type, amount, notes`. VIN, plate, vehicle, driver, user and the entry date are permanently locked (same doctrine as the vehicle, rule 8) and every attempt is reported back as "locked or invalid".
+- **A before → after diff the user can trust.** `formatEntryDiff()` prints `- Amount: Ksh 4,500 -> Ksh 4,800`, then the corrected row and a "reports and totals use the corrected figure right away" confirmation. Nothing is claimed unless the database write returned OK.
+- **Deletion is reversible without DDL.** `deleteLedgerEntry()` snapshots the full row into `admin_audit_logs` (`LEDGER_ENTRY_DELETED`, with `restore_until`) and then hard-deletes; `restoreLastDeleted()` re-inserts that snapshot with its original id inside the 30-minute window, and a second restore cannot duplicate the row. Edits are audited as `LEDGER_ENTRY_UPDATED` (before + after) and restores as `LEDGER_ENTRY_RESTORED`.
+- **One natural-language pass, many corrections.** `parseEntryEditRequest()` understands `amount 10,500 kes`, `the amount should be 4,800`, `type parts`, `change the type from repairs to parts`, `odometer 50,350`, `42 litres, full tank` and `notes: …` — in a single message, with the expense type canonicalised through `resolveExpenseType()` (one catalog, rule 23).
+- **An abandoned edit prompt can never eat a real log.** `resolveLedgerTurn()` owns a 15-minute pending state and returns `dropPending` when a fresh line arrives (`Logged 40L at 50,350 km`), so the new fill is logged instead of being applied as an edit to the old row.
+- **Security phases stay untouched.** While a PIN or account OTP is expected the ledger stays silent, and an abandoned quiz draft is parked (`reason: 'ledger_command'`) exactly like the read commands from v1.32.3. Pending state rides the chat session, so it survives Cloud Run restarts.
+- **Trained, not bolted on:** `EDIT_ENTRY` / `DELETE_ENTRY` are registered in `SAKA_INTENTS` (now 41), the classifier JSON schema, `SAKA_INTENT_PLAYBOOK`, the boundary rules and a new EDITABLE LEDGER block in the core prompt.
+- **Tests:** `test_entry_ledger` (**89**, new — detectors, selection, edit parsing, pending state + TTL + fresh-log guard, whitelist/immutability, copy, and a live edit → delete → restore round-trip that cleans its own rows), `test_agent_training` (**126**).
+- **Still deferred:** notes keyword search, the single-day "summary for `<date>`" digest and the non-fuel odometer policy.
+
+
 ## [1.32.4] - 2026-11-01
 
 - **Reports are legible again (the root cause, not the symptom):** `withAlpha()` called `doc.fillColor(rgb, alpha)`, which writes the alpha into the **page** graphics state and never resets it — the cover drew 9 of 20 text ops at `ca < 1` and the ledger page 22 of 40. The new `paintAlpha()` applies alpha only inside `save()/restore()` (`q … Q`), so the fade can never escape the shape it was meant for. Decorative glows, highlight pills, badges and the line-chart fill are unchanged.
