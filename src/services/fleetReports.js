@@ -47,6 +47,18 @@ export function resolveReportType(text, fallback = 'fleet') {
 const DAY_MS = 24 * 60 * 60 * 1000;
 const KNOWN_CATEGORIES = ['insurance', 'inspection', 'licensing', 'permit', 'driver_license', 'maintenance', 'deadline', 'other'];
 
+/** v1.32.3 — plain-language labels for the PDF compliance panels. */
+const CATEGORY_LABELS = Object.freeze({
+  insurance: 'Insurance',
+  inspection: 'Inspection',
+  licensing: 'Road licence',
+  permit: 'Permit',
+  driver_license: 'Driver licence',
+  maintenance: 'Maintenance',
+  deadline: 'Deadline',
+  other: 'Other'
+});
+
 function toNumber(value) {
   const num = Number(value);
   return Number.isFinite(num) ? num : 0;
@@ -94,7 +106,7 @@ function plateFor(vehicleId, vehicles) {
 
 /** Load the shared fleet dataset used by all four reports. */
 async function loadFleetData({ supabase, ownerId = null, driverId = null, vehicleId = null }) {
-  const empty = { vehicles: [], reminders: [], expenses: [], earnings: [], transfers: [], profiles: [], notificationLog: [], driverCompliances: [] };
+  const empty = { vehicles: [], reminders: [], expenses: [], earnings: [], transfers: [], profiles: [], notificationLog: [], driverCompliances: [], vehicleCompliances: [] };
   if (!supabase) return empty;
 
   const scopes = [];
@@ -185,7 +197,15 @@ async function loadFleetData({ supabase, ownerId = null, driverId = null, vehicl
     } catch { driverCompliances = []; }
   }
 
-  return { vehicles, reminders, expenses, earnings, transfers, profiles, notificationLog, driverCompliances };
+  // v1.32.3 — policy / certificate numbers live in the compliance ledger, not on
+  // the vehicle row, so the PDF "Documents on file" panel needs this table.
+  let vehicleCompliances = [];
+  try {
+    const { data } = await supabase.from('vehicle_compliances').select('*').in('vehicle_id', vehicleIds).limit(300);
+    vehicleCompliances = data || [];
+  } catch { vehicleCompliances = []; }
+
+  return { vehicles, reminders, expenses, earnings, transfers, profiles, notificationLog, driverCompliances, vehicleCompliances };
 }
 
 /** Unified expiry item list from reminders + canonical vehicle date columns. */
@@ -461,6 +481,47 @@ export async function buildComplianceReport({ supabase, ownerId = null, driverId
     return `Update ${item.reminderType.toLowerCase()} for ${item.plate} to ${target}`;
   });
 
+  // v1.32.3 — PDF-ready structures. The renderer needs the itemized rows (plate,
+  // item, expiry, days left, status), not only the aggregate bullets, otherwise
+  // the compliance PDF ships with empty panels and an unreadable page 2.
+  const scopedVehicles = (dataset.vehicles || []).map((vehicle) => ({
+    plate: vehicle.plate_number || 'Fleet vehicle',
+    make_model: vehicle.make_model || null,
+    asset_kind: vehicle.asset_kind || null,
+    status: isActiveVehicle(vehicle) ? 'active' : String(vehicle.status || 'inactive').toLowerCase()
+  }));
+
+  const expiryItems = items.map((item) => ({
+    plate: item.plate,
+    category: item.category,
+    categoryLabel: CATEGORY_LABELS[item.category] || item.reminderType || item.category,
+    item: item.reminderType || CATEGORY_LABELS[item.category] || item.category,
+    dueDate: item.dueDate,
+    daysLeft: item.daysLeft,
+    status: item.status,
+    subjectType: item.subjectType || 'vehicle'
+  }));
+  const overdueItems = expiryItems.filter((item) => typeof item.daysLeft === 'number' && item.daysLeft < 0);
+
+  // Policy / certificate numbers (compliance ledger), newest expiry last.
+  const documents = (dataset.vehicleCompliances || [])
+    .map((row) => {
+      const expiry = row.expiry ? String(row.expiry).slice(0, 10) : null;
+      const daysLeft = expiry ? daysUntilDue(expiry, now) : null;
+      return {
+        plate: plateFor(row.vehicle_id, dataset.vehicles),
+        type: row.type || 'other',
+        label: row.label || CATEGORY_LABELS[row.type] || row.type || 'Document',
+        number: row.number || null,
+        expiry,
+        lifetime: row.lifetime === true,
+        daysLeft,
+        status: row.lifetime ? 'active' : daysLeft === null ? 'unknown' : expiryStatus(daysLeft)
+      };
+    })
+    .sort((a, b) => (a.daysLeft ?? 9999) - (b.daysLeft ?? 9999))
+    .slice(0, 20);
+
   const data = {
     type: 'compliance',
     generatedAt: now.toISOString(),
@@ -472,6 +533,10 @@ export async function buildComplianceReport({ supabase, ownerId = null, driverId
     driverCompliance,
     notificationLog,
     actionPrompt,
+    vehicles: scopedVehicles,
+    expiryItems,
+    overdueItems,
+    documents,
     totals: {
       monitored: items.length,
       active: items.filter((item) => item.status === 'active').length,

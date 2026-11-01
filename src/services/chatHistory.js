@@ -1,3 +1,17 @@
+/**
+ * v1.32.3 — conversation history freshness.
+ *
+ * Live incident 2026-11-01: at 08:49 the bot answered "one step away" from a
+ * 10-turn window that ended at 07:06 (1 h 43 m stale), because the last-10 read
+ * had no age limit. History older than this window is never injected into the
+ * model prompt; the database rows are kept, only the prompt is protected.
+ */
+export const CHAT_HISTORY_MAX_AGE_MINUTES = (() => {
+  const raw = Number(process.env.CHAT_HISTORY_MAX_AGE_MINUTES || 45);
+  if (!Number.isFinite(raw) || raw <= 0) return 45;
+  return Math.min(raw, 24 * 60);
+})();
+
 export async function saveChatMessage(supabase, userPhone, role, message) {
   if (!supabase || !userPhone || !message) return null;
 
@@ -21,15 +35,21 @@ export async function saveChatMessage(supabase, userPhone, role, message) {
   }
 }
 
-export async function getRecentChatHistory(supabase, userPhone, limit = 10) {
+export async function getRecentChatHistory(supabase, userPhone, limit = 10, { maxAgeMinutes = CHAT_HISTORY_MAX_AGE_MINUTES } = {}) {
   if (!supabase || !userPhone) return [];
 
   try {
     const cleanPhone = userPhone.replace(/[^\d+]/g, '');
-    const { data, error } = await supabase
+    const windowMinutes = Number(maxAgeMinutes);
+    const cutoffMs = Number.isFinite(windowMinutes) && windowMinutes > 0
+      ? Date.now() - windowMinutes * 60 * 1000
+      : null;
+    let query = supabase
       .from('chat_history')
       .select('role, message, created_at')
-      .eq('user_phone', cleanPhone)
+      .eq('user_phone', cleanPhone);
+    if (cutoffMs) query = query.gte('created_at', new Date(cutoffMs).toISOString());
+    const { data, error } = await query
       .order('created_at', { ascending: false })
       .limit(limit);
 
@@ -37,8 +57,16 @@ export async function getRecentChatHistory(supabase, userPhone, limit = 10) {
       return [];
     }
 
-    // Chronological order (oldest to newest among the last N)
-    const chronological = [...data].reverse();
+    // Chronological order (oldest to newest among the last N), re-checked
+    // locally so a timezone-skewed row can never resurrect stale context.
+    const fresh = cutoffMs
+      ? data.filter((row) => {
+        const at = row?.created_at ? Date.parse(row.created_at) : NaN;
+        return !Number.isFinite(at) || at >= cutoffMs;
+      })
+      : data;
+    if (!fresh.length) return [];
+    const chronological = [...fresh].reverse();
 
     // Map into Saka's provider-neutral turn format: { role: 'user' | 'model', parts: [{ text }] }
     // (normalizeHistory() in aiClient.js converts this into DeepSeek/OpenAI messages.)

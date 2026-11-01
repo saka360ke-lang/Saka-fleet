@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.32.3] - 2026-11-01
+
+- **Stale state can no longer hijack a turn:** conversation history is bounded by `CHAT_HISTORY_MAX_AGE_MINUTES` (**45**), enforced in SQL *and* re-checked locally, so the 1 h 43 m-old turns behind the 08:49 "you are one step away" reply are never injected again. Database rows are kept; only the prompt is protected.
+- **Quiz drafts expire and park:** `QUIZ_MAX_AGE_MINUTES` (**20**, 5–240) makes `getActiveQuiz()` the only sanctioned read of `session.quiz`; an untouched draft is cleared instead of owning every later message. `markQuizTurn()` stamps the inactivity clock and `abandonQuiz()` parks a draft (answers preserved for telemetry) when a read command needs the conversation.
+- **Deterministic read commands always win:** reminder lists ("Report of recent tired alerts", "List recent tiered alerts"), the compliance card, expiry questions ("When does your insurance expire") and receipts/parts lists are answered by the engine even when a draft was open — the draft is parked and the read is served in the same turn. `carriesExplicitDate()` keeps date-bearing answers ("insurance expires 20/11/2026") out of every read detector, and negated replies ("no alerts yet") are ignored.
+- **A bare "yes" no longer redeems a coupon:** the trial-extension branch now requires a prior coupon offer (`session.lastAssistantPrompt`) plus a code in the merged extraction.
+- **Compliance PDFs are full:** `report_type: 'compliance'` renders through the new `complianceReportToPdf()` — cover highlights (overdue/due-soon), an itemized per-vehicle table with days-left chips, a category matrix and provenance notes. `buildComplianceReport()` now returns PDF-ready rows (policy numbers read from `vehicle_compliances`, `dueSoon` aggregation, plain-language category labels). The Apex cover gains an optional `coverHighlights` row and a dynamic hero band; "PRO REPORT" is now "APEX REPORT" and body text is larger.
+- **Sentinel nudges are visible:** every stall nudge is persisted with `saveChatMessage()`, and the last-warning nudge releases a stalled quiz, so the model never references dialogue the user cannot see.
+- **Prompt/doc sync:** `flowKnowledge` + `DEFAULT_SAKA_CORE_PROMPT` gain the READ COMMANDS WIN OVER DRAFTS contract; `.env.example` documents both freshness knobs; architecture §77 added; tests: `test_quiz_flow` (107), `test_vehicle_compliance` (62), `test_pdf_engine` (50).
+
 ## [1.32.2] - 2026-11-01
 
 - **Short links are now domain-verified (live fix):** the default base moved to `https://app.sakafleet.com` (the Cloud Run custom subdomain; the root site stays marketing). New `SHORT_LINK_DOMAIN_READY` gate (default **off**) means messages carry the original working URL until the branded domain serves HTTPS — the 2026-11-01 dead-link incident (`sakafleet.com` parked → every `/r/<code>` 404) can never repeat.

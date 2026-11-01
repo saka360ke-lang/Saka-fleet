@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.32.2  
+**Version:** 1.32.3  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.32.3** | Stale-state hijack fix: 45-min chat-history window, 20-min quiz expiry + auto-parking drafts, read commands always answered, coupon gated on a prior offer, dedicated compliance PDF layout | §77 |
 | **1.32.2** | Short links gated on the verified `app.sakafleet.com` subdomain, deterministic compliance/reminder answers, typed expiry corrections, days-left confirmations, deploy LIVE-alert fix | §76 |
 | **1.32.1** | OCR audit remediation: silent-crash fix, insurance≠logbook + expiry-label precedence, Kenya e-TIMS profile (Rule 36), three-layer duplicate guard, `ocr_requests` telemetry + `admin ocr-stats`, HEIC | §75 |
 | **1.32.0** | Presentation polish from the real KAS 628T PDF (plate cover, honest zero tones, 6-card grid, vehicle snapshot, clean callouts) + self-hosted short links for every report/checkout URL | §74 |
@@ -2985,3 +2986,37 @@ HEIC/HEIF accepted (`SUPPORTED_IMAGE_TYPES`); insurance receipt rows carry `Poli
 - **Files:** `linkShortener.js`, `complianceAnswers.js` (new), `src/routes/whatsapp.js`, `deployLiveAlert.js`, `ocrService.js`, `flowKnowledge.js`, `sakaAi.js`, `.env.example`, `.clinerules`.
 - **Tests:** `test_link_shortener.js` (28 — readiness gate, app subdomain base), `test_vehicle_compliance.js` (44 — detectors, replies, correction writes), `test_ocr_flow.js` (88 — expiry note), `test_quiz_flow.js` (95).
 - **Knobs:** `SHORT_LINK_DOMAIN_READY` (off; on|true|1 enables short links), `PUBLIC_APP_URL` (optional explicit base).
+
+---
+
+## 77. Stale-State Hijack, Read-Command Swallowing & the Compliance PDF (v1.32.3)
+
+### 77.1 Live evidence (2026-11-01, phone 254734852529)
+- At 08:49 the bot opened with "you are one step away" and re-asked an odometer question. The last-10 history window the model saw was **1 h 43 m stale** (last turn 07:06) — the read had no age limit.
+- A long-abandoned expense/registration draft stayed `session.quiz` forever and kept owning every later turn; a "yes" typed minutes later was routed as a quiz/coupon answer instead of a fresh request.
+- **Read commands were swallowed:** "Tired alerts report", "List recent tiered alerts", "Show me insurance details for my cars" and "When does my insurance expire" produced model prose (or a new reminder quiz) instead of the deterministic reminder list / compliance card / expiry answer, because the detectors only ran when no quiz was active.
+- A bare **"yes"** redeemed a trial-extension coupon the user was never offered.
+- The compliance PDF's page 2 was nearly empty: the generic summary layout drew only a couple of body rows for a compliance report.
+
+### 77.2 Conversation freshness (`chatHistory.js`, `quizEngine.js`)
+- `CHAT_HISTORY_MAX_AGE_MINUTES` (**45**, clamped to 24 h) — `getRecentChatHistory()` applies a SQL `gte('created_at', …)` cut-off **and** re-filters locally, so a timezone-skewed row can never resurrect stale context. `{ maxAgeMinutes: 0 }` is the explicit full read used by admin/tools. Rows are kept in the database; only the prompt is protected.
+- `QUIZ_MAX_AGE_MINUTES` (**20**, clamped 5–240) — `getActiveQuiz(session)` is now the ONLY way a route may read `session.quiz`: it measures from `lastTurnAt` (falling back to `startedAt`), and an expired draft is cleared from the session and never resumed.
+- `markQuizTurn(session)` stamps `lastTurnAt` after every handled quiz turn; `abandonQuiz(session, { reason })` parks a draft (`session.quiz = null`, `lastAbandonedQuiz = { …draft, reason, parkedAt }`) so the conversation is free again without losing the collected answers from telemetry.
+- `sentinel.js` persists every stall nudge through `saveChatMessage()` (nudges were invisible to history, which is why the model kept "remembering" a dialogue the user could not see) and a last-warning nudge now releases a stalled quiz via `sentinel_stall_release`.
+
+### 77.3 Read commands always win (`whatsapp.js`, `complianceAnswers.js`)
+- Deterministic read branches (reminders list, compliance card, expiry question, receipts/parts list, reports, profile, passbook) run **before** the quiz/flow branches and are no longer gated on "no active quiz": when a read command arrives with a live draft, the draft is parked (`abandonQuiz`) and the read is answered in the same turn.
+- `complianceAnswers.js` gains `carriesExplicitDate()` plus widened `detectRemindersListCommand`, `detectComplianceStatusCommand` and `detectComplianceExpiryQuestion`: "tiered/tired alerts", "list recent alerts", "see reminders for <plate>" and short non-negated fragments ("reminders") count as reads; any message that supplies its own date ("insurance expires 20/11/2026") is an ANSWER and is excluded from every read detector; "remind me to renew on <date>" stays a creation request; "compliance report"/"expiry report" stays with the PDF report engine.
+- The trial-extension coupon branch now requires BOTH a prior offer (`session.lastAssistantPrompt` matching the offer copy) AND a coupon code in the merged extraction — a bare "yes" can no longer redeem anything.
+- `receiptsCommand` was widened so "do you have any parts purchases" lists receipts instead of chatting.
+
+### 77.4 Compliance PDF (`reportDelivery.js`, `pdfEngine.js`)
+- `fleetReportToPdf()` routes `report_type: 'compliance'` to the new exported `complianceReportToPdf()`: cover highlights (overdue/due-soon counts), an itemized per-vehicle table (item, number, expiry, days left, 🟢🟡🔴 status), a category matrix across vehicles, and provenance notes — page 2 is now full for single-vehicle and fleet compliance reports.
+- `fleetReports.js`: `loadFleetData()` also reads `vehicle_compliances` (policy/certificate numbers live in the ledger, not on the vehicle row) and `buildComplianceReport()` returns PDF-ready structures — `scopedVehicles`, itemized rows with `daysLeft`, `dueSoon` aggregation, category counts and `CATEGORY_LABELS` for plain-language panel titles.
+- `pdfEngine.js`: `coverHighlights` optional cover row + dynamic hero band height; "PRO REPORT" renamed to "APEX REPORT"; body row/note font sizes raised to 8.6 for readability.
+
+### 77.5 Files, tests, knobs
+- **Files:** `src/services/chatHistory.js`, `quizEngine.js`, `complianceAnswers.js`, `reportDelivery.js`, `pdfEngine.js`, `fleetReports.js`, `src/routes/whatsapp.js`, `src/workers/sentinel.js`, `flowKnowledge.js`, `sakaAi.js`, `.env.example`.
+- **Tests:** `test_quiz_flow.js` (**107** — quiz expiry/parking + 45-min history window), `test_vehicle_compliance.js` (**62** — read-command detectors, negation and date-bearing exclusions), `test_pdf_engine.js` (**50** — compliance itemization + non-compliance regression), `test_agent_training.js` (prompt/registry sync).
+- **Knobs:** `CHAT_HISTORY_MAX_AGE_MINUTES` (45), `QUIZ_MAX_AGE_MINUTES` (20, 5–240).
+

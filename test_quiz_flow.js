@@ -9,8 +9,13 @@ import {
   shouldPauseQuizForChat,
   detectFlowSwitch,
   isPlateLike,
-  looksLikeReportRequest
+  looksLikeReportRequest,
+  getActiveQuiz,
+  markQuizTurn,
+  abandonQuiz,
+  QUIZ_MAX_AGE_MINUTES
 } from './src/services/quizEngine.js';
+import { getRecentChatHistory, CHAT_HISTORY_MAX_AGE_MINUTES } from './src/services/chatHistory.js';
 
 /**
  * Targeted suite: one-piece-at-a-time quiz engine + confirmation gate.
@@ -382,6 +387,63 @@ async function run() {
     shouldPauseQuizForChat({ messageText: 'No', intent: 'GENERAL_CHAT', quiz: { phase: 'confirm' } }) === false,
     'Bare "No" during confirmation remains engine-owned'
   );
+
+  console.log('\n--- Quiz staleness, parking & history freshness (v1.32.3) ---');
+  const freshSession = {
+    quiz: { flow: 'log_expense', phase: 'question', answers: {}, startedAt: Date.now() }
+  };
+  assert(getActiveQuiz(freshSession)?.flow === 'log_expense', 'A live quiz is returned by getActiveQuiz');
+  markQuizTurn(freshSession);
+  assert(Boolean(freshSession.quiz.lastTurnAt), 'markQuizTurn stamps the inactivity clock');
+
+  const idleSession = {
+    quiz: { flow: 'log_expense', phase: 'question', answers: {}, startedAt: Date.now() - 90 * 60 * 1000 }
+  };
+  assert(getActiveQuiz(idleSession) === null, 'A 90-minute idle quiz is expired');
+  assert(idleSession.quiz === null, 'An expired quiz is cleared from the session');
+
+  const touchedSession = {
+    quiz: { flow: 'log_expense', phase: 'question', answers: {}, startedAt: Date.now() - 90 * 60 * 1000, lastTurnAt: new Date().toISOString() }
+  };
+  assert(getActiveQuiz(touchedSession)?.flow === 'log_expense', 'A recently answered quiz survives its old startedAt');
+  assert(QUIZ_MAX_AGE_MINUTES >= 5 && QUIZ_MAX_AGE_MINUTES <= 240, 'QUIZ_MAX_AGE_MINUTES is clamped to a sane window');
+
+  const parkedSession = {
+    quiz: { flow: 'vehicle_registration', phase: 'question', answers: { plate_number: 'KAS 628T' }, startedAt: Date.now() }
+  };
+  const parked = abandonQuiz(parkedSession, { reason: 'deterministic_read_command' });
+  assert(parked?.flow === 'vehicle_registration', 'abandonQuiz returns the parked draft');
+  assert(parkedSession.quiz === null, 'A parked draft no longer owns the conversation');
+  assert(parkedSession.lastAbandonedQuiz?.reason === 'deterministic_read_command', 'The parking reason is remembered for telemetry');
+
+  // Chat history freshness: stale rows must never reach the model prompt.
+  const now = Date.now();
+  const historyRows = [
+    { role: 'user', message: 'old question', created_at: new Date(now - 103 * 60 * 1000).toISOString() },
+    { role: 'model', message: 'old answer', created_at: new Date(now - 100 * 60 * 1000).toISOString() },
+    { role: 'user', message: 'fresh question', created_at: new Date(now - 2 * 60 * 1000).toISOString() }
+  ];
+  const historyMock = {
+    cutoff: null,
+    from() { return this; },
+    select() { return this; },
+    eq() { return this; },
+    gte(column, value) { this.cutoff = Date.parse(value); return this; },
+    order() { return this; },
+    limit() {
+      const rows = historyRows.filter((row) => !this.cutoff || Date.parse(row.created_at) >= this.cutoff);
+      return Promise.resolve({ data: [...rows].reverse(), error: null });
+    }
+  };
+  const history = await getRecentChatHistory(historyMock, '+254700000001', 10);
+  assert(
+    history.length === 1 && history[0].parts?.[0]?.text === 'fresh question',
+    'Stale history (>45 min) is dropped from the prompt window'
+  );
+  historyMock.cutoff = null;
+  const wideHistory = await getRecentChatHistory(historyMock, '+254700000001', 10, { maxAgeMinutes: 0 });
+  assert(wideHistory.length === 3, 'maxAgeMinutes: 0 disables the window (full history is returned)');
+  assert(CHAT_HISTORY_MAX_AGE_MINUTES === 45, 'CHAT_HISTORY_MAX_AGE_MINUTES defaults to 45 minutes');
 
   console.log(`\n🎉 ALL QUIZ ENGINE TESTS PASSED (${passed} assertions).`);
 }

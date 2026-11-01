@@ -13,6 +13,7 @@
 import assert from 'assert';
 import { buildProReportPdf, pdfSafeText, getReportAccent, SAKA_PDF_THEME } from './src/services/pdfEngine.js';
 import { extractPdfText } from './src/services/pdfTextExtractor.js';
+import { complianceReportToPdf, fleetReportToPdf } from './src/services/reportDelivery.js';
 
 let passed = 0;
 function check(condition, label) {
@@ -158,6 +159,72 @@ async function run() {
   check(apexText.includes('no activity recorded'), 'An empty segmented chart degrades with plain copy');
   check(apexText.includes('financial health'), 'Insight callouts are drawn');
   check(apexText.includes('recorded costs'), 'Callout body copy is drawn');
+
+  console.log('\n--- Test 6: compliance report is itemized (v1.32.3) ---');
+  const compliancePayload = complianceReportToPdf({
+    ok: true,
+    type: 'compliance',
+    data: {
+      generatedAt: '2026-11-01T09:30:00.000Z',
+      currency: 'KES',
+      vehicles: [{ plate: 'KAS 628T', make_model: 'Toyota Fielder', asset_kind: 'car', status: 'active' }],
+      insuranceStatusMatrix: { total: 3, active: 1, due30: 0, due14: 0, due7: 0, expired: 1, items: [] },
+      inspectionAndPermits: {
+        inspections: { total: 2, active: 1, due30: 1, due14: 0, due7: 0, expired: 0, items: [] },
+        permits: { total: 2, active: 2, due30: 0, due14: 0, due7: 0, expired: 0, items: [] },
+        licensing: { total: 0, active: 0, due30: 0, due14: 0, due7: 0, expired: 0, items: [] }
+      },
+      driverLicenses: { total: 0, active: 0, due30: 0, expired: 0, items: [] },
+      driverCompliance: [],
+      notificationLog: [],
+      actionPrompt: [],
+      expiryItems: [
+        { plate: 'KAS 628T', category: 'insurance', categoryLabel: 'Insurance', item: 'Insurance Renewal', dueDate: '2026-09-30', daysLeft: -32, status: 'expired' },
+        { plate: 'KAS 628T', category: 'inspection', categoryLabel: 'Inspection', item: 'Inspection', dueDate: '2026-11-18', daysLeft: 17, status: 'due_30d' },
+        { plate: 'KAS 628T', category: 'permit', categoryLabel: 'Permit', item: 'Permit', dueDate: '2027-01-14', daysLeft: 74, status: 'active' }
+      ],
+      documents: [
+        { plate: 'KAS 628T', type: 'insurance', label: 'Insurance', number: 'POL-8871-KE', expiry: '2026-09-30', daysLeft: -32, status: 'expired' },
+        { plate: 'KAS 628T', type: 'inspection', label: 'Inspection', number: 'INS-5521', expiry: '2026-11-18', daysLeft: 17, status: 'due_30d' }
+      ],
+      totals: { monitored: 7, active: 4, expiring30Days: 1, expiring7Days: 0, expired: 1 }
+    }
+  }, 'compliance');
+  check(compliancePayload.kpis.length === 4, 'Compliance cover shows four KPI cards');
+  check(compliancePayload.coverHighlights.length === 3, 'Compliance cover carries the highlight row');
+  const itemTable = compliancePayload.tables.find((table) => /upcoming/i.test(table.title));
+  check(Boolean(itemTable) && itemTable.rows.length === 3, 'Every monitored item is itemized (not summarized)');
+  check(itemTable.rows[0].status === 'Expired' && itemTable.rows[0].daysLeft === '32d overdue', 'The expired item leads with its real overdue age');
+  check(itemTable.columns.some((column) => column.key === 'expires'), 'Itemized rows carry an expiry column');
+  const docTable = compliancePayload.tables.find((table) => /documents on file/i.test(table.title));
+  check(Boolean(docTable) && docTable.rows[0].number === 'POL-8871-KE', 'Policy numbers are listed for documents on file');
+  check(compliancePayload.sections.some((section) => /category matrix/i.test(section.title)), 'Category matrix section is present');
+  check(!compliancePayload.sections.some((section) => /Road licence/.test(JSON.stringify(section.rows || []))), 'All-zero categories are collapsed out of the matrix');
+
+  const complianceBuffer = await buildProReportPdf({ ...compliancePayload, useStandardFonts: true });
+  const complianceText = String(extractPdfText(complianceBuffer).text || '').toLowerCase();
+  const compliancePages = (complianceBuffer.toString('latin1').match(/\/Type\s*\/Page[^s]/g) || []).length;
+  check(complianceBuffer.slice(0, 5).toString() === '%PDF-', 'Compliance report renders a valid PDF');
+  check(compliancePages >= 2, `Compliance report spans cover + itemized pages (${compliancePages})`);
+  check(complianceText.includes('kas 628t'), 'Plate is drawn on the compliance cover');
+  check(complianceText.includes('32d overdue'), 'Overdue age is drawn in the itemized table');
+  check(complianceText.includes('expired'), 'Expired status is drawn');
+  check(complianceText.includes('documents on file'), 'Documents-on-file panel is drawn');
+  check(complianceText.includes('pol-8871-ke'), 'Policy number is drawn');
+  check(complianceText.includes('category matrix'), 'Category matrix panel is drawn');
+  check(complianceText.includes('reminder ladder'), 'Provenance notes are drawn');
+  check(!complianceText.includes('road licence'), 'A zero-count category never renders as a row');
+
+  // Regression: every other report type keeps the generic summary-led layout.
+  const fleetPayload = fleetReportToPdf({
+    ok: true,
+    text: '*Fleet Status Report*\n_1 Nov 2026_\n• Vehicles: 2\n• Active: 2',
+    data: { currency: 'KES', overview: { totalVehicles: 2, activeVehicles: 2, activeDrivers: 1 } }
+  }, 'fleet');
+  check(fleetPayload.title === 'Fleet Status Report', 'Non-compliance reports keep their generic title');
+  check(!fleetPayload.coverHighlights, 'Non-compliance reports carry no compliance highlight row');
+  const fleetBuffer = await buildProReportPdf({ ...fleetPayload, useStandardFonts: true });
+  check(fleetBuffer.slice(0, 5).toString() === '%PDF-', 'Non-compliance reports still render');
 
   console.log(`\n🎉 ${passed} PDF engine assertions passed.`);
 }

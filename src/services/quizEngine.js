@@ -115,7 +115,33 @@ import {
 } from './transfers.js';
 
 const CURRENT_YEAR = new Date().getFullYear();
-const MAX_QUIZ_AGE_MS = 45 * 60 * 1000;
+
+/**
+ * v1.32.3 — quiz staleness.
+ *
+ * `MAX_QUIZ_AGE_MS` (45 min) was only enforced inside `getActiveQuiz()`, while
+ * the WhatsApp route read `session.quiz` directly at nine call sites, so an
+ * abandoned quiz kept the conversation hostage for 45 minutes. The window is
+ * now 20 minutes of INACTIVITY (`lastTurnAt`), configurable in minutes via
+ * QUIZ_MAX_AGE_MINUTES (default 20, clamped 5-240), and every route reads the
+ * quiz through `getActiveQuiz()` / `activeQuizFor()`.
+ */
+export const QUIZ_MAX_AGE_MINUTES = (() => {
+  const raw = Number(process.env.QUIZ_MAX_AGE_MINUTES || 20);
+  if (!Number.isFinite(raw) || raw <= 0) return 20;
+  return Math.min(Math.max(raw, 5), 240);
+})();
+const MAX_QUIZ_AGE_MS = QUIZ_MAX_AGE_MINUTES * 60 * 1000;
+
+/** Epoch millis from a timestamp that may be a number, ISO string or Date. */
+function quizTimestamp(value) {
+  if (!value) return 0;
+  if (value instanceof Date) return value.getTime();
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
 
 const EMAIL_RE = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
 const PLATE_RE = /^[A-Z0-9][A-Z0-9 -]{2,12}$/i;
@@ -1068,13 +1094,49 @@ export function getFlowDefinition(flowKey, ctx) {
 /* Quiz state helpers                                                  */
 /* ------------------------------------------------------------------ */
 
-export function getActiveQuiz(session) {
+/**
+ * The live quiz for this conversation, or null.
+ *
+ * v1.32.3 — age is measured from the LAST turn (`lastTurnAt`, refreshed by
+ * `markQuizTurn`) and falls back to `startedAt` for quizzes created before this
+ * version. An expired quiz is cleared from the session, so a stale draft can
+ * never keep answering questions the user already moved on from.
+ */
+export function getActiveQuiz(session, { now = Date.now() } = {}) {
   const quiz = session?.quiz;
   if (!quiz) return null;
-  if (Date.now() - (quiz.startedAt || 0) > MAX_QUIZ_AGE_MS) {
+  const lastSeen = Math.max(quizTimestamp(quiz.lastTurnAt), quizTimestamp(quiz.startedAt));
+  if (lastSeen && now - lastSeen > MAX_QUIZ_AGE_MS) {
     session.quiz = null;
     return null;
   }
+  return quiz;
+}
+
+/** v1.32.3 — refresh the inactivity clock after a handled quiz turn. */
+export function markQuizTurn(session, { now = new Date() } = {}) {
+  const quiz = session?.quiz;
+  if (!quiz) return null;
+  quiz.lastTurnAt = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+  return quiz;
+}
+
+/**
+ * v1.32.3 — release the conversation from a quiz (stale, abandoned, or parked
+ * because the user asked a deterministic read question). The quiz is never
+ * silently destroyed: it is remembered on `session.lastAbandonedQuiz` for
+ * telemetry and for an honest "we can restart that" reply.
+ */
+export function abandonQuiz(session, { reason = 'abandoned', now = new Date() } = {}) {
+  const quiz = session?.quiz;
+  if (!quiz) return null;
+  session.quiz = null;
+  session.lastAbandonedQuiz = {
+    flow: quiz.flow || null,
+    phase: quiz.phase || null,
+    reason,
+    at: (now instanceof Date ? now : new Date(now)).toISOString()
+  };
   return quiz;
 }
 
@@ -3461,11 +3523,14 @@ export default {
   detectFlowSwitch,
   getActiveQuiz,
   clearQuiz,
+  markQuizTurn,
+  abandonQuiz,
   getFlowDefinition,
   getCurrentQuizField,
   shouldPauseQuizForChat,
   isPlateLike,
   looksLikeReportRequest,
+  QUIZ_MAX_AGE_MINUTES,
   QUIZ_FLOW_KEYS
 };
 

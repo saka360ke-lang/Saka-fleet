@@ -123,12 +123,236 @@ const CORE_REPORT_TITLES = Object.freeze({
   maintenance: 'Maintenance & Service Report'
 });
 
+/* ------------------------------------------------------------------ */
+/* v1.32.3 — Compliance & Expiry PDF (itemized, never aggregate-only)  */
+/* ------------------------------------------------------------------ */
+
+function readableDate(iso) {
+  const clean = String(iso || '').slice(0, 10);
+  if (!clean) return '—';
+  const date = new Date(`${clean}T12:00:00Z`);
+  if (Number.isNaN(date.getTime())) return clean;
+  return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' });
+}
+
+function daysLeftLabel(daysLeft) {
+  const days = Number(daysLeft);
+  if (daysLeft === null || daysLeft === undefined || !Number.isFinite(days)) return '—';
+  if (days === 0) return 'Today';
+  if (days < 0) return `${Math.abs(days)}d overdue`;
+  return `${days}d left`;
+}
+
+/** Status word the PDF colours (expired -> red, due -> amber, valid -> green). */
+function complianceStatusLabel(daysLeft, { lifetime = false } = {}) {
+  if (lifetime) return 'Valid';
+  const days = Number(daysLeft);
+  if (daysLeft === null || daysLeft === undefined || !Number.isFinite(days)) return 'Unknown';
+  if (days < 0) return 'Expired';
+  if (days <= 7) return 'Due in 7 days';
+  if (days <= 30) return 'Due in 30 days';
+  return 'Valid';
+}
+
+/**
+ * Compliance & Expiry report -> Saka Apex PDF payload.
+ *
+ * Live incident 2026-11-01: page 2 rendered four aggregate bullets and then
+ * stopped, because the renderer consumed `report.text` (summary lines) instead
+ * of the structured expiry rows. Every panel below is built from
+ * `data.expiryItems` / `data.documents`, so an expired insurance always shows
+ * its plate, item, expiry date, days-left and a coloured status.
+ */
+export function complianceReportToPdf(report, reportType = 'compliance') {
+  const data = report?.data || {};
+  const totals = data.totals || {};
+  const scopedVehicles = Array.isArray(data.vehicles) ? data.vehicles : [];
+  const single = scopedVehicles.length === 1 ? scopedVehicles[0] : null;
+  const plate = single?.plate || null;
+  const items = (Array.isArray(data.expiryItems) ? data.expiryItems : [])
+    .slice()
+    .sort((a, b) => {
+      const aDays = Number.isFinite(Number(a.daysLeft)) ? Number(a.daysLeft) : 99999;
+      const bDays = Number.isFinite(Number(b.daysLeft)) ? Number(b.daysLeft) : 99999;
+      return aDays - bDays;
+    });
+  const documents = Array.isArray(data.documents) ? data.documents : [];
+  const expired = Number(totals.expired ?? items.filter((item) => Number(item.daysLeft) < 0).length) || 0;
+  const due30 = Number(totals.expiring30Days ?? items.filter((item) => Number(item.daysLeft) >= 0 && Number(item.daysLeft) <= 30).length) || 0;
+  const monitored = Number(totals.monitored ?? items.length) || 0;
+  const valid = Number(totals.active ?? items.filter((item) => Number(item.daysLeft) > 30).length) || 0;
+
+  const kpis = [
+    { label: 'Monitored items', value: String(monitored), hint: 'documents tracked' },
+    {
+      label: 'Valid',
+      value: String(valid),
+      hint: valid > 0 ? 'valid beyond 30 days' : 'nothing current yet',
+      ...(valid > 0 ? { tone: 'positive' } : {})
+    },
+    {
+      label: 'Due within 30 days',
+      value: String(due30),
+      hint: due30 > 0 ? 'renew before they lapse' : 'nothing close to expiry',
+      ...(due30 > 0 ? { tone: 'warn' } : {})
+    },
+    {
+      label: 'Expired',
+      value: String(expired),
+      hint: expired > 0 ? 'renew now' : 'clean record',
+      ...(expired > 0 ? { tone: 'negative' } : {})
+    }
+  ];
+
+  const callouts = [];
+  if (expired > 0) {
+    const first = items.find((item) => Number(item.daysLeft) < 0);
+    callouts.push({
+      tone: 'negative',
+      title: `${expired} document${expired === 1 ? '' : 's'} expired`,
+      body: `${first ? `${first.plate} ${first.categoryLabel || first.item} lapsed ${Math.abs(Number(first.daysLeft))} day(s) ago. ` : ''}Renew the expired item(s) first, then reply with the new expiry date in WhatsApp so the record and reminders update.`
+    });
+  } else if (due30 > 0) {
+    callouts.push({
+      tone: 'warn',
+      title: `${due30} item${due30 === 1 ? '' : 's'} due within 30 days`,
+      body: 'Renew early to avoid a lapse - each date below is engine-calculated from your saved documents.'
+    });
+  } else {
+    callouts.push({
+      tone: 'positive',
+      title: 'Everything is current',
+      body: monitored > 0
+        ? `All ${monitored} monitored item(s) are valid beyond 30 days. You will be nudged 30, 14 and 7 days before each expiry.`
+        : 'No expiring documents are on file yet. Send an insurance, inspection or permit photo and Saka will track the date for you.'
+    });
+  }
+
+  const tables = [];
+  const shownItems = items.slice(0, 24);
+  if (shownItems.length) {
+    tables.push({
+      title: 'Upcoming & overdue items',
+      subtitle: expired > 0 ? 'Expired items come first - renew those today' : 'Sorted by days left, nearest first',
+      columns: [
+        { key: 'plate', label: 'Vehicle', width: 1.1 },
+        { key: 'item', label: 'Item', width: 1.6 },
+        { key: 'expires', label: 'Expires', width: 1.05 },
+        { key: 'daysLeft', label: 'Time left', width: 0.95, align: 'right' },
+        { key: 'status', label: 'Status', width: 1.05, type: 'status' }
+      ],
+      rows: shownItems.map((item) => ({
+        plate: item.plate || '—',
+        item: item.categoryLabel || item.item || 'Document',
+        expires: readableDate(item.dueDate),
+        daysLeft: daysLeftLabel(item.daysLeft),
+        status: complianceStatusLabel(item.daysLeft)
+      }))
+    });
+  }
+  if (documents.length) {
+    tables.push({
+      title: 'Documents on file',
+      subtitle: 'Policy and certificate numbers from your compliance ledger',
+      columns: [
+        { key: 'plate', label: 'Vehicle', width: 1 },
+        { key: 'document', label: 'Document', width: 1.5 },
+        { key: 'number', label: 'Number', width: 1.5 },
+        { key: 'expires', label: 'Expires', width: 1.05 },
+        { key: 'status', label: 'Status', width: 0.95, type: 'status' }
+      ],
+      rows: documents.slice(0, 20).map((doc) => ({
+        plate: doc.plate || '—',
+        document: doc.label || 'Document',
+        number: doc.number || 'not recorded',
+        expires: doc.lifetime ? 'Life' : readableDate(doc.expiry),
+        status: complianceStatusLabel(doc.daysLeft, { lifetime: doc.lifetime })
+      }))
+    });
+  }
+
+  // Category matrix — only categories that actually hold items are listed, so an
+  // empty category never inflates the page with rows of zeros.
+  const categoryRows = [
+    { label: 'Insurance', summary: data.insuranceStatusMatrix },
+    { label: 'Inspection', summary: data.inspectionAndPermits?.inspections },
+    { label: 'Road licence', summary: data.inspectionAndPermits?.licensing },
+    { label: 'Permit', summary: data.inspectionAndPermits?.permits },
+    { label: 'Driver licence', summary: data.driverLicenses }
+  ]
+    .filter((entry) => Number(entry.summary?.total || 0) > 0)
+    .map((entry) => {
+      const summary = entry.summary || {};
+      const dueSoon = Number(summary.due30 || 0) + Number(summary.due14 || 0) + Number(summary.due7 || 0);
+      const parts = [`${summary.active || 0} valid`];
+      if (dueSoon) parts.push(`${dueSoon} due within 30d`);
+      if (summary.expired) parts.push(`${summary.expired} expired`);
+      return {
+        label: `${entry.label} (${summary.total})`,
+        value: parts.join(' · '),
+        ...(summary.expired ? { valueColor: '#EF4444' } : {})
+      };
+    });
+
+  const sections = [];
+  if (categoryRows.length) sections.push({ title: 'Category matrix', rows: categoryRows });
+  if (single) {
+    const rows = [
+      { label: 'Plate', value: single.plate || '—' },
+      { label: 'Vehicle', value: single.make_model || '—' }
+    ];
+    if (single.asset_kind) rows.push({ label: 'Asset kind', value: String(single.asset_kind).replace(/_/g, ' ') });
+    rows.push({ label: 'Items monitored', value: String(monitored) });
+    sections.push({ title: 'Vehicle snapshot', rows });
+  } else if (scopedVehicles.length > 1) {
+    sections.push({
+      title: 'Vehicles in scope',
+      lines: scopedVehicles.slice(0, 12).map((vehicle) => `${vehicle.plate}${vehicle.make_model ? ` - ${vehicle.make_model}` : ''}`)
+    });
+  }
+
+  const notes = [
+    'Every date above was read from a document or a stored correction - Saka never estimates expiry dates.',
+    'Reminder ladder: 30, 14 and 7 days before expiry, then daily once overdue.',
+    'Reply in WhatsApp with the new date (e.g. "insurance expires 20/11/2026") to update a record instantly.'
+  ];
+  if (items.length > shownItems.length) {
+    notes.unshift(`Showing the ${shownItems.length} most urgent of ${items.length} monitored items - the full list is on your WhatsApp card.`);
+  }
+
+  return {
+    title: plate ? `Compliance Report - ${plate}` : 'Compliance & Expiry Report',
+    subtitle: plate
+      ? `${single?.make_model || 'Vehicle'} - every document, verified from your ledger`
+      : 'Every insured, inspected and licensed asset in one place',
+    periodLabel: 'All monitored items',
+    plate,
+    reportType,
+    generatedAt: data.generatedAt,
+    coverHighlights: [
+      { label: 'Monitored', value: String(monitored), tone: 'brand' },
+      { label: 'Expired', value: String(expired), tone: expired > 0 ? 'negative' : 'positive' },
+      { label: 'Due within 30d', value: String(due30), tone: due30 > 0 ? 'warn' : 'positive' }
+    ],
+    kpis,
+    charts: [],
+    ledgers: [],
+    callouts,
+    tables,
+    sections,
+    notes
+  };
+}
+
 /**
  * Adapt a core fleet-report payload into Saka Apex PDF sections (v1.32.0).
  * Single-vehicle scopes get a plate badge, vehicle identity, a snapshot panel
  * and no redundant one-row table; zero values keep honest, neutral tones.
  */
 export function fleetReportToPdf(report, reportType) {
+  // v1.32.3 — compliance has a dedicated itemized renderer; the generic
+  // summary-led layout produced an almost-empty page 2.
+  if (reportType === 'compliance') return complianceReportToPdf(report, reportType);
   const data = report?.data || {};
   const currency = data.currency || 'USD';
   const kpis = [];
@@ -447,7 +671,8 @@ export default {
   resolveAnyReportType,
   loadReportPeople,
   buildReportForLane,
-  deliverReportPdf
+  deliverReportPdf,
+  complianceReportToPdf
 };
 
 

@@ -50,22 +50,50 @@ function isReminderCreation(text) {
   return /\b(?:set|add|create|new|remind\s+me)\b/i.test(text);
 }
 
+/**
+ * v1.32.3 — does the message CARRY a date (i.e. the user is supplying one)?
+ * A message with a date is an answer or a correction, never a question, so the
+ * deterministic expiry answer must not steal it from an active quiz.
+ */
+export function carriesExplicitDate(text = '') {
+  const clean = String(text || '');
+  if (/\b\d{1,4}[\/.-]\d{1,2}[\/.-]\d{1,4}\b/.test(clean)) return true;
+  const month = '(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*';
+  if (new RegExp(`\\b\\d{1,2}(?:st|nd|rd|th)?\\s+${month}\\b`, 'i').test(clean)) return true;
+  return new RegExp(`\\b${month}\\s+\\d{1,2}(?:st|nd|rd|th)?\\b`, 'i').test(clean);
+}
+
 export function detectRemindersListCommand(text = '') {
   const clean = String(text || '').trim();
-  if (!clean || isReminderCreation(clean)) return false;
+  if (!clean || clean.length > 90 || isReminderCreation(clean)) return false;
   if (/^(?:my\s+|show\s+|list\s+)?(?:alerts?|reminders?)$/i.test(clean)) return true;
-  if (/^(?:list|show)\b[^?]{0,30}\b(?:alerts?|reminders?)\b/i.test(clean)) return true;
+  if (/^(?:list|show|see|view)\b[^?]{0,40}\b(?:alerts?|reminders?)\b/i.test(clean)) return true;
   if (/\b(?:alerts?|reminders?)\b[^?]{0,20}\b(?:list|report|due|upcoming|active)\b/i.test(clean)) return true;
+  // v1.32.3 — real users put the qualifier BEFORE the noun ("Report of recent
+  // tired alerts", "Does my car have active reminders?", "See reminders for
+  // KAS 628T"). For a short message, the noun plus any request word is enough.
+  const mentionsReminders = /\b(?:alerts?|reminders?)\b/i.test(clean);
+  const asksToSee = /\b(?:show|list|see|view|get|give|send|check|any|active|upcoming|due|recent|report|what|which|tell)\b/i.test(clean);
+  if (mentionsReminders) {
+    if (asksToSee) return true;
+    // A short fragment that just names them ("tiered alerts") is still a read
+    // request; a negated one ("no alerts yet") is an answer, not a command.
+    const negated = /\b(?:no|none|not|nothing|zero|never)\b/i.test(clean);
+    if (!negated && clean.split(/\s+/).filter(Boolean).length <= 3) return true;
+  }
   return /\bwhat(?:'s| is)?\s+(?:due|coming up)\b/i.test(clean);
 }
 
 export function detectComplianceStatusCommand(text = '') {
   const clean = String(text || '').trim();
-  if (!clean) return false;
+  if (!clean || clean.length > 90) return false;
   // "compliance report" belongs to the PDF report engine — never steal it.
   if (/\breport\b/i.test(clean)) return false;
-  return /^(?:my\s+)?compliance(?:\s+(?:status|card|summary|details))?$/i.test(clean)
-    || /\b(?:compliance|documents?|permits?)\s+(?:status|card)\b/i.test(clean);
+  if (/^(?:my\s+)?compliance(?:\s+(?:status|card|summary|details))?$/i.test(clean)) return true;
+  if (/\b(?:compliance|documents?|permits?)\s+(?:status|card)\b/i.test(clean)) return true;
+  // v1.32.3 — "Show me insurance details for my cars", "my inspection records",
+  // "what documents do you have on file".
+  return /\b(?:insurance|insurances|compliance|documents?|permits?|licen[cs]es?|inspection)\b[^?]{0,24}\b(?:details?|status|summary|card|records?|info|information|on\s+file)\b/i.test(clean);
 }
 
 /** "When does insurance expire?" / "insurance expiry date" / "inspection due?" */
@@ -73,6 +101,8 @@ export function detectComplianceExpiryQuestion(text = '') {
   const clean = String(text || '').trim();
   if (!clean || clean.length > 120) return false;
   if (/\breport\b/i.test(clean)) return false;
+  // v1.32.3 — a supplied date (or a corrected date) is never a question.
+  if (carriesExplicitDate(clean)) return false;
   const item = /\b(insur\w*|inspection|licen[cs]e|permit|road\s*service|compliance)\b/i.test(clean);
   const asks = /\b(expir\w*|due|renew\w*|valid\s*(?:until|till|to)|when)\b/i.test(clean);
   return item && asks;

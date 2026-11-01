@@ -200,7 +200,7 @@ function contentHeader(doc, fonts, accent, title) {
   doc.save();
   doc.rect(0, 0, PAGE_WIDTH, 6).fill(accent);
   doc.fillColor(SAKA_PDF_THEME.muted).font(fonts.body).fontSize(8.5)
-    .text('SAKA FLEET  ·  PRO REPORT', PAGE_MARGIN, 24, { characterSpacing: 1.2 });
+    .text('SAKA FLEET  ·  APEX REPORT', PAGE_MARGIN, 24, { characterSpacing: 1.2 });
   doc.fillColor(SAKA_PDF_THEME.ink).font(fonts.display).fontSize(10.5)
     .text(String(title || 'Fleet report').slice(0, 70), PAGE_MARGIN, 38, { width: CONTENT_WIDTH - 120, ellipsis: true });
   doc.strokeColor(SAKA_PDF_THEME.line).lineWidth(0.6).moveTo(PAGE_MARGIN, 58).lineTo(PAGE_WIDTH - PAGE_MARGIN, 58).stroke();
@@ -275,7 +275,15 @@ function plateBadge(doc, fonts, x, y, plate) {
 
 function drawCover(doc, fonts, report, accent) {
   const { title, subtitle, periodLabel, owner, drivers, reportType } = report;
-  doc.rect(0, 0, PAGE_WIDTH, 430).fill(SAKA_PDF_THEME.ink);
+  // v1.32.3 — optional highlight row fills the void under the cover chips on
+  // reports that have no drivers panel (e.g. a single-vehicle compliance PDF).
+  const highlights = (Array.isArray(report.coverHighlights) ? report.coverHighlights : []).slice(0, 3);
+  const highlightY = 330;
+  const highlightH = 56;
+  const cardY = highlights.length ? highlightY + highlightH + 16 : 348;
+  const cardH = 58;
+  const bandHeight = cardY + cardH + 24;
+  doc.rect(0, 0, PAGE_WIDTH, bandHeight).fill(SAKA_PDF_THEME.ink);
   withAlpha(doc, accent, 0.18);
   doc.circle(PAGE_WIDTH - 70, 70, 150).fill();
   withAlpha(doc, accent, 0.10);
@@ -284,7 +292,7 @@ function drawCover(doc, fonts, report, accent) {
   doc.fillColor(SAKA_PDF_THEME.white).font(fonts.bold).fontSize(15)
     .text('SAKA FLEET', PAGE_MARGIN, 64, { characterSpacing: 2.4 });
   doc.fillColor(SAKA_PDF_THEME.status.info).font(fonts.body).fontSize(8.5)
-    .text('FLEET INTELLIGENCE  ·  PRO REPORT', PAGE_MARGIN, 86, { characterSpacing: 1.8 });
+    .text('FLEET INTELLIGENCE  ·  APEX REPORT', PAGE_MARGIN, 86, { characterSpacing: 1.8 });
 
   doc.fillColor(SAKA_PDF_THEME.white).font(fonts.display).fontSize(30)
     .text(String(title || 'Fleet Report'), PAGE_MARGIN, 150, { width: CONTENT_WIDTH - 40, lineGap: 2 });
@@ -307,8 +315,31 @@ function drawCover(doc, fonts, report, accent) {
     if (chipX + 12 < badgeX) plateBadge(doc, fonts, badgeX, chipY - 7, report.plate);
   }
 
-  const cardY = 348;
-  doc.roundedRect(PAGE_MARGIN, cardY, CONTENT_WIDTH, 58, 12).fill(SAKA_PDF_THEME.white);
+  if (highlights.length) {
+    const gap = 10;
+    const w = (CONTENT_WIDTH - gap * (highlights.length - 1)) / highlights.length;
+    highlights.forEach((item, index) => {
+      const x = PAGE_MARGIN + index * (w + gap);
+      withAlpha(doc, SAKA_PDF_THEME.white, 0.07);
+      doc.roundedRect(x, highlightY, w, highlightH, 10).fill();
+      withAlpha(doc, toneColor(item.tone), 0.20);
+      doc.roundedRect(x, highlightY, w, highlightH, 10).fill();
+      withAlpha(doc, toneColor(item.tone), 0.95);
+      doc.rect(x, highlightY + 14, 3, highlightH - 28).fill();
+      doc.fillOpacity(1);
+      doc.fillColor('#94A3B8').font(fonts.body).fontSize(7)
+        .text(pdfSafeText(String(item.label || '')).toUpperCase(), x + 15, highlightY + 13, {
+          width: w - 28,
+          ellipsis: true,
+          characterSpacing: 0.8
+        });
+      doc.fillColor(SAKA_PDF_THEME.white).font(fonts.display).fontSize(21)
+        .text(pdfSafeText(String(item.value ?? '-')), x + 15, highlightY + 25, { width: w - 28, ellipsis: true });
+    });
+  }
+
+  doc.fillOpacity(1);
+  doc.roundedRect(PAGE_MARGIN, cardY, CONTENT_WIDTH, cardH, 12).fill(SAKA_PDF_THEME.white);
   doc.fillColor(SAKA_PDF_THEME.muted).font(fonts.body).fontSize(7.5)
     .text('PREPARED FOR', PAGE_MARGIN + 16, cardY + 12, { characterSpacing: 0.8 });
   doc.fillColor(SAKA_PDF_THEME.ink).font(fonts.bold).fontSize(12.5)
@@ -318,7 +349,7 @@ function drawCover(doc, fonts, report, accent) {
   doc.fillColor(accent).font(fonts.bold).fontSize(8)
     .text(String(owner?.language || 'English').toUpperCase(), PAGE_WIDTH - PAGE_MARGIN - 130, cardY + 24, { width: 114, align: 'right' });
 
-  let peopleY = 430;
+  let peopleY = bandHeight;
   if (drivers?.length) {
     doc.fillColor(SAKA_PDF_THEME.muted).font(fonts.body).fontSize(8)
       .text('DRIVERS ON THIS FLEET', PAGE_MARGIN, peopleY + 10, { characterSpacing: 1 });
@@ -907,9 +938,9 @@ function drawSection(doc, fonts, section, accent) {
     const y = doc.y;
     const status = row.status ? statusColor(row.status) : null;
     if (status) doc.circle(PAGE_MARGIN + 4, y + 6, 2.6).fill(status);
-    doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.body).fontSize(8.2)
+    doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.body).fontSize(8.6)
       .text(String(row.label || ''), PAGE_MARGIN + (status ? 12 : 0), y, { width: CONTENT_WIDTH * 0.62, ellipsis: true });
-    doc.fillColor(row.valueColor || SAKA_PDF_THEME.ink).font(fonts.bold).fontSize(8.2)
+    doc.fillColor(row.valueColor || SAKA_PDF_THEME.ink).font(fonts.bold).fontSize(8.6)
       .text(String(row.value ?? '—'), PAGE_WIDTH - PAGE_MARGIN - CONTENT_WIDTH * 0.34, y, { width: CONTENT_WIDTH * 0.34, align: 'right', ellipsis: true });
     doc.strokeColor(SAKA_PDF_THEME.line).lineWidth(0.35).moveTo(PAGE_MARGIN, y + 15).lineTo(PAGE_WIDTH - PAGE_MARGIN, y + 15).stroke();
     doc.y = y + 19;
@@ -997,7 +1028,7 @@ export function buildProReportPdf(report = {}) {
           sectionTitle(doc, fonts, 'Notes', accent);
           report.notes.forEach((note) => {
             ensureSpace(doc, 16, fonts, accent, 'Notes');
-            doc.fillColor(SAKA_PDF_THEME.muted).font(fonts.body).fontSize(8)
+            doc.fillColor(SAKA_PDF_THEME.muted).font(fonts.body).fontSize(8.6)
               .text(String(note), PAGE_MARGIN, doc.y, { width: CONTENT_WIDTH });
             doc.y += 5;
           });

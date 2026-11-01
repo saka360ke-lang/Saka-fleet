@@ -3,6 +3,7 @@ import { fetchCloudRunLogs } from '../services/sentinelCloudLogs.js';
 import { generateText, parseJsonSafely } from '../services/aiClient.js';
 import { composeMessage } from '../services/conversationEngine.js';
 import { getCurrentQuizField } from '../services/quizEngine.js';
+import { saveChatMessage } from '../services/chatHistory.js';
 import { detectCountryFromPhone } from '../services/globalization.js';
 import { deriveCountryCommStyles, upsertCountryCommStyles } from '../services/countryCommStyles.js';
 import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
@@ -1133,13 +1134,40 @@ export async function monitorActiveConversations(providedSupabase) {
       const sent = await sendProactiveWhatsApp(phone, nudgeText);
       if (!sent) continue;
 
+      // v1.32.3 — the nudge is a real assistant turn: persist it to the
+      // conversation history so the next model prompt sees exactly what the user
+      // saw. It used to live only in chat_transcripts, so the model answered
+      // "one step away" without knowing a nudge had ever been sent.
+      try {
+        await saveChatMessage(supabase, phone, 'model', nudgeText);
+      } catch { /* history is best-effort */ }
+
+      const nudgesSoFar = (recovery.nudges || 0) + 1;
+      // v1.32.3 — the LAST nudge also releases the stalled draft. Two nudges plus
+      // the idle window is proof the flow is abandoned; keeping it alive made the
+      // draft swallow every follow-up question the user asked afterwards.
+      const releaseQuiz = nudgesSoFar >= maxNudges;
       const newState = {
         ...state,
+        ...(releaseQuiz ? { quiz: null } : {}),
+        session: releaseQuiz
+          ? {
+            ...session,
+            quiz: null,
+            lastAbandonedQuiz: {
+              flow: quiz.flow || null,
+              phase: quiz.phase || null,
+              reason: 'sentinel_stall_release',
+              at: new Date().toISOString()
+            }
+          }
+          : session,
         recovery: {
-          nudges: (recovery.nudges || 0) + 1,
+          nudges: nudgesSoFar,
           lastNudgedAt: new Date().toISOString(),
           lastFlow: quiz.flow,
-          lastPhase: quiz.phase
+          lastPhase: quiz.phase,
+          releasedAt: releaseQuiz ? new Date().toISOString() : recovery.releasedAt
         }
       };
 

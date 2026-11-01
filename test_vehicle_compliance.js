@@ -24,6 +24,7 @@ import {
   detectComplianceExpiryQuestion,
   detectComplianceCorrection,
   detectComplianceItemAsked,
+  carriesExplicitDate,
   buildComplianceExpiryAnswer,
   buildComplianceStatusReply,
   buildRemindersListReply,
@@ -208,6 +209,33 @@ async function run() {
   check(savedRow?.expiry === '2026-11-20', 'Compliance ledger carries the corrected expiry');
   const legacyRow = correctionMock.db.vehicles.find((row) => row.id === 'v1');
   check(legacyRow?.insurance_expiry === '2026-11-20', 'Legacy insurance column follows the correction');
+
+  console.log('\n--- Test: read commands survive a stale quiz (v1.32.3) ---');
+  // Live evidence 2026-11-01: every one of these was swallowed by the model or
+  // by an abandoned quiz draft. They must all route deterministically.
+  const reminderReads = [
+    'Report of recent tired alerts',
+    'List recent tiered alerts',
+    'tiered alerts',
+    'I want to see active reminders',
+    'Does my car have active reminders?',
+    'See reminders for kas',
+    'my reminders'
+  ];
+  reminderReads.forEach((text) => {
+    check(detectRemindersListCommand(text), `Reminder list command detected: "${text}"`);
+  });
+  check(detectComplianceExpiryQuestion('When does my insurance expire'), 'Insurance expiry question detected');
+  check(detectComplianceExpiryQuestion('When does my drivers license expire?'), 'Driver-licence expiry question detected');
+  check(detectComplianceStatusCommand('Show me insurance details for my cars'), 'Insurance details request detected');
+  check(detectComplianceStatusCommand('my compliance'), 'Compliance card command detected');
+  check(detectComplianceStatusCommand('compliance report') === false, 'PDF report requests are never stolen by the status card');
+  check(detectRemindersListCommand('remind me to renew insurance on 20/11/2026') === false, 'Reminder creation is never read as a list request');
+  check(detectRemindersListCommand('no alerts yet') === false, 'A negated answer ("no alerts yet") is not a command');
+  check(carriesExplicitDate('insurance expires 20/11/2026'), 'Date-bearing messages are recognised as answers');
+  check(carriesExplicitDate('my insurance expired 20 Nov 2026'), 'Written dates are recognised as answers');
+  check(!carriesExplicitDate('when does my insurance expire?'), 'A pure question carries no date');
+  check(detectComplianceExpiryQuestion('insurance expires 20/11/2026') === false, 'A supplied expiry date is never answered as a question');
 
   console.log(`\n🎉 ${passed} vehicle-compliance assertions passed.`);
 }

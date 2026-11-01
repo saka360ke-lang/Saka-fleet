@@ -82,7 +82,7 @@ import { normalizeTierKey, getTierLabel, getAnnualDiscountPercent } from '../ser
 import { detectCountryFromPhone as detectCountryGlobal, resolveUserTimezone, resolveTimezoneFromCountry } from '../services/globalization.js';
 import { getCountryCommStyleLine } from '../services/countryCommStyles.js';
 import { applyOdometerReading, applyOperatingHours } from '../services/maintenanceReminders.js';
-import { handleQuizTurn, detectQuizStart, shouldPauseQuizForChat, getCurrentQuizField, detectFlowSwitch, getFlowDefinition, looksLikeReportRequest } from '../services/quizEngine.js';
+import { handleQuizTurn, detectQuizStart, shouldPauseQuizForChat, getCurrentQuizField, detectFlowSwitch, getFlowDefinition, looksLikeReportRequest, getActiveQuiz, markQuizTurn, abandonQuiz } from '../services/quizEngine.js';
 import { renderActionDiscovery, composeMessage } from '../services/conversationEngine.js';
 import { enqueueFollowUp, FOLLOWUP_KINDS, followUpAckText } from '../services/followups.js';
 import { enqueueUserMessage } from '../services/messageQueue.js';
@@ -1021,12 +1021,21 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         // Skip the DeepSeek intent call — regex classification is instant and
         // the quiz's deterministic parsers handle the answer. This removes the
         // duplicate AI call that previously ran on every quiz turn.
-        const quizForFastPath = session.quiz || null;
+        const quizForFastPath = getActiveQuiz(session);
         const quizPhaseLocked = !!quizForFastPath && (quizForFastPath.phase === 'pin' || quizForFastPath.phase === 'account_otp');
         const fastQuizTurn = !!quizForFastPath && !quizPhaseLocked;
 
         // Deterministic receipt history ("receipts") — zero AI tokens.
-        const receiptsCommand = /^(?:my\s+)?receipts?$|^show\s+(?:my\s+)?receipts?$|^last\s+receipt$/i.test(String(messageText || '').trim());
+        // v1.32.3 — also catches ledger read requests in the user's own words
+        // ("Do you have a record of any parts purchases?") that used to fall to
+        // the model and come back as "I don't have that information".
+        const receiptsCommand = (() => {
+          const text = String(messageText || '').trim();
+          if (/^(?:my\s+)?receipts?$|^show\s+(?:my\s+)?receipts?$|^last\s+receipt$/i.test(text)) return true;
+          if (/\b(?:log|record|add|save|spent|paid)\b/i.test(text) && !/\brecords?\b|\bhistory\b|\bany\b/i.test(text)) return false;
+          return /\b(?:receipts?|purchases?|parts?\s+(?:purchases?|bought|bought\s+parts?))\b/i.test(text)
+            && /\b(?:show|list|see|view|any|history|record|records|last|recent|what|which|do\s+you\s+have)\b/i.test(text);
+        })();
 
         // Deterministic garage list ("list my cars") — zero AI tokens. Only the
         // empty state is intercepted here; populated lists keep the numbered
@@ -1039,11 +1048,23 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         // v1.32.2 — deterministic compliance & reminder answers (zero AI tokens).
         // Live evidence 2026-11-01: three unanswered "when does insurance
         // expire?" questions and an ignored typed correction.
+        //
+        // v1.32.3 — a READ command is always answered. These flags no longer
+        // require an idle quiz slot: a stale/abandoned draft used to silence
+        // every deterministic answer for up to 45 minutes (live evidence 08:57
+        // "Report of recent tired alerts" and 08:49 "active reminders" were both
+        // swallowed). When a read command arrives mid-quiz the draft is parked,
+        // never destroyed, and the question is answered from the ledger.
         const commandText = String(messageText || '').trim();
-        const remindersListCommand = !session.quiz && detectRemindersListCommand(commandText);
-        const complianceStatusCommand = !session.quiz && detectComplianceStatusCommand(commandText);
-        const complianceExpiryQuestion = !session.quiz && detectComplianceExpiryQuestion(commandText);
-        const complianceCorrection = !session.quiz ? detectComplianceCorrection(commandText) : { isCorrection: false };
+        const remindersListCommand = detectRemindersListCommand(commandText);
+        const complianceStatusCommand = detectComplianceStatusCommand(commandText);
+        const complianceExpiryQuestion = detectComplianceExpiryQuestion(commandText);
+        const complianceCorrection = detectComplianceCorrection(commandText);
+        const complianceReadCommand = remindersListCommand || complianceStatusCommand
+          || complianceExpiryQuestion || complianceCorrection.isCorrection;
+        if (complianceReadCommand && quizForFastPath && !quizPhaseLocked) {
+          abandonQuiz(session, { reason: 'deterministic_read_command' });
+        }
 
         // Vehicle registration summary ("send me registration summary as PDF").
         const summaryCommand = /(?:(?:send|email|resend|share|mail)\b[\s\S]{0,40}(?:registration|vehicle|passbook)\b[\s\S]{0,20}(?:summary|details|copy|pdf|email))|(?:registration|vehicle)\s+(?:summary|details|passbook)/i.test(String(messageText || ''));
@@ -1617,7 +1638,11 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           }
         }
         // 4. Trial Extension Coupon ("Yes" or coupon code)
-        else if (!session.quiz && !session.pendingDeleteVehicle && !session.pendingAccountDeletion && !session.pendingCancelSubscription && intent !== 'EXTEND_TRIAL' && (intent === 'APPLY_COUPON' || /^(yes|yes please|apply coupon|extend trial|extend)$/i.test(messageText.trim()) || /^EXT30-[A-Z0-9]+$/i.test(messageText.trim()))) {
+        //
+        // v1.32.3 — a bare "yes" only redeems a coupon when Saka actually offered
+        // one. Live bug 2026-11-01 09:31: the owner answered the compliance
+        // question with "yes" and the coupon branch swallowed the turn.
+        else if (!session.quiz && !session.pendingDeleteVehicle && !session.pendingAccountDeletion && !session.pendingCancelSubscription && intent !== 'EXTEND_TRIAL' && (intent === 'APPLY_COUPON' || /^EXT30-[A-Z0-9]+$/i.test(messageText.trim()) || mergedExt?.coupon_code || (/^(yes|yes please|apply coupon|extend trial|extend)$/i.test(messageText.trim()) && /(?:coupon|EXT30-|extend\s+(?:your|the|my)?\s*trial|trial\s+extension)/i.test(String(session.lastAssistantPrompt || ''))))) {
           if (supabaseClient) {
             const extRes = await applyTrialExtensionCoupon({
               phone: senderPhone,
@@ -1958,6 +1983,10 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             ctx: quizCtx
           });
         }
+        // v1.32.3 — every handled quiz turn refreshes the inactivity clock, so an
+        // abandoned draft expires within QUIZ_MAX_AGE_MINUTES (default 20) instead
+        // of holding the conversation hostage for 45 minutes.
+        if (session.quiz) markQuizTurn(session);
 
         if (quizTurn.pausedForChat) {
           isSpecialFlowHandled = true;
