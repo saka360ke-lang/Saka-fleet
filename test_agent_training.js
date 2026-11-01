@@ -67,6 +67,7 @@ async function run() {
   check(SAKA_BOUNDARY_RULES.some((rule) => /LEDGER_ENTRY_DELETED/.test(rule)), 'Boundary: every ledger edit/delete is audited');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('EDITABLE LEDGER (v1.33.0'), 'Core prompt teaches the editable ledger');
 check(DEFAULT_SAKA_CORE_PROMPT.includes('NARRATIVE INTAKE (v1.34.0'), 'Core prompt teaches narrative intake');
+check(DEFAULT_SAKA_CORE_PROMPT.includes('1 Save / 2 Change / 3 Cancel'), 'Core prompt teaches the draft-card quick actions');
 const narrativeFlow = SAKA_QUIZ_FLOWS.find((flow) => flow.key === 'log_expense');
 check(Boolean(narrativeFlow && /narrative intake/.test(narrativeFlow.rules)), 'log_expense flow knowledge carries the narrative intake rules');
 check(/Narrative pre-fills are engine-determined facts/.test(await import('./src/services/conversationEngine.js').then((m) => m.QUIZ_INSTRUCTION_NATURAL)), 'Quiz composer honours narrative pre-fills');

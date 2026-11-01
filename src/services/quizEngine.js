@@ -241,11 +241,13 @@ function expiryLinkedColumn(category) {
 }
 
 function isYes(text) {
-  return /^(yes|y|yeah|yep|confirm|save|correct|ok|okay|sure|proceed|do it|âœ…)$/i.test(String(text).trim());
+  // "1" / "1️⃣" is the draft-card save action (v1.35.0); safe here because this
+  // helper is only consulted during the confirmation phase.
+  return /^(yes|y|yeah|yep|confirm|save|correct|ok|okay|sure|proceed|do it|1|1️⃣|✅)$/i.test(String(text).trim());
 }
 
 function isNo(text) {
-  return /^(no|n|nope|cancel|abort|stop|exit|discard|don'?t|nah)$/i.test(String(text).trim());
+  return /^(no|n|nope|cancel|abort|stop|exit|discard|don'?t|nah|3|3️⃣)$/i.test(String(text).trim());
 }
 
 function field(key, label, hint, options = {}) {
@@ -1175,7 +1177,7 @@ function buildSummaryRows(def, answers, ctx) {
 function pickNarrativeExtras(ext = {}) {
   const src = ext && typeof ext._narrative === 'object' && ext._narrative ? ext._narrative : ext || {};
   const out = {};
-  for (const key of ['occurred_at', 'occurred_at_iso', 'vendor', 'unit_price', 'occurred_at_label']) {
+  for (const key of ['occurred_at', 'occurred_at_iso', 'vendor', 'unit_price', 'occurred_at_label', 'kind']) {
     const value = src[key];
     if (value !== undefined && value !== null && value !== '') out[key] = value;
   }
@@ -1196,6 +1198,48 @@ function sanitizeRetroTimestamp(isoValue, dateValue) {
     return new Date(parsed).toISOString();
   }
   return null;
+}
+
+/**
+ * v1.35.0 — the draft card: the narrative pre-fill rendered deterministically
+ * (zero AI tokens) so the user checks every engine-captured value before the
+ * write. Quick actions: 1 save · 2 change · 3 cancel. Re-rendered live from
+ * quiz state, so a correction updates the card instead of staling it.
+ */
+export function renderNarrativeCard(state, ctx = {}) {
+  const extras = state?.narrativeExtras || {};
+  const answers = state?.answers || {};
+  const global = buildGlobalContext(ctx.countryInfo, ctx.profile);
+  const rows = [];
+  const push = (emoji, label, value) => {
+    if (value !== undefined && value !== null && value !== '' && value !== false) {
+      rows.push(`${emoji} *${label}:* ${value}`);
+    }
+  };
+
+  const vehicle = (ctx.vehicles || []).find((v) => v.id === answers.vehicle_id);
+  push('🚗', 'Vehicle', vehicle ? (vehicle.plate_number || vehicle.make_model) : null);
+  if (extras.kind === 'earning') push('📊', 'Type', 'Earning');
+  if (extras.kind === 'mileage') push('📊', 'Type', 'Odometer update');
+  push('🏷️', 'Type', answers.expense_type);
+  if (answers.amount != null) push('💰', 'Amount', formatMoney(Number(answers.amount), global.currency, global.locale));
+  if (answers.expense_type === 'Fuel' && answers.fuel_liters) push('🛢️', 'Volume', `${Number(answers.fuel_liters)} L`);
+  push('⛽', 'Fill', answers.fill_type);
+  if (answers.odometer_reading) push('📟', 'Odometer', `${Number(answers.odometer_reading).toLocaleString('en-US')} km`);
+  if (extras.occurred_at_label) push('📅', 'When', extras.occurred_at_label);
+  if (extras.vendor) push('📍', 'Place', extras.vendor);
+  if (answers.notes) push('📝', 'Notes', answers.notes);
+
+  if (!rows.length) return null;
+  return [
+    '📋 *Got it — check this before I save it*',
+    '',
+    ...rows,
+    '',
+    '1 ✅ Save it',
+    '2 ✏️ Change something',
+    '3 ❌ Cancel'
+  ].join('\n');
 }
 
 function applyExtraction(state, def, ext, ctx) {
@@ -1444,6 +1488,18 @@ export function startQuiz({ session, flowKey, ctx, prefill = {} }) {
     }
   }
 
+  // v1.35.0 — narrative pre-fills render as a deterministic draft card at the
+  // confirmation step. Unanswered OPTIONAL fields are skipped so the card (not
+  // a question) is the first thing the user sees; corrections stay available
+  // through quick action 2.
+  if (session.quiz.narrativeExtras) {
+    for (const f of def.fields) {
+      if (f.optional && !(f.key in session.quiz.answers)) session.quiz.answers[f.key] = null;
+    }
+    const card = renderNarrativeCard(session.quiz, ctx);
+    if (card) session.quiz.narrativeCard = card;
+  }
+
   // Warm the question cache for the remaining fields in the background — one
   // AI call for the whole flow instead of one per turn.
   prefetchFlowQuestions(def, ctx).catch(() => {});
@@ -1459,6 +1515,9 @@ async function askCurrent(state, ctx, note = null) {
 
   if (!field) {
     state.phase = 'confirm';
+    // v1.35.0 — a narrative draft confirms through its own deterministic card
+    // (zero AI tokens) instead of the composed summary.
+    if (state.narrativeCard) return String(state.narrativeCard);
     return renderConfirmationSummary({
       flowLabel: def.label,
       summaryRows: buildSummaryRows(def, state.answers, ctx),
@@ -2373,11 +2432,29 @@ async function handleConfirmation(state, def, clean, ctx, aiExtracted) {
     return { handled: true, reply, flow: state.flow, cancelled: true };
   }
 
+  // v1.35.0 — draft-card quick action 2: name any field to change; the card is
+  // re-shown with fresh values after the correction lands.
+  if (state.narrativeCard && /^(2|2️⃣|change|edit|fix)$/i.test(clean)) {
+    state.lastNote = null;
+    return {
+      handled: true,
+      reply: `✏️ *Which field should I change?*\n\nJust say it — e.g. *"amount 4,800"*, *"type Parts"*, *"40 litres"*, *"odometer 50,400"*. I'll show the card again with your correction.`,
+      flow: state.flow,
+      active: true
+    };
+  }
+
   const changed = applyCorrections(state, def, aiExtracted || {}, ctx);
   if (changed.length === 0 && isSubstantiveText(clean)) {
     state.extraNotes = mergeExtraNotes(state.extraNotes || [], [clean]);
   }
   const extraNoteLines = (state.extraNotes || []).map((n) => `Extra note: ${n}`);
+  if (state.narrativeCard) {
+    const prefix = changed.length
+      ? `✅ Updated: ${changed.join(', ')}.\n\n`
+      : `I did not change anything — which field would you like to fix? Say it plainly, e.g. *"amount 4,800"*.\n\n`;
+    return { handled: true, reply: `${prefix}${renderNarrativeCard(state, ctx)}`, flow: state.flow, active: true };
+  }
   const reply = await renderConfirmationSummary({
     flowLabel: def.label,
     summaryRows: buildSummaryRows(def, state.answers, ctx),

@@ -32,6 +32,22 @@ export function isNarrativeIntakeEnabled(env = process.env) {
   return !['off', 'false', '0', 'no', 'disabled'].includes(raw);
 }
 
+/**
+ * v1.35.0 (D5) — a message only enters narrative intake when it is shaped like
+ * a story: a paragraph (≥40 chars), at least one sentence break, or a clear
+ * narrative marker (a past-date word, a per-litre price, a fill word, a
+ * measurement or "at <Proper noun>"). Short one-liners keep the instant paths.
+ */
+const NARRATIVE_MARKER_RE = /(\b(?:yesterday|today|tonight|last\s+(?:night|week|evening)|ago|brimmed|top[\s-]?up|topped\s+up)\b|@\s?\d|\d[\d,.]*\s*(?:kes|ksh|usd|eur|gbp|bob|shillings?|l\b|lt\b|ltr\b|litres?|liters?|gal(?:lon)?s?\b|km\b|kms\b|mi\b|miles?\b)|\b(?:full\s+tank|partial)\b|\bat\s+[A-Z][a-z]+)/i;
+
+export function isNarrativeEligibleText(text = '') {
+  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!clean) return false;
+  if (clean.length >= 40) return true;
+  if (/[.!?;]\s/.test(clean)) return true;
+  return NARRATIVE_MARKER_RE.test(clean);
+}
+
 const EARNING_RE = /\b(earned|earnings?|made|collected|took in|takings?|income|revenue|hire fee|hire|contract|delivery job|customer paid|paid me|received|deposited)\b/i;
 const MILEAGE_RE = /\b(odometer|odo|mileage|reading|clocked|now at|currently at|clock)\b/i;
 const FULL_FILL_RE = /\b(full(?:\s+tank)?|brim(?:med)?|filled (?:it )?(?:to the top|up)|to the top)\b/i;
@@ -454,6 +470,7 @@ export function narrativeDraftExtras(draft) {
   const extras = {};
   if (draft.occurredAt?.localDate) extras.occurred_at = draft.occurredAt.localDate;
   if (draft.occurredAt?.iso) extras.occurred_at_iso = draft.occurredAt.iso;
+  if (draft.kind) extras.kind = draft.kind;
   if (draft.notes) extras.notes = draft.notes;
   if (draft.money?.unitPrice) extras.unit_price = draft.money.unitPrice;
   if (draft.vendor?.value) extras.vendor = draft.vendor.value;

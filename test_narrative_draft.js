@@ -20,6 +20,7 @@ import {
   extractVendor,
   matchNarrativeVehicle,
   isNarrativeIntakeEnabled,
+  isNarrativeEligibleText,
   NARRATIVE_DRAFT_VERSION
 } from './src/services/narrativeDraft.js';
 import { parseMoneyStory } from './src/services/moneyLexicon.js';
@@ -189,10 +190,21 @@ check('vendor travels to the write path', extras.vendor === 'Shell', extras);
 check('kill switch defaults to on', isNarrativeIntakeEnabled({}) === true);
 check('kill switch honours NARRATIVE_INTAKE=off', isNarrativeIntakeEnabled({ NARRATIVE_INTAKE: 'off' }) === false);
 check('kill switch honours NARRATIVE_INTAKE=0', isNarrativeIntakeEnabled({ NARRATIVE_INTAKE: '0' }) === false);
-check('empty text yields no draft', buildNarrativeDraft({ text: '   ', ctx: KE, vehicles: VEHICLES, now: NOW }).ok === false);
 check('drafts carry a version', authority.version === NARRATIVE_DRAFT_VERSION);
+check('empty text yields no draft', buildNarrativeDraft({ text: '   ', ctx: KE, vehicles: VEHICLES, now: NOW }).ok === false);
 const description = describeNarrativeDraft(authority, { locale: 'en-KE', currency: 'KES' });
 check('description names the currency and the date', /Ksh|KES/.test(description || '') && /31 Oct 2026/.test(description || ''), description);
+
+console.log('=== Narrative intake: eligibility threshold (v1.35.0, D5) ===');
+check('a bare one-liner stays on the fast path', isNarrativeEligibleText('fuel 2000') === false);
+check('empty text is never narrative', isNarrativeEligibleText('   ') === false);
+check('a short dated line is narrative', isNarrativeEligibleText('fuel 2000 yesterday') === true);
+check('a sentence break is narrative', isNarrativeEligibleText('fuel 2000. also 300 parking') === true);
+check('a long paragraph is narrative', isNarrativeEligibleText('I went to the station on the way to town and paid for a full refill with some change left over') === true);
+check('a per-litre price is narrative', isNarrativeEligibleText('1000kes @227 per litre') === true);
+check('a full-tank word is narrative', isNarrativeEligibleText('full tank') === true);
+check('a vendor mention is narrative', isNarrativeEligibleText('diesel at Shell') === true);
+check('narrative extras carry the record kind', narrativeDraftExtras(draftFor('earned 4500 today')).kind === 'earning', narrativeDraftExtras(draftFor('earned 4500 today')));
 
 console.log(`\n${pass} passed, ${fail} failed (deterministic section)`);
 

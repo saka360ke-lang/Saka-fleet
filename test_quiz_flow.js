@@ -452,6 +452,100 @@ async function run() {
   assert(wideHistory.length === 3, 'maxAgeMinutes: 0 disables the window (full history is returned)');
   assert(CHAT_HISTORY_MAX_AGE_MINUTES === 45, 'CHAT_HISTORY_MAX_AGE_MINUTES defaults to 45 minutes');
 
+  console.log('\n--- Test 10: narrative draft cards (v1.35.0) ---');
+  const narrativeFields = {
+    expense_type: 'Fuel',
+    amount: 5500,
+    fuel_liters: 40,
+    fill_type: 'Full tank',
+    odometer_reading: 50350
+  };
+  const narrativeExtras = {
+    occurred_at: '2026-10-31',
+    occurred_at_iso: '2026-10-31T12:00:00+03:00',
+    occurred_at_label: '31 Oct 2026 (yesterday)',
+    vendor: 'Shell',
+    kind: 'expense'
+  };
+  const cardCtx = baseCtx({ vehicles: [vehicle] });
+  const cardSession = {};
+  const cardStart = await handleQuizTurn({
+    session: cardSession,
+    messageText: 'spent 5500 on diesel yesterday at Shell, 40L at 50350km, full tank',
+    startFlow: 'log_expense',
+    aiExtracted: { ...narrativeFields, _narrative: narrativeExtras },
+    ctx: cardCtx
+  });
+  assert(cardStart.handled === true, 'the narrative turn is handled');
+  assert(cardSession.quiz?.phase === 'confirm', 'a complete narrative draft reaches confirmation immediately');
+  assert(Boolean(cardSession.quiz?.narrativeCard), 'the quiz stores the draft card');
+  assert(/Got it — check this before I save it/.test(String(cardStart.reply)), 'the card headline renders');
+  assert(/Ksh/.test(String(cardStart.reply)), 'the card shows the localized amount');
+  assert(/31 Oct 2026/.test(String(cardStart.reply)), 'the card shows the stated past date');
+  assert(/Shell/.test(String(cardStart.reply)), 'the card shows the vendor');
+  assert(/1 ✅ Save it/.test(String(cardStart.reply)) && /3 ❌ Cancel/.test(String(cardStart.reply)), 'the quick actions render');
+
+  // Quick action 2: ask which field, then a correction updates the card.
+  const changeTurn = await handleQuizTurn({ session: cardSession, messageText: '2', ctx: cardCtx });
+  assert(changeTurn.handled === true && /Which field should I change/.test(String(changeTurn.reply)), 'action 2 asks which field to change');
+  const correctionTurn = await handleQuizTurn({
+    session: cardSession,
+    messageText: 'amount 4800',
+    aiExtracted: { amount: 4800 },
+    ctx: cardCtx
+  });
+  assert(cardSession.quiz.answers.amount === 4800, 'the correction updates the answer');
+  assert(/Updated: Amount spent/.test(String(correctionTurn.reply)) && /4,800|Ksh/.test(String(correctionTurn.reply)), 'the card re-renders with the corrected amount');
+  assert(cardSession.quiz.phase === 'confirm', 'the card path stays at confirmation');
+
+  // Quick action 3: cancel, nothing written.
+  const cancelSession = {};
+  await handleQuizTurn({
+    session: cancelSession,
+    messageText: 'fuel 3000',
+    startFlow: 'log_expense',
+    aiExtracted: { expense_type: 'Fuel', amount: 3000, odometer_reading: 360100, _narrative: { kind: 'expense' } },
+    ctx: cardCtx
+  });
+  const cardCancelTurn = await handleQuizTurn({ session: cancelSession, messageText: '3', ctx: cardCtx });
+  assert(cardCancelTurn.cancelled === true, 'action 3 cancels the draft card');
+
+  // Quick action 1: save writes the row (with the retro date in created_at).
+  const cardInserted = [];
+  const cardMockSupabase = {
+    from(table) {
+      const builder = {
+        eq: () => builder,
+        gte: () => builder,
+        lte: () => builder,
+        gt: () => builder,
+        in: () => builder,
+        order: () => builder,
+        limit: () => builder,
+        select: () => builder,
+        update: () => builder,
+        delete: () => builder,
+        insert: async (rows) => { cardInserted.push({ table, rows }); return { error: null, data: rows }; },
+        maybeSingle: async () => ({ data: null, error: null }),
+        single: async () => ({ data: null, error: null })
+      };
+      return builder;
+    }
+  };
+  const saveSession = {};
+  await handleQuizTurn({
+    session: saveSession,
+    messageText: 'spent 5500 on diesel yesterday',
+    startFlow: 'log_expense',
+    aiExtracted: { expense_type: 'Fuel', amount: 5500, odometer_reading: 360100, _narrative: { occurred_at: '2026-10-31', occurred_at_iso: '2026-10-31T12:00:00+03:00', kind: 'expense' } },
+    ctx: { ...cardCtx, supabase: cardMockSupabase }
+  });
+  const saveTurn = await handleQuizTurn({ session: saveSession, messageText: '1', ctx: { ...cardCtx, supabase: cardMockSupabase } });
+  assert(saveTurn.completed === true, 'action 1 saves the draft');
+  const expenseRow = cardInserted.find((entry) => entry.table === 'expense_logs')?.rows?.[0] || null;
+  assert(Boolean(expenseRow), 'a narrative-saved expense row is written');
+  assert(String(expenseRow.created_at || '').startsWith('2026-10-31'), 'the retro date lands in created_at (1-save path)');
+
   console.log(`\n🎉 ALL QUIZ ENGINE TESTS PASSED (${passed} assertions).`);
 }
 

@@ -103,7 +103,7 @@ import { detectCountryFromPhone as detectCountryGlobal, resolveUserTimezone, res
 import { getCountryCommStyleLine } from '../services/countryCommStyles.js';
 import { applyOdometerReading, applyOperatingHours } from '../services/maintenanceReminders.js';
 import { handleQuizTurn, detectQuizStart, shouldPauseQuizForChat, getCurrentQuizField, detectFlowSwitch, getFlowDefinition, looksLikeReportRequest, getActiveQuiz, markQuizTurn, abandonQuiz } from '../services/quizEngine.js';
-import { buildNarrativeDraft, narrativeDraftFields, narrativeDraftExtras, shouldPrefillNarrativeDraft, isNarrativeIntakeEnabled } from '../services/narrativeDraft.js';
+import { buildNarrativeDraft, narrativeDraftFields, narrativeDraftExtras, shouldPrefillNarrativeDraft, isNarrativeIntakeEnabled, isNarrativeEligibleText } from '../services/narrativeDraft.js';
 import { renderActionDiscovery, composeMessage } from '../services/conversationEngine.js';
 import { enqueueFollowUp, FOLLOWUP_KINDS, followUpAckText } from '../services/followups.js';
 import { enqueueUserMessage } from '../services/messageQueue.js';
@@ -2024,6 +2024,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         if (isNarrativeIntakeEnabled()
             && !session.quiz
             && !mediaObj
+            && isNarrativeEligibleText(messageText)
             && ['LOG_EXPENSE', 'LOG_EARNINGS', 'UPDATE_MILEAGE'].includes(intent)) {
           try {
             const candidate = buildNarrativeDraft({

@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.34.0  
+**Version:** 1.35.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.35.0** | Draft Cards: narrative pre-fills confirm through an engine-rendered card (1 Save / 2 Change / 3 Cancel, zero AI tokens) with live re-render on corrections, optional-field auto-skip, and a narrative eligibility threshold (D5) | §81 |
 | **1.34.0** | Narrative Intake: one free-text sentence is deterministically parsed (money lexicon, past dates, vendor, volume, odometer) and pre-fills the log quiz; stated past dates land in `created_at` on the fresh write — zero AI tokens, never a guessed figure | §80 |
 | **1.33.0** | Editable ledger: `my entries` → `edit 2` / `delete 2` (DELETE confirm) → before/after diff, hard delete + `admin_audit_logs` snapshot + 30-minute `restore`, whitelist-locked fields (VIN/plate/date never editable), fresh-log safety and PIN/OTP guard | §79 |
 | **1.32.4** | Report legibility (paint-scoped alpha, real KPI rows, no-wrap cells, 722 pt cover), self-verifying short links (`/r/__saka_probe__`, honest 404), env/secret parity audit (`admin env`, `/internal/status` env block, `npm run env:audit`), chat friction rules (pdf = report, no empty replies, real receipt vendors) | §78 |
@@ -3176,7 +3177,7 @@ or on a report request — the suite pins those exclusions.
 
 ### 80.1 Narrative Intake engine (v1.34.0)
 
-One pasted free-text sentence becomes a whole draft � deterministically, with
+One pasted free-text sentence becomes a whole draft � deterministically, with
 zero AI tokens, and with AI output never allowed to overwrite it.
 
 - **Money lexicon** (`src/services/moneyLexicon.js`): classifies every number
@@ -3194,7 +3195,7 @@ zero AI tokens, and with AI output never allowed to overwrite it.
   `src/services/dateParser.js`, rule 36): resolves yesterday / last Friday /
   3 days ago / `28/10` with country-resolved DD/MM vs MM/DD, normalized to
   Africa/Nairobi. Future phrases are rejected (`future: true`) and two
-  different days in one message yield `multi-date` � the draft refuses to
+  different days in one message yield `multi-date` � the draft refuses to
   pick a day and the flow asks instead.
 - **Draft builder** (`src/services/narrativeDraft.js`):
   `buildNarrativeDraft()` resolves the kind (expense | earning | mileage),
@@ -3204,17 +3205,17 @@ zero AI tokens, and with AI output never allowed to overwrite it.
   flagged when defaulted) and the retro date. A mentioned plate is masked
   before number parsing so `KCB 456B` never reads as money.
   `shouldPrefillNarrativeDraft()` gates: ambiguous money or `multi-date`
-  never pre-fill. `narrativeDraftFields()` is the deterministic authority �
+  never pre-fill. `narrativeDraftFields()` is the deterministic authority �
   the route merges it AFTER any AI extraction so AI can never overwrite it.
 - **Write path** (`src/services/quizEngine.js`): `startQuiz()` stashes
   `session.quiz.narrativeExtras` (`occurred_at`, `occurred_at_iso`, vendor,
   unit price) from `aiExtracted._narrative`. The `log_expense` and
   `log_earnings` writers run `sanitizeRetroTimestamp()` (past or now only;
   future dropped) and set `created_at` (and `logged_at` for earnings) on the
-  FRESH insert only � no DDL, and the editable ledger can never change a
+  FRESH insert only � no DDL, and the editable ledger can never change a
   date (rule 37).
 - **Route wiring** (`src/routes/whatsapp.js`): after ledger and receipts,
-  before the generic quiz turn � for `LOG_EXPENSE` / `LOG_EARNINGS` /
+  before the generic quiz turn � for `LOG_EXPENSE` / `LOG_EARNINGS` /
   `UPDATE_MILEAGE` when no quiz and no media is in flight, the draft is
   built and passed as `aiExtracted` (deterministic fields + `_narrative`).
   Not pre-fillable drafts fall through to the existing behavior unchanged.
@@ -3230,7 +3231,7 @@ zero AI tokens, and with AI output never allowed to overwrite it.
   (log_expense trigger/extracted/rules), `src/services/conversationEngine.js`
   (quiz instruction honours pre-fills), `src/services/envAudit.js`,
   `.env.example`, `scripts/health_audit.js`.
-- **Tests:** `test_narrative_draft.js` (**91 assertions** � money/volume/
+- **Tests:** `test_narrative_draft.js` (**91 assertions** � money/volume/
   odometer/vendor/vehicle/date determinism, never-guess corpus, KE/US
   country conventions, AI-never-overwrites guard, kill switch, and a live
   pre-fill -> confirm -> write round-trip proving `created_at` equals the
@@ -3241,3 +3242,51 @@ zero AI tokens, and with AI output never allowed to overwrite it.
 - **Still deferred:** draft confirmation cards (v1.35.0), record answers +
   `QUERY_RECORDS` intent (v1.36.0), corrections 2.0 incl. the re-log
   collision fix (v1.37.0), multi-record paragraphs (v1.38.0).
+
+### 81.1 Draft Cards (v1.35.0)
+
+A narrative pre-fill is no longer invisible: it confirms through an
+engine-rendered card the user checks before anything is written.
+
+- **Renderer** — `renderNarrativeCard(state, ctx)` in
+  `src/services/quizEngine.js` builds the card from live quiz state +
+  `narrativeExtras` (Vehicle, Type/Earning/Odometer-update, Amount in local
+  currency, Volume, Fill, Odometer, When = `occurred_at_label`, Place =
+  vendor, Notes) and ends with quick actions `1 ✅ Save it · 2 ✏️ Change
+  something · 3 ❌ Cancel`. Deterministic — zero AI tokens.
+- **Confirm path** — `askCurrent()` returns the stored `narrativeCard`
+  instead of the composed summary; `isYes` accepts `1`/`1️⃣`, `isNo` accepts
+  `3`/`3️⃣` (both helpers are confirm-phase-only, so menu replies elsewhere
+  are unaffected).
+- **Change path** — `2` (or change/edit/fix) answers with a deterministic
+  "which field?" prompt; the next message runs the normal correction flow
+  (`applyCorrections`) and the card re-renders with `✅ Updated: <label>`
+  above it. The card can never go stale.
+- **Fastest path** — for narrative drafts, unanswered optional fields
+  (notes, earning type, period) are auto-skipped at start so the card is the
+  first thing shown; corrections remain one message away.
+- **Eligibility threshold (D5)** — `isNarrativeEligibleText()` in
+  `src/services/narrativeDraft.js`: intake engages only for ≥40 chars, a
+  sentence break, or a narrative marker (past-date word, `@` price, fill
+  word, measurement unit, `at <Proper noun>`). Short one-liners keep the
+  v1.24+ instant paths unchanged. The route guard is in the narrative branch
+  of `src/routes/whatsapp.js`.
+- **Writes unchanged** — action 1 executes the same audited write path as
+  v1.34.0 (retro date still lands in `created_at` on the fresh insert; a
+  future date is still dropped).
+
+### 81.2 Files, tests
+
+- **Files:** `src/services/quizEngine.js` (card renderer, confirm branch,
+  quick actions, optional auto-skip), `src/services/narrativeDraft.js`
+  (`isNarrativeEligibleText`, `kind` added to extras),
+  `src/routes/whatsapp.js` (threshold guard), `sakaAi.js` (draft-card rule
+  in the NARRATIVE INTAKE block), `src/services/flowKnowledge.js`
+  (log_expense rules mention the card + quick actions).
+- **Tests:** `test_quiz_flow` (**128** — card rendering, quick actions
+  1/2/3, correction re-render, retro-date save through the card),
+  `test_narrative_draft` (**100** — eligibility threshold both sides, kind
+  in extras), `test_agent_training` (**130** — prompt carries the quick
+  actions). No new env knobs.
+- **Still deferred:** record answers + `QUERY_RECORDS` (v1.36.0),
+  corrections 2.0 (v1.37.0), multi-record paragraphs (v1.38.0).

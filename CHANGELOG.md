@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.35.0] - 2026-11-01
+
+- **Draft Cards: the pre-fill you can see before you save.** A narrative draft now confirms through an engine-rendered card — Vehicle · Type · Amount · Volume · Fill · Odometer · When · Place — with quick actions *1 ✅ Save it · 2 ✏️ Change something · 3 ❌ Cancel*. Zero AI tokens: the card is rendered deterministically and re-rendered live after any correction ("Updated: Amount spent" then the fresh card).
+- **Corrections never leave the card.** Action 2 asks which field to fix and the next message ("amount 4,800", "type Parts", "40 litres") updates the card in place; action 3 cancels with nothing written; action 1 saves through the exact same audited write path as before (retro dates still land in `created_at`).
+- **The fastest path still wins.** For narrative drafts, unanswered optional fields (notes, earning type, period) are skipped so the card — not a questionnaire — is the first thing the user sees.
+- **Narrative eligibility threshold (D5).** Narrative intake engages only when the message is shaped like a story: ≥40 chars, at least one sentence break, or a narrative marker (past-date word, `@` price, fill word, measurement, `at <Proper noun>`). Bare one-liners like "fuel 2000" keep the instant paths.
+- **Files:** `src/services/quizEngine.js` (`renderNarrativeCard`, card confirm path, quick actions 1/2/3 in `isYes`/`isNo`/`handleConfirmation`), `src/services/narrativeDraft.js` (`isNarrativeEligibleText`, `kind` in extras), `src/routes/whatsapp.js` (threshold guard), `sakaAi.js`, `src/services/flowKnowledge.js`.
+- **Tests:** `test_quiz_flow` (**128**, +16 — card rendering, quick actions 1/2/3, retro-date save through the card), `test_narrative_draft` (**100** — eligibility threshold, kind extras), `test_agent_training` (**130**).
+- **Still deferred:** record answers + `QUERY_RECORDS` (v1.36.0), corrections 2.0 (v1.37.0), multi-record paragraphs (v1.38.0).
+
+
 ## [1.34.0] - 2026-11-01
 
 - **One sentence is a whole record now (Narrative Intake).** "spent 5500 on diesel yesterday at Shell, 40L at 50350km, full tank" is parsed deterministically — zero AI tokens — into amount, expense type, volume, fill type, odometer, vendor, per-litre price and the stated past date, then pre-fills the existing quiz and saves on the usual confirmation. `NARRATIVE_INTAKE` is the kill switch (default on).
