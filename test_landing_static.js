@@ -16,6 +16,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { COUNTRY_COMPLIANCE_CATALOG } from './src/services/complianceCatalog.js';
 import { REGIONS } from './src/services/globalization.js';
+import { getTierPriceUSD, getAddonPriceUSD } from './src/services/subscriptionTiers.js';
 
 const LANDING = path.join(path.dirname(fileURLToPath(import.meta.url)), 'landing');
 
@@ -239,6 +240,25 @@ for (const [code, entry] of Object.entries(countriesJson.countries)) {
   check(total >= 3, `${code} renders at least three compliance cards (${total})`);
 }
 check(!indexHtml.includes('PSV documents') && indexHtml.includes('any required permits'), 'the drivers card is locale-neutral (no static PSV)');
+
+console.log('\n--- Test 14: local-currency pricing + rate freshness (v1.46.0) ---');
+const dataJson = JSON.parse(fs.readFileSync(path.join(LANDING, 'data/countries.json'), 'utf8'));
+check(dataJson.exchangeRates && typeof dataJson.exchangeRates === 'object', 'the dataset carries an exchangeRates map');
+for (const cur of ['USD', 'KES', 'NGN', 'ZAR', 'GBP', 'EUR', 'TZS', 'UGX', 'RWF', 'AUD', 'INR', 'AED', 'BRL']) {
+  const r = dataJson.exchangeRates[cur];
+  check(Number.isFinite(Number(r)) && Number(r) > 0, `exchangeRates carries ${cur} (positive)`);
+}
+check(Boolean(dataJson.ratesUpdatedAt) && !Number.isNaN(Date.parse(dataJson.ratesUpdatedAt)), 'the dataset stamps when rates were last refreshed');
+const monthlyPairs = [['solo_pro', '9.99'], ['team_fleet', '17.99'], ['growth', '27.99']];
+const annualPairs = [['solo_pro', '83.92'], ['team_fleet', '151.12'], ['growth', '235.12']];
+for (const [tier, usd] of monthlyPairs) {
+  check(indexHtml.includes(`data-usd-monthly="${usd}"`) && Number(usd) === getTierPriceUSD(tier, 'monthly'), `${tier} monthly USD matches the tier registry`);
+}
+for (const [tier, usd] of annualPairs) {
+  check(indexHtml.includes(`data-usd-annual="${usd}"`) && Number(usd) === getTierPriceUSD(tier, 'annual'), `${tier} annual USD matches the tier registry`);
+}
+check(indexHtml.includes('data-addon-usd="3.99"') && Number('3.99') === getAddonPriceUSD('fleet_command', 'monthly'), 'the add-on USD matches the tier registry');
+check(mainJs.includes('data-usd-monthly') && mainJs.includes('Intl.NumberFormat') && mainJs.includes("getAttribute('data-country')"), 'main.js localizes prices from the resolved country');
 
 console.log('Stateless suite: file reads only — no database, no cleanup needed.');
 

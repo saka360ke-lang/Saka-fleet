@@ -281,6 +281,55 @@
         else probeHealth(index + 1);
       });
   }
+  /* ---------- local-currency pricing (v1.46.0) ---------- */
+  (function localizePricing() {
+    var code = document.documentElement.getAttribute('data-country');
+    if (!code || code === 'GLOBAL') return;
+    fetch('/data/countries.json')
+      .then(function (res) { return res.ok ? res.json() : Promise.reject(); })
+      .then(function (data) {
+        var entry = data.countries && data.countries[code];
+        var currency = entry && entry.currency ? entry.currency : null;
+        var rate = currency ? Number(data.exchangeRates && data.exchangeRates[currency]) : NaN;
+        if (!currency || currency === 'USD' || !isFinite(rate) || rate <= 0) return;
+        var locale = (entry && entry.locale) || 'en-US';
+        function local(usd) {
+          try {
+            return new Intl.NumberFormat(locale, { style: 'currency', currency: currency, maximumFractionDigits: 0 }).format(Math.round(Number(usd) * rate));
+          } catch (e) { return ''; }
+        }
+        var cards = document.querySelectorAll('.price-card');
+        for (var i = 0; i < cards.length; i += 1) {
+          var priceEl = cards[i].querySelector('.price');
+          var perEl = cards[i].querySelector('.per');
+          if (priceEl) {
+            var monthly = priceEl.getAttribute('data-usd-monthly');
+            if (monthly && Number(monthly) > 0) {
+              var lm = local(monthly);
+              if (lm) priceEl.innerHTML = lm + ' <span class="usd-hint">$' + monthly + '</span>';
+            }
+          }
+          if (perEl) {
+            var annual = perEl.getAttribute('data-usd-annual');
+            if (annual && Number(annual) > 0) {
+              var la = local(annual);
+              if (la) perEl.innerHTML = 'per month &middot; ' + la + '/year <span class="usd-hint">$' + annual + '/year</span>';
+            }
+          }
+        }
+        var addon = document.getElementById('addonNote');
+        if (addon) {
+          var addonUsd = addon.getAttribute('data-addon-usd');
+          if (addonUsd && Number(addonUsd) > 0) {
+            var aa = local(addonUsd);
+            if (aa) addon.innerHTML = 'Need more than 5 assets? Fleet Command grows with you &mdash; add assets for ' + aa + ' <span class="usd-hint">$' + addonUsd + '</span>/month each.';
+          }
+        }
+        var note = document.getElementById('pricingNote');
+        if (note) { note.textContent = 'Prices are set in USD; local figures are estimates.'; note.style.display = 'block'; }
+      })
+      .catch(function () { /* keep the USD defaults */ });
+  })();
   probeHealth(0);
 })();
 

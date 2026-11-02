@@ -1,6 +1,12 @@
 {
-  "latest": "1.45.0",
+  "latest": "1.46.0",
   "entries": [
+    {
+      "version": "1.46.0",
+      "date": "2026-11-02",
+      "title": "Prices in your currency",
+      "summary": "Pricing cards now show your local currency once your country is detected, with the USD list price kept as a small hint. Rates refresh monthly and never fall mid-month, so a weaker dollar can't lower the price you see."
+    },
     {
       "version": "1.45.0",
       "date": "2026-11-02",

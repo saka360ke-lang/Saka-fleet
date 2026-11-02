@@ -12,6 +12,7 @@ import {
 } from './src/services/productQa.js';
 import { TIER_MATRIX, getTierPriceUSD, getAddonPriceUSD } from './src/services/subscriptionTiers.js';
 import { TRIAL_DAYS } from './src/services/trialEngine.js';
+import { applyRateRatchet } from './src/services/paystack.js';
 
 /**
  * Saka Fleet — Product Q&A tests (v1.25.0). Stateless: registry + copy only.
@@ -140,5 +141,15 @@ check(hasLocalFigure('Solo Pro is KES 1,298/month', 'KES') === true, 'a local an
 check(hasLocalFigure('Plans are billed in KES at checkout', 'KES') === false, 'merely naming the currency is not a figure');
 check(hasLocalFigure('KES\n1,298 per month', 'KES') === true, 'a figure on the next line still counts');
 check(hasLocalFigure('$9.99/month', 'KES') === false, 'a dollar amount is never a local figure');
+
+console.log('\n--- Test 11: FX ratchet protects the downward case (v1.46.0) ---');
+const ratNow = new Date('2026-11-15T00:00:00Z');
+const ratRecent = new Date('2026-11-01T00:00:00Z');
+const ratStale = new Date('2026-10-16T00:00:00Z');
+check(applyRateRatchet({ baseline: 130, live: 120, lastReset: ratRecent, now: ratNow }).effective === 130, 'a weaker USD holds the baseline (revenue floor)');
+check(applyRateRatchet({ baseline: 130, live: 135, lastReset: ratRecent, now: ratNow }).effective === 135, 'a >=2% stronger USD ratchets up');
+check(applyRateRatchet({ baseline: 130, live: 131, lastReset: ratRecent, now: ratNow }).effective === 130, 'a sub-2% strengthening holds the baseline');
+check(applyRateRatchet({ baseline: 130, live: 120, lastReset: ratStale, now: ratNow }).effective === 120, '30+ days since reset re-anchors to live');
+check(applyRateRatchet({ baseline: 0, live: 120, lastReset: ratRecent, now: ratNow }).effective === 120, 'a missing baseline anchors to live');
 
 console.log(`\n🎉 ${passed} product Q&A assertions passed.`);

@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.46.0] - 2026-11-02
+
+- **Local-currency pricing on the homepage.** Once the visitor's country resolves, the pricing cards show the local price with a muted USD hint ("KES 1,299 · $9.99") plus a "prices set in USD, local figures are estimates" note. Prices are data-driven from the tier registry; `countries.json` now mirrors the engine's fallback FX table (13 currencies, BRL added).
+- **FX ratchet (maximise revenue, protect the downward case).** `getEffectiveExchangeRate()` now uses a one-sided ratchet: the effective rate never falls between monthly re-anchors (a weaker USD no longer lowers the local price), and a >=2% strengthening ratchets up immediately. The pure `applyRateRatchet()` is shared by billing and the landing refresh.
+- **Monthly rate refresh (not static).** New `scripts/refresh_landing_rates.mjs` + `refresh_landing_rates.yml` (monthly cron + manual) fetch live rates from the same open.er-api.com source, apply the same ratchet, commit the new `exchangeRates`/`ratesUpdatedAt`, and deploy the landing via FTP.
+- **META welcome template.** `META_WELCOME_TEMPLATE_NAME=web_signup_welcome` is now Active; set in Cloud Run (redeploy the backend to activate).
+- **Tests:** `test_landing_static` (**277** — rates map, freshness stamp, registry-matched USD prices, hydrator), `test_product_qa` (+5 ratchet assertions).
+
 ## [1.45.0] - 2026-11-02
 
 - **National flag in the nav.** A flag badge now sits in the top bar on every page, resolved on timezone auto-detect with the "Not you? Change" picker as the manual fallback. The resolved country is persisted (`saka_country`) so any page renders the flag instantly with no network and no map.

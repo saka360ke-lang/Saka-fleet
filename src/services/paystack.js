@@ -26,7 +26,7 @@ export const SUBSCRIPTION_TIERS = Object.freeze(
   )
 );
 
-const FALLBACK_EXCHANGE_RATES = {
+export const FALLBACK_EXCHANGE_RATES = {
   USD: 1.0,
   KES: 130.0,
   NGN: 1500.0,
@@ -38,12 +38,38 @@ const FALLBACK_EXCHANGE_RATES = {
   RWF: 1350.0,
   AUD: 1.50,
   INR: 84.0,
-  AED: 3.67
+  AED: 3.67,
+  BRL: 5.6
 };
 
 /**
- * Fetch and cache exchange rates monthly with ±10% mid-month drift threshold
+ * v1.46.0 — fetch and cache exchange rates monthly, with a one-sided revenue
+ * ratchet: the effective rate never falls between monthly re-anchors (a weaker
+ * USD can no longer lower the local price and erode revenue), and a >=2%
+ * strengthening ratchets up immediately to capture the upside.
  */
+
+/** Upward-ratchet dead-band (percent). Re-anchor only on >= this strengthening. */
+export const RATE_RATCHET_UP_PCT = 2;
+
+/**
+ * Pure, deterministic ratchet shared by billing and the landing rate refresh.
+ * Returns { effective, reset }:
+ *   - 30+ days since lastReset  -> re-anchor to live (fresh monthly anchor).
+ *   - live >= baseline*(1+pct)  -> ratchet up to live (capture upside).
+ *   - otherwise                 -> hold baseline (downward floor).
+ */
+export function applyRateRatchet({ baseline, live, lastReset, now = new Date(), upPct = RATE_RATCHET_UP_PCT } = {}) {
+  const base = Number(baseline);
+  const liveRate = Number(live);
+  const threshold = 1 + Math.max(0, Number(upPct) || 0) / 100;
+  if (!Number.isFinite(base) || base <= 0) return { effective: liveRate, reset: true };
+  const daysSince = (Number(now) - Number(new Date(lastReset))) / 86400000;
+  if (!Number.isFinite(daysSince) || daysSince >= 30) return { effective: liveRate, reset: true };
+  if (Number.isFinite(liveRate) && liveRate > 0 && liveRate >= base * threshold) return { effective: liveRate, reset: true };
+  return { effective: base, reset: false };
+}
+
 export async function getEffectiveExchangeRate(supabase, currency = 'USD') {
   const cur = currency.toUpperCase();
   if (cur === 'USD') return 1.0;
@@ -84,40 +110,29 @@ export async function getEffectiveExchangeRate(supabase, currency = 'USD') {
       return liveRate;
     }
 
-    const lastReset = new Date(cached.last_monthly_reset);
-    const daysSinceReset = (now - lastReset) / (1000 * 60 * 60 * 24);
-    const baseline = Number(cached.baseline_rate);
+    const decision = applyRateRatchet({
+      baseline: Number(cached.baseline_rate),
+      live: liveRate,
+      lastReset: cached.last_monthly_reset,
+      now
+    });
 
-    if (daysSinceReset >= 30) {
+    if (decision.reset) {
       await supabase.from('exchange_rates_cache').update({
         baseline_rate: liveRate,
         current_rate: liveRate,
         last_monthly_reset: now.toISOString(),
         updated_at: now.toISOString()
       }).eq('currency', cur);
-
       return liveRate;
     }
 
-    const driftRatio = Math.abs(liveRate - baseline) / baseline;
-
-    if (driftRatio <= 0.10) {
-      await supabase.from('exchange_rates_cache').update({
-        current_rate: liveRate,
-        updated_at: now.toISOString()
-      }).eq('currency', cur);
-
-      return baseline;
-    } else {
-      await supabase.from('exchange_rates_cache').update({
-        baseline_rate: liveRate,
-        current_rate: liveRate,
-        last_monthly_reset: now.toISOString(),
-        updated_at: now.toISOString()
-      }).eq('currency', cur);
-
-      return liveRate;
-    }
+    // Downward floor: hold the baseline; still record the latest observation.
+    await supabase.from('exchange_rates_cache').update({
+      current_rate: liveRate,
+      updated_at: now.toISOString()
+    }).eq('currency', cur);
+    return decision.effective;
   } catch (err) {
     console.error(`Error in getEffectiveExchangeRate for ${cur}:`, err.message);
     return FALLBACK_EXCHANGE_RATES[cur] || 1.0;

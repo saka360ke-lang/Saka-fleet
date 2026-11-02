@@ -1,0 +1,70 @@
+name: Refresh Landing Exchange Rates
+
+# v1.46.0 - keeps the marketing site's displayed FX rates fresh (monthly) and
+# applies the same one-sided revenue ratchet as billing, so a weaker USD never
+# lowers a shown local price. Commits the new rates AND deploys landing/ so the
+# live site always reflects them. Self-skips the deploy until HOSTINGER_FTP_*
+# secrets exist.
+
+on:
+  schedule:
+    - cron: '0 7 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Refresh exchange rates
+        run: node scripts/refresh_landing_rates.mjs
+
+      - name: Commit refreshed rates
+        run: |
+          git config user.name "Saka Rates Bot"
+          git config user.email "rates@sakafleet.com"
+          git add landing/data/countries.json
+          if git diff --cached --quiet; then
+            echo "No rate changes to commit."
+          else
+            git commit -m "chore(landing): refresh exchange rates"
+            git push origin HEAD:main
+          fi
+
+      - name: Verify Hostinger FTP secrets exist
+        id: guard
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.HOSTINGER_FTP_SERVER }}" ] || [ -z "${{ secrets.HOSTINGER_FTP_USERNAME }}" ] || [ -z "${{ secrets.HOSTINGER_FTP_PASSWORD }}" ]; then
+            echo "HOSTINGER_FTP_* secrets missing - skipping deploy."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy landing/ via FTP
+        if: steps.guard.outputs.ready == 'true'
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.HOSTINGER_FTP_SERVER }}
+          username: ${{ secrets.HOSTINGER_FTP_USERNAME }}
+          password: ${{ secrets.HOSTINGER_FTP_PASSWORD }}
+          server-dir: ./
+          local-dir: ./landing/
+          exclude: |
+            **/.DS_Store
+            **/.git*
+            **/*.md
+          dangerous-clean-slate: false

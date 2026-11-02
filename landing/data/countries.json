@@ -15,6 +15,11 @@
     { "label": "Insurance renewal", "note": "Saka reminds you before your vehicle insurance lapses — one place for every renewal date." },
     { "label": "Vehicle inspection / roadworthiness", "note": "Inspections and road licences are tracked with gentle reminders before they expire." }
   ],
+  "exchangeRates": {
+    "USD": 1.0, "KES": 130.0, "NGN": 1500.0, "ZAR": 18.5, "GBP": 0.77, "EUR": 0.92,
+    "TZS": 2600.0, "UGX": 3700.0, "RWF": 1350.0, "AUD": 1.5, "INR": 84.0, "AED": 3.67, "BRL": 5.6
+  },
+  "ratesUpdatedAt": "2026-11-02",
   "countries": {
     "KE": {
       "code": "KE", "name": "Kenya", "calling": "+254", "currency": "KES",
