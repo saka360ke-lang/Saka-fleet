@@ -1,6 +1,12 @@
 {
-  "latest": "1.51.4",
+  "latest": "1.51.5",
   "entries": [
+    {
+      "version": "1.51.5",
+      "date": "2026-11-02",
+      "title": "Sign up first",
+      "summary": "New WhatsApp users now sign up on the website before chatting."
+    },
     {
       "version": "1.51.4",
       "date": "2026-11-02",

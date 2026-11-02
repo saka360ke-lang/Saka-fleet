@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.51.5] - 2026-11-02
+
+- **Unverified numbers are hard-gated.** A single early gate in the WhatsApp route now short-circuits EVERY message from a number whose profile is not `email_verified` to one short website-signup line — no intro, no product answers, no menus, no registration — until web signup completes. This supersedes the v1.51.4 per-branch greeting checks (kept as harmless defense-in-depth).
+- **Tests:** `test_web_onboarding` (+1 source-level gate assertion), `test_first_message_flow` now runs against a verified profile.
+
 ## [1.51.4] - 2026-11-02
 
 - **Unverified numbers are no longer invited to register a vehicle.** The first-contact greeting, the AI welcome and the default reply now branch on `email_verified`: an unverified number gets a website-signup CTA (`sakaIntroText` with `websiteSignupNextStep()`), never "what do you drive?" — vehicle registration stays gated behind website signup.

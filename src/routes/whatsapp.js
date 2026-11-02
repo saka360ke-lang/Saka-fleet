@@ -961,6 +961,26 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           }
         }
 
+        // v1.51.5 — HARD gate: an unverified number gets ONLY a short website-signup
+        // line. No chatting, no intros, no product answers, no registration, until
+        // the profile is email_verified (web signup).
+        if (supabaseClient && profileData && profileData.email_verified !== true) {
+          const verifyReply = '🔒 Please sign up first at https://sakafleet.com — tap *Get Started Free* and verify your email, then I\'ll meet you right back here on WhatsApp.';
+          session.history = session.history || [];
+          session.history.push({ role: 'user', parts: [{ text: messageText }] });
+          session.history.push({ role: 'model', parts: [{ text: verifyReply }] });
+          if (session.history.length > 20) session.history = session.history.slice(-20);
+          chatSessions.set(senderPhone, session);
+          try {
+            await sendWhatsAppReply(senderPhone, verifyReply);
+            await logChatTranscript(supabaseClient, senderPhone, 'assistant', verifyReply);
+            await saveChatMessage(supabaseClient, senderPhone, 'assistant', verifyReply);
+          } catch { /* best-effort */ }
+          await userLogPromise;
+          await persistSnap();
+          return { status: 'unverified_gated' };
+        }
+
         let existingVehicles = [];
         let dbHistory = [];
 
@@ -3861,15 +3881,8 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
         }
         if (session.quiz || hasVehicleRegistered) session.nudgeCount = 0;
         if (isNewcomer && isFirstTimeMessage(messageText)) {
-          if (firstContact) {
-            finalReply = sakaIntroText({ countryInfo, profile: profileData, nextStep: 'Set up in about a minute at https://sakafleet.com — I\'ll meet you on WhatsApp.' });
-            session.sakaIntroduced = true;
-          } else {
-            // v1.51.0 — a returning unverified newcomer gets a gentle website nudge,
-            // never a fresh full intro (the welcome is never repeated).
-            finalReply = pickNewcomerNudge(session.nudgeCount || 0);
-            session.nudgeCount = (session.nudgeCount || 0) + 1;
-          }
+          finalReply = sakaIntroText({ countryInfo, profile: profileData, nextStep: 'Set up in about a minute at https://sakafleet.com — I\'ll meet you on WhatsApp.' });
+          session.sakaIntroduced = true;
         } else if (isRepeatedReply({ quizActive: Boolean(session.quiz), reply: finalReply, lastPrompt: previousAssistantPrompt })) {
           // v1.26.1 — never swap in a canned nudge. Ask for a fresh, different,
           // warmer phrasing; the short line below is only the AI-outage fallback.

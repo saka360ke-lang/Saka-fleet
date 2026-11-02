@@ -86,6 +86,12 @@ async function run() {
   console.log('=== SAKA FLEET — FIRST-MESSAGE FLOW TESTS (v1.25.8) ===\n');
   chatSessions.delete(phone);
   onboardingStore.delete(phone);
+  // v1.51.5 — run the conversational suite against a VERIFIED profile so the
+  // hard unverified gate does not intercept the flow under test.
+  if (supabase) {
+    await supabase.from('profiles').delete().eq('phone_number', phone);
+    await supabase.from('profiles').insert([{ phone_number: phone, email_verified: true, full_name: 'Test Owner', country: 'Kenya', country_code: 'KE', unit_system: 'metric', preferred_language: 'English', subscription_tier: 'free' }]);
+  }
   try {
     console.log('--- Test 1: "Hi" receives the sales welcome ---');
     const hi = await say('Hi');

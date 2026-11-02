@@ -552,7 +552,7 @@ export const SAKA_WEB_ONBOARDING_PLAYBOOK = [
   '- Verification (v1.49.2): the 6-digit code is verified on the website ONLY — Saka never invites or accepts a code in WhatsApp. Never invent a code; never nag more than once per conversation.',
   '- Web signup failures (email dispatch, database writes) are logged and tracked by Sentinel through the normal incident pipeline; expired OTP sessions are pruned automatically.',
   '- Language (v1.47.0): the website captures the visitor browser language at signup and stores it as preferred_language; when no preferred_language is set, Saka defaults to ENGLISH — never the country default language (e.g. never greet a Kenyan number in Swahili).',
-  '- Point of entry (v1.49.0): vehicle registration now happens on the website. A WhatsApp user whose profile is not email_verified is pointed to https://sakafleet.com (Get Started Free); the WhatsApp vehicle_registration quiz only proceeds once the profile is email_verified.'
+  '- Point of entry (v1.49.0, v1.51.5): vehicle registration happens on the website and an unverified number is hard-gated to https://sakafleet.com (Get Started Free) — no conversation, no intros, no product answers until the profile is email_verified.'
 ];
 
 export function buildFlowPlaybook() {

@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.51.4  
+**Version:** 1.51.5  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.51.5** | Unverified numbers hard-gated to website signup (single choke point) | §102 |
 | **1.51.4** | Unverified greeting → website-only (no vehicle-registration ask) | §101 |
 | **1.51.3** | FEAT adoption: `admin adopt <FEAT-code>` → SUG- work order | §100 |
 | **1.51.2** | FEAT-* approval dead-end → review-only reply | §99 |
@@ -3831,4 +3832,12 @@ quiz engine:
   `websiteSignupNextStep()` (a website-only CTA) instead of "what do you drive?" in
   `sakaIntroText`, the AI `first_time_welcome` prompt and the `first_time_default`
   prompt — vehicle registration remains gated behind website signup.
+
+### 102. Unverified hard gate (v1.51.5)
+
+- A single early gate in `whatsapp.js` (after the profile load, superadmin exempt)
+  returns a one-line website-signup message for any number whose
+  `profile.email_verified !== true`, short-circuiting greetings, product QA, menus,
+  registration and the AI conversation. This supersedes the v1.51.4 per-branch
+  greeting checks (kept as harmless defense-in-depth).
 

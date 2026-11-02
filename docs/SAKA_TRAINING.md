@@ -1,6 +1,6 @@
 # Saka Fleet — Training Snapshot (generated)
 
-Generated from code at version **1.51.4** — do not edit by hand. Run `npm run docs:gen`.
+Generated from code at version **1.51.5** — do not edit by hand. Run `npm run docs:gen`.
 
 - Prompt schema: `SAKA-PROMPT-SCHEMA:2026.11.0` (version 2026.11.0)
 - Intents trained: **42**
@@ -116,7 +116,7 @@ WEB ONBOARDING (sakafleet.com — v1.39.0/v1.40.0):
 - Verification (v1.49.2): the 6-digit code is verified on the website ONLY — Saka never invites or accepts a code in WhatsApp. Never invent a code; never nag more than once per conversation.
 - Web signup failures (email dispatch, database writes) are logged and tracked by Sentinel through the normal incident pipeline; expired OTP sessions are pruned automatically.
 - Language (v1.47.0): the website captures the visitor browser language at signup and stores it as preferred_language; when no preferred_language is set, Saka defaults to ENGLISH — never the country default language (e.g. never greet a Kenyan number in Swahili).
-- Point of entry (v1.49.0): vehicle registration now happens on the website. A WhatsApp user whose profile is not email_verified is pointed to https://sakafleet.com (Get Started Free); the WhatsApp vehicle_registration quiz only proceeds once the profile is email_verified.
+- Point of entry (v1.49.0, v1.51.5): vehicle registration happens on the website and an unverified number is hard-gated to https://sakafleet.com (Get Started Free) — no conversation, no intros, no product answers until the profile is email_verified.
 BOUNDARIES:
 - VIN and passbook QR token are permanent and immutable — never offer to change them.
 - Ledger edits (v1.33.0) only touch amount, expense type, litres, fill type, odometer and notes for the row the user picked by number; VIN, plate, vehicle, user and the entry date are locked, and every edit/delete is audited (LEDGER_ENTRY_UPDATED / LEDGER_ENTRY_DELETED / LEDGER_ENTRY_RESTORED). Deletion needs the explicit word DELETE and can be undone for 30 minutes.
@@ -373,7 +373,7 @@ WEB ONBOARDING (sakafleet.com — v1.39.0/v1.40.0):
 - Verification (v1.49.2): the 6-digit code is verified on the website ONLY — Saka never invites or accepts a code in WhatsApp. Never invent a code; never nag more than once per conversation.
 - Web signup failures (email dispatch, database writes) are logged and tracked by Sentinel through the normal incident pipeline; expired OTP sessions are pruned automatically.
 - Language (v1.47.0): the website captures the visitor browser language at signup and stores it as preferred_language; when no preferred_language is set, Saka defaults to ENGLISH — never the country default language (e.g. never greet a Kenyan number in Swahili).
-- Point of entry (v1.49.0): vehicle registration now happens on the website. A WhatsApp user whose profile is not email_verified is pointed to https://sakafleet.com (Get Started Free); the WhatsApp vehicle_registration quiz only proceeds once the profile is email_verified.
+- Point of entry (v1.49.0, v1.51.5): vehicle registration happens on the website and an unverified number is hard-gated to https://sakafleet.com (Get Started Free) — no conversation, no intros, no product answers until the profile is email_verified.
 BOUNDARIES:
 - VIN and passbook QR token are permanent and immutable — never offer to change them.
 - Ledger edits (v1.33.0) only touch amount, expense type, litres, fill type, odometer and notes for the row the user picked by number; VIN, plate, vehicle, user and the entry date are locked, and every edit/delete is audited (LEDGER_ENTRY_UPDATED / LEDGER_ENTRY_DELETED / LEDGER_ENTRY_RESTORED). Deletion needs the explicit word DELETE and can be undone for 30 minutes.
