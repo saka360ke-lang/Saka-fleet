@@ -6,6 +6,7 @@ import {
   AI_TIERS,
   AI_PURPOSES,
   isPremiumModelEnabled,
+  DEFAULT_ANTHROPIC_TIER1_MODEL,
   getTierModel,
   resolveTier,
   routeModelForPurpose,
@@ -78,7 +79,7 @@ async function runTests() {
   process.env.PREMIUM_MODEL_ENABLED = 'off';
   console.log(`  ℹ️ Premium switch forced off for the suite (local value: ${premiumEnvironmentBefore ? 'on' : 'off'}).\n`);
 
-  console.log('--- Test 1: Tier 1 is Sonnet for every user-facing purpose (v1.23.0) ---');
+  console.log('--- Test 1: Tier 1 is Haiku for every user-facing purpose (v1.50.0) ---');
   const premiumBefore = isPremiumModelEnabled();
   withEnv({ PREMIUM_MODEL_ENABLED: 'off', CONVERSATIONAL_PROVIDER: undefined, AI_MODEL_TIER_2: undefined, AI_TIER1_PROVIDER: 'anthropic' }, () => {
     check(isPremiumModelEnabled() === false, 'premium routing is off when the kill switch is off');
@@ -88,8 +89,8 @@ async function runTests() {
         check(resolved.provider === AI_PROVIDERS.DEEPSEEK, `${purpose}: background reasoning stays DeepSeek`);
       } else if (resolved.tier === AI_TIERS.ROUTER) {
         if (USER_FACING_PURPOSES.has(purpose)) {
-          check(resolved.provider === AI_PROVIDERS.ANTHROPIC, `${purpose}: front tier is Sonnet`);
-          check(typeof resolved.model === 'string' && resolved.model.startsWith('claude'), `${purpose}: Sonnet model (${resolved.model})`);
+          check(resolved.provider === AI_PROVIDERS.ANTHROPIC, `${purpose}: front tier is Anthropic`);
+          check(resolved.model === DEFAULT_ANTHROPIC_TIER1_MODEL, `${purpose}: Tier-1 uses Haiku (${resolved.model})`);
         } else {
           check(resolved.provider === AI_PROVIDERS.DEEPSEEK, `${purpose}: background router purpose stays DeepSeek`);
         }
@@ -141,7 +142,8 @@ async function runTests() {
     check(intent.provider === 'anthropic', 'intent_classify uses the configured provider');
     check(intent.model === 'claude-sonnet-test', 'intent_classify uses AI_MODEL_TIER_2');
     const extraction = resolveTier('extraction');
-    check(extraction.tier === AI_TIERS.ROUTER && extraction.provider === AI_PROVIDERS.ANTHROPIC, 'extraction rides the Sonnet router tier');
+    check(extraction.tier === AI_TIERS.ROUTER && extraction.provider === AI_PROVIDERS.ANTHROPIC, 'extraction rides the Haiku router tier');
+    check(extraction.model === DEFAULT_ANTHROPIC_TIER1_MODEL, 'Tier-1 (extraction) stays on Haiku even when premium is on');
   });
   check(isPremiumModelEnabled() === premiumBefore, 'premium toggle restored after the test');
 

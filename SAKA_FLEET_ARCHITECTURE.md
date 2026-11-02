@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.49.6  
+**Version:** 1.50.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.50.0** | True two-tier AI routing (Tier-1 Haiku / Tier-2 Sonnet) + superadmin-only | §95 |
 | **1.49.6** | Superadmin remediation view: grouped pending/deployed + `admin remediations pending|deployed` filters | §94 |
 | **1.49.5** | Mandatory website signup (write-path guards on both registration flows, legacy WhatsApp auth endpoints removed) | §93 |
 | **1.49.4** | English-first welcome + explicit language-switch confirmation | §92 |
@@ -3753,4 +3754,18 @@ quiz engine:
   and the natural `admin pending|deployed remediations/fixes` aliases; the
   `handleSuperadminFlow` routing audits the filter. `admin remediations`
   defaults to the grouped `all` view.
+
+### 95. True two-tier routing + superadmin-only (v1.50.0)
+
+- **Two-tier decoupling.** `DEFAULT_ANTHROPIC_TIER1_MODEL = 'claude-haiku-4-5'`
+  now serves Tier-1 (router/everyday) and no longer borrows `AI_MODEL_TIER_2`;
+  Tier-2 (`PREMIUM_MODEL_ENABLED=on`, `maxAiTier >= 2`) stays on
+  `claude-sonnet-5-5`. `AI_MODEL_TIER_1_ANTHROPIC` pins/overrides Tier-1.
+- **Haiku payload fix.** `buildAnthropicPayload` only sends the
+  `thinking: { type: 'between_tools' }` block for Sonnet/Opus models; Haiku and
+  other fast models reject a `thinking` block with HTTP 400.
+- **Superadmin-only.** `buildRoleContext` returns `['Superadmin']` only; the
+  webhook short-circuits a non-admin superadmin message to the admin hub;
+  `canAssignDriverToVehicle` refuses the superadmin phone as a driver. The
+  superadmin phone (`+254720641985`) can no longer hold Owner/Driver roles.
 

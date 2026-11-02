@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.50.0] - 2026-11-02
+
+- **True two-tier AI routing.** Tier-1 (router/everyday conversation) now runs on Claude Haiku (`AI_MODEL_TIER_1_ANTHROPIC=claude-haiku-4-5`, new `DEFAULT_ANTHROPIC_TIER1_MODEL`), decoupled from Tier-2 (Sonnet). Tier-2 (`PREMIUM_MODEL_ENABLED=on`, trial/paid only) stays on `claude-sonnet-5-5`. The Anthropic payload builder now only sends the `thinking` block for Sonnet/Opus models (Haiku rejects it with HTTP 400).
+- **Superadmin-only.** The superadmin phone is now Superadmin-only: it never resolves to Owner/Driver roles, non-admin messages get the admin hub (no fall-through), and it can never be assigned as a driver.
+- **Tests:** `test_model_router` (+Tier-1 Haiku assertions), `test_superadmin`, `test_subscription_billing`, `test_phase2_analytics`, `test_driver_assignment_gate` green.
+
 ## [1.49.6] - 2026-11-02
 
 - **Superadmin remediation view — pending vs deployed.** `admin remediations` now groups proposals into ⏳ Pending / 🚀 Deployed / ⛔ Declined sections (limit raised to 30), and `admin remediations pending` / `admin remediations deployed` filter deterministically (zero tokens). The chosen filter is audited.

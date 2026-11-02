@@ -467,6 +467,21 @@ export async function canAssignDriverToVehicle({ vehicleId, driverId, supabase }
     return { allowed: false, message: 'Vehicle ID and Driver ID are required.' };
   }
 
+  // v1.50.0 — the superadmin phone can never hold a driver profile.
+  try {
+    const { data: driverProfile } = await supabase
+      .from('profiles')
+      .select('phone_number')
+      .eq('id', driverId)
+      .maybeSingle();
+    if (driverProfile?.phone_number && process.env.SUPERADMIN_PHONE) {
+      const clean = (p) => String(p).replace(/[^\d]/g, '');
+      if (clean(driverProfile.phone_number) === clean(process.env.SUPERADMIN_PHONE)) {
+        return { allowed: false, reason: 'SUPERADMIN_DRIVER', message: 'The superadmin account cannot be assigned as a driver.' };
+      }
+    }
+  } catch { /* fail-open: the 1-to-1 checks below still apply */ }
+
   // 1. Check if driver is already assigned to any other active vehicle
   const { data: driverExistingVeh, error: driverErr } = await supabase
     .from('vehicles')

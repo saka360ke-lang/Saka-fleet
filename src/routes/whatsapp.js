@@ -341,8 +341,21 @@ async function sendWhatsAppReply(toPhone, messageBody) {
  * The AI writes the prose; this function owns the permissions.
  */
 export function buildRoleContext(profileData, vehicles = [], senderPhone = '') {
+  // v1.50.0 — superadmin is superadmin-only: it never holds owner/driver roles.
+  if (isSuperadminPhone(senderPhone)) {
+    return {
+      roles: ['Superadmin'],
+      commands: [
+        'adminstart', 'adminstop',
+        'admin report', 'admin audit <plate or VIN>', 'admin alerts',
+        'admin ai-stats', 'admin usage [Nh]', 'admin trial-stats [Nd]',
+        'admin remediations [pending|deployed]', 'admin accept fix <CODE>',
+        'admin decline fix <CODE>', 'admin modify fix <CODE> <feedback>',
+        'adminrules', 'admin sentinel diagnose'
+      ]
+    };
+  }
   const roles = [];
-  if (isSuperadminPhone(senderPhone)) roles.push('Superadmin');
   if (profileData?.id && vehicles.some((v) => v.owner_id === profileData.id)) roles.push('Owner');
   if (profileData?.id && vehicles.some((v) => v.assigned_driver_id === profileData.id)) roles.push('Driver');
   if (roles.length === 0) roles.push('Unregistered');
@@ -429,11 +442,10 @@ export function generateRoleBasedActionDiscovery({ profileData, vehicles = [], s
       `• \`admin report\` — Executive fleet digest\n` +
       `• \`admin audit [Plate or VIN]\` — Deep vehicle passbook audit\n` +
       `• \`admin alerts\` — System warnings & friction logs\n` +
+      `• \`admin remediations [pending|deployed]\` — Review fixes\n` +
+      `• \`admin ai-stats\` · \`admin trial-stats\` — Telemetry digests\n` +
       `• \`adminrules reset\` — Dynamic micro-rules management\n` +
-      `• \`adminstop\` — Terminate admin session\n\n` +
-      `💡 *Fleet Management:* You also have full access to owner and driver tools for personal vehicles.` +
-      (isOwner ? `\n\n👑 *Your Owner Tools (${activePlate}):* my vehicles · switch to [plate] · register · assign driver [phone] to [plate]` : '') +
-      (isDriver ? `\n\n🚙 *Your Driver Tools (${activePlate}):* Odometer [km] · Logged [L] fuel · Earned [amount] today` : '');
+      `• \`adminstop\` — Terminate admin session`;
   }
 
   if (isOwner && isDriver) {
@@ -830,6 +842,18 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           await logChatTranscript(supabaseClient, senderPhone, 'assistant', superadminRes.reply);
           await saveChatMessage(supabaseClient, senderPhone, 'assistant', superadminRes.reply);
         }
+        await userLogPromise;
+        await persistSnap();
+        return { status: 'superadmin_handled' };
+      }
+      // v1.50.0 — superadmin is superadmin-only: a non-admin message from the
+      // superadmin phone is answered with the admin hub instead of falling
+      // through to owner/driver flows.
+      if (isSuperadminPhone(senderPhone)) {
+        const hub = generateRoleBasedActionDiscovery({ profileData: null, vehicles: [], senderPhone });
+        await sendWhatsAppReply(senderPhone, hub);
+        await logChatTranscript(supabaseClient, senderPhone, 'assistant', hub);
+        await saveChatMessage(supabaseClient, senderPhone, 'assistant', hub);
         await userLogPromise;
         await persistSnap();
         return { status: 'superadmin_handled' };

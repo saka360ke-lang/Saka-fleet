@@ -21,6 +21,7 @@ import OpenAI from 'openai';
 export const DEEPSEEK_BASE_URL = 'https://api.deepseek.com';
 export const DEFAULT_DEEPSEEK_MODEL = 'deepseek-chat'; // DeepSeek-V3
 export const DEFAULT_DEEPSEEK_REASONER = 'deepseek-reasoner'; // Tier-3 opt-in
+export const DEFAULT_ANTHROPIC_TIER1_MODEL = 'claude-haiku-4-5';
 export const DEFAULT_ANTHROPIC_TIER2_MODEL = 'claude-sonnet-5-5';
 export const DEFAULT_OPENAI_TIER2_MODEL = 'gpt-4o';
 
@@ -132,8 +133,7 @@ export function getTierModel(tier, providerOverride = null) {
   // DeepSeek behaviour one env var away.
   if (tier === AI_TIERS.ROUTER && providerOverride === AI_PROVIDERS.ANTHROPIC) {
     if (process.env.AI_MODEL_TIER_1_ANTHROPIC) return process.env.AI_MODEL_TIER_1_ANTHROPIC;
-    if (process.env.AI_MODEL_TIER_2) return process.env.AI_MODEL_TIER_2;
-    return DEFAULT_ANTHROPIC_TIER2_MODEL;
+    return DEFAULT_ANTHROPIC_TIER1_MODEL;
   }
   if (process.env.AI_MODEL_TIER_1 || process.env.DEEPSEEK_MODEL) {
     return process.env.AI_MODEL_TIER_1 || process.env.DEEPSEEK_MODEL;
@@ -440,7 +440,11 @@ export function buildAnthropicPayload({
     max_tokens: maxTokens
   };
   const thinkingEnabled = TRUTHY.has(String(process.env.ANTHROPIC_THINKING_ENABLED || 'off').toLowerCase());
-  if (!thinkingEnabled) {
+  // v1.50.0 — the `between_tools` thinking toggle only applies to models with
+  // the thinking API (Sonnet/Opus). Haiku (Tier-1) and other fast models reject
+  // a `thinking` block with HTTP 400, so omit it for them.
+  const supportsThinkingToggle = /(?:sonnet|opus)/i.test(String(model || ''));
+  if (!thinkingEnabled && supportsThinkingToggle) {
     payload.thinking = { type: String(process.env.ANTHROPIC_THINKING_MODE || 'between_tools').trim() || 'between_tools' };
   }
   // Newer Claude models (Sonnet 5.5+) mark `temperature` as deprecated and

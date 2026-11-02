@@ -46,7 +46,7 @@ const thinkingOn = buildAnthropicPayload({ model: 'm', messages: [{ role: 'user'
 check(thinkingOn.thinking === undefined, 'ANTHROPIC_THINKING_ENABLED=on leaves thinking to the provider');
 delete process.env.ANTHROPIC_THINKING_ENABLED;
 process.env.ANTHROPIC_THINKING_MODE = 'disabled';
-const customMode = buildAnthropicPayload({ model: 'm', messages: [{ role: 'user', content: 'hi' }] });
+const customMode = buildAnthropicPayload({ model: 'claude-sonnet-5-5', messages: [{ role: 'user', content: 'hi' }] });
 check(customMode.thinking?.type === 'disabled', 'ANTHROPIC_THINKING_MODE can override the off mode');
 delete process.env.ANTHROPIC_THINKING_MODE;
 process.env.ANTHROPIC_TEMPERATURE_SUPPORTED = 'on';
