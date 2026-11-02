@@ -141,7 +141,7 @@ const ADMIN_INTENTS = new Set([
   'ADMIN_RULES_RESET', 'ADMIN_RULES_TOGGLE', 'ADMIN_RULES_LIST',
   'ADMIN_HORIZON', 'ADMIN_PROPOSALS', 'ADMIN_BACKLOG',
   'ADMIN_REMEDIATIONS', 'ADMIN_REMEDIATION_ACCEPT', 'ADMIN_REMEDIATION_DECLINE', 'ADMIN_REMEDIATION_MODIFY', 'ADMIN_REMEDIATION_STATUS',
-  'ADMIN_UPDATE_SUGGEST',
+  'ADMIN_UPDATE_SUGGEST', 'ADMIN_FEATURE_ADOPT',
   'ADMIN_AI_STATS',
   'ADMIN_ENV_AUDIT',
   'ADMIN_OCR_STATS',
@@ -320,6 +320,10 @@ export async function parseSuperadminCommand(messageText) {
   if (/^\s*admin\s+(pending|deployed)\s+(?:remediations?|fixes?|proposals?)\s*$/i.test(text)) {
     return { intent: 'ADMIN_REMEDIATIONS', filter: /pending/i.test(text) ? 'pending' : 'deployed' };
   }
+  const adoptFeatureMatch = text.match(/^\s*admin\s+adopt\s+([a-zA-Z0-9-]+)\s*$/i);
+  if (adoptFeatureMatch) {
+    return { intent: 'ADMIN_FEATURE_ADOPT', proposal_code: adoptFeatureMatch[1].toUpperCase() };
+  }
   const acceptFixMatch = text.match(/^\s*admin\s+accept\s+fix\s+([a-zA-Z0-9-]+)(?:\s+(override))?/i);
   if (acceptFixMatch) {
     return {
@@ -350,7 +354,7 @@ export async function parseSuperadminCommand(messageText) {
   }
 
   const prompt = `Classify user's admin request into JSON:
-Intent: "HEALTH_CHECK" | "GENERATE_COUPON" | "PROFILES_REPORT" | "ADMIN_AI_STATS" | "ADMIN_OCR_STATS" | "ADMIN_TURN_LATENCY" | "ADMIN_TRIAL_STATS" | "ADMIN_ROLLOUT" | "ADMIN_REPORT" | "ADMIN_AUDIT" | "ADMIN_ALERTS" | "ADMIN_RULES_RESET" | "ADMIN_RULES_TOGGLE" | "ADMIN_RULES_LIST" | "ADMIN_HORIZON" | "ADMIN_PROPOSALS" | "ADMIN_BACKLOG" | "ADMIN_REMEDIATIONS" | "ADMIN_REMEDIATION_ACCEPT" | "ADMIN_REMEDIATION_DECLINE" | "ADMIN_REMEDIATION_MODIFY" | "UNKNOWN"
+Intent: "HEALTH_CHECK" | "GENERATE_COUPON" | "PROFILES_REPORT" | "ADMIN_AI_STATS" | "ADMIN_OCR_STATS" | "ADMIN_TURN_LATENCY" | "ADMIN_TRIAL_STATS" | "ADMIN_ROLLOUT" | "ADMIN_REPORT" | "ADMIN_AUDIT" | "ADMIN_ALERTS" | "ADMIN_RULES_RESET" | "ADMIN_RULES_TOGGLE" | "ADMIN_RULES_LIST" | "ADMIN_HORIZON" | "ADMIN_PROPOSALS" | "ADMIN_BACKLOG" | "ADMIN_REMEDIATIONS" | "ADMIN_REMEDIATION_ACCEPT" | "ADMIN_REMEDIATION_DECLINE" | "ADMIN_REMEDIATION_MODIFY" | "ADMIN_FEATURE_ADOPT" | "UNKNOWN"
 Extract: discount_value (e.g. "20%"), target_phone (e.g. "+254712345678"), query (e.g. "KDA 123A" or VIN), rule_key (e.g. "clarify_vin"), proposal_code (e.g. "FIX-2026-10-30-01"), feedback (guidance text), hours (AI/OCR telemetry window 1-168, default 24), days (trial funnel window 1-365, default 30)
 Command: "${text}"`;
 
@@ -1301,6 +1305,77 @@ export async function handleAdminRulesList(supabase) {
  * approves it via `admin accept fix <CODE>`; Cline interprets the free text at
  * execution time (the CI gate applies a light keyword guard to the text).
  */
+/** v1.51.3 — adopt a Sentinel Horizon feature proposal into the remediation pipeline (two-step: capture, then `admin accept fix`). */
+export async function captureFeatureAdoption(supabase, adminPhone, featCode) {
+  const raw = String(featCode || '').trim().toUpperCase();
+  if (!/^FEAT-/.test(raw)) {
+    return { ok: false, reply: '⚠️ Usage: `admin adopt FEAT-<code>` — e.g. `admin adopt FEAT-2026-W43-01`.' };
+  }
+
+  const { data: feature, error: featErr } = await supabase
+    .from('weekly_feature_proposals')
+    .select('proposal_code,title,technical_spec,impact_score,status')
+    .eq('proposal_code', raw)
+    .maybeSingle();
+
+  if (featErr) return { ok: false, reply: `⚠️ Could not load \`${raw}\`: ${featErr.message}` };
+  if (!feature) return { ok: false, reply: `⚠️ Unknown feature proposal \`${raw}\`. Run \`admin backlog\` to see the list.` };
+  if (String(feature.status || 'pending').toLowerCase() !== 'pending') {
+    return { ok: false, reply: `ℹ️ \`${raw}\` was already adopted (status: ${feature.status || 'adopted'}).` };
+  }
+
+  const today = formatNairobiDate();
+  const prefix = `SUG-${today}-`;
+  const { data: existing } = await supabase
+    .from('remediation_proposals')
+    .select('proposal_code')
+    .like('proposal_code', `${prefix}%`);
+  const numbers = (existing || [])
+    .map((row) => Number(String(row.proposal_code || '').replace(prefix, '')))
+    .filter((value) => Number.isFinite(value));
+  const next = (numbers.length ? Math.max(...numbers) : 0) + 1;
+  const proposalCode = `${prefix}${String(next).padStart(2, '0')}`;
+
+  const overview = `${feature.title || 'Feature'}\n\n${String(feature.technical_spec || '').trim()}`.trim();
+  const { data, error } = await supabase
+    .from('remediation_proposals')
+    .insert([{
+      proposal_code: proposalCode,
+      title: String(feature.title || 'Feature').slice(0, 80),
+      category: 'update_suggest',
+      root_cause: overview,
+      proposed_changes: {
+        overview,
+        source: `FEAT adoption (${raw})`,
+        author_phone: adminPhone,
+        changes: [],
+        tests: ['test_agent_training.js'],
+        rollback: 'Revert the commit via git revert; no data migrations are involved.'
+      },
+      risk_level: Number(feature.impact_score) >= 8 ? 'medium' : 'low',
+      status: REMEDIATION_STATUS.PENDING_APPROVAL,
+      feedback: 'Adopted from a Sentinel Horizon feature proposal — Cline drafts the concrete scope at execution time.'
+    }])
+    .select('proposal_code')
+    .maybeSingle();
+
+  if (error) return { ok: false, reply: `⚠️ Could not capture the feature: ${error.message}` };
+
+  await supabase
+    .from('weekly_feature_proposals')
+    .update({ status: 'adopted' })
+    .eq('proposal_code', raw);
+
+  const code = data?.proposal_code || proposalCode;
+  return {
+    ok: true,
+    code,
+    reply: `✅ *Feature adopted* — captured as \`${code}\`.\n\n` +
+      `Review it with \`admin remediations\`, then approve with \`admin accept fix ${code}\`.\n\n` +
+      `_Nothing runs until you approve._`
+  };
+}
+
 export async function captureUpdateSuggestion(supabase, adminPhone, suggestionText) {
   const text = String(suggestionText || '').trim();
   if (!text) {
@@ -1491,7 +1566,7 @@ async function featureProposalReviewOnlyReply(supabase, code) {
     .maybeSingle();
   if (error || !feature) return null;
   return {
-    reply: `💡 \`${upper}\` — ${feature.title || 'Feature proposal'} is a Sentinel Horizon *feature blueprint* (impact ${feature.impact_score ?? '—'}/10), not a fix.\n\nFeature proposals are review-only — there's nothing to approve, decline or modify. Run \`admin backlog\` to see fixes and feature ideas together.`
+    reply: `💡 \`${upper}\` — ${feature.title || 'Feature proposal'} is a Sentinel Horizon *feature blueprint* (impact ${feature.impact_score ?? '—'}/10), not a fix.\n\nTo turn it into a work order, run \`admin adopt ${upper}\` — that captures it for review, and nothing runs until you approve the resulting \`SUG-*\` code.`
   };
 }
 
@@ -1885,7 +1960,7 @@ export function formatAdminHelpReply() {
   return '🛠️ *Saka admin commands*\n\n' +
     '📊 *Snapshots* — admin report · admin alerts · admin audit <query>\n' +
     '👥 *Fleet* — profiles report · admin trial-stats · admin ai-stats [24h] · admin ocr-stats [24h] · admin latency [24h] · admin env\n' +
-    '🛠️ *Fixes* — admin backlog · admin remediations [pending|deployed] · admin accept|decline|modify fix <CODE> · UPDATE-SUGGEST> <your update>\n' +
+    '🛠️ *Fixes* — admin backlog · admin remediations [pending|deployed] · admin accept|decline|modify fix <CODE> · admin adopt <FEAT-code> · UPDATE-SUGGEST> <your update>\n' +
     '🌱 *Growth* — generate coupon 20% · admin horizon · admin proposals\n' +
     '🩺 *Guardrails* — check health · admin rules list|toggle <key>|reset\n' +
     '📚 *Knowledge* — admin kb · admin kb review · admin kb stale\n' +
@@ -2052,6 +2127,18 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
     return {
       isSuperadmin: true,
       reply: statusRes.reply
+    };
+  }
+
+  if (parsedCommand.intent === 'ADMIN_FEATURE_ADOPT') {
+    const adoptRes = await captureFeatureAdoption(supabase, formattedPhone, parsedCommand.proposal_code);
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_FEATURE_ADOPT', {
+      proposal_code: adoptRes.code || null,
+      adopted: Boolean(adoptRes.ok)
+    });
+    return {
+      isSuperadmin: true,
+      reply: adoptRes.reply
     };
   }
 

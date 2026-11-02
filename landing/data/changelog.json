@@ -1,6 +1,12 @@
 {
-  "latest": "1.51.2",
+  "latest": "1.51.3",
   "entries": [
+    {
+      "version": "1.51.3",
+      "date": "2026-11-02",
+      "title": "Turn ideas into work",
+      "summary": "The superadmin can now turn a feature idea into a planned work item in one step."
+    },
     {
       "version": "1.51.2",
       "date": "2026-11-02",

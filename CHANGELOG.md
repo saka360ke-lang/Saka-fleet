@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.51.3] - 2026-11-02
+
+- **FEAT adoption (`admin adopt <FEAT-code>`).** A Sentinel Horizon feature blueprint can now be promoted into the autonomous remediation pipeline: `admin adopt FEAT-…` captures it as a `SUG-*` work order (`category: update_suggest`, title + technical_spec as the overview, `PENDING_APPROVAL`) and marks the FEAT `adopted`; the superadmin then reviews and approves with the existing `admin accept fix SUG-…` — nothing runs until approved. `admin accept fix FEAT-…` now points to `admin adopt` instead of a dead end.
+- **Tests:** `test_update_suggest` (+6: parse, capture, dedupe, adopt hint).
+
 ## [1.51.2] - 2026-11-02
 
 - **FEAT-* approval dead-end fixed.** `admin accept/decline/modify fix FEAT-…` (and `Status of FEAT-…`) now return a clear "review-only blueprint" reply instead of `⚠️ Unknown proposal` — Sentinel Horizon feature proposals are a backlog, not autonomous code changes.

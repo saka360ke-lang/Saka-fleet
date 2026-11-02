@@ -14,7 +14,8 @@ import {
   captureUpdateSuggestion,
   handleAdminRemediationStatus,
   handleAdminRemediationsList,
-  handleAdminRemediationDecision
+  handleAdminRemediationDecision,
+  captureFeatureAdoption
 } from './src/services/superadmin.js';
 import { createMockSupabase } from './scripts/mockSupabase.js';
 import {
@@ -64,6 +65,9 @@ const parsedBacklogPending = await parseSuperadminCommand('admin backlog pending
 check(parsedBacklogPending.intent === 'ADMIN_BACKLOG' && parsedBacklogPending.filter === 'pending', 'parse: "admin backlog pending" filters to pending');
 const parsedBacklogDeployed = await parseSuperadminCommand('admin backlog deployed');
 check(parsedBacklogDeployed.intent === 'ADMIN_BACKLOG' && parsedBacklogDeployed.filter === 'deployed', 'parse: "admin backlog deployed" filters to deployed');
+
+const parsedAdopt = await parseSuperadminCommand('admin adopt FEAT-2026-W43-01');
+check(parsedAdopt.intent === 'ADMIN_FEATURE_ADOPT' && parsedAdopt.proposal_code === 'FEAT-2026-W43-01', 'parse: "admin adopt FEAT-<code>" resolves to ADMIN_FEATURE_ADOPT');
 
 // ---- 2. Non-superadmin gating (stateless) ----
 const nonAdmin = await handleSuperadminFlow(null, '+254700000000', 'UPDATE-SUGGEST> sneaky change');
@@ -116,13 +120,29 @@ check(nonAdmin.isSuperadmin === false, 'gate: non-superadmin is rejected before 
     weekly_feature_proposals: [{ proposal_code: 'FEAT-2026-W43-01', title: 'Smart Document Intelligence', status: 'pending', impact_score: 9 }]
   });
   const featAccept = await handleAdminRemediationDecision(featMock.client, 'FEAT-2026-W43-01', 'accept');
-  check(/review-only/.test(featAccept.reply) && /feature blueprint/.test(featAccept.reply) && !/Unknown proposal/.test(featAccept.reply), 'decision: accepting a FEAT-* code explains it is a review-only blueprint');
+  check(/feature blueprint/.test(featAccept.reply) && /admin adopt/.test(featAccept.reply) && !/Unknown proposal/.test(featAccept.reply), 'decision: accepting a FEAT-* code points to `admin adopt` instead of a dead end');
 
   const featStatus = await handleAdminRemediationStatus(featMock.client, 'FEAT-2026-W43-01');
-  check(/review-only/.test(featStatus.reply) && !/No remediation proposal matches/.test(featStatus.reply), 'status: a FEAT-* code returns the review-only hint, not the not-found hint');
+  check(/admin adopt/.test(featStatus.reply) && !/No remediation proposal matches/.test(featStatus.reply), 'status: a FEAT-* code returns the adopt hint, not the not-found hint');
 
   const unknownDecision = await handleAdminRemediationDecision(featMock.client, 'FIX-0000-00-00-00', 'accept');
   check(/Unknown proposal/.test(unknownDecision.reply), 'decision: a genuinely unknown non-FEAT code still says Unknown proposal');
+}
+
+// ---- 2d. FEAT adoption captures a SUG- work order (stateless) ----
+{
+  const featMock = createMockSupabase({
+    remediation_proposals: [],
+    weekly_feature_proposals: [{ proposal_code: 'FEAT-2026-W43-01', title: 'Smart Document Intelligence', technical_spec: 'Build a natural-language admin console.', impact_score: 9, status: 'pending' }]
+  });
+  const adopt = await captureFeatureAdoption(featMock.client, '+254700000000', 'FEAT-2026-W43-01');
+  check(adopt.ok === true && /^SUG-\d{4}-\d{2}-\d{2}-\d{2}$/.test(String(adopt.code || '')), `adopt: captures a SUG- code (${adopt.code})`);
+  check(String(adopt.reply).includes('admin accept fix'), 'adopt: reply includes the approval next-step');
+  const sugRow = featMock.db.remediation_proposals[0];
+  check(sugRow?.category === 'update_suggest' && /Smart Document Intelligence/.test(sugRow?.proposed_changes?.overview || '') && /Build a natural-language/.test(sugRow?.proposed_changes?.overview || ''), 'adopt: the SUG row carries the FEAT title + technical_spec');
+  check(featMock.db.weekly_feature_proposals[0].status === 'adopted', 'adopt: the FEAT proposal is marked adopted');
+  const second = await captureFeatureAdoption(featMock.client, '+254700000000', 'FEAT-2026-W43-01');
+  check(second.ok === false && /already adopted/i.test(second.reply), 'adopt: a second adopt on the same FEAT is refused');
 }
 
 // ---- 3. Delivery-receipt webhook (stateless) ----

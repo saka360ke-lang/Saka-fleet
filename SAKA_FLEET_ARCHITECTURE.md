@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.51.2  
+**Version:** 1.51.3  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.51.3** | FEAT adoption: `admin adopt <FEAT-code>` → SUG- work order | §100 |
 | **1.51.2** | FEAT-* approval dead-end → review-only reply | §99 |
 | **1.51.1** | Short links enabled (SHORT_LINK_DOMAIN_READY=on + PUBLIC_APP_URL) | §98 |
 | **1.51.0** | Unified admin backlog + gentle website signup push + changelog refresh | §97 |
@@ -3811,4 +3812,15 @@ quiz engine:
   clear "review-only blueprint" reply via `featureProposalReviewOnlyReply()` instead of
   `⚠️ Unknown proposal` — Sentinel Horizon feature proposals are a backlog, not
   autonomous code changes.
+
+### 100. FEAT adoption (`admin adopt`) (v1.51.3)
+
+- `admin adopt <FEAT-code>` promotes a Sentinel Horizon feature blueprint into the
+  remediation pipeline: `captureFeatureAdoption()` looks up `weekly_feature_proposals`,
+  inserts a `remediation_proposals` row (`SUG-<date>-<n>`, category `update_suggest`,
+  `proposed_changes.overview = title + technical_spec`, `PENDING_APPROVAL`), and marks
+  the feature `adopted`. Approval + CI execution reuse the existing `admin accept fix`
+  flow unchanged (two-step, mirroring `UPDATE-SUGGEST>`).
+- `admin accept/decline/modify fix <FEAT-*>` now points to `admin adopt` instead of a
+  dead end.
 
