@@ -11,7 +11,8 @@ import { createClient } from '@supabase/supabase-js';
 import {
   parseSuperadminCommand,
   handleSuperadminFlow,
-  captureUpdateSuggestion
+  captureUpdateSuggestion,
+  handleAdminRemediationStatus
 } from './src/services/superadmin.js';
 import {
   verifyProposalGate,
@@ -41,9 +42,36 @@ check(parsedEmpty.intent === 'ADMIN_UPDATE_SUGGEST' && parsedEmpty.suggestion ==
 const parsedAdmin = await parseSuperadminCommand('admin remediations');
 check(parsedAdmin.intent === 'ADMIN_REMEDIATIONS', 'parse: existing admin commands still route correctly');
 
+const parsedFixStatus = await parseSuperadminCommand('Status of FIX-2026-10-30-01');
+check(parsedFixStatus.intent === 'ADMIN_REMEDIATION_STATUS' && parsedFixStatus.proposal_code === 'FIX-2026-10-30-01', 'parse: "Status of FIX-<code>" resolves to a single-proposal status lookup');
+const parsedFixStatusAdmin = await parseSuperadminCommand('admin FIX-2026-10-30-01');
+check(parsedFixStatusAdmin.intent === 'ADMIN_REMEDIATION_STATUS', 'parse: "admin FIX-<code>" resolves too');
+const parsedBareCode = await parseSuperadminCommand('FIX-2026-10-30-01');
+check(parsedBareCode.intent === 'ADMIN_REMEDIATION_STATUS', 'parse: a bare FIX- code resolves to a status lookup');
+
 // ---- 2. Non-superadmin gating (stateless) ----
 const nonAdmin = await handleSuperadminFlow(null, '+254700000000', 'UPDATE-SUGGEST> sneaky change');
 check(nonAdmin.isSuperadmin === false, 'gate: non-superadmin is rejected before capture');
+
+// ---- 2b. Fix-status lookup (stateless, in-memory double) ----
+{
+  const makeStatusMock = (row) => ({
+    from() {
+      return {
+        select() { return this; },
+        eq() { return this; },
+        maybeSingle() { return Promise.resolve({ data: row, error: null }); }
+      };
+    }
+  });
+  const found = await handleAdminRemediationStatus(
+    makeStatusMock({ proposal_code: 'FIX-2026-10-30-01', title: 'Stop the OTP loop', status: 'DEPLOYED', risk_level: 'low' }),
+    'fix-2026-10-30-01'
+  );
+  check(/Remediation status/.test(found.reply) && /DEPLOYED/.test(found.reply) && /FIX-2026-10-30-01/.test(found.reply), 'status: single-proposal lookup returns the status and title');
+  const missing = await handleAdminRemediationStatus(makeStatusMock(null), 'FIX-0000-00-00-00');
+  check(/No remediation proposal matches/.test(missing.reply), 'status: an unknown code returns a not-found hint');
+}
 
 // ---- 3. Delivery-receipt webhook (stateless) ----
 {

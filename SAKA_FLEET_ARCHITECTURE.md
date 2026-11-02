@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.49.0  
+**Version:** 1.49.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.49.1** | Fix: superadmin exempted from the website registration gate + natural-language "Status of FIX-<code>" remediation status lookup | §89 |
 | **1.49.0** | Website-first onboarding (point of entry = sakafleet.com), WhatsApp registration gated on email verification, consent-gated Google Tag Manager (GTM-TGR68X2X), targeted reset clears owner_id-keyed rows | §88 |
 | **1.48.0** | `UPDATE-SUGGEST>` superadmin command (Model A capture → remediation approval gate), WhatsApp `message_status` delivery receipts, build-notification diagnosis | §87 |
 | **1.42.0** | Extensionless URLs (301 + internal rewrite in .htaccess), clean links site-wide, always-sent {{1}} welcome-template parameter | §86 |
@@ -3661,4 +3662,19 @@ quiz engine:
 - **Reset gap closed.** The targeted reset SQL now deletes `subscriptions`,
   `trial_sessions` and `usage_counters` by `owner_id` before the profile row is
   removed (they were previously orphaned). `test_db_reset_scope` asserts it.
+
+### 89. Registration-gate regression + fix-status lookup (v1.49.1)
+
+- **Regression (v1.49.0).** The website-first registration gate
+  (`registrationEmailGated` in `whatsapp.js`) did not exempt the superadmin, so
+  a non-`admin` message from the superadmin phone (e.g. "Status of
+  FIX-2026-10-30-01", which is not an explicit `admin …` directive and therefore
+  falls through to the normal conversation) was answered with the website-signup
+  redirect. Fix: the gate now also requires `!isSuperadminPhone(senderPhone)`.
+- **Fix-status lookup.** `parseSuperadminCommand` recognises `Status of
+  FIX-<code>` / a bare `FIX-<code>` / `admin FIX-<code>` as
+  `ADMIN_REMEDIATION_STATUS`; `handleAdminRemediationStatus` returns the single
+  proposal's status/title/risk from `remediation_proposals` and is audited as
+  `ADMIN_REMEDIATION_STATUS`. Deterministic — zero LLM tokens.
+- **Tests:** `test_update_suggest.js` (+5 assertions), `test_superadmin.js`.
 

@@ -140,7 +140,7 @@ const ADMIN_INTENTS = new Set([
   'ADMIN_REPORT', 'ADMIN_AUDIT', 'ADMIN_ALERTS',
   'ADMIN_RULES_RESET', 'ADMIN_RULES_TOGGLE', 'ADMIN_RULES_LIST',
   'ADMIN_HORIZON', 'ADMIN_PROPOSALS',
-  'ADMIN_REMEDIATIONS', 'ADMIN_REMEDIATION_ACCEPT', 'ADMIN_REMEDIATION_DECLINE', 'ADMIN_REMEDIATION_MODIFY',
+  'ADMIN_REMEDIATIONS', 'ADMIN_REMEDIATION_ACCEPT', 'ADMIN_REMEDIATION_DECLINE', 'ADMIN_REMEDIATION_MODIFY', 'ADMIN_REMEDIATION_STATUS',
   'ADMIN_UPDATE_SUGGEST',
   'ADMIN_AI_STATS',
   'ADMIN_ENV_AUDIT',
@@ -172,6 +172,13 @@ export async function parseSuperadminCommand(messageText) {
   // "list superadmin commands", "show admin commands").
   if (/^\s*(?:(?:superadmin|admin)\s+(?:commands?|help)|(?:list|show|see)\s+(?:me\s+)?(?:all\s+)?(?:superadmin\s+|admin\s+)?commands?|commands?\s+list)\s*$/i.test(text)) {
     return { intent: 'ADMIN_HELP' };
+  }
+
+  // v1.49.1 — a natural-language "Status of FIX-<code>" (or a bare FIX-/SUG- code)
+  // is a deterministic single-proposal status lookup, never a registration input.
+  const fixStatusMatch = text.match(/^\s*(?:admin\s+)?(?:status\s+(?:of\s+)?)?(FIX-\d{4}-\d{2}-\d{2}-\d{2}|SUG-\d{4}-\d{2}-\d{2}-\d{2})(?:\s+status)?\s*$/i);
+  if (fixStatusMatch) {
+    return { intent: 'ADMIN_REMEDIATION_STATUS', proposal_code: fixStatusMatch[1].toUpperCase() };
   }
 
   // Gate: general conversation from the superadmin phone is NOT an admin command.
@@ -1376,6 +1383,37 @@ export async function handleAdminRemediationsList(supabase) {
   };
 }
 
+/** v1.49.1 — a superadmin can ask for one proposal's status ("Status of FIX-…"). */
+export async function handleAdminRemediationStatus(supabase, proposalCode) {
+  const code = String(proposalCode || '').toUpperCase();
+  const { data: proposal, error } = await supabase
+    .from('remediation_proposals')
+    .select('proposal_code,title,status,risk_level,created_at')
+    .eq('proposal_code', code)
+    .maybeSingle();
+
+  if (error) {
+    return { reply: `⚠️ Could not load ${code}: ${error.message}` };
+  }
+  if (!proposal) {
+    return { reply: `🛠️ No remediation proposal matches \`${code}\`. Type \`admin remediations\` to see the list.` };
+  }
+
+  const icons = {
+    PENDING_APPROVAL: '⏳',
+    APPROVED: '✅',
+    EXECUTING: '⚙️',
+    VALIDATED: '🧪',
+    DEPLOYED: '🚀',
+    DECLINED: '⛔',
+    NEEDS_MODIFICATION: '✏️'
+  };
+  const icon = icons[proposal.status] || '•';
+  return {
+    reply: `🛠️ *Remediation status*\n\n${icon} \`${proposal.proposal_code}\` — ${proposal.title || 'Untitled'}\n   Status: *${proposal.status}* | Risk: ${String(proposal.risk_level || 'low').toUpperCase()}\n\n_Approve:_ \`admin accept fix ${proposal.proposal_code}\`\n_Decline:_ \`admin decline fix ${proposal.proposal_code}\``
+  };
+}
+
 /**
  * Superadmin approval state machine (v1.10.0).
  * PENDING_APPROVAL / NEEDS_MODIFICATION → APPROVED (nonce minted, CI dispatched)
@@ -1878,6 +1916,15 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
     return {
       isSuperadmin: true,
       reply: listRes.reply
+    };
+  }
+
+  if (parsedCommand.intent === 'ADMIN_REMEDIATION_STATUS') {
+    const statusRes = await handleAdminRemediationStatus(supabase, parsedCommand.proposal_code);
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_REMEDIATION_STATUS', { proposal_code: parsedCommand.proposal_code });
+    return {
+      isSuperadmin: true,
+      reply: statusRes.reply
     };
   }
 

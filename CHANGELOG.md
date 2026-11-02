@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.49.1] - 2026-11-02
+
+- **Regression fix — superadmin bounced to the website.** The v1.49.0 registration gate now exempts the superadmin phone, so a non-`admin` message (e.g. "Status of FIX-…") falls through to normal conversation instead of the website-signup redirect.
+- **Natural-language fix status.** `Status of FIX-<code>` (and a bare `FIX-<code>` / `admin FIX-<code>`) now returns that proposal's status/title/risk from `remediation_proposals` via a deterministic `ADMIN_REMEDIATION_STATUS` handler, audited as `ADMIN_REMEDIATION_STATUS`.
+- **Tests:** `test_update_suggest` (+5 assertions), `test_superadmin`, `npm run health` green.
+
 ## [1.49.0] - 2026-11-02
 
 - **Point of entry is now the website.** First-contact greetings, newcomer/repeat nudges and the "how to use" answer lead with `https://sakafleet.com` ("Get Started Free") instead of "Reply REGISTER". The WhatsApp `vehicle_registration` quiz only proceeds once the profile is `email_verified`; otherwise Saka redirects to the website (with the 6-digit-code fallback). Synced across `flowKnowledge.js`, the core prompt, the composer, `productQa.js` and `greetings.js` (rule 13).
