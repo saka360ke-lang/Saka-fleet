@@ -12,7 +12,8 @@ import {
   parseSuperadminCommand,
   handleSuperadminFlow,
   captureUpdateSuggestion,
-  handleAdminRemediationStatus
+  handleAdminRemediationStatus,
+  handleAdminRemediationsList
 } from './src/services/superadmin.js';
 import {
   verifyProposalGate,
@@ -48,6 +49,12 @@ const parsedFixStatusAdmin = await parseSuperadminCommand('admin FIX-2026-10-30-
 check(parsedFixStatusAdmin.intent === 'ADMIN_REMEDIATION_STATUS', 'parse: "admin FIX-<code>" resolves too');
 const parsedBareCode = await parseSuperadminCommand('FIX-2026-10-30-01');
 check(parsedBareCode.intent === 'ADMIN_REMEDIATION_STATUS', 'parse: a bare FIX- code resolves to a status lookup');
+const parsedRemPending = await parseSuperadminCommand('admin remediations pending');
+check(parsedRemPending.intent === 'ADMIN_REMEDIATIONS' && parsedRemPending.filter === 'pending', 'parse: "admin remediations pending" resolves to the pending filter');
+const parsedRemDeployed = await parseSuperadminCommand('admin remediations deployed');
+check(parsedRemDeployed.intent === 'ADMIN_REMEDIATIONS' && parsedRemDeployed.filter === 'deployed', 'parse: "admin remediations deployed" resolves to the deployed filter');
+const parsedRemAll = await parseSuperadminCommand('admin remediations');
+check(parsedRemAll.intent === 'ADMIN_REMEDIATIONS' && parsedRemAll.filter === 'all', 'parse: "admin remediations" defaults to the all filter');
 
 // ---- 2. Non-superadmin gating (stateless) ----
 const nonAdmin = await handleSuperadminFlow(null, '+254700000000', 'UPDATE-SUGGEST> sneaky change');
@@ -71,6 +78,26 @@ check(nonAdmin.isSuperadmin === false, 'gate: non-superadmin is rejected before 
   check(/Remediation status/.test(found.reply) && /DEPLOYED/.test(found.reply) && /FIX-2026-10-30-01/.test(found.reply), 'status: single-proposal lookup returns the status and title');
   const missing = await handleAdminRemediationStatus(makeStatusMock(null), 'FIX-0000-00-00-00');
   check(/No remediation proposal matches/.test(missing.reply), 'status: an unknown code returns a not-found hint');
+
+  const remListMock = (rows) => ({
+    from() {
+      return {
+        select() { return this; },
+        order() { return this; },
+        limit() { return Promise.resolve({ data: rows, error: null }); }
+      };
+    }
+  });
+  const grouped = await handleAdminRemediationsList(remListMock([
+    { proposal_code: 'FIX-2026-10-30-01', title: 'Stop the OTP loop', status: 'DEPLOYED', risk_level: 'low' },
+    { proposal_code: 'FIX-2026-11-01-01', title: 'Something pending', status: 'PENDING_APPROVAL', risk_level: 'medium' }
+  ]), 'all');
+  check(/Pending/.test(grouped.reply) && /Deployed/.test(grouped.reply), 'remediations: the grouped list shows pending and deployed sections');
+  const onlyPending = await handleAdminRemediationsList(remListMock([
+    { proposal_code: 'FIX-2026-10-30-01', title: 'Stop the OTP loop', status: 'DEPLOYED', risk_level: 'low' },
+    { proposal_code: 'FIX-2026-11-01-01', title: 'Something pending', status: 'PENDING_APPROVAL', risk_level: 'medium' }
+  ]), 'pending');
+  check(/Pending/.test(onlyPending.reply) && !/Deployed/.test(onlyPending.reply), 'remediations: the pending filter hides the deployed section');
 }
 
 // ---- 3. Delivery-receipt webhook (stateless) ----

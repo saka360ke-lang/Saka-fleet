@@ -307,8 +307,12 @@ export async function parseSuperadminCommand(messageText) {
   }
 
   // Autonomous remediation approval gateway (v1.10.0)
-  if (/^\s*admin\s+remediations?\b/i.test(lower)) {
-    return { intent: 'ADMIN_REMEDIATIONS' };
+  const remediationsFilterMatch = text.match(/^\s*admin\s+remediations?\s*(pending|deployed|all)?\s*$/i);
+  if (remediationsFilterMatch) {
+    return { intent: 'ADMIN_REMEDIATIONS', filter: (remediationsFilterMatch[1] || 'all').toLowerCase() };
+  }
+  if (/^\s*admin\s+(pending|deployed)\s+(?:remediations?|fixes?|proposals?)\s*$/i.test(text)) {
+    return { intent: 'ADMIN_REMEDIATIONS', filter: /pending/i.test(text) ? 'pending' : 'deployed' };
   }
   const acceptFixMatch = text.match(/^\s*admin\s+accept\s+fix\s+([a-zA-Z0-9-]+)(?:\s+(override))?/i);
   if (acceptFixMatch) {
@@ -1345,12 +1349,12 @@ export async function captureUpdateSuggestion(supabase, adminPhone, suggestionTe
   };
 }
 
-export async function handleAdminRemediationsList(supabase) {
+export async function handleAdminRemediationsList(supabase, filter = 'all') {
   const { data: proposals, error } = await supabase
     .from('remediation_proposals')
     .select('proposal_code,title,status,risk_level,created_at')
     .order('created_at', { ascending: false })
-    .limit(8);
+    .limit(30);
 
   if (error) {
     return { reply: `⚠️ Could not load remediation proposals: ${error.message}` };
@@ -1361,25 +1365,42 @@ export async function handleAdminRemediationsList(supabase) {
     };
   }
 
-  const formatted = proposals.map((proposal) => {
-    const icons = {
-      PENDING_APPROVAL: '⏳',
-      APPROVED: '✅',
-      EXECUTING: '⚙️',
-      VALIDATED: '🧪',
-      DEPLOYED: '🚀',
-      DECLINED: '⛔',
-      NEEDS_MODIFICATION: '✏️'
-    };
-    const icon = icons[proposal.status] || '•';
-    return `${icon} \`${proposal.proposal_code}\` — ${proposal.title || 'Untitled'}\n   Status: *${proposal.status}* | Risk: ${String(proposal.risk_level || 'low').toUpperCase()}`;
+  const icons = {
+    PENDING_APPROVAL: '⏳',
+    APPROVED: '✅',
+    EXECUTING: '⚙️',
+    VALIDATED: '🧪',
+    DEPLOYED: '🚀',
+    DECLINED: '⛔',
+    NEEDS_MODIFICATION: '✏️'
+  };
+  const PENDING_STATUSES = ['PENDING_APPROVAL', 'APPROVED', 'EXECUTING', 'VALIDATED', 'NEEDS_MODIFICATION'];
+  const bucketOf = (p) => (PENDING_STATUSES.includes(p.status) ? 'pending' : (p.status === 'DEPLOYED' ? 'deployed' : 'other'));
+  const render = (list) => list.map((p) => {
+    const icon = icons[p.status] || '•';
+    return `${icon} \`${p.proposal_code}\` — ${p.title || 'Untitled'}\n   Status: *${p.status}* | Risk: ${String(p.risk_level || 'low').toUpperCase()}`;
   }).join('\n\n');
 
+  const sections = [];
+  if (filter === 'all' || filter === 'pending') {
+    const pending = proposals.filter((p) => bucketOf(p) === 'pending');
+    sections.push(`⏳ *Pending*\n${pending.length ? render(pending) : '• none'}`);
+  }
+  if (filter === 'all' || filter === 'deployed') {
+    const deployed = proposals.filter((p) => bucketOf(p) === 'deployed');
+    sections.push(`🚀 *Deployed*\n${deployed.length ? render(deployed) : '• none'}`);
+  }
+  if (filter === 'all') {
+    const other = proposals.filter((p) => bucketOf(p) === 'other');
+    if (other.length) sections.push(`⛔ *Declined/Other*\n${render(other)}`);
+  }
+
   return {
-    reply: `🛠️ *Autonomous Remediation Proposals*\n\n${formatted}\n\n` +
+    reply: `🛠️ *Autonomous Remediation*\n\n${sections.join('\n\n')}\n\n` +
       `_Approve:_ \`admin accept fix <CODE>\`\n` +
       `_Decline:_ \`admin decline fix <CODE>\`\n` +
-      `_Modify:_ \`admin modify fix <CODE> <guidance>\``
+      `_Modify:_ \`admin modify fix <CODE> <guidance>\`\n` +
+      `_Filter:_ \`admin remediations pending\` · \`admin remediations deployed\``
   };
 }
 
@@ -1767,7 +1788,7 @@ export function formatAdminHelpReply() {
   return '🛠️ *Saka admin commands*\n\n' +
     '📊 *Snapshots* — admin report · admin alerts · admin audit <query>\n' +
     '👥 *Fleet* — profiles report · admin trial-stats · admin ai-stats [24h] · admin ocr-stats [24h] · admin latency [24h] · admin env\n' +
-    '🛠️ *Fixes* — admin remediations · admin accept|decline|modify fix <CODE> · UPDATE-SUGGEST> <your update>\n' +
+    '🛠️ *Fixes* — admin remediations [pending|deployed] · admin accept|decline|modify fix <CODE> · UPDATE-SUGGEST> <your update>\n' +
     '🌱 *Growth* — generate coupon 20% · admin horizon · admin proposals\n' +
     '🩺 *Guardrails* — check health · admin rules list|toggle <key>|reset\n' +
     '📚 *Knowledge* — admin kb · admin kb review · admin kb stale\n' +
@@ -1911,8 +1932,8 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
   }
 
   if (parsedCommand.intent === 'ADMIN_REMEDIATIONS') {
-    const listRes = await handleAdminRemediationsList(supabase);
-    await logAdminAudit(supabase, formattedPhone, 'ADMIN_REMEDIATIONS', {});
+    const listRes = await handleAdminRemediationsList(supabase, parsedCommand.filter || 'all');
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_REMEDIATIONS', { filter: parsedCommand.filter || 'all' });
     return {
       isSuperadmin: true,
       reply: listRes.reply

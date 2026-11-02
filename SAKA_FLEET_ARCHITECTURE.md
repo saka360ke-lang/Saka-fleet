@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.49.5  
+**Version:** 1.49.6  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.49.6** | Superadmin remediation view: grouped pending/deployed + `admin remediations pending|deployed` filters | §94 |
 | **1.49.5** | Mandatory website signup (write-path guards on both registration flows, legacy WhatsApp auth endpoints removed) | §93 |
 | **1.49.4** | English-first welcome + explicit language-switch confirmation | §92 |
 | **1.49.3** | Signup conversion tracking (`successful_signup` dataLayer) + cookie-choice gate before account creation | §91 |
@@ -3740,4 +3741,16 @@ quiz engine:
 - **Legacy auth removed.** `POST /api/auth/whatsapp/request` and
   `/api/auth/whatsapp/verify` (the non-website `email_verified=true` path) are
   deleted from `index.js`.
+
+### 94. Superadmin remediation view (v1.49.6)
+
+- `handleAdminRemediationsList(supabase, filter)` groups proposals into
+  **Pending** (`PENDING_APPROVAL`, `APPROVED`, `EXECUTING`, `VALIDATED`,
+  `NEEDS_MODIFICATION`), **Deployed** (`DEPLOYED`) and **Declined/Other**
+  (`DECLINED`) sections; the hard `limit(8)` is raised to 30 so nothing is
+  hidden.
+- `parseSuperadminCommand` recognises `admin remediations [pending|deployed|all]`
+  and the natural `admin pending|deployed remediations/fixes` aliases; the
+  `handleSuperadminFlow` routing audits the filter. `admin remediations`
+  defaults to the grouped `all` view.
 

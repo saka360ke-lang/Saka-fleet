@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.49.6] - 2026-11-02
+
+- **Superadmin remediation view — pending vs deployed.** `admin remediations` now groups proposals into ⏳ Pending / 🚀 Deployed / ⛔ Declined sections (limit raised to 30), and `admin remediations pending` / `admin remediations deployed` filter deterministically (zero tokens). The chosen filter is audited.
+- **Tests:** `test_update_suggest` (+5 assertions), `test_superadmin` green.
+
 ## [1.49.5] - 2026-11-02
 
 - **Website signup is mandatory before registration/trial.** Added defense-in-depth guards in both vehicle-registration write paths (`quizEngine.persistVehicleRegistration` and legacy `onboarding.saveVehicleAssetRecord`) so an email-unverified account can never register a vehicle or start the welcome trial. The WhatsApp registration gate now clears stale legacy-onboarding state on redirect and no longer requires an empty `onboardingStore`.
