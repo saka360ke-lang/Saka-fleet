@@ -109,6 +109,8 @@ for (const needle of ['data-open-onboard', 'stepLegal', 'stepOtp', 'id="consent"
 check(/I have read, understood, and agree to the exhaustive Saka Fleet/.test(indexHtml), 'The mandatory legal checkbox copy is present');
 check(indexHtml.includes('id="statusCard"') && indexHtml.includes('/api/health'), 'The live uptime widget probes /api/health');
 check(indexHtml.includes('/data-deletion.html'), 'The footer links the data-deletion page');
+check(indexHtml.includes('wa.me/19404407252') && !indexHtml.includes('wa.me/254700000000'), 'wa.me links point at the real Saka business number, never the placeholder');
+check(mainJs.includes("WA_NUMBER = '19404407252'"), 'main.js uses the real Saka business number for deep links');
 check(/Get Started Free/.test(indexHtml) && /Deploy Your Fleet/.test(indexHtml), 'Primary CTAs are present');
 
 console.log(`\n🎉 ${passed} landing-site assertions passed.`);

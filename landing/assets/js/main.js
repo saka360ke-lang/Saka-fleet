@@ -3,7 +3,7 @@
   'use strict';
 
   var API_BASE = 'https://app.sakafleet.com';
-  var WA_NUMBER = '254700000000'; // Saka's WhatsApp business number (E.164, no +)
+  var WA_NUMBER = '19404407252'; // Saka's WhatsApp Business number (E.164, no +)
   var RESEND_COOLDOWN_S = 60;
 
   /* ---------- helpers ---------- */

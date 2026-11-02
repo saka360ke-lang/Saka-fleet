@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.39.4] - 2026-11-02
+
+- **Real WhatsApp deep links.** The hero "Talk to Saka" button and every wa.me deep link now use the verified Saka Fleet WhatsApp Business number (+1 940-440-7252, quality rating GREEN), replacing the placeholder. A regression assertion keeps the placeholder from ever returning.
+
 ## [1.39.3] - 2026-11-02
 
 - **New accounts are explicitly Free.** The live `profiles` schema carries a legacy `subscription_tier` default of `SOLO`, which the entitlement engine normalizes to `solo_pro` — and with a null status that resolves to ACTIVE, granting paid access to brand-new signups. Both creation paths (web onboarding + WhatsApp first-contact) now insert `subscription_tier: 'free'` explicitly; the welcome trial still upgrades the account at vehicle registration exactly as before (rules 23-26).

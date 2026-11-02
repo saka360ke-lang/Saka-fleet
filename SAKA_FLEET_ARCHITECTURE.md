@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.39.3  
+**Version:** 1.39.4  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.39.4** | wa.me deep links point at the verified Saka business number (+1 940-440-7252); placeholder regression-tested | §86 |
 | **1.39.3** | Explicit `subscription_tier: 'free'` on both profile-creation paths — the live schema's legacy `SOLO` default + null status resolved to paid entitlements for brand-new accounts | §86 |
 | **1.39.2** | Hostinger deploy workflow fix: secrets guard moved from job-level `if` (unsupported context — zero-job failures) to a step-output check | §86 |
 | **1.39.1** | Landing deploy prep: GFE-safe `/api/health` uptime probe (with `/healthz` fallback), Data Deletion page, footer/sitemap/llms links | §86 |
