@@ -112,7 +112,7 @@ import { enqueueFollowUp, FOLLOWUP_KINDS, followUpAckText } from '../services/fo
 import { enqueueUserMessage } from '../services/messageQueue.js';
 import { loadSessionSnapshot, persistSessionSnapshot } from '../services/sessionStore.js';
 import { createResilientClient } from '../services/supabaseClient.js';
-import { ocrWhatsAppMedia, extractDocumentHints, isOcrEnabled, isOcrAckFirstEnabled, buildMediaAckText } from '../services/ocrService.js';
+import { ocrWhatsAppMedia, extractDocumentHints, isOcrEnabled, isOcrAckFirstEnabled, buildMediaAckText, classifyOcrDocument } from '../services/ocrService.js';
 import { parseDocumentFields, uploadHintFor, DOCUMENT_SUPPORT_MENU } from '../services/documentLens.js';
 import {
   normalizeAssetKind,
@@ -795,20 +795,13 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
     }
 
     const ocrCountry = detectCountryFromPhone(formattedPhoneForSession);
-    const lens = ocrText
-      ? parseDocumentFields(ocrText, { countryCode: ocrCountry?.country_code || 'GLOBAL' })
-      : null;
-    const ocrKind = lens?.family || null;
-    // Deterministic Vision hints + the richer Document Lens field map (v1.20.0).
-    // v1.32.1 — the country-aware extractor wins on the keys it knows (amount,
-    // vendor, policy, expiry), so a lens misread can never override a labelled
-    // value (e.g. EXPIRING vs COMMENCING on an insurance certificate).
-    const receiptHints = ocrText
-      ? {
-        ...(lens?.hints || {}),
-        ...extractDocumentHints(ocrText, ocrKind, { countryCode: ocrCountry?.country_code || 'GLOBAL' })
-      }
-      : {};
+
+    // Safe, deterministic family classification (guarded; never throws) — used
+    // for the telemetry row so a crash in the richer Document Lens below can
+    // never make a media turn invisible.
+    let safeKind = 'unknown';
+    try { safeKind = ocrText ? classifyOcrDocument(ocrText) : 'unknown'; } catch { /* guarded */ }
+
     const ocrLowConfidence = Boolean(
       ocrText
       && Number.isFinite(Number(ocrResult?.confidence))
@@ -817,8 +810,9 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
     );
 
     // v1.32.1 — OCR request telemetry (Rule 36): one durable row per media turn,
-    // written BEFORE any crash-prone branch. A dead turn is now diagnosable and
-    // countable; country_code always comes from the WhatsApp number (E.164).
+    // written BEFORE the crash-prone Document Lens parsing. A dead turn is now
+    // diagnosable and countable; country_code always comes from the WhatsApp
+    // number (E.164).
     const ocrTextSha = buildOcrTextSha(ocrText);
     if (mediaObj?.id) {
       const ocrStatus = ocrPaused
@@ -832,13 +826,38 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         countryCode: ocrCountry?.country_code || null,
         mimeType: mediaMimeType,
         provider: ocrResult?.kind === 'pdf' ? 'local_pdf' : 'google_vision',
-        documentKind: ocrKind || null,
+        documentKind: safeKind || null,
         status: ocrStatus,
         confidence: ocrResult?.confidence ?? null,
         attempts: ocrResult?.attempts ?? null,
         latencyMs: Math.max(0, Date.now() - ocrStartedAt),
-        error: ocrError
+        error: ocrError || null
       }).catch(() => {});
+    }
+
+    // v1.51.7 — Document Lens parsing is best-effort: a crash here must never
+    // kill the turn (live 2026-11-02 logbook crash: "toUpperCase of undefined").
+    // Degrade to the raw OCR text and let the normal turn continue.
+    let lens = null;
+    let ocrKind = safeKind;
+    let receiptHints = {};
+    try {
+      lens = ocrText
+        ? parseDocumentFields(ocrText, { countryCode: ocrCountry?.country_code || 'GLOBAL' })
+        : null;
+      ocrKind = lens?.family || safeKind;
+      // Deterministic Vision hints + the richer Document Lens field map (v1.20.0).
+      // v1.32.1 — the country-aware extractor wins on the keys it knows (amount,
+      // vendor, policy, expiry), so a lens misread can never override a labelled
+      // value (e.g. EXPIRING vs COMMENCING on an insurance certificate).
+      receiptHints = ocrText
+        ? {
+          ...(lens?.hints || {}),
+          ...extractDocumentHints(ocrText, ocrKind, { countryCode: ocrCountry?.country_code || 'GLOBAL' })
+        }
+        : {};
+    } catch (lensErr) {
+      console.warn('[OCR] Document Lens failed (degrading to raw OCR text):', lensErr?.message || lensErr);
     }
 
     if (snapshot) {

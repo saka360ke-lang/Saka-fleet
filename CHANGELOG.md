@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.51.7] - 2026-11-02
+
+- **Document turns can no longer die silently.** The Document Lens parsing (field/hint extraction) is now best-effort: a crash degrades to the raw OCR text instead of killing the turn, and `recordOcrRequest` now writes its telemetry row BEFORE the crash-prone parsing (using the safe `classifyOcrDocument` classifier) so a dead turn is still diagnosable. Fixes the live 2026-11-02 logbook turn that died on `toUpperCase of undefined`.
+
 ## [1.51.6] - 2026-11-02
 
 - **Unverified numbers no longer run OCR.** The unverified gate now applies to media turns too: a number whose profile is not `email_verified` gets the website-signup line immediately, before the "Reading your photo" ack and before any Meta download or Vision call — fixing the "ack without follow-up" case where an unverified user sent a logbook and got silence.

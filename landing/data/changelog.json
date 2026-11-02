@@ -1,6 +1,12 @@
 {
-  "latest": "1.51.6",
+  "latest": "1.51.7",
   "entries": [
+    {
+      "version": "1.51.7",
+      "date": "2026-11-02",
+      "title": "Reliable document reading",
+      "summary": "Sending a photo or PDF now always gets a reply, even if the document can't be fully read."
+    },
     {
       "version": "1.51.6",
       "date": "2026-11-02",

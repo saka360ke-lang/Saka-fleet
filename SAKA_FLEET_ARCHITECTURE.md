@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.51.6  
+**Version:** 1.51.7  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.51.7** | Document-turn resilience (lens try/catch + telemetry-before-lens) | §104 |
 | **1.51.6** | Unverified media gate (no OCR ack/Vision for unverified numbers) | §103 |
 | **1.51.5** | Unverified numbers hard-gated to website signup (single choke point) | §102 |
 | **1.51.4** | Unverified greeting → website-only (no vehicle-registration ask) | §101 |
@@ -3848,4 +3849,11 @@ quiz engine:
   Vision call: an unverified number's photo/PDF gets the website line immediately
   (no "Reading your photo" ack, no download, no OCR). This closes the "ack without
   follow-up" hole where an unverified logbook submission produced silence.
+
+### 104. Document-turn resilience (v1.51.7)
+
+- Document Lens parsing is now best-effort (try/catch) in the media turn, and
+  `recordOcrRequest` telemetry is written BEFORE the lens using the safe
+  `classifyOcrDocument` classifier — a lens crash degrades to raw OCR text and
+  still leaves a durable `ocr_requests` row.
 
