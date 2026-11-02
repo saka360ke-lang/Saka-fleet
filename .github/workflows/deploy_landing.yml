@@ -1,6 +1,8 @@
 # Saka Fleet - deploy the landing/ marketing site to Hostinger shared hosting.
 # Ships ONLY static files; the backend repo never reaches Hostinger.
-# Self-skips until HOSTINGER_FTP_* secrets exist (see docs/LANDING_DEPLOYMENT.md).
+# Self-skips (with a green run) until HOSTINGER_FTP_* secrets exist.
+# Note: the secrets context is available in STEPS only, never in a job-level
+# if - the guard below is deliberately a step output check.
 
 name: Deploy Landing to Hostinger
 
@@ -15,12 +17,23 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    if: ${{ secrets.HOSTINGER_FTP_SERVER != '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Verify Hostinger FTP secrets exist
+        id: guard
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.HOSTINGER_FTP_SERVER }}" ] || [ -z "${{ secrets.HOSTINGER_FTP_USERNAME }}" ] || [ -z "${{ secrets.HOSTINGER_FTP_PASSWORD }}" ]; then
+            echo "HOSTINGER_FTP_* secrets are not configured yet - skipping the deploy."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Deploy landing/ via FTP
+        if: steps.guard.outputs.ready == 'true'
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5
         with:
           server: ${{ secrets.HOSTINGER_FTP_SERVER }}
@@ -33,3 +46,4 @@ jobs:
             **/.git*
             **/*.md
           dangerous-clean-slate: false
+

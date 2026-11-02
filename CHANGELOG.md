@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.39.2] - 2026-11-02
+
+- **Hostinger deploy workflow fixed.** The first two deploy runs failed instantly (zero jobs) because the `secrets` context is not available in a job-level `if`. The guard now runs as a bash step that emits a `ready` output; the FTP step deploys only when all three `HOSTINGER_FTP_*` secrets exist — and the run stays green (with a "skipping" note) while they are absent.
+
 ## [1.39.1] - 2026-11-02
 
 - **GFE-safe uptime probe.** Google's edge intercepts `/healthz` on some Cloud Run deployments (documented v1.24.4), so the landing uptime widget now probes `/api/health` first and falls back to `/healthz` for legacy revisions — the status card can never report "down" for a healthy backend.

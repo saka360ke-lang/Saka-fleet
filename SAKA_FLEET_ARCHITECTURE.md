@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.39.1  
+**Version:** 1.39.2  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.39.2** | Hostinger deploy workflow fix: secrets guard moved from job-level `if` (unsupported context — zero-job failures) to a step-output check | §86 |
 | **1.39.1** | Landing deploy prep: GFE-safe `/api/health` uptime probe (with `/healthz` fallback), Data Deletion page, footer/sitemap/llms links | §86 |
 | **1.39.0** | Marketing website + web onboarding (`landing/`, `/api/onboard`, Hostinger FTP deploy) + research-backed odometer policy (full-tank fuel required, zero-signal types never asked, hours-led assets use engine hours) | §85, §86 |
 | **1.38.0** | Multi-record paragraphs (D4): one message → numbered plan card (1 Save all / 2 Edit one / 3 Cancel), per-row audited writes, additive lines never split, no invented dates | §84 |
@@ -3523,6 +3524,9 @@ quiz engine:
   `SamKirkland/FTP-Deploy-Action`; credentials live in GitHub secrets
   (`HOSTINGER_FTP_SERVER/USERNAME/PASSWORD`); the job self-skips until the
   secrets exist. The backend repo never reaches Hostinger.
+- **v1.39.2 gotcha:** the `secrets` context is unavailable in a job-level
+  `if` (the first two runs failed instantly with zero jobs) — the guard is a
+  bash step emitting a `ready` output that gates the FTP step instead.
 - `landing/.htaccess` ships HTTPS redirect, canonical host, security headers,
   cache policy and a custom 404.
 - Operator walkthrough: `docs/LANDING_DEPLOYMENT.md`.
