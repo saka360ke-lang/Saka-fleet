@@ -30,6 +30,7 @@ const REQUIRED_FILES = [
   'index.html', 'privacy.html', 'terms.html', 'data-deletion.html', 'status.html', '404.html',
   'assets/css/styles.css', 'assets/js/main.js', 'assets/js/cookieConsent.js', 'assets/js/status.js', 'assets/js/locale.js',
   'assets/img/logo.svg', 'assets/img/favicon.svg', 'assets/img/og-cover.svg',
+  'assets/img/og-cover.png', 'assets/img/favicon-32.png', 'assets/img/apple-touch-icon.png', 'assets/img/icon-192.png',
   'assets/fonts/Outfit-600.woff2', 'assets/fonts/Outfit-800.woff2',
   'assets/fonts/Inter-400.woff2', 'assets/fonts/Inter-600.woff2', 'assets/fonts/Inter-700.woff2',
   'data/changelog.json', 'data/countries.json', 'robots.txt', 'sitemap.xml', 'llms.txt', 'manifest.webmanifest', '.htaccess'
@@ -196,5 +197,27 @@ check(!/href="\/[a-z0-9-]+\.html"/.test(allHtml), 'No internal page link uses th
 check(!/content="https:\/\/sakafleet\.com\/[a-z0-9-]+\.html"/.test(allHtml), 'Canonical and OG URLs are extensionless');
 check(allHtml.includes('href="/status"') && allHtml.includes('href="/privacy"'), 'Nav and footer use clean URLs');
 console.log(`\n🎉 ${passed} landing-site assertions passed.`);
+
+console.log('\n--- Test 12: first-load flag, cache strategy, images (v1.43.0) ---');
+const pkg143 = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'));
+check(indexHtml.includes('id="saka-boot"') && indexHtml.includes('window.__SAKA_BOOT__'), 'the head carries the inline locale bootstrap');
+const bootMatch = indexHtml.match(/var m=(\{.*\});/);
+check(Boolean(bootMatch), 'the bootstrap map is embedded and parseable');
+if (bootMatch) {
+  const bootMap = JSON.parse(bootMatch[1]);
+  for (const code of Object.keys(countriesJson.countries)) {
+    const e = countriesJson.countries[code];
+    check(bootMap[code] && bootMap[code].name === e.name && bootMap[code].calling === e.calling, 'bootstrap map matches the dataset for ' + code);
+  }
+}
+check(indexHtml.includes('document.documentElement.lang'), 'the bootstrap sets the html lang from the locale');
+check(/og-cover\.png/.test(indexHtml) && !/og-cover\.svg/.test(indexHtml), 'the share image is a PNG');
+const stampedV = indexHtml.match(/styles\.css\?v=([0-9.]+)/);
+check(Boolean(stampedV) && stampedV[1] === pkg143.version, 'asset version stamp matches package.json');
+const ht = fs.readFileSync(path.join(LANDING, '.htaccess'), 'utf8');
+check(/\.\(html\|json\)\$/.test(ht) && ht.includes('Cache-Control "no-cache"'), 'HTML and JSON are served no-cache');
+check(!/ExpiresByType text\/html/.test(ht), 'HTML is no longer long-cached');
+check(indexHtml.includes('aria-live="polite"'), 'the locale sections announce updates politely');
+check(/woff2\?v=/.test(css), 'self-hosted fonts are version-stamped');
 console.log('Stateless suite: file reads only — no database, no cleanup needed.');
 

@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.42.0  
+**Version:** 1.43.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -10,6 +10,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 | Version | Headline | Detail |
 |---|---|---|
 | **1.42.0** | Extensionless URLs (301 + internal rewrite in .htaccess), clean links site-wide, always-sent {{1}} welcome-template parameter | §86 |
+| **1.43.0** | First-load flag (inline locale bootstrap), no-cache HTML/JSON + version-stamped assets, PNG og/favicons, font preload | §86 |
 | **1.41.0** | Country-aware website: locale-detected compliance/lingo personalization from a catalog-mirroring dataset (drift-guarded), flag confidence chip, compact cookie banner | §86 |
 | **1.40.0** | Website refinement: vendor/Apex/app-host sweep, one-car language, /status page with plain-language incident ticker, cookie consent, self-hosted fonts, locale-based country codes, already-registered signup path, proactive Saka welcome, Sentinel-tracked web-onboarding failures + OTP prune, surgical training sync | §86 |
 | **1.39.4** | wa.me deep links point at the verified Saka business number (+1 940-440-7252); placeholder regression-tested | §86 |
@@ -3502,7 +3503,7 @@ quiz engine:
   country from the browser locale and renders the flag chip, the
   country-specific compliance section and the signup calling-code default;
   unknown locales get neutral GLOBAL copy. The cookie banner is now a
-  - **v1.42.0 extensionless URLs:** `.htaccess` 301s `/page.html` → `/page` and serves `/page` from `page.html` internally; all links, canonicals, sitemap and llms.txt use clean URLs; the proactive welcome always sends the `{{1}}` parameter (fallback "there").compact slim card (clamped copy, small buttons).
+  - **v1.42.0 extensionless URLs:** `.htaccess` 301s `/page.html` → `/page` and serves `/page` from `page.html` internally; all links, canonicals, sitemap and llms.txt use clean URLs; the proactive welcome always sends the `{{1}}` parameter (fallback "there").- **v1.43.0 first-load + cache:** inline bootstrap renders the flag chip and phone code on first paint; HTML/JSON are no-cache and assets are version-stamped by `npm run landing:stamp`; PNG share image and favicons added.compact slim card (clamped copy, small buttons).
 - **Isolation (rule 6):** zero secrets client-side; `test_landing_static.js`
   scans every static file for key patterns and verifies local references,
   structured data and AI files (49 assertions).

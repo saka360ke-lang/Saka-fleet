@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.43.0] - 2026-11-02
+
+- **First-load country confidence flag.** An inline `<head>` bootstrap (~no network) reads the browser locale, sets `<html lang>` + `data-country`, and renders the flag chip and the signup calling-code on first paint — no neutral flash. The compliance section below the fold hydrates from the dataset with `aria-live` announcements and no layout jump. The embedded map is a generated subset of `countries.json`, drift-guarded by the test.
+- **Cache clearing.** HTML and JSON now serve `Cache-Control: no-cache` (pages are always fresh); assets are version-stamped (`styles.css?v=1.43.0`, `main.js?v=…`, self-hosted fonts) by the new `npm run landing:stamp`, and the test asserts the stamp matches `package.json`.
+- **Share & install polish.** PNG `og-cover.png` (social platforms ignore SVG), PNG favicons (`favicon-32`, `apple-touch-icon`, `icon-192` in the manifest), and a font preload for the headline.
+- **Tests:** `test_landing_static` (**223** — bootstrap↔dataset subset guard, stamp-version guard, PNG/image presence, no-cache + extensionless rules).
+
 ## [1.42.0] - 2026-11-02
 
 - **Extensionless URLs everywhere.** New .htaccess rules: `/page.html` now 301-redirects to `/page`, and `/page` is served from `page.html` internally — so /status, /privacy, /terms and /data-deletion all work without the extension (the /status 404 is fixed). Every internal link, canonical URL, OpenGraph URL, sitemap loc and llms.txt link now uses the clean form; a new test forbids `.html` in any page link.

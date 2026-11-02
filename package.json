@@ -1,7 +1,7 @@
 {
   "name": "sakafleet-backend",
   "type": "module",
-  "version": "1.42.0",
+  "version": "1.43.0",
   "description": "Saka Fleet Backend",
   "main": "index.js",
   "scripts": {
@@ -52,7 +52,8 @@
     "postinstall": "node scripts/notify_git_push.js || true",
     "migrate:turn-latency": "node scripts/run_turn_latency_migration.js",
     "migrate:incidents": "node scripts/run_incidents_migration.js",
-    "migrate:web-onboard": "node scripts/run_web_onboarding_migration.js"
+    "migrate:web-onboard": "node scripts/run_web_onboarding_migration.js",
+    "landing:stamp": "node scripts/stamp_landing_assets.cjs"
   },
   "dependencies": {
     "@fastify/formbody": "^9.0.1",

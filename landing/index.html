@@ -17,20 +17,26 @@
   <meta property="og:title" content="Saka Fleet — WhatsApp Fleet Management That Runs Itself">
   <meta property="og:description" content="Log fuel, expenses and odometer in plain language on WhatsApp. PDF reports, reminders and compliance tracking. Free 30-day trial, no card.">
   <meta property="og:url" content="https://sakafleet.com/">
-  <meta property="og:image" content="https://sakafleet.com/assets/img/og-cover.svg">
+  <meta property="og:image" content="https://sakafleet.com/assets/img/og-cover.png">
   <meta property="og:locale" content="en_KE">
 
   <!-- Twitter -->
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Saka Fleet — WhatsApp Fleet Management That Runs Itself">
   <meta name="twitter:description" content="Log fuel, expenses and odometer in plain language on WhatsApp. PDF reports, reminders and compliance. Free 30-day trial.">
-  <meta name="twitter:image" content="https://sakafleet.com/assets/img/og-cover.svg">
+  <meta name="twitter:image" content="https://sakafleet.com/assets/img/og-cover.png">
 
   <link rel="icon" type="image/svg+xml" href="/assets/img/favicon.svg">
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
+  <link rel="apple-touch-icon" href="/assets/img/apple-touch-icon.png">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="alternate" type="text/plain" href="/llms.txt" title="LLMs.txt — AI-readable site summary">
 
-  <link rel="stylesheet" href="/assets/css/styles.css">
+  <link rel="stylesheet" href="/assets/css/styles.css?v=1.43.0">
+  <link rel="preload" href="/assets/fonts/Outfit-800.woff2" as="font" type="font/woff2" crossorigin>
+  <script id="saka-boot">
+  (function(){var m={"KE":{"name":"Kenya","calling":"+254","locale":"en-KE"},"TZ":{"name":"Tanzania","calling":"+255","locale":"sw-TZ"},"UG":{"name":"Uganda","calling":"+256","locale":"en-UG"},"RW":{"name":"Rwanda","calling":"+250","locale":"en-RW"},"NG":{"name":"Nigeria","calling":"+234","locale":"en-NG"},"ZA":{"name":"South Africa","calling":"+27","locale":"en-ZA"},"GB":{"name":"United Kingdom","calling":"+44","locale":"en-GB"},"US":{"name":"United States","calling":"+1","locale":"en-US"},"AE":{"name":"United Arab Emirates","calling":"+971","locale":"en-AE"},"IN":{"name":"India","calling":"+91","locale":"en-IN"},"AU":{"name":"Australia","calling":"+61","locale":"en-AU"},"DE":{"name":"Germany","calling":"+49","locale":"de-DE"},"FR":{"name":"France","calling":"+33","locale":"fr-FR"},"ES":{"name":"Spain","calling":"+34","locale":"es-ES"},"IT":{"name":"Italy","calling":"+39","locale":"it-IT"},"NL":{"name":"Netherlands","calling":"+31","locale":"nl-NL"},"BR":{"name":"Brazil","calling":"+55","locale":"pt-BR"}};var c=null;try{var r=(navigator.language||'en').toUpperCase().split('-')[1];c=/^[A-Z]{2}$/.test(r)?r:null;}catch(e){}var e=c&&m[c]?{code:c,name:m[c].name,calling:m[c].calling}:null;if(e){document.documentElement.lang=m[c].locale||'en';document.documentElement.setAttribute('data-country',c);}window.__SAKA_BOOT__=e;})();
+  </script>
     <!-- Structured data: Organization + WebSite + SoftwareApplication + FAQ (AI and answer-engine legible) -->
   <script type="application/ld+json">
   {
@@ -254,9 +260,9 @@
     <!-- Country-aware compliance (personalized by locale.js) -->
   <section class="section" id="compliance">
     <div class="wrap">
-      <h2 class="section-title" id="localeComplianceTitle">Wherever you drive, Saka keeps your paperwork in check</h2>
+      <h2 class="section-title" id="localeComplianceTitle" aria-live="polite">Wherever you drive, Saka keeps your paperwork in check</h2>
       <p class="section-sub" id="localeComplianceSub">Saka tracks licences, inspections, insurance and permits, reminds you before they lapse, and keeps driver handovers honest — in your words, wherever you are.</p>
-      <div class="grid cols-3" id="localeComplianceCards">
+      <div class="grid cols-3" id="localeComplianceCards" aria-live="polite">
         <div class="card">
           <div class="icon">🛡️</div>
           <h3>Driver licences</h3>
@@ -565,9 +571,13 @@
     </div>
   </div>
 
-  <script src="/assets/js/cookieConsent.js" defer></script>
-  <script src="/assets/js/locale.js" defer></script>
-  <script src="/assets/js/main.js" defer></script>
+  
+  <script>
+  (function(){var b=window.__SAKA_BOOT__;var chip=document.getElementById('localeFlag');if(b&&chip){chip.textContent=String.fromCodePoint.apply(null,[].map.call(b.code,function(ch){return 127397+ch.charCodeAt(0);}))+' Serving vehicle owners in '+b.name;chip.style.display='inline-flex';}var sel=document.getElementById('countryCode');if(b&&sel)sel.value=b.calling;})();
+  </script>
+  <script src="/assets/js/cookieConsent.js?v=1.43.0" defer></script>
+  <script src="/assets/js/locale.js?v=1.43.0" defer></script>
+  <script src="/assets/js/main.js?v=1.43.0" defer></script>
 </body>
 </html>
 
