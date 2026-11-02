@@ -144,6 +144,7 @@
     <div class="wrap hero-grid">
       <div>
         <span class="hero-badge">🟢 WhatsApp-first · No app to install</span>
+        <span class="hero-badge" id="localeFlag" style="display:none" aria-label="Country flag"></span>
         <h1>Your vehicle practically runs itself. <span class="grad-text">You just talk to it.</span></h1>
         <p class="lead">Saka is your co-pilot on WhatsApp — whether you drive one car or manage a whole fleet. Say "Logged 40L at 50,350 km — full tank" and the ledger, fuel economy and your next PDF report update themselves.</p>
         <div class="hero-actions">
@@ -250,7 +251,33 @@
       </div>
     </div>
   </section>
-    <!-- Pricing -->
+    <!-- Country-aware compliance (personalized by locale.js) -->
+  <section class="section" id="compliance">
+    <div class="wrap">
+      <h2 class="section-title" id="localeComplianceTitle">Wherever you drive, Saka keeps your paperwork in check</h2>
+      <p class="section-sub" id="localeComplianceSub">Saka tracks licences, inspections, insurance and permits, reminds you before they lapse, and keeps driver handovers honest — in your words, wherever you are.</p>
+      <div class="grid cols-3" id="localeComplianceCards">
+        <div class="card">
+          <div class="icon">🛡️</div>
+          <h3>Driver licences</h3>
+          <p>Saka reminds you before yours lapses and checks it whenever a driver takes over a vehicle.</p>
+        </div>
+        <div class="card">
+          <div class="icon">📅</div>
+          <h3>Inspections &amp; insurance</h3>
+          <p>Renewal dates live in one place, with gentle reminders before they expire.</p>
+        </div>
+        <div class="card">
+          <div class="icon">📜</div>
+          <h3>Permits &amp; certifications</h3>
+          <p>PSV, PDP, CPC, CDL or plant cards — Saka tracks whatever your work requires.</p>
+        </div>
+      </div>
+      <p style="text-align:center;color:var(--muted);font-size:.92rem;margin-top:22px" id="localeComplianceLingo">Talk to Saka in plain words — no forms, no jargon, wherever you are.</p>
+    </div>
+  </section>
+
+  <!-- Pricing -->
   <section class="section" id="pricing">
     <div class="wrap">
       <h2 class="section-title">Simple pricing, <span class="grad-text">no surprises</span></h2>
@@ -511,9 +538,9 @@
 
   <!-- Cookie consent -->
   <div class="cookie-banner" id="cookieBanner" role="region" aria-label="Cookie notice">
-    <p>🍪 We keep it simple: Saka Fleet uses only strictly necessary cookies to make this site work. No tracking, no advertising cookies — ever.</p>
+    <p>🍪 No tracking cookies here — just what keeps the site working.</p>
     <div class="cookie-actions">
-      <button class="btn btn-ghost" id="cookieSettingsBtn">Cookie settings</button>
+      <button class="btn btn-ghost" id="cookieSettingsBtn">Settings</button>
       <button class="btn btn-primary" id="cookieAcceptBtn">Got it</button>
     </div>
   </div>
@@ -539,6 +566,7 @@
   </div>
 
   <script src="/assets/js/cookieConsent.js" defer></script>
+  <script src="/assets/js/locale.js" defer></script>
   <script src="/assets/js/main.js" defer></script>
 </body>
 </html>

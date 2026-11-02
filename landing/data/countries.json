@@ -1,0 +1,169 @@
+{
+  "global": {
+    "code": "GLOBAL",
+    "name": null,
+    "title": "Wherever you drive, Saka keeps your paperwork in check",
+    "subtitle": "Saka tracks licences, inspections, insurance and permits, reminds you before they lapse, and keeps driver handovers honest — in your words, wherever you are.",
+    "compliance": [
+      { "label": "Driver licences", "note": "Saka reminds you before yours lapses and checks it whenever a driver takes over a vehicle." },
+      { "label": "Inspections & insurance", "note": "Renewal dates live in one place, with gentle reminders before they expire." },
+      { "label": "Permits & certifications", "note": "PSV, PDP, CPC, CDL or plant cards — Saka tracks whatever your work requires." }
+    ],
+    "lingo": null
+  },
+  "countries": {
+    "KE": {
+      "code": "KE", "name": "Kenya", "calling": "+254", "currency": "KES",
+      "plateExample": "KDA 123A", "units": "metric", "locale": "en-KE",
+      "compliance": {
+        "minimal": "Driver licence (NTSA)",
+        "additional": ["PSV badge"]
+      },
+      "lingo": ["matatu", "boda", "NTSA", "PSV badge"]
+    },
+    "TZ": {
+      "code": "TZ", "name": "Tanzania", "calling": "+255", "currency": "TZS",
+      "plateExample": "T123 ABC", "units": "metric", "locale": "sw-TZ",
+      "compliance": {
+        "minimal": "Driving licence (TRA)",
+        "additional": ["PSV licence"]
+      },
+      "lingo": ["daladala", "TRA", "PSV licence"]
+    },
+    "UG": {
+      "code": "UG", "name": "Uganda", "calling": "+256", "currency": "UGX",
+      "plateExample": "UBD 123A", "units": "metric", "locale": "en-UG",
+      "compliance": {
+        "minimal": "Driving permit (URA)",
+        "additional": ["PSV permit"]
+      },
+      "lingo": ["boda", "URA", "PSV permit"]
+    },
+    "RW": {
+      "code": "RW", "name": "Rwanda", "calling": "+250", "currency": "RWF",
+      "plateExample": "RAA 123A", "units": "metric", "locale": "en-RW",
+      "compliance": {
+        "minimal": "Driving licence (RRA)",
+        "additional": []
+      },
+      "lingo": ["RRA"]
+    },
+    "NG": {
+      "code": "NG", "name": "Nigeria", "calling": "+234", "currency": "NGN",
+      "plateExample": "ABC-123XY", "units": "metric", "locale": "en-NG",
+      "compliance": {
+        "minimal": "Driver licence (FRSC)",
+        "additional": ["Hackney permit"]
+      },
+      "lingo": ["FRSC", "hackney permit"]
+    },
+    "ZA": {
+      "code": "ZA", "name": "South Africa", "calling": "+27", "currency": "ZAR",
+      "plateExample": "CA 123-456", "units": "metric", "locale": "en-ZA",
+      "compliance": {
+        "minimal": "Driving licence",
+        "additional": ["Professional Driving Permit (PDP)"]
+      },
+      "lingo": ["PDP"]
+    },
+    "GB": {
+      "code": "GB", "name": "United Kingdom", "calling": "+44", "currency": "GBP",
+      "plateExample": "AB12 CDE", "units": "imperial", "locale": "en-GB",
+      "compliance": {
+        "minimal": "Driver licence (DVLA)",
+        "additional": ["Driver CPC", "CPCS plant operator card"]
+      },
+      "lingo": ["MOT", "Driver CPC", "CPCS"]
+    },
+    "US": {
+      "code": "US", "name": "United States", "calling": "+1", "currency": "USD",
+      "plateExample": "7ABC123", "units": "imperial", "locale": "en-US",
+      "compliance": {
+        "minimal": "Driver's licence (state DMV)",
+        "additional": ["Commercial Driver License (CDL)", "Heavy equipment operator certification"]
+      },
+      "lingo": ["DMV", "CDL"]
+    },
+    "AE": {
+      "code": "AE", "name": "United Arab Emirates", "calling": "+971", "currency": "AED",
+      "plateExample": "A 12345", "units": "metric", "locale": "en-AE",
+      "compliance": {
+        "minimal": "Driver licence (RTA)",
+        "additional": ["Heavy vehicle permit"]
+      },
+      "lingo": ["RTA"]
+    },
+    "IN": {
+      "code": "IN", "name": "India", "calling": "+91", "currency": "INR",
+      "plateExample": "MH 12 AB 1234", "units": "metric", "locale": "en-IN",
+      "compliance": {
+        "minimal": "Driving licence (RTO)",
+        "additional": ["Commercial driving licence"]
+      },
+      "lingo": ["RTO"]
+    },
+    "AU": {
+      "code": "AU", "name": "Australia", "calling": "+61", "currency": "AUD",
+      "plateExample": "1ABC23", "units": "metric", "locale": "en-AU",
+      "compliance": {
+        "minimal": "Driver licence",
+        "additional": ["Heavy rigid truck licence", "Construction white card"]
+      },
+      "lingo": ["white card", "HRT licence"]
+    },
+    "DE": {
+      "code": "DE", "name": "Germany", "calling": "+49", "currency": "EUR",
+      "plateExample": "B-MW 1234", "units": "metric", "locale": "de-DE",
+      "compliance": {
+        "minimal": "Führerschein",
+        "additional": []
+      },
+      "lingo": ["Führerschein"]
+    },
+    "FR": {
+      "code": "FR", "name": "France", "calling": "+33", "currency": "EUR",
+      "plateExample": "AB-123-CD", "units": "metric", "locale": "fr-FR",
+      "compliance": {
+        "minimal": "Permis de conduire",
+        "additional": []
+      },
+      "lingo": ["Permis de conduire"]
+    },
+    "ES": {
+      "code": "ES", "name": "Spain", "calling": "+34", "currency": "EUR",
+      "plateExample": "1234 ABC", "units": "metric", "locale": "es-ES",
+      "compliance": {
+        "minimal": "Permiso de conducir",
+        "additional": []
+      },
+      "lingo": ["Permiso de conducir"]
+    },
+    "IT": {
+      "code": "IT", "name": "Italy", "calling": "+39", "currency": "EUR",
+      "plateExample": "AB 123 CD", "units": "metric", "locale": "it-IT",
+      "compliance": {
+        "minimal": "Patente di guida",
+        "additional": []
+      },
+      "lingo": ["Patente di guida"]
+    },
+    "NL": {
+      "code": "NL", "name": "Netherlands", "calling": "+31", "currency": "EUR",
+      "plateExample": "AB-12-CD", "units": "metric", "locale": "nl-NL",
+      "compliance": {
+        "minimal": "Rijbewijs",
+        "additional": []
+      },
+      "lingo": ["Rijbewijs"]
+    },
+    "BR": {
+      "code": "BR", "name": "Brazil", "calling": "+55", "currency": "BRL",
+      "plateExample": "ABC1D23", "units": "metric", "locale": "pt-BR",
+      "compliance": {
+        "minimal": "CNH",
+        "additional": []
+      },
+      "lingo": ["CNH"]
+    }
+  }
+}

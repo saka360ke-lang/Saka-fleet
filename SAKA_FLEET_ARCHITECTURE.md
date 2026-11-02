@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.40.0  
+**Version:** 1.41.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.41.0** | Country-aware website: locale-detected compliance/lingo personalization from a catalog-mirroring dataset (drift-guarded), flag confidence chip, compact cookie banner | §86 |
 | **1.40.0** | Website refinement: vendor/Apex/app-host sweep, one-car language, /status page with plain-language incident ticker, cookie consent, self-hosted fonts, locale-based country codes, already-registered signup path, proactive Saka welcome, Sentinel-tracked web-onboarding failures + OTP prune, surgical training sync | §86 |
 | **1.39.4** | wa.me deep links point at the verified Saka business number (+1 940-440-7252); placeholder regression-tested | §86 |
 | **1.39.3** | Explicit `subscription_tier: 'free'` on both profile-creation paths — the live schema's legacy `SOLO` default + null status resolved to paid entitlements for brand-new accounts | §86 |
@@ -3494,6 +3495,13 @@ quiz engine:
   fonts (zero third-party requests); locale-based country-code detection on
   the signup form; already-registered visitors skip the OTP ("You're all
   set"); the Privacy Policy documents the cookie categories.
+- **v1.41.0 country-aware personalization:** `data/countries.json` (17
+  countries) mirrors `COUNTRY_COMPLIANCE_CATALOG` + `REGIONS` exactly —
+  drift-guarded by `test_landing_static`. `locale.js` detects the visitor's
+  country from the browser locale and renders the flag chip, the
+  country-specific compliance section and the signup calling-code default;
+  unknown locales get neutral GLOBAL copy. The cookie banner is now a
+  compact slim card (clamped copy, small buttons).
 - **Isolation (rule 6):** zero secrets client-side; `test_landing_static.js`
   scans every static file for key patterns and verifies local references,
   structured data and AI files (49 assertions).

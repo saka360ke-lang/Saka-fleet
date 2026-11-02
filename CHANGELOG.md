@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.41.0] - 2026-11-02
+
+- **Country-aware website (global audience, rule 31).** The site now detects the visitor's country from the browser locale and speaks their language:
+  - `landing/data/countries.json` — 17 countries, each mirroring the backend compliance catalog and REGIONS registry (name, calling code, currency, plate example, units) plus the real compliance documents Saka tracks there, named in the country's own words (NTSA + PSV badge for Kenya, PDP for South Africa, Driver CPC + CPCS for the UK, CDL for the US, Führerschein, Permis de conduire, CNH…).
+  - A new homepage section, *"In {country}, Saka keeps these in check"*, renders those real compliances with plain-language notes, plus a lingo line (*"Talk to Saka in your words: 'KDA 123A', 'matatu', 'PSV badge'…"*).
+  - A small **flag chip** in the hero ("🇰🇪 Serving vehicle owners in Kenya") for instant local confidence; unknown countries get neutral GLOBAL copy and no flag.
+  - The same dataset drives the signup form's calling-code default (replacing the hardcoded map in main.js).
+  - **Drift-guarded:** `test_landing_static` now imports `COUNTRY_COMPLIANCE_CATALOG` + `REGIONS` and asserts every country entry, compliance label and country fact matches the live code — the website can never claim a compliance Saka doesn't track, and a catalog change forces a site update.
+- **Compact cookie banner.** Slim bottom card (max 430px, small buttons, two-line clamped copy, ~15% of a phone screen instead of ~75%) — same settings modal, same consent storage.
+- **Tests:** `test_landing_static` (**203** — 17-country drift guard, flag chip, compliance section, compact banner, locale detection).
+
 ## [1.40.0] - 2026-11-02
 
 - **Website refinement & operations reinforcement.**

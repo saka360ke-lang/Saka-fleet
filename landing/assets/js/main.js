@@ -28,17 +28,6 @@
     });
   }
 
-  /* ---------- country auto-detect (v1.40.0) ----------
-     Offline and privacy-safe: the browser locale region selects the calling
-     code. No IP lookup, no third party. Falls back to Kenya. */
-  var REGION_CODES = { KE: '+254', TZ: '+255', UG: '+256', RW: '+250', BI: '+257', NG: '+234', ZA: '+27', GH: '+233', GB: '+44', US: '+1', CA: '+1', AE: '+971', IN: '+91', DE: '+49', AU: '+61' };
-  try {
-    var lang = String(navigator.language || 'en-KE').toUpperCase();
-    var region = lang.split('-')[1];
-    var codeSelect = $('countryCode');
-    if (region && REGION_CODES[region] && codeSelect) codeSelect.value = REGION_CODES[region];
-  } catch (e) { /* keep the default */ }
-
   /* ---------- modal ---------- */
   var modal = $('onboardModal');
   var openButtons = document.querySelectorAll('[data-open-onboard]');
