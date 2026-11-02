@@ -1,6 +1,12 @@
 {
-  "latest": "1.51.3",
+  "latest": "1.51.4",
   "entries": [
+    {
+      "version": "1.51.4",
+      "date": "2026-11-02",
+      "title": "Cleaner first hello",
+      "summary": "New WhatsApp users are now gently guided to sign up first, before adding a vehicle."
+    },
     {
       "version": "1.51.3",
       "date": "2026-11-02",

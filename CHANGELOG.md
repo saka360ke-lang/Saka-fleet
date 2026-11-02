@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.51.4] - 2026-11-02
+
+- **Unverified numbers are no longer invited to register a vehicle.** The first-contact greeting, the AI welcome and the default reply now branch on `email_verified`: an unverified number gets a website-signup CTA (`sakaIntroText` with `websiteSignupNextStep()`), never "what do you drive?" — vehicle registration stays gated behind website signup.
+- **Tests:** `test_greetings` (+3 unverified-greeting assertions).
+
 ## [1.51.3] - 2026-11-02
 
 - **FEAT adoption (`admin adopt <FEAT-code>`).** A Sentinel Horizon feature blueprint can now be promoted into the autonomous remediation pipeline: `admin adopt FEAT-…` captures it as a `SUG-*` work order (`category: update_suggest`, title + technical_spec as the overview, `PENDING_APPROVAL`) and marks the FEAT `adopted`; the superadmin then reviews and approves with the existing `admin accept fix SUG-…` — nothing runs until approved. `admin accept fix FEAT-…` now points to `admin adopt` instead of a dead end.

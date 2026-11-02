@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.51.3  
+**Version:** 1.51.4  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.51.4** | Unverified greeting → website-only (no vehicle-registration ask) | §101 |
 | **1.51.3** | FEAT adoption: `admin adopt <FEAT-code>` → SUG- work order | §100 |
 | **1.51.2** | FEAT-* approval dead-end → review-only reply | §99 |
 | **1.51.1** | Short links enabled (SHORT_LINK_DOMAIN_READY=on + PUBLIC_APP_URL) | §98 |
@@ -3823,4 +3824,11 @@ quiz engine:
   flow unchanged (two-step, mirroring `UPDATE-SUGGEST>`).
 - `admin accept/decline/modify fix <FEAT-*>` now points to `admin adopt` instead of a
   dead end.
+
+### 101. Unverified greeting → website (v1.51.4)
+
+- The greeting flow now branches on `email_verified`: an unverified number gets
+  `websiteSignupNextStep()` (a website-only CTA) instead of "what do you drive?" in
+  `sakaIntroText`, the AI `first_time_welcome` prompt and the `first_time_default`
+  prompt — vehicle registration remains gated behind website signup.
 

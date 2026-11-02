@@ -19,7 +19,7 @@ import { normalizeFillType } from '../services/fuelEconomy.js';
 import { resolveExpenseType, normalizeExpenseType, hasExpenseTypeMarker } from '../services/expenseCatalog.js';
 import { resolveEarningType, normalizeEarningType, hasEarningTypeMarker } from '../services/earningCatalog.js';
 import { shortenUrl } from '../services/linkShortener.js';
-import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly, shouldReplaceIntroCopy, isRepeatedReply, isStopRequest, PAUSE_REPLY, pickRepeatNudge, pickNewcomerNudge, isFirstTimeMessage, shouldReplacePlateAsk, isIncompleteReplyComplaint, isLegacyWelcomeCopy } from '../services/greetings.js';
+import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly, shouldReplaceIntroCopy, isRepeatedReply, isStopRequest, PAUSE_REPLY, pickRepeatNudge, pickNewcomerNudge, isFirstTimeMessage, shouldReplacePlateAsk, isIncompleteReplyComplaint, isLegacyWelcomeCopy, websiteSignupNextStep } from '../services/greetings.js';
 import { matchProductQa, buildProductQaReply, buildProductFactsContext, buildLocalPricingFacts, stripUsdFigures, hasLocalFigure, recommendTierForFleet, sanitizeSakaReply } from '../services/productQa.js';
 import { shouldSuggestContactSave, isLostChatMessage, buildContactSaveFacts, markContactSaveSuggested } from '../services/contactNudge.js';
 import { buildUserContextSnapshot } from '../services/userContextSnapshot.js';
@@ -3709,8 +3709,10 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
           // 3. Greetings — Saka introduces itself on first contact (deterministic),
           // otherwise a warm AI-rendered one-liner.
           else if (/^(habari|mambo|jambo|hujambo|salama)\b/i.test(clean) || intent === 'GREETING') {
+            // v1.51.4 — an unverified number is pointed to the website, never invited to register.
+            const unverified = !profileData || profileData.email_verified !== true;
             if (firstContact) {
-              customReply = sakaIntroText({ countryInfo, profile: profileData });
+              customReply = sakaIntroText({ countryInfo, profile: profileData, nextStep: unverified ? websiteSignupNextStep() : null });
               session.sakaIntroduced = true;
             } else {
               customReply = aiResult.reply_message && !aiResult.reply_message.includes('I am your Saka Fleet WhatsApp assistant') && !isLegacyWelcomeCopy(aiResult.reply_message)
@@ -3718,7 +3720,9 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
                 : await composeMessage({
                     purpose: 'first_time_welcome',
                     facts: {
-                      prompt: 'Introduce Saka warmly in two short lines (what it does for their machine) and ask exactly ONE natural question: what do they drive? Invite them to set up at https://sakafleet.com (Get Started Free) as the alternative. The word "plate" must not appear in your reply.',
+                      prompt: unverified
+                        ? 'Introduce Saka warmly in two short lines (what it does for their machine) and invite them to set up at https://sakafleet.com (Get Started Free). The word "plate" must not appear in your reply.'
+                        : 'Introduce Saka warmly in two short lines (what it does for their machine) and ask exactly ONE natural question: what do they drive? Invite them to set up at https://sakafleet.com (Get Started Free) as the alternative. The word "plate" must not appear in your reply.',
                       region: countryInfo,
                       plateExample: countryInfo.plate_example,
                       setupSteps: ['plate number', 'make/model, year, fuel, odometer', 'email OTP', 'VIN-locked passbook'],
@@ -3737,10 +3741,13 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
           }
           // 5. Default: AI-rendered single next step
           else {
+            const unverified = !profileData || profileData.email_verified !== true;
             customReply = await composeMessage({
               purpose: 'first_time_default',
               facts: {
-                prompt: 'Give exactly ONE warm next step: ask what they drive (one line is enough), or invite them to https://sakafleet.com. The word "plate" must not appear in your reply.',
+                prompt: unverified
+                  ? 'Give exactly ONE warm next step: invite them to https://sakafleet.com (Get Started Free). The word "plate" must not appear in your reply.'
+                  : 'Give exactly ONE warm next step: ask what they drive (one line is enough), or invite them to https://sakafleet.com. The word "plate" must not appear in your reply.',
                 plateExample: countryInfo.plate_example,
                 region: countryInfo
               },

@@ -185,6 +185,11 @@ export function sakaIntroText({ countryInfo = null, now = new Date(), profile = 
     (step ? `\n\n${step}` : '');
 }
 
+/** v1.51.4 — website-only CTA for unverified (not email_verified) numbers. */
+export function websiteSignupNextStep() {
+  return `Set up in about a minute at ${SAKA_WEB_SIGNUP_URL} — tap *Get Started Free*, verify your email, and I'll meet you right back here on WhatsApp.`;
+}
+
 /** True only for a genuinely fresh conversation (no persisted history, no vehicle). */
 export function isFirstContact({ session = null, dbHistory = [], profile = null, hasVehicleRegistered = false, now = Date.now(), newProfileWindowMs = 120000 } = {}) {
   if (hasVehicleRegistered) return false;
@@ -273,6 +278,7 @@ export default {
   isIntroCopy,
   wantsIntroduction,
   asksForPlateDirectly,
+  websiteSignupNextStep,
   isIncompleteReplyComplaint,
   isLegacyWelcomeCopy
 };

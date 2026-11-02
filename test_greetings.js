@@ -18,7 +18,8 @@ import {
   isFirstTimeMessage,
   shouldReplacePlateAsk,
   isIncompleteReplyComplaint,
-  isLegacyWelcomeCopy
+  isLegacyWelcomeCopy,
+  websiteSignupNextStep
 } from './src/services/greetings.js';
 import { sanitizeSakaReply } from './src/services/productQa.js';
 import { detectMessageLanguage, languageSwitchConfirmation } from './src/routes/whatsapp.js';
@@ -179,6 +180,14 @@ check(isLegacyWelcomeCopy("I'm Saka — your machine's memory, money-saver and p
 check(isFirstTimeMessage("Hello. Let's start again 😊") === true, '"start again" requests the welcome');
 check(isFirstTimeMessage('start fresh') === true, '"start fresh" requests the welcome');
 check(isFirstTimeMessage('How much is insurance?') === false, 'a normal question is not a restart');
+
+console.log('--- Test 8b: unverified numbers get the website, not registration (v1.51.4) ---');
+const webStep = websiteSignupNextStep();
+check(webStep.includes('sakafleet.com') && /Get Started Free/i.test(webStep), 'the website CTA names sakafleet.com and Get Started Free');
+const unverifiedIntro = sakaIntroText({ countryInfo: kenya, nextStep: webStep });
+check(!/Tell me what you drive/i.test(unverifiedIntro) && /sakafleet\.com/i.test(unverifiedIntro), 'an unverified intro never asks "what do you drive" — it points to the website');
+const verifiedIntro = sakaIntroText({ countryInfo: kenya });
+check(/Tell me what you drive/i.test(verifiedIntro), 'a verified (default) intro still asks what they drive');
 
 console.log(`\n🎉 ${passed} greeting & emoji assertions passed.`);
 
