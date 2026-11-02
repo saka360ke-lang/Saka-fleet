@@ -230,6 +230,10 @@ export async function completeWebOnboarding(supabase, { email, phone, firstName,
       email,
       email_verified: verified,
       full_name: fullName || 'Asset Owner',
+      // Governance (rule 23-26): a new account is ALWAYS Free until the
+      // welcome trial starts at vehicle registration. Never inherit a legacy
+      // tier default from the live schema.
+      subscription_tier: 'free',
       is_active: true
     }]);
     if (error) return { ok: false, error: error.message };

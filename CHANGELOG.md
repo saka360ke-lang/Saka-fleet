@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.39.3] - 2026-11-02
+
+- **New accounts are explicitly Free.** The live `profiles` schema carries a legacy `subscription_tier` default of `SOLO`, which the entitlement engine normalizes to `solo_pro` — and with a null status that resolves to ACTIVE, granting paid access to brand-new signups. Both creation paths (web onboarding + WhatsApp first-contact) now insert `subscription_tier: 'free'` explicitly; the welcome trial still upgrades the account at vehicle registration exactly as before (rules 23-26).
+- **Live E2E proof:** the full web handshake ran against production — `POST /api/onboard` → OTP row → `POST /api/onboard/verify` → `email_verified=true`, no trial row, explicit Free tier — and every test row was deleted afterwards (rule 10).
+
 ## [1.39.2] - 2026-11-02
 
 - **Hostinger deploy workflow fixed.** The first two deploy runs failed instantly (zero jobs) because the `secrets` context is not available in a job-level `if`. The guard now runs as a bash step that emits a `ready` output; the FTP step deploys only when all three `HOSTINGER_FTP_*` secrets exist — and the run stays green (with a "skipping" note) while they are absent.

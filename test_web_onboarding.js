@@ -158,6 +158,7 @@ const freshDb = createMockSupabase({ profiles: [], admin_audit_logs: [] });
 const freshResult = await completeWebOnboarding(freshDb, { email: 'fresh@example.com', phone: '+254700000010', firstName: 'Fresh', lastName: 'Start', verified: false });
 check(freshResult.ok === true && freshResult.created === true, 'A new profile is created');
 check(freshDb.__db.profiles[0].email_verified === false, 'An unverified signup stays unverified until the code matches');
+check(freshDb.__db.profiles[0].subscription_tier === 'free', 'A new web account is explicitly Free — never a legacy tier default');
 
 console.log('\n--- Test 5: WhatsApp fallback code check ---');
 const waDb = createMockSupabase({ profiles: [], web_onboard_otps: [], admin_audit_logs: [] });

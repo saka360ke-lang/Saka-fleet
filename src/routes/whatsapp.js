@@ -889,6 +889,10 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                 country_code: countryInfo.country_code,
                 unit_system: countryInfo.default_units,
                 preferred_language: 'English',
+                // v1.39.3 — explicit Free: the live schema's legacy default
+                // tier ('SOLO') resolves to solo_pro entitlements on a null
+                // status. New accounts are Free until a trial or payment.
+                subscription_tier: 'free',
                 is_active: true
               }])
               .select()

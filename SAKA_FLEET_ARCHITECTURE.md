@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.39.2  
+**Version:** 1.39.3  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.39.3** | Explicit `subscription_tier: 'free'` on both profile-creation paths — the live schema's legacy `SOLO` default + null status resolved to paid entitlements for brand-new accounts | §86 |
 | **1.39.2** | Hostinger deploy workflow fix: secrets guard moved from job-level `if` (unsupported context — zero-job failures) to a step-output check | §86 |
 | **1.39.1** | Landing deploy prep: GFE-safe `/api/health` uptime probe (with `/healthz` fallback), Data Deletion page, footer/sitemap/llms links | §86 |
 | **1.39.0** | Marketing website + web onboarding (`landing/`, `/api/onboard`, Hostinger FTP deploy) + research-backed odometer policy (full-tank fuel required, zero-signal types never asked, hours-led assets use engine hours) | §85, §86 |
@@ -3500,7 +3501,10 @@ quiz engine:
 - **Service:** `src/services/webOnboarding.js` (sanitize, session, verify,
   resend, complete, `tryVerifyPendingEmailCode`). **The welcome trial is
   NEVER started here (rule 26)** — it begins at vehicle registration in
-  WhatsApp.
+  WhatsApp. New profiles are inserted with an explicit
+  `subscription_tier: 'free'` (v1.39.3): the live schema's legacy `SOLO`
+  default normalizes to `solo_pro` with an ACTIVE-equivalent null status,
+  which would grant paid entitlements to a brand-new account.
 - **Schema:** `public.web_onboard_otps` via `npm run migrate:web-onboard`
   (idempotent) + boot-time `ensureWebOnboardOtpTable()`.
 - **CORS:** `LANDING_ORIGINS` (default `https://sakafleet.com,
