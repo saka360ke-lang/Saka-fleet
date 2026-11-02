@@ -11,6 +11,10 @@
     ],
     "lingo": null
   },
+  "universal": [
+    { "label": "Insurance renewal", "note": "Saka reminds you before your vehicle insurance lapses — one place for every renewal date." },
+    { "label": "Vehicle inspection / roadworthiness", "note": "Inspections and road licences are tracked with gentle reminders before they expire." }
+  ],
   "countries": {
     "KE": {
       "code": "KE", "name": "Kenya", "calling": "+254", "currency": "KES",

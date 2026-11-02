@@ -225,5 +225,20 @@ check(indexHtml.includes('localeChangeBtn') && indexHtml.includes('localePick'),
 check(/Based on your location/.test(indexHtml), 'the chip copy is guess-framed, not presumptuous');
 check(localeJs.includes('window.__SAKA_BOOT__'), 'locale.js reuses the bootstrap-resolved country');
 
+console.log('\n--- Test 13: nav flag, universal compliance, locale-neutral copy (v1.45.0) ---');
+for (const page of ['index.html', 'privacy.html', 'terms.html', 'data-deletion.html', 'status.html']) {
+  check(fs.readFileSync(path.join(LANDING, page), 'utf8').includes('id="navFlag"'), `${page} carries the national-flag badge`);
+}
+check(indexHtml.includes("localStorage.setItem('saka_country'"), 'the bootstrap persists the resolved country for other pages');
+const privacyHtml = fs.readFileSync(path.join(LANDING, 'privacy.html'), 'utf8');
+check(privacyHtml.includes("localStorage.getItem('saka_country'") && privacyHtml.includes('String.fromCodePoint'), 'non-home pages render the flag from the persisted country (no map, no fetch)');
+check(Array.isArray(countriesJson.universal) && countriesJson.universal.length >= 2, 'the dataset carries universal compliance cards (insurance + inspection)');
+check(countriesJson.universal.some((u) => /insurance/i.test(u.label)) && countriesJson.universal.some((u) => /inspection|roadworth/i.test(u.label)), 'universal cards cover insurance and inspection/roadworthiness');
+for (const [code, entry] of Object.entries(countriesJson.countries)) {
+  const total = 1 + (entry.compliance.additional || []).length + (countriesJson.universal || []).length;
+  check(total >= 3, `${code} renders at least three compliance cards (${total})`);
+}
+check(!indexHtml.includes('PSV documents') && indexHtml.includes('any required permits'), 'the drivers card is locale-neutral (no static PSV)');
+
 console.log('Stateless suite: file reads only — no database, no cleanup needed.');
 

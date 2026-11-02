@@ -1,6 +1,12 @@
 {
-  "latest": "1.38.0",
+  "latest": "1.45.0",
   "entries": [
+    {
+      "version": "1.45.0",
+      "date": "2026-11-02",
+      "title": "Your country, everywhere",
+      "summary": "A national-flag badge now sits in the top bar on every page, resolved from your timezone with a manual 'Not you? Change' override. The homepage compliance section always shows at least three cards for your country, and the driver copy is now locale-neutral."
+    },
     {
       "version": "1.38.0",
       "date": "2026-11-01",

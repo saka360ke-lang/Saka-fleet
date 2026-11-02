@@ -36,7 +36,7 @@
     });
   }
 
-  function renderCompliance(profile, globalProfile) {
+  function renderCompliance(profile, globalProfile, universal) {
     var title = document.getElementById('localeComplianceTitle');
     var sub = document.getElementById('localeComplianceSub');
     var cards = document.getElementById('localeComplianceCards');
@@ -58,6 +58,7 @@
     (profile ? (profile.compliance.additional || []) : []).forEach(function (label) {
       items.push({ label: label, note: 'Saka tracks the expiry and nudges you to renew in time, so it never catches you out.' });
     });
+    (profile ? (universal || []) : []).forEach(function (row) { items.push({ label: row.label, note: row.note }); });
     if (!profile) {
       (source.compliance || []).forEach(function (row) { items.push({ label: row.label, note: row.note }); });
     }
@@ -92,7 +93,7 @@
     var select = document.getElementById('countryCode');
     if (select && profile && profile.calling) select.value = profile.calling;
 
-    renderCompliance(profile, db.global);
+    renderCompliance(profile, db.global, db.universal);
   }
 
   fetch('/data/countries.json')

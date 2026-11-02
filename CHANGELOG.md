@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.45.0] - 2026-11-02
+
+- **National flag in the nav.** A flag badge now sits in the top bar on every page, resolved on timezone auto-detect with the "Not you? Change" picker as the manual fallback. The resolved country is persisted (`saka_country`) so any page renders the flag instantly with no network and no map.
+- **At least three compliance cards per locale.** The homepage compliance section now always shows 3–5 cards: the local driver licence, its additional permits, plus two universal cards (insurance renewal + vehicle inspection/roadworthiness) Saka tracks for every country. Added a `universal` list to `countries.json`, appended in `locale.js`.
+- **Locale-neutral driver copy.** The "Drivers & Compliance" card no longer hardcodes "PSV documents" — it now says "licences and any required permits".
+- **Tests:** `test_landing_static` (**255** — nav flag on every page, `saka_country` persistence, universal card coverage, ≥3 cards per locale, no static PSV).
+
 ## [1.44.0] - 2026-11-02
 
 - **Timezone-first country detection.** The confidence flag was showing the wrong country (e.g. UK) for visitors whose browser language defaulted to en-GB. Detection is now: remembered override -> device timezone (a TZ-to-country map, offline) -> browser language region -> GLOBAL. A visitor in Nairobi now correctly sees the Kenya flag regardless of language.

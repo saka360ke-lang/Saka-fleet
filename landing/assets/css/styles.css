@@ -7,23 +7,23 @@
 
 @font-face {
   font-family: 'Outfit'; font-style: normal; font-weight: 600; font-display: swap;
-  src: url('/assets/fonts/Outfit-600.woff2?v=1.44.0') format('woff2');
+  src: url('/assets/fonts/Outfit-600.woff2?v=1.45.0') format('woff2');
 }
 @font-face {
   font-family: 'Outfit'; font-style: normal; font-weight: 800; font-display: swap;
-  src: url('/assets/fonts/Outfit-800.woff2?v=1.44.0') format('woff2');
+  src: url('/assets/fonts/Outfit-800.woff2?v=1.45.0') format('woff2');
 }
 @font-face {
   font-family: 'Inter'; font-style: normal; font-weight: 400; font-display: swap;
-  src: url('/assets/fonts/Inter-400.woff2?v=1.44.0') format('woff2');
+  src: url('/assets/fonts/Inter-400.woff2?v=1.45.0') format('woff2');
 }
 @font-face {
   font-family: 'Inter'; font-style: normal; font-weight: 600; font-display: swap;
-  src: url('/assets/fonts/Inter-600.woff2?v=1.44.0') format('woff2');
+  src: url('/assets/fonts/Inter-600.woff2?v=1.45.0') format('woff2');
 }
 @font-face {
   font-family: 'Inter'; font-style: normal; font-weight: 700; font-display: swap;
-  src: url('/assets/fonts/Inter-700.woff2?v=1.44.0') format('woff2');
+  src: url('/assets/fonts/Inter-700.woff2?v=1.45.0') format('woff2');
 }
 
 :root {
@@ -105,6 +105,7 @@ a:hover { text-decoration: underline; }
 .nav-links a { color: var(--muted); font-weight: 600; font-size: .95rem; }
 .nav-links a:hover { color: var(--text); text-decoration: none; }
 .nav-cta { display: flex; align-items: center; gap: 12px; }
+.nav-flag { display: inline-flex; align-items: center; font-size: 1.05rem; padding: 6px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--card); line-height: 1; }
 .nav-cta .btn { padding: 10px 20px; font-size: .92rem; }
 
 /* Hero */
@@ -332,6 +333,7 @@ footer { border-top: 1px solid var(--line); padding: 56px 0 40px; margin-top: 40
 /* Small-screen centering fixes */
 .bubble { overflow-wrap: anywhere; }
 .otp-row { flex-wrap: wrap; }
+.nav-flag { display: inline-flex; align-items: center; font-size: 1.05rem; padding: 6px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--card); line-height: 1; }
 .nav-cta .btn { white-space: nowrap; }
 .modal { margin: auto; }
 
