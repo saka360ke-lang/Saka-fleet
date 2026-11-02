@@ -2084,6 +2084,19 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           }
         }
 
+        // v1.49.0 — point of entry is the website. An email-unverified WhatsApp
+        // user is sent to sakafleet.com instead of starting the registration quiz;
+        // the quiz only proceeds once the profile is email_verified (web signup).
+        const registrationEmailGated = !hasVehicleRegistered
+          && profileData?.email_verified !== true
+          && !session.quiz
+          && !onboardingStore.get(senderPhone)
+          && (isRegisterCommand || intent === 'REGISTER_VEHICLE' || intent === 'ONBOARDING_INPUT' || hasVehicleAttributes);
+        if (registrationEmailGated) {
+          customReply = '🚀 *Set up in about a minute on the website*\n\nTap *Get Started Free* at https://sakafleet.com — I\'ll meet you on WhatsApp once your email is verified.\n\nAlready signed up? Reply with your 6-digit code here.';
+          isSpecialFlowHandled = true;
+        }
+
         if (!isSpecialFlowHandled) {
 
         // --- SAKA QUIZ ENGINE: one-piece-at-a-time flows + confirmation ---
@@ -3692,7 +3705,7 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
                 : await composeMessage({
                     purpose: 'first_time_welcome',
                     facts: {
-                      prompt: 'Introduce Saka warmly in two short lines (what it does for their machine) and ask exactly ONE natural question: what do they drive? Invite REGISTER as an alternative. The word "plate" must not appear in your reply.',
+                      prompt: 'Introduce Saka warmly in two short lines (what it does for their machine) and ask exactly ONE natural question: what do they drive? Invite them to set up at https://sakafleet.com (Get Started Free) as the alternative. The word "plate" must not appear in your reply.',
                       region: countryInfo,
                       plateExample: countryInfo.plate_example,
                       setupSteps: ['plate number', 'make/model, year, fuel, odometer', 'email OTP', 'VIN-locked passbook'],
@@ -3701,7 +3714,7 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
                     language: targetLang,
                     countryInfo,
                     profile: profileData,
-                    fallbackText: `Welcome to Saka Fleet 🚗 What do you drive? One line is enough — or type REGISTER.`
+                    fallbackText: `Welcome to Saka Fleet 🚗 What do you drive? One line is enough — or set up at https://sakafleet.com.`
                   });
             }
           }
@@ -3714,14 +3727,14 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
             customReply = await composeMessage({
               purpose: 'first_time_default',
               facts: {
-                prompt: 'Give exactly ONE warm next step: ask what they drive (one line is enough), or invite REGISTER. The word "plate" must not appear in your reply.',
+                prompt: 'Give exactly ONE warm next step: ask what they drive (one line is enough), or invite them to https://sakafleet.com. The word "plate" must not appear in your reply.',
                 plateExample: countryInfo.plate_example,
                 region: countryInfo
               },
               language: targetLang,
               countryInfo,
               profile: profileData,
-              fallbackText: `What do you drive? Tell me in one line — or type REGISTER.`
+              fallbackText: `What do you drive? Tell me in one line — or set up at https://sakafleet.com.`
             });
           }
         }
@@ -3827,7 +3840,7 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
         }
         if (session.quiz || hasVehicleRegistered) session.nudgeCount = 0;
         if (isNewcomer && isFirstTimeMessage(messageText)) {
-          finalReply = sakaIntroText({ countryInfo, profile: profileData, nextStep: 'Reply *REGISTER* and I\'ll ask one simple question at a time.' });
+          finalReply = sakaIntroText({ countryInfo, profile: profileData, nextStep: 'Set up in about a minute at https://sakafleet.com — I\'ll meet you on WhatsApp.' });
           session.sakaIntroduced = true;
         } else if (isRepeatedReply({ quizActive: Boolean(session.quiz), reply: finalReply, lastPrompt: previousAssistantPrompt })) {
           // v1.26.1 — never swap in a canned nudge. Ask for a fresh, different,

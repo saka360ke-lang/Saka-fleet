@@ -296,7 +296,7 @@ export const PRODUCT_QA = Object.freeze([
     id: 'how_to_use',
     topics: /\b(how do i use|how to use|how do i start|how to start|get started|begin|onboard)\b/i,
     facts: () => [
-      '🚀 Reply REGISTER and answer one simple question at a time.',
+      '🚀 Set up in about a minute at https://sakafleet.com (Get Started Free) — then I\'ll meet you on WhatsApp.',
       '⛽ Then log in one line: "Logged 40L at 50350 km for KES 5500".',
       '🔔 Ask "reminders" to see what is due, or "report" for this month.',
       '💬 Everything else is plain language — ask me anything.'

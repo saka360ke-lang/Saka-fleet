@@ -163,7 +163,8 @@ check(indexHtml.includes('data-cookie-settings'), 'the footer re-opens cookie se
 check(/Strictly necessary/.test(fs.readFileSync(path.join(LANDING, 'privacy.html'), 'utf8')), 'the privacy policy documents the cookie categories');
 const cookieJs = fs.readFileSync(path.join(LANDING, 'assets/js/cookieConsent.js'), 'utf8');
 check(cookieJs.includes('localStorage') && cookieJs.includes('saka_cookie_consent'), 'consent is stored locally with a versioned key');
-check(/no tracking|tracking or advertising/i.test(cookieJs), 'the consent copy promises no tracking');
+check(cookieJs.includes('GTM-TGR68X2X'), 'the consent script carries the GTM container id');
+check(/analytics === true/.test(cookieJs) && /googletagmanager\.com/.test(cookieJs), 'analytics (Google Tag Manager) load only after an explicit opt-in');
 const css = fs.readFileSync(path.join(LANDING, 'assets/css/styles.css'), 'utf8');
 check(css.includes('@font-face') && css.includes('/assets/fonts/Outfit-800.woff2'), 'fonts are self-hosted via @font-face');
 check(css.includes('line-clamp') && /width: min\(430px/.test(css), 'the cookie banner is compact (slim, clamped copy, small buttons)');

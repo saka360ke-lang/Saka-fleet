@@ -91,7 +91,7 @@ async function run() {
     const hi = await say('Hi');
     check(/\*Saka\*/.test(hi), 'the welcome introduces Saka');
     check(hi.includes('⛽') && hi.includes('💰') && hi.includes('🔔'), 'the welcome carries the three value anchors');
-    check(/REGISTER/i.test(hi), 'the welcome ends with a next step');
+    check(/sakafleet\.com/i.test(hi), 'the welcome ends with a next step (website signup)');
     check(!/send your vehicle'?s? (?:number |registration )?plate/i.test(hi), 'the welcome never asks for a plate');
     check(!/\bplates?\b/i.test(hi), 'the welcome never mentions the word plate');
     check(!/keep moving|Happy to help you begin|Let's get you started/i.test(hi), 'the welcome is NOT replaced by a nudge');
@@ -120,7 +120,7 @@ async function run() {
     console.log('\n--- Test 4b: the anticipated-question matrix (v1.26.0) ---');
     const matrix = [
       ['What are the costs of using Saka?', /(?:KES|Ksh)\s?\d|free|trial/i, 'pricing'],
-      ['How do I use saka?', /REGISTER|one line|sentence|talk|start|log|ask me|tell me|send/i, 'tour'],
+      ['How do I use saka?', /sakafleet\.com|one line|sentence|talk|start|log|ask me|tell me|send/i, 'tour'],
       ['What are the details of Solo Pro?', /Solo Pro|plan|vehicle/i, 'plan details'],
       ['How do the add ons work?', /add.?ons?/i, 'add-ons'],
       ['How do I subscribe to growth fleet?', /UPGRADE|subscribe|plan|pay|checkout|link/i, 'subscribe steps'],

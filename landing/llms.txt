@@ -22,7 +22,7 @@ Key facts:
 - The welcome trial starts when the user registers their first asset with the WhatsApp assistant, not at website signup.
 
 ## API
-- The website connects securely to Saka Fleet's own servers for the signup, email verification and the live status widget. No tracking data is transmitted.
+- The website connects securely to Saka Fleet's own servers for the signup, email verification and the live status widget. Analytics (Google Tag Manager, Meta Pixel) load only after you opt in.
 - POST /api/onboard — create/update a lead profile and dispatch an email verification code.
 - POST /api/onboard/verify — verify the code and mark the account email-verified.
 - POST /api/onboard/resend — resend the verification code (rate limited).

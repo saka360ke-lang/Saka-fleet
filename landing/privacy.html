@@ -13,7 +13,7 @@
   <link rel="icon" type="image/svg+xml" href="/assets/img/favicon.svg">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
   <link rel="apple-touch-icon" href="/assets/img/apple-touch-icon.png">
-  <link rel="stylesheet" href="/assets/css/styles.css?v=1.48.0">
+  <link rel="stylesheet" href="/assets/css/styles.css?v=1.49.0">
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
@@ -147,13 +147,13 @@
       <p>The service is intended for individuals of legal age to contract (18 in most jurisdictions; 16 in some). We do not knowingly collect data from children. If you believe a child has provided us data, contact us and we will delete it promptly.</p>
 
       <h2 id="cookies">11. Cookies &amp; website telemetry</h2>
-      <p>Our marketing website keeps it simple: <strong>we set no tracking or advertising cookies</strong>. A consent banner lets you review and control what may be used, and your choices are remembered for future visits.</p>
+      <p>A consent banner lets you review and control what is used, and your choices are remembered for future visits. <strong>Google Tag Manager (and any tags you configure inside it, such as Meta Pixel) load only after you explicitly opt in.</strong></p>
       <ul>
         <li><strong>Strictly necessary</strong> — required for the site to function and stay secure (for example, load balancing while a page is served). Always on; consent not required.</li>
         <li><strong>Preferences</strong> — would remember choices like your country code. Currently unused, and stored only with your permission.</li>
-        <li><strong>Analytics &amp; marketing</strong> — we run none today. If measurement is ever added, it switches on only after you explicitly agree.</li>
+        <li><strong>Analytics &amp; marketing</strong> — measurement and marketing tags (Google Tag Manager, Meta Pixel) switch on only after you explicitly agree. Without consent, no analytics script is loaded.</li>
       </ul>
-      <p>The only network calls the site makes are the ones you start: the signup and verification steps, and the live status check against Saka Fleet's secure servers — neither transmits tracking data. Fonts are served from our own site, so no third-party font requests are made.</p>
+      <p>Besides the analytics you opt into, the only network calls the site makes are the ones you start: the signup and verification steps, and the live status check against Saka Fleet's secure servers. Fonts are served from our own site, so no third-party font requests are made.</p>
 
       <h2 id="changes">12. Changes to this policy</h2>
       <p>We may update this policy as the service evolves. The "Last updated" date at the top always reflects the current version. Material changes will be announced on the website and, where appropriate, through the WhatsApp assistant.</p>
@@ -173,10 +173,10 @@
 
   <!-- Cookie consent -->
   <div class="cookie-banner" id="cookieBanner" role="region" aria-label="Cookie notice">
-    <p>🍪 No tracking cookies here — just what keeps the site working.</p>
+    <p>🍪 We use cookies to keep the site working — and, with your consent, to measure how it's used.</p>
     <div class="cookie-actions">
       <button class="btn btn-ghost" id="cookieSettingsBtn">Settings</button>
-      <button class="btn btn-primary" id="cookieAcceptBtn">Got it</button>
+      <button class="btn btn-primary" id="cookieAcceptBtn">Accept all</button>
     </div>
   </div>
   <div class="cookie-settings-backdrop" id="cookieSettingsBackdrop" role="dialog" aria-modal="true" aria-labelledby="cookieSettingsTitle">
@@ -192,7 +192,7 @@
         <label class="cookie-toggle"><input type="checkbox" id="cookiePrefs"><span class="cookie-slider"></span></label>
       </div>
       <div class="cookie-group">
-        <div class="grow"><h4>Analytics &amp; marketing</h4><p>We run none today. If measurement is ever added, it switches on only with your permission.</p></div>
+        <div class="grow"><h4>Analytics &amp; marketing</h4><p>Google Tag Manager measures visits and sign-ups (including tags like Meta Pixel you configure there). It loads only with your permission.</p></div>
         <label class="cookie-toggle"><input type="checkbox" id="cookieAnalytics"><span class="cookie-slider"></span></label>
       </div>
       <button class="btn btn-ghost" id="cookieRejectBtn" style="width:48%">Reject non-essential</button>
@@ -203,7 +203,7 @@
   <script>
 (function(){try{var s=localStorage.getItem('saka_country');if(s){var p=s.split('|');var f=String.fromCodePoint.apply(null,[].map.call(p[0],function(c){return 127397+c.charCodeAt(0);}));var nf=document.getElementById('navFlag');if(nf){nf.textContent=f;nf.title=p[1]||'';nf.style.display='inline-flex';}}}catch(e){}})();
 </script>
-  <script src="/assets/js/cookieConsent.js?v=1.48.0" defer></script>
+  <script src="/assets/js/cookieConsent.js?v=1.49.0" defer></script>
 </body>
 </html>
 

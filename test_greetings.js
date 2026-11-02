@@ -68,7 +68,7 @@ const intro = sakaIntroText({ countryInfo: india, now: new Date('2026-10-30T04:0
 check(intro.includes('Namaste!') && intro.includes('*Saka*'), 'intro includes the localized greeting and the name Saka');
 check(intro.includes('MH 01 AB 1234'), 'intro uses the country plate example');
 check(intro.includes('⛽') && intro.includes('💰') && intro.includes('🔔'), 'intro uses semantic anchors for fuel, costs and reminders');
-check(/REGISTER/i.test(intro), 'intro ends with ONE clear next step');
+check(/sakafleet\.com/i.test(intro), 'intro ends with ONE clear next step (website signup)');
 check(!/send your vehicle'?s? (?:number |registration )?plate/i.test(intro), 'the intro never asks for a plate');
 check(/I can help you with/i.test(intro) && /Fuel & expense logs/i.test(intro) && /VIN passbook/i.test(intro), 'intro presents the full operations list (v1.28.7)');
 check(intro.split('\n').every((line) => emojiCount(line) <= 1), 'welcome keeps at most one emoji per line');
@@ -140,7 +140,7 @@ check(pickRepeatNudge(0) === REPEAT_NUDGES[0], 'the first repeat uses the first 
 check(pickRepeatNudge(1) === REPEAT_NUDGES[1], 'the second repeat uses a different nudge');
 check(pickRepeatNudge(2) === REPEAT_NUDGES[0], 'the rotation wraps around');
 for (const nudge of REPEAT_NUDGES) {
-  check(/REGISTER/.test(nudge) && /[\p{Extended_Pictographic}]/u.test(nudge), 'every nudge carries the CTA and an emoji anchor');
+  check(/sakafleet\.com/.test(nudge) && /[\p{Extended_Pictographic}]/u.test(nudge), 'every nudge carries the website CTA and an emoji anchor');
 }
 
 console.log('--- Test 4e: the welcome survives the plate guard (v1.25.6) ---');

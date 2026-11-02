@@ -1,6 +1,6 @@
 import { resolveUserTimezone } from './globalization.js';
 import { prepareRoutingText } from './textNormalizer.js';
-import { buildOperationsBlock } from './flowKnowledge.js';
+import { buildOperationsBlock, SAKA_WEB_SIGNUP_URL } from './flowKnowledge.js';
 
 /**
  * Saka Fleet — First-contact greetings (v1.18.1)
@@ -71,8 +71,8 @@ export function greetingFor({ countryInfo = null, now = new Date(), timeZone = n
 
 /** v1.25.4 — repeat nudges rotate so a stuck user never sees the same line twice. */
 export const REPEAT_NUDGES = Object.freeze([
-  '🚗 Let\'s keep moving.\n\nReply *REGISTER* to set up your first asset, or *Help* to see everything I can do.',
-  '🙂 I\'m here.\n\n*REGISTER* to set up your machine, *pricing* to see plans, or just tell me what you drive.'
+  '🚗 Let\'s keep moving.\n\nSet up in a minute at https://sakafleet.com — or *Help* to see everything I can do.',
+  '🙂 I\'m here.\n\nhttps://sakafleet.com to set up your machine, *pricing* to see plans, or just tell me what you drive.'
 ]);
 
 export function pickRepeatNudge(seed = 0) {
@@ -86,8 +86,8 @@ export function pickRepeatNudge(seed = 0) {
  * "mid-way". They get onboarding-oriented copy, not "Let's keep moving".
  */
 export const NEWCOMER_NUDGES = Object.freeze([
-  '👋 Welcome! Let\'s get you started — it takes about a minute.\n\nReply *REGISTER* and I\'ll ask one simple question at a time.',
-  '🙂 Happy to help you begin.\n\n*REGISTER* to add your first vehicle or machine, *pricing* to see plans, or just tell me what you drive.'
+  '👋 Welcome! Let\'s get you started — it takes about a minute.\n\nSign up at https://sakafleet.com and I\'ll meet you on WhatsApp.',
+  '🙂 Happy to help you begin.\n\nhttps://sakafleet.com to add your first vehicle or machine, *pricing* to see plans, or just tell me what you drive.'
 ]);
 
 export function pickNewcomerNudge(seed = 0) {
@@ -175,7 +175,7 @@ export function sakaIntroText({ countryInfo = null, now = new Date(), profile = 
   const safeName = /^whatsapp$/i.test(name) ? '' : name;
   const helloName = safeName ? ` ${safeName}` : '';
   const step = nextStep === null
-    ? `Tell me what you drive — one line like *"Toyota Fielder 2016, diesel, 120,000 km, ${example}"* — and I'll pick out every detail. Or reply *REGISTER* and I'll ask a few quick questions.`
+    ? `Tell me what you drive — one line like *"Toyota Fielder 2016, diesel, 120,000 km, ${example}"* — and I'll pick out every detail. Or set up in about a minute at ${SAKA_WEB_SIGNUP_URL} (tap Get Started Free).`
     : nextStep;
   return `${greeting}${helloName} I'm *Saka* — your machine's memory, money-saver and paperwork wizard, right here on WhatsApp.` +
     '\n\n⛽ Every litre and every shilling, remembered for you' +

@@ -1,6 +1,6 @@
 # Saka Fleet — Product QA (generated)
 
-Generated from code at version **1.48.0** — do not edit by hand. Run `npm run docs:gen`.
+Generated from code at version **1.49.0** — do not edit by hand. Run `npm run docs:gen`.
 
 Registry: `src/services/productQa.js` · 19 topics · prices from `src/services/subscriptionTiers.js`
 
@@ -92,7 +92,7 @@ They are added to your base plan and can be adjusted when your fleet changes.
 
 ## how_to_use
 
-🚀 Reply REGISTER and answer one simple question at a time.
+🚀 Set up in about a minute at https://sakafleet.com (Get Started Free) — then I'll meet you on WhatsApp.
 ⛽ Then log in one line: "Logged 40L at 50350 km for KES 5500".
 🔔 Ask "reminders" to see what is due, or "report" for this month.
 💬 Everything else is plain language — ask me anything.

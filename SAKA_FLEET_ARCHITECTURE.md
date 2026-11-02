@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.48.0  
+**Version:** 1.49.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.49.0** | Website-first onboarding (point of entry = sakafleet.com), WhatsApp registration gated on email verification, consent-gated Google Tag Manager (GTM-TGR68X2X), targeted reset clears owner_id-keyed rows | §88 |
 | **1.48.0** | `UPDATE-SUGGEST>` superadmin command (Model A capture → remediation approval gate), WhatsApp `message_status` delivery receipts, build-notification diagnosis | §87 |
 | **1.42.0** | Extensionless URLs (301 + internal rewrite in .htaccess), clean links site-wide, always-sent {{1}} welcome-template parameter | §86 |
 | **1.44.0** | Timezone-first + overridable country detection (fixes wrong-flag on en-GB devices), "Not you? Change" picker | §86 |
@@ -3636,4 +3637,28 @@ quiz engine:
 - `landing/.htaccess` ships HTTPS redirect, canonical host, security headers,
   cache policy and a custom 404.
 - Operator walkthrough: `docs/LANDING_DEPLOYMENT.md`.
+
+### 88. Website-first onboarding + consent-gated analytics (v1.49.0)
+
+- **Point of entry = website.** The first-contact greeting (`sakaIntroText`),
+  newcomer/repeat nudges, the AI welcome prompts and the `how_to_use` product
+  answer now lead with `https://sakafleet.com` ("Get Started Free") instead of
+  "Reply REGISTER". `SAKA_WEB_SIGNUP_URL` (exported from `flowKnowledge.js`) is
+  the single source of truth; `test_greetings`, `test_agent_training` and
+  `test_first_message_flow` assert the website link.
+- **Registration gate.** In `whatsapp.js`, a user with no vehicle who tries to
+  register (register command, `REGISTER_VEHICLE`/`ONBOARDING_INPUT` intent, or
+  pasted vehicle attributes) but whose profile is not `email_verified` is
+  redirected to the website with the 6-digit-code fallback — the
+  `vehicle_registration` quiz is never started. The core prompt teaches the same
+  rule ("the WhatsApp vehicle_registration quiz only proceeds once the profile
+  is email-verified").
+- **GTM (consent-gated).** `landing/assets/js/cookieConsent.js` v2 loads
+  `GTM-TGR68X2X` only when `analytics === true` (Accept all / Save with
+  analytics). The Meta Pixel is configured inside GTM, so no standalone snippet
+  ships. Banner + settings copy, `privacy.html` §11 and `llms.txt` now describe
+  opt-in analytics; the consent-key version bump forces a fresh opt-in.
+- **Reset gap closed.** The targeted reset SQL now deletes `subscriptions`,
+  `trial_sessions` and `usage_counters` by `owner_id` before the profile row is
+  removed (they were previously orphaned). `test_db_reset_scope` asserts it.
 

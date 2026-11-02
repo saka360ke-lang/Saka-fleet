@@ -542,6 +542,8 @@ export function buildSalesPlaybookBlock() {
   ].join('\n');
 }
 
+export const SAKA_WEB_SIGNUP_URL = 'https://sakafleet.com';
+
 export const SAKA_WEB_ONBOARDING_PLAYBOOK = [
   'WEB ONBOARDING (sakafleet.com — v1.39.0/v1.40.0):',
   '- Signup happens on the website: first/last name, email, WhatsApp number (E.164) and an explicit Terms + Privacy consent. The backend sends a 6-digit email code (10 minutes, 3 attempts, 60-second resend cooldown) and creates the profile as explicitly Free — the welcome trial NEVER starts at web signup (rule 26); it starts when the user registers their first asset.',
@@ -549,7 +551,8 @@ export const SAKA_WEB_ONBOARDING_PLAYBOOK = [
   '- An already-registered, already-verified visitor is never re-onboarded: the site shows "you\'re all set" and points them to WhatsApp. An existing profile may verify a different email address, which updates the profile and is audited.',
   '- In WhatsApp, a bare 6-digit code from a registered-but-unverified user completes their web verification (only when no quiz/onboarding/OTP/PIN phase is active). Never invent a code; never nag more than once per conversation.',
   '- Web signup failures (email dispatch, database writes) are logged and tracked by Sentinel through the normal incident pipeline; expired OTP sessions are pruned automatically.',
-  '- Language (v1.47.0): the website captures the visitor browser language at signup and stores it as preferred_language; when no preferred_language is set, Saka defaults to ENGLISH — never the country default language (e.g. never greet a Kenyan number in Swahili).'
+  '- Language (v1.47.0): the website captures the visitor browser language at signup and stores it as preferred_language; when no preferred_language is set, Saka defaults to ENGLISH — never the country default language (e.g. never greet a Kenyan number in Swahili).',
+  '- Point of entry (v1.49.0): vehicle registration now happens on the website. A WhatsApp user whose profile is not email_verified is pointed to https://sakafleet.com (Get Started Free); the WhatsApp vehicle_registration quiz only proceeds once the profile is email_verified.'
 ];
 
 export function buildFlowPlaybook() {
@@ -587,6 +590,7 @@ export default {
   SAKA_TONE_COMPASS,
   SAKA_SALES_PLAYBOOK,
   SAKA_WEB_ONBOARDING_PLAYBOOK,
+  SAKA_WEB_SIGNUP_URL,
   buildToneCompassBlock,
   buildSalesPlaybookBlock,
   buildFlowPlaybook,

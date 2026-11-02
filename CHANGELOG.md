@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.49.0] - 2026-11-02
+
+- **Point of entry is now the website.** First-contact greetings, newcomer/repeat nudges and the "how to use" answer lead with `https://sakafleet.com` ("Get Started Free") instead of "Reply REGISTER". The WhatsApp `vehicle_registration` quiz only proceeds once the profile is `email_verified`; otherwise Saka redirects to the website (with the 6-digit-code fallback). Synced across `flowKnowledge.js`, the core prompt, the composer, `productQa.js` and `greetings.js` (rule 13).
+- **Google Tag Manager on the landing site (consent-gated).** `GTM-TGR68X2X` loads only after an explicit analytics opt-in; the Meta Pixel is configured inside GTM (no standalone snippet). The cookie banner, settings panel, privacy policy §11 and `llms.txt` now describe opt-in analytics, and the consent key is bumped to v2 so existing visitors must re-consent.
+- **Targeted reset now clears owner_id-keyed rows.** `scripts/reset-db.js --phone` also deletes `subscriptions`, `trial_sessions` and `usage_counters` by `owner_id` before the profile row is removed (previously orphaned).
+- **Tests:** `test_greetings` (83), `test_agent_training` (141), `test_product_qa` (152), `test_landing_static`, `test_db_reset_scope` (82) all green.
+
 ## [1.48.0] - 2026-11-02
 
 - **`UPDATE-SUGGEST>` — superadmin update suggestions (Model A).** Only the verified `SUPERADMIN_PHONE` can send `UPDATE-SUGGEST> <free text>` from chat; it captures a `remediation_proposals` row (`SUG-YYYY-MM-DD-NN`, category `update_suggest`, status `PENDING_APPROVAL`) with an `ADMIN_UPDATE_SUGGEST` audit row. Nothing runs until the superadmin approves via the existing `admin accept fix <CODE>`; the CI execution gate adds a light keyword/path guard for free-text suggestions, Cline interprets the suggestion at execution time, and the post-edit forbidden-path guard still applies. Listed in `admin remediations` and the admin help.

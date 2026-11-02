@@ -68,6 +68,14 @@ function run() {
   assert(/^reset-backup-[\w.-]+\.json$/.test(name), `backup filename is safe (${name})`);
   assert(!name.includes(':'), 'backup filename has no colons');
 
+  console.log('--- Test 6: targeted-phone cascade clears owner_id-keyed rows too ---');
+  for (const table of ['subscriptions', 'trial_sessions', 'usage_counters']) {
+    assert(
+      scriptSource.includes(`DELETE FROM public.${table} WHERE owner_id IN (SELECT id FROM public.profiles`),
+      `targeted cascade deletes ${table} by owner_id before the profile is removed`
+    );
+  }
+
   console.log(`\n🎉 ${passed} reset-scope assertions passed.`);
 }
 
