@@ -201,7 +201,7 @@ console.log(`\n🎉 ${passed} landing-site assertions passed.`);
 console.log('\n--- Test 12: first-load flag, cache strategy, images (v1.43.0) ---');
 const pkg143 = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'));
 check(indexHtml.includes('id="saka-boot"') && indexHtml.includes('window.__SAKA_BOOT__'), 'the head carries the inline locale bootstrap');
-const bootMatch = indexHtml.match(/var m=(\{.*\});/);
+const bootMatch = indexHtml.match(/var m=(\{[^;]*\});/);
 check(Boolean(bootMatch), 'the bootstrap map is embedded and parseable');
 if (bootMatch) {
   const bootMap = JSON.parse(bootMatch[1]);
@@ -219,5 +219,11 @@ check(/\.\(html\|json\)\$/.test(ht) && ht.includes('Cache-Control "no-cache"'), 
 check(!/ExpiresByType text\/html/.test(ht), 'HTML is no longer long-cached');
 check(indexHtml.includes('aria-live="polite"'), 'the locale sections announce updates politely');
 check(/woff2\?v=/.test(css), 'self-hosted fonts are version-stamped');
+check(indexHtml.includes('window.__SAKA_CODES__') && indexHtml.includes('Africa/Nairobi'), 'the bootstrap carries the timezone map (Africa/Nairobi -> KE)');
+check(indexHtml.includes('saka_country_override'), 'the visitor can override the detected country (remembered in localStorage)');
+check(indexHtml.includes('localeChangeBtn') && indexHtml.includes('localePick'), 'the chip offers a "Not you? Change" picker');
+check(/Based on your location/.test(indexHtml), 'the chip copy is guess-framed, not presumptuous');
+check(localeJs.includes('window.__SAKA_BOOT__'), 'locale.js reuses the bootstrap-resolved country');
+
 console.log('Stateless suite: file reads only — no database, no cleanup needed.');
 

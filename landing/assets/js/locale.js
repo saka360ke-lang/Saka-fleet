@@ -83,25 +83,15 @@
   }
 
   function apply(db) {
-    var code = detectRegion();
+    var boot = window.__SAKA_BOOT__;
+    var code = (boot && boot.code) ? boot.code : detectRegion();
     var profile = code ? db.countries[code] : null;
 
-    // 1) signup form calling code
+    // The bootstrap already rendered the flag chip and phone code on first
+    // paint (timezone-first + optional override). Keep the phone code in sync.
     var select = document.getElementById('countryCode');
     if (select && profile && profile.calling) select.value = profile.calling;
 
-    // 2) flag chip
-    var chip = document.getElementById('localeFlag');
-    if (chip) {
-      if (profile) {
-        chip.textContent = flagOf(profile.code) + ' Serving vehicle owners in ' + profile.name;
-        chip.style.display = 'inline-flex';
-      } else {
-        chip.style.display = 'none';
-      }
-    }
-
-    // 3) compliance section
     renderCompliance(profile, db.global);
   }
 

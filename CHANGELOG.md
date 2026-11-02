@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.44.0] - 2026-11-02
+
+- **Timezone-first country detection.** The confidence flag was showing the wrong country (e.g. UK) for visitors whose browser language defaulted to en-GB. Detection is now: remembered override -> device timezone (a TZ-to-country map, offline) -> browser language region -> GLOBAL. A visitor in Nairobi now correctly sees the Kenya flag regardless of language.
+- **"Not you? Change" picker.** The chip is guess-framed ("Based on your location, it looks like you are in Kenya") with an inline country picker; the choice re-renders the flag, compliance section and phone code, and is remembered in localStorage.
+- **Tests:** `test_landing_static` (**228** — timezone map present, override storage, picker, guess-framed copy, locale.js reuses the resolved country).
+
 ## [1.43.0] - 2026-11-02
 
 - **First-load country confidence flag.** An inline `<head>` bootstrap (~no network) reads the browser locale, sets `<html lang>` + `data-country`, and renders the flag chip and the signup calling-code on first paint — no neutral flash. The compliance section below the fold hydrates from the dataset with `aria-live` announcements and no layout jump. The embedded map is a generated subset of `countries.json`, drift-guarded by the test.
