@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.49.2  
+**Version:** 1.49.3  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.49.3** | Signup conversion tracking (`successful_signup` dataLayer) + cookie-choice gate before account creation | §91 |
 | **1.49.2** | Website-only signup + OTP (in-chat 6-digit fallback removed), `web_onboard_otps` added to the clean-slate reset scope | §90 |
 | **1.49.1** | Fix: superadmin exempted from the website registration gate + natural-language "Status of FIX-<code>" remediation status lookup | §89 |
 | **1.49.0** | Website-first onboarding (point of entry = sakafleet.com), WhatsApp registration gated on email verification, consent-gated Google Tag Manager (GTM-TGR68X2X), targeted reset clears owner_id-keyed rows | §88 |
@@ -3694,4 +3695,19 @@ quiz engine:
 - **Tests:** `test_web_onboarding.js` (WhatsApp-fallback test removed),
   `test_agent_training.js` (+1 "never invite a code in WhatsApp"),
   `test_db_reset_scope.js` (+1 web_onboard_otps cascade).
+
+### 91. Signup tracking + cookie-choice gate (v1.49.3)
+
+- **`successful_signup` dataLayer push.** `main.js` pushes
+  `window.dataLayer = window.dataLayer || []` then
+  `{ event: 'successful_signup', signup_method: 'website' }` on the
+  `/api/onboard/verify` success branch only — never the `already_verified`
+  path (returning visitors are not counted as conversions).
+- **Cookie-choice gate.** `cookieConsent.js` exposes
+  `window.__sakaCookies = { chosen(), open() }`; `main.js` gates `legalSubmit`
+  (account creation) on a recorded choice. Both "Accept all" and "Reject
+  non-essential" satisfy it, so analytics stays opt-in and signup is never
+  blocked on tracking. `open()` re-surfaces the banner.
+- **GTM next steps (operator):** Custom Event trigger `successful_signup`,
+  GA4 `sign_up` tag, Meta `CompleteRegistration` tag.
 

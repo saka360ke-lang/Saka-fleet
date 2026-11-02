@@ -79,6 +79,11 @@
   consent.addEventListener('change', function () { legalSubmit.disabled = !consent.checked; });
   $('legalBack').addEventListener('click', function () { showStep('stepDetails'); });
 
+  function trackSignup() {
+    window.dataLayer = window.dataLayer || [];
+    window.dataLayer.push({ event: 'successful_signup', signup_method: 'website' });
+  }
+
   function showDone(already) {
     if (already) {
       $('doneTitle').textContent = '🎉 You are all set!';
@@ -90,6 +95,11 @@
 
   legalSubmit.addEventListener('click', function () {
     if (!consent.checked || !window.__onboard) return;
+    if (!(window.__sakaCookies && window.__sakaCookies.chosen())) {
+      if (window.__sakaCookies) window.__sakaCookies.open();
+      alert('Please accept or reject cookies to continue.');
+      return;
+    }
     legalSubmit.disabled = true;
     legalSubmit.textContent = 'Creating your account…';
 
@@ -167,6 +177,7 @@
       .then(function (out) {
         if (out.ok && out.body.success) {
           showDone(false);
+          trackSignup();
         } else {
           $('otpVerify').disabled = false;
           $('otpAlert').classList.add('show');

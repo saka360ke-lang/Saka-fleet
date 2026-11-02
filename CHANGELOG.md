@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.49.3] - 2026-11-02
+
+- **Signup conversion tracking + cookie gate.** A successful website signup pushes a `successful_signup` dataLayer event (`signup_method: 'website'`), ready for a GTM Custom Event trigger → GA4 `sign_up` + Meta `CompleteRegistration`. The signup flow also requires a cookie choice (Accept all or Reject non-essential) before the account is created — analytics stays opt-in and signup is never blocked on tracking.
+- **Tests:** `test_landing_static` (+3 assertions).
+
 ## [1.49.2] - 2026-11-02
 
 - **Website-only signup + OTP.** Removed the in-chat web-signup OTP fallback ("Already signed up? Reply with your 6-digit code here" and the bare 6-digit-code verifier). Signup and email verification now happen on sakafleet.com only — Saka never invites or accepts a code in WhatsApp. Synced across the core prompt, `flowKnowledge`, the composer and `webOnboarding.js` (rule 13).

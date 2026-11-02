@@ -47,6 +47,12 @@
     if (data && data.analytics === true) loadGtm();
   }
 
+  // v1.49.3 — expose consent state so the signup flow can gate on a recorded choice.
+  window.__sakaCookies = {
+    chosen: function () { return read() !== null; },
+    open: function () { showBanner(); }
+  };
+
   var banner = $('cookieBanner');
   var backdrop = $('cookieSettingsBackdrop');
   if (!banner || !backdrop) return;

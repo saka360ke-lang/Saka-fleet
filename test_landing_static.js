@@ -165,6 +165,9 @@ const cookieJs = fs.readFileSync(path.join(LANDING, 'assets/js/cookieConsent.js'
 check(cookieJs.includes('localStorage') && cookieJs.includes('saka_cookie_consent'), 'consent is stored locally with a versioned key');
 check(cookieJs.includes('GTM-TGR68X2X'), 'the consent script carries the GTM container id');
 check(/analytics === true/.test(cookieJs) && /googletagmanager\.com/.test(cookieJs), 'analytics (Google Tag Manager) load only after an explicit opt-in');
+check(cookieJs.includes('window.__sakaCookies') && /chosen\s*:\s*function/.test(cookieJs), 'the consent script exposes a cookie-choice gate for signup (v1.49.3)');
+check(mainJs.includes("event: 'successful_signup'") && mainJs.includes("signup_method: 'website'"), 'a successful signup pushes the successful_signup dataLayer event');
+check(mainJs.includes('window.__sakaCookies') && mainJs.includes('.chosen()'), 'the signup flow gates on a recorded cookie choice');
 const css = fs.readFileSync(path.join(LANDING, 'assets/css/styles.css'), 'utf8');
 check(css.includes('@font-face') && css.includes('/assets/fonts/Outfit-800.woff2'), 'fonts are self-hosted via @font-face');
 check(css.includes('line-clamp') && /width: min\(430px/.test(css), 'the cookie banner is compact (slim, clamped copy, small buttons)');
