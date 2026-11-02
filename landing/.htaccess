@@ -8,6 +8,14 @@
   # Canonical host: one www-free domain
   RewriteCond %{HTTP_HOST} ^www\.sakafleet\.com$ [NC]
   RewriteRule ^(.*)$ https://sakafleet.com/$1 [L,R=301]
+  # Canonical extensionless URLs: /page.html -> /page (301)
+  RewriteCond %{THE_REQUEST} \s/+(.+)\.html[\s?] [NC]
+  RewriteRule ^(.+)\.html$ /$1 [R=301,L]
+  # Serve extensionless URLs internally: /page -> /page.html when the file exists
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteCond %{REQUEST_FILENAME}.html -f
+  RewriteRule ^(.+)$ $1.html [L]
 </IfModule>
 
 # Security headers

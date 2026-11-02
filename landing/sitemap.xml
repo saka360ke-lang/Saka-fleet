@@ -7,25 +7,25 @@
     <priority>1.0</priority>
   </url>
   <url>
-    <loc>https://sakafleet.com/privacy.html</loc>
+    <loc>https://sakafleet.com/privacy</loc>
     <lastmod>2026-11-01</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
   </url>
   <url>
-    <loc>https://sakafleet.com/terms.html</loc>
+    <loc>https://sakafleet.com/terms</loc>
     <lastmod>2026-11-01</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
   </url>
   <url>
-    <loc>https://sakafleet.com/data-deletion.html</loc>
+    <loc>https://sakafleet.com/data-deletion</loc>
     <lastmod>2026-11-02</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.4</priority>
   </url>
   <url>
-    <loc>https://sakafleet.com/status.html</loc>
+    <loc>https://sakafleet.com/status</loc>
     <lastmod>2026-11-02</lastmod>
     <changefreq>daily</changefreq>
     <priority>0.6</priority>

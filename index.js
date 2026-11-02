@@ -685,7 +685,9 @@ fastify.post('/api/onboard/verify', async (request, reply) => {
     const templateName = process.env.META_WELCOME_TEMPLATE_NAME;
     if (templateName && result.phone) {
       sendMetaWhatsAppTemplate(result.phone, templateName, {
-        components: firstName ? [{ type: 'body', parameters: [{ type: 'text', text: firstName }] }] : []
+        // The approved template MUST use {{1}} for the first name; the parameter is always
+        // sent (fallback "there") so a nameless profile can never break the dispatch.
+        components: [{ type: 'body', parameters: [{ type: 'text', text: firstName || 'there' }] }]
       }).catch((err) => console.warn('[WebOnboard] Welcome template failed:', err.message));
     } else if (result.phone) {
       sendMetaWhatsAppMessage(result.phone, webOnboardWelcomeText(firstName))

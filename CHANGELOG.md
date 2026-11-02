@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.42.0] - 2026-11-02
+
+- **Extensionless URLs everywhere.** New .htaccess rules: `/page.html` now 301-redirects to `/page`, and `/page` is served from `page.html` internally — so /status, /privacy, /terms and /data-deletion all work without the extension (the /status 404 is fixed). Every internal link, canonical URL, OpenGraph URL, sitemap loc and llms.txt link now uses the clean form; a new test forbids `.html` in any page link.
+- **Template contract hardened.** The proactive welcome now ALWAYS sends the `{{1}}` first-name body parameter (fallback "there") so an approved `web_signup_welcome` template can never break on a nameless profile.
+- **Tests:** `test_landing_static` (**212** — extensionless sweep, .htaccess rule checks, clean-URL nav/footer assertions).
+
 ## [1.41.0] - 2026-11-02
 
 - **Country-aware website (global audience, rule 31).** The site now detects the visitor's country from the browser locale and speaks their language:

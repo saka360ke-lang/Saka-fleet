@@ -54,11 +54,11 @@ check(/Saka 360/i.test(org.parentOrganization?.name || '') && org.email === 'sup
 
 console.log('\n--- Test 3: AI-legibility files ---');
 const llms = fs.readFileSync(path.join(LANDING, 'llms.txt'), 'utf8');
-for (const needle of ['https://sakafleet.com/', '/privacy.html', '/terms.html', '/data-deletion.html', '/status.html', '/api/onboard', 'support@sakafleet.com']) {
+for (const needle of ['https://sakafleet.com/', '/privacy', '/terms', '/data-deletion', '/status', '/api/onboard', 'support@sakafleet.com']) {
   check(llms.includes(needle), `llms.txt references ${needle}`);
 }
 const sitemap = fs.readFileSync(path.join(LANDING, 'sitemap.xml'), 'utf8');
-for (const page of ['https://sakafleet.com/', 'https://sakafleet.com/privacy.html', 'https://sakafleet.com/terms.html', 'https://sakafleet.com/data-deletion.html', 'https://sakafleet.com/status.html']) {
+for (const page of ['https://sakafleet.com/', 'https://sakafleet.com/privacy', 'https://sakafleet.com/terms', 'https://sakafleet.com/data-deletion', 'https://sakafleet.com/status']) {
   check(sitemap.includes(`<loc>${page}</loc>`), `sitemap lists ${page}`);
 }
 const robots = fs.readFileSync(path.join(LANDING, 'robots.txt'), 'utf8');
@@ -103,7 +103,8 @@ console.log('\n--- Test 6: internal references resolve ---');
 const localRefs = [...indexHtml.matchAll(/(?:src|href)="(\/[^"#][^"]*)"/g)].map((m) => m[1]);
 const missing = localRefs.filter((ref) => {
   if (ref.startsWith('/assets/img/og-cover')) return false; // OG image is checked in Test 1
-  return !fs.existsSync(path.join(LANDING, ref.replace(/^\//, '').split('?')[0]));
+  const target = ref.replace(/^\//, '').split('?')[0];
+  return !(fs.existsSync(path.join(LANDING, target)) || fs.existsSync(path.join(LANDING, target + '.html')));
 });
 check(missing.length === 0, `Every local reference resolves${missing.length ? ` (missing: ${missing.join(', ')})` : ''}`);
 
@@ -112,8 +113,8 @@ for (const needle of ['data-open-onboard', 'stepLegal', 'stepOtp', 'id="consent"
   check(indexHtml.includes(needle), `The onboarding modal carries ${needle}`);
 }
 check(/I have read, understood, and agree to the exhaustive Saka Fleet/.test(indexHtml), 'The mandatory legal checkbox copy is present');
-check(indexHtml.includes('id="statusCard"') && indexHtml.includes('/status.html'), 'The homepage status chip links to the live status page');
-check(indexHtml.includes('/data-deletion.html'), 'The footer links the data-deletion page');
+check(indexHtml.includes('id="statusCard"') && indexHtml.includes('/status'), 'The homepage status chip links to the live status page');
+check(indexHtml.includes('/data-deletion'), 'The footer links the data-deletion page');
 check(indexHtml.includes('wa.me/19404407252') && !indexHtml.includes('wa.me/254700000000'), 'wa.me links point at the real Saka business number, never the placeholder');
 check(mainJs.includes("WA_NUMBER = '19404407252'"), 'main.js uses the real Saka business number for deep links');
 check(localeJs.includes('navigator.language') && localeJs.includes('flagOf'), 'locale.js auto-detects the country from the browser locale and renders its flag');
@@ -185,6 +186,15 @@ check(indexHtml.includes('id="localeComplianceCards"') && indexHtml.includes('id
 check(localeJs.includes('/data/countries.json'), 'locale.js loads the country dataset');
 check(/Get Started Free/.test(indexHtml) && /Deploy Your Fleet/.test(indexHtml), 'Primary CTAs are present');
 
+console.log('\n--- Test 11: extensionless URLs (v1.42.0) ---');
+const htaccess = fs.readFileSync(path.join(LANDING, '.htaccess'), 'utf8');
+check(/RewriteCond %{REQUEST_FILENAME}\.html -f/.test(htaccess), '.htaccess maps extensionless URLs to .html files');
+check(htaccess.includes('RewriteRule ^(.+)\\.html$ /$1 [R=301,L]'), '.htaccess redirects .html URLs to extensionless (301)');
+let allHtml = '';
+for (const file of walk(LANDING)) { if (/\.html$/.test(file)) allHtml += fs.readFileSync(file, 'utf8') + '\n'; }
+check(!/href="\/[a-z0-9-]+\.html"/.test(allHtml), 'No internal page link uses the .html extension');
+check(!/content="https:\/\/sakafleet\.com\/[a-z0-9-]+\.html"/.test(allHtml), 'Canonical and OG URLs are extensionless');
+check(allHtml.includes('href="/status"') && allHtml.includes('href="/privacy"'), 'Nav and footer use clean URLs');
 console.log(`\n🎉 ${passed} landing-site assertions passed.`);
 console.log('Stateless suite: file reads only — no database, no cleanup needed.');
 

@@ -11,10 +11,10 @@ Key facts:
 
 ## Pages
 - [Home](https://sakafleet.com/): product overview, features, pricing, changelog and signup.
-- [Live Status](https://sakafleet.com/status.html): realtime service health, incident updates and recent changes.
-- [Privacy Policy](https://sakafleet.com/privacy.html): data collection, cookies and compliance with the data protection laws that apply.
-- [Terms &amp; Conditions](https://sakafleet.com/terms.html): service terms, subscriptions and liability.
-- [Data Deletion](https://sakafleet.com/data-deletion.html): how to request account and record deletion.
+- [Live Status](https://sakafleet.com/status): realtime service health, incident updates and recent changes.
+- [Privacy Policy](https://sakafleet.com/privacy): data collection, cookies and compliance with the data protection laws that apply.
+- [Terms &amp; Conditions](https://sakafleet.com/terms): service terms, subscriptions and liability.
+- [Data Deletion](https://sakafleet.com/data-deletion): how to request account and record deletion.
 
 ## Onboarding
 - Web signup (sakafleet.com) collects first name, last name, email and WhatsApp number (E.164).
