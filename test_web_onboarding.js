@@ -219,7 +219,7 @@ check(quizSrc.includes('ctx.profile?.email_verified !== true'), 'persistVehicleR
 const onbSrc = fs.readFileSync(path.join(here, 'src/services/onboarding.js'), 'utf8');
 check(onbSrc.includes('profileData?.email_verified !== true'), 'saveVehicleAssetRecord refuses unverified accounts');
 const waSrc = fs.readFileSync(path.join(here, 'src/routes/whatsapp.js'), 'utf8');
-check(waSrc.includes('unverified_gated') && /profileData\.email_verified !== true/.test(waSrc), 'the WhatsApp route hard-gates unverified numbers');
+check(waSrc.includes('unverified_gated') && waSrc.includes('unverified_gated_media') && /profileData\.email_verified !== true/.test(waSrc), 'the WhatsApp route hard-gates unverified numbers (text and media)');
 
 console.log(`\n🎉 ${passed} web-onboarding assertions passed.`);
 console.log('Stateless suite: in-memory database double only — no real rows, no cleanup needed.');

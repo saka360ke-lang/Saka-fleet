@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.51.5  
+**Version:** 1.51.6  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.51.6** | Unverified media gate (no OCR ack/Vision for unverified numbers) | §103 |
 | **1.51.5** | Unverified numbers hard-gated to website signup (single choke point) | §102 |
 | **1.51.4** | Unverified greeting → website-only (no vehicle-registration ask) | §101 |
 | **1.51.3** | FEAT adoption: `admin adopt <FEAT-code>` → SUG- work order | §100 |
@@ -3840,4 +3841,11 @@ quiz engine:
   `profile.email_verified !== true`, short-circuiting greetings, product QA, menus,
   registration and the AI conversation. This supersedes the v1.51.4 per-branch
   greeting checks (kept as harmless defense-in-depth).
+
+### 103. Unverified media gate (v1.51.6)
+
+- The unverified hard gate now also runs for media turns, BEFORE the OCR ack and
+  Vision call: an unverified number's photo/PDF gets the website line immediately
+  (no "Reading your photo" ack, no download, no OCR). This closes the "ack without
+  follow-up" hole where an unverified logbook submission produced silence.
 

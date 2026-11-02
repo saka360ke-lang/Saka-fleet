@@ -725,6 +725,27 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
     const mediaCaption = (imageObj?.caption || documentObj?.caption || '').trim();
     const mediaMimeType = imageObj?.mime_type || documentObj?.mime_type || null;
 
+    // v1.51.6 — an unverified number never gets the OCR ack or runs Vision:
+    // short-circuit to the website line BEFORE any media download/OCR.
+    if (mediaObj?.id && supabaseClient && !isSuperadminPhone(senderPhone)) {
+      const { data: earlyProfile } = await supabaseClient
+        .from('profiles')
+        .select('email_verified')
+        .eq('phone_number', formattedPhoneForSession)
+        .maybeSingle();
+      if (!earlyProfile || earlyProfile.email_verified !== true) {
+        const verifyReply = '🔒 Please sign up first at https://sakafleet.com — tap *Get Started Free* and verify your email, then I\'ll meet you right back here on WhatsApp.';
+        try {
+          await logChatTranscript(supabaseClient, senderPhone, 'user', mediaCaption || '[document]');
+          await saveChatMessage(supabaseClient, senderPhone, 'user', mediaCaption || '[document]');
+          await sendWhatsAppReply(senderPhone, verifyReply);
+          await logChatTranscript(supabaseClient, senderPhone, 'assistant', verifyReply);
+          await saveChatMessage(supabaseClient, senderPhone, 'assistant', verifyReply);
+        } catch { /* best-effort */ }
+        return { status: 'unverified_gated_media' };
+      }
+    }
+
     // v1.22.0 — Snappy Saka: when Vision is enabled, acknowledge the media
     // immediately (deterministic, no AI) so the user never waits in silence
     // while the document is downloaded and read. The parsed result arrives as

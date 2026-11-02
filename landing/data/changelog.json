@@ -1,6 +1,12 @@
 {
-  "latest": "1.51.5",
+  "latest": "1.51.6",
   "entries": [
+    {
+      "version": "1.51.6",
+      "date": "2026-11-02",
+      "title": "Sign up first (documents too)",
+      "summary": "Unverified users are now guided to sign up before sending documents."
+    },
     {
       "version": "1.51.5",
       "date": "2026-11-02",

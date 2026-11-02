@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.51.6] - 2026-11-02
+
+- **Unverified numbers no longer run OCR.** The unverified gate now applies to media turns too: a number whose profile is not `email_verified` gets the website-signup line immediately, before the "Reading your photo" ack and before any Meta download or Vision call — fixing the "ack without follow-up" case where an unverified user sent a logbook and got silence.
+- **Tests:** `test_web_onboarding` (media-gate source assertion).
+
 ## [1.51.5] - 2026-11-02
 
 - **Unverified numbers are hard-gated.** A single early gate in the WhatsApp route now short-circuits EVERY message from a number whose profile is not `email_verified` to one short website-signup line — no intro, no product answers, no menus, no registration — until web signup completes. This supersedes the v1.51.4 per-branch greeting checks (kept as harmless defense-in-depth).
