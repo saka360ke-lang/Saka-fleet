@@ -110,6 +110,7 @@ async function run() {
 
   console.log('\n--- Test 1b: domain readiness gate (v1.32.2) ---');
   delete process.env.SHORT_LINK_DOMAIN_READY;
+  delete process.env.PUBLIC_APP_URL;
   check(isShortLinkDomainReady() === false, 'Short links are OFF until the branded domain is verified');
   const gated = await shortenUrl(createMockSupabase().client, LONG_URL);
   check(gated === LONG_URL, 'While the gate is off, the original working URL is sent (never a dead link)');

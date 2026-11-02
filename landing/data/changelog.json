@@ -1,6 +1,12 @@
 {
-  "latest": "1.51.0",
+  "latest": "1.51.1",
   "entries": [
+    {
+      "version": "1.51.1",
+      "date": "2026-11-02",
+      "title": "Short links live",
+      "summary": "Report PDF and checkout links now arrive as short, branded links."
+    },
     {
       "version": "1.51.0",
       "date": "2026-11-02",

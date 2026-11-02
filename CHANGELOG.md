@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.51.1] - 2026-11-02
+
+- **Short links enabled.** `SHORT_LINK_DOMAIN_READY=on` + `PUBLIC_APP_URL=https://app.sakafleet.com` are now set in Cloud Run and documented in `.env` / `.env.example`. The `/r/__saka_probe__` route was verified live (HTTP 200 + `x-saka-shortlink`), so report PDF and checkout links now ship as `https://app.sakafleet.com/r/<code>` instead of the long Supabase storage URL.
+
 ## [1.51.0] - 2026-11-02
 
 - **Unified superadmin backlog.** New `admin backlog` lists autonomous remediations (`FIX-*` / `SUG-*`) and Sentinel Horizon feature proposals (`FEAT-*`) in one deterministic, grouped view with `pending|deployed` filters; the `admin proposals` footer no longer points at a non-existent `admin approve [code]` (feature blueprints stay review-only).

@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.51.0  
+**Version:** 1.51.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.51.1** | Short links enabled (SHORT_LINK_DOMAIN_READY=on + PUBLIC_APP_URL) | §98 |
 | **1.51.0** | Unified admin backlog + gentle website signup push + changelog refresh | §97 |
 | **1.50.1** | Homepage changelog moved to /status; `PREMIUM_MODEL_ENABLED=on` | §96 |
 | **1.50.0** | True two-tier AI routing (Tier-1 Haiku / Tier-2 Sonnet) + superadmin-only | §95 |
@@ -3794,4 +3795,12 @@ quiz engine:
   gated on `firstContact` in `whatsapp.js`.
 - `landing/data/changelog.json` bumped to 1.51.0 (was 1.47.0); `test_landing_static`
   asserts `changelog.latest === package.json` to prevent drift.
+
+### 98. Short links enabled (v1.51.1)
+
+- `SHORT_LINK_DOMAIN_READY=on` + `PUBLIC_APP_URL=https://app.sakafleet.com` are now
+  set in Cloud Run (and documented in `.env` / `.env.example`); the `/r/__saka_probe__`
+  route was verified live (HTTP 200 + `x-saka-shortlink`), so report PDF and checkout
+  links now ship as `https://app.sakafleet.com/r/<code>` instead of the long Supabase
+  storage URL.
 
