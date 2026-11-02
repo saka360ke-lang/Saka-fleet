@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.39.0  
+**Version:** 1.39.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.39.1** | Landing deploy prep: GFE-safe `/api/health` uptime probe (with `/healthz` fallback), Data Deletion page, footer/sitemap/llms links | §86 |
 | **1.39.0** | Marketing website + web onboarding (`landing/`, `/api/onboard`, Hostinger FTP deploy) + research-backed odometer policy (full-tank fuel required, zero-signal types never asked, hours-led assets use engine hours) | §85, §86 |
 | **1.38.0** | Multi-record paragraphs (D4): one message → numbered plan card (1 Save all / 2 Edit one / 3 Cancel), per-row audited writes, additive lines never split, no invented dates | §84 |
 | **1.37.0** | Corrections 2.0 (D1): ledger edits are delete & re-log — fresh row, original entry date, DELETE audit consumed via `relogged_entry_id` so `restore` can never duplicate a corrected row | §83 |
@@ -3476,6 +3477,12 @@ quiz engine:
   SoftwareApplication, FAQPage), `sitemap.xml`, `robots.txt` (welcomes
   GPTBot/ClaudeBot/PerplexityBot/Google-Extended), `llms.txt`, OpenGraph +
   Twitter cards, canonical URLs, `manifest.webmanifest`, `humans.txt`.
+- **Uptime probe (v1.39.1):** the widget probes `/api/health` first and falls
+  back to `/healthz` — Google's edge intercepts `/healthz` on some Cloud Run
+  deployments (v1.24.4), so the alias keeps the live-status card honest.
+- **Data Deletion (v1.39.1):** `data-deletion.html` (WhatsApp `delete my
+  account`, per-entry deletion, email requests, KDPA/GDPR rights + ODPC)
+  linked from every footer, the sitemap and `llms.txt`.
 - **Isolation (rule 6):** zero secrets client-side; `test_landing_static.js`
   scans every static file for key patterns and verifies local references,
   structured data and AI files (49 assertions).

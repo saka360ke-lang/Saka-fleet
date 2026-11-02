@@ -25,7 +25,7 @@ function check(condition, message) {
 }
 
 const REQUIRED_FILES = [
-  'index.html', 'privacy.html', 'terms.html', '404.html',
+  'index.html', 'privacy.html', 'terms.html', 'data-deletion.html', '404.html',
   'assets/css/styles.css', 'assets/js/main.js',
   'assets/img/logo.svg', 'assets/img/favicon.svg', 'assets/img/og-cover.svg',
   'data/changelog.json', 'robots.txt', 'sitemap.xml', 'llms.txt', 'manifest.webmanifest', '.htaccess'
@@ -50,11 +50,11 @@ check(/Saka 360/i.test(org.parentOrganization?.name || '') && org.email === 'sup
 
 console.log('\n--- Test 3: AI-legibility files ---');
 const llms = fs.readFileSync(path.join(LANDING, 'llms.txt'), 'utf8');
-for (const needle of ['https://sakafleet.com/', '/privacy.html', '/terms.html', '/api/onboard', '/healthz', 'support@sakafleet.com']) {
+for (const needle of ['https://sakafleet.com/', '/privacy.html', '/terms.html', '/data-deletion.html', '/api/onboard', '/api/health', 'support@sakafleet.com']) {
   check(llms.includes(needle), `llms.txt references ${needle}`);
 }
 const sitemap = fs.readFileSync(path.join(LANDING, 'sitemap.xml'), 'utf8');
-for (const page of ['https://sakafleet.com/', 'https://sakafleet.com/privacy.html', 'https://sakafleet.com/terms.html']) {
+for (const page of ['https://sakafleet.com/', 'https://sakafleet.com/privacy.html', 'https://sakafleet.com/terms.html', 'https://sakafleet.com/data-deletion.html']) {
   check(sitemap.includes(`<loc>${page}</loc>`), `sitemap lists ${page}`);
 }
 const robots = fs.readFileSync(path.join(LANDING, 'robots.txt'), 'utf8');
@@ -92,6 +92,7 @@ for (const file of walk(LANDING)) {
 check(leaked.length === 0, `No secrets leak in static files${leaked.length ? ` (found: ${leaked.join(', ')})` : ''}`);
 const mainJs = fs.readFileSync(path.join(LANDING, 'assets/js/main.js'), 'utf8');
 check(mainJs.includes("API_BASE = 'https://app.sakafleet.com'") && mainJs.includes('/api/onboard'), 'main.js points only at the public API surface');
+check(mainJs.includes("'/api/health'") && mainJs.includes("'/healthz'"), 'the uptime widget probes /api/health first, /healthz as legacy fallback');
 
 console.log('\n--- Test 6: internal references resolve ---');
 const localRefs = [...indexHtml.matchAll(/(?:src|href)="(\/[^"#][^"]*)"/g)].map((m) => m[1]);
@@ -106,7 +107,8 @@ for (const needle of ['data-open-onboard', 'stepLegal', 'stepOtp', 'id="consent"
   check(indexHtml.includes(needle), `The onboarding modal carries ${needle}`);
 }
 check(/I have read, understood, and agree to the exhaustive Saka Fleet/.test(indexHtml), 'The mandatory legal checkbox copy is present');
-check(indexHtml.includes('id="statusCard"') && indexHtml.includes('/healthz'), 'The live uptime widget probes /healthz');
+check(indexHtml.includes('id="statusCard"') && indexHtml.includes('/api/health'), 'The live uptime widget probes /api/health');
+check(indexHtml.includes('/data-deletion.html'), 'The footer links the data-deletion page');
 check(/Get Started Free/.test(indexHtml) && /Deploy Your Fleet/.test(indexHtml), 'Primary CTAs are present');
 
 console.log(`\n🎉 ${passed} landing-site assertions passed.`);

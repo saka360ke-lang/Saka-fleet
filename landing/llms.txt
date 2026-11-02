@@ -14,6 +14,7 @@ Key facts:
 - [Home](https://sakafleet.com/): product overview, features, pricing, changelog and signup.
 - [Privacy Policy](https://sakafleet.com/privacy.html): data collection, Kenya Data Protection Act 2019 and GDPR compliance.
 - [Terms &amp; Conditions](https://sakafleet.com/terms.html): service terms, subscriptions and liability under Saka 360.
+- [Data Deletion](https://sakafleet.com/data-deletion.html): how to request account and record deletion.
 
 ## Onboarding
 - Web signup (sakafleet.com) collects first name, last name, email and WhatsApp number (E.164).
@@ -21,7 +22,7 @@ Key facts:
 - The welcome trial starts when the user registers their first asset with the WhatsApp assistant, not at website signup.
 
 ## API
-- GET https://app.sakafleet.com/healthz — public liveness probe used by the website status widget.
+- GET https://app.sakafleet.com/api/health — public liveness probe used by the website status widget (`/healthz` is its alias; Google's edge may intercept the alias, so the site probes `/api/health` first).
 - POST https://app.sakafleet.com/api/onboard — create/update a lead profile and dispatch an email verification code.
 - POST https://app.sakafleet.com/api/onboard/verify — verify the code and mark the account email-verified.
 - POST https://app.sakafleet.com/api/onboard/resend — resend the verification code (rate limited).

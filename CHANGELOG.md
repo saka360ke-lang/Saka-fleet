@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.39.1] - 2026-11-02
+
+- **GFE-safe uptime probe.** Google's edge intercepts `/healthz` on some Cloud Run deployments (documented v1.24.4), so the landing uptime widget now probes `/api/health` first and falls back to `/healthz` for legacy revisions — the status card can never report "down" for a healthy backend.
+- **Data Deletion page.** New `landing/data-deletion.html` preserves the previous site's deletion affordance: account deletion via WhatsApp, per-entry deletion, email requests (30-day response, KDPA/GDPR rights, ODPC contact). Linked from the footer of every page, the sitemap and `llms.txt`.
+- **Tests:** `test_landing_static` (**52** — data-deletion page, probe fallback chain, footer/sitemap/llms references).
+
 ## [1.39.0] - 2026-11-01
 
 - **Marketing website + onboarding portal (`landing/`).** A vibrant, conversion-optimized static site for sakafleet.com: hero with a WhatsApp chat mock, features grid, pricing from the tier registry, live changelog, live uptime probe (`app.sakafleet.com/healthz`) and a multi-step signup modal — details (E.164 phone, default +254) → exhaustive legal gate with a mandatory Terms & Privacy checkbox → inline 6-digit email OTP card (60 s resend cooldown) → success with a wa.me deep link. Full `privacy.html` (KDPA 2019 + GDPR) and `terms.html` (Saka 360, Kenya), 404, and a complete SEO/AEO layer: JSON-LD (Organization, WebSite, SoftwareApplication, FAQPage), `sitemap.xml`, `robots.txt` welcoming GPTBot/ClaudeBot/PerplexityBot/Google-Extended, `llms.txt`, OpenGraph/Twitter cards and `humans.txt`. Zero secrets client-side (rule 6); no frameworks.

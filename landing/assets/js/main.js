@@ -224,26 +224,49 @@
       $('changelogList').innerHTML = '<div class="cl-entry"><p>Changelog is being prepared — check back soon.</p></div>';
     });
 
-  /* ---------- live uptime probe ---------- */
+  /* ---------- live uptime probe ----------
+     /api/health is the reliable alias: Google's edge can intercept /healthz
+     on some Cloud Run deployments (documented v1.24.4), so we probe the
+     alias first and fall back to /healthz for legacy revisions. */
   var dot = $('statusDot');
   var statusText = $('statusText');
   var statusDetail = $('statusDetail');
-  fetch(API_BASE + '/healthz', { method: 'GET' })
-    .then(function (res) {
-      if (res.ok) {
-        dot.classList.add('up');
-        statusText.textContent = 'All systems operational';
-        statusDetail.textContent = 'app.sakafleet.com responded in real time — uptime maintained at 99.9%.';
-      } else {
-        dot.classList.add('down');
-        statusText.textContent = 'Service is having a moment';
-        statusDetail.textContent = 'The API responded with an unexpected status. Our supervisor is already on it.';
-      }
-    })
-    .catch(function () {
-      dot.classList.add('down');
-      statusText.textContent = 'Status probe unavailable from your network';
-      statusDetail.textContent = 'Could not reach app.sakafleet.com — check your connection or try again shortly.';
-    });
+  var healthPaths = ['/api/health', '/healthz'];
+  var checked = false;
+  function markUp() {
+    if (checked) return;
+    checked = true;
+    dot.classList.add('up');
+    statusText.textContent = 'All systems operational';
+    statusDetail.textContent = 'app.sakafleet.com responded in real time — uptime maintained at 99.9%.';
+  }
+  function markDown() {
+    if (checked) return;
+    checked = true;
+    dot.classList.add('down');
+    statusText.textContent = 'Status probe unavailable from your network';
+    statusDetail.textContent = 'Could not reach app.sakafleet.com — check your connection or try again shortly.';
+  }
+  function probeHealth(index) {
+    if (checked || index >= healthPaths.length) return;
+    fetch(API_BASE + healthPaths[index], { method: 'GET' })
+      .then(function (res) {
+        if (res.ok) {
+          markUp();
+        } else if (index === healthPaths.length - 1) {
+          dot.classList.add('down');
+          checked = true;
+          statusText.textContent = 'Service is having a moment';
+          statusDetail.textContent = 'The API responded with an unexpected status. Our supervisor is already on it.';
+        } else {
+          probeHealth(index + 1);
+        }
+      })
+      .catch(function () {
+        if (index === healthPaths.length - 1) markDown();
+        else probeHealth(index + 1);
+      });
+  }
+  probeHealth(0);
 })();
 
