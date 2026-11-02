@@ -118,7 +118,7 @@ check(/I have read, understood, and agree to the exhaustive Saka Fleet/.test(ind
 check(indexHtml.includes('id="statusCard"') && indexHtml.includes('/status'), 'The homepage status chip links to the live status page');
 check(indexHtml.includes('/data-deletion'), 'The footer links the data-deletion page');
 check(indexHtml.includes('wa.me/19404407252') && !indexHtml.includes('wa.me/254700000000'), 'wa.me links point at the real Saka business number, never the placeholder');
-check(mainJs.includes("WA_NUMBER = '19404407252'"), 'main.js uses the real Saka business number for deep links');
+check(!mainJs.includes('WA_NUMBER') && !mainJs.includes('waLink'), 'main.js no longer carries the manual WhatsApp deep-link plumbing');
 check(localeJs.includes('navigator.language') && localeJs.includes('flagOf'), 'locale.js auto-detects the country from the browser locale and renders its flag');
 check(!indexHtml.includes('This is where Saka says hello'), 'the phone hint is gone (locale detection replaced it)');
 check(mainJs.includes("'/api/health'") && mainJs.includes("'/healthz'"), 'the status probe checks /api/health first, /healthz as legacy fallback');
@@ -259,6 +259,12 @@ for (const [tier, usd] of annualPairs) {
 }
 check(indexHtml.includes('data-addon-usd="3.99"') && Number('3.99') === getAddonPriceUSD('fleet_command', 'monthly'), 'the add-on USD matches the tier registry');
 check(mainJs.includes('data-usd-monthly') && mainJs.includes('Intl.NumberFormat') && mainJs.includes("getAttribute('data-country')"), 'main.js localizes prices from the resolved country');
+
+console.log('\n--- Test 15: signup polish + language capture (v1.47.0) ---');
+check(!indexHtml.includes('otpWaLink') && !indexHtml.includes('doneWaLink') && !indexHtml.includes('Continue on WhatsApp'), 'the signup modal no longer offers a chat-with-Saka button');
+check(indexHtml.includes('Saka will message you on WhatsApp'), 'the success copy tells the user Saka initiates');
+check(mainJs.includes('preferred_language: detectLanguageName()') && mainJs.includes('navigator.language'), 'main.js captures the browser language at signup');
+check(css.includes('.usd-hint') && css.includes('font-size: 11px'), 'the USD hint is tiny but legible (11px)');
 
 console.log('Stateless suite: file reads only — no database, no cleanup needed.');
 

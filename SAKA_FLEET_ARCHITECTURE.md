@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.46.0  
+**Version:** 1.47.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -13,6 +13,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 | **1.44.0** | Timezone-first + overridable country detection (fixes wrong-flag on en-GB devices), "Not you? Change" picker | §86 |
 | **1.45.0** | National-flag badge on every page (timezone auto-detect + manual fallback), ≥3 compliance cards per locale (universal insurance + inspection cards), locale-neutral driver copy | §86 |
 | **1.46.0** | Local-currency pricing on the homepage (timezone-resolved), monthly FX refresh + one-sided revenue ratchet (never down, ratchet up >=2%), BRL added, META welcome template enabled | §86 |
+| **1.47.0** | Web signup captures the browser language + English default (never Swahili uninvited); signup no longer offers a manual chat button; CHANGELOG is now app-only | §86 |
 | **1.43.0** | First-load flag (inline locale bootstrap), no-cache HTML/JSON + version-stamped assets, PNG og/favicons, font preload | §86 |
 | **1.41.0** | Country-aware website: locale-detected compliance/lingo personalization from a catalog-mirroring dataset (drift-guarded), flag confidence chip, compact cookie banner | §86 |
 | **1.40.0** | Website refinement: vendor/Apex/app-host sweep, one-car language, /status page with plain-language incident ticker, cookie consent, self-hosted fonts, locale-based country codes, already-registered signup path, proactive Saka welcome, Sentinel-tracked web-onboarding failures + OTP prune, surgical training sync | §86 |

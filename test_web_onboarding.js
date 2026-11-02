@@ -209,6 +209,13 @@ await pruneExpiredWebOnboardOtps(pruneDb);
 check(!pruneDb.__db.web_onboard_otps.some((r) => r.id === 'row-old'), 'Expired OTP sessions are pruned');
 check(pruneDb.__db.web_onboard_otps.some((r) => r.id === 'row-new'), 'Fresh OTP sessions survive the prune');
 
+console.log('\n--- Test 8: language capture at signup (v1.47.0) ---');
+check(sanitizeOnboardPayload({ ...VALID_PAYLOAD, preferred_language: 'swahili' }).data.preferredLanguage === 'Swahili', 'The payload normalises a browser language name');
+check(sanitizeOnboardPayload(VALID_PAYLOAD).data.preferredLanguage === null, 'A missing language is null (Saka defaults to English)');
+const langDb = createMockSupabase({ profiles: [], admin_audit_logs: [] });
+await completeWebOnboarding(langDb, { email: 'lang@example.com', phone: '+254700000030', firstName: 'Lang', lastName: 'User', verified: false, preferredLanguage: 'English' });
+check(langDb.__db.profiles[0].preferred_language === 'English', 'The profile stores the captured language');
+
 console.log(`\n🎉 ${passed} web-onboarding assertions passed.`);
 console.log('Stateless suite: in-memory database double only — no real rows, no cleanup needed.');
 

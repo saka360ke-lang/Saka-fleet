@@ -621,7 +621,7 @@ function webOnboardWelcomeText(firstName) {
 fastify.post('/api/onboard', async (request, reply) => {
   const clean = sanitizeOnboardPayload(request.body);
   if (!clean.ok) return reply.status(400).send({ success: false, error: clean.error });
-  const { firstName, lastName, email, phone } = clean.data;
+  const { firstName, lastName, email, phone, preferredLanguage } = clean.data;
   if (!supabase) return reply.status(503).send({ success: false, error: 'Database unavailable. Please try again shortly.' });
 
   try {
@@ -647,7 +647,7 @@ fastify.post('/api/onboard', async (request, reply) => {
       return reply.status(502).send({ success: false, error: 'The verification email could not be sent. Please check the address and try again.' });
     }
 
-    const profileResult = await completeWebOnboarding(supabase, { email, phone, firstName, lastName, verified: false });
+    const profileResult = await completeWebOnboarding(supabase, { email, phone, firstName, lastName, verified: false, preferredLanguage });
     return {
       success: true,
       onboard_token: sessionRow.token,

@@ -3,7 +3,6 @@
   'use strict';
 
   var API_BASE = 'https://app.sakafleet.com';
-  var WA_NUMBER = '19404407252'; // Saka's WhatsApp Business number (E.164, no +)
   var RESEND_COOLDOWN_S = 60;
 
   /* ---------- helpers ---------- */
@@ -22,6 +21,12 @@
     return /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(value);
   }
   function cleanDigits(value) { return String(value || '').replace(/[^\d]/g, ''); }
+  function detectLanguageName() {
+    var lang = String(navigator.language || 'en').toLowerCase();
+    var code = lang.split('-')[0];
+    var map = { en: 'English', sw: 'Swahili', fr: 'French', es: 'Spanish', de: 'German', it: 'Italian', nl: 'Dutch', pt: 'Portuguese', ar: 'Arabic', hi: 'Hindi' };
+    return map[code] || 'English';
+  }
   function escapeHtml(value) {
     return String(value).replace(/[&<>"']/g, function (ch) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
@@ -96,6 +101,7 @@
         last_name: window.__onboard.lastName,
         email: window.__onboard.email,
         phone: window.__onboard.phone,
+        preferred_language: detectLanguageName(),
         consent: true
       })
     })
@@ -202,20 +208,6 @@
     })
       .then(function () { startResendCountdown(); })
       .catch(function () { startResendCountdown(); });
-  });
-
-  /* WhatsApp deep links */
-  function waLink(phone) {
-    var digits = phone ? cleanDigits(phone) : '';
-    return 'https://wa.me/' + (digits || WA_NUMBER) + '?text=' + encodeURIComponent('Hi Saka');
-  }
-  $('otpWaLink').addEventListener('click', function (e) {
-    e.preventDefault();
-    window.open(waLink(window.__onboard && window.__onboard.phone), '_blank', 'noopener');
-  });
-  $('doneWaLink').addEventListener('click', function (e) {
-    e.preventDefault();
-    window.open(waLink(window.__onboard && window.__onboard.phone), '_blank', 'noopener');
   });
 
   /* ---------- changelog ---------- */

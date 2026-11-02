@@ -73,17 +73,25 @@ export function normalizePhoneE164(phone) {
   return `+${digits}`;
 }
 
+/** Normalise a browser language name to a short, title-cased display name. */
+export function normalizeLanguageName(value) {
+  const raw = String(value || '').trim();
+  if (!raw || raw.length > 40 || !/^[a-zA-Z][a-zA-Z -]*$/.test(raw)) return null;
+  return raw.split(/\s+/).map((w) => w[0].toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+}
+
 /** Strict payload gate: names, valid email, E.164 phone and consent. */
 export function sanitizeOnboardPayload(body = {}) {
   const firstName = String(body?.first_name || '').trim().slice(0, 60);
   const lastName = String(body?.last_name || '').trim().slice(0, 60);
   const email = String(body?.email || '').trim().toLowerCase();
   const phone = normalizePhoneE164(body?.phone);
+  const preferredLanguage = normalizeLanguageName(body?.preferred_language);
   if (!firstName || !lastName) return { ok: false, error: 'First and last name are required.' };
   if (!/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(email)) return { ok: false, error: 'A valid email address is required.' };
   if (!phone) return { ok: false, error: 'A valid WhatsApp number in international format is required.' };
   if (body?.consent !== true) return { ok: false, error: 'The Terms & Conditions and Privacy Policy consent is required.' };
-  return { ok: true, data: { firstName, lastName, email, phone } };
+  return { ok: true, data: { firstName, lastName, email, phone, preferredLanguage } };
 }
 
 function mintOtp() {
@@ -199,13 +207,13 @@ export async function resendWebOnboardCode(supabase, { token }) {
  * Upsert the profile for a web signup. `verified` is only flipped true after a
  * code was matched. Never touches subscription state and never starts a trial.
  */
-export async function completeWebOnboarding(supabase, { email, phone, firstName, lastName, verified = false }) {
+export async function completeWebOnboarding(supabase, { email, phone, firstName, lastName, verified = false, preferredLanguage = null }) {
   if (!supabase) return { ok: false, error: 'no_client' };
   const fullName = [firstName, lastName].filter(Boolean).join(' ').trim() || null;
   try {
     const { data: existing } = await supabase
       .from('profiles')
-      .select('id, email_verified, full_name')
+      .select('id, email_verified, full_name, preferred_language')
       .eq('phone_number', phone)
       .maybeSingle();
 
@@ -216,6 +224,7 @@ export async function completeWebOnboarding(supabase, { email, phone, firstName,
         updates.email_verified = true;
       }
       if (fullName && !existing.full_name) updates.full_name = fullName;
+      if (preferredLanguage && !existing.preferred_language) updates.preferred_language = preferredLanguage;
       const { error } = await supabase.from('profiles').update(updates).eq('id', existing.id);
       if (error) return { ok: false, error: error.message };
       if (verified) {
@@ -238,7 +247,8 @@ export async function completeWebOnboarding(supabase, { email, phone, firstName,
       // welcome trial starts at vehicle registration. Never inherit a legacy
       // tier default from the live schema.
       subscription_tier: 'free',
-      is_active: true
+      is_active: true,
+      preferred_language: preferredLanguage || null
     }]);
     if (error) return { ok: false, error: error.message };
     await writeAudit(supabase, verified ? 'WEB_ONBOARD_VERIFIED' : 'WEB_ONBOARD_CREATED', { email, phone });

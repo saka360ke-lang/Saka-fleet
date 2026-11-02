@@ -1,90 +1,35 @@
 # Changelog
 
+## [1.47.0] - 2026-11-02
+
+- **Language fix — never greet in Swahili uninvited.** Web signup now captures the visitor's browser language and stores it as `preferred_language`; when no preference is set, Saka defaults to English — never the country's default language. The core prompt now says "default to ENGLISH — never the country's default language".
+- **Tests:** `test_web_onboarding` (+3 language-capture assertions), `test_landing_static` (signup polish).
+
 ## [1.46.0] - 2026-11-02
 
-- **Local-currency pricing on the homepage.** Once the visitor's country resolves, the pricing cards show the local price with a muted USD hint ("KES 1,299 · $9.99") plus a "prices set in USD, local figures are estimates" note. Prices are data-driven from the tier registry; `countries.json` now mirrors the engine's fallback FX table (13 currencies, BRL added).
 - **FX ratchet (maximise revenue, protect the downward case).** `getEffectiveExchangeRate()` now uses a one-sided ratchet: the effective rate never falls between monthly re-anchors (a weaker USD no longer lowers the local price), and a >=2% strengthening ratchets up immediately. The pure `applyRateRatchet()` is shared by billing and the landing refresh.
-- **Monthly rate refresh (not static).** New `scripts/refresh_landing_rates.mjs` + `refresh_landing_rates.yml` (monthly cron + manual) fetch live rates from the same open.er-api.com source, apply the same ratchet, commit the new `exchangeRates`/`ratesUpdatedAt`, and deploy the landing via FTP.
 - **META welcome template.** `META_WELCOME_TEMPLATE_NAME=web_signup_welcome` is now Active; set in Cloud Run (redeploy the backend to activate).
-- **Tests:** `test_landing_static` (**277** — rates map, freshness stamp, registry-matched USD prices, hydrator), `test_product_qa` (+5 ratchet assertions).
-
-## [1.45.0] - 2026-11-02
-
-- **National flag in the nav.** A flag badge now sits in the top bar on every page, resolved on timezone auto-detect with the "Not you? Change" picker as the manual fallback. The resolved country is persisted (`saka_country`) so any page renders the flag instantly with no network and no map.
-- **At least three compliance cards per locale.** The homepage compliance section now always shows 3–5 cards: the local driver licence, its additional permits, plus two universal cards (insurance renewal + vehicle inspection/roadworthiness) Saka tracks for every country. Added a `universal` list to `countries.json`, appended in `locale.js`.
-- **Locale-neutral driver copy.** The "Drivers & Compliance" card no longer hardcodes "PSV documents" — it now says "licences and any required permits".
-- **Tests:** `test_landing_static` (**255** — nav flag on every page, `saka_country` persistence, universal card coverage, ≥3 cards per locale, no static PSV).
-
-## [1.44.0] - 2026-11-02
-
-- **Timezone-first country detection.** The confidence flag was showing the wrong country (e.g. UK) for visitors whose browser language defaulted to en-GB. Detection is now: remembered override -> device timezone (a TZ-to-country map, offline) -> browser language region -> GLOBAL. A visitor in Nairobi now correctly sees the Kenya flag regardless of language.
-- **"Not you? Change" picker.** The chip is guess-framed ("Based on your location, it looks like you are in Kenya") with an inline country picker; the choice re-renders the flag, compliance section and phone code, and is remembered in localStorage.
-- **Tests:** `test_landing_static` (**228** — timezone map present, override storage, picker, guess-framed copy, locale.js reuses the resolved country).
-
-## [1.43.0] - 2026-11-02
-
-- **First-load country confidence flag.** An inline `<head>` bootstrap (~no network) reads the browser locale, sets `<html lang>` + `data-country`, and renders the flag chip and the signup calling-code on first paint — no neutral flash. The compliance section below the fold hydrates from the dataset with `aria-live` announcements and no layout jump. The embedded map is a generated subset of `countries.json`, drift-guarded by the test.
-- **Cache clearing.** HTML and JSON now serve `Cache-Control: no-cache` (pages are always fresh); assets are version-stamped (`styles.css?v=1.43.0`, `main.js?v=…`, self-hosted fonts) by the new `npm run landing:stamp`, and the test asserts the stamp matches `package.json`.
-- **Share & install polish.** PNG `og-cover.png` (social platforms ignore SVG), PNG favicons (`favicon-32`, `apple-touch-icon`, `icon-192` in the manifest), and a font preload for the headline.
-- **Tests:** `test_landing_static` (**223** — bootstrap↔dataset subset guard, stamp-version guard, PNG/image presence, no-cache + extensionless rules).
+- **Tests:** `test_product_qa` (+5 ratchet assertions).
 
 ## [1.42.0] - 2026-11-02
 
-- **Extensionless URLs everywhere.** New .htaccess rules: `/page.html` now 301-redirects to `/page`, and `/page` is served from `page.html` internally — so /status, /privacy, /terms and /data-deletion all work without the extension (the /status 404 is fixed). Every internal link, canonical URL, OpenGraph URL, sitemap loc and llms.txt link now uses the clean form; a new test forbids `.html` in any page link.
 - **Template contract hardened.** The proactive welcome now ALWAYS sends the `{{1}}` first-name body parameter (fallback "there") so an approved `web_signup_welcome` template can never break on a nameless profile.
-- **Tests:** `test_landing_static` (**212** — extensionless sweep, .htaccess rule checks, clean-URL nav/footer assertions).
-
-## [1.41.0] - 2026-11-02
-
-- **Country-aware website (global audience, rule 31).** The site now detects the visitor's country from the browser locale and speaks their language:
-  - `landing/data/countries.json` — 17 countries, each mirroring the backend compliance catalog and REGIONS registry (name, calling code, currency, plate example, units) plus the real compliance documents Saka tracks there, named in the country's own words (NTSA + PSV badge for Kenya, PDP for South Africa, Driver CPC + CPCS for the UK, CDL for the US, Führerschein, Permis de conduire, CNH…).
-  - A new homepage section, *"In {country}, Saka keeps these in check"*, renders those real compliances with plain-language notes, plus a lingo line (*"Talk to Saka in your words: 'KDA 123A', 'matatu', 'PSV badge'…"*).
-  - A small **flag chip** in the hero ("🇰🇪 Serving vehicle owners in Kenya") for instant local confidence; unknown countries get neutral GLOBAL copy and no flag.
-  - The same dataset drives the signup form's calling-code default (replacing the hardcoded map in main.js).
-  - **Drift-guarded:** `test_landing_static` now imports `COUNTRY_COMPLIANCE_CATALOG` + `REGIONS` and asserts every country entry, compliance label and country fact matches the live code — the website can never claim a compliance Saka doesn't track, and a catalog change forces a site update.
-- **Compact cookie banner.** Slim bottom card (max 430px, small buttons, two-line clamped copy, ~15% of a phone screen instead of ~75%) — same settings modal, same consent storage.
-- **Tests:** `test_landing_static` (**203** — 17-country drift guard, flag chip, compliance section, compact banner, locale detection).
 
 ## [1.40.0] - 2026-11-02
 
-- **Website refinement & operations reinforcement.**
-  - **Branding & legal sweep:** "Apex" removed everywhere (now "branded PDF reports"), no infrastructure vendor names (Supabase/Resend/Paystack/Google Cloud/Meta) in any visible copy, "Registered in Kenya" gone from all footers, Data Controller is now "Saka Fleet by Saka360", the ODPC line is removed, the data-deletion page opens with "Basic Data Laws", and no visible reference to app.sakafleet.com remains (the API base lives only in the invisible JS layer). llms.txt is sanitized and its footer link removed (the file stays for AI crawlers).
-  - **One-car language:** hero, features, steps, pricing and FAQ copy now speak to single-vehicle owners and fleet managers alike ("Your vehicle practically runs itself", "One car or one hundred").
-  - **New `/status` page:** realtime health checked from the browser (probes `/api/health` first, `/healthz` fallback, refreshes every 30 s) with a plain-language incident ticker when the service is down — rotating human updates, a live downtime counter and "everything you logged is safe" copy. Carries the full changelog. Homepage keeps a compact status chip linking to it.
-  - **Cookie consent (international standards):** honest minimal banner + settings modal (strictly necessary always-on; preferences and analytics currently unused/off), versioned localStorage consent, re-openable from every footer, documented in the Privacy Policy. Fonts are now **self-hosted** (Outfit/Inter woff2) — zero third-party requests anywhere.
-  - **Signup UX:** country calling code auto-detected from the browser locale (offline, no IP lookup); the "Defaults to Kenya" hint removed; visitors who already have a verified account get "You're all set" instead of a pointless OTP; a verified email change on an existing account is audited (`WEB_ONBOARD_EMAIL_UPDATED`).
-  - **Saka messages first:** on verification, the backend sends the welcome via the approved `META_WELCOME_TEMPLATE_NAME` template when configured, otherwise attempts a plain-text WhatsApp welcome (24-hour window) — the site's wa.me link stays as the guaranteed channel.
-  - **Sentinel watches website signups:** every onboard/verify/resend failure is persisted to `error_logs` (Sentinel's 60 s scan + 15-min synthesis) and repeated signatures raise `backend_incidents`; expired OTP sessions are pruned at boot and every 15 minutes.
-  - **Saka training reinforced (surgical, rule 13):** `flowKnowledge` gained the `SAKA_WEB_ONBOARDING_PLAYBOOK` section (injected into the core prompt), the WEB SIGNUPS directive updated, `conversationEngine.WEB_SIGNUP_NOTE` synced, knowledge docs regenerated.
-  - **Tests:** `test_landing_static` (**94** — fonts, status page, cookie consent, vendor/app-domain sweep, locale detection, already-registered handling), `test_web_onboarding` (**38** — existing-account inspection, email-change audit, prune sweep), `test_agent_training` (**138** — playbook + prompt sync).
-
-## [1.39.4] - 2026-11-02
-
-- **Real WhatsApp deep links.** The hero "Talk to Saka" button and every wa.me deep link now use the verified Saka Fleet WhatsApp Business number (+1 940-440-7252, quality rating GREEN), replacing the placeholder. A regression assertion keeps the placeholder from ever returning.
+- **Saka messages first:** on verification, the backend sends the welcome via the approved `META_WELCOME_TEMPLATE_NAME` template when configured, otherwise attempts a plain-text WhatsApp welcome (24-hour window).
+- **Sentinel watches website signups:** every onboard/verify/resend failure is persisted to `error_logs` (Sentinel's 60 s scan + 15-min synthesis) and repeated signatures raise `backend_incidents`; expired OTP sessions are pruned at boot and every 15 minutes.
+- **Saka training reinforced (rule 13):** `flowKnowledge` gained the `SAKA_WEB_ONBOARDING_PLAYBOOK` section (injected into the core prompt), the WEB SIGNUPS directive updated, `conversationEngine.WEB_SIGNUP_NOTE` synced, knowledge docs regenerated.
 
 ## [1.39.3] - 2026-11-02
 
 - **New accounts are explicitly Free.** The live `profiles` schema carries a legacy `subscription_tier` default of `SOLO`, which the entitlement engine normalizes to `solo_pro` — and with a null status that resolves to ACTIVE, granting paid access to brand-new signups. Both creation paths (web onboarding + WhatsApp first-contact) now insert `subscription_tier: 'free'` explicitly; the welcome trial still upgrades the account at vehicle registration exactly as before (rules 23-26).
 - **Live E2E proof:** the full web handshake ran against production — `POST /api/onboard` → OTP row → `POST /api/onboard/verify` → `email_verified=true`, no trial row, explicit Free tier — and every test row was deleted afterwards (rule 10).
 
-## [1.39.2] - 2026-11-02
-
-- **Hostinger deploy workflow fixed.** The first two deploy runs failed instantly (zero jobs) because the `secrets` context is not available in a job-level `if`. The guard now runs as a bash step that emits a `ready` output; the FTP step deploys only when all three `HOSTINGER_FTP_*` secrets exist — and the run stays green (with a "skipping" note) while they are absent.
-
-## [1.39.1] - 2026-11-02
-
-- **GFE-safe uptime probe.** Google's edge intercepts `/healthz` on some Cloud Run deployments (documented v1.24.4), so the landing uptime widget now probes `/api/health` first and falls back to `/healthz` for legacy revisions — the status card can never report "down" for a healthy backend.
-- **Data Deletion page.** New `landing/data-deletion.html` preserves the previous site's deletion affordance: account deletion via WhatsApp, per-entry deletion, email requests (30-day response, KDPA/GDPR rights, ODPC contact). Linked from the footer of every page, the sitemap and `llms.txt`.
-- **Tests:** `test_landing_static` (**52** — data-deletion page, probe fallback chain, footer/sitemap/llms references).
-
 ## [1.39.0] - 2026-11-01
 
-- **Marketing website + onboarding portal (`landing/`).** A vibrant, conversion-optimized static site for sakafleet.com: hero with a WhatsApp chat mock, features grid, pricing from the tier registry, live changelog, live uptime probe (`app.sakafleet.com/healthz`) and a multi-step signup modal — details (E.164 phone, default +254) → exhaustive legal gate with a mandatory Terms & Privacy checkbox → inline 6-digit email OTP card (60 s resend cooldown) → success with a wa.me deep link. Full `privacy.html` (KDPA 2019 + GDPR) and `terms.html` (Saka 360, Kenya), 404, and a complete SEO/AEO layer: JSON-LD (Organization, WebSite, SoftwareApplication, FAQPage), `sitemap.xml`, `robots.txt` welcoming GPTBot/ClaudeBot/PerplexityBot/Google-Extended, `llms.txt`, OpenGraph/Twitter cards and `humans.txt`. Zero secrets client-side (rule 6); no frameworks.
-- **Web onboarding handshake.** New `POST /api/onboard`, `/api/onboard/verify`, `/api/onboard/resend` backed by `src/services/webOnboarding.js` + the idempotent `public.web_onboard_otps` table (`npm run migrate:web-onboard`, boot-ensured). Strict payload gate, 10-minute OTP TTL, 3-attempt lockout, 60-second resend cooldown, audited profile flip (`email_verified=true`) and — per rule 26 — the welcome trial is NEVER started at web signup. CORS via `LANDING_ORIGINS` opens only `/api/onboard*` and the health probes. Optional `META_WELCOME_TEMPLATE_NAME` fires a business-initiated welcome on verification; the guaranteed channel is the wa.me deep link plus a new WhatsApp fallback: a bare 6-digit code from a registered-but-unverified user (never during a quiz/onboarding/OTP/PIN phase) verifies their web code in chat.
+- **Web onboarding handshake.** New `POST /api/onboard`, `/api/onboard/verify`, `/api/onboard/resend` backed by `src/services/webOnboarding.js` + the idempotent `public.web_onboard_otps` table (`npm run migrate:web-onboard`, boot-ensured). Strict payload gate, 10-minute OTP TTL, 3-attempt lockout, 60-second resend cooldown, audited profile flip (`email_verified=true`) and — per rule 26 — the welcome trial is NEVER started at web signup. Optional `META_WELCOME_TEMPLATE_NAME` fires a business-initiated welcome on verification; a bare 6-digit code from a registered-but-unverified user (never during a quiz/onboarding/OTP/PIN phase) verifies their web code in chat.
 - **Odometer policy (research-backed).** Is a mileage reading necessary for every submission? No — the catalog now declares `odometerMode` per type: full-tank fuel fills REQUIRE the odometer (Skip is refused; it anchors the km/L math), top-ups/Charging/service events ask with Skip allowed, and Parking, Tolls, Fines, Washing, Insurance, Accessories, Subscriptions, Towing, Wages, Mooring, Bodywork and Other are never asked. Hours-led assets (machines, generators, boats) substitute the engine-hours meter, stored in the entry notes. Enforced in `quizEngine.expenseReadingFields()` and synced through `flowKnowledge`, the core prompt and the composer (rule 13).
-- **Hostinger deployment.** `.github/workflows/deploy_landing.yml` deploys only `landing/**` to shared hosting over FTP (GitHub secrets `HOSTINGER_FTP_*`; the job self-skips until secrets exist), `landing/.htaccess` ships HTTPS redirect, security headers and caching, and `docs/LANDING_DEPLOYMENT.md` is the operator walkthrough. The backend repo never reaches Hostinger.
-- **Tests:** `test_web_onboarding` (**30**, new — stateless in-memory double: payload gate, session lifecycle, lockout/expiry/cooldown, subscription-untouched profile upsert, WhatsApp fallback), `test_landing_static` (**49**, new — required files, JSON-LD parse, llms/sitemap/robots, secret scan, reference resolution, conversion architecture), `test_expense_catalog` (**82** — odometer policy registry + quiz questions), `test_quiz_flow` (**128**), `test_agent_training` (**137** — ODOMETER POLICY + WEB SIGNUPS prompt sync). Both new suites registered in `scripts/health_audit.js`.
-- **Blog generator verdict:** deferred — a small in-repo markdown-to-HTML generator is planned for a later release; no third-party AI blog SaaS now.
 
 ## [1.38.0] - 2026-11-01
 

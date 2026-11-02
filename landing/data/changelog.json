@@ -1,6 +1,12 @@
 {
-  "latest": "1.46.0",
+  "latest": "1.47.0",
   "entries": [
+    {
+      "version": "1.47.0",
+      "date": "2026-11-02",
+      "title": "Cleaner signup, your language",
+      "summary": "The signup form no longer asks you to start the chat - Saka messages you first, in your language. Local prices now show the USD amount as a small hint."
+    },
     {
       "version": "1.46.0",
       "date": "2026-11-02",

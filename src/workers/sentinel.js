@@ -1105,7 +1105,7 @@ export async function monitorActiveConversations(providedSupabase) {
         .maybeSingle();
 
       const countryInfo = detectCountryFromPhone(phone);
-      const language = profile?.preferred_language || countryInfo.default_language || 'English';
+      const language = profile?.preferred_language || 'English';
       const field = getCurrentQuizField(quiz, { profile, countryInfo, language });
 
       const nudgeText = await composeMessage({

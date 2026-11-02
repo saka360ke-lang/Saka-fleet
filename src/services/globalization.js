@@ -247,7 +247,7 @@ export function buildGlobalContext(countryInfo, profile = null) {
     unitSystem,
     labels,
     timeZone: resolveUserTimezone({ countryInfo: region, profile }),
-    preferredLanguage: profile?.preferred_language || region.default_language || 'English',
+    preferredLanguage: profile?.preferred_language || 'English',
     plateExample: region.plate_example
   };
 }
