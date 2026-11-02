@@ -139,7 +139,7 @@ const ADMIN_INTENTS = new Set([
   'ADMIN_HELP',
   'ADMIN_REPORT', 'ADMIN_AUDIT', 'ADMIN_ALERTS',
   'ADMIN_RULES_RESET', 'ADMIN_RULES_TOGGLE', 'ADMIN_RULES_LIST',
-  'ADMIN_HORIZON', 'ADMIN_PROPOSALS',
+  'ADMIN_HORIZON', 'ADMIN_PROPOSALS', 'ADMIN_BACKLOG',
   'ADMIN_REMEDIATIONS', 'ADMIN_REMEDIATION_ACCEPT', 'ADMIN_REMEDIATION_DECLINE', 'ADMIN_REMEDIATION_MODIFY', 'ADMIN_REMEDIATION_STATUS',
   'ADMIN_UPDATE_SUGGEST',
   'ADMIN_AI_STATS',
@@ -306,6 +306,12 @@ export async function parseSuperadminCommand(messageText) {
     return { intent: 'ADMIN_MODEL_ROLLBACK', tier_slot: modelRollbackMatch[1] || 'tier_1' };
   }
 
+  // v1.51.0 — unified governance backlog (fixes + feature proposals).
+  const backlogMatch = text.match(/^\s*admin\s+backlog\s*(pending|deployed|all)?\s*$/i);
+  if (backlogMatch) {
+    return { intent: 'ADMIN_BACKLOG', filter: (backlogMatch[1] || 'all').toLowerCase() };
+  }
+
   // Autonomous remediation approval gateway (v1.10.0)
   const remediationsFilterMatch = text.match(/^\s*admin\s+remediations?\s*(pending|deployed|all)?\s*$/i);
   if (remediationsFilterMatch) {
@@ -344,7 +350,7 @@ export async function parseSuperadminCommand(messageText) {
   }
 
   const prompt = `Classify user's admin request into JSON:
-Intent: "HEALTH_CHECK" | "GENERATE_COUPON" | "PROFILES_REPORT" | "ADMIN_AI_STATS" | "ADMIN_OCR_STATS" | "ADMIN_TURN_LATENCY" | "ADMIN_TRIAL_STATS" | "ADMIN_ROLLOUT" | "ADMIN_REPORT" | "ADMIN_AUDIT" | "ADMIN_ALERTS" | "ADMIN_RULES_RESET" | "ADMIN_RULES_TOGGLE" | "ADMIN_RULES_LIST" | "ADMIN_HORIZON" | "ADMIN_PROPOSALS" | "ADMIN_REMEDIATIONS" | "ADMIN_REMEDIATION_ACCEPT" | "ADMIN_REMEDIATION_DECLINE" | "ADMIN_REMEDIATION_MODIFY" | "UNKNOWN"
+Intent: "HEALTH_CHECK" | "GENERATE_COUPON" | "PROFILES_REPORT" | "ADMIN_AI_STATS" | "ADMIN_OCR_STATS" | "ADMIN_TURN_LATENCY" | "ADMIN_TRIAL_STATS" | "ADMIN_ROLLOUT" | "ADMIN_REPORT" | "ADMIN_AUDIT" | "ADMIN_ALERTS" | "ADMIN_RULES_RESET" | "ADMIN_RULES_TOGGLE" | "ADMIN_RULES_LIST" | "ADMIN_HORIZON" | "ADMIN_PROPOSALS" | "ADMIN_BACKLOG" | "ADMIN_REMEDIATIONS" | "ADMIN_REMEDIATION_ACCEPT" | "ADMIN_REMEDIATION_DECLINE" | "ADMIN_REMEDIATION_MODIFY" | "UNKNOWN"
 Extract: discount_value (e.g. "20%"), target_phone (e.g. "+254712345678"), query (e.g. "KDA 123A" or VIN), rule_key (e.g. "clarify_vin"), proposal_code (e.g. "FIX-2026-10-30-01"), feedback (guidance text), hours (AI/OCR telemetry window 1-168, default 24), days (trial funnel window 1-365, default 30)
 Command: "${text}"`;
 
@@ -1404,6 +1410,76 @@ export async function handleAdminRemediationsList(supabase, filter = 'all') {
   };
 }
 
+/** v1.51.0 — unified governance backlog: autonomous remediations + Horizon feature proposals. */
+export async function handleAdminBacklog(supabase, filter = 'all') {
+  const [remediations, features] = await Promise.all([
+    supabase
+      .from('remediation_proposals')
+      .select('proposal_code,title,status,risk_level,created_at')
+      .order('created_at', { ascending: false })
+      .limit(30),
+    supabase
+      .from('weekly_feature_proposals')
+      .select('proposal_code,title,status,impact_score,created_at')
+      .order('created_at', { ascending: false })
+      .limit(5)
+  ]);
+
+  const loadError = remediations.error || features.error;
+  if (loadError) {
+    return { reply: `⚠️ Could not load the backlog: ${loadError.message}` };
+  }
+
+  const fixes = remediations.data || [];
+  const ideas = features.data || [];
+
+  const icons = {
+    PENDING_APPROVAL: '⏳',
+    APPROVED: '✅',
+    EXECUTING: '⚙️',
+    VALIDATED: '🧪',
+    DEPLOYED: '🚀',
+    DECLINED: '⛔',
+    NEEDS_MODIFICATION: '✏️'
+  };
+  const PENDING_STATUSES = ['PENDING_APPROVAL', 'APPROVED', 'EXECUTING', 'VALIDATED', 'NEEDS_MODIFICATION'];
+  const bucketOf = (p) => (PENDING_STATUSES.includes(p.status) ? 'pending' : (p.status === 'DEPLOYED' ? 'deployed' : 'other'));
+  const renderFix = (list) => list.map((p) => {
+    const icon = icons[p.status] || '•';
+    return `${icon} \`${p.proposal_code}\` — ${p.title || 'Untitled'}\n   Status: *${p.status}* | Risk: ${String(p.risk_level || 'low').toUpperCase()}`;
+  }).join('\n\n');
+
+  const sections = [];
+  if (filter === 'all' || filter === 'pending') {
+    const pending = fixes.filter((p) => bucketOf(p) === 'pending');
+    sections.push(`⏳ *Pending fixes*\n${pending.length ? renderFix(pending) : '• none'}`);
+  }
+  if (filter === 'all' || filter === 'deployed') {
+    const deployed = fixes.filter((p) => bucketOf(p) === 'deployed');
+    sections.push(`🚀 *Deployed fixes*\n${deployed.length ? renderFix(deployed) : '• none'}`);
+  }
+  if (filter === 'all') {
+    const other = fixes.filter((p) => bucketOf(p) === 'other');
+    if (other.length) sections.push(`⛔ *Declined / other*\n${renderFix(other)}`);
+  }
+
+  if (ideas.length) {
+    const renderIdea = ideas.map((p) => `💡 \`${p.proposal_code}\` — ${p.title || 'Untitled'}\n   Impact: ${p.impact_score ?? '—'}/10 · Status: ${p.status || 'pending'}`).join('\n\n');
+    sections.push(`💡 *Feature proposals*\n${renderIdea}`);
+  } else {
+    sections.push('💡 *Feature proposals*\n• none');
+  }
+
+  return {
+    reply: `🗂️ *Saka Backlog*\n\n${sections.join('\n\n')}\n\n` +
+      `_Approve a fix:_ \`admin accept fix <CODE>\`\n` +
+      `_Decline:_ \`admin decline fix <CODE>\`\n` +
+      `_Modify:_ \`admin modify fix <CODE> <guidance>\`\n` +
+      `_Feature proposals are review-only blueprints._\n` +
+      `_Filter:_ \`admin backlog pending\` · \`admin backlog deployed\``
+  };
+}
+
 /** v1.49.1 — a superadmin can ask for one proposal's status ("Status of FIX-…"). */
 export async function handleAdminRemediationStatus(supabase, proposalCode) {
   const code = String(proposalCode || '').toUpperCase();
@@ -1788,7 +1864,7 @@ export function formatAdminHelpReply() {
   return '🛠️ *Saka admin commands*\n\n' +
     '📊 *Snapshots* — admin report · admin alerts · admin audit <query>\n' +
     '👥 *Fleet* — profiles report · admin trial-stats · admin ai-stats [24h] · admin ocr-stats [24h] · admin latency [24h] · admin env\n' +
-    '🛠️ *Fixes* — admin remediations [pending|deployed] · admin accept|decline|modify fix <CODE> · UPDATE-SUGGEST> <your update>\n' +
+    '🛠️ *Fixes* — admin backlog · admin remediations [pending|deployed] · admin accept|decline|modify fix <CODE> · UPDATE-SUGGEST> <your update>\n' +
     '🌱 *Growth* — generate coupon 20% · admin horizon · admin proposals\n' +
     '🩺 *Guardrails* — check health · admin rules list|toggle <key>|reset\n' +
     '📚 *Knowledge* — admin kb · admin kb review · admin kb stale\n' +
@@ -1931,6 +2007,15 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
     };
   }
 
+  if (parsedCommand.intent === 'ADMIN_BACKLOG') {
+    const backlogRes = await handleAdminBacklog(supabase, parsedCommand.filter || 'all');
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_BACKLOG', { filter: parsedCommand.filter || 'all' });
+    return {
+      isSuperadmin: true,
+      reply: backlogRes.reply
+    };
+  }
+
   if (parsedCommand.intent === 'ADMIN_REMEDIATIONS') {
     const listRes = await handleAdminRemediationsList(supabase, parsedCommand.filter || 'all');
     await logAdminAudit(supabase, formattedPhone, 'ADMIN_REMEDIATIONS', { filter: parsedCommand.filter || 'all' });
@@ -2029,7 +2114,7 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
       proposals.forEach((p, idx) => {
         replyText += `${idx + 1}. *${p.title}* (\`${p.proposal_code}\`)\n   • Target: ${p.target_persona}\n   • Impact: ${p.impact_score}/10\n   • Value: ${p.driver_value_proposition}\n\n`;
       });
-      replyText += `_Text 'admin approve [code]' to review spec._`;
+      replyText += `_Review-only blueprints — see the full backlog with \`admin backlog\`._`;
     }
     return { isSuperadmin: true, reply: replyText };
   }

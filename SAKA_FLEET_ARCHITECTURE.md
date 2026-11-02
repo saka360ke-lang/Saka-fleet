@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.50.1  
+**Version:** 1.51.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.51.0** | Unified admin backlog + gentle website signup push + changelog refresh | §97 |
 | **1.50.1** | Homepage changelog moved to /status; `PREMIUM_MODEL_ENABLED=on` | §96 |
 | **1.50.0** | True two-tier AI routing (Tier-1 Haiku / Tier-2 Sonnet) + superadmin-only | §95 |
 | **1.49.6** | Superadmin remediation view: grouped pending/deployed + `admin remediations pending|deployed` filters | §94 |
@@ -487,6 +488,7 @@ Requires active session (`adminstart`, 30-min inactivity TTL) from verified `SUP
 - `admin alerts`: Current system warnings, unresolved errors, and detected friction logs.
 - `adminrules reset` / `adminrules toggle [key]` / `adminrules list`: Dynamic rule management.
 - `admin horizon`: Manually triggers Sentinel Horizon weekly feature synthesis on demand.
+- `admin backlog`: Lists fixes + feature proposals together (pending/deployed filters; feature blueprints are review-only).
 - `admin proposals`: Lists the latest pending Sentinel Horizon feature blueprints.
 - `admin remediations`: Lists the latest autonomous remediation proposals (`FIX-*`) with status and risk.
 - `admin accept fix [CODE]`: Approves a proposal, mints the single-use execution nonce and dispatches the CI execution workflow.
@@ -3777,4 +3779,19 @@ quiz engine:
   `/status` only, and the footer "Changelog" link points to `/status`.
 - `PREMIUM_MODEL_ENABLED=on` (operator): trial/paid users' escalated + prose
   turns run Tier-2 Sonnet; free stays Tier-1 Haiku.
+
+### 97. Unified admin backlog + gentle signup (v1.51.0)
+
+- **`admin backlog`** (deterministic, zero-token) lists `remediation_proposals`
+  (`FIX-*` / `SUG-*`, grouped ⏳ pending / 🚀 deployed / ⛔ declined) and
+  `weekly_feature_proposals` (`FEAT-*`, review-only) in one view, with
+  `admin backlog pending|deployed` filters; audited as `ADMIN_BACKLOG`.
+- The `admin proposals` footer no longer points at a non-existent
+  `admin approve [code]` — feature blueprints remain review-only.
+- **Gentle website signup push:** a returning unverified newcomer (no
+  `email_verified`, no vehicle) now receives a rotating `NEWCOMER_NUDGES`
+  website nudge instead of a repeated full intro — `isFirstTimeMessage()` is
+  gated on `firstContact` in `whatsapp.js`.
+- `landing/data/changelog.json` bumped to 1.51.0 (was 1.47.0); `test_landing_static`
+  asserts `changelog.latest === package.json` to prevent drift.
 

@@ -1,6 +1,24 @@
 {
-  "latest": "1.47.0",
+  "latest": "1.51.0",
   "entries": [
+    {
+      "version": "1.51.0",
+      "date": "2026-11-02",
+      "title": "Your fixes and ideas, together",
+      "summary": "The superadmin now reviews pending fixes and upcoming feature ideas in one place, and brand-new WhatsApp chatters are gently pointed to the website to sign up."
+    },
+    {
+      "version": "1.50.0",
+      "date": "2026-11-02",
+      "title": "Two AI brains, one helper",
+      "summary": "Saka now routes everyday chats through a fast model and the trickier questions through a sharper one, so answers stay quick and clear."
+    },
+    {
+      "version": "1.49.0",
+      "date": "2026-11-02",
+      "title": "Sign up on the website",
+      "summary": "Vehicle setup now happens on sakafleet.com — Saka meets you on WhatsApp once your email is verified."
+    },
     {
       "version": "1.47.0",
       "date": "2026-11-02",

@@ -3854,8 +3854,15 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
         }
         if (session.quiz || hasVehicleRegistered) session.nudgeCount = 0;
         if (isNewcomer && isFirstTimeMessage(messageText)) {
-          finalReply = sakaIntroText({ countryInfo, profile: profileData, nextStep: 'Set up in about a minute at https://sakafleet.com — I\'ll meet you on WhatsApp.' });
-          session.sakaIntroduced = true;
+          if (firstContact) {
+            finalReply = sakaIntroText({ countryInfo, profile: profileData, nextStep: 'Set up in about a minute at https://sakafleet.com — I\'ll meet you on WhatsApp.' });
+            session.sakaIntroduced = true;
+          } else {
+            // v1.51.0 — a returning unverified newcomer gets a gentle website nudge,
+            // never a fresh full intro (the welcome is never repeated).
+            finalReply = pickNewcomerNudge(session.nudgeCount || 0);
+            session.nudgeCount = (session.nudgeCount || 0) + 1;
+          }
         } else if (isRepeatedReply({ quizActive: Boolean(session.quiz), reply: finalReply, lastPrompt: previousAssistantPrompt })) {
           // v1.26.1 — never swap in a canned nudge. Ask for a fresh, different,
           // warmer phrasing; the short line below is only the AI-outage fallback.

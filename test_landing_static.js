@@ -73,6 +73,7 @@ const changelog = JSON.parse(fs.readFileSync(path.join(LANDING, 'data/changelog.
 check(changelog.entries.length >= 5, 'The changelog feed has recent releases');
 check(changelog.entries.every((e) => e.version && e.date && e.title && e.summary), 'Every changelog entry is complete');
 check(changelog.entries[0].version === changelog.latest, 'The newest entry matches the latest version');
+check(changelog.latest === JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'package.json'), 'utf8')).version, 'The changelog "latest" matches package.json version');
 console.log('\n--- Test 5: no secrets in static files (rule 6 isolation) ---');
 const SECRET_PATTERNS = [
   /sk_live_[A-Za-z0-9]+/, /sk_test_[A-Za-z0-9]+/,

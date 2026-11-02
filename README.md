@@ -74,7 +74,7 @@ Governance: add **Required reviewers** to the `Saka-Fleet-Staging` environment
 leg stays automatic.
 
 ## Superadmin quick reference
-`adminstart` → session, then `admin report`, `admin alerts`, `admin remediations`,
+`adminstart` → session, then `admin report`, `admin alerts`, `admin backlog`, `admin remediations`,
 `admin ai-stats`, `admin trial-stats`, `admin models`, `admin model scout`,
 `admin rollout`, `admin model adopt <model_id> [split]`, `admin model rollback [tier_1]`,
 `admin accept fix <CODE> [override]`,

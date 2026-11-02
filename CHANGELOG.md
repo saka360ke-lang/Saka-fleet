@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.51.0] - 2026-11-02
+
+- **Unified superadmin backlog.** New `admin backlog` lists autonomous remediations (`FIX-*` / `SUG-*`) and Sentinel Horizon feature proposals (`FEAT-*`) in one deterministic, grouped view with `pending|deployed` filters; the `admin proposals` footer no longer points at a non-existent `admin approve [code]` (feature blueprints stay review-only).
+- **Gentle website signup push.** A returning unverified WhatsApp user (no `email_verified`, no vehicle) now gets a short, rotating website nudge instead of a repeated full intro — the welcome is never re-sent once the conversation has history.
+- **Website changelog caught up.** `landing/data/changelog.json` now tracks `1.51.0` (was stuck at `1.47.0`), and `test_landing_static` asserts `latest === package.json` to prevent drift.
+- **Tests:** `test_update_suggest` (+3 parse assertions), `test_landing_static` (+1 drift guard), `test_greetings`, `test_superadmin` green.
+
 ## [1.50.1] - 2026-11-02
 
 - **Homepage "What's new" changelog removed.** The changelog feed now lives on `/status` only; the homepage footer "Changelog" link points to `/status`, and `main.js` no longer fetches `/data/changelog.json`.

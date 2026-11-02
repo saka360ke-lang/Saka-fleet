@@ -56,6 +56,13 @@ check(parsedRemDeployed.intent === 'ADMIN_REMEDIATIONS' && parsedRemDeployed.fil
 const parsedRemAll = await parseSuperadminCommand('admin remediations');
 check(parsedRemAll.intent === 'ADMIN_REMEDIATIONS' && parsedRemAll.filter === 'all', 'parse: "admin remediations" defaults to the all filter');
 
+const parsedBacklog = await parseSuperadminCommand('admin backlog');
+check(parsedBacklog.intent === 'ADMIN_BACKLOG' && parsedBacklog.filter === 'all', 'parse: "admin backlog" resolves to the unified backlog');
+const parsedBacklogPending = await parseSuperadminCommand('admin backlog pending');
+check(parsedBacklogPending.intent === 'ADMIN_BACKLOG' && parsedBacklogPending.filter === 'pending', 'parse: "admin backlog pending" filters to pending');
+const parsedBacklogDeployed = await parseSuperadminCommand('admin backlog deployed');
+check(parsedBacklogDeployed.intent === 'ADMIN_BACKLOG' && parsedBacklogDeployed.filter === 'deployed', 'parse: "admin backlog deployed" filters to deployed');
+
 // ---- 2. Non-superadmin gating (stateless) ----
 const nonAdmin = await handleSuperadminFlow(null, '+254700000000', 'UPDATE-SUGGEST> sneaky change');
 check(nonAdmin.isSuperadmin === false, 'gate: non-superadmin is rejected before capture');
