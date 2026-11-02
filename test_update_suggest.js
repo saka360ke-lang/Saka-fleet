@@ -13,8 +13,10 @@ import {
   handleSuperadminFlow,
   captureUpdateSuggestion,
   handleAdminRemediationStatus,
-  handleAdminRemediationsList
+  handleAdminRemediationsList,
+  handleAdminRemediationDecision
 } from './src/services/superadmin.js';
+import { createMockSupabase } from './scripts/mockSupabase.js';
 import {
   verifyProposalGate,
   buildApprovalWindow,
@@ -105,6 +107,22 @@ check(nonAdmin.isSuperadmin === false, 'gate: non-superadmin is rejected before 
     { proposal_code: 'FIX-2026-11-01-01', title: 'Something pending', status: 'PENDING_APPROVAL', risk_level: 'medium' }
   ]), 'pending');
   check(/Pending/.test(onlyPending.reply) && !/Deployed/.test(onlyPending.reply), 'remediations: the pending filter hides the deployed section');
+}
+
+// ---- 2c. FEAT-* codes are review-only, not fixes (stateless) ----
+{
+  const featMock = createMockSupabase({
+    remediation_proposals: [],
+    weekly_feature_proposals: [{ proposal_code: 'FEAT-2026-W43-01', title: 'Smart Document Intelligence', status: 'pending', impact_score: 9 }]
+  });
+  const featAccept = await handleAdminRemediationDecision(featMock.client, 'FEAT-2026-W43-01', 'accept');
+  check(/review-only/.test(featAccept.reply) && /feature blueprint/.test(featAccept.reply) && !/Unknown proposal/.test(featAccept.reply), 'decision: accepting a FEAT-* code explains it is a review-only blueprint');
+
+  const featStatus = await handleAdminRemediationStatus(featMock.client, 'FEAT-2026-W43-01');
+  check(/review-only/.test(featStatus.reply) && !/No remediation proposal matches/.test(featStatus.reply), 'status: a FEAT-* code returns the review-only hint, not the not-found hint');
+
+  const unknownDecision = await handleAdminRemediationDecision(featMock.client, 'FIX-0000-00-00-00', 'accept');
+  check(/Unknown proposal/.test(unknownDecision.reply), 'decision: a genuinely unknown non-FEAT code still says Unknown proposal');
 }
 
 // ---- 3. Delivery-receipt webhook (stateless) ----

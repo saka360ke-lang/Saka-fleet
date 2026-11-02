@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.51.1  
+**Version:** 1.51.2  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.51.2** | FEAT-* approval dead-end → review-only reply | §99 |
 | **1.51.1** | Short links enabled (SHORT_LINK_DOMAIN_READY=on + PUBLIC_APP_URL) | §98 |
 | **1.51.0** | Unified admin backlog + gentle website signup push + changelog refresh | §97 |
 | **1.50.1** | Homepage changelog moved to /status; `PREMIUM_MODEL_ENABLED=on` | §96 |
@@ -3803,4 +3804,11 @@ quiz engine:
   route was verified live (HTTP 200 + `x-saka-shortlink`), so report PDF and checkout
   links now ship as `https://app.sakafleet.com/r/<code>` instead of the long Supabase
   storage URL.
+
+### 99. FEAT-* approval dead-end fixed (v1.51.2)
+
+- `admin accept/decline/modify fix <FEAT-*>` (and `Status of <FEAT-*>`) now return a
+  clear "review-only blueprint" reply via `featureProposalReviewOnlyReply()` instead of
+  `⚠️ Unknown proposal` — Sentinel Horizon feature proposals are a backlog, not
+  autonomous code changes.
 

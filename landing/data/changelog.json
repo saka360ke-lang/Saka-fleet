@@ -1,6 +1,12 @@
 {
-  "latest": "1.51.1",
+  "latest": "1.51.2",
   "entries": [
+    {
+      "version": "1.51.2",
+      "date": "2026-11-02",
+      "title": "Smoother admin review",
+      "summary": "Reviewing feature ideas in the admin console now gives a clear, friendly answer."
+    },
     {
       "version": "1.51.1",
       "date": "2026-11-02",

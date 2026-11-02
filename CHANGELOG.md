@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.51.2] - 2026-11-02
+
+- **FEAT-* approval dead-end fixed.** `admin accept/decline/modify fix FEAT-…` (and `Status of FEAT-…`) now return a clear "review-only blueprint" reply instead of `⚠️ Unknown proposal` — Sentinel Horizon feature proposals are a backlog, not autonomous code changes.
+- **Tests:** `test_update_suggest` (+3 FEAT review-only assertions).
+
 ## [1.51.1] - 2026-11-02
 
 - **Short links enabled.** `SHORT_LINK_DOMAIN_READY=on` + `PUBLIC_APP_URL=https://app.sakafleet.com` are now set in Cloud Run and documented in `.env` / `.env.example`. The `/r/__saka_probe__` route was verified live (HTTP 200 + `x-saka-shortlink`), so report PDF and checkout links now ship as `https://app.sakafleet.com/r/<code>` instead of the long Supabase storage URL.

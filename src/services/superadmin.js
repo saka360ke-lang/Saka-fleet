@@ -1480,6 +1480,21 @@ export async function handleAdminBacklog(supabase, filter = 'all') {
   };
 }
 
+/** v1.51.2 — FEAT-* codes are Sentinel Horizon feature proposals (review-only), not fixes. */
+async function featureProposalReviewOnlyReply(supabase, code) {
+  if (!/^FEAT-/i.test(String(code || ''))) return null;
+  const upper = String(code || '').toUpperCase();
+  const { data: feature, error } = await supabase
+    .from('weekly_feature_proposals')
+    .select('title,status,impact_score')
+    .eq('proposal_code', upper)
+    .maybeSingle();
+  if (error || !feature) return null;
+  return {
+    reply: `💡 \`${upper}\` — ${feature.title || 'Feature proposal'} is a Sentinel Horizon *feature blueprint* (impact ${feature.impact_score ?? '—'}/10), not a fix.\n\nFeature proposals are review-only — there's nothing to approve, decline or modify. Run \`admin backlog\` to see fixes and feature ideas together.`
+  };
+}
+
 /** v1.49.1 — a superadmin can ask for one proposal's status ("Status of FIX-…"). */
 export async function handleAdminRemediationStatus(supabase, proposalCode) {
   const code = String(proposalCode || '').toUpperCase();
@@ -1493,6 +1508,8 @@ export async function handleAdminRemediationStatus(supabase, proposalCode) {
     return { reply: `⚠️ Could not load ${code}: ${error.message}` };
   }
   if (!proposal) {
+    const featureReply = await featureProposalReviewOnlyReply(supabase, code);
+    if (featureReply) return featureReply;
     return { reply: `🛠️ No remediation proposal matches \`${code}\`. Type \`admin remediations\` to see the list.` };
   }
 
@@ -1601,7 +1618,11 @@ export async function handleAdminRemediationDecision(supabase, proposalCode, dec
     .maybeSingle();
 
   if (error) return { reply: `⚠️ Could not load \`${code}\`: ${error.message}` };
-  if (!proposal) return { reply: `⚠️ Unknown proposal \`${code}\`.` };
+  if (!proposal) {
+    const featureReply = await featureProposalReviewOnlyReply(supabase, code);
+    if (featureReply) return featureReply;
+    return { reply: `⚠️ Unknown proposal \`${code}\`.` };
+  }
 
   const nowIso = new Date().toISOString();
   const actionable = [REMEDIATION_STATUS.PENDING_APPROVAL, REMEDIATION_STATUS.NEEDS_MODIFICATION]
