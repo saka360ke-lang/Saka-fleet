@@ -221,25 +221,7 @@
       .catch(function () { startResendCountdown(); });
   });
 
-  /* ---------- changelog ---------- */
-  fetch('/data/changelog.json')
-    .then(function (res) { return res.ok ? res.json() : Promise.reject(); })
-    .then(function (data) {
-      var list = $('changelogList');
-      var html = '';
-      (data.entries || []).forEach(function (entry) {
-        html += '<div class="cl-entry">'
-          + '<span class="ver">v' + escapeHtml(entry.version) + '</span>'
-          + '<span class="date">' + escapeHtml(entry.date) + '</span>'
-          + '<h3>' + escapeHtml(entry.title) + '</h3>'
-          + '<p>' + escapeHtml(entry.summary) + '</p>'
-          + '</div>';
-      });
-      list.innerHTML = html || '<div class="cl-entry"><div class="ver">No changelog yet.</div></div>';
-    })
-    .catch(function () {
-      $('changelogList').innerHTML = '<div class="cl-entry"><p>Changelog is being prepared — check back soon.</p></div>';
-    });
+  /* Changelog renderer removed from the homepage (v1.50.1) — /status owns the feed. */
 
   /* ---------- live uptime probe ----------
      /api/health is the reliable alias: Google's edge can intercept /healthz

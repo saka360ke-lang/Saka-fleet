@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.50.0  
+**Version:** 1.50.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.50.1** | Homepage changelog moved to /status; `PREMIUM_MODEL_ENABLED=on` | §96 |
 | **1.50.0** | True two-tier AI routing (Tier-1 Haiku / Tier-2 Sonnet) + superadmin-only | §95 |
 | **1.49.6** | Superadmin remediation view: grouped pending/deployed + `admin remediations pending|deployed` filters | §94 |
 | **1.49.5** | Mandatory website signup (write-path guards on both registration flows, legacy WhatsApp auth endpoints removed) | §93 |
@@ -3768,4 +3769,12 @@ quiz engine:
   webhook short-circuits a non-admin superadmin message to the admin hub;
   `canAssignDriverToVehicle` refuses the superadmin phone as a driver. The
   superadmin phone (`+254720641985`) can no longer hold Owner/Driver roles.
+
+### 96. Homepage changelog removal + premium on (v1.50.1)
+
+- The "What's new" changelog section was removed from the homepage
+  (`landing/index.html` + `landing/assets/js/main.js`); the feed now renders on
+  `/status` only, and the footer "Changelog" link points to `/status`.
+- `PREMIUM_MODEL_ENABLED=on` (operator): trial/paid users' escalated + prose
+  turns run Tier-2 Sonnet; free stays Tier-1 Haiku.
 

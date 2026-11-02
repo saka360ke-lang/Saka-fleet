@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.50.1] - 2026-11-02
+
+- **Homepage "What's new" changelog removed.** The changelog feed now lives on `/status` only; the homepage footer "Changelog" link points to `/status`, and `main.js` no longer fetches `/data/changelog.json`.
+- **`PREMIUM_MODEL_ENABLED=on`** (operator decision): Tier-2 Sonnet now activates for trial/paid users' escalated + prose turns; free stays Tier-1 Haiku.
+- **Tests:** `test_landing_static` green.
+
 ## [1.50.0] - 2026-11-02
 
 - **True two-tier AI routing.** Tier-1 (router/everyday conversation) now runs on Claude Haiku (`AI_MODEL_TIER_1_ANTHROPIC=claude-haiku-4-5`, new `DEFAULT_ANTHROPIC_TIER1_MODEL`), decoupled from Tier-2 (Sonnet). Tier-2 (`PREMIUM_MODEL_ENABLED=on`, trial/paid only) stays on `claude-sonnet-5-5`. The Anthropic payload builder now only sends the `thinking` block for Sonnet/Opus models (Haiku rejects it with HTTP 400).
