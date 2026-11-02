@@ -82,7 +82,7 @@ jobs:
 
       - name: Implement approved plan with Cline (headless)
         run: |
-          cline --auto-approve true -t 1800 -P deepseek -m deepseek-chat "You are Cline executing an APPROVED remediation work order for Saka Fleet inside CI. Read .clinerules, SAKA_FLEET_ARCHITECTURE.md and remediation/work-orders/${PROPOSAL_CODE}.md completely first. Implement EXACTLY the approved changes in the work order - no scope expansion. Run 'node scripts/run_tests.js ${TESTS}' and fix only regressions you introduced. Never edit any forbidden path. Never commit, push, force-push or rewrite history. If the scope is impossible or unsafe, make NO changes and explain why." > remediation/cline-execute.log 2>&1 || true
+          cline --auto-approve true -t 1800 -P deepseek -m deepseek-chat "You are Cline executing an APPROVED remediation work order for Saka Fleet inside CI. Read .clinerules, SAKA_FLEET_ARCHITECTURE.md and remediation/work-orders/${PROPOSAL_CODE}.md completely first. If the work order contains an explicit change table, implement EXACTLY those changes - no scope expansion. If it contains a free-text update suggestion (SUG- code), interpret the suggestion into the smallest correct set of code changes that satisfies it, and keep the diff minimal. Run 'node scripts/run_tests.js ${TESTS}' and fix only regressions you introduced. Never edit any forbidden path. Never commit, push, force-push or rewrite history. If the scope is impossible or unsafe, make NO changes and explain why." > remediation/cline-execute.log 2>&1 || true
           echo "Cline execution finished (see remediation/cline-execute.log)"
 
       - name: Post-change test pass

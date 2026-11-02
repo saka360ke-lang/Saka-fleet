@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.47.0  
+**Version:** 1.48.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.48.0** | `UPDATE-SUGGEST>` superadmin command (Model A capture → remediation approval gate), WhatsApp `message_status` delivery receipts, build-notification diagnosis | §87 |
 | **1.42.0** | Extensionless URLs (301 + internal rewrite in .htaccess), clean links site-wide, always-sent {{1}} welcome-template parameter | §86 |
 | **1.44.0** | Timezone-first + overridable country detection (fixes wrong-flag on en-GB devices), "Not you? Change" picker | §86 |
 | **1.45.0** | National-flag badge on every page (timezone auto-detect + manual fallback), ≥3 compliance cards per locale (universal insurance + inspection cards), locale-neutral driver copy | §86 |
@@ -2871,6 +2872,77 @@ The category layer stays `EXPIRY_CATEGORIES` (maintenanceReminders.js); the new 
 - **Resolver:** longest-alias-first (`fuel filter` beats `oil`, `hydraulic service` beats `service`); generic words (`reminder`, `expires`) are deliberately NOT aliases so they can never hijack a specific type.
 - **Quiz:** `set_reminder` builds its menu with `reminderTypeChoices(assetKind)` (max 8 + Other) and accepts any catalog type by free text; catalog resolution runs BEFORE menu-alias matching (`choiceField` `fallbackParse` first). Writes normalise `reminder_type` and derive the category through `reminderCategoryOf()` before `categoryForReminderType()`.
 - **Examples:** "Log an oil change reminder" → Oil change; "Change fuel filter and air filter" → Fuel filter; "Front tyre change reminder" → Tyres; "hydraulic service in 36 hours" → Hydraulic service (hours); "PSL 445566 expires 30 Nov 2026" → Road Service Licence.
+
+## 87. UPDATE-SUGGEST> command, message_status receipts & deploy-alert diagnosis (v1.48.0)
+
+### 87.1 `UPDATE-SUGGEST>` — superadmin suggestions into the remediation pipeline (Model A)
+
+- **Command:** `UPDATE-SUGGEST> <free text>` (case-insensitive). Only the
+  verified `SUPERADMIN_PHONE` may file it — `handleSuperadminFlow` rejects any
+  other phone before parsing (multi-role coexistence: the message falls through
+  to normal chat for everyone else). Requires the active admin session like
+  every admin command.
+- **Parse:** `ADMIN_DIRECTIVE_RE` (the admin-claim gate) now includes
+  `update-suggest\b`; `parseSuperadminCommand` matches
+  `/^\s*UPDATE-SUGGEST>\s*([\s\S]*)$/i` → `ADMIN_UPDATE_SUGGEST` + the trimmed
+  suggestion text (empty text is recognized and answered with a usage hint).
+- **Capture:** `captureUpdateSuggestion()` inserts a `remediation_proposals`
+  row — `proposal_code` `SUG-YYYY-MM-DD-NN` (Nairobi date, sequenced like
+  `FIX-`), `category='update_suggest'`, `title` truncated to 80 chars,
+  `root_cause` = full text, `proposed_changes.overview` = full text with
+  `source='UPDATE-SUGGEST command'` + `author_phone`, `tests=['test_agent_training.js']`
+  (default stateless suite for the CI pre/post passes), `status=PENDING_APPROVAL`,
+  `risk_level='low'`. Audited as `ADMIN_UPDATE_SUGGEST`. The reply carries the
+  code and the approval next-step. **Nothing executes until the Superadmin
+  approves** (`admin accept fix <CODE>`, existing state machine) — Model A.
+- **Gate:** `verifyProposalGate()` has a free-text path for
+  `category='update_suggest'`: the structured sanitizer is skipped (Cline drafts
+  the concrete scope at execution time), but the suggestion text is checked for
+  `REMEDIATION_BLOCKED_PATTERN` keywords and forbidden-path mentions; a blocked
+  suggestion needs an explicit audited `override` to proceed. The post-edit
+  `guard` step keeps enforcing forbidden paths on the produced diff.
+- **Work order:** `scripts/remediation_ci.js fetch` renders a free-text scope
+  section for SUG proposals instead of the change table; the execute workflow's
+  Cline prompt interprets the suggestion into the smallest correct change set.
+- `admin remediations` lists `SUG-` codes alongside `FIX-` (no prefix filter).
+- **Suite:** `test_update_suggest.js` (15 assertions: parse, non-superadmin
+  gating, delivery-receipt webhook, capture, suggestion gate + destructive-keyword
+  block; DB rows cleaned in `finally`).
+
+### 87.2 WhatsApp delivery receipts (`message_status`)
+
+- `handleWhatsAppWebhook` now acknowledges `entry[0].changes[0].value.statuses[0]`
+  (previously it answered `ignored_non_message_event`): every `sent`/`delivered`/
+  `read` receipt is logged (`event: whatsapp_message_status`), and a `failed`
+  receipt is persisted to `error_logs` (`route='/webhook/whatsapp/status'`) so
+  Sentinel's 60-second scan + 15-minute synthesis can surface undelivered
+  proactive messages. This ends the "silent failure" era: Meta can accept a send
+  (return a `wamid`) and still fail delivery, or fail asynchronously.
+
+### 87.3 Build-notification diagnosis (why deploy alerts stopped)
+
+- **Evidence (2026-11-02):** normal chats worked; the manual dispatch returned a
+  `wamid` (token + `META_PHONE_NUMBER_ID` + `SUPERADMIN_PHONE` verified healthy);
+  `system_config.last_deployed_revision` was stuck at `saka-fleet-00187-xh2` —
+  no new Cloud Run revision had booted, so the in-app "🚀 Saka is LIVE" alert
+  (announce once per new revision) never fired.
+- **Contributing fragility:** deploy alerts are **free-form** (non-template)
+  messages — they silently fail outside Meta's 24-hour customer-service window,
+  and until v1.48.0 the app had no `message_status` handling to see it.
+- **Operator follow-ups:** redeploy Cloud Run (advances the revision marker and
+  fires the LIVE alert), verify the `Deploy & Push WhatsApp Notification`
+  Actions workflow runs on push, and (recommended) approve a Meta template for
+  deploy alerts so they deliver regardless of the 24-hour window.
+
+### 87.4 Files, tests, knobs
+
+- Files: `src/services/superadmin.js` (gate regex, parse, capture, route, help),
+  `src/workers/remediation.js` (`verifyProposalGate` suggestion path),
+  `scripts/remediation_ci.js` (SUG work-order rendering),
+  `.github/workflows/remediation_execute.yml` (interpret-or-execute prompt),
+  `src/routes/whatsapp.js` (status receipts), `test_update_suggest.js` (new).
+- No new env knobs and no schema changes (reuses `remediation_proposals`).
+
 
 ### 73.2 Earning catalog + `earning_type` (`src/services/earningCatalog.js`)
 - **8 canonical types:** Trip fares, Daily takings, Cargo & freight, Vehicle hire, Equipment hire, Contract & charter, Transport service, Other. Aliases: matatu/fares/rides → Trip fares; takings/collections → Daily takings; freight/load → Cargo & freight; generator hire → Equipment hire; school run → Transport service.

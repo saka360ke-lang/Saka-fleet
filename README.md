@@ -78,7 +78,8 @@ leg stays automatic.
 `admin ai-stats`, `admin trial-stats`, `admin models`, `admin model scout`,
 `admin rollout`, `admin model adopt <model_id> [split]`, `admin model rollback [tier_1]`,
 `admin accept fix <CODE> [override]`,
-`admin modify fix <CODE> <guidance>`, `admin decline fix <CODE>`.
+`admin modify fix <CODE> <guidance>`, `admin decline fix <CODE>`,
+`UPDATE-SUGGEST> <your update description>` (files a `SUG-` proposal, Model A).
 
 ## Reports quick reference (v1.18.0)
 Ask Saka: `fleet status report`, `financial report`, `compliance report`,

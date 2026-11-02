@@ -594,6 +594,29 @@ export async function handleWhatsAppWebhook(request, reply, fastify) {
     const value = change?.value;
     const messageObj = value?.messages?.[0];
 
+    // v1.48.0 — delivery receipts (message_status). The app now sees when a
+    // proactive message (deploy alerts, reminders, briefings) actually lands or
+    // fails — previously send failures were invisible (Meta can accept a send and
+    // still fail delivery, or fail asynchronously with no webhook handling here).
+    const statusObj = value?.statuses?.[0];
+    if (statusObj) {
+      if (fastify?.log) {
+        fastify.log.info({
+          event: 'whatsapp_message_status',
+          wamid: statusObj.id || null,
+          status: statusObj.status || null,
+          recipient_id: statusObj.recipient_id || null,
+          timestamp: statusObj.timestamp || null,
+          errors: statusObj.errors || []
+        }, 'WhatsApp message status received.');
+      }
+      if (statusObj.status === 'failed') {
+        const failure = new Error(`WhatsApp message failed to deliver: ${statusObj.id || 'unknown'} (${JSON.stringify(statusObj.errors || [])})`);
+        if (supabaseClient) await logSystemError(supabaseClient, failure, '/webhook/whatsapp/status').catch(() => {});
+      }
+      return reply.status(200).send({ status: 'success', status_ack: 'message_status_recorded' });
+    }
+
     if (!messageObj) {
       return reply.status(200).send({ status: 'ignored_non_message_event' });
     }

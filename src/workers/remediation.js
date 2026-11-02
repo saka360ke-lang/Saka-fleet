@@ -770,6 +770,34 @@ export async function verifyProposalGate(providedSupabase, proposalCode, approva
   };
   const verdict = sanitizeRemediationPlan(storedPlan);
   const overridden = String(proposal.approval_kind || '').toLowerCase() === 'superadmin_override';
+
+  // v1.48.0 — UPDATE-SUGGEST> proposals carry free text, not a structured plan.
+  // The structured sanitizer is skipped because Cline drafts the concrete scope
+  // at execution time; a light keyword guard still applies to the text itself,
+  // and the post-edit `guard` step keeps enforcing forbidden paths on the diff.
+  const isSuggestion = String(proposal.category || '').toLowerCase() === 'update_suggest';
+  if (isSuggestion) {
+    const suggestionText = String(stored.overview || proposal.root_cause || '').trim();
+    const suggestionViolations = [];
+    if (!suggestionText) suggestionViolations.push('Suggestion text is empty.');
+    if (suggestionText && REMEDIATION_BLOCKED_PATTERN.test(suggestionText)) {
+      suggestionViolations.push('Suggestion contains a forbidden operation keyword (VIN/OTP/auth/schema/destructive/push override).');
+    }
+    if (suggestionText) {
+      const mentionedForbidden = REMEDIATION_FORBIDDEN_PATHS.find(
+        (entry) => suggestionText.toLowerCase().includes(String(entry).toLowerCase())
+      );
+      if (mentionedForbidden) suggestionViolations.push(`Suggestion mentions a forbidden path (${mentionedForbidden}).`);
+    }
+    if (suggestionViolations.length && !overridden) {
+      return {
+        ok: false,
+        error: `Suggestion is blocked by the guardrails (${suggestionViolations.join(' ')}). Approve with an explicit override to proceed.`
+      };
+    }
+    return { ok: true, proposal, sanitizer: 'suggestion' };
+  }
+
   if (!verdict.ok && !overridden) {
     return {
       ok: false,

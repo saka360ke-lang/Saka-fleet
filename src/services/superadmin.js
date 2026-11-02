@@ -141,6 +141,7 @@ const ADMIN_INTENTS = new Set([
   'ADMIN_RULES_RESET', 'ADMIN_RULES_TOGGLE', 'ADMIN_RULES_LIST',
   'ADMIN_HORIZON', 'ADMIN_PROPOSALS',
   'ADMIN_REMEDIATIONS', 'ADMIN_REMEDIATION_ACCEPT', 'ADMIN_REMEDIATION_DECLINE', 'ADMIN_REMEDIATION_MODIFY',
+  'ADMIN_UPDATE_SUGGEST',
   'ADMIN_AI_STATS',
   'ADMIN_ENV_AUDIT',
   'ADMIN_OCR_STATS',
@@ -158,7 +159,7 @@ const ADMIN_INTENTS = new Set([
  * Everything else from the superadmin phone falls through to the normal
  * Saka AI conversation (multi-role coexistence).
  */
-const ADMIN_DIRECTIVE_RE = /^\s*(admin\b|adminrules?\b|check\s+health\b|health\s+check\b|system\s+(status|health|diagnostics?)\b|sentinel\b|superadmin\s+(to\s+)?sentinel\b|profiles?\s+report\b|user\s+stats\b|generate\b[^\n]*\bcoupon\b|coupon\b|horizon\b|proposals?\b|health\s*$|status\s*$)/i;
+const ADMIN_DIRECTIVE_RE = /^\s*(admin\b|adminrules?\b|check\s+health\b|health\s+check\b|system\s+(status|health|diagnostics?)\b|sentinel\b|superadmin\s+(to\s+)?sentinel\b|profiles?\s+report\b|user\s+stats\b|generate\b[^\n]*\bcoupon\b|coupon\b|horizon\b|proposals?\b|health\s*$|status\s*$|update-suggest\b)/i;
 
 export async function parseSuperadminCommand(messageText) {
   const text = messageText ? messageText.trim() : '';
@@ -321,6 +322,14 @@ export async function parseSuperadminCommand(messageText) {
       proposal_code: modifyFixMatch[1].toUpperCase(),
       feedback: modifyFixMatch[2].trim()
     };
+  }
+
+  // v1.48.0 — superadmin update suggestions (UPDATE-SUGGEST>) flow into the
+  // remediation pipeline as PENDING_APPROVAL proposals (Model A). Superadmin-gated:
+  // handleSuperadminFlow returns { isSuperadmin: false } for any other phone.
+  const updateSuggestMatch = text.match(/^\s*UPDATE-SUGGEST>\s*([\s\S]*)$/i);
+  if (updateSuggestMatch) {
+    return { intent: 'ADMIN_UPDATE_SUGGEST', suggestion: updateSuggestMatch[1].trim() };
   }
 
   const prompt = `Classify user's admin request into JSON:
@@ -1268,6 +1277,67 @@ export async function handleAdminRulesList(supabase) {
   };
 }
 
+/**
+ * v1.48.0 — UPDATE-SUGGEST> capture (Model A).
+ * A superadmin-authored free-text update suggestion becomes a PENDING_APPROVAL
+ * remediation proposal with a SUG- code. Nothing executes until the superadmin
+ * approves it via `admin accept fix <CODE>`; Cline interprets the free text at
+ * execution time (the CI gate applies a light keyword guard to the text).
+ */
+export async function captureUpdateSuggestion(supabase, adminPhone, suggestionText) {
+  const text = String(suggestionText || '').trim();
+  if (!text) {
+    return { ok: false, reply: '⚠️ Usage: `UPDATE-SUGGEST> <your update description>` — describe the change you want made.' };
+  }
+
+  const today = formatNairobiDate();
+  const prefix = `SUG-${today}-`;
+  const { data: existing } = await supabase
+    .from('remediation_proposals')
+    .select('proposal_code')
+    .like('proposal_code', `${prefix}%`);
+  const numbers = (existing || [])
+    .map((row) => Number(String(row.proposal_code || '').replace(prefix, '')))
+    .filter((value) => Number.isFinite(value));
+  const next = (numbers.length ? Math.max(...numbers) : 0) + 1;
+  const proposalCode = `${prefix}${String(next).padStart(2, '0')}`;
+
+  const { data, error } = await supabase
+    .from('remediation_proposals')
+    .insert([{
+      proposal_code: proposalCode,
+      title: text.length > 80 ? `${text.slice(0, 77)}…` : text,
+      category: 'update_suggest',
+      root_cause: text,
+      proposed_changes: {
+        overview: text,
+        source: 'UPDATE-SUGGEST command',
+        author_phone: adminPhone,
+        changes: [],
+        tests: ['test_agent_training.js'],
+        rollback: 'Revert the commit via git revert; no data migrations are involved.'
+      },
+      risk_level: 'low',
+      status: REMEDIATION_STATUS.PENDING_APPROVAL,
+      feedback: 'Free-text superadmin suggestion — Cline drafts the concrete scope at execution time.'
+    }])
+    .select('proposal_code')
+    .maybeSingle();
+
+  if (error) {
+    return { ok: false, reply: `⚠️ Could not capture the suggestion: ${error.message}` };
+  }
+
+  const code = data?.proposal_code || proposalCode;
+  return {
+    ok: true,
+    code,
+    reply: `✅ *Update suggestion captured* as \`${code}\`.\n\n` +
+      `Review it with \`admin remediations\`, then approve with \`admin accept fix ${code}\`.\n\n` +
+      `_Nothing runs until you approve._`
+  };
+}
+
 export async function handleAdminRemediationsList(supabase) {
   const { data: proposals, error } = await supabase
     .from('remediation_proposals')
@@ -1659,7 +1729,7 @@ export function formatAdminHelpReply() {
   return '🛠️ *Saka admin commands*\n\n' +
     '📊 *Snapshots* — admin report · admin alerts · admin audit <query>\n' +
     '👥 *Fleet* — profiles report · admin trial-stats · admin ai-stats [24h] · admin ocr-stats [24h] · admin latency [24h] · admin env\n' +
-    '🛠️ *Fixes* — admin remediations · admin accept|decline|modify fix <CODE>\n' +
+    '🛠️ *Fixes* — admin remediations · admin accept|decline|modify fix <CODE> · UPDATE-SUGGEST> <your update>\n' +
     '🌱 *Growth* — generate coupon 20% · admin horizon · admin proposals\n' +
     '🩺 *Guardrails* — check health · admin rules list|toggle <key>|reset\n' +
     '📚 *Knowledge* — admin kb · admin kb review · admin kb stale\n' +
@@ -1808,6 +1878,18 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
     return {
       isSuperadmin: true,
       reply: listRes.reply
+    };
+  }
+
+  if (parsedCommand.intent === 'ADMIN_UPDATE_SUGGEST') {
+    const captureRes = await captureUpdateSuggestion(supabase, formattedPhone, parsedCommand.suggestion);
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_UPDATE_SUGGEST', {
+      proposal_code: captureRes.code || null,
+      captured: Boolean(captureRes.ok)
+    });
+    return {
+      isSuperadmin: true,
+      reply: captureRes.reply
     };
   }
 
@@ -2149,6 +2231,7 @@ ${JSON.stringify(telemetry).slice(0, 6000)}`;
     `• *Coupon Generation*: "generate 20% coupon for +254712345678"\n` +
     `• *Profiles Report*: "profiles report", "user stats"\n` +
     `• *Autonomous Remediation*: "admin remediations", "admin accept fix FIX-YYYY-MM-DD-NN"\n` +
+    `• *Update Suggestion*: "UPDATE-SUGGEST> your update description"\n` +
     `• *Close Session*: "adminstop"`;
 
   return {

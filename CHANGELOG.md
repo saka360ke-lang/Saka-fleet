@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.48.0] - 2026-11-02
+
+- **`UPDATE-SUGGEST>` — superadmin update suggestions (Model A).** Only the verified `SUPERADMIN_PHONE` can send `UPDATE-SUGGEST> <free text>` from chat; it captures a `remediation_proposals` row (`SUG-YYYY-MM-DD-NN`, category `update_suggest`, status `PENDING_APPROVAL`) with an `ADMIN_UPDATE_SUGGEST` audit row. Nothing runs until the superadmin approves via the existing `admin accept fix <CODE>`; the CI execution gate adds a light keyword/path guard for free-text suggestions, Cline interprets the suggestion at execution time, and the post-edit forbidden-path guard still applies. Listed in `admin remediations` and the admin help.
+- **WhatsApp delivery receipts (`message_status`).** The webhook now acknowledges `value.statuses` events: every `sent/delivered/read` receipt is logged, and a `failed` receipt is persisted to `error_logs` (route `/webhook/whatsapp/status`) so Sentinel's scan can surface undelivered proactive messages — previously send failures were invisible.
+- **Build-notification diagnosis (v1.48.0).** Deploy alerts to the Superadmin were not arriving while normal chats worked: the token and phone number were verified healthy (Meta returns message IDs), `system_config.last_deployed_revision` was stuck at `saka-fleet-00187-xh2` (no new Cloud Run revision had booted, so the "Saka is LIVE" alert never fired), and free-form (non-template) deploy messages fail silently outside Meta's 24-hour customer-service window with no delivery tracking. Operator follow-ups: redeploy Cloud Run, verify the `Deploy & Push WhatsApp Notification` Actions workflow, and (recommended) approve a Meta template for deploy alerts.
+- **Tests:** `test_update_suggest` (15 assertions — parsing, superadmin gating, delivery-receipt webhook, capture, suggestion gate), `test_remediation_pipeline`, `test_superadmin`, `test_meta_signature` all green.
+
 ## [1.47.0] - 2026-11-02
 
 - **Language fix — never greet in Swahili uninvited.** Web signup now captures the visitor's browser language and stores it as `preferred_language`; when no preference is set, Saka defaults to English — never the country's default language. The core prompt now says "default to ENGLISH — never the country's default language".
