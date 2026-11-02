@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.49.2] - 2026-11-02
+
+- **Website-only signup + OTP.** Removed the in-chat web-signup OTP fallback ("Already signed up? Reply with your 6-digit code here" and the bare 6-digit-code verifier). Signup and email verification now happen on sakafleet.com only — Saka never invites or accepts a code in WhatsApp. Synced across the core prompt, `flowKnowledge`, the composer and `webOnboarding.js` (rule 13).
+- **Clean-slate coverage.** `web_onboard_otps` is now in the global `TRUNCATE` and the targeted phone cascade, so a fresh-onboarding reset clears signup OTP sessions too.
+- **Tests:** `test_web_onboarding` (fallback removed), `test_agent_training` (+1), `test_db_reset_scope` (+1), `npm run health` green.
+
 ## [1.49.1] - 2026-11-02
 
 - **Regression fix — superadmin bounced to the website.** The v1.49.0 registration gate now exempts the superadmin phone, so a non-`admin` message (e.g. "Status of FIX-…") falls through to normal conversation instead of the website-signup redirect.

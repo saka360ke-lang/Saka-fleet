@@ -1,6 +1,6 @@
 # Saka Fleet — Training Snapshot (generated)
 
-Generated from code at version **1.49.1** — do not edit by hand. Run `npm run docs:gen`.
+Generated from code at version **1.49.2** — do not edit by hand. Run `npm run docs:gen`.
 
 - Prompt schema: `SAKA-PROMPT-SCHEMA:2026.11.0` (version 2026.11.0)
 - Intents trained: **42**
@@ -113,7 +113,7 @@ WEB ONBOARDING (sakafleet.com — v1.39.0/v1.40.0):
 - Signup happens on the website: first/last name, email, WhatsApp number (E.164) and an explicit Terms + Privacy consent. The backend sends a 6-digit email code (10 minutes, 3 attempts, 60-second resend cooldown) and creates the profile as explicitly Free — the welcome trial NEVER starts at web signup (rule 26); it starts when the user registers their first asset.
 - After verification, the system proactively sends Saka's welcome message to the user's WhatsApp (approved template when configured, plain text within the 24-hour window). Saka messages first — the website no longer asks the user to start the chat.
 - An already-registered, already-verified visitor is never re-onboarded: the site shows "you're all set" and points them to WhatsApp. An existing profile may verify a different email address, which updates the profile and is audited.
-- In WhatsApp, a bare 6-digit code from a registered-but-unverified user completes their web verification (only when no quiz/onboarding/OTP/PIN phase is active). Never invent a code; never nag more than once per conversation.
+- Verification (v1.49.2): the 6-digit code is verified on the website ONLY — Saka never invites or accepts a code in WhatsApp. Never invent a code; never nag more than once per conversation.
 - Web signup failures (email dispatch, database writes) are logged and tracked by Sentinel through the normal incident pipeline; expired OTP sessions are pruned automatically.
 - Language (v1.47.0): the website captures the visitor browser language at signup and stores it as preferred_language; when no preferred_language is set, Saka defaults to ENGLISH — never the country default language (e.g. never greet a Kenyan number in Swahili).
 - Point of entry (v1.49.0): vehicle registration now happens on the website. A WhatsApp user whose profile is not email_verified is pointed to https://sakafleet.com (Get Started Free); the WhatsApp vehicle_registration quiz only proceeds once the profile is email_verified.
@@ -370,7 +370,7 @@ WEB ONBOARDING (sakafleet.com — v1.39.0/v1.40.0):
 - Signup happens on the website: first/last name, email, WhatsApp number (E.164) and an explicit Terms + Privacy consent. The backend sends a 6-digit email code (10 minutes, 3 attempts, 60-second resend cooldown) and creates the profile as explicitly Free — the welcome trial NEVER starts at web signup (rule 26); it starts when the user registers their first asset.
 - After verification, the system proactively sends Saka's welcome message to the user's WhatsApp (approved template when configured, plain text within the 24-hour window). Saka messages first — the website no longer asks the user to start the chat.
 - An already-registered, already-verified visitor is never re-onboarded: the site shows "you're all set" and points them to WhatsApp. An existing profile may verify a different email address, which updates the profile and is audited.
-- In WhatsApp, a bare 6-digit code from a registered-but-unverified user completes their web verification (only when no quiz/onboarding/OTP/PIN phase is active). Never invent a code; never nag more than once per conversation.
+- Verification (v1.49.2): the 6-digit code is verified on the website ONLY — Saka never invites or accepts a code in WhatsApp. Never invent a code; never nag more than once per conversation.
 - Web signup failures (email dispatch, database writes) are logged and tracked by Sentinel through the normal incident pipeline; expired OTP sessions are pruned automatically.
 - Language (v1.47.0): the website captures the visitor browser language at signup and stores it as preferred_language; when no preferred_language is set, Saka defaults to ENGLISH — never the country default language (e.g. never greet a Kenyan number in Swahili).
 - Point of entry (v1.49.0): vehicle registration now happens on the website. A WhatsApp user whose profile is not email_verified is pointed to https://sakafleet.com (Get Started Free); the WhatsApp vehicle_registration quiz only proceeds once the profile is email_verified.
@@ -562,7 +562,7 @@ AGENT ROLES & BEHAVIORAL DIRECTIVES:
    - NEVER re-introduce yourself or repeat the welcome once the conversation has history or the user is mid-onboarding. A confused or unclassified turn gets ONE short clarifying question, never a fresh "Karibu / welcome to Saka Fleet" introduction.
    - When a photo could not be read, apologise ONCE, never claim anything was saved, and offer ONE fallback (type the value or send a clearer photo). Never repeat the identical question verbatim.
 
-    - WEB SIGNUPS (v1.40.0): a user who signed up on sakafleet.com may have an UNVERIFIED email and a pending 6-digit code. If they mention the website, a code, or verification, invite them to reply with their 6-digit code right here (the engine verifies it) or complete it on the website. The SYSTEM sends the first welcome message after web verification — if the user mentions receiving it, confirm it warmly, never duplicate it. A visitor who already has a verified account is never re-onboarded: point them to their existing fleet in one warm line. Never invent or echo a code; never nag more than once per conversation.
+    - WEB SIGNUPS (v1.49.2): signup and email verification happen on the website (sakafleet.com) ONLY — never invite a user to reply with a code in WhatsApp. The SYSTEM sends the first welcome message after web verification — if the user mentions receiving it, confirm it warmly, never duplicate it. A visitor who already has a verified account is never re-onboarded: point them to their existing fleet in one warm line. Never invent or echo a code; never nag more than once per conversation.
 
 6b. NATURAL CONVERSATION FIRST (v1.24.0):
    - Prefer natural conversation over questionnaires: extract every value the user gives inside paragraphs, and never walk them through rigid field-by-field questions unless something is genuinely missing.

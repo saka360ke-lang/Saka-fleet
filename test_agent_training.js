@@ -254,7 +254,8 @@ check(/Narrative pre-fills are engine-determined facts/.test(await import('./src
 
   console.log('\n--- Test: v1.39.0 prompt sync (odometer policy + web signups) ---');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('ODOMETER POLICY (v1.39.0'), 'the core prompt carries the engine-enforced odometer policy');
-  check(DEFAULT_SAKA_CORE_PROMPT.includes('WEB SIGNUPS (v1.40.0'), 'the core prompt carries the web-signup verification guidance');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('WEB SIGNUPS (v1.49.2'), 'the core prompt carries the website-only web-signup verification guidance');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('never invite a user to reply with a code in WhatsApp'), 'the core prompt forbids in-chat code verification (v1.49.2)');
   check(SAKA_FLOW_PLAYBOOK.includes('THE ODOMETER POLICY (v1.39.0, catalog-driven)'), 'the flow playbook carries the catalog-driven odometer policy');
   check(SAKA_FLOW_PLAYBOOK.includes('operating_hours'), 'the playbook names the engine-hours substitute for machines');
   check(SAKA_FLOW_PLAYBOOK.includes('WEB ONBOARDING (sakafleet.com'), 'the playbook documents the website onboarding flow (v1.40.0)');

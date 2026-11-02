@@ -75,6 +75,10 @@ function run() {
       `targeted cascade deletes ${table} by owner_id before the profile is removed`
     );
   }
+  assert(
+    scriptSource.includes("DELETE FROM public.web_onboard_otps WHERE phone IN"),
+    'targeted cascade deletes web_onboard_otps by phone'
+  );
 
   console.log(`\n🎉 ${passed} reset-scope assertions passed.`);
 }

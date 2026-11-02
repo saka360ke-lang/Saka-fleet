@@ -258,37 +258,6 @@ export async function completeWebOnboarding(supabase, { email, phone, firstName,
   }
 }
 
-/**
- * WhatsApp fallback: a registered-but-unverified user replies with their
- * 6-digit code. Verifies against their most recent unexpired web session.
- * Returns { verified: true, email } on success, else { verified: false }.
- */
-export async function tryVerifyPendingEmailCode(supabase, phone, rawText) {
-  if (!supabase) return { verified: false };
-  const code = String(rawText || '').trim();
-  if (!/^\d{6}$/.test(code)) return { verified: false };
-  const now = Date.now();
-  const { data: rows } = await supabase
-    .from(WEB_ONBOARD_OTP_TABLE)
-    .select('*')
-    .eq('phone', phone)
-    .eq('verified', false)
-    .order('created_at', { ascending: false })
-    .limit(5);
-  const row = (rows || []).find((r) => new Date(r.expires_at).getTime() >= now);
-  if (!row || String(row.otp_code) !== code) return { verified: false };
-
-  const attempts = Number(row.attempts || 0) + 1;
-  await supabase.from(WEB_ONBOARD_OTP_TABLE).update({ verified: true, attempts }).eq('id', row.id);
-  const done = await completeWebOnboarding(supabase, {
-    email: row.email,
-    phone,
-    firstName: row.first_name,
-    lastName: row.last_name,
-    verified: true
-  });
-  return { verified: done.ok, email: row.email };
-}
 
 /**
  * v1.40.0 — existing-account inspection for /api/onboard.

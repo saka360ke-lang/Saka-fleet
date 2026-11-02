@@ -17,7 +17,6 @@ import {
   verifyWebOnboardCode,
   resendWebOnboardCode,
   completeWebOnboarding,
-  tryVerifyPendingEmailCode,
   inspectExistingSignup,
   pruneExpiredWebOnboardOtps,
   WEB_ONBOARD_OTP_TABLE,
@@ -169,16 +168,6 @@ const freshResult = await completeWebOnboarding(freshDb, { email: 'fresh@example
 check(freshResult.ok === true && freshResult.created === true, 'A new profile is created');
 check(freshDb.__db.profiles[0].email_verified === false, 'An unverified signup stays unverified until the code matches');
 check(freshDb.__db.profiles[0].subscription_tier === 'free', 'A new web account is explicitly Free — never a legacy tier default');
-
-console.log('\n--- Test 5: WhatsApp fallback code check ---');
-const waDb = createMockSupabase({ profiles: [], web_onboard_otps: [], admin_audit_logs: [] });
-const waSession = await createWebOnboardSession(waDb, { email: 'wa@example.com', phone: '+254700000011', firstName: 'Wa', lastName: 'User' });
-await completeWebOnboarding(waDb, { email: 'wa@example.com', phone: '+254700000011', firstName: 'Wa', lastName: 'User', verified: false });
-check((await tryVerifyPendingEmailCode(waDb, '+254700000011', 'not a code')).verified === false, 'Non-code messages never verify');
-check((await tryVerifyPendingEmailCode(waDb, '+254700000011', '000000')).verified === false, 'A wrong code never verifies');
-const waDone = await tryVerifyPendingEmailCode(waDb, '+254700000011', waSession.code);
-check(waDone.verified === true && waDone.email === 'wa@example.com', 'The right code verifies in WhatsApp');
-check(waDb.__db.profiles[0].email_verified === true, 'The WhatsApp fallback flips the profile');
 
 console.log('\n--- Test 6: existing-account inspection (v1.40.0) ---');
 const inspectDb = createMockSupabase({

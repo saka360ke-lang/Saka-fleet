@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.49.1  
+**Version:** 1.49.2  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.49.2** | Website-only signup + OTP (in-chat 6-digit fallback removed), `web_onboard_otps` added to the clean-slate reset scope | §90 |
 | **1.49.1** | Fix: superadmin exempted from the website registration gate + natural-language "Status of FIX-<code>" remediation status lookup | §89 |
 | **1.49.0** | Website-first onboarding (point of entry = sakafleet.com), WhatsApp registration gated on email verification, consent-gated Google Tag Manager (GTM-TGR68X2X), targeted reset clears owner_id-keyed rows | §88 |
 | **1.48.0** | `UPDATE-SUGGEST>` superadmin command (Model A capture → remediation approval gate), WhatsApp `message_status` delivery receipts, build-notification diagnosis | §87 |
@@ -3677,4 +3678,20 @@ quiz engine:
   proposal's status/title/risk from `remediation_proposals` and is audited as
   `ADMIN_REMEDIATION_STATUS`. Deterministic — zero LLM tokens.
 - **Tests:** `test_update_suggest.js` (+5 assertions), `test_superadmin.js`.
+
+### 90. Website-only signup + OTP, reset coverage (v1.49.2)
+
+- **In-chat web-signup OTP removed.** The bare 6-digit-code verifier
+  (`tryVerifyPendingEmailCode` + the "WEB SIGNUP CODE CHECK" block in
+  `whatsapp.js`) is deleted, and the registration-gate redirect no longer says
+  "Reply with your 6-digit code here". Signup + email verification now happen on
+  sakafleet.com only. The core prompt WEB SIGNUPS directive, `flowKnowledge`
+  playbook, and `conversationEngine.WEB_SIGNUP_NOTE` all say "website only —
+  never invite or accept a code in WhatsApp".
+- **Reset coverage.** `web_onboard_otps` joined `RESET_TABLES`, the global
+  `TRUNCATE`, and the targeted phone cascade so a clean-slate reset clears
+  signup OTP sessions too.
+- **Tests:** `test_web_onboarding.js` (WhatsApp-fallback test removed),
+  `test_agent_training.js` (+1 "never invite a code in WhatsApp"),
+  `test_db_reset_scope.js` (+1 web_onboard_otps cascade).
 

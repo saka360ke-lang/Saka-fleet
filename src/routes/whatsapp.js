@@ -111,7 +111,6 @@ import { renderActionDiscovery, composeMessage } from '../services/conversationE
 import { enqueueFollowUp, FOLLOWUP_KINDS, followUpAckText } from '../services/followups.js';
 import { enqueueUserMessage } from '../services/messageQueue.js';
 import { loadSessionSnapshot, persistSessionSnapshot } from '../services/sessionStore.js';
-import { tryVerifyPendingEmailCode } from '../services/webOnboarding.js';
 import { createResilientClient } from '../services/supabaseClient.js';
 import { ocrWhatsAppMedia, extractDocumentHints, isOcrEnabled, isOcrAckFirstEnabled, buildMediaAckText } from '../services/ocrService.js';
 import { parseDocumentFields, uploadHintFor, DOCUMENT_SUPPORT_MENU } from '../services/documentLens.js';
@@ -979,38 +978,8 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           } catch {}
         }
 
-        // v1.39.0 — WEB SIGNUP CODE CHECK: a user who signed up on
-        // sakafleet.com may have an unverified email and a pending 6-digit
-        // code. Only when NO quiz / onboarding / OTP / PIN / edit phase is
-        // active, a bare 6-digit code completes their web verification here
-        // (a quiz or onboarding OTP always takes priority — never hijacked).
-        if (
-          supabaseClient
-          && profileData
-          && profileData.email_verified !== true
-          && /^\d{6}$/.test(messageText.trim())
-          && !session.quiz
-          && !onboardingStore.get(senderPhone)
-          && !session.otp
-          && !session.pendingEntryAction
-          && !session.pendingEmailUpdate
-          && (session.state === undefined || session.state === 'ACTIVE')
-        ) {
-          const webVerify = await tryVerifyPendingEmailCode(supabaseClient, formattedPhone, messageText.trim());
-          if (webVerify.verified) {
-            const webVerifyReply = `✅ *Email verified!* 🎉\n\nYour account is secured and reports will reach ${webVerify.email}.\n\nNext up: reply with your vehicle details — or type *Register* — and your 30-day full-featured trial begins. 🚗`;
-            await sendWhatsAppReply(senderPhone, webVerifyReply);
-            if (supabaseClient) {
-              try {
-                await supabaseClient.from('chat_transcripts').insert([{ phone_number: senderPhone, sender: 'assistant', message_text: webVerifyReply }]);
-                await supabaseClient.from('chat_history').insert([{ user_phone: senderPhone, role: 'assistant', message: webVerifyReply }]);
-              } catch {}
-            }
-            await userLogPromise;
-            await persistSnap();
-            return { status: 'web_otp_verified' };
-          }
-        }
+        // v1.49.2 — in-WhatsApp web-signup OTP verification removed: signup + OTP
+        // verification happen on the website (sakafleet.com) only.
 
         let currentActiveVehicle = null;
         if (hasVehicleRegistered) {
@@ -2094,7 +2063,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           && !isSuperadminPhone(senderPhone)
           && (isRegisterCommand || intent === 'REGISTER_VEHICLE' || intent === 'ONBOARDING_INPUT' || hasVehicleAttributes);
         if (registrationEmailGated) {
-          customReply = '🚀 *Set up in about a minute on the website*\n\nTap *Get Started Free* at https://sakafleet.com — I\'ll meet you on WhatsApp once your email is verified.\n\nAlready signed up? Reply with your 6-digit code here.';
+          customReply = '🚀 *Set up in about a minute on the website*\n\nTap *Get Started Free* at https://sakafleet.com — I\'ll meet you on WhatsApp once your email is verified.';
           isSpecialFlowHandled = true;
         }
 
