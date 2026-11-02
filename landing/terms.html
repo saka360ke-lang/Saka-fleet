@@ -11,9 +11,6 @@
   <meta property="og:title" content="Terms &amp; Conditions — Saka Fleet">
   <meta property="og:url" content="https://sakafleet.com/terms.html">
   <link rel="icon" type="image/svg+xml" href="/assets/img/favicon.svg">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@600;800&family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/assets/css/styles.css">
   <script type="application/ld+json">
   {
@@ -60,14 +57,14 @@
         <a href="#contact">13. Contact</a>
       </div>
             <h2 id="agreement">1. Agreement and parties</h2>
-      <p>These Terms &amp; Conditions ("Terms") form a binding agreement between <strong>you</strong> ("you", "your", "user") and <strong>Saka 360</strong>, a business registered in the Republic of Kenya, operating the service <strong>Saka Fleet</strong> ("Saka Fleet", "we", "us", "our", the "Service").</p>
+      <p>These Terms &amp; Conditions ("Terms") form a binding agreement between <strong>you</strong> ("you", "your", "user") and <strong>Saka360</strong>, operating the service <strong>Saka Fleet</strong> ("Saka Fleet", "we", "us", "our", the "Service").</p>
       <p>By signing up on our website, messaging the Saka assistant on WhatsApp, or otherwise using the Service, you confirm that you have read, understood and agree to these Terms and to our <a href="/privacy.html">Privacy Policy</a>, which is incorporated by reference. If you do not agree, do not use the Service.</p>
 
       <h2 id="service">2. The service</h2>
       <p>Saka Fleet is a WhatsApp-first fleet management assistant. It provides, among other things:</p>
       <ul>
         <li>Natural-language logging of expenses (19 expense types), fuel, odometer or engine-hour readings and earnings;</li>
-        <li>Branded "Apex" PDF reports delivered over WhatsApp and email;</li>
+        <li>Branded PDF reports delivered over WhatsApp and email;</li>
         <li>Service, insurance, inspection and compliance reminders;</li>
         <li>Driver assignment, handover/odometer tracking and compliance verification;</li>
         <li>Vehicle passbooks with a permanent VIN/chassis record and secure passbook transfers.</li>
@@ -87,7 +84,7 @@
       <ul>
         <li><strong>Plans:</strong> Free (1 asset, 1 report/month), Solo Pro (1 asset, all features), Team Fleet (3 assets), Growth Fleet (5 assets) and Fleet Command (5 assets plus paid per-asset add-ons). Plan limits and prices are published on our website and may change with notice.</li>
         <li><strong>Welcome trial:</strong> each new account receives ONE 30-day, no-card trial with full features. The trial starts when you register your first asset. Trials cannot be re-claimed or transferred; extensions are only available through official promotional coupons.</li>
-        <li><strong>Billing:</strong> paid plans are billed through Paystack in monthly or annual cycles and renew automatically until you cancel. Cancelling ("CANCELING") keeps your access for the remainder of the paid period — access is never cut off mid-cycle.</li>
+        <li><strong>Billing:</strong> paid plans are billed through our payment processor in monthly or annual cycles and renew automatically until you cancel. Cancelling ("CANCELING") keeps your access for the remainder of the paid period — access is never cut off mid-cycle.</li>
         <li><strong>Downgrades:</strong> if your plan expires or is downgraded, access returns to Free. Excess vehicles are paused, never deleted; your historical records remain intact.</li>
         <li><strong>Prices and calculations:</strong> all prices, discounts, trial dates and payment outcomes are determined by our billing engine. The assistant cannot change prices or promise refunds, and nothing an assistant message says overrides these Terms.</li>
       </ul>
@@ -113,7 +110,7 @@
       </ul>
             <h2 id="payments">7. Payments and refunds</h2>
       <ul>
-        <li>Payments are processed by Paystack and are subject to Paystack's terms. We never store your full card details.</li>
+        <li>Payments are processed by our payment processor and are subject to that processor's terms. We never store your full card details.</li>
         <li>Subscription fees are charged in advance for each billing cycle. Annual plans are charged once per year.</li>
         <li>Fees are generally non-refundable except where the law requires otherwise or where we have charged you in error. If you believe an error occurred, contact us within 30 days.</li>
         <li>Failed payments may temporarily restrict premium features; we will notify you and give you reasonable time to restore payment before access is downgraded.</li>
@@ -139,17 +136,48 @@
 
       <h2 id="contact">13. Contact</h2>
       <p><strong>Email:</strong> <a href="mailto:support@sakafleet.com">support@sakafleet.com</a><br>
-      <strong>Operator:</strong> Saka 360, registered in the Republic of Kenya.<br>
-      <strong>Websites:</strong> sakafleet.com (marketing &amp; onboarding) · app.sakafleet.com (app &amp; API).</p>
+      <strong>Operator:</strong> Saka360.<br>
+      <strong>Website:</strong> sakafleet.com.</p>
     </div>
   </section>
 
   <footer>
     <div class="wrap foot-bottom" style="border:0;padding-top:0">
-      <span>© 2026 Saka Fleet — a Saka 360 brand. Registered in Kenya.</span>
-      <span><a href="/privacy.html">Privacy Policy</a> · <a href="/data-deletion.html">Data Deletion</a> · <a href="/">Home</a></span>
+      <span>© 2026 Saka Fleet — a Saka360 brand.</span>
+      <span><a href="/privacy.html">Privacy Policy</a> · <a href="/data-deletion.html">Data Deletion</a> · <a href="#" data-cookie-settings>Cookie settings</a> · <a href="/">Home</a></span>
     </div>
   </footer>
+
+  <!-- Cookie consent -->
+  <div class="cookie-banner" id="cookieBanner" role="region" aria-label="Cookie notice">
+    <p>🍪 We keep it simple: Saka Fleet uses only strictly necessary cookies to make this site work. No tracking, no advertising cookies — ever.</p>
+    <div class="cookie-actions">
+      <button class="btn btn-ghost" id="cookieSettingsBtn">Cookie settings</button>
+      <button class="btn btn-primary" id="cookieAcceptBtn">Got it</button>
+    </div>
+  </div>
+  <div class="cookie-settings-backdrop" id="cookieSettingsBackdrop" role="dialog" aria-modal="true" aria-labelledby="cookieSettingsTitle">
+    <div class="cookie-settings">
+      <h2 id="cookieSettingsTitle" style="margin-bottom:6px">Cookie settings</h2>
+      <p class="sub">You decide. Strictly necessary cookies keep the site working and are always on.</p>
+      <div class="cookie-group">
+        <div class="grow"><h4>Strictly necessary</h4><p>Site function and security. Without these the site cannot work.</p></div>
+        <label class="cookie-toggle"><input type="checkbox" id="cookieEssential" checked disabled><span class="cookie-slider"></span></label>
+      </div>
+      <div class="cookie-group">
+        <div class="grow"><h4>Preferences</h4><p>Remember your choices, like your country code. Currently unused — nothing extra is stored.</p></div>
+        <label class="cookie-toggle"><input type="checkbox" id="cookiePrefs"><span class="cookie-slider"></span></label>
+      </div>
+      <div class="cookie-group">
+        <div class="grow"><h4>Analytics &amp; marketing</h4><p>We run none today. If measurement is ever added, it switches on only with your permission.</p></div>
+        <label class="cookie-toggle"><input type="checkbox" id="cookieAnalytics"><span class="cookie-slider"></span></label>
+      </div>
+      <button class="btn btn-ghost" id="cookieRejectBtn" style="width:48%">Reject non-essential</button>
+      <button class="btn btn-primary" id="cookieSaveBtn" style="width:48%">Save choices</button>
+    </div>
+  </div>
+
+  <script src="/assets/js/cookieConsent.js" defer></script>
 </body>
 </html>
 

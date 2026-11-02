@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.40.0] - 2026-11-02
+
+- **Website refinement & operations reinforcement.**
+  - **Branding & legal sweep:** "Apex" removed everywhere (now "branded PDF reports"), no infrastructure vendor names (Supabase/Resend/Paystack/Google Cloud/Meta) in any visible copy, "Registered in Kenya" gone from all footers, Data Controller is now "Saka Fleet by Saka360", the ODPC line is removed, the data-deletion page opens with "Basic Data Laws", and no visible reference to app.sakafleet.com remains (the API base lives only in the invisible JS layer). llms.txt is sanitized and its footer link removed (the file stays for AI crawlers).
+  - **One-car language:** hero, features, steps, pricing and FAQ copy now speak to single-vehicle owners and fleet managers alike ("Your vehicle practically runs itself", "One car or one hundred").
+  - **New `/status` page:** realtime health checked from the browser (probes `/api/health` first, `/healthz` fallback, refreshes every 30 s) with a plain-language incident ticker when the service is down — rotating human updates, a live downtime counter and "everything you logged is safe" copy. Carries the full changelog. Homepage keeps a compact status chip linking to it.
+  - **Cookie consent (international standards):** honest minimal banner + settings modal (strictly necessary always-on; preferences and analytics currently unused/off), versioned localStorage consent, re-openable from every footer, documented in the Privacy Policy. Fonts are now **self-hosted** (Outfit/Inter woff2) — zero third-party requests anywhere.
+  - **Signup UX:** country calling code auto-detected from the browser locale (offline, no IP lookup); the "Defaults to Kenya" hint removed; visitors who already have a verified account get "You're all set" instead of a pointless OTP; a verified email change on an existing account is audited (`WEB_ONBOARD_EMAIL_UPDATED`).
+  - **Saka messages first:** on verification, the backend sends the welcome via the approved `META_WELCOME_TEMPLATE_NAME` template when configured, otherwise attempts a plain-text WhatsApp welcome (24-hour window) — the site's wa.me link stays as the guaranteed channel.
+  - **Sentinel watches website signups:** every onboard/verify/resend failure is persisted to `error_logs` (Sentinel's 60 s scan + 15-min synthesis) and repeated signatures raise `backend_incidents`; expired OTP sessions are pruned at boot and every 15 minutes.
+  - **Saka training reinforced (surgical, rule 13):** `flowKnowledge` gained the `SAKA_WEB_ONBOARDING_PLAYBOOK` section (injected into the core prompt), the WEB SIGNUPS directive updated, `conversationEngine.WEB_SIGNUP_NOTE` synced, knowledge docs regenerated.
+  - **Tests:** `test_landing_static` (**94** — fonts, status page, cookie consent, vendor/app-domain sweep, locale detection, already-registered handling), `test_web_onboarding` (**38** — existing-account inspection, email-change audit, prune sweep), `test_agent_training` (**138** — playbook + prompt sync).
+
 ## [1.39.4] - 2026-11-02
 
 - **Real WhatsApp deep links.** The hero "Talk to Saka" button and every wa.me deep link now use the verified Saka Fleet WhatsApp Business number (+1 940-440-7252, quality rating GREEN), replacing the placeholder. A regression assertion keeps the placeholder from ever returning.

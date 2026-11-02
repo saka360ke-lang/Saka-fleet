@@ -254,9 +254,10 @@ check(/Narrative pre-fills are engine-determined facts/.test(await import('./src
 
   console.log('\n--- Test: v1.39.0 prompt sync (odometer policy + web signups) ---');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('ODOMETER POLICY (v1.39.0'), 'the core prompt carries the engine-enforced odometer policy');
-  check(DEFAULT_SAKA_CORE_PROMPT.includes('WEB SIGNUPS (v1.39.0'), 'the core prompt carries the web-signup verification guidance');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('WEB SIGNUPS (v1.40.0'), 'the core prompt carries the web-signup verification guidance');
   check(SAKA_FLOW_PLAYBOOK.includes('THE ODOMETER POLICY (v1.39.0, catalog-driven)'), 'the flow playbook carries the catalog-driven odometer policy');
   check(SAKA_FLOW_PLAYBOOK.includes('operating_hours'), 'the playbook names the engine-hours substitute for machines');
+  check(SAKA_FLOW_PLAYBOOK.includes('WEB ONBOARDING (sakafleet.com'), 'the playbook documents the website onboarding flow (v1.40.0)');
 
   console.log(`\n\u2705 ALL AGENT TRAINING TESTS PASSED (${passed} assertions).`);
   console.log('Stateless suite: no real database rows were created, so no cleanup is required.');

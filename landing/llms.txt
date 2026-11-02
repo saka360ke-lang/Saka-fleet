@@ -1,19 +1,19 @@
 # Saka Fleet
 
-> Saka Fleet is a WhatsApp-first fleet management assistant for cars, motorcycles, trucks, buses, generators, machinery and boats. Owners and drivers log fuel, expenses, odometer and earnings in plain language on WhatsApp and get Apex PDF reports, service reminders, compliance tracking and driver management. Owned by Saka 360, registered in Kenya.
+> Saka Fleet is a WhatsApp-first vehicle management assistant for cars, motorcycles, trucks, buses, generators, machinery and boats. Owners and drivers log fuel, expenses, odometer and earnings in plain language on WhatsApp and get branded PDF reports, service reminders, compliance tracking and driver management. Owned by Saka360.
 
 Key facts:
-- App/API base: https://app.sakafleet.com
 - Support: support@sakafleet.com
-- Pricing: free tier (1 asset, 1 report/month) up to Fleet Command (5 assets + add-ons); every new account starts a 30-day, no-card welcome trial with full features.
-- WhatsApp is the primary interface: message the Saka assistant to register assets, log records, set reminders and generate reports.
-- Reports are branded "Apex" PDFs delivered over WhatsApp and email.
-- Canonical data units: kilometres, litres, ISO-8601 dates (Africa/Nairobi).
+- Pricing: free tier (1 vehicle, 1 report/month) up to Fleet Command (5 vehicles + add-ons); every new account starts a 30-day, no-card welcome trial with full features.
+- WhatsApp is the primary interface: message the Saka assistant to register vehicles, log records, set reminders and generate reports.
+- Reports are branded PDF documents delivered over WhatsApp and email.
+- Canonical data units: kilometres, litres, ISO-8601 dates.
 
 ## Pages
 - [Home](https://sakafleet.com/): product overview, features, pricing, changelog and signup.
-- [Privacy Policy](https://sakafleet.com/privacy.html): data collection, Kenya Data Protection Act 2019 and GDPR compliance.
-- [Terms &amp; Conditions](https://sakafleet.com/terms.html): service terms, subscriptions and liability under Saka 360.
+- [Live Status](https://sakafleet.com/status.html): realtime service health, incident updates and recent changes.
+- [Privacy Policy](https://sakafleet.com/privacy.html): data collection, cookies and compliance with the data protection laws that apply.
+- [Terms &amp; Conditions](https://sakafleet.com/terms.html): service terms, subscriptions and liability.
 - [Data Deletion](https://sakafleet.com/data-deletion.html): how to request account and record deletion.
 
 ## Onboarding
@@ -22,10 +22,10 @@ Key facts:
 - The welcome trial starts when the user registers their first asset with the WhatsApp assistant, not at website signup.
 
 ## API
-- GET https://app.sakafleet.com/api/health — public liveness probe used by the website status widget (`/healthz` is its alias; Google's edge may intercept the alias, so the site probes `/api/health` first).
-- POST https://app.sakafleet.com/api/onboard — create/update a lead profile and dispatch an email verification code.
-- POST https://app.sakafleet.com/api/onboard/verify — verify the code and mark the account email-verified.
-- POST https://app.sakafleet.com/api/onboard/resend — resend the verification code (rate limited).
+- The website connects securely to Saka Fleet's own servers for the signup, email verification and the live status widget. No tracking data is transmitted.
+- POST /api/onboard — create/update a lead profile and dispatch an email verification code.
+- POST /api/onboard/verify — verify the code and mark the account email-verified.
+- POST /api/onboard/resend — resend the verification code (rate limited).
 
 ## Contact
 - Email: support@sakafleet.com

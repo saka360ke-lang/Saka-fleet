@@ -4,16 +4,13 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Data Deletion — Saka Fleet</title>
-  <meta name="description" content="How to request deletion of your Saka Fleet account and personal data under the Kenya Data Protection Act 2019 and the GDPR.">
+  <meta name="description" content="How to request deletion of your Saka Fleet account and personal data under the data protection laws that apply to you.">
   <meta name="robots" content="index, follow">
   <link rel="canonical" href="https://sakafleet.com/data-deletion.html">
   <meta property="og:type" content="website">
   <meta property="og:title" content="Data Deletion — Saka Fleet">
   <meta property="og:url" content="https://sakafleet.com/data-deletion.html">
   <link rel="icon" type="image/svg+xml" href="/assets/img/favicon.svg">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@600;800&family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/assets/css/styles.css">
   <script type="application/ld+json">
   {
@@ -44,7 +41,7 @@
       <h1>Data Deletion</h1>
       <p class="meta">Last updated: 2 November 2026 · Your right to be forgotten, made simple.</p>
             <h2>Your right to deletion</h2>
-      <p>Under the <strong>Kenya Data Protection Act 2019</strong> and — where it applies to you — the <strong>GDPR</strong>, you may ask us to delete your personal data. Here is exactly how that works with Saka Fleet.</p>
+      <p>Under the Basic Data Laws and — where it applies to you — the <strong>GDPR</strong>, you may ask us to delete your personal data. Here is exactly how that works with Saka Fleet.</p>
 
       <h2>What you can delete, and how</h2>
       <h3>1. Your whole account — the fastest way</h3>
@@ -65,24 +62,54 @@
 
       <h2>What happens after deletion</h2>
       <ul>
-        <li>Deletion is permanent and cannot be undone — please export any Apex reports you want to keep first.</li>
+        <li>Deletion is permanent and cannot be undone — please export any PDF reports you want to keep first.</li>
         <li>We may retain the minimum legally required records (for example, payment records under tax law) for as long as the law requires, then delete them.</li>
         <li>Aggregated, anonymised telemetry (which can never identify you) may remain for system health.</li>
       </ul>
 
       <h2>Questions or complaints</h2>
       <p><strong>Email:</strong> <a href="mailto:support@sakafleet.com">support@sakafleet.com</a><br>
-      <strong>Data Controller:</strong> Saka 360, registered in the Republic of Kenya.<br>
-      <strong>Kenyan supervisory authority:</strong> Office of the Data Protection Commissioner (ODPC), Nairobi, Kenya.</p>
+      <strong>Data Controller:</strong> Saka Fleet by Saka360.</p>
     </div>
   </section>
 
   <footer>
     <div class="wrap foot-bottom" style="border:0;padding-top:0">
-      <span>© 2026 Saka Fleet — a Saka 360 brand. Registered in Kenya.</span>
-      <span><a href="/privacy.html">Privacy Policy</a> · <a href="/terms.html">Terms &amp; Conditions</a> · <a href="/">Home</a></span>
+      <span>© 2026 Saka Fleet — a Saka360 brand.</span>
+      <span><a href="/privacy.html">Privacy Policy</a> · <a href="/terms.html">Terms &amp; Conditions</a> · <a href="#" data-cookie-settings>Cookie settings</a> · <a href="/">Home</a></span>
     </div>
   </footer>
+
+  <!-- Cookie consent -->
+  <div class="cookie-banner" id="cookieBanner" role="region" aria-label="Cookie notice">
+    <p>🍪 We keep it simple: Saka Fleet uses only strictly necessary cookies to make this site work. No tracking, no advertising cookies — ever.</p>
+    <div class="cookie-actions">
+      <button class="btn btn-ghost" id="cookieSettingsBtn">Cookie settings</button>
+      <button class="btn btn-primary" id="cookieAcceptBtn">Got it</button>
+    </div>
+  </div>
+  <div class="cookie-settings-backdrop" id="cookieSettingsBackdrop" role="dialog" aria-modal="true" aria-labelledby="cookieSettingsTitle">
+    <div class="cookie-settings">
+      <h2 id="cookieSettingsTitle" style="margin-bottom:6px">Cookie settings</h2>
+      <p class="sub">You decide. Strictly necessary cookies keep the site working and are always on.</p>
+      <div class="cookie-group">
+        <div class="grow"><h4>Strictly necessary</h4><p>Site function and security. Without these the site cannot work.</p></div>
+        <label class="cookie-toggle"><input type="checkbox" id="cookieEssential" checked disabled><span class="cookie-slider"></span></label>
+      </div>
+      <div class="cookie-group">
+        <div class="grow"><h4>Preferences</h4><p>Remember your choices, like your country code. Currently unused — nothing extra is stored.</p></div>
+        <label class="cookie-toggle"><input type="checkbox" id="cookiePrefs"><span class="cookie-slider"></span></label>
+      </div>
+      <div class="cookie-group">
+        <div class="grow"><h4>Analytics &amp; marketing</h4><p>We run none today. If measurement is ever added, it switches on only with your permission.</p></div>
+        <label class="cookie-toggle"><input type="checkbox" id="cookieAnalytics"><span class="cookie-slider"></span></label>
+      </div>
+      <button class="btn btn-ghost" id="cookieRejectBtn" style="width:48%">Reject non-essential</button>
+      <button class="btn btn-primary" id="cookieSaveBtn" style="width:48%">Save choices</button>
+    </div>
+  </div>
+
+  <script src="/assets/js/cookieConsent.js" defer></script>
 </body>
 </html>
 

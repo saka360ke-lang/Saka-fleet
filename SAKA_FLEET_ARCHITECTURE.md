@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.39.4  
+**Version:** 1.40.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.40.0** | Website refinement: vendor/Apex/app-host sweep, one-car language, /status page with plain-language incident ticker, cookie consent, self-hosted fonts, locale-based country codes, already-registered signup path, proactive Saka welcome, Sentinel-tracked web-onboarding failures + OTP prune, surgical training sync | §86 |
 | **1.39.4** | wa.me deep links point at the verified Saka business number (+1 940-440-7252); placeholder regression-tested | §86 |
 | **1.39.3** | Explicit `subscription_tier: 'free'` on both profile-creation paths — the live schema's legacy `SOLO` default + null status resolved to paid entitlements for brand-new accounts | §86 |
 | **1.39.2** | Hostinger deploy workflow fix: secrets guard moved from job-level `if` (unsupported context — zero-job failures) to a step-output check | §86 |
@@ -3486,6 +3487,13 @@ quiz engine:
 - **Data Deletion (v1.39.1):** `data-deletion.html` (WhatsApp `delete my
   account`, per-entry deletion, email requests, KDPA/GDPR rights + ODPC)
   linked from every footer, the sitemap and `llms.txt`.
+- **v1.40.0 refinement wave:** vendor-name/Apex/app-host sweep across all
+  visible copy; one-car-friendly language; `/status` page (realtime probe +
+  plain-language incident ticker + changelog); cookie-consent flow
+  (versioned localStorage, no CMP dependency); self-hosted Outfit/Inter
+  fonts (zero third-party requests); locale-based country-code detection on
+  the signup form; already-registered visitors skip the OTP ("You're all
+  set"); the Privacy Policy documents the cookie categories.
 - **Isolation (rule 6):** zero secrets client-side; `test_landing_static.js`
   scans every static file for key patterns and verifies local references,
   structured data and AI files (49 assertions).
@@ -3516,6 +3524,13 @@ quiz engine:
   registered-but-unverified user (and only when no quiz/onboarding/OTP/PIN
   phase is active) verifies their web code in chat; the core prompt's WEB
   SIGNUPS directive teaches Saka the same.
+- **v1.40.0:** already-verified visitors are never re-onboarded
+  (`WEB_ONBOARD_EXISTING` audit); verified email changes audit
+  `WEB_ONBOARD_EMAIL_UPDATED`; verification now sends the welcome
+  proactively (template when configured, plain text inside the 24-hour
+  window); every failure is telemetried through `logSystemError` +
+  `upsertIncident` into Sentinel's pipeline; expired OTP sessions are
+  pruned at boot and every 15 minutes.
 - **Welcome message:** `META_WELCOME_TEMPLATE_NAME` (optional, approved Meta
   template) fires on verification; the guaranteed channel is the site's
   wa.me deep link + Saka's first-message greeting.

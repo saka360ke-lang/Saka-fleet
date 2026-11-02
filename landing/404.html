@@ -7,9 +7,6 @@
   <meta name="robots" content="noindex, follow">
   <link rel="canonical" href="https://sakafleet.com/404.html">
   <link rel="icon" type="image/svg+xml" href="/assets/img/favicon.svg">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@600;800&family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/assets/css/styles.css">
 </head>
 <body>
@@ -19,5 +16,36 @@
     <p style="color:var(--muted);max-width:480px;margin:0 auto 26px">The page you're after doesn't exist — but your fleet's home base does. Head back and let Saka take the wheel.</p>
     <a class="btn btn-primary" href="/">← Back to Saka Fleet</a>
   </main>
+
+  <!-- Cookie consent -->
+  <div class="cookie-banner" id="cookieBanner" role="region" aria-label="Cookie notice">
+    <p>🍪 We keep it simple: Saka Fleet uses only strictly necessary cookies to make this site work. No tracking, no advertising cookies — ever.</p>
+    <div class="cookie-actions">
+      <button class="btn btn-ghost" id="cookieSettingsBtn">Cookie settings</button>
+      <button class="btn btn-primary" id="cookieAcceptBtn">Got it</button>
+    </div>
+  </div>
+  <div class="cookie-settings-backdrop" id="cookieSettingsBackdrop" role="dialog" aria-modal="true" aria-labelledby="cookieSettingsTitle">
+    <div class="cookie-settings">
+      <h2 id="cookieSettingsTitle" style="margin-bottom:6px">Cookie settings</h2>
+      <p class="sub">You decide. Strictly necessary cookies keep the site working and are always on.</p>
+      <div class="cookie-group">
+        <div class="grow"><h4>Strictly necessary</h4><p>Site function and security. Without these the site cannot work.</p></div>
+        <label class="cookie-toggle"><input type="checkbox" id="cookieEssential" checked disabled><span class="cookie-slider"></span></label>
+      </div>
+      <div class="cookie-group">
+        <div class="grow"><h4>Preferences</h4><p>Remember your choices, like your country code. Currently unused — nothing extra is stored.</p></div>
+        <label class="cookie-toggle"><input type="checkbox" id="cookiePrefs"><span class="cookie-slider"></span></label>
+      </div>
+      <div class="cookie-group">
+        <div class="grow"><h4>Analytics &amp; marketing</h4><p>We run none today. If measurement is ever added, it switches on only with your permission.</p></div>
+        <label class="cookie-toggle"><input type="checkbox" id="cookieAnalytics"><span class="cookie-slider"></span></label>
+      </div>
+      <button class="btn btn-ghost" id="cookieRejectBtn" style="width:48%">Reject non-essential</button>
+      <button class="btn btn-primary" id="cookieSaveBtn" style="width:48%">Save choices</button>
+    </div>
+  </div>
+
+  <script src="/assets/js/cookieConsent.js" defer></script>
 </body>
 </html>

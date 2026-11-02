@@ -219,7 +219,11 @@ export async function completeWebOnboarding(supabase, { email, phone, firstName,
       const { error } = await supabase.from('profiles').update(updates).eq('id', existing.id);
       if (error) return { ok: false, error: error.message };
       if (verified) {
-        await writeAudit(supabase, 'WEB_ONBOARD_VERIFIED', { email, phone, profileId: existing.id });
+        if (existing.email && String(existing.email).toLowerCase() !== String(email).toLowerCase()) {
+          await writeAudit(supabase, 'WEB_ONBOARD_EMAIL_UPDATED', { oldEmail: existing.email, newEmail: email, phone, profileId: existing.id });
+        } else {
+          await writeAudit(supabase, 'WEB_ONBOARD_VERIFIED', { email, phone, profileId: existing.id });
+        }
       }
       return { ok: true, created: false };
     }
@@ -274,6 +278,52 @@ export async function tryVerifyPendingEmailCode(supabase, phone, rawText) {
     verified: true
   });
   return { verified: done.ok, email: row.email };
+}
+
+/**
+ * v1.40.0 — existing-account inspection for /api/onboard.
+ *   'none'            -> brand-new visitor, normal OTP flow
+ *   'unverified'      -> profile exists, email not yet verified, normal OTP flow
+ *   'verified'        -> profile exists AND verified with the SAME email:
+ *                        never re-onboard; the site shows "you're all set"
+ *   'different_email' -> profile exists but with another address: OTP verifies
+ *                        the new address and the profile email is updated
+ */
+export async function inspectExistingSignup(supabase, { email, phone }) {
+  if (!supabase) return { state: 'none' };
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('id, email, email_verified')
+    .eq('phone_number', phone)
+    .maybeSingle();
+  if (!profile) return { state: 'none' };
+  if (profile.email_verified === true && String(profile.email || '').toLowerCase() === String(email || '').toLowerCase()) {
+    return { state: 'verified', profile };
+  }
+  if (profile.email && String(profile.email).toLowerCase() !== String(email || '').toLowerCase()) {
+    return { state: 'different_email', profile };
+  }
+  return { state: 'unverified', profile };
+}
+
+/** Public audit helper so routes can stamp web-onboarding events. */
+export async function auditWebOnboardEvent(supabase, action, details = {}) {
+  await writeAudit(supabase, action, details);
+}
+
+/**
+ * v1.40.0 — housekeeping: expired OTP sessions are dead weight and a
+ * verification surface; prune anything older than one day. Runs at boot and
+ * every 15 minutes.
+ */
+export async function pruneExpiredWebOnboardOtps(supabase) {
+  if (!supabase) return { ok: false };
+  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const { error } = await supabase
+    .from(WEB_ONBOARD_OTP_TABLE)
+    .delete()
+    .lt('expires_at', cutoff);
+  return { ok: !error, error: error?.message };
 }
 
 

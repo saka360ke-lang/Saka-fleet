@@ -18,6 +18,8 @@ import {
   resendWebOnboardCode,
   completeWebOnboarding,
   tryVerifyPendingEmailCode,
+  inspectExistingSignup,
+  pruneExpiredWebOnboardOtps,
   WEB_ONBOARD_OTP_TABLE,
   WEB_ONBOARD_MAX_ATTEMPTS
 } from './src/services/webOnboarding.js';
@@ -69,6 +71,14 @@ function createMockSupabase(seed = {}) {
           };
         },
         select: () => makeQuery(rows),
+        delete: () => ({
+          lt: async (col, value) => {
+            for (let i = rows.length - 1; i >= 0; i -= 1) {
+              if (String(rows[i][col]) < String(value)) rows.splice(i, 1);
+            }
+            return { error: null };
+          }
+        }),
         update: (payload) => ({
           eq: async (col, value) => {
             let touched = 0;
@@ -169,6 +179,35 @@ check((await tryVerifyPendingEmailCode(waDb, '+254700000011', '000000')).verifie
 const waDone = await tryVerifyPendingEmailCode(waDb, '+254700000011', waSession.code);
 check(waDone.verified === true && waDone.email === 'wa@example.com', 'The right code verifies in WhatsApp');
 check(waDb.__db.profiles[0].email_verified === true, 'The WhatsApp fallback flips the profile');
+
+console.log('\n--- Test 6: existing-account inspection (v1.40.0) ---');
+const inspectDb = createMockSupabase({
+  profiles: [
+    { id: 'p-none', phone_number: '+254700000020', email: 'none@example.com', email_verified: false },
+    { id: 'p-verified', phone_number: '+254700000021', email: 'verified@example.com', email_verified: true },
+    { id: 'p-other', phone_number: '+254700000022', email: 'old@example.com', email_verified: true }
+  ]
+});
+check((await inspectExistingSignup(inspectDb, { email: 'a@b.com', phone: '+254700000099' })).state === 'none', 'A brand-new phone is "none"');
+check((await inspectExistingSignup(inspectDb, { email: 'verified@example.com', phone: '+254700000021' })).state === 'verified', 'A verified account with the same email is "verified"');
+check((await inspectExistingSignup(inspectDb, { email: 'new@example.com', phone: '+254700000022' })).state === 'different_email', 'A different address on an existing account is "different_email"');
+check((await inspectExistingSignup(inspectDb, { email: 'none@example.com', phone: '+254700000020' })).state === 'unverified', 'An unverified account stays in the normal OTP flow');
+
+console.log('\n--- Test 7: email-change audit + prune (v1.40.0) ---');
+const changeDb = createMockSupabase({
+  profiles: [{ id: 'p-chg', phone_number: '+254700000023', email: 'old@example.com', email_verified: true, full_name: 'Keeper' }],
+  admin_audit_logs: []
+});
+await completeWebOnboarding(changeDb, { email: 'new@example.com', phone: '+254700000023', firstName: 'A', lastName: 'B', verified: true });
+check(changeDb.__db.admin_audit_logs.some((a) => a.action === 'WEB_ONBOARD_EMAIL_UPDATED' && a.details?.oldEmail === 'old@example.com' && a.details?.newEmail === 'new@example.com'), 'A verified email change is audited with old and new addresses');
+
+const pruneDb = createMockSupabase({ web_onboard_otps: [
+  { id: 'row-old', email: 'o@example.com', phone: '+254700000024', otp_code: '111111', verified: false, expires_at: new Date(Date.now() - 2 * 86400000).toISOString() },
+  { id: 'row-new', email: 'n@example.com', phone: '+254700000025', otp_code: '222222', verified: false, expires_at: new Date(Date.now() + 600000).toISOString() }
+] });
+await pruneExpiredWebOnboardOtps(pruneDb);
+check(!pruneDb.__db.web_onboard_otps.some((r) => r.id === 'row-old'), 'Expired OTP sessions are pruned');
+check(pruneDb.__db.web_onboard_otps.some((r) => r.id === 'row-new'), 'Fresh OTP sessions survive the prune');
 
 console.log(`\n🎉 ${passed} web-onboarding assertions passed.`);
 console.log('Stateless suite: in-memory database double only — no real rows, no cleanup needed.');

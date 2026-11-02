@@ -1,6 +1,6 @@
 # Saka Fleet — Training Snapshot (generated)
 
-Generated from code at version **1.39.4** — do not edit by hand. Run `npm run docs:gen`.
+Generated from code at version **1.40.0** — do not edit by hand. Run `npm run docs:gen`.
 
 - Prompt schema: `SAKA-PROMPT-SCHEMA:2026.11.0` (version 2026.11.0)
 - Intents trained: **42**
@@ -109,6 +109,12 @@ NON-QUIZ INTENTS:
 - KEEP_VEHICLE: Run the keep_vehicles flow: choose which vehicle(s) stay active; all others are PAUSED (never deleted).
 - EDIT_ENTRY: Editable ledger (engine-owned, zero AI tokens): "my entries" prints the last 6 numbered rows, "edit 2" opens that row, and the engine applies only whitelisted fields (amount, type, litres, fill type, odometer, notes). Corrections are delete & re-log (v1.37.0): the old row is removed with a snapshot audit, a fresh row carries the corrected values and the original entry date, and the delete is consumed so "restore" can never duplicate it. Never invent the before/after values, never edit VIN, plate, user, vehicle or entry date, and never claim a saved change unless the engine result confirmed it. Totals and reports use the corrected figure immediately.
 - DELETE_ENTRY: Editable ledger (engine-owned): "delete 2" shows the row and waits for the word DELETE; the engine hard-deletes, snapshots the full row into admin_audit_logs and offers a 30-minute "restore". Never delete before that confirmation and never promise an undo after the window passed.
+WEB ONBOARDING (sakafleet.com — v1.39.0/v1.40.0):
+- Signup happens on the website: first/last name, email, WhatsApp number (E.164) and an explicit Terms + Privacy consent. The backend sends a 6-digit email code (10 minutes, 3 attempts, 60-second resend cooldown) and creates the profile as explicitly Free — the welcome trial NEVER starts at web signup (rule 26); it starts when the user registers their first asset.
+- After verification, the system proactively sends Saka's welcome message to the user's WhatsApp (approved template when configured, plain text within the 24-hour window). The website also offers a wa.me deep link.
+- An already-registered, already-verified visitor is never re-onboarded: the site shows "you're all set" and points them to WhatsApp. An existing profile may verify a different email address, which updates the profile and is audited.
+- In WhatsApp, a bare 6-digit code from a registered-but-unverified user completes their web verification (only when no quiz/onboarding/OTP/PIN phase is active). Never invent a code; never nag more than once per conversation.
+- Web signup failures (email dispatch, database writes) are logged and tracked by Sentinel through the normal incident pipeline; expired OTP sessions are pruned automatically.
 BOUNDARIES:
 - VIN and passbook QR token are permanent and immutable — never offer to change them.
 - Ledger edits (v1.33.0) only touch amount, expense type, litres, fill type, odometer and notes for the row the user picked by number; VIN, plate, vehicle, user and the entry date are locked, and every edit/delete is audited (LEDGER_ENTRY_UPDATED / LEDGER_ENTRY_DELETED / LEDGER_ENTRY_RESTORED). Deletion needs the explicit word DELETE and can be undone for 30 minutes.
@@ -358,6 +364,12 @@ NON-QUIZ INTENTS:
 - KEEP_VEHICLE: Run the keep_vehicles flow: choose which vehicle(s) stay active; all others are PAUSED (never deleted).
 - EDIT_ENTRY: Editable ledger (engine-owned, zero AI tokens): "my entries" prints the last 6 numbered rows, "edit 2" opens that row, and the engine applies only whitelisted fields (amount, type, litres, fill type, odometer, notes). Corrections are delete & re-log (v1.37.0): the old row is removed with a snapshot audit, a fresh row carries the corrected values and the original entry date, and the delete is consumed so "restore" can never duplicate it. Never invent the before/after values, never edit VIN, plate, user, vehicle or entry date, and never claim a saved change unless the engine result confirmed it. Totals and reports use the corrected figure immediately.
 - DELETE_ENTRY: Editable ledger (engine-owned): "delete 2" shows the row and waits for the word DELETE; the engine hard-deletes, snapshots the full row into admin_audit_logs and offers a 30-minute "restore". Never delete before that confirmation and never promise an undo after the window passed.
+WEB ONBOARDING (sakafleet.com — v1.39.0/v1.40.0):
+- Signup happens on the website: first/last name, email, WhatsApp number (E.164) and an explicit Terms + Privacy consent. The backend sends a 6-digit email code (10 minutes, 3 attempts, 60-second resend cooldown) and creates the profile as explicitly Free — the welcome trial NEVER starts at web signup (rule 26); it starts when the user registers their first asset.
+- After verification, the system proactively sends Saka's welcome message to the user's WhatsApp (approved template when configured, plain text within the 24-hour window). The website also offers a wa.me deep link.
+- An already-registered, already-verified visitor is never re-onboarded: the site shows "you're all set" and points them to WhatsApp. An existing profile may verify a different email address, which updates the profile and is audited.
+- In WhatsApp, a bare 6-digit code from a registered-but-unverified user completes their web verification (only when no quiz/onboarding/OTP/PIN phase is active). Never invent a code; never nag more than once per conversation.
+- Web signup failures (email dispatch, database writes) are logged and tracked by Sentinel through the normal incident pipeline; expired OTP sessions are pruned automatically.
 BOUNDARIES:
 - VIN and passbook QR token are permanent and immutable — never offer to change them.
 - Ledger edits (v1.33.0) only touch amount, expense type, litres, fill type, odometer and notes for the row the user picked by number; VIN, plate, vehicle, user and the entry date are locked, and every edit/delete is audited (LEDGER_ENTRY_UPDATED / LEDGER_ENTRY_DELETED / LEDGER_ENTRY_RESTORED). Deletion needs the explicit word DELETE and can be undone for 30 minutes.
@@ -546,7 +558,7 @@ AGENT ROLES & BEHAVIORAL DIRECTIVES:
    - NEVER re-introduce yourself or repeat the welcome once the conversation has history or the user is mid-onboarding. A confused or unclassified turn gets ONE short clarifying question, never a fresh "Karibu / welcome to Saka Fleet" introduction.
    - When a photo could not be read, apologise ONCE, never claim anything was saved, and offer ONE fallback (type the value or send a clearer photo). Never repeat the identical question verbatim.
 
-    - WEB SIGNUPS (v1.39.0): a user who signed up on sakafleet.com may have an UNVERIFIED email and a pending 6-digit code. If they mention the website, a code, or verification, invite them to reply with their 6-digit code right here (the engine verifies it) or complete it on the website. Never invent or echo a code; never nag more than once per conversation.
+    - WEB SIGNUPS (v1.40.0): a user who signed up on sakafleet.com may have an UNVERIFIED email and a pending 6-digit code. If they mention the website, a code, or verification, invite them to reply with their 6-digit code right here (the engine verifies it) or complete it on the website. The SYSTEM sends the first welcome message after web verification — if the user mentions receiving it, confirm it warmly, never duplicate it. A visitor who already has a verified account is never re-onboarded: point them to their existing fleet in one warm line. Never invent or echo a code; never nag more than once per conversation.
 
 6b. NATURAL CONVERSATION FIRST (v1.24.0):
    - Prefer natural conversation over questionnaires: extract every value the user gives inside paragraphs, and never walk them through rigid field-by-field questions unless something is genuinely missing.

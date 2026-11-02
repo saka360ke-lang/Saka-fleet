@@ -61,8 +61,12 @@ import {
   verifyWebOnboardCode,
   resendWebOnboardCode,
   completeWebOnboarding,
-  ensureWebOnboardOtpTable
+  ensureWebOnboardOtpTable,
+  inspectExistingSignup,
+  auditWebOnboardEvent,
+  pruneExpiredWebOnboardOtps
 } from './src/services/webOnboarding.js';
+import { upsertIncident } from './src/services/incidents.js';
 import { ensureFeatureNoticeSchema } from './src/services/featureNotice.js';
 import { ensureContactNudgeSchema } from './src/services/contactNudge.js';
 import { drainQueue, getQueueStats } from './src/services/messageQueue.js';
@@ -586,29 +590,74 @@ fastify.post('/api/auth/whatsapp/verify', async (request, reply) => {
 // registers their first asset with Saka on WhatsApp.
 // ==========================================
 
+/**
+ * v1.40.0 — web-onboarding failures feed the Sentinel pipeline: the error is
+ * persisted to error_logs (scanned every 60s) and repeated signatures raise a
+ * backend incident so the remediation flow can propose and (when approved)
+ * ship a fix.
+ */
+async function logWebOnboardFailure(err, route, details = {}) {
+  console.error(`[WebOnboard] ${route} failed:`, err?.message);
+  try {
+    await logSystemError(supabase, err, route);
+    const message = err?.message || String(err);
+    await upsertIncident(supabase, {
+      signature: `web onboarding ${route}`,
+      category: 'web_onboard_error',
+      message: `${message} ${JSON.stringify(details || {}).slice(0, 300)}`,
+      source: route
+    });
+  } catch (auditErr) {
+    console.warn('[WebOnboard] failure telemetry failed:', auditErr.message);
+  }
+}
+
+/** v1.40.0 — the welcome message Saka sends after web verification. */
+function webOnboardWelcomeText(firstName) {
+  const name = firstName && firstName.length >= 2 ? `, ${firstName}` : '';
+  return `👋 *Welcome to Saka Fleet${name}!* I'm Saka — your vehicle's co-pilot. 🚗\n\nYour email is verified and your account is ready.\n\nNext up: reply with your vehicle details — or type *Register* — and your 30-day full-featured trial begins. 🎉`;
+}
+
 fastify.post('/api/onboard', async (request, reply) => {
   const clean = sanitizeOnboardPayload(request.body);
   if (!clean.ok) return reply.status(400).send({ success: false, error: clean.error });
   const { firstName, lastName, email, phone } = clean.data;
   if (!supabase) return reply.status(503).send({ success: false, error: 'Database unavailable. Please try again shortly.' });
 
-  const sessionRow = await createWebOnboardSession(supabase, { email, phone, firstName, lastName });
-  if (!sessionRow.ok) return reply.status(502).send({ success: false, error: 'We could not start your onboarding. Please try again.' });
-
   try {
-    await sendEmailOtp(email, sessionRow.code);
-  } catch (emailErr) {
-    console.error('[WebOnboard] OTP email failed:', emailErr.message);
-    return reply.status(502).send({ success: false, error: 'The verification email could not be sent. Please check the address and try again.' });
-  }
+    // v1.40.0 — never re-onboard an already-verified account: the site shows
+    // "you're all set" and points straight to WhatsApp.
+    const existing = await inspectExistingSignup(supabase, { email, phone });
+    if (existing.state === 'verified') {
+      await auditWebOnboardEvent(supabase, 'WEB_ONBOARD_EXISTING', { email, phone, profileId: existing.profile?.id });
+      return {
+        success: true,
+        already_verified: true,
+        message: 'You are already registered. Continue on WhatsApp — Saka is waiting for you.'
+      };
+    }
 
-  const profileResult = await completeWebOnboarding(supabase, { email, phone, firstName, lastName, verified: false });
-  return {
-    success: true,
-    onboard_token: sessionRow.token,
-    profile_created: profileResult.ok,
-    message: 'Verification code sent to your email.'
-  };
+    const sessionRow = await createWebOnboardSession(supabase, { email, phone, firstName, lastName });
+    if (!sessionRow.ok) return reply.status(502).send({ success: false, error: 'We could not start your onboarding. Please try again.' });
+
+    try {
+      await sendEmailOtp(email, sessionRow.code);
+    } catch (emailErr) {
+      await logWebOnboardFailure(emailErr, '/api/onboard', { email, phone, stage: 'email_dispatch' });
+      return reply.status(502).send({ success: false, error: 'The verification email could not be sent. Please check the address and try again.' });
+    }
+
+    const profileResult = await completeWebOnboarding(supabase, { email, phone, firstName, lastName, verified: false });
+    return {
+      success: true,
+      onboard_token: sessionRow.token,
+      profile_created: profileResult.ok,
+      message: 'Verification code sent to your email.'
+    };
+  } catch (err) {
+    await logWebOnboardFailure(err, '/api/onboard', { email, phone, stage: 'onboard' });
+    return reply.status(500).send({ success: false, error: 'Something went wrong. Please try again.' });
+  }
 });
 
 fastify.post('/api/onboard/verify', async (request, reply) => {
@@ -618,17 +667,39 @@ fastify.post('/api/onboard/verify', async (request, reply) => {
   }
   if (!supabase) return reply.status(503).send({ success: false, error: 'Database unavailable. Please try again shortly.' });
 
-  const result = await verifyWebOnboardCode(supabase, { token: onboard_token, code: String(code) });
-  if (!result.ok) return reply.status(400).send({ success: false, error: result.error || 'Invalid or expired code.' });
+  try {
+    const result = await verifyWebOnboardCode(supabase, { token: onboard_token, code: String(code) });
+    if (!result.ok) return reply.status(400).send({ success: false, error: result.error || 'Invalid or expired code.' });
 
-  // Concurrent welcome: fire an approved WhatsApp template if configured
-  // (business-initiated); the website's wa.me deep link covers the rest.
-  const templateName = process.env.META_WELCOME_TEMPLATE_NAME;
-  if (templateName && result.phone) {
-    sendMetaWhatsAppTemplate(result.phone, templateName).catch((err) => console.warn('[WebOnboard] Welcome template failed:', err.message));
+    // v1.40.0 — proactive welcome: Saka messages the user instead of waiting
+    // for them to message Saka. Template first (business-initiated, needs an
+    // approved template), then a plain-text attempt (works inside Meta's
+    // 24-hour window, rejected harmlessly outside it). The website's wa.me
+    // deep link remains as the guaranteed channel.
+    let firstName = '';
+    try {
+      const { data: profileRow } = await supabase.from('profiles').select('full_name').eq('phone_number', result.phone).maybeSingle();
+      firstName = String(profileRow?.full_name || '').split(' ')[0] || '';
+    } catch { /* name lookup is best-effort */ }
+
+    const templateName = process.env.META_WELCOME_TEMPLATE_NAME;
+    if (templateName && result.phone) {
+      sendMetaWhatsAppTemplate(result.phone, templateName, {
+        components: firstName ? [{ type: 'body', parameters: [{ type: 'text', text: firstName }] }] : []
+      }).catch((err) => console.warn('[WebOnboard] Welcome template failed:', err.message));
+    } else if (result.phone) {
+      sendMetaWhatsAppMessage(result.phone, webOnboardWelcomeText(firstName))
+        .then((metaRes) => {
+          if (metaRes?.error) console.warn('[WebOnboard] Plain welcome not delivered (expected outside the 24h window):', JSON.stringify(metaRes.error).slice(0, 200));
+        })
+        .catch((err) => console.warn('[WebOnboard] Plain welcome dispatch failed:', err.message));
+    }
+
+    return { success: true, message: 'Email verified. Welcome to Saka Fleet!' };
+  } catch (err) {
+    await logWebOnboardFailure(err, '/api/onboard/verify', { token: String(onboard_token).slice(0, 8), stage: 'verify' });
+    return reply.status(500).send({ success: false, error: 'Something went wrong. Please try again.' });
   }
-
-  return { success: true, message: 'Email verified. Welcome to Saka Fleet!' };
 });
 
 fastify.post('/api/onboard/resend', async (request, reply) => {
@@ -636,20 +707,31 @@ fastify.post('/api/onboard/resend', async (request, reply) => {
   if (!onboard_token) return reply.status(400).send({ success: false, error: 'A session token is required.' });
   if (!supabase) return reply.status(503).send({ success: false, error: 'Database unavailable. Please try again shortly.' });
 
-  const result = await resendWebOnboardCode(supabase, { token: onboard_token });
-  if (!result.ok) {
-    const status = result.retryAfterSeconds ? 429 : 400;
-    return reply.status(status).send({ success: false, error: result.error, retry_after: result.retryAfterSeconds || null });
-  }
-
   try {
-    await sendEmailOtp(result.email, result.code);
-  } catch (emailErr) {
-    console.error('[WebOnboard] Resend email failed:', emailErr.message);
-    return reply.status(502).send({ success: false, error: 'The verification email could not be sent. Please try again.' });
+    const result = await resendWebOnboardCode(supabase, { token: onboard_token });
+    if (!result.ok) {
+      const status = result.retryAfterSeconds ? 429 : 400;
+      return reply.status(status).send({ success: false, error: result.error, retry_after: result.retryAfterSeconds || null });
+    }
+
+    try {
+      await sendEmailOtp(result.email, result.code);
+    } catch (emailErr) {
+      await logWebOnboardFailure(emailErr, '/api/onboard/resend', { email: result.email, stage: 'resend_dispatch' });
+      return reply.status(502).send({ success: false, error: 'The verification email could not be sent. Please try again.' });
+    }
+    return { success: true, message: 'A new code is on its way.' };
+  } catch (err) {
+    await logWebOnboardFailure(err, '/api/onboard/resend', { token: String(onboard_token).slice(0, 8), stage: 'resend' });
+    return reply.status(500).send({ success: false, error: 'Something went wrong. Please try again.' });
   }
-  return { success: true, message: 'A new code is on its way.' };
 });
+
+// v1.40.0 — housekeeping: expired OTP sessions are pruned at boot and every
+// 15 minutes (they are dead weight and a stale verification surface).
+setInterval(() => {
+  pruneExpiredWebOnboardOtps(supabase).catch((err) => console.warn('[WebOnboard] prune sweep failed:', err.message));
+}, 15 * 60 * 1000);
 
 // ==========================================
 // Compliance & expiry reminders (insurance, inspection/MOT, licences, permits,
@@ -1188,6 +1270,7 @@ const start = async () => {
     await ensureFeatureNoticeSchema(supabase);
     await ensureContactNudgeSchema(supabase);
     await ensureWebOnboardOtpTable(supabase);
+    pruneExpiredWebOnboardOtps(supabase).catch(() => {});
 
     logWebhookEnvParity();
 

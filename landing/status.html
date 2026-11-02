@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Live Status — Saka Fleet</title>
+  <meta name="description" content="Real-time health of Saka Fleet, checked from your browser — plus every recent update we have shipped. Plain language, no jargon.">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://sakafleet.com/status.html">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Live Status — Saka Fleet">
+  <meta property="og:url" content="https://sakafleet.com/status.html">
+  <link rel="icon" type="image/svg+xml" href="/assets/img/favicon.svg">
+  <link rel="stylesheet" href="/assets/css/styles.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebPage",
+    "name": "Live Status — Saka Fleet",
+    "url": "https://sakafleet.com/status.html",
+    "isPartOf": { "@id": "https://sakafleet.com/#website" },
+    "about": "Realtime Saka Fleet service health and recent updates",
+    "inLanguage": "en"
+  }
+  </script>
+</head>
+<body>
+  <header class="nav">
+    <div class="wrap nav-inner">
+      <a class="nav-logo" href="/" aria-label="Saka Fleet home">
+        <img class="mark" src="/assets/img/logo.svg" alt="Saka Fleet wordmark" width="130" height="34">
+      </a>
+      <div class="nav-cta">
+        <button class="btn btn-primary" onclick="window.location.href='/'">← Back to Saka Fleet</button>
+      </div>
+    </div>
+  </header>
+
+  <section class="status-hero">
+    <div class="wrap">
+      <h1>Live <span class="grad-text">status</span></h1>
+      <p class="sub">Real-time health of Saka Fleet, checked from your browser — plus every recent update we've shipped. Plain language, no jargon.</p>
+    </div>
+  </section>
+
+  <section class="section" style="padding-top:10px">
+    <div class="wrap">
+      <div class="status-card status-big">
+        <div class="status-dot" id="statusDot" aria-hidden="true"></div>
+        <div class="status-word" id="statusWord">Checking Saka Fleet…</div>
+        <div class="status-meta" id="statusMeta">Contacting Saka Fleet's servers…</div>
+      </div>
+
+      <!-- Incident ticker: appears only while the service is having trouble -->
+      <div class="incident-ticker" id="incidentTicker" role="status" aria-live="polite">
+        <h3>We're on it — live updates</h3>
+        <div class="incident-line" id="incidentLine"></div>
+        <div class="incident-meta" id="incidentMeta"></div>
+      </div>
+
+      <div class="section" id="changelog" style="padding-top:70px">
+        <h2 class="section-title">What's <span class="grad-text">new</span></h2>
+        <p class="section-sub">We ship every week — here's the latest.</p>
+        <div class="changelog" id="changelogList" aria-live="polite">
+          <div class="cl-entry"><div class="ver">Loading changelog…</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="wrap foot-bottom" style="border:0">
+      <span>© 2026 Saka Fleet — a Saka360 brand.</span>
+      <span><a href="/privacy.html">Privacy Policy</a> · <a href="/terms.html">Terms &amp; Conditions</a> · <a href="#" data-cookie-settings>Cookie settings</a> · <a href="/">Home</a></span>
+    </div>
+  </footer>
+
+  <!-- Cookie consent -->
+  <div class="cookie-banner" id="cookieBanner" role="region" aria-label="Cookie notice">
+    <p>🍪 We keep it simple: Saka Fleet uses only strictly necessary cookies to make this site work. No tracking, no advertising cookies — ever.</p>
+    <div class="cookie-actions">
+      <button class="btn btn-ghost" id="cookieSettingsBtn">Cookie settings</button>
+      <button class="btn btn-primary" id="cookieAcceptBtn">Got it</button>
+    </div>
+  </div>
+  <div class="cookie-settings-backdrop" id="cookieSettingsBackdrop" role="dialog" aria-modal="true" aria-labelledby="cookieSettingsTitle">
+    <div class="cookie-settings">
+      <h2 id="cookieSettingsTitle" style="margin-bottom:6px">Cookie settings</h2>
+      <p class="sub">You decide. Strictly necessary cookies keep the site working and are always on.</p>
+      <div class="cookie-group">
+        <div class="grow"><h4>Strictly necessary</h4><p>Site function and security. Without these the site cannot work.</p></div>
+        <label class="cookie-toggle"><input type="checkbox" id="cookieEssential" checked disabled><span class="cookie-slider"></span></label>
+      </div>
+      <div class="cookie-group">
+        <div class="grow"><h4>Preferences</h4><p>Remember your choices, like your country code. Currently unused — nothing extra is stored.</p></div>
+        <label class="cookie-toggle"><input type="checkbox" id="cookiePrefs"><span class="cookie-slider"></span></label>
+      </div>
+      <div class="cookie-group">
+        <div class="grow"><h4>Analytics &amp; marketing</h4><p>We run none today. If measurement is ever added, it switches on only with your permission.</p></div>
+        <label class="cookie-toggle"><input type="checkbox" id="cookieAnalytics"><span class="cookie-slider"></span></label>
+      </div>
+      <button class="btn btn-ghost" id="cookieRejectBtn" style="width:48%">Reject non-essential</button>
+      <button class="btn btn-primary" id="cookieSaveBtn" style="width:48%">Save choices</button>
+    </div>
+  </div>
+
+  <script src="/assets/js/cookieConsent.js" defer></script>
+  <script src="/assets/js/status.js" defer></script>
+</body>
+</html>

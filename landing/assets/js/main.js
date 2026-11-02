@@ -28,6 +28,17 @@
     });
   }
 
+  /* ---------- country auto-detect (v1.40.0) ----------
+     Offline and privacy-safe: the browser locale region selects the calling
+     code. No IP lookup, no third party. Falls back to Kenya. */
+  var REGION_CODES = { KE: '+254', TZ: '+255', UG: '+256', RW: '+250', BI: '+257', NG: '+234', ZA: '+27', GH: '+233', GB: '+44', US: '+1', CA: '+1', AE: '+971', IN: '+91', DE: '+49', AU: '+61' };
+  try {
+    var lang = String(navigator.language || 'en-KE').toUpperCase();
+    var region = lang.split('-')[1];
+    var codeSelect = $('countryCode');
+    if (region && REGION_CODES[region] && codeSelect) codeSelect.value = REGION_CODES[region];
+  } catch (e) { /* keep the default */ }
+
   /* ---------- modal ---------- */
   var modal = $('onboardModal');
   var openButtons = document.querySelectorAll('[data-open-onboard]');
@@ -74,6 +85,15 @@
   consent.addEventListener('change', function () { legalSubmit.disabled = !consent.checked; });
   $('legalBack').addEventListener('click', function () { showStep('stepDetails'); });
 
+  function showDone(already) {
+    if (already) {
+      $('doneTitle').textContent = '🎉 You are all set!';
+      $('doneSub').textContent = 'Your account is already verified — Saka is waiting for you on WhatsApp.';
+      $('doneAlert').textContent = '✅ Account confirmed — no new signup needed.';
+    }
+    showStep('stepDone');
+  }
+
   legalSubmit.addEventListener('click', function () {
     if (!consent.checked || !window.__onboard) return;
     legalSubmit.disabled = true;
@@ -93,6 +113,12 @@
       .then(function (res) { return res.json().then(function (body) { return { ok: res.ok, body: body }; }); })
       .then(function (out) {
         if (out.ok && out.body.success) {
+          if (out.body.already_verified) {
+            // v1.40.0 — the account already exists and is verified: skip the
+            // OTP step and point straight to WhatsApp.
+            showDone(true);
+            return;
+          }
           $('otpEmail').textContent = window.__onboard.email;
           window.__onboard.token = out.body.onboard_token || null;
           startResendCountdown();
@@ -109,8 +135,7 @@
         alert('Network problem — please check your connection and try again.');
       });
   });
-    /* ---------- step 3: OTP ---------- */
-  var otpInputs = Array.prototype.slice.call($('otpRow').querySelectorAll('input'));
+    var otpInputs = Array.prototype.slice.call($('otpRow').querySelectorAll('input'));
   otpInputs.forEach(function (input, idx) {
     input.addEventListener('input', function () {
       input.value = input.value.replace(/[^\d]/g, '').slice(-1);
@@ -146,7 +171,7 @@
       .then(function (res) { return res.json().then(function (body) { return { ok: res.ok, body: body }; }); })
       .then(function (out) {
         if (out.ok && out.body.success) {
-          showStep('stepDone');
+          showDone(false);
         } else {
           $('otpVerify').disabled = false;
           $('otpAlert').classList.add('show');
@@ -238,14 +263,14 @@
     checked = true;
     dot.classList.add('up');
     statusText.textContent = 'All systems operational';
-    statusDetail.textContent = 'app.sakafleet.com responded in real time — uptime maintained at 99.9%.';
+    if (statusDetail) statusDetail.textContent = "Saka Fleet's servers responded in real time — uptime maintained at 99.9%.";
   }
   function markDown() {
     if (checked) return;
     checked = true;
     dot.classList.add('down');
     statusText.textContent = 'Status probe unavailable from your network';
-    statusDetail.textContent = 'Could not reach app.sakafleet.com — check your connection or try again shortly.';
+    if (statusDetail) statusDetail.textContent = 'Could not reach the service — check your connection or try again shortly.';
   }
   function probeHealth(index) {
     if (checked || index >= healthPaths.length) return;

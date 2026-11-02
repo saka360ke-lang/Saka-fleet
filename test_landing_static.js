@@ -25,9 +25,11 @@ function check(condition, message) {
 }
 
 const REQUIRED_FILES = [
-  'index.html', 'privacy.html', 'terms.html', 'data-deletion.html', '404.html',
-  'assets/css/styles.css', 'assets/js/main.js',
+  'index.html', 'privacy.html', 'terms.html', 'data-deletion.html', 'status.html', '404.html',
+  'assets/css/styles.css', 'assets/js/main.js', 'assets/js/cookieConsent.js', 'assets/js/status.js',
   'assets/img/logo.svg', 'assets/img/favicon.svg', 'assets/img/og-cover.svg',
+  'assets/fonts/Outfit-600.woff2', 'assets/fonts/Outfit-800.woff2',
+  'assets/fonts/Inter-400.woff2', 'assets/fonts/Inter-600.woff2', 'assets/fonts/Inter-700.woff2',
   'data/changelog.json', 'robots.txt', 'sitemap.xml', 'llms.txt', 'manifest.webmanifest', '.htaccess'
 ];
 
@@ -50,11 +52,11 @@ check(/Saka 360/i.test(org.parentOrganization?.name || '') && org.email === 'sup
 
 console.log('\n--- Test 3: AI-legibility files ---');
 const llms = fs.readFileSync(path.join(LANDING, 'llms.txt'), 'utf8');
-for (const needle of ['https://sakafleet.com/', '/privacy.html', '/terms.html', '/data-deletion.html', '/api/onboard', '/api/health', 'support@sakafleet.com']) {
+for (const needle of ['https://sakafleet.com/', '/privacy.html', '/terms.html', '/data-deletion.html', '/status.html', '/api/onboard', 'support@sakafleet.com']) {
   check(llms.includes(needle), `llms.txt references ${needle}`);
 }
 const sitemap = fs.readFileSync(path.join(LANDING, 'sitemap.xml'), 'utf8');
-for (const page of ['https://sakafleet.com/', 'https://sakafleet.com/privacy.html', 'https://sakafleet.com/terms.html', 'https://sakafleet.com/data-deletion.html']) {
+for (const page of ['https://sakafleet.com/', 'https://sakafleet.com/privacy.html', 'https://sakafleet.com/terms.html', 'https://sakafleet.com/data-deletion.html', 'https://sakafleet.com/status.html']) {
   check(sitemap.includes(`<loc>${page}</loc>`), `sitemap lists ${page}`);
 }
 const robots = fs.readFileSync(path.join(LANDING, 'robots.txt'), 'utf8');
@@ -107,10 +109,57 @@ for (const needle of ['data-open-onboard', 'stepLegal', 'stepOtp', 'id="consent"
   check(indexHtml.includes(needle), `The onboarding modal carries ${needle}`);
 }
 check(/I have read, understood, and agree to the exhaustive Saka Fleet/.test(indexHtml), 'The mandatory legal checkbox copy is present');
-check(indexHtml.includes('id="statusCard"') && indexHtml.includes('/api/health'), 'The live uptime widget probes /api/health');
+check(indexHtml.includes('id="statusCard"') && indexHtml.includes('/status.html'), 'The homepage status chip links to the live status page');
 check(indexHtml.includes('/data-deletion.html'), 'The footer links the data-deletion page');
 check(indexHtml.includes('wa.me/19404407252') && !indexHtml.includes('wa.me/254700000000'), 'wa.me links point at the real Saka business number, never the placeholder');
 check(mainJs.includes("WA_NUMBER = '19404407252'"), 'main.js uses the real Saka business number for deep links');
+check(mainJs.includes('REGION_CODES') && mainJs.includes('navigator.language'), 'the signup form auto-detects the country code from the browser locale');
+check(!indexHtml.includes('This is where Saka says hello'), 'the phone hint is gone (locale detection replaced it)');
+check(mainJs.includes("'/api/health'") && mainJs.includes("'/healthz'"), 'the status probe checks /api/health first, /healthz as legacy fallback');
+check(mainJs.includes('already_verified'), 'the form handles already-registered visitors without an OTP');
+
+console.log('\n--- Test 8: v1.40.0 content sweep ---');
+const BANNED_VISIBLE = [
+  ['Apex', /Apex/],
+  ['Supabase', /Supabase/],
+  ['Paystack', /Paystack/],
+  ['Google Fonts', /fonts\.googleapis|fonts\.gstatic/],
+  ['app.sakafleet.com (visible)', /app\.sakafleet\.com/],
+  ['"Registered in Kenya"', /Registered in Kenya/],
+  ['ODPC', /ODPC/]
+];
+let visibleText = '';
+for (const file of walk(LANDING)) {
+  if (!/\.(html|txt|svg)$/.test(file)) continue;
+  if (/robots\.txt$/.test(file)) continue;
+  visibleText += fs.readFileSync(file, 'utf8') + '\n';
+}
+for (const [label, pattern] of BANNED_VISIBLE) {
+  check(!pattern.test(visibleText), `No "${label}" appears in visible site content`);
+}
+const privacyText = fs.readFileSync(path.join(LANDING, 'privacy.html'), 'utf8');
+check(!/Supabase|Google Cloud|Resend API|Meta's|Paystack/.test(privacyText), 'The privacy policy names no infrastructure vendors');
+const llmsText = fs.readFileSync(path.join(LANDING, 'llms.txt'), 'utf8');
+check(!/app\.sakafleet\.com/.test(llmsText) && !/Apex|Supabase/.test(llmsText), 'llms.txt is sanitized of vendor names and the app host');
+check(/Saka Fleet by Saka360/.test(fs.readFileSync(path.join(LANDING, 'privacy.html'), 'utf8')), 'the Data Controller is named Saka Fleet by Saka360');
+check(/Basic Data Laws/.test(fs.readFileSync(path.join(LANDING, 'data-deletion.html'), 'utf8')), 'the data-deletion page uses the Basic Data Laws wording');
+check(!indexHtml.includes('llms.txt (AI summary)'), 'the llms.txt footer link is gone (the machine-facing alternate link stays)');
+
+console.log('\n--- Test 9: cookie consent + status page ---');
+const statusHtml = fs.readFileSync(path.join(LANDING, 'status.html'), 'utf8');
+check(statusHtml.includes('id="incidentTicker"') && statusHtml.includes('id="statusWord"'), 'the status page carries the live word and the incident ticker');
+check(/realtime|real-time/i.test(statusHtml), 'the status page says it is realtime');
+for (const page of ['index.html', 'privacy.html', 'terms.html', 'data-deletion.html', '404.html', 'status.html']) {
+  const html = fs.readFileSync(path.join(LANDING, page), 'utf8');
+  check(html.includes('id="cookieBanner"') && html.includes('cookieConsent.js'), `${page} carries the cookie banner`);
+}
+check(indexHtml.includes('data-cookie-settings'), 'the footer re-opens cookie settings');
+check(/Strictly necessary/.test(fs.readFileSync(path.join(LANDING, 'privacy.html'), 'utf8')), 'the privacy policy documents the cookie categories');
+const cookieJs = fs.readFileSync(path.join(LANDING, 'assets/js/cookieConsent.js'), 'utf8');
+check(cookieJs.includes('localStorage') && cookieJs.includes('saka_cookie_consent'), 'consent is stored locally with a versioned key');
+check(/no tracking|tracking or advertising/i.test(cookieJs), 'the consent copy promises no tracking');
+const css = fs.readFileSync(path.join(LANDING, 'assets/css/styles.css'), 'utf8');
+check(css.includes('@font-face') && css.includes('/assets/fonts/Outfit-800.woff2'), 'fonts are self-hosted via @font-face');
 check(/Get Started Free/.test(indexHtml) && /Deploy Your Fleet/.test(indexHtml), 'Primary CTAs are present');
 
 console.log(`\n🎉 ${passed} landing-site assertions passed.`);
