@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.49.3  
+**Version:** 1.49.4  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.49.4** | English-first welcome + explicit language-switch confirmation | §92 |
 | **1.49.3** | Signup conversion tracking (`successful_signup` dataLayer) + cookie-choice gate before account creation | §91 |
 | **1.49.2** | Website-only signup + OTP (in-chat 6-digit fallback removed), `web_onboard_otps` added to the clean-slate reset scope | §90 |
 | **1.49.1** | Fix: superadmin exempted from the website registration gate + natural-language "Status of FIX-<code>" remediation status lookup | §89 |
@@ -3710,4 +3711,19 @@ quiz engine:
   blocked on tracking. `open()` re-surfaces the banner.
 - **GTM next steps (operator):** Custom Event trigger `successful_signup`,
   GA4 `sign_up` tag, Meta `CompleteRegistration` tag.
+
+### 92. English-first welcome + language-switch confirmation (v1.49.4)
+
+- **Welcome is English-first.** `webOnboardWelcomeText()` (index.js) adds a
+  "🌍 Want a different language? Reply in the language you'd like" line; the
+  approved `web_signup_welcome` Meta template should mirror it (operator: update
+  the template body in Meta Business Manager).
+- **Explicit language switch.** `languageSwitchConfirmation(lang)` (whatsapp.js)
+  returns a per-language confirmation (Swahili/French/Spanish/German/Arabic +
+  a generic fallback). The message handler now sets a `languageSwitchNote` when
+  the detected language differs from `preferred_language` and prepends it to the
+  reply — replacing the previous silent auto-switch — while still persisting
+  `preferred_language`.
+- **Prompt sync (rule 13).** The core prompt LANGUAGE section adds "CONFIRM the
+  switch" before replying in a new language.
 

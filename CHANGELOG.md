@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.49.4] - 2026-11-02
+
+- **English-first welcome + language switch.** The proactive welcome (Meta template `web_signup_welcome` and its plain-text fallback) now greets in English and invites the user to reply in their preferred language. When a user replies in another language, Saka confirms the switch ("Language changed to X — reply English to switch back") instead of silently auto-switching. Synced in the core prompt (rule 13).
+- **Tests:** `test_greetings` (+6 language assertions), `test_agent_training` (+1).
+
 ## [1.49.3] - 2026-11-02
 
 - **Signup conversion tracking + cookie gate.** A successful website signup pushes a `successful_signup` dataLayer event (`signup_method: 'website'`), ready for a GTM Custom Event trigger → GA4 `sign_up` + Meta `CompleteRegistration`. The signup flow also requires a cookie choice (Accept all or Reject non-essential) before the account is created — analytics stays opt-in and signup is never blocked on tracking.

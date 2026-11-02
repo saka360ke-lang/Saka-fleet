@@ -234,6 +234,18 @@ export function detectMessageLanguage(text = '') {
   return best && best[1] >= 2 ? best[0] : 'English';
 }
 
+/** v1.49.4 — confirmation line shown when Saka switches to the user's language. */
+export function languageSwitchConfirmation(lang) {
+  const map = {
+    Swahili: '🔤 *Language: Kiswahili* — nitajibu kwa Kiswahili sasa. Jibu "English" ukitaka kurudi Kiingereza.',
+    French: '🔤 *Langue : français* — je répondrai en français. Répondez « English » pour revenir.',
+    Spanish: '🔤 *Idioma: español* — te responderé en español. Responde "English" para volver.',
+    German: '🔤 *Sprache: Deutsch* — ich antworte jetzt auf Deutsch. Antworte „English", um zurückzuwechseln.',
+    Arabic: '🔤 *اللغة: العربية* — سأرد بالعربية الآن. اكتب "English" للعودة.'
+  };
+  return map[lang] || `🔤 *Language changed to ${lang}* — I'll reply in ${lang} now. Reply "English" to switch back.`;
+}
+
 export function checkIsConversationalFeedback(text = '', step = 1) {
   const clean = text.trim().toLowerCase();
 
@@ -971,11 +983,16 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         phaseMarks.profileReadyAt = Date.now();
         const messageLang = detectMessageLanguage(messageText);
         const targetLang = messageLang !== 'English' ? messageLang : (profileData?.preferred_language || 'English');
-        if (messageLang !== 'English' && profileData && messageLang !== profileData.preferred_language && supabaseClient) {
-          try {
-            await supabaseClient.from('profiles').update({ preferred_language: messageLang }).eq('id', profileData.id);
-            profileData.preferred_language = messageLang;
-          } catch {}
+        let languageSwitchNote = null;
+        const languageChanged = messageLang !== 'English' && messageLang !== (profileData?.preferred_language || 'English');
+        if (languageChanged) {
+          languageSwitchNote = languageSwitchConfirmation(messageLang);
+          if (profileData && supabaseClient) {
+            try {
+              await supabaseClient.from('profiles').update({ preferred_language: messageLang }).eq('id', profileData.id);
+              profileData.preferred_language = messageLang;
+            } catch {}
+          }
         }
 
         // v1.49.2 — in-WhatsApp web-signup OTP verification removed: signup + OTP
@@ -3747,6 +3764,7 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
         }
 
         let finalReply = sanitizedReply;
+        if (languageSwitchNote) finalReply = `${languageSwitchNote}\n\n${finalReply}`;
 
         // First contact that did not arrive as a greeting (e.g. a plate sent
         // straight away) still gets Saka's polite introduction once.

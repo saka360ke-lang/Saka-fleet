@@ -21,6 +21,7 @@ import {
   isLegacyWelcomeCopy
 } from './src/services/greetings.js';
 import { sanitizeSakaReply } from './src/services/productQa.js';
+import { detectMessageLanguage, languageSwitchConfirmation } from './src/routes/whatsapp.js';
 
 /**
  * Saka Fleet — First-contact greetings & emoji artistry tests (v1.18.1).
@@ -186,3 +187,11 @@ check(pickNewcomerNudge(0) !== pickNewcomerNudge(1), 'newcomer nudges rotate');
 check(isFirstTimeMessage('This is my first time!!!!') === true, 'first-time message detected');
 check(isFirstTimeMessage("Let's keep moving to what?") === true, 'confused reply to the nudge gets the welcome');
 check(isFirstTimeMessage('Logged 40L at 50350 km') === false, 'normal log is not a first-time message');
+
+console.log('--- Test 9: language detection & switch confirmation (v1.49.4) ---');
+check(detectMessageLanguage('Habari, nataka kusajili gari langu') === 'Swahili', 'Swahili phrases are detected');
+check(detectMessageLanguage('Bonjour, je veux enregistrer ma voiture') === 'French', 'French phrases are detected');
+check(detectMessageLanguage('Hello, I want to register my car') === 'English', 'English stays the default');
+check(/Kiswahili|Swahili/.test(languageSwitchConfirmation('Swahili')), 'the switch confirmation is written in the new language');
+check(/English/.test(languageSwitchConfirmation('Swahili')), 'the confirmation offers a way back to English');
+check(/Language changed to Italian/.test(languageSwitchConfirmation('Italian')), 'an unsupported-language fallback still names the language');

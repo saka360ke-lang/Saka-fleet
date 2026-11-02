@@ -615,7 +615,7 @@ async function logWebOnboardFailure(err, route, details = {}) {
 /** v1.40.0 — the welcome message Saka sends after web verification. */
 function webOnboardWelcomeText(firstName) {
   const name = firstName && firstName.length >= 2 ? `, ${firstName}` : '';
-  return `👋 *Welcome to Saka Fleet${name}!* I'm Saka — your vehicle's co-pilot. 🚗\n\nYour email is verified and your account is ready.\n\nNext up: reply with your vehicle details — or type *Register* — and your 30-day full-featured trial begins. 🎉`;
+  return `👋 *Welcome to Saka Fleet${name}!* I'm Saka — your vehicle's co-pilot. 🚗\n\nYour email is verified and your account is ready.\n\nNext up: reply with your vehicle details — or type *Register* — and your 30-day full-featured trial begins. 🎉\n\n🌍 *Want a different language?* Reply in the language you'd like (e.g. "Swahili" or "Français") and I'll switch.`;
 }
 
 fastify.post('/api/onboard', async (request, reply) => {
