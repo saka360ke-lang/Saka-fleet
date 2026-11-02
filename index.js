@@ -140,8 +140,6 @@ const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
 const supabase = createResilientClient(supabaseUrl, supabaseServiceKey);
 
 // Memory Stores with 24-hour expiry cleanup
-const otpStore = new Map();
-const emailOtpStore = new Map();
 const onboardingStore = new Map(); 
 const chatSessions = new Map(); // phone -> { history: [{role, parts}], lastActive: timestamp }
 const deactivationOtpStore = new Map(); // phone -> { otp: string, expiresAt: number }
@@ -479,111 +477,6 @@ fastify.get('/r/:code', async (request, reply) => {
   reply.header('cache-control', 'no-store');
   return reply.code(404).type('text/html; charset=utf-8').send(shortLinkNotFoundHtml());
 });
-
-// 6. WhatsApp & Email Auth OTP Request Endpoint (Mandatory Email)
-fastify.post('/api/auth/whatsapp/request', async (request, reply) => {
-  const { phone, email } = request.body || {};
-  if (!phone || !email) return reply.status(400).send({ error: 'Phone number and mandatory email are required' });
-
-  const cleanPhone = phone.startsWith('+') ? phone : `+${phone}`;
-  
-  // Generate WhatsApp OTP
-  const whatsappOtp = Math.floor(100000 + Math.random() * 900000).toString();
-  otpStore.set(cleanPhone, { otp: whatsappOtp, expiresAt: Date.now() + 300000 });
-
-  // Generate Email OTP
-  const emailOtp = Math.floor(100000 + Math.random() * 900000).toString();
-  emailOtpStore.set(email.toLowerCase(), { otp: emailOtp, phone: cleanPhone, expiresAt: Date.now() + 300000 });
-
-  // Dispatch WhatsApp OTP
-  const waMessage = `Your Saka Admin verification code is: *${whatsappOtp}*. Valid for 5 minutes.`;
-  await sendMetaWhatsAppMessage(cleanPhone, waMessage);
-
-  // Dispatch Email OTP via Resend (Clean HTML, no fake attachment)
-  try {
-    const { Resend } = await import('resend');
-    const resend = new Resend(process.env.RESEND_API_KEY);
-    
-    await resend.emails.send({
-      from: 'Saka Assistant <reports@reports.sakafleet.com>',
-      to: email,
-      subject: 'Saka Email Verification Code',
-      text: `Your Saka email verification code is: ${emailOtp}. Valid for 5 minutes.`,
-      html: `
-        <div style="font-family: Arial, sans-serif; background-color: #070913; color: #f8fafc; padding: 24px; border-radius: 12px;">
-          <h2 style="color: #38BDF8; margin-top: 0;">Saka Verification</h2>
-          <p>Hello,</p>
-          <p>Your email verification code is:</p>
-          <h1 style="color: #38BDF8; letter-spacing: 2px;">${emailOtp}</h1>
-          <p>This code is valid for 5 minutes.</p>
-          <hr style="border: 0; border-top: 1px solid #1e293b; margin: 20px 0;" />
-          <p style="font-size: 12px; color: #94a3b8;">Cryptographically Verified by Saka AI â€¢ <a href="https://sakafleet.com" style="color: #38BDF8;">sakafleet.com</a></p>
-        </div>
-      `
-    });
-    fastify.log.info(`Email OTP successfully dispatched to ${email}`);
-  } catch (mailErr) {
-    fastify.log.error('Failed to send Email OTP:', mailErr.message);
-  }
-
-  return { success: true, message: 'OTP sent to WhatsApp and Email successfully.' };
-});
-
-// 7. WhatsApp & Email Auth OTP Verify Endpoint (Mandatory Email Linking & Verification)
-fastify.post('/api/auth/whatsapp/verify', async (request, reply) => {
-  const { phone, otp, email, emailOtp } = request.body || {};
-  if (!phone || !otp || !email || !emailOtp) {
-    return reply.status(400).send({ success: false, error: 'Phone, WhatsApp OTP, Email, and Email OTP are all required.' });
-  }
-
-  const cleanPhone = phone.startsWith('+') ? phone : `+${phone}`;
-  const lowerEmail = email.toLowerCase();
-
-  // Verify WhatsApp OTP
-  const waRecord = otpStore.get(cleanPhone);
-  if (!waRecord || waRecord.expiresAt < Date.now() || waRecord.otp !== otp) {
-    return reply.status(400).send({ success: false, error: 'Invalid or expired WhatsApp OTP.' });
-  }
-
-  // Verify Email OTP
-  const emailRecord = emailOtpStore.get(lowerEmail);
-  if (!emailRecord || emailRecord.expiresAt < Date.now() || emailRecord.otp !== emailOtp) {
-    return reply.status(400).send({ success: false, error: 'Invalid or expired Email OTP.' });
-  }
-
-  otpStore.delete(cleanPhone);
-  emailOtpStore.delete(lowerEmail);
-
-  // Upsert Profile with verified email
-  let { data: profile } = await supabase
-    .from('profiles')
-    .select('*')
-    .eq('phone_number', cleanPhone)
-    .maybeSingle();
-
-  if (profile) {
-    await supabase
-      .from('profiles')
-      .update({ email: lowerEmail, email_verified: true })
-      .eq('id', profile.id);
-    profile.email = lowerEmail;
-    profile.email_verified = true;
-  } else {
-    const { data: newProfile, err } = await supabase
-      .from('profiles')
-      .insert([{ phone_number: cleanPhone, email: lowerEmail, email_verified: true, full_name: 'Asset Owner' }])
-      .select()
-      .single();
-    profile = newProfile;
-  }
-
-  return {
-    success: true,
-    message: 'Authentication and mandatory email verification successful.',
-    profile: profile || { phone_number: cleanPhone, email: lowerEmail, email_verified: true, subscription_tier: 'free', full_name: 'Asset Owner' }
-  };
-});
-
 // ==========================================
 // 8. WEB ONBOARDING (v1.39.0) — sakafleet.com signup handshake.
 // The welcome trial is NOT started here (rule 26): trials begin when the user

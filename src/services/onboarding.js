@@ -116,6 +116,9 @@ export async function saveVehicleAssetRecord({
   supabaseClient,
   formattedPhone
 }) {
+  if (profileData?.email_verified !== true) {
+    throw new Error('Website signup required: verify your email on sakafleet.com first.');
+  }
   const token = `SK-PASSBOOK-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
   const coreYom = parseInt(obState.core.yom, 10);
   const coreMileage = parseInt(obState.core.current_mileage, 10) || 0;
@@ -181,7 +184,6 @@ export async function saveVehicleAssetRecord({
     }
     await supabaseClient.from('profiles').update({
       email: coreEmail || profileData.email,
-      email_verified: true,
       updated_at: new Date().toISOString()
     }).eq('id', profileData.id);
 

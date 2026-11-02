@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.49.5] - 2026-11-02
+
+- **Website signup is mandatory before registration/trial.** Added defense-in-depth guards in both vehicle-registration write paths (`quizEngine.persistVehicleRegistration` and legacy `onboarding.saveVehicleAssetRecord`) so an email-unverified account can never register a vehicle or start the welcome trial. The WhatsApp registration gate now clears stale legacy-onboarding state on redirect and no longer requires an empty `onboardingStore`.
+- **Removed legacy WhatsApp auth endpoints.** `POST /api/auth/whatsapp/request` and `/api/auth/whatsapp/verify` (which set `email_verified: true` without the website) are deleted.
+- **Tests:** `test_web_onboarding` (+3 source-level assertions).
+
 ## [1.49.4] - 2026-11-02
 
 - **English-first welcome + language switch.** The proactive welcome (Meta template `web_signup_welcome` and its plain-text fallback) now greets in English and invites the user to reply in their preferred language. When a user replies in another language, Saka confirms the switch ("Language changed to X — reply English to switch back") instead of silently auto-switching. Synced in the core prompt (rule 13).

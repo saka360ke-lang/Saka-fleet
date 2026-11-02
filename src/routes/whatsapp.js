@@ -2076,11 +2076,13 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         const registrationEmailGated = !hasVehicleRegistered
           && profileData?.email_verified !== true
           && !session.quiz
-          && !onboardingStore.get(senderPhone)
           && !isSuperadminPhone(senderPhone)
           && (isRegisterCommand || intent === 'REGISTER_VEHICLE' || intent === 'ONBOARDING_INPUT' || hasVehicleAttributes);
         if (registrationEmailGated) {
           customReply = '🚀 *Set up in about a minute on the website*\n\nTap *Get Started Free* at https://sakafleet.com — I\'ll meet you on WhatsApp once your email is verified.';
+          onboardingStore.delete(senderPhone);
+          session.state = 'IDLE';
+          session.onboardingStep = null;
           isSpecialFlowHandled = true;
         }
 

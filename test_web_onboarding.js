@@ -10,6 +10,9 @@
  */
 
 import assert from 'assert';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   sanitizeOnboardPayload,
   normalizePhoneE164,
@@ -204,6 +207,17 @@ check(sanitizeOnboardPayload(VALID_PAYLOAD).data.preferredLanguage === null, 'A 
 const langDb = createMockSupabase({ profiles: [], admin_audit_logs: [] });
 await completeWebOnboarding(langDb, { email: 'lang@example.com', phone: '+254700000030', firstName: 'Lang', lastName: 'User', verified: false, preferredLanguage: 'English' });
 check(langDb.__db.profiles[0].preferred_language === 'English', 'The profile stores the captured language');
+
+// v1.49.5 — website signup is mandatory: no registration path may create a
+// vehicle (or start the trial) for an email-unverified account, and the legacy
+// WhatsApp auth endpoints are removed.
+const here = path.dirname(fileURLToPath(import.meta.url));
+const indexSrc = fs.readFileSync(path.join(here, 'index.js'), 'utf8');
+check(!indexSrc.includes('/api/auth/whatsapp/verify') && !indexSrc.includes('/api/auth/whatsapp/request'), 'the legacy WhatsApp auth endpoints are removed');
+const quizSrc = fs.readFileSync(path.join(here, 'src/services/quizEngine.js'), 'utf8');
+check(quizSrc.includes('ctx.profile?.email_verified !== true'), 'persistVehicleRegistration refuses unverified accounts');
+const onbSrc = fs.readFileSync(path.join(here, 'src/services/onboarding.js'), 'utf8');
+check(onbSrc.includes('profileData?.email_verified !== true'), 'saveVehicleAssetRecord refuses unverified accounts');
 
 console.log(`\n🎉 ${passed} web-onboarding assertions passed.`);
 console.log('Stateless suite: in-memory database double only — no real rows, no cleanup needed.');

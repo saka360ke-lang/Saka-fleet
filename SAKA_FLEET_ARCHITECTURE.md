@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.49.4  
+**Version:** 1.49.5  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.49.5** | Mandatory website signup (write-path guards on both registration flows, legacy WhatsApp auth endpoints removed) | §93 |
 | **1.49.4** | English-first welcome + explicit language-switch confirmation | §92 |
 | **1.49.3** | Signup conversion tracking (`successful_signup` dataLayer) + cookie-choice gate before account creation | §91 |
 | **1.49.2** | Website-only signup + OTP (in-chat 6-digit fallback removed), `web_onboard_otps` added to the clean-slate reset scope | §90 |
@@ -3726,4 +3727,17 @@ quiz engine:
   `preferred_language`.
 - **Prompt sync (rule 13).** The core prompt LANGUAGE section adds "CONFIRM the
   switch" before replying in a new language.
+
+### 93. Mandatory website signup (v1.49.5)
+
+- **Write-path guards.** `quizEngine.persistVehicleRegistration` and legacy
+  `onboarding.saveVehicleAssetRecord` refuse to write a vehicle when
+  `email_verified !== true`, so the welcome trial can never start before website
+  signup. The legacy flow no longer self-sets `email_verified: true`.
+- **Registration gate.** `registrationEmailGated` (whatsapp.js) no longer requires
+  an empty `onboardingStore`, and clears stale legacy-onboarding state
+  (`onboardingStore`, `session.state`, `session.onboardingStep`) on redirect.
+- **Legacy auth removed.** `POST /api/auth/whatsapp/request` and
+  `/api/auth/whatsapp/verify` (the non-website `email_verified=true` path) are
+  deleted from `index.js`.
 

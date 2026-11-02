@@ -3412,6 +3412,9 @@ async function persistVehicleRegistration(state, ctx) {
   if (!ctx.supabase || !ctx.profile?.id) {
     return { success: false, error: 'Profile or database unavailable.' };
   }
+  if (ctx.profile?.email_verified !== true) {
+    return { success: false, error: 'Please sign up on the website (sakafleet.com) and verify your email first.' };
+  }
 
   const tier = await checkOwnerVehicleTierLimit({
     ownerId: ctx.profile.id,
