@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.55.0  
+**Version:** 1.55.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.55.1** | Sentinel response-mismatch → code diagnosis → PROP-* proposal (flag-gated, read-only, review-in-chat) | §121 |
 | **1.55.0** | Conversation working memory: the submitted-but-unsaved draft (fields + extra notes + pending) is visible to the model, secret-free | §120 |
 | **1.54.5** | Draft-correction lane fixed: a "wrong field" correction to an unsaved entry no longer gets stolen by the saved-ledger edit command | §119 |
 | **1.54.4** | Engine-owned patience ladder: same-field repeats climb deterministically (2nd → simplest typed path, 3rd → human lane), reset on progress | §118 |
@@ -4030,5 +4031,13 @@ quiz engine:
 - **The submitted-but-UNSAVED draft is now visible to the model.** New pure, dependency-free `buildConversationMemory({ quiz, pendingLabel, activeVehicle })` renders a compact "In-progress … draft (NOT saved yet)" block: collected fields as human labels, extra notes (details that never mapped to a DB column), the pending field, and the active vehicle — **never OTP/PIN/token**, and `''` when there is no draft (zero prompt cost in idle chat).
 - **Wired into the conversational-pause path:** `buildPausedQuizReply`'s `quiz_pause_conversation` facts now carry `workingMemory` instead of the raw `answers` object (which leaked secret keys and lacked labels) — so "what did I already tell you?" mid-quiz is answerable. Also passed to `processSakaMessage` (`options.workingMemory`) for any future draft-carrying general turn.
 - **Tests:** `test_conversation_memory` 11 (health-registered), `test_no_canned_replies` ratchet unchanged.
+
+### 121. Sentinel response-mismatch → code diagnosis → PROP proposal (v1.55.1)
+
+- **Conversational response-mismatch loop.** New `src/services/conversationDiagnosis.js` closes the gap between "friction logged" and "proposal drafted": when `evaluateConversationalFriction` records a `USER_FRUSTRATION` / `INCOMPLETE_REPLY`, a flag-gated reasoning-tier call (`purpose: conversation_diagnosis`, registered in `AI_PURPOSES`) inspects a curated **routing map** (the intent/detector entry points — `detectLedgerCommand`, `resolveLedgerTurn`, `detectQuizStart`, `detectRegistrationCorrection`, `isRegisterCommand`, `parseDocumentFields`, `buildConversationMemory`) plus the friction transcript, and returns `{ root_cause, likely_file, minimal_change }`.
+- **Sanitizer (`sanitizeConversationDiagnosis`)** is the wall: empty fields dropped, `likely_file` blocked by a forbidden-path guard (auth/OTP/VIN/payment/schema/CI/.env/reset), caps enforced. `recordConversationProposal()` mints a `PROP-<date>-<nn>` and inserts a **`PENDING_APPROVAL`** `remediation_proposals` row (`category: conversation`, `target_signature` = snippet, `proposed_changes` carries the diagnosis) — the same review-in-chat governance as v1.53.1; **nothing runs autonomously** (rules 16/18).
+- **Wired in `sentinel.js` `processFrictionPatches`** (after the friction row, before the micro-rule optimizer), fail-soft and deduped by the existing 24 h friction dedupe.
+- **Env:** `CONVERSATION_DIAGNOSIS_ENABLED` (default **off**) — registry + `.env.example` documented.
+- **Tests:** `test_conversation_diagnosis` 11 (health-registered: valid passes, forbidden paths rejected, caps), `test_env_audit` 44 (parity).
 
 

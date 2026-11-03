@@ -241,6 +241,8 @@ export const AI_PURPOSES = Object.freeze({
   remediation_synthesis: { tier: AI_TIERS.REASONING, jsonMode: true, maxTokens: 1200, temperature: 0.2 },
   model_benchmark: { tier: AI_TIERS.ROUTER, jsonMode: true, maxTokens: 120, temperature: 0 },
   model_research: { tier: AI_TIERS.ROUTER, maxTokens: 500, temperature: 0.2 },
+  // v1.55.1 — conversation response-mismatch diagnosis (reasoning, read-only).
+  conversation_diagnosis: { tier: AI_TIERS.REASONING, jsonMode: true, maxTokens: 400, temperature: 0.2 },
   default: { tier: AI_TIERS.ROUTER }
 });
 

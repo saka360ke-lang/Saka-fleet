@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.55.1] - 2026-11-03
+
+- **Sentinel now drafts proposals for conversational mismatches.** When a reply misses the user's ask, Sentinel (flag-gated `CONVERSATION_DIAGNOSIS_ENABLED`, default off) inspects the conversation routing map with the reasoning tier, produces a root cause + minimal change, and saves it as a `PROP-*` proposal (`PENDING_APPROVAL`, category `conversation`) for superadmin review — nothing runs autonomously. A forbidden-path sanitizer keeps the diagnosis away from auth/OTP/VIN/payment/schema/CI/.env.
+- **Tests:** `test_conversation_diagnosis` 11 (health-registered), `test_env_audit` 44.
+
 ## [1.55.0] - 2026-11-03
 
 - **Conversation working memory.** The submitted-but-**unsaved** draft is now visible to the model: a new `buildConversationMemory()` renders a compact, secret-free block (collected fields as labels, extra notes, the pending field, the active vehicle) and it now rides the conversational-pause path (`quiz_pause_conversation`) instead of the raw answers object — so "what did I already tell you?" is answerable mid-quiz, and OTP/PIN/token never leak into the prompt. No draft → no block → zero cost in idle chat.

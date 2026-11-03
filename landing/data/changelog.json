@@ -1,6 +1,12 @@
 {
-  "latest": "1.55.0",
+  "latest": "1.55.1",
   "entries": [
+    {
+      "version": "1.55.1",
+      "date": "2026-11-03",
+      "title": "Saka learns from every missed beat",
+      "summary": "When a reply misses the mark, Saka now diagnoses why and files a fix for review — so the next conversation goes smoother."
+    },
     {
       "version": "1.55.0",
       "date": "2026-11-03",

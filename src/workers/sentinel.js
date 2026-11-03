@@ -9,6 +9,7 @@ import { deriveCountryCommStyles, upsertCountryCommStyles } from '../services/co
 import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
 import { buildIncidentSignature, isIncidentSilenced } from '../services/incidents.js';
 import { SAKA_TONE_COMPASS } from '../services/flowKnowledge.js';
+import { isConversationDiagnosisEnabled, diagnoseConversationMismatch, recordConversationProposal } from '../services/conversationDiagnosis.js';
 import { PROMPT_REFINEMENT_MARKER, MAX_STORED_PROMPT_REFINEMENT_CHARS } from '../../sakaAi.js';
 
 function getSupabase(providedSupabase) {
@@ -886,6 +887,27 @@ async function processFrictionPatches(supabase, detectedFrictions) {
       }]);
     } catch (logErr) {
       console.warn('[Sentinel Friction Log Warning]:', logErr.message);
+    }
+
+    // v1.55.1 — conversational response-mismatch → code diagnosis → PROP
+    // proposal (flag-gated, read-only; the superadmin reviews before anything
+    // runs — rules 16/18 intact).
+    if ((friction.type === 'USER_FRUSTRATION' || friction.type === 'INCOMPLETE_REPLY') && isConversationDiagnosisEnabled()) {
+      try {
+        const diagnosis = await diagnoseConversationMismatch({ snippet: friction.snippet, frictionType: friction.type });
+        if (diagnosis) {
+          const proposal = await recordConversationProposal({
+            supabase,
+            phone: friction.phone,
+            frictionType: friction.type,
+            snippet: friction.snippet,
+            diagnosis
+          });
+          if (proposal.ok) console.log(`[Sentinel] Conversation proposal ${proposal.code} drafted (PENDING_APPROVAL).`);
+        }
+      } catch (diagErr) {
+        console.warn('[Sentinel conversation diagnosis]', diagErr.message);
+      }
     }
 
     const optimizerPrompt = `You are the Saka Sentinel Micro-Rule Optimizer for Saka Fleet's conversational assistant.
