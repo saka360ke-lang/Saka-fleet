@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.56.2] - 2026-11-03
+
+- **Plain-English admin backlog (PROP-2026-11-03-07).** The verified superadmin can now ask "show me [all] pending proposals", "list pending proposals", "pending proposals", "what's pending" (→ pending fixes) or "show me [all] proposals" (→ full backlog) and get the deterministic remediation list — zero tokens. These resolve before the directive gate and in the classifier fallback; bare "admin proposals" still opens the Horizon feature proposals, and the help menu names the new phrasing.
+- **Tests:** `test_update_suggest` 43 (+6 plain-English parse assertions, +1 Horizon-unchanged regression).
+
 ## [1.56.1] - 2026-11-03
 
 - **"You deleted the wrong entry" is a complaint, not an edit.** `detectLedgerCommand` now returns null when the user attributes a past action to Saka ("you deleted/wrote/logged/recorded…"), so it reaches the complaint-recovery lane instead of being misread as an edit of the last saved entry (live 2026-11-03).

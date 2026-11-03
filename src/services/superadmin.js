@@ -183,6 +183,18 @@ export async function parseSuperadminCommand(messageText) {
     return { intent: 'ADMIN_REMEDIATION_STATUS', proposal_code: fixStatusMatch[1].toUpperCase() };
   }
 
+  // v1.56.2 (PROP-2026-11-03-07) — plain-English governance shortcuts from the
+  // superadmin resolve deterministically (zero tokens) to the remediation
+  // backlog, never the Horizon feature proposals. Bare "admin proposals" stays
+  // Horizon (ADMIN_PROPOSALS) further down.
+  if (/^\s*(?:please\s+)?(?:what'?s|what\s+is)\s+pending\s*$/i.test(text)
+      || /^\s*(?:please\s+)?(?:show\s+me|list|display|view)?\s*(?:all\s+)?(?:the\s+)?pending\s+(?:remediations?|fixes?|proposals?|fix\s+proposals?)\s*$/i.test(text)) {
+    return { intent: 'ADMIN_REMEDIATIONS', filter: 'pending' };
+  }
+  if (/^\s*(?:please\s+)?(?:show\s+me|list|display|view)\s+(?:all\s+)?(?:the\s+)?(?:remediations?|fixes?|proposals?|fix\s+proposals?)\s*$/i.test(text)) {
+    return { intent: 'ADMIN_REMEDIATIONS', filter: 'all' };
+  }
+
   // Gate: general conversation from the superadmin phone is NOT an admin command.
   if (!ADMIN_DIRECTIVE_RE.test(text)) {
     return { intent: 'UNKNOWN' };
@@ -371,6 +383,7 @@ export async function parseSuperadminCommand(messageText) {
   const prompt = `Classify user's admin request into JSON:
 Intent: "HEALTH_CHECK" | "GENERATE_COUPON" | "PROFILES_REPORT" | "ADMIN_AI_STATS" | "ADMIN_OCR_STATS" | "ADMIN_OCR_PROFILE" | "ADMIN_TURN_LATENCY" | "ADMIN_TRIAL_STATS" | "ADMIN_ROLLOUT" | "ADMIN_REPORT" | "ADMIN_AUDIT" | "ADMIN_ALERTS" | "ADMIN_RULES_RESET" | "ADMIN_RULES_TOGGLE" | "ADMIN_RULES_LIST" | "ADMIN_HORIZON" | "ADMIN_PROPOSALS" | "ADMIN_BACKLOG" | "ADMIN_REMEDIATIONS" | "ADMIN_REMEDIATION_ACCEPT" | "ADMIN_REMEDIATION_DECLINE" | "ADMIN_REMEDIATION_MODIFY" | "ADMIN_FEATURE_ADOPT" | "UNKNOWN"
 Extract: discount_value (e.g. "20%"), target_phone (e.g. "+254712345678"), query (e.g. "KDA 123A" or VIN), rule_key (e.g. "clarify_vin"), proposal_code (e.g. "FIX-2026-10-30-01"), feedback (guidance text), hours (AI/OCR telemetry window 1-168, default 24), days (trial funnel window 1-365, default 30), country_code (e.g. "KE")
+Plain-English backlog: "show me [all] pending proposals" / "list pending proposals" / "pending proposals" / "what's pending" => ADMIN_REMEDIATIONS with filter "pending"; "show me [all] proposals" => ADMIN_REMEDIATIONS with filter "all" (bare "admin proposals" stays ADMIN_PROPOSALS/Horizon).
 Command: "${text}"`;
 
   try {
@@ -410,6 +423,10 @@ Command: "${text}"`;
   }
   if (/\b(profiles?|users?|drivers?|owners?)\s+(report|stats|summary|list|count)\b/i.test(lower) || /\b(user|driver|owner|profile)\s+(stats|summary|report)\b/i.test(lower)) {
     return { intent: 'PROFILES_REPORT' };
+  }
+  // v1.56.2 — deterministic safety net for plain-English backlog requests.
+  if (/\bpending\b/i.test(lower) && /\b(?:proposals?|fix(?:es)?|remediations?)\b/i.test(lower)) {
+    return { intent: 'ADMIN_REMEDIATIONS', filter: 'pending' };
   }
 
   return { intent: 'UNKNOWN' };
@@ -2001,7 +2018,7 @@ export function formatAdminHelpReply() {
   return '🛠️ *Saka admin commands*\n\n' +
     '📊 *Snapshots* — admin report · admin alerts · admin audit <query>\n' +
     '👥 *Fleet* — profiles report · admin trial-stats · admin ai-stats [24h] · admin ocr-stats [24h] · admin ocr-profile [KE] · admin latency [24h] · admin env\n' +
-    '🛠️ *Fixes* — admin backlog · admin remediations [pending|deployed] · admin accept|decline|modify fix <CODE> · admin adopt <FEAT-code> · admin quick-edit · UPDATE-SUGGEST> <your update>\n' +
+    '🛠️ *Fixes* — admin backlog · admin remediations [pending|deployed] · "show me pending proposals" · admin accept|decline|modify fix <CODE> · admin adopt <FEAT-code> · admin quick-edit · UPDATE-SUGGEST> <your update>\n' +
     '🌱 *Growth* — generate coupon 20% · admin horizon · admin proposals\n' +
     '🩺 *Guardrails* — check health · admin rules list|toggle <key>|reset\n' +
     '📚 *Knowledge* — admin kb · admin kb review · admin kb stale\n' +

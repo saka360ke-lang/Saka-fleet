@@ -1,6 +1,12 @@
 {
-  "latest": "1.56.1",
+  "latest": "1.56.2",
   "entries": [
+    {
+      "version": "1.56.2",
+      "date": "2026-11-03",
+      "title": "Just ask, in plain words",
+      "summary": "Admins can now ask \"what's pending?\" or \"show me pending proposals\" and get the fix list straight away — no special syntax needed."
+    },
     {
       "version": "1.56.1",
       "date": "2026-11-03",

@@ -59,6 +59,20 @@ check(parsedRemDeployed.intent === 'ADMIN_REMEDIATIONS' && parsedRemDeployed.fil
 const parsedRemAll = await parseSuperadminCommand('admin remediations');
 check(parsedRemAll.intent === 'ADMIN_REMEDIATIONS' && parsedRemAll.filter === 'all', 'parse: "admin remediations" defaults to the all filter');
 
+// v1.56.2 (PROP-2026-11-03-07) — plain-English backlog requests resolve deterministically.
+const plainPending = await parseSuperadminCommand('show me all pending proposals');
+check(plainPending.intent === 'ADMIN_REMEDIATIONS' && plainPending.filter === 'pending', 'parse: "show me all pending proposals" resolves to the pending backlog');
+const plainList = await parseSuperadminCommand('list pending proposals');
+check(plainList.intent === 'ADMIN_REMEDIATIONS' && plainList.filter === 'pending', 'parse: "list pending proposals" resolves to the pending backlog');
+const plainBare = await parseSuperadminCommand('pending proposals');
+check(plainBare.intent === 'ADMIN_REMEDIATIONS' && plainBare.filter === 'pending', 'parse: "pending proposals" resolves to the pending backlog');
+const plainWhatsPending = await parseSuperadminCommand("what's pending");
+check(plainWhatsPending.intent === 'ADMIN_REMEDIATIONS' && plainWhatsPending.filter === 'pending', 'parse: "what\'s pending" resolves to the pending backlog');
+const plainAll = await parseSuperadminCommand('show me all proposals');
+check(plainAll.intent === 'ADMIN_REMEDIATIONS' && plainAll.filter === 'all', 'parse: "show me all proposals" resolves to the full backlog');
+const adminProposalsHorizon = await parseSuperadminCommand('admin proposals');
+check(adminProposalsHorizon.intent === 'ADMIN_PROPOSALS', 'parse: bare "admin proposals" stays Horizon (unchanged)');
+
 const parsedBacklog = await parseSuperadminCommand('admin backlog');
 check(parsedBacklog.intent === 'ADMIN_BACKLOG' && parsedBacklog.filter === 'all', 'parse: "admin backlog" resolves to the unified backlog');
 const parsedBacklogPending = await parseSuperadminCommand('admin backlog pending');
