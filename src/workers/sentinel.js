@@ -12,7 +12,7 @@ import { buildIncidentSignature, isIncidentSilenced } from '../services/incident
 import { SAKA_TONE_COMPASS } from '../services/flowKnowledge.js';
 import { isConversationDiagnosisEnabled, diagnoseConversationMismatch, recordConversationProposal } from '../services/conversationDiagnosis.js';
 import { PROMPT_REFINEMENT_MARKER, MAX_STORED_PROMPT_REFINEMENT_CHARS } from '../../sakaAi.js';
-import { normalizeFrictionPhone } from '../services/frictionTracker.js';
+import { normalizeFrictionPhone, markFrictionDeployed } from '../services/frictionTracker.js';
 
 function getSupabase(providedSupabase) {
   if (providedSupabase) return providedSupabase;
@@ -1006,6 +1006,11 @@ Output ONLY valid JSON matching this schema:
             patch_instruction: instruction,
             friction_type: friction.type
           });
+          try {
+            const { data: newestRow } = await supabase.from("chat_friction_logs").select("id").eq("user_phone", normalizeFrictionPhone(friction.phone)).eq("friction_type", friction.type).order("detected_at", { ascending: false }).limit(1);
+            const fid = newestRow && newestRow[0] ? newestRow[0].id : null;
+            if (fid) await markFrictionDeployed(supabase, fid, "rule:" + sanitizedKey);
+          } catch { }
         } else {
           console.error('[Sentinel Dynamic Rule Upsert Error]:', upsertErr.message);
         }

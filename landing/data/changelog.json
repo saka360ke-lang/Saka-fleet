@@ -1,6 +1,12 @@
 {
-  "latest": "1.57.1",
+  "latest": "1.58.0",
   "entries": [
+    {
+      "version": "1.58.0",
+      "date": "2026-11-03",
+      "title": "No more correction loops",
+      "summary": "Re-sending a correction during vehicle setup now just updates the field, and Sentinel tracks its own fixes as deployed."
+    },
     {
       "version": "1.57.1",
       "date": "2026-11-03",

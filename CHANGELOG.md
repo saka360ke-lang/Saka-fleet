@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.58.0] - 2026-11-03
+
+- **The registration confirm no longer loops on a re-sent correction.** During confirmation, a natural field correction (Make and model: TOYOTA HIACE VAN / make is Toyota / insurance expiry: ...) now updates that field and drops its stale duplicate extra note, instead of piling up notes and re-showing the same summary (the TOYOTA/TOUOTA loop, live 2026-11-03). New parseRegistrationFieldCorrection + stripFieldNotes in quizEngine; also applied in the question-phase correction lane.
+- **Sentinel now marks its own fixes deployed.** When the micro-rule optimizer mints a saka_dynamic_rules patch from a friction point, the originating chat_friction_logs row is auto-marked DEPLOYED (resolution rule:key), so the friction tracker reflects reality and auto-clears after 4h.
+- **Conversation proposals triaged.** PROP-2026-11-03-08 and -09 (both the You deleted the wrong entry diagnosis) closed as DECLINED - already fixed in v1.56.1 (detectLedgerCommand complaint guard).
+- **Tests:** test_v1571 10 (+2 field-correction assertions).
+
 ## [1.57.1] - 2026-11-03
 
 - **No more phantom Applying trial extension coupon.** The coupon intent no longer fires on a bare yes / yes please / extend (both the sakaAi regex classifier and the whatsapp coupon branch were tightened); only an explicit code (EXT30-...) or verb (apply coupon / redeem coupon / extend trial) triggers it. Copy softened to Checking your coupon...

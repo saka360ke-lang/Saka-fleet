@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.57.1  
+**Version:** 1.58.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.58.0** | Registration confirm loop fix (field-correction lane + note strip) + Sentinel friction auto-close (DEPLOYED) + proposals triaged | 129 |
 | **1.57.1** | Coupon false-positive fix, trial capacity fix (growth welcome trial + reconcile), superadmin trial cleanup, clear chat | 128 |
 | **1.57.0** | Country learning buckets (Uganda != Italy) + superadmin-can-never-be-driver rectification | 127 |
 | **1.56.5** | admin friction done resolves short id prefixes (tracker polish) | 126 |
@@ -4100,3 +4101,10 @@ quiz engine:
 - **Superadmin:** rectify_superadmin_driver.js also clears the superadmin profile trial/subscription (free/ACTIVE, trial fields null).
 - **Clear chat:** confirm-gated clear chat / reset chat / start over deletes chat_history / chat_transcripts / processed_webhooks and resets the session (fleet data untouched; wipe-aware isFirstContact re-fires the welcome).
 - **Tests:** test_v1571 8 (health-registered).
+### 129. v1.58.0 - registration confirm loop fix + Sentinel friction auto-close (2026-11-03)
+
+- **Registration confirm correction lane:** handleConfirmation runs detectRegistrationCorrection + the new parseRegistrationFieldCorrection (label:value / label is value) before the extra-notes catch-all, sets/clears that field, strips the stale duplicate note via stripFieldNotes, and re-renders the summary. The question-phase correction lane also strips the field note. Fixes the TOYOTA/TOUOTA re-send-the-same-correction loop (live 2026-11-03).
+- **Sentinel friction -> DEPLOYED:** processFrictionPatches marks the originating chat_friction_logs row DEPLOYED (resolution rule:key) when a micro-rule is minted, closing the tracker loop (auto-clears after FRICTION_CLEARED_AFTER_HOURS).
+- **Proposals triaged:** PROP-2026-11-03-08 and -09 DECLINED (already fixed v1.56.1 detectLedgerCommand complaint guard).
+- **Remaining (tracked):** the reminder reply-3 -> identical re-prompt loop (LOOPING_PROMPTS 16:06) needs a numbered catalog menu for reminder_type / patience-ladder escalation.
+- **Tests:** test_v1571 10 (health-registered).

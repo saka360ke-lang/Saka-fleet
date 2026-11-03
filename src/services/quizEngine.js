@@ -2085,6 +2085,24 @@ function resolveRegistrationField(phrase, def) {
   return null;
 }
 
+export function stripFieldNotes(notes, fieldKey) {
+  const re = REG_FIELD_ALIASES[fieldKey];
+  if (!re || !Array.isArray(notes)) return Array.isArray(notes) ? notes : [];
+  return notes.filter((note) => !re.test(String(note)));
+}
+
+export function parseRegistrationFieldCorrection(text, def) {
+  const clean = String(text || "").trim();
+  if (!clean || clean.length > 80) return null;
+  const m = clean.match(/^([A-Za-z][A-Za-z0-9 ]{0,30}?)\s*(?::|=|\bis\b)\s*(.+)$/i);
+  if (!m) return null;
+  const field = resolveRegistrationField(m[1].trim(), def);
+  if (!field) return null;
+  const value = m[2].trim();
+  if (!value) return null;
+  return { field, value };
+}
+
 /**
  * v1.53.2 — correction lane for vehicle_registration. Recognises:
  *   "you captured/read/got the <field> wrong"  → clear + re-ask that field
@@ -2248,6 +2266,7 @@ export async function handleQuizTurn({
         // mangle a plate ("KAS628T" → "628T"); the confirm/persist step
         // normalises dates exactly as the normal flow does.
         state.answers[correction.field] = correction.value;
+        state.extraNotes = stripFieldNotes(state.extraNotes || [], correction.field);
         state.turnNote = `The user corrected ${correction.field}. Save this value and continue with the next missing field.`;
       }
       const reply = await askCurrent(state, vctx);
@@ -2597,6 +2616,33 @@ async function handleConfirmation(state, def, clean, ctx, aiExtracted) {
     };
   }
 
+  // v1.58.0 - a natural field correction during confirm (Make and model: X / make is Y) updates the field and drops the stale duplicate note, instead of piling up extra notes and re-showing the same summary (loop).
+  if (state.flow === 'vehicle_registration' && def) {
+    let fc = detectRegistrationCorrection(clean, def);
+    if (!fc) {
+      const parsed = parseRegistrationFieldCorrection(clean, def);
+      if (parsed) fc = { action: 'set', field: parsed.field, value: parsed.value };
+    }
+    if (fc) {
+      if (fc.action === 'clear') {
+        delete state.answers[fc.field];
+      } else {
+        state.answers[fc.field] = fc.value;
+      }
+      state.extraNotes = stripFieldNotes(state.extraNotes || [], fc.field);
+      state.lastNote = null;
+      const changedLabel = (def.fields.find((f) => f.key === fc.field) || {}).label || fc.field;
+      const reply = await renderConfirmationSummary({
+        flowLabel: def.label,
+        summaryRows: buildSummaryRows(def, state.answers, ctx),
+        notes: [`Updated from your correction: ${changedLabel}.`],
+        language: ctx.language,
+        countryInfo: ctx.countryInfo,
+        profile: ctx.profile
+      });
+      return { handled: true, reply, flow: state.flow, active: true };
+    }
+  }
   const changed = applyCorrections(state, def, aiExtracted || {}, ctx);
   if (changed.length === 0 && isSubstantiveText(clean)) {
     state.extraNotes = mergeExtraNotes(state.extraNotes || [], [clean]);

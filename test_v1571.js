@@ -2,6 +2,7 @@ import assert from 'assert';
 import { createMockSupabase } from './scripts/mockSupabase.js';
 import { getEntitlements, invalidateEntitlements } from './src/services/subscriptions.js';
 import { classifyIntentWithRegex } from './sakaAi.js';
+import { parseRegistrationFieldCorrection, stripFieldNotes } from './src/services/quizEngine.js';
 
 let passed = 0;
 function check(condition, message) { assert(condition, message); passed += 1; console.log("  ok " + message); }
@@ -26,5 +27,11 @@ const ent = await getEntitlements({ supabase: trialMock.client, ownerId: "p-tria
 check(ent.tierKey === "growth", "TRIALING resolves the tier from the live trial row");
 check(ent.isTrial === true, "the account is reported as on trial");
 check(ent.effectiveVehicleCapacity >= 3, "a trial user gets multi-vehicle capacity");
+
+const regDef = { fields: [{ key: "make_model" }, { key: "plate_number" }] };
+const fc = parseRegistrationFieldCorrection("Make and model: TOYOTA HIACE VAN", regDef);
+check(fc && fc.field === "make_model" && fc.value === "TOYOTA HIACE VAN", "a confirm-phase field correction parses to make_model");
+const stripped = stripFieldNotes(["Make and model: TOUOTA HIACE VAN", "bought in Mombasa"], "make_model");
+check(stripped.length === 1 && stripped[0] === "bought in Mombasa", "a corrected field drops its stale duplicate note");
 
 console.log("ALL v1.57.1 TESTS PASSED (" + passed + " assertions).");
