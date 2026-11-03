@@ -942,6 +942,48 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
 
     // v1.25.2 — explicit stop/pause: acknowledge once, stay quiet, and resume on
     // the user's next message. Deterministic (no AI, no marketing follow-up).
+    // v1.57.1 - user can wipe the conversation and start fresh; fleet data is untouched.
+    if (/^(?:clear|reset)\s+(?:the\s+)?(?:chat|conversation|history)$|^start\s+over$|^clear\s+chat$/i.test(cleanCmd) && !session.pendingClearChat) {
+      session.pendingClearChat = true;
+      const confirmClear = "This only clears our chat history - your vehicles, expenses and reminders stay safe. Reply *CLEAR* to confirm, or *cancel* to keep chatting.";
+      session.history = session.history || [];
+      session.history.push({ role: "user", parts: [{ text: messageText }] });
+      session.history.push({ role: "model", parts: [{ text: confirmClear }] });
+      if (session.history.length > CHAT_HISTORY_MAX_MESSAGES) session.history = session.history.slice(-CHAT_HISTORY_MAX_MESSAGES);
+      chatSessions.set(senderPhone, session);
+      try { await sendWhatsAppReply(senderPhone, confirmClear); } catch { }
+      if (supabaseClient) { try { await saveChatMessage(supabaseClient, senderPhone, "assistant", confirmClear); } catch { } }
+      return { status: "clear_chat_confirm" };
+    }
+    if (session.pendingClearChat) {
+      if (/^clear$/i.test(cleanCmd)) {
+        try {
+          if (supabaseClient) {
+            await supabaseClient.from("chat_history").delete().eq("user_phone", senderPhone);
+            await supabaseClient.from("chat_transcripts").delete().eq("phone_number", senderPhone);
+            await supabaseClient.from("processed_webhooks").delete().eq("phone_number", senderPhone);
+          }
+        } catch { }
+        session.history = [];
+        session.pendingClearChat = false;
+        session.sakaIntroduced = false;
+        session.quiz = null;
+        chatSessions.set(senderPhone, session);
+        const cleared = "Fresh start! Our chat is cleared - your vehicles, expenses and reminders are safe. What would you like to do?";
+        try { await sendWhatsAppReply(senderPhone, cleared); } catch { }
+        if (supabaseClient) { try { await saveChatMessage(supabaseClient, senderPhone, "assistant", cleared); } catch { } }
+        return { status: "chat_cleared" };
+      } else if (/^(cancel|no|stop)$/i.test(cleanCmd)) {
+        session.pendingClearChat = false;
+        chatSessions.set(senderPhone, session);
+        const keepChat = "Okay, I have not cleared anything.";
+        try { await sendWhatsAppReply(senderPhone, keepChat); } catch { }
+        return { status: "clear_chat_cancelled" };
+      } else {
+        session.pendingClearChat = false;
+      }
+    }
+
     if (isStopRequest(cleanCmd)) {
       session.paused = true;
       session.history = session.history || [];
@@ -1031,6 +1073,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                 // tier ('SOLO') resolves to solo_pro entitlements on a null
                 // status. New accounts are Free until a trial or payment.
                 subscription_tier: 'free',
+                subscription_status: 'ACTIVE',
                 is_active: true
               }])
               .select()
@@ -2120,7 +2163,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         // v1.32.3 — a bare "yes" only redeems a coupon when Saka actually offered
         // one. Live bug 2026-11-01 09:31: the owner answered the compliance
         // question with "yes" and the coupon branch swallowed the turn.
-        else if (!session.quiz && !session.pendingDeleteVehicle && !session.pendingAccountDeletion && !session.pendingCancelSubscription && intent !== 'EXTEND_TRIAL' && (intent === 'APPLY_COUPON' || /^EXT30-[A-Z0-9]+$/i.test(messageText.trim()) || mergedExt?.coupon_code || (/^(yes|yes please|apply coupon|extend trial|extend)$/i.test(messageText.trim()) && /(?:coupon|EXT30-|extend\s+(?:your|the|my)?\s*trial|trial\s+extension)/i.test(String(session.lastAssistantPrompt || ''))))) {
+        else if (!session.quiz && !session.pendingDeleteVehicle && !session.pendingAccountDeletion && !session.pendingCancelSubscription && intent !== 'EXTEND_TRIAL' && (intent === 'APPLY_COUPON' || /^EXT30-[A-Z0-9]+$/i.test(messageText.trim()) || mergedExt?.coupon_code || (/^(apply coupon|redeem coupon|extend trial)$/i.test(messageText.trim()) && /(?:coupon|EXT30-|extend\s+(?:your|the|my)?\s*trial|trial\s+extension)/i.test(String(session.lastAssistantPrompt || ''))))) {
           if (supabaseClient) {
             const extRes = await applyTrialExtensionCoupon({
               phone: senderPhone,

@@ -40,6 +40,8 @@ const STATLESS_SUITES = [
   'test_friction_tracker.js',
   // v1.57.0 - per-country learning buckets (Uganda != Italy).
   'test_country_learnings.js',
+  // v1.57.1 - coupon false-positive + trial capacity regressions.
+  'test_v1571.js',
   // v1.24.2 — the wipe registry and its TRUNCATE SQL must never drift apart.
   'test_db_reset_scope.js',
   // v1.24.4 — operator status probes (public vs secret-gated payloads).

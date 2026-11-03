@@ -804,12 +804,12 @@ export function classifyIntentWithRegex(messageText = '') {
   }
 
   // Trial Extension Coupon Intent (e.g. "Yes", "yes please", "apply coupon", or specific code)
-  if (/^(yes|yes please|apply coupon|extend trial|extend)$/i.test(clean) || /^EXT30-[A-Z0-9]+$/i.test(clean)) {
+  if (/^(apply coupon|redeem coupon|extend trial)$/i.test(clean) || /^EXT30-[A-Z0-9]+$/i.test(clean)) {
     const codeMatch = clean.match(/EXT30-[A-Z0-9]+/i);
     return {
       intent: 'APPLY_COUPON',
       extracted_data: { coupon_code: codeMatch ? codeMatch[0].toUpperCase() : null },
-      reply_message: 'Applying trial extension coupon...'
+      reply_message: 'Checking your coupon...'
     };
   }
 

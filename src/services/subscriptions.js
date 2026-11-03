@@ -184,8 +184,14 @@ export async function getEntitlements({ supabase, ownerId, profile = null, now =
   const prof = profile?.subscription_tier ? profile : await fetchProfile(supabase, id);
   if (!prof) return cacheEntitlements(id, freeEntitlements(id, profile));
 
-  const tierKey = normalizeTierKey(prof.subscription_tier);
   const status = String(prof.subscription_status || 'ACTIVE').toUpperCase();
+  // v1.57.1 - during TRIALING the live trial row decides the tier (a welcome
+  // trial runs on solo_pro even if profiles.subscription_tier is still at free).
+  const trialRowEarly = status === 'TRIALING' ? await getActiveTrialRow(supabase, id) : null;
+  const trialTierKeyEarly = trialRowEarly && ['ACTIVE', 'EXTENDED'].includes(String(trialRowEarly.status))
+    ? normalizeTierKey(trialRowEarly.tier || trialRowEarly.tier_key)
+    : null;
+  const tierKey = normalizeTierKey(trialTierKeyEarly || prof.subscription_tier);
   const addons = Math.max(0, Math.floor(Number(prof.addon_quantity) || 0));
   const endMs = periodEndMs(prof);
   const nowMs = now.getTime();
@@ -217,7 +223,7 @@ export async function getEntitlements({ supabase, ownerId, profile = null, now =
     return cacheEntitlements(id, ent);
   }
 
-  const trial = status === 'TRIALING' ? await getActiveTrialRow(supabase, id) : null;
+  const trial = trialRowEarly;
   // Revenue guard: TRIALING without a live trial row must never grant paid
   // access indefinitely (e.g. a deleted/corrupted trial_sessions row).
   if (status === 'TRIALING' && isPaidTierKey(tierKey) && !trial) {

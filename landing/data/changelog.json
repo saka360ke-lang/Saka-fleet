@@ -1,6 +1,12 @@
 {
-  "latest": "1.57.0",
+  "latest": "1.57.1",
   "entries": [
+    {
+      "version": "1.57.1",
+      "date": "2026-11-03",
+      "title": "Add vehicles on trial, clear your chat",
+      "summary": "A trial now lets you add vehicles, the stray coupon message is gone, and you can clear the chat anytime."
+    },
     {
       "version": "1.57.0",
       "date": "2026-11-03",

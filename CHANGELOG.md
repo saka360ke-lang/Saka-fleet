@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.57.1] - 2026-11-03
+
+- **No more phantom Applying trial extension coupon.** The coupon intent no longer fires on a bare yes / yes please / extend (both the sakaAi regex classifier and the whatsapp coupon branch were tightened); only an explicit code (EXT30-...) or verb (apply coupon / redeem coupon / extend trial) triggers it. Copy softened to Checking your coupon...
+- **Trial users can actually add vehicles.** (1) Accounts born TRIALING + a future trial_ends_at from legacy DB defaults but with no real trial_sessions row were silently on Free capacity; getEntitlements now resolves the tier from the live trial row and new profiles start explicitly ACTIVE. (2) The welcome trial now runs on growth (5 vehicles) via WELCOME_TRIAL_TIER, so a trial user can explore multi-vehicle (was solo_pro = 1). scripts/reconcile_trials.js started the missing welcome trials (David now gets capacity 5).
+- **Superadmin is clean.** scripts/rectify_superadmin_driver.js now also clears the superadmin profile trial/subscription (free/ACTIVE, no trial) - run live.
+- **Clear chat / reset chat.** A new confirm-gated clear chat / reset chat / start over command wipes chat_history / chat_transcripts / processed_webhooks and starts fresh - vehicles, expenses, reminders and the plan are untouched.
+- **Tests:** test_v1571 8 (health-registered).
+
 ## [1.57.0] - 2026-11-03
 
 - **Superadmin can never be a driver (rectified).** The assign-driver flow now refuses a superadmin phone at the write path (`createDriverAssignment`), and a one-time idempotent remediation (`scripts/rectify_superadmin_driver.js`) cancelled the live bad assignment, released any vehicle link and normalised the superadmin profile. Rule 15 / v1.50.0 preserved.

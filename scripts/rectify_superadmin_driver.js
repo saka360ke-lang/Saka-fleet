@@ -44,7 +44,7 @@ async function main() {
       const { error } = await supabase.from("vehicles").update({ assigned_driver_id: null }).eq("id", v.id);
       if (!error) summary.vehiclesReleased += 1;
     }
-    const { error: perr } = await supabase.from("profiles").update({ full_name: "Superadmin", driver_profile_pending: false }).eq("id", profile.id);
+    const { error: perr } = await supabase.from("profiles").update({ full_name: "Superadmin", driver_profile_pending: false, subscription_tier: "free", subscription_status: "ACTIVE", trial_ends_at: null, trial_used_at: null }).eq("id", profile.id);
     summary.profileNormalised = !perr;
   }
 

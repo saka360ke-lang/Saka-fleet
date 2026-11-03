@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.57.0  
+**Version:** 1.57.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.57.1** | Coupon false-positive fix, trial capacity fix (growth welcome trial + reconcile), superadmin trial cleanup, clear chat | 128 |
 | **1.57.0** | Country learning buckets (Uganda != Italy) + superadmin-can-never-be-driver rectification | 127 |
 | **1.56.5** | admin friction done resolves short id prefixes (tracker polish) | 126 |
 | **1.56.4** | Friction tracker (pending/deployed + 4h auto-clear + log) + whole-conversation memory (20-40 turns) + E.164 friction phones | 126 |
@@ -4092,3 +4093,10 @@ quiz engine:
 - **Country learning buckets:** new `country_learnings` (country_code PK, learnings, tone_notes, message_count) + `src/services/countryLearnings.js` (`ensureCountryBucket`, `deriveCountryLearnings`, `upsertCountryLearnings`, `getCountryLearningsLine`, `COUNTRY_LEARNINGS_SQL`). `ensureCountryBucket` creates the bucket on the fly at signup; Sentinel derives and upserts per-country lessons; `whatsapp.js` injects `COUNTRY LEARNINGS (CC, ...)` beside `COUNTRY COMMUNICATION STYLE`. Isolation: a CC lesson only reaches CC users; GLOBAL is never mixed.
 - **Superadmin is never a driver:** guard in `createDriverAssignment` refuses `SUPERADMIN_PHONE`; `scripts/rectify_superadmin_driver.js` (idempotent) cancelled the live assignment (`superadmin_cannot_be_driver`), released the vehicle link and normalised the profile to `Superadmin`.
 - **Tests:** `test_country_learnings` 9 (health-registered); `npm run migrate:country-learnings` applied.
+### 128. v1.57.1 live-bug fixes: coupon, trial capacity, superadmin cleanup, clear chat
+
+- **Coupon false-positive:** sakaAi.js classifyIntentWithRegex and the whatsapp coupon branch now require an explicit code (EXT30-...) or verb (apply coupon / redeem coupon / extend trial); a bare yes/extend no longer routes to APPLY_COUPON (was the spurious Applying trial extension coupon... message).
+- **Trial capacity:** getEntitlements resolves the tier from the live trial_sessions row when subscription_status is TRIALING (a free-tier profile on a live trial now gets the trial capacity); new profiles are created ACTIVE (no phantom trial); the welcome trial runs on WELCOME_TRIAL_TIER (default growth = 5 vehicles). reconcile_trials.js backfills real welcome trials for phantom-TRIALING accounts.
+- **Superadmin:** rectify_superadmin_driver.js also clears the superadmin profile trial/subscription (free/ACTIVE, trial fields null).
+- **Clear chat:** confirm-gated clear chat / reset chat / start over deletes chat_history / chat_transcripts / processed_webhooks and resets the session (fleet data untouched; wipe-aware isFirstContact re-fires the welcome).
+- **Tests:** test_v1571 8 (health-registered).

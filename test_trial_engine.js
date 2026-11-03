@@ -137,7 +137,7 @@ async function run() {
   });
   const welcome = await startWelcomeTrial({ supabase: welcomeMock.client, ownerId: 'p-1' });
   check(welcome.started === true && welcome.source === 'welcome', 'Welcome trial starts and is tagged "welcome"');
-  check(welcomeMock.db.trial_sessions[0].tier === 'solo_pro' && welcomeMock.db.trial_sessions[0].source === 'welcome', 'Welcome trial runs on solo_pro (all features)');
+  check(welcomeMock.db.trial_sessions[0].tier === (process.env.WELCOME_TRIAL_TIER || 'growth') && welcomeMock.db.trial_sessions[0].source === 'welcome', 'Welcome trial runs on the configured tier (all features)');
   check(welcomeMock.db.profiles[0].subscription_status === 'TRIALING' && Boolean(welcomeMock.db.profiles[0].trial_used_at), 'Profile is TRIALING and the lifetime stamp is set');
   const welcomeAgain = await startWelcomeTrial({ supabase: welcomeMock.client, ownerId: 'p-1' });
   check(welcomeAgain.started === false, 'A second welcome trial is impossible');

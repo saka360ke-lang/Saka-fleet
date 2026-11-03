@@ -296,7 +296,7 @@ export async function startWelcomeTrial({ supabase, ownerId } = {}) {
   return startAccountTrial({
     supabase,
     ownerId,
-    tierKey: 'solo_pro',
+    tierKey: process.env.WELCOME_TRIAL_TIER || 'growth',
     interval: 'monthly',
     source: 'welcome'
   });
