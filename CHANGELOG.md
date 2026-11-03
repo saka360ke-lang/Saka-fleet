@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.54.3] - 2026-11-03
+
+- **Conversational-first completion.** The last 19 canned replies in the WhatsApp route are now composed from facts by `composeMessage` — passbook/onboarding stage prompts, vehicle errors, the VIN-lock invariant, deletion/switch/expense/account outcome cards, earnings/email prompts and cancellation acks — with the old deterministic sentence preserved verbatim as `fallbackText` for provider outages. Only the instant "reading now" ack stays literal: **the no-canned-replies ratchet drops from ≤ 20 to ≤ 4 (1 literal remains).**
+- **Conversation compliance harness** (`test_conversation_compliance.js`, the §111 follow-up): persona proof for elderly, low-literacy, angry and Shenglish users pinned by the core-prompt LAWS and tone-compass poles/mirror/floors, plus a plain-language lint over all 32 deterministic fallbacks (no banned phrases, ONE unquoted question, ≤ 28-word sentences after stripping quoted example phrasings). Health-registered, 18 assertions.
+- **Tracked follow-up:** the engine-owned patience counter (same-field repeats → simplest typed path → human lane) ships with the next conversation release; the prompt-level EVERY-DEMOGRAPHIC LAW already carries the behavior.
+- **Tests:** `test_no_canned_replies` ratchet, `test_conversation_compliance` 18, `test_agent_training` 154, health green.
+
 ## [1.54.2] - 2026-11-03
 
 - **Country parsing profiles as plug-in data.** The KE e-TIMS + NTSA parsers moved out of `ocrService.js` into `src/data/ocrCountryProfiles.js` (`getOcrCountryProfile`), and GLOBAL/unprofiled countries resolve to the neutral path (rule 36) — exact parity proven by the existing fixtures. New country profiles are added as modules, never pushed globally.

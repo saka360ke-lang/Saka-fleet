@@ -1,6 +1,12 @@
 {
-  "latest": "1.54.2",
+  "latest": "1.54.3",
   "entries": [
+    {
+      "version": "1.54.3",
+      "date": "2026-11-03",
+      "title": "Saka speaks, never scripts — fully",
+      "summary": "Every reply is now written conversationally for you, and a new compliance harness keeps Saka warm, clear and patient for everyone."
+    },
     {
       "version": "1.54.2",
       "date": "2026-11-03",

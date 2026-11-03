@@ -12,8 +12,9 @@ import assert from 'assert';
  * (superadmin.js) is out of scope by design (hybrid deterministic payloads).
  *
  * Ratchet: the number of remaining canned literals must NEVER grow; each
- * release converts more of them into composed replies. (Quiz outcome cards
- * are the remaining batch, converted in follow-up releases.)
+ * release converts more of them into composed replies. (v1.54.3 — quiz
+ * outcome cards, gates and cancellation acks are composed now; only the
+ * instant "reading now" progress ack stays literal.)
  */
 
 const source = fs.readFileSync('src/routes/whatsapp.js', 'utf8');
@@ -36,11 +37,14 @@ let passed = 0;
 
 // Ratchet: the canned-literal count must never grow past today's baseline;
 // every release converts more of them into composed replies.
+// v1.54.3 — the quiz outcome cards + gates + cancellation acks are now
+// composed too; only the instant progress ack remains (counted twice: the
+// assignment and the send call).
 const currentCount = directReplies.length;
-assert(currentCount <= 20, `Canned literal replies grew beyond the ratchet (${currentCount}). Convert them to composeMessage instead.`);
+assert(currentCount <= 4, `Canned literal replies grew beyond the ratchet (${currentCount}). Convert them to composeMessage instead.`);
 passed += 1;
 assert(directReplies.includes('📖 Got it - reading that now.'), 'the instant reading ack remains the only whitelisted literal');
 passed += 1;
 
-console.log(`\n🎉 ${passed} no-canned-replies assertions passed — ${currentCount} canned literals remain (ratchet ≤ 20; every new literal must be composed).`);
+console.log(`\n🎉 ${passed} no-canned-replies assertions passed — ${currentCount} canned literals remain (ratchet ≤ 4; every new literal must be composed).`);
 

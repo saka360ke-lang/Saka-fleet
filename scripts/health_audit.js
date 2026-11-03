@@ -28,6 +28,8 @@ const STATLESS_SUITES = [
   'test_no_canned_replies.js',
   // v1.54.1 — universal OCR normalization (amounts, currency symbols, plates).
   'test_ocr_normalizer.js',
+  // v1.54.3 — conversation compliance harness (persona laws + fallback lint).
+  'test_conversation_compliance.js',
   // v1.24.2 — the wipe registry and its TRUNCATE SQL must never drift apart.
   'test_db_reset_scope.js',
   // v1.24.4 — operator status probes (public vs secret-gated payloads).

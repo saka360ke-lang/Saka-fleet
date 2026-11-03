@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.54.2  
+**Version:** 1.54.3  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.54.3** | Conversational-first completion: all 19 remaining canned replies composed (ratchet ≤ 4), persona conversation-compliance harness shipped | §117 |
 | **1.54.2** | Country parsing profiles as plug-in data + data-driven resilience loop (`admin ocr-profile`, OCR watchlist in the Sentinel digest) | §116 |
 | **1.54.1** | Global OCR hardening: universal normalization (locale amounts, CLDR currency symbols, country plates) + flag-gated zero-shot extraction top-up; purchase-invoice classification fixed | §115 |
 | **1.54.0** | ANSWER LAW v2: full own-data snapshot (recent ledger + one populate step per missing field), widened access-refusal ban, own-data on data-sensitive turns | §114 |
@@ -4001,5 +4002,12 @@ quiz engine:
 - **`admin ocr-profile [CC]`:** deterministic, zero-token per-country digest (`formatOcrProfileReply` — reads, unusable, low-confidence, avg confidence, top document kinds, watch verdict + reason), audited `ADMIN_OCR_PROFILE`; a bare `admin ocr-profile` shows the GLOBAL bucket. Registered in the command parser, the AI classifier enum and the help menu.
 - **Sentinel digest watchlist:** `sendRemediationDigest` adds a `🌍 OCR country watchlist` line listing flagged countries and pointing at `admin ocr-profile <CC>` — so the resilience loop runs on its own cadence without pushing NTSA rules anywhere else.
 - **Tests:** `test_ocr_flow` 120 (profile registry, marker re-export, parser, digest verdicts, watch thresholds, sample floor).
+
+### 117. Conversational-first completion + conversation compliance (v1.54.3)
+
+- **All 19 remaining canned replies are composed.** Every quiz outcome card, gate and cancellation ack in the WhatsApp route now renders through `composeMessage` from facts, with the previous deterministic sentence demoted to `fallbackText`: passbook/onboarding stage prompts (buyer details, registration plate, onboarding reset, weave nudge), vehicle not-found/unassign/delete errors, the VIN-lock invariant, deletion/switch/expense/account outcome cards (figures preserved verbatim in the fallback), earnings/email prompts, account/email cancellations and the email-required gate. Only the instant "reading now" progress ack stays literal — **the ratchet dropped from ≤ 20 to ≤ 4** (1 literal remains). Provider outages keep the exact engine cards.
+- **Conversation compliance harness shipped (`test_conversation_compliance.js`, promised in §111):** persona proof (elderly, low-literacy, angry, Shenglish) pinned by the core-prompt LAWS and the tone-compass poles/mirror/floors, plus a plain-language lint over all 32 deterministic fallbacks (banned phrases, ONE unquoted question, ≤ 28-word sentences after stripping quoted example phrasings) and the David Njonjo document replay staying engine-owned. Health-registered (18 assertions).
+- **Follow-up (tracked):** the engine-owned patience counter (session-level repeats of the same quiz field: 2nd failure → simplest typed path, 3rd → human lane) — the prompt-level EVERY-DEMOGRAPHIC LAW already carries the behavior; the deterministic counter ships with the next conversation release.
+- **Tests:** `test_no_canned_replies` ratchet ≤ 4 (1 literal), `test_conversation_compliance` 18, `test_agent_training` 154, health green.
 
 

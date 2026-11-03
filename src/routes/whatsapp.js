@@ -1877,7 +1877,14 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               await supabaseClient.from('passbook_transfers').update({ status: 'CANCELLED' }).eq('id', session.transferFlow.transferId);
             }
             session.transferFlow = null;
-            customReply = `Passbook transfer cancelled. You are back in main menu mode.`;
+            customReply = await composeMessage({
+              purpose: 'flow_cancellation_ack',
+              facts: { flow: 'Passbook transfer', cancelled: true },
+              language: targetLang,
+              countryInfo,
+              profile: profileData,
+              fallbackText: 'Passbook transfer cancelled. You are back in main menu mode.'
+            });
           } else if (session.transferFlow.step === 2) {
             const phoneMatch = messageText.match(/\+?[0-9]{9,15}/);
             const emailMatch = messageText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
@@ -1899,7 +1906,19 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                 customReply = `⚠️ ${res.error}\n\nPlease reply with both the buyer's WhatsApp number and email address, or reply 'cancel'.`;
               }
             } else {
-              customReply = `👉 *Step 2 of 5: Buyer Details*\n\nPlease provide both the buyer's WhatsApp phone number and email address (e.g. \`+254712345678 buyer@example.com\`).\n\n_(Reply 'cancel' to abort)_`;
+              customReply = await composeMessage({
+                purpose: 'transfer_buyer_details_prompt',
+                facts: {
+                  step: 'Step 2 of 5',
+                  askedFor: ["the buyer's WhatsApp number", "the buyer's email address"],
+                  example: '+254712345678 buyer@example.com',
+                  cancelWord: 'cancel'
+                },
+                language: targetLang,
+                countryInfo,
+                profile: profileData,
+                fallbackText: `👉 *Step 2 of 5: Buyer Details*\n\nPlease provide both the buyer's WhatsApp phone number and email address (e.g. \`+254712345678 buyer@example.com\`).\n\n_(Reply 'cancel' to abort)_`
+              });
             }
           } else if (session.transferFlow.step === 3) {
             const pinCandidate = messageText.trim();
@@ -2714,7 +2733,18 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             });
             session.onboardingStep = 1;
             session.onboardingStage = 1;
-            customReply = `🔄 *Onboarding Reset*\n\nPlease reply with your vehicle's registration plate number (e.g. *KDA 123A* or *KBC 456X*).`;
+            customReply = await composeMessage({
+              purpose: 'onboarding_reset_card',
+              facts: {
+                reset: true,
+                nextStep: 'reply with the registration plate number',
+                examples: ['KDA 123A', 'KBC 456X']
+              },
+              language: targetLang,
+              countryInfo,
+              profile: profileData,
+              fallbackText: `🔄 *Onboarding Reset*\n\nPlease reply with your vehicle's registration plate number (e.g. *KDA 123A* or *KBC 456X*).`
+            });
           } else if (isNewRegistrationStart && currentVehicleCount >= branchCapacity.capacity) {
             const branchOwner = { id: profileData?.id, phone_number: senderPhone, email: profileData?.email };
             if (branchCapacity.addonEligible) {
@@ -2780,7 +2810,18 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               if (obState.stage === 2) {
                 customReply = `I noticed your message ("${messageText.trim()}").\n\nYou can optionally share specs like insurance expiry, VIN, transmission, or simply reply **'Skip'** or **'Done'** to finish.`;
               } else if (!obState.core.plate_number) {
-                customReply = `I noticed your message. If you want to cancel, reply **'cancel'**.\n\nOtherwise, please reply with your vehicle's registration plate number (e.g. *KDA 123A*).`;
+                customReply = await composeMessage({
+                  purpose: 'onboarding_weave_nudge',
+                  facts: {
+                    nextStep: 'reply with the registration plate number',
+                    examples: ['KDA 123A'],
+                    cancelWord: 'cancel'
+                  },
+                  language: targetLang,
+                  countryInfo,
+                  profile: profileData,
+                  fallbackText: `I noticed your message. If you want to cancel, reply **'cancel'**.\n\nOtherwise, please reply with your vehicle's registration plate number (e.g. *KDA 123A*).`
+                });
               } else {
                 customReply = `I noticed your message ("${messageText.trim()}").\n\nIf you want to restart or cancel onboarding, reply **'reset'** or **'cancel'**.\nOtherwise, please share your vehicle's details (e.g. *"1991 diesel 80 series, mileage 366700, email user@mail.com"*).`;
               }
@@ -2924,7 +2965,19 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                 if (initPlate) {
                   customReply = `🚘 *Stage 1 of 2 · Step 2 of 4: Vehicle Core Details* 📝\n\nGot registration plate *${initPlate}*!\n\nCould you share the **Make & Model**, **Year of Manufacture (YOM)**, **Fuel Type (Diesel/Petrol/Hybrid/EV)**, **Current Mileage**, and your **Email**?\n\n💡 *Tip:* Send them all together in one message (e.g. "1991 diesel 80 series, mileage 366700, email user@mail.com").\n\n_(Type *Cancel* to stop, or *Restart* to begin again.)_`;
                 } else {
-                  customReply = `🚘 *Stage 1 of 2 · Step 1 of 4: Vehicle Registration Plate*\n\nPlease reply with the registration plate number for your new vehicle (e.g. *KDA 123A* or *KBC 456X*).\n\n_(Type *Cancel* to stop.)_`;
+                  customReply = await composeMessage({
+                    purpose: 'registration_plate_question',
+                    facts: {
+                      stage: 'Stage 1 of 2 · Step 1 of 4',
+                      nextStep: 'reply with the registration plate number for the new vehicle',
+                      examples: ['KDA 123A', 'KBC 456X'],
+                      cancelWord: 'Cancel'
+                    },
+                    language: targetLang,
+                    countryInfo,
+                    profile: profileData,
+                    fallbackText: `🚘 *Stage 1 of 2 · Step 1 of 4: Vehicle Registration Plate*\n\nPlease reply with the registration plate number for your new vehicle (e.g. *KDA 123A* or *KBC 456X*).\n\n_(Type *Cancel* to stop.)_`
+                  });
                 }
               }
             }
@@ -2961,7 +3014,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                     session.active_vehicle_id = null;
                   }
                   const remaining = existingVehicles.filter(v => v.id !== pendingDeletion.vehicleId);
-                  customReply = `🗑️ *Vehicle Deleted Successfully*\n\n` +
+                  const deletedCardText = `🗑️ *Vehicle Deleted Successfully*\n\n` +
                     `• *Vehicle:* ${pendingDeletion.plateNumber}\n` +
                     `• *Driver:* ${deletionResult.cleanup?.driverUnassigned ? 'unassigned ✅' : 'none assigned'}\n` +
                     `• *Pending transfers:* ${deletionResult.cleanup?.transfersCancelled || 0} cancelled\n` +
@@ -2970,6 +3023,14 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                     (remaining.length > 0
                       ? `Remaining active vehicles: ${remaining.map(v => v.plate_number).join(', ')}`
                       : `You have no active vehicles left. Type *Register* to add a new vehicle.`);
+                  customReply = await composeMessage({
+                    purpose: 'flow_outcome_card',
+                    facts: { cardText: deletedCardText, instruction: 'Re-render this engine card conversationally: keep EVERY figure, label, emoji anchor and next step exactly as written. Never drop or invent a figure.' },
+                    language: targetLang,
+                    countryInfo,
+                    profile: profileData,
+                    fallbackText: deletedCardText
+                  });
                 } else {
                   customReply = `❌ *Vehicle Deletion Failed*\n\n${deletionResult.error}`;
                 }
@@ -2991,7 +3052,14 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               }
 
               if (!assignTarget) {
-                customReply = `⚠️ I could not find that vehicle in your registered fleet.`;
+                customReply = await composeMessage({
+                  purpose: 'vehicle_not_found_notice',
+                  facts: { issue: 'No matching vehicle found in the registered fleet' },
+                  language: targetLang,
+                  countryInfo,
+                  profile: profileData,
+                  fallbackText: '⚠️ I could not find that vehicle in your registered fleet.'
+                });
                 session.pendingDriverAssignment = null;
               } else {
                 let driverPhone = mergedExt.driver_phone;
@@ -3037,7 +3105,14 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               }
 
               if (!unassignTarget) {
-                customReply = `⚠️ Could not identify the vehicle to unassign the driver from.`;
+                customReply = await composeMessage({
+                  purpose: 'unassign_driver_notice',
+                  facts: { issue: 'The vehicle for the driver unassignment could not be identified' },
+                  language: targetLang,
+                  countryInfo,
+                  profile: profileData,
+                  fallbackText: '⚠️ Could not identify the vehicle to unassign the driver from.'
+                });
               } else {
                 await unassignDriverFromVehicle({ vehicleId: unassignTarget.id, supabase: supabaseClient });
                 customReply = `✅ Driver unassigned from vehicle *${unassignTarget.plate_number}*. Vehicle is now available for a new driver.`;
@@ -3100,7 +3175,14 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                 : targetVeh;
 
               if (!editTarget) {
-                customReply = `⚠️ I could not find that vehicle in your registered fleet.`;
+                customReply = await composeMessage({
+                  purpose: 'vehicle_not_found_notice',
+                  facts: { issue: 'No matching vehicle found in the registered fleet' },
+                  language: targetLang,
+                  countryInfo,
+                  profile: profileData,
+                  fallbackText: '⚠️ I could not find that vehicle in your registered fleet.'
+                });
               } else {
                 const fieldAliasMap = {
                   make: 'make_model', model: 'make_model', make_model: 'make_model', make_and_model: 'make_model',
@@ -3152,7 +3234,14 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                 // VIN is immutable — always reject an attempted VIN change.
                 if (mergedExt.vin || candidateUpdates.vin) {
                   delete candidateUpdates.vin;
-                  customReply = `🔒 *VIN Is Permanently Locked*\n\nYour VIN / chassis number is permanently tied to your passbook and can never be edited. All other vehicle details can still be updated.`;
+                  customReply = await composeMessage({
+                    purpose: 'vin_lock_notice',
+                    facts: { invariant: 'The VIN / chassis number is permanently tied to the passbook and can never be edited; all other vehicle details can still be updated.' },
+                    language: targetLang,
+                    countryInfo,
+                    profile: profileData,
+                    fallbackText: `🔒 *VIN Is Permanently Locked*\n\nYour VIN / chassis number is permanently tied to your passbook and can never be edited. All other vehicle details can still be updated.`
+                  });
                 } else if (Object.keys(candidateUpdates).length === 0) {
                   const currentList = `• Plate: ${editTarget.plate_number}\n• Make/Model: ${editTarget.make_model || '-'}\n• Year: ${editTarget.yom || editTarget.year_of_manufacture || '-'}\n• Fuel: ${editTarget.fuel_type || '-'}\n• Odometer: ${(editTarget.current_mileage || editTarget.odometer_reading || 0).toLocaleString()} km\n• VIN: ${editTarget.vin || '-'} 🔒`;
                   customReply = `🛠️ *Edit Vehicle — ${editTarget.plate_number}*\n\n${currentList}\n\nReply with the change, e.g. *"update vehicle ${editTarget.plate_number} color to White"* or *"change fuel for ${editTarget.plate_number} to Diesel"*.\n\n🔒 *Note:* The VIN is permanently immutable.`;
@@ -3182,7 +3271,14 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                 : targetVeh;
 
               if (!deleteTarget) {
-                customReply = `⚠️ I could not identify the vehicle to delete. Please reply with the plate number, e.g. *"delete vehicle KDA 123A"*.`;
+                customReply = await composeMessage({
+                    purpose: 'vehicle_not_found_notice',
+                    facts: { issue: 'The vehicle to delete could not be identified', example: 'delete vehicle KDA 123A' },
+                    language: targetLang,
+                    countryInfo,
+                    profile: profileData,
+                    fallbackText: `⚠️ I could not identify the vehicle to delete. Please reply with the plate number, e.g. *"delete vehicle KDA 123A"*.`
+                  });
               } else if (deleteTarget.owner_id !== profileData?.id) {
                 customReply = `🔒 *Owner Authorization Required*\n\nOnly the registered owner of *${deleteTarget.plate_number}* can delete this vehicle.`;
               } else {
@@ -3196,11 +3292,19 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               if (found) {
                 setActiveVehicle({ senderPhone, vehicleId: found.id, chatSessions });
                 targetVeh = found;
-                customReply = `🔄 *Switched Active Vehicle!*\n\n` +
+                const switchCardText = `🔄 *Switched Active Vehicle!*\n\n` +
                   `Now managing: *${found.plate_number}* (${found.make_model || 'Vehicle'})\n` +
                   `• Fuel Type: ${found.fuel_type || 'Fuel'}\n` +
                   `• Current Odometer: ${(found.current_mileage || found.odometer_reading || 0).toLocaleString()} ${found.unit_system === 'imperial' ? 'mi' : 'km'}\n\n` +
                   `All subsequent fuel logs, mileage updates, and queries will automatically apply to this vehicle.`;
+                customReply = await composeMessage({
+                  purpose: 'flow_outcome_card',
+                  facts: { cardText: switchCardText, instruction: 'Re-render this engine card conversationally: keep EVERY figure, label, emoji anchor and next step exactly as written. Never drop or invent a figure.' },
+                  language: targetLang,
+                  countryInfo,
+                  profile: profileData,
+                  fallbackText: switchCardText
+                });
               } else {
                 const vList = existingVehicles.map((v, i) => `${i + 1}️⃣ *${v.plate_number}* (${v.make_model || 'Vehicle'})`).join('\n');
                 customReply = `⚠️ Could not find "${candidate}" in your fleet.\n\nYour registered vehicles:\n${vList}\n\nReply with a number or plate (e.g. *"switch to 1"* or *"switch to ${existingVehicles[0]?.plate_number}"*) to select.`;
@@ -3312,7 +3416,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                   }
                 }
 
-                customReply = `⛽ *Expense Logged Successfully!* 📝\n\n` +
+                const expenseCardText = `⛽ *Expense Logged Successfully!* 📝\n\n` +
                   `• *Vehicle:* *${targetVeh.plate_number}* (${targetVeh.make_model || 'Vehicle'})\n` +
                   `• *Category:* ${expType}\n` +
                   (extAmount ? `• *Amount:* ${countryInfo.currency} ${Number(extAmount).toLocaleString()}\n` : '') +
@@ -3323,6 +3427,14 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                   (expType.toLowerCase().includes('fuel') && !extFillType
                     ? `\n\n💡 *Tip:* say *"full tank"* or *"top-up"* with your next fuel log so I can measure exact fuel economy.`
                     : '');
+                customReply = await composeMessage({
+                  purpose: 'flow_outcome_card',
+                  facts: { cardText: expenseCardText, instruction: 'Re-render this engine card conversationally: keep EVERY figure, label, emoji anchor and next step exactly as written. Never drop or invent a figure.' },
+                  language: targetLang,
+                  countryInfo,
+                  profile: profileData,
+                  fallbackText: expenseCardText
+                });
                 if (existingVehicles.length > 1) {
                   customReply += `\n*(Active vehicle: ${targetVeh.plate_number}. Type "switch to [car]" to change)*`;
                 }
@@ -3426,7 +3538,14 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
                   customReply += `\n*(Active vehicle: ${targetVeh.plate_number})*`;
                 }
               } else {
-                customReply = `💰 *Log Earnings*\n\nPlease reply with your revenue details (e.g. *"Earned KES 5000 today"*).`;
+                customReply = await composeMessage({
+                  purpose: 'quiz_intro_prompt',
+                  facts: { flow: 'Log earnings', example: 'Earned KES 5000 today' },
+                  language: targetLang,
+                  countryInfo,
+                  profile: profileData,
+                  fallbackText: `💰 *Log Earnings*\n\nPlease reply with your revenue details (e.g. *"Earned KES 5000 today"*).`
+                });
               }
             }
             else if (activeIntent === 'SET_REMINDER') {
@@ -3543,7 +3662,14 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
               const providedOtp = mergedExt.otp_code || (cleanTrimmed.match(/^\d{6}$/) ? cleanTrimmed : null);
               if (/^(cancel|exit|stop)$/i.test(cleanTrimmed)) {
                 session.pendingAccountDeletion = null;
-                customReply = `Account deletion cancelled. Your account remains active.`;
+                customReply = await composeMessage({
+                  purpose: 'flow_cancellation_ack',
+                  facts: { flow: 'Account deletion', cancelled: true },
+                  language: targetLang,
+                  countryInfo,
+                  profile: profileData,
+                  fallbackText: 'Account deletion cancelled. Your account remains active.'
+                });
               } else if (providedOtp && session.pendingAccountDeletion.code === providedOtp && Date.now() <= session.pendingAccountDeletion.expiresAt) {
                 session.pendingAccountDeletion = null;
                 if (supabaseClient && profileData) {
@@ -3565,14 +3691,28 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
                 session.state = 'IDLE';
                 session.active_vehicle_id = null;
                 session.history = [];
-                customReply = `🗑️ *Account Deleted*\n\nYour Saka Fleet account has been soft-deleted, your vehicles released, and active sessions cleared. Historical audit logs are retained for compliance.\n\nYou can register again anytime by typing *Register*.`;
+                customReply = await composeMessage({
+                purpose: 'flow_outcome_card',
+                facts: { cardText: `🗑️ *Account Deleted*\n\nYour Saka Fleet account has been soft-deleted, your vehicles released, and active sessions cleared. Historical audit logs are retained for compliance.\n\nYou can register again anytime by typing *Register*.`, instruction: 'Re-render this engine card conversationally: keep EVERY figure, label, emoji anchor and next step exactly as written. Never drop or invent a figure.' },
+                language: targetLang,
+                countryInfo,
+                profile: profileData,
+                fallbackText: `🗑️ *Account Deleted*\n\nYour Saka Fleet account has been soft-deleted, your vehicles released, and active sessions cleared. Historical audit logs are retained for compliance.\n\nYou can register again anytime by typing *Register*.`
+              });
               } else {
                 customReply = `❌ *Invalid or Expired Code*\n\nPlease reply with the 6-digit code sent to **${profileData?.email}**, or reply *Cancel* to abort.`;
               }
             }
             else if (activeIntent === 'DELETE_ACCOUNT' || /^(?:delete|deactivate|close|remove)\s+(?:my\s+)?account\b/i.test(messageText.trim())) {
               if (!profileData?.email) {
-                customReply = `🔒 *Email Required*\n\nPlease add a verified email first (reply *"update email to your@email.com"*) so we can send the account-deletion verification code.`;
+                customReply = await composeMessage({
+                  purpose: 'email_required_gate',
+                  facts: { issue: 'Account deletion needs a verified email for the confirmation code', oneStep: 'reply "update email to your@email.com"' },
+                  language: targetLang,
+                  countryInfo,
+                  profile: profileData,
+                  fallbackText: `🔒 *Email Required*\n\nPlease add a verified email first (reply *"update email to your@email.com"*) so we can send the account-deletion verification code.`
+                });
               } else {
                 const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
                 session.pendingAccountDeletion = { code: otpCode, expiresAt: Date.now() + 10 * 60 * 1000 };
@@ -3634,7 +3774,14 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
                 customReply = `✅ *Email Successfully Verified & Updated!* 📧\n\nYour account and vehicle passbooks are now linked to **${newEmail}**.`;
               } else if (/^(cancel|exit|stop)$/i.test(cleanTrimmed)) {
                 session.pendingEmailUpdate = null;
-                customReply = `Email update cancelled. You are back in main menu mode.`;
+                customReply = await composeMessage({
+                  purpose: 'flow_cancellation_ack',
+                  facts: { flow: 'Email update', cancelled: true },
+                  language: targetLang,
+                  countryInfo,
+                  profile: profileData,
+                  fallbackText: 'Email update cancelled. You are back in main menu mode.'
+                });
               } else {
                 customReply = `❌ *Invalid or Expired Verification Code*\n\nPlease check your inbox for **${session.pendingEmailUpdate.newEmail}** and reply with the 6-digit code, or reply **'cancel'** to abort.`;
               }
@@ -3652,7 +3799,14 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
                 await sendEmailOtp(targetEmail, otpCode);
                 customReply = `📧 *Email Verification Required*\n\nWe dispatched a 6-digit verification code to **${targetEmail}**.\n\nPlease reply with the 6-digit code to confirm and finalize updating your registered email.`;
               } else {
-                customReply = `📧 *Update Email Address*\n\nPlease reply with your new email address (e.g. *"update email to user@example.com"*).`;
+                customReply = await composeMessage({
+                  purpose: 'quiz_intro_prompt',
+                  facts: { flow: 'Update email', example: 'update email to user@example.com' },
+                  language: targetLang,
+                  countryInfo,
+                  profile: profileData,
+                  fallbackText: `📧 *Update Email Address*\n\nPlease reply with your new email address (e.g. *"update email to user@example.com"*).`
+                });
               }
             }
             else if (activeIntent === 'TRANSFER_PASSBOOK' || /^transfer\s+passbook\b/i.test(messageText.trim())) {
