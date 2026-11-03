@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.54.1  
+**Version:** 1.54.2  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.54.2** | Country parsing profiles as plug-in data + data-driven resilience loop (`admin ocr-profile`, OCR watchlist in the Sentinel digest) | §116 |
 | **1.54.1** | Global OCR hardening: universal normalization (locale amounts, CLDR currency symbols, country plates) + flag-gated zero-shot extraction top-up; purchase-invoice classification fixed | §115 |
 | **1.54.0** | ANSWER LAW v2: full own-data snapshot (recent ledger + one populate step per missing field), widened access-refusal ban, own-data on data-sensitive turns | §114 |
 | **1.53.2** | Onboarding fixed: KE NTSA PARTICULARS parsing (correct plate), registration correction/edit lane, verified-email answer | §113 |
@@ -3992,5 +3993,13 @@ quiz engine:
 - **Purchase-invoice classification fixed:** a strong `PURCHASE INVOICE` / `SALE AGREEMENT` / `SOLD TO` marker now wins over the generic INVOICE → `receipt_general` base, so the purchase-cost prefill fires again; `Buyer PIN` e-TIMS receipts stay receipts and service invoices stay service receipts.
 - **Prompt sync (rule 13):** the core prompt's OCR & PHOTOS block names the top-up and locks the deterministic lens as the authority; docs regenerated.
 - **Tests:** `test_ocr_normalizer` 38 (new, health-registered), `test_ocr_flow` 108 (EU/Brazil fixtures, purchase regression, top-up kill switch), `test_doc_lens` 48, `test_agent_training` 154, `test_env_audit` 44.
+
+### 116. Country parsing profiles as data + ongoing resilience loop (v1.54.2)
+
+- **Profiles as plug-in data (`src/data/ocrCountryProfiles.js`, new):** the KE e-TIMS receipt extractor and the NTSA "VEHICLE PARTICULARS" logbook parser moved out of `ocrService.js` into a country-profile registry (`KE_OCR_PROFILE.etimes` / `.logbook`); `getOcrCountryProfile()` resolves from the WhatsApp country and **GLOBAL/unprofiled countries return null** — the universal path stays neutral (rule 36). `extractDocumentHints` now delegates through the registry; the existing 108 OCR-flow assertions prove exact parity. New country profiles are added as plug-in modules — never pushed globally.
+- **Data-driven strengthening loop:** `summarizeOcrCountryRows()` (pure), `getOcrCountryProfileStats()` (one country, 1–168 h) and `getOcrCountryWatchlist()` (all countries crossing thresholds, min 5 rows, ≥25% unusable or ≥30% low-confidence) in `ocrTelemetry.js` turn the existing `ocr_requests` rows into the signal for which country profile to write NEXT.
+- **`admin ocr-profile [CC]`:** deterministic, zero-token per-country digest (`formatOcrProfileReply` — reads, unusable, low-confidence, avg confidence, top document kinds, watch verdict + reason), audited `ADMIN_OCR_PROFILE`; a bare `admin ocr-profile` shows the GLOBAL bucket. Registered in the command parser, the AI classifier enum and the help menu.
+- **Sentinel digest watchlist:** `sendRemediationDigest` adds a `🌍 OCR country watchlist` line listing flagged countries and pointing at `admin ocr-profile <CC>` — so the resilience loop runs on its own cadence without pushing NTSA rules anywhere else.
+- **Tests:** `test_ocr_flow` 120 (profile registry, marker re-export, parser, digest verdicts, watch thresholds, sample floor).
 
 

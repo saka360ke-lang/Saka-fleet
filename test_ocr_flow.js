@@ -375,6 +375,44 @@ async function run() {
   const purchaseLens = parseDocumentFields('PURCHASE INVOICE\nSeller: Auto Mall Ltd\nSold to: David Njonjo\nPurchase price 1,250,000\n2026-09-01');
   check(purchaseLens.hints.purchase_cost === 1250000, 'the purchase prefill now fires with the parsed cost');
 
+  console.log('--- Test 15: country parsing profiles as data + watchlist (v1.54.2) ---');
+  const profilesModule = await import('./src/data/ocrCountryProfiles.js');
+  const { getOcrCountryProfile, KE_OCR_PROFILE, isKenyaEtimesText: isKeEtimes } = profilesModule;
+  check(getOcrCountryProfile('KE') === KE_OCR_PROFILE, 'the KE parsing profile resolves from the country code');
+  check(getOcrCountryProfile('GLOBAL') === null && getOcrCountryProfile('NG') === null, 'GLOBAL and unprofiled countries use the neutral path (rule 36)');
+  check(typeof KE_OCR_PROFILE.etimes.extractHints === 'function' && typeof KE_OCR_PROFILE.logbook.extractHints === 'function', 'a profile carries its receipt and logbook parsers');
+  check(isKeEtimes(etimsText) === true && isKeEtimes('TOTAL 3000') === false, 'the e-TIMS marker detector still resolves from the registry');
+
+  const ocrTelemetryModule = await import('./src/services/ocrTelemetry.js');
+  const { summarizeOcrCountryRows } = ocrTelemetryModule;
+  const superadminOcrModule = await import('./src/services/superadmin.js');
+  const { formatOcrProfileReply } = superadminOcrModule;
+  const profileCommand = await superadminOcrModule.parseSuperadminCommand('admin ocr-profile KE');
+  check(profileCommand.intent === 'ADMIN_OCR_PROFILE' && profileCommand.countryCode === 'KE', 'admin ocr-profile KE parses deterministically');
+  const profileCommandBare = await superadminOcrModule.parseSuperadminCommand('admin ocr-profile');
+  check(profileCommandBare.intent === 'ADMIN_OCR_PROFILE' && profileCommandBare.countryCode === null, 'a bare admin ocr-profile parses (shows the GLOBAL bucket)');
+  const healthy = summarizeOcrCountryRows([
+    { country_code: 'KE', status: 'read', document_kind: 'receipt_fuel', confidence: 0.92 },
+    { country_code: 'KE', status: 'read', document_kind: 'logbook', confidence: 0.95 },
+    { country_code: 'KE', status: 'read', document_kind: 'receipt_fuel', confidence: 0.9 },
+    { country_code: 'KE', status: 'read', document_kind: 'insurance', confidence: 0.88 },
+    { country_code: 'KE', status: 'read', document_kind: 'receipt_fuel', confidence: 0.91 }
+  ]);
+  check(healthy.total === 5 && healthy.watch === false, 'a healthy country never triggers the watch flag');
+  check(formatOcrProfileReply({ ok: true, hours: 168, countryCode: 'KE', total: 5, byStatus: { read: 5 }, byKind: { receipt_fuel: 3 }, failed: 0, lowConfidence: 0, avgConfidence: 0.91, watch: false }).includes('Healthy'), 'the profile digest renders the healthy verdict');
+  const watch = summarizeOcrCountryRows([
+    { country_code: 'NG', status: 'failed', document_kind: 'logbook', confidence: null },
+    { country_code: 'NG', status: 'read', document_kind: 'receipt_fuel', confidence: 0.9 },
+    { country_code: 'NG', status: 'failed', document_kind: 'receipt_fuel', confidence: null },
+    { country_code: 'NG', status: 'read', document_kind: 'logbook', confidence: 0.93 },
+    { country_code: 'NG', status: 'read', document_kind: 'receipt_fuel', confidence: 0.91 }
+  ]);
+  check(watch.watch === true && watch.reason === 'unusable-read rate', 'a country crossing the unusable-read threshold is flagged for a profile');
+  check(watch.total === 5 && watch.failed === 2, 'the roll-up counts unusable reads');
+  check(formatOcrProfileReply({ ok: true, hours: 168, countryCode: 'NG', total: 5, byStatus: { failed: 2, read: 3 }, byKind: { logbook: 2, receipt_fuel: 3 }, failed: 2, lowConfidence: 0, avgConfidence: 0.91, watch: true, reason: 'unusable-read rate' }).includes('Watch'), 'the profile digest renders the watch verdict with the reason');
+  const underSample = summarizeOcrCountryRows([{ country_code: 'TZ', status: 'failed', document_kind: 'logbook', confidence: null }]);
+  check(underSample.watch === false, 'countries below the sample floor are never flagged');
+
   console.log('\n--- Test 13: duplicate protection (v1.32.1) ---');
   const shaA = buildOcrTextSha('TOTAL  3,000.00\nDIESEL');
   const shaB = buildOcrTextSha('TOTAL 3,000.00 DIESEL');

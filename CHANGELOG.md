@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.54.2] - 2026-11-03
+
+- **Country parsing profiles as plug-in data.** The KE e-TIMS + NTSA parsers moved out of `ocrService.js` into `src/data/ocrCountryProfiles.js` (`getOcrCountryProfile`), and GLOBAL/unprofiled countries resolve to the neutral path (rule 36) — exact parity proven by the existing fixtures. New country profiles are added as modules, never pushed globally.
+- **Data-driven resilience loop.** `summarizeOcrCountryRows` / `getOcrCountryProfileStats` / `getOcrCountryWatchlist` turn `ocr_requests` telemetry into the signal for which country profile to write next (min 5 rows; ≥25% unusable or ≥30% low-confidence flags a watch).
+- **`admin ocr-profile [CC]`.** Deterministic zero-token per-country digest (reads, unusable, low-confidence, confidence, document kinds, watch verdict + reason), audited `ADMIN_OCR_PROFILE`.
+- **Sentinel digest watchlist.** The remediation digest now carries a `🌍 OCR country watchlist` line so the strengthening loop runs on its own cadence.
+- **Tests:** `test_ocr_flow` 120.
+
 ## [1.54.1] - 2026-11-03
 
 - **Universal OCR normalization (new `ocrNormalizer.js`).** Every OCR value now resolves through one layer: amounts parse BOTH grouping conventions (1,234.56 and 1.234,56) with CLDR locale resolution for ambiguous single-separator tokens and zero guessing on noise; currency detection carries an extended symbol table (฿ ₱ ₩ ₺ R$ KSh …) with longest-symbol-first so `R$` never degrades to `$`; per-country plate patterns (KE/GB/IN/ZA/US/…) validate plate candidates with a neutral GLOBAL shape (rule 36); VINs pass a universal guard; dates always route through `dateParser` country-resolved. A German `TOTAL € / 1.234,56` now prefills 1234.56 — in the lens, the receipt hints and the e-TIMS path.

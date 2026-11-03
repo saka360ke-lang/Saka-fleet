@@ -28,7 +28,7 @@ import {
 } from './incidents.js';
 import { getTrialFunnelStats, formatTrialStatsReply } from './trialEngine.js';
 import { getTurnLatencySummary } from './turnLatency.js';
-import { getOcrUsageSummary } from './ocrTelemetry.js';
+import { getOcrUsageSummary, getOcrCountryProfileStats } from './ocrTelemetry.js';
 import { auditEnv, formatEnvDigest, parseEnvKeys, envTemplateKeys } from './envAudit.js';
 import { getFeatureRolloutStatus, FEATURE_NOTICE_VERSION } from './featureNotice.js';
 import {
@@ -274,6 +274,12 @@ export async function parseSuperadminCommand(messageText) {
     return { intent: 'ADMIN_ENV_AUDIT' };
   }
 
+  // v1.54.2 — per-country OCR profile digest (deterministic, zero tokens).
+  const ocrProfileMatch = text.match(/^\s*admin\s+ocr[-\s_]*profile(?:\s+([A-Za-z]{2}))?\s*$/i);
+  if (ocrProfileMatch) {
+    return { intent: 'ADMIN_OCR_PROFILE', countryCode: ocrProfileMatch[1] ? ocrProfileMatch[1].toUpperCase() : null };
+  }
+
   // v1.32.1 — OCR request digest (deterministic, zero LLM calls).
   const ocrStatsMatch = text.match(/^\s*admin\s+ocr[\s_-]*(?:stats?|usage|requests?)(?:\s+(\d{1,3})\s*h(?:ours?|rs?)?)?\s*$/i);
   if (ocrStatsMatch) {
@@ -363,8 +369,8 @@ export async function parseSuperadminCommand(messageText) {
   }
 
   const prompt = `Classify user's admin request into JSON:
-Intent: "HEALTH_CHECK" | "GENERATE_COUPON" | "PROFILES_REPORT" | "ADMIN_AI_STATS" | "ADMIN_OCR_STATS" | "ADMIN_TURN_LATENCY" | "ADMIN_TRIAL_STATS" | "ADMIN_ROLLOUT" | "ADMIN_REPORT" | "ADMIN_AUDIT" | "ADMIN_ALERTS" | "ADMIN_RULES_RESET" | "ADMIN_RULES_TOGGLE" | "ADMIN_RULES_LIST" | "ADMIN_HORIZON" | "ADMIN_PROPOSALS" | "ADMIN_BACKLOG" | "ADMIN_REMEDIATIONS" | "ADMIN_REMEDIATION_ACCEPT" | "ADMIN_REMEDIATION_DECLINE" | "ADMIN_REMEDIATION_MODIFY" | "ADMIN_FEATURE_ADOPT" | "UNKNOWN"
-Extract: discount_value (e.g. "20%"), target_phone (e.g. "+254712345678"), query (e.g. "KDA 123A" or VIN), rule_key (e.g. "clarify_vin"), proposal_code (e.g. "FIX-2026-10-30-01"), feedback (guidance text), hours (AI/OCR telemetry window 1-168, default 24), days (trial funnel window 1-365, default 30)
+Intent: "HEALTH_CHECK" | "GENERATE_COUPON" | "PROFILES_REPORT" | "ADMIN_AI_STATS" | "ADMIN_OCR_STATS" | "ADMIN_OCR_PROFILE" | "ADMIN_TURN_LATENCY" | "ADMIN_TRIAL_STATS" | "ADMIN_ROLLOUT" | "ADMIN_REPORT" | "ADMIN_AUDIT" | "ADMIN_ALERTS" | "ADMIN_RULES_RESET" | "ADMIN_RULES_TOGGLE" | "ADMIN_RULES_LIST" | "ADMIN_HORIZON" | "ADMIN_PROPOSALS" | "ADMIN_BACKLOG" | "ADMIN_REMEDIATIONS" | "ADMIN_REMEDIATION_ACCEPT" | "ADMIN_REMEDIATION_DECLINE" | "ADMIN_REMEDIATION_MODIFY" | "ADMIN_FEATURE_ADOPT" | "UNKNOWN"
+Extract: discount_value (e.g. "20%"), target_phone (e.g. "+254712345678"), query (e.g. "KDA 123A" or VIN), rule_key (e.g. "clarify_vin"), proposal_code (e.g. "FIX-2026-10-30-01"), feedback (guidance text), hours (AI/OCR telemetry window 1-168, default 24), days (trial funnel window 1-365, default 30), country_code (e.g. "KE")
 Command: "${text}"`;
 
   try {
@@ -738,6 +744,56 @@ export function formatOcrStatsReply(summary) {
     `*Documents*\n${kindLines || '• none'}\n\n` +
     `*Countries*\n${countryLines || '• none'}\n\n` +
     `_Deterministic digest · zero tokens · Vision calls only via ocrService._`;
+}
+
+/**
+ * v1.54.2 — deterministic per-country OCR profile digest (zero tokens).
+ * The watch line is the data-driven signal for writing the NEXT country
+ * parsing profile — never pushing one country's rules globally (rule 36).
+ */
+export function formatOcrProfileReply(stats) {
+  if (!stats || stats.ok !== true) {
+    return `🌍 *Saka OCR Profile*\n\nTelemetry unavailable: ${stats?.error || 'unknown error'}\n\n_Try \`admin ocr-profile KE\` — the country code comes from the WhatsApp number._`;
+  }
+  const code = String(stats.countryCode || '').toUpperCase() || 'GLOBAL';
+  if (stats.total === 0) {
+    return `🌍 *OCR Profile — ${code}*\n\nNo document reads recorded for this country in the last ${stats.hours}h.\n\n_Reads are logged automatically from photos and PDFs._`;
+  }
+  const kindLines = Object.entries(stats.byKind || {})
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4)
+    .map(([key, count]) => `• ${key}: ${count}`)
+    .join('\n');
+  const confidence = stats.avgConfidence === null ? 'n/a' : `${(stats.avgConfidence * 100).toFixed(1)}%`;
+  const watchLine = stats.watch
+    ? `⚠️ *Watch:* ${stats.reason} (${stats.failed} unusable / ${stats.lowConfidence} low-confidence of ${stats.total}) — this country is a candidate for a parsing profile.`
+    : '✅ *Healthy:* reads are parsing well for this country.';
+  return `🌍 *OCR Profile — ${code} (${stats.hours}h)*\n\n` +
+    `• Reads: ${stats.total} · ❌ unusable: ${stats.failed} · 🟡 low-confidence: ${stats.lowConfidence}\n` +
+    `• Avg confidence: ${confidence}\n\n` +
+    `*Documents*\n${kindLines || '• none'}\n\n` +
+    `${watchLine}\n\n` +
+    `_Deterministic · zero tokens · country resolved from the WhatsApp number (rule 36)._`;
+}
+
+/** Superadmin OCR country-profile command handler (v1.54.2). */
+export async function handleOcrProfileCommand(supabase, countryCode = null) {
+  const stats = await getOcrCountryProfileStats(supabase, { countryCode: countryCode || 'GLOBAL', hours: 168 });
+  return {
+    reply: formatOcrProfileReply(stats),
+    details: {
+      hours: stats.hours,
+      ok: stats.ok,
+      country_code: stats.countryCode || countryCode || 'GLOBAL',
+      total: stats.total,
+      failed: stats.failed,
+      low_confidence: stats.lowConfidence,
+      avg_confidence: stats.avgConfidence,
+      watch: stats.watch,
+      reason: stats.reason,
+      error: stats.error
+    }
+  };
 }
 
 /** Superadmin OCR stats command handler (v1.32.1). */
@@ -1944,7 +2000,7 @@ export function formatFeatureRolloutReply(status) {
 export function formatAdminHelpReply() {
   return '🛠️ *Saka admin commands*\n\n' +
     '📊 *Snapshots* — admin report · admin alerts · admin audit <query>\n' +
-    '👥 *Fleet* — profiles report · admin trial-stats · admin ai-stats [24h] · admin ocr-stats [24h] · admin latency [24h] · admin env\n' +
+    '👥 *Fleet* — profiles report · admin trial-stats · admin ai-stats [24h] · admin ocr-stats [24h] · admin ocr-profile [KE] · admin latency [24h] · admin env\n' +
     '🛠️ *Fixes* — admin backlog · admin remediations [pending|deployed] · admin accept|decline|modify fix <CODE> · admin adopt <FEAT-code> · admin quick-edit · UPDATE-SUGGEST> <your update>\n' +
     '🌱 *Growth* — generate coupon 20% · admin horizon · admin proposals\n' +
     '🩺 *Guardrails* — check health · admin rules list|toggle <key>|reset\n' +
@@ -2258,6 +2314,15 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
     return {
       isSuperadmin: true,
       reply: ocrRes.reply
+    };
+  }
+
+  if (parsedCommand.intent === 'ADMIN_OCR_PROFILE') {
+    const profileRes = await handleOcrProfileCommand(supabase, parsedCommand.countryCode);
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_OCR_PROFILE', profileRes.details);
+    return {
+      isSuperadmin: true,
+      reply: profileRes.reply
     };
   }
 

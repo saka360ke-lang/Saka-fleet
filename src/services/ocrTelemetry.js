@@ -158,4 +158,126 @@ export async function getOcrUsageSummary(providedSupabase, hours = 24) {
   }
 }
 
-export default { recordOcrRequest, ensureOcrRequestsTable, buildOcrTextSha, getOcrUsageSummary, OCR_REQUESTS_SQL };
+/**
+ * v1.54.2 — pure per-country roll-up over ocr_requests rows (testable,
+ * zero tokens). Flags a country when its unusable-read rate or
+ * low-confidence rate crosses the thresholds with enough samples.
+ */
+export function summarizeOcrCountryRows(rows = [], {
+  minRows = 5,
+  failRate = 0.25,
+  lowConfidenceRate = 0.3
+} = {}) {
+  const stats = {
+    countryCode: null,
+    total: 0,
+    byStatus: {},
+    byKind: {},
+    failed: 0,
+    lowConfidence: 0,
+    avgConfidence: null,
+    watch: false,
+    reason: null
+  };
+  const usable = Array.isArray(rows) ? rows : [];
+  stats.total = usable.length;
+  if (!usable.length) return stats;
+  stats.countryCode = usable[0]?.country_code || null;
+  let confidenceSum = 0;
+  let confidenceCount = 0;
+  for (const row of usable) {
+    const status = String(row.status || 'unknown');
+    stats.byStatus[status] = (stats.byStatus[status] || 0) + 1;
+    const kind = String(row.document_kind || 'unknown');
+    stats.byKind[kind] = (stats.byKind[kind] || 0) + 1;
+    if (status === 'failed' || status === 'pdf_scanned' || status === 'unsupported') stats.failed += 1;
+    if (status === 'low_confidence') stats.lowConfidence += 1;
+    const conf = Number(row.confidence);
+    if (Number.isFinite(conf) && conf > 0) { confidenceSum += conf; confidenceCount += 1; }
+  }
+  stats.avgConfidence = confidenceCount ? confidenceSum / confidenceCount : null;
+  const minimum = Math.max(1, Number(minRows) || 5);
+  if (stats.total >= minimum) {
+    if (stats.total > 0 && stats.failed / stats.total >= (Number(failRate) || 0.25)) {
+      stats.watch = true;
+      stats.reason = 'unusable-read rate';
+    } else if (stats.total > 0 && stats.lowConfidence / stats.total >= (Number(lowConfidenceRate) || 0.3)) {
+      stats.watch = true;
+      stats.reason = 'low-confidence rate';
+    }
+  }
+  return stats;
+}
+
+/**
+ * v1.54.2 — one country's OCR telemetry digest (the signal that decides
+ * whether the next country parsing profile is worth writing). 1–168 h
+ * window, 2000-row cap, never throws.
+ */
+export async function getOcrCountryProfileStats(providedSupabase, {
+  countryCode = null,
+  hours = 168,
+  minRows = 5,
+  failRate = 0.25,
+  lowConfidenceRate = 0.3
+} = {}) {
+  const stats = { ok: false, hours: Math.min(168, Math.max(1, Number(hours) || 168)), error: null };
+  if (!providedSupabase) { stats.error = 'no-client'; return stats; }
+  if (!countryCode) { stats.error = 'missing-country'; return stats; }
+  try {
+    const cutoff = new Date(Date.now() - stats.hours * 60 * 60 * 1000).toISOString();
+    const { data, error } = await providedSupabase
+      .from(OCR_REQUESTS_TABLE)
+      .select('status, document_kind, country_code, confidence')
+      .eq('country_code', String(countryCode).toUpperCase())
+      .gte('created_at', cutoff)
+      .limit(2000);
+    if (error) { stats.error = error.message; return stats; }
+    const summary = summarizeOcrCountryRows(data || [], { minRows, failRate, lowConfidenceRate });
+    Object.assign(stats, summary, { ok: true });
+    return stats;
+  } catch (err) {
+    stats.error = err.message;
+    return stats;
+  }
+}
+
+/**
+ * v1.54.2 — OCR country watchlist: every country whose document reads cross
+ * the thresholds inside the window, newest-activity countries first. This is
+ * the data-driven signal for strengthening country parsing profiles — never
+ * pushing one country's rules globally (rule 36).
+ */
+export async function getOcrCountryWatchlist(providedSupabase, {
+  hours = 168,
+  minRows = 5,
+  failRate = 0.25,
+  lowConfidenceRate = 0.3
+} = {}) {
+  if (!providedSupabase) return [];
+  const windowHours = Math.min(168, Math.max(1, Number(hours) || 168));
+  try {
+    const cutoff = new Date(Date.now() - windowHours * 60 * 60 * 1000).toISOString();
+    const { data, error } = await providedSupabase
+      .from(OCR_REQUESTS_TABLE)
+      .select('status, document_kind, country_code, confidence')
+      .gte('created_at', cutoff)
+      .limit(2000);
+    if (error || !Array.isArray(data) || !data.length) return [];
+    const buckets = new Map();
+    for (const row of data) {
+      const code = String(row.country_code || 'GLOBAL').toUpperCase();
+      if (!buckets.has(code)) buckets.set(code, []);
+      buckets.get(code).push(row);
+    }
+    return [...buckets.entries()]
+      .map(([countryCode, rows]) => summarizeOcrCountryRows(rows, { minRows, failRate, lowConfidenceRate }))
+      .filter((summary) => summary.watch)
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 6);
+  } catch {
+    return [];
+  }
+}
+
+export default { recordOcrRequest, ensureOcrRequestsTable, buildOcrTextSha, getOcrUsageSummary, summarizeOcrCountryRows, getOcrCountryProfileStats, getOcrCountryWatchlist, OCR_REQUESTS_SQL };

@@ -1,6 +1,12 @@
 {
-  "latest": "1.54.1",
+  "latest": "1.54.2",
   "entries": [
+    {
+      "version": "1.54.2",
+      "date": "2026-11-03",
+      "title": "Documents that keep improving",
+      "summary": "Saka now learns where document reading struggles most — country by country — and sharpens those readers first."
+    },
     {
       "version": "1.54.1",
       "date": "2026-11-03",

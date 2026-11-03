@@ -8,6 +8,7 @@ import { dispatchRepositoryEvent, isRemediationAutonomyEnabled } from '../servic
 import { sendProactiveWhatsApp } from './sentinel.js';
 import { upsertIncident } from '../services/incidents.js';
 import { validateAiModelUpdatePlan, verifyModelUpdateAgainstRegistry, getModelWatchdogSummary } from '../services/aiModelRegistry.js';
+import { getOcrCountryWatchlist } from '../services/ocrTelemetry.js';
 
 /**
  * Saka Fleet — Autonomous Sentinel ↔ Cline Remediation Pipeline (v1.10.0)
@@ -1258,6 +1259,17 @@ export async function sendRemediationDigest(providedSupabase, { now = new Date()
     ? `🧠 *Model Watchdog:* ${watchdog.active.map((row) => `${row.tierSlot}=${row.alias} (${row.trafficSplit}%)`).join(' · ') || 'env-governed'} · ${watchdog.candidates.length} candidate(s) · ${watchdog.pendingProposals} model approval(s) pending`
     : '';
 
+  // v1.54.2 — OCR country watchlist (deterministic, zero tokens): countries
+  // whose document reads cross the thresholds are candidates for the next
+  // country parsing profile — never one country's rules pushed globally.
+  let ocrWatchlist = [];
+  try {
+    ocrWatchlist = await getOcrCountryWatchlist(supabase, { hours: 168 });
+  } catch { ocrWatchlist = []; }
+  const ocrWatchLine = ocrWatchlist.length
+    ? `🌍 *OCR country watchlist:* ${ocrWatchlist.map((entry) => `${entry.countryCode} (${entry.failed}/${entry.total} unusable, ${entry.lowConfidence} low-conf)`).join(' · ')}\n→ \`admin ocr-profile <CC>\` for the full per-country digest.`
+    : '';
+
   const lines = [
     `🩺 *Saka Remediation Digest — ${slotLabel}*`,
     `_${dateLabel} • frequency: ${nextFrequency}_`,
@@ -1277,6 +1289,7 @@ export async function sendRemediationDigest(providedSupabase, { now = new Date()
       ? '✅ `admin accept fix <CODE>`\n⛔ `admin decline fix <CODE>`\n✏️ `admin modify fix <CODE> <guidance>`'
       : '',
     watchdogLine,
+    ocrWatchLine,
     `_Digest frequency auto-scales with stability (${REMEDIATION_DIGEST_SCALE_DOWN_WINDOW_DAYS}-day events: ${weeklyEvents})._`
   ].filter(Boolean).join('\n');
 
