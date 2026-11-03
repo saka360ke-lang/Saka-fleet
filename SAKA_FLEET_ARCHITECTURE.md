@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.56.5  
+**Version:** 1.57.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.57.0** | Country learning buckets (Uganda != Italy) + superadmin-can-never-be-driver rectification | 127 |
 | **1.56.5** | admin friction done resolves short id prefixes (tracker polish) | 126 |
 | **1.56.4** | Friction tracker (pending/deployed + 4h auto-clear + log) + whole-conversation memory (20-40 turns) + E.164 friction phones | 126 |
 | **1.56.3** | Maintenance-schedule questions ("when should I replace my tyres?") answer from the user's reminders, never a generic menu | §125 |
@@ -4085,3 +4086,9 @@ quiz engine:
 - **Sentinel fix:** `conversationDiagnosis.js` ROUTING_MAP now names the registration-correction, entitlement and active-vehicle entry points so future PROP diagnoses land on the right file.
 - **Tests:** `test_friction_tracker` 10 (health-registered); `test_quiz_flow` asserts `CHAT_HISTORY_MAX_MESSAGES === 40`.
 - **v1.56.5:** `admin friction done <id>` accepts any unique id prefix (the 8 chars shown in the list); `resolveFrictionId` maps it to the full uuid before the update, and a full uuid still passes through unchanged.
+### 127. Autonomous country-scoped learning + superadmin-driver rectification (v1.57.0)
+
+- **Existing autonomy confirmed.** `evaluateConversationalFriction` -> `processFrictionPatches` already upserts `saka_dynamic_rules` (is_active) with no approval, and `runConversationRefinement` writes append-only LIVE LEARNINGS; both are injected by `getSakaCorePrompt()`. This release keeps that autonomy and adds country separation.
+- **Country learning buckets:** new `country_learnings` (country_code PK, learnings, tone_notes, message_count) + `src/services/countryLearnings.js` (`ensureCountryBucket`, `deriveCountryLearnings`, `upsertCountryLearnings`, `getCountryLearningsLine`, `COUNTRY_LEARNINGS_SQL`). `ensureCountryBucket` creates the bucket on the fly at signup; Sentinel derives and upserts per-country lessons; `whatsapp.js` injects `COUNTRY LEARNINGS (CC, ...)` beside `COUNTRY COMMUNICATION STYLE`. Isolation: a CC lesson only reaches CC users; GLOBAL is never mixed.
+- **Superadmin is never a driver:** guard in `createDriverAssignment` refuses `SUPERADMIN_PHONE`; `scripts/rectify_superadmin_driver.js` (idempotent) cancelled the live assignment (`superadmin_cannot_be_driver`), released the vehicle link and normalised the profile to `Superadmin`.
+- **Tests:** `test_country_learnings` 9 (health-registered); `npm run migrate:country-learnings` applied.

@@ -104,6 +104,7 @@ import {
 import { normalizeTierKey, getTierLabel, getAnnualDiscountPercent } from '../services/subscriptionTiers.js';
 import { detectCountryFromPhone as detectCountryGlobal, resolveUserTimezone, resolveTimezoneFromCountry } from '../services/globalization.js';
 import { getCountryCommStyleLine } from '../services/countryCommStyles.js';
+import { ensureCountryBucket, getCountryLearningsLine } from '../services/countryLearnings.js';
 import { applyOdometerReading, applyOperatingHours } from '../services/maintenanceReminders.js';
 import { handleQuizTurn, detectQuizStart, shouldPauseQuizForChat, getCurrentQuizField, detectFlowSwitch, getFlowDefinition, looksLikeReportRequest, getActiveQuiz, markQuizTurn, abandonQuiz } from '../services/quizEngine.js';
 import { buildNarrativeDraft, narrativeDraftFields, narrativeDraftExtras, shouldPrefillNarrativeDraft, isNarrativeIntakeEnabled, isNarrativeEligibleText, buildNarrativeParagraphDrafts, renderNarrativeBatchCard, resolveNarrativeBatchTurn, describeNarrativeDraft } from '../services/narrativeDraft.js';
@@ -1043,6 +1044,9 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         // v1.51.5 — HARD gate: an unverified number gets ONLY a short website-signup
         // line. No chatting, no intros, no product answers, no registration, until
         // the profile is email_verified (web signup).
+        if (supabaseClient && profileData?.country_code) {
+          ensureCountryBucket(supabaseClient, { countryCode: profileData.country_code }).catch(() => {});
+        }
         if (supabaseClient && profileData && profileData.email_verified !== true) {
           const verifyReply = await composeMessage({
             purpose: 'website_signup_gate',
@@ -1177,6 +1181,9 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         if (commStyleLine) jurisdictionContext = `${jurisdictionContext}\n${commStyleLine}`;
 
         // --- Receipt intelligence (v1.19.0): dedupe + vault ---
+        const countryLearningsLine = await getCountryLearningsLine({ supabase: supabaseClient, countryCode: bucketCountryCode }).catch(() => "");
+        if (countryLearningsLine) jurisdictionContext = jurisdictionContext + "\n" + countryLearningsLine;
+
         let duplicateReceipt = null;
         if (mediaObj?.id && supabaseClient && !ocrPaused && (ocrKind === 'receipt_fuel' || ocrKind === 'receipt_general')) {
           try {

@@ -1,7 +1,7 @@
 {
   "name": "sakafleet-backend",
   "type": "module",
-  "version": "1.56.5",
+  "version": "1.57.0",
   "description": "Saka Fleet Backend",
   "main": "index.js",
   "scripts": {
@@ -57,6 +57,7 @@
     "migrate:incidents": "node scripts/run_incidents_migration.js",
     "migrate:web-onboard": "node scripts/run_web_onboarding_migration.js",
     "migrate:friction": "node scripts/run_friction_tracker_migration.js",
+    "migrate:country-learnings": "node scripts/run_country_learnings_migration.js",
     "landing:stamp": "node scripts/stamp_landing_assets.cjs"
   },
   "dependencies": {

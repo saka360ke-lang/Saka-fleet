@@ -110,6 +110,12 @@ export async function createDriverAssignment({
   const cleanPhone = normalizeDriverPhone(driverPhone);
   if (!cleanPhone) return { ok: false, error: 'A valid driver phone number is required.' };
 
+  // Rule 15 - the superadmin is superadmin-only and can never be a driver.
+  const adminPhone = normalizeDriverPhone(process.env.SUPERADMIN_PHONE);
+  if (adminPhone && cleanPhone === adminPhone) {
+    return { ok: false, error: "That number is the Saka admin line and cannot be assigned as a driver." };
+  }
+
   const ownerId = ownerProfile?.id || vehicle.owner_id;
   const ownerPhone = ownerProfile?.phone_number || vehicle.owner_phone;
   const ownerEmail = String(ownerProfile?.email || vehicle.owner_email || '').trim().toLowerCase();

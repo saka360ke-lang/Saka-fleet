@@ -6,6 +6,7 @@ import { getCurrentQuizField } from '../services/quizEngine.js';
 import { saveChatMessage } from '../services/chatHistory.js';
 import { detectCountryFromPhone } from '../services/globalization.js';
 import { deriveCountryCommStyles, upsertCountryCommStyles } from '../services/countryCommStyles.js';
+import { deriveCountryLearnings, upsertCountryLearnings } from '../services/countryLearnings.js';
 import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
 import { buildIncidentSignature, isIncidentSilenced } from '../services/incidents.js';
 import { SAKA_TONE_COMPASS } from '../services/flowKnowledge.js';
@@ -35,7 +36,8 @@ export async function ensureSentinelTables(providedSupabase) {
     'chat_transcripts',
     'chat_friction_logs',
     'saka_dynamic_rules',
-    'country_comm_styles'
+    'country_comm_styles',
+    'country_learnings'
   ];
   const statusMap = {};
 
@@ -111,6 +113,13 @@ export async function ensureSentinelTables(providedSupabase) {
             short_reply_rate numeric DEFAULT 0,
             formal_rate numeric DEFAULT 0,
             notes text,
+            updated_at timestamp with time zone DEFAULT now()
+        );
+        CREATE TABLE IF NOT EXISTS public.country_learnings (
+            country_code text PRIMARY KEY,
+            learnings text,
+            tone_notes text,
+            message_count integer DEFAULT 0,
             updated_at timestamp with time zone DEFAULT now()
         );
       `;
@@ -439,6 +448,8 @@ Return strictly a single valid JSON object matching this schema (no markdown ast
   // 5. v1.28.8 — derive per-country communication styles from the same
   // transcripts (deterministic, zero AI tokens) so prompts mirror local tone.
   try {
+    const countryLessonRows = deriveCountryLearnings(transcripts || []);
+    if (countryLessonRows.length) { try { await upsertCountryLearnings({ supabase, rows: countryLessonRows }); } catch { } }
     const styles = deriveCountryCommStyles(transcripts || []);
     if (styles.length) {
       const saved = await upsertCountryCommStyles({ supabase, styles });

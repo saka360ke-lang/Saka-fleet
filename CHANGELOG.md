@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.57.0] - 2026-11-03
+
+- **Superadmin can never be a driver (rectified).** The assign-driver flow now refuses a superadmin phone at the write path (`createDriverAssignment`), and a one-time idempotent remediation (`scripts/rectify_superadmin_driver.js`) cancelled the live bad assignment, released any vehicle link and normalised the superadmin profile. Rule 15 / v1.50.0 preserved.
+- **Country learning buckets (Uganda is not Italy).** New `country_learnings` table + `src/services/countryLearnings.js`: each country gets its own learning bucket, created on the fly at signup (`ensureCountryBucket`) and populated by the Sentinel refinement pass (`deriveCountryLearnings`). The per-country learnings line rides the jurisdiction context beside the comm-style line, so a Ugandan lesson never leaks into an Italian conversation (GLOBAL stays neutral). `npm run migrate:country-learnings`.
+- **Tests:** `test_country_learnings` 9 (health-registered, Kenya/Uganda/Italy separation).
+
 ## [1.56.5] - 2026-11-03
 
 - **`admin friction done` accepts a short id.** The tracker list shows an 8-character id; `admin friction done <id>` now resolves any unique prefix to the full uuid (a full uuid still works). No more copy-typing 36 characters.

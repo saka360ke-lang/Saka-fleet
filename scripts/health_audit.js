@@ -38,6 +38,8 @@ const STATLESS_SUITES = [
   'test_odometer_answer.js',
   // v1.56.4 - friction-point tracker (pending/deployed + 4h auto-clear + log).
   'test_friction_tracker.js',
+  // v1.57.0 - per-country learning buckets (Uganda != Italy).
+  'test_country_learnings.js',
   // v1.24.2 — the wipe registry and its TRUNCATE SQL must never drift apart.
   'test_db_reset_scope.js',
   // v1.24.4 — operator status probes (public vs secret-gated payloads).
