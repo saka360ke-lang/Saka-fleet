@@ -406,7 +406,9 @@ export const SAKA_TONE_COMPASS = {
     'I don\'t have that information to share', 'I don\'t have any details to confirm',
     'As an AI language model', 'I understand your frustration',
     // v1.28.2 — the retired corporate identity must never resurface.
-    'intelligent WhatsApp vehicle & asset management assistant', 'your fleet assistant'
+    'intelligent WhatsApp vehicle & asset management assistant', 'your fleet assistant',
+    // v1.52.0 — the user's own data is never withheld behind an access refusal.
+    "I don't have access to", "I can't access", 'I do not have that data', 'that data is not available to me'
   ],
   poles: [
     { id: 'anchor', name: 'Precision (Anchor)', law: 'Numbers, dates, currency and units are sacred: use only supplied facts, never approximate database values, and state exactly what was saved.' },

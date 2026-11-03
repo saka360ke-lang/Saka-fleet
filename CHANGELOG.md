@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.52.0] - 2026-11-03
+
+- **The user's own data always rides the snapshot.** `buildUserContextSnapshot` now carries every expiry date (per-vehicle insurance + inspection, with days-left/overdue), the driver compliance record (type + expiry), the trial end date with days-left, and the vehicle YOM/VIN — so "when does my insurance expire?" is always answerable from the facts, in both the deterministic compliance lane and the composed `user_data_answer` path.
+- **OWN-DATA LAW in the core prompt.** The FACTS block is the user's own data and is theirs to read: give the exact figure; never claim you lack access, can't see, or don't hold it; if a field is genuinely missing, name the exact missing field and offer the ONE step to add it. The access-refusal family ("I don't have access to", "I can't access", "I do not have that data", "that data is not available to me") joins the banned phrases in both the core prompt and `flowKnowledge`.
+- **Tests:** new stateless `test_user_data_access.js` (8 — expiry/trial/compliance facts, days-left math, no invented data), registered in the health gate; `test_agent_training` (145) asserts the new law.
+
 ## [1.51.11] - 2026-11-03
 
 - **Registration certificates now register vehicles, not receipts.** An NTSA "REGISTRATION CERTIFICATE" (logbook) is routed to vehicle registration: the plate (old `N7200766H` and new `KDA 123A` formats), fuel type, make/model and YOM are read from the certificate and prefill the registration quiz with a deterministic "I read these from your certificate" summary. A pure-digit TRANSFER number is never stored as a VIN.

@@ -22,6 +22,8 @@ const STATLESS_SUITES = [
   'test_subscription_billing.js',
   'test_trial_engine.js',
   'test_agent_training.js',
+  // v1.52.0 — the user's own data (expiries, trial, compliance) rides every snapshot.
+  'test_user_data_access.js',
   // v1.24.2 — the wipe registry and its TRUNCATE SQL must never drift apart.
   'test_db_reset_scope.js',
   // v1.24.4 — operator status probes (public vs secret-gated payloads).

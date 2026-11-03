@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.51.11  
+**Version:** 1.52.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.52.0** | Own-data snapshot (expiries, trial, compliance) + OWN-DATA LAW — Saka never withholds the user's data | §109 |
 | **1.51.11** | NTSA registration certificate → registration prefill; receipt pipeline receipt-only; empty-expense guard; git auto-sync hooks | §108 |
 | **1.51.10** | Interactive quick-edit payload builder (`admin quick-edit` preview); SUG-2026-11-03-01 clause 7 only | §107 |
 | **1.51.9** | Cloud Run deploy-noise classifier + cut-off reply recovery (completeness complaints get the finished answer) | §106 |
@@ -3933,5 +3934,13 @@ quiz engine:
 - **Logbook CTA:** `asksToUploadLogbook()` (greetings.js) answers "Can I upload the logbook?" deterministically with a YES and one next step.
 - **Git auto-sync (rule 32):** `scripts/sync_origin.js` (skips in CI) is wired as `prehealth`/`pretest`, so every `npm run health`/`npm test` first fast-forwards `main` to `origin/main` — a local session can never run gates on a stale tree after an autonomous push.
 - **Tests:** `test_ocr_flow` 93 (NTSA fixture + date-stable duplicate fixture), `test_greetings` 94, `test_quiz_flow` 128.
+
+### 109. Own-data snapshot + OWN-DATA LAW (v1.52.0)
+
+- `buildUserContextSnapshot()` now carries the user's OWN data end-to-end: per-vehicle `insurance_expiry`/`inspection_expiry` with days-left/overdue, the driver compliance record (`compliance_type` + `compliance_expiry`), the trial end date with days-left, and vehicle YOM/VIN. "When does my insurance expire?" is therefore answerable from the facts in BOTH the deterministic compliance lane (`detectComplianceExpiryQuestion` → `buildComplianceExpiryAnswer`) and the composed `user_data_answer` path.
+- **OWN-DATA LAW** in the core prompt: the FACTS block is the user's own data and is theirs to read — give the exact figure, never claim you lack access, and when a field is genuinely missing, name the exact missing field and offer the ONE step to add it.
+- The access-refusal family (`I don't have access to`, `I can't access`, `I do not have that data`, `that data is not available to me`) joins the banned phrases in the core prompt and `SAKA_TONE_COMPASS.bannedPhrases` (rule 13 synced).
+- `user_data_answer` instructions now tell the composer "userDataFacts is the user's own data — read from it FIRST".
+- **Tests:** `test_user_data_access.js` (8, stateless, registered in the health gate), `test_agent_training` (145).
 
 

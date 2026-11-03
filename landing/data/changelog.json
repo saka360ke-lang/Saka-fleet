@@ -1,6 +1,12 @@
 {
-  "latest": "1.51.11",
+  "latest": "1.52.0",
   "entries": [
+    {
+      "version": "1.52.0",
+      "date": "2026-11-03",
+      "title": "Your data, always at hand",
+      "summary": "Ask Saka when your insurance or licence expires and she answers from your own records — every time."
+    },
     {
       "version": "1.51.11",
       "date": "2026-11-03",

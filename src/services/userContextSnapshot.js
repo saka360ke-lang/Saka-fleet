@@ -73,7 +73,7 @@ export async function buildUserContextSnapshot({ supabase, profile = null, vehic
     if (!roster.length && supabase && profile?.id) {
       const { data: rows } = await supabase
         .from('vehicles')
-        .select('id,plate_number,make_model,current_mileage,fuel_type,status,deleted_at')
+        .select('id,plate_number,make_model,current_mileage,fuel_type,status,deleted_at,insurance_expiry,inspection_expiry,yom,asset_kind,vin')
         .eq('owner_id', profile.id)
         .is('deleted_at', null)
         .limit(MAX_VEHICLES);
@@ -83,12 +83,45 @@ export async function buildUserContextSnapshot({ supabase, profile = null, vehic
       id: vehicle.id,
       plate: vehicle.plate_number || null,
       label: vehicleLabel(vehicle),
-      mileage: Number(vehicle.current_mileage || 0)
+      mileage: Number(vehicle.current_mileage || 0),
+      insuranceExpiry: vehicle.insurance_expiry || null,
+      inspectionExpiry: vehicle.inspection_expiry || null,
+      yom: vehicle.yom || null,
+      vin: vehicle.vin || null
     }));
     if (data.vehicles.length) {
       lines.push(`Vehicles on file (${data.vehicles.length}): ${data.vehicles.map((v) => v.label).join('; ')}.`);
     } else {
       lines.push('Vehicles on file: none yet.');
+    }
+
+    // v1.52.0 — expiry dates, trial end and driver compliance are the user's
+    // OWN data and must ride in every snapshot so Saka can always answer
+    // "when does my insurance expire?" from the facts — never with a refusal.
+    const expiryNotes = [];
+    for (const vehicle of data.vehicles) {
+      if (vehicle.insuranceExpiry) {
+        const days = daysUntil(vehicle.insuranceExpiry, now);
+        expiryNotes.push(`${vehicle.plate || vehicle.label} insurance expires ${String(vehicle.insuranceExpiry).slice(0, 10)}${days === null ? '' : days < 0 ? ` (${Math.abs(days)} days overdue)` : ` (in ${days} days)`}`);
+      }
+      if (vehicle.inspectionExpiry) {
+        const days = daysUntil(vehicle.inspectionExpiry, now);
+        expiryNotes.push(`${vehicle.plate || vehicle.label} inspection due ${String(vehicle.inspectionExpiry).slice(0, 10)}${days === null ? '' : days < 0 ? ` (${Math.abs(days)} days overdue)` : ` (in ${days} days)`}`);
+      }
+    }
+    if (expiryNotes.length) lines.push(`Expiry dates: ${expiryNotes.join('; ')}.`);
+
+    const trialEnds = profile?.trial_ends_at || null;
+    if (trialEnds) {
+      const days = daysUntil(trialEnds, now);
+      lines.push(`Trial ends: ${String(trialEnds).slice(0, 10)}${days === null ? '' : ` (${Math.max(0, days)} day${days === 1 ? '' : 's'} left)`}.`);
+    }
+
+    const complianceType = profile?.compliance_type || null;
+    const complianceExpiry = profile?.compliance_expiry || null;
+    if (complianceType || complianceExpiry) {
+      const days = complianceExpiry ? daysUntil(complianceExpiry, now) : null;
+      lines.push(`Your compliance: ${[complianceType, complianceExpiry ? `expires ${String(complianceExpiry).slice(0, 10)}` : null].filter(Boolean).join(' ')}${days === null ? '' : days < 0 ? ` (${Math.abs(days)} days overdue)` : ` (in ${days} days)`}.`);
     }
 
     // v1.28.0 — lightweight per-user memory (no schema change): the details a
