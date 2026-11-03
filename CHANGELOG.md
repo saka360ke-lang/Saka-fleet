@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.56.4] - 2026-11-03
+
+- **Friction points are tracked, never lost.** New `src/services/frictionTracker.js` + `npm run migrate:friction` add a PENDING -> DEPLOYED lifecycle to `chat_friction_logs` (`status`, `resolved_at`, `resolution`). A deployed point auto-clears from the active list after 4 hours but the log keeps it forever. Superadmin: `admin friction [pending|deployed|log]` and `admin friction done <id>`.
+- **Sentinel diagnosis on target.** `conversationDiagnosis.js` routing map now names the registration-correction, entitlement and active-vehicle entry points, so conversational PROP proposals land on the right file (the 2026-11-03 diagnosis mis-targeted the ledger detector).
+- **Whole-conversation memory.** `CHAT_HISTORY_MAX_MESSAGES` (default 40, clamped 20-60) raises the injected history and the in-memory session cap from 10/20 to 40 turns, so Saka remembers the whole chat, not just submitted fields.
+- **E.164 friction phones.** Sentinel now normalises `chat_friction_logs.user_phone` to +254 form at write time (bare-254 vs +254 split fixed).
+- **Tests:** `test_friction_tracker` 10 (health-registered); `test_quiz_flow` asserts the 40-message default.
+
 ## [1.56.3] - 2026-11-03
 
 - **Maintenance-schedule questions answer from your reminders.** "When am I supposed to buy my front tyres?" / "how often should I change the oil?" now route to the reminder lane (deterministic, zero tokens) instead of a generic menu. If you have a matching reminder, Saka cites it exactly (date / km / hours); if not, she says so honestly and offers the one step to track it — she never invents an interval.

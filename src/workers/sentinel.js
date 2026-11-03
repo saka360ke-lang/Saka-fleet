@@ -11,6 +11,7 @@ import { buildIncidentSignature, isIncidentSilenced } from '../services/incident
 import { SAKA_TONE_COMPASS } from '../services/flowKnowledge.js';
 import { isConversationDiagnosisEnabled, diagnoseConversationMismatch, recordConversationProposal } from '../services/conversationDiagnosis.js';
 import { PROMPT_REFINEMENT_MARKER, MAX_STORED_PROMPT_REFINEMENT_CHARS } from '../../sakaAi.js';
+import { normalizeFrictionPhone } from '../services/frictionTracker.js';
 
 function getSupabase(providedSupabase) {
   if (providedSupabase) return providedSupabase;
@@ -867,7 +868,7 @@ async function processFrictionPatches(supabase, detectedFrictions) {
       const { data: recent } = await supabase
         .from('chat_friction_logs')
         .select('id, transcript_snippet')
-        .eq('user_phone', friction.phone)
+        .eq('user_phone', normalizeFrictionPhone(friction.phone))
         .eq('friction_type', friction.type)
         .gte('detected_at', sinceIso)
         .limit(20);
@@ -879,7 +880,7 @@ async function processFrictionPatches(supabase, detectedFrictions) {
       }
 
       await supabase.from('chat_friction_logs').insert([{
-        user_phone: friction.phone,
+        user_phone: normalizeFrictionPhone(friction.phone),
         session_id: `session_${friction.phone.replace(/[^\d]/g, '')}`,
         friction_type: friction.type,
         transcript_snippet: friction.snippet,
@@ -1286,7 +1287,7 @@ export async function monitorActiveConversations(providedSupabase) {
       const frictionType = extractionFailures >= 2 ? 'EXTRACTION_ERROR' : 'CONVERSATION_STALL';
       try {
         await supabase.from('chat_friction_logs').insert([{
-          user_phone: phone,
+          user_phone: normalizeFrictionPhone(phone),
           session_id: `session_${String(phone).replace(/[^\d]/g, '')}`,
           friction_type: frictionType,
           transcript_snippet: `Stalled ${stallMinutes}m in ${quiz.flow}/${quiz.phase}. Pending: ${field?.label || 'confirm draft'}. Nudge #${newState.recovery.nudges}. Extraction failures: ${extractionFailures}.`,

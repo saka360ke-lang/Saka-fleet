@@ -12,6 +12,14 @@ export const CHAT_HISTORY_MAX_AGE_MINUTES = (() => {
   return Math.min(raw, 24 * 60);
 })();
 
+// v1.56.4 - Saka carries the whole conversation, not just submitted fields.
+// 20-40 recent turns ride the prompt (default 40), clamped to a safe bound.
+export const CHAT_HISTORY_MAX_MESSAGES = (() => {
+  const raw = Number(process.env.CHAT_HISTORY_MAX_MESSAGES || 40);
+  if (!Number.isFinite(raw) || raw <= 0) return 40;
+  return Math.min(Math.max(raw, 20), 60);
+})();
+
 export async function saveChatMessage(supabase, userPhone, role, message) {
   if (!supabase || !userPhone || !message) return null;
 
@@ -35,7 +43,7 @@ export async function saveChatMessage(supabase, userPhone, role, message) {
   }
 }
 
-export async function getRecentChatHistory(supabase, userPhone, limit = 10, { maxAgeMinutes = CHAT_HISTORY_MAX_AGE_MINUTES } = {}) {
+export async function getRecentChatHistory(supabase, userPhone, limit = CHAT_HISTORY_MAX_MESSAGES, { maxAgeMinutes = CHAT_HISTORY_MAX_AGE_MINUTES } = {}) {
   if (!supabase || !userPhone) return [];
 
   try {

@@ -72,7 +72,7 @@ import {
 } from '../services/entryLedger.js';
 import { parseVehicleComplianceParagraph, submitVehicleCompliance } from '../services/vehicleCompliance.js';
 import { handleStage1CoreCapture, handleStage2OptionalWeaving } from '../services/onboarding.js';
-import { saveChatMessage, getRecentChatHistory } from '../services/chatHistory.js';
+import { saveChatMessage, getRecentChatHistory, CHAT_HISTORY_MAX_MESSAGES } from '../services/chatHistory.js';
 import { sendEmailOtp, sendSupportEscalationEmail, sendMfaEmail } from '../services/mailer.js';
 import {
   initiatePassbookTransfer,
@@ -952,7 +952,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
       });
       session.history.push({ role: 'user', parts: [{ text: messageText }] });
       session.history.push({ role: 'model', parts: [{ text: pauseReply }] });
-      if (session.history.length > 20) session.history = session.history.slice(-20);
+      if (session.history.length > CHAT_HISTORY_MAX_MESSAGES) session.history = session.history.slice(-CHAT_HISTORY_MAX_MESSAGES);
       chatSessions.set(senderPhone, session);
       try { await sendWhatsAppReply(senderPhone, pauseReply); } catch { /* best-effort */ }
       if (supabaseClient) {
@@ -1058,7 +1058,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           session.history = session.history || [];
           session.history.push({ role: 'user', parts: [{ text: messageText }] });
           session.history.push({ role: 'model', parts: [{ text: verifyReply }] });
-          if (session.history.length > 20) session.history = session.history.slice(-20);
+          if (session.history.length > CHAT_HISTORY_MAX_MESSAGES) session.history = session.history.slice(-CHAT_HISTORY_MAX_MESSAGES);
           chatSessions.set(senderPhone, session);
           try {
             await sendWhatsAppReply(senderPhone, verifyReply);
@@ -1100,7 +1100,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               .select('*')
               .is('deleted_at', null)
               .or(`owner_id.eq.${profileData.id},assigned_driver_id.eq.${profileData.id}`),
-            getRecentChatHistory(supabaseClient, senderPhone, 10)
+            getRecentChatHistory(supabaseClient, senderPhone, CHAT_HISTORY_MAX_MESSAGES)
           ]);
           existingVehicles = vehiclesRes?.data || [];
           // v1.24.3 — this turn's own user row can land before the history read on
@@ -4488,7 +4488,7 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
 
         session.history.push({ role: 'user', parts: [{ text: messageText }] });
         session.history.push({ role: 'model', parts: [{ text: finalReply }] });
-        if (session.history.length > 20) session.history = session.history.slice(-20);
+        if (session.history.length > CHAT_HISTORY_MAX_MESSAGES) session.history = session.history.slice(-CHAT_HISTORY_MAX_MESSAGES);
         chatSessions.set(senderPhone, session);
 
         turnFinalized = true;

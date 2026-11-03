@@ -36,6 +36,8 @@ const STATLESS_SUITES = [
   'test_conversation_diagnosis.js',
   // v1.56.0 — current odometer/mileage answers come from the vehicle record.
   'test_odometer_answer.js',
+  // v1.56.4 - friction-point tracker (pending/deployed + 4h auto-clear + log).
+  'test_friction_tracker.js',
   // v1.24.2 — the wipe registry and its TRUNCATE SQL must never drift apart.
   'test_db_reset_scope.js',
   // v1.24.4 — operator status probes (public vs secret-gated payloads).

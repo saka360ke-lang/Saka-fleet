@@ -1,6 +1,12 @@
 {
-  "latest": "1.56.3",
+  "latest": "1.56.4",
   "entries": [
+    {
+      "version": "1.56.4",
+      "date": "2026-11-03",
+      "title": "Nothing forgotten, nothing lost",
+      "summary": "Saka remembers your whole conversation, and every friction point is tracked from pending to fixed with a permanent log."
+    },
     {
       "version": "1.56.3",
       "date": "2026-11-03",

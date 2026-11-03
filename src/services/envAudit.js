@@ -193,6 +193,7 @@ export const ENV_SECTIONS = Object.freeze([
     section: 'LATENCY & CONVERSATION',
     keys: [
       'CHAT_HISTORY_MAX_AGE_MINUTES',
+      'CHAT_HISTORY_MAX_MESSAGES',
       'QUIZ_MAX_AGE_MINUTES',
       'SLOW_ACK_MS',
       'TURN_LATENCY_LOGGING_ENABLED',

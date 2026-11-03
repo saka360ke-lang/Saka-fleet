@@ -25,6 +25,9 @@ export function isConversationDiagnosisEnabled() {
 // Curated routing map so the diagnosis can cite a real file/function without
 // ingesting the whole tree.
 const ROUTING_MAP = [
+  "src/services/quizEngine.js::detectRegistrationCorrection + applyRegistrationCorrection - a free-text instruction (save as draft) must never be stored as a field value.",
+  "src/services/subscriptions.js::getEntitlements - the welcome trial grants solo_pro capacity; never tell a trial user they are limited to the Free 1-vehicle cap.",
+  "src/services/quizEngine.js::startQuiz / registerVehicleFromQuiz - never reference a vehicle the user did not supply; only the active vehicle.",
   'src/services/entryAnswers.js::detectLedgerCommand — turns "edit/change/delete/my entries/wrong…" into saved-ledger commands.',
   'src/services/entryAnswers.js::resolveLedgerTurn — single ledger decision point (list/select/edit/delete/cancel).',
   'src/services/quizEngine.js::detectQuizStart — intent → quiz flow; REGISTER_VEHICLE only starts when the user has NO vehicle yet.',

@@ -16,7 +16,7 @@ import {
   startQuiz,
   QUIZ_MAX_AGE_MINUTES
 } from './src/services/quizEngine.js';
-import { getRecentChatHistory, CHAT_HISTORY_MAX_AGE_MINUTES } from './src/services/chatHistory.js';
+import { getRecentChatHistory, CHAT_HISTORY_MAX_AGE_MINUTES, CHAT_HISTORY_MAX_MESSAGES } from './src/services/chatHistory.js';
 
 /**
  * Targeted suite: one-piece-at-a-time quiz engine + confirmation gate.
@@ -461,6 +461,7 @@ async function run() {
   const wideHistory = await getRecentChatHistory(historyMock, '+254700000001', 10, { maxAgeMinutes: 0 });
   assert(wideHistory.length === 3, 'maxAgeMinutes: 0 disables the window (full history is returned)');
   assert(CHAT_HISTORY_MAX_AGE_MINUTES === 45, 'CHAT_HISTORY_MAX_AGE_MINUTES defaults to 45 minutes');
+  assert(CHAT_HISTORY_MAX_MESSAGES === 40, 'CHAT_HISTORY_MAX_MESSAGES defaults to 40 messages');
 
   console.log('\n--- Test 10: narrative draft cards (v1.35.0) ---');
   const narrativeFields = {

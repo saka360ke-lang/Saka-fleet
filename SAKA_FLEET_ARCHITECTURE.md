@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.56.3  
+**Version:** 1.56.4  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.56.4** | Friction tracker (pending/deployed + 4h auto-clear + log) + whole-conversation memory (20-40 turns) + E.164 friction phones | 126 |
 | **1.56.3** | Maintenance-schedule questions ("when should I replace my tyres?") answer from the user's reminders, never a generic menu | §125 |
 | **1.56.2** | Plain-English admin backlog — "show me [all] pending proposals" maps to the remediation list (PROP-2026-11-03-07) | §124 |
 | **1.56.1** | "You deleted the wrong entry" is a complaint (not a ledger edit) + readable empty record answers | §123 |
@@ -4072,3 +4073,13 @@ quiz engine:
 - **Tests:** `test_vehicle_compliance` 67 (+5 maintenance assertions).
 
 
+
+
+### 126. Friction-point tracker + whole-conversation memory (v1.56.4)
+
+- **Track never lost.** New `src/services/frictionTracker.js` adds a PENDING -> DEPLOYED lifecycle on `chat_friction_logs` (`status`, `resolved_at`, `resolution`); a deployed point auto-clears from the active list after `FRICTION_CLEARED_AFTER_HOURS` (4) but is never deleted. `npm run migrate:friction` adds the columns (idempotent). `normalizeFrictionPhone` fixes the bare-254 vs +254 split at the Sentinel write paths.
+- **Superadmin:** `admin friction [pending|deployed|log]` lists the active track and the persistent log; `admin friction done <id>` marks a point deployed. Audited as `ADMIN_FRICTION` / `ADMIN_FRICTION_DONE`. Deterministic, zero tokens.
+- **Whole-conversation memory (rule 40):** `CHAT_HISTORY_MAX_MESSAGES` (default 40, clamped 20-60) is the new default limit for `getRecentChatHistory`; `session.history` caps at the same bound in `whatsapp.js` (3 sites). The 45-minute age guard is unchanged.
+- **Live audit (2026-11-03, 0734852529):** Sentinel flagged 8 friction rows (USER_FRUSTRATION x5, LOOPING_PROMPTS x2, CONVERSATION_STALL x1) and minted `PROP-2026-11-03-08` (conversation). Real root causes: (a) registration flow stored free-text (save as draft / financial analysis) as make and model; (b) welcome-trial user told the Free 1-vehicle cap; (c) a hallucinated Honda CR-V; (d) bare/+254 phone split. The Sentinel diagnosis mis-targeted the ledger detector.
+- **Sentinel fix:** `conversationDiagnosis.js` ROUTING_MAP now names the registration-correction, entitlement and active-vehicle entry points so future PROP diagnoses land on the right file.
+- **Tests:** `test_friction_tracker` 10 (health-registered); `test_quiz_flow` asserts `CHAT_HISTORY_MAX_MESSAGES === 40`.

@@ -30,6 +30,7 @@ import { getTrialFunnelStats, formatTrialStatsReply } from './trialEngine.js';
 import { getTurnLatencySummary } from './turnLatency.js';
 import { getOcrUsageSummary, getOcrCountryProfileStats } from './ocrTelemetry.js';
 import { auditEnv, formatEnvDigest, parseEnvKeys, envTemplateKeys } from './envAudit.js';
+import { listFrictionLog, formatFrictionReply, markFrictionDeployed, FRICTION_CLEARED_AFTER_HOURS } from './frictionTracker.js';
 import { getFeatureRolloutStatus, FEATURE_NOTICE_VERSION } from './featureNotice.js';
 import {
   listKbDrafts,
@@ -142,6 +143,7 @@ const ADMIN_INTENTS = new Set([
   'ADMIN_RULES_RESET', 'ADMIN_RULES_TOGGLE', 'ADMIN_RULES_LIST',
   'ADMIN_HORIZON', 'ADMIN_PROPOSALS', 'ADMIN_BACKLOG',
   'ADMIN_REMEDIATIONS', 'ADMIN_REMEDIATION_ACCEPT', 'ADMIN_REMEDIATION_DECLINE', 'ADMIN_REMEDIATION_MODIFY', 'ADMIN_REMEDIATION_STATUS',
+  'ADMIN_FRICTION', 'ADMIN_FRICTION_DONE',
   'ADMIN_UPDATE_SUGGEST', 'ADMIN_FEATURE_ADOPT',
   'ADMIN_QUICK_EDIT_PREVIEW',
   'ADMIN_AI_STATS',
@@ -340,6 +342,15 @@ export async function parseSuperadminCommand(messageText) {
   if (/^\s*admin\s+(pending|deployed)\s+(?:remediations?|fixes?|proposals?)\s*$/i.test(text)) {
     return { intent: 'ADMIN_REMEDIATIONS', filter: /pending/i.test(text) ? 'pending' : 'deployed' };
   }
+  const frictionDoneMatch = text.match(/^\s*admin\s+friction\s+done\s+([0-9a-fA-F-]{6,36})\s*$/i);
+  if (frictionDoneMatch) {
+    return { intent: "ADMIN_FRICTION_DONE", friction_id: frictionDoneMatch[1] };
+  }
+  const frictionMatch = text.match(/^\s*admin\s+friction\s*(pending|deployed|log|active)?\s*$/i);
+  if (frictionMatch) {
+    return { intent: "ADMIN_FRICTION", filter: (frictionMatch[1] || "active").toLowerCase() };
+  }
+
   const adoptFeatureMatch = text.match(/^\s*admin\s+adopt\s+([a-zA-Z0-9-]+)\s*$/i);
   if (adoptFeatureMatch) {
     return { intent: 'ADMIN_FEATURE_ADOPT', proposal_code: adoptFeatureMatch[1].toUpperCase() };
@@ -1512,6 +1523,23 @@ export async function captureUpdateSuggestion(supabase, adminPhone, suggestionTe
   };
 }
 
+/** v1.56.4 - friction-point tracker (pending/deployed + 4h auto-clear + persistent log). */
+export async function handleAdminFriction(supabase, filter = "active") {
+  const rows = await listFrictionLog(supabase, 60);
+  const reply = formatFrictionReply(rows, filter === "log" ? "log" : "active");
+  return { reply };
+}
+
+export async function handleAdminFrictionDone(supabase, id) {
+  const result = await markFrictionDeployed(supabase, id, "Marked deployed by superadmin");
+  const shortId = String(id || "none").slice(0, 8);
+  return {
+    reply: result.ok
+      ? "Done - friction point `" + shortId + "` marked deployed. It clears from the active list after " + FRICTION_CLEARED_AFTER_HOURS + " h but stays in the log."
+      : "Could not mark `" + shortId + "` deployed: " + (result.reason || "unknown") + "."
+  };
+}
+
 export async function handleAdminRemediationsList(supabase, filter = 'all') {
   const { data: proposals, error } = await supabase
     .from('remediation_proposals')
@@ -2018,7 +2046,7 @@ export function formatAdminHelpReply() {
   return '🛠️ *Saka admin commands*\n\n' +
     '📊 *Snapshots* — admin report · admin alerts · admin audit <query>\n' +
     '👥 *Fleet* — profiles report · admin trial-stats · admin ai-stats [24h] · admin ocr-stats [24h] · admin ocr-profile [KE] · admin latency [24h] · admin env\n' +
-    '🛠️ *Fixes* — admin backlog · admin remediations [pending|deployed] · "show me pending proposals" · admin accept|decline|modify fix <CODE> · admin adopt <FEAT-code> · admin quick-edit · UPDATE-SUGGEST> <your update>\n' +
+    '🛠️ *Fixes* — admin backlog · admin remediations [pending|deployed] - admin friction [pending|deployed|log] · "show me pending proposals" · admin accept|decline|modify fix <CODE> · admin adopt <FEAT-code> · admin quick-edit · UPDATE-SUGGEST> <your update>\n' +
     '🌱 *Growth* — generate coupon 20% · admin horizon · admin proposals\n' +
     '🩺 *Guardrails* — check health · admin rules list|toggle <key>|reset\n' +
     '📚 *Knowledge* — admin kb · admin kb review · admin kb stale\n' +
@@ -2176,6 +2204,24 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
     return {
       isSuperadmin: true,
       reply: listRes.reply
+    };
+  }
+
+  if (parsedCommand.intent === "ADMIN_FRICTION") {
+    const frictionRes = await handleAdminFriction(supabase, parsedCommand.filter || "active");
+    await logAdminAudit(supabase, formattedPhone, "ADMIN_FRICTION", { filter: parsedCommand.filter || "active" });
+    return {
+      isSuperadmin: true,
+      reply: frictionRes.reply
+    };
+  }
+
+  if (parsedCommand.intent === "ADMIN_FRICTION_DONE") {
+    const frictionDoneRes = await handleAdminFrictionDone(supabase, parsedCommand.friction_id);
+    await logAdminAudit(supabase, formattedPhone, "ADMIN_FRICTION_DONE", { friction_id: parsedCommand.friction_id });
+    return {
+      isSuperadmin: true,
+      reply: frictionDoneRes.reply
     };
   }
 
