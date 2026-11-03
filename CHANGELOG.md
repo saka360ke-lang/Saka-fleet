@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.56.0] - 2026-11-03
+
+- **Existing owners can register another asset.** An owner who already has a vehicle and says "I have another car", "add vehicle", "a second truck" (or "Add car") now starts the real registration quiz again — previously `detectQuizStart` only offered registration when the account had NO vehicle, so those requests produced a plausible-looking paragraph with no quiz state and every follow-up ("Car", the plate, "Ok") was dropped. Capacity and verified email are still enforced at save (`persistVehicleRegistration`), so nothing can over-register.
+- **"What's my current mileage?" answers from the vehicle.** New deterministic `src/services/odometerAnswer.js` answers current mileage / odometer / odo-reading / last-update questions from the vehicle's own reading (`current_mileage`, or engine hours for hours-led assets) instead of the expense ledger — the live audit showed all three phrasings returning an expense total or a false "no odometer on file". It parks a non-registration quiz exactly like the record lane.
+- **Tests:** `test_odometer_answer` 11 (health-registered), `test_quiz_flow` 142 (+1 existing-owner registration); `test_no_canned_replies` ratchet unchanged (≤4, 1 literal); `flowKnowledge` + core prompt synced (rule 13).
+
 ## [1.55.1] - 2026-11-03
 
 - **Sentinel now drafts proposals for conversational mismatches.** When a reply misses the user's ask, Sentinel (flag-gated `CONVERSATION_DIAGNOSIS_ENABLED`, default off) inspects the conversation routing map with the reasoning tier, produces a root cause + minimal change, and saves it as a `PROP-*` proposal (`PENDING_APPROVAL`, category `conversation`) for superadmin review — nothing runs autonomously. A forbidden-path sanitizer keeps the diagnosis away from auth/OTP/VIN/payment/schema/CI/.env.

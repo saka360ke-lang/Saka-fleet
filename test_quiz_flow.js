@@ -72,6 +72,7 @@ async function run() {
   assert(regFlow.fields.filter((f) => f.group === 'optional').length >= 8, 'Optional spec group is present');
 
   assert(detectQuizStart({ intent: 'REGISTER_VEHICLE', messageText: 'register', hasVehicleRegistered: false }) === 'vehicle_registration', 'Registration intent starts registration quiz');
+  assert(detectQuizStart({ intent: 'GENERAL_CHAT', messageText: 'I have another car', hasVehicleRegistered: true, isRegisterCommand: true }) === 'vehicle_registration', 'an existing owner adding another car starts registration (v1.56.0)');
   assert(detectQuizStart({ intent: 'ASSIGN_DRIVER', messageText: 'assign driver', hasVehicleRegistered: true }) === 'assign_driver', 'Assign-driver intent maps to its quiz');
   assert(detectQuizStart({ intent: 'GENERAL_CHAT', messageText: 'what can I do', hasVehicleRegistered: true }) === null, 'General chat does not start a quiz');
   assert(detectQuizStart({ intent: 'VIEW_PROFILE', messageText: 'my profile details', hasVehicleRegistered: true }) === null, 'Viewing a profile never starts a quiz');

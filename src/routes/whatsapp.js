@@ -24,6 +24,7 @@ import { matchProductQa, buildProductQaReply, buildProductFactsContext, buildLoc
 import { shouldSuggestContactSave, isLostChatMessage, buildContactSaveFacts, markContactSaveSuggested } from '../services/contactNudge.js';
 import { buildUserContextSnapshot, buildUserFactsLines } from '../services/userContextSnapshot.js';
 import { buildConversationMemory } from '../services/conversationMemory.js';
+import { isOdometerQuestion, buildOdometerAnswer } from '../services/odometerAnswer.js';
 import { resolveSlowAckMs, pickSlowAckLine, shouldSendSlowAck } from '../services/turnAck.js';
 import { buildVehicleSummary, emailVehicleSummary } from '../services/vehicleSummary.js';
 import {
@@ -1308,6 +1309,12 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         if (recordQuestion.ok && quizForFastPath && !quizPhaseLocked) {
           abandonQuiz(session, { reason: 'record_query' });
         }
+        // v1.56.0 — "current mileage / odometer" questions answer from the
+        // VEHICLE record, never the expense ledger.
+        const odometerQuestion = !quizPhaseLocked && isOdometerQuestion(commandText);
+        if (odometerQuestion && quizForFastPath && !quizPhaseLocked) {
+          abandonQuiz(session, { reason: 'odometer_query' });
+        }
 
 
 
@@ -1721,6 +1728,12 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
 
           aiResult = { intent: ledgerIntent, extracted_data: {}, reply_message: reply };
 
+        } else if (odometerQuestion) {
+          // v1.56.0 — current mileage / odometer answers come from the VEHICLE,
+          // never the expense ledger (hours meter for hours-led assets).
+          const veh = currentActiveVehicle || existingVehicles[0] || null;
+          aiResult = { intent: 'GENERAL_CHAT', extracted_data: {}, reply_message: buildOdometerAnswer(veh) };
+
         } else if (recordQuestion.ok && supabaseClient && profileData?.id) {
           // v1.36.0 — record answers: every figure comes from the ledger rows.
           const laneOwner = existingVehicles.some((v) => v.owner_id === profileData?.id);
@@ -1818,7 +1831,10 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
 
         const isRegisterCommand = /^\s*(register|onboard|add car|add vehicle|new vehicle)\b/i.test(messageText)
           || /\b(?:add|register|onboard)\b[^.!?]{0,24}\b(?:my\s+)?(?:vehicle|car|truck|bike|bus|machine|boat|asset)\b/i.test(messageText)
-          || /\b(?:upload|send)\b[^.!?]{0,24}\b(?:reg(?:istration)?\s*(?:cert|certificate)|log\s?book)\b/i.test(messageText);
+          || /\b(?:upload|send)\b[^.!?]{0,24}\b(?:reg(?:istration)?\s*(?:cert|certificate)|log\s?book)\b/i.test(messageText)
+          // v1.56.0 — an existing owner adding another asset ("I have another
+          // car", "a second vehicle", "one more truck") is a register command.
+          || /\b(?:another|second|one\s+more|an?\s+extra)\s+(?:vehicle|car|truck|bike|motorbike|bus|machine|boat|asset)\b/i.test(messageText);
         const hasVehicleAttributes = !!(mergedExt.plate_number || (mergedExt.yom && (mergedExt.fuel_type || mergedExt.make_model)) || (mergedExt.fuel_type && mergedExt.current_mileage) || mergedExt.vin);
 
         let isSupportFlow = false;

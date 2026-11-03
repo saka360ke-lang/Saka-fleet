@@ -34,6 +34,8 @@ const STATLESS_SUITES = [
   'test_conversation_memory.js',
   // v1.55.1 — response-mismatch diagnosis sanitizer (proposal guardrail).
   'test_conversation_diagnosis.js',
+  // v1.56.0 — current odometer/mileage answers come from the vehicle record.
+  'test_odometer_answer.js',
   // v1.24.2 — the wipe registry and its TRUNCATE SQL must never drift apart.
   'test_db_reset_scope.js',
   // v1.24.4 — operator status probes (public vs secret-gated payloads).

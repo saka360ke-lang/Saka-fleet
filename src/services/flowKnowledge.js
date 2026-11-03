@@ -75,11 +75,11 @@ export const SAKA_QUIZ_FLOWS = [
   {
     key: 'vehicle_registration',
     label: 'Vehicle registration',
-    trigger: 'register / add vehicle, new plate, "Register", first-time onboarding',
+    trigger: 'register / add vehicle, new plate, "Register", first-time onboarding, OR an existing owner adding another asset ("I have another car", "add vehicle", "a second truck")',
     fields: 'asset kind (car/motorcycle/truck/bus/machinery/heavy equipment/generator/boat) → plate or serial → make/model → YOM → fuel → odometer or hour meter → VIN (road assets only) → optional specs → confirm',
     extracted: ['asset_kind', 'plate_number', 'serial_number', 'make_model', 'yom', 'fuel_type', 'current_mileage', 'operating_hours', 'vin'],
     writes: 'vehicles + VIN provenance ledger (no VIN trial) + profile email (from the website-verified account) + passbook email + the one-time full-featured welcome trial + owner driver-profile start',
-    rules: 'VIN is permanent; the asset kind selects the identity track (plate+VIN for road assets, serial + hour meter for generators/machinery) and the country-bucket compliance catalog; one question per turn; optional specs skippable as a group; a pasted paragraph fills several fields at once; on completion Saka immediately starts the owner\'s own driver profile (minimum compliance, skippable)'
+    rules: 'VIN is permanent; the asset kind selects the identity track (plate+VIN for road assets, serial + hour meter for generators/machinery) and the country-bucket compliance catalog; one question per turn; optional specs skippable as a group; a pasted paragraph fills several fields at once; on completion Saka immediately starts the owner\'s own driver profile (minimum compliance, skippable); an owner who ALREADY has a vehicle can register another asset the same way — capacity and verified email are enforced at save'
   },
   {
     key: 'email_update',

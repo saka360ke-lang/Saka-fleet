@@ -1,6 +1,12 @@
 {
-  "latest": "1.55.1",
+  "latest": "1.56.0",
   "entries": [
+    {
+      "version": "1.56.0",
+      "date": "2026-11-03",
+      "title": "Add a second car — and check its mileage",
+      "summary": "Already have a vehicle? Ask Saka to add another and registration just works. And \"what's my current mileage?\" now reads the vehicle's real odometer, not your spending."
+    },
     {
       "version": "1.55.1",
       "date": "2026-11-03",

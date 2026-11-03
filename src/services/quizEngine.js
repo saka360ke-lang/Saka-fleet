@@ -3762,6 +3762,12 @@ export function detectQuizStart({
   // before any vehicle management flow can start.
   if (driverOnboardingPending) return 'driver_onboarding';
 
+  // v1.56.0 — an EXISTING owner explicitly adding another asset ("I have
+  // another car", "add vehicle", "a second truck") starts the registration
+  // quiz. Capacity + email verification are enforced at persist time
+  // (persistVehicleRegistration), so this can never over-register.
+  if (isRegisterCommand) return 'vehicle_registration';
+
   const intentMap = {
     ASSIGN_DRIVER: 'assign_driver',
     UNASSIGN_DRIVER: 'unassign_driver',

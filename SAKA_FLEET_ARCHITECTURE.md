@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.55.1  
+**Version:** 1.56.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.56.0** | Existing owners add another asset (registration starts for them) + "current mileage" answers read the vehicle, not the ledger | §122 |
 | **1.55.1** | Sentinel response-mismatch → code diagnosis → PROP-* proposal (flag-gated, read-only, review-in-chat) | §121 |
 | **1.55.0** | Conversation working memory: the submitted-but-unsaved draft (fields + extra notes + pending) is visible to the model, secret-free | §120 |
 | **1.54.5** | Draft-correction lane fixed: a "wrong field" correction to an unsaved entry no longer gets stolen by the saved-ledger edit command | §119 |
@@ -4039,5 +4040,13 @@ quiz engine:
 - **Wired in `sentinel.js` `processFrictionPatches`** (after the friction row, before the micro-rule optimizer), fail-soft and deduped by the existing 24 h friction dedupe.
 - **Env:** `CONVERSATION_DIAGNOSIS_ENABLED` (default **off**) — registry + `.env.example` documented.
 - **Tests:** `test_conversation_diagnosis` 11 (health-registered: valid passes, forbidden paths rejected, caps), `test_env_audit` 44 (parity).
+
+### 122. Existing owners add assets + current mileage reads the vehicle (v1.56.0)
+
+- **Add-another-asset registration (R1).** `detectQuizStart` (quizEngine.js) no longer gates `vehicle_registration` behind `!hasVehicleRegistered`: an explicit register command now starts the registration quiz for an EXISTING owner too. `isRegisterCommand` (whatsapp.js) additionally recognises the "I have another car", "a second vehicle", "one more truck" family. Capacity + verified email are still enforced at write time by `persistVehicleRegistration` (`checkOwnerVehicleTierLimit` → "plan allows N vehicle(s)"), so a Free account can never over-register. Live 2026-11-03 (0734852529): "I have another car" / "Add car" produced AI prose with no quiz state, so "Car" / "KBJ 819C" / "Ok" all fell through to the generic menu.
+- **Current-mileage answers come from the VEHICLE (R2).** New pure `src/services/odometerAnswer.js` (`isOdometerQuestion`, `buildOdometerAnswer`). In the deterministic read chain (whatsapp.js, checked before `parseRecordQuestion`) a "current mileage / odometer / odo reading / last update / how many km" question answers from `vehicles.current_mileage` (or `operating_hours` for hours-led assets) — never an expense summary, and never "no odometer on file" when the vehicle has a reading. It parks a non-registration quiz (`abandonQuiz` reason `odometer_query`) exactly like the record lane. Live 2026-11-03: all three odometer questions returned expense totals or a false "no odometer".
+- **Skill/prompt sync (rule 13):** `flowKnowledge.js` vehicle_registration trigger/rules now cover existing owners adding an asset; `sakaAi.js` `DEFAULT_SAKA_CORE_PROMPT` gains the MILEAGE & ADD-ASSET LAW.
+- **Tests:** `test_odometer_answer` 11 (health-registered), `test_quiz_flow` 142 (+1: an existing owner adding another car starts registration). `test_no_canned_replies` ratchet unchanged (≤4 literals; 1 remains).
+- **Deferred (tracked):** `chat_friction_logs.user_phone` E.164 normalization (bare `254…` vs `+254…`); confirm the live `CONVERSATION_DIAGNOSIS_ENABLED` value in Cloud Run.
 
 
