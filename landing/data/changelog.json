@@ -1,6 +1,12 @@
 {
-  "latest": "1.54.5",
+  "latest": "1.55.0",
   "entries": [
+    {
+      "version": "1.55.0",
+      "date": "2026-11-03",
+      "title": "Saka remembers what you just told her",
+      "summary": "Even before you save, Saka keeps your in-progress details in view — so she never asks you to repeat yourself."
+    },
     {
       "version": "1.54.5",
       "date": "2026-11-03",

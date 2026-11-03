@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.54.5  
+**Version:** 1.55.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.55.0** | Conversation working memory: the submitted-but-unsaved draft (fields + extra notes + pending) is visible to the model, secret-free | §120 |
 | **1.54.5** | Draft-correction lane fixed: a "wrong field" correction to an unsaved entry no longer gets stolen by the saved-ledger edit command | §119 |
 | **1.54.4** | Engine-owned patience ladder: same-field repeats climb deterministically (2nd → simplest typed path, 3rd → human lane), reset on progress | §118 |
 | **1.54.3** | Conversational-first completion: all 19 remaining canned replies composed (ratchet ≤ 4), persona conversation-compliance harness shipped | §117 |
@@ -4023,5 +4024,11 @@ quiz engine:
 - **The saved-ledger edit command no longer steals draft corrections.** Live evidence 2026-11-03 (0734852529, fuel top-up): during the confirmation summary the user wrote *"The fuel volume is definitely wrong… amount … price was 222 kes per liter"* — `detectLedgerCommand()`'s "natural mistake" rule matched `fuel … wrong … amount` and turned it into a saved-entry `edit`, replying *"I could not find an entry to change."* The rule now requires a genuine **saved-entry noun** (`entry/entries`, `record`, `expense`, `log`, `transaction`, `receipt`) instead of any bare field/fuel word, so a correction to the **open draft** flows to the confirmation summary (which re-renders and asks which field to change) — the saved-entry phrasing (`"I made a mistake on the fuel entry"`, `"wrong amount on my last expense"`) is unchanged.
 - **Tests:** `test_entry_ledger` (new regression: the live draft-correction text returns `null`; the saved-entry phrasings still resolve), `test_agent_training` unchanged.
 - **Follow-ups tracked (not shipped):** (a) `"I have another vehicle"` → deterministic registration for an existing owner (the phrase was answered with a generic menu twice; self-recovered after the user typed "Register"); (b) normalize `chat_friction_logs.user_phone` to E.164 (`+` prefix) — it is written bare (`254…`) by one Sentinel path while `chat_history` carries `+254…`.
+
+### 120. Conversation working memory (v1.55.0)
+
+- **The submitted-but-UNSAVED draft is now visible to the model.** New pure, dependency-free `buildConversationMemory({ quiz, pendingLabel, activeVehicle })` renders a compact "In-progress … draft (NOT saved yet)" block: collected fields as human labels, extra notes (details that never mapped to a DB column), the pending field, and the active vehicle — **never OTP/PIN/token**, and `''` when there is no draft (zero prompt cost in idle chat).
+- **Wired into the conversational-pause path:** `buildPausedQuizReply`'s `quiz_pause_conversation` facts now carry `workingMemory` instead of the raw `answers` object (which leaked secret keys and lacked labels) — so "what did I already tell you?" mid-quiz is answerable. Also passed to `processSakaMessage` (`options.workingMemory`) for any future draft-carrying general turn.
+- **Tests:** `test_conversation_memory` 11 (health-registered), `test_no_canned_replies` ratchet unchanged.
 
 

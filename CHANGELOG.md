@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.55.0] - 2026-11-03
+
+- **Conversation working memory.** The submitted-but-**unsaved** draft is now visible to the model: a new `buildConversationMemory()` renders a compact, secret-free block (collected fields as labels, extra notes, the pending field, the active vehicle) and it now rides the conversational-pause path (`quiz_pause_conversation`) instead of the raw answers object — so "what did I already tell you?" is answerable mid-quiz, and OTP/PIN/token never leak into the prompt. No draft → no block → zero cost in idle chat.
+- **Tests:** `test_conversation_memory` 11 (health-registered), `test_no_canned_replies` ratchet unchanged.
+
 ## [1.54.5] - 2026-11-03
 
 - **Draft corrections are no longer swallowed by the saved-ledger edit.** A "wrong field" correction to an **unsaved** entry (e.g. *"The fuel volume is definitely wrong… amount"*) previously matched the ledger's "natural mistake" rule and answered *"I could not find an entry to change."* `detectLedgerCommand()` now requires a real saved-entry noun, so the correction flows to the confirmation summary instead — while `"I made a mistake on the fuel entry"` / `"wrong amount on my last expense"` still edit saved rows exactly as before.

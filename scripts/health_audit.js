@@ -30,6 +30,8 @@ const STATLESS_SUITES = [
   'test_ocr_normalizer.js',
   // v1.54.3 — conversation compliance harness (persona laws + fallback lint).
   'test_conversation_compliance.js',
+  // v1.55.0 — the unsaved draft is visible to the model (secret-free memory).
+  'test_conversation_memory.js',
   // v1.24.2 — the wipe registry and its TRUNCATE SQL must never drift apart.
   'test_db_reset_scope.js',
   // v1.24.4 — operator status probes (public vs secret-gated payloads).

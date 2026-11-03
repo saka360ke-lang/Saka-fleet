@@ -23,6 +23,7 @@ import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForP
 import { matchProductQa, buildProductQaReply, buildProductFactsContext, buildLocalPricingFacts, stripUsdFigures, hasLocalFigure, recommendTierForFleet, sanitizeSakaReply } from '../services/productQa.js';
 import { shouldSuggestContactSave, isLostChatMessage, buildContactSaveFacts, markContactSaveSuggested } from '../services/contactNudge.js';
 import { buildUserContextSnapshot, buildUserFactsLines } from '../services/userContextSnapshot.js';
+import { buildConversationMemory } from '../services/conversationMemory.js';
 import { resolveSlowAckMs, pickSlowAckLine, shouldSendSlowAck } from '../services/turnAck.js';
 import { buildVehicleSummary, emailVehicleSummary } from '../services/vehicleSummary.js';
 import {
@@ -1760,7 +1761,8 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             maxAiTier: entitlements?.maxAiTier ?? null,
             ownerId: profileData?.id || null,
             planSummary,
-            jurisdictionContext
+            jurisdictionContext,
+            workingMemory: buildConversationMemory({ quiz: session?.quiz || null })
           });
         }
         phaseMarks.aiDoneAt = Date.now();
@@ -2515,7 +2517,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             facts: {
               userMessage: messageText,
               quizFlow: quizState?.flow,
-              collectedSoFar: quizState?.answers || {},
+              workingMemory: buildConversationMemory({ quiz: quizState, pendingLabel: field?.label || null }),
               pendingQuestion: field ? { label: field.label, hint: field.hint } : null,
               instruction: field
                 ? 'Answer the user conversationally and helpfully, then end with EXACTLY ONE short sentence asking the pending question. Ask nothing else. Do not claim anything was saved.'
