@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.51.9  
+**Version:** 1.51.10  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.51.10** | Interactive quick-edit payload builder (`admin quick-edit` preview); SUG-2026-11-03-01 clause 7 only | §107 |
 | **1.51.9** | Cloud Run deploy-noise classifier + cut-off reply recovery (completeness complaints get the finished answer) | §106 |
 | **1.51.8** | Registration email/OTP removed from chat (verified profile email used) | §105 |
 | **1.51.7** | Document-turn resilience (lens try/catch + telemetry-before-lens) | §104 |
@@ -3877,4 +3878,50 @@ quiz engine:
 
 - **Deploy-noise decoder (FIX-2026-11-02-01 / FIX-2026-11-02-02):** printable-run extraction from protobuf AuditLog byte arrays, the Ready/Waiting-for-revision condition family added to `DEPLOY_NOISE_RE`, `CLOUD_RUN_ROLLOUT_NOISE_RE`, signature-based dedupe inside `scanCloudRunAnomalies`, source classification in `fetchCloudRunLogs` via `isRolloutLifecycleEntry`, and the guarantee that genuine Ready-condition failures still alert (see §59.4).
 - **Cut-off reply recovery (FIX-2026-11-03-01):** `isIncompleteReplyComplaint` widened (cut off / only half / where is the rest / finish your answer / …) and `replyContinuationRequestFor()` returns `isComplaint`, `isContinuation`, `detectedFleetCount` and `wantsFullAnswer` so the route parses the fleet count in one place. The reply-quality branch is currency-agnostic and, when the composer reports `stoppedAtCap` (new `isOutputCappedStop()` treating `max_tokens` and `length`), sends the deterministic facts instead of a truncated sentence. New `complaint_recovery` AI purpose maps to `question_render`; `shouldSendSlowAck` never fires after the first outbound reply; Sentinel maps the cut-off vocabulary to `INCOMPLETE_REPLY`; the core prompt + flowKnowledge carry the COMPLETENESS COMPLAINTS rule.
+
+### 107. Interactive quick-edit payload builder (v1.51.10)
+
+- **SUG-2026-11-03-01 clause 7 only.** An audit of the approved suggestion showed
+  six of its seven clauses already ship (§52 Document Lens field-level confidences
+  + confirm-before-save, §36 COMMENCING-vs-EXPIRING insurance disambiguation in
+  `ocrService.js` and `complianceCatalog.js`, §76 deterministic compliance
+  correction ("you read it wrong … expiry is …"), `deliverReportPdf` →
+  `sendReportByEmail`, and `buildVehicleSummary`/`emailVehicleSummary`). The one
+  genuine gap was WhatsApp **interactive** messages: `grep -ri interactive src/`
+  returned zero hits and the outbound sender only emits `type:"text"`.
+- **New pure module `src/services/interactiveReply.js`:**
+  - `buildInteractiveReply()` renders a Cloud API `interactive` payload —
+    `type:'button'` for 1-3 actions (limit `maxButtons`), `type:'list'` for 4-10
+    rows — and ALWAYS returns a `fallbackText` so a caller without button support
+    degrades to plain text.
+  - `buildReplyButton()` / `resolveQuickEditButtonId()` map a button id
+    (`<action>` or `<action>:<field>`) back to the operator a user would have
+    typed, so quick edits reuse LIVE grammar instead of duplicating it.
+  - `QUICK_EDIT_ACTIONS` aggregates the two existing whitelists
+    (`edit_vehicle_fields`: plate/make/yom/fuel and `sanitizeEntryUpdate`:
+    expense_type/amount/fuel_liters/fill_type/odometer_reading/notes) plus the
+    compliance-correction detector. `INTERACTIVE_LOCKED_FIELDS`
+    (`vin`, `qr_passbook_token`, `vehicle_id`, `driver_id`, `user_id`,
+    `entry_date`) is refused by every builder — rule 8 holds: a VIN button can
+    never be produced or resolved.
+  - Never throws; every entry point degrades to `null`/text.
+- **Not wired to the wire, by design:** the sender in `src/routes/whatsapp.js`
+  still sends `type:"text"`. Emitting interactive objects requires the buttons to
+  be registered and tested on the Meta WABA; shipping them blind from a headless
+  run would risk dead buttons for live users.
+- **Superadmin lane (existing `admin` family, no new Saka intent):**
+  `admin quick-edit` (also `admin quick edit` / `admin quickedit preview`) →
+  `ADMIN_QUICK_EDIT_PREVIEW`, handled by `formatQuickEditPreview()` and audited
+  as `ADMIN_QUICK_EDIT_PREVIEW`. Deterministic, zero AI tokens, Superadmin-gated
+  by `handleSuperadminFlow` like every other branch; listed in
+  `formatAdminHelpReply()`.
+- **Deliberately NOT included:** a literal `trial status` command. `subscription`
+  already answers it deterministically (`formatSubscriptionSummary` →
+  "🎁 Free trial — N day(s) left (ends <date>)"). A new phrase matcher would have
+  to be mirrored in `flowKnowledge.js`, the Saka core prompt, the role index and
+  the docs in the same commit (rule 13); rule 18 forbids editing the prompt from
+  this autonomous run, so it stays a human-session change.
+- **Intents/flows unchanged:** `SAKA_INTENTS` stays 42 and `SAKA_QUIZ_FLOWS` stays
+  21 — the builder is an operator-rendering utility, not a new classifier lane.
+
 

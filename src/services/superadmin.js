@@ -18,6 +18,7 @@ import {
   getAiBudgetAlertPct
 } from './aiUsageLog.js';
 import { formatNairobiDate } from './dateParser.js';
+import { formatQuickEditPreview } from './interactiveReply.js';
 import {
   listIncidents,
   resolveIncident,
@@ -142,6 +143,7 @@ const ADMIN_INTENTS = new Set([
   'ADMIN_HORIZON', 'ADMIN_PROPOSALS', 'ADMIN_BACKLOG',
   'ADMIN_REMEDIATIONS', 'ADMIN_REMEDIATION_ACCEPT', 'ADMIN_REMEDIATION_DECLINE', 'ADMIN_REMEDIATION_MODIFY', 'ADMIN_REMEDIATION_STATUS',
   'ADMIN_UPDATE_SUGGEST', 'ADMIN_FEATURE_ADOPT',
+  'ADMIN_QUICK_EDIT_PREVIEW',
   'ADMIN_AI_STATS',
   'ADMIN_ENV_AUDIT',
   'ADMIN_OCR_STATS',
@@ -351,6 +353,13 @@ export async function parseSuperadminCommand(messageText) {
   const updateSuggestMatch = text.match(/^\s*UPDATE-SUGGEST>\s*([\s\S]*)$/i);
   if (updateSuggestMatch) {
     return { intent: 'ADMIN_UPDATE_SUGGEST', suggestion: updateSuggestMatch[1].trim() };
+  }
+
+  // v1.51.10 — SUG-2026-11-03-01 clause 7: preview the interactive quick-edit
+  // card (buttons + text fallback) before the Superadmin registers it on the WABA.
+  // Deterministic, zero tokens; superadmin-gated like every branch above.
+  if (/^\s*admin\s+quick[- ]?edit(?:\s+preview)?\s*$/i.test(text)) {
+    return { intent: 'ADMIN_QUICK_EDIT_PREVIEW' };
   }
 
   const prompt = `Classify user's admin request into JSON:
@@ -1960,7 +1969,7 @@ export function formatAdminHelpReply() {
   return '🛠️ *Saka admin commands*\n\n' +
     '📊 *Snapshots* — admin report · admin alerts · admin audit <query>\n' +
     '👥 *Fleet* — profiles report · admin trial-stats · admin ai-stats [24h] · admin ocr-stats [24h] · admin latency [24h] · admin env\n' +
-    '🛠️ *Fixes* — admin backlog · admin remediations [pending|deployed] · admin accept|decline|modify fix <CODE> · admin adopt <FEAT-code> · UPDATE-SUGGEST> <your update>\n' +
+    '🛠️ *Fixes* — admin backlog · admin remediations [pending|deployed] · admin accept|decline|modify fix <CODE> · admin adopt <FEAT-code> · admin quick-edit · UPDATE-SUGGEST> <your update>\n' +
     '🌱 *Growth* — generate coupon 20% · admin horizon · admin proposals\n' +
     '🩺 *Guardrails* — check health · admin rules list|toggle <key>|reset\n' +
     '📚 *Knowledge* — admin kb · admin kb review · admin kb stale\n' +
@@ -2151,6 +2160,19 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
     return {
       isSuperadmin: true,
       reply: captureRes.reply
+    };
+  }
+
+  // v1.51.10 — SUG-2026-11-03-01 clause 7: deterministic interactive quick-edit
+  // preview (buttons + text fallback). Read-only, zero AI tokens, audited.
+  if (parsedCommand.intent === 'ADMIN_QUICK_EDIT_PREVIEW') {
+    const preview = formatQuickEditPreview();
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_QUICK_EDIT_PREVIEW', {
+      payload_type: preview?.payload?.interactive?.type || 'text'
+    });
+    return {
+      isSuperadmin: true,
+      reply: preview.reply
     };
   }
 

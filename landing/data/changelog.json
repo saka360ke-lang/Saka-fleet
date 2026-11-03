@@ -1,6 +1,12 @@
 {
-  "latest": "1.51.9",
+  "latest": "1.51.10",
   "entries": [
+    {
+      "version": "1.51.10",
+      "date": "2026-11-03",
+      "title": "One-tap quick edits",
+      "summary": "Saka can now offer quick-edit buttons for plates, entries and document dates — with the same replies when buttons aren't available."
+    },
     {
       "version": "1.51.9",
       "date": "2026-11-03",
