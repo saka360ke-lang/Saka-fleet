@@ -2,7 +2,8 @@ import assert from 'assert';
 import { createMockSupabase } from './scripts/mockSupabase.js';
 import { getEntitlements, invalidateEntitlements } from './src/services/subscriptions.js';
 import { classifyIntentWithRegex } from './sakaAi.js';
-import { parseRegistrationFieldCorrection, stripFieldNotes } from './src/services/quizEngine.js';
+import { parseRegistrationFieldCorrection, stripFieldNotes, getFlowDefinition } from './src/services/quizEngine.js';
+import { reminderTypeMenu, reminderTypeChoices } from './src/services/reminderCatalog.js';
 
 let passed = 0;
 function check(condition, message) { assert(condition, message); passed += 1; console.log("  ok " + message); }
@@ -33,5 +34,12 @@ const fc = parseRegistrationFieldCorrection("Make and model: TOYOTA HIACE VAN", 
 check(fc && fc.field === "make_model" && fc.value === "TOYOTA HIACE VAN", "a confirm-phase field correction parses to make_model");
 const stripped = stripFieldNotes(["Make and model: TOUOTA HIACE VAN", "bought in Mombasa"], "make_model");
 check(stripped.length === 1 && stripped[0] === "bought in Mombasa", "a corrected field drops its stale duplicate note");
+
+const remDef = getFlowDefinition("set_reminder", { vehicles: [{ id: "v1", plate_number: "KAS628T" }], countryInfo: { country_code: "KE", locale: "en-KE" }, profile: {} });
+const remType = remDef.fields.find((f) => f.key === "reminder_type");
+const remChoices = reminderTypeChoices("vehicle").map((c) => c.value);
+check(remType.parse("3") === remChoices[2], "a bare number selects the Nth reminder type");
+check(remType.parse("99") === null, "an out-of-range number is rejected");
+check(reminderTypeMenu("vehicle").includes("1. "), "the reminder menu is numbered");
 
 console.log("ALL v1.57.1 TESTS PASSED (" + passed + " assertions).");

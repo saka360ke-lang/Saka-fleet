@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.58.1] - 2026-11-03
+
+- **Bare-number menu replies no longer loop.** choiceField now maps a bare number to the Nth menu item, and reminderTypeMenu is numbered (1. Oil change - 2. Service - ...), so reply 3 selects Insurance Renewal instead of re-showing the identical Set Reminder prompt (LOOPING_PROMPTS live 2026-11-03). Out-of-range numbers are rejected.
+- **Tests:** test_v1571 13 (+3 reminder-numeric).
+
 ## [1.58.0] - 2026-11-03
 
 - **The registration confirm no longer loops on a re-sent correction.** During confirmation, a natural field correction (Make and model: TOYOTA HIACE VAN / make is Toyota / insurance expiry: ...) now updates that field and drops its stale duplicate extra note, instead of piling up notes and re-showing the same summary (the TOYOTA/TOUOTA loop, live 2026-11-03). New parseRegistrationFieldCorrection + stripFieldNotes in quizEngine; also applied in the question-phase correction lane.

@@ -128,7 +128,7 @@ export function reminderTypeChoices(assetKind = 'vehicle') {
 }
 
 export function reminderTypeMenu(assetKind = 'vehicle') {
-  return reminderTypeChoices(assetKind).map((choice) => choice.value).join(' · ');
+  return reminderTypeChoices(assetKind).map((choice, index) => `${index + 1}. ${choice.value}`).join(' · ');
 }
 
 // Longest alias first: "fuel filter" beats "oil", "hydraulic service" beats "service".

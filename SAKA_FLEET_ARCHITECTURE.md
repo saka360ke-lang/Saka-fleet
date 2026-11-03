@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.58.0  
+**Version:** 1.58.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.58.1** | Reminder menu is numbered + bare number selects the Nth option (fixes reply-3 loop) | 130 |
 | **1.58.0** | Registration confirm loop fix (field-correction lane + note strip) + Sentinel friction auto-close (DEPLOYED) + proposals triaged | 129 |
 | **1.57.1** | Coupon false-positive fix, trial capacity fix (growth welcome trial + reconcile), superadmin trial cleanup, clear chat | 128 |
 | **1.57.0** | Country learning buckets (Uganda != Italy) + superadmin-can-never-be-driver rectification | 127 |
@@ -4108,3 +4109,7 @@ quiz engine:
 - **Proposals triaged:** PROP-2026-11-03-08 and -09 DECLINED (already fixed v1.56.1 detectLedgerCommand complaint guard).
 - **Remaining (tracked):** the reminder reply-3 -> identical re-prompt loop (LOOPING_PROMPTS 16:06) needs a numbered catalog menu for reminder_type / patience-ladder escalation.
 - **Tests:** test_v1571 10 (health-registered).
+### 130. v1.58.1 - reminder menu numeric selection (2026-11-03)
+
+- choiceField maps a bare number N (1-99) to normalized[N-1].value before catalog/alias parsing, so a numbered menu reply is consumed instead of re-prompted. reminderTypeMenu is numbered (1. X - 2. Y ...). Out-of-range numbers return null. Fixes the reply-3 to identical Set Reminder prompt LOOPING_PROMPTS loop (live 2026-11-03).
+- Tests: test_v1571 13 (health-registered).

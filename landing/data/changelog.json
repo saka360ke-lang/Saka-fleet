@@ -1,6 +1,12 @@
 {
-  "latest": "1.58.0",
+  "latest": "1.58.1",
   "entries": [
+    {
+      "version": "1.58.1",
+      "date": "2026-11-03",
+      "title": "Pick by number",
+      "summary": "The reminder menu is numbered now, so replying 3 picks the third option instead of looping."
+    },
     {
       "version": "1.58.0",
       "date": "2026-11-03",

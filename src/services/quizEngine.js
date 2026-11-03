@@ -282,6 +282,11 @@ function choiceField(key, label, hint, choices, options = {}) {
       // v1.31.0 — catalog resolvers are authoritative: they run BEFORE the
       // menu aliases so "fuel filter" (Parts) is never caught by "fuel", and
       // "hydraulic service" is never caught by "service".
+      const idxMatch = /^\s*(\d{1,2})\s*$/.exec(clean);
+      if (idxMatch) {
+        const pick = normalized[Number(idxMatch[1]) - 1];
+        if (pick) return pick.value;
+      }
       if (typeof options.fallbackParse === 'function') {
         const resolved = options.fallbackParse(text);
         if (resolved) return resolved;
