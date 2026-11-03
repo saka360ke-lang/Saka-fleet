@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.51.9] - 2026-11-03
+
+- **Cloud Run deploy noise stays out of Sentinel.** Protobuf `AuditLog` byte arrays are decoded with printable-run extraction (recursive, bounded 3 passes), a new `CLOUD_RUN_ROLLOUT_NOISE_RE` family (probe failures, Ready condition, instance-not-started, CANCELLED) plus a widened `DEPLOY_NOISE_RE` (Ready/Waiting-for-revision) classify rollout lifecycle records as noise on both raw and decoded text; `scanCloudRunAnomalies` fingerprints incidents on the decoded text so a successful rollout never raises `SYSTEM_ERROR`. `sentinelCloudLogs.fetchCloudRunLogs` classifies payloads at the source and exports `isRolloutLifecycleEntry`.
+- **Completeness complaints get the finished answer.** `isIncompleteReplyComplaint` widened (cut off / only half / where is the rest / finish your answer / …) and a shared `replyContinuationRequestFor()` parses the fleet count in one place; the reply-quality branch is now currency-agnostic (USD treated like localized accounts) and, when the composer stops at the cap, sends the deterministic facts instead of a truncated sentence. New `complaint_recovery` AI purpose + `isOutputCappedStop()` (max_tokens | length); slow-turn acks never fire after the first outbound reply; Sentinel detects the cut-off vocabulary as `INCOMPLETE_REPLY`; the core prompt + flowKnowledge carry the COMPLETENESS rule.
+- **Tests:** `test_greetings` (+6), `test_turn_ack` (+1), `test_anthropic_payload` (+4 `isOutputCappedStop`).
+
 ## [1.51.8] - 2026-11-03
 
 - **Vehicle registration is website-only end-to-end.** Removed the `owner_email` and `otp` steps from the WhatsApp `vehicle_registration` quiz — the verified profile email (`profiles.email`, set during web signup) is now used directly by `persistVehicleRegistration` for the vehicle record, profile sync and passbook email. The legacy `onboarding.js` path also skips the chat email/OTP step when the profile is already `email_verified`. Synced `flowKnowledge.js`, `SAKA_TRAINING.md` and the architecture flow table (rule 13).

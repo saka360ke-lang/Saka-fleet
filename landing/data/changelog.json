@@ -1,6 +1,12 @@
 {
-  "latest": "1.51.8",
+  "latest": "1.51.9",
   "entries": [
+    {
+      "version": "1.51.9",
+      "date": "2026-11-03",
+      "title": "Smarter fixes & quieter alerts",
+      "summary": "Completeness complaints now get the full answer, and Cloud Run deploy noise stays out of your alerts."
+    },
     {
       "version": "1.51.8",
       "date": "2026-11-03",

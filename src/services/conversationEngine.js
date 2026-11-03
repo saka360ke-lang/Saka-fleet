@@ -15,7 +15,7 @@
  *    rigid templates.
  */
 
-import { chatCompletion } from './aiClient.js';
+import { chatCompletion, isOutputCappedStop } from './aiClient.js';
 import { buildGlobalContext, formatDate, formatMoney, formatNumber } from './globalization.js';
 import { SAKA_TONE_COMPASS } from './flowKnowledge.js';
 
@@ -37,7 +37,8 @@ const COMPASS_FLOORS = SAKA_TONE_COMPASS.floors.slice(0, 3).join(' ');
 const ROUTER_PURPOSE_BY_COMPOSE = Object.freeze({
   quiz_intro_question: 'question_render',
   quiz_next_question: 'question_render',
-  conversation_stall_nudge: 'stall_nudge'
+  conversation_stall_nudge: 'stall_nudge',
+  complaint_recovery: 'question_render'
 });
 
 function routerPurposeForCompose(purpose) {
@@ -99,7 +100,8 @@ export async function composeMessage({
   fallbackText = '',
   userTone = null,
   relationshipStage = null,
-  modelLabel = null
+  modelLabel = null,
+  detail = null
 } = {}) {
   const globalCtx = buildGlobalContext(countryInfo, profile);
 
@@ -151,6 +153,8 @@ export async function composeMessage({
     temperature: 0.5,
     purpose: routerPurposeForCompose(purpose)
   });
+  const stoppedAtCap = isOutputCappedStop(result?.stopReason);
+  if (detail && typeof detail === 'object') detail.stoppedAtCap = stoppedAtCap;
   if (result.ok && result.text && result.text.trim()) {
     const composed = result.text.trim();
     // v1.32.4 — a contentless reply ("Noted.", "Got your vehicle details!") is

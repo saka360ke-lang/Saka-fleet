@@ -13,6 +13,23 @@ export function getLoggingClient() {
 }
 
 /**
+ * v1.51.9 — revision-rollout lifecycle wording (Ready condition, probe
+ * failures, instance-not-started, CANCELLED handshakes). Used to skip rollout
+ * noise before the worker classifies a payload.
+ */
+const ROLLOUT_LIFECYCLE_RE = /(?:readiness|startup|liveness)\s+probe\s+failed|ready\s+condition|instance\s+was\s+not\s+started|connection\s+failed\s+with\s+status\s+cancelled|revision\s+[^'\s]+(?:\s+is)?\s+not\s+ready|container\s+failed\s+to\s+start|waiting\s+for\s+revision|deploying\s+revision/i;
+
+/** True when a Cloud Logging entry is a revision-rollout lifecycle record. */
+export function isRolloutLifecycleEntry(entry) {
+  try {
+    const raw = String(entry?.text || entry?.message
+      || (entry?.value?.data ? JSON.stringify(entry.value.data) : '')
+      || JSON.stringify(entry || {}));
+    return ROLLOUT_LIFECYCLE_RE.test(raw);
+  } catch { return false; }
+}
+
+/**
  * Fetches recent logs from Google Cloud Run for the saka-fleet service.
  * Filters for severity ERROR/CRITICAL or high latency.
  */
@@ -40,7 +57,27 @@ export async function fetchCloudRunLogs(minutesAgo = 5) {
 
     return entries.map(entry => {
       const payload = entry.data || entry.textPayload || entry.jsonPayload || {};
-      const message = typeof payload === 'string' ? payload : (payload.message || JSON.stringify(payload));
+      // v1.51.9 — classify payloads at the source: textPayload, then the
+      // api/jsonPayload message, then decoded AuditLog byte-array text.
+      let message;
+      if (typeof payload === 'string') {
+        message = payload;
+      } else if (entry.textPayload) {
+        message = entry.textPayload;
+      } else if (entry.data && entry.data.message) {
+        message = entry.data.message;
+      } else if (entry.jsonPayload && entry.jsonPayload.message) {
+        message = entry.jsonPayload.message;
+      } else if (payload && payload.message) {
+        message = payload.message;
+      } else if (payload && payload.type_url && payload.value && Array.isArray(payload.value.data)) {
+        message = payload.value.data
+          .filter((b) => Number.isInteger(b) && b >= 0 && b <= 255)
+          .map((b) => String.fromCharCode(b))
+          .join('');
+      } else {
+        message = JSON.stringify(payload);
+      }
       
       const reqInfo = entry.metadata?.httpRequest || {};
       let latencySeconds = 0;

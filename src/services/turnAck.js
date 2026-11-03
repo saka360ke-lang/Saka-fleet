@@ -4,7 +4,10 @@
  * When a turn runs long the user deserves one gentle "still with you" line. It
  * must never become a metronome: the threshold is 8s, the copy rotates per
  * session, and at most one ack is sent per 60s so an outage cannot spam.
- * Pure helpers so the behaviour stays stateless-testable.
+ * v1.51.9 — once a turn has produced its first outbound message no ack is ever
+ * emitted (a "Still with you…" line followed by the final reply reads to the
+ * user as an incomplete answer). Pure helpers so the behaviour stays
+ * stateless-testable.
  */
 
 export const SLOW_ACK_DEFAULT_MS = 8000;
@@ -32,9 +35,9 @@ export function pickSlowAckLine(seed = 0) {
   return SLOW_ACK_LINES[index];
 }
 
-/** Gate the ack: only unfinished turns, and never twice within the floor. */
-export function shouldSendSlowAck({ turnFinalized = false, now = Date.now(), lastAckAt = 0, minGapMs = SLOW_ACK_MIN_GAP_MS } = {}) {
-  if (turnFinalized) return false;
+/** Gate the ack: only unfinished turns, never twice within the floor, and never after the first outbound reply. */
+export function shouldSendSlowAck({ turnFinalized = false, now = Date.now(), lastAckAt = 0, minGapMs = SLOW_ACK_MIN_GAP_MS, replyStarted = false } = {}) {
+  if (turnFinalized || replyStarted) return false;
   if (!Number.isFinite(now)) return false;
   if (!lastAckAt) return true;
   return now - Number(lastAckAt) >= minGapMs;

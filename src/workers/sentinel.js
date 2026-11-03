@@ -506,30 +506,77 @@ const CLOUD_RUN_ALERT_TTL = 15 * 60 * 1000; // 15 minutes
 
 // v1.19.1 — deployment artifacts (Cloud Run revision/traffic conflicts while a
 // new revision rolls out) are not user-facing failures. Ignoring them keeps
-// Sentinel health and Superadmin alerts signal-rich.
-export const DEPLOY_NOISE_RE = /(version\s+'[^']+'\s+was\s+specified\s+but\s+current\s+version\s+is|Conflict\s+for\s+resource|traffic\s+was\s+specified\s+but\s+current\s+traffic)/i;
+// Sentinel health and Superadmin alerts signal-rich. v1.51.9 widened the
+// classifier with the Ready/Waiting-for-revision condition family so a
+// successful rollout can never surface as a SYSTEM_ERROR.
+export const DEPLOY_NOISE_RE = /(version\s+'[^']+'\s+was\s+specified\s+but\s+current\s+version\s+is|Conflict\s+for\s+resource|traffic\s+was\s+specified\s+but\s+current\s+traffic|ready\s+condition\s+(?:status\s+)?(?:changed|updated)|waiting\s+for\s+revision|deploying\s+revision)/i;
+
+// v1.51.9 — Cloud Run revision-rollout lifecycle wording (probe chatter, Ready
+// condition, instance-not-started, CANCELLED handshakes) is rollout noise, not
+// a user-facing failure. Exported so tests can assert both directions.
+export const CLOUD_RUN_ROLLOUT_NOISE_RE = /(?:readiness|startup|liveness)\s+probe\s+failed|ready\s+condition|instance\s+was\s+not\s+started|connection\s+failed\s+with\s+status\s+cancelled|revision\s+[^'\s]+(?:\s+is)?\s+not\s+ready|container\s+failed\s+to\s+start/i;
 
 /**
- * v1.23.2 - decode protobuf AuditLog byte arrays (Cloud Run deploy noise is
- * often stored as "data":[67,111,110,...] = "Conflict for resource ...").
+ * v1.23.2 / v1.51.9 — decode protobuf AuditLog byte arrays (Cloud Run deploy
+ * noise is often stored as "data":[67,111,110,...] = "Conflict for resource …").
+ * v1.51.9: printable-run extraction (runs of >= 4 printable bytes, control bytes
+ * collapsed to one space) plus recursive nested-array decoding (bounded to 3
+ * passes). Never throws; returns the original text unchanged on any failure.
  */
+function printableRunsFromBytes(bytes) {
+  const runs = [];
+  let current = [];
+  for (const byte of bytes) {
+    if ((byte >= 32 && byte <= 126) || byte === 10 || byte === 9) {
+      current.push(String.fromCharCode(byte));
+    } else {
+      if (current.length >= 4) runs.push(current.join(''));
+      current = [];
+    }
+  }
+  if (current.length >= 4) runs.push(current.join(''));
+  return runs.join(' ');
+}
+
 export function decodeAuditByteArrays(text) {
   const raw = String(text || '');
-  if (!raw.includes('"data"') || raw.length > 200000) return raw;
-  return raw.replace(/\[(?:\s*\d{1,3}\s*,)*\s*\d{1,3}\s*\]/g, (match) => {
-    try {
-      const bytes = match.slice(1, -1).split(',').map((n) => Number(n.trim()))
-        .filter((n) => Number.isInteger(n) && n >= 0 && n <= 255);
-      if (bytes.length < 4) return match;
-      return Buffer.from(bytes).toString('utf8');
-    } catch { return match; }
-  });
+  if (raw.length > 200000) return raw;
+  let decoded = raw;
+  for (let pass = 0; pass < 3; pass++) {
+    let changed = false;
+    decoded = decoded.replace(/\[(?:\s*\d{1,3}\s*,)*\s*\d{1,3}\s*\]/g, (match) => {
+      try {
+        const bytes = match.slice(1, -1).split(',').map((n) => Number(n.trim()))
+          .filter((n) => Number.isInteger(n) && n >= 0 && n <= 255);
+        if (bytes.length < 4) return match;
+        const printable = printableRunsFromBytes(bytes);
+        if (!printable) return match;
+        changed = true;
+        return printable;
+      } catch { return match; }
+    });
+    if (!changed) break;
+  }
+  return decoded;
+}
+
+/**
+ * v1.51.9 — strip base64-ish runs and long repeated-character runs so protobuf
+ * occurrences of the same rollout record resolve to one incident signature.
+ */
+function normalizeCloudRunSignature(text) {
+  return String(text || '')
+    .replace(/[A-Za-z0-9+/=]{24,}/g, ' ')
+    .replace(/(.)\1{8,}/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 export function isDeployNoiseLog(text) {
   const raw = String(text || '');
-  if (DEPLOY_NOISE_RE.test(raw)) return true;
-  return DEPLOY_NOISE_RE.test(decodeAuditByteArrays(raw));
+  const decoded = decodeAuditByteArrays(raw);
+  return DEPLOY_NOISE_RE.test(raw) || DEPLOY_NOISE_RE.test(decoded)
+    || CLOUD_RUN_ROLLOUT_NOISE_RE.test(raw) || CLOUD_RUN_ROLLOUT_NOISE_RE.test(decoded);
 }
 
 export async function scanCloudRunAnomalies(providedSupabase) {
@@ -550,12 +597,10 @@ export async function scanCloudRunAnomalies(providedSupabase) {
     }
   }
 
-  for (const log of logs) {
-    // Generate a simple hash of the log text and status to deduplicate
-    const hashStr = `${log.severity}-${log.httpRequest?.status || 'no-status'}-${(log.text || '').substring(0, 50)}`;
-    
-    if (recentlyAlertedLogHashes.has(hashStr)) continue;
+  let noiseFilteredCount = 0;
+  let firstNoisePhrase = null;
 
+  for (const log of logs) {
     const isError = log.severity === 'ERROR' || log.severity === 'CRITICAL';
     const isTimeoutRisk = Number(log.httpRequest?.status || 0) >= 500;
 
@@ -569,15 +614,31 @@ export async function scanCloudRunAnomalies(providedSupabase) {
 
     const logText = String(log.text || '').trim();
     if (!logText || logText === '{}' || logText === 'null' || logText === 'undefined') continue;
-    if (isDeployNoiseLog(logText)) continue;
+    // v1.51.9 — decode protobuf AuditLog byte arrays once so the classifier and
+    // every persisted snippet operate on readable text, not opaque bytes.
+    const readableText = decodeAuditByteArrays(logText) || logText;
+    if (isDeployNoiseLog(logText)) {
+      noiseFilteredCount += 1;
+      if (!firstNoisePhrase) {
+        firstNoisePhrase = (CLOUD_RUN_ROLLOUT_NOISE_RE.test(readableText) || CLOUD_RUN_ROLLOUT_NOISE_RE.test(logText))
+          ? 'rollout lifecycle' : 'deploy conflict';
+      }
+      continue;
+    }
+
+    // v1.51.9 — fingerprint on the decoded, normalized text so every protobuf
+    // occurrence of the same rollout record resolves to one signature.
+    const signature = buildIncidentSignature(normalizeCloudRunSignature(readableText));
+    const hashStr = `${log.severity}-${log.httpRequest?.status || 'no-status'}-${signature}`;
+    if (recentlyAlertedLogHashes.has(hashStr)) continue;
 
     // v1.23.3 - resolved/suppressed incidents stay silent until they recur.
-    if (await isIncidentSilenced(supabase, buildIncidentSignature(logText))) continue;
+    if (await isIncidentSilenced(supabase, signature)) continue;
 
     if (isError || isTimeoutRisk) {
       recentlyAlertedLogHashes.set(hashStr, now);
 
-      const snippet = `[Cloud Run Alert] Severity: ${log.severity} | Status: ${log.httpRequest?.status || 'N/A'} | Latency: ${log.httpRequest?.latency || 0}s\nMessage: ${logText}`;
+      const snippet = `[Cloud Run Alert] Severity: ${log.severity} | Status: ${log.httpRequest?.status || 'N/A'} | Latency: ${log.httpRequest?.latency || 0}s\nMessage: ${readableText}`;
       
       // Log to chat_friction_logs
       try {
@@ -595,7 +656,7 @@ export async function scanCloudRunAnomalies(providedSupabase) {
       // Log to error_logs
       try {
         await supabase.from('error_logs').insert([{
-          error_message: logText,
+          error_message: readableText,
           stack_trace: JSON.stringify(log),
           route: log.httpRequest?.requestUrl || 'system',
           status: 'unresolved',
@@ -610,7 +671,7 @@ export async function scanCloudRunAnomalies(providedSupabase) {
       const metaToken = process.env.META_WHATSAPP_TOKEN;
       if (metaPhoneId && metaToken) {
         const cleanPhone = superadminPhone.replace(/[^\d]/g, '');
-        const waMessage = `ðŸš¨ *Sentinel Cloud Run Error Alert* âš ï¸\n\nâ€¢ *Service:* saka-fleet\nâ€¢ *Severity:* ${log.severity}\nâ€¢ *Latency / Status:* ${log.httpRequest?.status || 'N/A'} (${log.httpRequest?.latency || 0}s)\nâ€¢ *Timestamp:* ${new Date(log.timestamp).toLocaleString()}\nâ€¢ *Snippet:* "${(log.text || '').substring(0, 200)}"\n\n_Logged to chat_friction_logs. Text 'admin alerts' for full diagnostic._`;
+        const waMessage = `ðŸš¨ *Sentinel Cloud Run Error Alert* âš ï¸\n\nâ€¢ *Service:* saka-fleet\nâ€¢ *Severity:* ${log.severity}\nâ€¢ *Latency / Status:* ${log.httpRequest?.status || 'N/A'} (${log.httpRequest?.latency || 0}s)\nâ€¢ *Timestamp:* ${new Date(log.timestamp).toLocaleString()}\nâ€¢ *Snippet:* "${(readableText || '').substring(0, 200)}"\n\n_Logged to chat_friction_logs. Text 'admin alerts' for full diagnostic._`;
         
         try {
           await fetch(`https://graph.facebook.com/v17.0/${metaPhoneId}/messages`, {
@@ -631,6 +692,10 @@ export async function scanCloudRunAnomalies(providedSupabase) {
         }
       }
     }
+  }
+
+  if (noiseFilteredCount > 0) {
+    console.info(`[scanCloudRunAnomalies] Filtered ${noiseFilteredCount} deploy-noise log(s) (${firstNoisePhrase || 'deploy conflict'}).`);
   }
 }
 
@@ -691,6 +756,9 @@ export async function evaluateConversationalFriction(providedSupabase) {
   }
 
   const frustrationRegex = /\b(stuck|looping|loop|broken|bug|wrong|repeating|stop asking|already gave|already told|help me|stupid|not working|why are you|confused|frustrated|ridiculous)\b/i;
+  // v1.51.9 — cut-off vocabulary so an unhealed incomplete answer is captured
+  // before a user has to complain, mapped to its own friction type.
+  const incompleteReplyRegex = /\b(?:incomplete|cut off|cut short|only half|where is the rest|finish your answer|not finished|didn'?t finish|did not finish|stopped mid)\b/i;
   const detectedFrictions = [];
 
   for (const [phone, chatList] of userChats.entries()) {
@@ -736,6 +804,13 @@ export async function evaluateConversationalFriction(providedSupabase) {
           const snippet = chatList.slice(Math.max(0, i - 4), i + 2)
             .map(c => `[${c.role}]: ${c.message}`).join('\n');
           detectedFrictions.push({ phone, type: 'USER_FRUSTRATION', snippet, reason: `User expressed frustration: "${item.message.slice(0, 80)}"` });
+          break;
+        }
+
+        if (incompleteReplyRegex.test(item.message || '')) {
+          const snippet = chatList.slice(Math.max(0, i - 4), i + 2)
+            .map(c => `[${c.role}]: ${c.message}`).join('\n');
+          detectedFrictions.push({ phone, type: 'INCOMPLETE_REPLY', snippet, reason: `User complained their reply was incomplete: "${item.message.slice(0, 80)}"` });
           break;
         }
       }

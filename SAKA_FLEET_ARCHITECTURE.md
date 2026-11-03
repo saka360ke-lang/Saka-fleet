@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.51.8  
+**Version:** 1.51.9  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.51.9** | Cloud Run deploy-noise classifier + cut-off reply recovery (completeness complaints get the finished answer) | §106 |
 | **1.51.8** | Registration email/OTP removed from chat (verified profile email used) | §105 |
 | **1.51.7** | Document-turn resilience (lens try/catch + telemetry-before-lens) | §104 |
 | **1.51.6** | Unverified media gate (no OCR ack/Vision for unverified numbers) | §103 |
@@ -2395,6 +2396,9 @@ Template for every superadmin alert: what happened -> what it means -> what to d
 
 ### 59.4 Deploy-noise decoder
 - isDeployNoiseLog() decodes protobuf AuditLog byte arrays before matching, so stale-revision console deploys no longer create errors, friction, alerts or a FAILING health status.
+- v1.51.9 widened the classifier: `decodeAuditByteArrays()` extracts printable runs (>= 4 printable bytes, control bytes collapsed to one space) recursively across nested `data` arrays (bounded to 3 passes, never throws); `DEPLOY_NOISE_RE` gained the Ready/Waiting-for-revision condition family and a new `CLOUD_RUN_ROLLOUT_NOISE_RE` covers probe failures, Ready condition, instance-not-started, CANCELLED handshakes and container-start failures. `isDeployNoiseLog()` matches BOTH families against raw AND decoded text.
+- `scanCloudRunAnomalies` decodes once into `readableText`, uses it for every persisted snippet/error message/WhatsApp line, fingerprints incidents on `buildIncidentSignature(normalizeCloudRunSignature(readableText))` (base64-ish and long repeated-char runs stripped) so a rollout resolves to one signature, and logs one diagnostic `console.info` per scan. Genuine Ready-condition failures (e.g. `Ready check failed: cannot read property plate of undefined`, `TypeError: Cannot read properties of undefined`) still alert.
+- `sentinelCloudLogs.fetchCloudRunLogs` classifies payloads at the source (textPayload → api/jsonPayload.message → decoded AuditLog text) and exports `isRolloutLifecycleEntry(entry)`.
 
 ### 59.5 Tests
 - test_notifications.js: 11 assertions (plain-English alert + headline, watchdog copy, protobuf/plain noise filtered, genuine errors still alert).
@@ -3868,4 +3872,9 @@ quiz engine:
   (falls back to `profileData.email` and checks `profileData.email_verified`).
 - Synced `flowKnowledge.js` (field order + extracted keys), `SAKA_TRAINING.md` playbook
   and the architecture flow table (rule 13).
+
+### 106. Cloud Run deploy-noise classifier + cut-off reply recovery (v1.51.9)
+
+- **Deploy-noise decoder (FIX-2026-11-02-01 / FIX-2026-11-02-02):** printable-run extraction from protobuf AuditLog byte arrays, the Ready/Waiting-for-revision condition family added to `DEPLOY_NOISE_RE`, `CLOUD_RUN_ROLLOUT_NOISE_RE`, signature-based dedupe inside `scanCloudRunAnomalies`, source classification in `fetchCloudRunLogs` via `isRolloutLifecycleEntry`, and the guarantee that genuine Ready-condition failures still alert (see §59.4).
+- **Cut-off reply recovery (FIX-2026-11-03-01):** `isIncompleteReplyComplaint` widened (cut off / only half / where is the rest / finish your answer / …) and `replyContinuationRequestFor()` returns `isComplaint`, `isContinuation`, `detectedFleetCount` and `wantsFullAnswer` so the route parses the fleet count in one place. The reply-quality branch is currency-agnostic and, when the composer reports `stoppedAtCap` (new `isOutputCappedStop()` treating `max_tokens` and `length`), sends the deterministic facts instead of a truncated sentence. New `complaint_recovery` AI purpose maps to `question_render`; `shouldSendSlowAck` never fires after the first outbound reply; Sentinel maps the cut-off vocabulary to `INCOMPLETE_REPLY`; the core prompt + flowKnowledge carry the COMPLETENESS COMPLAINTS rule.
 

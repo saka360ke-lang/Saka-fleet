@@ -229,6 +229,7 @@ export const AI_PURPOSES = Object.freeze({
   prose_render: { tier: AI_TIERS.CONVERSATIONAL, maxTokens: 520, temperature: 0.4 },
   stall_nudge: { tier: AI_TIERS.ROUTER, maxTokens: 420, temperature: 0.4 },
   small_talk: { tier: AI_TIERS.ROUTER, maxTokens: 320, temperature: 0.6 },
+  complaint_recovery: { tier: AI_TIERS.CONVERSATIONAL, maxTokens: 600, temperature: 0.4 },
   admin_parse: { tier: AI_TIERS.ROUTER, jsonMode: true, maxTokens: 512, temperature: 0.2 },
   health_synthesis: { tier: AI_TIERS.REASONING, maxTokens: 900, temperature: 0.5 },
   sentinel_diagnosis: { tier: AI_TIERS.REASONING, maxTokens: 900, temperature: 0.3 },
@@ -408,6 +409,15 @@ export function normalizeAnthropicResponse(payload = {}) {
 /** True when the provider stopped because it hit the output cap. */
 export function isTruncatedStop(stopReason = '') {
   return String(stopReason || '').toLowerCase() === 'max_tokens';
+}
+
+/**
+ * Provider-neutral capped-stop predicate (v1.51.9): treats both Anthropic's
+ * `max_tokens` and the OpenAI-compatible `length` finish reason as a cut-off.
+ */
+export function isOutputCappedStop(finishReason = '') {
+  const value = String(finishReason || '').toLowerCase();
+  return value === 'max_tokens' || value === 'length';
 }
 
 /**
@@ -891,6 +901,7 @@ export async function chatCompletion({
       let text = '';
       let promptTokens = null;
       let completionTokens = null;
+      let stopReason = null;
 
       if (attempt.provider === AI_PROVIDERS.ANTHROPIC) {
         // Premium concurrency cap: overflow straight to the DeepSeek fallback.
@@ -925,6 +936,7 @@ export async function chatCompletion({
         text = anthropicResult.text;
         promptTokens = anthropicResult.promptTokens;
         completionTokens = anthropicResult.completionTokens;
+        stopReason = anthropicResult.stopReason || null;
       } else {
         const ai = getProviderClient(attempt.provider);
         if (!ai) throw new Error(`Provider '${attempt.provider}' is not configured`);
@@ -997,6 +1009,7 @@ export async function chatCompletion({
         text = response?.choices?.[0]?.message?.content || '';
         promptTokens = response?.usage?.prompt_tokens ?? null;
         completionTokens = response?.usage?.completion_tokens ?? null;
+        stopReason = response?.choices?.[0]?.finish_reason || null;
       }
 
       // v1.19.1 — one purpose-scoped retry on empty completions. DeepSeek
@@ -1083,7 +1096,7 @@ export async function chatCompletion({
             error: null
           }]
         });
-        return { ok: true, text: text.trim(), model: attempt.model, error: null };
+        return { ok: true, text: text.trim(), model: attempt.model, error: null, stopReason };
       }
       lastError = new Error('Empty completion returned by provider');
       recordProviderOutcome(attempt.provider, false);

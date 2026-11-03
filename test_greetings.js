@@ -18,6 +18,7 @@ import {
   isFirstTimeMessage,
   shouldReplacePlateAsk,
   isIncompleteReplyComplaint,
+  replyContinuationRequestFor,
   isLegacyWelcomeCopy,
   websiteSignupNextStep
 } from './src/services/greetings.js';
@@ -172,6 +173,13 @@ check(isIncompleteReplyComplaint('Your last brief on my 7 vehicles was incomplet
 check(isIncompleteReplyComplaint('That answer was cut off') === true, '"cut off" is recognised');
 check(isIncompleteReplyComplaint('Half tank') === false, 'a fuel statement is not a reply complaint');
 check(isIncompleteReplyComplaint('My report is incomplete') === false, 'an unrelated incomplete item is not a reply complaint');
+// v1.51.9 — widened detector + shared grammar.
+check(isIncompleteReplyComplaint('where is the rest') === true, 'a standalone "where is the rest" is recognised');
+check(isIncompleteReplyComplaint('that was only part of it') === true, '"that was only part of it" is recognised');
+check(isIncompleteReplyComplaint('finish your answer') === true, '"finish your answer" is recognised');
+const cont = replyContinuationRequestFor('your last reply on my 7 vehicles was incomplete');
+check(cont.isComplaint === true && cont.detectedFleetCount === 7, 'replyContinuationRequestFor parses the fleet count in one place');
+check(replyContinuationRequestFor('half an answer').wantsFullAnswer === true, 'a continuation request wants the full answer');
 
 console.log('--- Test 8: legacy identity copy is banned (v1.28.2) ---');
 check(isLegacyWelcomeCopy("👋 Welcome to Saka Fleet! I'm your intelligent WhatsApp vehicle & asset management assistant.") === true, 'the live legacy welcome is detected');

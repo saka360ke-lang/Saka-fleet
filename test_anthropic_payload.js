@@ -2,7 +2,8 @@ import assert from 'assert';
 import {
   buildAnthropicPayload,
   normalizeAnthropicResponse,
-  isTruncatedStop
+  isTruncatedStop,
+  isOutputCappedStop
 } from './src/services/aiClient.js';
 
 /**
@@ -64,6 +65,10 @@ check(truncated.stopReason === 'max_tokens', 'stop_reason is surfaced');
 check(isTruncatedStop(truncated.stopReason) === true, 'a max_tokens stop is treated as truncation');
 check(isTruncatedStop('end_turn') === false, 'a normal end_turn is complete');
 check(isTruncatedStop('stop_sequence') === false, 'a stop_sequence is complete');
+check(isOutputCappedStop('length') === true, 'an OpenAI "length" finish reason is a capped stop');
+check(isOutputCappedStop('max_tokens') === true, 'a max_tokens stop is capped');
+check(isOutputCappedStop('stop') === false, 'a normal "stop" finish is complete');
+check(isOutputCappedStop('end_turn') === false, 'a normal end_turn is complete');
 const normal = normalizeAnthropicResponse({ content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn' });
 check(normal.stopReason === 'end_turn' && normal.text === 'ok', 'normal responses pass through');
 

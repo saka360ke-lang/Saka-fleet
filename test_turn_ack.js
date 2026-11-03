@@ -39,5 +39,6 @@ check(shouldSendSlowAck({ turnFinalized: false, now, lastAckAt: 0 }) === true, '
 check(shouldSendSlowAck({ turnFinalized: true, now, lastAckAt: 0 }) === false, 'a finished turn never acknowledges');
 check(shouldSendSlowAck({ turnFinalized: false, now, lastAckAt: now - 10_000 }) === false, 'two acks within 60s are suppressed');
 check(shouldSendSlowAck({ turnFinalized: false, now, lastAckAt: now - SLOW_ACK_MIN_GAP_MS - 1 }) === true, 'the floor expires after 60s');
+check(shouldSendSlowAck({ turnFinalized: false, now, lastAckAt: 0, replyStarted: true }) === false, 'a turn that already replied never sends a slow ack');
 
 console.log(`\n🎉 ${passed} slow-ack assertions passed.`);

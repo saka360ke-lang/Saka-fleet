@@ -122,6 +122,9 @@ export const PAUSE_REPLY = '🔇 *Paused.* I\'ll stay quiet — message me anyti
 
 const INCOMPLETE_REPLY_RE = /\b(?:incomplete|cut off|cut short|truncated|not finished|didn'?t finish|did not finish|stopped mid)\b/i;
 
+// v1.51.9 — standalone completeness-request phrasings that need no "reply/answer" co-term.
+const COMPLETENESS_REQUEST_RE = /\b(?:half an answer|only half|you stopped|where is the rest|that was only part of it|finish your answer|continue from where you stopped)\b/i;
+
 /**
  * v1.28.2 — the OLD corporate identity must never reach a user again. Live
  * evidence 2026-10-31 19:08: the regex classifier's canned greeting shipped
@@ -139,11 +142,34 @@ export function isLegacyWelcomeCopy(text = '') {
  * twice after complaining that an answer was cut short. This helper lets the
  * route acknowledge and recover instead of re-introducing Saka.
  */
+function normalizeCompleteness(text) {
+  return String(text || '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
 export function isIncompleteReplyComplaint(text = '') {
   const value = String(text || '');
-  if (!value || !INCOMPLETE_REPLY_RE.test(value)) return false;
-  return /\b(?:reply|replies|answer|message|brief|response|summary|you)\b/i.test(value)
-    || /^\s*(?:your|that|this)\b/i.test(value);
+  if (!value) return false;
+  const route = normalizeCompleteness(value);
+  if (COMPLETENESS_REQUEST_RE.test(route)) return true;
+  if (!INCOMPLETE_REPLY_RE.test(route)) return false;
+  return /\b(?:reply|replies|answer|message|brief|response|summary|you)\b/i.test(route)
+    || /^(?:your|that|this)\b/i.test(route);
+}
+
+/**
+ * v1.51.9 — one shared, unit-testable grammar for the reply-completeness branch.
+ * Returns isComplaint, isContinuation, detectedFleetCount and wantsFullAnswer.
+ * Reuses the same digit+asset-noun pattern the route keeps inline so the fleet
+ * count is parsed in ONE place. Pure: no AI, DB or I/O.
+ */
+export function replyContinuationRequestFor(text = '') {
+  const value = String(text || '');
+  const route = normalizeCompleteness(value);
+  const isComplaint = isIncompleteReplyComplaint(value);
+  const isContinuation = COMPLETENESS_REQUEST_RE.test(route);
+  const fleetMatch = value.match(/\b(\d{1,3})\s*(?:cars?|vehicles?|units?|machines?|trucks?|bikes?|motorbikes?|matatus?|lorries?|pickups?)\b/i);
+  const detectedFleetCount = fleetMatch ? Number(fleetMatch[1]) : null;
+  return { isComplaint, isContinuation, detectedFleetCount, wantsFullAnswer: isComplaint || isContinuation };
 }
 
 /**
@@ -280,5 +306,6 @@ export default {
   asksForPlateDirectly,
   websiteSignupNextStep,
   isIncompleteReplyComplaint,
+  replyContinuationRequestFor,
   isLegacyWelcomeCopy
 };

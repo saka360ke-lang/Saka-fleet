@@ -19,7 +19,7 @@ import { normalizeFillType } from '../services/fuelEconomy.js';
 import { resolveExpenseType, normalizeExpenseType, hasExpenseTypeMarker } from '../services/expenseCatalog.js';
 import { resolveEarningType, normalizeEarningType, hasEarningTypeMarker } from '../services/earningCatalog.js';
 import { shortenUrl } from '../services/linkShortener.js';
-import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly, shouldReplaceIntroCopy, isRepeatedReply, isStopRequest, PAUSE_REPLY, pickRepeatNudge, pickNewcomerNudge, isFirstTimeMessage, shouldReplacePlateAsk, isIncompleteReplyComplaint, isLegacyWelcomeCopy, websiteSignupNextStep } from '../services/greetings.js';
+import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly, shouldReplaceIntroCopy, isRepeatedReply, isStopRequest, PAUSE_REPLY, pickRepeatNudge, pickNewcomerNudge, isFirstTimeMessage, shouldReplacePlateAsk, isIncompleteReplyComplaint, replyContinuationRequestFor, isLegacyWelcomeCopy, websiteSignupNextStep } from '../services/greetings.js';
 import { matchProductQa, buildProductQaReply, buildProductFactsContext, buildLocalPricingFacts, stripUsdFigures, hasLocalFigure, recommendTierForFleet, sanitizeSakaReply } from '../services/productQa.js';
 import { shouldSuggestContactSave, isLostChatMessage, buildContactSaveFacts, markContactSaveSuggested } from '../services/contactNudge.js';
 import { buildUserContextSnapshot } from '../services/userContextSnapshot.js';
@@ -3607,26 +3607,29 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
           // v1.28.1. NEVER answer this with the welcome. Recover the answer, and
           // if the complaint mentions a fleet size, answer it now in local currency.
           else if (isIncompleteReplyComplaint(messageText)) {
-            const complaintFleet = messageText.match(/\b(\d{1,3})\s*(?:cars?|vehicles?|units?|machines?|trucks?|bikes?|motorbikes?|matatus?|lorries?|pickups?)\b/i);
+            // v1.51.9 — one shared grammar; the fleet count is parsed in ONE place.
+            const continuation = replyContinuationRequestFor(messageText);
+            const complaintFleet = continuation.detectedFleetCount;
             let recoveryFacts = null;
-            if (complaintFleet && countryInfo?.currency && String(countryInfo.currency).toUpperCase() !== 'USD') {
+            if (complaintFleet) {
               try {
                 recoveryFacts = await buildLocalPricingFacts({
                   supabase: supabaseClient,
-                  currency: countryInfo.currency,
-                  locale: countryInfo.locale,
-                  fleetCount: Number(complaintFleet[1])
+                  currency: countryInfo?.currency || 'USD',
+                  locale: countryInfo?.locale,
+                  fleetCount: complaintFleet
                 });
               } catch { recoveryFacts = null; }
             }
             const recoveryTotal = recoveryFacts
               ? (recoveryFacts.find((line) => /For \d+ vehicles/.test(line)) || recoveryFacts[0])
               : null;
+            const recoveryDetail = {};
             const recoveryReply = await composeMessage({
               purpose: 'complaint_recovery',
               facts: {
                 userNote: messageText,
-                fleetCount: complaintFleet ? Number(complaintFleet[1]) : null,
+                fleetCount: complaintFleet || null,
                 pricedAnswer: recoveryTotal || 'None supplied.',
                 instruction: recoveryTotal
                   ? 'In 1-2 short lines, acknowledge the previous reply was cut short and give the full recommendation now using pricedAnswer ONLY. Never mention $, USD or any dollar amount. No re-introduction, no welcome, no menu.'
@@ -3635,6 +3638,7 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
               language: targetLang,
               countryInfo,
               profile: profileData,
+              detail: recoveryDetail,
               fallbackText: recoveryTotal
                 ? `You are right — that reply was cut short. ${recoveryTotal}`
                 : 'You are right — that reply was cut short. Tell me again and I will give you the full answer in one message. 🙏'
@@ -3645,16 +3649,19 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
               : (recoveryTotal
                 ? `You are right — that reply was cut short. ${recoveryTotal}`
                 : 'You are right — that reply was cut short. Tell me again and I will give you the full answer in one message. 🙏');
-            customReply = recoveryFacts
-              ? stripUsdFigures(ackReply, { currency: countryInfo.currency })
-              : ackReply;
+            // v1.51.9 — if the composer itself was cut short, use the deterministic facts.
+            customReply = (recoveryDetail.stoppedAtCap && recoveryTotal)
+              ? stripUsdFigures(`You are right — that reply was cut short. ${recoveryTotal}`, { currency: countryInfo?.currency || 'USD' })
+              : (recoveryFacts
+                ? stripUsdFigures(ackReply, { currency: countryInfo?.currency || 'USD' })
+                : ackReply);
             if (supabaseClient) {
               try {
                 await supabaseClient.from('chat_friction_logs').insert([{
                   user_phone: senderPhone,
                   session_id: senderPhone,
                   friction_type: 'INCOMPLETE_REPLY_COMPLAINT',
-                  transcript_snippet: `Reply complaint: "${messageText}"`.slice(0, 500)
+                  transcript_snippet: `Reply complaint [recovered: ${recoveryTotal ? 'pricing' : 'no-facts'}]: "${messageText}"`.slice(0, 500)
                 }]);
               } catch { /* logging is best effort */ }
             }
