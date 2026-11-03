@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.56.4  
+**Version:** 1.56.5  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.56.5** | admin friction done resolves short id prefixes (tracker polish) | 126 |
 | **1.56.4** | Friction tracker (pending/deployed + 4h auto-clear + log) + whole-conversation memory (20-40 turns) + E.164 friction phones | 126 |
 | **1.56.3** | Maintenance-schedule questions ("when should I replace my tyres?") answer from the user's reminders, never a generic menu | §125 |
 | **1.56.2** | Plain-English admin backlog — "show me [all] pending proposals" maps to the remediation list (PROP-2026-11-03-07) | §124 |
@@ -4083,3 +4084,4 @@ quiz engine:
 - **Live audit (2026-11-03, 0734852529):** Sentinel flagged 8 friction rows (USER_FRUSTRATION x5, LOOPING_PROMPTS x2, CONVERSATION_STALL x1) and minted `PROP-2026-11-03-08` (conversation). Real root causes: (a) registration flow stored free-text (save as draft / financial analysis) as make and model; (b) welcome-trial user told the Free 1-vehicle cap; (c) a hallucinated Honda CR-V; (d) bare/+254 phone split. The Sentinel diagnosis mis-targeted the ledger detector.
 - **Sentinel fix:** `conversationDiagnosis.js` ROUTING_MAP now names the registration-correction, entitlement and active-vehicle entry points so future PROP diagnoses land on the right file.
 - **Tests:** `test_friction_tracker` 10 (health-registered); `test_quiz_flow` asserts `CHAT_HISTORY_MAX_MESSAGES === 40`.
+- **v1.56.5:** `admin friction done <id>` accepts any unique id prefix (the 8 chars shown in the list); `resolveFrictionId` maps it to the full uuid before the update, and a full uuid still passes through unchanged.

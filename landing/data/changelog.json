@@ -1,6 +1,12 @@
 {
-  "latest": "1.56.4",
+  "latest": "1.56.5",
   "entries": [
+    {
+      "version": "1.56.5",
+      "date": "2026-11-03",
+      "title": "Fix tracking, simply",
+      "summary": "Marking a friction point fixed now takes the short id shown in the list."
+    },
     {
       "version": "1.56.4",
       "date": "2026-11-03",

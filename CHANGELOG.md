@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.56.5] - 2026-11-03
+
+- **`admin friction done` accepts a short id.** The tracker list shows an 8-character id; `admin friction done <id>` now resolves any unique prefix to the full uuid (a full uuid still works). No more copy-typing 36 characters.
+- **Tests:** `test_friction_tracker` 10 (health-registered); `test_quiz_flow` asserts the 40-message default.
+
 ## [1.56.4] - 2026-11-03
 
 - **Friction points are tracked, never lost.** New `src/services/frictionTracker.js` + `npm run migrate:friction` add a PENDING -> DEPLOYED lifecycle to `chat_friction_logs` (`status`, `resolved_at`, `resolution`). A deployed point auto-clears from the active list after 4 hours but the log keeps it forever. Superadmin: `admin friction [pending|deployed|log]` and `admin friction done <id>`.

@@ -40,6 +40,16 @@ export function activeFrictionOf(rows, now = new Date()) {
   return (rows || []).filter((r) => r.status !== FRICTION_STATUS.DEPLOYED || !isFrictionDeployedCleared(r, now));
 }
 
+/** Resolve a short id prefix (or full uuid) to a real chat_friction_logs id. */
+export async function resolveFrictionId(supabase, id) {
+  const raw = String(id || "").trim();
+  if (!raw) return null;
+  if (/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(raw)) return raw;
+  const { data } = await supabase.from("chat_friction_logs").select("id").order("detected_at", { ascending: false }).limit(200);
+  const hit = (data || []).find((r) => String(r.id).toLowerCase().startsWith(raw.toLowerCase()));
+  return hit ? hit.id : null;
+}
+
 export async function markFrictionDeployed(supabase, id, resolution = '') {
   if (!supabase || !id) return { ok: false, reason: 'missing id/supabase' };
   try {
@@ -47,7 +57,7 @@ export async function markFrictionDeployed(supabase, id, resolution = '') {
       status: FRICTION_STATUS.DEPLOYED,
       resolved_at: new Date().toISOString(),
       resolution: String(resolution || '').slice(0, 200)
-    }).eq('id', id);
+    }).eq('id', (await resolveFrictionId(supabase, id)) || id);
     return error ? { ok: false, reason: error.message } : { ok: true };
   } catch (err) {
     return { ok: false, reason: err.message };
@@ -60,7 +70,7 @@ export async function markFrictionPending(supabase, id) {
     const { error } = await supabase.from('chat_friction_logs').update({
       status: FRICTION_STATUS.PENDING,
       resolved_at: null
-    }).eq('id', id);
+    }).eq('id', (await resolveFrictionId(supabase, id)) || id);
     return error ? { ok: false, reason: error.message } : { ok: true };
   } catch (err) {
     return { ok: false, reason: err.message };
@@ -117,5 +127,6 @@ export default {
   markFrictionDeployed,
   markFrictionPending,
   listFrictionLog,
+  resolveFrictionId,
   formatFrictionReply
 };
