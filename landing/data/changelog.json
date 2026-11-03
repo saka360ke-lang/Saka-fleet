@@ -1,6 +1,12 @@
 {
-  "latest": "1.54.4",
+  "latest": "1.54.5",
   "entries": [
+    {
+      "version": "1.54.5",
+      "date": "2026-11-03",
+      "title": "Fixing your draft, not losing it",
+      "summary": "When you tell Saka a number on a draft is wrong, she now fixes that draft — instead of saying she couldn't find the entry."
+    },
     {
       "version": "1.54.4",
       "date": "2026-11-03",

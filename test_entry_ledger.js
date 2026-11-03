@@ -65,6 +65,9 @@ async function runTests() {
   assert(detectLedgerCommand('remove my last expense')?.action === 'delete', '"remove my last expense" not a delete');
   assert(detectLedgerCommand('I made a mistake on the fuel entry')?.action === 'edit', 'mistake phrasing not an edit');
   assert(detectLedgerCommand('wrong amount on my last expense, delete it')?.action === 'delete', 'wrong+delete phrasing not a delete');
+  // v1.54.5 — a correction to the OPEN draft must never be stolen as a
+  // saved-entry edit (live 2026-11-03: "could not find an entry to change").
+  assert(detectLedgerCommand('The fuel volume is definitely wrong. As I said earlier I do not remember the amount of liters but I do rem the price was 222 kes per liter') === null, 'a draft correction is not a ledger command');
   assert(detectLedgerCommand('restore')?.action === 'restore', '"restore" not detected');
   assert(detectLedgerCommand('undo my last entry')?.action === 'delete', '"undo my last entry" not a delete');
   assert(detectLedgerCommand('logged 40L at 50350 km') === null, 'a fresh log must not be a ledger command');

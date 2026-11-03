@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.54.5] - 2026-11-03
+
+- **Draft corrections are no longer swallowed by the saved-ledger edit.** A "wrong field" correction to an **unsaved** entry (e.g. *"The fuel volume is definitely wrong… amount"*) previously matched the ledger's "natural mistake" rule and answered *"I could not find an entry to change."* `detectLedgerCommand()` now requires a real saved-entry noun, so the correction flows to the confirmation summary instead — while `"I made a mistake on the fuel entry"` / `"wrong amount on my last expense"` still edit saved rows exactly as before.
+- **Tests:** `test_entry_ledger` (live-text regression), `test_agent_training` unchanged.
+- **Tracked follow-ups:** (a) `"I have another vehicle"` → registration for existing owners; (b) E.164 normalization of `chat_friction_logs.user_phone`.
+
 ## [1.54.4] - 2026-11-03
 
 - **Engine-owned patience ladder (the §117 follow-up).** The quiz engine now tracks repeats per step in `quiz.patience`: the **2nd failure on the same field** appends the simplest typed path to the question (country-resolved examples — plate, currency, date, litres, email, phone), and the **3rd+ failure** offers the human lane (`reply Support`). Any progress resets the ladder; nothing is ever blamed or rushed. The core prompt's EVERY-DEMOGRAPHIC LAW names the engine ladder so the composer uses the engine-supplied hints verbatim (rule 13).

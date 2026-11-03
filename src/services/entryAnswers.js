@@ -94,8 +94,12 @@ export function detectLedgerCommand(text = '') {
   }
 
   // Natural mistakes: "I made a mistake on the fuel entry", "wrong amount".
+  // v1.54.5 — must name a SAVED entry, never a bare field/fuel word. "The fuel
+  // volume is definitely wrong… amount" is a correction to the OPEN draft, not
+  // an edit of a saved row (live 2026-11-03: this text was stolen from the
+  // confirmation summary and answered "I could not find an entry to change").
   if (/\b(?:mistake|wrong|incorrect|typo|error)\b/.test(t)
-      && /\b(?:entr(?:y|ies)|record|expense|fuel|log|amount|odometer|mileage)\b/.test(t)) {
+      && /\b(?:entr(?:y|ies)|record|expense|log|transaction|receipt)\b/.test(t)) {
     const wantsDelete = /\b(?:delete|remove|erase|void)\b/.test(t);
     return { action: wantsDelete ? 'delete' : 'edit', index: parseEntrySelection(t) };
   }

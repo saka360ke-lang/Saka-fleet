@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.54.4  
+**Version:** 1.54.5  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.54.5** | Draft-correction lane fixed: a "wrong field" correction to an unsaved entry no longer gets stolen by the saved-ledger edit command | §119 |
 | **1.54.4** | Engine-owned patience ladder: same-field repeats climb deterministically (2nd → simplest typed path, 3rd → human lane), reset on progress | §118 |
 | **1.54.3** | Conversational-first completion: all 19 remaining canned replies composed (ratchet ≤ 4), persona conversation-compliance harness shipped | §117 |
 | **1.54.2** | Country parsing profiles as plug-in data + data-driven resilience loop (`admin ocr-profile`, OCR watchlist in the Sentinel digest) | §116 |
@@ -4016,5 +4017,11 @@ quiz engine:
 - **The EVERY-DEMOGRAPHIC LAW is now deterministic, not prompt-only.** `askCurrent()` in the quiz engine tracks repeats per field in `quiz.patience {field, retries}`: the **2nd failure on the same field** appends the simplest typed path to the question hint (country-resolved: plate example, currency, date, litres, email, phone — `simplestTypedPath()`), and the **3rd+ failure** appends the human lane (`reply Support`). Any progress (a banked answer or a new field) resets the ladder; a fresh quiz starts with `patience: null`. Never blame, never rush — the turnNote teaches the composer to offer only the simplest option.
 - **Prompt sync (rule 13):** the core prompt's EVERY-DEMOGRAPHIC LAW now names the engine ladder ("The ENGINE tracks repeats per step … use those engine-supplied hints exactly"); docs regenerated.
 - **Tests:** `test_quiz_flow` 141 (new Test 11 drives the full ladder deterministically with provider keys cleared: invalid → recorded retry → simplest path → human lane → progress reset; exit 0), `test_agent_training` 155.
+
+### 119. Draft-correction lane fixed (v1.54.5)
+
+- **The saved-ledger edit command no longer steals draft corrections.** Live evidence 2026-11-03 (0734852529, fuel top-up): during the confirmation summary the user wrote *"The fuel volume is definitely wrong… amount … price was 222 kes per liter"* — `detectLedgerCommand()`'s "natural mistake" rule matched `fuel … wrong … amount` and turned it into a saved-entry `edit`, replying *"I could not find an entry to change."* The rule now requires a genuine **saved-entry noun** (`entry/entries`, `record`, `expense`, `log`, `transaction`, `receipt`) instead of any bare field/fuel word, so a correction to the **open draft** flows to the confirmation summary (which re-renders and asks which field to change) — the saved-entry phrasing (`"I made a mistake on the fuel entry"`, `"wrong amount on my last expense"`) is unchanged.
+- **Tests:** `test_entry_ledger` (new regression: the live draft-correction text returns `null`; the saved-entry phrasings still resolve), `test_agent_training` unchanged.
+- **Follow-ups tracked (not shipped):** (a) `"I have another vehicle"` → deterministic registration for an existing owner (the phrase was answered with a generic menu twice; self-recovered after the user typed "Register"); (b) normalize `chat_friction_logs.user_phone` to E.164 (`+` prefix) — it is written bare (`254…`) by one Sentinel path while `chat_history` carries `+254…`.
 
 
