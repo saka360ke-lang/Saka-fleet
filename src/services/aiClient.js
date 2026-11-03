@@ -225,6 +225,8 @@ export function getPremiumMaxConcurrency() {
 export const AI_PURPOSES = Object.freeze({
   intent_classify: { tier: AI_TIERS.CONVERSATIONAL, jsonMode: true, maxTokens: 800, temperature: 0.3 },
   extraction: { tier: AI_TIERS.ROUTER, jsonMode: true, maxTokens: 600, temperature: 0.1 },
+  // v1.54.1 — zero-shot OCR top-up (background router tier, deterministic lens wins).
+  ocr_extraction: { tier: AI_TIERS.ROUTER, jsonMode: true, maxTokens: 700, temperature: 0.1 },
   question_render: { tier: AI_TIERS.ROUTER, maxTokens: 420, temperature: 0.4 },
   prose_render: { tier: AI_TIERS.CONVERSATIONAL, maxTokens: 520, temperature: 0.4 },
   stall_nudge: { tier: AI_TIERS.ROUTER, maxTokens: 420, temperature: 0.4 },

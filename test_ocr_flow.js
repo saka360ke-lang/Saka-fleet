@@ -12,6 +12,7 @@ import {
   SUPPORTED_IMAGE_TYPES
 } from './src/services/ocrService.js';
 import { classifyDocumentFamily, parseDocumentFields } from './src/services/documentLens.js';
+import { semanticOcrTopUp } from './src/services/ocrSemantic.js';
 import { buildOcrTextSha, getOcrUsageSummary } from './src/services/ocrTelemetry.js';
 import { isSameExpenseCandidate, nairobiDateKey } from './src/services/expenseGuard.js';
 import { readFileSync } from 'fs';
@@ -349,6 +350,30 @@ async function run() {
   const particularsGlobal = extractDocumentHints(ntsaParticulars, 'logbook', { countryCode: 'GLOBAL' });
   check(particularsGlobal.plate_number === 'N7200766H', 'GLOBAL path uses the title-line plate, never the KE PARTICULARS plate');
   check(particularsGlobal.make_model === undefined && particularsGlobal.yom === undefined, 'GLOBAL path never applies the NTSA PARTICULARS rules');
+
+  console.log('--- Test 14: universal normalization (v1.54.1) ---');
+  const euReceipt = [
+    'ARAL TANKSTELLE',
+    'DIESEL 40,5 L',
+    'TOTAL €',
+    '1.234,56',
+    'Datum: 12.10.2026'
+  ].join('\n');
+  const euHints = extractDocumentHints(euReceipt, 'receipt_fuel', { countryCode: 'DE' });
+  check(euHints.amount === 1234.56, 'a German receipt TOTAL 1.234,56 reads 1234.56 (EU decimal convention)');
+  check(euHints.currency === 'EUR', 'the EU receipt resolves EUR from its market');
+  const euLens = parseDocumentFields(euReceipt, { countryCode: 'DE' });
+  check(euLens.family === 'receipt_fuel', 'the German receipt classifies as a fuel receipt');
+  check(euLens.hints.amount === 1234.56, 'the Document Lens parses the EU TOTAL through the universal normalizer');
+  const euLensGlobal = parseDocumentFields(euReceipt, { countryCode: 'GLOBAL' });
+  check(euLensGlobal.hints.amount === 1234.56, 'GLOBAL still parses the structurally-unambiguous EU grouping (rule 36)');
+  const brazilian = extractDocumentHints('POSTO IPIRANGA\nTOTAL R$ 250,00', 'receipt_fuel', { countryCode: 'BR' });
+  check(brazilian.currency === 'BRL' && brazilian.amount === 250, 'R$ resolves to BRL and the comma decimal parses for Brazil');
+  const noTopUp = await semanticOcrTopUp({ text: euReceipt, family: 'receipt_fuel', countryCode: 'DE', existing: {} });
+  check(Object.keys(noTopUp).length === 0, 'the AI top-up stays OFF while OCR_AI_EXTRACTION is unset');
+  check(classifyDocumentFamily('PURCHASE INVOICE\nSeller: Auto Mall Ltd\nSold to: David Njonjo\nPurchase price 1,250,000\n2026-09-01') === 'purchase_invoice', 'a strong PURCHASE INVOICE marker wins over the generic INVOICE base (v1.54.1)');
+  const purchaseLens = parseDocumentFields('PURCHASE INVOICE\nSeller: Auto Mall Ltd\nSold to: David Njonjo\nPurchase price 1,250,000\n2026-09-01');
+  check(purchaseLens.hints.purchase_cost === 1250000, 'the purchase prefill now fires with the parsed cost');
 
   console.log('\n--- Test 13: duplicate protection (v1.32.1) ---');
   const shaA = buildOcrTextSha('TOTAL  3,000.00\nDIESEL');

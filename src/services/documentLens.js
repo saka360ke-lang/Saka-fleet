@@ -1,5 +1,11 @@
 import { parseFlexibleDate } from './dateParser.js';
 import { classifyOcrDocument } from './ocrService.js';
+import {
+  parseOcrAmount,
+  detectCurrencyFromText,
+  validatePlateCandidate,
+  validateVinCandidate
+} from './ocrNormalizer.js';
 
 /**
  * Saka Fleet — Document Lens (v1.20.0)
@@ -78,42 +84,37 @@ function pushField(target, key, value, confidence = 0.9) {
 }
 
 function detectCurrency(text) {
-  const raw = String(text || '').toUpperCase();
-  if (/KES|KSH|K\.SH/.test(raw)) return 'KES';
-  if (/TZS|T\.SH/.test(raw)) return 'TZS';
-  if (/UGX|USHS?/.test(raw)) return 'UGX';
-  if (/NGN|₦/.test(raw)) return 'NGN';
-  if (/ZAR|R\s?\d/.test(raw)) return 'ZAR';
-  if (/INR|₹/.test(raw)) return 'INR';
-  if (/USD|US\$|\$\s?\d/.test(raw)) return 'USD';
-  if (/EUR|€/.test(raw)) return 'EUR';
-  if (/GBP|£/.test(raw)) return 'GBP';
-  return null;
+  // v1.54.1 — extended CLDR symbol/code tables live in ocrNormalizer.js.
+  return detectCurrencyFromText(text);
 }
 
-function amountFrom(text) {
+function amountFrom(text, countryCode = 'GLOBAL') {
   const rows = lines(text);
   const totalLine = rows.find((row) => /\b(grand\s*total|total|amount\s*due|balance\s*due|amount)\b/i.test(row));
   if (totalLine) {
-    const match = totalLine.match(/([A-Z]{3})?\s*([\d][\d,]{2,}(?:\.\d{1,2})?)/);
-    if (match) return toNumber(match[2]);
+    // v1.54.1 — grouped money tokens in EITHER convention (1,234.56 | 1.234,56).
+    const match = totalLine.match(/([A-Z]{3})?\s*(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)/);
+    if (match) {
+      const value = parseOcrAmount(match[2], { countryCode });
+      if (value !== null && value > 0) return value;
+    }
     // v1.32.1 — bare "TOTAL" label with the figure on the next line.
     const idx = rows.indexOf(totalLine);
     for (let k = 1; k <= 2 && idx >= 0 && idx + k < rows.length; k += 1) {
       const row = rows[idx + k];
       if (/%|\bTAX\b|\bNET\b/i.test(row)) continue;
-      const next = row.match(/^([\d][\d,]*(?:\.\d{1,2})?)$/);
-      const value = next ? toNumber(next[1]) : null;
+      const next = row.match(/^(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)$/);
+      const value = next ? parseOcrAmount(next[1], { countryCode }) : null;
       if (value !== null && value > 0) return value;
     }
   }
   // v1.32.1 — address / PIN / phone / serial numbers are never money.
-  const all = [...String(text || '').matchAll(/([A-Z]{3})?\s*([\d][\d,]{3,}(?:\.\d{1,2})?)/g)]
+  const all = [...String(text || '').matchAll(/([A-Z]{3})?\s*([\d][\d.,]{3,}(?:[.,]\d{1,2})?)/g)]
     .filter((match) => {
       const context = String(text || '').slice(Math.max(0, match.index - 24), match.index);
       return !/(p\.?\s*o\.?\s*box|pin\b|phone|serial|invoice\s*(?:no|number)|receipt\s*(?:no|number)|h\.?\s*p\.?)/i.test(context);
     })
-    .map((match) => toNumber(match[2])).filter(Boolean);
+    .map((match) => parseOcrAmount(match[2], { countryCode })).filter((value) => value !== null && value > 0);
   return all.length ? Math.max(...all) : null;
 }
 
@@ -124,11 +125,15 @@ function parseLogbook(text, countryCode) {
 
   const plateMatch = String(text).match(/(?:registration\s*(?:no|number)?|reg\.?\s*(?:no|number)|plate(?:\s*(?:no|number))?)\s*[:\-#]?\s*([A-Z]{1,4}[\s-]?\d{1,4}[A-Z]{0,3})\b/i)
     || String(text).match(/\b([A-Z]{2,3}[\s-]?\d{3}[A-Z]?)\b/);
-  pushField(fields, 'plate_number', plateMatch ? plateMatch[1].toUpperCase().replace(/\s+/g, ' ').trim() : null, 0.92);
+  const rawPlate = plateMatch ? String(plateMatch[1]).toUpperCase().replace(/\s+/g, ' ').trim() : null;
+  // v1.54.1 — the plate candidate is validated against its country pattern
+  // (or the neutral GLOBAL shape) before it can prefill the quiz.
+  pushField(fields, 'plate_number', rawPlate ? validatePlateCandidate(rawPlate, countryCode) : null, 0.92);
 
   const vinMatch = String(text).match(/(?:VIN|chassis(?:\s*(?:no|number))?)\s*[:\-#]?\s*([A-HJ-NPR-Z0-9]{11,17})\b/i)
     || String(text).match(/\b(?=[A-HJ-NPR-Z0-9]{11,17}\b)(?=[A-Z0-9]*\d)[A-HJ-NPR-Z0-9]{11,17}\b/);
-  pushField(fields, 'vin', vinMatch ? vinMatch[1].toUpperCase() : null, 0.9);
+  const rawVin = vinMatch ? vinMatch[1].toUpperCase() : null;
+  pushField(fields, 'vin', rawVin ? validateVinCandidate(rawVin) : null, 0.9);
   pushField(fields, 'engine_number', labeled(text, 'engine\\s*(?:no|number)?'), 0.88);
 
   const make = String(text).match(/(?:make|manufacturer)\s*[:\-]?\s*([A-Za-z][A-Za-z0-9 .\-/]{1,30})/i);
@@ -159,8 +164,8 @@ function parseInsurance(text, countryCode) {
   const expiryLabel = (String(text).match(/\b(?:expir\w*|valid\s*(?:until|to|till))\s*:?\s*(\d{4}-\d{2}-\d{2}|\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4})/i) || [])[1];
   const expiryParsed = expiryLabel ? parseFlexibleDate(expiryLabel, { countryCode }) : null;
   pushField(fields, 'insurance_expiry', expiryParsed?.ok && expiryParsed.iso ? expiryParsed.iso.slice(0, 10) : firstDateNear(text, /(expir|valid\s*(?:until|to|till)|renew|due)/i, countryCode), 0.9);
-  const premium = String(text).match(/(?:premium|sum\s*insured|insured\s*value)\s*[:\-]?\s*([A-Z]{3})?\s*([\d][\d,]{2,})/i);
-  pushField(fields, 'insurance_premium', premium ? toNumber(premium[2]) : null, 0.78);
+  const premium = String(text).match(/(?:premium|sum\s*insured|insured\s*value)\s*[:\-]?\s*([A-Z]{3})?\s*([\d][\d.,]{2,})/i);
+  pushField(fields, 'insurance_premium', premium ? parseOcrAmount(premium[2], { countryCode }) : null, 0.78);
   return fields;
 }
 
@@ -198,7 +203,7 @@ function parseReceipt(text, family, countryCode) {
   const rows = lines(text);
   const vendorLine = rows.find((row) => row.length >= 3 && row.length <= 60 && !/^\d+$/.test(row));
   pushField(fields, 'vendor', vendorLine || null, 0.7);
-  pushField(fields, 'amount', amountFrom(text), 0.88);
+  pushField(fields, 'amount', amountFrom(text, countryCode), 0.88);
   pushField(fields, 'currency', detectCurrency(text), 0.85);
   pushField(fields, 'date', firstDateNear(text, /(date|time)/i, countryCode) || anyDate(text, countryCode), 0.8);
 
@@ -222,7 +227,7 @@ function parseReceipt(text, family, countryCode) {
 
 function parsePurchaseInvoice(text, countryCode) {
   const fields = {};
-  pushField(fields, 'purchase_cost', amountFrom(text), 0.85);
+  pushField(fields, 'purchase_cost', amountFrom(text, countryCode), 0.85);
   pushField(fields, 'purchase_date', firstDateNear(text, /(date|invoice|sold|sale)/i, countryCode) || anyDate(text, countryCode), 0.8);
   const seller = String(text).match(/(?:seller|vendor|dealer|sold\s*by)\s*[:\-]?\s*([A-Za-z0-9 &.\-]{2,50})/i);
   pushField(fields, 'vendor', seller ? cleanLine(seller[1]) : lines(text)[0] || null, 0.75);
@@ -249,6 +254,14 @@ export function classifyDocumentFamily(text = '') {
   // not a purchase-invoice signal (Kenyan e-TIMS receipts print it).
   if (!/^receipt_/.test(base) && /\b(purchase\s*invoice|sale\s*agreement|sold\s*to|buyer(?!\s*pin))\b/i.test(raw) && !SERVICE_WORDS.test(raw)) return 'purchase_invoice';
   if (/\b(service|maintenance|garage|workshop)\b/i.test(raw) && /\b(invoice|total|cash|amount)\b/i.test(raw)) return 'service_receipt';
+  // v1.54.1 — a STRONG purchase marker wins over the generic INVOICE receipt
+  // base ("PURCHASE INVOICE" filed as receipt_general, so the purchase prefill
+  // never fired). "Buyer PIN" e-TIMS receipts stay receipts (v1.32.1), service
+  // invoices stay service receipts (rule above), fuel receipts stay fuel.
+  if (/\b(purchase\s*invoice|sale\s*agreement|sold\s*to)\b/i.test(raw)
+    && !/buyer\s*pin/i.test(raw)
+    && !SERVICE_WORDS.test(raw)
+    && base !== 'receipt_fuel') return 'purchase_invoice';
   return base;
 }
 

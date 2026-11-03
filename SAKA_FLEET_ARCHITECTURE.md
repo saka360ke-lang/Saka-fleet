@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.54.0  
+**Version:** 1.54.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.54.1** | Global OCR hardening: universal normalization (locale amounts, CLDR currency symbols, country plates) + flag-gated zero-shot extraction top-up; purchase-invoice classification fixed | §115 |
 | **1.54.0** | ANSWER LAW v2: full own-data snapshot (recent ledger + one populate step per missing field), widened access-refusal ban, own-data on data-sensitive turns | §114 |
 | **1.53.2** | Onboarding fixed: KE NTSA PARTICULARS parsing (correct plate), registration correction/edit lane, verified-email answer | §113 |
 | **1.53.1** | Governance v2: autonomous execution decommissioned → PROP-* proposal registry, review-in-chat workflow | §112 |
@@ -3982,5 +3983,14 @@ quiz engine:
 - **OWN-DATA LAW v2:** the core prompt now demands the EXACT figure with local time context (user timezone + days-left from today), bans the widened refusal family (`I can't see`, `not stored on my side`, `I don't hold that data`, `no record of`) in both the prompt and `SAKA_TONE_COMPASS.bannedPhrases`, and points at the snapshot's Missing line as the only sanctioned source of populate steps.
 - **Snapshot on data-sensitive turns:** new `buildUserFactsLines()` (capped, never throws) attaches the user's own data to the composed `complaint_recovery`, `friction_apology` and `hard_trip_support_escalation` turns — the two answer lanes (`product_answer`, `user_data_answer`) already carried it since v1.52.0.
 - **Tests:** `test_user_data_access` 19 (ledger rows, populate steps, cap), `test_agent_training` 153, `test_kb_docs` 36, `test_no_canned_replies` ratchet unchanged.
+
+### 115. Global OCR hardening — universal normalization + zero-shot top-up (v1.54.1)
+
+- **Universal normalization (`src/services/ocrNormalizer.js`, new):** every OCR value resolves through one layer — `parseOcrAmount()` handles BOTH grouping conventions (1,234.56 | 1.234,56) structurally, resolves single-separator tokens by CLDR locale (45,50 in DE vs 45,50 in KE; 1.234 = thousands in DE, decimal in KE) and never guesses noise (3.000.00 → null); `detectCurrencyFromText()` carries an extended CLDR symbol table (฿ ₱ ₩ ₺ R$ KSh …) with longest-symbol-first so R$ never degrades to $; `validatePlateCandidate()` adds per-country plate patterns (KE/GB/IN/ZA/US/…), the GLOBAL shape stays neutral (rule 36); `validateVinCandidate()` is the universal VIN guard; `normalizeOcrDate()` routes every date through `dateParser` country-resolved.
+- **Wired into the existing lens:** `documentLens.amountFrom/parseReceipt/parseInsurance/parsePurchaseInvoice` parse through the normalizer with the caller's countryCode; `ocrService.extractDocumentHints` money tokens and the e-TIMS path delegate too. A German `TOTAL € / 1.234,56` now prefills 1234.56 in the quiz — the GLOBAL path parses the same structurally-unambiguous grouping (no leakage).
+- **Zero-shot extraction top-up (`src/services/ocrSemantic.js`, new, flag-gated):** when the deterministic lens misses fields, an `ocr_extraction` background-tier JSON call (bounded 4k chars, purpose registered in `AI_PURPOSES`) proposes values for EMPTY slots only; every proposal is re-validated (dates → dateParser, amounts → normalizer, plates → country pattern, VIN → guard) and invalid values are dropped. The deterministic lens is ALWAYS the authority. Kill switch `OCR_AI_EXTRACTION` (default **off** in the testing phase), env-registered + `.env.example` documented. Wired after the lens in the WhatsApp media turn; any failure keeps today's behavior.
+- **Purchase-invoice classification fixed:** a strong `PURCHASE INVOICE` / `SALE AGREEMENT` / `SOLD TO` marker now wins over the generic INVOICE → `receipt_general` base, so the purchase-cost prefill fires again; `Buyer PIN` e-TIMS receipts stay receipts and service invoices stay service receipts.
+- **Prompt sync (rule 13):** the core prompt's OCR & PHOTOS block names the top-up and locks the deterministic lens as the authority; docs regenerated.
+- **Tests:** `test_ocr_normalizer` 38 (new, health-registered), `test_ocr_flow` 108 (EU/Brazil fixtures, purchase regression, top-up kill switch), `test_doc_lens` 48, `test_agent_training` 154, `test_env_audit` 44.
 
 

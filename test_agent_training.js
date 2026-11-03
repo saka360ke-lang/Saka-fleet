@@ -249,7 +249,8 @@ check(/Narrative pre-fills are engine-determined facts/.test(await import('./src
   check(SAKA_TONE_COMPASS.bannedPhrases.includes('not stored on my side'), 'the tone compass bans "not stored on my side" (v1.54.0)');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('PERSONALITY LAW'), 'the core prompt carries the PERSONALITY LAW (v1.53.0)');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('EVERY-DEMOGRAPHIC LAW'), 'the core prompt carries the EVERY-DEMOGRAPHIC LAW (v1.53.0)');
-  check(DEFAULT_SAKA_CORE_PROMPT.includes('Got your vehicle details!'), 'the exact contentless reply from the live chat is named as banned');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('zero-shot AI top-up'), 'the prompt describes the flag-gated zero-shot OCR top-up (v1.54.1)');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('the deterministic lens is ALWAYS the authority'), 'the prompt locks the deterministic lens as the OCR authority (v1.54.1)');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('Send me as a detailed pdf'), 'deliverable-shaped requests are named as report requests');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('never silently merge'), 'draft-conflict merging is forbidden');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('CORRECTIONS to the entry under discussion'), 'follow-up totals are corrections, not new entries');

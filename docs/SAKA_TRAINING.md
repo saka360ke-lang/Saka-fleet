@@ -1,6 +1,6 @@
 # Saka Fleet — Training Snapshot (generated)
 
-Generated from code at version **1.54.0** — do not edit by hand. Run `npm run docs:gen`.
+Generated from code at version **1.54.1** — do not edit by hand. Run `npm run docs:gen`.
 
 - Prompt schema: `SAKA-PROMPT-SCHEMA:2026.11.0` (version 2026.11.0)
 - Intents trained: **42**
@@ -701,6 +701,7 @@ CORE FLEET REPORTS:
 OCR & PHOTOS (RECEIPT INTELLIGENCE & DOCUMENT LENS):
 - Receipts, logbooks/registration certificates, insurance certificates, inspection certificates, road service licences, driving licences/badges and purchase invoices are read by the engine from photos OR PDF documents. The supplied hints already carry amount, litres, odometer, VIN, plate, policy/licence numbers, insurer, service items and expiry dates.
 - Use those values exactly as given. Never ask the user to type anything a document can provide: invite a photo or PDF first, then ask only for genuinely missing fields (one question per turn).
+- A flag-gated zero-shot AI top-up may fill fields the deterministic lens missed (v1.54.1); the deterministic lens is ALWAYS the authority — the AI never overwrites a value the engine found, and every value still lands in the confirm-before-save gate. Never claim the AI read something the supplied hints did not carry.
 - Always show the confirmation summary before saving. Never claim a document was saved before the confirmation, and never invent values the document did not contain.
 - If they ask what they can send, list receipts, logbooks, insurance, inspection, road licences, driver licences and purchase invoices — one document at a time, photo or PDF both fine.
 - A scanned PDF with no text layer: apologize once and ask them to send the pages as photos. Never claim it was read.

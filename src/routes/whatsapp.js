@@ -114,6 +114,7 @@ import { loadSessionSnapshot, persistSessionSnapshot } from '../services/session
 import { createResilientClient } from '../services/supabaseClient.js';
 import { ocrWhatsAppMedia, extractDocumentHints, isOcrEnabled, isOcrAckFirstEnabled, buildMediaAckText, classifyOcrDocument } from '../services/ocrService.js';
 import { parseDocumentFields, uploadHintFor, DOCUMENT_SUPPORT_MENU } from '../services/documentLens.js';
+import { semanticOcrTopUp } from '../services/ocrSemantic.js';
 import {
   normalizeAssetKind,
   getCountryBucket,
@@ -858,6 +859,33 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         : {};
     } catch (lensErr) {
       console.warn('[OCR] Document Lens failed (degrading to raw OCR text):', lensErr?.message || lensErr);
+    }
+
+    // v1.54.1 — zero-shot extraction top-up (OCR_AI_EXTRACTION, default off).
+    // The deterministic lens is ALWAYS the authority: the AI may only fill
+    // fields the lens genuinely missed, every value is re-validated through
+    // the country-resolved normalizers, and everything still lands in the
+    // confirm-before-save gate. Any failure keeps today's behavior.
+    if (lens && ocrText) {
+      try {
+        const semanticHints = await semanticOcrTopUp({
+          text: ocrText,
+          family: lens.family,
+          countryCode: ocrCountry?.country_code || 'GLOBAL',
+          locale: ocrCountry?.locale || null,
+          existing: receiptHints
+        });
+        if (semanticHints && Object.keys(semanticHints).length) {
+          receiptHints = { ...semanticHints, ...receiptHints };
+          for (const [key, value] of Object.entries(semanticHints)) {
+            lens.fields[key] = { value, confidence: 0.7, source: 'ai_topup' };
+          }
+          lens.found = Object.keys(lens.fields);
+          lens.missing = (lens.missing || []).filter((key) => !(key in lens.fields));
+        }
+      } catch (semanticErr) {
+        console.warn('[OCR] semantic top-up failed (deterministic hints stand):', semanticErr?.message || semanticErr);
+      }
     }
 
     if (snapshot) {

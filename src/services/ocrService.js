@@ -1,4 +1,10 @@
 import { extractPdfText } from './pdfTextExtractor.js';
+import {
+  OCR_CURRENCY_CODES as OCR_CURRENCY_CODES_EXTENDED,
+  OCR_CURRENCY_SYMBOLS,
+  detectCurrencyFromText,
+  parseOcrAmount
+} from './ocrNormalizer.js';
 
 /**
  * Saka Fleet — OCR Service
@@ -299,18 +305,12 @@ function looksLikeVin(text) {
   return /\b(?=[A-HJ-NPR-Z0-9]{11,17}\b)(?=[A-Z0-9]*\d)[A-HJ-NPR-Z0-9]{11,17}\b/.test(cleaned);
 }
 
-export const OCR_CURRENCY_CODES = Object.freeze(['KES', 'USD', 'EUR', 'GBP', 'NGN', 'ZAR', 'TZS', 'UGX', 'RWF', 'INR', 'AED', 'BRL', 'MXN']);
-const CURRENCY_SYMBOLS = Object.freeze({ '₹': 'INR', $: 'USD', '€': 'EUR', '£': 'GBP', '₦': 'NGN' });
+// v1.54.1 — extended CLDR symbol/code tables live in ocrNormalizer.js.
+export const OCR_CURRENCY_CODES = OCR_CURRENCY_CODES_EXTENDED;
+const CURRENCY_SYMBOLS = OCR_CURRENCY_SYMBOLS;
 
 function detectCurrency(raw) {
-  const text = String(raw || '');
-  for (const code of OCR_CURRENCY_CODES) {
-    if (new RegExp(`\\b${code}\\b`, 'i').test(text)) return code;
-  }
-  for (const [symbol, code] of Object.entries(CURRENCY_SYMBOLS)) {
-    if (text.includes(symbol)) return code;
-  }
-  return null;
+  return detectCurrencyFromText(raw);
 }
 
 function firstDateNear(raw, keywordRe) {
@@ -339,12 +339,8 @@ export function isKenyaEtimesText(text = '') {
  * OCR noise ("3.000.00") returns null — Saka never guesses a wrong figure.
  */
 function normalizeOcrNumber(raw) {
-  const token = String(raw || '').replace(/\s/g, '');
-  if (!token) return null;
-  if (/^\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?$/.test(token) || /^\d+(?:\.\d{1,2})?$/.test(token) || /^\d{3,}$/.test(token)) {
-    return toNumber(token.replace(/,/g, ''));
-  }
-  return null;
+  // v1.54.1 — universal normalizer delegate; KE keeps comma-thousands semantics.
+  return parseOcrAmount(raw, { countryCode: 'KE' });
 }
 
 /**
@@ -369,7 +365,7 @@ function extractKenyaEtimesHints(raw, rows) {
     const line = lines[i];
     if (!/\b(?:total|cash|amount)\b/i.test(line)) continue;
     if (/%|\bTAX\b|\bNET\b|\bBALANCE\b/i.test(line)) continue;
-    const sameLine = normalizeOcrNumber((line.match(/(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+\.\d{1,2})/) || [])[1]);
+    const sameLine = parseOcrAmount((line.match(/(\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|\d+[.,]\d{1,2})/) || [])[1], { countryCode: 'KE' });
     if (sameLine !== null && sameLine > 0) { hints.amount = sameLine; break; }
     for (let k = 1; k <= 2 && i + k < lines.length; k += 1) {
       const next = lines[i + k];
@@ -410,11 +406,11 @@ export function extractDocumentHints(text = '', kind = null, { receiptOnly = fal
   const isKenya = String(countryCode || 'GLOBAL').toUpperCase() === 'KE';
   const etimesHints = isKenya && isKenyaEtimesText(raw) ? extractKenyaEtimesHints(raw, lines) : null;
 
-  const moneyRe = /(?:kes|usd|ngn|zar|tzs|ugx|rwf|gbp|eur|inr|aed|brl|mxn|\$|€|£|₦|₹)\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)/gi;
-  const toNumber = (value) => {
-    const num = Number(String(value).replace(/[,\s]/g, ''));
-    return Number.isFinite(num) ? num : null;
-  };
+  // v1.54.1 — universal money tokens: word codes + CLDR symbols, and grouped
+  // numbers in EITHER convention (1,234.56 | 1.234,56). Multi-char symbols
+  // come before single chars so "R$" never degrades to "$".
+  const moneyRe = /(?:KSh|TSh|USh|R\$|S\$|A\$|C\$|NZ\$|HK\$|KES|USD|NGN|ZAR|TZS|UGX|RWF|GBP|EUR|INR|AED|BRL|MXN|THB|PHP|KRW|TRY|SAR|PKR|IDR|MYR|SGD|AUD|CAD|NZD|HKD|EGP|GHS|ETB|COP|ARS|CLP|PEN|BDT|VND|₹|฿|₱|₩|₺|₦|\$|€|£)\s*(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)/gi;
+  const toNumber = (value) => parseOcrAmount(value, { countryCode });
   const amountFrom = (line) => {
     const matches = [...String(line).matchAll(moneyRe)];
     if (!matches.length) return null;
@@ -431,7 +427,7 @@ export function extractDocumentHints(text = '', kind = null, { receiptOnly = fal
     for (let k = 1; k <= 2 && idx >= 0 && idx + k < lines.length; k += 1) {
       const row = lines[idx + k];
       if (/%|\bTAX\b|\bNET\b/i.test(row)) continue;
-      const bare = normalizeOcrNumber((row.match(/(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+\.\d{1,2})/) || [])[1]);
+      const bare = parseOcrAmount((row.match(/(\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|\d+[.,]\d{1,2})/) || [])[1], { countryCode });
       if (bare !== null && bare > 0) { amount = bare; break; }
     }
   }

@@ -1,6 +1,12 @@
 {
-  "latest": "1.54.0",
+  "latest": "1.54.1",
   "entries": [
+    {
+      "version": "1.54.1",
+      "date": "2026-11-03",
+      "title": "Receipts from anywhere",
+      "summary": "Saka now reads amounts, currencies and plates the way your country writes them — and double-checks anything she isn't sure about."
+    },
     {
       "version": "1.54.0",
       "date": "2026-11-03",

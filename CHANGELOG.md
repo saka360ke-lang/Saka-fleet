@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.54.1] - 2026-11-03
+
+- **Universal OCR normalization (new `ocrNormalizer.js`).** Every OCR value now resolves through one layer: amounts parse BOTH grouping conventions (1,234.56 and 1.234,56) with CLDR locale resolution for ambiguous single-separator tokens and zero guessing on noise; currency detection carries an extended symbol table (฿ ₱ ₩ ₺ R$ KSh …) with longest-symbol-first so `R$` never degrades to `$`; per-country plate patterns (KE/GB/IN/ZA/US/…) validate plate candidates with a neutral GLOBAL shape (rule 36); VINs pass a universal guard; dates always route through `dateParser` country-resolved. A German `TOTAL € / 1.234,56` now prefills 1234.56 — in the lens, the receipt hints and the e-TIMS path.
+- **Zero-shot extraction top-up (new `ocrSemantic.js`, flag-gated).** When the deterministic lens misses fields, an `ocr_extraction` background-tier JSON call proposes values for EMPTY slots only; every proposal is re-validated (date → dateParser, amount → normalizer, plate → country pattern, VIN → guard) and anything invalid is dropped. The deterministic lens is always the authority. Kill switch `OCR_AI_EXTRACTION` defaults **off** during the testing phase (env-registered + documented).
+- **Purchase-invoice classification fixed.** A strong `PURCHASE INVOICE`/`SALE AGREEMENT`/`SOLD TO` marker now beats the generic INVOICE → `receipt_general` base, so purchase-cost prefill fires again; e-TIMS `Buyer PIN` receipts stay receipts.
+- **Prompt sync:** the core prompt's OCR & PHOTOS block names the top-up and locks the deterministic lens as the authority.
+- **Tests:** `test_ocr_normalizer` 38 (new, health-registered), `test_ocr_flow` 108, `test_doc_lens` 48, `test_agent_training` 154, `test_env_audit` 44.
+
 ## [1.54.0] - 2026-11-03
 
 - **ANSWER LAW v2 — the user's whole record rides the snapshot.** `buildUserContextSnapshot` now carries the recent ledger (last 3 expenses + 3 earnings, with plate, type and Nairobi date) and a `Missing (each has one fill step)` line: every absent field is named with its engine-owned single populate step (insurance expiry → certificate photo or "my insurance expires <date>", inspection, odometer, licence, email). "What did I log yesterday?" and "what do I need to fill?" are answerable from facts in every composed turn.

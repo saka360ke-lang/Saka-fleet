@@ -70,6 +70,7 @@ export const ENV_SECTIONS = Object.freeze([
       'OCR_CONFIRM_THRESHOLD',
       'OCR_DUPLICATE_WINDOW_HOURS',
       'OCR_EXPENSE_DEDUPE_HOURS',
+      'OCR_AI_EXTRACTION',
       'RECEIPTS_BUCKET'
     ]
   },
