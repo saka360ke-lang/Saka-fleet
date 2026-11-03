@@ -787,7 +787,7 @@ export async function recommendModelUpdate(providedSupabase, { minScore = AI_MOD
 
 async function nextProposalCode(supabase) {
   const today = new Date().toISOString().slice(0, 10).replace(/-/g, '-');
-  const prefix = `FIX-${today}-`;
+  const prefix = `PROP-${today}-`;
   const { data } = await supabase
     .from('remediation_proposals')
     .select('proposal_code')

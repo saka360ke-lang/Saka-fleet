@@ -37,6 +37,12 @@ export async function dispatchRepositoryEvent(eventType, clientPayload = {}) {
     return { ok: false, skipped: true, error: 'REMEDIATION_AUTONOMY is not enabled (kill switch off).' };
   }
 
+  // v1.53.1 — autonomous execution is decommissioned. Proposals are reviewed in
+  // superadmin chat sessions (plan → design → act); only plan-drafting survives.
+  if (eventType === 'remediation_execute') {
+    return { ok: false, skipped: true, error: 'Autonomous execution decommissioned (v1.53.1) — proposals are implemented in superadmin chat sessions.' };
+  }
+
   const token = process.env.GH_REMEDIATION_TOKEN || process.env.GITHUB_TOKEN;
   const repo = resolveRemediationRepo();
   if (!token || !repo) {

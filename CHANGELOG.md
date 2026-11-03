@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.53.1] - 2026-11-03
+
+- **Autonomous execution decommissioned.** `remediation_execute` dispatches are permanently refused (`githubDispatch.js`), `.github/workflows/remediation_execute.yml` is deleted, `checkRemediationExecutionRetry` returns `decommissioned`, and `admin accept fix <CODE>` now marks the proposal **APPROVED for review** (`approval_kind: chat_session`) — no nonce, no CI dispatch, nothing runs automatically. Sentinel keeps drafting proposals and digests; implementation happens in superadmin chat sessions (plan → design → act).
+- **Single `PROP-*` proposal registry.** Every proposal code is now `PROP-YYYY-MM-DD-NN` — Sentinel fixes, `UPDATE-SUGGEST>`, `admin adopt`, model-update proposals and Sentinel Horizon feature blueprints. `npm run migrate:proposals` re-coded all 8 existing rows (legacy codes preserved in `execution.legacy_code`). `admin adopt` accepts `PROP-*` codes.
+- **Tests:** `test_remediation_pipeline` + `test_update_suggest` (37) updated for review-only approvals and PROP- codes; both green.
+
 ## [1.53.0] - 2026-11-03
 
 - **Personality v3 (research-backed).** From NN/g's four tone dimensions Saka's position is now locked in the core prompt: casual-warm, always respectful, never sarcastic/irreverent, matter-of-fact with milestone-only enthusiasm, mirror-only humour. From W3C older-user and plain-language guidance: sentences of ~15 words or fewer, everyday words, active voice, "you" address, one idea per line, ONE question per message.

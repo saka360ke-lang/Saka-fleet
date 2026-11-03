@@ -1409,10 +1409,10 @@ export async function maybeSendUrgentRemediationAlert(providedSupabase, { now = 
  * a crashed run. Stops at REMEDIATION_MAX_ATTEMPTS.
  */
 export async function checkRemediationExecutionRetry(providedSupabase) {
-  const supabase = getSupabase(providedSupabase);
-  if (!isRemediationAutonomyEnabled()) {
-    return { status: 'skipped', reason: 'REMEDIATION_AUTONOMY is not enabled.' };
-  }
+  // v1.53.1 — autonomous execution is decommissioned: proposals are approved
+  // for review and implemented in superadmin chat sessions. Nothing to retry.
+  void providedSupabase;
+  return { status: 'decommissioned', reason: 'Autonomous execution removed in v1.53.1 — proposals ship via superadmin chat sessions.' };
 
   await ensureRemediationTables(supabase);
 

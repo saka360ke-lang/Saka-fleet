@@ -1,7 +1,7 @@
 {
   "name": "sakafleet-backend",
   "type": "module",
-  "version": "1.53.0",
+  "version": "1.53.1",
   "description": "Saka Fleet Backend",
   "main": "index.js",
   "scripts": {
@@ -31,6 +31,7 @@
     "migrate:dunning": "node scripts/run_dunning_migration.js",
     "migrate:welcome-trial": "node scripts/run_welcome_trial_migration.js",
     "migrate:remediation": "node scripts/run_remediation_migration.js",
+    "migrate:proposals": "node scripts/run_proposal_migration.js",
     "migrate:model-registry": "node scripts/run_model_registry_migration.js",
     "migrate:fuel-fill": "node scripts/run_fuel_fill_type_migration.js",
     "migrate:earning-type": "node scripts/run_earning_type_migration.js",

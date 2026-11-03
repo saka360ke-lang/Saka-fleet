@@ -120,7 +120,7 @@ async function fetchAudit(supabase, [auditKey, modifyFeedback, clusterSignature]
 }
 
 async function nextProposalCode(supabase) {
-  const prefix = `FIX-${formatNairobiDate()}-`;
+  const prefix = `PROP-${formatNairobiDate()}-`;
   const { data } = await supabase
     .from('remediation_proposals')
     .select('proposal_code')
@@ -199,7 +199,7 @@ async function submitPlan(supabase, [auditKey, planFile, clusterSignature]) {
     }
 
     lastError = error;
-    const prefix = `FIX-${formatNairobiDate()}-`;
+    const prefix = `PROP-${formatNairobiDate()}-`;
     const sequence = Number(String(proposalCode).replace(prefix, '')) + 1;
     proposalCode = `${prefix}${String(sequence).padStart(2, '0')}`;
   }

@@ -1317,8 +1317,8 @@ export async function handleAdminRulesList(supabase) {
 /** v1.51.3 — adopt a Sentinel Horizon feature proposal into the remediation pipeline (two-step: capture, then `admin accept fix`). */
 export async function captureFeatureAdoption(supabase, adminPhone, featCode) {
   const raw = String(featCode || '').trim().toUpperCase();
-  if (!/^FEAT-/.test(raw)) {
-    return { ok: false, reply: '⚠️ Usage: `admin adopt FEAT-<code>` — e.g. `admin adopt FEAT-2026-W43-01`.' };
+  if (!/^(?:PROP|FEAT)-/.test(raw)) {
+    return { ok: false, reply: '⚠️ Usage: `admin adopt PROP-<code>` — e.g. `admin adopt PROP-2026-11-03-01`.' };
   }
 
   const { data: feature, error: featErr } = await supabase
@@ -1334,7 +1334,7 @@ export async function captureFeatureAdoption(supabase, adminPhone, featCode) {
   }
 
   const today = formatNairobiDate();
-  const prefix = `SUG-${today}-`;
+  const prefix = `PROP-${today}-`;
   const { data: existing } = await supabase
     .from('remediation_proposals')
     .select('proposal_code')
@@ -1392,7 +1392,7 @@ export async function captureUpdateSuggestion(supabase, adminPhone, suggestionTe
   }
 
   const today = formatNairobiDate();
-  const prefix = `SUG-${today}-`;
+  const prefix = `PROP-${today}-`;
   const { data: existing } = await supabase
     .from('remediation_proposals')
     .select('proposal_code')
@@ -1575,7 +1575,7 @@ async function featureProposalReviewOnlyReply(supabase, code) {
     .maybeSingle();
   if (error || !feature) return null;
   return {
-    reply: `💡 \`${upper}\` — ${feature.title || 'Feature proposal'} is a Sentinel Horizon *feature blueprint* (impact ${feature.impact_score ?? '—'}/10), not a fix.\n\nTo turn it into a work order, run \`admin adopt ${upper}\` — that captures it for review, and nothing runs until you approve the resulting \`SUG-*\` code.`
+    reply: `💡 \`${upper}\` — ${feature.title || 'Feature proposal'} is a Sentinel Horizon *feature blueprint* (impact ${feature.impact_score ?? '—'}/10), not a fix.\n\nTo turn it into a work order, run \`admin adopt ${upper}\` — that captures it for review as a \`PROP-*\` code, and nothing runs until we plan and ship it together in a chat session.`
   };
 }
 
@@ -1718,51 +1718,27 @@ export async function handleAdminRemediationDecision(supabase, proposalCode, dec
     return handleModelUpdateProposalDecision(supabase, proposal, decision, feedback, { override });
   }
 
-  if (!isRemediationAutonomyEnabled()) {
-    return {
-      reply: '🔒 *Remediation autonomy is disabled.* Set `REMEDIATION_AUTONOMY=on` to enable execution dispatch. No changes were made.'
-    };
-  }
-
   if (decision === 'accept') {
     if (!actionable) {
       return { reply: `⚠️ \`${code}\` is ${proposal.status}; only PENDING_APPROVAL or NEEDS_MODIFICATION can be approved.` };
     }
 
-    // v1.16.2 — a sanitizer-blocked plan needs an explicit, audited override.
-    // Without it the Superadmin is guided to re-plan instead of silently
-    // bypassing the OTP/auth/VIN boundary.
-    if (proposal.status === REMEDIATION_STATUS.NEEDS_MODIFICATION && !override) {
-      return {
-        reply: `🔒 \`${code}\` was blocked by the guardrail sanitizer.\n\n` +
-          `Reply \`admin modify fix ${code} <guidance>\` to re-draft it, or \`admin accept fix ${code} override\` to approve it explicitly (recorded as a Superadmin override).`
-      };
-    }
-
-    const window = buildApprovalWindow();
-    const { data: updated, error: updateErr } = await supabase
+    // v1.53.1 — autonomous execution is decommissioned. Approval marks the
+    // proposal for a superadmin chat session (plan → design → act); nothing
+    // runs automatically and no nonce is minted.
+    const { error: updateErr } = await supabase
       .from('remediation_proposals')
       .update({
         status: REMEDIATION_STATUS.APPROVED,
-        approval_nonce: window.approval_nonce,
-        nonce_expires_at: window.nonce_expires_at,
-        attempts: 0,
         reviewed_at: nowIso,
-        approval_kind: override ? 'superadmin_override' : 'standard',
+        approval_kind: 'chat_session',
         feedback: feedback ? String(feedback).trim() : proposal.feedback
       })
-      .eq('id', proposal.id)
-      .select('*')
-      .maybeSingle();
+      .eq('id', proposal.id);
 
     if (updateErr) return { reply: `⚠️ Approval failed: ${updateErr.message}` };
 
-    const dispatch = await dispatchExecutionForProposal(supabase, updated || proposal);
-    const note = dispatch.ok
-      ? 'Execution workflow dispatched. Cline will implement, run targeted tests and push; a deployment alert will follow.'
-      : `Execution dispatch failed (${dispatch.error || 'unknown'}). The retry poller re-dispatches every 30 minutes (max ${REMEDIATION_MAX_ATTEMPTS} attempts).`;
-
-    return { reply: `✅ *Approved* \`${code}\`.\n\n${note}` };
+    return { reply: `✅ *Approved for review* \`${code}\`. We will plan and ship it together in a chat session — nothing runs automatically.` };
   }
 
   if (decision === 'decline') {

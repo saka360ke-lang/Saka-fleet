@@ -189,11 +189,10 @@ async function run() {
   delete process.env.GITHUB_TOKEN;
   try {
     const accepted = await handleAdminRemediationDecision(supabase, PROPOSAL_CODES[3], 'accept');
-    check(String(accepted.reply).includes('Approved'), 'ACCEPT returns an approval confirmation');
+    check(String(accepted.reply).includes('Approved for review'), 'ACCEPT returns a review confirmation (v1.53.1)');
     const { data: acceptedRow } = await supabase.from('remediation_proposals').select('*').eq('proposal_code', PROPOSAL_CODES[3]).maybeSingle();
     check(acceptedRow.status === REMEDIATION_STATUS.APPROVED, 'ACCEPT moves the proposal to APPROVED');
-    check(Boolean(acceptedRow.approval_nonce), 'ACCEPT mints an approval nonce');
-    check(Boolean(acceptedRow.nonce_expires_at), 'ACCEPT sets the nonce expiry window');
+    check(acceptedRow.approval_kind === 'chat_session', 'ACCEPT marks the proposal for a chat-session review (no nonce)');
 
     const declined = await handleAdminRemediationDecision(supabase, PROPOSAL_CODES[3], 'decline');
     check(String(declined.reply).includes('Declined'), 'DECLINE returns a decline confirmation');
@@ -221,11 +220,11 @@ async function run() {
   process.env.REMEDIATION_AUTONOMY = 'off';
   try {
     const blocked = await handleAdminRemediationDecision(supabase, PROPOSAL_CODES[3], 'accept');
-    check(String(blocked.reply).includes('disabled'), 'REMEDIATION_AUTONOMY=off blocks approvals');
+    check(String(blocked.reply).includes('Approved for review'), 'ACCEPT works without autonomy — review-only, no dispatch (v1.53.1)');
     const triggerSkip = await checkRemediationPlanTriggers(supabase, { now: auditNow });
     check(triggerSkip.status === 'skipped', 'REMEDIATION_AUTONOMY=off skips plan dispatch');
     const dispatchSkip = await dispatchRepositoryEvent('remediation_execute', { proposal_code: PROPOSAL_CODES[3], approval_nonce: 'test' });
-    check(dispatchSkip.skipped === true && dispatchSkip.ok === false, 'REMEDIATION_AUTONOMY=off short-circuits repository_dispatch');
+    check(dispatchSkip.skipped === true && dispatchSkip.ok === false, 'autonomous execution dispatch is always refused (v1.53.1)');
     process.env.REMEDIATION_AUTONOMY = 'true';
     check(isRemediationAutonomyEnabled() === true, 'Autonomy gate treats true as enabled');
     process.env.REMEDIATION_AUTONOMY = '1';

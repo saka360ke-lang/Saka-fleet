@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.53.0  
+**Version:** 1.53.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.53.1** | Governance v2: autonomous execution decommissioned → PROP-* proposal registry, review-in-chat workflow | §112 |
 | **1.53.0** | Personality v3: tone-dimension lock, plain-language floors, every-demographic pacing (research-backed) | §111 |
 | **1.52.1** | Conversational-first: prose replies composed from facts (gates, acks, cancellations, duplicate receipt, pause) + no-canned-replies ratchet lint | §110 |
 | **1.52.0** | Own-data snapshot (expiries, trial, compliance) + OWN-DATA LAW — Saka never withholds the user's data | §109 |
@@ -3957,5 +3958,11 @@ quiz engine:
 - **Tone-dimension lock (NN/g research):** casual-warm, always respectful, never sarcastic/irreverent, matter-of-fact with milestone-only enthusiasm, mirror-only humour — locked in the core prompt as the PERSONALITY LAW.
 - **Plain-language + older-user floors (W3C + plain-language research):** sentences of ~15 words or fewer, everyday words, active voice, "you" address, one idea per line, ONE question per message; on the second struggle offer the simplest path; never rush or imply a deadline; accept fragments, typos, voice notes and mixed languages without scolding. Added to `SAKA_TONE_COMPASS.floors` + the core prompt EVERY-DEMOGRAPHIC LAW.
 - **Tests:** `test_agent_training` (147) asserts both new laws; the persona conversation-compliance harness (`test_conversation_compliance.js` with elderly/low-literacy/angry/Shenglish personas + the David Njonjo replay) ships as the follow-up in the same release line.
+
+### 112. Governance v2 — proposal registry + review-in-chat (v1.53.1)
+
+- **Autonomous execution decommissioned.** `dispatchRepositoryEvent` permanently refuses `remediation_execute`; `.github/workflows/remediation_execute.yml` is deleted; `checkRemediationExecutionRetry` returns `decommissioned`; `admin accept fix <CODE>` marks `APPROVED` with `approval_kind: chat_session` — no nonce minting, no CI dispatch. Sentinel keeps scanning, drafting proposals (`remediation_plan` dispatch) and sending digests; implementation happens in superadmin chat sessions (plan → design → act), then the proposal is marked `DEPLOYED`.
+- **Single `PROP-*` registry.** All proposal codes are `PROP-YYYY-MM-DD-NN` (Nairobi date): Sentinel fixes (`remediation_ci.js submit-plan`), `UPDATE-SUGGEST>` captures, `admin adopt` work orders, model-update proposals (`aiModelRegistry.js`) and Sentinel Horizon feature blueprints (`sentinel.js`). Origin is carried by `category`. `npm run migrate:proposals` re-codes legacy rows idempotently and stores the previous code in `execution.legacy_code` for lookups.
+- **Dormant columns preserved** (`approval_nonce`, `nonce_expires_at`, `execution_dispatched_at`) — no schema churn.
 
 

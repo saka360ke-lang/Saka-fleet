@@ -1021,7 +1021,7 @@ Synthesize the single most valuable feature proposal to make Saka Fleet the #1 v
 
 Output ONLY valid JSON matching this schema:
 {
-  "proposal_code": "FEAT-2026-WXX-XX",
+  "proposal_code": "PROP-2026-XX-XX",
   "title": "string",
   "target_persona": "string",
   "driver_value_proposition": "string",

@@ -136,7 +136,7 @@ check(nonAdmin.isSuperadmin === false, 'gate: non-superadmin is rejected before 
     weekly_feature_proposals: [{ proposal_code: 'FEAT-2026-W43-01', title: 'Smart Document Intelligence', technical_spec: 'Build a natural-language admin console.', impact_score: 9, status: 'pending' }]
   });
   const adopt = await captureFeatureAdoption(featMock.client, '+254700000000', 'FEAT-2026-W43-01');
-  check(adopt.ok === true && /^SUG-\d{4}-\d{2}-\d{2}-\d{2}$/.test(String(adopt.code || '')), `adopt: captures a SUG- code (${adopt.code})`);
+  check(adopt.ok === true && /^PROP-\d{4}-\d{2}-\d{2}-\d{2}$/.test(String(adopt.code || '')), `adopt: captures a PROP- code (${adopt.code})`);
   check(String(adopt.reply).includes('admin accept fix'), 'adopt: reply includes the approval next-step');
   const sugRow = featMock.db.remediation_proposals[0];
   check(sugRow?.category === 'update_suggest' && /Smart Document Intelligence/.test(sugRow?.proposed_changes?.overview || '') && /Build a natural-language/.test(sugRow?.proposed_changes?.overview || ''), 'adopt: the SUG row carries the FEAT title + technical_spec');
@@ -179,7 +179,7 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
 const createdCodes = [];
 try {
   const capture = await captureUpdateSuggestion(supabase, '+254700000000', 'Redirect chat signups to the website');
-  check(capture.ok === true && /^SUG-\d{4}-\d{2}-\d{2}-\d{2}$/.test(String(capture.code || '')), `capture: creates a SUG- code (${capture.code})`);
+  check(capture.ok === true && /^PROP-\d{4}-\d{2}-\d{2}-\d{2}$/.test(String(capture.code || '')), `capture: creates a PROP- code (${capture.code})`);
   check(String(capture.reply).includes('admin accept fix'), 'capture: reply includes the approval next-step');
   if (capture.code) createdCodes.push(capture.code);
 
