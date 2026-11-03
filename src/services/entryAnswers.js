@@ -70,6 +70,15 @@ export function detectLedgerCommand(text = '') {
   if (!raw) return null;
   const t = raw.toLowerCase().replace(/\s+/g, ' ');
 
+  // v1.56.1 — "You deleted/wrote/logged the wrong entry" is a COMPLAINT about
+  // what Saka did, not a request to edit/delete a saved row (live 2026-11-03:
+  // it was misread as an edit of the user's last entry). Past-tense attribution
+  // to Saka routes to the complaint lane instead of the ledger.
+  if (/^(?:you|saka|u)\b/.test(t)
+      && /\b(?:deleted|removed|erased|wrote|logged|recorded|charged|changed|edited|saved|sent|got)\b/.test(t)) {
+    return null;
+  }
+
   if (/^(?:show |list |view |see )?(?:my |the )?(?:saved )?(?:entries|entry list|ledger|expense log|records?)$/.test(t)) {
     return { action: 'list', index: null };
   }

@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.56.1] - 2026-11-03
+
+- **"You deleted the wrong entry" is a complaint, not an edit.** `detectLedgerCommand` now returns null when the user attributes a past action to Saka ("you deleted/wrote/logged/recorded…"), so it reaches the complaint-recovery lane instead of being misread as an edit of the last saved entry (live 2026-11-03).
+- **The empty record answer reads properly.** `formatRecordAnswer` now names a noun — "no other expenses all time" / "no earnings all time" — instead of the broken "no other all time" seen in the live audit.
+- **Tests:** `test_entry_ledger` (+3 complaint guards), `test_record_answers` 36 (+1 noun assertion).
+
 ## [1.56.0] - 2026-11-03
 
 - **Existing owners can register another asset.** An owner who already has a vehicle and says "I have another car", "add vehicle", "a second truck" (or "Add car") now starts the real registration quiz again — previously `detectQuizStart` only offered registration when the account had NO vehicle, so those requests produced a plausible-looking paragraph with no quiz state and every follow-up ("Car", the plate, "Ok") was dropped. Capacity and verified email are still enforced at save (`persistVehicleRegistration`), so nothing can over-register.

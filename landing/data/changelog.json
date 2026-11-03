@@ -1,6 +1,12 @@
 {
-  "latest": "1.56.0",
+  "latest": "1.56.1",
   "entries": [
+    {
+      "version": "1.56.1",
+      "date": "2026-11-03",
+      "title": "Complaints heard, answers that read right",
+      "summary": "Tell Saka \"you deleted the wrong entry\" and she treats it as feedback — not an edit. Empty searches now read in plain words too."
+    },
     {
       "version": "1.56.0",
       "date": "2026-11-03",

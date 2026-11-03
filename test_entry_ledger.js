@@ -68,6 +68,10 @@ async function runTests() {
   // v1.54.5 — a correction to the OPEN draft must never be stolen as a
   // saved-entry edit (live 2026-11-03: "could not find an entry to change").
   assert(detectLedgerCommand('The fuel volume is definitely wrong. As I said earlier I do not remember the amount of liters but I do rem the price was 222 kes per liter') === null, 'a draft correction is not a ledger command');
+  // v1.56.1 — "You deleted/wrote the wrong entry" is a complaint, not an edit.
+  assert(detectLedgerCommand('You deleted the wrong entry') === null, 'complaint about Saka deleting the wrong entry is not an edit command');
+  assert(detectLedgerCommand('you logged the wrong amount on the fuel entry') === null, 'complaint about what Saka logged is not an edit command');
+  assert(detectLedgerCommand('edit entry 2 amount to 5000')?.action === 'edit', 'an explicit edit still works after the complaint guard');
   assert(detectLedgerCommand('restore')?.action === 'restore', '"restore" not detected');
   assert(detectLedgerCommand('undo my last entry')?.action === 'delete', '"undo my last entry" not a delete');
   assert(detectLedgerCommand('logged 40L at 50350 km') === null, 'a fresh log must not be a ledger command');

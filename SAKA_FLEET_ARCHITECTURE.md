@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.56.0  
+**Version:** 1.56.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.56.1** | "You deleted the wrong entry" is a complaint (not a ledger edit) + readable empty record answers | §123 |
 | **1.56.0** | Existing owners add another asset (registration starts for them) + "current mileage" answers read the vehicle, not the ledger | §122 |
 | **1.55.1** | Sentinel response-mismatch → code diagnosis → PROP-* proposal (flag-gated, read-only, review-in-chat) | §121 |
 | **1.55.0** | Conversation working memory: the submitted-but-unsaved draft (fields + extra notes + pending) is visible to the model, secret-free | §120 |
@@ -4048,5 +4049,11 @@ quiz engine:
 - **Skill/prompt sync (rule 13):** `flowKnowledge.js` vehicle_registration trigger/rules now cover existing owners adding an asset; `sakaAi.js` `DEFAULT_SAKA_CORE_PROMPT` gains the MILEAGE & ADD-ASSET LAW.
 - **Tests:** `test_odometer_answer` 11 (health-registered), `test_quiz_flow` 142 (+1: an existing owner adding another car starts registration). `test_no_canned_replies` ratchet unchanged (≤4 literals; 1 remains).
 - **Deferred (tracked):** `chat_friction_logs.user_phone` E.164 normalization (bare `254…` vs `+254…`); confirm the live `CONVERSATION_DIAGNOSIS_ENABLED` value in Cloud Run.
+
+### 123. Complaint vs. ledger edit + readable empty answers (v1.56.1)
+
+- **Complaint guard (R3).** `detectLedgerCommand` (`src/services/entryAnswers.js`) returns `null` when a past-tense action is attributed to Saka ("You deleted the wrong entry", "you logged the wrong amount on the fuel entry"), so the message reaches the complaint-recovery lane instead of being turned into an edit of the user's last saved row. Explicit edits ("edit entry 2 amount to 5000") still resolve. Live 2026-11-03: the complaint was misread as an edit request.
+- **Readable empty record answer (R4).** `formatRecordAnswer` (`src/services/recordAnswers.js`) now names a noun in the empty case — "no other expenses all time", "no earnings all time" — replacing the broken "no other all time" from the live audit (the type label was concatenated with the period label with no noun between them).
+- **Tests:** `test_entry_ledger` (+3 complaint guards, explicit-edit regression), `test_record_answers` 36 (+1 noun assertion).
 
 

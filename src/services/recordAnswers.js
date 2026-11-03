@@ -94,9 +94,15 @@ export function formatRecordAnswer(result = {}, question = {}, { vehicles = [], 
     ? 'Earnings'
     : (question.expenseTypes.length ? question.expenseTypes.join(' + ') : 'Expenses');
   const fleetNote = vehicles.length > 1 ? `\n🚗 Across your ${vehicles.length} vehicles.` : '';
+  // v1.56.1 — the empty answer needs a NOUN: "no other all time" read as broken
+  // text (live 2026-11-03). Now: "no other expenses all time" / "no earnings all time".
+  const missingNoun = question.earning ? 'earnings' : 'expenses';
+  const missingLabel = typeLabel.toLowerCase() === missingNoun
+    ? missingNoun
+    : `${typeLabel.toLowerCase()} ${missingNoun}`;
 
   if (result.count === 0) {
-    return `📊 *Nothing logged* — no ${typeLabel.toLowerCase()} ${periodLabel}. ✅${fleetNote}`;
+    return `📊 *Nothing logged* — no ${missingLabel} ${periodLabel}. ✅${fleetNote}`;
   }
 
   const volumeNote = result.liters > 0 ? ` · ${formatNumber(result.liters, locale)} L` : '';
