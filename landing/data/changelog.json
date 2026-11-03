@@ -1,6 +1,12 @@
 {
-  "latest": "1.52.1",
+  "latest": "1.53.0",
   "entries": [
+    {
+      "version": "1.53.0",
+      "date": "2026-11-03",
+      "title": "A warmer, clearer Saka",
+      "summary": "Short, plain sentences, one question at a time, and patience for everyone — whatever your age or tech comfort."
+    },
     {
       "version": "1.52.1",
       "date": "2026-11-03",

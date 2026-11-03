@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.52.1  
+**Version:** 1.53.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.53.0** | Personality v3: tone-dimension lock, plain-language floors, every-demographic pacing (research-backed) | §111 |
 | **1.52.1** | Conversational-first: prose replies composed from facts (gates, acks, cancellations, duplicate receipt, pause) + no-canned-replies ratchet lint | §110 |
 | **1.52.0** | Own-data snapshot (expiries, trial, compliance) + OWN-DATA LAW — Saka never withholds the user's data | §109 |
 | **1.51.11** | NTSA registration certificate → registration prefill; receipt pipeline receipt-only; empty-expense guard; git auto-sync hooks | §108 |
@@ -3950,5 +3951,11 @@ quiz engine:
 - Only progress indicators stay literal (instant "reading now" ack, slow-turn ack rotation, media ack) — they are transitory signals, never answers.
 - `test_no_canned_replies.js` (stateless, registered in the health gate) scans `whatsapp.js` for direct literal user-facing replies and ratchets the count at ≤ 20 — the quiz outcome cards are the remaining batch, converted in follow-up releases. Any NEW canned literal fails `npm run health`.
 - The superadmin operator console stays deterministic (hybrid console per the plan).
+
+### 111. Personality v3 (v1.53.0)
+
+- **Tone-dimension lock (NN/g research):** casual-warm, always respectful, never sarcastic/irreverent, matter-of-fact with milestone-only enthusiasm, mirror-only humour — locked in the core prompt as the PERSONALITY LAW.
+- **Plain-language + older-user floors (W3C + plain-language research):** sentences of ~15 words or fewer, everyday words, active voice, "you" address, one idea per line, ONE question per message; on the second struggle offer the simplest path; never rush or imply a deadline; accept fragments, typos, voice notes and mixed languages without scolding. Added to `SAKA_TONE_COMPASS.floors` + the core prompt EVERY-DEMOGRAPHIC LAW.
+- **Tests:** `test_agent_training` (147) asserts both new laws; the persona conversation-compliance harness (`test_conversation_compliance.js` with elderly/low-literacy/angry/Shenglish personas + the David Njonjo replay) ships as the follow-up in the same release line.
 
 

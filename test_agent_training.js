@@ -240,6 +240,8 @@ check(/Narrative pre-fills are engine-determined facts/.test(await import('./src
   check(DEFAULT_SAKA_CORE_PROMPT.includes('NO EMPTY REPLIES'), 'the core prompt bans empty acknowledgement replies');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('OWN-DATA LAW'), 'the core prompt carries the OWN-DATA LAW (v1.52.0)');
   check(DEFAULT_SAKA_CORE_PROMPT.includes("I don't have access to"), 'access-refusal phrasing is banned (v1.52.0)');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('PERSONALITY LAW'), 'the core prompt carries the PERSONALITY LAW (v1.53.0)');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('EVERY-DEMOGRAPHIC LAW'), 'the core prompt carries the EVERY-DEMOGRAPHIC LAW (v1.53.0)');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('Got your vehicle details!'), 'the exact contentless reply from the live chat is named as banned');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('Send me as a detailed pdf'), 'deliverable-shaped requests are named as report requests');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('never silently merge'), 'draft-conflict merging is forbidden');

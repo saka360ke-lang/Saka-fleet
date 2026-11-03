@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.53.0] - 2026-11-03
+
+- **Personality v3 (research-backed).** From NN/g's four tone dimensions Saka's position is now locked in the core prompt: casual-warm, always respectful, never sarcastic/irreverent, matter-of-fact with milestone-only enthusiasm, mirror-only humour. From W3C older-user and plain-language guidance: sentences of ~15 words or fewer, everyday words, active voice, "you" address, one idea per line, ONE question per message.
+- **Every-demographic law.** Assume nothing about tech skill: on the second struggle offer the simplest path ("or just type the number"); always end with the ONE next step in plain words; never rush or imply a deadline; accept fragments, typos, voice notes and mixed languages without scolding. A matching floor joined `SAKA_TONE_COMPASS.floors`.
+- **Tests:** `test_agent_training` (147) asserts both new laws.
+
 ## [1.52.1] - 2026-11-03
 
 - **Conversational-first replies.** Every prose reply in the WhatsApp route is now composed by `composeMessage` from facts, with the old sentence demoted to `fallbackText`: the website-signup gate (verified + registration variants), the records-query hint, support escalation, assignment cancellation, OTP dispatch, batch cancellation, the logbook upload invite, the drive nudge (no-plate invariant), the pause confirmation, and the duplicate-receipt reply. Only the instant "reading now" ack stays a literal progress indicator.
