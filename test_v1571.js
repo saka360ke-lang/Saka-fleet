@@ -2,7 +2,7 @@ import assert from 'assert';
 import { createMockSupabase } from './scripts/mockSupabase.js';
 import { getEntitlements, invalidateEntitlements } from './src/services/subscriptions.js';
 import { classifyIntentWithRegex } from './sakaAi.js';
-import { parseRegistrationFieldCorrection, stripFieldNotes, getFlowDefinition } from './src/services/quizEngine.js';
+import { parseRegistrationFieldCorrection, stripFieldNotes, getFlowDefinition, isPollutedFieldValue } from './src/services/quizEngine.js';
 import { reminderTypeMenu, reminderTypeChoices } from './src/services/reminderCatalog.js';
 
 let passed = 0;
@@ -41,5 +41,12 @@ const remChoices = reminderTypeChoices("vehicle").map((c) => c.value);
 check(remType.parse("3") === remChoices[2], "a bare number selects the Nth reminder type");
 check(remType.parse("99") === null, "an out-of-range number is rejected");
 check(reminderTypeMenu("vehicle").includes("1. "), "the reminder menu is numbered");
+
+check(isPollutedFieldValue("Extra Notes:") === true, "UI-label text is rejected as a field value");
+check(isPollutedFieldValue("Save KBJ as a draft") === true, "an instruction is rejected as a field value");
+check(isPollutedFieldValue("Toyota Hiace Van") === false, "a real make/model is accepted");
+const editDef = getFlowDefinition("edit_vehicle", { vehicles: [{ id: "v1", plate_number: "KBJ 819C" }], countryInfo: {}, profile: {} });
+const editField = editDef.fields.find((f) => f.key === "edit_field");
+check(editField.parse("MAKE AND MODEL") === "Make / model", "make and model maps to the Make / model edit field");
 
 console.log("ALL v1.57.1 TESTS PASSED (" + passed + " assertions).");

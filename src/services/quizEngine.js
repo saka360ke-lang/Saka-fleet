@@ -291,9 +291,12 @@ function choiceField(key, label, hint, choices, options = {}) {
         const resolved = options.fallbackParse(text);
         if (resolved) return resolved;
       }
+      const normLabel = (s) => String(s).toLowerCase().replace(/[&\/]+/g, " and ").replace(/\s+/g, " ").trim();
+      const cleanNorm = normLabel(clean);
       for (const c of normalized) {
         if (clean === c.value.toLowerCase()) return c.value;
-        if (c.aliases.some((a) => clean.includes(a))) return c.value;
+        if (cleanNorm && normLabel(c.value) === cleanNorm) return c.value;
+        if (c.aliases.some((a) => clean.includes(a) || (cleanNorm && normLabel(a) === cleanNorm))) return c.value;
       }
       return null;
     },
@@ -1282,6 +1285,20 @@ export function renderNarrativeCard(state, ctx = {}) {
   ].join('\n');
 }
 
+/** v1.58.2 - instruction / UI-label text must never become a field value (live 2026-11-03: make_model stored Extra Notes:, Save KBJ as a draft, Change VIN to ..., Financial analysis for KAS). */
+export function isPollutedFieldValue(text) {
+  const raw = String(text == null ? "" : text).trim().toLowerCase();
+  if (!raw) return false;
+  const clean = raw.replace(/\s+/g, " ");
+  const labelPrefixes = ["extra note", "note:", "notes:", "make and model:", "make & model:", "make / model:", "make:", "model:", "financial analysis", "policy number", "policy / provider", "analysis:", "details:", "vehicle:"];
+  if (labelPrefixes.some((label) => clean.startsWith(label))) return true;
+  if (clean.includes("as a draft") || clean.includes("as draft")) return true;
+  const first = clean.split(" ")[0];
+  const verbs = ["change", "update", "edit", "set", "save", "delete", "remove", "register", "add", "move", "switch"];
+  if (verbs.includes(first) && (clean.includes(" to ") || clean.includes(" as "))) return true;
+  if (["confirm", "yes", "no", "ok", "okay", "done", "cancel", "skip", "reset", "restart"].includes(clean)) return true;
+  return false;
+}
 function applyExtraction(state, def, ext, ctx) {
   if (!ext) return;
   // Two passes: conditional fields (e.g. fuel volume when expense_type = Fuel)
@@ -1297,6 +1314,7 @@ function applyExtraction(state, def, ext, ctx) {
         if (parsed === null || parsed === undefined) continue;
         const check = f.validate(parsed, { ...ctx, answers: state.answers }, state.answers);
         if (check.ok) {
+          if (typeof parsed === 'string' && isPollutedFieldValue(parsed)) continue;
           state.answers[f.key] = parsed;
           break;
         }
@@ -2455,6 +2473,7 @@ export async function handleQuizTurn({
       let naturalFilled = 0;
       for (const [key, value] of Object.entries(natural.fields || {})) {
         if (key in state.answers && state.answers[key] !== undefined) continue;
+        if (typeof value === 'string' && isPollutedFieldValue(value)) continue;
         state.answers[key] = value;
         naturalFilled += 1;
       }
@@ -2552,6 +2571,11 @@ export async function handleQuizTurn({
         state.turnNote = 'Confirm the email is verified and that the details sent with the code were captured. Ask only what is still missing.';
       }
     }
+  } else if (typeof parsed === 'string' && isPollutedFieldValue(parsed)) {
+    state.lastAcceptedAnswer = null;
+    state.turnNote = "That looks like a note or instruction, not a value. Ask again for just the value.";
+    const reply = await askCurrent(state, vctx, current.optional ? "That looks like a note, not the value - try again or reply Skip." : "That looks like a note or instruction - please send just the value.");
+    return { handled: true, reply, flow: state.flow, active: true };
   } else {
     state.answers[current.key] = parsed;
     state.extractionFailures = 0;

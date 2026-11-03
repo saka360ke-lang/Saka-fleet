@@ -1,6 +1,12 @@
 {
-  "latest": "1.58.1",
+  "latest": "1.58.2",
   "entries": [
+    {
+      "version": "1.58.2",
+      "date": "2026-11-03",
+      "title": "Notes stay notes, fields stay fields",
+      "summary": "Saka no longer stores a note or label as the make/model, and saying make and model now edits the right field."
+    },
     {
       "version": "1.58.1",
       "date": "2026-11-03",

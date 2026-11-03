@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.58.2] - 2026-11-03
+
+- **Instruction/UI labels can never become field values.** New isPollutedFieldValue guard rejects Extra Notes:, Save KBJ as a draft, Change VIN to ..., Financial analysis for KAS and bare confirm/yes/no at the direct-answer, AI-extraction and text-banking paths, so a note or label can no longer overwrite make/model (or any free-text field). Live 2026-11-03: KBJ 819C had make_model = Extra Notes:.
+- **make and model now edits the vehicle.** choiceField alias matching normalizes & and / to and, so MAKE AND MODEL maps to the Make / model edit field instead of looping Which field would you like to update?.
+- **Corrupted live row fixed.** KBJ 819C make_model corrected from Extra Notes: to Toyota Hiace Van (audited).
+- **Tests:** test_v1571 17 (+4).
+
 ## [1.58.1] - 2026-11-03
 
 - **Bare-number menu replies no longer loop.** choiceField now maps a bare number to the Nth menu item, and reminderTypeMenu is numbered (1. Oil change - 2. Service - ...), so reply 3 selects Insurance Renewal instead of re-showing the identical Set Reminder prompt (LOOPING_PROMPTS live 2026-11-03). Out-of-range numbers are rejected.
