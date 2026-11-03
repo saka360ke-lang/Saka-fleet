@@ -51,6 +51,7 @@ import {
 import { resolveBundledCatalog, parseComplianceItem } from '../services/complianceCatalog.js';
 import {
   resolveLedgerTurn,
+  resolveLedgerVehicleScope,
   ledgerEntryKey,
   formatLedgerList,
   formatEditPreview,
@@ -107,7 +108,7 @@ import { getCountryCommStyleLine } from '../services/countryCommStyles.js';
 import { ensureCountryBucket, getCountryLearningsLine } from '../services/countryLearnings.js';
 import { applyOdometerReading, applyOperatingHours } from '../services/maintenanceReminders.js';
 import { handleQuizTurn, detectQuizStart, shouldPauseQuizForChat, getCurrentQuizField, detectFlowSwitch, getFlowDefinition, looksLikeReportRequest, getActiveQuiz, markQuizTurn, abandonQuiz } from '../services/quizEngine.js';
-import { buildNarrativeDraft, narrativeDraftFields, narrativeDraftExtras, shouldPrefillNarrativeDraft, isNarrativeIntakeEnabled, isNarrativeEligibleText, buildNarrativeParagraphDrafts, renderNarrativeBatchCard, resolveNarrativeBatchTurn, describeNarrativeDraft } from '../services/narrativeDraft.js';
+import { matchNarrativeVehicle, buildNarrativeDraft, narrativeDraftFields, narrativeDraftExtras, shouldPrefillNarrativeDraft, isNarrativeIntakeEnabled, isNarrativeEligibleText, buildNarrativeParagraphDrafts, renderNarrativeBatchCard, resolveNarrativeBatchTurn, describeNarrativeDraft } from '../services/narrativeDraft.js';
 import { parseRecordQuestion, formatRecordAnswer } from '../services/recordAnswers.js';
 import { queryRecordLedger } from '../services/recordQuery.js';
 import { renderActionDiscovery, composeMessage } from '../services/conversationEngine.js';
@@ -1683,17 +1684,24 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           // v1.33.0 — editable ledger (deterministic, zero AI tokens).
           // Every figure comes from the row itself; nothing is improvised.
           const laneOwner = existingVehicles.some((v) => v.owner_id === profileData?.id);
+          // v1.58.3 - scope to ONE vehicle (pending, then plate, then active, then single).
+          const scope = resolveLedgerVehicleScope({
+            text: commandText,
+            vehicles: existingVehicles,
+            activeVehicle: currentActiveVehicle,
+            pendingVehicleId: pendingEntryAction?.vehicleId || null
+          });
           const ledgerScope = {
             ownerId: laneOwner ? profileData?.id : null,
             driverId: laneOwner ? null : profileData?.id,
-            vehicleIds: existingVehicles.map((v) => v.id),
+            vehicleIds: scope.vehicleIds,
             limit: ENTRY_LIST_LIMIT
           };
           const locale = countryInfo?.locale || 'en-US';
           const currency = countryInfo?.currency || null;
           const copy = { vehicles: existingVehicles, currency, locale };
-          const remember = (mode, key) => {
-            if (session) session.pendingEntryAction = { mode, key, at: new Date().toISOString() };
+          const remember = (mode, key, vehicleId) => {
+            if (session) session.pendingEntryAction = { mode, key, at: new Date().toISOString(), vehicleId };
           };
           const clearPending = () => {
             if (session) session.pendingEntryAction = null;
@@ -1707,7 +1715,14 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           let reply = null;
           let ledgerIntent = 'GENERAL_CHAT';
 
-          if (ledgerTurn.type === 'cancel') {
+          if (scope.ambiguous) {
+            clearPending();
+            const plateLines = [];
+            existingVehicles.forEach(function (v, i) {
+              plateLines.push((i + 1) + '. ' + v.plate_number + (v.make_model ? ' (' + v.make_model + ')' : ''));
+            });
+            reply = 'Which vehicle should I use?\n\n' + plateLines.join('\n') + '\n\nReply the number or the plate.';
+          } else if (ledgerTurn.type === 'cancel') {
             clearPending();
             reply = 'No changes made. Everything is still as you logged it.';
           } else if (ledgerTurn.type === 'command' && ledgerTurn.action === 'list') {
@@ -1732,11 +1747,11 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               reply = `${head}\n\n${formatLedgerList({ entries, ...copy })}`;
             } else if (ledgerTurn.action === 'edit') {
               ledgerIntent = 'EDIT_ENTRY';
-              remember('edit', ledgerEntryKey(target));
+              remember('edit', ledgerEntryKey(target), target.vehicle_id);
               reply = formatEditPreview(target, copy);
             } else {
               ledgerIntent = 'DELETE_ENTRY';
-              remember('delete', ledgerEntryKey(target));
+              remember('delete', ledgerEntryKey(target), target.vehicle_id);
               reply = formatDeleteConfirm(target, copy);
             }
           } else if (ledgerTurn.type === 'select') {
@@ -1745,11 +1760,11 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               reply = `${formatNoEntryForSelection(ledgerTurn.index)}\n\n${formatLedgerList({ entries, ...copy })}`;
             } else if (ledgerTurn.mode === 'delete') {
               ledgerIntent = 'DELETE_ENTRY';
-              remember('delete', ledgerEntryKey(target));
+              remember('delete', ledgerEntryKey(target), target.vehicle_id);
               reply = formatDeleteConfirm(target, copy);
             } else {
               ledgerIntent = 'EDIT_ENTRY';
-              remember('edit', ledgerEntryKey(target));
+              remember('edit', ledgerEntryKey(target), target.vehicle_id);
               reply = formatEditPreview(target, copy);
             }
           } else if (ledgerTurn.type === 'edit-apply') {
@@ -2462,11 +2477,21 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           }
         }
 
+        // v1.58.3 - one-line write intents with several vehicles and no named
+        // vehicle must ask which vehicle instead of silently defaulting to the
+        // active one. A single-vehicle account (or a named plate) is unaffected.
+        const writeIntents = ['LOG_EXPENSE', 'LOG_EARNINGS', 'UPDATE_MILEAGE', 'LOG_OPERATING_HOURS', 'SET_REMINDER', 'EDIT_VEHICLE'];
+        const namedVehicle = matchNarrativeVehicle(String(messageText || ''), existingVehicles, null);
+        const hasNamedVehicle = ['plate', 'ordinal', 'label', 'single'].includes(namedVehicle.reason);
+        const forceVehiclePrompt = !session.quiz
+          && writeIntents.includes(intent)
+          && existingVehicles.length >= 2
+          && !hasNamedVehicle;
         const quizCtx = {
           supabase: supabaseClient,
           profile: profileData,
           vehicles: existingVehicles,
-          activeVehicle: currentActiveVehicle,
+          activeVehicle: forceVehiclePrompt ? null : currentActiveVehicle,
           countryInfo,
           senderPhone,
           formattedPhone,

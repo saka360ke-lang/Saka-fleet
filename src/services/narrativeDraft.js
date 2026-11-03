@@ -134,11 +134,11 @@ const ORDINALS = {
 };
 
 function plateOf(vehicle = {}) {
-  return String(vehicle.plate || vehicle.number_plate || vehicle.registration_number || vehicle.registration || '').trim();
+  return String(vehicle.plate || vehicle.plate_number || vehicle.serial_number || vehicle.number_plate || vehicle.registration_number || vehicle.registration || '').trim();
 }
 
 function labelOf(vehicle = {}) {
-  const make = String(vehicle.make || vehicle.vehicle_make || '').trim();
+  const make = String(vehicle.make || vehicle.vehicle_make || vehicle.make_model || '').trim();
   const model = String(vehicle.model || vehicle.vehicle_model || '').trim();
   const nickname = String(vehicle.nickname || vehicle.nick_name || vehicle.name || '').trim();
   return [make, model, nickname].filter(Boolean).join(' ').trim();
@@ -151,7 +151,7 @@ function compactAlnum(value) {
 /**
  * Find the vehicle the sentence is about. Explicit mention (plate, ordinal or
  * make/model) always wins; a single-vehicle account resolves automatically;
- * otherwise the account's active vehicle is used and flagged as `defaulted`.
+ * otherwise the account's active vehicle is ambiguous and the caller must ask which.
  */
 export function matchNarrativeVehicle(text = '', vehicles = [], activeVehicle = null) {
   const list = Array.isArray(vehicles) ? vehicles.filter(Boolean) : [];
@@ -198,11 +198,11 @@ export function matchNarrativeVehicle(text = '', vehicles = [], activeVehicle = 
     return { vehicle: null, reason: 'ambiguous-label', defaulted: false, candidates: scored.map((entry) => entry.vehicle) };
   }
 
-  const fallback = activeVehicle || list[0];
+  // v1.58.3 - several vehicles and no plate/ordinal/label = ambiguous; never silently default
   return {
-    vehicle: fallback,
-    reason: 'active-default',
-    defaulted: true,
+    vehicle: null,
+    reason: 'ambiguous',
+    defaulted: false,
     candidates: list
   };
 }

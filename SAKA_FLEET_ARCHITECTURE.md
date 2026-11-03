@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.58.2  
+**Version:** 1.58.3  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.58.3** | Cross-vehicle ledger scoping + one-line plate routing (live plate_number/make_model matcher + which-vehicle safe gate) | 132 |
 | **1.58.2** | Field-value pollution guard (notes/labels never overwrite make/model) + edit-field alias normalization + live KBJ row cleaned | 131 |
 | **1.58.1** | Reminder menu is numbered + bare number selects the Nth option (fixes reply-3 loop) | 130 |
 | **1.58.0** | Registration confirm loop fix (field-correction lane + note strip) + Sentinel friction auto-close (DEPLOYED) + proposals triaged | 129 |
@@ -4119,3 +4120,8 @@ quiz engine:
 - isPollutedFieldValue (quizEngine) rejects instruction/UI-label strings (Extra Notes:, Save ... as a draft, Change VIN to ..., Financial analysis for KAS, bare confirm/yes/no) at the direct-answer accept, the AI natural-fill and applyExtraction paths, so a note can never become a field value. Live 2026-11-03: KBJ 819C make_model was Extra Notes: (corrected to Toyota Hiace Van, audited).
 - choiceField alias matching normalizes & and / to and, so MAKE AND MODEL maps to the Make / model edit field (fixes the Which field would you like to update? loop).
 - Tests: test_v1571 17 (health-registered).
+### 132. v1.58.3 - cross-vehicle ledger scoping + one-line plate routing (2026-11-03)
+
+- Ledger is never owner-wide. New resolveLedgerVehicleScope (entryAnswers) resolves a single target vehicle (pending row, then explicit plate/label/ordinal, then the active vehicle, then the single vehicle); whatsapp.js scopes listLedgerEntries/restore to it and pins vehicleId in pendingEntryAction, so editing one vehicle can never touch another history. When no vehicle resolves, the engine asks which vehicle.
+- One-line plate routing works for live data. matchNarrativeVehicle plateOf/labelOf now read plate_number/make_model (previously only plate/make/model keys, so plate detection was dead for real DB rows), and the multi-vehicle/no-mention fallback returns ambiguous (never silently defaults to active). A write intent (log/earning/mileage/operating-hours/reminder/edit_vehicle) with several vehicles and no named vehicle forces a which-vehicle prompt via forceVehiclePrompt.
+- Tests: test_v1583.js (9, health-registered), test_narrative_draft.js (118), test_entry_ledger.js + test_agent_training.js green.

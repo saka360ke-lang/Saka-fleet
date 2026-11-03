@@ -142,8 +142,14 @@ const platePick = matchNarrativeVehicle('car wash 500 kcb 456b', VEHICLES, VEHIC
 check('explicit plate beats the active vehicle', platePick.vehicle?.id === 'v2' && platePick.reason === 'plate', platePick.reason);
 const ordinalPick = matchNarrativeVehicle('fuel 2000 on the second one', VEHICLES, VEHICLES[0]);
 check('ordinal chooses the vehicle', ordinalPick.vehicle?.id === 'v2' && ordinalPick.reason === 'ordinal', ordinalPick.reason);
-const defaultPick = matchNarrativeVehicle('fuel 2000', VEHICLES, VEHICLES[1]);
-check('unmentioned vehicle defaults but is flagged', defaultPick.vehicle?.id === 'v2' && defaultPick.defaulted === true, defaultPick);
+const ambiguousPick = matchNarrativeVehicle('fuel 2000', VEHICLES, VEHICLES[1]);
+check('unmentioned vehicle is ambiguous, never silently defaulted', ambiguousPick.vehicle === null && ambiguousPick.reason === 'ambiguous', ambiguousPick);
+const dbVehicles = [
+  { id: 'v1', plate_number: 'KDA 123A', make_model: 'Toyota Fielder' },
+  { id: 'v2', plate_number: 'KCB 456B', make_model: 'Toyota Probox' }
+];
+check('plate_number routes (live DB field)', matchNarrativeVehicle('car wash 500 kcb 456b', dbVehicles, dbVehicles[0]).vehicle?.id === 'v2');
+check('make_model label routes', matchNarrativeVehicle('wash the probox', dbVehicles, dbVehicles[0]).vehicle?.id === 'v2');
 
 const plateStory = draftFor('car wash 500 kcb 456b last friday');
 check('a mentioned plate is never read as money', plateStory.money.amount === 500, plateStory.money);

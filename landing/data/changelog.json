@@ -1,6 +1,12 @@
 {
-  "latest": "1.58.2",
+  "latest": "1.58.3",
   "entries": [
+    {
+      "version": "1.58.3",
+      "date": "2026-11-03",
+      "title": "The right vehicle, every time",
+      "summary": "Editing your ledger now stays scoped to one vehicle, and one-line logs route by plate instead of guessing."
+    },
     {
       "version": "1.58.2",
       "date": "2026-11-03",

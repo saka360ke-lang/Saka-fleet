@@ -20,6 +20,7 @@
 
 import { formatMoney, formatDate } from './globalization.js';
 import { resolveExpenseType } from './expenseCatalog.js';
+import { matchNarrativeVehicle } from './narrativeDraft.js';
 
 export const ENTRY_PENDING_TTL_MINUTES = 15;
 export const ENTRY_RESTORE_WINDOW_MINUTES = 30;
@@ -243,6 +244,35 @@ export function resolveLedgerTurn({ pending = null, text = '', now = new Date() 
 }
 
 /** Stable key for a ledger row: `expense:12` / `earning:7`. */
+/**
+ * v1.58.3 - which vehicle does a ledger command target? Never the whole fleet:
+ * an explicit plate/label/ordinal wins, then the single vehicle, then the
+ * user's active vehicle. A multi-vehicle account with no such signal returns
+ * ambiguous so the route can ask which vehicle before any write.
+ */
+export function resolveLedgerVehicleScope({
+  text = '',
+  vehicles = [],
+  activeVehicle = null,
+  pendingVehicleId = null
+} = {}) {
+  const list = Array.isArray(vehicles) ? vehicles.filter(Boolean) : [];
+  if (pendingVehicleId) {
+    const pinned = list.find(function (v) { return v.id === pendingVehicleId; });
+    if (pinned) return { vehicleIds: [pinned.id], vehicle: pinned, reason: 'pending', ambiguous: false };
+  }
+  if (list.length === 0) return { vehicleIds: [], vehicle: null, reason: 'no-vehicles', ambiguous: true };
+  const match = matchNarrativeVehicle(text, list, activeVehicle);
+  if (match.vehicle && match.reason !== 'ambiguous') {
+    return { vehicleIds: [match.vehicle.id], vehicle: match.vehicle, reason: match.reason, ambiguous: false };
+  }
+  if (activeVehicle && list.some(function (v) { return v.id === activeVehicle.id; })) {
+    return { vehicleIds: [activeVehicle.id], vehicle: activeVehicle, reason: 'active', ambiguous: false };
+  }
+  if (list.length === 1) return { vehicleIds: [list[0].id], vehicle: list[0], reason: 'single', ambiguous: false };
+  return { vehicleIds: [], vehicle: null, reason: 'ambiguous', ambiguous: true, candidates: list };
+}
+
 export function ledgerEntryKey(entry = {}) {
   if (!entry) return null;
   const kind = entry.kind || (entry.table === 'private_earnings' ? 'earning' : 'expense');

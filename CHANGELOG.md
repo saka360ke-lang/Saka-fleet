@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.58.3] - 2026-11-03
+
+- Cross-vehicle ledger leakage is closed. The editable ledger (list/edit/delete/restore) now resolves a single target vehicle (pending row, then an explicit plate/label/ordinal, then the active vehicle, then the single vehicle) and scopes every query to it - so editing KBJ 819C can never surface or touch a KAS628T record. Mid-edit stays pinned to the row vehicle. When no target resolves the engine asks which vehicle instead of listing the whole fleet.
+- One-line plate routing works for live data. matchNarrativeVehicle now reads plate_number and make_model (it previously read only plate/make/model keys, so plate detection was dead for real DB rows), and a one-line log/edit/reminder with several vehicles and no named vehicle asks which vehicle instead of silently defaulting to the active one. A named plate (or a single-vehicle account) still routes instantly.
+- Files: src/services/narrativeDraft.js, src/services/entryAnswers.js (resolveLedgerVehicleScope), src/routes/whatsapp.js, src/services/flowKnowledge.js.
+- Tests: test_v1583.js (9, new - plate routing, safe gate, live two-vehicle scoping), test_narrative_draft.js (118, +3), test_entry_ledger.js + test_agent_training.js green.
 ## [1.58.2] - 2026-11-03
 
 - **Instruction/UI labels can never become field values.** New isPollutedFieldValue guard rejects Extra Notes:, Save KBJ as a draft, Change VIN to ..., Financial analysis for KAS and bare confirm/yes/no at the direct-answer, AI-extraction and text-banking paths, so a note or label can no longer overwrite make/model (or any free-text field). Live 2026-11-03: KBJ 819C had make_model = Extra Notes:.
