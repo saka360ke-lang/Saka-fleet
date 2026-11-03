@@ -911,15 +911,21 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
     if (isStopRequest(cleanCmd)) {
       session.paused = true;
       session.history = session.history || [];
+      const pauseReply = await composeMessage({
+        purpose: 'pause_confirmation',
+        facts: { paused: true, resumeHint: 'Message me anytime and I will pick up where we left off.' },
+        countryInfo,
+        fallbackText: PAUSE_REPLY
+      });
       session.history.push({ role: 'user', parts: [{ text: messageText }] });
-      session.history.push({ role: 'model', parts: [{ text: PAUSE_REPLY }] });
+      session.history.push({ role: 'model', parts: [{ text: pauseReply }] });
       if (session.history.length > 20) session.history = session.history.slice(-20);
       chatSessions.set(senderPhone, session);
-      try { await sendWhatsAppReply(senderPhone, PAUSE_REPLY); } catch { /* best-effort */ }
+      try { await sendWhatsAppReply(senderPhone, pauseReply); } catch { /* best-effort */ }
       if (supabaseClient) {
         try {
-          await logChatTranscript(supabaseClient, senderPhone, 'assistant', PAUSE_REPLY);
-          await saveChatMessage(supabaseClient, senderPhone, 'assistant', PAUSE_REPLY);
+          await logChatTranscript(supabaseClient, senderPhone, 'assistant', pauseReply);
+          await saveChatMessage(supabaseClient, senderPhone, 'assistant', pauseReply);
         } catch { /* best-effort */ }
       }
       await userLogPromise;
@@ -1005,7 +1011,17 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         // line. No chatting, no intros, no product answers, no registration, until
         // the profile is email_verified (web signup).
         if (supabaseClient && profileData && profileData.email_verified !== true) {
-          const verifyReply = '🔒 Please sign up first at https://sakafleet.com — tap *Get Started Free* and verify your email, then I\'ll meet you right back here on WhatsApp.';
+          const verifyReply = await composeMessage({
+            purpose: 'website_signup_gate',
+            facts: {
+              websiteUrl: 'https://sakafleet.com',
+              reason: 'Saka chats with you once your email is verified from the website signup.'
+            },
+            language: profileData?.preferred_language || 'English',
+            countryInfo,
+            profile: profileData,
+            fallbackText: '🔒 Please sign up first at https://sakafleet.com — tap *Get Started Free* and verify your email, then I\'ll meet you right back here on WhatsApp.'
+          });
           session.history = session.history || [];
           session.history.push({ role: 'user', parts: [{ text: messageText }] });
           session.history.push({ role: 'model', parts: [{ text: verifyReply }] });
@@ -1726,7 +1742,17 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         // v1.36.0 — a QUERY_RECORDS message the engine could not parse gets a
         // deterministic nudge instead of an AI answer (figures are never invented).
         if (intent === 'QUERY_RECORDS' && !aiResult.__deterministicRecords) {
-          customReply = '📊 Ask me like this: *"how much did I spend on fuel last week?"* or *"what did I log yesterday?"* — I read the numbers straight from your ledger.';
+          customReply = await composeMessage({
+            purpose: 'records_query_hint',
+            facts: {
+              examples: '"how much did I spend on fuel last week?" or "what did I log yesterday?"',
+              note: 'The numbers come straight from the user\'s own ledger.'
+            },
+            language: targetLang,
+            countryInfo,
+            profile: profileData,
+            fallbackText: '📊 Ask me like this: *"how much did I spend on fuel last week?"* or *"what did I log yesterday?"* — I read the numbers straight from your ledger.'
+          });
         }
 
         // A receipt photo that was already processed never re-enters the
@@ -1781,7 +1807,14 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               vehiclesList: existingVehicles
             });
             session.pendingSupportEscalation = false;
-            customReply = "I've forwarded your message to our support team at support@sakafleet.com. They will reach out to you shortly!";
+            customReply = await composeMessage({
+              purpose: 'support_escalation',
+              facts: { supportEmail: 'support@sakafleet.com', forwarded: true },
+              language: targetLang,
+              countryInfo,
+              profile: profileData,
+              fallbackText: "I've forwarded your message to our support team at support@sakafleet.com. They will reach out to you shortly!"
+            });
           }
         } else if (
           /\b(support team|contact support|talk to support|human help|help from (?:a )?human|talk to (?:a )?(?:human|person|agent|representative)|human (?:agent|support)|customer (?:care|support)|file a complaint|escalat(?:e|ion)|dispute|admin intervention)\b/i.test(messageText)
@@ -1905,7 +1938,14 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               });
               session.pendingAssignmentOtp = null;
               isSpecialFlowHandled = true;
-              customReply = 'Driver assignment cancelled. No driver was notified.';
+              customReply = await composeMessage({
+                purpose: 'assignment_cancelled',
+                facts: { cancelled: true, driverNotified: false },
+                language: targetLang,
+                countryInfo,
+                profile: profileData,
+                fallbackText: 'Driver assignment cancelled. No driver was notified.'
+              });
             } else if (/^(resend|resend code|new code|send again)$/i.test(clean)) {
               const vehicle = existingVehicles.find((v) => v.id === session.pendingAssignmentOtp.vehicleId) || targetVeh;
               const resent = await createDriverAssignment({
@@ -1925,7 +1965,14 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                   driverPhone: resent.driverPhone,
                   expiresAt: resent.expiresAt
                 };
-                customReply = '🔐 A fresh 6-digit code has been emailed to you. Reply with it to continue.';
+                customReply = await composeMessage({
+                  purpose: 'otp_dispatched',
+                  facts: { deliveredTo: 'your verified email', action: 'Reply with the code to continue.' },
+                  language: targetLang,
+                  countryInfo,
+                  profile: profileData,
+                  fallbackText: '🔐 A fresh 6-digit code has been emailed to you. Reply with it to continue.'
+                });
               } else {
                 customReply = `❌ ${resent.error}`;
               }
@@ -2178,7 +2225,17 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           && !isSuperadminPhone(senderPhone)
           && (isRegisterCommand || intent === 'REGISTER_VEHICLE' || intent === 'ONBOARDING_INPUT' || hasVehicleAttributes);
         if (registrationEmailGated) {
-          customReply = '🚀 *Set up in about a minute on the website*\n\nTap *Get Started Free* at https://sakafleet.com — I\'ll meet you on WhatsApp once your email is verified.';
+          customReply = await composeMessage({
+            purpose: 'website_signup_gate',
+            facts: {
+              websiteUrl: 'https://sakafleet.com',
+              reason: 'Vehicle registration needs a verified email from the website signup first.'
+            },
+            language: targetLang,
+            countryInfo,
+            profile: profileData,
+            fallbackText: '🚀 *Set up in about a minute on the website*\n\nTap *Get Started Free* at https://sakafleet.com — I\'ll meet you on WhatsApp once your email is verified.'
+          });
           onboardingStore.delete(senderPhone);
           session.state = 'IDLE';
           session.onboardingStep = null;
@@ -2329,7 +2386,14 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             isSpecialFlowHandled = true;
             narrativeSuppressQuiz = true;
           } else if (batchTurn.type === 'cancel') {
-            customReply = '❌ Nothing was saved.';
+            customReply = await composeMessage({
+              purpose: 'batch_cancelled',
+              facts: { saved: false },
+              language: targetLang,
+              countryInfo,
+              profile: profileData,
+              fallbackText: '❌ Nothing was saved.'
+            });
             isSpecialFlowHandled = true;
             narrativeSuppressQuiz = true;
           } else if (batchTurn.type === 'invalid-edit') {
@@ -3646,7 +3710,18 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
           // v1.28.1. NEVER answer this with the welcome. Recover the answer, and
           // if the complaint mentions a fleet size, answer it now in local currency.
           else if (asksToUploadLogbook(messageText)) {
-            customReply = 'Yes! 📄 Send a clear photo of your logbook or registration certificate and I will read the plate, make and model from it — then we finish registration together. If the photo is tricky, reply *REGISTER* and I will ask a few quick questions instead. 🙂';
+            customReply = await composeMessage({
+              purpose: 'logbook_upload_invite',
+              facts: {
+                whatToSend: 'a clear photo of the logbook or registration certificate',
+                whatHappens: 'Saka reads the plate, make and model from it and finishes registration together.',
+                alternative: 'reply REGISTER for a few quick questions instead'
+              },
+              language: targetLang,
+              countryInfo,
+              profile: profileData,
+              fallbackText: 'Yes! 📄 Send a clear photo of your logbook or registration certificate and I will read the plate, make and model from it — then we finish registration together. If the photo is tricky, reply *REGISTER* and I will ask a few quick questions instead. 🙂'
+            });
           }
           else if (isIncompleteReplyComplaint(messageText)) {
             // v1.51.9 — one shared grammar; the fleet count is parsed in ONE place.
@@ -3938,7 +4013,19 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
         // and a low-confidence read asks the user to double-check first.
         if (duplicateReceipt) {
           session.quiz = null;
-          finalReply = formatDuplicateReceiptReply(duplicateReceipt, { fallbackCurrency: countryInfo?.currency || null });
+          finalReply = await composeMessage({
+            purpose: 'receipt_duplicate',
+            facts: {
+              alreadyRead: true,
+              vendor: duplicateReceipt?.vendor || null,
+              amount: duplicateReceipt?.amount || null,
+              currency: duplicateReceipt?.currency || countryInfo?.currency || null
+            },
+            language: targetLang,
+            countryInfo,
+            profile: profileData,
+            fallbackText: formatDuplicateReceiptReply(duplicateReceipt, { fallbackCurrency: countryInfo?.currency || null })
+          });
         } else if (ocrLowConfidence && session.quiz) {
           finalReply = `${finalReply}\n\n${OCR_LOW_CONFIDENCE_NOTE}`;
         }
@@ -3995,7 +4082,17 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
         if (!session.quiz && !hasVehicleRegistered
           && !/^\s*(?:register|onboard|add)\b/i.test(messageText)
           && /\bplates?\b/i.test(finalReply)) {
-          finalReply = 'Tell me what you drive — one line is enough (e.g. *"Toyota Fielder 2016, diesel, 120,000 km"*). Or reply *REGISTER* and I\'ll ask a few quick questions. 🙂';
+          finalReply = await composeMessage({
+            purpose: 'drive_nudge',
+            facts: {
+              example: '"Toyota Fielder 2016, diesel, 120,000 km"',
+              alternative: 'reply REGISTER and Saka asks a few quick questions instead'
+            },
+            language: targetLang,
+            countryInfo,
+            profile: profileData,
+            fallbackText: 'Tell me what you drive — one line is enough (e.g. *"Toyota Fielder 2016, diesel, 120,000 km"*). Or reply *REGISTER* and I\'ll ask a few quick questions. 🙂'
+          });
         }
 
         // v1.21.3 — a zero-vehicle user must never be asked for a plate before

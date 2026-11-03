@@ -1,6 +1,12 @@
 {
-  "latest": "1.52.0",
+  "latest": "1.52.1",
   "entries": [
+    {
+      "version": "1.52.1",
+      "date": "2026-11-03",
+      "title": "Saka speaks, never scripts",
+      "summary": "Every reply is now written conversationally for you, in the moment — no more canned lines."
+    },
     {
       "version": "1.52.0",
       "date": "2026-11-03",

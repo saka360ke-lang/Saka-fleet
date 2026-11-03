@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.52.1] - 2026-11-03
+
+- **Conversational-first replies.** Every prose reply in the WhatsApp route is now composed by `composeMessage` from facts, with the old sentence demoted to `fallbackText`: the website-signup gate (verified + registration variants), the records-query hint, support escalation, assignment cancellation, OTP dispatch, batch cancellation, the logbook upload invite, the drive nudge (no-plate invariant), the pause confirmation, and the duplicate-receipt reply. Only the instant "reading now" ack stays a literal progress indicator.
+- **No-canned-replies ratchet.** New stateless `test_no_canned_replies.js` scans `whatsapp.js` for direct literal user-facing replies and pins the remaining count at ≤ 20 (the quiz outcome cards are the remaining batch, converted in follow-ups) — any NEW canned reply fails the health gate. Registered in the health audit.
+- **Tests:** `test_greetings` 94, `test_quiz_flow` 128, `test_web_onboarding` 41, `test_no_canned_replies` (ratchet), all green.
+
 ## [1.52.0] - 2026-11-03
 
 - **The user's own data always rides the snapshot.** `buildUserContextSnapshot` now carries every expiry date (per-vehicle insurance + inspection, with days-left/overdue), the driver compliance record (type + expiry), the trial end date with days-left, and the vehicle YOM/VIN — so "when does my insurance expire?" is always answerable from the facts, in both the deterministic compliance lane and the composed `user_data_answer` path.

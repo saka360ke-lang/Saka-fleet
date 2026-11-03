@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.52.0  
+**Version:** 1.52.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.52.1** | Conversational-first: prose replies composed from facts (gates, acks, cancellations, duplicate receipt, pause) + no-canned-replies ratchet lint | §110 |
 | **1.52.0** | Own-data snapshot (expiries, trial, compliance) + OWN-DATA LAW — Saka never withholds the user's data | §109 |
 | **1.51.11** | NTSA registration certificate → registration prefill; receipt pipeline receipt-only; empty-expense guard; git auto-sync hooks | §108 |
 | **1.51.10** | Interactive quick-edit payload builder (`admin quick-edit` preview); SUG-2026-11-03-01 clause 7 only | §107 |
@@ -3942,5 +3943,12 @@ quiz engine:
 - The access-refusal family (`I don't have access to`, `I can't access`, `I do not have that data`, `that data is not available to me`) joins the banned phrases in the core prompt and `SAKA_TONE_COMPASS.bannedPhrases` (rule 13 synced).
 - `user_data_answer` instructions now tell the composer "userDataFacts is the user's own data — read from it FIRST".
 - **Tests:** `test_user_data_access.js` (8, stateless, registered in the health gate), `test_agent_training` (145).
+
+### 110. Conversational-first replies + no-canned ratchet (v1.52.1)
+
+- Every prose reply in the WhatsApp route is composed by `composeMessage` from facts with the previous sentence demoted to `fallbackText`: website-signup gates, records-query hint, support escalation, assignment cancellation, OTP dispatch, batch cancellation, logbook upload invite, drive nudge (no-plate invariant), pause confirmation, duplicate-receipt reply.
+- Only progress indicators stay literal (instant "reading now" ack, slow-turn ack rotation, media ack) — they are transitory signals, never answers.
+- `test_no_canned_replies.js` (stateless, registered in the health gate) scans `whatsapp.js` for direct literal user-facing replies and ratchets the count at ≤ 20 — the quiz outcome cards are the remaining batch, converted in follow-up releases. Any NEW canned literal fails `npm run health`.
+- The superadmin operator console stays deterministic (hybrid console per the plan).
 
 
