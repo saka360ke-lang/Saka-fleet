@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.51.8] - 2026-11-03
+
+- **Vehicle registration is website-only end-to-end.** Removed the `owner_email` and `otp` steps from the WhatsApp `vehicle_registration` quiz — the verified profile email (`profiles.email`, set during web signup) is now used directly by `persistVehicleRegistration` for the vehicle record, profile sync and passbook email. The legacy `onboarding.js` path also skips the chat email/OTP step when the profile is already `email_verified`. Synced `flowKnowledge.js`, `SAKA_TRAINING.md` and the architecture flow table (rule 13).
+- **Tests:** `test_quiz_flow` (registration now asserts no email/OTP), `test_web_onboarding`, `test_agent_training` all green.
+
 ## [1.51.7] - 2026-11-02
 
 - **Document turns can no longer die silently.** The Document Lens parsing (field/hint extraction) is now best-effort: a crash degrades to the raw OCR text instead of killing the turn, and `recordOcrRequest` now writes its telemetry row BEFORE the crash-prone parsing (using the safe `classifyOcrDocument` classifier) so a dead turn is still diagnosable. Fixes the live 2026-11-02 logbook turn that died on `toUpperCase of undefined`.

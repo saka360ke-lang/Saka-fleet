@@ -67,7 +67,7 @@ async function run() {
   const keys = regFlow.fields.map((f) => f.key);
   assert(keys[0] === 'asset_kind', 'Registration starts by asking the asset kind');
   assert(keys[1] === 'plate_number', 'Road assets are then asked for the plate');
-  assert(keys.includes('vin') && keys.includes('owner_email') && keys.includes('otp'), 'Registration includes VIN, email and OTP');
+  assert(keys.includes('vin') && !keys.includes('owner_email') && !keys.includes('otp'), 'Registration includes VIN but never email/OTP (website-only)');
   assert(regFlow.fields.filter((f) => f.group === 'optional').length >= 8, 'Optional spec group is present');
 
   assert(detectQuizStart({ intent: 'REGISTER_VEHICLE', messageText: 'register', hasVehicleRegistered: false }) === 'vehicle_registration', 'Registration intent starts registration quiz');

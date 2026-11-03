@@ -76,9 +76,9 @@ export const SAKA_QUIZ_FLOWS = [
     key: 'vehicle_registration',
     label: 'Vehicle registration',
     trigger: 'register / add vehicle, new plate, "Register", first-time onboarding',
-    fields: 'asset kind (car/motorcycle/truck/bus/machinery/heavy equipment/generator/boat) → plate or serial → make/model → YOM → fuel → odometer or hour meter → VIN (road assets only) → email → OTP → optional specs → confirm',
-    extracted: ['asset_kind', 'plate_number', 'serial_number', 'make_model', 'yom', 'fuel_type', 'current_mileage', 'operating_hours', 'vin', 'owner_email'],
-    writes: 'vehicles + VIN provenance ledger (no VIN trial) + profile email + passbook email + the one-time full-featured welcome trial + owner driver-profile start',
+    fields: 'asset kind (car/motorcycle/truck/bus/machinery/heavy equipment/generator/boat) → plate or serial → make/model → YOM → fuel → odometer or hour meter → VIN (road assets only) → optional specs → confirm',
+    extracted: ['asset_kind', 'plate_number', 'serial_number', 'make_model', 'yom', 'fuel_type', 'current_mileage', 'operating_hours', 'vin'],
+    writes: 'vehicles + VIN provenance ledger (no VIN trial) + profile email (from the website-verified account) + passbook email + the one-time full-featured welcome trial + owner driver-profile start',
     rules: 'VIN is permanent; the asset kind selects the identity track (plate+VIN for road assets, serial + hour meter for generators/machinery) and the country-bucket compliance catalog; one question per turn; optional specs skippable as a group; a pasted paragraph fills several fields at once; on completion Saka immediately starts the owner\'s own driver profile (minimum compliance, skippable)'
   },
   {

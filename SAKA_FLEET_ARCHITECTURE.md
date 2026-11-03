@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.51.7  
+**Version:** 1.51.8  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.51.8** | Registration email/OTP removed from chat (verified profile email used) | §105 |
 | **1.51.7** | Document-turn resilience (lens try/catch + telemetry-before-lens) | §104 |
 | **1.51.6** | Unverified media gate (no OCR ack/Vision for unverified numbers) | §103 |
 | **1.51.5** | Unverified numbers hard-gated to website signup (single choke point) | §102 |
@@ -824,7 +825,7 @@ All multi-field flows run through `src/services/quizEngine.js`. Each asks exactl
 
 | Flow | Questions (in order) | Odometer capture | Executor |
 | :--- | :--- | :--- | :--- |
-| `vehicle_registration` | plate → make/model → YOM → fuel → odometer → VIN → email → OTP → optional specs (insurance/inspection/colour/transmission/engine/tires/cost/mods) → confirm | `current_mileage` (canonical km) | inserts `vehicles`, `vin_registry` trial, profile email, coupon, passbook email, reminders |
+| `vehicle_registration` | plate → make/model → YOM → fuel → odometer → VIN → optional specs (insurance/inspection/colour/transmission/engine/tires/cost/mods) → confirm | `current_mileage` (canonical km) | inserts `vehicles`, `vin_registry` trial, profile email (website-verified), coupon, passbook email, reminders |
 | `email_update` | new email → OTP → confirm | — | `profiles.email`, `vehicles.owner_email` |
 | `assign_driver` | vehicle → driver phone → **handover odometer** → confirm | `metadata.odometer_at_assignment` + vehicle odometer | `assignDriverToVehicle` |
 | `unassign_driver` | vehicle → **handback odometer** → confirm | `metadata.odometer_at_release` + distance driven | `unassignDriverFromVehicle` |
@@ -3856,4 +3857,15 @@ quiz engine:
   `recordOcrRequest` telemetry is written BEFORE the lens using the safe
   `classifyOcrDocument` classifier — a lens crash degrades to raw OCR text and
   still leaves a durable `ocr_requests` row.
+
+### 105. Registration email/OTP is website-only (v1.51.8)
+
+- The WhatsApp `vehicle_registration` quiz no longer asks for `owner_email` or an
+  `otp` code. Signup + email verification happen only on sakafleet.com; the quiz
+  is only reachable once the profile is `email_verified`, and `persistVehicleRegistration`
+  uses `ctx.profile.email` for the vehicle record, profile sync and passbook email.
+- The legacy `onboarding.js` path skips the chat email/OTP step for verified profiles
+  (falls back to `profileData.email` and checks `profileData.email_verified`).
+- Synced `flowKnowledge.js` (field order + extracted keys), `SAKA_TRAINING.md` playbook
+  and the architecture flow table (rule 13).
 

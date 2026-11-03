@@ -422,22 +422,8 @@ function registrationFields() {
         ? { ok: true }
         : { ok: false, message: 'A VIN is 11â€“17 letters/numbers (I, O and Q are not used). Please resend it.' })
     }),
-    field('owner_email', 'Email address — only for your OTP, so nobody else can open your passbook 🔐', 'for OTP verification and passbook delivery', {
-      aliases: ['owner_email', 'email'],
-      parse: (text) => parseEmail(text),
-      validate: (value) => (value && EMAIL_RE.test(value)
-        ? { ok: true }
-        : { ok: false, message: 'That email does not look valid. Please resend it.' })
-    }),
-    field('otp', '6-digit verification code — 10 seconds 🔐', 'we just emailed it to you (reply "resend" for a new code)', {
-      kind: 'otp',
-      when: (answers) => !!answers.owner_email,
-      parse: (text) => {
-        const match = String(text).match(/\b\d{6}\b/);
-        return match ? match[0] : null;
-      },
-      validate: (value) => (/^\d{6}$/.test(String(value)) ? { ok: true } : { ok: false, message: 'Please send the 6-digit code.' })
-    })
+    // v1.51.8 — email + OTP are website-only for vehicle registration: a verified
+    // profile's email is used directly by persistVehicleRegistration (no chat OTP).
   ];
 }
 
@@ -3450,7 +3436,7 @@ async function persistVehicleRegistration(state, ctx) {
     make_model: a.make_model,
     yom: a.yom,
     year_of_manufacture: a.yom,
-    owner_email: a.owner_email,
+    owner_email: ctx.profile.email || a.owner_email,
     fuel_type: a.fuel_type,
     current_mileage: a.current_mileage ?? 0,
     odometer_reading: a.current_mileage ?? 0,
@@ -3518,7 +3504,7 @@ async function persistVehicleRegistration(state, ctx) {
   const insertedVehicleId = insertRes.data?.id || null;
 
   await ctx.supabase.from('profiles').update({
-    email: a.owner_email,
+    email: ctx.profile.email,
     email_verified: true,
     jurisdiction_confirmed: true,
     jurisdiction_updated_at: new Date().toISOString(),
@@ -3530,7 +3516,7 @@ async function persistVehicleRegistration(state, ctx) {
 
   try {
     await sendPassbookWelcomeEmail({
-      targetEmail: a.owner_email,
+      targetEmail: ctx.profile.email,
       plateNumber: displayName,
       makeModel: a.make_model,
       yom: a.yom,
@@ -3588,7 +3574,7 @@ async function persistVehicleRegistration(state, ctx) {
     yom: a.yom,
     mileage: a.current_mileage ?? null,
     operatingHours: a.operating_hours ?? null,
-    email: a.owner_email,
+    email: ctx.profile.email,
     token
   };
 }

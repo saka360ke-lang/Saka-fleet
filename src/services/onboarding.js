@@ -319,6 +319,7 @@ export async function handleStage1CoreCapture({
   const hasMileage = obState.core.current_mileage !== null && obState.core.current_mileage !== undefined;
   const hasVin = !!obState.core.vin;
   const hasEmail = !!(obState.core.owner_email || profileData?.email);
+  if (!obState.core.owner_email && profileData?.email) obState.core.owner_email = profileData.email;
 
   // When all 7 mandatory core fields are captured:
   if (hasPlate && hasModel && hasYom && hasFuel && hasMileage && hasVin && hasEmail) {
@@ -326,8 +327,8 @@ export async function handleStage1CoreCapture({
     const providedOtp = mergedExt.otp_code || (cleanTrimmed.match(/^\d{6}$/) ? cleanTrimmed : null) || (cleanTrimmed.match(/\b\d{6}\b/) ? cleanTrimmed.match(/\b\d{6}\b/)[0] : null);
     const isResendReq = /^(resend|resend otp|resend code|send code again)$/i.test(cleanTrimmed);
 
-    // If email is not yet verified via OTP
-    if (!obState.core.email_verified) {
+    // If email is not yet verified via OTP (a website-verified profile skips this)
+    if (!obState.core.email_verified && !(profileData?.email_verified === true)) {
       if (providedOtp && obState.pending_otp) {
         if (obState.pending_otp.code === providedOtp && Date.now() <= obState.pending_otp.expiresAt) {
           obState.core.email_verified = true;

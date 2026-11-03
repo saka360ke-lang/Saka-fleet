@@ -1,6 +1,12 @@
 {
-  "latest": "1.51.7",
+  "latest": "1.51.8",
   "entries": [
+    {
+      "version": "1.51.8",
+      "date": "2026-11-03",
+      "title": "One signup, one place",
+      "summary": "Email verification now happens only on the website — WhatsApp registration no longer asks for email or a code."
+    },
     {
       "version": "1.51.7",
       "date": "2026-11-02",
