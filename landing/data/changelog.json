@@ -1,6 +1,12 @@
 {
-  "latest": "1.56.2",
+  "latest": "1.56.3",
   "entries": [
+    {
+      "version": "1.56.3",
+      "date": "2026-11-03",
+      "title": "When to replace your tyres? Just ask",
+      "summary": "Ask Saka \"when should I replace my tyres?\" and she answers from your own reminders — or offers to set one, without guessing."
+    },
     {
       "version": "1.56.2",
       "date": "2026-11-03",

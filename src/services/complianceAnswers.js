@@ -108,6 +108,62 @@ export function detectComplianceExpiryQuestion(text = '') {
   return item && asks;
 }
 
+const MAINTENANCE_PARTS = [
+  ['tyres', /tyre|tire/i],
+  ['brakes', /brake|\bpads?\b|disc|rotor/i],
+  ['oil', /\boil\b/i],
+  ['battery', /battery/i],
+  ['filters', /filter/i],
+  ['spark plugs', /spark\s*plug|\bplugs?\b/i],
+  ['coolant', /coolant|antifreeze/i],
+  ['belts', /\bbelts?\b|timing/i],
+  ['wipers', /wiper/i]
+];
+
+/**
+ * v1.56.3 — "When am I supposed to buy my front tyres?" / "how often should I
+ * change the oil?" is a maintenance-schedule question, not a generic menu.
+ */
+export function detectMaintenanceScheduleQuestion(text = '') {
+  const clean = String(text || '').trim();
+  if (!clean || clean.length > 140) return false;
+  if (/\breport\b/i.test(clean)) return false;
+  if (carriesExplicitDate(clean)) return false;
+  const asksWhen = /\b(?:when|how\s+often|how\s+many\s+(?:km|kilomet(?:er|re)s?|miles?))\b/i.test(clean);
+  const verb = /\b(?:buy|replace|change|service|rotate|check|inspect|do|need)\b/i.test(clean);
+  const part = MAINTENANCE_PARTS.some(([, re]) => re.test(clean));
+  return asksWhen && verb && part;
+}
+
+/** Which maintenance part does the message name? */
+export function detectMaintenancePart(text = '') {
+  const clean = String(text || '');
+  for (const [name, re] of MAINTENANCE_PARTS) {
+    if (re.test(clean)) return name;
+  }
+  return null;
+}
+
+/** Deterministic answer from the user's own reminders; never invents intervals. */
+export function buildMaintenanceScheduleAnswer({ vehicle = null, reminders = [], asked = null } = {}) {
+  const plate = vehicle?.plate_number || 'your vehicle';
+  const part = asked || 'maintenance';
+  const partRe = (MAINTENANCE_PARTS.find(([name]) => name === part) || [null, new RegExp(part, 'i')])[1];
+  const wanted = (reminders || []).filter((r) => partRe.test(String(r.reminder_type || '')));
+  if (wanted.length) {
+    const lines = wanted.slice(0, 3).map((r) => {
+      const label = r.reminder_type || 'Reminder';
+      const value = Number(r.threshold_value || 0);
+      if (r.threshold_unit === 'distance' && value > 0) return `🔔 ${label}: at *${value.toLocaleString()} km*`;
+      if (r.threshold_unit === 'hours' && value > 0) return `🔔 ${label}: at *${value.toLocaleString()} h*`;
+      if (r.due_date) return `🔔 ${label}: due *${r.due_date}*`;
+      return `🔔 ${label}`;
+    });
+    return `📌 *${part[0].toUpperCase()}${part.slice(1)} for ${plate}*\n\n${lines.join('\n')}\n\n_Read from your own reminders._`;
+  }
+  return `📌 I don't have a ${part} reminder for *${plate}* yet — and I won't guess an interval, since ${part} life depends on how the vehicle is used.\n\nWant me to track it? Reply e.g. _remind me to replace ${part} at 400,000 km_ or _in 6 months_.`;
+}
+
 /** Which compliance item does the message refer to? */
 export function detectComplianceItemAsked(text = '') {
   const clean = String(text || '');

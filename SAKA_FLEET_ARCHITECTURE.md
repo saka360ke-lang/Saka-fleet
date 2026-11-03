@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.56.2  
+**Version:** 1.56.3  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.56.3** | Maintenance-schedule questions ("when should I replace my tyres?") answer from the user's reminders, never a generic menu | §125 |
 | **1.56.2** | Plain-English admin backlog — "show me [all] pending proposals" maps to the remediation list (PROP-2026-11-03-07) | §124 |
 | **1.56.1** | "You deleted the wrong entry" is a complaint (not a ledger edit) + readable empty record answers | §123 |
 | **1.56.0** | Existing owners add another asset (registration starts for them) + "current mileage" answers read the vehicle, not the ledger | §122 |
@@ -4063,5 +4064,11 @@ quiz engine:
 - **Bare "admin proposals" is untouched** — it still opens the Horizon feature proposals (`ADMIN_PROPOSALS`). The admin help menu now names "show me pending proposals".
 - **Tests:** `test_update_suggest` 43 (+6 plain-English parse assertions, +1 Horizon-unchanged regression).
 - **Provenance:** implements the approved proposal `PROP-2026-11-03-07` (marked DEPLOYED after the health gate was green).
+
+### 125. Maintenance-schedule questions answer from reminders (v1.56.3 — live-audit R5)
+
+- **Detector + answer (pure).** `src/services/complianceAnswers.js` gains `detectMaintenanceScheduleQuestion` ("when / how often / how many km" + a maintenance verb + a part), `detectMaintenancePart` (tyres, brakes, oil, battery, filters, spark plugs, coolant, belts, wipers) and `buildMaintenanceScheduleAnswer`. The answer cites the user's own active `reminders` row (distance km / hours / due date) when it matches; otherwise it states honestly that no reminder exists and offers the ONE step to set one — never an invented interval.
+- **Wired** into the deterministic compliance/reminder branch in `whatsapp.js` (parks a non-registration quiz like the other read commands). Live 2026-11-03 (0734852529): "when am I supposed to buy my front tyres" got a generic menu.
+- **Tests:** `test_vehicle_compliance` 67 (+5 maintenance assertions).
 
 

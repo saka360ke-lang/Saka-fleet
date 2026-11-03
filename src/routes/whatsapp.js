@@ -147,6 +147,9 @@ import {
   detectComplianceExpiryQuestion,
   detectComplianceCorrection,
   detectComplianceItemAsked,
+  detectMaintenanceScheduleQuestion,
+  detectMaintenancePart,
+  buildMaintenanceScheduleAnswer,
   buildComplianceExpiryAnswer,
   buildComplianceStatusReply,
   buildRemindersListReply,
@@ -1279,8 +1282,9 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         const complianceStatusCommand = detectComplianceStatusCommand(commandText);
         const complianceExpiryQuestion = detectComplianceExpiryQuestion(commandText);
         const complianceCorrection = detectComplianceCorrection(commandText);
+        const maintenanceScheduleQuestion = detectMaintenanceScheduleQuestion(commandText);
         const complianceReadCommand = remindersListCommand || complianceStatusCommand
-          || complianceExpiryQuestion || complianceCorrection.isCorrection;
+          || complianceExpiryQuestion || complianceCorrection.isCorrection || maintenanceScheduleQuestion;
         if (complianceReadCommand && quizForFastPath && !quizPhaseLocked) {
           abandonQuiz(session, { reason: 'deterministic_read_command' });
         }
@@ -1564,7 +1568,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             extracted_data: {},
             reply_message: `🚗 Your garage is empty for now.\n\nSend your vehicle's number plate (e.g. *${countryInfo.plate_example}*) or type *REGISTER* — setup takes about two minutes.`
           };
-        } else if (remindersListCommand || complianceStatusCommand || complianceExpiryQuestion || complianceCorrection.isCorrection) {
+        } else if (remindersListCommand || complianceStatusCommand || complianceExpiryQuestion || complianceCorrection.isCorrection || maintenanceScheduleQuestion) {
           // v1.32.2 — deterministic compliance/reminder answers (zero AI tokens).
           // Every date comes from the ledger; nothing is improvised.
           const ownedVehicles = existingVehicles.filter((v) => v.owner_id === profileData?.id);
@@ -1603,6 +1607,18 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               .select('type,label,number,expiry,lifetime')
               .eq('vehicle_id', targetVehicle.id);
             reply = buildComplianceStatusReply({ vehicle: targetVehicle, rows: rows || [] });
+          } else if (maintenanceScheduleQuestion) {
+            const { data: reminders } = await supabaseClient
+              .from('reminders')
+              .select('reminder_type,due_date,status,threshold_value,threshold_unit')
+              .eq('status', 'active')
+              .in('vehicle_id', [targetVehicle.id])
+              .limit(50);
+            reply = buildMaintenanceScheduleAnswer({
+              vehicle: targetVehicle,
+              reminders: reminders || [],
+              asked: detectMaintenancePart(commandText)
+            });
           } else {
             const { data: reminders } = await supabaseClient
               .from('reminders')

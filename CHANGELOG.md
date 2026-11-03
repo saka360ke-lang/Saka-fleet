@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.56.3] - 2026-11-03
+
+- **Maintenance-schedule questions answer from your reminders.** "When am I supposed to buy my front tyres?" / "how often should I change the oil?" now route to the reminder lane (deterministic, zero tokens) instead of a generic menu. If you have a matching reminder, Saka cites it exactly (date / km / hours); if not, she says so honestly and offers the one step to track it — she never invents an interval.
+- **Tests:** `test_vehicle_compliance` 67 (+5 maintenance assertions).
+
 ## [1.56.2] - 2026-11-03
 
 - **Plain-English admin backlog (PROP-2026-11-03-07).** The verified superadmin can now ask "show me [all] pending proposals", "list pending proposals", "pending proposals", "what's pending" (→ pending fixes) or "show me [all] proposals" (→ full backlog) and get the deterministic remediation list — zero tokens. These resolve before the directive gate and in the classifier fallback; bare "admin proposals" still opens the Horizon feature proposals, and the help menu names the new phrasing.

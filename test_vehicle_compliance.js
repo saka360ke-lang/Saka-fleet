@@ -24,6 +24,9 @@ import {
   detectComplianceExpiryQuestion,
   detectComplianceCorrection,
   detectComplianceItemAsked,
+  detectMaintenanceScheduleQuestion,
+  detectMaintenancePart,
+  buildMaintenanceScheduleAnswer,
   carriesExplicitDate,
   buildComplianceExpiryAnswer,
   buildComplianceStatusReply,
@@ -170,6 +173,21 @@ async function run() {
     now: NOW
   });
   check(answer.includes('20 Nov 2026') && answer.includes('C35343842'), 'Expiry answer renders the labelled date and policy');
+
+  // v1.56.3 — a maintenance-schedule question routes to the user's reminders,
+  // never a generic menu (live 2026-11-03: "when am I supposed to buy my
+  // front tyres" got a menu).
+  check(detectMaintenanceScheduleQuestion('When am I supposed to buy my front tyres?'), 'Tyre-replacement question is recognised');
+  check(!detectMaintenanceScheduleQuestion('insurance expires 20/11/2026'), 'A supplied date is not a maintenance question');
+  check(detectMaintenancePart('when should I change the oil') === 'oil', 'The maintenance part is identified');
+  const tyreAnswer = buildMaintenanceScheduleAnswer({
+    vehicle: { plate_number: 'KAS 628T' },
+    reminders: [{ reminder_type: 'Tyres', threshold_unit: 'distance', threshold_value: 400000, due_date: null }],
+    asked: 'tyres'
+  });
+  check(/Tyres/.test(tyreAnswer) && /400,000 km/.test(tyreAnswer), 'A tyre reminder is cited from the user own reminders');
+  const noTyre = buildMaintenanceScheduleAnswer({ vehicle: { plate_number: 'KAS 628T' }, reminders: [], asked: 'tyres' });
+  check(/won't guess/.test(noTyre) && /KAS 628T/.test(noTyre), 'No tyre reminder is answered honestly with a next step');
   const card = buildComplianceStatusReply({
     vehicle: { plate_number: 'KAS 628T' },
     rows: [
