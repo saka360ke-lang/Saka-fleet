@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.53.1  
+**Version:** 1.53.2  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.53.2** | Onboarding fixed: KE NTSA PARTICULARS parsing (correct plate), registration correction/edit lane, verified-email answer | §113 |
 | **1.53.1** | Governance v2: autonomous execution decommissioned → PROP-* proposal registry, review-in-chat workflow | §112 |
 | **1.53.0** | Personality v3: tone-dimension lock, plain-language floors, every-demographic pacing (research-backed) | §111 |
 | **1.52.1** | Conversational-first: prose replies composed from facts (gates, acks, cancellations, duplicate receipt, pause) + no-canned-replies ratchet lint | §110 |
@@ -3964,5 +3965,13 @@ quiz engine:
 - **Autonomous execution decommissioned.** `dispatchRepositoryEvent` permanently refuses `remediation_execute`; `.github/workflows/remediation_execute.yml` is deleted; `checkRemediationExecutionRetry` returns `decommissioned`; `admin accept fix <CODE>` marks `APPROVED` with `approval_kind: chat_session` — no nonce minting, no CI dispatch. Sentinel keeps scanning, drafting proposals (`remediation_plan` dispatch) and sending digests; implementation happens in superadmin chat sessions (plan → design → act), then the proposal is marked `DEPLOYED`.
 - **Single `PROP-*` registry.** All proposal codes are `PROP-YYYY-MM-DD-NN` (Nairobi date): Sentinel fixes (`remediation_ci.js submit-plan`), `UPDATE-SUGGEST>` captures, `admin adopt` work orders, model-update proposals (`aiModelRegistry.js`) and Sentinel Horizon feature blueprints (`sentinel.js`). Origin is carried by `category`. `npm run migrate:proposals` re-codes legacy rows idempotently and stores the previous code in `execution.legacy_code` for lookups.
 - **Dormant columns preserved** (`approval_nonce`, `nonce_expires_at`, `execution_dispatched_at`) — no schema churn.
+
+### 113. Onboarding & registration fixed (v1.53.2)
+
+- **KE NTSA "VEHICLE PARTICULARS" parsing** (country profile only, rule 36): value-before-label pairs read the **current** plate (`KAS628T DATE OF REGISTRATION`; the title-line plate is only a GLOBAL fallback and is never mistaken for the current one), make/model/body, year, fuel, engine number and colour. A pure-digit `TRANSFER` timestamp can never become an expiry. GLOBAL documents parse exactly as before (no-leak regression test).
+- **Registration correction lane** (`detectRegistrationCorrection` in quizEngine): "you captured/read/got the <field> wrong" clears and re-asks that one field; "edit: <field> <value>" sets the user's value verbatim and runs **before** whole-message extraction so an edit can never clobber the other banked answers.
+- **Own-data answer for verification**: the snapshot carries the masked email + `email_verified`, so "is my profile verified?" answers with the real state.
+- **Register routing**: "add/register/upload … vehicle / reg cert / logbook" maps deterministically to `vehicle_registration`.
+- **Tests:** `test_ocr_flow` 99, `test_quiz_flow` 131, `test_user_data_access` 9.
 
 

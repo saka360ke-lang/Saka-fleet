@@ -321,9 +321,34 @@ async function run() {
   const ntsaHints = extractDocumentHints(ntsaCert, 'logbook', { countryCode: 'KE' });
   check(ntsaHints.plate_number === 'N7200766H', 'the plate is read from the line under REGISTRATION CERTIFICATE');
   check(ntsaHints.vin === undefined, 'a pure-digit TRANSFER number is never stored as a VIN');
-  check(ntsaHints.fuel_type === 'diesel', 'FUEL TYPE label value is extracted (fuel words only)');
   const oldLogbook = extractDocumentHints('VIN JTE777A1234567890\nREG NO KDA 123A', 'logbook');
   check(oldLogbook.vin === 'JTE777A1234567890' && oldLogbook.plate_number === 'KDA 123A', 'classic VIN/REG NO logbooks still extract');
+
+  // v1.53.2 — the real NTSA "VEHICLE PARTICULARS" table (KE profile): value-before-label.
+  const ntsaParticulars = [
+    'REGISTRATION CERTIFICATE',
+    'N7200766H',
+    'VEHICLE PARTICULARS',
+    'KAS628T DATE OF REGISTRATION',
+    'HDJ810007675 GROSS WEIGHT (KGS)',
+    'TOYOTA DUTY',
+    'LAND CRUISER NO. OF PREVIOUS OWNERS',
+    'S.WAGON TARE WEIGHT (KGS).',
+    'DIESEL TAX CLASS',
+    '1991 NO. OF AXLES',
+    '1HD-0015769 PREVIOUS REG. COUNTRY',
+    'SILVER PREVIOUS REGISTRATION'
+  ].join('\n');
+  const particulars = extractDocumentHints(ntsaParticulars, 'logbook', { countryCode: 'KE' });
+  check(particulars.plate_number === 'KAS628T', 'the CURRENT plate (beside DATE OF REGISTRATION) beats the title-line previous plate');
+  check(particulars.vin === 'HDJ810007675', 'chassis is read beside GROSS WEIGHT');
+  check(particulars.make_model === 'TOYOTA LAND CRUISER S.WAGON', 'make + model + body are read from the PARTICULARS table');
+  check(particulars.yom === 1991 && particulars.fuel_type === 'diesel', 'year (beside NO. OF AXLES) and fuel (beside TAX CLASS) are read');
+  check(particulars.engine_number === '1HD-0015769' && particulars.color === 'silver', 'engine number and colour are read');
+  // GLOBAL regression: the same document must never leak NTSA rules (rule 36).
+  const particularsGlobal = extractDocumentHints(ntsaParticulars, 'logbook', { countryCode: 'GLOBAL' });
+  check(particularsGlobal.plate_number === 'N7200766H', 'GLOBAL path uses the title-line plate, never the KE PARTICULARS plate');
+  check(particularsGlobal.make_model === undefined && particularsGlobal.yom === undefined, 'GLOBAL path never applies the NTSA PARTICULARS rules');
 
   console.log('\n--- Test 13: duplicate protection (v1.32.1) ---');
   const shaA = buildOcrTextSha('TOTAL  3,000.00\nDIESEL');

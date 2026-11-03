@@ -1,6 +1,12 @@
 {
-  "latest": "1.53.1",
+  "latest": "1.53.2",
   "entries": [
+    {
+      "version": "1.53.2",
+      "date": "2026-11-03",
+      "title": "Registration just works",
+      "summary": "Send your certificate and Saka reads the right plate, make and model — and corrections now actually fix the right field."
+    },
     {
       "version": "1.53.1",
       "date": "2026-11-03",

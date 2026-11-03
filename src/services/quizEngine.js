@@ -2027,6 +2027,66 @@ export function detectFlowSwitch({ quiz, messageText = '', intent = '' } = {}) {
  * Main entry point used by the WhatsApp route for every inbound message.
  * Returns { handled, reply } â€” handled=false means the message is not a quiz turn.
  */
+const REG_FIELD_ALIASES = {
+  plate_number: /\b(?:plate|reg(?:istration)?\s*(?:no|number)|number\s*plate)\b/i,
+  make_model: /\b(?:make|model|make\s*\/?\s*model)\b/i,
+  yom: /\b(?:year|yom|year\s+of\s+(?:manufacture|make))\b/i,
+  fuel_type: /\b(?:fuel|fuel\s+type)\b/i,
+  odometer_reading: /\b(?:odometer|mileage|kilomet(?:er|re)s?|km)\b/i,
+  vin: /\b(?:vin|chassis)\b/i,
+  insurance_expiry: /\b(?:insurance|expiry|insurance\s+expiry)\b/i,
+  engine_number: /\b(?:engine(?:[ -]?no\.?|[ -]?number)?)\b/i,
+  color: /\b(?:colou?r)\b/i
+};
+
+function resolveRegistrationField(phrase, def) {
+  const p = String(phrase || '').toLowerCase();
+  for (const [key, re] of Object.entries(REG_FIELD_ALIASES)) {
+    if (def.fields.some((f) => f.key === key) && re.test(p)) return key;
+  }
+  if (def.fields.some((f) => f.key === p)) return p;
+  return null;
+}
+
+/**
+ * v1.53.2 — correction lane for vehicle_registration. Recognises:
+ *   "you captured/read/got the <field> wrong"  → clear + re-ask that field
+ *   "edit: <field> <value>" / "edit field <field>: change it to <value>" → set
+ * This must run BEFORE whole-message extraction so an edit can never clobber
+ * the other banked answers (the mangled-summary bug).
+ */
+function detectRegistrationCorrection(text, def) {
+  const clean = String(text || '').trim();
+  const editRaw = clean.match(/^edit(?:\s+field)?\s*:?\s*(.*)$/i);
+  if (editRaw) {
+    const rest = editRaw[1].trim();
+    let fieldPhrase = rest;
+    let value = null;
+    const toSplit = rest.split(/\b(?:change\s+(?:it\s+)?to|to)\s*/i);
+    if (toSplit.length > 1) {
+      fieldPhrase = toSplit[0].trim();
+      value = toSplit[1].trim();
+    } else {
+      const tokens = rest.split(/\s+/);
+      const valueStart = tokens.findIndex((t) => /\d/.test(t));
+      if (valueStart > 0) {
+        fieldPhrase = tokens.slice(0, valueStart).join(' ');
+        value = tokens.slice(valueStart).join(' ');
+      }
+    }
+    const field = resolveRegistrationField(fieldPhrase, def);
+    if (field && value) return { action: 'set', field, value };
+  }
+  const wrong = clean.match(/(?:you\s+)?(?:captured|read|got|wrote|entered|put)\b[^.!?]{0,30}\b(wrong|incorrect|badly|wrongly)/i)
+    || clean.match(/\b(wrong|incorrect|mistak\w*)\b[^.!?]{0,20}\b(plate|make|model|year|fuel|vin|chassis|odometer|engine|colour|color|insurance)\b/i);
+  if (wrong) {
+    const mention = (clean.match(/\b(plate|make|model|year|fuel|vin|chassis|odometer|engine|colou?r|insurance)\b/i) || [])[1];
+    const field = mention ? resolveRegistrationField(mention, def) : null;
+    if (field) return { action: 'clear', field };
+  }
+  return null;
+}
+
 export async function handleQuizTurn({
   session,
   messageText = '',
@@ -2135,6 +2195,27 @@ export async function handleQuizTurn({
     state.turnNote = 'The extra note was stored with this draft. Do not claim the whole record was saved.';
     const reply = await askCurrent(state, vctx);
     return { handled: true, reply, flow: state.flow, active: true };
+  }
+
+  // v1.53.2 — correction lane: "you captured the plate wrong" or "edit: <field>
+  // <value>" repairs exactly that field. Runs before any whole-message
+  // extraction so an edit can never clobber the other banked answers.
+  if (state.phase === 'question' && def && state.flow === 'vehicle_registration') {
+    const correction = detectRegistrationCorrection(clean, def);
+    if (correction) {
+      if (correction.action === 'clear') {
+        delete state.answers[correction.field];
+        state.turnNote = `The user corrected ${correction.field}. Re-ask only that field, warmly, never restart onboarding.`;
+      } else {
+        // v1.53.2 — store the user's correction verbatim. The field parser can
+        // mangle a plate ("KAS628T" → "628T"); the confirm/persist step
+        // normalises dates exactly as the normal flow does.
+        state.answers[correction.field] = correction.value;
+        state.turnNote = `The user corrected ${correction.field}. Save this value and continue with the next missing field.`;
+      }
+      const reply = await askCurrent(state, vctx);
+      return { handled: true, reply, flow: state.flow, active: true };
+    }
   }
 
   if (state.phase === 'pin') {

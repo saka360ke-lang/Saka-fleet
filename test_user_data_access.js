@@ -25,7 +25,9 @@ const snapshot = await buildUserContextSnapshot({
     subscription_status: 'TRIALING',
     trial_ends_at: '2027-02-01T05:52:40Z',
     compliance_type: 'Driver Licence',
-    compliance_expiry: '2027-01-31'
+    compliance_expiry: '2027-01-31',
+    email: 'amina@gmail.com',
+    email_verified: true
   },
   vehicles: [
     {
@@ -47,6 +49,7 @@ check(/KDA 123A insurance expires 2026-11-20/.test(facts), 'vehicle insurance ex
 check(/in 17 days/.test(facts), 'insurance days-left is computed (17 days)');
 check(/Your compliance: Driver Licence expires 2027-01-31/.test(facts), 'driver compliance expiry is in the snapshot facts');
 check(/Trial ends: 2027-02-01/.test(facts), 'trial end date is in the snapshot facts');
+check(/verified ✅/.test(facts) && facts.includes('am…@gmail.com'), 'the verified email state is in the snapshot facts (v1.53.2)');
 check(snapshot.data.vehicles[0].insuranceExpiry === '2026-11-20', 'the structured data carries the expiry value');
 check(snapshot.data.vehicles[0].plate === 'KDA 123A', 'the structured data keeps the plate');
 

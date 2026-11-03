@@ -1193,7 +1193,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           try {
             const lbHints = extractDocumentHints(ocrText, 'logbook', { countryCode: ocrCountry?.country_code || 'GLOBAL' });
             const picked = {};
-            for (const key of ['plate_number', 'vin', 'make_model', 'yom', 'fuel_type']) {
+            for (const key of ['plate_number', 'vin', 'make_model', 'yom', 'fuel_type', 'engine_number', 'color']) {
               if (lbHints?.[key] !== undefined && lbHints[key] !== null && String(lbHints[key]).trim() !== '') picked[key] = lbHints[key];
             }
             if (Object.keys(picked).length > 0) logbookPrefill = picked;
@@ -1786,7 +1786,9 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           }
         }
 
-        const isRegisterCommand = /^\s*(register|onboard|add car|add vehicle|new vehicle)\b/i.test(messageText);
+        const isRegisterCommand = /^\s*(register|onboard|add car|add vehicle|new vehicle)\b/i.test(messageText)
+          || /\b(?:add|register|onboard)\b[^.!?]{0,24}\b(?:my\s+)?(?:vehicle|car|truck|bike|bus|machine|boat|asset)\b/i.test(messageText)
+          || /\b(?:upload|send)\b[^.!?]{0,24}\b(?:reg(?:istration)?\s*(?:cert|certificate)|log\s?book)\b/i.test(messageText);
         const hasVehicleAttributes = !!(mergedExt.plate_number || (mergedExt.yom && (mergedExt.fuel_type || mergedExt.make_model)) || (mergedExt.fuel_type && mergedExt.current_mileage) || mergedExt.vin);
 
         let isSupportFlow = false;

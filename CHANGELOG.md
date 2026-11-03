@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.53.2] - 2026-11-03
+
+- **Onboarding/registration fixed end-to-end.** (a) NTSA "REGISTRATION CERTIFICATE" parsing now reads the KE **VEHICLE PARTICULARS** table value-before-label pairs — the **current** plate (`KAS628T DATE OF REGISTRATION`) beats the title-line previous plate, and make/model/body (`TOYOTA`/`LAND CRUISER`/`S.WAGON`), year (`1991`), fuel (`DIESEL`), engine (`1HD-0015769`) and colour are extracted — all gated behind the KE country profile (rule 36; GLOBAL stays neutral). (b) A registration **correction lane**: "you captured the plate wrong" clears + re-asks just that field, and "edit: <field> <value>" sets it without clobbering the other banked answers. (c) The snapshot now answers "is my profile verified?" with the masked email + verified state. (d) "add/register/upload … vehicle/reg cert" routes deterministically to registration.
+- **Tests:** `test_ocr_flow` 99 (real NTSA PARTICULARS fixture + GLOBAL no-leak regression), `test_quiz_flow` 131 (correction lane), `test_user_data_access` 9 (verified email).
+
 ## [1.53.1] - 2026-11-03
 
 - **Autonomous execution decommissioned.** `remediation_execute` dispatches are permanently refused (`githubDispatch.js`), `.github/workflows/remediation_execute.yml` is deleted, `checkRemediationExecutionRetry` returns `decommissioned`, and `admin accept fix <CODE>` now marks the proposal **APPROVED for review** (`approval_kind: chat_session`) — no nonce, no CI dispatch, nothing runs automatically. Sentinel keeps drafting proposals and digests; implementation happens in superadmin chat sessions (plan → design → act).

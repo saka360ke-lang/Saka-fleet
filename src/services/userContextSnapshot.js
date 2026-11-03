@@ -63,6 +63,17 @@ export async function buildUserContextSnapshot({ supabase, profile = null, vehic
       : null;
     if (name) lines.push(`Name: ${name}.`);
 
+    // v1.53.2 — the user's own verification state is their data: answer
+    // "is my profile verified?" with a definitive YES + the masked email.
+    const email = profile?.email ? String(profile.email).trim() : null;
+    const emailVerified = profile?.email_verified === true;
+    data.email = email || null;
+    data.emailVerified = emailVerified;
+    if (email) {
+      const masked = email.replace(/^(.{2})[^@]*/, '$1…');
+      lines.push(`Email: ${masked} (${emailVerified ? 'verified ✅' : 'NOT verified yet'}).`);
+    }
+
     const tierKey = profile?.subscription_tier || 'free';
     const status = profile?.subscription_status || null;
     const trialStarted = profile?.trial_started_at || null;

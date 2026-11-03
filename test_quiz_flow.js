@@ -119,6 +119,14 @@ async function run() {
   assert(session.quiz.answers.plate_number === 'KDA 123A', 'Plate captured');
   assert(session.quiz.answers.make_model === undefined, 'Make/model NOT captured yet (one at a time)');
 
+  // v1.53.2 — correction lane: "you captured the plate wrong" clears + re-asks,
+  // and "edit: plate KAS628T" sets exactly that field without clobbering others.
+  await handleQuizTurn({ session, messageText: 'you captured the plate wrong', ctx });
+  assert(session.quiz.answers.plate_number === undefined, 'correction: the wrong plate is cleared, never kept');
+  await handleQuizTurn({ session, messageText: 'edit: plate KAS628T', ctx });
+  assert(session.quiz.answers.plate_number === 'KAS628T', 'correction: the edited plate is saved');
+  assert(session.quiz.answers.asset_kind === 'vehicle', 'correction: the asset kind is never clobbered by an edit');
+
   await handleQuizTurn({
     session,
     messageText: 'Toyota Land Cruiser 80 series',
