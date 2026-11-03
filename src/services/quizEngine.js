@@ -1493,7 +1493,8 @@ export function startQuiz({ session, flowKey, ctx, prefill = {} }) {
     lastAcceptedAnswer: null,
     turnNote: null,
     extraNotes: [],
-    extractionFailures: 0
+    extractionFailures: 0,
+    patience: null
   };
 
   applyExtraction(session.quiz, def, ctx.aiExtracted || {}, ctx);
@@ -1542,12 +1543,29 @@ export function startQuiz({ session, flowKey, ctx, prefill = {} }) {
   return true;
 }
 
+/**
+ * v1.54.4 — the single simplest typed example for a field (patience ladder).
+ * Country-resolved where it matters (plate example, currency).
+ */
+function simplestTypedPath(field, ctx = {}) {
+  const key = String(field?.key || '').toLowerCase();
+  const plateExample = ctx.countryInfo?.plateExample || ctx.countryInfo?.plate_example || 'KDA 123A';
+  const currency = ctx.countryInfo?.currency || 'KES';
+  if (key.includes('plate')) return `just type the plate, e.g. *${plateExample}*`;
+  if (/(odometer|mileage|operating_hours)/.test(key)) return 'just type the number, e.g. *366700*';
+  if (/(amount|cost|revenue)/.test(key)) return `just type the number, e.g. *${currency} 5000*`;
+  if (/(date|expiry|yom|year)/.test(key)) return 'just type the date, e.g. *15/12/2026*';
+  if (key.includes('email')) return 'just type the address, e.g. *you@example.com*';
+  if (/(phone|driver_phone)/.test(key)) return 'just type the number, e.g. *+254712345678*';
+  if (/(liters|litres|fuel)/.test(key)) return 'just type the litres, e.g. *40*';
+  return 'just type the value in your own words';
+}
+
 async function askCurrent(state, ctx, note = null) {
   const def = getFlowDefinition(state.flow, ctx);
   if (!def) return null;
 
   const field = nextField(def, state.answers);
-
   if (!field) {
     state.phase = 'confirm';
     // v1.35.0 — a narrative draft confirms through its own deterministic card
@@ -1579,6 +1597,25 @@ async function askCurrent(state, ctx, note = null) {
     }
     const knownTarget = state.otpDispatch?.target || state.otp?.target || null;
     hint = `${otpQuestionField(knownTarget).hint}${note ? ` (${note})` : ''}`;
+  }
+
+  // v1.54.4 — engine-owned patience ladder (EVERY-DEMOGRAPHIC LAW made
+  // deterministic): repeated failures on the SAME field climb the ladder —
+  // the 2nd retry gets the simplest typed path, the 3rd+ offers the human
+  // lane. Any progress resets it. Never blame, never rush.
+  if (note) {
+    const previous = state.patience || null;
+    const retries = previous && previous.field === field.key ? previous.retries + 1 : 1;
+    state.patience = { field: field.key, retries };
+    if (retries === 2) {
+      hint = `${hint} Easiest way: ${simplestTypedPath(field, ctx)}.`;
+      state.turnNote = [state.turnNote, 'The user has struggled twice with this step. Offer ONLY the simplest typed path — just type the value — never blame or rush.'].filter(Boolean).join(' ');
+    } else if (retries >= 3) {
+      hint = `${hint} Or reply *Support* and a human will help you through this step.`;
+      state.turnNote = [state.turnNote, 'The user has struggled repeatedly with this step. Kindly offer the human lane (reply Support) as the simplest next option. Never blame or rush.'].filter(Boolean).join(' ');
+    }
+  } else if (state.patience && state.patience.field !== field.key) {
+    state.patience = null; // the user made progress — the ladder resets
   }
 
   state.lastNote = note;

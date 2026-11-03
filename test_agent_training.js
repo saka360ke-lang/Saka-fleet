@@ -251,6 +251,7 @@ check(/Narrative pre-fills are engine-determined facts/.test(await import('./src
   check(DEFAULT_SAKA_CORE_PROMPT.includes('EVERY-DEMOGRAPHIC LAW'), 'the core prompt carries the EVERY-DEMOGRAPHIC LAW (v1.53.0)');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('zero-shot AI top-up'), 'the prompt describes the flag-gated zero-shot OCR top-up (v1.54.1)');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('the deterministic lens is ALWAYS the authority'), 'the prompt locks the deterministic lens as the OCR authority (v1.54.1)');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('The ENGINE tracks repeats per step'), 'the prompt documents the engine-owned patience ladder (v1.54.4)');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('Send me as a detailed pdf'), 'deliverable-shaped requests are named as report requests');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('never silently merge'), 'draft-conflict merging is forbidden');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('CORRECTIONS to the entry under discussion'), 'follow-up totals are corrections, not new entries');

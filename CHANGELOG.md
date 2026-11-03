@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.54.4] - 2026-11-03
+
+- **Engine-owned patience ladder (the §117 follow-up).** The quiz engine now tracks repeats per step in `quiz.patience`: the **2nd failure on the same field** appends the simplest typed path to the question (country-resolved examples — plate, currency, date, litres, email, phone), and the **3rd+ failure** offers the human lane (`reply Support`). Any progress resets the ladder; nothing is ever blamed or rushed. The core prompt's EVERY-DEMOGRAPHIC LAW names the engine ladder so the composer uses the engine-supplied hints verbatim (rule 13).
+- **Tests:** `test_quiz_flow` 141 (full ladder drive with provider keys cleared — deterministic), `test_agent_training` 155.
+
 ## [1.54.3] - 2026-11-03
 
 - **Conversational-first completion.** The last 19 canned replies in the WhatsApp route are now composed from facts by `composeMessage` — passbook/onboarding stage prompts, vehicle errors, the VIN-lock invariant, deletion/switch/expense/account outcome cards, earnings/email prompts and cancellation acks — with the old deterministic sentence preserved verbatim as `fallbackText` for provider outages. Only the instant "reading now" ack stays literal: **the no-canned-replies ratchet drops from ≤ 20 to ≤ 4 (1 literal remains).**

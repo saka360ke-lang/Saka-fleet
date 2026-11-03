@@ -1,6 +1,12 @@
 {
-  "latest": "1.54.3",
+  "latest": "1.54.4",
   "entries": [
+    {
+      "version": "1.54.4",
+      "date": "2026-11-03",
+      "title": "Patience that never runs out",
+      "summary": "If a step trips you up twice, Saka shows the easiest way to type it — and after that, a human is one word away."
+    },
     {
       "version": "1.54.3",
       "date": "2026-11-03",

@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.54.3  
+**Version:** 1.54.4  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.54.4** | Engine-owned patience ladder: same-field repeats climb deterministically (2nd → simplest typed path, 3rd → human lane), reset on progress | §118 |
 | **1.54.3** | Conversational-first completion: all 19 remaining canned replies composed (ratchet ≤ 4), persona conversation-compliance harness shipped | §117 |
 | **1.54.2** | Country parsing profiles as plug-in data + data-driven resilience loop (`admin ocr-profile`, OCR watchlist in the Sentinel digest) | §116 |
 | **1.54.1** | Global OCR hardening: universal normalization (locale amounts, CLDR currency symbols, country plates) + flag-gated zero-shot extraction top-up; purchase-invoice classification fixed | §115 |
@@ -4009,5 +4010,11 @@ quiz engine:
 - **Conversation compliance harness shipped (`test_conversation_compliance.js`, promised in §111):** persona proof (elderly, low-literacy, angry, Shenglish) pinned by the core-prompt LAWS and the tone-compass poles/mirror/floors, plus a plain-language lint over all 32 deterministic fallbacks (banned phrases, ONE unquoted question, ≤ 28-word sentences after stripping quoted example phrasings) and the David Njonjo document replay staying engine-owned. Health-registered (18 assertions).
 - **Follow-up (tracked):** the engine-owned patience counter (session-level repeats of the same quiz field: 2nd failure → simplest typed path, 3rd → human lane) — the prompt-level EVERY-DEMOGRAPHIC LAW already carries the behavior; the deterministic counter ships with the next conversation release.
 - **Tests:** `test_no_canned_replies` ratchet ≤ 4 (1 literal), `test_conversation_compliance` 18, `test_agent_training` 154, health green.
+
+### 118. Engine-owned patience ladder (v1.54.4)
+
+- **The EVERY-DEMOGRAPHIC LAW is now deterministic, not prompt-only.** `askCurrent()` in the quiz engine tracks repeats per field in `quiz.patience {field, retries}`: the **2nd failure on the same field** appends the simplest typed path to the question hint (country-resolved: plate example, currency, date, litres, email, phone — `simplestTypedPath()`), and the **3rd+ failure** appends the human lane (`reply Support`). Any progress (a banked answer or a new field) resets the ladder; a fresh quiz starts with `patience: null`. Never blame, never rush — the turnNote teaches the composer to offer only the simplest option.
+- **Prompt sync (rule 13):** the core prompt's EVERY-DEMOGRAPHIC LAW now names the engine ladder ("The ENGINE tracks repeats per step … use those engine-supplied hints exactly"); docs regenerated.
+- **Tests:** `test_quiz_flow` 141 (new Test 11 drives the full ladder deterministically with provider keys cleared: invalid → recorded retry → simplest path → human lane → progress reset; exit 0), `test_agent_training` 155.
 
 

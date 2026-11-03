@@ -13,6 +13,7 @@ import {
   getActiveQuiz,
   markQuizTurn,
   abandonQuiz,
+  startQuiz,
   QUIZ_MAX_AGE_MINUTES
 } from './src/services/quizEngine.js';
 import { getRecentChatHistory, CHAT_HISTORY_MAX_AGE_MINUTES } from './src/services/chatHistory.js';
@@ -553,6 +554,42 @@ async function run() {
   const expenseRow = cardInserted.find((entry) => entry.table === 'expense_logs')?.rows?.[0] || null;
   assert(Boolean(expenseRow), 'a narrative-saved expense row is written');
   assert(String(expenseRow.created_at || '').startsWith('2026-10-31'), 'the retro date lands in created_at (1-save path)');
+
+  console.log('--- Test 11: engine-owned patience ladder (v1.54.4) ---');
+  const originalKeys = {
+    DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY,
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY
+  };
+  process.env.DEEPSEEK_API_KEY = '';
+  process.env.ANTHROPIC_API_KEY = '';
+  process.env.OPENAI_API_KEY = '';
+  try {
+    const ladderSession = {};
+    const ladderCtx = baseCtx({ vehicles: [vehicle], activeVehicle: vehicle });
+    assert(startQuiz({ session: ladderSession, flowKey: 'log_expense', ctx: ladderCtx }), 'ladder quiz starts with the single vehicle pre-selected');
+    const ladderFuel = await handleQuizTurn({ session: ladderSession, messageText: 'fuel', ctx: ladderCtx });
+    assert(ladderFuel.handled && !/not understood/i.test(ladderFuel.reply || ''), 'the first valid answer advances the quiz');
+    const ladderFirst = await handleQuizTurn({ session: ladderSession, messageText: 'zzzz', ctx: ladderCtx });
+    assert(/That answer was not understood/.test(ladderFirst.reply || ''), 'an invalid amount re-asks with the not-understood note');
+    assert(ladderSession.quiz.patience?.field === 'amount' && ladderSession.quiz.patience.retries === 1, 'the first failure is recorded against the pending field');
+    const ladderSecond = await handleQuizTurn({ session: ladderSession, messageText: 'zzzz', ctx: ladderCtx });
+    assert(/Easiest way/.test(ladderSecond.reply || '') && /just type the number/.test(ladderSecond.reply || ''), 'the second failure offers the simplest typed path');
+    assert(ladderSession.quiz.patience?.retries === 2, 'the second failure climbs the ladder');
+    const ladderThird = await handleQuizTurn({ session: ladderSession, messageText: 'zzzz', ctx: ladderCtx });
+    assert(/Support/.test(ladderThird.reply || ''), 'the third failure offers the human lane');
+    assert(ladderSession.quiz.patience?.retries === 3, 'the third failure keeps climbing without blame');
+    const ladderAdvance = await handleQuizTurn({ session: ladderSession, messageText: '5000', ctx: ladderCtx });
+    assert(ladderAdvance.handled === true, 'a valid answer advances the quiz');
+    assert(!ladderSession.quiz.patience || ladderSession.quiz.patience.field !== 'amount', 'progress resets the patience ladder');
+  } finally {
+    if (originalKeys.DEEPSEEK_API_KEY !== undefined) process.env.DEEPSEEK_API_KEY = originalKeys.DEEPSEEK_API_KEY;
+    else delete process.env.DEEPSEEK_API_KEY;
+    if (originalKeys.ANTHROPIC_API_KEY !== undefined) process.env.ANTHROPIC_API_KEY = originalKeys.ANTHROPIC_API_KEY;
+    else delete process.env.ANTHROPIC_API_KEY;
+    if (originalKeys.OPENAI_API_KEY !== undefined) process.env.OPENAI_API_KEY = originalKeys.OPENAI_API_KEY;
+    else delete process.env.OPENAI_API_KEY;
+  }
 
   console.log(`\n🎉 ALL QUIZ ENGINE TESTS PASSED (${passed} assertions).`);
 }
