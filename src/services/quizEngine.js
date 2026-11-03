@@ -2863,6 +2863,19 @@ async function executeFlow(state, ctx) {
           state.narrativeExtras?.occurred_at_iso,
           state.narrativeExtras?.occurred_at
         );
+        // v1.51.11 — a document that is not an expense (registration
+        // certificate, insurance, licence) can never write an expense:
+        // a type and a positive amount are mandatory.
+        if (!canonicalExpenseType
+            || a.amount === undefined || a.amount === null
+            || !Number.isFinite(Number(a.amount)) || Number(a.amount) <= 0) {
+          return {
+            handled: true,
+            reply: 'I did not log anything — an expense needs a type and an amount. What did you spend, and how much? 🙏',
+            flow: state.flow,
+            active: true
+          };
+        }
         // v1.32.1 — duplicate guard: a re-uploaded receipt must never create a
         // second expense row. Different odometer reading = separate fill → passes.
         const duplicate = await isDuplicateExpense(ctx.supabase, {

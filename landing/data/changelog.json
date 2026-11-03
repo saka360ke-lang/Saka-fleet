@@ -1,6 +1,12 @@
 {
-  "latest": "1.51.10",
+  "latest": "1.51.11",
   "entries": [
+    {
+      "version": "1.51.11",
+      "date": "2026-11-03",
+      "title": "Logbooks register vehicles",
+      "summary": "Send your registration certificate and Saka reads the plate, make and model straight into registration — no more receipt mix-ups."
+    },
     {
       "version": "1.51.10",
       "date": "2026-11-03",

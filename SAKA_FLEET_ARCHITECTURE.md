@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.51.10  
+**Version:** 1.51.11  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.51.11** | NTSA registration certificate → registration prefill; receipt pipeline receipt-only; empty-expense guard; git auto-sync hooks | §108 |
 | **1.51.10** | Interactive quick-edit payload builder (`admin quick-edit` preview); SUG-2026-11-03-01 clause 7 only | §107 |
 | **1.51.9** | Cloud Run deploy-noise classifier + cut-off reply recovery (completeness complaints get the finished answer) | §106 |
 | **1.51.8** | Registration email/OTP removed from chat (verified profile email used) | §105 |
@@ -3923,5 +3924,14 @@ quiz engine:
   this autonomous run, so it stays a human-session change.
 - **Intents/flows unchanged:** `SAKA_INTENTS` stays 42 and `SAKA_QUIZ_FLOWS` stays
   21 — the builder is an operator-rendering utility, not a new classifier lane.
+
+### 108. Registration certificates register vehicles (v1.51.11)
+
+- **NTSA "REGISTRATION CERTIFICATE" → registration, never a receipt.** `extractDocumentHints(…, 'logbook')` now parses the certificate layout: the plate from the line under the title (old `N7200766H` and new `KDA 123A` formats), `MAKE OF VEHICLE`/`MODEL`/`FUEL TYPE` label values (fuel restricted to known fuel words) and a labelled YOM. A real VIN must contain letters — a pure-digit `TRANSFER` number is never stored.
+- **Routing (media turn):** `logbook` uploads with extracted fields start the `vehicle_registration` quiz prefilled (via `handleQuizTurn` `prefill`) and open with a deterministic "I read these from your registration certificate: …" summary. The receipt dedupe, "already read this receipt" reply, receipt vault and `receiptQuizStart` are now gated to `receipt_fuel`/`receipt_general` only.
+- **Empty-expense guard:** the `log_expense` write path refuses to write without a type and a positive amount — "Logged expense of amount." is impossible.
+- **Logbook CTA:** `asksToUploadLogbook()` (greetings.js) answers "Can I upload the logbook?" deterministically with a YES and one next step.
+- **Git auto-sync (rule 32):** `scripts/sync_origin.js` (skips in CI) is wired as `prehealth`/`pretest`, so every `npm run health`/`npm test` first fast-forwards `main` to `origin/main` — a local session can never run gates on a stale tree after an autonomous push.
+- **Tests:** `test_ocr_flow` 93 (NTSA fixture + date-stable duplicate fixture), `test_greetings` 94, `test_quiz_flow` 128.
 
 

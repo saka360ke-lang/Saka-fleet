@@ -296,13 +296,42 @@ async function run() {
   check(String(insuredLens.fields?.insurance_expiry?.value || '') === '2026-11-20', 'Lens normalizes the expiry to ISO (Africa/Nairobi)');
   check(/Monarch/.test(String(insuredLens.fields?.insurer?.value || '')), 'ISSUED BY names the insurer cleanly');
 
+  console.log('\n--- Test 12b: NTSA registration certificate is a logbook, not a receipt (v1.51.11) ---');
+  const ntsaCert = [
+    'FRES',
+    'NTSA',
+    'N7200766 H',
+    'REPUBLIC OF KENYA',
+    'NATIONAL TRANSPORT AND SAFETY AUTHORITY',
+    'THE TRAFFIC ACT (CAP. 403) (SECTION 6 (5))',
+    'REGISTRATION CERTIFICATE',
+    'N7200766H',
+    'TRANSFER: 202412066492776',
+    'ENTRY NO:',
+    'REGISTRATION:',
+    'CHASSIS/FRAME',
+    'MAKE OF VEHICLE',
+    'MODEL',
+    'TYPE OF VEHICLE',
+    'BODY TYPE',
+    'FUEL TYPE',
+    'DIESEL'
+  ].join('\n');
+  check(classifyOcrDocument(ntsaCert) === 'logbook', 'an NTSA registration certificate classifies as a logbook');
+  const ntsaHints = extractDocumentHints(ntsaCert, 'logbook', { countryCode: 'KE' });
+  check(ntsaHints.plate_number === 'N7200766H', 'the plate is read from the line under REGISTRATION CERTIFICATE');
+  check(ntsaHints.vin === undefined, 'a pure-digit TRANSFER number is never stored as a VIN');
+  check(ntsaHints.fuel_type === 'diesel', 'FUEL TYPE label value is extracted (fuel words only)');
+  const oldLogbook = extractDocumentHints('VIN JTE777A1234567890\nREG NO KDA 123A', 'logbook');
+  check(oldLogbook.vin === 'JTE777A1234567890' && oldLogbook.plate_number === 'KDA 123A', 'classic VIN/REG NO logbooks still extract');
+
   console.log('\n--- Test 13: duplicate protection (v1.32.1) ---');
   const shaA = buildOcrTextSha('TOTAL  3,000.00\nDIESEL');
   const shaB = buildOcrTextSha('TOTAL 3,000.00 DIESEL');
   check(shaA && shaA === shaB, 'Content hash ignores whitespace differences');
   check(buildOcrTextSha('TOTAL 2,000.00') !== shaA, 'Different receipts hash differently');
   check(buildOcrTextSha('   ') === null, 'Empty OCR text has no content hash');
-  const sameDay = { plate: 'KAS 628T', amount: 3000, expense_type: 'Fuel', odometer_reading: 367480, created_at: '2026-11-01T06:34:18Z' };
+  const sameDay = { plate: 'KAS 628T', amount: 3000, expense_type: 'Fuel', odometer_reading: 367480, created_at: new Date().toISOString() };
   check(isSameExpenseCandidate(sameDay, { plate: 'KAS 628T', amount: 3000, expenseType: 'fuel', odometer: 367480 }), 'Same plate + amount + type + Nairobi day is a duplicate');
   check(!isSameExpenseCandidate(sameDay, { plate: 'KAS 628T', amount: 3000, expenseType: 'Fuel', odometer: 367500 }), 'A different odometer reading proves a separate fill');
   check(!isSameExpenseCandidate(sameDay, { plate: 'KAS 628T', amount: 3100, expenseType: 'Fuel' }), 'A different amount is never a duplicate');

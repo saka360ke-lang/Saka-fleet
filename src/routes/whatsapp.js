@@ -19,7 +19,7 @@ import { normalizeFillType } from '../services/fuelEconomy.js';
 import { resolveExpenseType, normalizeExpenseType, hasExpenseTypeMarker } from '../services/expenseCatalog.js';
 import { resolveEarningType, normalizeEarningType, hasEarningTypeMarker } from '../services/earningCatalog.js';
 import { shortenUrl } from '../services/linkShortener.js';
-import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly, shouldReplaceIntroCopy, isRepeatedReply, isStopRequest, PAUSE_REPLY, pickRepeatNudge, pickNewcomerNudge, isFirstTimeMessage, shouldReplacePlateAsk, isIncompleteReplyComplaint, replyContinuationRequestFor, isLegacyWelcomeCopy, websiteSignupNextStep } from '../services/greetings.js';
+import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly, shouldReplaceIntroCopy, isRepeatedReply, isStopRequest, PAUSE_REPLY, pickRepeatNudge, pickNewcomerNudge, isFirstTimeMessage, shouldReplacePlateAsk, isIncompleteReplyComplaint, replyContinuationRequestFor, asksToUploadLogbook, isLegacyWelcomeCopy, websiteSignupNextStep } from '../services/greetings.js';
 import { matchProductQa, buildProductQaReply, buildProductFactsContext, buildLocalPricingFacts, stripUsdFigures, hasLocalFigure, recommendTierForFleet, sanitizeSakaReply } from '../services/productQa.js';
 import { shouldSuggestContactSave, isLostChatMessage, buildContactSaveFacts, markContactSaveSuggested } from '../services/contactNudge.js';
 import { buildUserContextSnapshot } from '../services/userContextSnapshot.js';
@@ -1129,7 +1129,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
 
         // --- Receipt intelligence (v1.19.0): dedupe + vault ---
         let duplicateReceipt = null;
-        if (mediaObj?.id && supabaseClient && !ocrPaused) {
+        if (mediaObj?.id && supabaseClient && !ocrPaused && (ocrKind === 'receipt_fuel' || ocrKind === 'receipt_general')) {
           try {
             // v1.32.1 — a re-uploaded document gets a NEW WhatsApp media id, so
             // content matching (text hash, 48 h) is what actually stops the
@@ -1167,6 +1167,21 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               });
             }
           } catch { /* the receipt vault is best-effort */ }
+        }
+
+        // v1.51.11 — a registration certificate (logbook) is a registration
+        // document, never a receipt. Extract the vehicle fields so the
+        // registration quiz can be prefilled and confirmed.
+        let logbookPrefill = null;
+        if (mediaObj?.id && ocrKind === 'logbook' && ocrText) {
+          try {
+            const lbHints = extractDocumentHints(ocrText, 'logbook', { countryCode: ocrCountry?.country_code || 'GLOBAL' });
+            const picked = {};
+            for (const key of ['plate_number', 'vin', 'make_model', 'yom', 'fuel_type']) {
+              if (lbHints?.[key] !== undefined && lbHints[key] !== null && String(lbHints[key]).trim() !== '') picked[key] = lbHints[key];
+            }
+            if (Object.keys(picked).length > 0) logbookPrefill = picked;
+          } catch { /* best-effort */ }
         }
 
         // Pass message through DeepSeek Intent Classifier (sakaAi.js) with Active Fleet Context
@@ -2202,7 +2217,8 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
 
         // Receipt photos always confirm before any write — a paper trail is
         // never silently auto-logged, even when every number is readable.
-        const receiptQuizStart = (mediaObj && receiptHints?.document_kind && intent === 'LOG_EXPENSE')
+        const isReceiptDocument = ocrKind === 'receipt_fuel' || ocrKind === 'receipt_general';
+        const receiptQuizStart = (mediaObj && isReceiptDocument && intent === 'LOG_EXPENSE')
           ? 'log_expense'
           : quizStartFlow;
 
@@ -2434,6 +2450,17 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             });
             quizTurn.reply = `${switchNote}\n\n${quizTurn.reply}`;
           }
+        } else if (logbookPrefill && !session.quiz && !hasVehicleRegistered) {
+          // v1.51.11 — a logbook upload starts registration prefilled with the
+          // fields read from the certificate, then confirms the rest.
+          quizTurn = await handleQuizTurn({
+            session,
+            messageText: '',
+            aiExtracted: {},
+            startFlow: 'vehicle_registration',
+            prefill: logbookPrefill,
+            ctx: quizCtx
+          });
         } else {
           quizTurn = narrativeSuppressQuiz
             ? { handled: false }
@@ -2449,6 +2476,18 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         // abandoned draft expires within QUIZ_MAX_AGE_MINUTES (default 20) instead
         // of holding the conversation hostage for 45 minutes.
         if (session.quiz) markQuizTurn(session);
+        if (logbookPrefill && quizTurn.handled && session.quiz?.flow === 'vehicle_registration') {
+          const readParts = [
+            logbookPrefill.plate_number ? `plate *${logbookPrefill.plate_number}*` : null,
+            logbookPrefill.make_model || null,
+            logbookPrefill.vin ? `VIN ${logbookPrefill.vin}` : null,
+            logbookPrefill.fuel_type || null,
+            logbookPrefill.yom ? `year ${logbookPrefill.yom}` : null
+          ].filter(Boolean);
+          if (readParts.length) {
+            quizTurn.reply = `📄 I read these from your registration certificate: ${readParts.join(', ')}. Let me fill in the rest —\n\n${quizTurn.reply}`;
+          }
+        }
 
         if (quizTurn.pausedForChat) {
           isSpecialFlowHandled = true;
@@ -3606,6 +3645,9 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
           // 1b-2. Reply-quality complaint ("your last reply was incomplete") —
           // v1.28.1. NEVER answer this with the welcome. Recover the answer, and
           // if the complaint mentions a fleet size, answer it now in local currency.
+          else if (asksToUploadLogbook(messageText)) {
+            customReply = 'Yes! 📄 Send a clear photo of your logbook or registration certificate and I will read the plate, make and model from it — then we finish registration together. If the photo is tricky, reply *REGISTER* and I will ask a few quick questions instead. 🙂';
+          }
           else if (isIncompleteReplyComplaint(messageText)) {
             // v1.51.9 — one shared grammar; the fleet count is parsed in ONE place.
             const continuation = replyContinuationRequestFor(messageText);

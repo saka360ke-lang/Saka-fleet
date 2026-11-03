@@ -470,11 +470,45 @@ export function extractDocumentHints(text = '', kind = null, { receiptOnly = fal
   if (noteParts.length) hints.notes = noteParts.join(' | ');
 
   if (documentKind === 'logbook') {
-    const plateMatch = raw.match(/\b(?:reg(?:istration)?\s*(?:no|number)?|plate)\s*[:\-#]?\s*([A-Z]{1,4}\s?\d{1,4}[A-Z]{0,3})\b/i)
-      || raw.match(/\b([A-Z]{2,3}\s?\d{2,4}\s?[A-Z]{1,3})\b/);
-    const vinMatch = raw.match(/\b(?=[A-HJ-NPR-Z0-9]{11,17}\b)(?=[A-Z0-9]*\d)[A-HJ-NPR-Z0-9]{11,17}\b/i);
-    if (plateMatch) hints.plate_number = plateMatch[1].toUpperCase().replace(/\s+/g, ' ').trim();
-    if (vinMatch) hints.vin = vinMatch[0].toUpperCase();
+    // v1.51.11 — NTSA "REGISTRATION CERTIFICATE" support. The plate can sit on
+    // its own line under the title (old N7200766H, new KDA 123A formats), and
+    // the certificate prints label/value pairs for the remaining fields. A
+    // pure-digit run (a TRANSFER number) is never a plate or a VIN.
+    const ntsaCert = /\bREGISTRATION\s+CERTIFICATE\b/i.test(raw) || /\bCHASSIS\s*\/?\s*FRAME\b/i.test(raw);
+    let plate = null;
+    const labelledPlate = raw.match(/\b(?:reg(?:istration)?\s*(?:no|number)?|plate)\s*[:#]?\s*([A-Z]{1,4}\s?\d{1,4}[A-Z]{0,3})\b/i);
+    if (labelledPlate) plate = labelledPlate[1];
+    if (!plate && ntsaCert) {
+      const certIdx = lines.findIndex((line) => /\bREGISTRATION\s+CERTIFICATE\b/i.test(line));
+      const next = certIdx >= 0 ? lines[certIdx + 1] : null;
+      if (next && /^[A-Z]{1,3}\s?[A-Z0-9]{4,12}$/.test(next) && /\d/.test(next)) plate = next;
+    }
+    if (plate) hints.plate_number = String(plate).toUpperCase().replace(/\s+/g, ' ').trim();
+    // A real VIN contains letters; a pure-digit transfer number never qualifies.
+    const vin = [...raw.matchAll(/\b(?=[A-HJ-NPR-Z0-9]{11,17}\b)(?=[A-Z0-9]*\d)[A-HJ-NPR-Z0-9]{11,17}\b/g)]
+      .map((m) => m[0])
+      .find((token) => /[A-HJ-NPR-Z]/.test(token));
+    if (vin) hints.vin = vin.toUpperCase();
+    // NTSA label/value pairs (the value can sit on the same line or the next).
+    const labelValue = (labelRe) => {
+      const idx = lines.findIndex((line) => labelRe.test(line));
+      if (idx < 0) return null;
+      const same = lines[idx].replace(labelRe, '').replace(/^[:#\s]+/, '').trim();
+      if (same && same.length <= 40) return same;
+      const next = idx + 1 < lines.length ? lines[idx + 1] : null;
+      const isLabel = /^(?:REPUBLIC|NATIONAL|THE\s|ENTRY|TRANSFER|REGISTRATION|CHASSIS|MAKE|MODEL|FUEL|BODY|TYPE|YEAR|COLOUR|COLOR)/i;
+      return next && next.length <= 40 && !isLabel.test(next) ? next : null;
+    };
+    const make = labelValue(/\bMAKE\s+OF\s+VEHICLE\b/i);
+    const model = labelValue(/\bMODEL\b/i);
+    const fuelRaw = labelValue(/\bFUEL\s+TYPE\b/i);
+    const fuel = fuelRaw && /\b(petrol|diesel|gasoline|electric|hybrid|lpg|cng|hydrogen)\b/i.test(fuelRaw)
+      ? fuelRaw.match(/\b(petrol|diesel|gasoline|electric|hybrid|lpg|cng|hydrogen)\b/i)[1]
+      : null;
+    if (make || model) hints.make_model = [make, model].filter(Boolean).join(' ').trim();
+    if (fuel) hints.fuel_type = fuel.toLowerCase();
+    const yomMatch = raw.match(/\b(?:YEAR\s+OF\s+(?:MANUFACTURE|MAKE)|YOM)\s*[:#]?\s*((?:19|20)\d{2})\b/i);
+    if (yomMatch) hints.yom = Number(yomMatch[1]);
   }
 
   if (documentKind === 'insurance') {

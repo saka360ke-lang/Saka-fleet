@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.51.11] - 2026-11-03
+
+- **Registration certificates now register vehicles, not receipts.** An NTSA "REGISTRATION CERTIFICATE" (logbook) is routed to vehicle registration: the plate (old `N7200766H` and new `KDA 123A` formats), fuel type, make/model and YOM are read from the certificate and prefill the registration quiz with a deterministic "I read these from your certificate" summary. A pure-digit TRANSFER number is never stored as a VIN.
+- **Receipt pipeline is receipt-only.** The duplicate-receipt detector, the "already read this receipt" reply and the receipt vault now fire only for `receipt_fuel`/`receipt_general` — a logbook, insurance or licence upload can never be answered with the receipt-duplicate line.
+- **No more empty expenses.** The `log_expense` write path refuses to write without a type and a positive amount ("Logged expense of amount." can never happen again).
+- **Clear logbook CTA.** "Can I upload the logbook?" now gets a deterministic YES with the next step instead of a vague AI reply.
+- **Git auto-sync (rule 32).** New `scripts/sync_origin.js` wired as `prehealth`/`pretest` — every `npm run health`/`npm test` first fast-forwards `main` to `origin/main` (skipped in CI), so local work can never start on a stale tree after an autonomous push.
+- **Tests:** `test_ocr_flow` (+5 NTSA fixture, date-stable duplicate fixture; 93), `test_greetings` (+3; 94), `test_quiz_flow` (128).
+
 ## [1.51.10] - 2026-11-03
 
 - **Interactive quick-edit payload builder (SUG-2026-11-03-01, clause 7 only).** An audit of the approved suggestion found six of its seven clauses already shipped — Document Lens field-level confidences + confirm-before-save (§52), COMMENCING-vs-EXPIRING insurance disambiguation (`ocrService.js`, `complianceCatalog.js`), deterministic compliance correction ("you read it wrong … expiry is …"), PDF report email (`deliverReportPdf` → `sendReportByEmail`) and on-demand vehicle summaries (`buildVehicleSummary`/`emailVehicleSummary`) — so they were deliberately NOT re-implemented. The only real gap was WhatsApp interactive messages: `grep -ri interactive src/` returned nothing and the sender only emits `type:"text"`.

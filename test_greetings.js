@@ -19,6 +19,7 @@ import {
   shouldReplacePlateAsk,
   isIncompleteReplyComplaint,
   replyContinuationRequestFor,
+  asksToUploadLogbook,
   isLegacyWelcomeCopy,
   websiteSignupNextStep
 } from './src/services/greetings.js';
@@ -180,6 +181,10 @@ check(isIncompleteReplyComplaint('finish your answer') === true, '"finish your a
 const cont = replyContinuationRequestFor('your last reply on my 7 vehicles was incomplete');
 check(cont.isComplaint === true && cont.detectedFleetCount === 7, 'replyContinuationRequestFor parses the fleet count in one place');
 check(replyContinuationRequestFor('half an answer').wantsFullAnswer === true, 'a continuation request wants the full answer');
+// v1.51.11 — logbook upload offers get a clear YES.
+check(asksToUploadLogbook('Can I upload the logbook for you to get the details?') === true, 'a logbook-upload offer is recognised');
+check(asksToUploadLogbook('send the registration certificate') === true, 'registration certificate uploads are recognised');
+check(asksToUploadLogbook('what is a logbook') === false, 'a definition question is not an upload offer');
 
 console.log('--- Test 8: legacy identity copy is banned (v1.28.2) ---');
 check(isLegacyWelcomeCopy("👋 Welcome to Saka Fleet! I'm your intelligent WhatsApp vehicle & asset management assistant.") === true, 'the live legacy welcome is detected');

@@ -157,6 +157,18 @@ export function isIncompleteReplyComplaint(text = '') {
 }
 
 /**
+ * v1.51.11 — "Can I upload the logbook?" is an offer to share a registration
+ * document. Answer YES with one clear next step instead of a vague AI reply.
+ */
+export function asksToUploadLogbook(text = '') {
+  const value = normalizeCompleteness(text);
+  if (!value) return false;
+  return /\b(?:can|may|do|should|want\s+to)\b.*\b(?:upload|send|share|give)\b.*\b(?:log\s?book|registration\s+certificate|vehicle\s+document|car\s+paper)/i.test(value)
+    || /\b(?:upload|send|share)\b.*\b(?:log\s?book|registration\s+certificate)/i.test(value)
+    || /\b(?:log\s?book|registration\s+certificate)\b.*\b(?:upload|send|photo|picture|read|details)/i.test(value);
+}
+
+/**
  * v1.51.9 — one shared, unit-testable grammar for the reply-completeness branch.
  * Returns isComplaint, isContinuation, detectedFleetCount and wantsFullAnswer.
  * Reuses the same digit+asset-noun pattern the route keeps inline so the fleet
@@ -307,5 +319,6 @@ export default {
   websiteSignupNextStep,
   isIncompleteReplyComplaint,
   replyContinuationRequestFor,
+  asksToUploadLogbook,
   isLegacyWelcomeCopy
 };
