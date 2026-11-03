@@ -18,6 +18,7 @@ import {
   SAKA_QUIZ_FLOWS,
   SAKA_INTENT_PLAYBOOK,
   SAKA_BOUNDARY_RULES,
+  SAKA_TONE_COMPASS,
   buildFlowPlaybook,
   getKnownFlowKeys
 } from './src/services/flowKnowledge.js';
@@ -240,6 +241,12 @@ check(/Narrative pre-fills are engine-determined facts/.test(await import('./src
   check(DEFAULT_SAKA_CORE_PROMPT.includes('NO EMPTY REPLIES'), 'the core prompt bans empty acknowledgement replies');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('OWN-DATA LAW'), 'the core prompt carries the OWN-DATA LAW (v1.52.0)');
   check(DEFAULT_SAKA_CORE_PROMPT.includes("I don't have access to"), 'access-refusal phrasing is banned (v1.52.0)');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('OWN-DATA LAW (v1.54.0'), 'the core prompt carries the OWN-DATA LAW v2 (v1.54.0)');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes("I can't see"), 'the widened access-refusal family is banned in the prompt (v1.54.0)');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('not stored on my side'), '"not stored on my side" is banned (v1.54.0)');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('Missing (each has one fill step)'), 'the prompt names the snapshot populate-step line (v1.54.0)');
+  check(SAKA_TONE_COMPASS.bannedPhrases.includes("I can't see"), 'the tone compass mirrors the widened banned phrases (v1.54.0)');
+  check(SAKA_TONE_COMPASS.bannedPhrases.includes('not stored on my side'), 'the tone compass bans "not stored on my side" (v1.54.0)');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('PERSONALITY LAW'), 'the core prompt carries the PERSONALITY LAW (v1.53.0)');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('EVERY-DEMOGRAPHIC LAW'), 'the core prompt carries the EVERY-DEMOGRAPHIC LAW (v1.53.0)');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('Got your vehicle details!'), 'the exact contentless reply from the live chat is named as banned');

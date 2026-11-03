@@ -1,6 +1,12 @@
 {
-  "latest": "1.53.2",
+  "latest": "1.54.0",
   "entries": [
+    {
+      "version": "1.54.0",
+      "date": "2026-11-03",
+      "title": "Your whole record, one answer away",
+      "summary": "Saka now answers from your recent logs too — and for anything missing, she tells you the one step that fills it."
+    },
     {
       "version": "1.53.2",
       "date": "2026-11-03",

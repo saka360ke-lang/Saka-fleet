@@ -22,7 +22,7 @@ import { shortenUrl } from '../services/linkShortener.js';
 import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly, shouldReplaceIntroCopy, isRepeatedReply, isStopRequest, PAUSE_REPLY, pickRepeatNudge, pickNewcomerNudge, isFirstTimeMessage, shouldReplacePlateAsk, isIncompleteReplyComplaint, replyContinuationRequestFor, asksToUploadLogbook, isLegacyWelcomeCopy, websiteSignupNextStep } from '../services/greetings.js';
 import { matchProductQa, buildProductQaReply, buildProductFactsContext, buildLocalPricingFacts, stripUsdFigures, hasLocalFigure, recommendTierForFleet, sanitizeSakaReply } from '../services/productQa.js';
 import { shouldSuggestContactSave, isLostChatMessage, buildContactSaveFacts, markContactSaveSuggested } from '../services/contactNudge.js';
-import { buildUserContextSnapshot } from '../services/userContextSnapshot.js';
+import { buildUserContextSnapshot, buildUserFactsLines } from '../services/userContextSnapshot.js';
 import { resolveSlowAckMs, pickSlowAckLine, shouldSendSlowAck } from '../services/turnAck.js';
 import { buildVehicleSummary, emailVehicleSummary } from '../services/vehicleSummary.js';
 import {
@@ -3744,15 +3744,27 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
               ? (recoveryFacts.find((line) => /For \d+ vehicles/.test(line)) || recoveryFacts[0])
               : null;
             const recoveryDetail = {};
+            // v1.54.0 — ANSWER LAW v2: the user's own data rides this turn too,
+            // so a cut-off answer about their fleet is finished from facts.
+            let recoveryUserFacts = '';
+            try {
+              recoveryUserFacts = await buildUserFactsLines({
+                supabase: supabaseClient,
+                profile: profileData,
+                vehicles: existingVehicles,
+                currency: countryInfo?.currency || 'USD'
+              });
+            } catch { recoveryUserFacts = ''; }
             const recoveryReply = await composeMessage({
               purpose: 'complaint_recovery',
               facts: {
                 userNote: messageText,
                 fleetCount: complaintFleet || null,
                 pricedAnswer: recoveryTotal || 'None supplied.',
+                userDataFacts: recoveryUserFacts || 'No account data on file yet.',
                 instruction: recoveryTotal
-                  ? 'In 1-2 short lines, acknowledge the previous reply was cut short and give the full recommendation now using pricedAnswer ONLY. Never mention $, USD or any dollar amount. No re-introduction, no welcome, no menu.'
-                  : 'In 1-2 short lines, acknowledge the previous reply was cut short and say you will give the full answer now. Ask for the one detail you need, if any. No re-introduction, no welcome, no menu, no defensiveness.'
+                  ? 'In 1-2 short lines, acknowledge the previous reply was cut short and give the full recommendation now using pricedAnswer ONLY. Never mention $, USD or any dollar amount. No re-introduction, no welcome, no menu. userDataFacts is the user\'s own data — never claim you lack access to it.'
+                  : 'In 1-2 short lines, acknowledge the previous reply was cut short and say you will give the full answer now. Ask for the one detail you need, if any. No re-introduction, no welcome, no menu, no defensiveness. userDataFacts is the user\'s own data — never claim you lack access to it.'
               },
               language: targetLang,
               countryInfo,
@@ -3884,7 +3896,15 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
               facts: {
                 issue: 'The user reported too many or repeating messages',
                 actionTaken: 'Automated prompts paused for this chat',
-                nextSteps: ['Type Support to reach support@sakafleet.com', 'Send a vehicle plate when ready to onboard']
+                nextSteps: ['Type Support to reach support@sakafleet.com', 'Send a vehicle plate when ready to onboard'],
+                // v1.54.0 — ANSWER LAW v2: the user's own data rides this turn.
+                userDataFacts: (await buildUserFactsLines({
+                  supabase: supabaseClient,
+                  profile: profileData,
+                  vehicles: existingVehicles,
+                  currency: countryInfo?.currency || 'USD'
+                })) || 'No account data on file yet.',
+                instruction: 'In 1-2 short lines, acknowledge the issue in plain words without apology theatre. State what was paused and give ONE next step. userDataFacts is the user\'s own data — never claim you lack access to it.'
               },
               language: targetLang,
               countryInfo,
@@ -4187,7 +4207,15 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
             facts: {
               issue: 'Repeated identical prompt; support has been emailed automatically',
               supportEmail: 'support@sakafleet.com',
-              nextSteps: ['Type Restart to begin again', 'Type Cancel to exit', 'Wait for a WhatsApp update from support']
+              nextSteps: ['Type Restart to begin again', 'Type Cancel to exit', 'Wait for a WhatsApp update from support'],
+              // v1.54.0 — ANSWER LAW v2: even a breaker trip carries the
+              // user's own data; never claim a lack of access to it.
+              userDataFacts: (await buildUserFactsLines({
+                supabase: supabaseClient,
+                profile: profileData,
+                vehicles: existingVehicles,
+                currency: countryInfo?.currency || 'USD'
+              })) || 'No account data on file yet.'
             },
             language: targetLang,
             countryInfo,

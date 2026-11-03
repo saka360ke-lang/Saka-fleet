@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.53.2  
+**Version:** 1.54.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.54.0** | ANSWER LAW v2: full own-data snapshot (recent ledger + one populate step per missing field), widened access-refusal ban, own-data on data-sensitive turns | §114 |
 | **1.53.2** | Onboarding fixed: KE NTSA PARTICULARS parsing (correct plate), registration correction/edit lane, verified-email answer | §113 |
 | **1.53.1** | Governance v2: autonomous execution decommissioned → PROP-* proposal registry, review-in-chat workflow | §112 |
 | **1.53.0** | Personality v3: tone-dimension lock, plain-language floors, every-demographic pacing (research-backed) | §111 |
@@ -3973,5 +3974,13 @@ quiz engine:
 - **Own-data answer for verification**: the snapshot carries the masked email + `email_verified`, so "is my profile verified?" answers with the real state.
 - **Register routing**: "add/register/upload … vehicle / reg cert / logbook" maps deterministically to `vehicle_registration`.
 - **Tests:** `test_ocr_flow` 99, `test_quiz_flow` 131, `test_user_data_access` 9.
+
+### 114. ANSWER LAW v2 — full own-data snapshot + zero refusal (v1.54.0)
+
+- **Recent ledger rides the snapshot:** `buildUserContextSnapshot()` adds the last 3 expense + 3 earning rows (Nairobi date, type, amount, plate) plus a bounded `Recent logs` line, so "what did I log yesterday?" is answerable from facts in every composed turn. Structured rows are exposed as `data.ledger`.
+- **One populate step per missing field:** the snapshot emits a `Missing (each has one fill step)` line naming each absent field AND its engine-owned single step (insurance expiry → certificate photo or "my insurance expires <date>"; inspection; odometer; driver licence; email). Saka names the field and the step — never an access refusal, never an invented step.
+- **OWN-DATA LAW v2:** the core prompt now demands the EXACT figure with local time context (user timezone + days-left from today), bans the widened refusal family (`I can't see`, `not stored on my side`, `I don't hold that data`, `no record of`) in both the prompt and `SAKA_TONE_COMPASS.bannedPhrases`, and points at the snapshot's Missing line as the only sanctioned source of populate steps.
+- **Snapshot on data-sensitive turns:** new `buildUserFactsLines()` (capped, never throws) attaches the user's own data to the composed `complaint_recovery`, `friction_apology` and `hard_trip_support_escalation` turns — the two answer lanes (`product_answer`, `user_data_answer`) already carried it since v1.52.0.
+- **Tests:** `test_user_data_access` 19 (ledger rows, populate steps, cap), `test_agent_training` 153, `test_kb_docs` 36, `test_no_canned_replies` ratchet unchanged.
 
 

@@ -135,6 +135,24 @@ export async function buildUserContextSnapshot({ supabase, profile = null, vehic
       lines.push(`Your compliance: ${[complianceType, complianceExpiry ? `expires ${String(complianceExpiry).slice(0, 10)}` : null].filter(Boolean).join(' ')}${days === null ? '' : days < 0 ? ` (${Math.abs(days)} days overdue)` : ` (in ${days} days)`}.`);
     }
 
+    // v1.54.0 — ANSWER LAW v2: every commonly-missing field carries its ONE
+    // populate step (engine-owned). Saka names the missing field AND the
+    // single step to fill it — never an access refusal, never an invented step.
+    const populateSteps = [];
+    if (!data.vehicles.length) {
+      populateSteps.push('vehicle — reply "register vehicle" or send the registration certificate photo');
+    } else {
+      if (!data.vehicles.some((v) => v.insuranceExpiry)) populateSteps.push('insurance expiry — send the insurance certificate photo, or type "my insurance expires <date>"');
+      if (!data.vehicles.some((v) => v.inspectionExpiry)) populateSteps.push('inspection expiry — type "inspection due <date>" or send the inspection certificate photo');
+      if (data.vehicles.some((v) => !v.mileage)) populateSteps.push('odometer — type "my odometer is <number> km"');
+    }
+    if (!complianceType && !complianceExpiry) populateSteps.push('driver licence — type "my licence expires <date>" with the licence number');
+    if (!email) populateSteps.push('email — add it to your profile at https://app.sakafleet.com');
+    if (populateSteps.length) {
+      data.populateSteps = populateSteps.slice(0, 4);
+      lines.push(`Missing (each has one fill step): ${data.populateSteps.join(' | ')}.`);
+    }
+
     // v1.28.0 — lightweight per-user memory (no schema change): the details a
     // human assistant would naturally remember about a returning owner.
     const createdAt = profile?.created_at ? Date.parse(profile.created_at) : NaN;
@@ -209,6 +227,41 @@ export async function buildUserContextSnapshot({ supabase, profile = null, vehic
           lines.push('Upcoming reminders: none active.');
         }
       } catch { /* reminders are optional facts */ }
+
+      // v1.54.0 — ANSWER LAW v2: the recent ledger rides the snapshot so
+      // "what did I log yesterday?" is answerable from facts in every
+      // composed turn. Bounded (3 rows per side) to keep the prompt lean.
+      try {
+        const ledgerRows = [];
+        const { data: recentExpenses } = await supabase
+          .from('expense_logs')
+          .select('amount,expense_type,created_at,vehicle_id')
+          .in('vehicle_id', vehicleIds)
+          .order('created_at', { ascending: false })
+          .limit(3);
+        const { data: recentEarnings } = await supabase
+          .from('private_earnings')
+          .select('revenue_amount,earning_type,created_at,vehicle_id')
+          .in('vehicle_id', vehicleIds)
+          .order('created_at', { ascending: false })
+          .limit(3);
+        const plateFor = (vehicleId) => data.vehicles.find((v) => v.id === vehicleId)?.plate || null;
+        for (const row of (Array.isArray(recentExpenses) ? recentExpenses : [])) {
+          const plate = plateFor(row.vehicle_id);
+          ledgerRows.push(`${String(row.created_at || '').slice(0, 10)} ${row.expense_type || 'expense'} ${money(row.amount, currency)}${plate ? ` (${plate})` : ''}`);
+        }
+        for (const row of (Array.isArray(recentEarnings) ? recentEarnings : [])) {
+          const plate = plateFor(row.vehicle_id);
+          ledgerRows.push(`${String(row.created_at || '').slice(0, 10)} earned ${money(row.revenue_amount, currency)} ${row.earning_type || ''}${plate ? ` (${plate})` : ''}`.trim());
+        }
+        if (ledgerRows.length) {
+          data.ledger = ledgerRows.slice(0, 5);
+          lines.push(`Recent logs: ${ledgerRows.slice(0, 5).join('; ')}.`);
+        } else {
+          data.ledger = [];
+          lines.push('Recent logs: none yet.');
+        }
+      } catch { /* ledger rows are optional facts */ }
     }
   } catch {
     // Never throw: a partial snapshot is still useful.
@@ -217,4 +270,20 @@ export async function buildUserContextSnapshot({ supabase, profile = null, vehic
   return { lines, data };
 }
 
-export default { buildUserContextSnapshot };
+/**
+ * v1.54.0 — convenience wrapper: the snapshot rendered as compact composer
+ * facts. Capped so data-sensitive composed turns (complaint recovery,
+ * friction apology, support escalation) carry the user's own data without
+ * blowing the prompt budget. Never throws.
+ */
+export async function buildUserFactsLines({ supabase, profile = null, vehicles = [], currency = 'USD', maxLines = 10 } = {}) {
+  try {
+    const snapshot = await buildUserContextSnapshot({ supabase, profile, vehicles, currency });
+    const cap = Math.max(1, Math.min(20, Number(maxLines) || 10));
+    return snapshot.lines.slice(0, cap).join('\n');
+  } catch {
+    return '';
+  }
+}
+
+export default { buildUserContextSnapshot, buildUserFactsLines };

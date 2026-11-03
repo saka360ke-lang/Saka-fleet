@@ -410,7 +410,9 @@ export const SAKA_TONE_COMPASS = {
     // v1.28.2 — the retired corporate identity must never resurface.
     'intelligent WhatsApp vehicle & asset management assistant', 'your fleet assistant',
     // v1.52.0 — the user's own data is never withheld behind an access refusal.
-    "I don't have access to", "I can't access", 'I do not have that data', 'that data is not available to me'
+    "I don't have access to", "I can't access", 'I do not have that data', 'that data is not available to me',
+    // v1.54.0 — ANSWER LAW v2 widens the refusal family.
+    "I can't see", 'not stored on my side', "I don't hold that data", 'no record of'
   ],
   poles: [
     { id: 'anchor', name: 'Precision (Anchor)', law: 'Numbers, dates, currency and units are sacred: use only supplied facts, never approximate database values, and state exactly what was saved.' },

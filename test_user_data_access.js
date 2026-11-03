@@ -1,12 +1,14 @@
 import assert from 'assert';
-import { buildUserContextSnapshot } from './src/services/userContextSnapshot.js';
+import { buildUserContextSnapshot, buildUserFactsLines } from './src/services/userContextSnapshot.js';
 
 /**
- * Saka Fleet — user data access (v1.52.0). Stateless.
+ * Saka Fleet — user data access (v1.52.0 → v1.54.0 ANSWER LAW v2). Stateless.
  *
  * The snapshot must carry the user's OWN data — expiry dates, driver
- * compliance, trial end — so Saka can answer "when does my insurance expire?"
- * from the facts and can never be forced into an access refusal.
+ * compliance, trial end, recent ledger rows and the one populate step for
+ * every missing field — so Saka can answer "when does my insurance expire?"
+ * or "what did I log yesterday?" from the facts and can never be forced into
+ * an access refusal.
  */
 
 let passed = 0;
@@ -16,30 +18,32 @@ function check(condition, message) {
   console.log(`  ✅ ${message}`);
 }
 
-console.log('=== SAKA FLEET — USER DATA ACCESS TESTS (v1.52.0) ===\n');
+console.log('=== SAKA FLEET — USER DATA ACCESS TESTS (v1.54.0) ===\n');
+
+const AMINA_PROFILE = {
+  full_name: 'Amina Yusuf',
+  subscription_tier: 'free',
+  subscription_status: 'TRIALING',
+  trial_ends_at: '2027-02-01T05:52:40Z',
+  compliance_type: 'Driver Licence',
+  compliance_expiry: '2027-01-31',
+  email: 'amina@gmail.com',
+  email_verified: true
+};
+
+const AMINA_VEHICLE = {
+  id: 'vehicle-1',
+  plate_number: 'KDA 123A',
+  make_model: 'Toyota Fielder',
+  current_mileage: 367480,
+  fuel_type: 'diesel',
+  insurance_expiry: '2026-11-20',
+  inspection_expiry: null
+};
 
 const snapshot = await buildUserContextSnapshot({
-  profile: {
-    full_name: 'Amina Yusuf',
-    subscription_tier: 'free',
-    subscription_status: 'TRIALING',
-    trial_ends_at: '2027-02-01T05:52:40Z',
-    compliance_type: 'Driver Licence',
-    compliance_expiry: '2027-01-31',
-    email: 'amina@gmail.com',
-    email_verified: true
-  },
-  vehicles: [
-    {
-      id: 'vehicle-1',
-      plate_number: 'KDA 123A',
-      make_model: 'Toyota Fielder',
-      current_mileage: 367480,
-      fuel_type: 'diesel',
-      insurance_expiry: '2026-11-20',
-      inspection_expiry: null
-    }
-  ],
+  profile: AMINA_PROFILE,
+  vehicles: [AMINA_VEHICLE],
   currency: 'KES',
   now: new Date('2026-11-03T12:00:00Z')
 });
@@ -56,5 +60,61 @@ check(snapshot.data.vehicles[0].plate === 'KDA 123A', 'the structured data keeps
 const empty = await buildUserContextSnapshot({});
 check(empty.lines.join(' ').includes('Vehicles on file: none yet'), 'an empty account honestly states what is missing');
 check(!/insurance expires/.test(empty.lines.join(' ')), 'no invented expiry for an empty account');
+
+console.log('\n--- v1.54.0: ANSWER LAW v2 — one populate step per missing field ---');
+
+check(/Missing \(each has one fill step\):/.test(facts), 'the snapshot names missing fields with one fill step each');
+check(/inspection expiry —/.test(facts), 'the missing inspection expiry carries its populate step');
+check(snapshot.data.populateSteps?.length === 1, 'exactly one missing step for Amina (inspection)');
+check(!/driver licence —/.test(facts), 'a present driver licence is not listed as missing');
+const emptyFacts = empty.lines.join(' ');
+check(/Missing \(each has one fill step\):/.test(emptyFacts), 'an empty account lists the missing fields with steps');
+check(!/insurance expires/.test(emptyFacts), 'the populate step never invents an expiry date');
+
+console.log('\n--- v1.54.0: recent ledger rides the snapshot ---');
+
+function fakeBuilder(rows) {
+  const self = {
+    select: () => self,
+    in: () => self,
+    gte: () => self,
+    eq: () => self,
+    is: () => self,
+    limit: () => self,
+    order: () => self,
+    then(resolve) { resolve({ data: rows, error: null }); }
+  };
+  return self;
+}
+const fakeSupabase = {
+  from(table) {
+    const rows = {
+      expense_logs: [{ amount: 5500, expense_type: 'Fuel', created_at: '2026-11-02T10:00:00Z', vehicle_id: 'vehicle-1' }],
+      private_earnings: [{ revenue_amount: 18000, earning_type: 'Cargo & freight', created_at: '2026-11-01T09:00:00Z', vehicle_id: 'vehicle-1' }],
+      reminders: []
+    }[table] || [];
+    return fakeBuilder(rows);
+  }
+};
+const ledgerSnapshot = await buildUserContextSnapshot({
+  supabase: fakeSupabase,
+  profile: AMINA_PROFILE,
+  vehicles: [AMINA_VEHICLE],
+  currency: 'KES',
+  now: new Date('2026-11-03T12:00:00Z')
+});
+const ledgerFacts = ledgerSnapshot.lines.join('\n');
+check(/Recent logs:/.test(ledgerFacts) && ledgerFacts.includes('Fuel KES 5,500 (KDA 123A)'), 'recent expense rows ride the snapshot with plate');
+check(ledgerFacts.includes('earned KES 18,000'), 'recent earning rows ride the snapshot');
+check(Array.isArray(ledgerSnapshot.data.ledger) && ledgerSnapshot.data.ledger.length === 2, 'the structured ledger data is exposed');
+
+const capped = await buildUserFactsLines({
+  supabase: fakeSupabase,
+  profile: AMINA_PROFILE,
+  vehicles: [AMINA_VEHICLE],
+  currency: 'KES',
+  maxLines: 3
+});
+check(capped.split('\n').length === 3, 'buildUserFactsLines caps the fact lines (prompt budget)');
 
 console.log(`\n🎉 ${passed} user-data-access assertions passed.`);

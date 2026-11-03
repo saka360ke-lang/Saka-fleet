@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.54.0] - 2026-11-03
+
+- **ANSWER LAW v2 — the user's whole record rides the snapshot.** `buildUserContextSnapshot` now carries the recent ledger (last 3 expenses + 3 earnings, with plate, type and Nairobi date) and a `Missing (each has one fill step)` line: every absent field is named with its engine-owned single populate step (insurance expiry → certificate photo or "my insurance expires <date>", inspection, odometer, licence, email). "What did I log yesterday?" and "what do I need to fill?" are answerable from facts in every composed turn.
+- **Zero-refusal widening.** The core prompt's OWN-DATA LAW v2 requires the exact figure with local time context and points at the snapshot's Missing line as the only sanctioned populate steps; `I can't see`, `not stored on my side`, `I don't hold that data` and `no record of` join the banned phrases in both the prompt and `SAKA_TONE_COMPASS.bannedPhrases`.
+- **Own-data on data-sensitive turns.** New `buildUserFactsLines()` (capped, never throws) attaches the user's facts to the composed complaint-recovery, friction-apology and breaker-trip turns.
+- **Tests:** `test_user_data_access` 19, `test_agent_training` 153, `test_kb_docs` 36, `test_no_canned_replies` ratchet unchanged.
+
 ## [1.53.2] - 2026-11-03
 
 - **Onboarding/registration fixed end-to-end.** (a) NTSA "REGISTRATION CERTIFICATE" parsing now reads the KE **VEHICLE PARTICULARS** table value-before-label pairs — the **current** plate (`KAS628T DATE OF REGISTRATION`) beats the title-line previous plate, and make/model/body (`TOYOTA`/`LAND CRUISER`/`S.WAGON`), year (`1991`), fuel (`DIESEL`), engine (`1HD-0015769`) and colour are extracted — all gated behind the KE country profile (rule 36; GLOBAL stays neutral). (b) A registration **correction lane**: "you captured the plate wrong" clears + re-asks just that field, and "edit: <field> <value>" sets it without clobbering the other banked answers. (c) The snapshot now answers "is my profile verified?" with the masked email + verified state. (d) "add/register/upload … vehicle/reg cert" routes deterministically to registration.
