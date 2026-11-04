@@ -47,6 +47,16 @@ check(db.__db.support_tickets[0].whatsapp_number === 'customer@example.com', 'th
 check(notified && notified.phone === '+254700000000', 'the customer-care worker is pinged');
 check(notified && notified.text.indexOf('Help with my truck') !== -1, 'the ping carries the subject');
 
+console.log('--- long sender fallback ---');
+function mockLimited() {
+  const db = { support_tickets: [] };
+  return { __db: db, from(name) { const r = db[name] || (db[name] = []); return { insert(p) { const items = Array.isArray(p) ? p : [p]; const tooLong = items.find((it) => String(it.whatsapp_number || '').length > 20); if (tooLong) return { select: () => ({ maybeSingle: async () => ({ data: null, error: { message: 'value too long for type character varying(20)' } }) }) }; for (const it of items) r.push({ id: 't-' + r.length, ...it }); return { select: () => ({ maybeSingle: async () => ({ data: r[r.length - 1], error: null }) }) }; } }; } };
+}
+const dbLong = mockLimited();
+const longSender = await handleInboundEmail(dbLong, { payload: { type: 'email.received', data: { email_id: 'e3', from: 'verylongcustomername@example.com', to: ['support@sakafleet.com'], subject: 'Long sender' } }, headers: { 'svix-id': ID, 'svix-timestamp': TS, 'svix-signature': SIG }, rawBody: RAW, secret: SECRET, skipFetch: true });
+check(longSender.ok === true && Boolean(longSender.ticketId), 'a long sender still opens a ticket (truncated fallback)');
+check(dbLong.__db.support_tickets.length === 1 && dbLong.__db.support_tickets[0].whatsapp_number.length === 20, 'the fallback trims the sender to the legacy column width');
+
 const ignored = await handleInboundEmail(mock(), { payload: { type: 'email.sent', data: {} }, headers: {}, rawBody: '{}', secret: null, skipFetch: true });
 check(ignored.ok === true && ignored.ignored === 'email.sent', 'non-inbound events are ignored');
 

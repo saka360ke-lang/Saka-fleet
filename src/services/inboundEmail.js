@@ -78,12 +78,18 @@ export async function handleInboundEmail(supabase, { payload = {}, headers = {},
   let ticketId = null;
   if (supabase) {
     try {
-      const { data } = await supabase.from('support_tickets').insert([{
+      const ticket = {
         whatsapp_number: email.fromEmail,
         issue_category: 'email',
         message_body: String((body && body.text) || email.subject || '').slice(0, 2000),
         created_at: new Date().toISOString()
-      }]).select('id').maybeSingle();
+      };
+      let { data, error } = await supabase.from('support_tickets').insert([ticket]).select('id').maybeSingle();
+      // v1.58.16 - legacy deployments define whatsapp_number as varchar(20); a
+      // sender email longer than that must never lose the ticket.
+      if (error && /too long|character varying/i.test(error.message || '')) {
+        ({ data, error } = await supabase.from('support_tickets').insert([{ ...ticket, whatsapp_number: String(email.fromEmail).slice(0, 20) }]).select('id').maybeSingle());
+      }
       ticketId = data ? data.id : null;
     } catch { ticketId = null; }
   }

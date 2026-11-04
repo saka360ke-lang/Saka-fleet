@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.58.15  
+**Version:** 1.58.16  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.58.16** | Legal/policy copy for receipt &amp; document storage (Free = parsed data only) + inbound-email Svix secret live on Cloud Run (`00271-dn4`) + Free-gate regression pin | 145 |
 | **1.58.15** | Production knobs off (REMEDIATION_AUTONOMY / CONVERSATION_DIAGNOSIS_ENABLED) + multi-asset landing branding (cars, trucks, boats, generators, excavators, EVs) + document retention (receipt delete, bucket-object wipes, OCR telemetry prune) | 144 |
 | **1.58.14** | Duplicate-signup block (phone variants + email + owner notice) + Sentinel log-only policy (no autonomous proposals; errors clear when tended) + Resend inbound email with Svix verification and admin inbox | 143 |
 | **1.58.13** | Pending-only remediation alerts (threshold = pending backlog) + unverified-gate confusion clarification (PROP-2026-11-04-01) + phantom 90-day trial fix (legacy default dropped, data remediated) | 142 |
@@ -4236,3 +4237,11 @@ quiz engine:
 - **Env:** two new knobs registered in `envAudit.js` and `.env.example`.
 - **Rules:** `.clinerules` 48 (documents are evidence, the user can remove them, retention bounds).
 - **Tests:** `test_document_retention` (16), `test_ocr_flow` (120), `test_profile_wipe` (14), `test_landing_static` (217), `test_asset_metrics` (70), `test_country_bucket` (54), `test_expense_catalog` (82), `test_env_audit` (44) - green.
+### 145. v1.58.16 - document storage wording + inbound-email secret live (2026-11-04)
+
+- **Terms and policy docs now state the document storage scope.** `terms.html` section 6 gains a "Documents and receipt photos" clause (Free keeps parsed figures only; paid plans and the welcome trial store the original; self-service delete; receipts kept as tax evidence). `privacy.html` section 6 carries the Free-tier nuance, `data-deletion.html` section 2 documents the single-receipt delete (`receipts` -> `delete receipt N`), `llms.txt` gains the AI-legibility fact, and the homepage FAQ (visible + JSON-LD) answers "Where are my receipt photos stored?".
+- **Free-tier gating audited (Option A - keep as-is).** `receiptVaultStorage=false` on Free is enforced in `whatsapp.js` (no bucket upload; `receipts.image_url=null`, parsed-data row kept). `test_subscription_billing` now pins `freeEnt.receiptVaultStorage === false`; `test_landing_static` pins the legal copy (223 assertions).
+- **Inbound email secret is LIVE.** Cloud Run revision `saka-fleet-00271-dn4` carries `EMAIL_INBOUND_SIGNING_SECRET`, so `verifyResendSignature()` verifies every POST to `/webhook/email/inbound` (Svix `svix-id` / `svix-timestamp` / `svix-signature`, HMAC-SHA256, 5-minute tolerance, timing-safe compare). The legacy `EMAIL_INBOUND_SECRET` + `x-saka-inbound` header path stays as a fallback and is inert while the signing secret is set. `CUSTOMER_CARE_PHONE` stays unset, so care pings fall back to `SUPERADMIN_PHONE`.
+- **Deep audit:** Sentinel knobs still off (`REMEDIATION_AUTONOMY=off`, `CONVERSATION_DIAGNOSIS_ENABLED=off`, `SENTINEL_PROPOSALS_ENABLED=off` secret), zero pending `remediation_proposals`, and `chat_friction_logs` rows recording `PENDING` (all 12 columns migrated).
+- **Found + fixed in live testing: tickets were silently dropped for long senders.** The live `support_tickets.whatsapp_number` was `varchar(20)` (the staging DDL already declares `text`), so any sender email longer than 20 characters failed the insert and the route returned `ticketId: null`. New `npm run migrate:support-tickets` widens the column to `text` (applied live); `handleInboundEmail()` now retries with a 20-character trim as a safety net so a ticket is never lost; `test_inbound_email` (20) pins it. Live smoke test: valid Svix signature -> 200 + ticket `07c635d5` + care ping; tampered / missing signature -> 401 (test row deleted).
+- **Tests:** `test_inbound_email` (20), `test_landing_static` (223), `test_subscription_billing` (76), `test_document_retention` (16), `test_sentinel_policy`, `npm run health` - green.

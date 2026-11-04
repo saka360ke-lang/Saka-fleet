@@ -1,6 +1,12 @@
 {
-  "latest": "1.58.15",
+  "latest": "1.58.16",
   "entries": [
+    {
+      "version": "1.58.16",
+      "date": "2026-11-04",
+      "title": "Clearer document storage",
+      "summary": "Receipt and document storage is now spelled out in the terms and privacy pages: Saka reads every photo, the Free plan keeps just the numbers, paid plans keep the original file, and any receipt photo can be deleted from WhatsApp."
+    },
     {
       "version": "1.58.15",
       "date": "2026-11-04",

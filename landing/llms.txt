@@ -8,6 +8,7 @@ Key facts:
 - WhatsApp is the primary interface: message the Saka assistant to register assets, log records, set reminders and generate reports.
 - Reports are branded PDF documents delivered over WhatsApp and email.
 - Canonical data units: kilometres, litres, engine hours and kWh (EVs), ISO-8601 dates.
+- Documents: receipt, logbook, insurance and licence photos are read by the assistant. On the Free plan only the parsed figures are kept (no original file); paid plans and the welcome trial store the original. Receipts are kept as tax evidence by default and can be deleted from WhatsApp.
 
 ## Pages
 - [Home](https://sakafleet.com/): product overview, features, pricing, changelog and signup.

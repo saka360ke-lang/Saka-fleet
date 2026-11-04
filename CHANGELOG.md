@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.58.16] - 2026-11-04
+
+- **Document storage is spelled out in the legal pages.** Terms section 6, Privacy section 6, Data Deletion section 2, `llms.txt` and the homepage FAQ now state the scope: Saka reads every receipt, logbook, insurance and licence photo; the Free plan keeps only the parsed figures (no original file); paid plans and the welcome trial store the original; and any receipt photo can be deleted from WhatsApp (`receipts` -> `delete receipt N`).
+- **Free-tier gate pinned by tests.** `receiptVaultStorage` was already enforced (no bucket upload on Free); `test_subscription_billing` now asserts `freeEnt.receiptVaultStorage === false` and `test_landing_static` (223) guards the new copy.
+- **Live-test catch: long sender emails were silently dropped.** `support_tickets.whatsapp_number` was `varchar(20)` on the live database (the staging DDL already used `text`), so any sender email longer than 20 characters failed the ticket insert. `npm run migrate:support-tickets` widens it to `text` (applied live), `handleInboundEmail()` retries with a 20-character trim as a safety net, and `test_inbound_email` covers long senders (20 assertions).
+- **Inbound support email is verified in production.** Cloud Run revision `saka-fleet-00271-dn4` carries `EMAIL_INBOUND_SIGNING_SECRET`, so `/webhook/email/inbound` validates Svix signatures (20 assertions green); the legacy shared-secret header path remains as a fallback. Live smoke test: valid signature -> 200 + ticket + care ping; tampered / missing -> 401.
+- **Audit:** `REMEDIATION_AUTONOMY=off`, `CONVERSATION_DIAGNOSIS_ENABLED=off`, `SENTINEL_PROPOSALS_ENABLED=off`; zero pending proposals; friction rows recording `PENDING`.
+- **Files:** landing/{terms,privacy,data-deletion,index}.html, landing/llms.txt, landing/data/changelog.json, test_landing_static.js, test_subscription_billing.js, scripts/run_support_tickets_migration.js, package.json, SAKA_FLEET_ARCHITECTURE.md, CHANGELOG.md.
+- **Tests:** test_landing_static (223), test_subscription_billing (76), test_inbound_email (20), test_document_retention (16), test_sentinel_policy - green; `npm run health` green.
+
 ## [1.58.15] - 2026-11-04
 
 - **Production knobs off.** Cloud Run now runs `REMEDIATION_AUTONOMY=off` and `CONVERSATION_DIAGNOSIS_ENABLED=off` (revision `saka-fleet-00267-8f9`), alongside `SENTINEL_PROPOSALS_ENABLED=off`. Sentinel detects only; approved fixes are implemented in a superadmin session.

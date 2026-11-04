@@ -202,6 +202,16 @@ for (const file of walk(LANDING)) { if (/\.html$/.test(file)) allHtml += fs.read
 check(!/href="\/[a-z0-9-]+\.html"/.test(allHtml), 'No internal page link uses the .html extension');
 check(!/content="https:\/\/sakafleet\.com\/[a-z0-9-]+\.html"/.test(allHtml), 'Canonical and OG URLs are extensionless');
 check(allHtml.includes('href="/status"') && allHtml.includes('href="/privacy"'), 'Nav and footer use clean URLs');
+console.log('\n--- Test 16: receipt/document storage copy (v1.58.16) ---');
+const termsDoc = fs.readFileSync(path.join(LANDING, 'terms.html'), 'utf8');
+const privacyDoc = fs.readFileSync(path.join(LANDING, 'privacy.html'), 'utf8');
+const deletionDoc = fs.readFileSync(path.join(LANDING, 'data-deletion.html'), 'utf8');
+check(termsDoc.includes('Documents and receipt photos') && termsDoc.includes('On the Free plan we keep only the parsed figures'), 'terms explains the document storage scope by plan');
+check(privacyDoc.includes('On the Free plan we keep only what Saka reads from a photo') && privacyDoc.includes('paid plans and the welcome trial store the original file'), 'privacy states the Free-tier document storage nuance');
+check(privacyDoc.includes('delete receipt N'), 'privacy documents the self-service receipt delete');
+check(deletionDoc.includes('delete a single receipt or document photo') && deletionDoc.includes('delete receipt N'), 'data-deletion documents the single receipt delete path');
+check(llms.includes('On the Free plan only the parsed figures are kept'), 'llms.txt tells answer engines the document storage scope');
+check(indexHtml.includes('Where are my receipt photos stored?') && jsonLdBlocks.some((b2) => b2['@type'] === 'FAQPage' && JSON.stringify(b2).includes('Where are my receipt photos stored?')), 'the homepage FAQ (visible + JSON-LD) answers the storage question');
 console.log(`\n🎉 ${passed} landing-site assertions passed.`);
 
 console.log('\n--- Test 12: first-load flag, cache strategy, images (v1.43.0) ---');

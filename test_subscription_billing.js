@@ -121,6 +121,7 @@ async function run() {
   const freeEnt = await getEntitlements({ supabase: freeMock.client, ownerId: 'p-1', profile: freeProfile, useCache: false });
   check(freeEnt.tierKey === 'free' && freeEnt.maxAiTier === 1, 'Free entitlements clamp AI to Tier 1');
   check(freeEnt.reportsPerMonth === 1 && freeEnt.driverAssignment === false, 'Free gates reports + driver assignment');
+  check(freeEnt.receiptVaultStorage === false, 'Free keeps parsed receipt data but never stores the document file');
   check(freeEnt.effectiveVehicleCapacity === 1, 'Free capacity = 1 vehicle');
 
   const trialingProfile = profile({
