@@ -202,7 +202,21 @@ check(!/Tell me what you drive/i.test(unverifiedIntro) && /sakafleet\.com/i.test
 const verifiedIntro = sakaIntroText({ countryInfo: kenya });
 check(/Tell me what you drive/i.test(verifiedIntro), 'a verified (default) intro still asks what they drive');
 
-console.log(`\n🎉 ${passed} greeting & emoji assertions passed.`);
+
+console.log('--- Test 10: verified users are not re-welcomed + English-first greeting (v1.58.11) ---');
+const KE = { country_code: 'KE', country: 'Kenya', currency: 'KES', locale: 'en-KE', plate_example: 'KDA 123A', labels: {} };
+check(isFirstContact({ profile: { email_verified: true } }) === false, 'a verified account is never first contact (no re-welcome)');
+check(isFirstContact({ profile: { email_verified: false, created_at: new Date().toISOString() } }) === true, 'a brand-new unverified profile is still first contact');
+check(isFirstContact({ profile: { created_at: '2020-01-01T00:00:00Z' }, dbHistory: [{ role: 'user' }] }) === false, 'history means not first contact');
+check(!/Habari/i.test(greetingFor({ countryInfo: KE, language: 'English' }).text), 'English user gets no local (Habari) greeting');
+check(/Habari/i.test(greetingFor({ countryInfo: KE }).text), 'country default greeting is preserved when language is unset');
+check(/Habari/i.test(greetingFor({ countryInfo: KE, language: 'Swahili' }).text), 'a Swahili user keeps the local greeting');
+check(!/Habari/i.test(sakaIntroText({ countryInfo: KE, profile: { preferred_language: 'English', full_name: 'David' } })), 'sakaIntroText is English for an English profile');
+check(!/Habari/i.test(sakaIntroText({ countryInfo: KE, profile: {} })), 'sakaIntroText is English-first when no language is set');
+check(/Habari/i.test(sakaIntroText({ countryInfo: KE, profile: { preferred_language: 'Swahili' } })), 'sakaIntroText greets a Swahili profile with the local word');
+
+console.log(`\n🎉 ${passed} greeting & emoji assertions passed (incl. v1.58.11).`);
+
 
 check(NEWCOMER_NUDGES.every((n) => !/keep moving/i.test(n)), 'newcomer nudges never say keep moving');
 check(pickNewcomerNudge(0) !== pickNewcomerNudge(1), 'newcomer nudges rotate');

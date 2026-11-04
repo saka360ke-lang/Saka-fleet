@@ -4279,9 +4279,14 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
           else if (/^(habari|mambo|jambo|hujambo|salama)\b/i.test(clean) || intent === 'GREETING') {
             // v1.51.4 — an unverified number is pointed to the website, never invited to register.
             const unverified = !profileData || profileData.email_verified !== true;
+            const firstName = profileData?.full_name ? String(profileData.full_name).split(/\s+/)[0] : '';
             if (firstContact) {
               customReply = sakaIntroText({ countryInfo, profile: profileData, nextStep: unverified ? websiteSignupNextStep() : null });
               session.sakaIntroduced = true;
+            } else if (!unverified && !hasVehicleRegistered) {
+              // v1.58.11 — a verified user with no vehicle already met Saka on the
+              // web: ADVANCE to the first vehicle, never re-introduce (live 2026-11-04).
+              customReply = `Hi${firstName ? ` ${firstName}` : ''}! 👋 You're all set ✅ — what do you drive? One line is enough, e.g. *"Toyota Probox"*.`;
             } else {
               customReply = aiResult.reply_message && !aiResult.reply_message.includes('I am your Saka Fleet WhatsApp assistant') && !isLegacyWelcomeCopy(aiResult.reply_message)
                 ? aiResult.reply_message
@@ -4290,7 +4295,7 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
                     facts: {
                       prompt: unverified
                         ? 'Introduce Saka warmly in two short lines (what it does for their machine) and invite them to set up at https://sakafleet.com (Get Started Free). The word "plate" must not appear in your reply.'
-                        : 'Introduce Saka warmly in two short lines (what it does for their machine) and ask exactly ONE natural question: what do they drive? Invite them to set up at https://sakafleet.com (Get Started Free) as the alternative. The word "plate" must not appear in your reply.',
+                        : 'Greet warmly in ONE short line and offer ONE next step (log a fuel/expense, check the fleet, or set a reminder). Never ask them to introduce themselves again. The word "plate" must not appear in your reply.',
                       region: countryInfo,
                       plateExample: countryInfo.plate_example,
                       setupSteps: ['plate number', 'make/model, year, fuel, odometer', 'email OTP', 'VIN-locked passbook'],
@@ -4299,7 +4304,7 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
                     language: targetLang,
                     countryInfo,
                     profile: profileData,
-                    fallbackText: `Welcome to Saka Fleet 🚗 What do you drive? One line is enough — or set up at https://sakafleet.com.`
+                    fallbackText: `Hi${firstName ? ` ${firstName}` : ''}! 👋 What would you like to do — log a fuel/expense, or check your fleet?`
                   });
             }
           }

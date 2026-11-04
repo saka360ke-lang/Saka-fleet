@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.58.10  
+**Version:** 1.58.11  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.58.11** | Fresh-signup fix: verified users are never re-welcomed, the GREETING lane advances a verified vehicle-less user to their first vehicle, and the greeting is English-first / language-aware | 140 |
 | **1.58.10** | Self-documenting superadmin commands (registry + clarify) + autonomous customer care (tickets, inbound-email→WhatsApp, superadmin escalation) + driver/trial/coupon/nudge audit | 139 |
 | **1.58.9** | Profile-wipe phone-variant fix (bare 254… rows) + ops CLI + live reset of +254734852529 | 138 |
 | **1.58.8** | Cloud Run auto-deploy pipeline + OTP-gated profile wipe (`admin wipe`) + verified earnings save + post-signup conversion directive | 137 |
@@ -4187,3 +4188,10 @@ quiz engine:
 - **Driver / trial / coupon / nudge audit.** Audited + confirmed green: driver assign→OTP→accept→unassign→reassign (1-to-1 invariant), welcome-trial capacity (growth, 5 vehicles) + lapse→excess paused, dunning/re-engagement ladders, follow-ups and contact-nudge. `test_driver_assignment_gate`, `test_trial_engine`, `test_subscription_billing`, `test_dunning_reengagement`, `test_followups`, `test_contact_nudge` all pass.
 - **Recommended follow-ups (next iteration):** a "your requested feature shipped" user notice tied to adopted `PROP-*`, and per-release non-spammy changelog nudges with a 1-per-user-per-release cooldown (reuse `featureNotice.js`).
 - **Tests:** `test_customer_care.js` (12) + `test_profile_wipe` (14) + `test_deep_audit` (25) registered; `test_superadmin`, `test_update_suggest`, `test_env_audit` green; `npm run health` green.
+
+### 140. v1.58.11 - fresh-signup fix: never re-welcome a verified user + English-first greeting (2026-11-04)
+
+- **No re-welcome loop for verified accounts.** `isFirstContact()` (`src/services/greetings.js`) now returns `false` whenever `profile.email_verified === true`. A user who signed up on the website and then says "Hi" on WhatsApp is ADVANCED to their first vehicle instead of being welcomed again (live 2026-11-04: a fresh verified user received three welcomes in a row).
+- **Deterministic advance branch.** In the GREETING lane (`src/routes/whatsapp.js`) a verified user with **no vehicle** gets one short advance — "Hi <name>! 👋 You're all set ✅ — what do you drive? One line is enough, e.g. *"Toyota Probox"*." — instead of a fresh introduction. A verified user **with** a vehicle gets a one-line greeting + ONE next step (log / check fleet), never "what do you drive" again. Unverified numbers keep the website CTA; a true first contact keeps the full `sakaIntroText` welcome.
+- **English-first, language-aware greeting.** `greetingFor()` accepts a `language`; an explicitly English user is never greeted in the local tongue. `sakaIntroText()` derives the language from `profile.preferred_language` and is English-first for a known account with no language set, while a user who chose Swahili keeps the local greeting and the country default is preserved when there is no profile at all.
+- **Tests:** `test_greetings.js` Test 10 (verified ≠ first contact; English-first; Swahili preserved; country default preserved) and `test_first_message_flow.js` Test 1 rewritten to the advance contract; `test_agent_training` (155) green.

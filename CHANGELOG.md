@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.58.11] - 2026-11-04
+
+- **Fresh sign-ups are never re-welcomed.** `isFirstContact()` returns `false` for a verified account, so a user who set up on the website and then says "Hi" on WhatsApp is advanced to their first vehicle instead of being welcomed again (live: three welcomes in a row).
+- **Verified advances, unverified signs up.** The GREETING lane now gives a verified vehicle-less user one short advance ("You're all set ✅ — what do you drive?"), a verified user with a vehicle a one-line greeting + next step, and unverified numbers the website CTA.
+- **English-first, language-aware greeting.** `greetingFor()`/`sakaIntroText()` honour `preferred_language`: an English user (or a known account with no language set) is greeted in English, never "Habari"/"Karibu"; a Swahili user keeps the local greeting; the country default is preserved when there is no profile.
+- **Files:** src/services/greetings.js, src/routes/whatsapp.js, test_greetings.js, test_first_message_flow.js.
+- **Tests:** test_greetings (103), test_first_message_flow (53), test_agent_training (155) - green.
+
 ## [1.58.10] - 2026-11-04
 
 - **Self-documenting superadmin.** `ADMIN_COMMAND_REGISTRY` is the single source of truth; `admin help` is generated from it (never stale). An admin-looking message that matches no command gets a "did you mean…" clarification (2-3 closest commands + a plain-English example); normal chat still falls through.

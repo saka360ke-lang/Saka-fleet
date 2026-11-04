@@ -57,12 +57,17 @@ export function resolveDaypart(now = new Date(), timeZone = 'Africa/Nairobi') {
 }
 
 /** Country-aware opener: "Namaste! 🙏", "Habari! 👋", "Good evening! 🌙". */
-export function greetingFor({ countryInfo = null, now = new Date(), timeZone = null } = {}) {
+export function greetingFor({ countryInfo = null, now = new Date(), timeZone = null, language = null } = {}) {
   const code = String(countryInfo?.country_code || '').toUpperCase();
   const local = LOCAL_GREETINGS[code];
   const zone = timeZone || resolveUserTimezone({ countryInfo, profile: null });
   const daypart = resolveDaypart(now, zone);
-  if (local) {
+  // v1.58.11 — honour the user's chosen language: an explicitly English user is
+  // never greeted in the local tongue (live 2026-11-04: an English user got
+  // "Karibu!"). Country default is preserved for everyone else.
+  const lang = String(language || '').trim().toLowerCase();
+  const isEnglish = lang === 'english' || lang.startsWith('en');
+  if (local && !isEnglish) {
     return { text: `${local.word}! ${local.emoji}`, daypart, local: local.word };
   }
   const label = daypart.charAt(0).toUpperCase() + daypart.slice(1);
@@ -205,8 +210,15 @@ export function isStopRequest(text = '') {
  * brand-new user sees everything Saka can do for them at a glance. The list is
  * the same registry the on-demand "help" menu uses (SAKA_OPERATIONS).
  */
-export function sakaIntroText({ countryInfo = null, now = new Date(), profile = null, plateExample = null, nextStep = null } = {}) {
-  const { text: greeting } = greetingFor({ countryInfo, now });
+export function sakaIntroText({ countryInfo = null, now = new Date(), profile = null, plateExample = null, nextStep = null, language = null } = {}) {
+  // English-first intro for a known account: an unset language means the user has
+  // not chosen one yet, so open in English (never a surprise local greeting).
+  // With no profile at all we keep the localized default.
+  const { text: greeting } = greetingFor({
+    countryInfo,
+    now,
+    language: language || profile?.preferred_language || (profile ? 'English' : null)
+  });
   const example = plateExample || countryInfo?.plate_example || 'ABC 1234';
   const name = String(profile?.full_name || '').trim().split(/\s+/)[0];
   // v1.25.8 — never greet someone as the placeholder name "WhatsApp User".
@@ -231,6 +243,10 @@ export function websiteSignupNextStep() {
 /** True only for a genuinely fresh conversation (no persisted history, no vehicle). */
 export function isFirstContact({ session = null, dbHistory = [], profile = null, hasVehicleRegistered = false, now = Date.now(), newProfileWindowMs = 120000 } = {}) {
   if (hasVehicleRegistered) return false;
+  // v1.58.11 — a verified account was already welcomed on the web, so the user's
+  // next WhatsApp message must ADVANCE to "what do you drive?", never re-welcome
+  // (live 2026-11-04: a fresh verified user got three welcomes in a row).
+  if (profile?.email_verified === true) return false;
   // v1.24.3 — a profile created moments ago is a brand-new account, full stop.
   // This check runs BEFORE the history check because the turn's own user row can
   // land in chat_history before the history read on a slow database, which used

@@ -1,6 +1,12 @@
 {
-  "latest": "1.58.10",
+  "latest": "1.58.11",
   "entries": [
+    {
+      "version": "1.58.11",
+      "date": "2026-11-04",
+      "title": "A warmer hello",
+      "summary": "Already set up on the website? Say hi and Saka goes straight to your first vehicle instead of welcoming you again — and the greeting now follows the language you actually chose."
+    },
     {
       "version": "1.58.10",
       "date": "2026-11-04",

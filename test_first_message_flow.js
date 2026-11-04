@@ -93,14 +93,12 @@ async function run() {
     await supabase.from('profiles').insert([{ phone_number: phone, email_verified: true, full_name: 'Test Owner', country: 'Kenya', country_code: 'KE', unit_system: 'metric', preferred_language: 'English', subscription_tier: 'free' }]);
   }
   try {
-    console.log('--- Test 1: "Hi" receives the sales welcome ---');
+    console.log('--- Test 1: a verified user is advanced, never re-welcomed (v1.58.11) ---');
     const hi = await say('Hi');
-    check(/\*Saka\*/.test(hi), 'the welcome introduces Saka');
-    check(hi.includes('⛽') && hi.includes('💰') && hi.includes('🔔'), 'the welcome carries the three value anchors');
-    check(/sakafleet\.com/i.test(hi), 'the welcome ends with a next step (website signup)');
-    check(!/send your vehicle'?s? (?:number |registration )?plate/i.test(hi), 'the welcome never asks for a plate');
-    check(!/\bplates?\b/i.test(hi), 'the welcome never mentions the word plate');
-    check(!/keep moving|Happy to help you begin|Let's get you started/i.test(hi), 'the welcome is NOT replaced by a nudge');
+    check(/what do you drive|which vehicle|make and model/i.test(hi), 'a verified user is advanced to their first vehicle');
+    check(!/\*Saka\*|Karibu|Habari|I(?:'m| am) Saka/i.test(hi), 'a verified user is NOT re-introduced to Saka');
+    check(!/\bplates?\b/i.test(hi), 'the advance never mentions the word plate');
+    check(!/keep moving|Happy to help you begin|Let's get you started/i.test(hi), 'the advance is NOT a canned nudge');
     check(!/WhatsApp I'm/.test(hi), 'the placeholder name "WhatsApp User" is never used as a greeting');
 
     console.log('\n--- Test 2: pricing answers with the pricing card ---');
