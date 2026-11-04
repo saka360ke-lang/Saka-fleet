@@ -1,6 +1,8 @@
-# Saka Fleet backend — Cloud Run image (v1.58.8)
+# Saka Fleet backend — Cloud Run image (v1.58.10)
 # Build: gcloud run deploy saka-fleet --source .  (Cloud Build uses this Dockerfile)
-FROM node:20-slim
+# Node 22 is required: @supabase/supabase-js needs native WebSocket (Node 20 throws
+# "native WebSocket not found" on createClient at boot).
+FROM node:22-slim
 WORKDIR /app
 ENV NODE_ENV=production
 # Layer cache: install production deps first
