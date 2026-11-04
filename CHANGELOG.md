@@ -11,7 +11,7 @@
 - **Deep audit (rule 52) catch:** the WhatsApp passbook confirmation referenced a bare `launchAward` outside its frame — a granted award would have thrown `ReferenceError` while rendering. Fixed to `saved.launchAward`; the quiz completion path was already correct.
 - **Recurrence autopsy (rule 51):** defect class *campaign state promised by copy but not enforced by the engine* → award copy (rendered only when `granted`), website banner (fail-closed), status endpoint (fail-closed), stats digest (honest failure line), trial cap (engine-owned), second-award path (UNIQUE).
 - **Files:** src/services/{launchAwards(new),trialEngine,onboarding,quizEngine,webOnboarding,envAudit,superadmin}.js, index.js, scripts/{run_launch_awards_migration(new),health_audit,reset-db,provision_staging_schema}.js, .env.example, landing/{assets/js/main.js,data/changelog.json}, test_launch_award.js (new), test_trial_engine.js, test_web_onboarding.js, test_landing_static.js, test_agent_training.js, .clinerules, package.json, SAKA_FLEET_ARCHITECTURE.md, CHANGELOG.md.
-- **Suites run:** test_launch_award (22), test_trial_engine, test_subscription_billing, test_web_onboarding, test_landing_static, test_env_audit, test_doc_sync, test_agent_training, test_superadmin, test_quiz_flow - green; `npm run health` green.
+- **Suites run:** test_launch_award (23), test_trial_engine, test_subscription_billing, test_web_onboarding, test_landing_static, test_env_audit, test_doc_sync, test_agent_training, test_superadmin, test_quiz_flow - green; `npm run health` green.
 
 ## [1.58.25] - 2026-11-04
 
