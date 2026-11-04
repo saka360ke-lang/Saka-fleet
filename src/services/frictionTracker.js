@@ -18,7 +18,10 @@ export const FRICTION_TRACKER_SQL = `
   ALTER TABLE public.chat_friction_logs
     ADD COLUMN IF NOT EXISTS status text DEFAULT 'PENDING',
     ADD COLUMN IF NOT EXISTS resolved_at timestamp with time zone,
-    ADD COLUMN IF NOT EXISTS resolution text;
+    ADD COLUMN IF NOT EXISTS resolution text,
+    ADD COLUMN IF NOT EXISTS error_log_ids text[] DEFAULT '{}',
+    ADD COLUMN IF NOT EXISTS source text,
+    ADD COLUMN IF NOT EXISTS diagnosis jsonb;
   CREATE INDEX IF NOT EXISTS idx_friction_logs_status
     ON public.chat_friction_logs(status, detected_at DESC);
 `;
@@ -58,7 +61,18 @@ export async function markFrictionDeployed(supabase, id, resolution = '') {
       resolved_at: new Date().toISOString(),
       resolution: String(resolution || '').slice(0, 200)
     }).eq('id', (await resolveFrictionId(supabase, id)) || id);
-    return error ? { ok: false, reason: error.message } : { ok: true };
+    if (error) return { ok: false, reason: error.message };
+    let clearedErrors = 0;
+    try {
+      const realId = (await resolveFrictionId(supabase, id)) || id;
+      const { data: row } = await supabase.from('chat_friction_logs').select('error_log_ids').eq('id', realId).maybeSingle();
+      const ids = row && Array.isArray(row.error_log_ids) ? row.error_log_ids : [];
+      if (ids.length) {
+        const { error: e2 } = await supabase.from('error_logs').update({ status: 'resolved' }).in('id', ids);
+        if (!e2) clearedErrors = ids.length;
+      }
+    } catch { clearedErrors = 0; }
+    return { ok: true, clearedErrors };
   } catch (err) {
     return { ok: false, reason: err.message };
   }
@@ -72,6 +86,37 @@ export async function markFrictionPending(supabase, id) {
       resolved_at: null
     }).eq('id', (await resolveFrictionId(supabase, id)) || id);
     return error ? { ok: false, reason: error.message } : { ok: true };
+  } catch (err) {
+    return { ok: false, reason: err.message };
+  }
+}
+
+/**
+ * v1.58.14 - log a Sentinel finding as a friction point (log-only).
+ */
+export async function recordFriction(supabase, { phone = 'SENTINEL', frictionType = 'UNKNOWN', snippet = '', source = 'sentinel', diagnosis = null, errorLogIds = [] } = {}) {
+  if (!supabase) return { ok: false, reason: 'no client' };
+  const payload = {
+    user_phone: normalizeFrictionPhone(phone),
+    session_id: 'sentinel_' + String(phone || 'system').replace(/[^0-9]/g, ''),
+    friction_type: String(frictionType || 'UNKNOWN').slice(0, 60),
+    transcript_snippet: String(snippet || '').slice(0, 2000),
+    source,
+    diagnosis: diagnosis || null,
+    error_log_ids: Array.isArray(errorLogIds) ? errorLogIds.slice(0, 20) : [],
+    detected_at: new Date().toISOString()
+  };
+  try {
+    let { data, error } = await supabase.from('chat_friction_logs').insert([payload]).select('id').maybeSingle();
+    if (error && /error_log_ids|source|diagnosis/i.test(error.message)) {
+      const slim = { ...payload };
+      delete slim.source;
+      delete slim.diagnosis;
+      delete slim.error_log_ids;
+      ({ data, error } = await supabase.from('chat_friction_logs').insert([slim]).select('id').maybeSingle());
+    }
+    if (error) return { ok: false, reason: error.message };
+    return { ok: true, id: data?.id || null };
   } catch (err) {
     return { ok: false, reason: err.message };
   }
@@ -126,6 +171,7 @@ export default {
   activeFrictionOf,
   markFrictionDeployed,
   markFrictionPending,
+  recordFriction,
   listFrictionLog,
   resolveFrictionId,
   formatFrictionReply

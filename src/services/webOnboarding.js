@@ -14,6 +14,7 @@
 
 import crypto from 'crypto';
 import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
+import { sendExistingAccountNoticeEmail } from './mailer.js';
 
 export const WEB_ONBOARD_OTP_TABLE = 'web_onboard_otps';
 export const WEB_ONBOARD_OTP_TTL_MS = 10 * 60 * 1000; // 10 minutes
@@ -211,11 +212,10 @@ export async function completeWebOnboarding(supabase, { email, phone, firstName,
   if (!supabase) return { ok: false, error: 'no_client' };
   const fullName = [firstName, lastName].filter(Boolean).join(' ').trim() || null;
   try {
-    const { data: existing } = await supabase
-      .from('profiles')
-      .select('id, email_verified, full_name, preferred_language')
-      .eq('phone_number', phone)
-      .maybeSingle();
+    // v1.58.14 - resolve by phone variants (E.164 / bare / 9-digit tail) so a
+    // local-format submission reuses the existing profile instead of inserting
+    // a duplicate.
+    const existing = await findProfileByPhone(supabase, phone);
 
     if (existing) {
       const updates = { updated_at: new Date().toISOString() };
@@ -273,20 +273,13 @@ export async function completeWebOnboarding(supabase, { email, phone, firstName,
  *                        the new address and the profile email is updated
  */
 export async function inspectExistingSignup(supabase, { email, phone }) {
-  if (!supabase) return { state: 'none' };
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('id, email, email_verified')
-    .eq('phone_number', phone)
-    .maybeSingle();
-  if (!profile) return { state: 'none' };
-  if (profile.email_verified === true && String(profile.email || '').toLowerCase() === String(email || '').toLowerCase()) {
-    return { state: 'verified', profile };
-  }
-  if (profile.email && String(profile.email).toLowerCase() !== String(email || '').toLowerCase()) {
-    return { state: 'different_email', profile };
-  }
-  return { state: 'unverified', profile };
+  const { profile, matchedBy } = await findExistingProfile(supabase, { email, phone });
+  if (!profile) return { state: 'none', matchedBy: null };
+  const sameEmail = String(profile.email || '').toLowerCase() === String(email || '').toLowerCase();
+  if (matchedBy === 'email') return { state: 'email_exists', profile, matchedBy };
+  if (profile.email_verified === true && sameEmail) return { state: 'verified', profile, matchedBy };
+  if (profile.email && !sameEmail) return { state: 'different_email', profile, matchedBy };
+  return { state: 'unverified', profile, matchedBy };
 }
 
 /** Public audit helper so routes can stamp web-onboarding events. */
@@ -307,6 +300,79 @@ export async function pruneExpiredWebOnboardOtps(supabase) {
     .delete()
     .lt('expires_at', cutoff);
   return { ok: !error, error: error?.message };
+}
+
+/**
+ * v1.58.14 - phone-lookup variants. A user may type a local "07..." number,
+ * the bare digits, or the full E.164 form, while profiles store E.164. The
+ * 9-digit national tail lets a local-format submission match a stored "+254...".
+ */
+export function phoneVariants(phone) {
+  const digits = String(phone || '').replace(/[^\d]/g, '');
+  if (digits.length < 9 || digits.length > 15) return [];
+  const variants = ['+' + digits, digits];
+  const tail = digits.slice(-9);
+  if (tail.length === 9 && variants.indexOf(tail) === -1) variants.push(tail);
+  return variants;
+}
+
+/** Find a profile by phone variants (exact E.164/bare, then 9-digit suffix). */
+export async function findProfileByPhone(supabase, phone) {
+  if (!supabase) return null;
+  const variants = phoneVariants(phone);
+  if (!variants.length) return null;
+  const select = 'id, email, email_verified, phone_number, full_name, preferred_language';
+  const { data: exact } = await supabase.from('profiles').select(select).in('phone_number', variants).limit(3);
+  if (exact && exact.length) return { ...exact[0] };
+  const tail = variants[variants.length - 1];
+  if (tail.length !== 9) return null;
+  const { data: byTail } = await supabase.from('profiles').select(select).ilike('phone_number', '%' + tail).limit(3);
+  return byTail && byTail.length ? { ...byTail[0] } : null;
+}
+
+/** Find a profile by phone (variants) OR email (case-insensitive). */
+export async function findExistingProfile(supabase, { email, phone }) {
+  const byPhone = await findProfileByPhone(supabase, phone);
+  if (byPhone) return { profile: byPhone, matchedBy: 'phone' };
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  if (normalizedEmail) {
+    const { data: byEmail } = await supabase.from('profiles').select('id, email, email_verified, phone_number, full_name, preferred_language').ilike('email', normalizedEmail).limit(3);
+    if (byEmail && byEmail.length) return { profile: byEmail[0], matchedBy: 'email' };
+  }
+  return { profile: null, matchedBy: null };
+}
+
+/** Mask a phone for the duplicate-signup email: +254****852529. */
+export function maskPhone(phone) {
+  const digits = String(phone || '').replace(/[^\d]/g, '');
+  if (digits.length < 6) return String(phone || '');
+  const head = digits.slice(0, Math.min(4, digits.length - 4));
+  const tail = digits.slice(-4);
+  const stars = new Array(Math.max(2, digits.length - head.length - tail.length) + 1).join('*');
+  return '+' + head + stars + tail;
+}
+
+/**
+ * v1.58.14 - notify the account owner that a duplicate signup was blocked.
+ * Emails the stored address and pings the stored WhatsApp number (if a sender
+ * is injected), then stamps an audit row. Never throws.
+ */
+export async function notifyExistingSignup(supabase, { profile, email = null, phone = null, sendWhatsApp = null }) {
+  if (!profile) return { ok: false, reason: 'no-profile' };
+  const masked = maskPhone(profile.phone_number);
+  let emailed = false;
+  if (profile.email) {
+    try { emailed = await sendExistingAccountNoticeEmail(profile.email, { maskedPhone: masked }); } catch { emailed = false; }
+  }
+  let whatsapped = false;
+  if (profile.phone_number && typeof sendWhatsApp === 'function') {
+    try {
+      const text = "You already have a Saka account! We stopped a duplicate sign-up on sakafleet.com using your details. No new account was created - just message me here and we will keep going.";
+      whatsapped = (await sendWhatsApp(profile.phone_number, text)) !== false;
+    } catch { whatsapped = false; }
+  }
+  await writeAudit(supabase, 'WEB_ONBOARD_DUPLICATE_NOTIFIED', { email: email || null, phone: phone || null, profileId: profile.id, emailed, whatsapped });
+  return { ok: true, emailed, whatsapped, masked };
 }
 
 

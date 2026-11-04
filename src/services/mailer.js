@@ -503,4 +503,37 @@ export async function sendTransferReleasePinEmail({ targetEmail, ownerName, plat
     }
 }
 
+/**
+ * v1.58.14 - tell the account owner a duplicate website signup was blocked.
+ * Plain informational email (never an auth/OTP path, so it is not quota-muted).
+ */
+export async function sendExistingAccountNoticeEmail(targetEmail, { maskedPhone = null } = {}) {
+    if (!targetEmail || !process.env.RESEND_API_KEY) return false;
+    try {
+        const phoneLine = maskedPhone ? ' or the WhatsApp number <strong>' + maskedPhone + '</strong>' : '';
+        const html = '<div style="font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif; color: #1e293b; max-width: 520px; margin: auto; border: 1px solid #e2e8f0; padding: 24px; border-radius: 12px; background: #ffffff;">' +
+            '<h2 style="color: #0f172a; margin-top: 0;">You are already on board</h2>' +
+            '<p>Someone (hopefully you!) just tried to sign up for Saka Fleet again using your email' + phoneLine + '.</p>' +
+            '<p>Good news - <strong>you already have an account</strong>, so there is nothing to do. Just open WhatsApp and message Saka to keep going.</p>' +
+            '<p style="font-size: 13px; color: #64748b;">If this was not you, you can safely ignore this email. No new account was created.</p>' +
+            '<hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;">' +
+            '<p style="font-size: 12px; color: #94a3b8; margin: 0;">Saka Fleet - your machine memory.</p>' +
+            '</div>';
+        const { error } = await getResendClient().emails.send({
+            from: 'Saka Fleet <reports@reports.sakafleet.com>',
+            to: [targetEmail],
+            subject: 'You already have a Saka Fleet account',
+            html
+        });
+        if (error) {
+            console.error('[Resend Duplicate Notice Error]:', error);
+            return false;
+        }
+        return true;
+    } catch (err) {
+        console.error('[Resend Duplicate Notice Exception]:', err.message);
+        return false;
+    }
+}
+
 

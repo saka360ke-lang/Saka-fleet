@@ -6,7 +6,7 @@ import crypto from 'crypto';
 import { generateFleetReport, uploadReportToSupabase } from './reports.js';
 import { sendReportByEmail, sendMfaEmail, sendEmailOtp } from './src/services/mailer.js';
 import { processSakaMessage } from './sakaAi.js';
-import { runHealthCheck, runConversationRefinement, evaluateConversationalFriction, monitorActiveConversations, logSystemError, logChatTranscript, ensureSentinelTables, scanCloudRunAnomalies } from './src/workers/sentinel.js';
+import { runHealthCheck, runConversationRefinement, evaluateConversationalFriction, monitorActiveConversations, logSystemError, logChatTranscript, ensureSentinelTables, scanCloudRunAnomalies, sendProactiveWhatsApp } from './src/workers/sentinel.js';
 import { ensureSuperadminTables, isSuperadminPhone, sendMorningExecutiveBriefing, maybeSendAiBudgetAlert } from './src/services/superadmin.js';
 import { ensureVehicleTableColumns } from './src/services/vehicles.js';
 import { ensureTrialSchemaDefaults } from './src/services/trialSchema.js';
@@ -33,6 +33,7 @@ import { detectCountryFromPhone, buildGlobalContext, formatMoney } from './src/s
 import { formatNairobiDate } from './src/services/dateParser.js';
 import { runDeepAudit, isDeepAuditEnabled, parseDeepAuditSchedule } from './src/services/deepAudit.js';
 import { handleInboundSupportEmail } from './src/services/customerCare.js';
+import { handleInboundEmail } from './src/services/inboundEmail.js';
 import { ensureAiUsageLogsTable, installAiUsageSink, installAiBudgetGuard } from './src/services/aiUsageLog.js';
 import { ensureTurnLatencyTable } from './src/services/turnLatency.js';
 import { buildStatusResponse, isStatusAuthorized } from './src/services/statusProbe.js';
@@ -68,6 +69,7 @@ import {
   completeWebOnboarding,
   ensureWebOnboardOtpTable,
   inspectExistingSignup,
+  notifyExistingSignup,
   auditWebOnboardEvent,
   pruneExpiredWebOnboardOtps
 } from './src/services/webOnboarding.js';
@@ -526,8 +528,9 @@ fastify.post('/api/onboard', async (request, reply) => {
     // v1.40.0 — never re-onboard an already-verified account: the site shows
     // "you're all set" and points straight to WhatsApp.
     const existing = await inspectExistingSignup(supabase, { email, phone });
-    if (existing.state === 'verified') {
-      await auditWebOnboardEvent(supabase, 'WEB_ONBOARD_EXISTING', { email, phone, profileId: existing.profile?.id });
+    if (existing.state === 'verified' || existing.state === 'email_exists') {
+      await auditWebOnboardEvent(supabase, 'WEB_ONBOARD_EXISTING', { email, phone, profileId: existing.profile?.id, matchedBy: existing.matchedBy });
+      await notifyExistingSignup(supabase, { profile: existing.profile, email, phone, sendWhatsApp: sendMetaWhatsAppMessage });
       return {
         success: true,
         already_verified: true,
@@ -1091,18 +1094,21 @@ fastify.post('/api/whatsapp/webhook', handleWhatsAppWebhook);
 // v1.58.10 — inbound support email (Resend inbound) → relay to the user's
 // WhatsApp. Optional shared-secret gate via EMAIL_INBOUND_SECRET.
 fastify.post('/webhook/email/inbound', async (request, reply) => {
-  const secret = process.env.EMAIL_INBOUND_SECRET;
-  if (secret && request.headers['x-saka-inbound'] !== secret) {
+  const signingSecret = process.env.EMAIL_INBOUND_SIGNING_SECRET || null;
+  const legacySecret = process.env.EMAIL_INBOUND_SECRET;
+  if (!signingSecret && legacySecret && request.headers['x-saka-inbound'] !== legacySecret) {
     return reply.status(403).send({ error: 'forbidden' });
   }
-  const body = request.body || {};
-  const data = body.data || body;
-  const fromEmail = data.from || (data.envelope && data.envelope.from) || data.sender || null;
-  const text = data.text || data.plain || data.html || null;
-  const subject = data.subject || null;
-  const result = await handleInboundSupportEmail(supabase, { fromEmail, subject, text, sendWhatsApp: sendMetaWhatsAppMessage })
+  const rawBody = request.rawBody || (typeof request.body === 'string' ? request.body : JSON.stringify(request.body || {}));
+  const payload = request.body && typeof request.body === 'object' ? request.body : {};
+  const carePhone = process.env.CUSTOMER_CARE_PHONE || process.env.SUPERADMIN_PHONE || null;
+  const result = await handleInboundEmail(supabase, { payload, headers: request.headers, rawBody, secret: signingSecret, notify: sendProactiveWhatsApp, notifyPhone: carePhone })
     .catch((err) => ({ ok: false, reason: err.message }));
-  return { success: true, result };
+  if (result.rejected) return reply.status(401).send({ success: false, result });
+  const email = result.email || {};
+  const relay = await handleInboundSupportEmail(supabase, { fromEmail: email.fromEmail, subject: email.subject, text: result.textBody || email.subject || null, sendWhatsApp: sendMetaWhatsAppMessage })
+    .catch(() => ({ ok: false }));
+  return { success: true, result, relay };
 });
 
 // [Refactored to src/routes/whatsapp.js]

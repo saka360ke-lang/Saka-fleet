@@ -1,6 +1,12 @@
 {
-  "latest": "1.58.13",
+  "latest": "1.58.14",
   "entries": [
+    {
+      "version": "1.58.14",
+      "date": "2026-11-04",
+      "title": "One account, calmer alerts, real inbox",
+      "summary": "Signing up twice with the same number or email is now impossible and the owner is told, Sentinel flags friction for a human instead of offering fixes, and support@sakafleet.com email lands in the app ready to tend."
+    },
     {
       "version": "1.58.13",
       "date": "2026-11-04",

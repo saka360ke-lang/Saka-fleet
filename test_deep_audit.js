@@ -1,7 +1,7 @@
 import {
   isDeepAuditEnabled, parseDeepAuditSchedule,
   lintMojibake, lintNairobiTime, lintLedgerScoping, sanitizeFinding,
-  mintFindingProposal, hasRunThisWindow, recordDeepAuditRun, runDeepAudit,
+  mintFindingLog, mintFindingProposal, hasRunThisWindow, recordDeepAuditRun, runDeepAudit,
   DEEP_AUDIT_CATEGORY
 } from './src/services/deepAudit.js';
 
@@ -44,6 +44,7 @@ function makeMock() {
 
 async function run() {
   process.env.SENTINEL_DEEP_AUDIT_ENABLED = 'on';
+  process.env.SENTINEL_PROPOSALS_ENABLED = 'on';
 
   const sched = parseDeepAuditSchedule('Mon,Thu@03:00');
   check(sched.weekdays.has(1) && sched.weekdays.has(4) && sched.weekdays.size === 2 && sched.nairobiHour === 3, 'parses Mon,Thu@03:00');
@@ -87,6 +88,15 @@ async function run() {
   check(m1.db.remediation_proposals.length === 1 && m1.db.remediation_proposals[0].category === DEEP_AUDIT_CATEGORY, 'mint inserts one deep_audit_finding proposal');
   check(m1.db.remediation_proposals[0].status === 'PENDING_APPROVAL', 'minted proposal is PENDING_APPROVAL');
   check(b.ok === true && b.duplicate === true, 'second mint is deduped (same target_signature)');
+
+  process.env.SENTINEL_PROPOSALS_ENABLED = 'off';
+  const mLog = makeMock();
+  const refused = await mintFindingProposal(mLog.client, { runKey: 'DEEP-AUDIT-LOG', finding });
+  check(refused.ok === false && refused.reason === 'proposals_disabled', 'proposals are refused while the master switch is off');
+  const logged = await mintFindingLog(mLog.client, { runKey: 'DEEP-AUDIT-LOG', finding });
+  check(logged.ok === true && logged.logged === true, 'the finding is logged to chat_friction_logs instead');
+  check((mLog.db.chat_friction_logs || []).length === 1, 'one friction row is written');
+  process.env.SENTINEL_PROPOSALS_ENABLED = 'on';
 
   const m2 = makeMock();
   await recordDeepAuditRun(m2.client, { runKey: 'DEEP-AUDIT-2026-11-04', findings: [], summary: 'none' });

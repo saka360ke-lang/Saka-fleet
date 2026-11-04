@@ -20,6 +20,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { formatNairobiDate } from './dateParser.js';
 import { nextProposalCode } from './proposalRegistry.js';
+import { isSentinelProposalsEnabled } from './sentinelPolicy.js';
 
 export const DEEP_AUDIT_ACTION = 'SENTINEL_DEEP_AUDIT';
 export const DEEP_AUDIT_CATEGORY = 'deep_audit_finding';
@@ -231,8 +232,36 @@ export function sanitizeFinding(finding) {
   return { ...finding, files };
 }
 
+/** v1.58.14 - log-only finding: a friction entry for a human to tend later. */
+export async function mintFindingLog(supabase, { runKey, finding } = {}) {
+  if (!supabase || !finding) return { ok: false, reason: 'missing' };
+  if (!isDeepAuditEnabled()) return { ok: false, reason: 'disabled' };
+  try {
+    const { data, error } = await supabase.from('chat_friction_logs').insert([{
+      user_phone: 'SENTINEL',
+      session_id: 'deep_audit',
+      friction_type: 'DEEP_AUDIT_FINDING',
+      transcript_snippet: String(finding.title + ' :: ' + (finding.description || '')).slice(0, 2000),
+      source: 'deep_audit',
+      diagnosis: {
+        run_key: runKey,
+        slug: finding.slug,
+        severity: finding.severity || 'medium',
+        files: finding.files || [],
+        remediation: String(finding.remediation || '').slice(0, 2000)
+      },
+      detected_at: new Date().toISOString()
+    }]).select('id').maybeSingle();
+    if (error) return { ok: false, reason: error.message };
+    return { ok: true, logged: true, id: data?.id || null };
+  } catch (err) {
+    return { ok: false, reason: err.message };
+  }
+}
+
 /** Mint one deduped PENDING_APPROVAL proposal for a finding. */
 export async function mintFindingProposal(supabase, { runKey, finding } = {}) {
+  if (!isSentinelProposalsEnabled()) return { ok: false, reason: 'proposals_disabled' };
   if (!supabase || !finding) return { ok: false, reason: 'missing' };
   if (!isDeepAuditEnabled()) return { ok: false, reason: 'disabled' };
   const signature = `DEEP-AUDIT:${runKey}:${finding.slug}`;
@@ -336,7 +365,10 @@ export async function runDeepAudit(supabase, { dryRun = false, force = false } =
     const results = [];
     if (!dryRun) {
       for (const finding of findings) {
-        results.push({ slug: finding.slug, ...await mintFindingProposal(supabase, { runKey, finding }) });
+        const minted = isSentinelProposalsEnabled()
+          ? await mintFindingProposal(supabase, { runKey, finding })
+          : await mintFindingLog(supabase, { runKey, finding });
+        results.push({ slug: finding.slug, ...minted });
       }
       const summary = findings.length
         ? `${findings.length} deep-audit finding(s): ${findings.map((f) => f.slug).join(', ')}`
@@ -368,6 +400,7 @@ export default {
   lintSilentFailures,
   collectSourceFiles,
   sanitizeFinding,
+  mintFindingLog,
   mintFindingProposal,
   hasRunThisWindow,
   recordDeepAuditRun,

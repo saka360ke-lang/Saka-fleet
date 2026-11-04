@@ -91,7 +91,13 @@ const STATLESS_SUITES = [
   'test_record_answers.js',
   // v1.39.0 — marketing site contract + web onboarding handshake.
   'test_landing_static.js',
-  'test_web_onboarding.js'
+  'test_web_onboarding.js',
+  // v1.58.14 - duplicate website signup prevention (phone variants + email).
+  'test_duplicate_signup.js',
+  // v1.58.14 - Sentinel proposals master switch + log-only findings.
+  'test_sentinel_policy.js',
+  // v1.58.14 - Resend inbound email (Svix verify + ticket + care ping).
+  'test_inbound_email.js'
 ];
 
 const WORKFLOW_DIR = '.github/workflows';

@@ -38,22 +38,41 @@ function createMockSupabase(seed = {}) {
   const db = {};
   for (const [name, rows] of Object.entries(seed)) db[name] = rows.map((row) => ({ ...row }));
 
+  function rowMatches(row, [c, v]) {
+    if (typeof c === 'string' && c.startsWith('__in__')) {
+      const col = c.slice(6);
+      return Array.isArray(v) && v.indexOf(row[col]) !== -1;
+    }
+    if (typeof c === 'string' && c.startsWith('__ilike__')) {
+      const col = c.slice(9);
+      const value = String(row[col] || '').toLowerCase();
+      const pat = String(v || '').toLowerCase();
+      if (pat.startsWith('%') && pat.endsWith('%')) return value.indexOf(pat.slice(1, -1)) !== -1;
+      if (pat.startsWith('%')) return value.endsWith(pat.slice(1));
+      if (pat.endsWith('%')) return value.startsWith(pat.slice(0, -1));
+      return value === pat;
+    }
+    return row[c] === v;
+  }
+
   function makeQuery(rows) {
     const filters = [];
     let orderBy = null;
     const q = {
       eq: (col, value) => { filters.push([col, value]); return q; },
       is: (col, value) => { filters.push([col, value]); return q; },
+      in: (col, values) => { filters.push(['__in__' + col, values]); return q; },
+      ilike: (col, pattern) => { filters.push(['__ilike__' + col, pattern]); return q; },
       order: (col, opts) => { orderBy = { col, dir: opts?.ascending === false ? 'desc' : 'asc' }; return q; },
       limit: async (n) => {
-        let out = rows.filter((row) => filters.every(([c, v]) => row[c] === v));
+        let out = rows.filter((row) => filters.every((f) => rowMatches(row, f)));
         if (orderBy) out.sort((a, b) => (orderBy.dir === 'asc'
           ? String(a[orderBy.col]).localeCompare(String(b[orderBy.col]))
           : String(b[orderBy.col]).localeCompare(String(a[orderBy.col]))));
         return { data: out.slice(0, n) };
       },
       maybeSingle: async () => {
-        const out = rows.filter((row) => filters.every(([c, v]) => row[c] === v));
+        const out = rows.filter((row) => filters.every((f) => rowMatches(row, f)));
         return out.length === 0 ? { data: null } : { data: { ...out[0] } };
       }
     };

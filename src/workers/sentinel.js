@@ -13,6 +13,7 @@ import { SAKA_TONE_COMPASS } from '../services/flowKnowledge.js';
 import { isConversationDiagnosisEnabled, diagnoseConversationMismatch, recordConversationProposal } from '../services/conversationDiagnosis.js';
 import { PROMPT_REFINEMENT_MARKER, MAX_STORED_PROMPT_REFINEMENT_CHARS } from '../../sakaAi.js';
 import { normalizeFrictionPhone, markFrictionDeployed } from '../services/frictionTracker.js';
+import { isSentinelProposalsEnabled } from '../services/sentinelPolicy.js';
 
 function getSupabase(providedSupabase) {
   if (providedSupabase) return providedSupabase;
@@ -913,6 +914,19 @@ async function processFrictionPatches(supabase, detectedFrictions) {
         transcript_snippet: friction.snippet,
         detected_at: new Date().toISOString()
       }]);
+      // v1.58.14 - Sentinel is log-only by default: link the unresolved error
+      // logs this friction relates to so admin friction done clears them.
+      try {
+        if (!isSentinelProposalsEnabled()) {
+          const since = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
+          const { data: errs } = await supabase.from('error_logs').select('id').eq('status', 'unresolved').gte('created_at', since).limit(10);
+          const ids = (errs || []).map((r) => r.id);
+          if (ids.length) {
+            const { data: fr } = await supabase.from('chat_friction_logs').select('id').eq('user_phone', normalizeFrictionPhone(friction.phone)).eq('friction_type', friction.type).order('detected_at', { ascending: false }).limit(1);
+            if (fr && fr.length) await supabase.from('chat_friction_logs').update({ error_log_ids: ids }).eq('id', fr[0].id);
+          }
+        }
+      } catch { /* best-effort */ }
     } catch (logErr) {
       console.warn('[Sentinel Friction Log Warning]:', logErr.message);
     }

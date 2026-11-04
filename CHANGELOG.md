@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.58.14] - 2026-11-04
+
+- **Duplicate website signups are blocked (and the owner is told).** Typing `0734852529` with `+254` no longer becomes `+2540734852529`; `/api/onboard` matches phone variants AND email, never re-creates an existing account, sends an "already on board" email plus a WhatsApp reminder, and blocks `email_exists` outright.
+- **Sentinel detects, never proposes.** New `SENTINEL_PROPOSALS_ENABLED` (default off) gates conversation diagnosis, deep-audit proposal minting and CI plan dispatch. With it off, findings land in `chat_friction_logs` with the associated `error_log_ids`; `admin friction done <id>` marks the point deployed and resolves those errors, so the log clears when tended.
+- **Resend inbound email.** support@sakafleet.com mail is verified with the Svix signature (`EMAIL_INBOUND_SIGNING_SECRET`), parsed, body-fetched, stored as a support ticket, pinged to `CUSTOMER_CARE_PHONE`, and listed by `admin inbox` / `admin inbox read <id>`. Replies still relay to the sender WhatsApp.
+- **Rules of engagement:** audit before acting on any remediation/proposal; consult `.clinerules` before every plan/act operation.
+- **Files:** src/services/{webOnboarding,mailer,inboundEmail,sentinelPolicy,conversationDiagnosis,deepAudit,frictionTracker,superadmin,envAudit}.js, src/workers/{sentinel,remediation}.js, src/routes/whatsapp.js, index.js, landing/assets/js/main.js, .clinerules, .env.example, scripts/health_audit.js.
+- **Tests:** test_duplicate_signup (14), test_sentinel_policy (17), test_inbound_email (18), test_deep_audit (28), test_friction_tracker (10), test_conversation_diagnosis (11), test_remediation_pipeline (74), test_web_onboarding (41), test_greetings (110), test_first_message_flow (53), test_superadmin, test_customer_care (12) - green; `npm run health` green.
+
 ## [1.58.13] - 2026-11-04
 
 - **Remediation alerts list pending only.** The urgent page no longer fires on raw error volume — it keys on the count of PENDING proposals and lists just those (`REMEDIATION_URGENT_PENDING_THRESHOLD`, default 10; the old `REMEDIATION_URGENT_ERROR_THRESHOLD` is read as a fallback).

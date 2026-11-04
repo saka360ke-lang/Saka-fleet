@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.58.13  
+**Version:** 1.58.14  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.58.14** | Duplicate-signup block (phone variants + email + owner notice) + Sentinel log-only policy (no autonomous proposals; errors clear when tended) + Resend inbound email with Svix verification and admin inbox | 143 |
 | **1.58.13** | Pending-only remediation alerts (threshold = pending backlog) + unverified-gate confusion clarification (PROP-2026-11-04-01) + phantom 90-day trial fix (legacy default dropped, data remediated) | 142 |
 | **1.58.12** | Zero-vehicle owner: the snapshot no longer offers a driver-licence fill step before a vehicle exists (snapshot noise fix) | 141 |
 | **1.58.11** | Fresh-signup fix: verified users are never re-welcomed, the GREETING lane advances a verified vehicle-less user to their first vehicle, and the greeting is English-first / language-aware | 140 |
@@ -4213,3 +4214,12 @@ quiz engine:
 - **Tests:** `test_greetings` (+7 confused-turn), `test_user_data_access` (+1 phantom guard, 21), `test_remediation_pipeline` (+2 pending-keyed), `test_trial_engine` (73), `test_subscription_billing` (75), `test_web_onboarding` (41) green; `npm run health` green.
 
 
+
+### 143. v1.58.14 - duplicate-signup block + Sentinel log-only policy + Resend inbound email (2026-11-04)
+
+- **Website duplicate signups are impossible.** `landing/assets/js/main.js` now strips a leading trunk `0` before prepending the country code (typing `0734852529` with `+254` no longer becomes `+2540734852529`). Backend `webOnboarding.js` adds `phoneVariants()` (E.164 / bare / 9-digit national tail), `findProfileByPhone()`, `findExistingProfile()` (phone OR email, case-insensitive) and `notifyExistingSignup()`. `inspectExistingSignup()` returns `email_exists` when the submitted email already belongs to a profile; `/api/onboard` blocks `verified` and `email_exists`, sends an "already on board" email (`sendExistingAccountNoticeEmail`) plus a one-line WhatsApp reminder to the stored number, and returns `already_verified` so the site shows "you are all set". `completeWebOnboarding()` resolves by phone variants, so a local-format submission updates the existing profile instead of inserting a duplicate. Audit: `WEB_ONBOARD_DUPLICATE_NOTIFIED`.
+- **Sentinel detects, never offers proposals.** New `src/services/sentinelPolicy.js` exposes `isSentinelProposalsEnabled()` reading `SENTINEL_PROPOSALS_ENABLED` (default **off**). When off: `conversationDiagnosis.isConversationDiagnosisEnabled()` is false (no diagnosis, no `PROP-*`), `deepAudit.mintFindingProposal()` returns `proposals_disabled` and `runDeepAudit()` routes findings to `mintFindingLog()` (a `chat_friction_logs` row with `friction_type='DEEP_AUDIT_FINDING'`, `source='deep_audit'`, `diagnosis` JSON), and `checkRemediationPlanTriggers()` returns skipped (no CI dispatch). `sentinel.js` links recent unresolved `error_logs` to the friction row. `frictionTracker.js` gains `error_log_ids text[]`, `source text`, `diagnosis jsonb`, a `recordFriction()` helper, and `markFrictionDeployed()` now ALSO sets the linked `error_logs.status='resolved'` - `admin friction done <id>` therefore clears the log once the issue is tended.
+- **Resend inbound email for support@sakafleet.com.** New `src/services/inboundEmail.js`: `verifyResendSignature()` (Svix `svix-id` / `svix-timestamp` / `svix-signature`, HMAC-SHA256 over `id.timestamp.rawBody`, 5-minute tolerance), `parseInboundEmail()` for the `email.received` metadata, `fetchInboundEmailBody()` (Resend Get Email API - the webhook carries no body), and `handleInboundEmail()` which verifies, parses, fetches, opens a `support_tickets` row (`issue_category='email'`) and pings the customer-care worker (`CUSTOMER_CARE_PHONE`, falling back to `SUPERADMIN_PHONE`). `/webhook/email/inbound` now uses the raw body retained by the existing `addContentTypeParser`, honours the optional `EMAIL_INBOUND_SIGNING_SECRET` (legacy `EMAIL_INBOUND_SECRET` header still accepted) and still relays a reply to the sender's WhatsApp via `handleInboundSupportEmail`. New superadmin commands: `admin inbox` and `admin inbox read <id>`.
+- **Env:** `SENTINEL_PROPOSALS_ENABLED` (off), `EMAIL_INBOUND_SIGNING_SECRET`, `CUSTOMER_CARE_PHONE` registered in `envAudit.js` and `.env.example`.
+- **Rules:** `.clinerules` 44 (audit before acting on any remediation/proposal), 45 (consult the rules before every plan/act operation), 46 (Sentinel detects, never proposes), 47 (duplicate signups blocked + owner notified).
+- **Tests:** `test_duplicate_signup` (14), `test_sentinel_policy` (17), `test_inbound_email` (18), `test_deep_audit` (28), `test_friction_tracker` (10), `test_conversation_diagnosis` (11), `test_remediation_pipeline` (74), `test_web_onboarding` (41), `test_greetings` (110), `test_first_message_flow` (53), `test_superadmin`, `test_customer_care` (12) - green.

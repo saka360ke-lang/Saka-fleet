@@ -5,6 +5,7 @@ import { formatNairobiDate } from '../services/dateParser.js';
 import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
 import { sendAdminNotificationEmail, sendRemediationProposalEmail, sendRemediationDigestEmail } from '../services/mailer.js';
 import { dispatchRepositoryEvent, isRemediationAutonomyEnabled } from '../services/githubDispatch.js';
+import { isSentinelProposalsEnabled } from '../services/sentinelPolicy.js';
 import { sendProactiveWhatsApp } from './sentinel.js';
 import { upsertIncident } from '../services/incidents.js';
 import { validateAiModelUpdatePlan, verifyModelUpdateAgainstRegistry, getModelWatchdogSummary } from '../services/aiModelRegistry.js';
@@ -1020,6 +1021,9 @@ export function selectPlanTriggerClusters(clusters = [], { triggerCount = REMEDI
  */
 export async function checkRemediationPlanTriggers(providedSupabase, { now = new Date() } = {}) {
   const supabase = getSupabase(providedSupabase);
+  if (!isSentinelProposalsEnabled()) {
+    return { status: 'skipped', reason: 'SENTINEL_PROPOSALS_ENABLED is off.' };
+  }
   if (!isRemediationAutonomyEnabled()) {
     return { status: 'skipped', reason: 'REMEDIATION_AUTONOMY is not enabled.' };
   }

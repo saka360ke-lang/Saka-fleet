@@ -1,4 +1,5 @@
 import { chatCompletion, parseJsonSafely } from './aiClient.js';
+import { isSentinelProposalsEnabled } from './sentinelPolicy.js';
 import { formatNairobiDate } from './dateParser.js';
 
 /**
@@ -19,6 +20,7 @@ const PENDING = 'PENDING_APPROVAL';
 const DIAGNOSIS_FORBIDDEN = /(^|\/)(\.env|\.clinerules|\.github|supabase)(\/|$)|paystack\.js|transfers\.js|githubDispatch\.js|remediation(\.js|_ci\.js)|run_vin_immutability|reset-db|provision_staging|otp|vin_immutability/i;
 
 export function isConversationDiagnosisEnabled() {
+  if (!isSentinelProposalsEnabled()) return false;
   return /^(?:on|true|1)$/i.test(String(process.env.CONVERSATION_DIAGNOSIS_ENABLED || 'off'));
 }
 
@@ -78,6 +80,7 @@ export async function diagnoseConversationMismatch({ snippet = '', frictionType 
 
 /** Mint a PROP- code and save the diagnosis as a PENDING_APPROVAL proposal. */
 export async function recordConversationProposal({ supabase, phone = null, frictionType = 'USER_FRUSTRATION', snippet = '', diagnosis = null } = {}) {
+  if (!isSentinelProposalsEnabled()) return { ok: false, reason: 'proposals_disabled' };
   if (!supabase || !diagnosis) return { ok: false, reason: 'no-diagnosis' };
   try {
     const today = formatNairobiDate();

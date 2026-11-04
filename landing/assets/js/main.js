@@ -54,7 +54,7 @@
     var lastName = $('lastName').value.trim();
     var email = $('email').value.trim().toLowerCase();
     var cc = $('countryCode').value;
-    var digits = cleanDigits($('phone').value);
+    var digits = cleanDigits($('phone').value).replace(/^0+/, '');
     var honeypot = $('website').value;
 
     var ok = true;

@@ -31,6 +31,7 @@ import { getTurnLatencySummary } from './turnLatency.js';
 import { getOcrUsageSummary, getOcrCountryProfileStats } from './ocrTelemetry.js';
 import { auditEnv, formatEnvDigest, parseEnvKeys, envTemplateKeys } from './envAudit.js';
 import { listFrictionLog, formatFrictionReply, markFrictionDeployed, FRICTION_CLEARED_AFTER_HOURS } from './frictionTracker.js';
+import { listInboundEmails, getInboundEmail, formatInboxReply, formatInboundEmailReply } from './inboundEmail.js';
 import { getFeatureRolloutStatus, FEATURE_NOTICE_VERSION } from './featureNotice.js';
 import {
   listKbDrafts,
@@ -360,6 +361,13 @@ export async function parseSuperadminCommand(messageText) {
   const frictionMatch = text.match(/^\s*admin\s+friction\s*(pending|deployed|log|active)?\s*$/i);
   if (frictionMatch) {
     return { intent: "ADMIN_FRICTION", filter: (frictionMatch[1] || "active").toLowerCase() };
+  }
+  const inboxReadMatch = text.match(/^\s*admin\s+inbox\s+read\s+([0-9a-fA-F-]{6,36})\s*$/i);
+  if (inboxReadMatch) {
+    return { intent: 'ADMIN_INBOX_READ', inbound_id: inboxReadMatch[1] };
+  }
+  if (/^\s*admin\s+inbox\s*$/i.test(text)) {
+    return { intent: 'ADMIN_INBOX' };
   }
 
   const adoptFeatureMatch = text.match(/^\s*admin\s+adopt\s+([a-zA-Z0-9-]+)\s*$/i);
@@ -1616,6 +1624,16 @@ export async function captureUpdateSuggestion(supabase, adminPhone, suggestionTe
 }
 
 /** v1.56.4 - friction-point tracker (pending/deployed + 4h auto-clear + persistent log). */
+export async function handleAdminInbox(supabase) {
+  const rows = await listInboundEmails(supabase, 10);
+  return { reply: formatInboxReply(rows) };
+}
+
+export async function handleAdminInboxRead(supabase, id) {
+  const row = await getInboundEmail(supabase, id);
+  return { reply: formatInboundEmailReply(row) };
+}
+
 export async function handleAdminFriction(supabase, filter = "active") {
   const rows = await listFrictionLog(supabase, 60);
   const reply = formatFrictionReply(rows, filter === "log" ? "log" : "active");
@@ -2162,6 +2180,8 @@ export const ADMIN_COMMAND_REGISTRY = Object.freeze([
     { cmd: 'status of <CODE>', desc: 'one proposal status', ex: ['status of PROP-2026-11-04-01'] },
     { cmd: 'admin friction [pending|deployed|log]', desc: 'friction points', ex: ['admin friction pending'] },
     { cmd: 'admin friction done <id>', desc: 'mark a friction point fixed', ex: ['admin friction done 1a2b3c4d'] },
+    { cmd: 'admin inbox', desc: 'inbound support emails', ex: ['admin inbox'] },
+    { cmd: 'admin inbox read <id>', desc: 'open one inbound email', ex: ['admin inbox read 1a2b3c4d'] },
     { cmd: 'admin adopt <FEAT/PROP-code>', desc: 'adopt a feature/proposal for review', ex: ['admin adopt FEAT-2026-W44-01'] },
     { cmd: 'UPDATE-SUGGEST> <text>', desc: 'file a free-text update suggestion', ex: ['UPDATE-SUGGEST> redirect chat signups to the site'] },
     { cmd: 'admin quick-edit', desc: 'interactive quick-edit preview', ex: ['admin quick-edit'] }
@@ -2396,6 +2416,18 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
       isSuperadmin: true,
       reply: listRes.reply
     };
+  }
+
+  if (parsedCommand.intent === 'ADMIN_INBOX') {
+    const inboxRes = await handleAdminInbox(supabase);
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_INBOX', {});
+    return { isSuperadmin: true, reply: inboxRes.reply };
+  }
+
+  if (parsedCommand.intent === 'ADMIN_INBOX_READ') {
+    const inboxReadRes = await handleAdminInboxRead(supabase, parsedCommand.inbound_id);
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_INBOX_READ', { inbound_id: parsedCommand.inbound_id });
+    return { isSuperadmin: true, reply: inboxReadRes.reply };
   }
 
   if (parsedCommand.intent === "ADMIN_FRICTION") {
