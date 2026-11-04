@@ -31,6 +31,7 @@ import { createResilientClient } from './src/services/supabaseClient.js';
 import { detectCountryFromPhone, buildGlobalContext, formatMoney } from './src/services/globalization.js';
 import { formatNairobiDate } from './src/services/dateParser.js';
 import { runDeepAudit, isDeepAuditEnabled, parseDeepAuditSchedule } from './src/services/deepAudit.js';
+import { handleInboundSupportEmail } from './src/services/customerCare.js';
 import { ensureAiUsageLogsTable, installAiUsageSink, installAiBudgetGuard } from './src/services/aiUsageLog.js';
 import { ensureTurnLatencyTable } from './src/services/turnLatency.js';
 import { buildStatusResponse, isStatusAuthorized } from './src/services/statusProbe.js';
@@ -1085,6 +1086,23 @@ async function handleWhatsAppWebhook(request, reply) {
 fastify.post('/webhook', handleWhatsAppWebhook);
 fastify.post('/webhook/whatsapp', handleWhatsAppWebhook);
 fastify.post('/api/whatsapp/webhook', handleWhatsAppWebhook);
+
+// v1.58.10 — inbound support email (Resend inbound) → relay to the user's
+// WhatsApp. Optional shared-secret gate via EMAIL_INBOUND_SECRET.
+fastify.post('/webhook/email/inbound', async (request, reply) => {
+  const secret = process.env.EMAIL_INBOUND_SECRET;
+  if (secret && request.headers['x-saka-inbound'] !== secret) {
+    return reply.status(403).send({ error: 'forbidden' });
+  }
+  const body = request.body || {};
+  const data = body.data || body;
+  const fromEmail = data.from || (data.envelope && data.envelope.from) || data.sender || null;
+  const text = data.text || data.plain || data.html || null;
+  const subject = data.subject || null;
+  const result = await handleInboundSupportEmail(supabase, { fromEmail, subject, text, sendWhatsApp: sendMetaWhatsAppMessage })
+    .catch((err) => ({ ok: false, reason: err.message }));
+  return { success: true, result };
+});
 
 // [Refactored to src/routes/whatsapp.js]
 

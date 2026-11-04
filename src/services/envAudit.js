@@ -55,7 +55,7 @@ export const ENV_SECTIONS = Object.freeze([
     ]
   },
   { section: 'META WHATSAPP', keys: ['META_PHONE_NUMBER_ID', 'META_WHATSAPP_TOKEN', 'META_VERIFY_TOKEN', 'META_APP_SECRET', 'META_WELCOME_TEMPLATE_NAME'] },
-  { section: 'EMAIL', keys: ['RESEND_API_KEY'] },
+  { section: 'EMAIL', keys: ['RESEND_API_KEY', 'EMAIL_INBOUND_SECRET'] },
   {
     section: 'OCR & VISION',
     keys: [

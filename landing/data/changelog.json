@@ -1,6 +1,12 @@
 {
-  "latest": "1.58.9",
+  "latest": "1.58.10",
   "entries": [
+    {
+      "version": "1.58.10",
+      "date": "2026-11-04",
+      "title": "Saka answers for itself",
+      "summary": "The admin command list documents itself, and support now runs end-to-end: a request becomes a ticket, high-priority ones ping the team instantly, and an emailed reply lands back on the customer's WhatsApp."
+    },
     {
       "version": "1.58.9",
       "date": "2026-11-04",

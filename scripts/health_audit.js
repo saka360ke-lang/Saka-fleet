@@ -46,6 +46,8 @@ const STATLESS_SUITES = [
   'test_v1583.js',
   // v1.58.8 - OTP-gated profile wipe (clean sign-up).
   'test_profile_wipe.js',
+  // v1.58.10 - autonomous customer care (tickets + inbound-email relay).
+  'test_customer_care.js',
   // v1.58.5 - bi-weekly Sentinel deep audit (checks + proposal minting + idempotency).
   'test_deep_audit.js',
   // v1.24.2 — the wipe registry and its TRUNCATE SQL must never drift apart.

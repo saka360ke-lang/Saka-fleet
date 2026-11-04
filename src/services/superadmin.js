@@ -2130,22 +2130,112 @@ export function formatFeatureRolloutReply(status) {
 }
 
 /**
- * Deterministic superadmin command list (v1.24.2). Zero tokens, zero provider
- * calls — `admin help` / `superadmin commands` must answer instantly even when
- * every AI provider is timing out.
+ * Deterministic superadmin command registry (v1.58.10) — the SINGLE source of
+ * truth for the command list. `admin help` is generated from THIS, so adding a
+ * command here (once) automatically documents it. Zero tokens.
+ */
+export const ADMIN_COMMAND_REGISTRY = Object.freeze([
+  { group: 'Session', items: [
+    { cmd: 'adminstart', desc: 'open a 30-min admin session', ex: ['adminstart'] },
+    { cmd: 'adminstop', desc: 'close the admin session', ex: ['adminstop'] },
+    { cmd: 'admin help', desc: 'list every command (this list)', ex: ['admin help', 'list admin commands'] }
+  ] },
+  { group: 'Snapshots', items: [
+    { cmd: 'admin report', desc: 'full system snapshot (users, vehicles, health)', ex: ['admin report'] },
+    { cmd: 'admin alerts', desc: 'recent alerts + unresolved errors', ex: ['admin alerts'] },
+    { cmd: 'admin audit <query>', desc: 'search the admin audit log', ex: ['admin audit wipe'] },
+    { cmd: 'check health', desc: 'live health check', ex: ['check health'] }
+  ] },
+  { group: 'Fleet', items: [
+    { cmd: 'profiles report', desc: 'user / profile statistics', ex: ['profiles report'] },
+    { cmd: 'admin trial-stats', desc: 'trial funnel + conversion', ex: ['admin trial-stats'] },
+    { cmd: 'admin ai-stats [Nh]', desc: 'AI usage + cost (default 24h)', ex: ['admin ai-stats', 'admin ai-stats 48h'] },
+    { cmd: 'admin ocr-stats [Nh]', desc: 'OCR usage summary', ex: ['admin ocr-stats'] },
+    { cmd: 'admin ocr-profile [KE]', desc: 'per-country OCR profile', ex: ['admin ocr-profile KE'] },
+    { cmd: 'admin latency [Nh]', desc: 'reply-speed digest', ex: ['admin latency 24h'] },
+    { cmd: 'admin env', desc: 'env / secret parity (names only)', ex: ['admin env'] }
+  ] },
+  { group: 'Fixes & governance', items: [
+    { cmd: 'admin backlog', desc: 'all open fixes / proposals', ex: ['admin backlog', 'show me pending proposals'] },
+    { cmd: 'admin remediations [pending|deployed]', desc: 'remediation backlog', ex: ['admin remediations pending'] },
+    { cmd: 'admin accept|decline|modify fix <CODE>', desc: 'decide a proposal', ex: ['admin accept fix PROP-2026-11-04-01'] },
+    { cmd: 'status of <CODE>', desc: 'one proposal status', ex: ['status of PROP-2026-11-04-01'] },
+    { cmd: 'admin friction [pending|deployed|log]', desc: 'friction points', ex: ['admin friction pending'] },
+    { cmd: 'admin friction done <id>', desc: 'mark a friction point fixed', ex: ['admin friction done 1a2b3c4d'] },
+    { cmd: 'admin adopt <FEAT/PROP-code>', desc: 'adopt a feature/proposal for review', ex: ['admin adopt FEAT-2026-W44-01'] },
+    { cmd: 'UPDATE-SUGGEST> <text>', desc: 'file a free-text update suggestion', ex: ['UPDATE-SUGGEST> redirect chat signups to the site'] },
+    { cmd: 'admin quick-edit', desc: 'interactive quick-edit preview', ex: ['admin quick-edit'] }
+  ] },
+  { group: 'Growth', items: [
+    { cmd: 'generate coupon <pct>', desc: 'create a discount coupon', ex: ['generate coupon 20%'] },
+    { cmd: 'admin horizon', desc: 'synthesize the weekly feature blueprint', ex: ['admin horizon'] },
+    { cmd: 'admin proposals', desc: 'Horizon feature proposals', ex: ['admin proposals'] }
+  ] },
+  { group: 'Guardrails & data', items: [
+    { cmd: 'admin rules list|toggle <key>|reset', desc: 'Sentinel micro-rules', ex: ['admin rules list', 'admin rules reset'] },
+    { cmd: 'admin wipe <phone>', desc: 'OTP-gated clean sign-up wipe (code to SUPERADMIN_EMAIL)', ex: ['admin wipe 0734852529'] },
+    { cmd: 'admin wipe confirm <code>', desc: 'confirm the wipe with the emailed code', ex: ['admin wipe confirm 123456'] },
+    { cmd: 'sentinel diagnose', desc: 'live health + friction diagnosis', ex: ['sentinel diagnose'] }
+  ] },
+  { group: 'Knowledge', items: [
+    { cmd: 'admin kb', desc: 'country knowledgebase overview', ex: ['admin kb'] },
+    { cmd: 'admin kb review', desc: 'draft KB rules awaiting approval', ex: ['admin kb review'] },
+    { cmd: 'admin kb stale', desc: 'stale KB rules', ex: ['admin kb stale'] },
+    { cmd: 'admin kb approve|reject <id>', desc: 'decide a draft KB rule', ex: ['admin kb approve ab12cd34'] }
+  ] },
+  { group: 'Models', items: [
+    { cmd: 'admin models', desc: 'model registry + serving state', ex: ['admin models'] },
+    { cmd: 'admin scout', desc: 'run the model scout cycle', ex: ['admin scout'] },
+    { cmd: 'admin adopt <model-id> [pct]', desc: 'canary a new model', ex: ['admin adopt gpt-4o-mini 10'] },
+    { cmd: 'admin model rollback', desc: 'roll back a regressed model', ex: ['admin model rollback'] }
+  ] },
+  { group: 'Release & incidents', items: [
+    { cmd: 'admin rollout', desc: 'feature rollout status', ex: ['admin rollout'] },
+    { cmd: 'admin incidents', desc: 'open incidents', ex: ['admin incidents'] },
+    { cmd: 'admin incident resolve|suppress <id>', desc: 'decide an incident', ex: ['admin incident resolve 1a2b3c4d'] }
+  ] }
+]);
+
+/** Rank registry commands against a free-text admin request (for clarification). */
+export function matchAdminCommands(text = '', limit = 3) {
+  const q = String(text || '').toLowerCase().replace(/^admin\s+/, '').trim();
+  const tokens = q.split(/[^a-z0-9]+/).filter((t) => t.length >= 2);
+  const scored = [];
+  for (const g of ADMIN_COMMAND_REGISTRY) {
+    for (const it of g.items) {
+      const hay = `${it.cmd} ${it.desc} ${(it.ex || []).join(' ')}`.toLowerCase();
+      let score = 0;
+      for (const t of tokens) if (hay.includes(t)) score += 1;
+      if (score > 0) scored.push({ score, item: it });
+    }
+  }
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, limit).map((s) => s.item);
+}
+
+/** Friendly "did you mean…" for an admin-looking message we could not parse. */
+export function buildAdminClarifyReply(text = '') {
+  const matches = matchAdminCommands(text, 3);
+  const header = "🤔 I'm not sure which admin action that is. Here's what I can do - reply with one, or just tell me in plain words:";
+  if (!matches.length) return `${header}\n\n${formatAdminHelpReply()}`;
+  const lines = matches.map((it) => `• *${it.cmd}* - ${it.desc}\n   e.g. _${(it.ex && it.ex[0]) || it.cmd}_`);
+  return `${header}\n\n${lines.join('\n')}\n\nReply *admin help* for the full list.`;
+}
+
+/**
+ * Deterministic superadmin command list, generated from ADMIN_COMMAND_REGISTRY
+ * so it can never go stale. Zero tokens, zero provider calls.
  */
 export function formatAdminHelpReply() {
-  return '🛠️ *Saka admin commands*\n\n' +
-    '📊 *Snapshots* — admin report · admin alerts · admin audit <query>\n' +
-    '👥 *Fleet* — profiles report · admin trial-stats · admin ai-stats [24h] · admin ocr-stats [24h] · admin ocr-profile [KE] · admin latency [24h] · admin env\n' +
-    '🛠️ *Fixes* — admin backlog · admin remediations [pending|deployed] - admin friction [pending|deployed|log] · "show me pending proposals" · admin accept|decline|modify fix <CODE> · admin adopt <FEAT-code> · admin quick-edit · UPDATE-SUGGEST> <your update>\n' +
-    '🌱 *Growth* — generate coupon 20% · admin horizon · admin proposals\n' +
-    '🩺 *Guardrails* — check health · admin rules list|toggle <key>|reset\n' +
-    '🧹 *Data* — `admin wipe <phone>` (OTP-gated clean sign-up wipe; code emailed to SUPERADMIN_EMAIL)\n' +
-    '📚 *Knowledge* — admin kb · admin kb review · admin kb stale\n' +
-    '🧠 *Models* — admin models · admin scout · admin adopt <id> [pct] · admin model rollback\n' +
-    '🚀 *Release* — admin rollout · admin incidents\n\n' +
-    '_adminstart opens a session · adminstop closes it._';
+  const lines = ['🛠️ *Saka admin commands*', ''];
+  for (const group of ADMIN_COMMAND_REGISTRY) {
+    if (!group.items.length) continue;
+    lines.push(`*${group.group}*`);
+    for (const it of group.items) lines.push(`• ${it.cmd} - ${it.desc}`);
+    lines.push('');
+  }
+  lines.push('_adminstart opens a session · adminstop closes it · admin help shows this list._');
+  return lines.join('\n');
 }
 
 export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
@@ -2202,7 +2292,11 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
   // the normal Owner/Driver conversational flow (multi-role coexistence).
   const parsedCommand = await parseSuperadminCommand(messageText);
 
-  if (!ADMIN_INTENTS.has(parsedCommand.intent)) {
+  // v1.58.10 — an admin-looking message that matches no command gets a helpful
+  // "did you mean…" clarification (deterministic). Non-admin chat still falls
+  // through to normal Saka (multi-role coexistence).
+  const adminIsh = parsedCommand.intent === 'UNKNOWN' && ADMIN_DIRECTIVE_RE.test(String(messageText || ''));
+  if (!ADMIN_INTENTS.has(parsedCommand.intent) && !adminIsh) {
     return { isSuperadmin: false };
   }
 
@@ -2251,6 +2345,10 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
     .eq('phone_number', formattedPhone);
 
   // 5. Command Routing
+  if (parsedCommand.intent === 'UNKNOWN') {
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_CLARIFY', { text: String(messageText || '').slice(0, 120) });
+    return { isSuperadmin: true, reply: buildAdminClarifyReply(messageText) };
+  }
   if (parsedCommand.intent === 'ADMIN_HELP') {
     await logAdminAudit(supabase, formattedPhone, 'ADMIN_HELP', {});
     return { isSuperadmin: true, reply: formatAdminHelpReply() };

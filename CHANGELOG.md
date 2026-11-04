@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.58.10] - 2026-11-04
+
+- **Self-documenting superadmin.** `ADMIN_COMMAND_REGISTRY` is the single source of truth; `admin help` is generated from it (never stale). An admin-looking message that matches no command gets a "did you mean…" clarification (2-3 closest commands + a plain-English example); normal chat still falls through.
+- **Autonomous customer care.** New `customerCare.js`: classifies a support request, opens a `support_tickets` row, emails support@, and pings the superadmin on WhatsApp for high-priority/refund cases. `POST /webhook/email/inbound` (optional `EMAIL_INBOUND_SECRET`) relays a support@ reply back to the user's WhatsApp. WhatsApp support now creates a ticket too.
+- **Driver/trial/coupon/nudge audit:** driver assign→unassign→reassign (1-to-1), welcome-trial capacity + lapse pauses, dunning, follow-ups and contact-nudge all confirmed green.
+- **Files:** src/services/{superadmin,customerCare,profileWipe}.js, src/routes/whatsapp.js, index.js, src/services/envAudit.js, .env.example, scripts/health_audit.js, test_customer_care.js.
+- **Tests:** test_customer_care (12), test_superadmin, test_update_suggest, test_env_audit, and the driver/trial/coupon/nudge suites - green; `npm run health` green.
+
 ## [1.58.9] - 2026-11-04
 
 - **Profile wipe matches every stored phone form.** `wipeProfileForSignup` now deletes `+254...`, `254...`, `0...` and bare 9-digit variants (from both the input and the resolved profile), so chat rows stored without a `+`/`0` are not left behind. (Live: 711 `254734852529` transcripts survived the first pass; now zero.)

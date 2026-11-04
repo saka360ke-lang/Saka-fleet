@@ -76,6 +76,7 @@ import { parseVehicleComplianceParagraph, submitVehicleCompliance } from '../ser
 import { handleStage1CoreCapture, handleStage2OptionalWeaving } from '../services/onboarding.js';
 import { saveChatMessage, getRecentChatHistory, CHAT_HISTORY_MAX_MESSAGES } from '../services/chatHistory.js';
 import { sendEmailOtp, sendSupportEscalationEmail, sendMfaEmail } from '../services/mailer.js';
+import { handleCareRequest } from '../services/customerCare.js';
 import {
   initiatePassbookTransfer,
   setBuyerDetailsAndSendReleaseOtp,
@@ -1971,12 +1972,13 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             session.pendingSupportEscalation = false;
             customReply = `Support escalation cancelled. ${hasVehicleRegistered ? "You are back in active menu mode." : "How can I assist you today?"}`;
           } else {
-            await sendSupportEscalationEmail({
-              userPhone: senderPhone,
+            // v1.58.10 — autonomous customer care: open a ticket + email
+            // support@ + ping the superadmin for high-priority cases.
+            await handleCareRequest(supabaseClient, {
+              phone: senderPhone,
+              text: messageText.trim(),
+              profile: profileData,
               userEmail: profileData?.email,
-              userName: profileData?.full_name,
-              subscriptionTier: profileData?.subscription_tier,
-              issueParagraph: messageText.trim(),
               vehiclesList: existingVehicles
             });
             session.pendingSupportEscalation = false;

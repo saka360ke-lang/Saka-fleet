@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.58.9  
+**Version:** 1.58.10  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.58.10** | Self-documenting superadmin commands (registry + clarify) + autonomous customer care (tickets, inbound-email→WhatsApp, superadmin escalation) + driver/trial/coupon/nudge audit | 139 |
 | **1.58.9** | Profile-wipe phone-variant fix (bare 254… rows) + ops CLI + live reset of +254734852529 | 138 |
 | **1.58.8** | Cloud Run auto-deploy pipeline + OTP-gated profile wipe (`admin wipe`) + verified earnings save + post-signup conversion directive | 137 |
 | **1.58.7** | Verified saves (no false "Saved"), "switch to X" works mid-draft, "Stop" pause TDZ fixed | 136 |
@@ -4178,3 +4179,11 @@ quiz engine:
 - **Wipe matches every stored phone form.** `wipeProfileForSignup` now builds `+254...`, `254...`, `0...` and bare 9-digit variants (from the input AND the resolved profile), so chat rows stored WITHOUT a `+`/`0` are deleted too (live: 711 `254734852529` transcripts survived the first pass). Locked by a `test_profile_wipe` assertion.
 - **Ops CLI.** `scripts/wipe_profile.js <phone> [--confirm]` writes a JSON backup to `tmp/` then wipes (dry-run by default) — the headless counterpart of `admin wipe <phone>`.
 - **Applied live:** +254734852529 fully reset (profiles / vehicles / chat_history / chat_transcripts / chat_sessions / chat_friction_logs / processed_webhooks = 0) for a clean sign-up.
+
+### 139. v1.58.10 - self-documenting superadmin, autonomous customer care, driver/trial/coupon audit (2026-11-04)
+
+- **Self-documenting, conversational superadmin.** New `ADMIN_COMMAND_REGISTRY` (`src/services/superadmin.js`) is the single source of truth; `admin help` is generated from it (can never go stale). An admin-looking message that matches no command now gets a "did you mean…" clarification with the 2-3 closest commands + a plain-English example (`buildAdminClarifyReply` / `matchAdminCommands`); non-admin chat still falls through to normal Saka (multi-role coexistence).
+- **Autonomous customer care.** New `src/services/customerCare.js`: classifies a support request (bug / billing / feature / driver / vehicle / logging / other + priority), opens a `support_tickets` row, emails support@, and pings the superadmin on WhatsApp for high-priority / dispute / refund cases (`handleCareRequest`). `POST /webhook/email/inbound` (Resend inbound, optional `EMAIL_INBOUND_SECRET` gate) relays a support@sakafleet.com reply back to the user's WhatsApp (`handleInboundSupportEmail`). The WhatsApp support flow now uses `handleCareRequest` instead of a bare one-way email.
+- **Driver / trial / coupon / nudge audit.** Audited + confirmed green: driver assign→OTP→accept→unassign→reassign (1-to-1 invariant), welcome-trial capacity (growth, 5 vehicles) + lapse→excess paused, dunning/re-engagement ladders, follow-ups and contact-nudge. `test_driver_assignment_gate`, `test_trial_engine`, `test_subscription_billing`, `test_dunning_reengagement`, `test_followups`, `test_contact_nudge` all pass.
+- **Recommended follow-ups (next iteration):** a "your requested feature shipped" user notice tied to adopted `PROP-*`, and per-release non-spammy changelog nudges with a 1-per-user-per-release cooldown (reuse `featureNotice.js`).
+- **Tests:** `test_customer_care.js` (12) + `test_profile_wipe` (14) + `test_deep_audit` (25) registered; `test_superadmin`, `test_update_suggest`, `test_env_audit` green; `npm run health` green.
