@@ -1,6 +1,12 @@
 {
-  "latest": "1.58.17",
+  "latest": "1.58.18",
   "entries": [
+    {
+      "version": "1.58.18",
+      "date": "2026-11-04",
+      "title": "Care that follows through",
+      "summary": "Every support message - on WhatsApp or by email - now becomes a tracked ticket with a lifecycle, a thread and an audit trail, and the care team can reply on both channels from one console."
+    },
     {
       "version": "1.58.17",
       "date": "2026-11-04",

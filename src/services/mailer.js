@@ -450,6 +450,31 @@ export async function sendSuperadminEscalationEmail({ userPhone, category, prior
     }
 }
 
+/**
+ * v1.58.18 - the care worker's reply to a user by email. Replies come back to
+ * the support inbox (reply_to), so the thread continues inside the console.
+ */
+export async function sendCareReplyEmail({ to, subject, text } = {}) {
+    if (!to) return false;
+    try {
+        const { data, error } = await getResendClient().emails.send({
+            from: 'Saka Support <support@reports.sakafleet.com>',
+            to: [to],
+            reply_to: 'support@reports.sakafleet.com',
+            subject: subject || 'Saka support',
+            text: String(text || '')
+        });
+        if (error) {
+            console.error('[Resend Care Reply Error]:', error);
+            return false;
+        }
+        return Boolean(data);
+    } catch (err) {
+        console.error('[Resend Care Reply Exception]:', err.message);
+        return false;
+    }
+}
+
 export async function sendTrialExtensionReminderEmail({ targetEmail, ownerName, plateNumber, vin, couponCode, trialEndDate }) {
     try {
         const { data, error } = await getResendClient().emails.send({

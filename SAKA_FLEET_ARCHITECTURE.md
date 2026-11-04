@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.58.17  
+**Version:** 1.58.18  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.58.18** | Care Console: WhatsApp worker console (`care ...`), ticket lifecycle + email threading, reply loop (WhatsApp + email), escalation ladder, CARE_TICKET_* audit, CARE_WORKER_GUIDE | 147 |
 | **1.58.17** | Support inbox moved to support@reports.sakafleet.com everywhere (app + website) + inbound recipient gate + superadmin email escalation | 146 |
 | **1.58.16** | Legal/policy copy for receipt &amp; document storage (Free = parsed data only) + inbound-email Svix secret live on Cloud Run (`00271-dn4`) + Free-gate regression pin | 145 |
 | **1.58.15** | Production knobs off (REMEDIATION_AUTONOMY / CONVERSATION_DIAGNOSIS_ENABLED) + multi-asset landing branding (cars, trucks, boats, generators, excavators, EVs) + document retention (receipt delete, bucket-object wipes, OCR telemetry prune) | 144 |
@@ -4253,3 +4254,13 @@ quiz engine:
 - **Escalations reach the superadmin on TWO channels.** `escalateCareToSuperadmin()` keeps the WhatsApp ping (`SUPERADMIN_PHONE`) and now ALSO emails `SUPERADMIN_EMAIL` via `sendSuperadminEscalationEmail()` (never throws; skipped when unset). `handleCareRequest()` still reports a boolean `superadminPinged` (true when either channel fired). `CUSTOMER_CARE_PHONE` stays unset by policy, so inbound care pings fall back to the superadmin.
 - **Website + legal.** `index.html` (JSON-LD Organization email + contactPoint, FAQ sub, footer), `privacy.html` (sections 1, 9, 13), `terms.html` (sections 11, 13), `data-deletion.html` (email section + contact), `llms.txt` (support + contact), `humans.txt` all carry the new address.
 - **Tests:** `test_inbound_email` (23 - canonical recipient, care-ping copy, recipient gate), `test_customer_care` (12 - escalation env isolation), `test_landing_static` (223) - green.
+### 147. v1.58.18 - Care Console: worker role, ticket lifecycle, threading, audit (2026-11-04)
+
+- **The care worker now has a real console inside WhatsApp.** `src/services/careConsole.js` (deterministic, zero tokens) exposes `care ...`: help, inbox (open/high/all), read, reply (WhatsApp + email), email, note, take/release, escalate/deescalate, close/reopen, search, stats, audit. The role is gated by `CUSTOMER_CARE_PHONE` (**OFF by default**) and the superadmin can always run every care command; anything that is not a `care ...` line falls through untouched, so normal chat is never hijacked. `whatsapp.js` routes the console just before the superadmin gate.
+- **Ticket lifecycle + threads.** Migration `npm run migrate:care-console` adds `status` (OPEN/IN_PROGRESS/RESOLVED/CLOSED), `priority`, `source`, `sender_email`, `subject`, `assigned_to`, `internal_note`, `thread_key`, `updated_at` to `support_tickets`, plus `support_ticket_messages` (direction in/out/internal, channel whatsapp/email, body). Every inbound email is classified with `classifyCareRequest` (bug/billing/feature/driver/vehicle/logging/other + priority) and **threaded** by sender + subject stem inside `CARE_THREAD_WINDOW_HOURS` (168 = 7 days) instead of opening duplicate tickets; follow-ups bump `updated_at` and auto-raise priority when the new text is high.
+- **The reply loop closes.** `care reply <id> <text>` sends to the ticket WhatsApp number (when it is a phone) AND to the sender email via `sendCareReplyEmail()` (From `Saka Support <support@reports.sakafleet.com>`, reply_to the inbox), so the customer email answer returns through the webhook and lands in the same ticket. Replies move the ticket to IN_PROGRESS.
+- **Escalation ladder.** `care escalate <id>` sets high priority and alerts the superadmin on WhatsApp + email (`escalateCareToSuperadmin`); `care deescalate <id>` returns it to medium; `care close/reopen` own the lifecycle.
+- **Audit.** Every action writes `admin_audit_logs` as `CARE_TICKET_*` (REPLIED / ESCALATED / DEESCALATED / NOTE / TAKEN / RELEASED / CLOSED / REOPENED); `care audit` renders the recent trail for the worker and the superadmin.
+- **Boundaries.** The console only reads/appends tickets and sends replies: no ledger, VIN, billing, refunds, prices or `admin` commands (rules 18 / 28 / 46). `flowKnowledge.js` gains a staff-tools boundary rule; `docs/CARE_WORKER_GUIDE.md` is the full operating manual (commands, shift routine, escalation ladder, tone, SLA 4h / 24h / 72h, sample replies, training checklist).
+- **Env:** `CUSTOMER_CARE_PHONE` (role, off), `CUSTOMER_CARE_NAME`, `CARE_THREAD_WINDOW_HOURS` (168), `CARE_TICKET_MAX_OPEN` (200) registered in `envAudit.js` + `.env.example`.
+- **Tests:** `test_care_worker` (43 - threading, lifecycle, permissions, reply loop, audit), `test_inbound_email` (25), `test_customer_care` (12), `test_superadmin`, `test_agent_training` (155) - green.

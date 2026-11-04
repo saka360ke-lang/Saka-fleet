@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 
 /** v1.58.17 - the one inbox that opens care tickets (Resend inbound domain). */
 export const SUPPORT_INBOX = 'support@reports.sakafleet.com';
+import { openOrAppendEmailTicket } from './careConsole.js';
 
 function headerOf(headers, name) {
   if (!headers) return null;
@@ -84,30 +85,32 @@ export async function handleInboundEmail(supabase, { payload = {}, headers = {},
     if (fetched.ok) body = fetched;
   }
   let ticketId = null;
+  let careCategory = null;
+  let carePriority = null;
+  let careCreated = null;
   if (supabase) {
-    try {
-      const ticket = {
-        whatsapp_number: email.fromEmail,
-        issue_category: 'email',
-        message_body: String((body && body.text) || email.subject || '').slice(0, 2000),
-        created_at: new Date().toISOString()
-      };
-      let { data, error } = await supabase.from('support_tickets').insert([ticket]).select('id').maybeSingle();
-      // v1.58.16 - legacy deployments define whatsapp_number as varchar(20); a
-      // sender email longer than that must never lose the ticket.
-      if (error && /too long|character varying/i.test(error.message || '')) {
-        ({ data, error } = await supabase.from('support_tickets').insert([{ ...ticket, whatsapp_number: String(email.fromEmail).slice(0, 20) }]).select('id').maybeSingle());
-      }
-      ticketId = data ? data.id : null;
-    } catch { ticketId = null; }
+    // v1.58.18 - classify + thread every email into a tracked care ticket.
+    const outcome = await openOrAppendEmailTicket(supabase, {
+      fromEmail: email.fromEmail,
+      subject: email.subject,
+      text: (body && body.text) || email.subject
+    }).catch(() => null);
+    ticketId = outcome ? outcome.ticketId : null;
+    if (outcome) {
+      careCategory = outcome.category || null;
+      carePriority = outcome.priority || null;
+      careCreated = outcome.created;
+    }
   }
   let notified = false;
   if (typeof notify === 'function' && notifyPhone) {
     const snippet = String((body && body.text) || '').slice(0, 900);
-    const text = '[Support email]\n\nFrom: ' + email.fromEmail + '\nSubject: ' + email.subject + (snippet ? '\n\n' + snippet : '') + '\n\n_Reply from support@reports.sakafleet.com to tend it._';
+    const label = careCreated === false ? ' (update)' : '';
+    const meta = [careCategory, carePriority].filter(Boolean).join(' · ');
+    const text = '[Support email' + label + ']\n\nFrom: ' + email.fromEmail + '\nSubject: ' + email.subject + (meta ? '\n' + meta : '') + (snippet ? '\n\n' + snippet : '') + '\n\n_Tend it: care reply <id> — or reply from support@reports.sakafleet.com._';
     try { notified = (await notify(notifyPhone, text)) !== false; } catch { notified = false; }
   }
-  return { ok: true, email, textBody: body ? body.text : null, ticketId, notified, verified: Boolean(verify.verified) };
+  return { ok: true, email, textBody: body ? body.text : null, ticketId, notified, verified: Boolean(verify.verified), category: careCategory, priority: carePriority, threadUpdate: careCreated === false };
 }
 
 export default { verifyResendSignature, parseInboundEmail, fetchInboundEmailBody, handleInboundEmail };/** List recent inbound support emails (stored as support_tickets category=email). */
@@ -129,7 +132,7 @@ export async function getInboundEmail(supabase, id) {
 
 export function formatInboxReply(rows) {
   if (!rows || !rows.length) return '*Support inbox*\n\n- none';
-  const lines = rows.slice(0, 10).map((r, i) => (i + 1) + '. ' + String(r.id).slice(0, 8) + ' ' + (r.whatsapp_number || 'unknown') + ' - ' + String(r.message_body || '(no body)').slice(0, 60));
+  const lines = rows.slice(0, 10).map((r, i) => (i + 1) + '. ' + String(r.id).slice(0, 8) + ' ' + (r.whatsapp_number || 'unknown') + (r.status ? ' [' + r.status + (r.priority ? '/' + r.priority : '') + ']' : '') + ' - ' + String(r.message_body || '(no body)').slice(0, 60));
   return '*Support inbox*\n\n' + lines.join('\n') + '\n\n_Open one:_ admin inbox read <id>';
 }
 

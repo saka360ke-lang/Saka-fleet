@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.58.18] - 2026-11-04
+
+- **The care worker now has a real console.** Resend mail at support@reports.sakafleet.com and WhatsApp support requests become tracked tickets the worker can `care inbox`, `care read`, `care reply` (WhatsApp + email), `care note`, `care take`, `care escalate` / `care deescalate`, `care close` / `care reopen`, `care search`, `care stats` and `care audit` - all deterministic and audited.
+- **Tickets have a lifecycle and threads.** Status (OPEN/IN_PROGRESS/RESOLVED/CLOSED), priority, source, assignee, internal notes and a full message thread; follow-up emails in the same thread append to the open ticket instead of creating duplicates.
+- **Replies land on both channels.** A reply goes to the customer WhatsApp and email (From support@reports.sakafleet.com, reply_to the inbox), so their email answer threads straight back into the ticket.
+- **Escalations reach the superadmin** by WhatsApp and email; de-escalation, closing and reopening are one command each. Every action is audited as CARE_TICKET_*.
+- **Training:** `docs/CARE_WORKER_GUIDE.md` - role, boundaries, shift routine, escalation ladder, tone, SLA (4h first reply / 24h updates / 72h close-or-escalate), sample replies and a first-shift checklist.
+- **Safety:** the worker role stays OFF until CUSTOMER_CARE_PHONE is set; the superadmin can run every care command; the console never touches ledger, VIN, billing or refunds and never blocks normal chat.
+- **Files:** src/services/{careConsole,inboundEmail,mailer,flowKnowledge,envAudit}.js, src/routes/whatsapp.js, scripts/run_care_console_migration.js, scripts/health_audit.js, test_care_worker.js, test_inbound_email.js, docs/CARE_WORKER_GUIDE.md, .env.example, package.json, SAKA_FLEET_ARCHITECTURE.md, CHANGELOG.md.
+- **Tests:** test_care_worker (43), test_inbound_email (25), test_customer_care (12), test_agent_training (155), test_landing_static (223) - green; `npm run health` green.
+
 ## [1.58.17] - 2026-11-04
 
 - **One support inbox: support@reports.sakafleet.com.** The Resend inbound domain is reports.sakafleet.com, so every care path now uses that address: WhatsApp care requests are emailed there (From: `Saka Support <support@reports.sakafleet.com>`), Saka's support copy (circuit-breaker, support intake, friction apology, hard-trip) names it, and the website (JSON-LD, FAQ, footer, privacy, terms, data-deletion, llms.txt, humans.txt) publishes it. security@reports.sakafleet.com (OTP) is unchanged.

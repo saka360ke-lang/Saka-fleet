@@ -75,8 +75,9 @@ import {
 import { parseVehicleComplianceParagraph, submitVehicleCompliance } from '../services/vehicleCompliance.js';
 import { handleStage1CoreCapture, handleStage2OptionalWeaving } from '../services/onboarding.js';
 import { saveChatMessage, getRecentChatHistory, CHAT_HISTORY_MAX_MESSAGES } from '../services/chatHistory.js';
-import { sendEmailOtp, sendSupportEscalationEmail, sendMfaEmail } from '../services/mailer.js';
-import { handleCareRequest } from '../services/customerCare.js';
+import { sendEmailOtp, sendSupportEscalationEmail, sendMfaEmail, sendCareReplyEmail } from '../services/mailer.js';
+import { handleCareRequest, escalateCareToSuperadmin } from '../services/customerCare.js';
+import { handleCareCommand } from '../services/careConsole.js';
 import {
   initiatePassbookTransfer,
   setBuyerDetailsAndSendReleaseOtp,
@@ -912,6 +913,28 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         logChatTranscript(supabaseClient, senderPhone, 'user', messageText),
         saveChatMessage(supabaseClient, senderPhone, 'user', messageText)
       ]).catch(() => {});
+    }
+
+    // v1.58.18 - Care console (worker role). CUSTOMER_CARE_PHONE is OFF by
+    // default; the superadmin can always run `care ...` too. Anything that is
+    // not a care command falls through untouched.
+    if (supabaseClient) {
+      const careRes = await handleCareCommand(supabaseClient, {
+        phone: senderPhone,
+        text: messageText,
+        sendWhatsApp: sendWhatsAppReply,
+        sendEmail: sendCareReplyEmail,
+        notifySuperadmin: (payload) => escalateCareToSuperadmin(payload),
+        isSuperadminActor: isSuperadminPhone(senderPhone)
+      });
+      if (careRes && careRes.reply) {
+        await sendWhatsAppReply(senderPhone, careRes.reply);
+        await logChatTranscript(supabaseClient, senderPhone, 'assistant', careRes.reply);
+        await saveChatMessage(supabaseClient, senderPhone, 'assistant', careRes.reply);
+        await userLogPromise;
+        await persistSnap();
+        return { status: 'care_handled' };
+      }
     }
 
     // Superadmin Intercept Middleware
