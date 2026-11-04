@@ -1,6 +1,12 @@
 {
-  "latest": "1.58.11",
+  "latest": "1.58.12",
   "entries": [
+    {
+      "version": "1.58.12",
+      "date": "2026-11-04",
+      "title": "One step at a time",
+      "summary": "Brand-new owners get exactly one next step: your first vehicle. Saka no longer asks for a driver licence before you even have a car on file."
+    },
     {
       "version": "1.58.11",
       "date": "2026-11-04",

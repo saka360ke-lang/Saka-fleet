@@ -70,6 +70,7 @@ check(!/driver licence —/.test(facts), 'a present driver licence is not listed
 const emptyFacts = empty.lines.join(' ');
 check(/Missing \(each has one fill step\):/.test(emptyFacts), 'an empty account lists the missing fields with steps');
 check(!/insurance expires/.test(emptyFacts), 'the populate step never invents an expiry date');
+check(!/driver licence —/.test(emptyFacts), 'a zero-vehicle account is not asked for a driver licence before a vehicle (v1.58.12)');
 
 console.log('\n--- v1.54.0: recent ledger rides the snapshot ---');
 

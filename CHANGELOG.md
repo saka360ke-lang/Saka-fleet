@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.58.12] - 2026-11-04
+
+- **Zero-vehicle owners aren't asked for a driver licence first.** `buildUserContextSnapshot()` now offers the `driver licence — …` fill step only once the account has a vehicle, so a fresh owner's single next step is the vehicle (not a licence). Removes snapshot noise on "is my profile verified?".
+- **Files:** src/services/userContextSnapshot.js, test_user_data_access.js.
+- **Tests:** test_user_data_access (20) green.
+
 ## [1.58.11] - 2026-11-04
 
 - **Fresh sign-ups are never re-welcomed.** `isFirstContact()` returns `false` for a verified account, so a user who set up on the website and then says "Hi" on WhatsApp is advanced to their first vehicle instead of being welcomed again (live: three welcomes in a row).

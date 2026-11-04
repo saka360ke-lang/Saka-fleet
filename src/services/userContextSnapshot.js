@@ -146,7 +146,11 @@ export async function buildUserContextSnapshot({ supabase, profile = null, vehic
       if (!data.vehicles.some((v) => v.inspectionExpiry)) populateSteps.push('inspection expiry — type "inspection due <date>" or send the inspection certificate photo');
       if (data.vehicles.some((v) => !v.mileage)) populateSteps.push('odometer — type "my odometer is <number> km"');
     }
-    if (!complianceType && !complianceExpiry) populateSteps.push('driver licence — type "my licence expires <date>" with the licence number');
+    // v1.58.12 — only offer the driver-licence step once a vehicle exists: a
+    // brand-new zero-vehicle owner's ONE next step is the vehicle, not a licence
+    // (live 2026-11-04: "is my profile verified?" for a fresh owner returned
+    // "driver licence — …" as noise before any vehicle was registered).
+    if (!complianceType && !complianceExpiry && data.vehicles.length) populateSteps.push('driver licence — type "my licence expires <date>" with the licence number');
     if (!email) populateSteps.push('email — add it to your profile at https://app.sakafleet.com');
     if (populateSteps.length) {
       data.populateSteps = populateSteps.slice(0, 4);

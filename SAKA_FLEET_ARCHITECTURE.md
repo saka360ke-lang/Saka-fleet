@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.58.11  
+**Version:** 1.58.12  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.58.12** | Zero-vehicle owner: the snapshot no longer offers a driver-licence fill step before a vehicle exists (snapshot noise fix) | 141 |
 | **1.58.11** | Fresh-signup fix: verified users are never re-welcomed, the GREETING lane advances a verified vehicle-less user to their first vehicle, and the greeting is English-first / language-aware | 140 |
 | **1.58.10** | Self-documenting superadmin commands (registry + clarify) + autonomous customer care (tickets, inbound-email→WhatsApp, superadmin escalation) + driver/trial/coupon/nudge audit | 139 |
 | **1.58.9** | Profile-wipe phone-variant fix (bare 254… rows) + ops CLI + live reset of +254734852529 | 138 |
@@ -4195,3 +4196,10 @@ quiz engine:
 - **Deterministic advance branch.** In the GREETING lane (`src/routes/whatsapp.js`) a verified user with **no vehicle** gets one short advance — "Hi <name>! 👋 You're all set ✅ — what do you drive? One line is enough, e.g. *"Toyota Probox"*." — instead of a fresh introduction. A verified user **with** a vehicle gets a one-line greeting + ONE next step (log / check fleet), never "what do you drive" again. Unverified numbers keep the website CTA; a true first contact keeps the full `sakaIntroText` welcome.
 - **English-first, language-aware greeting.** `greetingFor()` accepts a `language`; an explicitly English user is never greeted in the local tongue. `sakaIntroText()` derives the language from `profile.preferred_language` and is English-first for a known account with no language set, while a user who chose Swahili keeps the local greeting and the country default is preserved when there is no profile at all.
 - **Tests:** `test_greetings.js` Test 10 (verified ≠ first contact; English-first; Swahili preserved; country default preserved) and `test_first_message_flow.js` Test 1 rewritten to the advance contract; `test_agent_training` (155) green.
+
+### 141. v1.58.12 - zero-vehicle owners are not asked for a driver licence before a vehicle (2026-11-04)
+
+- **Snapshot noise fix.** `buildUserContextSnapshot()` (`src/services/userContextSnapshot.js`) now emits the `driver licence — …` populate step ONLY once the account has at least one vehicle. A brand-new zero-vehicle owner's ONE next step is the vehicle (plus email if unset), so "is my profile verified?" on a fresh account no longer returns a licence instruction as noise (live 2026-11-04).
+- **Boundary intact:** OWN-DATA LAW v2 still names every missing field with one engine-owned step; only the premature licence step for vehicle-less accounts is removed.
+- **Tests:** `test_user_data_access.js` +1 (a zero-vehicle account lists no driver-licence step); 20 assertions green.
+
