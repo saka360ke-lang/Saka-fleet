@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.58.18  
+**Version:** 1.58.19  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.58.19** | Self-sender guard: the platform no longer re-ingests its own escalation emails as tickets (support-inbox loop) | 148 |
 | **1.58.18** | Care Console: WhatsApp worker console (`care ...`), ticket lifecycle + email threading, reply loop (WhatsApp + email), escalation ladder, CARE_TICKET_* audit, CARE_WORKER_GUIDE | 147 |
 | **1.58.17** | Support inbox moved to support@reports.sakafleet.com everywhere (app + website) + inbound recipient gate + superadmin email escalation | 146 |
 | **1.58.16** | Legal/policy copy for receipt &amp; document storage (Free = parsed data only) + inbound-email Svix secret live on Cloud Run (`00271-dn4`) + Free-gate regression pin | 145 |
@@ -4264,3 +4265,9 @@ quiz engine:
 - **Boundaries.** The console only reads/appends tickets and sends replies: no ledger, VIN, billing, refunds, prices or `admin` commands (rules 18 / 28 / 46). `flowKnowledge.js` gains a staff-tools boundary rule; `docs/CARE_WORKER_GUIDE.md` is the full operating manual (commands, shift routine, escalation ladder, tone, SLA 4h / 24h / 72h, sample replies, training checklist).
 - **Env:** `CUSTOMER_CARE_PHONE` (role, off), `CUSTOMER_CARE_NAME`, `CARE_THREAD_WINDOW_HOURS` (168), `CARE_TICKET_MAX_OPEN` (200) registered in `envAudit.js` + `.env.example`.
 - **Tests:** `test_care_worker` (43 - threading, lifecycle, permissions, reply loop, audit), `test_inbound_email` (25), `test_customer_care` (12), `test_superadmin`, `test_agent_training` (155) - green.
+### 148. v1.58.19 - stop the support-inbox self-loop (2026-11-04)
+
+- **Caught in live testing:** every WhatsApp care request emails the escalation to `support@reports.sakafleet.com`, which is also the Resend **inbound** address - so the platform re-ingested its own escalation as a new ticket (sender = the support inbox). Four such loop tickets were produced during verification.
+- **Fix:** `handleInboundEmail()` now ignores any inbound mail whose sender is on the platform domain (`/@reports\.sakafleet\.com$/i`) as `ignored: 'self-sender'`, before the ticket write and the care ping. User mail is unaffected; escalation/reply emails still reach the inbox for the record.
+- **Cleanup:** the four self-loop tickets were deleted from `support_tickets`.
+- **Tests:** `test_inbound_email` (26 - adds the self-sender guard) plus `test_care_worker` (44) - green.

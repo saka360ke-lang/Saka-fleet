@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.58.19] - 2026-11-04
+
+- **No more support-inbox self-loop.** Escalation emails are sent to support@reports.sakafleet.com, which is also the inbound address - so the platform was re-ingesting its own escalations as new tickets. `handleInboundEmail()` now ignores mail from `@reports.sakafleet.com` (the platform own senders) as `self-sender`, before any ticket write or care ping. Four loop tickets produced during verification were removed.
+- **Tests:** test_inbound_email (26) with the new self-sender guard; test_care_worker (44) - green; `npm run health` green.
+
 ## [1.58.18] - 2026-11-04
 
 - **The care worker now has a real console.** Resend mail at support@reports.sakafleet.com and WhatsApp support requests become tracked tickets the worker can `care inbox`, `care read`, `care reply` (WhatsApp + email), `care note`, `care take`, `care escalate` / `care deescalate`, `care close` / `care reopen`, `care search`, `care stats` and `care audit` - all deterministic and audited.

@@ -55,6 +55,10 @@ console.log('--- recipient gate ---');
 const offInbox = await handleInboundEmail(mock(), { payload: { type: 'email.received', data: { email_id: 'e9', from: 'customer@example.com', to: ['someone@example.com'], subject: 'Not support' } }, headers: {}, rawBody: '{}', secret: null, skipFetch: true });
 check(offInbox.ok === true && offInbox.ignored === 'not-support-recipient', 'mail addressed outside the support inbox is ignored');
 
+console.log('--- self-sender guard ---');
+const selfMail = await handleInboundEmail(mock(), { payload: { type: 'email.received', data: { email_id: 'e10', from: 'support@reports.sakafleet.com', to: ['support@reports.sakafleet.com'], subject: 'Support Escalation Ticket: +254700000000 (User)' } }, headers: {}, rawBody: '{}', secret: null, skipFetch: true });
+check(selfMail.ok === true && selfMail.ignored === 'self-sender', 'our own outbound mail is never re-ingested (no ticket loop)');
+
 console.log('--- long sender fallback ---');
 function mockLimited() {
   const db = { support_tickets: [] };

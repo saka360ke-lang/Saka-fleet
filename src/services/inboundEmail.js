@@ -79,6 +79,11 @@ export async function handleInboundEmail(supabase, { payload = {}, headers = {},
     return { ok: true, ignored: 'not-support-recipient', toEmails: email.toEmails };
   }
   if (!email.fromEmail) return { ok: false, reason: 'no-sender' };
+  // v1.58.19 - never re-ingest our own outbound mail. Escalation/reply emails are
+  // addressed TO the support inbox, so a self-sender would loop tickets forever.
+  if (/@reports\.sakafleet\.com$/i.test(String(email.fromEmail))) {
+    return { ok: true, ignored: 'self-sender', fromEmail: email.fromEmail };
+  }
   let body = null;
   if (!skipFetch && email.emailId) {
     const fetched = await fetchInboundEmailBody(email.emailId);

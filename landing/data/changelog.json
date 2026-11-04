@@ -1,6 +1,12 @@
 {
-  "latest": "1.58.18",
+  "latest": "1.58.19",
   "entries": [
+    {
+      "version": "1.58.19",
+      "date": "2026-11-04",
+      "title": "No duplicate support tickets",
+      "summary": "Escalation emails that land back in the support inbox are no longer turned into duplicate tickets, so each conversation stays as one clean thread."
+    },
     {
       "version": "1.58.18",
       "date": "2026-11-04",
