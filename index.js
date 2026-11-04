@@ -58,8 +58,8 @@ import {
   SHORT_LINK_PROBE_PATH,
   SHORT_LINK_PROBE_TAG
 } from './src/services/linkShortener.js';
-import { ensureReceiptsTable } from './src/services/receipts.js';
-import { ensureOcrRequestsTable } from './src/services/ocrTelemetry.js';
+import { ensureReceiptsTable, pruneOldReceipts } from './src/services/receipts.js';
+import { ensureOcrRequestsTable, pruneOcrTelemetry } from './src/services/ocrTelemetry.js';
 import { ensureChatSessionsTable } from './src/services/sessionStore.js';
 import {
   sanitizeOnboardPayload,
@@ -635,6 +635,12 @@ fastify.post('/api/onboard/resend', async (request, reply) => {
 setInterval(() => {
   pruneExpiredWebOnboardOtps(supabase).catch((err) => console.warn('[WebOnboard] prune sweep failed:', err.message));
 }, 15 * 60 * 1000);
+
+// v1.58.15 - daily document + telemetry retention sweeps.
+setInterval(() => {
+  pruneOldReceipts(supabase).catch((err) => console.warn('[Receipts] retention sweep failed:', err.message));
+  pruneOcrTelemetry(supabase).catch((err) => console.warn('[OCR] telemetry sweep failed:', err.message));
+}, 24 * 60 * 60 * 1000);
 
 // ==========================================
 // Compliance & expiry reminders (insurance, inspection/MOT, licences, permits,

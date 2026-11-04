@@ -9,6 +9,8 @@
  * Never throws: every delete is best-effort and returns a per-table count.
  */
 
+import { RECEIPTS_BUCKET, receiptStoragePaths } from './receipts.js';
+
 export async function wipeProfileForSignup(supabase, rawPhone) {
   if (!supabase || !rawPhone) return { ok: false, reason: 'missing phone or client' };
   const digits = String(rawPhone).replace(/[^0-9]/g, '');
@@ -64,6 +66,23 @@ export async function wipeProfileForSignup(supabase, rawPhone) {
   for (const t of ['expense_logs', 'private_earnings', 'expiry_notification_log', 'reminders', 'passbook_transfers', 'pending_owner_notifications', 'driver_compliances']) {
     await del(t, 'vehicle_id', vehicleIds);
   }
+  // v1.58.15 - delete the stored receipt IMAGES too (rows alone leave PII orphans).
+  try {
+    const receiptOr = [];
+    if (profileIds.length) receiptOr.push('owner_id.in.(' + profileIds.join(',') + ')', 'driver_id.in.(' + profileIds.join(',') + ')');
+    if (vehicleIds.length) receiptOr.push('vehicle_id.in.(' + vehicleIds.join(',') + ')');
+    if (receiptOr.length) {
+      const { data: receiptRows } = await supabase.from('receipts').select('media_id, image_url').or(receiptOr.join(','));
+      const paths = [];
+      for (const row of receiptRows || []) paths.push(...receiptStoragePaths(row));
+      const uniquePaths = [...new Set(paths)];
+      if (uniquePaths.length) {
+        const { error: storageError } = await supabase.storage.from(RECEIPTS_BUCKET).remove(uniquePaths);
+        if (!storageError) counts.storage_objects = uniquePaths.length;
+      }
+    }
+  } catch { /* best effort */ }
+
   await del('receipts', 'vehicle_id', vehicleIds);
   await del('driver_assignments', 'vehicle_id', vehicleIds);
   await del('expenses', 'plate', plates);

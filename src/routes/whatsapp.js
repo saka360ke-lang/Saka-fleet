@@ -137,6 +137,7 @@ import {
   recordReceipt,
   uploadReceiptImage,
   listReceipts,
+  deleteReceipt,
   formatReceiptsReply,
   formatDuplicateReceiptReply,
   OCR_CONFIRM_THRESHOLD,
@@ -1327,6 +1328,11 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             && /\b(?:show|list|see|view|any|history|record|records|last|recent|what|which|do\s+you\s+have)\b/i.test(text);
         })();
 
+        // v1.58.15 - deterministic receipt delete. "delete receipt 2" previews;
+        // adding DELETE confirms. The expense entry stays in the ledger.
+        const receiptDeleteMatch = String(messageText || '').trim().match(/^(?:delete|remove)\s+receipts?\s+([1-5])(?:\s+(DELETE))?$/i);
+        const receiptDeleteCommand = receiptDeleteMatch ? { index: Number(receiptDeleteMatch[1]), confirmed: Boolean(receiptDeleteMatch[2]) } : null;
+
         // Deterministic garage list ("list my cars") — zero AI tokens. Only the
         // empty state is intercepted here; populated lists keep the numbered
         // switch menu in the AI branch below.
@@ -1886,6 +1892,30 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             };
           }
 
+        } else if (receiptDeleteCommand) {
+          const isOwner = existingVehicles.some((v) => v.owner_id === profileData?.id);
+          const rows = await listReceipts(supabaseClient, {
+            ownerId: isOwner ? profileData?.id : null,
+            driverId: isOwner ? null : profileData?.id,
+            vehicleIds: existingVehicles.map((v) => v.id)
+          });
+          const target = rows[receiptDeleteCommand.index - 1];
+          if (!target) {
+            aiResult = { intent: 'GENERAL_CHAT', extracted_data: {}, reply_message: 'I could not find receipt ' + receiptDeleteCommand.index + '. Type *receipts* to see the numbered list.' };
+          } else if (!receiptDeleteCommand.confirmed) {
+            const label = target.vendor ? String(target.vendor).split('|')[0].trim() : (target.document_kind || 'receipt');
+            aiResult = { intent: 'GENERAL_CHAT', extracted_data: {}, reply_message: 'Delete receipt ' + receiptDeleteCommand.index + ' (' + label + ')? Reply *delete receipt ' + receiptDeleteCommand.index + ' DELETE* to confirm. Your expense log stays untouched.' };
+          } else {
+            const del = await deleteReceipt(supabaseClient, { receiptId: target.id, ownerId: isOwner ? profileData?.id : null, driverId: isOwner ? null : profileData?.id });
+            if (del.ok) {
+              try {
+                await supabaseClient.from('admin_audit_logs').insert([{ admin_phone: senderPhone, action: 'RECEIPT_DELETED', details: { receipt_id: target.id, media_id: target.media_id || null, vehicle_id: target.vehicle_id || null, objects: del.objects || 0 } }]);
+              } catch { /* audit best effort */ }
+              aiResult = { intent: 'GENERAL_CHAT', extracted_data: {}, reply_message: 'Receipt ' + receiptDeleteCommand.index + ' deleted, along with its photo. Your expense entry is still in the ledger - use *my entries* to edit or delete it.' };
+            } else {
+              aiResult = { intent: 'GENERAL_CHAT', extracted_data: {}, reply_message: 'I could not delete that receipt (' + (del.error || 'unknown') + '). It may already be gone.' };
+            }
+          }
         } else if (receiptsCommand) {
           const isOwner = existingVehicles.some((v) => v.owner_id === profileData?.id);
           const receipts = await listReceipts(supabaseClient, {

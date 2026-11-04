@@ -16,6 +16,7 @@ import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
  */
 
 export const OCR_REQUESTS_TABLE = 'ocr_requests';
+export const OCR_TELEMETRY_RETENTION_DAYS = Math.max(1, Number(process.env.OCR_TELEMETRY_RETENTION_DAYS || 90));
 
 export const OCR_REQUESTS_SQL = `
     CREATE TABLE IF NOT EXISTS public.ocr_requests (
@@ -280,4 +281,17 @@ export async function getOcrCountryWatchlist(providedSupabase, {
   }
 }
 
-export default { recordOcrRequest, ensureOcrRequestsTable, buildOcrTextSha, getOcrUsageSummary, summarizeOcrCountryRows, getOcrCountryProfileStats, getOcrCountryWatchlist, OCR_REQUESTS_SQL };
+/** v1.58.15 - trim OCR telemetry older than the retention window. Never throws. */
+export async function pruneOcrTelemetry(providedSupabase, days = OCR_TELEMETRY_RETENTION_DAYS) {
+  if (!providedSupabase) return { ok: false, error: 'no-client' };
+  const window = Math.max(1, Number(days) || 90);
+  try {
+    const cutoff = new Date(Date.now() - window * 24 * 60 * 60 * 1000).toISOString();
+    const { error } = await providedSupabase.from(OCR_REQUESTS_TABLE).delete().lt('created_at', cutoff);
+    return error ? { ok: false, error: error.message } : { ok: true, windowDays: window };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export default { recordOcrRequest, ensureOcrRequestsTable, buildOcrTextSha, getOcrUsageSummary, summarizeOcrCountryRows, getOcrCountryProfileStats, getOcrCountryWatchlist, pruneOcrTelemetry, OCR_TELEMETRY_RETENTION_DAYS, OCR_REQUESTS_SQL };

@@ -97,7 +97,9 @@ const STATLESS_SUITES = [
   // v1.58.14 - Sentinel proposals master switch + log-only findings.
   'test_sentinel_policy.js',
   // v1.58.14 - Resend inbound email (Svix verify + ticket + care ping).
-  'test_inbound_email.js'
+  'test_inbound_email.js',
+  // v1.58.15 - document retention (receipt delete, prunes, wipe images).
+  'test_document_retention.js'
 ];
 
 const WORKFLOW_DIR = '.github/workflows';

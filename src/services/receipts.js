@@ -11,6 +11,7 @@ import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
 
 export const RECEIPTS_TABLE = 'receipts';
 export const RECEIPTS_BUCKET = process.env.RECEIPTS_BUCKET || 'receipts';
+export const RECEIPT_RETENTION_DAYS = Math.max(0, Number(process.env.RECEIPT_RETENTION_DAYS || 0));
 export const OCR_CONFIRM_THRESHOLD = Math.min(
   1,
   Math.max(0, Number(process.env.OCR_CONFIRM_THRESHOLD || 0.85))
@@ -220,7 +221,7 @@ export function formatReceiptsReply({ receipts = [], vehicles = [], fallbackCurr
     const bits = [amount, vehicle?.plate_number, formatWhen(receipt.created_at)].filter(Boolean);
     return `• ${statusDot(receipt.status)} *${vendor}* — ${bits.join(' · ')}`;
   });
-  return `📸 *Your recent receipts*\n\n${lines.join('\n')}\n\nSend another photo anytime, or type *"receipts"* to see this list again.`;
+  return `📸 *Your recent receipts*\n\n${lines.join('\n')}\n\nDelete one: *delete receipt N* (1 = newest; add DELETE to confirm). Send another photo anytime, or type *"receipts"* to see this list again.`;
 }
 
 /** Warm duplicate-receipt reply (never re-logs silently). */
@@ -233,14 +234,79 @@ export function formatDuplicateReceiptReply(receipt = {}, { fallbackCurrency = n
     'Reply *"receipts"* to see your history, or type the details if you want to log it again.';
 }
 
+
+/** Derive the stored object paths for a receipt (URL tail + media-id extensions). */
+export function receiptStoragePaths(row = {}) {
+  const paths = new Set();
+  if (row.image_url) {
+    const marker = '/' + RECEIPTS_BUCKET + '/';
+    const idx = String(row.image_url).indexOf(marker);
+    if (idx !== -1) paths.add(String(row.image_url).slice(idx + marker.length));
+  }
+  if (row.media_id) {
+    for (const ext of ['jpg', 'png', 'webp']) paths.add(String(row.media_id) + '.' + ext);
+  }
+  return [...paths];
+}
+
+/**
+ * v1.58.15 - delete ONE receipt (row + stored image) for its owner/driver.
+ * The parsed EXPENSE stays in the ledger (edit/delete it via my entries).
+ */
+export async function deleteReceipt(providedSupabase, { receiptId, ownerId = null, driverId = null } = {}) {
+  const supabase = getClient(providedSupabase);
+  if (!supabase || !receiptId) return { ok: false, error: 'missing' };
+  try {
+    const { data: row } = await supabase.from(RECEIPTS_TABLE).select('*').eq('id', receiptId).maybeSingle();
+    if (!row) return { ok: false, error: 'not-found' };
+    const mine = (ownerId && row.owner_id === ownerId) || (driverId && row.driver_id === driverId);
+    if (!mine) return { ok: false, error: 'forbidden' };
+    const paths = receiptStoragePaths(row);
+    if (paths.length) { try { await supabase.storage.from(RECEIPTS_BUCKET).remove(paths); } catch { /* best effort */ } }
+    const { error } = await supabase.from(RECEIPTS_TABLE).delete().eq('id', receiptId);
+    if (error) return { ok: false, error: error.message };
+    return { ok: true, receipt: row, objects: paths.length };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
+ * v1.58.15 - retention sweep. 0 (default) keeps receipts forever (tax evidence);
+ * when RECEIPT_RETENTION_DAYS is set, old rows AND stored images are deleted.
+ */
+export async function pruneOldReceipts(providedSupabase, days = RECEIPT_RETENTION_DAYS) {
+  const supabase = getClient(providedSupabase);
+  const window = Math.max(0, Number(days) || 0);
+  if (!supabase || !window) return { ok: true, skipped: true, deleted: 0 };
+  try {
+    const cutoff = new Date(Date.now() - window * 24 * 60 * 60 * 1000).toISOString();
+    const { data } = await supabase.from(RECEIPTS_TABLE).select('id, media_id, image_url').lt('created_at', cutoff).limit(500);
+    const rows = data || [];
+    if (!rows.length) return { ok: true, deleted: 0 };
+    const paths = [];
+    for (const row of rows) paths.push(...receiptStoragePaths(row));
+    if (paths.length) { try { await supabase.storage.from(RECEIPTS_BUCKET).remove(paths); } catch { /* best effort */ } }
+    const ids = rows.map((r) => r.id);
+    const { error } = await supabase.from(RECEIPTS_TABLE).delete().in('id', ids);
+    return error ? { ok: false, error: error.message } : { ok: true, deleted: ids.length, objects: paths.length };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
 export default {
   RECEIPTS_TABLE,
   RECEIPTS_BUCKET,
   RECEIPTS_SQL,
   OCR_CONFIRM_THRESHOLD,
+  RECEIPT_RETENTION_DAYS,
   OCR_LOW_CONFIDENCE_NOTE,
   ensureReceiptsTable,
   findReceiptByMediaId,
+  receiptStoragePaths,
+  deleteReceipt,
+  pruneOldReceipts,
   recordReceipt,
   uploadReceiptImage,
   listReceipts,

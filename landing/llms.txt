@@ -1,13 +1,13 @@
 # Saka Fleet
 
-> Saka Fleet is a WhatsApp-first vehicle management assistant for cars, motorcycles, trucks, buses, generators, machinery and boats. Owners and drivers log fuel, expenses, odometer and earnings in plain language on WhatsApp and get branded PDF reports, service reminders, compliance tracking and driver management. Owned by Saka360.
+> Saka Fleet is a WhatsApp-first vehicle management assistant for cars, motorcycles, trucks, buses, excavators, machinery, generators, boats and electric vehicles. Owners and drivers log fuel, expenses, odometer and earnings in plain language on WhatsApp and get branded PDF reports, service reminders, compliance tracking and driver management. Owned by Saka360.
 
 Key facts:
 - Support: support@sakafleet.com
-- Pricing: free tier (1 vehicle, 1 report/month) up to Fleet Command (5 vehicles + add-ons); every new account starts a 30-day, no-card welcome trial with full features.
-- WhatsApp is the primary interface: message the Saka assistant to register vehicles, log records, set reminders and generate reports.
+- Pricing: free tier (1 asset, 1 report/month) up to Fleet Command (5 assets + add-ons); every new account starts a 30-day, no-card welcome trial with full features.
+- WhatsApp is the primary interface: message the Saka assistant to register assets, log records, set reminders and generate reports.
 - Reports are branded PDF documents delivered over WhatsApp and email.
-- Canonical data units: kilometres, litres, ISO-8601 dates.
+- Canonical data units: kilometres, litres, engine hours and kWh (EVs), ISO-8601 dates.
 
 ## Pages
 - [Home](https://sakafleet.com/): product overview, features, pricing, changelog and signup.

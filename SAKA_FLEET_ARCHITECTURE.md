@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.58.14  
+**Version:** 1.58.15  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.58.15** | Production knobs off (REMEDIATION_AUTONOMY / CONVERSATION_DIAGNOSIS_ENABLED) + multi-asset landing branding (cars, trucks, boats, generators, excavators, EVs) + document retention (receipt delete, bucket-object wipes, OCR telemetry prune) | 144 |
 | **1.58.14** | Duplicate-signup block (phone variants + email + owner notice) + Sentinel log-only policy (no autonomous proposals; errors clear when tended) + Resend inbound email with Svix verification and admin inbox | 143 |
 | **1.58.13** | Pending-only remediation alerts (threshold = pending backlog) + unverified-gate confusion clarification (PROP-2026-11-04-01) + phantom 90-day trial fix (legacy default dropped, data remediated) | 142 |
 | **1.58.12** | Zero-vehicle owner: the snapshot no longer offers a driver-licence fill step before a vehicle exists (snapshot noise fix) | 141 |
@@ -4223,3 +4224,15 @@ quiz engine:
 - **Env:** `SENTINEL_PROPOSALS_ENABLED` (off), `EMAIL_INBOUND_SIGNING_SECRET`, `CUSTOMER_CARE_PHONE` registered in `envAudit.js` and `.env.example`.
 - **Rules:** `.clinerules` 44 (audit before acting on any remediation/proposal), 45 (consult the rules before every plan/act operation), 46 (Sentinel detects, never proposes), 47 (duplicate signups blocked + owner notified).
 - **Tests:** `test_duplicate_signup` (14), `test_sentinel_policy` (17), `test_inbound_email` (18), `test_deep_audit` (28), `test_friction_tracker` (10), `test_conversation_diagnosis` (11), `test_remediation_pipeline` (74), `test_web_onboarding` (41), `test_greetings` (110), `test_first_message_flow` (53), `test_superadmin`, `test_customer_care` (12) - green.
+### 144. v1.58.15 - production knobs off + multi-asset branding + document retention (2026-11-04)
+
+- **Production knobs (Cloud Run `saka-fleet`, `europe-west1`).** `REMEDIATION_AUTONOMY=off` and `CONVERSATION_DIAGNOSIS_ENABLED=off` (revision `saka-fleet-00267-8f9`), joining `SENTINEL_PROPOSALS_ENABLED=off` (Secret Manager). Sentinel no longer diagnoses or dispatches plans; `dispatchRepositoryEvent` refuses CI execution, so an approved fix is implemented by Cline in a superadmin session.
+- **Multi-asset branding (landing).** The website now leads with every supported asset, not just cars: title/meta/OG/Twitter, JSON-LD, hero ("Every machine you run practically runs itself"), a generator engine-hours bubble in the chat mock, stats ("8 asset kinds - cars, trucks, boats, generators and EVs"), features, FAQ (EVs use kWh and km/kWh), terms/privacy summary, done screen, footer and `llms.txt`. No flow or handler changed; the app already supports all eight kinds (`ASSET_KINDS`), EVs via `metricsForAssetKind(kind, { fuelType })`, and asset-aware expense/reminder/report menus (proof: `test_asset_metrics` 70, `test_country_bucket` 54, `test_expense_catalog` 82).
+- **Document pipeline hardening.** The audit confirmed the lens/OCR pipeline is sound (families, country profiles, three dedupe layers, confirm-before-save), so nothing was decommissioned. Gaps closed:
+  - `wipeProfileForSignup` now removes the stored receipt IMAGES (`receiptStoragePaths` -> `storage.remove`) in addition to the rows, and reports `counts.storage_objects` (PII no longer orphaned).
+  - `deleteReceipt()` + the deterministic `delete receipt <n>` (literal `DELETE` to confirm) command let a user delete one receipt row + its image, audited `RECEIPT_DELETED`; the parsed expense stays in the ledger (`my entries`).
+  - `RECEIPT_RETENTION_DAYS` (default **0 = keep forever**, tax evidence) and `OCR_TELEMETRY_RETENTION_DAYS` (90) with a daily boot sweep (`pruneOldReceipts`, `pruneOcrTelemetry`).
+  - `landing/privacy.html` section 6 now states document/image retention and the 90-day OCR telemetry window.
+- **Env:** two new knobs registered in `envAudit.js` and `.env.example`.
+- **Rules:** `.clinerules` 48 (documents are evidence, the user can remove them, retention bounds).
+- **Tests:** `test_document_retention` (16), `test_ocr_flow` (120), `test_profile_wipe` (14), `test_landing_static` (217), `test_asset_metrics` (70), `test_country_bucket` (54), `test_expense_catalog` (82), `test_env_audit` (44) - green.

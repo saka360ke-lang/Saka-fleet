@@ -1,6 +1,12 @@
 {
-  "latest": "1.58.14",
+  "latest": "1.58.15",
   "entries": [
+    {
+      "version": "1.58.15",
+      "date": "2026-11-04",
+      "title": "Every machine you run",
+      "summary": "Saka now speaks to every asset, not just cars: trucks, bikes, boats, generators, excavators and EVs are front and centre, receipts can be deleted on request, and old documents and OCR telemetry are cleaned up on a schedule."
+    },
     {
       "version": "1.58.14",
       "date": "2026-11-04",

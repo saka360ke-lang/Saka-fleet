@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.58.15] - 2026-11-04
+
+- **Production knobs off.** Cloud Run now runs `REMEDIATION_AUTONOMY=off` and `CONVERSATION_DIAGNOSIS_ENABLED=off` (revision `saka-fleet-00267-8f9`), alongside `SENTINEL_PROPOSALS_ENABLED=off`. Sentinel detects only; approved fixes are implemented in a superadmin session.
+- **Branding for every asset, not just cars.** The website now leads with cars, trucks, bikes, boats, generators, excavators and EVs across title/meta/OG/Twitter, JSON-LD, hero, a generator engine-hours chat example, stats, features, FAQ (EVs use kWh and km/kWh), terms/privacy summary, the done screen, footer and `llms.txt`.
+- **Document pipeline hardening (audit: no decommission needed).** Account wipe now removes stored receipt images too; new `delete receipt <n>` (literal `DELETE` to confirm) deletes a receipt row + image and audits `RECEIPT_DELETED` while the expense stays in the ledger; `RECEIPT_RETENTION_DAYS` (default 0 = keep forever) and `OCR_TELEMETRY_RETENTION_DAYS` (90) drive a daily prune; privacy section 6 states the retention windows.
+- **Files:** landing/{index.html,llms.txt,privacy.html}, src/services/{receipts,ocrTelemetry,profileWipe,envAudit}.js, src/routes/whatsapp.js, index.js, scripts/health_audit.js, .env.example, .clinerules, package.json.
+- **Tests:** test_document_retention (16), test_ocr_flow (120), test_profile_wipe (14), test_landing_static (217), test_asset_metrics (70), test_country_bucket (54), test_expense_catalog (82), test_env_audit (44) - green; `npm run health` green.
+
 ## [1.58.14] - 2026-11-04
 
 - **Duplicate website signups are blocked (and the owner is told).** Typing `0734852529` with `+254` no longer becomes `+2540734852529`; `/api/onboard` matches phone variants AND email, never re-creates an existing account, sends an "already on board" email plus a WhatsApp reminder, and blocks `email_exists` outright.
