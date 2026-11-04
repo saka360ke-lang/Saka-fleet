@@ -63,6 +63,9 @@ export function parseRecordQuestion(text = '', { countryCode = 'GLOBAL', locale 
   if (!source) return { ok: false, reason: 'empty' };
   // v1.58.6 — a past-tense expense statement is a LOG, never a records question.
   if (looksLikeLogStatement(source)) return { ok: false, reason: 'looks-like-log' };
+  // v1.58.22 - a "why…" question is never a ledger total (live 2026-11-04:
+  // "Why can I not see extra notes on an entry?" got two expense summaries).
+  if (/^\s*why\b/i.test(source)) return { ok: false, reason: 'why-question' };
 
   const hasPlateLike = /\b[A-Z]{2,3}\s?\d{1,4}[A-Z]?\b/.test(source.toUpperCase());
   const looksLikeQuestion = QUESTION_WORDS_RE.test(source)
@@ -107,7 +110,7 @@ export function parseRecordQuestion(text = '', { countryCode = 'GLOBAL', locale 
  * Render the deterministic answer for a parsed question + query result.
  * `vehicles` adds the fleet scope line; currency/locale are the user's own.
  */
-export function formatRecordAnswer(result = {}, question = {}, { vehicles = [], currency = 'USD', locale = 'en-US' } = {}) {
+export function formatRecordAnswer(result = {}, question = {}, { vehicles = [], currency = 'USD', locale = 'en-US', scopePlate = null } = {}) {
   if (!result.ok) {
     return '📊 I could not read the ledger just now — please try again in a moment.';
   }
@@ -116,7 +119,13 @@ export function formatRecordAnswer(result = {}, question = {}, { vehicles = [], 
   const typeLabel = question.earning
     ? 'Earnings'
     : (question.expenseTypes.length ? question.expenseTypes.join(' + ') : 'Expenses');
-  const fleetNote = vehicles.length > 1 ? `\n🚗 Across your ${vehicles.length} vehicles.` : '';
+  // v1.58.22 - a scoped read names the vehicle it covers; only a genuine
+  // fleet-wide read says "across your N vehicles" (live 2026-11-04: a plate
+  // question still answered "Across your 2 vehicles").
+  const scopedPlate = scopePlate || (question.vehiclePlate && scopePlate !== false ? question.vehiclePlate : null);
+  const fleetNote = scopedPlate
+    ? `\n🚗 For *${String(scopedPlate).toUpperCase()}*.`
+    : (vehicles.length > 1 ? `\n🚗 Across your ${vehicles.length} vehicles.` : '');
   // v1.56.1 — the empty answer needs a NOUN: "no other all time" read as broken
   // text (live 2026-11-03). Now: "no other expenses all time" / "no earnings all time".
   const missingNoun = question.earning ? 'earnings' : 'expenses';
@@ -142,7 +151,10 @@ export function formatRecordAnswer(result = {}, question = {}, { vehicles = [], 
     const lines = (result.rows || []).slice(0, 6).map((row) => {
       const type = row.expense_type || row.earning_type || '—';
       const day = formatDate(row.created_at, locale, { day: '2-digit', month: 'short' });
-      return `• ${money(row[result.amountCol])} — ${type} — ${day}`;
+      // v1.58.22 - notes/part names are part of the entry; users asked three
+      // times why they could not see them (live 2026-11-04).
+      const note = row.notes ? ` (${String(row.notes).slice(0, 60)})` : '';
+      return `• ${money(row[result.amountCol])} — ${type} — ${day}${note}`;
     });
     const more = result.count > lines.length ? `\n…and ${result.count - lines.length} more (reply *my entries* for the full ledger).` : '';
     return `📊 *${typeLabel} ${periodLabel}:* ${result.count} record${result.count === 1 ? '' : 's'}\n${lines.join('\n')}${more}${fleetNote}`;

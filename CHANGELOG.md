@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.58.22] - 2026-11-04
+
+- **Support claims are backed by a real ticket.** `openCareTicket` now writes the care lifecycle (`status=OPEN`, priority, source, subject, thread_key) with a slim-table fallback, failed inserts are reported (`ticketCreated:false`) and logged, and Saka says "forwarded" only when a row exists - it no longer promises a hand-off that the care console cannot see. Live check: insert + cleanup green (0 rows left).
+- **A pending support intake owns the next message.** The intake runs before the stop/quiz lanes, so an open expense draft cannot swallow the issue description; `cancel/exit/stop` exits.
+- **A request mid-draft is not an answer.** Statements like "I should be able to name the part" park the draft (nothing lost) and offer Support instead of re-asking the same question (live: 7 repeats).
+- **Parts are nameable and notes are visible.** The quiz note step invites `brake pads, oil filter, Shell station`; record lists show `(notes)` per row; plate-scoped reads print `For *PLATE*` instead of claiming the whole fleet; `why...` questions never return ledger totals.
+- **Driver compliance phrasings** (`show me my driver compliance`, `drivers licence expiry`, `personal compliance`) read the owner Compliance Card.
+- **Delivery-failure log hygiene:** status callbacks log a normalized recipient+code message so the 24h rollup folds repeats (22 near-identical 131026 rows in 48h).
+- **Files:** src/services/{customerCare,recordAnswers,recordQuery,quizEngine,flowKnowledge}.js, src/routes/whatsapp.js, test_customer_care.js, test_record_answers.js, .clinerules, package.json, SAKA_FLEET_ARCHITECTURE.md, CHANGELOG.md.
+- **Tests:** test_customer_care (18), test_record_answers (48), test_quiz_flow (143), test_inbound_email (26), test_care_worker (44), test_entry_ledger, test_v1583 (9), test_first_message_flow (53), test_agent_training (155), test_sentinel_policy (17) - green; `npm run health` green.
+
 ## [1.58.21] - 2026-11-04
 
 - **The welcome trial now runs from the day the passbook is issued.** `startAccountTrial({ startedAt })` anchors `started_at`/`ends_at` to the asset creation instant; both registration paths pass it, and the heal/reconcile pass the owner oldest ACTIVE vehicle `created_at`. Existing trials were re-anchored live (13:20:24 and 13:22:14 - the exact asset timestamps).

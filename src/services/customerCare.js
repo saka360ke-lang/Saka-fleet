@@ -31,15 +31,34 @@ export function shouldEscalateCare(text = '', priority = 'medium') {
   return priority === 'high' || ESCALATE_RE.test(String(text || ''));
 }
 
-export async function openCareTicket(supabase, { phone, body, category = 'other', source = 'whatsapp' } = {}) {
+export async function openCareTicket(supabase, { phone, body, category = 'other', source = 'whatsapp', priority = 'medium', senderEmail = null } = {}) {
   if (!supabase) return { ok: false, reason: 'no client' };
+  // v1.58.22 - the care-console migration added lifecycle columns; a bare
+  // four-column insert failed silently on the live table (2026-11-04: Saka
+  // promised "passed to support" while support_tickets stayed empty).
+  const bodyText = String(body || '').slice(0, 2000);
+  const base = {
+    whatsapp_number: phone,
+    issue_category: category,
+    message_body: bodyText,
+    created_at: new Date().toISOString()
+  };
+  const full = {
+    ...base,
+    status: 'OPEN',
+    priority,
+    source,
+    subject: String(bodyText || 'WhatsApp support request').slice(0, 200),
+    thread_key: `${source}:${String(phone || '').replace(/[^0-9]/g, '')}`,
+    updated_at: new Date().toISOString()
+  };
+  if (senderEmail) full.sender_email = String(senderEmail).slice(0, 200);
   try {
-    const { data, error } = await supabase.from('support_tickets').insert([{
-      whatsapp_number: phone,
-      issue_category: category,
-      message_body: String(body || '').slice(0, 2000),
-      created_at: new Date().toISOString()
-    }]).select();
+    let { data, error } = await supabase.from('support_tickets').insert([full]).select();
+    if (error && /column|schema|does not exist/i.test(error.message || '')) {
+      // Legacy slim table: fall back to the four guaranteed columns.
+      ({ data, error } = await supabase.from('support_tickets').insert([base]).select());
+    }
     if (error) return { ok: false, reason: error.message };
     const row = Array.isArray(data) ? data[0] : data;
     return { ok: true, id: row?.id || null, source };
@@ -63,7 +82,16 @@ export async function escalateCareToSuperadmin({ phone, text, category, priority
 /** Orchestrator: open ticket + email support@ + (high-priority) ping superadmin. */
 export async function handleCareRequest(supabase, { phone, text, profile = null, userEmail = null, vehiclesList = [] } = {}) {
   const { category, priority } = classifyCareRequest(text);
-  const ticket = await openCareTicket(supabase, { phone, body: text, category, source: 'whatsapp' });
+  const ticket = await openCareTicket(supabase, { phone, body: text, category, source: 'whatsapp', priority, senderEmail: userEmail || profile?.email || null });
+  // v1.58.22 - a failed ticket is never silent: without a row the assistant
+  // must not claim the issue was "passed to support".
+  if (!ticket?.ok) {
+    try {
+      const { logSystemError } = await import('../workers/sentinel.js');
+      const failure = new Error(`Support ticket insert failed: ${ticket?.reason || 'unknown'}`);
+      await logSystemError(supabase, failure, '/services/customerCare');
+    } catch { /* best effort */ }
+  }
   let emailed = false;
   try {
     emailed = await sendSupportEscalationEmail({
@@ -80,7 +108,7 @@ export async function handleCareRequest(supabase, { phone, text, profile = null,
     const alert = await escalateCareToSuperadmin({ phone, text, category, priority });
     superadminPinged = Boolean(alert && alert.alerted);
   }
-  return { category, priority, ticket, emailed, superadminPinged };
+  return { category, priority, ticket, ticketCreated: Boolean(ticket && ticket.ok), emailed, superadminPinged };
 }
 
 /** Inbound email (support@reports.sakafleet.com reply) → relay to the user's WhatsApp. */

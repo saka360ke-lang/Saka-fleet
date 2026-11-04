@@ -648,7 +648,14 @@ export async function handleWhatsAppWebhook(request, reply, fastify) {
         }, 'WhatsApp message status received.');
       }
       if (statusObj.status === 'failed') {
-        const failure = new Error(`WhatsApp message failed to deliver: ${statusObj.id || 'unknown'} (${JSON.stringify(statusObj.errors || [])})`);
+        // v1.58.22 - normalize the message so ERROR_ROLLUP_HOURS folds repeats:
+        // one row per recipient+code per window instead of one row per wamid
+        // (live 2026-11-04: 22 near-identical 131026 rows in 48h).
+        const errCode = statusObj.errors?.[0]?.code || 'unknown';
+        const errTitle = statusObj.errors?.[0]?.title || 'delivery failed';
+        const recipient = String(statusObj.recipient_id || 'unknown');
+        const failure = new Error(`WhatsApp delivery failed (${errCode}) to …${recipient.slice(-4)}: ${errTitle}`);
+        failure.stack = `wamid: ${statusObj.id || 'unknown'}\nrecipient: ${recipient}\n${JSON.stringify(statusObj.errors || [])}`;
         if (supabaseClient) await logSystemError(supabaseClient, failure, '/webhook/whatsapp/status').catch(() => {});
       }
       return reply.status(200).send({ status: 'success', status_ack: 'message_status_recorded' });
@@ -1014,6 +1021,28 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
       } else {
         session.pendingClearChat = false;
       }
+    }
+
+    // v1.58.22 - a pending support intake OWNS the next turn: an open draft must
+    // never swallow the user's issue description (live 2026-11-04: "KAS 628T"
+    // was answered by the expense quiz while support intake was waiting).
+    if (session.pendingSupportEscalation) {
+      const cleanSupport = messageText.trim().toLowerCase();
+      let supportReply;
+      if (/^(cancel|exit|stop)$/i.test(cleanSupport)) {
+        session.pendingSupportEscalation = false;
+        supportReply = 'Okay — support escalation cancelled. What would you like to do next?';
+      } else {
+        const care = await handleCareRequest(supabaseClient, { phone: senderPhone, text: messageText.trim() });
+        session.pendingSupportEscalation = false;
+        supportReply = care?.ticketCreated
+          ? "🎫 Thank you — I've logged this for our support team at support@reports.sakafleet.com. They'll reach out to you here on WhatsApp."
+          : "Thanks — I couldn't open a support ticket automatically just now. Please email support@reports.sakafleet.com with a line about what happened, or reply *Support* to try again.";
+      }
+      chatSessions.set(senderPhone, session);
+      try { await sendWhatsAppReply(senderPhone, supportReply); } catch { }
+      if (supabaseClient) { try { await saveChatMessage(supabaseClient, senderPhone, 'assistant', supportReply); } catch { } }
+      return { status: 'support_intake_handled' };
     }
 
     if (isStopRequest(cleanCmd)) {
@@ -1422,7 +1451,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         // owner's own compliance card, never a restart of driver onboarding
         // (live 2026-11-04: two misroutes into fleet context / reminders).
         const driverProfileQuestion = !quizPhaseLocked
-          && /^(?:(?:show|see|view|open|check)\s+(?:me\s+)?(?:my\s+)?(?:personal\s+)?driver\s+(?:profile|licen[cs]e|record|card)|(?:my|personal)\s+driver\s+(?:profile|licen[cs]e|record|card))\b/i.test(commandText);
+          && /^(?:(?:show|see|view|open|check|what(?:'s| is))\s+(?:me\s+)?(?:my\s+)?(?:own\s+)?(?:personal\s+)?driver(?:'s|’s|s)?\s+(?:profile|licen[cs]e|record|card|compliance)|(?:my|our|personal|own)\s+driver(?:'s|’s|s)?\s+(?:profile|licen[cs]e|record|card|compliance)|(?:my\s+)?personal\s+compliance)\b/i.test(commandText);
         if (driverProfileQuestion && quizForFastPath && !quizPhaseLocked) {
           abandonQuiz(session, { reason: 'driver_profile_read' });
         }
@@ -1937,7 +1966,9 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               reply_message: formatRecordAnswer(recordResult, recordQuestion, {
                 vehicles: existingVehicles,
                 currency: countryInfo?.currency || 'USD',
-                locale: countryInfo?.locale || 'en-US'
+                locale: countryInfo?.locale || 'en-US',
+                // v1.58.22 - only claim a vehicle scope when one actually resolved.
+                scopePlate: recordScope.reason === 'plate' ? recordQuestion.vehiclePlate : false
               })
             };
           }
@@ -2066,7 +2097,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           } else {
             // v1.58.10 — autonomous customer care: open a ticket + email
             // support@ + ping the superadmin for high-priority cases.
-            await handleCareRequest(supabaseClient, {
+            const care = await handleCareRequest(supabaseClient, {
               phone: senderPhone,
               text: messageText.trim(),
               profile: profileData,
@@ -2074,14 +2105,17 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               vehiclesList: existingVehicles
             });
             session.pendingSupportEscalation = false;
-            customReply = await composeMessage({
-              purpose: 'support_escalation',
-              facts: { supportEmail: 'support@reports.sakafleet.com', forwarded: true },
-              language: targetLang,
-              countryInfo,
-              profile: profileData,
-              fallbackText: "I've forwarded your message to our support team at support@reports.sakafleet.com. They will reach out to you shortly!"
-            });
+            // v1.58.22 - only claim "forwarded" when a ticket row actually exists.
+            customReply = care?.ticketCreated
+              ? await composeMessage({
+                  purpose: 'support_escalation',
+                  facts: { supportEmail: 'support@reports.sakafleet.com', forwarded: true },
+                  language: targetLang,
+                  countryInfo,
+                  profile: profileData,
+                  fallbackText: "I've forwarded your message to our support team at support@reports.sakafleet.com. They will reach out to you shortly!"
+                })
+              : "Thanks — I couldn't open a support ticket automatically just now. Please email support@reports.sakafleet.com with a line about what happened, or reply *Support* to try again.";
           }
         } else if (
           /\b(support team|contact support|talk to support|human help|help from (?:a )?human|talk to (?:a )?(?:human|person|agent|representative)|human (?:agent|support)|customer (?:care|support)|file a complaint|escalat(?:e|ion)|dispute|admin intervention|confus(?:ed|ing)|doesn'?t make sense|not clear)\b/i.test(messageText)
@@ -2785,7 +2819,16 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         };
 
         let quizTurn = { handled: false };
-        if (pauseQuizForChat) {
+        // v1.58.22 - a request/statement mid-draft is never an answer to the
+        // pending question. Live 2026-11-04: "For parts entry, I should be able
+        // to identify which part incurred the expense" was re-asked 7 times.
+        const statementEscapeRe = /\b(?:should be able to|why can(?:no|'|’)?t i|why can i not|why do i (?:not|n'?t)|i want to be able to|not captured)\b/i;
+        if (session.quiz && statementEscapeRe.test(messageText) && !pauseQuizForChat && !switchQuizFlow) {
+          const parkedFlow = getFlowDefinition(session.quiz.flow, quizCtx)?.label || session.quiz.flow;
+          abandonQuiz(session, { reason: 'statement_not_answer' });
+          isSpecialFlowHandled = true;
+          customReply = `Thanks — I've noted this: “${messageText.trim().slice(0, 180)}”\n\nI've parked your ${parkedFlow} draft so nothing is lost. Reply *Support* to pass this to our team (support@reports.sakafleet.com), or tell me what you'd like to do next.`;
+        } else if (pauseQuizForChat) {
           isSpecialFlowHandled = true;
           customReply = await buildPausedQuizReply(activeQuiz);
         } else if (switchQuizFlow) {

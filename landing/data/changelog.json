@@ -1,6 +1,12 @@
 {
-  "latest": "1.58.21",
+  "latest": "1.58.22",
   "entries": [
+    {
+      "version": "1.58.22",
+      "date": "2026-11-04",
+      "title": "Support that actually reaches a human",
+      "summary": "Support requests now open a real ticket before Saka says it forwarded them, a waiting support intake owns your next message, and statements mid-draft park the draft instead of looping. Part names and notes show up in your records."
+    },
     {
       "version": "1.58.21",
       "date": "2026-11-04",

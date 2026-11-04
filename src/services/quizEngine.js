@@ -613,7 +613,7 @@ function expenseFields(ctx) {
       { value: 'Top-up', aliases: ['top up', 'top-up', 'topped up', 'partial', 'half tank', 'not full', 'some fuel'] }
     ], { optional: true, when: (answers) => answers.expense_type === 'Fuel' }),
     ...expenseReadingFields(ctx),
-    field('notes', 'Notes', 'optional — e.g. Shell station, front-left tyre', {
+    field('notes', 'Note or part name', 'optional — e.g. brake pads, oil filter, Shell station', {
       optional: true, aliases: ['notes'], parse: (text) => String(text).trim() || null
     })
   ];

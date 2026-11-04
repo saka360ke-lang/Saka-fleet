@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.58.21  
+**Version:** 1.58.22  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.58.22** | Support tickets actually open (lifecycle insert + honest promise), intake locks the next turn, mid-draft statement escape, part names + notes visible in records, scoped reads, driver-compliance phrasings, delivery-failure rollup | 151 |
 | **1.58.21** | Trial anchored to passbook issuance + growth rides on the trial (no early conversion, trial floor, safe expiry sweep) + chat friction fixes (switch picker, driver-profile read, confusion escape, tier math) | 150 |
 | **1.58.20** | Welcome-trial outage fixed (profiles.currency/locale missing -> "profile not found"): migration + resilient fetchOwner + lazy heal + reconcile + observability + error rollup | 149 |
 | **1.58.19** | Self-sender guard: the platform no longer re-ingests its own escalation emails as tickets (support-inbox loop) | 148 |
@@ -4288,3 +4289,12 @@ quiz engine:
 - **Growth rides on the trial.** `markTrialConverted()` no longer flips the trial to CONVERTED on subscription.create / invoice.paid / legacy charge - it records `converted_at` + `paystack_subscription_code` and leaves the row ACTIVE until its anchored `ends_at`. `getEntitlements()` consults the live trial row for every status: paid access follows the PROFILE paid plan, the trial tier is the floor (a lapsed paid plan returns to the trial, never straight to Free), and the T-0 sweep never downgrades an owner whose paid subscription is still live.
 - **Chat friction:** bare "switch car" -> numbered "Which one?" picker; "show me my driver profile" is a deterministic read of the owner own Compliance Card (never fleet context or an onboarding restart); "confusing / doesn not make sense / not clear" joins the support escape family; tier-math follow-ups ("I have less than 3 assets") route to the plan view with a count-aware line ("You have N asset(s); this trial covers M").
 - **Tests:** `test_trial_engine` (77, includes anchor + stale-anchor), `test_subscription_billing` (78, includes conversion-keeps-window + trial-floor), `test_quiz_flow` (143), `test_agent_training` (155), `test_first_message_flow` (53), `test_v1571` (20), `test_greetings` (110) - green.
+### 151. v1.58.22 - support that actually reaches someone + draft-vs-request discipline (2026-11-04, live chat audit)
+
+- **The support promise is now backed by a real ticket.** `openCareTicket()` inserts the full care lifecycle (`status='OPEN'`, `priority`, `source`, `subject`, `thread_key`, `updated_at`, optional `sender_email`) and falls back to the four guaranteed columns only when the live table lacks a column; a failed insert is logged through `logSystemError` and returned as `ticketCreated:false`. `whatsapp.js` says `I've forwarded your message...` ONLY when a row exists, otherwise it says the ticket could not be opened and points at support@reports.sakafleet.com. Live verification 2026-11-04: `openCareTicket` -> `{ ok:true, id:14d74ac0 }`, row deleted after the check (0 rows left). Before this version the bare four-column insert failed on the live table while the assistant claimed a hand-off (support_tickets was empty after the 15:01 escalation).
+- **A pending support intake owns the NEXT turn.** The explicit `session.pendingSupportEscalation` block now runs before stop/quiz handling, so an open expense draft can never swallow the issue description (live: `KAS 628T` was answered by the expense quiz while intake waited). `cancel/exit/stop` exits the intake.
+- **A request mid-draft is never an answer.** New statement escape in the quiz lane: `should be able to`, `why can't I`, `why do I not`, `I want to be able to`, `not captured` while a draft is open parks the draft (nothing lost) and offers `Support` - the live sentence was re-asked 7 times.
+- **Part names and notes are visible.** The expense quiz note step is labelled `Note or part name` (`brake pads, oil filter, Shell station`); record lists render `(notes)` per row; a plate-scoped read prints `For *PLATE*` instead of `Across your N vehicles`; `why...` questions are never parsed as ledger totals.
+- **Driver-compliance phrasings.** `show me my driver compliance`, `drivers licence expiry`, `personal compliance`, `what's my driver card` and possessive variants all read the owner's Compliance Card instead of vehicle/expense answers.
+- **Delivery-failure hygiene.** Status callbacks now log a normalized `WhatsApp delivery failed (131026) to ...1234: title` (wamid/recipient in the stack), so `ERROR_ROLLUP_HOURS` folds repeats into one row instead of one row per wamid (22 near-identical 131026 rows in 48h).
+- **Tests:** `test_customer_care` (18 - lifecycle fields, legacy fallback, failed-insert reporting, intake-before-quiz source guard), `test_record_answers` (48 - notes in lists, scoped plate line, why-guard), `test_quiz_flow` (143), `test_inbound_email` (26), `test_care_worker` (44), `test_entry_ledger`, `test_v1583` (9), `test_first_message_flow` (53), `test_agent_training` (155), `test_sentinel_policy` (17) - green.

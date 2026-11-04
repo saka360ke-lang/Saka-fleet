@@ -107,6 +107,24 @@ const listReply = formatRecordAnswer(
 );
 check('list answer shows type and day', /Fuel/.test(listReply) && /31 Oct/.test(listReply), listReply);
 
+// v1.58.22 - notes/part names are visible in lists, and a plate-scoped read
+// names the vehicle instead of claiming the whole fleet (live 2026-11-04).
+const notedList = formatRecordAnswer(
+  {
+    ok: true,
+    rows: [{ amount: 4100, expense_type: 'Parts', notes: 'AC idler pulley mounting bracket', created_at: '2026-11-04T12:00:00+03:00' }],
+    count: 1, total: 4100, liters: 0, average: 4100, amountCol: 'amount'
+  },
+  { kind: 'list', earning: false, expenseTypes: ['Parts'], range: null },
+  { vehicles: [{}, {}], scopePlate: 'KAS628T', ...COPY }
+);
+check('a list answer shows the note/part name', /AC idler pulley mounting bracket/.test(notedList), notedList);
+check('a scoped read names the vehicle, not the fleet', /For \*KAS628T\*/.test(notedList) && !/Across your 2 vehicles/.test(notedList), notedList);
+
+// v1.58.22 - "why…" questions are never ledger totals (live 2026-11-04).
+const whyQ = parseRecordQuestion('Why can I not see extra notes on an entry?', KE);
+check('a why-question is not parsed as a records query', whyQ.ok === false && whyQ.reason === 'why-question', whyQ);
+
 const emptyReply = formatRecordAnswer(
   { ok: true, rows: [], count: 0, total: 0, liters: 0, average: 0, amountCol: 'amount' },
   { kind: 'total', earning: false, expenseTypes: [], range: { label: '31 Oct' } },

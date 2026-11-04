@@ -37,8 +37,8 @@ export async function queryRecordLedger(supabase, { ownerId = null, driverId = n
   const table = earning ? 'private_earnings' : 'expense_logs';
   const amountCol = earning ? 'revenue_amount' : 'amount';
   const selectCols = earning
-    ? 'id,revenue_amount,earning_type,created_at,vehicle_id'
-    : 'id,expense_type,amount,fuel_liters,fill_type,odometer_reading,created_at,vehicle_id';
+    ? 'id,revenue_amount,earning_type,notes,created_at,vehicle_id'
+    : 'id,expense_type,amount,fuel_liters,fill_type,odometer_reading,notes,created_at,vehicle_id';
 
   try {
     let query = supabase.from(table).select(selectCols);

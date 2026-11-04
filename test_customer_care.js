@@ -1,5 +1,6 @@
 // v1.58.10 - autonomous customer care (mock; stateless, no real email/WhatsApp).
 import { classifyCareRequest, shouldEscalateCare, openCareTicket, handleInboundSupportEmail, handleCareRequest } from './src/services/customerCare.js';
+import fs from 'node:fs';
 
 let pass = 0;
 let fail = 0;
@@ -36,6 +37,44 @@ async function run() {
   const m1 = makeMock();
   const t = await openCareTicket(m1.client, { phone: '+254700000000', body: 'help', category: 'bug' });
   check(t.ok === true && m1.inserts.length === 1 && m1.inserts[0].table === 'support_tickets', 'ticket inserted into support_tickets');
+  // v1.58.22 - the lifecycle columns ride the insert (the live table rejected a
+  // bare four-column insert and the promise went out with no ticket row).
+  const ticketRow = m1.inserts[0].rows[0];
+  check(ticketRow.status === 'OPEN' && ticketRow.priority === 'medium' && ticketRow.source === 'whatsapp' && Boolean(ticketRow.thread_key), 'the ticket carries the care lifecycle fields');
+
+  const legacy = {
+    inserts: [],
+    client: {
+      from() {
+        return {
+          insert(rows) {
+            legacy.inserts.push(rows);
+            const row = Array.isArray(rows) ? rows[0] : rows;
+            if ('status' in row) return { select: () => Promise.resolve({ data: null, error: { message: 'column "status" of relation "support_tickets" does not exist' } }) };
+            return { select: () => Promise.resolve({ data: [{ id: 'legacy-1' }], error: null }) };
+          }
+        };
+      }
+    }
+  };
+  const legacyTicket = await openCareTicket(legacy.client, { phone: '+254700000000', body: 'help' });
+  check(legacyTicket.ok === true && legacy.inserts.length === 2, 'an unknown lifecycle column falls back to the slim insert');
+
+  const savedPhone = process.env.SUPERADMIN_PHONE;
+  const savedMail = process.env.SUPERADMIN_EMAIL;
+  delete process.env.SUPERADMIN_PHONE;
+  delete process.env.SUPERADMIN_EMAIL;
+  const brokenClient = { from() { return { insert() { return { select: () => Promise.resolve({ data: null, error: { message: 'permission denied for table support_tickets' } }) }; }, select() { return this; }, limit: async () => ({ data: [], error: null }) }; } };
+  const brokenCare = await handleCareRequest(brokenClient, { phone: '+254700000000', text: 'help with fuel logging' });
+  check(brokenCare.ticketCreated === false, 'a failed ticket insert is reported (never claimed as forwarded)');
+  if (savedPhone !== undefined) process.env.SUPERADMIN_PHONE = savedPhone;
+  if (savedMail !== undefined) process.env.SUPERADMIN_EMAIL = savedMail;
+
+  // v1.58.22 - route-level guards for the live 2026-11-04 frictions.
+  const wa = fs.readFileSync('./src/routes/whatsapp.js', 'utf8');
+  check(/support_intake_handled/.test(wa) && wa.indexOf('support_intake_handled') < wa.indexOf('isStopRequest(cleanCmd)'), 'the support intake lock runs before stop/quiz handling');
+  check(/ticketCreated\s*\?/.test(wa), 'the forwarded copy is gated on a real ticket');
+  check(/statement_not_answer/.test(wa), 'a statement mid-draft parks the draft instead of looping');
 
   const m2 = makeMock({ profile: { id: 'p1', phone_number: '+254700000000', email: 'd@x.com' } });
   const sent = [];
