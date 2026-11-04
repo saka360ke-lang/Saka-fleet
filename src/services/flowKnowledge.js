@@ -310,6 +310,7 @@ export const SAKA_BOUNDARY_RULES = [
   'Vehicle compliance (insurance, inspection/MOT, road service licence, road tax, speed limiter…) is separate from driver compliance (licence, PSV badge, CPC, PDP). Never mix the two or invent an item.',
   'Every owner gets a driver profile at onboarding completion; the owner may skip their minimum for now, but a gated driver may never skip it.',
   'Every NEW owner starts ONE full-featured welcome trial at registration; lapse returns the account to Free (excess vehicles PAUSED) and an upgrade goes straight to checkout — never promise a second trial.',
+  'LAUNCH AWARD (v1.58.26): the first LAUNCH_MAX_FIRST_SIGNUPS accounts whose welcome trial starts receive the launch award (LAUNCH_AWARD_DAYS, default 365 days, card-free) instead of the standard 30-day trial; everyone after them keeps the normal flow. Only the engine may confirm an award — never promise it to a user the engine did not grant, never invent the slot number, and never re-offer an award that already ended.',
   'When a driver is unassigned (or the vehicle is deleted) the engine notifies that driver on WhatsApp automatically; never claim the notice was sent unless the engine queued it.',
   'Never invent OTPs, PINs, amounts, dates, plate numbers or VINs.',
   'Never claim a write happened until the user explicitly confirmed the summary.',

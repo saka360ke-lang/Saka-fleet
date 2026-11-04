@@ -22,6 +22,7 @@ import {
   completeWebOnboarding,
   inspectExistingSignup,
   pruneExpiredWebOnboardOtps,
+  sanitizeUtmValue,
   WEB_ONBOARD_OTP_TABLE,
   WEB_ONBOARD_MAX_ATTEMPTS
 } from './src/services/webOnboarding.js';
@@ -226,6 +227,16 @@ check(sanitizeOnboardPayload(VALID_PAYLOAD).data.preferredLanguage === null, 'A 
 const langDb = createMockSupabase({ profiles: [], admin_audit_logs: [] });
 await completeWebOnboarding(langDb, { email: 'lang@example.com', phone: '+254700000030', firstName: 'Lang', lastName: 'User', verified: false, preferredLanguage: 'English' });
 check(langDb.__db.profiles[0].preferred_language === 'English', 'The profile stores the captured language');
+
+console.log('\n--- Test 9: launch campaign attribution (v1.58.26) ---');
+const utmPayload = sanitizeOnboardPayload({ ...VALID_PAYLOAD, utm_source: 'Meta', utm_medium: 'paid_social', utm_campaign: 'launch-365' });
+check(utmPayload.ok === true && utmPayload.data.utm.source === 'meta' && utmPayload.data.utm.medium === 'paid_social' && utmPayload.data.utm.campaign === 'launch-365', 'UTM attribution is sanitised and lower-cased');
+check(sanitizeOnboardPayload({ ...VALID_PAYLOAD, utm_source: 'meta; drop table' }).data.utm.source === null, 'Unsafe UTM characters are dropped, never stored');
+check(sanitizeOnboardPayload({ ...VALID_PAYLOAD, utm_campaign: 'x'.repeat(65) }).data.utm.campaign === null, 'Over-long UTM values are dropped');
+check(sanitizeOnboardPayload(VALID_PAYLOAD).data.utm.source === null && sanitizeUtmValue(undefined) === null, 'A signup without campaign params stores no attribution');
+const utmDb = createMockSupabase({ profiles: [], admin_audit_logs: [] });
+await completeWebOnboarding(utmDb, { email: 'utm@example.com', phone: '+254700000031', firstName: 'Utm', lastName: 'User', verified: false, preferredLanguage: 'English', utm: { source: 'meta', medium: 'paid_social', campaign: 'launch-365' } });
+check(utmDb.__db.profiles[0].utm_source === 'meta' && utmDb.__db.profiles[0].utm_campaign === 'launch-365', 'First-touch attribution lands on the profile');
 
 // v1.49.5 — website signup is mandatory: no registration path may create a
 // vehicle (or start the trial) for an email-unverified account, and the legacy

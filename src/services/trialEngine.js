@@ -415,21 +415,26 @@ export async function recordActivationEvent({ supabase, ownerId, event } = {}) {
 /**
  * Extend the active trial (coupon redemption). Cumulative trial lifetime is
  * capped by TRIAL_MAX_TOTAL_DAYS so extensions can never run forever.
+ *
+ * v1.58.26 — `maxTotalDays` lets the slot-gated launch award raise the cap for
+ * ONE explicit caller. Every coupon path keeps passing null, so the standard
+ * 45-day clamp is unchanged (test_trial_engine pins both directions).
  */
-export async function extendAccountTrial({ supabase, ownerId, days = 15, couponCode = null } = {}) {
+export async function extendAccountTrial({ supabase, ownerId, days = 15, couponCode = null, maxTotalDays = null } = {}) {
   if (!supabase || !ownerId) return { ok: false, error: 'owner required' };
   const trial = await getActiveTrialRow(supabase, ownerId);
   if (!trial) return { ok: false, error: 'No active trial to extend.' };
 
+  const capDays = Math.max(TRIAL_MAX_TOTAL_DAYS, Math.floor(Number(maxTotalDays) || TRIAL_MAX_TOTAL_DAYS));
   const requested = Math.max(1, Math.floor(Number(days) || 15));
   const startedMs = new Date(trial.started_at).getTime();
   const currentEndMs = new Date(trial.ends_at).getTime();
   const baseMs = Math.max(Date.now(), currentEndMs);
-  const hardCapMs = startedMs + TRIAL_MAX_TOTAL_DAYS * DAY_MS;
+  const hardCapMs = startedMs + capDays * DAY_MS;
   const newEndMs = Math.min(baseMs + requested * DAY_MS, hardCapMs);
 
   if (newEndMs <= baseMs) {
-    return { ok: false, error: `Trial extension limit reached (${TRIAL_MAX_TOTAL_DAYS} days total).` };
+    return { ok: false, error: `Trial extension limit reached (${capDays} days total).` };
   }
 
   const nowIso = new Date().toISOString();
@@ -461,6 +466,7 @@ export async function extendAccountTrial({ supabase, ownerId, days = 15, couponC
     endsAt: newEndIso,
     daysAdded: Math.round((newEndMs - baseMs) / DAY_MS),
     totalDays: Math.round((newEndMs - startedMs) / DAY_MS),
+    capDays,
     capped: newEndMs >= hardCapMs
   };
 }

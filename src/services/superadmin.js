@@ -27,6 +27,7 @@ import {
   formatIncidentResolvedReply
 } from './incidents.js';
 import { getTrialFunnelStats, formatTrialStatsReply } from './trialEngine.js';
+import { getLaunchAwardStats, formatLaunchStatsReply } from './launchAwards.js';
 import { getTurnLatencySummary } from './turnLatency.js';
 import { getOcrUsageSummary, getOcrCountryProfileStats } from './ocrTelemetry.js';
 import { auditEnv, formatEnvDigest, parseEnvKeys, envTemplateKeys } from './envAudit.js';
@@ -318,6 +319,11 @@ export async function parseSuperadminCommand(messageText) {
   if (trialStatsMatch) {
     const requestedDays = trialStatsMatch[1] ? Number(trialStatsMatch[1]) : 30;
     return { intent: 'ADMIN_TRIAL_STATS', days: Math.min(365, Math.max(1, requestedDays)) };
+  }
+
+  // v1.58.26: launch-award digest (deterministic, zero LLM calls).
+  if (/^\s*admin\s+launch[\s_-]*stats?\s*$/i.test(text)) {
+    return { intent: 'ADMIN_LAUNCH_STATS' };
   }
 
   // v1.17.0: Model Watchdog commands (deterministic, zero LLM calls).
@@ -924,6 +930,25 @@ export async function handleTrialStatsCommand(supabase, days = 30) {
       extended: stats.extended,
       active: stats.active,
       by_tier: stats.byTier
+    }
+  };
+}
+
+/**
+ * Superadmin launch-award digest (v1.58.26). Deterministic; zero tokens.
+ * Never invents numbers: a failed read renders the honest "unavailable" line.
+ */
+export async function handleLaunchStatsCommand(supabase) {
+  const stats = await getLaunchAwardStats({ supabase });
+  return {
+    reply: formatLaunchStatsReply(stats),
+    details: {
+      ok: stats.ok,
+      enabled: stats.enabled,
+      slots_total: stats.slotsTotal,
+      slots_taken: stats.slotsTaken,
+      slots_left: stats.slotsLeft,
+      award_days: stats.awardDays
     }
   };
 }
@@ -2167,6 +2192,7 @@ export const ADMIN_COMMAND_REGISTRY = Object.freeze([
   { group: 'Fleet', items: [
     { cmd: 'profiles report', desc: 'user / profile statistics', ex: ['profiles report'] },
     { cmd: 'admin trial-stats', desc: 'trial funnel + conversion', ex: ['admin trial-stats'] },
+    { cmd: 'admin launch-stats', desc: 'launch award slots + winners', ex: ['admin launch-stats'] },
     { cmd: 'admin ai-stats [Nh]', desc: 'AI usage + cost (default 24h)', ex: ['admin ai-stats', 'admin ai-stats 48h'] },
     { cmd: 'admin ocr-stats [Nh]', desc: 'OCR usage summary', ex: ['admin ocr-stats'] },
     { cmd: 'admin ocr-profile [KE]', desc: 'per-country OCR profile', ex: ['admin ocr-profile KE'] },
@@ -2644,6 +2670,15 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
     };
   }
 
+  if (parsedCommand.intent === 'ADMIN_LAUNCH_STATS') {
+    const launchRes = await handleLaunchStatsCommand(supabase);
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_LAUNCH_STATS', launchRes.details);
+    return {
+      isSuperadmin: true,
+      reply: launchRes.reply
+    };
+  }
+
   if (parsedCommand.intent === 'ADMIN_ROLLOUT') {
     const status = await getFeatureRolloutStatus(supabase);
     await logAdminAudit(supabase, formattedPhone, 'ADMIN_ROLLOUT', {
@@ -2852,6 +2887,7 @@ ${JSON.stringify(telemetry).slice(0, 6000)}`;
     `• *Reply Speed*: "admin latency" or "admin latency 48h" (p50/p95 reply time & two-lane trigger)\n` +
     `• *Model Watchdog*: "admin models", "admin model scout", "admin model adopt [model] [split]", "admin model rollback [tier_1]"\n` +
     `• *Trial Funnel*: "admin trial-stats" or "admin trial-stats 90d" (trial → paid conversion)\n` +
+    `• *Launch Award*: "admin launch-stats" (first-50 slots, winners & days)\n` +
     `• *Coupon Generation*: "generate 20% coupon for +254712345678"\n` +
     `• *Profiles Report*: "profiles report", "user stats"\n` +
     `• *Autonomous Remediation*: "admin remediations", "admin accept fix FIX-YYYY-MM-DD-NN"\n` +

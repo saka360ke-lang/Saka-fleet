@@ -92,7 +92,23 @@ export function sanitizeOnboardPayload(body = {}) {
   if (!/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(email)) return { ok: false, error: 'A valid email address is required.' };
   if (!phone) return { ok: false, error: 'A valid WhatsApp number in international format is required.' };
   if (body?.consent !== true) return { ok: false, error: 'The Terms & Conditions and Privacy Policy consent is required.' };
-  return { ok: true, data: { firstName, lastName, email, phone, preferredLanguage } };
+  // v1.58.26 — campaign attribution (UTM) is optional and strictly sanitized:
+  // 64 chars max, letters/digits/_-.~ and spaces only; anything else is dropped.
+  const utm = {
+    source: sanitizeUtmValue(body?.utm_source),
+    medium: sanitizeUtmValue(body?.utm_medium),
+    campaign: sanitizeUtmValue(body?.utm_campaign)
+  };
+  return { ok: true, data: { firstName, lastName, email, phone, preferredLanguage, utm } };
+}
+
+/** Campaign tag gate: null when absent/invalid (never an error for the user). */
+export function sanitizeUtmValue(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+  if (raw.length > 64) return null;
+  if (!/^[a-zA-Z0-9._~ -]+$/.test(raw)) return null;
+  return raw.toLowerCase();
 }
 
 function mintOtp() {
@@ -208,7 +224,7 @@ export async function resendWebOnboardCode(supabase, { token }) {
  * Upsert the profile for a web signup. `verified` is only flipped true after a
  * code was matched. Never touches subscription state and never starts a trial.
  */
-export async function completeWebOnboarding(supabase, { email, phone, firstName, lastName, verified = false, preferredLanguage = null }) {
+export async function completeWebOnboarding(supabase, { email, phone, firstName, lastName, verified = false, preferredLanguage = null, utm = null }) {
   if (!supabase) return { ok: false, error: 'no_client' };
   const fullName = [firstName, lastName].filter(Boolean).join(' ').trim() || null;
   try {
@@ -225,6 +241,10 @@ export async function completeWebOnboarding(supabase, { email, phone, firstName,
       }
       if (fullName && !existing.full_name) updates.full_name = fullName;
       if (preferredLanguage && !existing.preferred_language) updates.preferred_language = preferredLanguage;
+      // v1.58.26 — first-touch attribution only; never overwrite an existing tag.
+      if (utm?.source && !existing.utm_source) updates.utm_source = utm.source;
+      if (utm?.medium && !existing.utm_medium) updates.utm_medium = utm.medium;
+      if (utm?.campaign && !existing.utm_campaign) updates.utm_campaign = utm.campaign;
       const { error } = await supabase.from('profiles').update(updates).eq('id', existing.id);
       if (error) return { ok: false, error: error.message };
       if (verified) {
@@ -237,7 +257,7 @@ export async function completeWebOnboarding(supabase, { email, phone, firstName,
       return { ok: true, created: false };
     }
 
-    const { error } = await supabase.from('profiles').insert([{
+    const profileRow = {
       id: crypto.randomUUID(),
       phone_number: phone,
       email,
@@ -253,7 +273,19 @@ export async function completeWebOnboarding(supabase, { email, phone, firstName,
       trial_ends_at: null,
       is_active: true,
       preferred_language: preferredLanguage || null
-    }]);
+    };
+    // v1.58.26 — campaign attribution rides the insert when present.
+    const utmColumns = {};
+    if (utm?.source) utmColumns.utm_source = utm.source;
+    if (utm?.medium) utmColumns.utm_medium = utm.medium;
+    if (utm?.campaign) utmColumns.utm_campaign = utm.campaign;
+
+    let { error } = await supabase.from('profiles').insert([{ ...profileRow, ...utmColumns }]);
+    // Rule 50 — a schema that has not been migrated yet must never block a
+    // signup: retry once without the optional attribution columns.
+    if (error && /utm_|column .* does not exist|schema cache/i.test(error.message || '')) {
+      ({ error } = await supabase.from('profiles').insert([profileRow]));
+    }
     if (error) return { ok: false, error: error.message };
     await writeAudit(supabase, verified ? 'WEB_ONBOARD_VERIFIED' : 'WEB_ONBOARD_CREATED', { email, phone });
     return { ok: true, created: true };

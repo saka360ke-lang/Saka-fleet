@@ -4,6 +4,7 @@ import { sendEmailOtp, sendPassbookWelcomeEmail } from './mailer.js';
 import { checkOwnerVehicleTierLimit, ensureVinRegistryEntry } from './vehicles.js';
 import { createExpiryReminder, buildExpirySpecFromDate } from './maintenanceReminders.js';
 import { startWelcomeTrial, recordActivationEvent, ACTIVATION_EVENTS } from './trialEngine.js';
+import { grantLaunchAwardForTrial, formatLaunchAwardLine, getLaunchAwardConfig } from './launchAwards.js';
 import { resolveUserTimezone } from './globalization.js';
 
 export async function handleStage2OptionalWeaving({
@@ -173,6 +174,7 @@ export async function saveVehicleAssetRecord({
   if (obState.optional?.inspection_expiry) vehRecord.inspection_expiry = obState.optional.inspection_expiry;
   if (obState.optional?.purchase_cost) vehRecord.purchase_cost = obState.optional.purchase_cost;
 
+  let launchAward = null;
   if (supabaseClient && profileData) {
     // v1.58.21 - the passbook issuance moment is the trial anchor.
     const issuedAt = new Date().toISOString();
@@ -201,6 +203,23 @@ export async function saveVehicleAssetRecord({
         ownerId: profileData.id,
         event: ACTIVATION_EVENTS.VEHICLE_REGISTERED
       });
+      // v1.58.26 — launch campaign: the first N welcome-trial starts get the
+      // 365-day award. Fail-soft: an award problem never blocks the trial.
+      if (welcome?.started) {
+        try {
+          const award = await grantLaunchAwardForTrial({
+            supabase: supabaseClient,
+            ownerId: profileData.id,
+            trial: welcome.trial || null,
+            phone: formattedPhone || profileData.phone_number || null
+          });
+          if (award?.granted) {
+            launchAward = { slot: award.slot, days: award.days, already: Boolean(award.already) };
+          }
+        } catch (awardErr) {
+          console.warn('[onboarding] Launch award skipped:', awardErr.message);
+        }
+      }
     } catch (trialErr) {
       console.warn('[onboarding] Welcome trial skipped:', trialErr.message);
     }
@@ -226,7 +245,7 @@ export async function saveVehicleAssetRecord({
     console.warn('[saveVehicleAssetRecord] Warning: Could not dispatch passbook email:', emailErr.message);
   }
 
-  return { token, coreYom, coreMileage, coreEmail, coreFuel, corePlate, coreModel, coreVin };
+  return { token, coreYom, coreMileage, coreEmail, coreFuel, corePlate, coreModel, coreVin, launchAward };
 }
 
 export async function handleStage1CoreCapture({
@@ -389,7 +408,10 @@ export async function handleStage1CoreCapture({
       session.state = 'ONBOARDING_STAGE_2';
       chatSessions.set(senderPhone, session);
 
-      return `🎉 *Stage 1 of 2 · Step 4 of 4: Passbook Issued!* 🚀\n\n*Vehicle Registration Complete & VIN-Locked* ✅\n\n🚘 *Vehicle Asset Record:*\n• *Plate Number:* ${saved.corePlate}\n• *VIN (Chassis):* \`${saved.coreVin}\` *(Permanently Locked 🔒)*\n• *Make & Model:* ${saved.coreModel} (${saved.coreYom})\n• *Fuel:* ${saved.coreFuel} | *Odometer:* ${saved.coreMileage.toLocaleString()} km\n• *Email:* ${saved.coreEmail} *(Verified ✅)*\n• *Passbook Token:* \`${saved.token}\`\n\n📧 *Your official digital passbook and token have been sent directly to ${saved.coreEmail}!*\n\n🛠️ *Stage 2 of 2 — Optional Specs:*\nWould you like to optionally add details like **Insurance Expiry Date**, **Inspection/NTAC Date**, **Color**, **Transmission** (Auto/Manual), or any **Custom Modifications** (e.g. Bullbar, Winch)?\n\nAdding insurance expiry enables Saka to send proactive renewal alerts before expiration!\n\n💡 *Reply with any details (e.g. "Insurance expires 2027-05-15, automatic, color White"), or simply type **'Skip'** or **'Done'** to finish. Type **'Help'** anytime for your menu.*`;
+      const launchAwardLine = saved.launchAward
+        ? `\n\n${formatLaunchAwardLine({ days: saved.launchAward.days, slot: saved.launchAward.slot, slotsTotal: getLaunchAwardConfig().slots })}`
+        : '';
+      return `🎉 *Stage 1 of 2 · Step 4 of 4: Passbook Issued!* 🚀\n\n*Vehicle Registration Complete & VIN-Locked* ✅\n\n🚘 *Vehicle Asset Record:*\n• *Plate Number:* ${saved.corePlate}\n• *VIN (Chassis):* \`${saved.coreVin}\` *(Permanently Locked 🔒)*\n• *Make & Model:* ${saved.coreModel} (${saved.coreYom})\n• *Fuel:* ${saved.coreFuel} | *Odometer:* ${saved.coreMileage.toLocaleString()} km\n• *Email:* ${saved.coreEmail} *(Verified ✅)*\n• *Passbook Token:* \`${saved.token}\`\n\n📧 *Your official digital passbook and token have been sent directly to ${saved.coreEmail}!*\n\n🛠️ *Stage 2 of 2 — Optional Specs:*\nWould you like to optionally add details like **Insurance Expiry Date**, **Inspection/NTAC Date**, **Color**, **Transmission** (Auto/Manual), or any **Custom Modifications** (e.g. Bullbar, Winch)?\n\nAdding insurance expiry enables Saka to send proactive renewal alerts before expiration!\n\n💡 *Reply with any details (e.g. "Insurance expires 2027-05-15, automatic, color White"), or simply type **'Skip'** or **'Done'** to finish. Type **'Help'** anytime for your menu.*${launchAwardLine}`;
     } catch (regErr) {
       console.error('[handleStage1CoreCapture] Registration Error:', regErr);
       onboardingStore.delete(senderPhone);

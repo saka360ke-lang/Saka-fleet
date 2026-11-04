@@ -103,7 +103,9 @@ const STATLESS_SUITES = [
   // v1.58.15 - document retention (receipt delete, prunes, wipe images).
   'test_document_retention.js',
   // v1.58.18 - care console (worker role, lifecycle, threading, audit).
-  'test_care_worker.js'
+  'test_care_worker.js',
+  // v1.58.26 - launch award: first 50 welcome trials get 365 days, then the default flow.
+  'test_launch_award.js'
 ];
 
 const WORKFLOW_DIR = '.github/workflows';

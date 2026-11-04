@@ -73,6 +73,7 @@ import {
   auditWebOnboardEvent,
   pruneExpiredWebOnboardOtps
 } from './src/services/webOnboarding.js';
+import { ensureLaunchAwardTable, getLaunchAwardStatus } from './src/services/launchAwards.js';
 import { upsertIncident } from './src/services/incidents.js';
 import { ensureFeatureNoticeSchema } from './src/services/featureNotice.js';
 import { ensureContactNudgeSchema } from './src/services/contactNudge.js';
@@ -104,7 +105,7 @@ await fastify.register(rateLimit, {
 // the public health probe. Every other route stays closed to browsers.
 const LANDING_ORIGINS = (process.env.LANDING_ORIGINS || 'https://sakafleet.com,https://www.sakafleet.com')
   .split(',').map((s) => s.trim()).filter(Boolean);
-const CORS_PATHS = ['/api/onboard', '/api/onboard/verify', '/api/onboard/resend', '/healthz', '/api/health'];
+const CORS_PATHS = ['/api/onboard', '/api/onboard/verify', '/api/onboard/resend', '/api/onboard/launch-status', '/healthz', '/api/health'];
 fastify.addHook('onRequest', async (request, reply) => {
   const origin = request.headers.origin;
   if (!origin) return;
@@ -521,7 +522,7 @@ function webOnboardWelcomeText(firstName) {
 fastify.post('/api/onboard', async (request, reply) => {
   const clean = sanitizeOnboardPayload(request.body);
   if (!clean.ok) return reply.status(400).send({ success: false, error: clean.error });
-  const { firstName, lastName, email, phone, preferredLanguage } = clean.data;
+  const { firstName, lastName, email, phone, preferredLanguage, utm } = clean.data;
   if (!supabase) return reply.status(503).send({ success: false, error: 'Database unavailable. Please try again shortly.' });
 
   try {
@@ -548,7 +549,7 @@ fastify.post('/api/onboard', async (request, reply) => {
       return reply.status(502).send({ success: false, error: 'The verification email could not be sent. Please check the address and try again.' });
     }
 
-    const profileResult = await completeWebOnboarding(supabase, { email, phone, firstName, lastName, verified: false, preferredLanguage });
+    const profileResult = await completeWebOnboarding(supabase, { email, phone, firstName, lastName, verified: false, preferredLanguage, utm });
     return {
       success: true,
       onboard_token: sessionRow.token,
@@ -627,6 +628,24 @@ fastify.post('/api/onboard/resend', async (request, reply) => {
   } catch (err) {
     await logWebOnboardFailure(err, '/api/onboard/resend', { token: String(onboard_token).slice(0, 8), stage: 'resend' });
     return reply.status(500).send({ success: false, error: 'Something went wrong. Please try again.' });
+  }
+});
+
+// v1.58.26 — public launch-campaign status for the website banner. No PII, no
+// secrets; fail-closed (a DB error hides the campaign rather than promising an
+// award that cannot be granted). Cached in the service for 60 s.
+fastify.get('/api/onboard/launch-status', async (_request, reply) => {
+  try {
+    const status = await getLaunchAwardStatus({ supabase });
+    return {
+      success: true,
+      launch_active: status.active,
+      slots_left: status.slotsLeft,
+      slots_total: status.slotsTotal,
+      award_days: status.awardDays
+    };
+  } catch {
+    return reply.status(200).send({ success: true, launch_active: false, slots_left: 0, slots_total: 0, award_days: 0 });
   }
 });
 
@@ -1229,6 +1248,7 @@ const start = async () => {
     await ensureFeatureNoticeSchema(supabase);
     await ensureContactNudgeSchema(supabase);
     await ensureWebOnboardOtpTable(supabase);
+    await ensureLaunchAwardTable(supabase);
     pruneExpiredWebOnboardOtps(supabase).catch(() => {});
 
     logWebhookEnvParity();

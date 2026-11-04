@@ -1,6 +1,12 @@
 {
-  "latest": "1.58.25",
+  "latest": "1.58.26",
   "entries": [
+    {
+      "version": "1.58.26",
+      "date": "2026-11-04",
+      "title": "The first 50 get a whole year",
+      "summary": "A launch thank-you: the first 50 accounts that register their first car get a full 365-day trial - every feature unlocked, no card, no catch. Once the first 50 are in, the normal 30-day welcome trial keeps running for everyone else."
+    },
     {
       "version": "1.58.25",
       "date": "2026-11-04",

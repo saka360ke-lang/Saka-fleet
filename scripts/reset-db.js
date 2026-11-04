@@ -66,6 +66,7 @@ export const RESET_TABLES = [
   'subscriptions',
   'usage_counters',
   'paystack_webhook_events',
+  'launch_awards',
   'vehicles',
   'superadmin_sessions',
   'coupons',
@@ -207,6 +208,7 @@ export async function executeDatabaseReset({ targetPhone = null, verbose = true,
         DELETE FROM public.vehicles WHERE owner_phone IN ('${cleanPhone}', '${altPhone}') OR owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}'));
         DELETE FROM public.subscriptions WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}'));
         DELETE FROM public.trial_sessions WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}'));
+        DELETE FROM public.launch_awards WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}'));
         DELETE FROM public.usage_counters WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}'));
         DELETE FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}');
       `;
@@ -238,6 +240,7 @@ export async function executeDatabaseReset({ targetPhone = null, verbose = true,
           public.subscriptions,
           public.usage_counters,
           public.paystack_webhook_events,
+          public.launch_awards,
           public.vehicles,
           public.superadmin_sessions,
           public.coupons,

@@ -68,6 +68,8 @@ check(DEFAULT_SAKA_CORE_PROMPT.includes('QUERY RECORDS (v1.36.0'), 'Core prompt 
 check(SAKA_INTENT_PLAYBOOK.some((row) => row.intent === 'QUERY_RECORDS' && /recordAnswers/.test(row.behavior)), 'Record-answers playbook names the deterministic engine');
   check(SAKA_INTENT_PLAYBOOK.some((row) => row.intent === 'EDIT_ENTRY' && /whitelisted fields/i.test(row.behavior)), 'Edit intent playbook names the editable whitelist');
   check(SAKA_INTENT_PLAYBOOK.some((row) => row.intent === 'DELETE_ENTRY' && /30-minute "restore"/.test(row.behavior)), 'Delete intent playbook names the restore window');
+check(/LAUNCH AWARD \(v1\.58\.26\)/.test(DEFAULT_SAKA_CORE_PROMPT), 'Core prompt teaches the launch award (engine-confirmed only)');
+check(/LAUNCH AWARD \(v1\.58\.26\)/.test(SAKA_FLOW_PLAYBOOK), 'Flow playbook teaches the launch award (engine-confirmed only)');
   check(SAKA_BOUNDARY_RULES.some((rule) => /LEDGER_ENTRY_DELETED/.test(rule)), 'Boundary: every ledger edit/delete is audited');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('EDITABLE LEDGER (v1.33.0'), 'Core prompt teaches the editable ledger');
 check(DEFAULT_SAKA_CORE_PROMPT.includes('NARRATIVE INTAKE (v1.34.0'), 'Core prompt teaches narrative intake');

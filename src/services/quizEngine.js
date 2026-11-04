@@ -79,6 +79,7 @@ import {
   selectVehiclesToKeep,
   getEntitlements
 } from './subscriptions.js';
+import { grantLaunchAwardForTrial, formatLaunchAwardLine, getLaunchAwardConfig } from './launchAwards.js';
 import { normalizeTierKey, getTierLabel } from './subscriptionTiers.js';
 import { parseFlexibleDate } from './dateParser.js';
 import { normalizeAssetKind, requiresPlate, requiresVin, meterForAssetKind } from './countryBucket.js';
@@ -2863,7 +2864,24 @@ async function executeFlow(state, ctx) {
             event: ACTIVATION_EVENTS.VEHICLE_REGISTERED
           });
         } catch { /* activation is best-effort */ }
-        const reply = await ok({
+        // v1.58.26 — launch campaign: the first N welcome-trial starts get the
+        // 365-day award. Fail-soft: a launch problem never blocks registration.
+        let launchAward = null;
+        if (welcomeTrial?.started) {
+          try {
+            const award = await grantLaunchAwardForTrial({
+              supabase: ctx.supabase,
+              ownerId: ctx.profile?.id,
+              trial: welcomeTrial.trial || null,
+              phone: ctx.profile?.phone_number || null
+            });
+            if (award?.granted) launchAward = award;
+          } catch (awardErr) {
+            console.warn('[launch-award] skipped:', awardErr.message);
+          }
+        }
+        const effectiveTrialDays = launchAward?.extended ? launchAward.days : welcomeTrial?.days;
+        const composedReply = await ok({
           vehicle: saved.plate,
           vin: saved.vin,
           makeModel: saved.makeModel,
@@ -2873,11 +2891,14 @@ async function executeFlow(state, ctx) {
           passbookToken: saved.token,
           ...(welcomeTrial?.started
             ? {
-              trialDays: welcomeTrial.days,
+              trialDays: effectiveTrialDays,
               trialEndsAt: formatDate(welcomeTrial.endsAt, buildGlobalContext(ctx.countryInfo, ctx.profile).locale)
             }
             : {})
         });
+        const reply = launchAward
+          ? `${composedReply}\n\n${formatLaunchAwardLine({ days: launchAward.days, slot: launchAward.slot, slotsTotal: getLaunchAwardConfig().slots })}`
+          : composedReply;
         return { handled: true, reply, flow: state.flow, completed: true };
       }
 

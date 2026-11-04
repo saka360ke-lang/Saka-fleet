@@ -281,5 +281,14 @@ check(indexHtml.includes('Saka will message you on WhatsApp'), 'the success copy
 check(mainJs.includes('preferred_language: detectLanguageName()') && mainJs.includes('navigator.language'), 'main.js captures the browser language at signup');
 check(css.includes('.usd-hint') && css.includes('font-size: 11px'), 'the USD hint is tiny but legible (11px)');
 
+console.log('\n--- Test 16: launch campaign banner + UTM attribution (v1.58.26) ---');
+check(indexHtml.includes('hero-note') && /30-day full-featured welcome trial/.test(indexHtml), 'the default hero note states the standard 30-day trial (truthful fallback)');
+check(mainJs.includes('/api/onboard/launch-status') && mainJs.includes('launch_active'), 'main.js reads the public launch status');
+check(mainJs.includes('if (!body || body.launch_active !== true || !(body.slots_left > 0)) return;'), 'the banner fails closed: an inactive or exhausted campaign leaves the default copy');
+check(mainJs.includes('hero-note') && mainJs.includes('Launch offer'), 'an active campaign upgrades the hero note');
+check(mainJs.includes("event: 'launch_offer_view'") && mainJs.includes('launch_award_days'), 'launch exposure rides the existing dataLayer (no new vendor)');
+check(mainJs.includes('utm_source') && mainJs.includes('utm_medium') && mainJs.includes('utm_campaign'), 'main.js forwards UTM attribution on signup');
+check(mainJs.includes("'utm_' + key") && mainJs.includes('slice(0, 64)'), 'UTM values come from utm_* params and are capped at 64 chars');
+
 console.log('Stateless suite: file reads only — no database, no cleanup needed.');
 

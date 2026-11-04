@@ -81,8 +81,67 @@
 
   function trackSignup() {
     window.dataLayer = window.dataLayer || [];
-    window.dataLayer.push({ event: 'successful_signup', signup_method: 'website' });
+    window.dataLayer.push({
+      event: 'successful_signup',
+      signup_method: 'website',
+      launch_active: LAUNCH.active === true,
+      launch_award_days: LAUNCH.active ? LAUNCH.awardDays : 0
+    });
   }
+
+  /* ---------- v1.58.26: campaign attribution (UTM) + launch banner ---------- */
+  var LAUNCH = { active: false, slotsLeft: 0, slotsTotal: 0, awardDays: 0 };
+  var UTM_KEY = 'saka_utm';
+
+  function captureUtm() {
+    try {
+      var params = new URLSearchParams(window.location.search);
+      var utm = {};
+      ['source', 'medium', 'campaign'].forEach(function (key) {
+        var value = params.get('utm_' + key);
+        if (value) utm[key] = String(value).slice(0, 64);
+      });
+      if (utm.source || utm.medium || utm.campaign) {
+        sessionStorage.setItem(UTM_KEY, JSON.stringify(utm));
+      }
+    } catch (err) { /* storage may be blocked — attribution is optional */ }
+  }
+
+  function readUtm() {
+    try { return JSON.parse(sessionStorage.getItem(UTM_KEY) || '{}') || {}; } catch (err) { return {}; }
+  }
+
+  // The banner only appears while the campaign can actually award (fail-closed:
+  // any API problem leaves the truthful default 30-day copy in place).
+  function fetchLaunchStatus() {
+    fetch(API_BASE + '/api/onboard/launch-status')
+      .then(function (res) { return res.json(); })
+      .then(function (body) {
+        if (!body || body.launch_active !== true || !(body.slots_left > 0)) return;
+        LAUNCH = {
+          active: true,
+          slotsLeft: body.slots_left,
+          slotsTotal: body.slots_total,
+          awardDays: body.award_days
+        };
+        var note = document.querySelector('.hero-note');
+        if (note) {
+          note.textContent = '🎉 Launch offer — the first ' + body.slots_total + ' new accounts get a full ' +
+            body.award_days + '-day trial · No card needed';
+        }
+        window.dataLayer = window.dataLayer || [];
+        window.dataLayer.push({
+          event: 'launch_offer_view',
+          slots_left: body.slots_left,
+          slots_total: body.slots_total,
+          award_days: body.award_days
+        });
+      })
+      .catch(function () { /* silent — default copy stands */ });
+  }
+
+  captureUtm();
+  fetchLaunchStatus();
 
   function showDone(already) {
     if (already) {
@@ -112,7 +171,10 @@
         email: window.__onboard.email,
         phone: window.__onboard.phone,
         preferred_language: detectLanguageName(),
-        consent: true
+        consent: true,
+        utm_source: readUtm().source || undefined,
+        utm_medium: readUtm().medium || undefined,
+        utm_campaign: readUtm().campaign || undefined
       })
     })
       .then(function (res) { return res.json().then(function (body) { return { ok: res.ok, body: body }; }); })

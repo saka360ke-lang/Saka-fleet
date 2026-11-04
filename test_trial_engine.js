@@ -215,6 +215,13 @@ async function run() {
   check(overExtend.ok === true && overExtend.capped === true, 'Extension is clamped to the cumulative cap');
   check(overExtend.totalDays <= TRIAL_MAX_TOTAL_DAYS, `Total trial days never exceeds ${TRIAL_MAX_TOTAL_DAYS}`);
 
+  // v1.58.26 — only the explicit, slot-gated launch award may raise the cap.
+  const launchExtend = await extendAccountTrial({ supabase: extMock.client, ownerId: 'p-1', days: 365, couponCode: 'LAUNCH365-1', maxTotalDays: 365 });
+  check(launchExtend.ok === true && launchExtend.totalDays > TRIAL_MAX_TOTAL_DAYS, 'The launch award can exceed the standard 45-day cap (maxTotalDays)');
+  check(launchExtend.totalDays <= 365 && launchExtend.capDays === 365, 'The launch award never exceeds its own 365-day cap');
+  const normalAfterLaunch = await extendAccountTrial({ supabase: extMock.client, ownerId: 'p-1', days: 30 });
+  check(normalAfterLaunch.ok === false && /45 days total/.test(normalAfterLaunch.error || ''), 'A normal coupon is still clamped by TRIAL_MAX_TOTAL_DAYS after an award');
+
   const noTrialExtend = await extendAccountTrial({ supabase: noTrialMock.client, ownerId: 'p-1', days: 5 });
   check(noTrialExtend.ok === false, 'Cannot extend without an active trial');
 
