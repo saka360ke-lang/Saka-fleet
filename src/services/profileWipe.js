@@ -1,0 +1,94 @@
+/**
+ * Saka Fleet — Superadmin profile wipe for a clean sign-up (v1.58.8)
+ * -----------------------------------------------------------------
+ * Permanently erases ONE account and everything keyed to it (profile, vehicles,
+ * ledger, chats, sessions, trials, subscriptions, vouchers, the VIN ledger) so
+ * the person can sign up fresh. It is OTP-gated in superadmin.js (a code goes to
+ * SUPERADMIN_EMAIL) and always audited (ADMIN_PROFILE_WIPED).
+ *
+ * Never throws: every delete is best-effort and returns a per-table count.
+ */
+
+export async function wipeProfileForSignup(supabase, rawPhone) {
+  if (!supabase || !rawPhone) return { ok: false, reason: 'missing phone or client' };
+  const digits = String(rawPhone).replace(/[^0-9]/g, '');
+  if (digits.length < 9) return { ok: false, reason: 'phone too short' };
+  const tail = digits.slice(-9);
+  const counts = {};
+
+  const del = async (table, column, values) => {
+    const vals = (values || []).filter((v) => v !== null && v !== undefined && v !== '');
+    if (!vals.length) return;
+    try {
+      const { count } = await supabase.from(table).delete({ count: 'exact' }).in(column, vals);
+      if (count) counts[table] = (counts[table] || 0) + count;
+    } catch { /* table/column may not exist on this deployment — best effort */ }
+  };
+
+  // Resolve the profile country-agnostically by its trailing digits.
+  let profiles = [];
+  try {
+    const { data } = await supabase.from('profiles').select('id, phone_number').ilike('phone_number', `%${tail}%`);
+    profiles = data || [];
+  } catch { profiles = []; }
+  const profileIds = profiles.map((r) => r.id).filter(Boolean);
+  const phones = [...new Set([...profiles.map((r) => r.phone_number), `+${digits}`, digits].filter(Boolean))];
+
+  // Resolve vehicles by owner id or owner phone.
+  let vehicles = [];
+  try {
+    const orParts = [];
+    if (profileIds.length) orParts.push(`owner_id.in.(${profileIds.join(',')})`);
+    orParts.push(`owner_phone.in.(${phones.join(',')})`);
+    const { data } = await supabase.from('vehicles').select('id, plate_number, vin').or(orParts.join(','));
+    vehicles = data || [];
+  } catch { vehicles = []; }
+  const vehicleIds = vehicles.map((r) => r.id).filter(Boolean);
+  const plates = vehicles.map((r) => r.plate_number).filter(Boolean);
+  const vins = vehicles.map((r) => r.vin).filter(Boolean);
+
+  // Dependent rows keyed by vehicle.
+  for (const t of ['expense_logs', 'private_earnings', 'expiry_notification_log', 'reminders', 'passbook_transfers', 'pending_owner_notifications', 'driver_compliances']) {
+    await del(t, 'vehicle_id', vehicleIds);
+  }
+  await del('receipts', 'vehicle_id', vehicleIds);
+  await del('driver_assignments', 'vehicle_id', vehicleIds);
+  await del('expenses', 'plate', plates);
+  await del('coupons', 'vin', vins);
+  await del('coupons', 'assigned_to_phone', phones);
+
+  // Rows keyed by phone number.
+  for (const [t, c] of [
+    ['chat_history', 'user_phone'],
+    ['chat_transcripts', 'phone_number'],
+    ['chat_friction_logs', 'user_phone'],
+    ['processed_webhooks', 'phone_number'],
+    ['chat_sessions', 'phone_number'],
+    ['superadmin_sessions', 'phone_number'],
+    ['ai_usage_logs', 'phone_number'],
+    ['turn_latency_logs', 'phone_number'],
+    ['trial_sessions', 'owner_phone']
+  ]) {
+    await del(t, c, phones);
+  }
+
+  // Rows keyed by profile id.
+  await del('receipts', 'owner_id', profileIds);
+  await del('receipts', 'driver_id', profileIds);
+  await del('driver_compliances', 'driver_id', profileIds);
+  await del('driver_assignments', 'driver_id', profileIds);
+  await del('subscriptions', 'owner_id', profileIds);
+  await del('trial_sessions', 'owner_id', profileIds);
+
+  // The VIN provenance ledger is erased ONLY here (an explicit admin full wipe),
+  // so a fresh sign-up can re-register the same vehicle cleanly.
+  await del('vin_registry', 'vin', vins);
+
+  await del('vehicles', 'id', vehicleIds);
+  await del('profiles', 'phone_number', phones);
+  await del('profiles', 'id', profileIds);
+
+  return { ok: true, phone: phones[0] || `+${digits}`, digits, counts, profiles: profileIds.length, vehicles: vehicleIds.length };
+}
+
+export default { wipeProfileForSignup };

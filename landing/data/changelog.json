@@ -1,6 +1,12 @@
 {
-  "latest": "1.58.7",
+  "latest": "1.58.8",
   "entries": [
+    {
+      "version": "1.58.8",
+      "date": "2026-11-04",
+      "title": "Always up to date",
+      "summary": "Pushes now deploy automatically, a superadmin can reset an account safely with an emailed code, and new users get a friendly nudge to set up their first vehicle."
+    },
     {
       "version": "1.58.7",
       "date": "2026-11-04",

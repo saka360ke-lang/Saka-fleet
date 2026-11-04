@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.58.7  
+**Version:** 1.58.8  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.58.8** | Cloud Run auto-deploy pipeline + OTP-gated profile wipe (`admin wipe`) + verified earnings save + post-signup conversion directive | 137 |
 | **1.58.7** | Verified saves (no false "Saved"), "switch to X" works mid-draft, "Stop" pause TDZ fixed | 136 |
 | **1.58.6** | Chat fixes: past-tense expense statements logged (not answered as queries), "pull/show … records" routed as queries (not log flows), ambiguous multi-vehicle reads ask which vehicle | 135 |
 | **1.58.5** | Bi-weekly Sentinel deep audit (deterministic code-integrity scan → deduped PENDING_APPROVAL PROP-* proposals, Mon/Thu 03:00 EAT, env-gated) | 134 |
@@ -4161,3 +4162,12 @@ quiz engine:
 - **"Switch to <plate>" works anytime (F3).** Mid-draft, "switch to KBJ 819C" was swallowed by the open expense quiz (asking for litres, and garbling the plate into "KES 819"). An explicit switch now abandons any open draft first, then routes to the switch handler.
 - **"Stop" no longer dead-airs (TDZ).** The pause handler referenced `countryInfo` before its `const` declaration → a `ReferenceError` threw and the user got an empty reply. Fixed by computing `countryInfo` inline in the pause path (surfaced by `test_reliability` Test 3a).
 - **Tests:** `test_record_answers` (45), `test_v1583`, `test_entry_ledger`, `test_edit_delete`, `test_narrative_draft` green; `test_reliability` Test 3a ("Stop" pause) now passes; `npm run health` green.
+
+### 137. v1.58.8 - deploy pipeline, profile wipe, verified earnings, post-signup conversion (2026-11-04)
+
+- **Backend now auto-deploys on push.** Added `Dockerfile` + `.dockerignore` + `.github/workflows/deploy_cloud_run.yml` (builds from source via `gcloud run deploy --source .`, `--min-instances=1 --cpu-boost --no-cpu-throttling --allow-unauthenticated`). Enable with repo secrets `GCP_SA_KEY`, `GCP_PROJECT_ID`, `GCP_REGION`; while `GCP_SA_KEY` is unset the job skips with a warning (never red). Fixes the frozen live revision (was `saka-fleet-00253-b4q`, 2026-10-28) — previously a push only fired the WhatsApp "building" alert, never a deploy.
+- **OTP-gated profile wipe for a clean sign-up.** `admin wipe <phone>` emails a 6-digit code to `SUPERADMIN_EMAIL` (`sendEmailOtp`); `admin wipe confirm <code>` verifies it (10-min TTL, 5 attempts, superadmin-own-phone refused) then `wipeProfileForSignup()` (`src/services/profileWipe.js`) erases the profile + vehicles + ledger + chats + sessions + trials/subscriptions + coupons + the VIN ledger. Audited `ADMIN_PROFILE_WIPE_REQUESTED` / `ADMIN_PROFILE_WIPED`. No DDL.
+- **Verified earnings save (F5 remainder).** The LOG_EARNINGS quick path inserted into `private_earnings` without checking the error and still said "Recorded" — now the write is verified and a failure says "nothing was written" (same assurance as the expense path).
+- **Post-signup conversion directive.** The Saka core prompt now instructs: a verified user with no vehicle gets their app/pricing/feature question answered first in 2-4 short lines, then ONE soft next step — set up their first vehicle (reply Register) — to experience the feature. Warm, never long or pushy (answers stay AI-composed from facts).
+- **Security:** audited every success renderer ("Successfully"/"Saved") — the expense quick path (v1.58.7) and the earnings quick path (this release) were the two unverified writes; trial-extension, vehicle-delete, odometer and operating-hours paths were already gated on their result.
+- **Tests:** `test_profile_wipe.js` (13, mock) registered in the health suite; `test_record_answers` (45), `test_v1583`, `test_entry_ledger`, `test_edit_delete`, `test_narrative_draft`, `test_agent_training`, `test_product_qa`, `test_greetings`, `test_conversation_compliance`, `test_superadmin`, `test_update_suggest` green; `npm run health` green.

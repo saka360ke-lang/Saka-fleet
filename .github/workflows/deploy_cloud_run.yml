@@ -1,0 +1,62 @@
+name: Deploy Backend (Cloud Run)
+
+# v1.58.8 - the backend had NO automatic Cloud Run deploy: a push only fired the
+# WhatsApp "building" alert (deploy_notify.yml) but never rebuilt the service, so
+# the live revision froze. This workflow deploys main to Cloud Run from source.
+#
+# Enable by adding these repo secrets:
+#   GCP_SA_KEY      - a GCP service-account JSON key with roles:
+#                     Cloud Run Admin, Cloud Build Editor, Service Account User,
+#                     Storage Admin, Artifact Registry/Container Registry reader.
+#   GCP_PROJECT_ID  - the GCP project id.
+#   GCP_REGION      - the Cloud Run region (e.g. africa-south1, us-central1).
+# If GCP_SA_KEY is unset the job skips cleanly (warning only, never red).
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check deploy secrets
+        id: guard
+        run: |
+          if [ -z "${{ secrets.GCP_SA_KEY }}" ]; then
+            echo "::warning title=Cloud Run deploy skipped::GCP_SA_KEY is not set. Add GCP_SA_KEY, GCP_PROJECT_ID and GCP_REGION repo secrets to enable automatic backend deploys from main."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        if: steps.guard.outputs.skip == 'false'
+        uses: actions/checkout@v4
+
+      - name: Auth to Google Cloud
+        if: steps.guard.outputs.skip == 'false'
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud
+        if: steps.guard.outputs.skip == 'false'
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Deploy to Cloud Run (build from source)
+        if: steps.guard.outputs.skip == 'false'
+        run: |
+          gcloud run deploy saka-fleet \
+            --source . \
+            --region "${{ secrets.GCP_REGION }}" \
+            --platform managed \
+            --allow-unauthenticated \
+            --min-instances=1 \
+            --cpu-boost \
+            --no-cpu-throttling \
+            --quiet
+          echo "Deployed $(git rev-parse --short HEAD) to saka-fleet (${{ secrets.GCP_REGION }})"

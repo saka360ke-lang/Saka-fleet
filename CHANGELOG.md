@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.58.8] - 2026-11-04
+
+- **Backend auto-deploys on push.** New `Dockerfile` + `.github/workflows/deploy_cloud_run.yml` (builds from source, `--min-instances=1 --cpu-boost --no-cpu-throttling`). Enable with the `GCP_SA_KEY`/`GCP_PROJECT_ID`/`GCP_REGION` secrets; skips softly while unset. Fixes the frozen live revision (a push previously only sent a WhatsApp alert, never deployed).
+- **OTP-gated profile wipe.** `admin wipe <phone>` -> 6-digit code emailed to `SUPERADMIN_EMAIL` -> `admin wipe confirm <code>` wipes the profile + all its data for a clean sign-up (audited `ADMIN_PROFILE_WIPED`).
+- **Verified earnings save.** The earnings quick path now checks the insert before saying "Recorded".
+- **Post-signup conversion.** The core prompt answers app/pricing questions concisely and nudges a verified, vehicle-less user to set up their first vehicle.
+- **Files:** Dockerfile, .dockerignore, .github/workflows/deploy_cloud_run.yml, src/services/{profileWipe,superadmin}.js, src/routes/whatsapp.js, sakaAi.js, test_profile_wipe.js, .clinerules.
+- **Tests:** test_profile_wipe (13), test_record_answers (45), test_agent_training, test_product_qa, test_greetings, test_conversation_compliance, test_superadmin - green; `npm run health` green.
+
 ## [1.58.7] - 2026-11-04
 
 - **No false "Saved".** The one-line expense save showed "Expense Logged Successfully! ✅ Saved" even on a duplicate, a missing client, or a failed insert (the error was never checked). Success now renders only after a verified `expense_logs` insert; failures say "nothing was written".

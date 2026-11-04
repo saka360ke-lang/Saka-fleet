@@ -3692,18 +3692,28 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
                 ? normalizeEarningType(mergedExt.earning_type)
                 : (hasEarningTypeMarker(messageText) ? resolveEarningType(messageText) : null);
               if (extAmount && extAmount > 0) {
+                let earningSaveError = null;
                 if (supabaseClient && targetVeh) {
-                  await supabaseClient.from('private_earnings').insert([{
+                  // v1.58.8 — verify the write before claiming "Recorded" (same
+                  // assurance as the expense path).
+                  const { error: earnErr } = await supabaseClient.from('private_earnings').insert([{
                     vehicle_id: targetVeh.id,
                     revenue_amount: extAmount,
                     currency: countryInfo.currency,
                     earning_type: earnType,
                     logged_at: new Date().toISOString()
                   }]);
+                  if (earnErr) earningSaveError = earnErr.message;
+                } else {
+                  earningSaveError = 'no vehicle or database';
                 }
-                customReply = `💰 *Earnings Logged!* 🎉\n\n• *Vehicle:* *${targetVeh?.plate_number || 'Fleet'}*\n• *Revenue:* ${countryInfo.currency} ${Number(extAmount).toLocaleString()}${earnType ? `\n• *Type:* ${earnType}` : ''}\n\n✅ Recorded under *${targetVeh.plate_number}*!`;
-                if (existingVehicles.length > 1) {
-                  customReply += `\n*(Active vehicle: ${targetVeh.plate_number})*`;
+                if (earningSaveError) {
+                  customReply = `⚠️ I could not save that earning just now — *nothing was written*. Please try again in a moment.`;
+                } else {
+                  customReply = `💰 *Earnings Logged!* 🎉\n\n• *Vehicle:* *${targetVeh.plate_number}*\n• *Revenue:* ${countryInfo.currency} ${Number(extAmount).toLocaleString()}${earnType ? `\n• *Type:* ${earnType}` : ''}\n\n✅ Recorded under *${targetVeh.plate_number}*!`;
+                  if (existingVehicles.length > 1) {
+                    customReply += `\n*(Active vehicle: ${targetVeh.plate_number})*`;
+                  }
                 }
               } else {
                 customReply = await composeMessage({

@@ -1,0 +1,14 @@
+node_modules
+.git
+.gitignore
+.env
+.env.*
+tmp
+reset-backup-*.json
+.github
+.vscode
+landing
+docs
+test_*.js
+*.log
+npm-debug.log*

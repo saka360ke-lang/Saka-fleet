@@ -8,7 +8,7 @@ import {
   setConfigValue
 } from '../workers/remediation.js';
 import { dispatchRepositoryEvent, isRemediationAutonomyEnabled } from './githubDispatch.js';
-import { sendAdminNotificationEmail } from './mailer.js';
+import { sendAdminNotificationEmail, sendEmailOtp } from './mailer.js';
 import { generateText, parseJsonSafely } from './aiClient.js';
 import {
   getAiUsageSummary,
@@ -51,6 +51,7 @@ import {
   AI_MODEL_TIER_SLOTS
 } from './aiModelRegistry.js';
 import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
+import { wipeProfileForSignup } from './profileWipe.js';
 import crypto from 'crypto';
 
 export function isSuperadminPhone(senderPhone) {
@@ -200,6 +201,16 @@ export async function parseSuperadminCommand(messageText) {
   // Gate: general conversation from the superadmin phone is NOT an admin command.
   if (!ADMIN_DIRECTIVE_RE.test(text)) {
     return { intent: 'UNKNOWN' };
+  }
+
+  // v1.58.8 — OTP-gated profile wipe for a clean sign-up.
+  const wipeConfirmMatch = text.match(/^\s*admin\s+wipe\s+confirm\s+([0-9]{6})\s*$/i);
+  if (wipeConfirmMatch) {
+    return { intent: 'ADMIN_PROFILE_WIPE_CONFIRM', code: wipeConfirmMatch[1] };
+  }
+  const wipeMatch = text.match(/^\s*admin\s+wipe\s+(\+?[0-9][0-9\s-]{8,})\s*$/i);
+  if (wipeMatch) {
+    return { intent: 'ADMIN_PROFILE_WIPE', target_phone: wipeMatch[1].trim() };
   }
 
   // 0. Sentinel diagnosis from chat
@@ -1328,6 +1339,87 @@ export async function handleAdminAlertsCommand(supabase) {
   };
 }
 
+const WIPE_PENDING_KEY = 'admin_wipe_pending';
+const WIPE_TTL_MINUTES = 10;
+const WIPE_MAX_ATTEMPTS = 5;
+
+async function readWipePending(supabase) {
+  try {
+    const { data } = await supabase.from('system_config').select('value').eq('key', WIPE_PENDING_KEY).maybeSingle();
+    if (!data?.value) return null;
+    const parsed = JSON.parse(data.value);
+    return parsed && parsed.code && parsed.targetPhone ? parsed : null;
+  } catch { return null; }
+}
+
+async function clearWipePending(supabase) {
+  try { await supabase.from('system_config').upsert([{ key: WIPE_PENDING_KEY, value: null }], { onConflict: 'key' }); } catch { /* best effort */ }
+}
+
+/** Step 1 of the OTP-gated profile wipe: email a code to SUPERADMIN_EMAIL. */
+export async function handleAdminProfileWipeInitiate(supabase, targetPhone) {
+  if (!supabase) return { reply: '⚠️ Database unavailable.' };
+  const email = process.env.SUPERADMIN_EMAIL;
+  if (!email) return { reply: '⚠️ SUPERADMIN_EMAIL is not configured — cannot email the confirmation code.' };
+  const digits = String(targetPhone || '').replace(/[^0-9]/g, '');
+  if (digits.length < 9) return { reply: '⚠️ Usage: `admin wipe <phone>` — e.g. `admin wipe 0734852529`.\n\nThis erases the profile and ALL its data for a clean sign-up. It is gated by a code emailed to you.' };
+  const e164 = digits.startsWith('0') ? `+254${digits.slice(1)}` : `+${digits}`;
+  const code = String(crypto.randomInt(100000, 1000000));
+  const expiresAt = new Date(Date.now() + WIPE_TTL_MINUTES * 60 * 1000).toISOString();
+  try {
+    await supabase.from('system_config').upsert(
+      [{ key: WIPE_PENDING_KEY, value: JSON.stringify({ targetPhone: e164, code, expiresAt, attempts: 0 }) }],
+      { onConflict: 'key' }
+    );
+  } catch (err) { return { reply: `⚠️ Could not start the wipe: ${err.message}` }; }
+  try {
+    await sendEmailOtp(email, code);
+  } catch (err) {
+    await clearWipePending(supabase);
+    return { reply: `⚠️ Could not email the confirmation code: ${err.message}` };
+  }
+  const masked = email.replace(/^(.{2})[^@]*/, '$1…');
+  return {
+    reply: `🧹 *Profile wipe requested* for *${e164}*.\n\nA 6-digit confirmation code was emailed to *${masked}*. Reply \`admin wipe confirm <code>\` within ${WIPE_TTL_MINUTES} minutes to permanently erase this profile and all its data so they can sign up fresh.\n\n_If you did not request this, ignore it — nothing is wiped without the code._`
+  };
+}
+
+/** Step 2: verify the emailed code, then wipe. */
+export async function handleAdminProfileWipeConfirm(supabase, code) {
+  if (!supabase) return { wiped: false, reply: '⚠️ Database unavailable.' };
+  const pending = await readWipePending(supabase);
+  if (!pending) return { wiped: false, reply: 'ℹ️ There is no pending wipe. Start one with `admin wipe <phone>`.' };
+  if (new Date(pending.expiresAt).getTime() < Date.now()) {
+    await clearWipePending(supabase);
+    return { wiped: false, reply: '⏰ That wipe code expired. Start again with `admin wipe <phone>`.' };
+  }
+  if (isSuperadminPhone(pending.targetPhone)) {
+    await clearWipePending(supabase);
+    return { wiped: false, reply: '🛑 Refused — the target is the superadmin account.' };
+  }
+  const attempts = Number(pending.attempts || 0) + 1;
+  if (String(code) !== String(pending.code)) {
+    if (attempts >= WIPE_MAX_ATTEMPTS) {
+      await clearWipePending(supabase);
+      return { wiped: false, reply: '🛑 Too many wrong codes — the wipe request was cancelled. Start again if needed.' };
+    }
+    try {
+      await supabase.from('system_config').upsert([{ key: WIPE_PENDING_KEY, value: JSON.stringify({ ...pending, attempts }) }], { onConflict: 'key' });
+    } catch { /* best effort */ }
+    return { wiped: false, reply: `⚠️ That code is not correct (${attempts}/${WIPE_MAX_ATTEMPTS}). Reply \`admin wipe confirm <code>\`.` };
+  }
+  const result = await wipeProfileForSignup(supabase, pending.targetPhone);
+  await clearWipePending(supabase);
+  if (!result.ok) return { wiped: false, reply: `⚠️ Wipe failed: ${result.reason}` };
+  const total = Object.values(result.counts || {}).reduce((a, b) => a + b, 0);
+  return {
+    wiped: true,
+    phone: result.phone,
+    counts: result.counts,
+    reply: `✅ *Profile wiped* for *${result.phone}*.\n\n• Removed ${total} row(s) across ${Object.keys(result.counts || {}).length} table(s)\n• Vehicles removed: ${result.vehicles}\n\nThey can now sign up fresh on sakafleet.com.`
+  };
+}
+
 export async function handleAdminRulesReset(supabase) {
   const { error } = await supabase
     .from('saka_dynamic_rules')
@@ -2049,6 +2141,7 @@ export function formatAdminHelpReply() {
     '🛠️ *Fixes* — admin backlog · admin remediations [pending|deployed] - admin friction [pending|deployed|log] · "show me pending proposals" · admin accept|decline|modify fix <CODE> · admin adopt <FEAT-code> · admin quick-edit · UPDATE-SUGGEST> <your update>\n' +
     '🌱 *Growth* — generate coupon 20% · admin horizon · admin proposals\n' +
     '🩺 *Guardrails* — check health · admin rules list|toggle <key>|reset\n' +
+    '🧹 *Data* — `admin wipe <phone>` (OTP-gated clean sign-up wipe; code emailed to SUPERADMIN_EMAIL)\n' +
     '📚 *Knowledge* — admin kb · admin kb review · admin kb stale\n' +
     '🧠 *Models* — admin models · admin scout · admin adopt <id> [pct] · admin model rollback\n' +
     '🚀 *Release* — admin rollout · admin incidents\n\n' +
@@ -2300,6 +2393,20 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
       isSuperadmin: true,
       reply: resetRes.reply
     };
+  }
+
+  if (parsedCommand.intent === 'ADMIN_PROFILE_WIPE') {
+    const wipeRes = await handleAdminProfileWipeInitiate(supabase, parsedCommand.target_phone);
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_PROFILE_WIPE_REQUESTED', { target: parsedCommand.target_phone });
+    return { isSuperadmin: true, reply: wipeRes.reply };
+  }
+
+  if (parsedCommand.intent === 'ADMIN_PROFILE_WIPE_CONFIRM') {
+    const wipeRes = await handleAdminProfileWipeConfirm(supabase, parsedCommand.code);
+    if (wipeRes.wiped) {
+      await logAdminAudit(supabase, formattedPhone, 'ADMIN_PROFILE_WIPED', { phone: wipeRes.phone, counts: wipeRes.counts });
+    }
+    return { isSuperadmin: true, reply: wipeRes.reply };
   }
 
   if (parsedCommand.intent === 'ADMIN_RULES_TOGGLE') {
