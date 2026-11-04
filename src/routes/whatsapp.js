@@ -995,7 +995,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
       const pauseReply = await composeMessage({
         purpose: 'pause_confirmation',
         facts: { paused: true, resumeHint: 'Message me anytime and I will pick up where we left off.' },
-        countryInfo,
+        countryInfo: detectCountryFromPhone(formattedPhoneForSession),
         fallbackText: PAUSE_REPLY
       });
       session.history.push({ role: 'user', parts: [{ text: messageText }] });
@@ -2625,6 +2625,13 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
 
         // Quiz ↔ Conversation arbitration — a greeting/question mid-quiz is
         // answered conversationally and the quiz resumes where it paused.
+        // v1.58.6 — an explicit "switch to <plate/number>" is navigation, not a
+        // quiz answer: drop any open draft so the switch handler runs cleanly
+        // (live 2026-11-04: it got stuck asking for litres, then garbled the
+        // plate "KBJ 819C" into "KES 819").
+        if (session.quiz && /^\s*(?:switch(?:\s+to)?|manage|select)\s+\S/i.test(String(messageText || ''))) {
+          abandonQuiz(session, { reason: 'switch_command' });
+        }
         const activeQuiz = session.quiz || null;
         const pauseQuizForChat = activeQuiz && shouldPauseQuizForChat({ messageText, intent, quiz: activeQuiz });
         const switchQuizFlow = activeQuiz && !pauseQuizForChat
@@ -3540,7 +3547,11 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                 if (duplicateExpense.duplicate) {
                   customReply = `⚠️ *Already logged* — I found *${countryInfo.currency} ${Number(extAmount).toLocaleString()}* (${expType}) for *${targetVeh.plate_number}* in the last few hours, so I did *not* save a duplicate. ✅\n\nIf this is a genuinely separate fill, send the new odometer reading (e.g. *"Logged ${extLiters || ''}L at 367,500 km"*) and I will log it.`;
                 } else if (supabaseClient && targetVeh) {
-                  await supabaseClient.from('expense_logs').insert([{
+                  // v1.58.6 — never claim "Saved" without a VERIFIED write (live
+                  // 2026-11-04: a one-line fuel log rendered "Saved ✅" while the
+                  // expense_logs row was never persisted; the old code also showed
+                  // success for a duplicate or when no client was present).
+                  const { error: quickLogErr } = await supabaseClient.from('expense_logs').insert([{
                     vehicle_id: targetVeh.id,
                     driver_id: profileData?.id,
                     expense_type: expType,
@@ -3550,46 +3561,50 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                     odometer_reading: extOdo || null,
                     notes: messageText.trim()
                   }]);
+                  if (quickLogErr) {
+                    customReply = `⚠️ I could not save that expense just now — *nothing was written*. Please try again in a moment, or send it as *"amount type"* (e.g. *"1000 fuel"*).`;
+                  } else {
+                    await supabaseClient.from('expenses').insert([{
+                      plate: targetVeh.plate_number,
+                      expense_type: expType,
+                      amount: extAmount || 0,
+                      liters: extLiters || 0,
+                      odometer_reading: extOdo || null
+                    }]).select().maybeSingle();
 
-                  await supabaseClient.from('expenses').insert([{
-                    plate: targetVeh.plate_number,
-                    expense_type: expType,
-                    amount: extAmount || 0,
-                    liters: extLiters || 0,
-                    odometer_reading: extOdo || null
-                  }]).select().maybeSingle();
-
-                  if (extOdo && extOdo > (targetVeh.current_mileage || 0)) {
-                    await supabaseClient.from('vehicles').update({
-                      current_mileage: extOdo,
-                      odometer_reading: extOdo,
-                      updated_at: new Date().toISOString()
-                    }).eq('id', targetVeh.id);
-                    targetVeh.current_mileage = extOdo;
+                    if (extOdo && extOdo > (targetVeh.current_mileage || 0)) {
+                      await supabaseClient.from('vehicles').update({
+                        current_mileage: extOdo,
+                        odometer_reading: extOdo,
+                        updated_at: new Date().toISOString()
+                      }).eq('id', targetVeh.id);
+                      targetVeh.current_mileage = extOdo;
+                    }
+                    const expenseCardText = `⛽ *Expense Logged Successfully!* 📝\n\n` +
+                      `• *Vehicle:* *${targetVeh.plate_number}* (${targetVeh.make_model || 'Vehicle'})\n` +
+                      `• *Category:* ${expType}\n` +
+                      (extAmount ? `• *Amount:* ${countryInfo.currency} ${Number(extAmount).toLocaleString()}\n` : '') +
+                      (extLiters ? `• *Volume:* ${extLiters} Liters\n` : '') +
+                      (extFillType ? `• *Fill:* ${extFillType === 'full' ? 'Full tank' : 'Top-up'}\n` : '') +
+                      (extOdo ? `• *Odometer:* ${Number(extOdo).toLocaleString()} km\n` : '') +
+                      `\n✅ Saved to database under *${targetVeh.plate_number}*.` +
+                      (expType.toLowerCase().includes('fuel') && !extFillType
+                        ? `\n\n💡 *Tip:* say *"full tank"* or *"top-up"* with your next fuel log so I can measure exact fuel economy.`
+                        : '');
+                    customReply = await composeMessage({
+                      purpose: 'flow_outcome_card',
+                      facts: { cardText: expenseCardText, instruction: 'Re-render this engine card conversationally: keep EVERY figure, label, emoji anchor and next step exactly as written. Never drop or invent a figure.' },
+                      language: targetLang,
+                      countryInfo,
+                      profile: profileData,
+                      fallbackText: expenseCardText
+                    });
+                    if (existingVehicles.length > 1) {
+                      customReply += `\n*(Active vehicle: ${targetVeh.plate_number}. Type "switch to [car]" to change)*`;
+                    }
                   }
-                }
-
-                const expenseCardText = `⛽ *Expense Logged Successfully!* 📝\n\n` +
-                  `• *Vehicle:* *${targetVeh.plate_number}* (${targetVeh.make_model || 'Vehicle'})\n` +
-                  `• *Category:* ${expType}\n` +
-                  (extAmount ? `• *Amount:* ${countryInfo.currency} ${Number(extAmount).toLocaleString()}\n` : '') +
-                  (extLiters ? `• *Volume:* ${extLiters} Liters\n` : '') +
-                  (extFillType ? `• *Fill:* ${extFillType === 'full' ? 'Full tank' : 'Top-up'}\n` : '') +
-                  (extOdo ? `• *Odometer:* ${Number(extOdo).toLocaleString()} km\n` : '') +
-                  `\n✅ Saved to database under *${targetVeh.plate_number}*.` +
-                  (expType.toLowerCase().includes('fuel') && !extFillType
-                    ? `\n\n💡 *Tip:* say *"full tank"* or *"top-up"* with your next fuel log so I can measure exact fuel economy.`
-                    : '');
-                customReply = await composeMessage({
-                  purpose: 'flow_outcome_card',
-                  facts: { cardText: expenseCardText, instruction: 'Re-render this engine card conversationally: keep EVERY figure, label, emoji anchor and next step exactly as written. Never drop or invent a figure.' },
-                  language: targetLang,
-                  countryInfo,
-                  profile: profileData,
-                  fallbackText: expenseCardText
-                });
-                if (existingVehicles.length > 1) {
-                  customReply += `\n*(Active vehicle: ${targetVeh.plate_number}. Type "switch to [car]" to change)*`;
+                } else {
+                  customReply = `⛽ I can't save that right now — please try again in a moment.`;
                 }
               } else {
                 customReply = `⛽ *Log Expense / Fuel for ${targetVeh.plate_number}*\n\nPlease reply with expense details. For example:\n• *"Logged 45L fuel at 368000 km for KES 8500"*\n• *"Oil change KES 5000"*`;

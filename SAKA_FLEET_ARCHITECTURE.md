@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.58.6  
+**Version:** 1.58.7  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.58.7** | Verified saves (no false "Saved"), "switch to X" works mid-draft, "Stop" pause TDZ fixed | 136 |
 | **1.58.6** | Chat fixes: past-tense expense statements logged (not answered as queries), "pull/show … records" routed as queries (not log flows), ambiguous multi-vehicle reads ask which vehicle | 135 |
 | **1.58.5** | Bi-weekly Sentinel deep audit (deterministic code-integrity scan → deduped PENDING_APPROVAL PROP-* proposals, Mon/Thu 03:00 EAT, env-gated) | 134 |
 | **1.58.4** | Deep-audit reliability fixes (mojibake purge, crash fallback, Nairobi/currency auto-audit, record-lane scoping, pinned ledger edit, Sentinel boundary lock, Meta v21.0, dead-code) | 133 |
@@ -4153,3 +4154,10 @@ quiz engine:
 - **"Pull/show/list … records/entries" is a records query, not a fuel-log flow.** "Pull fuel records for KBJ 819C" kept starting the fuel-log quiz (litres / full-tank). `parseRecordQuestion` now treats records/entries/history/ledger (plus an expense/earning word or a plate) as a QUERY, and `pull/get/fetch/give` are recognised query leads.
 - **An ambiguous multi-vehicle read ASKS which vehicle.** A records question with no plate, no active vehicle and several vehicles now replies "Which vehicle — A or B? (or *all vehicles*)?" instead of silently summing the fleet. Only an explicit "all/both/fleet" aggregates.
 - **Tests:** `test_record_answers.js` (+9 assertions, 45 total) covers each phrase; `test_v1583`, `test_entry_ledger`, `test_edit_delete`, `test_narrative_draft` green; `npm run health` green.
+
+### 136. v1.58.7 - verified saves, switch-anytime, Stop fixed (2026-11-04, live chat audit)
+
+- **No "Saved" without a verified write (F5).** The quick-path one-liner expense save rendered "Expense Logged Successfully! ✅ Saved" unconditionally — even on a duplicate, a missing client, or a failed insert (the `expense_logs` insert error was never checked). The success card now runs only after a clean insert; a failed write returns "nothing was written"; a duplicate is no longer overwritten by a false success.
+- **"Switch to <plate>" works anytime (F3).** Mid-draft, "switch to KBJ 819C" was swallowed by the open expense quiz (asking for litres, and garbling the plate into "KES 819"). An explicit switch now abandons any open draft first, then routes to the switch handler.
+- **"Stop" no longer dead-airs (TDZ).** The pause handler referenced `countryInfo` before its `const` declaration → a `ReferenceError` threw and the user got an empty reply. Fixed by computing `countryInfo` inline in the pause path (surfaced by `test_reliability` Test 3a).
+- **Tests:** `test_record_answers` (45), `test_v1583`, `test_entry_ledger`, `test_edit_delete`, `test_narrative_draft` green; `test_reliability` Test 3a ("Stop" pause) now passes; `npm run health` green.

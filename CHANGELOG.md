@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.58.7] - 2026-11-04
+
+- **No false "Saved".** The one-line expense save showed "Expense Logged Successfully! ✅ Saved" even on a duplicate, a missing client, or a failed insert (the error was never checked). Success now renders only after a verified `expense_logs` insert; failures say "nothing was written".
+- **"Switch to <plate>" works mid-draft** - an explicit switch abandons the open quiz first (no more stuck "how many litres?" or "KES 819" plate-garbling).
+- **"Stop" no longer dead-airs** - fixed a TDZ ReferenceError (countryInfo used before its declaration) that left the pause reply empty.
+- **Files:** src/routes/whatsapp.js.
+- **Tests:** test_record_answers (45), test_v1583, test_entry_ledger, test_edit_delete, test_narrative_draft green; test_reliability Test 3a ("Stop" pause) now passes; `npm run health` green.
+
 ## [1.58.6] - 2026-11-04
 
 - **A past-tense expense statement is logged, not answered as a query.** "Repaired a puncture for KAS628T … cost me 300kes" was repeatedly answered "Nothing logged". `parseRecordQuestion` now returns `looks-like-log` for a past-tense verb + amount, and the route logs it (`LOG_EXPENSE`). New shared `looksLikeLogStatement()`.
