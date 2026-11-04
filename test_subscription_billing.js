@@ -148,6 +148,16 @@ async function run() {
   const trialEnt = await getEntitlements({ supabase: trialingMock.client, ownerId: 'p-1', profile: trialingProfile, useCache: false });
   check(trialEnt.isTrial === true && trialEnt.tierKey === 'growth', 'Active trial gets paid-tier entitlements');
   check(trialEnt.receiptVaultStorage === true, 'Trial keeps paid document storage');
+
+  const floorProfile = profile({ subscription_tier: 'free', subscription_status: 'ACTIVE', trial_used_at: past(5) });
+  const floorMock = createMockSupabase({
+    profiles: [floorProfile],
+    trial_sessions: [{ id: 'ts-floor', owner_id: 'p-1', tier: 'growth', status: 'ACTIVE', source: 'welcome', started_at: past(5), ends_at: future(20), activated: false }],
+    usage_counters: [],
+    vehicles: []
+  });
+  const floorEnt = await getEntitlements({ supabase: floorMock.client, ownerId: 'p-1', profile: floorProfile, useCache: false });
+  check(floorEnt.tierKey === 'growth' && floorEnt.isTrial === true && floorEnt.effectiveVehicleCapacity === 5, 'A free profile with a live trial keeps the trial floor (growth rides on it)');
   check(trialEnt.maxAiTier === 3 && trialEnt.reportsPerMonth === Infinity, 'Trial unlocks full AI + unlimited reports');
   check(trialEnt.effectiveVehicleCapacity === 5, 'Trial capacity follows the trialed tier');
   check(trialEnt.trialDaysLeft >= 27, 'Trial days-left is reported');
@@ -282,12 +292,14 @@ async function run() {
       metadata: { user_id: 'p-1', target_tier: 'growth', billing_interval: 'annual' }
     }
   };
+  const trialEndBefore = hookMock.db.trial_sessions[0].ends_at;
   const created = await handlePaystackEvent({ supabase: hookMock.client, event: createEvent });
   check(created.handled === true && created.type === 'subscription.create', 'subscription.create is handled');
   check(hookMock.db.profiles[0].subscription_tier === 'growth' && hookMock.db.profiles[0].subscription_status === 'ACTIVE', 'Profile activates the paid tier');
   check(hookMock.db.profiles[0].paystack_subscription_code === 'SUB_1' && hookMock.db.profiles[0].paystack_email_token === 'tok_1', 'Subscription code + email token are stored');
   check(hookMock.db.subscriptions.length === 1 && hookMock.db.subscriptions[0].paystack_subscription_code === 'SUB_1', 'Ledger row is written');
-  check(hookMock.db.trial_sessions[0].status === 'CONVERTED', 'Active trial converts on subscription.create');
+  check(hookMock.db.trial_sessions[0].status === 'ACTIVE' && Boolean(hookMock.db.trial_sessions[0].converted_at) && hookMock.db.trial_sessions[0].paystack_subscription_code === 'SUB_1', 'A paid upgrade records the conversion but keeps the trial row (growth rides on it)');
+  check(hookMock.db.trial_sessions[0].ends_at === trialEndBefore, 'The anchored trial end never moves on upgrade');
 
   const duplicate = await handlePaystackEvent({ supabase: hookMock.client, event: createEvent });
   check(duplicate.duplicate === true, 'Duplicate webhook events are ignored (idempotency)');

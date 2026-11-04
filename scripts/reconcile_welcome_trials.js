@@ -26,8 +26,14 @@ async function main() {
   const supabase = createClient(url, key);
   const summary = { scanned: 0, started: 0, skipped: 0, errors: 0, details: [] };
 
-  const vehicles = await supabase.from('vehicles').select('owner_id').eq('status', 'ACTIVE').limit(1000);
-  const ownerIds = [...new Set((vehicles.data || []).map((v) => v.owner_id).filter(Boolean))];
+  const vehicles = await supabase.from('vehicles').select('owner_id, created_at').eq('status', 'ACTIVE').limit(1000);
+  const firstAssetAt = new Map();
+  for (const row of vehicles.data || []) {
+    if (!row.owner_id) continue;
+    const prev = firstAssetAt.get(row.owner_id);
+    if (!prev || (row.created_at && row.created_at < prev)) firstAssetAt.set(row.owner_id, row.created_at || prev || null);
+  }
+  const ownerIds = [...firstAssetAt.keys()];
   summary.scanned = ownerIds.length;
 
   for (const ownerId of ownerIds) {
@@ -36,7 +42,7 @@ async function main() {
       if (!profile.data || profile.data.trial_used_at) { summary.skipped += 1; continue; }
       const existing = await supabase.from('trial_sessions').select('id').eq('owner_id', ownerId).limit(1);
       if ((existing.data || []).length) { summary.skipped += 1; continue; }
-      const res = await startWelcomeTrial({ supabase, ownerId });
+      const res = await startWelcomeTrial({ supabase, ownerId, startedAt: firstAssetAt.get(ownerId) || null });
       if (res.started) {
         summary.started += 1;
         summary.details.push((profile.data.phone_number || ownerId) + ' -> ' + res.tierKey);
@@ -58,6 +64,31 @@ async function main() {
       created_at: new Date().toISOString()
     }]);
   } catch { /* audit is best-effort */ }
+
+  // v1.58.21 - RE-ANCHOR existing welcome trials to the first asset date: a
+  // trial that started later (heal/reconcile day) moves back to the day its
+  // passbook was issued. Only earlier anchors apply; never a dead window.
+  const trialDays = Math.max(7, Math.min(90, Number(process.env.TRIAL_DAYS || 30)));
+  const activeTrials = await supabase.from('trial_sessions').select('id, owner_id, started_at, ends_at, status').eq('status', 'ACTIVE').limit(1000);
+  let reanchored = 0;
+  for (const trial of activeTrials.data || []) {
+    const anchorIso = firstAssetAt.get(trial.owner_id);
+    if (!anchorIso) continue;
+    const anchorMs = new Date(anchorIso).getTime();
+    const startedMs = new Date(trial.started_at || 0).getTime();
+    if (!Number.isFinite(anchorMs) || !Number.isFinite(startedMs) || anchorMs >= startedMs) continue;
+    const endsMs = anchorMs + trialDays * 24 * 60 * 60 * 1000;
+    if (endsMs <= Date.now()) continue; // never move into an already-dead window
+    const upd = await supabase.from('trial_sessions').update({
+      started_at: new Date(anchorMs).toISOString(),
+      ends_at: new Date(endsMs).toISOString(),
+      updated_at: new Date().toISOString()
+    }).eq('id', trial.id);
+    if (upd.error) { summary.errors += 1; continue; }
+    try { await supabase.from('profiles').update({ trial_used_at: new Date(anchorMs).toISOString() }).eq('id', trial.owner_id); } catch { /* best effort */ }
+    reanchored += 1;
+  }
+  summary.reanchored = reanchored;
 
   console.log('RECONCILE ' + JSON.stringify(summary));
 }

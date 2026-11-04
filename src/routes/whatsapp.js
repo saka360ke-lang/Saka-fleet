@@ -25,6 +25,7 @@ import { shouldSuggestContactSave, isLostChatMessage, buildContactSaveFacts, mar
 import { buildUserContextSnapshot, buildUserFactsLines } from '../services/userContextSnapshot.js';
 import { buildConversationMemory } from '../services/conversationMemory.js';
 import { isOdometerQuestion, buildOdometerAnswer } from '../services/odometerAnswer.js';
+import { buildDriverComplianceCard } from '../services/driverReports.js';
 import { resolveSlowAckMs, pickSlowAckLine, shouldSendSlowAck } from '../services/turnAck.js';
 import { buildVehicleSummary, emailVehicleSummary } from '../services/vehicleSummary.js';
 import {
@@ -1417,6 +1418,14 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         if (odometerQuestion && quizForFastPath && !quizPhaseLocked) {
           abandonQuiz(session, { reason: 'odometer_query' });
         }
+        // v1.58.21 - "show me my driver profile" is a deterministic READ of the
+        // owner's own compliance card, never a restart of driver onboarding
+        // (live 2026-11-04: two misroutes into fleet context / reminders).
+        const driverProfileQuestion = !quizPhaseLocked
+          && /^(?:(?:show|see|view|open|check)\s+(?:me\s+)?(?:my\s+)?(?:personal\s+)?driver\s+(?:profile|licen[cs]e|record|card)|(?:my|personal)\s+driver\s+(?:profile|licen[cs]e|record|card))\b/i.test(commandText);
+        if (driverProfileQuestion && quizForFastPath && !quizPhaseLocked) {
+          abandonQuiz(session, { reason: 'driver_profile_read' });
+        }
 
 
 
@@ -1875,6 +1884,23 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           const veh = currentActiveVehicle || existingVehicles[0] || null;
           aiResult = { intent: 'GENERAL_CHAT', extracted_data: {}, reply_message: buildOdometerAnswer(veh) };
 
+        } else if (driverProfileQuestion && supabaseClient && profileData?.id) {
+          // v1.58.21 - the owner's OWN driver profile (compliance card) is a
+          // read; an empty profile offers the setup instead of fleet context.
+          try {
+            const card = await buildDriverComplianceCard({ supabase: supabaseClient, driverId: profileData.id, countryInfo });
+            const rows = card?.data?.tables?.[0]?.rows || [];
+            aiResult = {
+              intent: 'GENERAL_CHAT',
+              extracted_data: {},
+              reply_message: rows.length
+                ? card.text
+                : '🪪 *Your driver profile*\n\nNo driver documents are on file yet. Reply *driver profile* and I will set it up with you — licence number and expiry, one step at a time.'
+            };
+          } catch {
+            aiResult = { intent: 'GENERAL_CHAT', extracted_data: {}, reply_message: 'Your driver profile is unavailable right now. Please try again in a moment.' };
+          }
+
         } else if (recordQuestion.ok && supabaseClient && profileData?.id) {
           // v1.36.0 — record answers: every figure comes from the ledger rows.
           const laneOwner = existingVehicles.some((v) => v.owner_id === profileData?.id);
@@ -2058,7 +2084,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             });
           }
         } else if (
-          /\b(support team|contact support|talk to support|human help|help from (?:a )?human|talk to (?:a )?(?:human|person|agent|representative)|human (?:agent|support)|customer (?:care|support)|file a complaint|escalat(?:e|ion)|dispute|admin intervention)\b/i.test(messageText)
+          /\b(support team|contact support|talk to support|human help|help from (?:a )?human|talk to (?:a )?(?:human|person|agent|representative)|human (?:agent|support)|customer (?:care|support)|file a complaint|escalat(?:e|ion)|dispute|admin intervention|confus(?:ed|ing)|doesn'?t make sense|not clear)\b/i.test(messageText)
         ) {
           isSupportFlow = true;
           session.pendingSupportEscalation = true;
@@ -2307,7 +2333,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         else if (!session.quiz && !session.pendingDeleteVehicle && !session.pendingAccountDeletion
           && (session.pendingCancelSubscription
             || ['VIEW_SUBSCRIPTION', 'UPGRADE_SUBSCRIPTION', 'CANCEL_SUBSCRIPTION', 'MANAGE_ADDONS', 'KEEP_VEHICLE', 'EXTEND_TRIAL'].includes(intent)
-            || /^(?:subscription|my\s+(?:plan|subscription)|billing|upgrade|subscribe|cancel\s+(?:my\s+)?(?:subscription|plan)|unsubscribe|keep\s+(?:vehicle|car)\b|extra\s+(?:car|vehicle|slot)|add[- ]?on|extend\s+(?:my\s+)?trial)\b/i.test(messageText.trim()))) {
+            || /^(?:subscription|my\s+(?:plan|subscription)|billing|upgrade|subscribe|cancel\s+(?:my\s+)?(?:subscription|plan)|unsubscribe|keep\s+(?:vehicle|car)\b|extra\s+(?:car|vehicle|slot)|add[- ]?on|extend\s+(?:my\s+)?trial|which\s+tier|should\s+be\s+on|(?:less|fewer|more)\s+than\s+\d+\s+(?:assets?|vehicles?))\b/i.test(messageText.trim()))) {
           isSpecialFlowHandled = true;
           const subTurn = await maybeHandleSubscriptionTurn({
             intent,
@@ -2940,7 +2966,14 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           const capacityTier = entitlements?.tierKey || profileData?.subscription_tier || 'free';
           if (String(capacityTier) === 'free' && !profileData?.trial_used_at && profileData?.id) {
             try {
-              const welcome = await startWelcomeTrial({ supabase: supabaseClient, ownerId: profileData.id });
+              // v1.58.21 - heal with the ASSET anchor: the trial counts from the
+              // day the passbook was issued, never from this repair moment.
+              const firstAssetAt = existingVehicles
+                .filter((v) => v.owner_id === profileData.id)
+                .map((v) => v.created_at)
+                .filter(Boolean)
+                .sort()[0] || null;
+              const welcome = await startWelcomeTrial({ supabase: supabaseClient, ownerId: profileData.id, startedAt: firstAssetAt });
               if (welcome && welcome.started) {
                 capacityProfile = {
                   ...profileData,
@@ -3559,7 +3592,10 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                 });
               } else {
                 const vList = existingVehicles.map((v, i) => `${i + 1}️⃣ *${v.plate_number}* (${v.make_model || 'Vehicle'})`).join('\n');
-                customReply = `⚠️ Could not find "${candidate}" in your fleet.\n\nYour registered vehicles:\n${vList}\n\nReply with a number or plate (e.g. *"switch to 1"* or *"switch to ${existingVehicles[0]?.plate_number}"*) to select.`;
+                const generic = !candidate || /^(?:car|vehicle|truck|asset|one|another|other)$/i.test(String(candidate).trim());
+                customReply = generic
+                  ? `🔄 *Which vehicle should be active?*\n\n${vList}\n\nReply with a number or plate (e.g. *"switch to 1"*).`
+                  : `⚠️ Could not find "${candidate}" in your fleet.\n\nYour registered vehicles:\n${vList}\n\nReply with a number or plate (e.g. *"switch to 1"* or *"switch to ${existingVehicles[0]?.plate_number}"*) to select.`;
               }
             }
             else if (activeIntent === 'QUERY_FUEL_EFFICIENCY') {
@@ -4879,7 +4915,8 @@ async function maybeHandleSubscriptionTurn({
   }
 
   const wantsView = intent === 'VIEW_SUBSCRIPTION'
-    || /^(?:subscription|my\s+(?:plan|subscription)|billing|plan\s+details)\b/i.test(lower);
+    || /^(?:subscription|my\s+(?:plan|subscription)|billing|plan\s+details)\b/i.test(lower)
+    || /\b(?:which|what)\s+tier\b|\bshould\s+be\s+on\b|\b(?:less|fewer|more)\s+than\s+\d+\s+(?:assets?|vehicles?)\b/i.test(lower);
   const wantsResume = /^resume\s+(?:my\s+)?(?:subscription|plan)\b/i.test(lower);
   const wantsCancel = intent === 'CANCEL_SUBSCRIPTION'
     || /^(?:cancel|stop)\s+(?:my\s+)?(?:subscription|plan|billing)\b/i.test(lower)
@@ -4909,10 +4946,14 @@ async function maybeHandleSubscriptionTurn({
   // ---- view plan ----
   if (wantsView && !wantsUpgrade && !wantsCancel && !wantsAddon && !wantsKeep && !wantsExtend) {
     const fresh = await refresh();
+    const planReply = await formatSubscriptionSummary({ supabase: supabaseClient, entitlements: fresh, currency });
+    // v1.58.21 - tier-math follow-ups ("I have less than 3 assets...") get the
+    // count-aware truth instead of the free-tier pitch.
+    const assetCount = (existingVehicles || []).filter((v) => v.owner_id === ownerId).length;
     return {
       handled: true,
       entitlements: fresh,
-      reply: await formatSubscriptionSummary({ supabase: supabaseClient, entitlements: fresh, currency })
+      reply: planReply + `\n\n📊 You have *${assetCount}* asset(s) on file; this ${fresh.isTrial ? 'trial' : 'plan'} covers *${fresh.effectiveVehicleCapacity}*.`
     };
   }
 

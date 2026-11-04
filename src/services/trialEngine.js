@@ -218,7 +218,7 @@ export async function scheduleAccountTrialExtensionCoupon({
  * returned as-is; a consumed `trial_used_at` blocks a second trial.
  * NO Paystack call happens here — that is the no-card guarantee.
  */
-export async function startAccountTrial({ supabase, ownerId, tierKey, interval = 'monthly', source = 'upgrade' } = {}) {
+export async function startAccountTrial({ supabase, ownerId, tierKey, interval = 'monthly', source = 'upgrade', startedAt = null } = {}) {
   if (!supabase || !ownerId) return { started: false, reason: 'owner required' };
   const canonicalTier = normalizeTierKey(tierKey);
   if (!isPaidTierKey(canonicalTier)) return { started: false, reason: 'paid tier required' };
@@ -240,14 +240,21 @@ export async function startAccountTrial({ supabase, ownerId, tierKey, interval =
   if (owner.trial_used_at) return { started: false, reason: 'trial_already_used' };
 
   const now = new Date();
-  const endsAt = computeTrialEnd(now);
+  // v1.58.21 - the welcome window is anchored to the ASSET (the moment the
+  // passbook is issued), never to the moment a heal or reconcile happened to
+  // run. A future/invalid anchor falls back to now, and an anchor whose 30
+  // days are already over falls back to now too (never mint a dead trial).
+  const requested = startedAt ? new Date(startedAt) : now;
+  let anchor = Number.isFinite(requested.getTime()) && requested.getTime() <= now.getTime() ? requested : now;
+  if (computeTrialEnd(anchor).getTime() <= now.getTime()) anchor = now;
+  const endsAt = computeTrialEnd(anchor);
   const trialSource = source === 'welcome' ? 'welcome' : 'upgrade';
   const record = {
     owner_id: ownerId,
     tier: canonicalTier,
     interval: interval === 'annual' ? 'annual' : 'monthly',
     status: 'ACTIVE',
-    started_at: now.toISOString(),
+    started_at: anchor.toISOString(),
     ends_at: endsAt.toISOString(),
     activated: false,
     activation_events: [],
@@ -265,7 +272,7 @@ export async function startAccountTrial({ supabase, ownerId, tierKey, interval =
     subscription_tier: canonicalTier,
     subscription_status: 'TRIALING',
     billing_interval: record.interval,
-    trial_used_at: now.toISOString(),
+    trial_used_at: anchor.toISOString(),
     cancel_at_period_end: false,
     updated_at: now.toISOString()
   }).eq('id', ownerId);
@@ -303,14 +310,15 @@ export async function startAccountTrial({ supabase, ownerId, tierKey, interval =
  * Lapse is handled by the existing sweep: EXPIRED -> downgradeToFree (excess
  * vehicles PAUSED). An upgrade converts the trial via `subscription.create`.
  */
-export async function startWelcomeTrial({ supabase, ownerId } = {}) {
+export async function startWelcomeTrial({ supabase, ownerId, startedAt = null } = {}) {
   if (!supabase || !ownerId) return { started: false, reason: 'owner required' };
   return startAccountTrial({
     supabase,
     ownerId,
     tierKey: process.env.WELCOME_TRIAL_TIER || 'growth',
     interval: 'monthly',
-    source: 'welcome'
+    source: 'welcome',
+    startedAt
   });
 }
 
@@ -1113,6 +1121,18 @@ export async function runTrialLifecycleSweep({ supabase, sendWhatsAppFn = null, 
     // ---- T-0: expire -> Free (PAUSED vehicles, data preserved) ----
     if (nowMs >= endsMs) {
       await stampTrial(supabase, trial.id, { status: 'EXPIRED', expiry_processed_at: nowIso });
+      // v1.58.21 - growth rides on the trial: an owner whose PAID subscription
+      // is still live must never be downgraded when the old trial ages out.
+      const paidEndRaw = owner?.subscription_period_end || owner?.subscription_expires_at || null;
+      const paidEndMs = paidEndRaw ? new Date(paidEndRaw).getTime() : 0;
+      const paidLive = Boolean(owner)
+        && isPaidTierKey(owner.subscription_tier)
+        && ['ACTIVE', 'CANCELING', 'PAST_DUE'].includes(String(owner.subscription_status || '').toUpperCase())
+        && (paidEndMs === 0 || paidEndMs > nowMs);
+      if (paidLive) {
+        stats.expired += 1;
+        continue;
+      }
       const downgraded = await downgradeToFree({ supabase, ownerId: trial.owner_id, reason: 'trial.expired' });
       stats.expired += 1;
       if (phone && sendWhatsAppFn) {

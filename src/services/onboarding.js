@@ -174,6 +174,8 @@ export async function saveVehicleAssetRecord({
   if (obState.optional?.purchase_cost) vehRecord.purchase_cost = obState.optional.purchase_cost;
 
   if (supabaseClient && profileData) {
+    // v1.58.21 - the passbook issuance moment is the trial anchor.
+    const issuedAt = new Date().toISOString();
     const { error: insErr } = await supabaseClient.from('vehicles').insert([vehRecord]);
     if (insErr) {
       if (insErr.code === '23505') {
@@ -190,7 +192,7 @@ export async function saveVehicleAssetRecord({
     // v1.16.4 — the account's one-time full-featured welcome trial starts here
     // (lapse returns the account to Free; an upgrade converts it).
     try {
-      const welcome = await startWelcomeTrial({ supabase: supabaseClient, ownerId: profileData.id });
+      const welcome = await startWelcomeTrial({ supabase: supabaseClient, ownerId: profileData.id, startedAt: issuedAt });
       if (welcome && welcome.started === false) {
         console.warn('[onboarding] Welcome trial skipped:', welcome.reason || 'unknown');
       }

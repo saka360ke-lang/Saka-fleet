@@ -142,6 +142,29 @@ async function run() {
   const welcomeAgain = await startWelcomeTrial({ supabase: welcomeMock.client, ownerId: 'p-1' });
   check(welcomeAgain.started === false, 'A second welcome trial is impossible');
 
+  console.log('\n--- Test 2c: the trial anchors to asset creation (v1.58.21) ---');
+  const anchor = new Date(Date.now() - 10 * DAY).toISOString();
+  const anchorMock = createMockSupabase({
+    profiles: [ownerProfile({ subscription_tier: 'free', subscription_status: 'ACTIVE', trial_used_at: null })],
+    trial_sessions: [],
+    usage_counters: [],
+    vehicles: [],
+    coupons: []
+  });
+  const anchored = await startWelcomeTrial({ supabase: anchorMock.client, ownerId: 'p-1', startedAt: anchor });
+  check(anchored.started === true && anchored.startedAt === anchor, 'the trial starts on the asset (passbook) date');
+  check(Math.round((new Date(anchored.endsAt).getTime() - new Date(anchor).getTime()) / DAY) === 30, 'the window is exactly 30 days from the asset date');
+  check(anchorMock.db.trial_sessions[0].started_at === anchor, 'trial_sessions.started_at carries the anchor');
+  const staleMock = createMockSupabase({
+    profiles: [ownerProfile({ subscription_tier: 'free', subscription_status: 'ACTIVE', trial_used_at: null })],
+    trial_sessions: [],
+    usage_counters: [],
+    vehicles: [],
+    coupons: []
+  });
+  const stale = await startWelcomeTrial({ supabase: staleMock.client, ownerId: 'p-1', startedAt: new Date(Date.now() - 40 * DAY).toISOString() });
+  check(stale.started === true && new Date(stale.endsAt).getTime() > Date.now(), 'an anchor older than the window falls back to a live trial (never mint a dead one)');
+
   console.log('\n--- Test 3: activation (strictly three events) ---');
   const actMock = createMockSupabase({
     profiles: [ownerProfile({ subscription_tier: 'growth', subscription_status: 'TRIALING', trial_used_at: past(1) })],

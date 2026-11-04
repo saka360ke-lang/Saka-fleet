@@ -2822,7 +2822,7 @@ async function executeFlow(state, ctx) {
         // (one per account lifetime; lapse returns the account to Free).
         let welcomeTrial = null;
         try {
-          welcomeTrial = await startWelcomeTrial({ supabase: ctx.supabase, ownerId: ctx.profile?.id });
+          welcomeTrial = await startWelcomeTrial({ supabase: ctx.supabase, ownerId: ctx.profile?.id, startedAt: saved.issuedAt || null });
           // v1.58.20 - a refused trial must be visible (silent skips once left
           // every account trial-less: profiles.currency/locale were missing).
           if (welcomeTrial && welcomeTrial.started === false) {
@@ -3703,6 +3703,8 @@ async function persistVehicleRegistration(state, ctx) {
     record.metadata = { ...(record.metadata || {}), extra_notes: state.extraNotes };
   }
 
+  // v1.58.21 - the moment the passbook is issued IS the trial anchor.
+  const issuedAt = new Date().toISOString();
   let insertRes = await ctx.supabase.from('vehicles').insert([record]).select('id').maybeSingle();
   let insertErr = insertRes.error || null;
   // Pre-migration safety: if asset_kind/serial_number/operating_hours columns do
@@ -3795,7 +3797,8 @@ async function persistVehicleRegistration(state, ctx) {
     mileage: a.current_mileage ?? null,
     operatingHours: a.operating_hours ?? null,
     email: ctx.profile.email,
-    token
+    token,
+    issuedAt
   };
 }
 

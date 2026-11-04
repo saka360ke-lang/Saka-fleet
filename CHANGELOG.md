@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.58.21] - 2026-11-04
+
+- **The welcome trial now runs from the day the passbook is issued.** `startAccountTrial({ startedAt })` anchors `started_at`/`ends_at` to the asset creation instant; both registration paths pass it, and the heal/reconcile pass the owner oldest ACTIVE vehicle `created_at`. Existing trials were re-anchored live (13:20:24 and 13:22:14 - the exact asset timestamps).
+- **Growth rides on the trial.** Upgrading no longer shortens the window: a paid subscription records the conversion but the trial row stays ACTIVE until its anchored end; entitlements treat the trial as the floor (a lapsed paid plan returns to the trial, never straight to Free) and the expiry sweep never downgrades a live paid account.
+- **Chat friction fixed:** bare "switch car" now asks "Which one?" with the numbered list; "show me my driver profile" answers with the owner Compliance Card instead of fleet context; "confusing" joins the support escape; tier-math follow-ups ("I have less than 3 assets") get the count-aware plan answer.
+- **Files:** src/services/{trialEngine,subscriptions,quizEngine,onboarding}.js, src/routes/whatsapp.js, scripts/reconcile_welcome_trials.js, test_trial_engine.js, test_subscription_billing.js, package.json, SAKA_FLEET_ARCHITECTURE.md, CHANGELOG.md.
+- **Tests:** test_trial_engine (77), test_subscription_billing (78), test_quiz_flow (143), test_agent_training (155), test_first_message_flow (53), test_greetings (110) - green; `npm run health` green.
+
 ## [1.58.20] - 2026-11-04
 
 - **The welcome trial is back (root cause found).** The live profiles table was missing `currency` and `locale`, so every `startWelcomeTrial` call returned "profile not found" and was swallowed - trial_sessions was empty and every account sat on Free capacity while believing it was on a trial. Migration `npm run migrate:profile-context` adds both columns (applied live); `fetchOwner` now falls back to a slim select, and both registration paths log a refused trial instead of hiding it.

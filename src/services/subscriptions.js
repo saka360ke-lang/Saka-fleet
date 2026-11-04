@@ -185,20 +185,27 @@ export async function getEntitlements({ supabase, ownerId, profile = null, now =
   if (!prof) return cacheEntitlements(id, freeEntitlements(id, profile));
 
   const status = String(prof.subscription_status || 'ACTIVE').toUpperCase();
-  // v1.57.1 - during TRIALING the live trial row decides the tier (a welcome
-  // trial runs on solo_pro even if profiles.subscription_tier is still at free).
-  const trialRowEarly = status === 'TRIALING' ? await getActiveTrialRow(supabase, id) : null;
-  const trialTierKeyEarly = trialRowEarly && ['ACTIVE', 'EXTENDED'].includes(String(trialRowEarly.status))
-    ? normalizeTierKey(trialRowEarly.tier || trialRowEarly.tier_key)
-    : null;
-  const tierKey = normalizeTierKey(trialTierKeyEarly || prof.subscription_tier);
+  // v1.58.21 - the live trial row is consulted for EVERY status: while its
+  // anchored window is open it is the entitlement floor ("growth rides on the
+  // trial"). A paid plan wins while it grants access; if it lapses before the
+  // window ends, the trial takes over instead of Free.
+  const trialRowEarly = await getActiveTrialRow(supabase, id);
+  const trialEndMs = trialRowEarly ? new Date(trialRowEarly.ends_at || 0).getTime() : 0;
+  const trialLive = Boolean(trialRowEarly)
+    && ['ACTIVE', 'EXTENDED'].includes(String(trialRowEarly.status))
+    && Number.isFinite(trialEndMs) && trialEndMs > now.getTime();
+  const trialTierKeyEarly = trialLive ? normalizeTierKey(trialRowEarly.tier || trialRowEarly.tier_key) : null;
+  const profileTierKey = normalizeTierKey(prof.subscription_tier);
+  const tierKey = isPaidTierKey(profileTierKey) ? profileTierKey : normalizeTierKey(trialTierKeyEarly || profileTierKey);
   const addons = Math.max(0, Math.floor(Number(prof.addon_quantity) || 0));
   const endMs = periodEndMs(prof);
   const nowMs = now.getTime();
   const graceMs = PAST_DUE_GRACE_DAYS * 24 * 60 * 60 * 1000;
 
   let hasPaidAccess = false;
-  if (isPaidTierKey(tierKey)) {
+  // v1.58.21 - paid access follows the PROFILE's own paid plan; the trial tier
+  // (used while no paid plan is live) is a floor, not a payment.
+  if (isPaidTierKey(profileTierKey)) {
     if (status === 'ACTIVE' || status === 'TRIAL' || status === 'TRIALING') {
       hasPaidAccess = true;
     } else if (status === 'CANCELING') {
@@ -212,8 +219,8 @@ export async function getEntitlements({ supabase, ownerId, profile = null, now =
     }
   }
 
-  // Lazy expiry downgrade: a paid tier without access falls back to Free.
-  if (isPaidTierKey(tierKey) && !hasPaidAccess) {
+  // Lazy expiry downgrade: a paid tier without access and NO live trial floor.
+  if (isPaidTierKey(tierKey) && !hasPaidAccess && !trialLive) {
     const downgraded = await downgradeToFree({ supabase, ownerId: id, reason: `expired:${status}` });
     const ent = freeEntitlements(id, prof, {
       status: 'ACTIVE',
@@ -234,9 +241,10 @@ export async function getEntitlements({ supabase, ownerId, profile = null, now =
       pausedVehicles: downgraded?.paused || []
     }));
   }
-  const isTrial = Boolean(trial && ['ACTIVE', 'EXTENDED'].includes(String(trial.status)));
-  const effective = hasPaidAccess ? getTierDefinition(tierKey) : getTierDefinition('free');
-  const effectiveTierKey = hasPaidAccess ? tierKey : 'free';
+  const isTrial = Boolean(trialLive) && (status === 'TRIALING' || !hasPaidAccess);
+  const accessGranted = hasPaidAccess || Boolean(trialLive);
+  const effective = accessGranted ? getTierDefinition(tierKey) : getTierDefinition('free');
+  const effectiveTierKey = accessGranted ? tierKey : 'free';
   const capacity = getEffectiveVehicleLimit(effectiveTierKey, effective.addonEligible ? addons : 0);
   const reportsUsed = Number.isFinite(effective.reportsPerMonth)
     ? await getMonthlyReportCount(supabase, id, now)
@@ -642,8 +650,11 @@ async function resolveOwnerForEvent({ supabase, metadata = {}, subscriptionCode 
 async function markTrialConverted(supabase, ownerId, subscriptionCode = null) {
   if (!supabase || !ownerId) return;
   try {
+    // v1.58.21 - growth rides on the trial: a paid subscription records the
+    // conversion but NEVER shortens the anchored welcome window. The row stays
+    // ACTIVE (as the entitlement floor) until its anchored ends_at, when the
+    // sweep retires it.
     await supabase.from('trial_sessions').update({
-      status: 'CONVERTED',
       converted_at: new Date().toISOString(),
       paystack_subscription_code: subscriptionCode || null,
       updated_at: new Date().toISOString()

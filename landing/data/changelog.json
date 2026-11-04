@@ -1,6 +1,12 @@
 {
-  "latest": "1.58.20",
+  "latest": "1.58.21",
   "entries": [
+    {
+      "version": "1.58.21",
+      "date": "2026-11-04",
+      "title": "Trials that start on day one",
+      "summary": "Your welcome trial now runs from the day your first asset is registered, upgrading never cuts it short, and the assistant answers plan, switch and driver-profile questions straight instead of looping."
+    },
     {
       "version": "1.58.20",
       "date": "2026-11-04",

@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.58.20  
+**Version:** 1.58.21  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.58.21** | Trial anchored to passbook issuance + growth rides on the trial (no early conversion, trial floor, safe expiry sweep) + chat friction fixes (switch picker, driver-profile read, confusion escape, tier math) | 150 |
 | **1.58.20** | Welcome-trial outage fixed (profiles.currency/locale missing -> "profile not found"): migration + resilient fetchOwner + lazy heal + reconcile + observability + error rollup | 149 |
 | **1.58.19** | Self-sender guard: the platform no longer re-ingests its own escalation emails as tickets (support-inbox loop) | 148 |
 | **1.58.18** | Care Console: WhatsApp worker console (`care ...`), ticket lifecycle + email threading, reply loop (WhatsApp + email), escalation ladder, CARE_TICKET_* audit, CARE_WORKER_GUIDE | 147 |
@@ -4281,3 +4282,9 @@ quiz engine:
 - **Complaint pollution:** `isPollutedFieldValue` now rejects trial/refund/complaint phrasing ("I am on a valid 30 day trial!!!", "Your last reply was incomplete", "I want a refund") so a grievance can never become a vehicle field.
 - **Error rollup (P2):** `logSystemError` writes one row per (route, normalized message) per `ERROR_ROLLUP_HOURS` (24) instead of one per event - the 40 identical WhatsApp 131026 undeliverable rows were drowning `error_logs`. Live check: two identical logs -> one row.
 - **Tests:** `test_trial_engine`, `test_quiz_flow` (143), `test_v1571` (20 - +3 pollution), `test_agent_training` (155), `test_env_audit` (44) - green.
+### 150. v1.58.21 - trial anchored to asset creation + growth rides on the trial + chat friction (2026-11-04)
+
+- **Trial anchor = passbook issuance.** `startAccountTrial({ startedAt })` starts the window on the asset date: `started_at = anchor`, `ends_at = anchor + TRIAL_DAYS`. `persistVehicleRegistration` (quizEngine) and `onboarding.saveVehicleAssetRecord` capture the issuance instant and pass it; the lazy heal and `reconcile:welcome-trials` pass the owner OLDEST ACTIVE vehicle `created_at`. A future/invalid anchor falls back to now and an anchor whose window is already over never mints a dead trial. Live: both owner trials re-anchored to their asset timestamps (13:20:24 / 13:22:14).
+- **Growth rides on the trial.** `markTrialConverted()` no longer flips the trial to CONVERTED on subscription.create / invoice.paid / legacy charge - it records `converted_at` + `paystack_subscription_code` and leaves the row ACTIVE until its anchored `ends_at`. `getEntitlements()` consults the live trial row for every status: paid access follows the PROFILE paid plan, the trial tier is the floor (a lapsed paid plan returns to the trial, never straight to Free), and the T-0 sweep never downgrades an owner whose paid subscription is still live.
+- **Chat friction:** bare "switch car" -> numbered "Which one?" picker; "show me my driver profile" is a deterministic read of the owner own Compliance Card (never fleet context or an onboarding restart); "confusing / doesn not make sense / not clear" joins the support escape family; tier-math follow-ups ("I have less than 3 assets") route to the plan view with a count-aware line ("You have N asset(s); this trial covers M").
+- **Tests:** `test_trial_engine` (77, includes anchor + stale-anchor), `test_subscription_billing` (78, includes conversion-keeps-window + trial-floor), `test_quiz_flow` (143), `test_agent_training` (155), `test_first_message_flow` (53), `test_v1571` (20), `test_greetings` (110) - green.
