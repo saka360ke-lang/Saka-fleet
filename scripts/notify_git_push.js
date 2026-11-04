@@ -117,7 +117,7 @@ export async function sendAdminDeploymentAlert(customData = {}) {
   let waSuccess = false;
   if (cleanPhone && phoneNumberId && token) {
     try {
-      const res = await fetch(`https://graph.facebook.com/v17.0/${phoneNumberId}/messages`, {
+      const res = await fetch(`https://graph.facebook.com/v21.0/${phoneNumberId}/messages`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,

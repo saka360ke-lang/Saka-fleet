@@ -1908,7 +1908,7 @@ export async function sendMorningExecutiveBriefing(supabase) {
     const token = process.env.META_WHATSAPP_TOKEN;
     if (phoneNumberId && token) {
       const cleanPhone = superadminPhone.replace(/[^\d]/g, '');
-      await fetch(`https://graph.facebook.com/v17.0/${phoneNumberId}/messages`, {
+      await fetch(`https://graph.facebook.com/v21.0/${phoneNumberId}/messages`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,

@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.58.4] - 2026-11-04
+
+- **Mojibake purge.** User/admin WhatsApp strings carried UTF-8 mojibake (driver-activity summary, fleet auto-audit, Sentinel Cloud-Run alert, Horizon blueprint, quiz VIN error/trip hint/summaries). All fixed; a repo sweep confirms zero double-encoded emoji/dash sequences left.
+- **No silent crash.** `processIncomingWhatsAppMessage` sends one deterministic recovery line when a turn throws before any reply went out (`replyDispatched` guard).
+- **Global + Nairobi auto-audit.** Currency localized via `formatMoney`/`buildGlobalContext` (no more hardcoded KES); all windows/scheduling normalized to Africa/Nairobi.
+- **Record-lane scoping.** QUERY_RECORDS scopes to one vehicle via `resolveLedgerVehicleScope`, aggregating the fleet only when ambiguous.
+- **Pinned ledger edits.** A pending edit/delete re-fetches the original row by id (`getLedgerEntry`) if it scrolled out of the top-6 list; ledger write helpers re-verify `vehicleIds` (defense-in-depth).
+- **Sentinel boundary lock.** `processFrictionPatches`/`refinementIsSafe` reject security-weakening prompts (negation-aware) instead of 5 literal phrases.
+- **Meta API + cleanup.** All Graph calls bumped `v17.0`->`v21.0` (incl. OCR default); removed the dead `whatsappRoutes` plugin duplicating /webhook routes.
+- **Files:** index.js, src/routes/whatsapp.js, src/services/{entryLedger,quizEngine,superadmin,ocrService}.js, src/workers/sentinel.js, scripts/notify_git_push.js.
+- **Tests:** test_agent_training (155), test_entry_ledger, test_edit_delete, test_v1583, test_record_answers, test_conversation_compliance, test_env_audit (44), test_sentinel - all green; `npm run health` fully green.
+
 ## [1.58.3] - 2026-11-03
 
 - Cross-vehicle ledger leakage is closed. The editable ledger (list/edit/delete/restore) now resolves a single target vehicle (pending row, then an explicit plate/label/ordinal, then the active vehicle, then the single vehicle) and scopes every query to it - so editing KBJ 819C can never surface or touch a KAS628T record. Mid-edit stays pinned to the row vehicle. When no target resolves the engine asks which vehicle instead of listing the whole fleet.

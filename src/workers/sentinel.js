@@ -249,6 +249,22 @@ export function refinementIsSafe(text = '') {
       index = lowered.indexOf(needle, index + needle.length);
     }
   }
+  // v1.58.x — a refinement must never teach Saka to weaken a security boundary
+  // (VIN/OTP/auth/verification) or a schema rule, unless the sentence forbids it.
+  const securityTerms = [
+    'bypass vin', 'ignore vin', 'skip otp', 'skip the otp', 'disable auth',
+    'disable authentication', 'disable verification', 'disable email verification',
+    'drop table', 'truncate table', 'modify schema', 'alter table', 'delete from'
+  ];
+  for (const term of securityTerms) {
+    let index = lowered.indexOf(term);
+    while (index !== -1) {
+      const context = lowered.slice(Math.max(0, index - 48), index);
+      const negated = /\b(never|avoid|avoiding|don'?t|do not|not|no|forbidden|banned)\b/.test(context);
+      if (!negated) return false;
+      index = lowered.indexOf(term, index + term.length);
+    }
+  }
   return true;
 }
 
@@ -476,7 +492,7 @@ Return strictly a single valid JSON object matching this schema (no markdown ast
 export async function logSystemError(providedSupabase, error, route = 'unknown') {
   try {
     const message = error?.message || (typeof error === 'string' ? error : '');
-    // Ignore empty/serialized-empty errors and benign status codes â€” these are
+    // Ignore empty/serialized-empty errors and benign status codes — these are
     // observability noise (e.g. INFO 200 webhook logs) and must not pollute
     // error_logs or Sentinel AI diagnosis.
     if (!message || message === '{}' || message === 'undefined' || message === 'null') return;
@@ -617,7 +633,7 @@ export async function scanCloudRunAnomalies(providedSupabase) {
     const isError = log.severity === 'ERROR' || log.severity === 'CRITICAL';
     const isTimeoutRisk = Number(log.httpRequest?.status || 0) >= 500;
 
-    // Ignore benign INFO/NOTICE traffic (health checks, 200 webhooks) â€” this is
+    // Ignore benign INFO/NOTICE traffic (health checks, 200 webhooks) — this is
     // the noise source that produced false "AI-diagnosed errors".
     const status = Number(log.httpRequest?.status || 0);
     const severity = String(log.severity || '').toUpperCase();
@@ -684,10 +700,10 @@ export async function scanCloudRunAnomalies(providedSupabase) {
       const metaToken = process.env.META_WHATSAPP_TOKEN;
       if (metaPhoneId && metaToken) {
         const cleanPhone = superadminPhone.replace(/[^\d]/g, '');
-        const waMessage = `ðŸš¨ *Sentinel Cloud Run Error Alert* âš ï¸\n\nâ€¢ *Service:* saka-fleet\nâ€¢ *Severity:* ${log.severity}\nâ€¢ *Latency / Status:* ${log.httpRequest?.status || 'N/A'} (${log.httpRequest?.latency || 0}s)\nâ€¢ *Timestamp:* ${new Date(log.timestamp).toLocaleString()}\nâ€¢ *Snippet:* "${(readableText || '').substring(0, 200)}"\n\n_Logged to chat_friction_logs. Text 'admin alerts' for full diagnostic._`;
+        const waMessage = `🚨 *Sentinel Cloud Run Error Alert* ⚠️\n\n• *Service:* saka-fleet\n• *Severity:* ${log.severity}\n• *Latency / Status:* ${log.httpRequest?.status || 'N/A'} (${log.httpRequest?.latency || 0}s)\n• *Timestamp:* ${new Date(log.timestamp).toLocaleString()}\n• *Snippet:* "${(readableText || '').substring(0, 200)}"\n\n_Logged to chat_friction_logs. Text 'admin alerts' for full diagnostic._`;
         
         try {
-          await fetch(`https://graph.facebook.com/v17.0/${metaPhoneId}/messages`, {
+          await fetch(`https://graph.facebook.com/v21.0/${metaPhoneId}/messages`, {
             method: 'POST',
             headers: {
               'Authorization': `Bearer ${metaToken}`,
@@ -986,7 +1002,12 @@ Output ONLY valid JSON matching this schema:
       const sanitizedKey = parsedPatch.rule_key.toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, 50);
       const instruction = parsedPatch.patch_instruction.trim();
 
-      const violatesLock = /\b(bypass vin|ignore vin|skip otp|disable auth|drop table|modify schema)\b/i.test(instruction);
+      // v1.58.x — broaden the boundary lock beyond 5 literal phrases: a patch may
+      // only EXPLAIN a requirement, never weaken a security/auth/VIN/OTP/schema
+      // rule. (The AI prompt already forbids it; this is the deterministic backstop.)
+      const violatesLock = /\b(?:bypass|ignore|ignoring|skip|skipping|disable|disabling|remove|removing|waive|waiving|omit|omitting|relax|relaxing|loosen|loosening|override|overrule|sidestep)\b[^.!?\n]{0,40}\b(?:vin|chassis|otp|one[- ]?time|auth|authentication|authorization|verif(?:y|ication)|schema|table|column|migration|ddl)\b/i.test(instruction)
+        || /\b(?:drop|truncate|alter)\s+(?:table|schema|database)\b/i.test(instruction)
+        || /\b(?:no need to (?:verify|ask)|don'?t (?:verify|ask for))\b/i.test(instruction);
       if (!violatesLock) {
         const nowIso = new Date().toISOString();
         const { error: upsertErr } = await supabase
@@ -1106,13 +1127,13 @@ ${rawCorpus.slice(0, 15000)}`;
   // 3. Dispatch to Superadmin
   const superadminPhone = process.env.SUPERADMIN_PHONE;
   if (superadminPhone) {
-    const waMsg = `ðŸŒŸ *Saka Sentinel Horizon â€” Weekly Feature Evolution* ðŸš€\n\nAnalyzed ${recentTranscripts.length} driver exchanges this week.\nTop Driver Feature Opportunity:\n\nðŸ’¡ *${parsedProposal.title}*\nâ€¢ *Why:* ${parsedProposal.evidence_quotes.substring(0, 100)}...\nâ€¢ *Driver Value:* ${parsedProposal.driver_value_proposition}\nâ€¢ *Impact:* ${parsedProposal.impact_score}/10\n\n_Text "admin proposals" to review._`;
+    const waMsg = `🌟 *Saka Sentinel Horizon — Weekly Feature Evolution* 🚀\n\nAnalyzed ${recentTranscripts.length} driver exchanges this week.\nTop Driver Feature Opportunity:\n\n💡 *${parsedProposal.title}*\n• *Why:* ${parsedProposal.evidence_quotes.substring(0, 100)}...\n• *Driver Value:* ${parsedProposal.driver_value_proposition}\n• *Impact:* ${parsedProposal.impact_score}/10\n\n_Text "admin proposals" to review._`;
     try {
       const token = process.env.META_WHATSAPP_TOKEN;
       const phoneNumberId = process.env.META_PHONE_NUMBER_ID;
       const cleanPhone = superadminPhone.replace(/[^\d]/g, '');
       if (token && phoneNumberId && cleanPhone) {
-        await fetch(`https://graph.facebook.com/v17.0/${phoneNumberId}/messages`, {
+        await fetch(`https://graph.facebook.com/v21.0/${phoneNumberId}/messages`, {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ messaging_product: 'whatsapp', to: cleanPhone, type: 'text', text: { body: waMsg } })
@@ -1121,7 +1142,7 @@ ${rawCorpus.slice(0, 15000)}`;
     } catch {}
   }
 
-  return { status: 'success', message: `âœ… Sentinel Horizon generated blueprint: ${parsedProposal.title}` };
+  return { status: 'success', message: `✅ Sentinel Horizon generated blueprint: ${parsedProposal.title}` };
 }
 
 /* ------------------------------------------------------------------ */
@@ -1141,7 +1162,7 @@ export async function sendProactiveWhatsApp(toPhone, text) {
   if (!cleanPhone) return false;
 
   try {
-    const res = await fetch(`https://graph.facebook.com/v17.0/${phoneNumberId}/messages`, {
+    const res = await fetch(`https://graph.facebook.com/v21.0/${phoneNumberId}/messages`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -1239,7 +1260,7 @@ export async function monitorActiveConversations(providedSupabase) {
         countryInfo,
         profile,
         fallbackText: field
-          ? `Still there? When you're ready: ${field.label} â€” ${field.hint} (Reply Restart or Cancel.)`
+          ? `Still there? When you're ready: ${field.label} — ${field.hint} (Reply Restart or Cancel.)`
           : quiz.phase === 'confirm'
             ? 'Still there? Reply YES to confirm and save, or Cancel to discard your draft.'
             : 'Still there? Reply to continue, or type Restart / Cancel.'

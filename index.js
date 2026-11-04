@@ -9,7 +9,7 @@ import { processSakaMessage } from './sakaAi.js';
 import { runHealthCheck, runConversationRefinement, evaluateConversationalFriction, monitorActiveConversations, logSystemError, logChatTranscript, ensureSentinelTables, scanCloudRunAnomalies } from './src/workers/sentinel.js';
 import { ensureSuperadminTables, isSuperadminPhone, sendMorningExecutiveBriefing, maybeSendAiBudgetAlert } from './src/services/superadmin.js';
 import { ensureVehicleTableColumns } from './src/services/vehicles.js';
-import whatsappRoutes, { handleWhatsAppWebhook as handleWhatsAppWebhookRoute } from './src/routes/whatsapp.js';
+import { handleWhatsAppWebhook as handleWhatsAppWebhookRoute } from './src/routes/whatsapp.js';
 import { verifyPaystackSignature } from './src/services/paystack.js';
 import { runReminderSweep } from './src/services/maintenanceReminders.js';
 import { ensureComplianceCatalog, reviewComplianceCatalog, COMPLIANCE_CATALOG_VERSION } from './src/services/complianceCatalog.js';
@@ -28,6 +28,8 @@ import {
   REMEDIATION_DIGEST_HOURS
 } from './src/workers/remediation.js';
 import { createResilientClient } from './src/services/supabaseClient.js';
+import { detectCountryFromPhone, buildGlobalContext, formatMoney } from './src/services/globalization.js';
+import { formatNairobiDate } from './src/services/dateParser.js';
 import { ensureAiUsageLogsTable, installAiUsageSink, installAiBudgetGuard } from './src/services/aiUsageLog.js';
 import { ensureTurnLatencyTable } from './src/services/turnLatency.js';
 import { buildStatusResponse, isStatusAuthorized } from './src/services/statusProbe.js';
@@ -222,7 +224,7 @@ async function processPendingOwnerNotifications() {
       const plate = item.vehicle?.plate_number || 'Vehicle';
 
       if (ownerPhone && canDeliverVehicleAlert(ownerPhone, item.vehicle)) {
-        const msg = `ðŸ”” *Driver Activity Summary (${plate})*\nDriver *${driverName}* submitted:\nðŸ‘‰ ${item.details_summary}`;
+        const msg = `🔔 *Driver Activity Summary (${plate})*\nDriver *${driverName}* submitted:\n👉 ${item.details_summary}`;
         await sendMetaWhatsAppMessage(ownerPhone, msg);
       }
 
@@ -365,7 +367,7 @@ async function sendMetaWhatsAppMessage(toPhone, messageBody) {
   const cleanTo = toPhone.replace('whatsapp:', '').replace('+', '').trim();
 
   try {
-    const response = await fetch(`https://graph.facebook.com/v17.0/${phoneNumberId}/messages`, {
+    const response = await fetch(`https://graph.facebook.com/v21.0/${phoneNumberId}/messages`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,
@@ -404,7 +406,7 @@ async function sendMetaWhatsAppTemplate(toPhone, templateName, { languageCode = 
   if (!phoneNumberId || !token || !templateName) return null;
   const cleanTo = String(toPhone || '').replace('whatsapp:', '').replace('+', '').trim();
   try {
-    const response = await fetch(`https://graph.facebook.com/v17.0/${phoneNumberId}/messages`, {
+    const response = await fetch(`https://graph.facebook.com/v21.0/${phoneNumberId}/messages`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,
@@ -643,7 +645,8 @@ async function processAutoAudits() {
   fastify.log.info('Running daily auto-audit scan...');
   try {
     const now = new Date();
-    const todayStr = now.toISOString().split('T')[0];
+    const todayStr = formatNairobiDate(now);
+    const nairobiWeekday = new Date(`${todayStr}T00:00:00Z`).getUTCDay();
 
     // Group vehicles by owner
     const { data: vehicles, error } = await supabase
@@ -654,7 +657,7 @@ async function processAutoAudits() {
         make_model,
         owner_id,
         audit_report_frequency,
-        profiles!vehicles_owner_id_fkey (phone_number, full_name)
+        profiles!vehicles_owner_id_fkey (phone_number, full_name, country_code)
       `)
       .eq('is_business', true)
       .eq('opt_in_earnings', true);
@@ -669,7 +672,7 @@ async function processAutoAudits() {
       const freq = v.audit_report_frequency || 'on_demand';
       let shouldSend = false;
       if (freq === 'daily') shouldSend = true;
-      else if (freq === 'weekly' && now.getDay() === 0) shouldSend = true;
+      else if (freq === 'weekly' && nairobiWeekday === 0) shouldSend = true;
 
       if (!shouldSend) continue;
 
@@ -686,6 +689,9 @@ async function processAutoAudits() {
     }
 
     for (const [phone, ownerData] of ownersMap.entries()) {
+      const globalCtx = buildGlobalContext(detectCountryFromPhone(phone), ownerData.profile || null);
+      const cur = globalCtx.currency;
+      const loc = globalCtx.locale;
       let fleetTotalEarnings = 0;
       let fleetTotalExpenses = 0;
       let fleetTotalFuel = 0;
@@ -697,7 +703,7 @@ async function processAutoAudits() {
           .from('private_earnings')
           .select('revenue_amount')
           .eq('vehicle_id', v.id)
-          .gte('logged_at', `${todayStr}T00:00:00Z`);
+          .gte('logged_at', `${todayStr}T00:00:00+03:00`);
 
         const vEarn = earnings ? earnings.reduce((sum, e) => sum + Number(e.revenue_amount), 0) : 0;
         fleetTotalEarnings += vEarn;
@@ -707,7 +713,7 @@ async function processAutoAudits() {
           .from('expense_logs')
           .select('amount, fuel_liters')
           .eq('vehicle_id', v.id)
-          .gte('created_at', `${todayStr}T00:00:00Z`);
+          .gte('created_at', `${todayStr}T00:00:00+03:00`);
 
         const vExp = expenses ? expenses.reduce((sum, e) => sum + Number(e.amount), 0) : 0;
         const vFuel = expenses ? expenses.reduce((sum, e) => sum + Number(e.fuel_liters || 0), 0) : 0;
@@ -715,8 +721,8 @@ async function processAutoAudits() {
         fleetTotalExpenses += vExp;
         fleetTotalFuel += vFuel;
 
-        recentOps.push({ type: `Earnings: ${v.plate_number}`, value: `KES ${vEarn.toFixed(2)}`, created_at: todayStr });
-        recentOps.push({ type: `Expenses: ${v.plate_number}`, value: `KES ${vExp.toFixed(2)}`, created_at: todayStr });
+        recentOps.push({ type: `Earnings: ${v.plate_number}`, value: formatMoney(vEarn, cur, loc), created_at: todayStr });
+        recentOps.push({ type: `Expenses: ${v.plate_number}`, value: formatMoney(vExp, cur, loc), created_at: todayStr });
       }
 
       const reportData = {
@@ -726,7 +732,7 @@ async function processAutoAudits() {
         fuelLiters: fleetTotalFuel.toFixed(2),
         totalCost: fleetTotalExpenses.toFixed(2),
         burnRate: 'N/A',
-        status: `Earnings: KES ${fleetTotalEarnings.toFixed(2)} | Net: KES ${(fleetTotalEarnings - fleetTotalExpenses).toFixed(2)}`,
+        status: `Earnings: ${formatMoney(fleetTotalEarnings, cur, loc)} | Net: ${formatMoney(fleetTotalEarnings - fleetTotalExpenses, cur, loc)}`,
         reminders: [],
         recentOperations: recentOps
       };
@@ -735,7 +741,7 @@ async function processAutoAudits() {
         const pdfBuffer = await generateFleetReport(reportData);
         const reportUrl = await uploadReportToSupabase(supabase, pdfBuffer, `Fleet_${Date.now()}`);
         const shortReportUrl = await shortenUrl(supabase, reportUrl);
-        const msg = `ðŸ“Š Your Fleet Auto-Audit Report is ready.\n\nNet Earnings Today: KES ${(fleetTotalEarnings - fleetTotalExpenses).toFixed(2)}\nView PDF: ${shortReportUrl}`;
+        const msg = `📊 Your Fleet Auto-Audit Report is ready.\n\nNet Earnings Today: ${formatMoney(fleetTotalEarnings - fleetTotalExpenses, cur, loc)}\nView PDF: ${shortReportUrl}`;
         await sendMetaWhatsAppMessage(phone, msg);
         fastify.log.info(`Auto-audit sent to ${phone} for entire fleet.`);
       } catch (repErr) {
@@ -750,11 +756,11 @@ async function processAutoAudits() {
 let lastAuditRunDay = null;
 setInterval(() => {
   const now = new Date();
-  const currentDay = now.getDate();
-  const currentHour = now.getHours();
-  // Run at 8 PM (20:00) local time
-  if (currentHour === 20 && lastAuditRunDay !== currentDay) {
-    lastAuditRunDay = currentDay;
+  const nairobiHour = (now.getUTCHours() + 3) % 24;
+  const todayKey = formatNairobiDate(now);
+  // Run at 20:00 Africa/Nairobi (canonical TZ), once per Nairobi calendar day
+  if (nairobiHour === 20 && lastAuditRunDay !== todayKey) {
+    lastAuditRunDay = todayKey;
     processAutoAudits();
   }
 }, 30 * 60 * 1000); // check every 30 minutes
@@ -783,7 +789,7 @@ async function checkMorningBriefingSchedule() {
 
     if (nairobiHour === 8 && nairobiMinute <= 5 && lastMorningBriefingDate !== todayStr) {
       lastMorningBriefingDate = todayStr;
-      fastify.log.info('ðŸŒ… Dispatching automated 8:00 AM executive morning briefing to superadmin...');
+      fastify.log.info('🌅 Dispatching automated 8:00 AM executive morning briefing to superadmin...');
       await sendMorningExecutiveBriefing(supabase);
     }
   } catch (err) {
@@ -806,7 +812,7 @@ setInterval(async () => {
   }
 }, 5 * 60 * 1000); // Run friction evaluation every 5 minutes
 
-// Sentinel Real-Time Conversation Recovery Loop â€” rescues users stalled mid-quiz.
+// Sentinel Real-Time Conversation Recovery Loop — rescues users stalled mid-quiz.
 setInterval(async () => {
   try {
     await monitorActiveConversations(supabase);
@@ -825,7 +831,7 @@ setInterval(async () => {
 }, 2 * 60 * 1000); // Run anomaly evaluation every 2 minutes
 
 // ==========================================
-// SENTINEL HORIZON â€” WEEKLY FEATURE EVOLUTION (Sundays 20:00 EAT)
+// SENTINEL HORIZON — WEEKLY FEATURE EVOLUTION (Sundays 20:00 EAT)
 // ==========================================
 let lastHorizonDate = null;
 async function checkHorizonSchedule() {
@@ -838,7 +844,7 @@ async function checkHorizonSchedule() {
     // Sunday === 0
     if (now.getUTCDay() === 0 && nairobiHour === 20 && nairobiMinute <= 5 && lastHorizonDate !== todayStr) {
       lastHorizonDate = todayStr;
-      fastify.log.info('ðŸŒŸ Sentinel Horizon: synthesizing weekly feature evolution blueprint...');
+      fastify.log.info('🌟 Sentinel Horizon: synthesizing weekly feature evolution blueprint...');
       const { generateWeeklyFeaturePlan } = await import('./src/workers/sentinel.js');
       await generateWeeklyFeaturePlan(supabase);
     }
@@ -1172,7 +1178,7 @@ const start = async () => {
     const port = process.env.PORT || 3000;
     await fastify.listen({ port: Number(port), host: '0.0.0.0' });
     serverStarted = true;
-    console.log(`ðŸš€ Saka Fleet Meta-Native Backend is live and listening on port ${port}`);
+    console.log(`🚀 Saka Fleet Meta-Native Backend is live and listening on port ${port}`);
     // Cloud Run startup self-announcement → "LIVE" notification (v1.25.7).
     // Fires once per revision, on every deploy path (local, cline.bot, console).
     const isProduction = process.env.NODE_ENV === 'production' || process.env.K_SERVICE;
@@ -1195,7 +1201,7 @@ const start = async () => {
 // complete before Cloud Run terminates the instance.
 const shutdown = async (signal) => {
   try {
-    console.log(`[Shutdown] ${signal} received â€” draining message queue (${JSON.stringify(getQueueStats())})...`);
+    console.log(`[Shutdown] ${signal} received — draining message queue (${JSON.stringify(getQueueStats())})...`);
     const drained = await drainQueue(12000);
     if (!drained) console.warn('[Shutdown] Queue drain timed out; exiting.');
     await fastify.close();

@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.58.3  
+**Version:** 1.58.4  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.58.4** | Deep-audit reliability fixes (mojibake purge, crash fallback, Nairobi/currency auto-audit, record-lane scoping, pinned ledger edit, Sentinel boundary lock, Meta v21.0, dead-code) | 133 |
 | **1.58.3** | Cross-vehicle ledger scoping + one-line plate routing (live plate_number/make_model matcher + which-vehicle safe gate) | 132 |
 | **1.58.2** | Field-value pollution guard (notes/labels never overwrite make/model) + edit-field alias normalization + live KBJ row cleaned | 131 |
 | **1.58.1** | Reminder menu is numbered + bare number selects the Nth option (fixes reply-3 loop) | 130 |
@@ -4125,3 +4126,14 @@ quiz engine:
 - Ledger is never owner-wide. New resolveLedgerVehicleScope (entryAnswers) resolves a single target vehicle (pending row, then explicit plate/label/ordinal, then the active vehicle, then the single vehicle); whatsapp.js scopes listLedgerEntries/restore to it and pins vehicleId in pendingEntryAction, so editing one vehicle can never touch another history. When no vehicle resolves, the engine asks which vehicle.
 - One-line plate routing works for live data. matchNarrativeVehicle plateOf/labelOf now read plate_number/make_model (previously only plate/make/model keys, so plate detection was dead for real DB rows), and the multi-vehicle/no-mention fallback returns ambiguous (never silently defaults to active). A write intent (log/earning/mileage/operating-hours/reminder/edit_vehicle) with several vehicles and no named vehicle forces a which-vehicle prompt via forceVehiclePrompt.
 - Tests: test_v1583.js (9, health-registered), test_narrative_draft.js (118), test_entry_ledger.js + test_agent_training.js green.
+
+### 133. v1.58.4 - deep-audit reliability fixes (2026-11-04)
+
+- **Mojibake purge.** User/admin-facing WhatsApp strings and logs carried UTF-8 mojibake (double-encoded emojis/dashes) from a round-trip; every source string is now correct UTF-8 (driver-activity summary, fleet auto-audit, Sentinel Cloud-Run alert, Horizon blueprint, quiz VIN error / trip hint / summaries). A repo-wide sweep confirms zero remaining double-encoded emoji/dash sequences.
+- **No silent crash.** `processIncomingWhatsAppMessage` now sends one short deterministic recovery line if the turn throws before any reply was dispatched (`replyDispatched` guard), ending dead-air failures.
+- **Global auto-audit.** The daily/weekly auto-audit resolves currency via `formatMoney(buildGlobalContext(detectCountryFromPhone(phone)))` instead of hardcoded `KES`, and normalizes all windows and scheduling to Africa/Nairobi (`formatNairobiDate`, `(getUTCHours()+3)%24`, `T00:00:00+03:00`, Nairobi weekday) instead of server-local/UTC.
+- **Record-lane scoping.** QUERY_RECORDS now scopes to one vehicle via `resolveLedgerVehicleScope` (mirrors v1.58.3), aggregating the fleet only when genuinely ambiguous.
+- **Pinned ledger edits.** A pending edit/delete re-fetches the original row by id (`getLedgerEntry`) when it has scrolled out of the top-6 list, so it can never retarget `entries[0]`; `applyEntryUpdate` / `relogLedgerEntry` / `deleteLedgerEntry` re-verify `vehicleIds` (defense-in-depth).
+- **Sentinel boundary lock.** `processFrictionPatches` and `refinementIsSafe` now reject security-weakening instructions (negation-aware verb+target match) instead of 5 literal phrases, so a prompt hint can never weaken VIN/OTP/auth/schema.
+- **Meta API + cleanup.** All Graph API calls moved from deprecated `v17.0` to `v21.0` (OCR default too); the dead `whatsappRoutes` plugin that duplicated the /webhook routes was removed.
+- **Tests:** test_agent_training (155), test_entry_ledger, test_edit_delete, test_v1583, test_record_answers, test_conversation_compliance, test_env_audit (44), test_sentinel - all green; `npm run health` fully green.

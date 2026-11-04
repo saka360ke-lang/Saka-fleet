@@ -1,6 +1,12 @@
 {
-  "latest": "1.58.3",
+  "latest": "1.58.4",
   "entries": [
+    {
+      "version": "1.58.4",
+      "date": "2026-11-04",
+      "title": "Polished, reliable, everywhere",
+      "summary": "Messages read cleanly again, a mid-turn hiccup never leaves you in silence, and your fleet auto-audit now uses your own currency and Nairobi time."
+    },
     {
       "version": "1.58.3",
       "date": "2026-11-03",

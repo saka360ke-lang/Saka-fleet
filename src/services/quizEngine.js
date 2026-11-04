@@ -1,12 +1,12 @@
 /**
- * Saka Fleet â€” One-Piece-at-a-Time Quiz Engine
+ * Saka Fleet — One-Piece-at-a-Time Quiz Engine
  * --------------------------------------------
  * Every multi-field conversational flow is a step-by-step wizard that asks
  * exactly ONE question per turn, accepts multi-field answers (fast-forward),
  * and ALWAYS presents a confirmation summary before writing to the database.
  *
  * The engine owns the state machine and the data validation. Saka AI renders
- * all prose through conversationEngine.js â€” there are no canned quiz texts.
+ * all prose through conversationEngine.js — there are no canned quiz texts.
  */
 
 import crypto from 'crypto';
@@ -267,7 +267,7 @@ function field(key, label, hint, options = {}) {
     when: options.when || null,
     parse: options.parse || ((text) => String(text).trim()),
     validate: options.validate || (() => ({ ok: true })),
-    summary: options.summary || ((value) => (value === null || value === undefined ? 'â€”' : String(value)))
+    summary: options.summary || ((value) => (value === null || value === undefined ? '—' : String(value)))
   };
 }
 
@@ -311,7 +311,7 @@ function vehicleField(ctx) {
   const vehicles = ctx.vehicles || [];
   const summarize = (value) => {
     const v = vehicles.find((x) => x.id === value);
-    return v ? `${v.plate_number}${v.make_model ? ` (${v.make_model})` : ''}` : 'â€”';
+    return v ? `${v.plate_number}${v.make_model ? ` (${v.make_model})` : ''}` : '—';
   };
 
   if (vehicles.length <= 1) {
@@ -428,7 +428,7 @@ function registrationFields() {
       parse: (text) => parseVin(text),
       validate: (value) => (value && VIN_RE.test(value)
         ? { ok: true }
-        : { ok: false, message: 'A VIN is 11â€“17 letters/numbers (I, O and Q are not used). Please resend it.' })
+        : { ok: false, message: 'A VIN is 11–17 letters/numbers (I, O and Q are not used). Please resend it.' })
     }),
     // v1.51.8 — email + OTP are website-only for vehicle registration: a verified
     // profile's email is used directly by persistVehicleRegistration (no chat OTP).
@@ -940,7 +940,7 @@ export function getFlowDefinition(flowKey, ctx) {
               return { ok: true };
             }
           }),
-          field('period', 'Trip or period', 'optional â€” e.g. morning shift, 12â€“14 Oct', {
+          field('period', 'Trip or period', 'optional — e.g. morning shift, 12–14 Oct', {
             optional: true, aliases: ['period', 'notes'], parse: (text) => String(text).trim() || null
           })
         ]
@@ -2085,7 +2085,7 @@ export function detectFlowSwitch({ quiz, messageText = '', intent = '' } = {}) {
 
 /**
  * Main entry point used by the WhatsApp route for every inbound message.
- * Returns { handled, reply } â€” handled=false means the message is not a quiz turn.
+ * Returns { handled, reply } — handled=false means the message is not a quiz turn.
  */
 const REG_FIELD_ALIASES = {
   plate_number: /\b(?:plate|reg(?:istration)?\s*(?:no|number)|number\s*plate)\b/i,

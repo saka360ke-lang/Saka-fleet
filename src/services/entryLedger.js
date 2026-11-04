@@ -202,8 +202,10 @@ async function writeAudit(supabase, { action, actorPhone, details }) {
 }
 
 /** Apply a sanitized patch + write the audit row. */
-export async function applyEntryUpdate(supabase, { entry = null, patch = {}, actorPhone = null } = {}) {
+export async function applyEntryUpdate(supabase, { entry = null, patch = {}, actorPhone = null, vehicleIds = null } = {}) {
   if (!supabase || !entry) return { ok: false, reason: 'no_entry' };
+  const entryScope = (vehicleIds || []).filter(Boolean);
+  if (entryScope.length && !entryScope.includes(entry.vehicle_id)) return { ok: false, reason: 'not_yours' };
   const kind = entry.kind === 'earning' ? 'earning' : 'expense';
   const { ok, patch: clean, rejected } = sanitizeEntryUpdate(kind, patch);
   if (!ok) return { ok: false, reason: 'no_valid_change', rejected };
@@ -284,8 +286,10 @@ export async function markDeletedEntryRelogged(supabase, { deletedEntryId = null
  * insert, exactly like the narrative retro-date rule), and the DELETE audit
  * row is marked consumed so `restore` can never duplicate it.
  */
-export async function relogLedgerEntry(supabase, { entry = null, patch = {}, actorPhone = null } = {}) {
+export async function relogLedgerEntry(supabase, { entry = null, patch = {}, actorPhone = null, vehicleIds = null } = {}) {
   if (!supabase || !entry) return { ok: false, reason: 'no_entry' };
+  const entryScope = (vehicleIds || []).filter(Boolean);
+  if (entryScope.length && !entryScope.includes(entry.vehicle_id)) return { ok: false, reason: 'not_yours' };
   const kind = entry.kind === 'earning' ? 'earning' : 'expense';
   const { ok, patch: clean, rejected } = sanitizeEntryUpdate(kind, patch);
   if (!ok) return { ok: false, reason: 'no_valid_change', rejected };
@@ -362,8 +366,10 @@ export async function relogLedgerEntry(supabase, { entry = null, patch = {}, act
  * Hard delete + full-row snapshot in `admin_audit_logs`. The snapshot is what
  * `restoreLastDeleted()` replays inside the 30-minute window.
  */
-export async function deleteLedgerEntry(supabase, { entry = null, actorPhone = null } = {}) {
+export async function deleteLedgerEntry(supabase, { entry = null, actorPhone = null, vehicleIds = null } = {}) {
   if (!supabase || !entry) return { ok: false, reason: 'no_entry' };
+  const entryScope = (vehicleIds || []).filter(Boolean);
+  if (entryScope.length && !entryScope.includes(entry.vehicle_id)) return { ok: false, reason: 'not_yours' };
   const kind = entry.kind === 'earning' ? 'earning' : 'expense';
   const table = LEDGER_TABLES[kind];
   try {

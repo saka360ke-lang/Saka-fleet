@@ -67,6 +67,7 @@ import {
 } from '../services/entryAnswers.js';
 import {
   listLedgerEntries,
+  getLedgerEntry,
   relogLedgerEntry,
   deleteLedgerEntry,
   restoreLastDeleted
@@ -322,7 +323,7 @@ async function sendWhatsAppReply(toPhone, messageBody) {
 
   try {
     const cleanPhone = toPhone.startsWith('+') ? toPhone.slice(1) : toPhone;
-    await fetch(`https://graph.facebook.com/v17.0/${phoneNumberId}/messages`, {
+    await fetch(`https://graph.facebook.com/v21.0/${phoneNumberId}/messages`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,
@@ -714,6 +715,9 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
   // v1.24.2 - slow-turn ack state (function scope so the final send can clear it).
   let slowAckTimer = null;
   let turnFinalized = false;
+  // v1.58.x — set once the final reply is dispatched, so the crash fallback
+  // only fires when the user genuinely received nothing.
+  let replyDispatched = false;
   // v1.32.1 — `session` is hoisted to function scope so the catch block can
   // never reference an undeclared binding (live crash 2026-11-01: the masking
   // ReferenceError "session is not defined" silently killed two photo uploads).
@@ -1709,9 +1713,21 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           const entries = await listLedgerEntries(supabaseClient, ledgerScope);
           const atIndex = (index) => (index ? entries[Number(index) - 1] || null : null);
           const pendingKey = pendingEntryAction?.key || null;
-          const pendingEntry = pendingKey
+          // v1.58.x — a pinned edit must resolve the ORIGINAL row even if it has
+          // scrolled out of the top-6 list; never silently retarget entries[0].
+          const pendingEntryInList = pendingKey
             ? entries.find((entry) => ledgerEntryKey(entry) === pendingKey) || null
             : null;
+          const resolvePinnedEntry = async () => {
+            if (pendingEntryInList) return pendingEntryInList;
+            if (!pendingKey) return null;
+            return await getLedgerEntry(supabaseClient, {
+              key: pendingKey,
+              vehicleIds: ledgerScope.vehicleIds,
+              driverId: ledgerScope.driverId,
+              ownerId: ledgerScope.ownerId
+            });
+          };
           let reply = null;
           let ledgerIntent = 'GENERAL_CHAT';
 
@@ -1769,7 +1785,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             }
           } else if (ledgerTurn.type === 'edit-apply') {
             ledgerIntent = 'EDIT_ENTRY';
-            const target = pendingEntry || entries[0] || null;
+            const target = (await resolvePinnedEntry()) || (!pendingKey ? entries[0] || null : null);
             if (!target) {
               clearPending();
               reply = formatLedgerList({ entries, ...copy });
@@ -1781,7 +1797,8 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               const updated = await relogLedgerEntry(supabaseClient, {
                 entry: target,
                 patch: ledgerTurn.changes,
-                actorPhone: senderPhone
+                actorPhone: senderPhone,
+                vehicleIds: ledgerScope.vehicleIds
               });
               if (updated.ok) {
                 clearPending();
@@ -1794,12 +1811,12 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             }
           } else if (ledgerTurn.type === 'delete-confirm') {
             ledgerIntent = 'DELETE_ENTRY';
-            const target = pendingEntry || entries[0] || null;
+            const target = (await resolvePinnedEntry()) || (!pendingKey ? entries[0] || null : null);
             if (!target) {
               clearPending();
               reply = formatLedgerList({ entries, ...copy });
             } else {
-              const removed = await deleteLedgerEntry(supabaseClient, { entry: target, actorPhone: senderPhone });
+              const removed = await deleteLedgerEntry(supabaseClient, { entry: target, actorPhone: senderPhone, vehicleIds: ledgerScope.vehicleIds });
               clearPending();
               reply = removed.ok
                 ? formatEntryDeleted({ entry: target, ...copy })
@@ -1821,7 +1838,17 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           const recordResult = await queryRecordLedger(supabaseClient, {
             ownerId: laneOwner ? profileData?.id : null,
             driverId: laneOwner ? null : profileData?.id,
-            vehicleIds: existingVehicles.map((v) => v.id),
+            vehicleIds: (() => {
+              // v1.58.x — scope the read to ONE vehicle when a plate/active/single
+              // vehicle resolves (mirrors editable-ledger scoping); only a
+              // genuinely ambiguous multi-vehicle ask aggregates the whole fleet.
+              const recordScope = resolveLedgerVehicleScope({
+                text: commandText,
+                vehicles: existingVehicles,
+                activeVehicle: currentActiveVehicle
+              });
+              return recordScope.ambiguous ? existingVehicles.map((v) => v.id) : recordScope.vehicleIds;
+            })(),
             question: recordQuestion
           });
           aiResult = {
@@ -4572,6 +4599,7 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
           slowAckTimer = null;
         }
         await sendWhatsAppReply(senderPhone, finalReply);
+        replyDispatched = true;
         const phaseMs = {
           setup: phaseMarks.profileReadyAt ? phaseMarks.profileReadyAt - turnStartedAt : null,
           preAi: phaseMarks.profileReadyAt && phaseMarks.aiStartedAt ? phaseMarks.aiStartedAt - phaseMarks.profileReadyAt : null,
@@ -4610,37 +4638,19 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
         // died silently because this line threw "session is not defined").
         await logSystemError(supabaseClient, err, '/webhook/whatsapp').catch(() => {});
         void logTurnLatency(supabaseClient, { phone: messageObj?.from || null, turnMs: Date.now() - turnStartedAt, ackSent: session?.slowAckSent === true });
+        // v1.58.x — never leave the user in silence: if the turn crashed before
+        // any reply was dispatched, send one short deterministic recovery line.
+        if (!replyDispatched && messageObj?.from) {
+          try {
+            await sendWhatsAppReply(messageObj.from, '🙂 Something hiccupped on my side just now — your message is safe. Please send it once more, or type *Help*.');
+          } catch { /* best-effort */ }
+        }
         return { status: 'error', error: err?.message };
       }
 }
 
-export default async function whatsappRoutes(fastify, options) {
-  const verifyWebhook = async (request, reply) => {
-    const mode = request.query['hub.mode'];
-    const token = request.query['hub.verify_token'];
-    const challenge = request.query['hub.challenge'];
-
-    const expectedToken = process.env.WHATSAPP_VERIFY_TOKEN || process.env.META_VERIFY_TOKEN;
-
-    if (mode === 'subscribe' && token === expectedToken) {
-      if (fastify?.log) fastify.log.info('WhatsApp webhook verified successfully!');
-      return reply.status(200).send(challenge);
-    } else {
-      return reply.status(403).send('Forbidden');
-    }
-  };
-
-  // 1. Webhook Verification Handshake (GET)
-  fastify.get('/webhook', verifyWebhook);
-  fastify.get('/webhook/whatsapp', verifyWebhook);
-  fastify.get('/api/whatsapp/webhook', verifyWebhook);
-
-  // 2. Incoming Messages & Event Listener (POST)
-  const webhookHandler = (request, reply) => handleWhatsAppWebhook(request, reply, fastify);
-  fastify.post('/webhook', webhookHandler);
-  fastify.post('/webhook/whatsapp', webhookHandler);
-  fastify.post('/api/whatsapp/webhook', webhookHandler);
-}
+// (removed) The unused `whatsappRoutes` plugin duplicated the /webhook routes
+// already registered in index.js; it was never `fastify.register()`ed (v1.58.x cleanup).
 
 /* ------------------------------------------------------------------ */
 /* Subscription / trial turn handling (v1.15.0)                        */

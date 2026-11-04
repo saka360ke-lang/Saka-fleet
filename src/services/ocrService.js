@@ -21,7 +21,7 @@ import {
  *  - Hard timeouts and size limits protect the message queue.
  */
 
-const GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v17.0';
+const GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v21.0';
 const MAX_MEDIA_BYTES = Number(process.env.OCR_MAX_MEDIA_BYTES || 5 * 1024 * 1024);
 const FETCH_TIMEOUT_MS = Number(process.env.OCR_TIMEOUT_MS || 15000);
 
