@@ -30,6 +30,7 @@ import {
 import { createResilientClient } from './src/services/supabaseClient.js';
 import { detectCountryFromPhone, buildGlobalContext, formatMoney } from './src/services/globalization.js';
 import { formatNairobiDate } from './src/services/dateParser.js';
+import { runDeepAudit, isDeepAuditEnabled, parseDeepAuditSchedule } from './src/services/deepAudit.js';
 import { ensureAiUsageLogsTable, installAiUsageSink, installAiBudgetGuard } from './src/services/aiUsageLog.js';
 import { ensureTurnLatencyTable } from './src/services/turnLatency.js';
 import { buildStatusResponse, isStatusAuthorized } from './src/services/statusProbe.js';
@@ -768,6 +769,31 @@ setInterval(() => {
 fastify.post('/api/cron/auto-audits', async (request, reply) => {
   await processAutoAudits();
   return { success: true, message: 'Auto-audit scan executed manually.' };
+});
+
+// v1.58.5 — bi-weekly Sentinel deep audit (Mon & Thu @ 03:00 Africa/Nairobi).
+// Deterministic code-integrity scan → PENDING_APPROVAL PROP-* proposals. The
+// run marker (admin_audit_logs) makes it idempotent per Nairobi day.
+let lastDeepAuditSlot = null;
+setInterval(() => {
+  if (!isDeepAuditEnabled()) return;
+  const { weekdays, nairobiHour } = parseDeepAuditSchedule();
+  const now = new Date();
+  const nairobiDate = formatNairobiDate(now);
+  const hourNow = (now.getUTCHours() + 3) % 24;
+  const weekday = new Date(`${nairobiDate}T00:00:00Z`).getUTCDay();
+  if (!weekdays.has(weekday) || hourNow !== nairobiHour || now.getUTCMinutes() > 5) return;
+  const slot = `${nairobiDate}-${nairobiHour}`;
+  if (lastDeepAuditSlot === slot) return;
+  lastDeepAuditSlot = slot;
+  runDeepAudit(supabase).catch((err) => {
+    console.warn('[DeepAudit] run failed:', err.message);
+  });
+}, 60 * 1000);
+
+fastify.post('/api/cron/deep-audit', async (request, reply) => {
+  const result = await runDeepAudit(supabase, { force: true });
+  return { success: true, deep_audit: result };
 });
 
 fastify.post('/api/cron/check-reminders', async (request, reply) => {

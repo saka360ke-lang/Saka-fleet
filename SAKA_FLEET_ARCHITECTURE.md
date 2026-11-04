@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.58.4  
+**Version:** 1.58.5  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.58.5** | Bi-weekly Sentinel deep audit (deterministic code-integrity scan → deduped PENDING_APPROVAL PROP-* proposals, Mon/Thu 03:00 EAT, env-gated) | 134 |
 | **1.58.4** | Deep-audit reliability fixes (mojibake purge, crash fallback, Nairobi/currency auto-audit, record-lane scoping, pinned ledger edit, Sentinel boundary lock, Meta v21.0, dead-code) | 133 |
 | **1.58.3** | Cross-vehicle ledger scoping + one-line plate routing (live plate_number/make_model matcher + which-vehicle safe gate) | 132 |
 | **1.58.2** | Field-value pollution guard (notes/labels never overwrite make/model) + edit-field alias normalization + live KBJ row cleaned | 131 |
@@ -4137,3 +4138,10 @@ quiz engine:
 - **Sentinel boundary lock.** `processFrictionPatches` and `refinementIsSafe` now reject security-weakening instructions (negation-aware verb+target match) instead of 5 literal phrases, so a prompt hint can never weaken VIN/OTP/auth/schema.
 - **Meta API + cleanup.** All Graph API calls moved from deprecated `v17.0` to `v21.0` (OCR default too); the dead `whatsappRoutes` plugin that duplicated the /webhook routes was removed.
 - **Tests:** test_agent_training (155), test_entry_ledger, test_edit_delete, test_v1583, test_record_answers, test_conversation_compliance, test_env_audit (44), test_sentinel - all green; `npm run health` fully green.
+
+### 134. v1.58.5 - bi-weekly Sentinel deep audit & proposal registry (2026-11-04)
+
+- **Deterministic, twice-weekly code audit.** `src/services/deepAudit.js` runs a code-integrity scan Monday & Thursday at 03:00 Africa/Nairobi (`SENTINEL_DEEP_AUDIT_SCHEDULE`, default `Mon,Thu@03:00`; kill switch `SENTINEL_DEEP_AUDIT_ENABLED`, default on). It is wired in `index.js` (a 60 s scheduler check + manual `POST /api/cron/deep-audit`) and is idempotent per Nairobi day via an `admin_audit_logs` run marker (`SENTINEL_DEEP_AUDIT`, `run_key = DEEP-AUDIT-<date>`).
+- **Four checks (zero AI tokens for detection):** mojibake lint (double-encoded UTF-8 in `src/**` + root JS), Nairobi-time lint (`now.getHours()`/`now.getDay()` server-local time and UTC-midnight DB windows, excluding legitimate `new Date(...T00:00:00Z)` weekday math), ledger-scoping lint (the `.in('vehicle_id', scoped)` guard and `resolveLedgerVehicleScope` usage), and a silent-failure watch (recurring unresolved `error_logs` by route, >=3 in 7 days).
+- **Proposal registry, not autonomy.** Each finding mints one deduped `PENDING_APPROVAL` proposal - `proposal_code = PROP-YYYY-MM-DD-NN` (via the new shared `src/services/proposalRegistry.js::nextProposalCode`), `category = deep_audit_finding`, dedupe key `target_signature = DEEP-AUDIT:<date>:<slug>`. Nothing is ever executed; the finding's remediation is a hint for a superadmin chat session (`admin remediations` / `show me pending proposals`). A light `sanitizeFinding` strips governance-protected paths (`.env`, `.clinerules`, `.github/`, `supabase/`, `paystack.js`, `remediation*.js`, VIN/reset/provision scripts).
+- **Tests & health.** `test_deep_audit.js` (25 assertions: schedule parse + fallback, enable/kill switch, all four lints incl. the `new Date` exclusion, `sanitizeFinding`, mint + dedupe + `PENDING_APPROVAL` + `PROP-` code, run-marker idempotency, `runDeepAudit` dryRun and same-window skip) is registered in the health suite; `npm run health` fully green.

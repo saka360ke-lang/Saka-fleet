@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.58.5] - 2026-11-04
+
+- **Bi-weekly Sentinel deep audit.** New `src/services/deepAudit.js` runs a deterministic code-integrity scan Monday & Thursday at 03:00 Africa/Nairobi (env-gated `SENTINEL_DEEP_AUDIT_ENABLED`, cadence `SENTINEL_DEEP_AUDIT_SCHEDULE`), wired in `index.js` + a manual `POST /api/cron/deep-audit`. Idempotent per Nairobi day via an `admin_audit_logs` run marker.
+- **Four checks, zero AI for detection:** mojibake lint, Nairobi-time drift (server-local time + UTC-midnight windows, `new Date(...T00:00:00Z)` weekday math excluded), ledger vehicle-scoping guards, and recurring unresolved `error_logs` by route.
+- **Proposal registry, never autonomy.** Each finding mints one deduped `PENDING_APPROVAL` `PROP-*` proposal (`category=deep_audit_finding`, `target_signature=DEEP-AUDIT:<date>:<slug>`) via the new shared `src/services/proposalRegistry.js::nextProposalCode`. `sanitizeFinding` strips governance-protected paths. Nothing executes automatically.
+- **Files:** src/services/deepAudit.js, src/services/proposalRegistry.js, index.js, src/services/envAudit.js, .env.example, scripts/health_audit.js, test_deep_audit.js.
+- **Tests:** test_deep_audit.js (25 assertions), test_env_audit (44) - green; `npm run health` fully green.
+
 ## [1.58.4] - 2026-11-04
 
 - **Mojibake purge.** User/admin WhatsApp strings carried UTF-8 mojibake (driver-activity summary, fleet auto-audit, Sentinel Cloud-Run alert, Horizon blueprint, quiz VIN error/trip hint/summaries). All fixed; a repo sweep confirms zero double-encoded emoji/dash sequences left.

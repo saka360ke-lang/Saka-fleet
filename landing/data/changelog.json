@@ -1,6 +1,12 @@
 {
-  "latest": "1.58.4",
+  "latest": "1.58.5",
   "entries": [
+    {
+      "version": "1.58.5",
+      "date": "2026-11-04",
+      "title": "Sentinel looks deeper",
+      "summary": "Twice a week Saka's background supervisor audits the system itself and files a reviewable fix proposal for anything it finds — nothing changes without your say-so."
+    },
     {
       "version": "1.58.4",
       "date": "2026-11-04",

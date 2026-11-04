@@ -44,6 +44,8 @@ const STATLESS_SUITES = [
   'test_v1571.js',
   // v1.58.3 - cross-vehicle ledger scoping + one-line plate routing.
   'test_v1583.js',
+  // v1.58.5 - bi-weekly Sentinel deep audit (checks + proposal minting + idempotency).
+  'test_deep_audit.js',
   // v1.24.2 — the wipe registry and its TRUNCATE SQL must never drift apart.
   'test_db_reset_scope.js',
   // v1.24.4 — operator status probes (public vs secret-gated payloads).
