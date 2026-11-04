@@ -101,6 +101,7 @@ check(award.granted === true && award.slot === 1 && award.days === 365, 'First g
 check(award.extended === true && award.couponCode === 'LAUNCH365-1', 'The award writes its coupon and extends the trial');
 check(world.db.launch_awards.length === 1 && world.db.launch_awards[0].owner_id === 'p-1', 'Exactly one launch_awards row for the owner');
 check(world.db.coupons.some((c) => c.code === 'LAUNCH365-1' && c.created_by === 'LAUNCH_AWARD' && c.applicable_to === 'account_trial_extension'), 'A LAUNCH_AWARD coupon row exists (server-side confirmation)');
+check(world.db.coupons.some((c) => c.code === 'LAUNCH365-1' && c.owner_id === 'p-1' && c.is_redeemed === true), 'The award coupon is account-bound and marked redeemed (rule 29)');
 const extendedTrial = world.db.trial_sessions.find((t) => t.id === 't-1');
 const totalDays = Math.round((new Date(extendedTrial.ends_at).getTime() - new Date(extendedTrial.started_at).getTime()) / DAY);
 check(totalDays >= 364 && totalDays <= 366, `The trial now runs ~365 days (got ${totalDays})`);
