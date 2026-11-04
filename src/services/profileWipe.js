@@ -32,7 +32,20 @@ export async function wipeProfileForSignup(supabase, rawPhone) {
     profiles = data || [];
   } catch { profiles = []; }
   const profileIds = profiles.map((r) => r.id).filter(Boolean);
-  const phones = [...new Set([...profiles.map((r) => r.phone_number), `+${digits}`, digits].filter(Boolean))];
+  // Build every stored phone form: +254…, 254…, 0…, bare 9-digit tail — so a
+  // chat row stored without a "+" or "0" is never left behind (v1.58.8).
+  const variants = new Set();
+  const addVariants = (value) => {
+    const d = String(value || '').replace(/[^0-9]/g, '');
+    if (d.length < 9) return;
+    const tail = d.slice(-9);
+    for (const v of [d, `+${d}`, tail, `+${tail}`, `0${tail}`, `+0${tail}`]) variants.add(v);
+    if (d.startsWith('0')) { const intl = `254${d.slice(1)}`; variants.add(intl); variants.add(`+${intl}`); }
+    if (d.startsWith('254')) variants.add(`0${d.slice(3)}`);
+  };
+  addVariants(rawPhone);
+  for (const r of profiles) addVariants(r.phone_number);
+  const phones = [...variants];
 
   // Resolve vehicles by owner id or owner phone.
   let vehicles = [];

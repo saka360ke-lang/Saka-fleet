@@ -8,6 +8,7 @@ const check = (c, l) => { if (c) { pass += 1; console.log('✅', l); } else { fa
 
 function makeMock({ pending = null } = {}) {
   const deleted = [];
+  const deleteCalls = [];
   const cfg = {};
   if (pending) cfg.admin_wipe_pending = JSON.stringify(pending);
   const builder = (table) => {
@@ -29,7 +30,7 @@ function makeMock({ pending = null } = {}) {
         return Promise.resolve({ data: null });
       },
       upsert(rows) { rows.forEach((r) => { cfg[r.key] = r.value; }); return Promise.resolve({ error: null }); },
-      delete() { return { in: (col, vals) => { deleted.push(table); return Promise.resolve({ count: (vals && vals.length) ? 1 : 0 }); } }; },
+      delete() { return { in: (col, vals) => { deleted.push(table); deleteCalls.push({ table, col, vals: vals || [] }); return Promise.resolve({ count: (vals && vals.length) ? 1 : 0 }); } }; },
       then(resolve) {
         if (table === 'profiles') resolve({ data: [{ id: 'p1', phone_number: '+254734852529' }] });
         else if (table === 'vehicles') resolve({ data: [{ id: 'v1', plate_number: 'KBJ 819C', vin: 'KBJ123456789' }] });
@@ -38,7 +39,7 @@ function makeMock({ pending = null } = {}) {
     };
     return chain;
   };
-  return { deleted, cfg, client: { from: builder } };
+  return { deleted, deleteCalls, cfg, client: { from: builder } };
 }
 
 async function run() {
@@ -51,6 +52,8 @@ async function run() {
   check(m1.deleted.includes('private_earnings'), 'wipe deletes private_earnings');
   check(m1.deleted.includes('chat_sessions'), 'wipe deletes chat_sessions');
   check(m1.deleted.includes('vin_registry'), 'wipe deletes vin_registry (clean slate)');
+  const ctCall = m1.deleteCalls.find((c) => c.table === 'chat_transcripts');
+  check(ctCall && ctCall.vals.includes('254734852529'), 'wipe matches the bare 254... phone form');
   check((await wipeProfileForSignup(m1.client, '123')).ok === false, 'short phone is rejected');
 
   const m2 = makeMock();

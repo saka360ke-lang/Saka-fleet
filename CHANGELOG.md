@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.58.9] - 2026-11-04
+
+- **Profile wipe matches every stored phone form.** `wipeProfileForSignup` now deletes `+254...`, `254...`, `0...` and bare 9-digit variants (from both the input and the resolved profile), so chat rows stored without a `+`/`0` are not left behind. (Live: 711 `254734852529` transcripts survived the first pass; now zero.)
+- **Ops CLI.** `scripts/wipe_profile.js <phone> [--confirm]` - backup-first, dry-run by default; the headless counterpart of `admin wipe`.
+- **Applied:** +254734852529 fully reset for a clean sign-up.
+- **Tests:** test_profile_wipe (14) green; `npm run health` green.
+
 ## [1.58.8] - 2026-11-04
 
 - **Backend auto-deploys on push.** New `Dockerfile` + `.github/workflows/deploy_cloud_run.yml` (builds from source, `--min-instances=1 --cpu-boost --no-cpu-throttling`). Enable with the `GCP_SA_KEY`/`GCP_PROJECT_ID`/`GCP_REGION` secrets; skips softly while unset. Fixes the frozen live revision (a push previously only sent a WhatsApp alert, never deployed).

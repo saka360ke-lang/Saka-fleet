@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.58.8  
+**Version:** 1.58.9  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.58.9** | Profile-wipe phone-variant fix (bare 254… rows) + ops CLI + live reset of +254734852529 | 138 |
 | **1.58.8** | Cloud Run auto-deploy pipeline + OTP-gated profile wipe (`admin wipe`) + verified earnings save + post-signup conversion directive | 137 |
 | **1.58.7** | Verified saves (no false "Saved"), "switch to X" works mid-draft, "Stop" pause TDZ fixed | 136 |
 | **1.58.6** | Chat fixes: past-tense expense statements logged (not answered as queries), "pull/show … records" routed as queries (not log flows), ambiguous multi-vehicle reads ask which vehicle | 135 |
@@ -4171,3 +4172,9 @@ quiz engine:
 - **Post-signup conversion directive.** The Saka core prompt now instructs: a verified user with no vehicle gets their app/pricing/feature question answered first in 2-4 short lines, then ONE soft next step — set up their first vehicle (reply Register) — to experience the feature. Warm, never long or pushy (answers stay AI-composed from facts).
 - **Security:** audited every success renderer ("Successfully"/"Saved") — the expense quick path (v1.58.7) and the earnings quick path (this release) were the two unverified writes; trial-extension, vehicle-delete, odometer and operating-hours paths were already gated on their result.
 - **Tests:** `test_profile_wipe.js` (13, mock) registered in the health suite; `test_record_answers` (45), `test_v1583`, `test_entry_ledger`, `test_edit_delete`, `test_narrative_draft`, `test_agent_training`, `test_product_qa`, `test_greetings`, `test_conversation_compliance`, `test_superadmin`, `test_update_suggest` green; `npm run health` green.
+
+### 138. v1.58.9 - wipe phone-variant fix + ops CLI (2026-11-04)
+
+- **Wipe matches every stored phone form.** `wipeProfileForSignup` now builds `+254...`, `254...`, `0...` and bare 9-digit variants (from the input AND the resolved profile), so chat rows stored WITHOUT a `+`/`0` are deleted too (live: 711 `254734852529` transcripts survived the first pass). Locked by a `test_profile_wipe` assertion.
+- **Ops CLI.** `scripts/wipe_profile.js <phone> [--confirm]` writes a JSON backup to `tmp/` then wipes (dry-run by default) — the headless counterpart of `admin wipe <phone>`.
+- **Applied live:** +254734852529 fully reset (profiles / vehicles / chat_history / chat_transcripts / chat_sessions / chat_friction_logs / processed_webhooks = 0) for a clean sign-up.

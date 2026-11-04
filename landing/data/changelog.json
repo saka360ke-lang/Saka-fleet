@@ -1,6 +1,12 @@
 {
-  "latest": "1.58.8",
+  "latest": "1.58.9",
   "entries": [
+    {
+      "version": "1.58.9",
+      "date": "2026-11-04",
+      "title": "Clean starts, every time",
+      "summary": "The account-reset tool now clears every trace of an account (even chats saved in a different number format), so a fresh sign-up truly starts clean."
+    },
     {
       "version": "1.58.8",
       "date": "2026-11-04",
