@@ -1,6 +1,12 @@
 {
-  "latest": "1.58.12",
+  "latest": "1.58.13",
   "entries": [
+    {
+      "version": "1.58.13",
+      "date": "2026-11-04",
+      "title": "Calmer alerts, clearer start",
+      "summary": "Team alerts now flag only the fixes actually waiting for review, an unverified number that says \"Huh?\" gets a clear way forward instead of the same line, and every new account starts cleanly on Free with no stray trial dates."
+    },
     {
       "version": "1.58.12",
       "date": "2026-11-04",

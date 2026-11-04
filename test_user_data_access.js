@@ -57,6 +57,14 @@ check(/verified ✅/.test(facts) && facts.includes('am…@gmail.com'), 'the veri
 check(snapshot.data.vehicles[0].insuranceExpiry === '2026-11-20', 'the structured data carries the expiry value');
 check(snapshot.data.vehicles[0].plate === 'KDA 123A', 'the structured data keeps the plate');
 
+// v1.58.13 — a free/ACTIVE profile carrying a legacy phantom trial_ends_at must
+// NOT report a trial end (the old now()+90d DB default leaked as a fake trial).
+const phantom = await buildUserContextSnapshot({
+  profile: { full_name: 'Fresh Owner', subscription_tier: 'free', subscription_status: 'ACTIVE', trial_ends_at: '2027-02-02T00:00:00Z' },
+  now: new Date('2026-11-04T12:00:00Z')
+});
+check(!/Trial ends:/.test(phantom.lines.join('\n')), 'a free/ACTIVE phantom trial_ends_at never reports a trial end (v1.58.13)');
+
 const empty = await buildUserContextSnapshot({});
 check(empty.lines.join(' ').includes('Vehicles on file: none yet'), 'an empty account honestly states what is missing');
 check(!/insurance expires/.test(empty.lines.join(' ')), 'no invented expiry for an empty account');

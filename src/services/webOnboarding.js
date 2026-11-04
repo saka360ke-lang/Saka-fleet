@@ -247,6 +247,10 @@ export async function completeWebOnboarding(supabase, { email, phone, firstName,
       // welcome trial starts at vehicle registration. Never inherit a legacy
       // tier default from the live schema.
       subscription_tier: 'free',
+      subscription_status: 'ACTIVE',
+      // v1.58.13 — never inherit the legacy `now() + 90 days` trial_ends_at
+      // default: a fresh account has no trial until its welcome trial starts.
+      trial_ends_at: null,
       is_active: true,
       preferred_language: preferredLanguage || null
     }]);

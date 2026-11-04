@@ -122,7 +122,10 @@ export async function buildUserContextSnapshot({ supabase, profile = null, vehic
     }
     if (expiryNotes.length) lines.push(`Expiry dates: ${expiryNotes.join('; ')}.`);
 
-    const trialEnds = profile?.trial_ends_at || null;
+    // v1.58.13 — only a genuinely TRIALING account reports a trial end. A legacy
+    // `trial_ends_at` left on a free/ACTIVE profile (the old now()+90d DB default)
+    // is a phantom date, never a real trial — never surface it to the user.
+    const trialEnds = (String(profile?.subscription_status || '').toUpperCase() === 'TRIALING' && profile?.trial_ends_at) || null;
     if (trialEnds) {
       const days = daysUntil(trialEnds, now);
       lines.push(`Trial ends: ${String(trialEnds).slice(0, 10)}${days === null ? '' : ` (${Math.max(0, days)} day${days === 1 ? '' : 's'} left)`}.`);

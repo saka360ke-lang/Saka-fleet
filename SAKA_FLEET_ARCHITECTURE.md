@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.58.12  
+**Version:** 1.58.13  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.58.13** | Pending-only remediation alerts (threshold = pending backlog) + unverified-gate confusion clarification (PROP-2026-11-04-01) + phantom 90-day trial fix (legacy default dropped, data remediated) | 142 |
 | **1.58.12** | Zero-vehicle owner: the snapshot no longer offers a driver-licence fill step before a vehicle exists (snapshot noise fix) | 141 |
 | **1.58.11** | Fresh-signup fix: verified users are never re-welcomed, the GREETING lane advances a verified vehicle-less user to their first vehicle, and the greeting is English-first / language-aware | 140 |
 | **1.58.10** | Self-documenting superadmin commands (registry + clarify) + autonomous customer care (tickets, inbound-email→WhatsApp, superadmin escalation) + driver/trial/coupon/nudge audit | 139 |
@@ -4202,4 +4203,13 @@ quiz engine:
 - **Snapshot noise fix.** `buildUserContextSnapshot()` (`src/services/userContextSnapshot.js`) now emits the `driver licence — …` populate step ONLY once the account has at least one vehicle. A brand-new zero-vehicle owner's ONE next step is the vehicle (plus email if unset), so "is my profile verified?" on a fresh account no longer returns a licence instruction as noise (live 2026-11-04).
 - **Boundary intact:** OWN-DATA LAW v2 still names every missing field with one engine-owned step; only the premature licence step for vehicle-less accounts is removed.
 - **Tests:** `test_user_data_access.js` +1 (a zero-vehicle account lists no driver-licence step); 20 assertions green.
+
+### 142. v1.58.13 - pending-only remediation alerts + unverified-gate clarification + phantom-trial fix (2026-11-04)
+
+- **Remediation alerts key on the PENDING backlog.** `maybeSendUrgentRemediationAlert()` no longer pages on raw `error_logs` volume — it queries every `PENDING_APPROVAL` proposal and fires only when the pending count reaches `REMEDIATION_URGENT_PENDING_THRESHOLD` (default 10), listing ONLY those proposals. The old `REMEDIATION_URGENT_ERROR_THRESHOLD` is read as a fallback and kept as a deprecated alias. (Live: 58 unresolved WhatsApp delivery-status rows paged the superadmin while the real signal — a single pending proposal — sat in the digest.)
+- **PROP-2026-11-04-01 — the unverified gate no longer loops.** `isConfusedUnverifiedTurn()` (`src/services/greetings.js`) detects a short confused/repeat turn ("Huh?", "What?", "Still confused", "I don't get it") from an unverified number; the hard gate then sends a short clarification plus a `HELP`-to-human path (new `website_signup_gate_clarify` compose purpose) instead of re-firing the identical 🔒 line. Genuine first turns keep the standard gate line and the `unverified_gated` status.
+- **Phantom 90-day trial remedied (live +254734852529).** The `profiles.trial_ends_at` column carried a legacy DB default `now() + interval '90 days'` and `subscription_status` defaulted to `'TRIALING'`, so accounts created without those columns were born with a fake 90-day trial that leaked into copy ("trial running until 2027-02-02 (90 days left)") on a Free/ACTIVE profile. `npm run migrate:trial-defaults` drops the `trial_ends_at` default and sets the `subscription_status` default to `'ACTIVE'`; every profile insert path (WhatsApp route, web onboarding, driver creation) now pins `trial_ends_at: null`; `buildUserContextSnapshot()` only reports a trial end when `subscription_status='TRIALING'`; and `npm run remediate:phantom-trials` cleared the 1 live phantom (0 profiles now carry a stray `trial_ends_at`; a fresh insert verified to stay null).
+- **Env/docs:** `REMEDIATION_URGENT_PENDING_THRESHOLD` added to the env registry and `.env.example`; staging bootstrap matches (`subscription_status DEFAULT 'ACTIVE'`, nullable `trial_ends_at`).
+- **Tests:** `test_greetings` (+7 confused-turn), `test_user_data_access` (+1 phantom guard, 21), `test_remediation_pipeline` (+2 pending-keyed), `test_trial_engine` (73), `test_subscription_billing` (75), `test_web_onboarding` (41) green; `npm run health` green.
+
 

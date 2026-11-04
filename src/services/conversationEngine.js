@@ -38,7 +38,8 @@ const ROUTER_PURPOSE_BY_COMPOSE = Object.freeze({
   quiz_intro_question: 'question_render',
   quiz_next_question: 'question_render',
   conversation_stall_nudge: 'stall_nudge',
-  complaint_recovery: 'question_render'
+  complaint_recovery: 'question_render',
+  website_signup_gate_clarify: 'question_render'
 });
 
 function routerPurposeForCompose(purpose) {

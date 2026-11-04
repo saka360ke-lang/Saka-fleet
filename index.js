@@ -9,6 +9,7 @@ import { processSakaMessage } from './sakaAi.js';
 import { runHealthCheck, runConversationRefinement, evaluateConversationalFriction, monitorActiveConversations, logSystemError, logChatTranscript, ensureSentinelTables, scanCloudRunAnomalies } from './src/workers/sentinel.js';
 import { ensureSuperadminTables, isSuperadminPhone, sendMorningExecutiveBriefing, maybeSendAiBudgetAlert } from './src/services/superadmin.js';
 import { ensureVehicleTableColumns } from './src/services/vehicles.js';
+import { ensureTrialSchemaDefaults } from './src/services/trialSchema.js';
 import { handleWhatsAppWebhook as handleWhatsAppWebhookRoute } from './src/routes/whatsapp.js';
 import { verifyPaystackSignature } from './src/services/paystack.js';
 import { runReminderSweep } from './src/services/maintenanceReminders.js';
@@ -1191,6 +1192,7 @@ const start = async () => {
     await ensureSentinelTables(supabase);
     await ensureSuperadminTables(supabase);
     await ensureRemediationTables(supabase);
+    await ensureTrialSchemaDefaults();
     await ensureAiUsageLogsTable(supabase);
     await ensureTurnLatencyTable(supabase);
     await ensureAiModelRegistryTables(supabase);

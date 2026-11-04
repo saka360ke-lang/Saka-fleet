@@ -168,6 +168,9 @@ export async function createDriverAssignment({
       phone_number: cleanPhone,
       full_name: 'Fleet Driver',
       is_active: true,
+      // v1.58.13 — drivers get no trial; never inherit the legacy 90-day default.
+      trial_ends_at: null,
+      subscription_status: 'ACTIVE',
       country: countryInfo?.country || null,
       country_code: countryInfo?.country_code || null,
       unit_system: countryInfo?.default_units || 'metric'

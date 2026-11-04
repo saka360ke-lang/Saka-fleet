@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.58.13] - 2026-11-04
+
+- **Remediation alerts list pending only.** The urgent page no longer fires on raw error volume — it keys on the count of PENDING proposals and lists just those (`REMEDIATION_URGENT_PENDING_THRESHOLD`, default 10; the old `REMEDIATION_URGENT_ERROR_THRESHOLD` is read as a fallback).
+- **Unverified gate stops looping (PROP-2026-11-04-01).** A confused/repeat turn ("Huh?", "What?", "Still confused") now gets a short clarification + a HELP-to-human path instead of the identical signup line on repeat.
+- **Phantom 90-day trial fixed.** The legacy `profiles.trial_ends_at` default (`now()+90d`) and `subscription_status='TRIALING'` default are gone (`npm run migrate:trial-defaults`); every insert pins `trial_ends_at: null`; the snapshot only shows a trial for a genuine TRIALING account; `npm run remediate:phantom-trials` cleared the one live phantom (+254734852529).
+- **Files:** src/workers/remediation.js, src/routes/whatsapp.js, src/services/{greetings,userContextSnapshot,conversationEngine,envAudit,webOnboarding,driverAssignments,trialSchema}.js, scripts/{run_trial_default_migration,remediate_phantom_trials,provision_staging_schema}.js, index.js, package.json, .env.example.
+- **Tests:** test_greetings, test_user_data_access, test_remediation_pipeline, test_trial_engine, test_subscription_billing, test_web_onboarding - green; `npm run health` green.
+
 ## [1.58.12] - 2026-11-04
 
 - **Zero-vehicle owners aren't asked for a driver licence first.** `buildUserContextSnapshot()` now offers the `driver licence — …` fill step only once the account has a vehicle, so a fresh owner's single next step is the vehicle (not a licence). Removes snapshot noise on "is my profile verified?".

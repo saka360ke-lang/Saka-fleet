@@ -19,7 +19,7 @@ import { normalizeFillType } from '../services/fuelEconomy.js';
 import { resolveExpenseType, normalizeExpenseType, hasExpenseTypeMarker } from '../services/expenseCatalog.js';
 import { resolveEarningType, normalizeEarningType, hasEarningTypeMarker } from '../services/earningCatalog.js';
 import { shortenUrl } from '../services/linkShortener.js';
-import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly, shouldReplaceIntroCopy, isRepeatedReply, isStopRequest, PAUSE_REPLY, pickRepeatNudge, pickNewcomerNudge, isFirstTimeMessage, shouldReplacePlateAsk, isIncompleteReplyComplaint, replyContinuationRequestFor, asksToUploadLogbook, isLegacyWelcomeCopy, websiteSignupNextStep } from '../services/greetings.js';
+import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly, shouldReplaceIntroCopy, isRepeatedReply, isStopRequest, PAUSE_REPLY, pickRepeatNudge, pickNewcomerNudge, isFirstTimeMessage, shouldReplacePlateAsk, isIncompleteReplyComplaint, replyContinuationRequestFor, asksToUploadLogbook, isLegacyWelcomeCopy, websiteSignupNextStep, isConfusedUnverifiedTurn } from '../services/greetings.js';
 import { matchProductQa, buildProductQaReply, buildProductFactsContext, buildLocalPricingFacts, stripUsdFigures, hasLocalFigure, recommendTierForFleet, sanitizeSakaReply } from '../services/productQa.js';
 import { shouldSuggestContactSave, isLostChatMessage, buildContactSaveFacts, markContactSaveSuggested } from '../services/contactNudge.js';
 import { buildUserContextSnapshot, buildUserFactsLines } from '../services/userContextSnapshot.js';
@@ -1080,6 +1080,8 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                 // status. New accounts are Free until a trial or payment.
                 subscription_tier: 'free',
                 subscription_status: 'ACTIVE',
+                // v1.58.13 — never inherit the legacy now()+90d trial_ends_at default.
+                trial_ends_at: null,
                 is_active: true
               }])
               .select()
@@ -1097,16 +1099,26 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           ensureCountryBucket(supabaseClient, { countryCode: profileData.country_code }).catch(() => {});
         }
         if (supabaseClient && profileData && profileData.email_verified !== true) {
+          // v1.58.13 — PROP-2026-11-04-01: a confused/repeat turn ("Huh?",
+          // "What?", "Still confused") from an unverified number gets a short
+          // clarification + a human-help path instead of the identical gate line
+          // re-firing on loop.
+          const confusedGateTurn = isConfusedUnverifiedTurn(messageText);
           const verifyReply = await composeMessage({
-            purpose: 'website_signup_gate',
+            purpose: confusedGateTurn ? 'website_signup_gate_clarify' : 'website_signup_gate',
             facts: {
               websiteUrl: 'https://sakafleet.com',
-              reason: 'Saka chats with you once your email is verified from the website signup.'
+              offerHumanHelp: confusedGateTurn,
+              reason: confusedGateTurn
+                ? 'Acknowledge in one short line that the previous message was the website signup step, apologise briefly for the repetition, then restate it plainly (sign up at the website and verify the email) and offer HELP to reach a human.'
+                : 'Saka chats with you once your email is verified from the website signup.'
             },
             language: profileData?.preferred_language || 'English',
             countryInfo,
             profile: profileData,
-            fallbackText: '🔒 Please sign up first at https://sakafleet.com — tap *Get Started Free* and verify your email, then I\'ll meet you right back here on WhatsApp.'
+            fallbackText: confusedGateTurn
+              ? 'Sorry for repeating myself 🙂 — I can only chat after a quick website signup. Tap https://sakafleet.com and choose *Get Started Free*, verify your email, or reply *HELP* to reach a human. I\'ll wait right here.'
+              : '🔒 Please sign up first at https://sakafleet.com — tap *Get Started Free* and verify your email, then I\'ll meet you right back here on WhatsApp.'
           });
           session.history = session.history || [];
           session.history.push({ role: 'user', parts: [{ text: messageText }] });
@@ -1120,7 +1132,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           } catch { /* best-effort */ }
           await userLogPromise;
           await persistSnap();
-          return { status: 'unverified_gated' };
+          return { status: confusedGateTurn ? 'unverified_gated_clarify' : 'unverified_gated' };
         }
 
         let existingVehicles = [];

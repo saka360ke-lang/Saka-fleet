@@ -20,6 +20,7 @@ import {
   sendRemediationDigest,
   getDigestFrequency,
   maybeSendUrgentRemediationAlert,
+  REMEDIATION_URGENT_PENDING_THRESHOLD,
   verifyProposalGate,
   markProposalExecuting,
   consumeProposalNonce
@@ -288,6 +289,8 @@ async function run() {
   check(digestTwo.proposals === 0, 'Already-digested proposals are not re-sent');
   const urgent = await maybeSendUrgentRemediationAlert(supabase, { now: auditNow, dryRun: true });
   check(['skipped', 'success'].includes(urgent.status), 'Urgent escalation evaluates cleanly');
+  check(typeof REMEDIATION_URGENT_PENDING_THRESHOLD === 'number' && REMEDIATION_URGENT_PENDING_THRESHOLD >= 1, 'urgent threshold gates the PENDING proposal backlog (v1.58.13)');
+  check(typeof urgent.pending === 'number', 'urgent alert reports a pending count, never raw error volume (v1.58.13)');
   const storedAutonomy = process.env.REMEDIATION_AUTONOMY;
   process.env.REMEDIATION_AUTONOMY = 'off';
   try {

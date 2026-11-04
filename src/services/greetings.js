@@ -240,6 +240,20 @@ export function websiteSignupNextStep() {
   return `Set up in about a minute at ${SAKA_WEB_SIGNUP_URL} — tap *Get Started Free*, verify your email, and I'll meet you right back here on WhatsApp.`;
 }
 
+/**
+ * v1.58.13 — a short, confused turn ("Huh?", "What?", "Still confused", "I don't
+ * get it", …) from an unverified number that already received the website gate.
+ * PROP-2026-11-04-01: the gate re-fired the identical line on loop with no
+ * acknowledgement or way out, so a confused turn now earns a clarification plus
+ * a human-help option instead of the same line again.
+ */
+export function isConfusedUnverifiedTurn(text) {
+  const clean = String(text || '').trim().toLowerCase();
+  if (!clean || clean.length > 90) return false;
+  if (/^(?:huh+|eh+|what|sorry|confused|hello\?|what\?|hmm+)\W*$/.test(clean)) return true;
+  return /\b(?:still confused|i'?m confused|i am confused|don'?t (?:get|understand)|do not (?:get|understand)|what do you mean|not sure what you mean|make it clear)\b/.test(clean);
+}
+
 /** True only for a genuinely fresh conversation (no persisted history, no vehicle). */
 export function isFirstContact({ session = null, dbHistory = [], profile = null, hasVehicleRegistered = false, now = Date.now(), newProfileWindowMs = 120000 } = {}) {
   if (hasVehicleRegistered) return false;

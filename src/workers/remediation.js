@@ -55,7 +55,14 @@ export const REMEDIATION_DIGEST_FREQUENCIES = Object.freeze(['weekly', 'daily', 
 export const REMEDIATION_DIGEST_SCALE_DOWN_WINDOW_DAYS = Number(process.env.REMEDIATION_DIGEST_SCALE_DOWN_WINDOW_DAYS || 7);
 export const REMEDIATION_DIGEST_DAILY_THRESHOLD = Number(process.env.REMEDIATION_DIGEST_DAILY_THRESHOLD || 10);
 export const REMEDIATION_DIGEST_WEEKLY_THRESHOLD = Number(process.env.REMEDIATION_DIGEST_WEEKLY_THRESHOLD || 3);
-export const REMEDIATION_URGENT_ERROR_THRESHOLD = Number(process.env.REMEDIATION_URGENT_ERROR_THRESHOLD || 10);
+// v1.58.13 — the urgent page now keys on the PENDING proposal backlog (not raw
+// error volume). `REMEDIATION_URGENT_ERROR_THRESHOLD` is read as a fallback so an
+// existing deployment keeps its configured value through the rename.
+export const REMEDIATION_URGENT_PENDING_THRESHOLD = Number(
+  process.env.REMEDIATION_URGENT_PENDING_THRESHOLD || process.env.REMEDIATION_URGENT_ERROR_THRESHOLD || 10
+);
+/** @deprecated v1.58.13 — use REMEDIATION_URGENT_PENDING_THRESHOLD. */
+export const REMEDIATION_URGENT_ERROR_THRESHOLD = REMEDIATION_URGENT_PENDING_THRESHOLD;
 export const REMEDIATION_URGENT_COOLDOWN_MS = Number(process.env.REMEDIATION_URGENT_COOLDOWN_MS || 60 * 60 * 1000);
 export const REMEDIATION_AUDIT_WINDOW_HOURS = Math.min(72, Math.max(1, Number(process.env.REMEDIATION_AUDIT_WINDOW_HOURS || 4)));
 
@@ -1352,44 +1359,38 @@ export async function sendRemediationDigest(providedSupabase, { now = new Date()
 export const dispatchTwiceDailyDigests = sendRemediationDigest;
 
 /**
- * Urgent escalation: unresolved errors above threshold or high-risk pending
- * proposals trigger an immediate WhatsApp+email alert (deduped by cooldown),
- * in addition to the regular digest. Notification-only → not autonomy-gated.
+ * Urgent escalation (v1.58.13): the page now lists ONLY the PENDING proposal
+ * backlog and fires once it reaches REMEDIATION_URGENT_PENDING_THRESHOLD. Raw
+ * error volume no longer pages — it flooded the superadmin with an "unresolved
+ * errors" alert while the real signal (proposals awaiting review) sat buried in
+ * the digest. Notification-only → not autonomy-gated.
  */
 export async function maybeSendUrgentRemediationAlert(providedSupabase, { now = new Date(), dryRun = false } = {}) {
   const supabase = getSupabase(providedSupabase);
   await ensureRemediationTables(supabase);
 
-  const { count: unresolvedErrors } = await supabase
-    .from('error_logs')
-    .select('*', { count: 'exact', head: true })
-    .eq('status', 'unresolved');
-
-  const { data: highRisk } = await supabase
+  const { data: pending } = await supabase
     .from('remediation_proposals')
-    .select('proposal_code,title,status')
+    .select('proposal_code,title,status,risk_level')
     .eq('status', REMEDIATION_STATUS.PENDING_APPROVAL)
-    .eq('risk_level', 'high')
     .order('created_at', { ascending: true })
-    .limit(5);
+    .limit(50);
 
-  const errorBreach = (unresolvedErrors || 0) >= REMEDIATION_URGENT_ERROR_THRESHOLD;
-  const proposals = highRisk || [];
-  if (!errorBreach && proposals.length === 0) {
-    return { status: 'skipped', reason: 'No urgent condition.' };
+  const proposals = pending || [];
+  if (proposals.length < REMEDIATION_URGENT_PENDING_THRESHOLD) {
+    return { status: 'skipped', reason: 'Pending proposals below threshold.', pending: proposals.length };
   }
 
   const lastSent = await getConfigValue(supabase, URGENT_LAST_SENT_KEY);
   if (lastSent && now.getTime() - new Date(lastSent).getTime() < REMEDIATION_URGENT_COOLDOWN_MS) {
-    return { status: 'skipped', reason: 'Urgent alert cooldown active.' };
+    return { status: 'skipped', reason: 'Urgent alert cooldown active.', pending: proposals.length };
   }
 
-  const lines = `🚨 *Saka Remediation — Urgent Attention*\n\n` +
-    (errorBreach ? `• Unresolved errors: *${unresolvedErrors}* (threshold ${REMEDIATION_URGENT_ERROR_THRESHOLD})\n` : '') +
-    (proposals.length
-      ? `• High-risk proposals:\n${proposals.map((proposal) => `   – \`${proposal.proposal_code}\` ${proposal.title || ''}`).join('\n')}\n`
-      : '') +
-    `\nReply \`admin remediations\` to review, then \`admin accept fix <CODE>\` to approve.`;
+  const shown = proposals.slice(0, 15);
+  const lines = `🚨 *Saka Remediation — Pending Approvals*\n\n` +
+    `• Pending proposals: *${proposals.length}* (threshold ${REMEDIATION_URGENT_PENDING_THRESHOLD})\n\n` +
+    shown.map((proposal, index) => `${index + 1}. \`${proposal.proposal_code}\` ${proposal.title || 'Untitled'} (${String(proposal.risk_level || 'low').toUpperCase()})`).join('\n') +
+    `\n\nReply \`admin remediations\` to review, then \`admin accept fix <CODE>\` to approve.`;
 
   let waSent = false;
   let emailSent = false;
@@ -1397,7 +1398,7 @@ export async function maybeSendUrgentRemediationAlert(providedSupabase, { now = 
   if (!dryRun) {
     waSent = await sendProactiveWhatsApp(process.env.SUPERADMIN_PHONE, lines);
     emailSent = await sendAdminNotificationEmail(
-      '🚨 Saka Remediation — urgent attention required',
+      '🚨 Saka Remediation — pending approvals awaiting review',
       `<p>${lines.replace(/\n/g, '<br>')}</p>`
     );
     if (waSent || emailSent) {
@@ -1406,14 +1407,14 @@ export async function maybeSendUrgentRemediationAlert(providedSupabase, { now = 
   }
 
   await logRemediationAudit(supabase, 'REMEDIATION_URGENT_ALERT', {
-    unresolved_errors: unresolvedErrors || 0,
-    proposals: proposals.length,
+    pending_proposals: proposals.length,
+    threshold: REMEDIATION_URGENT_PENDING_THRESHOLD,
     wa_sent: waSent,
     email_sent: emailSent,
     dry_run: dryRun
   });
 
-  return { status: 'success', urgent: true, proposals: proposals.length, waSent, emailSent };
+  return { status: 'success', urgent: true, pending: proposals.length, proposals: proposals.length, waSent, emailSent };
 }
 
 /**

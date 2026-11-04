@@ -21,7 +21,8 @@ import {
   replyContinuationRequestFor,
   asksToUploadLogbook,
   isLegacyWelcomeCopy,
-  websiteSignupNextStep
+  websiteSignupNextStep,
+  isConfusedUnverifiedTurn
 } from './src/services/greetings.js';
 import { sanitizeSakaReply } from './src/services/productQa.js';
 import { detectMessageLanguage, languageSwitchConfirmation } from './src/routes/whatsapp.js';
@@ -215,7 +216,16 @@ check(!/Habari/i.test(sakaIntroText({ countryInfo: KE, profile: { preferred_lang
 check(!/Habari/i.test(sakaIntroText({ countryInfo: KE, profile: {} })), 'sakaIntroText is English-first when no language is set');
 check(/Habari/i.test(sakaIntroText({ countryInfo: KE, profile: { preferred_language: 'Swahili' } })), 'sakaIntroText greets a Swahili profile with the local word');
 
-console.log(`\n🎉 ${passed} greeting & emoji assertions passed (incl. v1.58.11).`);
+console.log('--- Test 11: confused unverified gate turn detection (v1.58.13) ---');
+check(isConfusedUnverifiedTurn('Huh?') === true, '"Huh?" is a confused turn');
+check(isConfusedUnverifiedTurn('What?') === true, '"What?" is a confused turn');
+check(isConfusedUnverifiedTurn('Still confused') === true, '"Still confused" is a confused turn');
+check(isConfusedUnverifiedTurn("I don't get it") === true, '"I don\'t get it" is a confused turn');
+check(isConfusedUnverifiedTurn('What do you mean?') === true, '"what do you mean" is a confused turn');
+check(isConfusedUnverifiedTurn('My plate is KDA 123A') === false, 'a real statement is not a confused turn');
+check(isConfusedUnverifiedTurn('') === false, 'an empty message is not a confused turn');
+
+console.log(`\n🎉 ${passed} greeting & emoji assertions passed (incl. v1.58.13).`);
 
 
 check(NEWCOMER_NUDGES.every((n) => !/keep moving/i.test(n)), 'newcomer nudges never say keep moving');
