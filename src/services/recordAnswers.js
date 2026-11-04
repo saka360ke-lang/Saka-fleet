@@ -68,10 +68,15 @@ export function parseRecordQuestion(text = '', { countryCode = 'GLOBAL', locale 
   if (/^\s*why\b/i.test(source)) return { ok: false, reason: 'why-question' };
 
   const hasPlateLike = /\b[A-Z]{2,3}\s?\d{1,4}[A-Z]?\b/.test(source.toUpperCase());
+  // v1.58.23 - a bare "…yes?" is not a records question: '?' only counts when
+  // the text also carries a ledger signal (live 2026-11-04: "i should be on
+  // team fleet, yes?" was answered with an expenses total).
+  const questionMarkSignal = /\?/.test(source)
+    && (RECORDS_WORD_RE.test(source) || EXPENSE_SIDE_RE.test(source) || EARNING_RE.test(source) || hasPlateLike);
   const looksLikeQuestion = QUESTION_WORDS_RE.test(source)
     || /^(what|how|show|list|display|summarize|summarise|total|count|pull|get|fetch|give)\b/i.test(source)
     || (RECORDS_WORD_RE.test(source) && (EXPENSE_SIDE_RE.test(source) || EARNING_RE.test(source) || hasPlateLike))
-    || /\?$/.test(source);
+    || questionMarkSignal;
   if (!looksLikeQuestion) return { ok: false, reason: 'not-a-question' };
 
   let kind = 'total';

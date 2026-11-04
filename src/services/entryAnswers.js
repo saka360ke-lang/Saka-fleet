@@ -266,6 +266,19 @@ export function resolveLedgerVehicleScope({
   if (match.vehicle && match.reason !== 'ambiguous') {
     return { vehicleIds: [match.vehicle.id], vehicle: match.vehicle, reason: match.reason, ambiguous: false };
   }
+  // v1.58.23 - a unique plate prefix resolves ("KBJ" -> KBJ 819C). Only when
+  // exactly one vehicle matches; never a guess between several (live 2026-11-04:
+  // "Show me expenses for KBJ" was refused on a 2-vehicle account).
+  const tokens = String(text || '').toUpperCase().match(/\b[A-Z]{2,4}\b/g) || [];
+  for (const token of new Set(tokens)) {
+    const hits = list.filter(function (v) {
+      const plate = String(v.plate_number || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      return plate.startsWith(token);
+    });
+    if (hits.length === 1) {
+      return { vehicleIds: [hits[0].id], vehicle: hits[0], reason: 'plate', ambiguous: false };
+    }
+  }
   if (activeVehicle && list.some(function (v) { return v.id === activeVehicle.id; })) {
     return { vehicleIds: [activeVehicle.id], vehicle: activeVehicle, reason: 'active', ambiguous: false };
   }

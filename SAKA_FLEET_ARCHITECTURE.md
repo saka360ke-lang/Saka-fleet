@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.58.22  
+**Version:** 1.58.23  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.58.23** | Recurrence-autopsy law (rule 51) + intent-lane hijack sweep (records .? catch-all, mid-sentence tier triggers, card change-lane, unique plate prefixes, delivery guard) | 152 |
 | **1.58.22** | Support tickets actually open (lifecycle insert + honest promise), intake locks the next turn, mid-draft statement escape, part names + notes visible in records, scoped reads, driver-compliance phrasings, delivery-failure rollup | 151 |
 | **1.58.21** | Trial anchored to passbook issuance + growth rides on the trial (no early conversion, trial floor, safe expiry sweep) + chat friction fixes (switch picker, driver-profile read, confusion escape, tier math) | 150 |
 | **1.58.20** | Welcome-trial outage fixed (profiles.currency/locale missing -> "profile not found"): migration + resilient fetchOwner + lazy heal + reconcile + observability + error rollup | 149 |
@@ -4298,3 +4299,11 @@ quiz engine:
 - **Driver-compliance phrasings.** `show me my driver compliance`, `drivers licence expiry`, `personal compliance`, `what's my driver card` and possessive variants all read the owner's Compliance Card instead of vehicle/expense answers.
 - **Delivery-failure hygiene.** Status callbacks now log a normalized `WhatsApp delivery failed (131026) to ...1234: title` (wamid/recipient in the stack), so `ERROR_ROLLUP_HOURS` folds repeats into one row instead of one row per wamid (22 near-identical 131026 rows in 48h).
 - **Tests:** `test_customer_care` (18 - lifecycle fields, legacy fallback, failed-insert reporting, intake-before-quiz source guard), `test_record_answers` (48 - notes in lists, scoped plate line, why-guard), `test_quiz_flow` (143), `test_inbound_email` (26), `test_care_worker` (44), `test_entry_ledger`, `test_v1583` (9), `test_first_message_flow` (53), `test_agent_training` (155), `test_sentinel_policy` (17) - green.
+### 152. v1.58.23 - recurrence-autopsy law + intent-lane hijack sweep (2026-11-04, live chat audit)
+
+- **The law (`.clinerules` rule 51).** Every friction/error fix must now sweep the defect CLASS, not one line: after reconciling error logs and friction, audit every sibling entry point that could produce the same failure, patch or document each in the same commit, add one targeted regression assertion per sibling, and record the autopsy here + in CHANGELOG. A fix whose class was not swept is incomplete.
+- **Recurrence autopsy #1 - "catch-all parsers hijack intent lanes".** Siblings audited: `parseRecordQuestion` (any `?` counted as a ledger question -> now needs a records/expense/earning/plate signal; live 2026-11-04 "i should be on team fleet, yes?" was answered with an expenses total), the subscription trigger (start-anchored `^(?:subscription|...)` so mid-sentence "confirm which tier i am on", "put me on the second tier", "enroll me on solo fleet" never reached the plan handler -> now `^(subscription|billing)` + an unanchored plan-command family, keeping advisory questions like "Which subscription is best?" on the pricing lane), the mid-draft statement escape (now covers "add a feature", "to be able to", "i cannot label/add/see..."), the support intake lock (v1.58.22), and the draft-card change lane. Deliberately left: `looksLikeLogStatement`'s `?` escape (a question with an amount is still not a log) and `QUESTION_LEAD_RE` (start-anchored by design).
+- **Draft-card change lane accepts explicit fields.** `Type: Part (AC idler pulley mounting bracket)` canonicalises through the expense catalog, stores the parenthetical as the note, and `Extra notes: ...` appends to the draft - the 14:48/15:44 "I did not change anything" loops are impossible now. Post-save odometer follow-up (B4) was audited and is a no-op: that prompt copy no longer exists in the tree.
+- **Unique plate prefixes resolve.** `resolveLedgerVehicleScope` accepts a unique 2-4 letter prefix ("KBJ" -> KBJ 819C) when no explicit plate matched and never guesses between several vehicles.
+- **Delivery guard.** New `src/services/deliveryGuard.js` (in-memory, fail-open): permanent WhatsApp failures (131026 / 131047 / 131051) block the recipient for `DELIVERY_BLOCK_HOURS` (24) in `sendWhatsAppReply`, `sendProactiveWhatsApp`, and the status callback - a doomed number can no longer produce a 7-second retry storm.
+- **Tests:** `test_record_answers` (49 - bare yes-question), `test_quiz_flow` (147 - card `Type:`/`Extra notes:` lanes), `test_v1583` (10 - unique prefix), `test_sentinel_policy` (23 - delivery guard), `test_first_message_flow` (53 - advisory subscription question still reaches pricing), `test_entry_ledger`, `test_agent_training` (155), `test_customer_care` (18), `test_narrative_draft` (118) - green.

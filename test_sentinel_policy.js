@@ -9,6 +9,7 @@ import { isSentinelProposalsEnabled, SENTINEL_PROPOSALS_DEFAULT } from './src/se
 import { isConversationDiagnosisEnabled, recordConversationProposal } from './src/services/conversationDiagnosis.js';
 import { mintFindingLog, mintFindingProposal } from './src/services/deepAudit.js';
 import { recordFriction } from './src/services/frictionTracker.js';
+import { markDeliveryBlocked, isDeliveryBlocked, clearDeliveryBlock, PERMANENT_FAILURE_CODES } from './src/services/deliveryGuard.js';
 
 let passed = 0;
 function check(cond, label) { assert.ok(cond, label); passed += 1; console.log('  ok ' + label); }
@@ -28,6 +29,14 @@ function mock() {
     };
   } };
 }
+
+console.log('--- delivery guard (v1.58.23) ---');
+check(markDeliveryBlocked('+254799000512', '131026') === true, 'a permanent failure blocks the recipient');
+check(isDeliveryBlocked('254799000512') === true, 'the block matches without the +');
+check(isDeliveryBlocked('+254700000000') === false, 'other recipients stay open');
+check(markDeliveryBlocked('+254700000000', '131000') === false, 'transient codes do not block');
+check(clearDeliveryBlock('254799000512') === true && isDeliveryBlocked('+254799000512') === false, 'a block can be cleared');
+check(PERMANENT_FAILURE_CODES.has('131026'), '131026 is a permanent-failure code');
 
 console.log('--- policy switch ---');
 check(SENTINEL_PROPOSALS_DEFAULT === 'off', 'the default is off');

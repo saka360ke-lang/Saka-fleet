@@ -125,6 +125,10 @@ check('a scoped read names the vehicle, not the fleet', /For \*KAS628T\*/.test(n
 const whyQ = parseRecordQuestion('Why can I not see extra notes on an entry?', KE);
 check('a why-question is not parsed as a records query', whyQ.ok === false && whyQ.reason === 'why-question', whyQ);
 
+// v1.58.23 - a bare "…yes?" carries no ledger signal and must not become a query.
+const yesQ = parseRecordQuestion('i should be on team fleet, yes?', KE);
+check('a bare yes-question is not a records query', yesQ.ok === false, yesQ);
+
 const emptyReply = formatRecordAnswer(
   { ok: true, rows: [], count: 0, total: 0, liters: 0, average: 0, amountCol: 'amount' },
   { kind: 'total', earning: false, expenseTypes: [], range: { label: '31 Oct' } },

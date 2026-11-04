@@ -509,6 +509,15 @@ async function run() {
   assert(/Updated: Amount spent/.test(String(correctionTurn.reply)) && /4,800|Ksh/.test(String(correctionTurn.reply)), 'the card re-renders with the corrected amount');
   assert(cardSession.quiz.phase === 'confirm', 'the card path stays at confirmation');
 
+  // v1.58.23 - explicit "field: value" lines update the card in place (live
+  // 2026-11-04: "Type: Part (AC idler…)" / "Extra notes: …" looped).
+  const notesTurn = await handleQuizTurn({ session: cardSession, messageText: 'Extra notes: AC idler pulley mounting bracket', ctx: cardCtx });
+  assert(String(cardSession.quiz.answers.notes || '').includes('AC idler pulley mounting bracket'), 'an "Extra notes: …" line lands on the draft');
+  assert(/Updated: Note or part name/.test(String(notesTurn.reply)), 'the card acknowledges the note update');
+  const typeTurn = await handleQuizTurn({ session: cardSession, messageText: 'Type: Part (AC idler pulley mounting bracket)', ctx: cardCtx });
+  assert(cardSession.quiz.answers.expense_type === 'Parts', 'a "Type:" line canonicalises through the expense catalog');
+  assert(/Updated: Expense type/.test(String(typeTurn.reply)), 'the card acknowledges the type update');
+
   // Quick action 3: cancel, nothing written.
   const cancelSession = {};
   await handleQuizTurn({

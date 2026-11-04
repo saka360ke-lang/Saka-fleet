@@ -39,6 +39,10 @@ async function runTests() {
   check('ledger scopes to the active vehicle when no plate is named', scopedActive.reason === 'active' && scopedActive.vehicleIds.length === 1 && scopedActive.vehicleIds[0] === 'v1', scopedActive);
   const scopedPlate = resolveLedgerVehicleScope({ text: 'edit entry for kcb 456b', vehicles: VEHICLES, activeVehicle: VEHICLES[0] });
   check('a plate in the command scopes the ledger to that vehicle', scopedPlate.reason === 'plate' && scopedPlate.vehicleIds[0] === 'v2', scopedPlate);
+  // v1.58.23 - a unique plate prefix resolves (live 2026-11-04: "Show me expenses
+  // for KBJ" was refused on a 2-vehicle account).
+  const scopedPrefix = resolveLedgerVehicleScope({ text: 'Show me expenses for KCB', vehicles: VEHICLES, activeVehicle: VEHICLES[0] });
+  check('a unique plate prefix scopes the ledger', scopedPrefix.reason === 'plate' && scopedPrefix.vehicleIds[0] === 'v2', scopedPrefix);
   const scopedPinned = resolveLedgerVehicleScope({ text: 'amount 4800', vehicles: VEHICLES, activeVehicle: VEHICLES[0], pendingVehicleId: 'v2' });
   check('a pending edit stays pinned to its vehicle', scopedPinned.reason === 'pending' && scopedPinned.vehicleIds[0] === 'v2', scopedPinned);
   const scopedAmbig = resolveLedgerVehicleScope({ text: 'my entries', vehicles: VEHICLES, activeVehicle: null });

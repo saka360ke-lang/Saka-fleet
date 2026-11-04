@@ -2651,6 +2651,29 @@ async function handleConfirmation(state, def, clean, ctx, aiExtracted) {
     };
   }
 
+  // v1.58.23 - explicit "field: value" corrections on the card (live 2026-11-04:
+  // "Type: Part (AC idler pulley mounting bracket)" + "Extra notes: …" looped
+  // because the card parser only understood AI-extracted keys).
+  if (state.narrativeCard) {
+    const noteMatch = clean.match(/^(?:extra\s+)?notes?\s*[:=-]\s*(.+)$/i);
+    if (noteMatch) {
+      const value = noteMatch[1].trim().slice(0, 300);
+      state.answers.notes = [state.answers.notes, value].filter(Boolean).join(' · ').slice(0, 400);
+      return { handled: true, reply: `✅ Updated: Note or part name.\n\n${renderNarrativeCard(state, ctx)}`, flow: state.flow, active: true };
+    }
+    const typeMatch = clean.match(/^(?:type|category|expense\s+type)\s*[:=-]\s*(.+)$/i);
+    if (typeMatch) {
+      const raw = typeMatch[1].trim();
+      const resolved = resolveExpenseType(raw) || (/\bpart/i.test(raw) ? 'Parts' : null);
+      if (resolved) {
+        state.answers.expense_type = resolved;
+        const detail = raw.match(/\(([^)]+)\)/);
+        if (detail && detail[1] && !state.answers.notes) state.answers.notes = detail[1].trim().slice(0, 300);
+        return { handled: true, reply: `✅ Updated: Expense type.\n\n${renderNarrativeCard(state, ctx)}`, flow: state.flow, active: true };
+      }
+    }
+  }
+
   // v1.58.0 - a natural field correction during confirm (Make and model: X / make is Y) updates the field and drops the stale duplicate note, instead of piling up extra notes and re-showing the same summary (loop).
   if (state.flow === 'vehicle_registration' && def) {
     let fc = detectRegistrationCorrection(clean, def);

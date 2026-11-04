@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.58.23] - 2026-11-04
+
+- **Recurrence-autopsy law (rule 51).** Every friction/error fix now sweeps the defect class: sibling entry points audited, patched or documented, one targeted assertion each, and the autopsy recorded in the architecture section + changelog. A fix whose class was not swept is incomplete.
+- **Intent-lane hijack sweep.** Any sentence ending in `?` is no longer a ledger question (it needs a records/expense/earning/plate signal), and mid-sentence plan phrases (`confirm which tier i am on`, `put me on the second tier`, `enroll me on solo fleet`) now reach the deterministic plan handler while advisory questions like `Which subscription is best?` still get the pricing answer.
+- **Draft cards accept explicit fields.** `Type: Part (AC idler pulley mounting bracket)` canonicalises and stores the parenthetical as the note; `Extra notes: ...` updates the draft in place (the 14:48/15:44 `I did not change anything` loops are gone). A unique plate prefix (`KBJ`) now resolves when only one vehicle matches.
+- **Delivery guard.** Permanent WhatsApp failures (131026/131047/131051) block that recipient for 24h (`DELIVERY_BLOCK_HOURS`) in both senders and the status callback, ending retry storms against numbers that can never receive.
+- **Files:** .clinerules, src/routes/whatsapp.js, src/services/{quizEngine,recordAnswers,entryAnswers,deliveryGuard}.js, src/workers/sentinel.js, test_*.js, .env.example, package.json, SAKA_FLEET_ARCHITECTURE.md, CHANGELOG.md.
+- **Tests:** test_record_answers (49), test_quiz_flow (147), test_v1583 (10), test_sentinel_policy (23), test_first_message_flow (53), test_entry_ledger, test_agent_training (155), test_customer_care (18), test_narrative_draft (118) - green; `npm run health` green.
+
 ## [1.58.22] - 2026-11-04
 
 - **Support claims are backed by a real ticket.** `openCareTicket` now writes the care lifecycle (`status=OPEN`, priority, source, subject, thread_key) with a slim-table fallback, failed inserts are reported (`ticketCreated:false`) and logged, and Saka says "forwarded" only when a row exists - it no longer promises a hand-off that the care console cannot see. Live check: insert + cleanup green (0 rows left).

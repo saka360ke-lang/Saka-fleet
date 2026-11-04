@@ -115,6 +115,7 @@ import { applyOdometerReading, applyOperatingHours } from '../services/maintenan
 import { handleQuizTurn, detectQuizStart, shouldPauseQuizForChat, getCurrentQuizField, detectFlowSwitch, getFlowDefinition, looksLikeReportRequest, getActiveQuiz, markQuizTurn, abandonQuiz } from '../services/quizEngine.js';
 import { matchNarrativeVehicle, buildNarrativeDraft, narrativeDraftFields, narrativeDraftExtras, shouldPrefillNarrativeDraft, isNarrativeIntakeEnabled, isNarrativeEligibleText, buildNarrativeParagraphDrafts, renderNarrativeBatchCard, resolveNarrativeBatchTurn, describeNarrativeDraft } from '../services/narrativeDraft.js';
 import { parseRecordQuestion, formatRecordAnswer } from '../services/recordAnswers.js';
+import { isDeliveryBlocked, markDeliveryBlocked } from '../services/deliveryGuard.js';
 import { queryRecordLedger } from '../services/recordQuery.js';
 import { renderActionDiscovery, composeMessage } from '../services/conversationEngine.js';
 import { enqueueFollowUp, FOLLOWUP_KINDS, followUpAckText } from '../services/followups.js';
@@ -325,6 +326,9 @@ async function sendWhatsAppReply(toPhone, messageBody) {
   const phoneNumberId = process.env.META_PHONE_NUMBER_ID;
   const token = process.env.META_WHATSAPP_TOKEN;
   if (!phoneNumberId || !token) return;
+  // v1.58.23 - never re-send to a recipient whose delivery permanently failed
+  // (live 2026-11-04: a doomed number produced ~1 failed send every 7 seconds).
+  if (isDeliveryBlocked(toPhone)) return;
 
   try {
     const cleanPhone = toPhone.startsWith('+') ? toPhone.slice(1) : toPhone;
@@ -656,6 +660,9 @@ export async function handleWhatsAppWebhook(request, reply, fastify) {
         const recipient = String(statusObj.recipient_id || 'unknown');
         const failure = new Error(`WhatsApp delivery failed (${errCode}) to …${recipient.slice(-4)}: ${errTitle}`);
         failure.stack = `wamid: ${statusObj.id || 'unknown'}\nrecipient: ${recipient}\n${JSON.stringify(statusObj.errors || [])}`;
+        // v1.58.23 - block permanent delivery failures so the sender stops
+        // hammering a number that can never receive (fail-open, per instance).
+        markDeliveryBlocked(recipient, errCode);
         if (supabaseClient) await logSystemError(supabaseClient, failure, '/webhook/whatsapp/status').catch(() => {});
       }
       return reply.status(200).send({ status: 'success', status_ack: 'message_status_recorded' });
@@ -2367,7 +2374,8 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         else if (!session.quiz && !session.pendingDeleteVehicle && !session.pendingAccountDeletion
           && (session.pendingCancelSubscription
             || ['VIEW_SUBSCRIPTION', 'UPGRADE_SUBSCRIPTION', 'CANCEL_SUBSCRIPTION', 'MANAGE_ADDONS', 'KEEP_VEHICLE', 'EXTEND_TRIAL'].includes(intent)
-            || /^(?:subscription|my\s+(?:plan|subscription)|billing|upgrade|subscribe|cancel\s+(?:my\s+)?(?:subscription|plan)|unsubscribe|keep\s+(?:vehicle|car)\b|extra\s+(?:car|vehicle|slot)|add[- ]?on|extend\s+(?:my\s+)?trial|which\s+tier|should\s+be\s+on|(?:less|fewer|more)\s+than\s+\d+\s+(?:assets?|vehicles?))\b/i.test(messageText.trim()))) {
+            || /^(?:subscription|billing)\b/i.test(messageText.trim())
+            || /\b(?:my\s+(?:plan|subscription)|upgrade|subscribe|cancel\s+(?:my\s+)?(?:subscription|plan)|unsubscribe|keep\s+(?:vehicle|car)\b|extra\s+(?:car|vehicle|slot)|add[- ]?on|extend\s+(?:my\s+)?trial|which\s+tier|should\s+be\s+on|(?:less|fewer|more)\s+than\s+\d+\s+(?:assets?|vehicles?)|put\s+me\s+on|move\s+me\s+to|enroll\s+me|confirm\s+(?:which|what)\s+tier|what\s+tier\s+am\s+i)\b/i.test(messageText.trim()))) {
           isSpecialFlowHandled = true;
           const subTurn = await maybeHandleSubscriptionTurn({
             intent,
@@ -2822,7 +2830,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         // v1.58.22 - a request/statement mid-draft is never an answer to the
         // pending question. Live 2026-11-04: "For parts entry, I should be able
         // to identify which part incurred the expense" was re-asked 7 times.
-        const statementEscapeRe = /\b(?:should be able to|why can(?:no|'|’)?t i|why can i not|why do i (?:not|n'?t)|i want to be able to|not captured)\b/i;
+        const statementEscapeRe = /\b(?:should be able to|why can(?:no|'|’)?t i|why can i not|why do i (?:not|n'?t)|i want to be able to|not captured|add a feature|to be able to|i can(?:no|'|’)?t\s+(?:label|add|see|find|edit|change|get|set))\b/i;
         if (session.quiz && statementEscapeRe.test(messageText) && !pauseQuizForChat && !switchQuizFlow) {
           const parkedFlow = getFlowDefinition(session.quiz.flow, quizCtx)?.label || session.quiz.flow;
           abandonQuiz(session, { reason: 'statement_not_answer' });
@@ -4959,7 +4967,7 @@ async function maybeHandleSubscriptionTurn({
 
   const wantsView = intent === 'VIEW_SUBSCRIPTION'
     || /^(?:subscription|my\s+(?:plan|subscription)|billing|plan\s+details)\b/i.test(lower)
-    || /\b(?:which|what)\s+tier\b|\bshould\s+be\s+on\b|\b(?:less|fewer|more)\s+than\s+\d+\s+(?:assets?|vehicles?)\b/i.test(lower);
+    || /\b(?:which|what)\s+tier\b|\bshould\s+be\s+on\b|\b(?:less|fewer|more)\s+than\s+\d+\s+(?:assets?|vehicles?)\b|\b(?:put|move|enroll)\s+me\s+(?:on|to|in)\b|\b(?:first|second|third|1st|2nd|3rd)\s+tier\b|\bconfirm\s+(?:which|what)\s+tier\b|\bwhat\s+tier\s+am\s+i\b/i.test(lower);
   const wantsResume = /^resume\s+(?:my\s+)?(?:subscription|plan)\b/i.test(lower);
   const wantsCancel = intent === 'CANCEL_SUBSCRIPTION'
     || /^(?:cancel|stop)\s+(?:my\s+)?(?:subscription|plan|billing)\b/i.test(lower)

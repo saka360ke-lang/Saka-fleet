@@ -14,6 +14,7 @@ import { isConversationDiagnosisEnabled, diagnoseConversationMismatch, recordCon
 import { PROMPT_REFINEMENT_MARKER, MAX_STORED_PROMPT_REFINEMENT_CHARS } from '../../sakaAi.js';
 import { normalizeFrictionPhone, markFrictionDeployed } from '../services/frictionTracker.js';
 import { isSentinelProposalsEnabled } from '../services/sentinelPolicy.js';
+import { isDeliveryBlocked } from '../services/deliveryGuard.js';
 
 function getSupabase(providedSupabase) {
   if (providedSupabase) return providedSupabase;
@@ -1190,6 +1191,8 @@ export async function sendProactiveWhatsApp(toPhone, text) {
 
   const cleanPhone = String(toPhone).replace(/[^\d]/g, '');
   if (!cleanPhone) return false;
+  // v1.58.23 - respect the delivery blocklist (permanent 131026-style failures).
+  if (isDeliveryBlocked(cleanPhone)) return false;
 
   try {
     const res = await fetch(`https://graph.facebook.com/v21.0/${phoneNumberId}/messages`, {
