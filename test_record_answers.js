@@ -6,7 +6,7 @@ dotenv.config();
 import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 import { runWithCleanup } from './scripts/testCleanup.js';
-import { parseRecordQuestion, formatRecordAnswer, RECORD_ANSWER_VERSION } from './src/services/recordAnswers.js';
+import { parseRecordQuestion, formatRecordAnswer, RECORD_ANSWER_VERSION, looksLikeLogStatement } from './src/services/recordAnswers.js';
 import { queryRecordLedger } from './src/services/recordQuery.js';
 import { resolveDateRange, formatNairobiDate } from './src/services/dateParser.js';
 
@@ -55,6 +55,17 @@ check('a log command is never a records question', parseRecordQuestion('log fuel
 check('empty text never parses', parseRecordQuestion('', KE).ok === false);
 check('small talk never parses', parseRecordQuestion('hi saka', KE).ok === false);
 check('an explicit plate is captured', parseRecordQuestion('how much did KDA 123A spend last week?', KE).vehiclePlate === 'KDA123A');
+
+console.log('=== v1.58.6 - log-vs-query disambiguation (live 2026-11-04) ===');
+check('a past-tense repair statement is a LOG, not a query', parseRecordQuestion('Repaired a puncture for kas 628t @367600km. Puncture repair cost me 300kes. Repair done at lower kabete', KE).reason === 'looks-like-log');
+check('"Log this; ..." is a LOG', parseRecordQuestion('Log this; today i Repaired a puncture for kas 628t @367600km. 300kes', KE).ok === false);
+check('"I fuelled X 3000kes" is a LOG, not a query', parseRecordQuestion('I fuelled KAS today with 3000kes worth of fuel @222kes/liter', KE).reason === 'looks-like-log');
+check('"Pull fuel records for X" is a records query', (() => { const q = parseRecordQuestion('Pull fuel records for KBJ 819C', KE); return q.ok === true && q.kind === 'list' && q.expenseTypes.includes('Fuel') && q.vehiclePlate === 'KBJ819C'; })());
+check('"Fuel entries for X" is a records query', parseRecordQuestion('Fuel entries for kas', KE).ok === true);
+check('"List KAS entries" is a records query', parseRecordQuestion('List KAS entries', KE).ok === true);
+check('"how much did I spend on fuel" stays a query', parseRecordQuestion('how much did I spend on fuel last week', KE).ok === true);
+check('looksLikeLogStatement true for a repair+amount', looksLikeLogStatement('Repaired a puncture, cost me 300kes') === true);
+check('looksLikeLogStatement false for a question', looksLikeLogStatement('how much did I spend on repairs') === false);
 
 console.log('=== Record answers: date ranges (country-resolved) ===');
 check('last week trailing window', resolveDateRange('last week', KE).from === '2026-10-26');

@@ -1835,32 +1835,43 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         } else if (recordQuestion.ok && supabaseClient && profileData?.id) {
           // v1.36.0 — record answers: every figure comes from the ledger rows.
           const laneOwner = existingVehicles.some((v) => v.owner_id === profileData?.id);
-          const recordResult = await queryRecordLedger(supabaseClient, {
-            ownerId: laneOwner ? profileData?.id : null,
-            driverId: laneOwner ? null : profileData?.id,
-            vehicleIds: (() => {
-              // v1.58.x — scope the read to ONE vehicle when a plate/active/single
-              // vehicle resolves (mirrors editable-ledger scoping); only a
-              // genuinely ambiguous multi-vehicle ask aggregates the whole fleet.
-              const recordScope = resolveLedgerVehicleScope({
-                text: commandText,
-                vehicles: existingVehicles,
-                activeVehicle: currentActiveVehicle
-              });
-              return recordScope.ambiguous ? existingVehicles.map((v) => v.id) : recordScope.vehicleIds;
-            })(),
-            question: recordQuestion
+          // v1.58.3/1.58.6 — scope the read to ONE vehicle (plate → active →
+          // single). When the ask is genuinely ambiguous (several vehicles, no
+          // plate, no active) ASK which vehicle instead of silently summing the
+          // fleet (live 2026-11-04: "total liters fuelled" summed both cars).
+          const recordScope = resolveLedgerVehicleScope({
+            text: commandText,
+            vehicles: existingVehicles,
+            activeVehicle: currentActiveVehicle
           });
-          aiResult = {
-            intent: 'QUERY_RECORDS',
-            extracted_data: {},
-            __deterministicRecords: true,
-            reply_message: formatRecordAnswer(recordResult, recordQuestion, {
-              vehicles: existingVehicles,
-              currency: countryInfo?.currency || 'USD',
-              locale: countryInfo?.locale || 'en-US'
-            })
-          };
+          const wantsAllVehicles = /\b(?:all|both|every)\s+(?:vehicles?|cars?|assets?)\b|\b(?:across|for)\s+(?:the\s+)?(?:whole\s+)?fleet\b|\bfleet[-\s]?wide\b/i.test(commandText);
+          if (recordScope.ambiguous && !wantsAllVehicles && existingVehicles.length >= 2) {
+            const plates = existingVehicles.map((v) => v.plate_number).filter(Boolean);
+            aiResult = {
+              intent: 'QUERY_RECORDS',
+              extracted_data: {},
+              __deterministicRecords: true,
+              reply_message: `📊 Which vehicle should I pull that for — *${plates.join('* or *')}*?\n\nOr reply *all vehicles* for the fleet total.`
+            };
+          } else {
+            const recordVehicleIds = recordScope.ambiguous ? existingVehicles.map((v) => v.id) : recordScope.vehicleIds;
+            const recordResult = await queryRecordLedger(supabaseClient, {
+              ownerId: laneOwner ? profileData?.id : null,
+              driverId: laneOwner ? null : profileData?.id,
+              vehicleIds: recordVehicleIds,
+              question: recordQuestion
+            });
+            aiResult = {
+              intent: 'QUERY_RECORDS',
+              extracted_data: {},
+              __deterministicRecords: true,
+              reply_message: formatRecordAnswer(recordResult, recordQuestion, {
+                vehicles: existingVehicles,
+                currency: countryInfo?.currency || 'USD',
+                locale: countryInfo?.locale || 'en-US'
+              })
+            };
+          }
 
         } else if (receiptsCommand) {
           const isOwner = existingVehicles.some((v) => v.owner_id === profileData?.id);
@@ -1888,6 +1899,12 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         }
         phaseMarks.aiDoneAt = Date.now();
         let intent = aiResult.intent;
+        // v1.58.6 — a clear past-tense expense statement ("Repaired a puncture,
+        // cost me 300kes") is LOGGED, never answered as a query, even if the
+        // classifier hedged (live 2026-11-04: it kept replying "Nothing logged").
+        if (recordQuestion.reason === 'looks-like-log' && !['LOG_EXPENSE', 'LOG_EARNINGS'].includes(intent)) {
+          intent = 'LOG_EXPENSE';
+        }
         let customReply = aiResult.reply_message;
 
         // v1.36.0 — a QUERY_RECORDS message the engine could not parse gets a

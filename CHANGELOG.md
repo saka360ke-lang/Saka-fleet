@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.58.6] - 2026-11-04
+
+- **A past-tense expense statement is logged, not answered as a query.** "Repaired a puncture for KAS628T … cost me 300kes" was repeatedly answered "Nothing logged". `parseRecordQuestion` now returns `looks-like-log` for a past-tense verb + amount, and the route logs it (`LOG_EXPENSE`). New shared `looksLikeLogStatement()`.
+- **"Pull/show/list … records/entries" is a records query, not a fuel-log flow.** "Pull fuel records for KBJ 819C" no longer starts the fuel quiz.
+- **Ambiguous multi-vehicle reads ask which vehicle** instead of silently summing the fleet (only an explicit "all/fleet" aggregates).
+- **Files:** src/services/recordAnswers.js, src/routes/whatsapp.js, test_record_answers.js.
+- **Tests:** test_record_answers (45), test_v1583, test_entry_ledger, test_edit_delete, test_narrative_draft - green; `npm run health` green.
+
 ## [1.58.5] - 2026-11-04
 
 - **Bi-weekly Sentinel deep audit.** New `src/services/deepAudit.js` runs a deterministic code-integrity scan Monday & Thursday at 03:00 Africa/Nairobi (env-gated `SENTINEL_DEEP_AUDIT_ENABLED`, cadence `SENTINEL_DEEP_AUDIT_SCHEDULE`), wired in `index.js` + a manual `POST /api/cron/deep-audit`. Idempotent per Nairobi day via an `admin_audit_logs` run marker.

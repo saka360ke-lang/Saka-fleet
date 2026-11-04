@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.58.5  
+**Version:** 1.58.6  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.58.6** | Chat fixes: past-tense expense statements logged (not answered as queries), "pull/show … records" routed as queries (not log flows), ambiguous multi-vehicle reads ask which vehicle | 135 |
 | **1.58.5** | Bi-weekly Sentinel deep audit (deterministic code-integrity scan → deduped PENDING_APPROVAL PROP-* proposals, Mon/Thu 03:00 EAT, env-gated) | 134 |
 | **1.58.4** | Deep-audit reliability fixes (mojibake purge, crash fallback, Nairobi/currency auto-audit, record-lane scoping, pinned ledger edit, Sentinel boundary lock, Meta v21.0, dead-code) | 133 |
 | **1.58.3** | Cross-vehicle ledger scoping + one-line plate routing (live plate_number/make_model matcher + which-vehicle safe gate) | 132 |
@@ -4145,3 +4146,10 @@ quiz engine:
 - **Four checks (zero AI tokens for detection):** mojibake lint (double-encoded UTF-8 in `src/**` + root JS), Nairobi-time lint (`now.getHours()`/`now.getDay()` server-local time and UTC-midnight DB windows, excluding legitimate `new Date(...T00:00:00Z)` weekday math), ledger-scoping lint (the `.in('vehicle_id', scoped)` guard and `resolveLedgerVehicleScope` usage), and a silent-failure watch (recurring unresolved `error_logs` by route, >=3 in 7 days).
 - **Proposal registry, not autonomy.** Each finding mints one deduped `PENDING_APPROVAL` proposal - `proposal_code = PROP-YYYY-MM-DD-NN` (via the new shared `src/services/proposalRegistry.js::nextProposalCode`), `category = deep_audit_finding`, dedupe key `target_signature = DEEP-AUDIT:<date>:<slug>`. Nothing is ever executed; the finding's remediation is a hint for a superadmin chat session (`admin remediations` / `show me pending proposals`). A light `sanitizeFinding` strips governance-protected paths (`.env`, `.clinerules`, `.github/`, `supabase/`, `paystack.js`, `remediation*.js`, VIN/reset/provision scripts).
 - **Tests & health.** `test_deep_audit.js` (25 assertions: schedule parse + fallback, enable/kill switch, all four lints incl. the `new Date` exclusion, `sanitizeFinding`, mint + dedupe + `PENDING_APPROVAL` + `PROP-` code, run-marker idempotency, `runDeepAudit` dryRun and same-window skip) is registered in the health suite; `npm run health` fully green.
+
+### 135. v1.58.6 - log-vs-query disambiguation (2026-11-04, live chat audit)
+
+- **A past-tense expense statement is logged, never answered as a query.** "Repaired a puncture for KAS628T … cost me 300kes" was answered "Nothing logged" (the records-query lane) five times in a row. `parseRecordQuestion` now returns `reason:'looks-like-log'` for a statement with a past-tense action verb + amount and no question lead, and the route re-labels the turn to `LOG_EXPENSE` so the expense is actually recorded. `looksLikeLogStatement()` (recordAnswers.js) is the single shared guard.
+- **"Pull/show/list … records/entries" is a records query, not a fuel-log flow.** "Pull fuel records for KBJ 819C" kept starting the fuel-log quiz (litres / full-tank). `parseRecordQuestion` now treats records/entries/history/ledger (plus an expense/earning word or a plate) as a QUERY, and `pull/get/fetch/give` are recognised query leads.
+- **An ambiguous multi-vehicle read ASKS which vehicle.** A records question with no plate, no active vehicle and several vehicles now replies "Which vehicle — A or B? (or *all vehicles*)?" instead of silently summing the fleet. Only an explicit "all/both/fleet" aggregates.
+- **Tests:** `test_record_answers.js` (+9 assertions, 45 total) covers each phrase; `test_v1583`, `test_entry_ledger`, `test_edit_delete`, `test_narrative_draft` green; `npm run health` green.

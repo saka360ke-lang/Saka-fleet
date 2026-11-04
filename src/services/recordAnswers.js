@@ -24,6 +24,25 @@ const KIND_LIST_RE = /\b(what did i log|list|show|display|entries|records|my exp
 const EARNING_RE = /\b(earn(?:ed|ings?)?|revenue|income|takings?|fares?|collected)\b/i;
 const EXPENSE_SIDE_RE = /\b(spent|spend|expenses?|fuel|diesel|petrol|service|repair|parts?|tyres?|parking|fine|wash|cost)\b/i;
 
+// v1.58.6 — LOG-vs-QUERY disambiguation (live 2026-11-04 failures):
+//  • "Repaired a puncture … cost me 300kes" is an EXPENSE TO LOG, not a records
+//    question — even though "cost"/"spent" appear in the question lexicon.
+//  • "Pull/show/list … records/entries" is a QUERY, not a fuel-LOG flow — even
+//    though it mentions "fuel".
+const RECORDS_WORD_RE = /\b(?:records?|entries|history|ledger)\b/i;
+const LOG_VERB_RE = /\b(?:logged|recorded|paid|spent|bought|purchased|repaired|fixed|fuelled|fueled|filled|washed|changed|replaced|serviced|topped\s+up|did|sorted|handled|used|installed)\b/i;
+const EXPLICIT_LOG_RE = /^\s*(?:please\s+)?(?:log|save|record|add)\s+(?:this|it|that|the\s+following)\b/i;
+const QUESTION_LEAD_RE = /^\s*(?:what|whats|what's|how|when|which|who|where|why|show|list|display|summari[sz]e|total|count|average|avg|pull|get|fetch|give|does|do|did|is|are|was|were|tell)\b/i;
+const AMOUNT_RE = /\b\d[\d,]*(?:\.\d+)?\s*(?:kes|ksh|usd|eur|gbp|shillings?|bob)\b|(?:kes|ksh|\$|€|£|₦|₹)\s?\d[\d,]*/i;
+
+/** True when the text is a past-tense expense statement to LOG, not a question. */
+export function looksLikeLogStatement(text = '') {
+  const s = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!s) return false;
+  if (QUESTION_LEAD_RE.test(s) || /\?\s*$/.test(s)) return false;
+  return (LOG_VERB_RE.test(s) || EXPLICIT_LOG_RE.test(s)) && AMOUNT_RE.test(s);
+}
+
 function rangeLabel(range, locale = 'en-US') {
   if (!range) return 'all time';
   try {
@@ -42,9 +61,13 @@ function rangeLabel(range, locale = 'en-US') {
 export function parseRecordQuestion(text = '', { countryCode = 'GLOBAL', locale = 'en-US', now = new Date() } = {}) {
   const source = String(text || '').replace(/\s+/g, ' ').trim();
   if (!source) return { ok: false, reason: 'empty' };
+  // v1.58.6 — a past-tense expense statement is a LOG, never a records question.
+  if (looksLikeLogStatement(source)) return { ok: false, reason: 'looks-like-log' };
 
+  const hasPlateLike = /\b[A-Z]{2,3}\s?\d{1,4}[A-Z]?\b/.test(source.toUpperCase());
   const looksLikeQuestion = QUESTION_WORDS_RE.test(source)
-    || /^(what|how|show|list|display|summarize|summarise|total|count)\b/i.test(source)
+    || /^(what|how|show|list|display|summarize|summarise|total|count|pull|get|fetch|give)\b/i.test(source)
+    || (RECORDS_WORD_RE.test(source) && (EXPENSE_SIDE_RE.test(source) || EARNING_RE.test(source) || hasPlateLike))
     || /\?$/.test(source);
   if (!looksLikeQuestion) return { ok: false, reason: 'not-a-question' };
 
@@ -131,5 +154,6 @@ export function formatRecordAnswer(result = {}, question = {}, { vehicles = [], 
 export default {
   RECORD_ANSWER_VERSION,
   parseRecordQuestion,
-  formatRecordAnswer
+  formatRecordAnswer,
+  looksLikeLogStatement
 };

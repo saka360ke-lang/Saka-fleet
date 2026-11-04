@@ -1,6 +1,12 @@
 {
-  "latest": "1.58.5",
+  "latest": "1.58.6",
   "entries": [
+    {
+      "version": "1.58.6",
+      "date": "2026-11-04",
+      "title": "Saka hears what you mean",
+      "summary": "Logging a repair as a sentence now actually saves it, asking for your fuel records shows them, and with two cars Saka asks which one before totalling."
+    },
     {
       "version": "1.58.5",
       "date": "2026-11-04",
