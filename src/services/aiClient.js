@@ -265,6 +265,19 @@ export function resolveTier(purpose = 'default', { tier: forcedTier, maxTier = n
   if (tier === AI_TIERS.DETERMINISTIC) {
     return { tier, provider: null, model: null };
   }
+  // v1.58.24 - plan-driven model routing: paid and live-trial accounts
+  // (maxTier >= 2) run EVERY front conversation on Sonnet; free accounts
+  // (maxTier = 1) stay on Tier-1 Haiku. PREMIUM_MODEL_MODE=escalate restores
+  // the legacy canary behaviour; PREMIUM_MODEL_ENABLED=off still degrades
+  // everyone to Tier 1 through the kill switch below.
+  const premiumMode = String(process.env.PREMIUM_MODEL_MODE || 'all').toLowerCase();
+  const isFrontPurpose = USER_FACING_PURPOSES.has(String(purpose || ''));
+  if (premiumMode !== 'escalate' && isFrontPurpose
+      && maxTier !== null && maxTier !== undefined && Number.isFinite(Number(maxTier))
+      && Number(maxTier) >= AI_TIERS.CONVERSATIONAL
+      && tier > AI_TIERS.DETERMINISTIC && tier < AI_TIERS.REASONING) {
+    tier = AI_TIERS.CONVERSATIONAL;
+  }
   if (tier === AI_TIERS.CONVERSATIONAL && !isPremiumModelEnabled()) {
     tier = AI_TIERS.ROUTER;
   }

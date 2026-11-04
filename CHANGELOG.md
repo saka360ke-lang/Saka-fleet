@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.58.24] - 2026-11-04
+
+- **The model now follows the plan.** Paid and live-trial accounts run every front conversation (intent, extraction, quiz questions, prose, nudges, complaint recovery) on Claude Sonnet; free accounts with no live trial stay on Tier-1 Claude Haiku. The choice is deterministic from `entitlements.maxAiTier`, so a user never bounces between models mid-conversation.
+- **`PREMIUM_MODEL_MODE`** (`all` default | `escalate`) controls the policy; `PREMIUM_MODEL_ENABLED=off` remains the global kill switch (everyone degrades to Haiku) and the Sonnet -> GPT-4o -> DeepSeek chain is unchanged.
+- **Composer inherits the plan.** `composeMessage()` derives `maxTier` from the per-request profile (stamped with `entitlements.maxAiTier`), so prose, quiz questions, stall nudges and complaint recovery route exactly like the intent turn.
+- **Stale test corrected:** `test_phase1_canary` asserted the retired v1.23.0 invariant (front Sonnet even with the premium switch off); it now asserts the kill-switch contract.
+- **Files:** src/services/{aiClient,conversationEngine,envAudit}.js, src/routes/whatsapp.js, test_subscription_billing.js, test_phase1_canary.js, .clinerules, README.md, .env.example, package.json, SAKA_FLEET_ARCHITECTURE.md, CHANGELOG.md.
+- **Tests:** test_subscription_billing (plan floor/free/escalate/kill switch), test_model_router, test_phase1_canary, test_phase2_analytics, test_phase3_resilience, test_quiz_flow, test_first_message_flow, test_env_audit - green; `npm run health` green.
+
 ## [1.58.23] - 2026-11-04
 
 - **Recurrence-autopsy law (rule 51).** Every friction/error fix now sweeps the defect class: sibling entry points audited, patched or documented, one targeted assertion each, and the autopsy recorded in the architecture section + changelog. A fix whose class was not swept is incomplete.

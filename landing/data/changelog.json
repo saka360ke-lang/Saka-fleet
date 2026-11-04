@@ -1,6 +1,12 @@
 {
-  "latest": "1.58.23",
+  "latest": "1.58.24",
   "entries": [
+    {
+      "version": "1.58.24",
+      "date": "2026-11-04",
+      "title": "One plan, one model",
+      "summary": "Your plan now decides the model: paid and trial accounts get Sonnet on every turn, free accounts stay on fast Haiku - no more switching mid-conversation."
+    },
     {
       "version": "1.58.23",
       "date": "2026-11-04",

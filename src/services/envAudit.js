@@ -82,6 +82,7 @@ export const ENV_SECTIONS = Object.freeze([
     section: 'AI ROUTER',
     keys: [
       'PREMIUM_MODEL_ENABLED',
+      'PREMIUM_MODEL_MODE',
       'CONVERSATIONAL_PROVIDER',
       'DEEPSEEK_API_KEY',
       'DEEPSEEK_MODEL',

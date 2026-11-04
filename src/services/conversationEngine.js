@@ -102,7 +102,8 @@ export async function composeMessage({
   userTone = null,
   relationshipStage = null,
   modelLabel = null,
-  detail = null
+  detail = null,
+  maxTier = null
 } = {}) {
   const globalCtx = buildGlobalContext(countryInfo, profile);
 
@@ -152,7 +153,10 @@ export async function composeMessage({
     jsonMode: false,
     maxTokens,
     temperature: 0.5,
-    purpose: routerPurposeForCompose(purpose)
+    purpose: routerPurposeForCompose(purpose),
+    // v1.58.24 - plan-driven routing: the caller's entitlement cap (carried on
+    // the profile object) makes paid/trial prose Sonnet and free prose Haiku.
+    maxTier: maxTier !== null && maxTier !== undefined ? maxTier : (profile?.maxAiTier ?? null)
   });
   const stoppedAtCap = isOutputCappedStop(result?.stopReason);
   if (detail && typeof detail === 'object') detail.stoppedAtCap = stoppedAtCap;

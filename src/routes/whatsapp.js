@@ -1213,6 +1213,10 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         } catch (entErr) {
           console.warn('[WhatsApp] entitlements lookup failed:', entErr.message);
         }
+        // v1.58.24 - carry the plan's AI cap on the per-request profile object so
+        // every composed front message (conversationEngine) routes by plan:
+        // paid/trial = Sonnet, free = Haiku.
+        if (profileData && entitlements) profileData.maxAiTier = entitlements.maxAiTier;
         const planSummary = entitlements
           ? `${entitlements.tierName}${entitlements.isTrial ? ` (trial, ${entitlements.trialDaysLeft} day(s) left)` : ''} — ${entitlements.effectiveVehicleCapacity} vehicle slot(s), ${Number.isFinite(entitlements.reportsPerMonth) ? `${entitlements.reportsPerMonth} report(s)/month` : 'unlimited reports'}, ${entitlements.maxAiTier >= 3 ? 'full AI (Tiers 0-3)' : 'Tier-1 AI'}`
           : null;

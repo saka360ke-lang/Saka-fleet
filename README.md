@@ -179,8 +179,8 @@ ask you to double-check before saving; nothing is ever written without your YES.
   normal turn (never during a quiz), version-stamped by `FEATURE_NOTICE_VERSION`.
   Run `npm run rollout:features -- --apply` to backfill, and `admin rollout` for status.
 
-## Sonnet-first front conversations (v1.23.0)
-- Every **front user conversation** (intent, extraction, quiz questions, prose, small talk, nudges, admin parsing) runs on **Claude Sonnet** whenever `ANTHROPIC_API_KEY` is set - free and paid plans alike; vehicles remain the only subscription limit.
+## Plan-driven front conversations (v1.58.24)
+- **Paid and live-trial accounts** run every **front user conversation** (intent, extraction, quiz questions, prose, small talk, nudges, admin parsing) on **Claude Sonnet**. **Free accounts with no live trial** stay on **Claude Haiku** (Tier 1). `PREMIUM_MODEL_MODE=all` (default) enforces this; `escalate` restores the legacy canary.
 - Background/system work (Sentinel synthesis, model benchmarking/research) stays on DeepSeek. Failover: **Sonnet -> GPT-4o** when `OPENAI_API_KEY` is set -> **DeepSeek** (always terminal).
 - Cloud Run needs `ANTHROPIC_API_KEY` and optionally `OPENAI_API_KEY`; `AI_TIER1_PROVIDER` / `AI_MODEL_TIER_1_ANTHROPIC` pin or override the front provider/model. Without keys the app degrades to DeepSeek automatically.
 ## Snappy Saka — latency & OCR pause (v1.22.0)

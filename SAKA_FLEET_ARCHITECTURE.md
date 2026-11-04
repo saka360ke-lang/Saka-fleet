@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.58.23  
+**Version:** 1.58.24  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.58.24** | Plan-driven model routing: paid/live-trial accounts run Sonnet on every front turn, free accounts stay on Haiku; `PREMIUM_MODEL_MODE` knob; composer inherits the plan cap | 153 |
 | **1.58.23** | Recurrence-autopsy law (rule 51) + intent-lane hijack sweep (records .? catch-all, mid-sentence tier triggers, card change-lane, unique plate prefixes, delivery guard) | 152 |
 | **1.58.22** | Support tickets actually open (lifecycle insert + honest promise), intake locks the next turn, mid-draft statement escape, part names + notes visible in records, scoped reads, driver-compliance phrasings, delivery-failure rollup | 151 |
 | **1.58.21** | Trial anchored to passbook issuance + growth rides on the trial (no early conversion, trial floor, safe expiry sweep) + chat friction fixes (switch picker, driver-profile read, confusion escape, tier math) | 150 |
@@ -4307,3 +4308,10 @@ quiz engine:
 - **Unique plate prefixes resolve.** `resolveLedgerVehicleScope` accepts a unique 2-4 letter prefix ("KBJ" -> KBJ 819C) when no explicit plate matched and never guesses between several vehicles.
 - **Delivery guard.** New `src/services/deliveryGuard.js` (in-memory, fail-open): permanent WhatsApp failures (131026 / 131047 / 131051) block the recipient for `DELIVERY_BLOCK_HOURS` (24) in `sendWhatsAppReply`, `sendProactiveWhatsApp`, and the status callback - a doomed number can no longer produce a 7-second retry storm.
 - **Tests:** `test_record_answers` (49 - bare yes-question), `test_quiz_flow` (147 - card `Type:`/`Extra notes:` lanes), `test_v1583` (10 - unique prefix), `test_sentinel_policy` (23 - delivery guard), `test_first_message_flow` (53 - advisory subscription question still reaches pricing), `test_entry_ledger`, `test_agent_training` (155), `test_customer_care` (18), `test_narrative_draft` (118) - green.
+### 153. v1.58.24 - plan-driven model routing: Sonnet for paid/trial, Haiku for free (2026-11-04)
+
+- **Policy.** Front conversation models follow the plan: `entitlements.maxAiTier >= 2` (paid ACTIVE/CANCELING/PAST_DUE-with-access and every live trial, including the v1.58.21 trial floor) runs EVERY front purpose on Sonnet; `maxAiTier = 1` (free, no live trial) stays on Tier-1 Haiku. Background/Sentinel purposes are unchanged (DeepSeek/reasoning); deterministic lanes never call a model.
+- **Mechanics.** `resolveTier()` gained the plan floor (front purposes only, `maxTier >= 2`, raises ROUTER to CONVERSATIONAL) before the premium kill-switch downgrade, plus `PREMIUM_MODEL_MODE` (`all` default, `escalate` = legacy canary). `composeMessage()` derives `maxTier` from the per-request profile object (stamped with `entitlements.maxAiTier` in whatsapp.js), so prose, quiz questions, nudges and complaint recovery inherit the same plan.
+- **Fallbacks unchanged.** Sonnet -> GPT-4o -> DeepSeek chain, DeepSeek always terminal; `PREMIUM_MODEL_ENABLED=off` degrades everyone to Tier-1 Haiku; `AI_DAILY_BUDGET_USD` still gates premium legs (fail-open, alert once per day).
+- **Observability.** `ai_usage_logs` proves the split after deploy: paid/trial turns log `anthropic claude-sonnet-5-5` at tier 2 for every front purpose; free turns log `anthropic claude-haiku-4-5` at tier 1.
+- **Tests:** `test_subscription_billing` (plan floor, free Haiku, escalate mode, kill switch), `test_model_router`, `test_phase1_canary` (stale v1.23.0 expectation updated to the kill-switch contract), `test_phase2_analytics`, `test_phase3_resilience`, `test_quiz_flow`, `test_first_message_flow`, `test_env_audit` - green.

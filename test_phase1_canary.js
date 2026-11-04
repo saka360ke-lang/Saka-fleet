@@ -286,7 +286,7 @@ async function runTests() {
       return deepseekOk('{"intent":"GREETING","extracted_data":{},"reply_message":"Hi"}');
     });
     const result = await withEnv({
-      PREMIUM_MODEL_ENABLED: undefined,
+      PREMIUM_MODEL_ENABLED: 'on',
       CONVERSATIONAL_PROVIDER: 'anthropic',
       AI_MODEL_TIER_2: 'claude-test',
       ANTHROPIC_API_KEY: 'test-anthropic-key',
@@ -302,9 +302,8 @@ async function runTests() {
       purpose: 'intent_classify',
       tier: AI_TIERS.CONVERSATIONAL
     }));
-    // v1.23.0 superseded the Phase-0 "premium off → DeepSeek" invariant: every
-    // front purpose is Sonnet-first on every plan, and the canary flag only
-    // gates Tier-2 escalation for background work.
+    // v1.58.24 — plan-driven routing: with the premium switch ON a front turn is
+    // Sonnet-first; with it OFF everyone degrades to Tier-1 Haiku (kill switch).
     check(result.ok === true && result.model === 'claude-test', 'the front turn is served by Sonnet');
     check(anthropicTouched === 1 && deepseekTouched === 0, 'Anthropic serves the front leg');
     check(downgradeRecords.length === 1 && downgradeRecords[0].provider === AI_PROVIDERS.ANTHROPIC, 'telemetry records the Anthropic front leg');

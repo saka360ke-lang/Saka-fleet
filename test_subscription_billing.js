@@ -106,12 +106,28 @@ async function run() {
 
   console.log('\n--- Test 5: AI entitlement clamp (premium routing) ---');
   const originalPremium = process.env.PREMIUM_MODEL_ENABLED;
+  const originalMode = process.env.PREMIUM_MODEL_MODE;
   process.env.PREMIUM_MODEL_ENABLED = 'on';
+  delete process.env.PREMIUM_MODEL_MODE;
   check(resolveTier('intent_classify', { maxTier: 1 }).tier === AI_TIERS.ROUTER, 'Free clamp forces Tier 1');
   check(resolveTier('intent_classify', { maxTier: 3 }).tier === AI_TIERS.CONVERSATIONAL, 'Paid clamp allows Tier 2');
   check(resolveTier('health_synthesis', {}).tier === AI_TIERS.REASONING, 'Background purposes keep Tier 3 (no clamp)');
+
+  // v1.58.24 - plan-driven model routing: paid/live-trial front purposes (even
+  // the formerly Tier-1 ones) run Sonnet; free stays Haiku.
+  check(resolveTier('question_render', { maxTier: 3 }).tier === AI_TIERS.CONVERSATIONAL, 'Paid front question_render climbs to Sonnet');
+  check(resolveTier('stall_nudge', { maxTier: 3 }).tier === AI_TIERS.CONVERSATIONAL, 'Paid front stall_nudge climbs to Sonnet');
+  check(resolveTier('question_render', { maxTier: 1 }).tier === AI_TIERS.ROUTER, 'Free front question_render stays on Haiku');
+  check(resolveTier('extraction', { maxTier: 3, tier: AI_TIERS.ROUTER }).tier === AI_TIERS.CONVERSATIONAL, 'The canary tier is raised for paid front purposes');
+  process.env.PREMIUM_MODEL_MODE = 'escalate';
+  check(resolveTier('question_render', { maxTier: 3 }).tier === AI_TIERS.ROUTER, 'PREMIUM_MODEL_MODE=escalate keeps the legacy canary');
+  delete process.env.PREMIUM_MODEL_MODE;
+  process.env.PREMIUM_MODEL_ENABLED = 'off';
+  check(resolveTier('question_render', { maxTier: 3 }).tier === AI_TIERS.ROUTER, 'The premium kill switch still degrades everyone to Tier 1');
   if (originalPremium === undefined) delete process.env.PREMIUM_MODEL_ENABLED;
   else process.env.PREMIUM_MODEL_ENABLED = originalPremium;
+  if (originalMode === undefined) delete process.env.PREMIUM_MODEL_MODE;
+  else process.env.PREMIUM_MODEL_MODE = originalMode;
 
   console.log('\n--- Test 6: entitlement resolution (free / trial / paid) ---');
   invalidateEntitlements();
