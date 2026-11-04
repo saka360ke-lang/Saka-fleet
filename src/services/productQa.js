@@ -372,7 +372,7 @@ export const PRODUCT_QA = Object.freeze([
     topics: /\b(support|contact|talk to (?:someone|a human|a person)|human help|customer care)\b/i,
     facts: () => [
       '🙋 I am here first — most things I can fix in one message.',
-      '✉️ If you need a human, type "email support" and I will pass it to support@sakafleet.com with the context.'
+      '✉️ If you need a human, type "email support" and I will pass it to support@reports.sakafleet.com with the context.'
     ]
   }
 ]);

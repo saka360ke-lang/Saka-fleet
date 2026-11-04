@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.58.17] - 2026-11-04
+
+- **One support inbox: support@reports.sakafleet.com.** The Resend inbound domain is reports.sakafleet.com, so every care path now uses that address: WhatsApp care requests are emailed there (From: `Saka Support <support@reports.sakafleet.com>`), Saka's support copy (circuit-breaker, support intake, friction apology, hard-trip) names it, and the website (JSON-LD, FAQ, footer, privacy, terms, data-deletion, llms.txt, humans.txt) publishes it. security@reports.sakafleet.com (OTP) is unchanged.
+- **Inbound recipient gate.** Only mail addressed to support@reports.sakafleet.com opens a care ticket; replies to any other alias are ignored, so OTP threads never become tickets.
+- **Escalations now reach the superadmin on email AND WhatsApp.** `escalateCareToSuperadmin()` keeps the WhatsApp ping and adds `sendSuperadminEscalationEmail()` to SUPERADMIN_EMAIL (never throws; skipped when unset). `CUSTOMER_CARE_PHONE` stays off by policy - inbound pings fall back to the superadmin.
+- **Files:** src/services/{mailer,customerCare,inboundEmail,flowKnowledge,quizEngine,productQa}.js, src/routes/whatsapp.js, landing/{index,privacy,terms,data-deletion}.html, landing/llms.txt, landing/humans.txt, test_inbound_email.js, test_customer_care.js, test_landing_static.js, .env.example, .clinerules, package.json, SAKA_FLEET_ARCHITECTURE.md, CHANGELOG.md.
+- **Tests:** test_inbound_email (23), test_customer_care (12), test_landing_static (223), test_document_retention (16) - green; `npm run health` green.
+
 ## [1.58.16] - 2026-11-04
 
 - **Document storage is spelled out in the legal pages.** Terms section 6, Privacy section 6, Data Deletion section 2, `llms.txt` and the homepage FAQ now state the scope: Saka reads every receipt, logbook, insurance and licence photo; the Free plan keeps only the parsed figures (no original file); paid plans and the welcome trial store the original; and any receipt photo can be deleted from WhatsApp (`receipts` -> `delete receipt N`).

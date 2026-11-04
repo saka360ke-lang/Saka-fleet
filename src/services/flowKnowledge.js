@@ -222,7 +222,7 @@ export const SAKA_QUIZ_FLOWS = [
     trigger: 'support, help me, complaint, talk to a human, email support',
     fields: 'description → confirm',
     extracted: ['notes'],
-    writes: 'Resend escalation to support@sakafleet.com',
+    writes: 'Resend escalation to support@reports.sakafleet.com',
     rules: 'confirm before sending; include the user phone and vehicle context'
   },
   {

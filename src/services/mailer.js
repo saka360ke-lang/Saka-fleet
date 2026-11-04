@@ -383,14 +383,14 @@ export async function sendPassbookWelcomeEmail({ targetEmail, plateNumber, makeM
 }
 
 export async function sendSupportEscalationEmail({ userPhone, userEmail, userName, subscriptionTier, issueParagraph, vehiclesList = [] }) {
-    const targetEmail = 'support@sakafleet.com';
+    const targetEmail = 'support@reports.sakafleet.com';
     try {
         const formattedVehicles = vehiclesList.length > 0
             ? vehiclesList.map(v => `${v.plate_number} (${v.make_model || 'Vehicle'}, VIN: ${v.vin || 'N/A'})`).join(', ')
             : 'None';
 
         const { data, error } = await getResendClient().emails.send({
-            from: 'Saka Support <reports@reports.sakafleet.com>',
+            from: 'Saka Support <support@reports.sakafleet.com>',
             to: [targetEmail],
             reply_to: userEmail || undefined,
             subject: `Support Escalation Ticket: ${userPhone} (${userName || 'User'})`,
@@ -420,6 +420,32 @@ export async function sendSupportEscalationEmail({ userPhone, userEmail, userNam
         return true;
     } catch (err) {
         console.error('[Resend Support Exception]:', err.message);
+        return false;
+    }
+}
+
+/**
+ * v1.58.17 - high-priority care escalations are ALSO delivered to the
+ * superadmin's inbox (SUPERADMIN_EMAIL), alongside the WhatsApp ping.
+ * Never throws; returns false when the address is unset or Resend fails.
+ */
+export async function sendSuperadminEscalationEmail({ userPhone, category, priority, text } = {}) {
+    const targetEmail = process.env.SUPERADMIN_EMAIL;
+    if (!targetEmail) return false;
+    try {
+        const { data, error } = await getResendClient().emails.send({
+            from: 'Saka Support <support@reports.sakafleet.com>',
+            to: [targetEmail],
+            subject: `Saka escalation (${priority || 'high'} ${category || 'support'}) - ${userPhone || 'unknown'}`,
+            text: String(text || '').slice(0, 2000)
+        });
+        if (error) {
+            console.error('[Resend Superadmin Error]:', error);
+            return false;
+        }
+        return Boolean(data);
+    } catch (err) {
+        console.error('[Resend Superadmin Exception]:', err.message);
         return false;
     }
 }

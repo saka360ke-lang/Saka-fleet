@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.58.16  
+**Version:** 1.58.17  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.58.17** | Support inbox moved to support@reports.sakafleet.com everywhere (app + website) + inbound recipient gate + superadmin email escalation | 146 |
 | **1.58.16** | Legal/policy copy for receipt &amp; document storage (Free = parsed data only) + inbound-email Svix secret live on Cloud Run (`00271-dn4`) + Free-gate regression pin | 145 |
 | **1.58.15** | Production knobs off (REMEDIATION_AUTONOMY / CONVERSATION_DIAGNOSIS_ENABLED) + multi-asset landing branding (cars, trucks, boats, generators, excavators, EVs) + document retention (receipt delete, bucket-object wipes, OCR telemetry prune) | 144 |
 | **1.58.14** | Duplicate-signup block (phone variants + email + owner notice) + Sentinel log-only policy (no autonomous proposals; errors clear when tended) + Resend inbound email with Svix verification and admin inbox | 143 |
@@ -428,7 +429,7 @@ Cline-authored, Superadmin-approved fix plans consumed by the CI executor.
    - Sessions track `loopSignature`, `consecutivePromptCount`, `circuitBreakerStage`, `lastAssistantPrompt`.
    - The `loopSignature` is the actual generated reply text; breaker messages never overwrite it, so strikes accumulate correctly across grace retries.
    - **Strike 3 → `SOFT_TRIP`:** logs `LOOPING_PROMPTS` friction and sends a short AI-rendered retry invitation (one clean retry while Sentinel synthesizes a micro-rule).
-   - **Strike 4 → `HARD_TRIP`:** logs `SYSTEM_ERROR` friction, emails `support@sakafleet.com` via Resend with the profile, repeated prompt and last user input, then sends an AI-rendered escalation message (deterministic fallback if the provider is down).
+   - **Strike 4 → `HARD_TRIP`:** logs `SYSTEM_ERROR` friction, emails `support@reports.sakafleet.com` via Resend with the profile, repeated prompt and last user input, then sends an AI-rendered escalation message (deterministic fallback if the provider is down).
    - **Navigation Freedom (no permanent lockout):** `cancel|exit|stop|reset|restart|start over|start again|1..5` or `log|update|set|request|help` clears the breaker stage, strike count and loop signature instantly. The `restart` variant is explicitly covered (Oct-2026 onboarding incident).
 
 6. **Unregistered / Idle User Conversational Model (AI-rendered):**
@@ -618,13 +619,13 @@ Owners exceeding capacity are prompted with the next-tier upgrade checkout (or t
 
 ---
 
-## 8. Support Escalation Flow (`support@sakafleet.com`)
+## 8. Support Escalation Flow (`support@reports.sakafleet.com`)
 
 1. **Trigger Condition:** User asks for admin intervention, human help, agent assistance, or reaches an unresolvable issue.
 2. **Escalation Prompt:** User is prompted to write out their issue as a single paragraph description.
-3. **Automated Dispatch:** Format an email containing the paragraph, user phone number, email, and account details and send directly to **`support@sakafleet.com`** via Resend.
+3. **Automated Dispatch:** Format an email containing the paragraph, user phone number, email, and account details and send directly to **`support@reports.sakafleet.com`** via Resend.
 4. **WhatsApp Confirmation:** Reply to user:
-   *"I've forwarded your message to our support team at support@sakafleet.com. They will reach out to you shortly!"*
+   *"I've forwarded your message to our support team at support@reports.sakafleet.com. They will reach out to you shortly!"*
 5. Return conversation state to normal active mode.
 
 ---
@@ -2602,7 +2603,7 @@ Always close with the smallest next action; sell outcomes (cost per km, resale v
 Registration and compliance quiz questions are conversational with one emoji anchor each ("First things first — what are we taking care of today? 🚗 Car · 🏍️ Bike …", "Almost done 🎉 The VIN / chassis number…", "When does the insurance expire? 📄 …"). The deterministic templates remain the floor so a provider outage can never mute onboarding.
 
 ### 65.6 Help menu & support routing
-`help` / `menu` / `what can you do` → a five-line tour with one example line and a closing question. The support escalation trigger no longer fires on a bare "agent"/"human"/"support" word: only explicit phrases (`support team`, `talk to a person`, `file a complaint`, `escalate`, …) route to `support@sakafleet.com`.
+`help` / `menu` / `what can you do` → a five-line tour with one example line and a closing question. The support escalation trigger no longer fires on a bare "agent"/"human"/"support" word: only explicit phrases (`support team`, `talk to a person`, `file a complaint`, `escalate`, …) route to `support@reports.sakafleet.com`.
 
 ### 65.7 v1.25.1 — stale prompt refinements retired + ack polish
 - **Prompt schema gate:** `SAKA_PROMPT_SCHEMA_VERSION` is now `2026.11.0`. Because the marker embeds the version, `includes(PROMPT_REFINEMENT_MARKER)` is an exact-version check — the 2026-10-28 refinement in `system_config.saka_core_prompt` (which pulled replies back to "Let's keep moving" and corporate copy) is now ignored. `test_agent_training.js` asserts a stale-schema refinement is dropped while `VOICE LAW` survives. Bump this constant on any prompt-breaking release.
@@ -4245,3 +4246,10 @@ quiz engine:
 - **Deep audit:** Sentinel knobs still off (`REMEDIATION_AUTONOMY=off`, `CONVERSATION_DIAGNOSIS_ENABLED=off`, `SENTINEL_PROPOSALS_ENABLED=off` secret), zero pending `remediation_proposals`, and `chat_friction_logs` rows recording `PENDING` (all 12 columns migrated).
 - **Found + fixed in live testing: tickets were silently dropped for long senders.** The live `support_tickets.whatsapp_number` was `varchar(20)` (the staging DDL already declares `text`), so any sender email longer than 20 characters failed the insert and the route returned `ticketId: null`. New `npm run migrate:support-tickets` widens the column to `text` (applied live); `handleInboundEmail()` now retries with a 20-character trim as a safety net so a ticket is never lost; `test_inbound_email` (20) pins it. Live smoke test: valid Svix signature -> 200 + ticket `07c635d5` + care ping; tampered / missing signature -> 401 (test row deleted).
 - **Tests:** `test_inbound_email` (20), `test_landing_static` (223), `test_subscription_billing` (76), `test_document_retention` (16), `test_sentinel_policy`, `npm run health` - green.
+### 146. v1.58.17 - support inbox moved to support@reports.sakafleet.com (2026-11-04)
+
+- **One canonical care inbox.** Resend inbound is configured on `support@reports.sakafleet.com` (the `reports.sakafleet.com` domain that already sends OTP and reports), so the app and the website now use that address everywhere: `sendSupportEscalationEmail()` routes WhatsApp care requests there (From: `Saka Support <support@reports.sakafleet.com>`), and the assistant copy (`whatsapp.js` circuit-breaker / support intake / friction apology / hard-trip replies, `flowKnowledge.js`, `quizEngine.js` `contact_support`, `productQa.js`) promotes it. `security@reports.sakafleet.com` (the OTP sender) is untouched.
+- **Inbound recipient gate.** `handleInboundEmail()` now exports `SUPPORT_INBOX` and only opens a ticket when the parsed recipients include it (when recipients are known); mail to any other alias is ignored as `not-support-recipient`, so OTP-thread replies can never become care tickets. Svix verification, the long-sender fallback and the ticket/ping behaviour are unchanged.
+- **Escalations reach the superadmin on TWO channels.** `escalateCareToSuperadmin()` keeps the WhatsApp ping (`SUPERADMIN_PHONE`) and now ALSO emails `SUPERADMIN_EMAIL` via `sendSuperadminEscalationEmail()` (never throws; skipped when unset). `handleCareRequest()` still reports a boolean `superadminPinged` (true when either channel fired). `CUSTOMER_CARE_PHONE` stays unset by policy, so inbound care pings fall back to the superadmin.
+- **Website + legal.** `index.html` (JSON-LD Organization email + contactPoint, FAQ sub, footer), `privacy.html` (sections 1, 9, 13), `terms.html` (sections 11, 13), `data-deletion.html` (email section + contact), `llms.txt` (support + contact), `humans.txt` all carry the new address.
+- **Tests:** `test_inbound_email` (23 - canonical recipient, care-ping copy, recipient gate), `test_customer_care` (12 - escalation env isolation), `test_landing_static` (223) - green.

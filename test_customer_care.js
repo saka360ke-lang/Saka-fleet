@@ -48,11 +48,14 @@ async function run() {
 
   const m4 = makeMock();
   const saved = process.env.SUPERADMIN_PHONE;
+  const savedEmail = process.env.SUPERADMIN_EMAIL;
   delete process.env.SUPERADMIN_PHONE;
+  delete process.env.SUPERADMIN_EMAIL;
   const r4 = await handleCareRequest(m4.client, { phone: '+254700000000', text: 'urgent, I want a refund', profile: null });
   check(r4.category === 'billing' && r4.priority === 'high', 'care request classified');
   check(m4.inserts.some((i) => i.table === 'support_tickets'), 'care request opens a ticket');
   if (saved !== undefined) process.env.SUPERADMIN_PHONE = saved;
+  if (savedEmail !== undefined) process.env.SUPERADMIN_EMAIL = savedEmail;
 }
 
 run().then(() => {

@@ -3566,7 +3566,7 @@ async function executeFlow(state, ctx) {
           issueParagraph: a.description,
           vehiclesList: ctx.vehicles || []
         });
-        const reply = await ok({ status: 'Forwarded to support@sakafleet.com.', description: a.description });
+        const reply = await ok({ status: 'Forwarded to support@reports.sakafleet.com.', description: a.description });
         return { handled: true, reply, flow: state.flow, completed: true };
       }
 

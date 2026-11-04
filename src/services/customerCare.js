@@ -1,14 +1,14 @@
 /**
  * Saka Fleet — Autonomous Customer Care (v1.58.10)
  * ------------------------------------------------
- * Handles support requests from WhatsApp AND from support@sakafleet.com email:
+ * Handles support requests from WhatsApp AND from support@reports.sakafleet.com email:
  *  - classifies the request (category + priority) deterministically;
  *  - opens a `support_tickets` row;
  *  - emails support@ (existing channel) and pings the superadmin for high-priority;
  *  - relays an inbound support@ reply back to the user's WhatsApp.
  * Never throws. Guardrail: it only reads/writes support_tickets + sends messages.
  */
-import { sendSupportEscalationEmail } from './mailer.js';
+import { sendSupportEscalationEmail, sendSuperadminEscalationEmail } from './mailer.js';
 import { sendProactiveWhatsApp } from '../workers/sentinel.js';
 
 const CARE_RULES = [
@@ -48,11 +48,16 @@ export async function openCareTicket(supabase, { phone, body, category = 'other'
 
 export async function escalateCareToSuperadmin({ phone, text, category, priority } = {}) {
   const adminPhone = process.env.SUPERADMIN_PHONE;
-  if (!adminPhone) return false;
-  try {
-    const msg = `🎫 *New ${priority} support ticket* (${category})\n\n👤 ${phone}\n\n"${String(text || '').slice(0, 500)}"\n\n_Reply from support@sakafleet.com — Saka will relay it to the user's WhatsApp._`;
-    return Boolean(await sendProactiveWhatsApp(adminPhone, msg));
-  } catch { return false; }
+  let pinged = false;
+  if (adminPhone) {
+    try {
+      const msg = `🎫 *New ${priority} support ticket* (${category})\n\n👤 ${phone}\n\n"${String(text || '').slice(0, 500)}"\n\n_Reply from support@reports.sakafleet.com — Saka will relay it to the user's WhatsApp._`;
+      pinged = Boolean(await sendProactiveWhatsApp(adminPhone, msg));
+    } catch { pinged = false; }
+  }
+  let emailed = false;
+  try { emailed = await sendSuperadminEscalationEmail({ userPhone: phone, category, priority, text }); } catch { emailed = false; }
+  return { pinged, emailed, alerted: pinged || emailed };
 }
 
 /** Orchestrator: open ticket + email support@ + (high-priority) ping superadmin. */
@@ -71,11 +76,14 @@ export async function handleCareRequest(supabase, { phone, text, profile = null,
     });
   } catch { emailed = false; }
   let superadminPinged = false;
-  if (shouldEscalateCare(text, priority)) superadminPinged = await escalateCareToSuperadmin({ phone, text, category, priority });
+  if (shouldEscalateCare(text, priority)) {
+    const alert = await escalateCareToSuperadmin({ phone, text, category, priority });
+    superadminPinged = Boolean(alert && alert.alerted);
+  }
   return { category, priority, ticket, emailed, superadminPinged };
 }
 
-/** Inbound email (support@sakafleet.com reply) → relay to the user's WhatsApp. */
+/** Inbound email (support@reports.sakafleet.com reply) → relay to the user's WhatsApp. */
 export async function handleInboundSupportEmail(supabase, { fromEmail = null, subject = null, text = null, sendWhatsApp = null } = {}) {
   if (!supabase) return { ok: false, reason: 'no client' };
   const email = String(fromEmail || '').trim().toLowerCase();

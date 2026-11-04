@@ -1,6 +1,9 @@
 /** Saka Fleet - Resend inbound email (v1.58.14). Verifies Svix, parses email.received, fetches the body, opens a ticket and pings the care worker. */
 import crypto from 'node:crypto';
 
+/** v1.58.17 - the one inbox that opens care tickets (Resend inbound domain). */
+export const SUPPORT_INBOX = 'support@reports.sakafleet.com';
+
 function headerOf(headers, name) {
   if (!headers) return null;
   const lower = String(name).toLowerCase();
@@ -69,6 +72,11 @@ export async function handleInboundEmail(supabase, { payload = {}, headers = {},
   if (!verify.ok) return { ok: false, rejected: true, reason: verify.reason };
   const email = parseInboundEmail(payload);
   if (email.type && email.type !== 'email.received') return { ok: true, ignored: email.type };
+  // v1.58.17 - only mail addressed to the support inbox opens a ticket; a reply
+  // to security@ (OTP sender) or any other alias must not become a care ticket.
+  if (email.toEmails.length && !email.toEmails.includes(SUPPORT_INBOX)) {
+    return { ok: true, ignored: 'not-support-recipient', toEmails: email.toEmails };
+  }
   if (!email.fromEmail) return { ok: false, reason: 'no-sender' };
   let body = null;
   if (!skipFetch && email.emailId) {
@@ -96,7 +104,7 @@ export async function handleInboundEmail(supabase, { payload = {}, headers = {},
   let notified = false;
   if (typeof notify === 'function' && notifyPhone) {
     const snippet = String((body && body.text) || '').slice(0, 900);
-    const text = '[Support email]\n\nFrom: ' + email.fromEmail + '\nSubject: ' + email.subject + (snippet ? '\n\n' + snippet : '') + '\n\n_Reply from support@sakafleet.com to tend it._';
+    const text = '[Support email]\n\nFrom: ' + email.fromEmail + '\nSubject: ' + email.subject + (snippet ? '\n\n' + snippet : '') + '\n\n_Reply from support@reports.sakafleet.com to tend it._';
     try { notified = (await notify(notifyPhone, text)) !== false; } catch { notified = false; }
   }
   return { ok: true, email, textBody: body ? body.text : null, ticketId, notified, verified: Boolean(verify.verified) };

@@ -1,6 +1,6 @@
 # Saka Fleet — Product QA (generated)
 
-Generated from code at version **1.58.16** — do not edit by hand. Run `npm run docs:gen`.
+Generated from code at version **1.58.17** — do not edit by hand. Run `npm run docs:gen`.
 
 Registry: `src/services/productQa.js` · 19 topics · prices from `src/services/subscriptionTiers.js`
 
@@ -144,4 +144,4 @@ They are added to your base plan and can be adjusted when your fleet changes.
 ## support
 
 🙋 I am here first — most things I can fix in one message.
-✉️ If you need a human, type "email support" and I will pass it to support@sakafleet.com with the context.
+✉️ If you need a human, type "email support" and I will pass it to support@reports.sakafleet.com with the context.

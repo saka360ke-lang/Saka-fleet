@@ -52,11 +52,11 @@ for (const type of ['Organization', 'WebSite', 'SoftwareApplication', 'FAQPage']
 const faqBlock = jsonLdBlocks.find((block) => block['@type'] === 'FAQPage');
 check(Array.isArray(faqBlock.mainEntity) && faqBlock.mainEntity.length >= 6, 'FAQPage carries the visible questions');
 const org = jsonLdBlocks.find((block) => block['@type'] === 'Organization');
-check(/Saka 360/i.test(org.parentOrganization?.name || '') && org.email === 'support@sakafleet.com', 'Organization names Saka 360 (Kenya) and the support email');
+check(/Saka 360/i.test(org.parentOrganization?.name || '') && org.email === 'support@reports.sakafleet.com', 'Organization names Saka 360 (Kenya) and the support email');
 
 console.log('\n--- Test 3: AI-legibility files ---');
 const llms = fs.readFileSync(path.join(LANDING, 'llms.txt'), 'utf8');
-for (const needle of ['https://sakafleet.com/', '/privacy', '/terms', '/data-deletion', '/status', '/api/onboard', 'support@sakafleet.com']) {
+for (const needle of ['https://sakafleet.com/', '/privacy', '/terms', '/data-deletion', '/status', '/api/onboard', 'support@reports.sakafleet.com']) {
   check(llms.includes(needle), `llms.txt references ${needle}`);
 }
 const sitemap = fs.readFileSync(path.join(LANDING, 'sitemap.xml'), 'utf8');

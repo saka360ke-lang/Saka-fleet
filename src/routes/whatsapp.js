@@ -1032,13 +1032,13 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
     } else if (session.circuitBreakerStage === 'HARD_TRIP') {
       // Circuit breaker is in hard trip: bypass DeepSeek and send a short,
       // AI-rendered recovery message (deterministic fallback if AI is down).
-      const fallbackReply = "⚠️ I've paused automated replies for this step. Type Restart to begin again, or contact support@sakafleet.com — we will update you here once resolved.";
+      const fallbackReply = "⚠️ I've paused automated replies for this step. Type Restart to begin again, or contact support@reports.sakafleet.com — we will update you here once resolved.";
       const recoveryReply = await composeMessage({
         purpose: 'circuit_breaker_recovery',
         facts: {
           reason: 'Repeated identical assistant prompt detected',
-          nextSteps: ['Type Restart to begin again', 'Type Cancel to exit', 'Email support@sakafleet.com'],
-          supportEmail: 'support@sakafleet.com'
+          nextSteps: ['Type Restart to begin again', 'Type Cancel to exit', 'Email support@reports.sakafleet.com'],
+          supportEmail: 'support@reports.sakafleet.com'
         },
         fallbackText: fallbackReply
       });
@@ -2006,7 +2006,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         const hasVehicleAttributes = !!(mergedExt.plate_number || (mergedExt.yom && (mergedExt.fuel_type || mergedExt.make_model)) || (mergedExt.fuel_type && mergedExt.current_mileage) || mergedExt.vin);
 
         let isSupportFlow = false;
-        // --- SUPPORT ESCALATION FLOW (support@sakafleet.com) ---
+        // --- SUPPORT ESCALATION FLOW (support@reports.sakafleet.com) ---
         if (session.pendingSupportEscalation) {
           isSupportFlow = true;
           const cleanText = messageText.trim().toLowerCase();
@@ -2026,11 +2026,11 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             session.pendingSupportEscalation = false;
             customReply = await composeMessage({
               purpose: 'support_escalation',
-              facts: { supportEmail: 'support@sakafleet.com', forwarded: true },
+              facts: { supportEmail: 'support@reports.sakafleet.com', forwarded: true },
               language: targetLang,
               countryInfo,
               profile: profileData,
-              fallbackText: "I've forwarded your message to our support team at support@sakafleet.com. They will reach out to you shortly!"
+              fallbackText: "I've forwarded your message to our support team at support@reports.sakafleet.com. They will reach out to you shortly!"
             });
           }
         } else if (
@@ -2042,12 +2042,12 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             purpose: 'support_intake',
             facts: {
               instruction: 'Ask the user to describe the issue in one message so it can be forwarded to support.',
-              supportEmail: 'support@sakafleet.com'
+              supportEmail: 'support@reports.sakafleet.com'
             },
             language: targetLang,
             countryInfo,
             profile: profileData,
-            fallbackText: 'Please describe your issue in one message and I will forward it to support@sakafleet.com.'
+            fallbackText: 'Please describe your issue in one message and I will forward it to support@reports.sakafleet.com.'
           });
         }
 
@@ -4300,7 +4300,7 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
               facts: {
                 issue: 'The user reported too many or repeating messages',
                 actionTaken: 'Automated prompts paused for this chat',
-                nextSteps: ['Type Support to reach support@sakafleet.com', 'Send a vehicle plate when ready to onboard'],
+                nextSteps: ['Type Support to reach support@reports.sakafleet.com', 'Send a vehicle plate when ready to onboard'],
                 // v1.54.0 — ANSWER LAW v2: the user's own data rides this turn.
                 userDataFacts: (await buildUserFactsLines({
                   supabase: supabaseClient,
@@ -4615,7 +4615,7 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
             purpose: 'hard_trip_support_escalation',
             facts: {
               issue: 'Repeated identical prompt; support has been emailed automatically',
-              supportEmail: 'support@sakafleet.com',
+              supportEmail: 'support@reports.sakafleet.com',
               nextSteps: ['Type Restart to begin again', 'Type Cancel to exit', 'Wait for a WhatsApp update from support'],
               // v1.54.0 — ANSWER LAW v2: even a breaker trip carries the
               // user's own data; never claim a lack of access to it.
@@ -4629,7 +4629,7 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
             language: targetLang,
             countryInfo,
             profile: profileData,
-            fallbackText: "I've escalated this step to support@sakafleet.com. Type Restart to begin again, or Cancel to exit."
+            fallbackText: "I've escalated this step to support@reports.sakafleet.com. Type Restart to begin again, or Cancel to exit."
           });
           session.lastAssistantPrompt = finalReply;
         }

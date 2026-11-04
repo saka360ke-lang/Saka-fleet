@@ -1,14 +1,14 @@
 /** Saka Fleet - Resend inbound email tests (v1.58.14, stateless) */
 import assert from 'assert';
 import crypto from 'node:crypto';
-import { verifyResendSignature, parseInboundEmail, handleInboundEmail } from './src/services/inboundEmail.js';
+import { verifyResendSignature, parseInboundEmail, handleInboundEmail, SUPPORT_INBOX } from './src/services/inboundEmail.js';
 
 let passed = 0;
 function check(cond, label) { assert.ok(cond, label); passed += 1; console.log('  ok ' + label); }
 
 const SECRET = 'whsec_' + Buffer.from('saka-test-signing-key').toString('base64');
 const key = Buffer.from(SECRET.replace(/^whsec_/, ''), 'base64');
-const RAW = JSON.stringify({ type: 'email.received', data: { email_id: 'e1', from: 'customer@example.com', to: ['support@sakafleet.com'], subject: 'Help with my truck' } });
+const RAW = JSON.stringify({ type: 'email.received', data: { email_id: 'e1', from: 'customer@example.com', to: ['support@reports.sakafleet.com'], subject: 'Help with my truck' } });
 const TS = String(Math.floor(Date.now() / 1000));
 const ID = 'msg_test_1';
 const SIG = 'v1,' + crypto.createHmac('sha256', key).update(ID + '.' + TS + '.' + RAW).digest('base64');
@@ -25,7 +25,8 @@ const parsed = parseInboundEmail(JSON.parse(RAW));
 check(parsed.type === 'email.received', 'the event type is parsed');
 check(parsed.emailId === 'e1', 'the email id is parsed');
 check(parsed.fromEmail === 'customer@example.com', 'the sender is lower-cased');
-check(parsed.toEmails.length === 1 && parsed.toEmails[0] === 'support@sakafleet.com', 'the recipients are parsed');
+check(parsed.toEmails.length === 1 && parsed.toEmails[0] === 'support@reports.sakafleet.com', 'the recipients are parsed');
+check(parsed.toEmails[0] === SUPPORT_INBOX, 'the parsed recipient is the canonical support inbox');
 check(parsed.subject === 'Help with my truck', 'the subject is parsed');
 
 console.log('--- handler ---');
@@ -46,6 +47,11 @@ check(db.__db.support_tickets[0].issue_category === 'email', 'the ticket is cate
 check(db.__db.support_tickets[0].whatsapp_number === 'customer@example.com', 'the ticket carries the sender');
 check(notified && notified.phone === '+254700000000', 'the customer-care worker is pinged');
 check(notified && notified.text.indexOf('Help with my truck') !== -1, 'the ping carries the subject');
+check(notified && notified.text.indexOf('support@reports.sakafleet.com') !== -1, 'the care ping names the support inbox');
+
+console.log('--- recipient gate ---');
+const offInbox = await handleInboundEmail(mock(), { payload: { type: 'email.received', data: { email_id: 'e9', from: 'customer@example.com', to: ['someone@example.com'], subject: 'Not support' } }, headers: {}, rawBody: '{}', secret: null, skipFetch: true });
+check(offInbox.ok === true && offInbox.ignored === 'not-support-recipient', 'mail addressed outside the support inbox is ignored');
 
 console.log('--- long sender fallback ---');
 function mockLimited() {
@@ -53,7 +59,7 @@ function mockLimited() {
   return { __db: db, from(name) { const r = db[name] || (db[name] = []); return { insert(p) { const items = Array.isArray(p) ? p : [p]; const tooLong = items.find((it) => String(it.whatsapp_number || '').length > 20); if (tooLong) return { select: () => ({ maybeSingle: async () => ({ data: null, error: { message: 'value too long for type character varying(20)' } }) }) }; for (const it of items) r.push({ id: 't-' + r.length, ...it }); return { select: () => ({ maybeSingle: async () => ({ data: r[r.length - 1], error: null }) }) }; } }; } };
 }
 const dbLong = mockLimited();
-const longSender = await handleInboundEmail(dbLong, { payload: { type: 'email.received', data: { email_id: 'e3', from: 'verylongcustomername@example.com', to: ['support@sakafleet.com'], subject: 'Long sender' } }, headers: { 'svix-id': ID, 'svix-timestamp': TS, 'svix-signature': SIG }, rawBody: RAW, secret: SECRET, skipFetch: true });
+const longSender = await handleInboundEmail(dbLong, { payload: { type: 'email.received', data: { email_id: 'e3', from: 'verylongcustomername@example.com', to: ['support@reports.sakafleet.com'], subject: 'Long sender' } }, headers: { 'svix-id': ID, 'svix-timestamp': TS, 'svix-signature': SIG }, rawBody: RAW, secret: SECRET, skipFetch: true });
 check(longSender.ok === true && Boolean(longSender.ticketId), 'a long sender still opens a ticket (truncated fallback)');
 check(dbLong.__db.support_tickets.length === 1 && dbLong.__db.support_tickets[0].whatsapp_number.length === 20, 'the fallback trims the sender to the legacy column width');
 
