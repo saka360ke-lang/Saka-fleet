@@ -44,6 +44,8 @@ const STATLESS_SUITES = [
   'test_v1571.js',
   // v1.58.3 - cross-vehicle ledger scoping + one-line plate routing.
   'test_v1583.js',
+  // v1.58.25 - compliance capture: owner self-documents, partial asks, merges.
+  'test_compliance_capture.js',
   // v1.58.8 - OTP-gated profile wipe (clean sign-up).
   'test_profile_wipe.js',
   // v1.58.10 - autonomous customer care (tickets + inbound-email relay).

@@ -325,12 +325,17 @@ function normalizeAssetType(assetType) {
   return String(assetType || '').toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 }
 
-/** Sync resolver for the vehicle catalog (bundled defaults + asset filtering). */
-export function resolveVehicleComplianceCatalog({ countryCode = 'GLOBAL', assetType = null } = {}) {
+/**
+ * Sync resolver for the vehicle catalog (bundled defaults + asset filtering).
+ * v1.58.25 — `includeAll: true` skips the asset-type menu filter so an explicit
+ * mention ("add insurance") always resolves, even on a differently-typed asset.
+ */
+export function resolveVehicleComplianceCatalog({ countryCode = 'GLOBAL', assetType = null, includeAll = false } = {}) {
   const code = String(countryCode || 'GLOBAL').toUpperCase();
   const entry = VEHICLE_COMPLIANCE_CATALOG[code] || VEHICLE_COMPLIANCE_CATALOG.DEFAULT;
   const normalizedAsset = normalizeAssetType(assetType);
   const items = (entry.items || []).filter((item) => {
+    if (includeAll) return true;
     if (!item.assetTypes || item.assetTypes.length === 0) return true;
     return Boolean(normalizedAsset) && item.assetTypes.includes(normalizedAsset);
   });

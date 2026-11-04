@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.58.25] - 2026-11-04
+
+- **Compliance capture that never dead-ends.** "Add psv license" (live 2026-11-04, +254734852529) used to fall through to the generic menu four times: the lane required `vehicles.assigned_driver_id` and an alias filter hid the PSV badge on a VAN. New pure `src/services/complianceCapture.js` gives any OWNER or assigned driver one deterministic lane: a complete one-liner saves immediately, an expiry-only paragraph (the live one had `2027-08-08` but no badge number) gets ONE question for the number, a bare request gets the exact one-line example, `cancel` abandons it, and the pending capture lives 15 minutes in the session. The vehicle-permit sibling ("add insurance") rides the same lane; a fresh ledger log always outranks a waiting document question (rule 37).
+- **Explicit mention beats the menu filter.** `resolveBundledCatalog(..., { includeAll: true })` and the vehicle catalog equivalent return every optional item for the country, so a vehicle registered as a VAN can still bank a PSV badge. Owner self-profile documents save with `isMinimal=false` (owner minimums stay skippable; only a gated driver runs the 3-strike logic).
+- **Friction now points at its evidence.** `INCOMPLETE_REPLY_COMPLAINT` writes through `recordFriction()` and attaches the recent `error_logs` rows that name the same number, so `admin friction done` resolves both sides (the live row had no ids while 140 × 131026 failures touched that number).
+- **Warm one-car website.** The homepage, meta/OG/Twitter, FAQ (visible + JSON-LD), `llms.txt` and `humans.txt` now speak to a single car owner first ("your car's friend on WhatsApp"); the trial FAQ tells the truth — everything unlocked, up to 5 vehicles, no card, starting at the first car.
+- **Rule 52 (deep audit + extensive test law).** Every edit starts with a whole-module/callers/existing-suite audit and ends with every touched flow proven; behaviour changes need before/after assertions, the rule 51 sibling sweep is mandatory, and each release names its "Frames touched" and "Suites run".
+- **Recurrence autopsy (rule 51):** defect class *capture request without the full data / role-gated lane* → driver documents (fixed), vehicle permit paragraph (fixed), "add insurance" (fixed), support intake (already owns its next turn — left), ledger pending action (fresh-log escape — left), compliance read lanes (answered, never captured — left).
+- **Files:** src/services/{complianceCapture(new),complianceCatalog,vehicleCompliance,flowKnowledge}.js, src/routes/whatsapp.js, sakaAi.js, scripts/health_audit.js, test_compliance_capture.js (new), test_agent_training.js, .clinerules, landing/{index.html,llms.txt,humans.txt,data/changelog.json}, package.json, SAKA_FLEET_ARCHITECTURE.md, CHANGELOG.md.
+- **Suites run:** test_compliance_capture (29), test_agent_training, test_quiz_flow, test_first_message_flow, test_vehicle_compliance, test_driver_profile_onboarding, test_friction_tracker, test_landing_static, test_doc_sync, test_env_audit - green; `npm run health` green.
+
+
 ## [1.58.24] - 2026-11-04
 
 - **The model now follows the plan.** Paid and live-trial accounts run every front conversation (intent, extraction, quiz questions, prose, nudges, complaint recovery) on Claude Sonnet; free accounts with no live trial stay on Tier-1 Claude Haiku. The choice is deterministic from `entitlements.maxAiTier`, so a user never bounces between models mid-conversation.

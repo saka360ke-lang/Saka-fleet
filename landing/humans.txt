@@ -1,5 +1,6 @@
-# humans.txt — the people behind Saka Fleet
+# humans.txt - the people behind Saka Fleet
 Team: Saka Fleet (a Saka360 brand)
 Site: https://sakafleet.com
 Contact: support@reports.sakafleet.com
 Built with: plain HTML, CSS and JavaScript. No frameworks, no bloat - fast for everyone.
+Built for: one-car owners first. Fleets of trucks, bikes, boats and generators are welcome too.

@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.58.24  
+**Version:** 1.58.25  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.58.25** | Warm one-car website + compliance capture that never dead-ends ("Add psv license" saves or asks ONE question for any owner or driver) + friction↔error linkage + rule 52 (deep audit + extensive test law) | 154 |
 | **1.58.24** | Plan-driven model routing: paid/live-trial accounts run Sonnet on every front turn, free accounts stay on Haiku; `PREMIUM_MODEL_MODE` knob; composer inherits the plan cap | 153 |
 | **1.58.23** | Recurrence-autopsy law (rule 51) + intent-lane hijack sweep (records .? catch-all, mid-sentence tier triggers, card change-lane, unique plate prefixes, delivery guard) | 152 |
 | **1.58.22** | Support tickets actually open (lifecycle insert + honest promise), intake locks the next turn, mid-draft statement escape, part names + notes visible in records, scoped reads, driver-compliance phrasings, delivery-failure rollup | 151 |
@@ -4315,3 +4316,14 @@ quiz engine:
 - **Fallbacks unchanged.** Sonnet -> GPT-4o -> DeepSeek chain, DeepSeek always terminal; `PREMIUM_MODEL_ENABLED=off` degrades everyone to Tier-1 Haiku; `AI_DAILY_BUDGET_USD` still gates premium legs (fail-open, alert once per day).
 - **Observability.** `ai_usage_logs` proves the split after deploy: paid/trial turns log `anthropic claude-sonnet-5-5` at tier 2 for every front purpose; free turns log `anthropic claude-haiku-4-5` at tier 1.
 - **Tests:** `test_subscription_billing` (plan floor, free Haiku, escalate mode, kill switch), `test_model_router`, `test_phase1_canary` (stale v1.23.0 expectation updated to the kill-switch contract), `test_phase2_analytics`, `test_phase3_resilience`, `test_quiz_flow`, `test_first_message_flow`, `test_env_audit` - green.
+### 154. v1.58.25 - warm one-car website + compliance capture that never dead-ends + rule 52 (2026-11-04)
+
+- **The law (`.clinerules` rule 52).** Every edit starts with a deep audit (whole module, every caller, every existing suite) and ends with extensive tests of ALL touched flows: behaviour changes need before/after assertions, the rule 51 sibling sweep is mandatory, every release names its **Frames touched** and **Suites run**, and `npm run health` must be green before the push.
+- **Website voice (one-car owners first).** `landing/index.html` title/meta/OG/Twitter, hero, chat preview, stats, features, pricing cards, addon note, final CTA and FAQ now speak to one car owner ("your car's friend on WhatsApp"), with trucks/bikes/boats/generators/EVs as a warm "more later?" line rather than the headline. `llms.txt` + `humans.txt` mirror it. The trial FAQ (visible + JSON-LD) now states the truth: everything unlocked — **up to 5 vehicles** (growth welcome trial), no card, starting at first car registration.
+- **Compliance capture (`src/services/complianceCapture.js`, new, pure).** One deterministic lane for "add my <document>": whole-word alias matching, explicit mention always wins (`includeAll` on both catalogs, so a VAN-registered PSV still resolves its badge), **owner self-profile fallback** (`pickComplianceContextVehicle` — the old lane required `vehicles.assigned_driver_id` and silently dead-ended), full save when number+expiry are present, ONE follow-up question when one is missing (`session.pendingComplianceCapture`, 15-minute TTL), the exact one-line example when neither is present, and `cancel` to stop. Rule 37 guard: a fresh log line (`looksLikeFreshLogLine`) always outranks a stale capture prompt.
+- **Persistence split.** `persistCapturedCompliance()` in `whatsapp.js` routes vehicle permits to `vehicle_compliances` and driver documents to `driver_compliances`; an owner's own minimal item is NEVER `isMinimal` (owner self-profiles stay skippable per §40.1; only a gated driver runs the 3-strike/assignment logic). Vehicle permit requests ("add insurance") ride the same lane (rule 51 sibling).
+- **Friction ↔ error linkage.** `INCOMPLETE_REPLY_COMPLAINT` now writes through `recordFriction()` with the recent `error_logs` ids that mention the same number in `stack_trace` (24 h, max 10), so `admin friction done` clears both sides (live: a complaint row carried no ids while 140 × 131026 failures piled up for the same number).
+- **Recurrence autopsy (rule 51).** Defect class: *a capture request without the full data — or from a role the lane did not consider — falls through to the generic menu*. Siblings audited: driver documents (fixed: owner fallback + partial ask), vehicle permit paragraph lane (fixed: ask prompt via the shared lane), vehicle "add insurance" (fixed), support intake (already owns its next turn — left), editable-ledger pending action (already has a fresh-log escape — left), compliance read lanes (`show my psv badge` — deliberately still answered, never captured).
+- **Frames touched.** `src/services/complianceCapture.js` (new), `src/services/complianceCatalog.js` (`resolveBundledCatalog` includeAll), `src/services/vehicleCompliance.js` (`resolveVehicleComplianceCatalog` includeAll), `src/routes/whatsapp.js` (imports, pending lane, vehicle ask lane, owner+driver document lane, `persistCapturedCompliance`, friction linkage), `scripts/health_audit.js` (suite registry), `.clinerules` (rule 52), `landing/index.html`, `landing/llms.txt`, `landing/humans.txt`, `landing/data/changelog.json`, `package.json`, `CHANGELOG.md`, this section, and the flow-knowledge/core-prompt sync below.
+- **Skill sync (rule 13).** `flowKnowledge.js` `driver_onboarding` rules + `vehicle_registration` note teach the any-time document capture contract; `DEFAULT_SAKA_CORE_PROMPT` gains the COMPLIANCE CAPTURE block; `test_agent_training.js` asserts both.
+- **Tests / Suites run:** `test_compliance_capture` (29 - new), `test_agent_training`, `test_quiz_flow`, `test_first_message_flow`, `test_vehicle_compliance`, `test_driver_profile_onboarding`, `test_friction_tracker`, `test_landing_static`, `test_doc_sync`, `test_env_audit`, `npm run health` — green.

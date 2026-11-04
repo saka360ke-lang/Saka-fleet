@@ -49,7 +49,23 @@ import {
   submitDriverCompliance,
   notifyOwnerComplianceCleared
 } from '../services/driverAssignments.js';
-import { resolveBundledCatalog, parseComplianceItem } from '../services/complianceCatalog.js';
+import { resolveBundledCatalog } from '../services/complianceCatalog.js';
+import {
+  DRIVER_DOC_RE,
+  VEHICLE_DOC_RE,
+  catalogCandidates,
+  findMentionedComplianceItem,
+  pickComplianceContextVehicle,
+  detectComplianceAddRequest,
+  extractComplianceDetails,
+  mergeComplianceCapture,
+  complianceCapturePrompt,
+  formatComplianceSaved,
+  isComplianceCaptureCancel,
+  complianceCaptureCancelText,
+  looksLikeFreshLogLine,
+  isComplianceCaptureExpired
+} from '../services/complianceCapture.js';
 import {
   resolveLedgerTurn,
   resolveLedgerVehicleScope,
@@ -73,7 +89,7 @@ import {
   deleteLedgerEntry,
   restoreLastDeleted
 } from '../services/entryLedger.js';
-import { parseVehicleComplianceParagraph, submitVehicleCompliance } from '../services/vehicleCompliance.js';
+import { parseVehicleComplianceParagraph, submitVehicleCompliance, resolveVehicleComplianceCatalog } from '../services/vehicleCompliance.js';
 import { handleStage1CoreCapture, handleStage2OptionalWeaving } from '../services/onboarding.js';
 import { saveChatMessage, getRecentChatHistory, CHAT_HISTORY_MAX_MESSAGES } from '../services/chatHistory.js';
 import { sendEmailOtp, sendSupportEscalationEmail, sendMfaEmail, sendCareReplyEmail } from '../services/mailer.js';
@@ -116,6 +132,7 @@ import { handleQuizTurn, detectQuizStart, shouldPauseQuizForChat, getCurrentQuiz
 import { matchNarrativeVehicle, buildNarrativeDraft, narrativeDraftFields, narrativeDraftExtras, shouldPrefillNarrativeDraft, isNarrativeIntakeEnabled, isNarrativeEligibleText, buildNarrativeParagraphDrafts, renderNarrativeBatchCard, resolveNarrativeBatchTurn, describeNarrativeDraft } from '../services/narrativeDraft.js';
 import { parseRecordQuestion, formatRecordAnswer } from '../services/recordAnswers.js';
 import { isDeliveryBlocked, markDeliveryBlocked } from '../services/deliveryGuard.js';
+import { recordFriction } from '../services/frictionTracker.js';
 import { queryRecordLedger } from '../services/recordQuery.js';
 import { renderActionDiscovery, composeMessage } from '../services/conversationEngine.js';
 import { enqueueFollowUp, FOLLOWUP_KINDS, followUpAckText } from '../services/followups.js';
@@ -2494,55 +2511,157 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           }
         }
 
-        // A driver can add or refresh any compliance item from chat at any
-        // time ("PSV badge 445566 expires 15 Dec 2028"). This is how Saka keeps
-        // collecting optional extras after the gate has opened.
+        // v1.58.25 — a pending compliance capture owns its follow-up turn, so a
+        // half-answer ("445566", "8 Aug 2027") lands on the document instead of
+        // the generic menu (live PSV loop 2026-11-04).
+        if (!isSpecialFlowHandled && !session.quiz && session.pendingComplianceCapture
+          && !looksLikeFreshLogLine(messageText)) {
+          const pending = session.pendingComplianceCapture;
+          const pendingScope = pending.scope === 'vehicle' ? 'vehicle' : 'driver';
+          const context = pickComplianceContextVehicle({ vehicles: existingVehicles, profileId: profileData?.id });
+          const pendingAssetType = context.vehicle?.asset_type || context.vehicle?.metadata?.asset_type || null;
+          const pendingCatalog = pendingScope === 'vehicle'
+            ? resolveVehicleComplianceCatalog({ countryCode: countryInfo?.country_code || 'GLOBAL', assetType: pendingAssetType, includeAll: true })
+            : resolveBundledCatalog({ countryCode: countryInfo?.country_code || 'GLOBAL', assetType: pendingAssetType, includeAll: true });
+          const pendingItem = catalogCandidates(pendingCatalog).find((entry) => entry.type === pending.type) || null;
+          if (isComplianceCaptureCancel(messageText)) {
+            session.pendingComplianceCapture = null;
+            isSpecialFlowHandled = true;
+            customReply = complianceCaptureCancelText();
+          } else if (isComplianceCaptureExpired(pending) || !pendingItem) {
+            session.pendingComplianceCapture = null;
+          } else {
+            const timeZone = resolveUserTimezone({ countryInfo, profile: profileData });
+            const merged = mergeComplianceCapture(pending, messageText, {
+              item: pendingItem,
+              countryCode: countryInfo?.country_code || 'GLOBAL',
+              locale: countryInfo?.locale || 'en-US',
+              timeZone
+            });
+            isSpecialFlowHandled = true;
+            if (merged?.ok) {
+              const saved = await persistCapturedCompliance({
+                supabaseClient,
+                profileData,
+                scope: pendingScope,
+                item: pendingItem,
+                parsed: merged.parsed,
+                vehicle: context.vehicle,
+                isSelfProfile: context.isSelfProfile,
+                isMinimal: pendingScope === 'driver' && !context.isSelfProfile && pendingItem.type === pendingCatalog.minimal?.type,
+                countryCode: countryInfo?.country_code || 'GLOBAL',
+                assetType: pendingAssetType,
+                timeZone
+              });
+              session.pendingComplianceCapture = null;
+              customReply = saved.ok
+                ? formatComplianceSaved({ item: pendingItem, parsed: merged.parsed, scope: pendingScope, contextLabel: context.vehicle?.plate_number || null })
+                : `❌ ${saved.error}`;
+            } else {
+              const nextNumber = merged?.number || pending.number || null;
+              const nextExpiry = merged?.expiry || pending.expiry || null;
+              session.pendingComplianceCapture = {
+                ...pending,
+                number: nextNumber,
+                expiry: nextExpiry,
+                at: new Date().toISOString()
+              };
+              customReply = complianceCapturePrompt({
+                item: pendingItem,
+                scope: pendingScope,
+                have: { number: nextNumber, expiry: nextExpiry, lifetime: merged?.lifetime ?? pending.lifetime },
+                contextLabel: context.vehicle?.plate_number || null
+              });
+            }
+          }
+        }
+
+
+        // v1.58.25 — a vehicle permit request without details ("add insurance")
+        // gets the exact one-line example, never the generic menu (rule 51 sibling).
         if (!isSpecialFlowHandled && !session.quiz && supabaseClient && profileData?.id
-          && /\b(licen[cs]e|psv|cpc|cdl|pdp|permit|operator|card|badge|dl|compliance)\b/i.test(messageText)
-          && /\d/.test(messageText)) {
-          const assignedVehicle = existingVehicles.find((v) => v.assigned_driver_id === profileData.id) || null;
-          if (assignedVehicle) {
-            const assetType = assignedVehicle.asset_type || assignedVehicle.metadata?.asset_type || null;
-            const catalog = resolveBundledCatalog({ countryCode: countryInfo?.country_code, assetType });
-            const lower = messageText.toLowerCase();
-            const item = [catalog.minimal, ...(catalog.additional || [])].find((entry) =>
-              lower.includes(entry.type.replace(/_/g, ' ')) ||
-              (entry.aliases || []).some((alias) => lower.includes(alias)) ||
-              lower.includes(entry.label.toLowerCase())
-            );
-            if (item) {
+          && VEHICLE_DOC_RE.test(messageText)) {
+          const ownedVehicles = existingVehicles.filter((v) => v.owner_id === profileData.id);
+          const targetVehicle = ownedVehicles.find((v) => v.id === currentActiveVehicle?.id)
+            || (ownedVehicles.length === 1 ? ownedVehicles[0] : null);
+          if (targetVehicle) {
+            const assetType = targetVehicle.asset_type || targetVehicle.metadata?.asset_type || null;
+            const catalog = resolveVehicleComplianceCatalog({ countryCode: countryInfo?.country_code, assetType, includeAll: true });
+            const addRequest = detectComplianceAddRequest(messageText, { catalog, scope: 'vehicle' });
+            if (addRequest?.item) {
+              isSpecialFlowHandled = true;
+              session.pendingComplianceCapture = {
+                scope: 'vehicle',
+                type: addRequest.item.type,
+                number: null,
+                expiry: null,
+                at: new Date().toISOString()
+              };
+              customReply = complianceCapturePrompt({
+                item: addRequest.item,
+                scope: 'vehicle',
+                contextLabel: targetVehicle.plate_number || null
+              });
+            }
+          }
+        }
+
+
+        // Driver documents — any OWNER or assigned driver can add or refresh a
+        // compliance item from chat ("PSV badge 445566 expires 15 Dec 2028").
+        // v1.58.25: owners keep their own documents too (rule 51 sibling: the
+        // old lane required vehicles.assigned_driver_id and silently dead-ended).
+        if (!isSpecialFlowHandled && !session.quiz && supabaseClient && profileData?.id
+          && DRIVER_DOC_RE.test(messageText)) {
+          const context = pickComplianceContextVehicle({ vehicles: existingVehicles, profileId: profileData.id });
+          if (context.vehicle) {
+            const assetType = context.vehicle.asset_type || context.vehicle.metadata?.asset_type || null;
+            const catalog = resolveBundledCatalog({ countryCode: countryInfo?.country_code, assetType, includeAll: true });
+            const item = findMentionedComplianceItem(messageText, catalog);
+            const addRequest = detectComplianceAddRequest(messageText, { catalog, scope: 'driver' });
+            if (item && (addRequest || /\d/.test(messageText))) {
               const timeZone = resolveUserTimezone({ countryInfo, profile: profileData });
-              const parsed = parseComplianceItem(messageText, {
+              const details = extractComplianceDetails(messageText, {
+                item,
                 countryCode: countryInfo?.country_code || 'GLOBAL',
                 locale: countryInfo?.locale || 'en-US',
-                timeZone,
-                catalogItem: item
+                timeZone
               });
-              if (parsed?.ok) {
-                const isMinimal = item.type === catalog.minimal.type;
-                const result = await submitDriverCompliance({
-                  supabase: supabaseClient,
-                  driverId: profileData.id,
+              isSpecialFlowHandled = true;
+              if (details.ok) {
+                const isMinimal = !context.isSelfProfile && item.type === catalog.minimal?.type;
+                const saved = await persistCapturedCompliance({
+                  supabaseClient,
+                  profileData,
+                  scope: 'driver',
                   item,
-                  parsed,
+                  parsed: details.parsed,
+                  vehicle: context.vehicle,
+                  isSelfProfile: context.isSelfProfile,
                   isMinimal,
                   countryCode: countryInfo?.country_code || 'GLOBAL',
                   assetType,
                   timeZone
                 });
-                isSpecialFlowHandled = true;
-                if (result.ok) {
-                  if (isMinimal) {
-                    const status = await getDriverComplianceStatus({ supabase: supabaseClient, driverId: profileData.id, assetType });
-                    const assignment = await getActiveAssignment({ supabase: supabaseClient, driverId: profileData.id, vehicleId: assignedVehicle.id });
-                    if (status.canManage && assignment) {
-                      await notifyOwnerComplianceCleared({ supabase: supabaseClient, assignment, status });
-                    }
-                  }
-                  customReply = `✅ *Compliance Saved*\n\n• ${item.label}: ${parsed.number} — ${parsed.lifetime ? 'valid for life' : `expires ${parsed.expiry}`}\n\nWe'll remind you before it expires.`;
-                } else {
-                  customReply = `❌ ${result.error}`;
-                }
+                session.pendingComplianceCapture = null;
+                customReply = saved.ok
+                  ? formatComplianceSaved({ item, parsed: details.parsed, scope: 'driver', contextLabel: context.isSelfProfile ? null : context.vehicle.plate_number || null })
+                  : `❌ ${saved.error}`;
+              } else {
+                session.pendingComplianceCapture = {
+                  scope: 'driver',
+                  type: item.type,
+                  number: details.number || null,
+                  expiry: details.expiry || null,
+                  lifetime: Boolean(details.lifetime),
+                  at: new Date().toISOString()
+                };
+                customReply = complianceCapturePrompt({
+                  item,
+                  scope: 'driver',
+                  have: { number: details.number || null, expiry: details.expiry || null, lifetime: Boolean(details.lifetime) },
+                  contextLabel: context.isSelfProfile ? null : context.vehicle.plate_number || null
+                });
               }
             }
           }
@@ -4331,12 +4450,28 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
                 : ackReply);
             if (supabaseClient) {
               try {
-                await supabaseClient.from('chat_friction_logs').insert([{
-                  user_phone: senderPhone,
-                  session_id: senderPhone,
-                  friction_type: 'INCOMPLETE_REPLY_COMPLAINT',
-                  transcript_snippet: `Reply complaint [recovered: ${recoveryTotal ? 'pricing' : 'no-facts'}]: "${messageText}"`.slice(0, 500)
-                }]);
+                // v1.58.25 — a complaint is linked to the delivery errors that
+                // explain it (live 2026-11-04: an INCOMPLETE_REPLY_COMPLAINT row
+                // carried no error ids while 131026 failures piled up for the
+                // same number). `admin friction done` now clears both sides.
+                const recentErrors = await supabaseClient
+                  .from('error_logs')
+                  .select('id,stack_trace')
+                  .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
+                  .order('created_at', { ascending: false })
+                  .limit(40);
+                const digits = String(senderPhone || '').replace(/\D/g, '');
+                const relatedIds = (recentErrors?.data || [])
+                  .filter((row) => digits && String(row.stack_trace || '').includes(digits))
+                  .map((row) => row.id)
+                  .slice(0, 10);
+                await recordFriction(supabaseClient, {
+                  phone: senderPhone,
+                  frictionType: 'INCOMPLETE_REPLY_COMPLAINT',
+                  snippet: `Reply complaint [recovered: ${recoveryTotal ? 'pricing' : 'no-facts'}]: "${messageText}"`,
+                  source: 'chat',
+                  errorLogIds: relatedIds
+                });
               } catch { /* logging is best effort */ }
             }
           }
@@ -4881,6 +5016,78 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
 
 // (removed) The unused `whatsappRoutes` plugin duplicated the /webhook routes
 // already registered in index.js; it was never `fastify.register()`ed (v1.58.x cleanup).
+
+/* ------------------------------------------------------------------ */
+/* Compliance capture persistence (v1.58.25)                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Save one captured document for either role. Vehicle permits go to
+ * `vehicle_compliances`; driver documents (owner self-profile or an assigned
+ * driver) go to `driver_compliances`. An owner's own minimal item is NEVER
+ * `isMinimal` (owner self-profiles are skippable per §40.1 — only a gated
+ * driver's minimal item runs the 3-strike/assignment logic).
+ */
+async function persistCapturedCompliance({
+  supabaseClient,
+  profileData,
+  scope = 'driver',
+  item,
+  parsed,
+  vehicle = null,
+  isSelfProfile = false,
+  isMinimal = false,
+  countryCode = 'GLOBAL',
+  assetType = null,
+  timeZone = null
+} = {}) {
+  if (!supabaseClient || !profileData?.id || !item?.type || !parsed?.ok) {
+    return { ok: false, error: 'I need the document number and expiry first.' };
+  }
+  try {
+    if (scope === 'vehicle') {
+      if (!vehicle) return { ok: false, error: 'Add your vehicle first, then I can save that.' };
+      const result = await submitVehicleCompliance({
+        supabase: supabaseClient,
+        vehicle,
+        item,
+        parsed,
+        countryCode,
+        assetType,
+        ownerId: profileData.id,
+        timeZone
+      });
+      return result?.ok ? { ok: true } : { ok: false, error: result?.error || 'That could not be saved yet.' };
+    }
+
+    const result = await submitDriverCompliance({
+      supabase: supabaseClient,
+      driverId: profileData.id,
+      item,
+      parsed,
+      isMinimal: Boolean(isMinimal) && !isSelfProfile,
+      countryCode,
+      assetType,
+      timeZone
+    });
+    if (!result?.ok) {
+      return { ok: false, error: result?.error || 'That could not be saved yet.' };
+    }
+    if (isMinimal && !isSelfProfile && vehicle?.id) {
+      try {
+        const status = await getDriverComplianceStatus({ supabase: supabaseClient, driverId: profileData.id, assetType });
+        const assignment = await getActiveAssignment({ supabase: supabaseClient, driverId: profileData.id, vehicleId: vehicle.id });
+        if (status.canManage && assignment) {
+          await notifyOwnerComplianceCleared({ supabase: supabaseClient, assignment, status });
+        }
+      } catch { /* owner notice is best-effort */ }
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err?.message || 'That could not be saved yet.' };
+  }
+}
+
 
 /* ------------------------------------------------------------------ */
 /* Subscription / trial turn handling (v1.15.0)                        */

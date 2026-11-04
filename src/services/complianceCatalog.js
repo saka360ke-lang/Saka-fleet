@@ -138,12 +138,21 @@ export function complianceCategory(type) {
   return 'other';
 }
 
-/** Resolve the bundled catalog for a country + asset type (sync, no I/O). */
-export function resolveBundledCatalog({ countryCode = 'GLOBAL', assetType = null } = {}) {
+/**
+ * Resolve the bundled catalog for a country + asset type (sync, no I/O).
+ *
+ * v1.58.25 — `includeAll: true` returns every optional item for the country
+ * regardless of the asset-type menu filter. Explicit user mentions ("add my PSV
+ * badge") must always resolve, even when the vehicle was registered as a VAN
+ * while the owner actually runs it as a PSV (live 2026-11-04 loop: the badge was
+ * filtered out and the request fell through to the generic menu).
+ */
+export function resolveBundledCatalog({ countryCode = 'GLOBAL', assetType = null, includeAll = false } = {}) {
   const code = String(countryCode || 'GLOBAL').toUpperCase();
   const entry = COUNTRY_COMPLIANCE_CATALOG[code] || COUNTRY_COMPLIANCE_CATALOG[DEFAULT_CATALOG_COUNTRY];
   const normalizedAsset = normalizeAssetType(assetType);
   const additional = (entry.additional || []).filter((it) => {
+    if (includeAll) return true;
     if (!it.assetTypes || it.assetTypes.length === 0) return true;
     return Boolean(normalizedAsset) && it.assetTypes.includes(normalizedAsset);
   });

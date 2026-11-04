@@ -1,6 +1,12 @@
 {
-  "latest": "1.58.24",
+  "latest": "1.58.25",
   "entries": [
+    {
+      "version": "1.58.25",
+      "date": "2026-11-04",
+      "title": "Your car's friend, and a Saka that never leaves you at a menu",
+      "summary": "Ask to add your PSV, licence or insurance and Saka saves it straight away — or asks one short question for the missing number or date, then remembers the rest. Owners no longer need an assigned driver for that. The website now speaks to one-car owners first, in plain words."
+    },
     {
       "version": "1.58.24",
       "date": "2026-11-04",

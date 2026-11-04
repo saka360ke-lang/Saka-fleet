@@ -72,6 +72,12 @@ check(SAKA_INTENT_PLAYBOOK.some((row) => row.intent === 'QUERY_RECORDS' && /reco
   check(DEFAULT_SAKA_CORE_PROMPT.includes('EDITABLE LEDGER (v1.33.0'), 'Core prompt teaches the editable ledger');
 check(DEFAULT_SAKA_CORE_PROMPT.includes('NARRATIVE INTAKE (v1.34.0'), 'Core prompt teaches narrative intake');
 check(DEFAULT_SAKA_CORE_PROMPT.includes('1 Save / 2 Change / 3 Cancel'), 'Core prompt teaches the draft-card quick actions');
+// v1.58.25 — any owner or driver can add a document at any time (rule 51 sibling lane).
+check(DEFAULT_SAKA_CORE_PROMPT.includes('COMPLIANCE CAPTURE (v1.58.25'), 'Core prompt teaches the compliance capture lane');
+const captureFlow = SAKA_QUIZ_FLOWS.find((flow) => flow.key === 'driver_onboarding');
+check(Boolean(captureFlow && /add\/refresh ANY compliance document/.test(captureFlow.rules)), 'driver_onboarding knowledge carries the any-time capture rules');
+const permitFlow = SAKA_QUIZ_FLOWS.find((flow) => flow.key === 'vehicle_registration');
+check(Boolean(permitFlow && /vehicle permits .*captured at any time/.test(permitFlow.rules)), 'vehicle_registration carries the sibling vehicle-permit capture rule');
 const narrativeFlow = SAKA_QUIZ_FLOWS.find((flow) => flow.key === 'log_expense');
 check(Boolean(narrativeFlow && /narrative intake/.test(narrativeFlow.rules)), 'log_expense flow knowledge carries the narrative intake rules');
 check(/Narrative pre-fills are engine-determined facts/.test(await import('./src/services/conversationEngine.js').then((m) => m.QUIZ_INSTRUCTION_NATURAL)), 'Quiz composer honours narrative pre-fills');
