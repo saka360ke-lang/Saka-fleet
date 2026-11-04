@@ -1,7 +1,7 @@
 {
   "name": "sakafleet-backend",
   "type": "module",
-  "version": "1.58.19",
+  "version": "1.58.20",
   "description": "Saka Fleet Backend",
   "main": "index.js",
   "scripts": {
@@ -59,6 +59,8 @@
     "migrate:friction": "node scripts/run_friction_tracker_migration.js",
     "migrate:support-tickets": "node scripts/run_support_tickets_migration.js",
     "migrate:care-console": "node scripts/run_care_console_migration.js",
+    "migrate:profile-context": "node scripts/run_profile_context_migration.js",
+    "reconcile:welcome-trials": "node scripts/reconcile_welcome_trials.js",
     "migrate:country-learnings": "node scripts/run_country_learnings_migration.js",
     "migrate:trial-defaults": "node scripts/run_trial_default_migration.js",
     "remediate:phantom-trials": "node scripts/remediate_phantom_trials.js",

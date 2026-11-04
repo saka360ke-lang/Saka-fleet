@@ -83,12 +83,24 @@ function daysLeft(endsAt, now = new Date()) {
 
 async function fetchOwner(supabase, ownerId) {
   if (!supabase || !ownerId) return null;
-  const { data } = await supabase
+  const rich = await supabase
     .from('profiles')
     .select('id, phone_number, email, full_name, subscription_tier, subscription_status, billing_interval, trial_used_at, currency, country_code, locale, timezone, preferred_language')
     .eq('id', ownerId)
     .maybeSingle();
-  return data || null;
+  if (!rich.error) return rich.data || null;
+  // v1.58.20 - a missing optional column must never make an existing owner look
+  // absent (that silently killed every welcome trial with "profile not found").
+  try {
+    const slim = await supabase
+      .from('profiles')
+      .select('id, phone_number, email, full_name, subscription_tier, subscription_status, billing_interval, trial_used_at')
+      .eq('id', ownerId)
+      .maybeSingle();
+    return slim.data || null;
+  } catch {
+    return null;
+  }
 }
 
 /**

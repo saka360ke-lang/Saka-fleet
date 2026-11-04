@@ -101,6 +101,7 @@ import {
 } from '../services/subscriptions.js';
 import {
   startAccountTrial,
+  startWelcomeTrial,
   applyAccountTrialExtensionCoupon,
   recordActivationEvent,
   ACTIVATION_EVENTS
@@ -2931,11 +2932,34 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         )) {
           session.state = 'ONBOARDING';
           const currentVehicleCount = existingVehicles.filter((v) => v.owner_id === profileData?.id).length;
+          // v1.58.20 - lazy welcome-trial heal: an owner whose account never got
+          // its one-per-lifetime trial (the live profiles table was missing
+          // currency/locale, so every startWelcomeTrial call silently returned
+          // "profile not found") receives it BEFORE a capacity block can fire.
+          let capacityProfile = profileData;
+          const capacityTier = entitlements?.tierKey || profileData?.subscription_tier || 'free';
+          if (String(capacityTier) === 'free' && !profileData?.trial_used_at && profileData?.id) {
+            try {
+              const welcome = await startWelcomeTrial({ supabase: supabaseClient, ownerId: profileData.id });
+              if (welcome && welcome.started) {
+                capacityProfile = {
+                  ...profileData,
+                  subscription_status: 'TRIALING',
+                  subscription_tier: welcome.tierKey,
+                  trial_used_at: new Date().toISOString()
+                };
+              }
+            } catch { /* the heal never blocks onboarding */ }
+          }
           const branchCapacity = await evaluateVehicleCapacity({
             supabase: supabaseClient,
             ownerId: profileData?.id,
-            profile: profileData
+            profile: capacityProfile
           });
+          // Honest copy when a block is genuine: never imply a missing trial.
+          const capacityTrialNote = (capacityProfile?.trial_used_at && !entitlements?.isTrial)
+            ? '\n\n_Trials are one per account — yours was already used, so Free capacity applies._'
+            : '';
           const isNewRegistrationStart = !onboardingStore.has(senderPhone);
 
           const cleanText = messageText.trim().toLowerCase();
@@ -2995,6 +3019,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               });
               customReply = `⚠️ *Vehicle Capacity Limit Reached*\n\nYour current plan (*${branchCapacity.tierName}*) allows ${branchCapacity.capacity} vehicle(s).\n\nUpgrade to *${getTierLabel(nextTier)}*:\n👉 ${await shortenUrl(supabaseClient, upgrade.ok ? upgrade.checkoutUrl : 'https://sakafleet.com/pricing')}`;
             }
+            customReply = String(customReply || '') + capacityTrialNote;
             onboardingStore.delete(senderPhone);
             session.state = hasVehicleRegistered ? 'ACTIVE' : 'IDLE';
             session.onboardingStep = null;

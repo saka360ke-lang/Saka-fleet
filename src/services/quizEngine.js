@@ -1293,6 +1293,12 @@ export function isPollutedFieldValue(text) {
   const labelPrefixes = ["extra note", "note:", "notes:", "make and model:", "make & model:", "make / model:", "make:", "model:", "financial analysis", "policy number", "policy / provider", "analysis:", "details:", "vehicle:"];
   if (labelPrefixes.some((label) => clean.startsWith(label))) return true;
   if (clean.includes("as a draft") || clean.includes("as draft")) return true;
+  // v1.58.20 - complaints and trial/refund claims are never field values
+  // (live 2026-11-04: "I'm on a valid 30 day trial!!!" became the make/model).
+  if (/^(i'?m|i am|im|we'?re|we are)\s+(on|in)\s+/.test(clean)) return true;
+  if (/\b(valid\s+)?\d+\s*[- ]?day\s+trial\b/.test(clean)) return true;
+  if (/\bi\s+(want|need|demand)\s+(a\s+)?(refund|explanation|manager)\b/.test(clean)) return true;
+  if (/\b(your\s+(last\s+)?reply\s+was\s+incomplete|not\s+working|complaint|talk\s+to\s+a\s+human)\b/.test(clean)) return true;
   const first = clean.split(" ")[0];
   const verbs = ["change", "update", "edit", "set", "save", "delete", "remove", "register", "add", "move", "switch"];
   if (verbs.includes(first) && (clean.includes(" to ") || clean.includes(" as "))) return true;
@@ -2817,7 +2823,15 @@ async function executeFlow(state, ctx) {
         let welcomeTrial = null;
         try {
           welcomeTrial = await startWelcomeTrial({ supabase: ctx.supabase, ownerId: ctx.profile?.id });
-        } catch { welcomeTrial = null; }
+          // v1.58.20 - a refused trial must be visible (silent skips once left
+          // every account trial-less: profiles.currency/locale were missing).
+          if (welcomeTrial && welcomeTrial.started === false) {
+            console.warn('[welcome-trial] skipped:', welcomeTrial.reason || 'unknown');
+          }
+        } catch (trialErr) {
+          console.warn('[welcome-trial] failed:', trialErr.message);
+          welcomeTrial = null;
+        }
         // Trial activation #1: vehicle registered + passbook issued.
         try {
           await recordActivationEvent({

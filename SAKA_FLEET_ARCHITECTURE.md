@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.58.19  
+**Version:** 1.58.20  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.58.20** | Welcome-trial outage fixed (profiles.currency/locale missing -> "profile not found"): migration + resilient fetchOwner + lazy heal + reconcile + observability + error rollup | 149 |
 | **1.58.19** | Self-sender guard: the platform no longer re-ingests its own escalation emails as tickets (support-inbox loop) | 148 |
 | **1.58.18** | Care Console: WhatsApp worker console (`care ...`), ticket lifecycle + email threading, reply loop (WhatsApp + email), escalation ladder, CARE_TICKET_* audit, CARE_WORKER_GUIDE | 147 |
 | **1.58.17** | Support inbox moved to support@reports.sakafleet.com everywhere (app + website) + inbound recipient gate + superadmin email escalation | 146 |
@@ -4271,3 +4272,12 @@ quiz engine:
 - **Fix:** `handleInboundEmail()` now ignores any inbound mail whose sender is on the platform domain (`/@reports\.sakafleet\.com$/i`) as `ignored: 'self-sender'`, before the ticket write and the care ping. User mail is unaffected; escalation/reply emails still reach the inbox for the record.
 - **Cleanup:** the four self-loop tickets were deleted from `support_tickets`.
 - **Tests:** `test_inbound_email` (26 - adds the self-sender guard) plus `test_care_worker` (44) - green.
+### 149. v1.58.20 - welcome-trial outage root cause + lazy heal + observability (2026-11-04)
+
+- **Root cause (live):** the live `profiles` table was missing `currency` and `locale`. `trialEngine.fetchOwner()` selected them, PostgREST returned an error, `fetchOwner` returned null and `startAccountTrial` answered `profile not found` - every welcome trial silently failed. `trial_sessions` had **0 rows** and every account sat on Free capacity while believing it was trialling ("I am on a valid 30 day trial!!!").
+- **Fix:** migration `npm run migrate:profile-context` adds `currency` + `locale` (idempotent, applied live); `fetchOwner` falls back to a slim column set so a missing optional column can never make an existing owner look absent; both registration triggers (`quizEngine` + `onboarding`) log a refused trial (`[welcome-trial] skipped: <reason>`) instead of swallowing it.
+- **Lazy heal in the capacity branch (whatsapp.js):** before a capacity block can fire, a Free owner with no `trial_used_at` receives the welcome trial (idempotent, engine-owned) and the check re-evaluates with the trial profile. A genuine block now carries an honest line ("Trials are one per account - yours was already used...").
+- **Reconcile:** `npm run reconcile:welcome-trials` heals owners of ACTIVE vehicles with no trial row (audited `TRIAL_RECONCILED`). Live run: 2 scanned, 1 started (`+254710268605 -> growth`), 0 errors; David (`+254734852529`) was healed by the instrumented run (growth, 30 days, capacity 5).
+- **Complaint pollution:** `isPollutedFieldValue` now rejects trial/refund/complaint phrasing ("I am on a valid 30 day trial!!!", "Your last reply was incomplete", "I want a refund") so a grievance can never become a vehicle field.
+- **Error rollup (P2):** `logSystemError` writes one row per (route, normalized message) per `ERROR_ROLLUP_HOURS` (24) instead of one per event - the 40 identical WhatsApp 131026 undeliverable rows were drowning `error_logs`. Live check: two identical logs -> one row.
+- **Tests:** `test_trial_engine`, `test_quiz_flow` (143), `test_v1571` (20 - +3 pollution), `test_agent_training` (155), `test_env_audit` (44) - green.

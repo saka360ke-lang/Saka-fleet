@@ -500,13 +500,29 @@ export async function logSystemError(providedSupabase, error, route = 'unknown')
     if (error?.statusCode && Number(error.statusCode) < 400) return;
 
     const supabase = getSupabase(providedSupabase);
-    await supabase.from('error_logs').insert([{
+    // v1.58.20 - roll up identical failures: one row per (route, message) per
+    // ERROR_ROLLUP_HOURS. 40 identical WhatsApp 131026 rows used to drown
+    // error_logs and burn one AI diagnosis each.
+    const rollupHours = Math.max(1, Number(process.env.ERROR_ROLLUP_HOURS || 24));
+    const cutoff = new Date(Date.now() - rollupHours * 60 * 60 * 1000).toISOString();
+    try {
+      const existing = await supabase
+        .from('error_logs')
+        .select('id')
+        .eq('route', route)
+        .eq('error_message', message)
+        .gte('created_at', cutoff)
+        .limit(1);
+      if ((existing.data || []).length) return existing.data[0].id;
+    } catch { /* fall through to a fresh insert */ }
+    const { data } = await supabase.from('error_logs').insert([{
       error_message: message,
       stack_trace: error.stack || null,
       route: route,
       status: 'unresolved',
       created_at: new Date().toISOString()
-    }]);
+    }]).select('id').maybeSingle();
+    return data ? data.id : null;
   } catch (err) {
     console.error('[Sentinel Helper] Failed to log error to error_logs table:', err.message);
   }

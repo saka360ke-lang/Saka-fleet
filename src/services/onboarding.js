@@ -190,7 +190,10 @@ export async function saveVehicleAssetRecord({
     // v1.16.4 — the account's one-time full-featured welcome trial starts here
     // (lapse returns the account to Free; an upgrade converts it).
     try {
-      await startWelcomeTrial({ supabase: supabaseClient, ownerId: profileData.id });
+      const welcome = await startWelcomeTrial({ supabase: supabaseClient, ownerId: profileData.id });
+      if (welcome && welcome.started === false) {
+        console.warn('[onboarding] Welcome trial skipped:', welcome.reason || 'unknown');
+      }
       await recordActivationEvent({
         supabase: supabaseClient,
         ownerId: profileData.id,

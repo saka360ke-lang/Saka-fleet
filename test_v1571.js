@@ -44,6 +44,9 @@ check(reminderTypeMenu("vehicle").includes("1. "), "the reminder menu is numbere
 
 check(isPollutedFieldValue("Extra Notes:") === true, "UI-label text is rejected as a field value");
 check(isPollutedFieldValue("Save KBJ as a draft") === true, "an instruction is rejected as a field value");
+check(isPollutedFieldValue("I'm on a valid 30 day trial!!!") === true, "a trial complaint is never a field value");
+check(isPollutedFieldValue("Your last reply was incomplete") === true, "a reply complaint is never a field value");
+check(isPollutedFieldValue("I want a refund") === true, "a refund demand is never a field value");
 check(isPollutedFieldValue("Toyota Hiace Van") === false, "a real make/model is accepted");
 const editDef = getFlowDefinition("edit_vehicle", { vehicles: [{ id: "v1", plate_number: "KBJ 819C" }], countryInfo: {}, profile: {} });
 const editField = editDef.fields.find((f) => f.key === "edit_field");

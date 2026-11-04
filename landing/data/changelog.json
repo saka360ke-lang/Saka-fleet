@@ -1,6 +1,12 @@
 {
-  "latest": "1.58.19",
+  "latest": "1.58.20",
   "entries": [
+    {
+      "version": "1.58.20",
+      "date": "2026-11-04",
+      "title": "Trials that actually start",
+      "summary": "A rare database mismatch was stopping welcome trials from starting; it is fixed, every eligible account has been repaired, and the assistant now tells the truth about your plan instead of looping."
+    },
     {
       "version": "1.58.19",
       "date": "2026-11-04",

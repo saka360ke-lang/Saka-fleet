@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.58.20] - 2026-11-04
+
+- **The welcome trial is back (root cause found).** The live profiles table was missing `currency` and `locale`, so every `startWelcomeTrial` call returned "profile not found" and was swallowed - trial_sessions was empty and every account sat on Free capacity while believing it was on a trial. Migration `npm run migrate:profile-context` adds both columns (applied live); `fetchOwner` now falls back to a slim select, and both registration paths log a refused trial instead of hiding it.
+- **Lazy heal + reconcile.** A Free owner with no trial now receives the welcome trial before any capacity block can fire, and `npm run reconcile:welcome-trials` heals every owner of an ACTIVE vehicle with no trial row (audited TRIAL_RECONCILED). Live: +254734852529 and +254710268605 are on growth (5 vehicles) now.
+- **No more complaint pollution.** "I am on a valid 30 day trial!!!", "Your last reply was incomplete" and "I want a refund" can never be stored as a vehicle field.
+- **Error rollup.** Identical failures (same route + message) are logged once per ERROR_ROLLUP_HOURS (24) instead of one row per event - the 40 identical WhatsApp 131026 undeliverable rows were drowning error_logs and burning diagnosis tokens.
+- **Files:** src/services/{trialEngine,quizEngine,onboarding,envAudit}.js, src/routes/whatsapp.js, src/workers/sentinel.js, scripts/{run_profile_context_migration,reconcile_welcome_trials}.js, test_v1571.js, .env.example, package.json, SAKA_FLEET_ARCHITECTURE.md, CHANGELOG.md.
+- **Tests:** test_quiz_flow (143), test_trial_engine, test_v1571 (20), test_agent_training (155), test_env_audit (44) - green; `npm run health` green.
+
 ## [1.58.19] - 2026-11-04
 
 - **No more support-inbox self-loop.** Escalation emails are sent to support@reports.sakafleet.com, which is also the inbound address - so the platform was re-ingesting its own escalations as new tickets. `handleInboundEmail()` now ignores mail from `@reports.sakafleet.com` (the platform own senders) as `self-sender`, before any ticket write or care ping. Four loop tickets produced during verification were removed.
