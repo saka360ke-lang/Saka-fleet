@@ -983,6 +983,11 @@ async function processFrictionPatches(supabase, detectedFrictions) {
       }
     }
 
+    // v1.61.9 — rule minting is now gated by SENTINEL_PROPOSALS_ENABLED (default
+    // off). Sentinel keeps detecting and logging friction (feeds the DeepEval
+    // live cases), but prompt patches ship only through the A/B-verified
+    // DeepEval healer — one verified source, no duplicate rules (rules 16/46).
+    if (isSentinelProposalsEnabled()) {
     const optimizerPrompt = `You are the Saka Sentinel Micro-Rule Optimizer for Saka Fleet's conversational assistant.
 
 CRITICAL FUNCTION BOUNDARY LOCK:
@@ -1080,6 +1085,7 @@ Output ONLY valid JSON matching this schema:
           console.error('[Sentinel Dynamic Rule Upsert Error]:', upsertErr.message);
         }
       }
+    }
     }
   }
 

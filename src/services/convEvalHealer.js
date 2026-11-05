@@ -1,5 +1,5 @@
 import { generateText, parseJsonSafely } from './aiClient.js';
-import { judgeConversation, CONV_EVAL_STATUS, isConvEvalHealEnabled, CONV_EVAL_DEFAULT_THRESHOLD } from './convEval.js';
+import { judgeConversation, CONV_EVAL_STATUS, isConvEvalHealEnabled, getConvEvalConfig, CONV_EVAL_DEFAULT_THRESHOLD } from './convEval.js';
 import { refinementIsSafe, patchViolatesBoundaryLock, sendProactiveWhatsApp } from '../workers/sentinel.js';
 import { sendAdminNotificationEmail } from './mailer.js';
 import { nextProposalCode } from './proposalRegistry.js';
@@ -185,6 +185,51 @@ export function formatHealNotice({ caseDef = {}, before = 0, after = 0, patch = 
 }
 
 /**
+ * v1.61.9 — keep the active prompt-rule table bounded. When `is_active` rows
+ * exceed `CONV_EVAL_MAX_ACTIVE_RULES`, the OLDEST rules retire first (0 = no
+ * cap). Every retirement is audited (`CONV_EVAL_RULE_RETIRED`) and reversible
+ * with `admin rules toggle <key>`. Never throws.
+ */
+export async function enforceActiveRuleCap(supabase, { maxActive = null } = {}) {
+  if (!supabase) return { retired: [] };
+  const cap = maxActive === null ? Number(getConvEvalConfig().maxActiveRules) : Number(maxActive);
+  if (!Number.isFinite(cap) || cap <= 0) return { retired: [] };
+  try {
+    const { data: active } = await supabase
+      .from('saka_dynamic_rules')
+      .select('id,rule_key,updated_at')
+      .eq('is_active', true)
+      .order('updated_at', { ascending: true })
+      .limit(500);
+    const list = active || [];
+    if (list.length <= cap) return { retired: [] };
+    const overflow = list.slice(0, list.length - cap);
+    const retired = [];
+    for (const rule of overflow) {
+      const { error } = await supabase
+        .from('saka_dynamic_rules')
+        .update({ is_active: false, updated_at: new Date().toISOString() })
+        .eq('id', rule.id);
+      if (!error) {
+        retired.push(rule.rule_key);
+        await writeAudit(supabase, 'CONV_EVAL_RULE_RETIRED', { rule_key: rule.rule_key, reason: 'max_active_rules', cap });
+      }
+    }
+    return { retired };
+  } catch {
+    return { retired: [] };
+  }
+}
+
+/**
+ * Calibration cases (`expected: "fail"`) exist to prove the judge still fails a
+ * known-bad reply. They are never healed (v1.61.9). Pure.
+ */
+export function isCalibrationCase(caseDef = {}) {
+  return String(caseDef?.expected || '').toLowerCase() === 'fail';
+}
+
+/**
  * Deterministic failure / intervention announcement. This one also goes by email
  * (v1.61.7): a heal that could not ship must never be missed.
  */
@@ -254,6 +299,11 @@ export async function healFailedCase({
 } = {}) {
   if (!isConvEvalHealEnabled()) return { ok: false, reason: 'heal_disabled' };
   if (!caseDef || !caseDef.id) return { ok: false, reason: 'no_case' };
+  // v1.61.9 — calibration cases (`expected: "fail"`) are the false-negative
+  // guard: their stored reply is the KNOWN bad one, so a heal can never stick
+  // and only mints a duplicate rule every tick (live 2026-11-05: 8 calibration
+  // cases fed 60% of heal attempts and ~6 near-identical rules).
+  if (isCalibrationCase(caseDef)) return { ok: false, reason: 'calibration_case' };
   if (!judged || judged.ok !== true || judged.passed) return { ok: false, reason: 'not_failed' };
 
   // v1.61.7/1.61.8 — a failed heal is announced on WhatsApp immediately; the
@@ -304,6 +354,24 @@ export async function healFailedCase({
 
   let shipped = 'none';
   let proposalCode = null;
+  let shippedKey = patch.ruleKey;
+  // v1.61.9 — reuse the key this case already healed with instead of minting a
+  // near-duplicate every tick (live 2026-11-05: six "confirmation opener" rules
+  // in 90 minutes). Only prompt-rule patches can be reused.
+  if (supabase && patch.patchScope !== 'code') {
+    try {
+      const { data: prior } = await supabase
+        .from('conversation_eval_runs')
+        .select('patch_id')
+        .eq('case_id', caseDef.id)
+        .eq('status', CONV_EVAL_STATUS.HEALED)
+        .not('patch_id', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(1);
+      const priorKey = prior && prior[0] ? String(prior[0].patch_id || '') : '';
+      if (priorKey && !/^PROP-/i.test(priorKey)) shippedKey = priorKey;
+    } catch { /* fall back to the freshly generated key */ }
+  }
   if (patch.patchScope === 'code') {
     if (!isSentinelProposalsEnabled()) {
       await writeAudit(supabase, 'CONV_EVAL_ERROR', { case_id: caseDef.id, stage: 'ship', reason: 'proposals_disabled' });
@@ -343,7 +411,7 @@ export async function healFailedCase({
   } else if (supabase) {
     try {
       const { error } = await supabase.from('saka_dynamic_rules').upsert({
-        rule_key: patch.ruleKey,
+        rule_key: shippedKey,
         rule_description: patch.ruleDescription,
         patch_instruction: patch.patchInstruction,
         is_active: true,
@@ -352,8 +420,9 @@ export async function healFailedCase({
       if (!error) {
         shipped = 'rule';
         if (caseDef.frictionLogId) {
-          await markFrictionDeployed(supabase, caseDef.frictionLogId, `rule:${patch.ruleKey}`);
+          await markFrictionDeployed(supabase, caseDef.frictionLogId, `rule:${shippedKey}`);
         }
+        await enforceActiveRuleCap(supabase);
       }
     } catch {
       shipped = 'none';
@@ -368,7 +437,7 @@ export async function healFailedCase({
 
   await writeAudit(supabase, shipped === 'proposal' ? 'CONV_EVAL_PROPOSED' : 'CONV_EVAL_HEALED', {
     case_id: caseDef.id,
-    rule_key: patch.ruleKey,
+    rule_key: shippedKey,
     proposal_code: proposalCode,
     before,
     after: after.aggregate,
@@ -376,7 +445,7 @@ export async function healFailedCase({
     friction_log_id: caseDef.frictionLogId || null
   });
 
-  const notice = formatHealNotice({ caseDef, before, after: after.aggregate, patch, shipped, proposalCode });
+  const notice = formatHealNotice({ caseDef, before, after: after.aggregate, patch: { ...patch, ruleKey: shippedKey }, shipped, proposalCode });
   let notified = { whatsapp: false, email: false };
   try {
     notified = await notify(
@@ -393,7 +462,7 @@ export async function healFailedCase({
     before,
     after: after.aggregate,
     shipped,
-    ruleKey: patch.ruleKey,
+    ruleKey: shipped === 'rule' ? shippedKey : patch.ruleKey,
     proposalCode,
     status: shipped === 'proposal' ? CONV_EVAL_STATUS.PROPOSED : CONV_EVAL_STATUS.HEALED,
     notified,

@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { createClient } from '@supabase/supabase-js';
 import { CONV_EVAL_CRITERIA, formatConvEvalReply, getConvEvalConfig, resolveJudgeConfig, runConvEvalBatch } from '../src/services/convEval.js';
 import { CONVERSATION_CASES, buildLiveCasesFromFriction, sampleCorpusCases, CASE_VALIDATION_ERRORS, SYNTHETIC_CASES, SYNTHETIC_CASE_ERRORS } from '../src/services/convEvalCases.js';
-import { healFailedCase } from '../src/services/convEvalHealer.js';
+import { healFailedCase, isCalibrationCase } from '../src/services/convEvalHealer.js';
 
 /**
  * Saka Fleet — conversation eval CLI (v1.60.0)
@@ -135,7 +135,17 @@ async function main() {
 
   if (args.heal && summary.failed > 0) {
     console.log('\n🩹 Healing failed cases…');
-    const failures = summary.results.filter((result) => result.judged?.ok && !result.judged.passed).slice(0, cfg.maxPatches);
+    const failures = summary.results
+      .filter((result) => result.judged?.ok && !result.judged.passed)
+      // v1.61.9 — calibration cases (`expected: "fail"`) are never healed.
+      .filter((result) => {
+        if (isCalibrationCase(result.caseDef)) {
+          console.log(`  ⏭️ ${result.caseId}: calibration case (expected fail) — not healed`);
+          return false;
+        }
+        return true;
+      })
+      .slice(0, cfg.maxPatches);
     for (const failure of failures) {
       const healed = await healFailedCase({ supabase, caseDef: failure.caseDef, judged: failure.judged, judgeConfig: judge });
       if (healed.ok) {

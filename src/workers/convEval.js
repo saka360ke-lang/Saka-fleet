@@ -9,7 +9,7 @@ import {
   CONV_EVAL_STATUS
 } from '../services/convEval.js';
 import { buildLiveCasesFromFriction, buildLiveCasesFromChatHistory, sampleCorpusCases } from '../services/convEvalCases.js';
-import { healFailedCase, notifySuperadminConvEval, notifyHealFailureDigest } from '../services/convEvalHealer.js';
+import { healFailedCase, notifySuperadminConvEval, notifyHealFailureDigest, isCalibrationCase } from '../services/convEvalHealer.js';
 
 /**
  * Saka Fleet — conversation eval tick (v1.60.0)
@@ -104,12 +104,23 @@ export async function runConvEvalTick(supabase, { force = false, persist = true 
   // 2. Healing (only when the operator opted in). maxPatches 0 = heal ALL
   // failures this tick (resource-bounded), per the always-on contract.
   const healResults = [];
+  let calibrationSkipped = 0;
   if (isConvEvalHealEnabled()) {
     const patchBudget = cfg.maxPatches === 0
       ? Number.MAX_SAFE_INTEGER
       : cfg.maxPatches;
     const failures = summary.results
       .filter((result) => result.judged?.ok && !result.judged.passed)
+      // v1.61.9 — calibration cases (`expected: "fail"`) are the judge's
+      // false-negative guard and must never be healed (live 2026-11-05: they
+      // consumed ~60% of heal attempts and minted duplicate rules each tick).
+      .filter((result) => {
+        if (isCalibrationCase(result.caseDef)) {
+          calibrationSkipped += 1;
+          return false;
+        }
+        return true;
+      })
       .slice(0, patchBudget);
     for (const failure of failures) {
       const healed = await healFailedCase({
@@ -178,6 +189,7 @@ export async function runConvEvalTick(supabase, { force = false, persist = true 
     skipped_live: skippedLive.slice(0, 10),
     healed: healResults.filter((result) => result.ok),
     heal_attempts: healResults.length,
+    calibration_skipped: calibrationSkipped,
     failure_alert: failureDigest,
     notified: alerted
   };

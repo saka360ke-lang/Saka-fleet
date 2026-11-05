@@ -1,6 +1,13 @@
 {
-  "latest": "1.61.8",
+  "latest": "1.61.9",
   "entries": [
+    {
+      "version": "1.61.9",
+      "date": "2026-11-05",
+      "title": "Smarter quality fixes, no repeated tickets",
+      "preview": "Known-bad test cases are no longer \"fixed\" repeatedly, and quality hints stay capped and tidy.",
+      "summary": "The quality loop used to keep trying to fix the same deliberately-bad test cases, minting a new hint each time. Now those calibration cases are skipped by design, a recurring case updates its existing hint instead of creating a new one, the active hint list is capped at 30 (oldest retired first, never deleted and always reversible), and the old background rule generator is switched off by default so every prompt hint is one that has been proven to improve the score."
+    },
     {
       "version": "1.61.8",
       "date": "2026-11-05",

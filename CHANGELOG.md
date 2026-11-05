@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.61.9] - 2026-11-05
+
+- **Calibration cases are never healed.** The 8 `expected: "fail"` corpus cases are the judge's false-negative guard — their stored reply is deliberately bad, so a heal can never stick and only minted a duplicate rule every tick (200 runs since 13:00Z: 103 failed, 32 healed, 20 active rules incl. six near-identical "confirmation opener" rules). New `isCalibrationCase()` guard refuses before any token spend; the worker and `npm run eval:conv --heal` filter them out and the tick reports `calibration_skipped`.
+- **Rule keys are reused, and the table is capped.** A repeat heal now reuses the case's previous `patch_id` as the rule key (one rule per case, updated in place), and `CONV_EVAL_MAX_ACTIVE_RULES` (default 30, `0` = unlimited) retires the **oldest** rules first — deactivated, never deleted, audited `CONV_EVAL_RULE_RETIRED`, reversible with `admin rules toggle <key>`.
+- **Sentinel keeps detecting, stops minting.** The micro-rule optimizer is now gated by `SENTINEL_PROPOSALS_ENABLED` (default off), the same switch that guards proposals. Sentinel's 60-second friction detection still runs and still feeds the DeepEval live cases; prompt patches now come only from the A/B-verified healer — one verified source for `saka_dynamic_rules`.
+- **Frames touched:** `src/services/convEvalHealer.js`, `src/services/convEval.js`, `src/workers/convEval.js`, `src/workers/sentinel.js`, `scripts/run_conv_eval.js`, `src/services/envAudit.js`, `.env.example`, `test_conv_eval.js` (+14 assertions), `test_sentinel_policy.js` (+2), `package.json`, `landing/data/changelog.json` + stamped assets, `SAKA_FLEET_ARCHITECTURE.md` (§2.7, friction loop, §173), this file.
+- **Suites run:** `test_conv_eval` (153), `test_sentinel_policy` (25) — green; `npm run health` green.
+
 ## [1.61.8] - 2026-11-05
 
 - **Live verification of 1.61.7 found the follow-on problem: six failures = six emails per tick.** Revision `00308` proved the channel policy works (4 successful heals → **no email**; 6 failed heals → 6 emails) but that is ~24 emails/hour against the Resend quota. Failure alerts are now **batched**: each failure is announced on WhatsApp immediately (per case, no email), and the worker sends **ONE `notifyHealFailureDigest()` per tick** — WhatsApp + **a single email** listing up to 10 cases with reason and before → after, plus "…and N more".

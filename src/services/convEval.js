@@ -96,11 +96,16 @@ export function getConvEvalConfig(env = process.env) {
   const maxCases = Number(rawCases) === 0 ? 0 : Math.round(boundedNumber(rawCases, 100, 1, 500));
   const rawPatches = read('CONV_EVAL_MAX_PATCHES_PER_RUN');
   const maxPatches = Number(rawPatches) === 0 ? 0 : Math.round(boundedNumber(rawPatches, 10, 1, 50));
+  // v1.61.9 — active prompt-rule cap (0 = unlimited). Oldest rules retire first
+  // so a case that heals every tick can never grow the table forever.
+  const rawActive = read('CONV_EVAL_MAX_ACTIVE_RULES');
+  const maxActiveRules = Number(rawActive) === 0 ? 0 : Math.round(boundedNumber(rawActive, 30, 1, 500));
   return {
     threshold: boundedNumber(read('CONV_EVAL_MIN_SCORE'), CONV_EVAL_DEFAULT_THRESHOLD, 0, 1),
     maxCases,
     intervalMs: minutes * 60 * 1000,
     maxPatches,
+    maxActiveRules,
     dedupeHours: boundedNumber(read('CONV_EVAL_DEDUPE_HOURS'), 1, 0.25, 168),
     alertCooldownHours: boundedNumber(read('CONV_EVAL_ALERT_COOLDOWN_HOURS'), 1, 0, 48),
     judgeProvider: String(read('CONV_EVAL_JUDGE_PROVIDER') || 'deepseek').trim().toLowerCase(),

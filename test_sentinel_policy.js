@@ -78,5 +78,15 @@ check(db.__db.chat_friction_logs.some((r) => Array.isArray(r.error_log_ids) && r
 console.log('--- plan dispatch is gated ---');
 check(fs.readFileSync('src/workers/remediation.js', 'utf8').includes('SENTINEL_PROPOSALS_ENABLED is off'), 'plan dispatch returns skipped when the switch is off');
 
+// v1.61.9 — the micro-rule optimizer is part of the same gate: with the switch
+// off Sentinel detects/logs friction only, and prompt patches come solely from
+// the A/B-verified DeepEval healer.
+const sentinelSource = fs.readFileSync('src/workers/sentinel.js', 'utf8');
+const optimizerIndex = sentinelSource.indexOf('Saka Sentinel Micro-Rule Optimizer');
+const gateIndex = sentinelSource.lastIndexOf('if (isSentinelProposalsEnabled()) {', optimizerIndex);
+check(optimizerIndex > 0 && gateIndex > 0 && optimizerIndex - gateIndex < 600, 'the micro-rule optimizer is gated by SENTINEL_PROPOSALS_ENABLED');
+check(sentinelSource.includes('Sentinel keeps detecting and logging friction'), 'the gate is documented in the source');
+
+
 console.log('');
 console.log(passed + ' sentinel-policy assertions passed.');

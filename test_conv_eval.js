@@ -29,7 +29,7 @@ import {
   sampleCorpusCases,
   validateCase
 } from './src/services/convEvalCases.js';
-import { sanitizeHealPatch, formatHealNotice, formatHealFailureNotice, notifyHealFailureDigest, healFailedCase, HEAL_PATCH_MAX_CHARS } from './src/services/convEvalHealer.js';
+import { sanitizeHealPatch, formatHealNotice, formatHealFailureNotice, notifyHealFailureDigest, isCalibrationCase, enforceActiveRuleCap, healFailedCase, HEAL_PATCH_MAX_CHARS } from './src/services/convEvalHealer.js';
 import { formatBatchFailures, handleConvEvalCommand } from './src/services/convEvalConsole.js';
 import { ENV_SECTIONS } from './src/services/envAudit.js';
 
@@ -323,6 +323,75 @@ await notifyHealFailureDigest(
   { notify: async (text, subject, options) => { bigDigestCalls.push({ text, subject, options }); return { whatsapp: true, email: true }; } }
 );
 check(bigDigestCalls.length === 1 && /and 3 more/.test(bigDigestCalls[0].text), 'the digest caps at ten lines and says how many remain');
+
+// v1.61.9 — calibration cases are never healed; rule keys are reused; the
+// active-rule table is capped (oldest retires, audited).
+console.log('\n--- Test 11c: calibration guard, key reuse, rule cap (v1.61.9) ---');
+check(isCalibrationCase({ expected: 'fail' }) === true, 'expected:fail is a calibration case');
+check(isCalibrationCase({ expected: 'pass' }) === false, 'expected:pass is not a calibration case');
+check(isCalibrationCase({}) === false, 'a case without an expectation is not calibration');
+check(isCalibrationCase(null) === false, 'null is handled');
+process.env.CONV_EVAL_HEAL_ENABLED = 'on';
+const calibrationCalls = [];
+const calibrationRun = await healFailedCase({
+  supabase: null,
+  caseDef: { id: 'loop-expense-litres', expected: 'fail' },
+  judged: { ok: true, passed: false, aggregate: 0.2, threshold: 0.7 },
+  generate: async () => JSON.stringify(goodPatch),
+  judge: async () => ({ ok: true, passed: true, aggregate: 0.9 }),
+  notify: async (text, subject, options) => { calibrationCalls.push({ text, subject, options }); return { whatsapp: true, email: false }; }
+});
+check(calibrationRun.ok === false && calibrationRun.reason === 'calibration_case', 'a calibration case is refused before any judge spend');
+check(calibrationCalls.length === 0, 'a calibration case never notifies the superadmin');
+
+function chainMock(result, hooks = {}) {
+  const obj = {
+    select: () => obj,
+    eq: () => obj,
+    not: () => obj,
+    order: () => obj,
+    limit: () => Promise.resolve(result),
+    insert: () => Promise.resolve({ error: null }),
+    update: (patch) => ({ eq: (col, value) => { if (hooks.update) hooks.update(col, value, patch); return Promise.resolve({ error: null }); } }),
+    upsert: (payload) => { if (hooks.upsert) hooks.upsert(payload); return Promise.resolve({ error: null }); }
+  };
+  return obj;
+}
+const reusedUpserts = [];
+const reuseSupabase = {
+  from: (table) => {
+    if (table === 'conversation_eval_runs') return chainMock({ data: [{ patch_id: 'prior_rule_key' }] });
+    if (table === 'saka_dynamic_rules') return chainMock({ data: [] }, { upsert: (payload) => reusedUpserts.push(payload) });
+    return chainMock({ data: [] });
+  }
+};
+const reuseRun = await healFailedCase({
+  supabase: reuseSupabase,
+  caseDef: { id: 'report-recovery' },
+  judged: { ok: true, passed: false, aggregate: 0.6, threshold: 0.7 },
+  judgeConfig: { threshold: 0.7 },
+  generate: async () => JSON.stringify(goodPatch),
+  judge: async () => ({ ok: true, passed: true, aggregate: 0.9 }),
+  notify: async () => ({ whatsapp: true, email: false })
+});
+check(reuseRun.ok === true && reuseRun.ruleKey === 'prior_rule_key', 'a repeat heal reuses the case\'s existing rule key', reuseRun.ruleKey);
+check(reusedUpserts.length === 1 && reusedUpserts[0].rule_key === 'prior_rule_key', 'the upsert writes the reused key (no duplicate row)');
+
+const capUpdates = [];
+const capSupabase = {
+  from: (table) => chainMock({ data: [
+    { id: 1, rule_key: 'oldest_rule', updated_at: '2026-11-01T00:00:00Z' },
+    { id: 2, rule_key: 'middle_rule', updated_at: '2026-11-02T00:00:00Z' },
+    { id: 3, rule_key: 'newest_rule', updated_at: '2026-11-03T00:00:00Z' }
+  ] }, { update: (col, value, patch) => capUpdates.push({ col, value, patch }) })
+};
+const capped = await enforceActiveRuleCap(capSupabase, { maxActive: 2 });
+check(capped.retired.length === 1 && capped.retired[0] === 'oldest_rule', 'the oldest rule retires when above the cap', capped.retired);
+check(capUpdates.length === 1 && capUpdates[0].patch.is_active === false, 'retirement deactivates (never deletes) the rule');
+const underCap = await enforceActiveRuleCap(capSupabase, { maxActive: 5 });
+check(underCap.retired.length === 0, 'a table under the cap retires nothing');
+const noCap = await enforceActiveRuleCap(capSupabase, { maxActive: 0 });
+check(noCap.retired.length === 0, 'cap 0 means unlimited');
 if (prevHealFlag === undefined) delete process.env.CONV_EVAL_HEAL_ENABLED;
 else process.env.CONV_EVAL_HEAL_ENABLED = prevHealFlag;
 
@@ -364,9 +433,10 @@ check((CONV_EVAL_SQL.match(/CREATE INDEX IF NOT EXISTS/g) || []).length === 2, '
 check(CONV_EVAL_SQL.includes('before_score') && CONV_EVAL_SQL.includes('after_score') && CONV_EVAL_SQL.includes('transcript_hash'), 'the table tracks before/after scores and hashes (no message bodies)');
 const evalSection = ENV_SECTIONS.find((section) => section.section === 'CONVERSATION EVAL');
 check(Boolean(evalSection), 'the env registry declares the CONVERSATION EVAL section');
-for (const key of ['CONV_EVAL_ENABLED', 'CONV_EVAL_HEAL_ENABLED', 'CONV_EVAL_MIN_SCORE', 'CONV_EVAL_JUDGE_PROVIDER', 'CONV_EVAL_MAX_PATCHES_PER_RUN']) {
+for (const key of ['CONV_EVAL_ENABLED', 'CONV_EVAL_HEAL_ENABLED', 'CONV_EVAL_MIN_SCORE', 'CONV_EVAL_JUDGE_PROVIDER', 'CONV_EVAL_MAX_PATCHES_PER_RUN', 'CONV_EVAL_MAX_ACTIVE_RULES']) {
   check(evalSection.keys.includes(key), `env registry carries ${key}`);
 }
+check(getConvEvalConfig({}).maxActiveRules === 30, 'the active-rule cap defaults to 30 (0 = unlimited)');
 const emptyDigest = await handleConvEvalCommand(null, { mode: 'stats' });
 check(emptyDigest.reply.includes('No evaluation runs'), 'the stats command degrades cleanly without a database');
 
