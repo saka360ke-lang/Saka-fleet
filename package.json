@@ -1,7 +1,7 @@
 {
   "name": "sakafleet-backend",
   "type": "module",
-  "version": "1.59.1",
+  "version": "1.59.2",
   "description": "Saka Fleet Backend",
   "main": "index.js",
   "scripts": {
@@ -63,6 +63,7 @@
     "migrate:launch-awards": "node scripts/run_launch_awards_migration.js",
     "migrate:country-source": "node scripts/run_country_source_migration.js",
     "migrate:entry-labels": "node scripts/run_entry_labels_migration.js",
+    "migrate:signup-guards": "node scripts/run_signup_guard_migration.js",
     "reconcile:country": "node scripts/reconcile_country.js",
     "reconcile:welcome-trials": "node scripts/reconcile_welcome_trials.js",
     "migrate:country-learnings": "node scripts/run_country_learnings_migration.js",

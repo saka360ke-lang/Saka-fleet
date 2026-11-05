@@ -50,6 +50,9 @@
   var form = $('onboardForm');
   form.addEventListener('submit', function (e) {
     e.preventDefault();
+    // v1.59.2 — the Continue button is gated by the live availability check:
+    // a disabled button (unknown/taken number or email) can never advance.
+    if ($('detailsContinue') && $('detailsContinue').disabled) return;
     var firstName = $('firstName').value.trim();
     var lastName = $('lastName').value.trim();
     var email = $('email').value.trim().toLowerCase();
@@ -67,11 +70,123 @@
 
     if (!ok) return;
 
+    // Belt and braces: a known account can never advance (the button gate
+    // already blocks it; this covers Enter-key submits on a stale page).
+    if (availability.email === 'registered' || availability.phone === 'registered') return;
+
     var fullPhone = cc + digits;
     window.__onboard = { firstName: firstName, lastName: lastName, email: email, phone: fullPhone };
 
     showStep('stepLegal');
   });
+
+  /* ---------- v1.59.2: live availability check (phone + email) ---------- */
+  // The Continue button stays greyed out until BOTH fields are valid AND the
+  // backend confirms neither already has an account. A network problem fails
+  // OPEN (the server-side duplicate block still protects).
+  var AVAIL_CHECK_DEBOUNCE_MS = 500;
+  var availability = { email: null, phone: null, pending: 0, failed: false };
+  var availabilityTimers = { email: null, phone: null };
+
+  function fullPhoneValue() {
+    var ccEl = $('countryCode');
+    var phoneEl = $('phone');
+    if (!ccEl || !phoneEl) return null;
+    var digits = cleanDigits(phoneEl.value).replace(/^0+/, '');
+    if (digits.length < 9 || digits.length > 15) return null;
+    return ccEl.value + digits;
+  }
+
+  function setAvailabilityNote(field, message) {
+    var el = $(field + 'Status');
+    if (!el) return;
+    el.textContent = message || '';
+    el.classList.toggle('registered', Boolean(message));
+  }
+
+  function signedUpMessage(field, verified) {
+    var noun = field === 'email' ? 'email' : 'number';
+    return verified
+      ? 'This ' + noun + ' already has a Saka account — you are all set, continue on WhatsApp.'
+      : 'This ' + noun + ' already has a Saka account.';
+  }
+
+  function refreshContinueGate() {
+    var btn = $('detailsContinue');
+    if (!btn) return;
+    var first = $('firstName') ? $('firstName').value.trim() : '';
+    var last = $('lastName') ? $('lastName').value.trim() : '';
+    var email = $('email') ? $('email').value.trim().toLowerCase() : '';
+    var phone = fullPhoneValue();
+    var waiting = availability.pending > 0;
+    // A failed check fails OPEN: the server-side duplicate block still guards.
+    var emailOk = availability.email === 'available' || (availability.failed === true && isEmail(email));
+    var phoneOk = availability.phone === 'available' || (availability.failed === true && Boolean(phone));
+    btn.disabled = !(Boolean(first) && Boolean(last) && isEmail(email) && Boolean(phone) && !waiting && emailOk && phoneOk);
+  }
+
+  function runAvailabilityCheck() {
+    var email = $('email') ? $('email').value.trim().toLowerCase() : '';
+    var phone = fullPhoneValue();
+    var payload = {};
+    if (isEmail(email)) payload.email = email;
+    if (phone) payload.phone = phone;
+    if (!payload.email && !payload.phone) { refreshContinueGate(); return; }
+    availability.pending += 1;
+    refreshContinueGate();
+    fetch(API_BASE + '/api/onboard/check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+      .then(function (res) { return res.json().then(function (body) { return { ok: res.ok, body: body }; }); })
+      .then(function (out) {
+        availability.pending = Math.max(0, availability.pending - 1);
+        if (!out.ok || !out.body || out.body.success !== true) {
+          availability.failed = true;
+          refreshContinueGate();
+          return;
+        }
+        availability.failed = false;
+        if (payload.email) {
+          availability.email = out.body.email === 'registered' ? 'registered' : 'available';
+          setAvailabilityNote('email', availability.email === 'registered' ? signedUpMessage('email', out.body.verified === true) : '');
+        }
+        if (payload.phone) {
+          availability.phone = out.body.phone === 'registered' ? 'registered' : 'available';
+          setAvailabilityNote('phone', availability.phone === 'registered' ? signedUpMessage('phone', out.body.verified === true) : '');
+        }
+        refreshContinueGate();
+      })
+      .catch(function () {
+        availability.pending = Math.max(0, availability.pending - 1);
+        availability.failed = true;
+        refreshContinueGate();
+      });
+  }
+
+  function scheduleAvailabilityCheck(field) {
+    // An edited value invalidates its previous verdict until the check returns.
+    if (field === 'email') availability.email = null;
+    if (field === 'phone') availability.phone = null;
+    if (availabilityTimers[field]) clearTimeout(availabilityTimers[field]);
+    availabilityTimers[field] = setTimeout(runAvailabilityCheck, AVAIL_CHECK_DEBOUNCE_MS);
+    refreshContinueGate();
+  }
+
+  ['firstName', 'lastName'].forEach(function (id) {
+    var el = $(id);
+    if (el) el.addEventListener('input', refreshContinueGate);
+  });
+  ['email', 'phone'].forEach(function (id) {
+    var el = $(id);
+    if (!el) return;
+    el.addEventListener('input', function () { scheduleAvailabilityCheck(id); });
+    el.addEventListener('blur', function () { scheduleAvailabilityCheck(id); });
+  });
+  var countryCodeField = $('countryCode');
+  if (countryCodeField) countryCodeField.addEventListener('change', function () { scheduleAvailabilityCheck('phone'); });
+  refreshContinueGate();
 
   /* ---------- step 2: legal gate ---------- */
   var consent = $('consent');
@@ -166,7 +281,7 @@
     }
     var note = document.querySelector('.hero-note');
     if (note) {
-      note.textContent = '🎉 Launch offer — the first ' + body.slots_total + ' new accounts get a full ' +
+      note.textContent = '🎉 Launch offer — the first ' + body.slots_total + ' signups get a full ' +
         body.award_days + '-day trial · No card needed';
     }
     window.dataLayer = window.dataLayer || [];

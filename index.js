@@ -67,6 +67,7 @@ import {
   verifyWebOnboardCode,
   resendWebOnboardCode,
   completeWebOnboarding,
+  checkSignupAvailability,
   ensureWebOnboardOtpTable,
   inspectExistingSignup,
   notifyExistingSignup,
@@ -105,7 +106,7 @@ await fastify.register(rateLimit, {
 // the public health probe. Every other route stays closed to browsers.
 const LANDING_ORIGINS = (process.env.LANDING_ORIGINS || 'https://sakafleet.com,https://www.sakafleet.com')
   .split(',').map((s) => s.trim()).filter(Boolean);
-const CORS_PATHS = ['/api/onboard', '/api/onboard/verify', '/api/onboard/resend', '/api/onboard/launch-status', '/healthz', '/api/health'];
+const CORS_PATHS = ['/api/onboard', '/api/onboard/check', '/api/onboard/verify', '/api/onboard/resend', '/api/onboard/launch-status', '/healthz', '/api/health'];
 fastify.addHook('onRequest', async (request, reply) => {
   const origin = request.headers.origin;
   if (!origin) return;
@@ -559,6 +560,30 @@ fastify.post('/api/onboard', async (request, reply) => {
   } catch (err) {
     await logWebOnboardFailure(err, '/api/onboard', { email, phone, stage: 'onboard' });
     return reply.status(500).send({ success: false, error: 'Something went wrong. Please try again.' });
+  }
+});
+
+fastify.post('/api/onboard/check', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {
+  // v1.59.2 — live signup availability: the website checks the email and number
+  // as the user types so the Continue button stays greyed until both are free.
+  // Anti-enumeration: a tight per-route rate limit; answers are per-field only.
+  const body = request.body || {};
+  const emailRaw = typeof body.email === 'string' ? body.email.trim().toLowerCase().slice(0, 120) : null;
+  const phoneRaw = typeof body.phone === 'string' ? body.phone.trim().slice(0, 20) : null;
+  if (!emailRaw && !phoneRaw) {
+    return reply.status(400).send({ success: false, error: 'Provide an email or a phone number.' });
+  }
+  if (emailRaw && !/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(emailRaw)) {
+    return reply.status(400).send({ success: false, error: 'A valid email is required.' });
+  }
+  if (!supabase) return reply.status(200).send({ success: false });
+  try {
+    const result = await checkSignupAvailability(supabase, { email: emailRaw, phone: phoneRaw });
+    if (!result.ok) return reply.status(200).send({ success: false });
+    return { success: true, email: result.email, phone: result.phone, verified: result.verified };
+  } catch (err) {
+    console.warn('[WebOnboard] availability check failed:', err.message);
+    return reply.status(200).send({ success: false });
   }
 });
 

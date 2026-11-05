@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.59.1  
+**Version:** 1.59.2  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.59.2** | Sticky glowing launch banner (mobile-centred, "signups" copy) + live signup availability check (Continue gated) + DB unique phone/email guards + race merge | 158 |
 | **1.59.1** | Launch banner + live slot counter + opt-out tick box (checked by default), rules-of-engagement consolidation + rules 53-59 | 157 |
 | **1.59.0** | Persona v4 (brand compass + ack variety + pacing), phone-primary country lock + signup reconciliation, changelog preview feed, optional searchable record labels, live secrets audit | 156 |
 | **1.58.26** | Launch award: the first 50 welcome-trial starts get a 365-day trial (slot-gated, idempotent, race-safe), then the default 30-day flow; public fail-closed banner + UTM attribution | 155 |
@@ -4408,4 +4409,28 @@ quiz engine:
 **Frames touched.** `src/services/launchAwards.js` (opt-in SQL, gate, stats), `src/services/webOnboarding.js` (sanitize + create/update persistence + degrade), `index.js` (payload pass-through), `scripts/run_launch_awards_migration.js` (opt-in DDL), `landing/index.html` (banner + tick box), `landing/assets/js/main.js` (render/dismiss/opt-in/payload/analytics), `landing/assets/css/styles.css` (banner styles), `.clinerules` (consolidation + rules 53-59 + knobs), `test_launch_award.js` (+6 opt-in assertions), `test_web_onboarding.js` (+9), `test_landing_static.js` (+10), `SAKA_FLEET_ARCHITECTURE.md`, `CHANGELOG.md`, `landing/data/changelog.json`, `docs/*` (version stamp), `package.json`.
 
 **Suites run:** `test_launch_award` (29), `test_web_onboarding` (62), `test_landing_static` (incl. 10 new banner/opt-in checks), `test_duplicate_signup`, `test_first_message_flow`, `test_doc_sync`, `test_kb_docs`, `test_env_audit`, `npm run health` - green.
+
+---
+
+### 158. v1.59.2 - sticky glowing launch banner + live signup guard (2026-11-05)
+
+**Launch banner polish (improving v1.59.1).**
+- **Copy:** the banner now says "the first **50 signups** get a full 365-day trial" (the tick-box label follows the same wording; the hero-note upgrade is aligned to "signups"). The word "fleets" no longer appears in the offer sentence.
+- **Sticky on every screen size:** the banner markup moved INSIDE the sticky `<header class="nav">` (above `.nav-inner`), so banner + nav scroll together and the offer never scrolls away; dismissing the banner leaves the normal sticky nav. No fixed positioning, no body-padding hacks, no fragile top offsets.
+- **Attention glow:** a slow breathing inset glow (3.2 s cyan→violet pulse) — deliberately not a rapid strobe — with `@media (prefers-reduced-motion: reduce)` disabling the animation (rule 31 accessibility).
+- **Mobile:** at ≤640 px the banner stacks vertically and centres, the slots pill drops to its own line, and the dismiss ✕ keeps its own padded hit-area with text padding so nothing underlaps it.
+
+**Duplicate signup: audit + live guard.**
+- **Audit (no guessing):** the live `admin_audit_logs` show the latest duplicate attempt (2026-11-05 04:37, +254734852529 / david.njonjo@gmail.com) was **blocked** — `WEB_ONBOARD_EXISTING` (matchedBy phone) + `WEB_ONBOARD_DUPLICATE_NOTIFIED` (owner emailed + WhatsApp'd), no new row. A historical double-profile for that number existed across 11-03/11-04 (predating the v1.58.14 guard) and was removed by the clean slates. Live table: 3 profiles, **0 phone duplicates, 0 email duplicates**.
+- **`POST /api/onboard/check`** (new, CORS-allowlisted, tight per-route rate limit 20/min): per-field `available | registered` plus a `verified` flag; invalid payloads 400; ANY DB problem returns `success:false` so the client fails open (submit-time blocking still protects). Service: `checkSignupAvailability()` (never throws, reuses `findProfileByPhone` variants + case-insensitive email).
+- **Website gating:** debounced (500 ms) checks on email/phone input, blur and country-code change; per-field notes ("This number/email already has a Saka account…"); **Continue stays disabled** until names + valid email + valid phone AND both fields report `available`; a verified match shows "you are all set, continue on WhatsApp". Enter-key submits are guarded too, and a network failure fails OPEN (button enabled; server still blocks).
+- **DB defense-in-depth:** `SIGNUP_GUARD_SQL` — partial unique indexes on `profiles.phone_number` and `lower(profiles.email)` — applied live (`npm run migrate:signup-guards`, idempotent; safe because the live table had zero duplicates). A concurrent double-submit can no longer create a second row: `completeWebOnboarding` catches the unique violation, re-reads the winner, merges (email/verified/launch opt-in) and audits `WEB_ONBOARD_RACE_MERGED`.
+
+**Recurrence autopsy (rule 51).**
+- Defect class *account-existence known only at submit time* → siblings audited: submit-time block (already correct), pre-submit UI (fixed with the live check), step-1 Enter-key path (guarded), country-code change (re-checks), network failure (fail-open), verified-account path (clear "all set" copy).
+- Defect class *check-then-insert race* → DB unique indexes (fixed) + merge fallback (fixed, tested) + audit trail.
+
+**Frames touched.** `landing/index.html` (sticky header placement, copy, tick label, availability notes, gated Continue), `landing/assets/js/main.js` (availability checks + gate + hero-note copy), `landing/assets/css/styles.css` (sticky/glow/reduced-motion/mobile/avail-note), `src/services/webOnboarding.js` (`SIGNUP_GUARD_SQL`, `checkSignupAvailability`, race merge), `index.js` (CORS path, `/api/onboard/check`), `scripts/run_signup_guard_migration.js` (new), `package.json`, `test_duplicate_signup.js` (+8), `test_landing_static.js` (+10), `.clinerules` (rule 47 additive), `SAKA_FLEET_ARCHITECTURE.md`, `CHANGELOG.md`, `landing/data/changelog.json`.
+
+**Suites run:** `test_duplicate_signup` (21), `test_landing_static` (incl. 10 new sticky/glow/guard checks), `test_web_onboarding`, `test_launch_award`, `test_first_message_flow`, `test_doc_sync`, `test_kb_docs`, `test_env_audit`, `npm run health` - green.
 

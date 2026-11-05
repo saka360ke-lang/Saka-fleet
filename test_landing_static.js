@@ -320,5 +320,18 @@ check(mainJs.includes('launch_offer_dismiss') && mainJs.includes('saka_launch_ba
 check(mainJs.includes("event: 'successful_signup'") && mainJs.includes('launch_opt_in: typeof optedIn'), 'signup analytics record the opt-in choice');
 check(css.includes('.launch-banner') && css.includes('.launch-optin'), 'the banner and opt-in box are styled');
 
+console.log('\n--- Test 18: sticky glowing banner + live signup guard (v1.59.2) ---');
+const headerSlice = indexHtml.slice(indexHtml.indexOf('<header class="nav">'), indexHtml.indexOf('</header>'));
+check(headerSlice.includes('id="launchBanner"'), 'the banner lives INSIDE the sticky header (visible while scrolling)');
+check(indexHtml.includes('signups get a full') && !indexHtml.includes('fleets get a full'), 'the banner copy says "signups", not "fleets"');
+check(css.includes('@keyframes launch-glow') && css.includes('prefers-reduced-motion') && css.includes('animation: launch-glow'), 'the banner carries a slow glow pulse with a reduced-motion fallback');
+check(css.includes('the launch banner stacks and centres on small screens') && /\.launch-banner\s*\{[^}]*flex-direction: column/.test(css), 'the banner stacks and centres on mobile');
+check(indexHtml.includes('id="detailsContinue"') && /id="detailsContinue"[^>]*disabled/.test(indexHtml), 'the Continue button starts disabled (gated by the live check)');
+check(indexHtml.includes('id="emailStatus"') && indexHtml.includes('id="phoneStatus"'), 'both fields carry an availability note');
+check(mainJs.includes('/api/onboard/check') && mainJs.includes('refreshContinueGate') && mainJs.includes('scheduleAvailabilityCheck'), 'main.js checks availability as the user types and gates Continue');
+check(mainJs.includes('availability.failed === true') && mainJs.includes("availability.email === 'registered'"), 'a failed check fails open; a known account never advances');
+check(mainJs.includes('signedUpMessage') && mainJs.includes('continue on WhatsApp'), 'the user is told when the number/email already has an account');
+check(css.includes('.avail-note'), 'the availability note is styled');
+
 console.log('Stateless suite: file reads only — no database, no cleanup needed.');
 

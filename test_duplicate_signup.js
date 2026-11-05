@@ -5,7 +5,8 @@
 import assert from 'assert';
 import {
   phoneVariants, findProfileByPhone, findExistingProfile,
-  inspectExistingSignup, completeWebOnboarding, notifyExistingSignup, maskPhone
+  inspectExistingSignup, completeWebOnboarding, notifyExistingSignup, maskPhone,
+  checkSignupAvailability
 } from './src/services/webOnboarding.js';
 
 let passed = 0;
@@ -94,6 +95,44 @@ const notify = await notifyExistingSignup(db, { profile: db.__db.profiles[0], em
 check(notify.ok === true && notify.whatsapped === true, 'the owner is pinged on WhatsApp');
 check(waCalled === '+254734852529', 'the WhatsApp ping goes to the stored number');
 check(db.__db.admin_audit_logs.some((a) => a.action === 'WEB_ONBOARD_DUPLICATE_NOTIFIED'), 'the block is audited');
+
+console.log('--- Test 7: live availability check (v1.59.2) ---');
+const known = await checkSignupAvailability(db, { email: 'DAVID@example.com', phone: '0734852529' });
+check(known.ok === true && known.email === 'registered' && known.phone === 'registered', 'a known email and number both report registered');
+check(known.verified === true, 'the verified flag rides the availability answer');
+const partlyFree = await checkSignupAvailability(db, { email: 'brand.new@example.com', phone: '+254700000000' });
+check(partlyFree.email === 'available' && partlyFree.phone === 'available', 'a free email and number both report available');
+const noClient = await checkSignupAvailability(null, { phone: '+254700000000' });
+check(noClient.ok === false, 'a missing client fails open (never a false "registered")');
+const brokenCheck = await checkSignupAvailability({ from() { throw new Error('db down'); } }, { phone: '+254700000000' });
+check(brokenCheck.ok === false, 'a DB failure fails open (never a false "registered")');
+
+console.log('--- Test 8: unique-violation race merges into the existing profile (v1.59.2) ---');
+let findCalls = 0;
+const raceDb = {
+  from(name) {
+    if (name === 'profiles') {
+      return {
+        select: () => ({
+          in: () => ({
+            limit: async () => {
+              findCalls += 1;
+              if (findCalls === 1) return { data: [], error: null };
+              return { data: [{ id: 'p-raced', phone_number: '+254700000123', email_verified: false, full_name: null, preferred_language: null }], error: null };
+            }
+          }),
+          ilike: () => ({ limit: async () => ({ data: [], error: null }) })
+        }),
+        insert: () => Promise.resolve({ error: { message: 'duplicate key value violates unique constraint "idx_profiles_phone_unique"' } }),
+        update: () => ({ eq: async () => ({ error: null }) })
+      };
+    }
+    return { insert: () => Promise.resolve({ error: null }) };
+  }
+};
+const raced = await completeWebOnboarding(raceDb, { email: 'race@example.com', phone: '+254700000123', firstName: 'R', lastName: 'A', verified: true });
+check(raced.ok === true && raced.created === false && raced.raced === true, 'a unique-violation race merges instead of failing the signup');
+check(findCalls >= 2, 'the race path re-reads the profile before merging');
 
 console.log('');
 console.log(passed + ' duplicate-signup assertions passed.');

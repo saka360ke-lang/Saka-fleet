@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.59.2] - 2026-11-05
+
+- **Sticky, glowing launch banner — and the copy says "signups".** The banner now lives inside the sticky header, so it stays visible while scrolling on every screen size; it carries a slow breathing glow (never a rapid strobe, with a reduced-motion fallback) and stacks/centres on mobile with the dismiss button always reachable. The offer line now reads "the first 50 signups get a full 365-day trial".
+- **No more duplicate signups from the website.** The signup form now checks the number and the email live as you type (`POST /api/onboard/check`, debounced, per-field answers): a known number/email is called out immediately and the Continue button stays greyed out until both are free (a verified account gets "you are all set — continue on WhatsApp"). Network problems fail open, so the form never dead-ends; the server-side block still protects. DB defense-in-depth: partial unique indexes on `profiles.phone_number` and `lower(profiles.email)` (applied live), and a check-then-insert race now merges into the existing profile (audited `WEB_ONBOARD_RACE_MERGED`) instead of erroring.
+- **Signup-log audit:** the latest duplicate attempt was already blocked (`WEB_ONBOARD_EXISTING` + `WEB_ONBOARD_DUPLICATE_NOTIFIED`, no new row); the historical double-profile predated the v1.58.14 guard and was removed by the clean slates. Live table: 3 profiles, 0 phone/email duplicates.
+- **Recurrence autopsy (rule 51).** *Account existence known only at submit time* → live pre-check (fixed), Enter-key path (guarded), country-code change (re-checks), network failure (fail-open), verified account (clear copy). *Check-then-insert race* → unique indexes + merge fallback + audit.
+- **Frames touched:** landing/{index.html,assets/js/main.js,assets/css/styles.css,data/changelog.json}, src/services/webOnboarding.js, index.js, scripts/run_signup_guard_migration.js (new), package.json, test_duplicate_signup.js, test_landing_static.js, .clinerules (rule 47 additive), SAKA_FLEET_ARCHITECTURE.md.
+- **Suites run:** test_duplicate_signup (21), test_landing_static, test_web_onboarding, test_launch_award, test_first_message_flow, test_doc_sync, test_kb_docs, test_env_audit — green; `npm run health` green.
+
 ## [1.59.1] - 2026-11-05
 
 - **Launch offer, front and centre.** The website now shows a slim, dismissible launch banner with a live slots-left counter, the offer terms and a production note ("Your logs and feedback help us polish Saka for production"). It renders only while the campaign can actually award — zero slots or any status error hides the banner and the site keeps its truthful 30-day copy.

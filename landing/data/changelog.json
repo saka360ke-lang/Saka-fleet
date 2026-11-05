@@ -1,6 +1,13 @@
 {
-  "latest": "1.59.1",
+  "latest": "1.59.2",
   "entries": [
+    {
+      "version": "1.59.2",
+      "date": "2026-11-05",
+      "title": "The banner that follows you",
+      "preview": "The launch banner now sticks while you scroll — and duplicate signups stop before Continue.",
+      "summary": "The launch offer banner now stays visible as you scroll on every screen size, with a soft glow, a live slots counter and a mobile layout that centres everything. The signup form also checks your number and email live as you type: if either already has a Saka account you are told straight away, and the Continue button stays greyed out until both are free."
+    },
     {
       "version": "1.59.1",
       "date": "2026-11-05",

@@ -24,6 +24,18 @@ export const WEB_ONBOARD_MAX_ATTEMPTS = 3;
 export const WEB_ONBOARD_RESEND_COOLDOWN_MS = 60 * 1000; // 60 seconds
 export const WEB_ONBOARD_AUDIT_ACTOR = 'WEB_ONBOARD';
 
+/**
+ * v1.59.2 — DB-level signup guards (defense-in-depth behind the app checks).
+ * Partial unique indexes make a second account for the same number or email
+ * physically impossible, even in a concurrent race. Idempotent.
+ *
+ * Run: npm run migrate:signup-guards
+ */
+export const SIGNUP_GUARD_SQL = `
+CREATE UNIQUE INDEX IF NOT EXISTS idx_profiles_phone_unique ON public.profiles (phone_number) WHERE phone_number IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_profiles_email_unique ON public.profiles (lower(email)) WHERE email IS NOT NULL AND email <> '';
+`;
+
 export const WEB_ONBOARD_OTP_SQL = `
 CREATE TABLE IF NOT EXISTS public.${WEB_ONBOARD_OTP_TABLE} (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -331,6 +343,22 @@ export async function completeWebOnboarding(supabase, { email, phone, firstName,
     if (error && /utm_|column .* does not exist|schema cache/i.test(error.message || '')) {
       ({ error } = await supabase.from('profiles').insert([profileRow]));
     }
+    if (error && /duplicate key|unique constraint|23505/i.test(error.message || '')) {
+      // v1.59.2 — a concurrent signup created the row between our lookup and the
+      // insert: merge into it (audited) instead of failing the signup.
+      const raced = await findProfileByPhone(supabase, phone);
+      if (raced) {
+        const raceUpdates = { updated_at: new Date().toISOString() };
+        if (verified) {
+          raceUpdates.email = email;
+          raceUpdates.email_verified = true;
+        }
+        if (launchOptIn === true || launchOptIn === false) raceUpdates.launch_opt_in = launchOptIn;
+        try { await supabase.from('profiles').update(raceUpdates).eq('id', raced.id); } catch { /* merge is best-effort */ }
+        await writeAudit(supabase, 'WEB_ONBOARD_RACE_MERGED', { email, phone, profileId: raced.id });
+        return { ok: true, created: false, raced: true };
+      }
+    }
     if (error) return { ok: false, error: error.message };
     await writeAudit(supabase, verified ? 'WEB_ONBOARD_VERIFIED' : 'WEB_ONBOARD_CREATED', {
       email, phone,
@@ -435,6 +463,39 @@ export async function findExistingProfile(supabase, { email, phone }) {
     if (byEmail && byEmail.length) return { profile: byEmail[0], matchedBy: 'email' };
   }
   return { profile: null, matchedBy: null };
+}
+
+/**
+ * v1.59.2 — live signup availability (the website checks as the user types).
+ * Reports per-field `available | registered` plus whether the matching account
+ * is already verified. Never throws; any DB problem returns `ok:false` so the
+ * client fails open (the submit-time duplicate block still protects).
+ */
+export async function checkSignupAvailability(supabase, { email = null, phone = null } = {}) {
+  if (!supabase) return { ok: false, error: 'no_client' };
+  try {
+    const result = { ok: true, email: null, phone: null, verified: false };
+    const cleanEmail = String(email || '').trim().toLowerCase();
+    if (cleanEmail) {
+      const { data, error } = await supabase.from('profiles')
+        .select('id, email, email_verified')
+        .ilike('email', cleanEmail)
+        .limit(3);
+      if (error) return { ok: false, error: error.message };
+      const match = (data || [])[0] || null;
+      result.email = match ? 'registered' : 'available';
+      if (match?.email_verified) result.verified = true;
+    }
+    const cleanPhone = normalizePhoneE164(phone);
+    if (cleanPhone) {
+      const match = await findProfileByPhone(supabase, cleanPhone);
+      result.phone = match ? 'registered' : 'available';
+      if (match?.email_verified) result.verified = true;
+    }
+    return result;
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
 }
 
 /** Mask a phone for the duplicate-signup email: +254****852529. */
