@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.61.4  
+**Version:** 1.61.5  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.61.5** | Records lane: short type reads ("Fuel all time"/"Fuel list") are reads, challenge phrasing replays the last query, plate false-positives fixed ("MY2"); DeepEval delivering in production | 169 |
 | **1.61.4** | DeepEval delivery guarantee: first tick 60 s after boot, resolved config logged at boot, tick outcome logged | 168 |
 | **1.61.3** | DeepEval online & always-on (15-min ticks, 0 = unlimited, live chat-history cases) + five live lane fixes (plural driver docs, merged expiry list, number search, photo/paste capture) + coverage audit + edge taxonomy | 168 |
 | **1.61.2** | Driver-document read/confirm lane (live PSV friction 2026-11-05) + driver rows on the compliance card + judge ENGINE FACTS + expanded capture verbs | 167 |
@@ -4705,4 +4706,29 @@ quiz engine:
 **Frames touched:** `src/services/{complianceAnswers,complianceCapture,convEval,convEvalCases,envAudit}.js`, `src/workers/convEval.js`, `src/routes/whatsapp.js`, `scripts/{audit_conv_coverage(new),generate_synthetic_cases}.js`, `evals/cases/syn_*_20261105-113416.json`, `.env.example`, `test_{conv_eval,driver_compliance_answers}.js`, `package.json`, `landing/data/changelog.json` + stamped assets, `docs/{PRODUCT_QA,SAKA_TRAINING}.md`, `SAKA_FLEET_ARCHITECTURE.md`, `CHANGELOG.md`.
 
 **Suites run:** `test_driver_compliance_answers` (63), `test_conv_eval` (119), `test_synthetic_cases` (91), `test_env_audit`, `test_agent_training`, `test_compliance_capture`, `test_vehicle_compliance`, `test_record_answers`, `test_quiz_flow`, `test_first_message_flow`, `test_driver_profile_onboarding`, `test_landing_static`, `test_doc_sync`, `test_kb_docs`, `test_sentinel_policy` - green; `npm run health` green.
+
+### 169. v1.61.5 - records lane hardening: short type reads, challenge replay & plate safety (2026-11-05)
+
+**A. The live audit that triggered this release.** The 12:28-12:30Z chats (the first window after DeepEval began delivering) exposed three records-lane defects:
+
+1. **`Fuel all time` / `Fuel list` started a new expense quiz.** Neither phrase carries a question word, so `parseRecordQuestion()` returned `not-a-question`; the LOG_EXPENSE lane took over and asked *"Expense type noted. Which vehicle is this for?"*. The user cancelled twice and only got the list on the third attempt. The parking path (`abandonQuiz(reason:'record_query')`) was already correct — the parser never armed it.
+2. **A challenge minted a fresh fleet-wide total.** `That record | Across my 2 vehicles. Cannot be right` was answered with *"Expenses all time: Ksh 18,300 (4 records)"* — a fresh all-types, all-vehicles read instead of the fuel record the user was disputing.
+3. **`MY2` phantom plate.** The plate regex read "my 2" as a plate, so a scope resolved that nobody asked for.
+
+**B. Fixes (all deterministic, zero tokens).**
+
+- **Short type reads** — `SHORT_TYPE_SPAN_RE` (type word: fuel/diesel/petrol/gasoline/service/repairs/parts/tyres/parking/fines/wash/insurance/expenses/earnings/records/entries/ledger) plus `SHORT_TAIL_RE` (list/entries/records/history/log/ledger/report/summary/all time/so far/total/today/yesterday/this|last week|month|year). Requires **no amount and no log verb** (`looksLikeLogStatement` guard runs first), so `Fuel 2000` and `Service 5000` stay out of the records lane while `Fuel all time`, `Fuel list`, `fuel report` and `Service history` answer from `expense_logs`.
+- **Challenge replay** — `isRecordChallenge()` (exported; short phrasing ≤140 chars: "cannot be right", "can't be right", "not right", "that's wrong", "doesn't add up", "that record", "those records", "re-check that", "explain that figure/total"). The route stores `session.lastRecordQuery` (kind, earning, expenseTypes, range, vehiclePlate, keyword, text + `at`) after every answered read, persisted with the rest of the session snapshot; a challenge within **15 minutes** replays that exact query with the prefix *"↩️ Same record, straight from your ledger — nothing changed"* and a `my entries` pointer for corrections. No prior query → normal parsing (no hijack).
+- **Plate safety** — exported `extractPlate()` skips English filler prefixes (`PLATE_PREFIX_STOP`: MY, IN, ON, AT, TO, OF, IS, IT, WE, HE, BY, AS, BE, DO, GO, NO, SO, UP, US, IF, OR, AN, ME, AM, PM, OK). Used for both `hasPlateLike` and `vehiclePlate`, so plates still scope reads (`Fuel entries for KBJ 819C` → `KBJ819C`) but prose never becomes one.
+
+**C. Rule 51 sibling sweep (defect class: text → structured identifier).** `documentLens.js` requires three digits from a document; `ocrNormalizer.js` validates through country-specific patterns (NG/ZA/AU); `resolveLedgerVehicleScope()` (entryAnswers) matches tokens only against real `vehicles.plate_number` values. No other site can mint a phantom plate, and no other parser lost short-form reads (the compliance lane's plural detector landed in v1.61.3).
+
+**D. DeepEval pipeline verification (same session).** Root cause of the production silence: PowerShell split the unquoted `--update-env-vars` comma list, so `CONV_EVAL_ENABLED` held the entire string and every tick logged `skipped: disabled`. Corrected with a quoted value; revision `00304` logs `enabled=on heal=on intervalMs=900000 maxCases=100 judge=deepseek` at boot and delivered `tick done: 66 case(s), 16 passed, 50 failed, 0 errored, 2 healed`; `conversation_eval_runs` = 68 rows, `ai_usage_logs` `conversation_eval` = 76 calls, 2 `CONV_EVAL_HEALED` rules (`no_unstated_fleet_facts`, `acknowledge_distress_before_data`) with 4 honest `no_improvement` refusals. The newest live exchanges (12:28-12:30Z) are picked up by the next 15-minute tick.
+
+**E. Regression pins.** `test_record_answers.js` gains 17 assertions (short type reads, log-line safety, `MY2` regression, real plate, challenge detection/limits, live challenge line never becomes a fleet total, replayed answer shape). Corpus gains `fuel-short-read-not-quiz` and `record-challenge-replays-last-query` (18 cases).
+
+**Frames touched:** `src/services/recordAnswers.js`, `src/routes/whatsapp.js`, `test_record_answers.js`, `evals/cases/conversation_cases.json`, `package.json`, `SAKA_FLEET_ARCHITECTURE.md`, `CHANGELOG.md`.
+
+**Suites run:** `test_record_answers` (75), `test_conv_eval` (121), `test_quiz_flow` (147), `test_first_message_flow` (53), `test_entry_ledger` — green; `npm run health` green.
+
 

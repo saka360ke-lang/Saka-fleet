@@ -183,6 +183,24 @@
         { "role": "user", "text": "List psv badge" }
       ],
       "reply": "Nothing under licences & permits expenses all time yet — send the next one and I'll keep it here.\n🚗 Across your 2 vehicles."
+    },
+    {
+      "id": "fuel-short-read-not-quiz",
+      "tags": ["records", "fuel", "regression", "live-2026-11-05"],
+      "note": "Live defect v1.61.5: \"Fuel all time\" carried no question word, so the expense quiz swallowed the read and asked which vehicle to log for, instead of answering from the ledger.",
+      "turns": [
+        { "role": "user", "text": "Fuel all time" }
+      ],
+      "reply": "📊 *Fuel all time:* Ksh 2,000 (1 record) · 8.97 L\n🚗 For *KBJ 819C*."
+    },
+    {
+      "id": "record-challenge-replays-last-query",
+      "tags": ["records", "challenge", "regression", "live-2026-11-05"],
+      "note": "Live defect v1.61.5: a challenge (\"that record cannot be right\") was answered with a fresh fleet-wide all-expenses total plus a bogus plate (MY2). The challenge lane must replay the last answered query, unchanged.",
+      "turns": [
+        { "role": "user", "text": "That record | Across my 2 vehicles. Cannot be right" }
+      ],
+      "reply": "↩️ Same record, straight from your ledger — nothing changed:\n\n📊 *Fuel all time:* Ksh 2,000 (1 record) · 8.97 L\n🚗 For *KBJ 819C*.\n\nIf a row looks wrong, reply *my entries* to edit or delete it."
     }
   ]
 }

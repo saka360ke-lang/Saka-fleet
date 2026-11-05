@@ -1,6 +1,13 @@
 {
-  "latest": "1.61.4",
+  "latest": "1.61.5",
   "entries": [
+    {
+      "version": "1.61.5",
+      "date": "2026-11-05",
+      "title": "Fuel reads answer instantly; disputed figures get the record",
+      "preview": "Short asks like \"Fuel all time\" now read your ledger, and disputing a figure replays that exact record.",
+      "summary": "Two records-lane fixes from live chats: a short type ask such as \"Fuel all time\", \"Fuel list\" or \"fuel report\" now answers straight from your logged entries (it used to be mistaken for a new expense being logged, so you had to cancel), and a challenge like \"that record cannot be right\" re-shows the very record you were disputing \u2014 same vehicle, same window, same numbers \u2014 instead of a fresh fleet-wide total. Phrases like \"my 2 vehicles\" can no longer be mistaken for a plate number."
+    },
     {
       "version": "1.61.4",
       "date": "2026-11-05",

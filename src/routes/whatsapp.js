@@ -136,7 +136,7 @@ import { ensureCountryBucket, getCountryLearningsLine } from '../services/countr
 import { applyOdometerReading, applyOperatingHours } from '../services/maintenanceReminders.js';
 import { handleQuizTurn, detectQuizStart, shouldPauseQuizForChat, getCurrentQuizField, detectFlowSwitch, getFlowDefinition, looksLikeReportRequest, getActiveQuiz, markQuizTurn, abandonQuiz } from '../services/quizEngine.js';
 import { matchNarrativeVehicle, buildNarrativeDraft, narrativeDraftFields, narrativeDraftExtras, shouldPrefillNarrativeDraft, isNarrativeIntakeEnabled, isNarrativeEligibleText, buildNarrativeParagraphDrafts, renderNarrativeBatchCard, resolveNarrativeBatchTurn, describeNarrativeDraft } from '../services/narrativeDraft.js';
-import { parseRecordQuestion, formatRecordAnswer } from '../services/recordAnswers.js';
+import { parseRecordQuestion, formatRecordAnswer, isRecordChallenge } from '../services/recordAnswers.js';
 import { isDeliveryBlocked, markDeliveryBlocked } from '../services/deliveryGuard.js';
 import { recordFriction } from '../services/frictionTracker.js';
 import { queryRecordLedger } from '../services/recordQuery.js';
@@ -1489,12 +1489,24 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         }
         // v1.36.0 — Record answers (QUERY_RECORDS): deterministic zero-token
         // answers from the ledger. Same guards as the ledger lane above.
+        // v1.61.5 — a challenge ("that record cannot be right") replays the LAST
+        // answered record query (same type, same window, same scope) instead of
+        // falling through to a fresh fleet-wide total (live 2026-11-05: a fuel
+        // complaint was answered with an all-expenses total).
+        const lastRecordQuery = session?.lastRecordQuery
+          && (Date.now() - Number(session.lastRecordQuery.at || 0) <= 15 * 60 * 1000)
+          ? session.lastRecordQuery
+          : null;
+        const recordChallenge = !quizPhaseLocked && lastRecordQuery?.spec
+          && isRecordChallenge(commandText)
+          ? { ...lastRecordQuery.spec, ok: true, challenge: true }
+          : null;
         const recordQuestion = quizPhaseLocked
           ? { ok: false }
-          : parseRecordQuestion(commandText, {
+          : (recordChallenge || parseRecordQuestion(commandText, {
             countryCode: countryInfo?.country_code || 'GLOBAL',
             locale: countryInfo?.locale || 'en-US'
-          });
+          }));
         if (recordQuestion.ok && quizForFastPath && !quizPhaseLocked) {
           abandonQuiz(session, { reason: 'record_query' });
         }
@@ -2090,17 +2102,35 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               });
               otherLabelBlock = formatOtherLabelMatches(otherLabelGroups);
             }
+            const recordAnswerText = formatRecordAnswer(recordResult, recordQuestion, {
+              vehicles: existingVehicles,
+              currency: countryInfo?.currency || 'USD',
+              locale: countryInfo?.locale || 'en-US',
+              // v1.58.22 - only claim a vehicle scope when one actually resolved.
+              scopePlate: recordScope.reason === 'plate' ? recordQuestion.vehiclePlate : false
+            }) + otherLabelBlock;
+            // v1.61.5 — remember the answered query so a challenge replays it.
+            if (session && !recordChallenge) {
+              session.lastRecordQuery = {
+                at: Date.now(),
+                spec: {
+                  kind: recordQuestion.kind,
+                  earning: recordQuestion.earning,
+                  expenseTypes: recordQuestion.expenseTypes,
+                  range: recordQuestion.range,
+                  vehiclePlate: recordQuestion.vehiclePlate,
+                  keyword: recordQuestion.keyword,
+                  text: recordQuestion.text
+                }
+              };
+            }
             aiResult = {
               intent: 'QUERY_RECORDS',
               extracted_data: {},
               __deterministicRecords: true,
-              reply_message: formatRecordAnswer(recordResult, recordQuestion, {
-                vehicles: existingVehicles,
-                currency: countryInfo?.currency || 'USD',
-                locale: countryInfo?.locale || 'en-US',
-                // v1.58.22 - only claim a vehicle scope when one actually resolved.
-                scopePlate: recordScope.reason === 'plate' ? recordQuestion.vehiclePlate : false
-              }) + otherLabelBlock
+              reply_message: recordChallenge
+                ? `↩️ Same record, straight from your ledger — nothing changed:\n\n${recordAnswerText}\n\nIf a row looks wrong, reply *my entries* to edit or delete it.`
+                : recordAnswerText
             };
           }
 

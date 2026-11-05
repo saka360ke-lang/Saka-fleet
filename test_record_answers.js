@@ -6,7 +6,7 @@ dotenv.config();
 import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 import { runWithCleanup } from './scripts/testCleanup.js';
-import { parseRecordQuestion, formatRecordAnswer, RECORD_ANSWER_VERSION, looksLikeLogStatement } from './src/services/recordAnswers.js';
+import { parseRecordQuestion, formatRecordAnswer, RECORD_ANSWER_VERSION, looksLikeLogStatement, isRecordChallenge, extractPlate } from './src/services/recordAnswers.js';
 import { queryRecordLedger } from './src/services/recordQuery.js';
 import { resolveDateRange, formatNairobiDate } from './src/services/dateParser.js';
 
@@ -144,6 +144,41 @@ const keywordAnswerShape = formatRecordAnswer(
   { vehicles: [], ...COPY }
 );
 check('the keyword answer names the label and the row chip', /label "karen"/.test(keywordAnswerShape) && /#karen run/.test(keywordAnswerShape), keywordAnswerShape);
+
+// v1.61.5 — live 2026-11-05 (five lanes):
+//  • "Fuel all time" / "Fuel list" must be LEDGER READS, not a new expense quiz.
+//  • "That record … Cannot be right" must never mint a fleet-wide total nor a
+//    bogus plate ("MY2") — the challenge lane replays the last query instead.
+console.log('=== v1.61.5 - short type reads, challenge phrasing, plate safety ===');
+const fuelAllTime = parseRecordQuestion('Fuel all time', KE);
+check('"Fuel all time" is a records read', fuelAllTime.ok === true && fuelAllTime.kind === 'total', fuelAllTime);
+check('"Fuel all time" scopes to Fuel', (fuelAllTime.expenseTypes || []).includes('Fuel'), fuelAllTime.expenseTypes);
+check('"Fuel all time" is the all-time window', fuelAllTime.range === null, fuelAllTime.range);
+const fuelList = parseRecordQuestion('Fuel list', KE);
+check('"Fuel list" is a list read on Fuel', fuelList.ok === true && fuelList.kind === 'list' && fuelList.expenseTypes.includes('Fuel'), fuelList);
+const fuelReportQ = parseRecordQuestion('fuel report', KE);
+check('"fuel report" is a read, not a log', fuelReportQ.ok === true && fuelReportQ.expenseTypes.includes('Fuel'), fuelReportQ);
+const serviceHistoryQ = parseRecordQuestion('Service history', KE);
+check('"Service history" is a read', serviceHistoryQ.ok === true, serviceHistoryQ);
+check('"Fuel 2000" stays out of the records lane', parseRecordQuestion('Fuel 2000', KE).ok === false);
+check('"Service 5000" stays out of the records lane', parseRecordQuestion('Service 5000', KE).ok === false);
+check('a past-tense fill line is still a log', looksLikeLogStatement('Filled 40L diesel at 50350 for 5500 kes') === true);
+check('a phrase never becomes a plate (MY2 regression)', extractPlate('Across my 2 vehicles') === null);
+check('a real plate still resolves through extractPlate', extractPlate('KBJ 819C') === 'KBJ819C');
+const plateRead = parseRecordQuestion('Fuel entries for KBJ 819C', KE);
+check('a real plate still scopes a read', plateRead.vehiclePlate === 'KBJ819C', plateRead.vehiclePlate);
+check('challenge phrasing is detected', isRecordChallenge('That record cannot be right') === true);
+check('a contraction challenge is detected', isRecordChallenge("This total doesn't add up") === true);
+check('a plain read is not a challenge', isRecordChallenge('Fuel all time') === false);
+check('a long paragraph is never a challenge replay', isRecordChallenge(`That record cannot be right ${'x'.repeat(200)}`) === false);
+const liveChallengeLine = parseRecordQuestion('That record | Across my 2 vehicles. Cannot be right', KE);
+check('the live challenge line never becomes a fleet total', liveChallengeLine.ok === false, liveChallengeLine);
+const replayAnswer = formatRecordAnswer(
+  { ok: true, rows: [{ amount: 2000, expense_type: 'Fuel', created_at: '2026-11-04T09:00:00+03:00' }], count: 1, total: 2000, liters: 0, average: 2000, amountCol: 'amount' },
+  { kind: 'list', earning: false, expenseTypes: ['Fuel'], range: null },
+  { vehicles: [], ...COPY }
+);
+check('a replayed fuel read names Fuel and the amount', /Fuel/.test(replayAnswer) && /2,000/.test(replayAnswer), replayAnswer);
 
 const emptyReply = formatRecordAnswer(
   { ok: true, rows: [], count: 0, total: 0, liters: 0, average: 0, amountCol: 'amount' },

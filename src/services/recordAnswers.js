@@ -59,6 +59,46 @@ const EXPLICIT_LOG_RE = /^\s*(?:please\s+)?(?:log|save|record|add)\s+(?:this|it|
 const QUESTION_LEAD_RE = /^\s*(?:what|whats|what's|how|when|which|who|where|why|show|list|display|summari[sz]e|total|count|average|avg|pull|get|fetch|give|does|do|did|is|are|was|were|tell)\b/i;
 const AMOUNT_RE = /\b\d[\d,]*(?:\.\d+)?\s*(?:kes|ksh|usd|eur|gbp|shillings?|bob)\b|(?:kes|ksh|\$|€|£|₦|₹)\s?\d[\d,]*/i;
 
+// v1.61.5 — short type reads ("Fuel list", "Fuel all time", "fuel report").
+// Live 2026-11-05: "Fuel all time" carried no question word, so the expense
+// quiz swallowed the read and asked "which vehicle is this for?" instead of
+// answering from the ledger. A type word + a list/period tail with no amount
+// and no log verb is a READ, never a log.
+const SHORT_TYPE_SPAN_RE = /^(?:my\s+|the\s+)?(?:fuel|fuels|diesel|petrol|gasoline|service|services|repairs?|parts?|tyres?|tires?|parking|fines?|washes|wash|insurance|expenses?|earnings?|records?|entries?|ledger)\b[\p{L}\p{N} &/'-]{0,32}$/iu;
+const SHORT_TAIL_RE = /\b(?:list|lists|entries|records?|history|log|logs|ledger|report|summary|all(?:\s+time)?|so\s+far|total|today|yesterday|this\s+(?:week|month|year)|last\s+(?:week|month|year))\b/i;
+
+// v1.61.5 — plate detection must never read English filler as a plate: live
+// 2026-11-05, "Across my 2 vehicles. Cannot be right" produced the bogus plate
+// "MY2" and a scoped read nobody asked for. Stopword prefixes are skipped.
+const PLATE_PREFIX_STOP = new Set([
+  'MY', 'IN', 'ON', 'AT', 'TO', 'OF', 'IS', 'IT', 'WE', 'HE', 'BY', 'AS', 'BE',
+  'DO', 'GO', 'NO', 'SO', 'UP', 'US', 'IF', 'OR', 'AN', 'ME', 'AM', 'PM', 'OK'
+]);
+const PLATE_RE = /\b([A-Z]{2,3})\s?(\d{1,4})([A-Z]?)\b/g;
+
+/** First plate-like token that is not an English filler word (null if none). */
+export function extractPlate(text = '') {
+  const upper = String(text || '').toUpperCase();
+  PLATE_RE.lastIndex = 0;
+  let match = PLATE_RE.exec(upper);
+  while (match) {
+    if (!PLATE_PREFIX_STOP.has(match[1])) return `${match[1]}${match[2]}${match[3]}`;
+    match = PLATE_RE.exec(upper);
+  }
+  return null;
+}
+
+// v1.61.5 — challenge phrasing ("that record cannot be right") replays the LAST
+// answered record query instead of minting a fresh fleet-wide total.
+const RECORD_CHALLENGE_RE = /\b(?:cannot\s+be\s+right|can'?t\s+be\s+right|not\s+right|that'?s\s+wrong|that\s+is\s+wrong|wrong\s+(?:total|figure|number|amount)|doesn'?t\s+add\s+up|does\s+not\s+add\s+up|that\s+record|those\s+records|re-?check\s+that|check\s+that\s+(?:record|figure|number|total)|explain\s+(?:that|this)\s+(?:figure|number|total))\b/i;
+
+/** True when the message challenges a figure just answered (short phrasing only). */
+export function isRecordChallenge(text = '') {
+  const s = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!s || s.length > 140) return false;
+  return RECORD_CHALLENGE_RE.test(s);
+}
+
 /** True when the text is a past-tense expense statement to LOG, not a question. */
 export function looksLikeLogStatement(text = '') {
   const s = String(text || '').replace(/\s+/g, ' ').trim();
@@ -91,7 +131,7 @@ export function parseRecordQuestion(text = '', { countryCode = 'GLOBAL', locale 
   // "Why can I not see extra notes on an entry?" got two expense summaries).
   if (/^\s*why\b/i.test(source)) return { ok: false, reason: 'why-question' };
 
-  const hasPlateLike = /\b[A-Z]{2,3}\s?\d{1,4}[A-Z]?\b/.test(source.toUpperCase());
+  const hasPlateLike = Boolean(extractPlate(source));
   // v1.59.0 — a keyword search is always a records question (zero-token lane).
   const keyword = extractRecordKeyword(source);
   // v1.58.23 - a bare "…yes?" is not a records question: '?' only counts when
@@ -104,7 +144,11 @@ export function parseRecordQuestion(text = '', { countryCode = 'GLOBAL', locale 
     || /^(what|how|show|list|display|summarize|summarise|total|count|pull|get|fetch|give|search|find)\b/i.test(source)
     || (RECORDS_WORD_RE.test(source) && (EXPENSE_SIDE_RE.test(source) || EARNING_RE.test(source) || hasPlateLike))
     || questionMarkSignal;
-  if (!looksLikeQuestion) return { ok: false, reason: 'not-a-question' };
+  // v1.61.5 — short type reads: "Fuel list", "Fuel all time", "fuel report".
+  const looksLikeShortTypeQuery = !looksLikeQuestion
+    && SHORT_TYPE_SPAN_RE.test(source)
+    && SHORT_TAIL_RE.test(source);
+  if (!looksLikeQuestion && !looksLikeShortTypeQuery) return { ok: false, reason: 'not-a-question' };
 
   let kind = 'total';
   if (KIND_AVERAGE_RE.test(source)) kind = 'average';
@@ -131,8 +175,7 @@ export function parseRecordQuestion(text = '', { countryCode = 'GLOBAL', locale 
     ? { from: rangeResult.from, to: rangeResult.to, label: rangeLabel(rangeResult, locale), source: rangeResult.source }
     : null;
 
-  const plateMatch = source.toUpperCase().match(/\b([A-Z]{2,3}\s?\d{1,4}[A-Z]?)\b/);
-  const vehiclePlate = plateMatch ? plateMatch[1].replace(/\s+/g, '') : null;
+  const vehiclePlate = extractPlate(source);
 
   return { ok: true, kind, earning, expenseTypes, range, vehiclePlate, keyword, text: source };
 }
