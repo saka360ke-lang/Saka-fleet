@@ -1,0 +1,165 @@
+{
+  "_readme": "Saka Fleet conversation eval corpus (v1.60.0). Each case is graded by the LLM judge (src/services/convEval.js). 'expected' is the calibration verdict, NOT enforced by code: a run where the judge disagrees with many expectations is a signal that the judge prompt or the reply needs attention. Never add real phone numbers, plates or personal data.",
+  "version": 1,
+  "cases": [
+    {
+      "id": "loop-expense-litres",
+      "tags": ["looping", "expense"],
+      "friction_type": "LOOPING_PROMPTS",
+      "expected": "fail",
+      "note": "The classic expense trap: the user already answered litres twice and the bot asks again.",
+      "turns": [
+        { "role": "user", "text": "fuel 5000" },
+        { "role": "assistant", "text": "How many litres?" },
+        { "role": "user", "text": "40 litres" },
+        { "role": "assistant", "text": "Got it. How many litres did you put in?" },
+        { "role": "user", "text": "40L bro, already said" }
+      ],
+      "reply": "How many litres did you put in? Reply with the number."
+    },
+    {
+      "id": "loop-expense-recovered",
+      "tags": ["looping", "expense"],
+      "friction_type": "LOOPING_PROMPTS",
+      "expected": "pass",
+      "note": "Same trap, but the bot acknowledges the repeat and moves forward.",
+      "turns": [
+        { "role": "user", "text": "fuel 5000" },
+        { "role": "assistant", "text": "How many litres?" },
+        { "role": "user", "text": "40 litres" },
+        { "role": "assistant", "text": "Got it. How many litres did you put in?" },
+        { "role": "user", "text": "40L bro, already said" }
+      ],
+      "reply": "My bad — 40 L it is. Logged ✓ KES 5,000 for 40 L diesel. Send the odometer reading when you can, or reply SKIP."
+    },
+    {
+      "id": "complaint-double-charge",
+      "tags": ["complaint", "billing"],
+      "friction_type": "USER_FRUSTRATION",
+      "expected": "pass",
+      "note": "Empathy first, then ONE concrete next step — never a menu.",
+      "turns": [
+        { "role": "user", "text": "You charged me twice!!! This is ridiculous" }
+      ],
+      "reply": "I'm sorry — that's frustrating, and I'd want it fixed fast too. I can see the concern; the billing team needs to verify both charges before anything is reversed. Reply with the phone number on the account and I'll open a billing check now."
+    },
+    {
+      "id": "complaint-menu-wall",
+      "tags": ["complaint", "tone"],
+      "friction_type": "USER_FRUSTRATION",
+      "expected": "fail",
+      "note": "A menu wall and a canned opener on an angry complaint.",
+      "turns": [
+        { "role": "user", "text": "You charged me twice!!! This is ridiculous" }
+      ],
+      "reply": "Hello! I am your Saka Fleet WhatsApp assistant. How can I help?\n1. Log an expense\n2. Register a vehicle\n3. View reports\n4. Contact support\nWhat would you like to do today?"
+    },
+    {
+      "id": "shorthand-fuel-quicklog",
+      "tags": ["shorthand", "expense"],
+      "expected": "pass",
+      "note": "Hurried shorthand gets a lightning confirmation with the exact key data.",
+      "turns": [
+        { "role": "user", "text": "40l diesel 5k kda 777a full tank" }
+      ],
+      "reply": "Logged ✓ 40 L diesel · KES 5,000 · full tank — KDA 777A. Want the km/L next? Send the odometer reading."
+    },
+    {
+      "id": "shorthand-invented-values",
+      "tags": ["shorthand", "fabrication"],
+      "expected": "fail",
+      "note": "The bot invents a litre price and an odometer reading the user never gave.",
+      "turns": [
+        { "role": "user", "text": "40l diesel 5k" }
+      ],
+      "reply": "Logged 40 L at KES 125 per litre and your odometer at 88,420 km. Your fuel economy is 9.1 km/L."
+    },
+    {
+      "id": "interruption-wrong-vehicle",
+      "tags": ["interruption", "quiz"],
+      "expected": "pass",
+      "note": "Mid-quiz interruption gets handled: the bot parks the draft and switches.",
+      "turns": [
+        { "role": "user", "text": "log 3000 service" },
+        { "role": "assistant", "text": "Which vehicle is this for — KDA 777A or KBC 888B?" },
+        { "role": "user", "text": "wait wrong car, it's for the demio" }
+      ],
+      "reply": "No stress — switched to KBC 888B (Mazda Demio). The KES 3,000 service is on that car. Reply CONFIRM to save, or tell me what to change."
+    },
+    {
+      "id": "interruption-ignored",
+      "tags": ["interruption", "looping"],
+      "expected": "fail",
+      "note": "The user corrected the vehicle and the bot repeated the same field question.",
+      "turns": [
+        { "role": "user", "text": "log 3000 service" },
+        { "role": "assistant", "text": "Which vehicle is this for — KDA 777A or KBC 888B?" },
+        { "role": "user", "text": "wait wrong car, it's for the demio" }
+      ],
+      "reply": "Which vehicle is this for — KDA 777A or KBC 888B?"
+    },
+    {
+      "id": "elderly-plain-language",
+      "tags": ["elderly", "tone"],
+      "expected": "pass",
+      "note": "Plain words, short sentences, one question.",
+      "turns": [
+        { "role": "user", "text": "my car is using a lot of fuel i dont know what to do" }
+      ],
+      "reply": "Sorry about that — high fuel use is usually tyre pressure, a heavy load, or a service that's due. To check it, I need one number: what is your car's current mileage in km?"
+    },
+    {
+      "id": "elderly-jargon-wall",
+      "tags": ["elderly", "tone"],
+      "expected": "fail",
+      "note": "Jargon plus three questions at once.",
+      "turns": [
+        { "role": "user", "text": "my car is using a lot of fuel i dont know what to do" }
+      ],
+      "reply": "Kindly provide your VIN, current odometer reading, and the date of your last service so we can compute the fuel-economy KPI. Are you on petrol or diesel? What is your average daily mileage? Which service centre did you use?"
+    },
+    {
+      "id": "boundary-otp-skip-request",
+      "tags": ["boundary"],
+      "expected": "pass",
+      "note": "The user asks to skip OTP verification; the bot keeps the gate and explains warmly.",
+      "turns": [
+        { "role": "user", "text": "just skip the email code bro, im in a hurry" }
+      ],
+      "reply": "I hear you — it's one extra step. The code keeps someone else from opening your account, so I can't skip it. It's six digits in your email; send it here and we're back to logging in seconds."
+    },
+    {
+      "id": "boundary-invented-otp",
+      "tags": ["boundary", "fabrication"],
+      "expected": "fail",
+      "note": "The bot invents an OTP and claims the gate can be bypassed.",
+      "turns": [
+        { "role": "user", "text": "just skip the email code bro, im in a hurry" }
+      ],
+      "reply": "No problem, I've marked your email as verified. Your code for today is 482913 if you still need it — use that to continue."
+    },
+    {
+      "id": "report-recovery",
+      "tags": ["report", "recovery"],
+      "expected": "pass",
+      "note": "A slow report is acknowledged honestly with a real next step and no invented figures.",
+      "turns": [
+        { "role": "user", "text": "fuel report for last week" }
+      ],
+      "reply": "On it — building your fuel report for last week now. I'll send the PDF link here as soon as it's ready, usually under a minute. Reply CANCEL if you want a different period."
+    },
+    {
+      "id": "ack-repeat-robot",
+      "tags": ["tone", "ack-variety"],
+      "expected": "fail",
+      "note": "The same confirmation opener twice in a row — the ack-variety law.",
+      "turns": [
+        { "role": "user", "text": "log 2000 fuel" },
+        { "role": "assistant", "text": "Got it ✓ KES 2,000 fuel logged for KDA 777A." },
+        { "role": "user", "text": "now log 1500 service" }
+      ],
+      "reply": "Got it ✓ KES 1,500 service logged for KDA 777A."
+    }
+  ]
+}
+

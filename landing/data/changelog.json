@@ -1,6 +1,13 @@
 {
-  "latest": "1.59.7",
+  "latest": "1.60.0",
   "entries": [
+    {
+      "version": "1.60.0",
+      "date": "2026-11-05",
+      "title": "Saka grades its own conversations",
+      "preview": "Every reply is now scored for clarity, tone and honesty — and the small fixes are tested before anyone sees them.",
+      "summary": "Saka's conversations are now graded automatically on five things that matter: no repeating the same question, a warm human voice, exact shorthand handling, one question at a time, and never inventing a VIN, price, date or code. Real stuck-chat transcripts join a fixed set of tricky scenarios (hurried shorthand, interruptions, complaints, plain-language asks) for every check. When a reply fails, Saka writes one small behavioural fix, proves the corrected reply scores better, and applies it immediately — code changes still need a human approval first. Superadmins get a WhatsApp and email note for every fix, and the whole loop is off by default until switched on."
+    },
     {
       "version": "1.59.7",
       "date": "2026-11-05",

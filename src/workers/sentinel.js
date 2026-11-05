@@ -270,6 +270,20 @@ export function refinementIsSafe(text = '') {
   return true;
 }
 
+/**
+ * v1.60.0 — single source of truth for the "never weaken a boundary" patch gate.
+ * Sentinel's micro-rule optimizer and the DeepEval healer both call this.
+ */
+export const PATCH_BOUNDARY_LOCK = /\b(?:bypass|ignore|ignoring|skip|skipping|disable|disabling|remove|removing|waive|waiving|omit|omitting|relax|relaxing|loosen|loosening|override|overrule|sidestep)\b[^.!?\n]{0,40}\b(?:vin|chassis|otp|one[- ]?time|auth|authentication|authorization|verif(?:y|ication)|schema|table|column|migration|ddl)\b/i;
+
+/** True when a proposed prompt patch tries to weaken a hard boundary. */
+export function patchViolatesBoundaryLock(text = '') {
+  const value = String(text || '');
+  return PATCH_BOUNDARY_LOCK.test(value)
+    || /\b(?:drop|truncate|alter)\s+(?:table|schema|database)\b/i.test(value)
+    || /\b(?:no need to (?:verify|ask)|don'?t (?:verify|ask for))\b/i.test(value);
+}
+
 /** Keep the marker + header + NEWEST learnings inside the stored bound. */
 function boundedRefinementBlock(lines = []) {
   const kept = [...lines];
@@ -1035,10 +1049,9 @@ Output ONLY valid JSON matching this schema:
 
       // v1.58.x — broaden the boundary lock beyond 5 literal phrases: a patch may
       // only EXPLAIN a requirement, never weaken a security/auth/VIN/OTP/schema
-      // rule. (The AI prompt already forbids it; this is the deterministic backstop.)
-      const violatesLock = /\b(?:bypass|ignore|ignoring|skip|skipping|disable|disabling|remove|removing|waive|waiving|omit|omitting|relax|relaxing|loosen|loosening|override|overrule|sidestep)\b[^.!?\n]{0,40}\b(?:vin|chassis|otp|one[- ]?time|auth|authentication|authorization|verif(?:y|ication)|schema|table|column|migration|ddl)\b/i.test(instruction)
-        || /\b(?:drop|truncate|alter)\s+(?:table|schema|database)\b/i.test(instruction)
-        || /\b(?:no need to (?:verify|ask)|don'?t (?:verify|ask for))\b/i.test(instruction);
+      // rule. v1.60.0 — the regex now lives in `patchViolatesBoundaryLock()` so
+      // the DeepEval healer applies the exact same gate (single source).
+      const violatesLock = patchViolatesBoundaryLock(instruction);
       if (!violatesLock) {
         const nowIso = new Date().toISOString();
         const { error: upsertErr } = await supabase

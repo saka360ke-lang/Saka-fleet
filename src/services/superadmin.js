@@ -34,6 +34,7 @@ import { auditEnv, formatEnvDigest, parseEnvKeys, envTemplateKeys } from './envA
 import { listFrictionLog, formatFrictionReply, markFrictionDeployed, FRICTION_CLEARED_AFTER_HOURS } from './frictionTracker.js';
 import { listInboundEmails, getInboundEmail, formatInboxReply, formatInboundEmailReply } from './inboundEmail.js';
 import { getFeatureRolloutStatus, FEATURE_NOTICE_VERSION } from './featureNotice.js';
+import { handleConvEvalCommand } from './convEvalConsole.js';
 import {
   listKbDrafts,
   approveKbRule,
@@ -150,6 +151,7 @@ const ADMIN_INTENTS = new Set([
   'ADMIN_UPDATE_SUGGEST', 'ADMIN_FEATURE_ADOPT',
   'ADMIN_QUICK_EDIT_PREVIEW',
   'ADMIN_AI_STATS',
+  'ADMIN_CONV_EVAL',
   'ADMIN_ENV_AUDIT',
   'ADMIN_OCR_STATS',
   'ADMIN_TURN_LATENCY',
@@ -296,6 +298,21 @@ export async function parseSuperadminCommand(messageText) {
     return { intent: 'ADMIN_AI_STATS', hours: Math.min(168, Math.max(1, requestedHours)) };
   }
 
+  // v1.60.0 — conversation eval console. `stats`/`last` are zero-token digests;
+  // `run` and `heal` are explicit superadmin actions that spend judge calls.
+  const convEvalMatch = text.match(/^\s*admin\s+(?:conv[\s_-]*)?evals?(?:\s+(run|last|stats|heal))?(?:\s+(\S+))?\s*$/i);
+  if (convEvalMatch) {
+    const mode = String(convEvalMatch[1] || 'stats').toLowerCase();
+    const arg = convEvalMatch[2] || null;
+    const hoursMatch = arg && arg.match(/^(\d{1,3})\s*h(?:ours?|rs?)?$/i);
+    return {
+      intent: 'ADMIN_CONV_EVAL',
+      mode,
+      case_id: mode === 'heal' ? arg : null,
+      hours: hoursMatch ? Math.min(168, Math.max(1, Number(hoursMatch[1]))) : 24
+    };
+  }
+
   // v1.32.4 — env & secret parity digest (names/booleans only, zero values).
   if (/^\s*admin\s+(?:env|environment|secrets?)(?:\s+(?:audit|parity|status|check|report))?\s*$/i.test(lower)) {
     return { intent: 'ADMIN_ENV_AUDIT' };
@@ -417,7 +434,7 @@ export async function parseSuperadminCommand(messageText) {
   }
 
   const prompt = `Classify user's admin request into JSON:
-Intent: "HEALTH_CHECK" | "GENERATE_COUPON" | "PROFILES_REPORT" | "ADMIN_AI_STATS" | "ADMIN_OCR_STATS" | "ADMIN_OCR_PROFILE" | "ADMIN_TURN_LATENCY" | "ADMIN_TRIAL_STATS" | "ADMIN_ROLLOUT" | "ADMIN_REPORT" | "ADMIN_AUDIT" | "ADMIN_ALERTS" | "ADMIN_RULES_RESET" | "ADMIN_RULES_TOGGLE" | "ADMIN_RULES_LIST" | "ADMIN_HORIZON" | "ADMIN_PROPOSALS" | "ADMIN_BACKLOG" | "ADMIN_REMEDIATIONS" | "ADMIN_REMEDIATION_ACCEPT" | "ADMIN_REMEDIATION_DECLINE" | "ADMIN_REMEDIATION_MODIFY" | "ADMIN_FEATURE_ADOPT" | "UNKNOWN"
+Intent: "HEALTH_CHECK" | "GENERATE_COUPON" | "PROFILES_REPORT" | "ADMIN_AI_STATS" | "ADMIN_CONV_EVAL" | "ADMIN_OCR_STATS" | "ADMIN_OCR_PROFILE" | "ADMIN_TURN_LATENCY" | "ADMIN_TRIAL_STATS" | "ADMIN_ROLLOUT" | "ADMIN_REPORT" | "ADMIN_AUDIT" | "ADMIN_ALERTS" | "ADMIN_RULES_RESET" | "ADMIN_RULES_TOGGLE" | "ADMIN_RULES_LIST" | "ADMIN_HORIZON" | "ADMIN_PROPOSALS" | "ADMIN_BACKLOG" | "ADMIN_REMEDIATIONS" | "ADMIN_REMEDIATION_ACCEPT" | "ADMIN_REMEDIATION_DECLINE" | "ADMIN_REMEDIATION_MODIFY" | "ADMIN_FEATURE_ADOPT" | "UNKNOWN"
 Extract: discount_value (e.g. "20%"), target_phone (e.g. "+254712345678"), query (e.g. "KDA 123A" or VIN), rule_key (e.g. "clarify_vin"), proposal_code (e.g. "FIX-2026-10-30-01"), feedback (guidance text), hours (AI/OCR telemetry window 1-168, default 24), days (trial funnel window 1-365, default 30), country_code (e.g. "KE")
 Plain-English backlog: "show me [all] pending proposals" / "list pending proposals" / "pending proposals" / "what's pending" => ADMIN_REMEDIATIONS with filter "pending"; "show me [all] proposals" => ADMIN_REMEDIATIONS with filter "all" (bare "admin proposals" stays ADMIN_PROPOSALS/Horizon).
 Command: "${text}"`;
@@ -2625,6 +2642,19 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
     };
   }
 
+  if (parsedCommand.intent === 'ADMIN_CONV_EVAL') {
+    const convRes = await handleConvEvalCommand(supabase, {
+      mode: parsedCommand.mode || 'stats',
+      hours: parsedCommand.hours || 24,
+      caseId: parsedCommand.case_id || null
+    });
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_CONV_EVAL', convRes.details);
+    return {
+      isSuperadmin: true,
+      reply: convRes.reply
+    };
+  }
+
   if (parsedCommand.intent === 'ADMIN_ENV_AUDIT') {
     const envRes = await handleEnvAuditCommand(process.env, { templateKeys: readTemplateEnvKeys() });
     await logAdminAudit(supabase, formattedPhone, 'ADMIN_ENV_AUDIT', envRes.details);
@@ -2885,6 +2915,7 @@ ${JSON.stringify(telemetry).slice(0, 6000)}`;
     `• *System Health*: "check health", "system status"\n` +
     `• *AI Telemetry*: "admin ai-stats" or "admin usage 48h" (router cost, latency & token digest)\n` +
     `• *Reply Speed*: "admin latency" or "admin latency 48h" (p50/p95 reply time & two-lane trigger)\n` +
+    `• *Conversation Evals*: "admin eval" (24h digest), "admin eval run", "admin eval last 48h", "admin eval heal <case-id>"\n` +
     `• *Model Watchdog*: "admin models", "admin model scout", "admin model adopt [model] [split]", "admin model rollback [tier_1]"\n` +
     `• *Trial Funnel*: "admin trial-stats" or "admin trial-stats 90d" (trial → paid conversion)\n` +
     `• *Launch Award*: "admin launch-stats" (first-50 slots, winners & days)\n` +

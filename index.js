@@ -38,6 +38,8 @@ import { ensureAiUsageLogsTable, installAiUsageSink, installAiBudgetGuard } from
 import { ensureTurnLatencyTable } from './src/services/turnLatency.js';
 import { buildStatusResponse, isStatusAuthorized } from './src/services/statusProbe.js';
 import { auditEnv, envTemplateKeys, envStatusSummary } from './src/services/envAudit.js';
+import { runConvEvalTick } from './src/workers/convEval.js';
+import { ensureConvEvalTable, getConvEvalConfig } from './src/services/convEval.js';
 import { announceRevisionLive } from './src/services/deployLiveAlert.js';
 import {
   ensureAiModelRegistryTables,
@@ -1020,6 +1022,21 @@ setInterval(() => {
     .catch((err) => console.warn('[Model Health Warning]:', err.message));
 }, 30 * 60 * 1000);
 
+// Conversation evals (v1.60.0): DeepEval-style judge over live friction
+// transcripts + the offline corpus. Kill-switched by CONV_EVAL_ENABLED (off by
+// default); healing is separately gated by CONV_EVAL_HEAL_ENABLED and can only
+// ship prompt-level hints autonomously (code changes remain proposals).
+let convEvalTickInFlight = false;
+setInterval(() => {
+  if (convEvalTickInFlight) return;
+  convEvalTickInFlight = true;
+  runConvEvalTick(supabase)
+    .catch((err) => console.warn('[Conversation Eval Warning]:', err.message))
+    .finally(() => {
+      convEvalTickInFlight = false;
+    });
+}, getConvEvalConfig().intervalMs);
+
 async function checkRemediationDigestSchedule() {
   try {
     const now = new Date();
@@ -1252,6 +1269,12 @@ const start = async () => {
     await ensureAiUsageLogsTable(supabase);
     await ensureTurnLatencyTable(supabase);
     await ensureAiModelRegistryTables(supabase);
+    // v1.60.0 — conversation evals: detect the tracking table (rule 50). A
+    // missing table never blocks boot; `npm run migrate:conv-eval` applies it.
+    const convEvalTable = await ensureConvEvalTable(supabase);
+    if (convEvalTable.table !== 'exists') {
+      console.warn(`[ConversationEval] tracking table ${convEvalTable.table} — run npm run migrate:conv-eval (evals still run, results are not persisted).`);
+    }
     await ensureSubscriptionSchema({ label: 'boot.ensureSubscriptionSchema' });
     installAiUsageSink(supabase);
     installAiBudgetGuard(supabase);

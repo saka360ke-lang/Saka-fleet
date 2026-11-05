@@ -243,6 +243,12 @@ export const AI_PURPOSES = Object.freeze({
   model_research: { tier: AI_TIERS.ROUTER, maxTokens: 500, temperature: 0.2 },
   // v1.55.1 — conversation response-mismatch diagnosis (reasoning, read-only).
   conversation_diagnosis: { tier: AI_TIERS.REASONING, jsonMode: true, maxTokens: 400, temperature: 0.2 },
+  // v1.60.0 — DeepEval-style conversation judge + bounded healing (background
+  // purposes: they stay on the DeepSeek tier unless an operator explicitly sets
+  // CONV_EVAL_JUDGE_PROVIDER=anthropic, which routes the judge through the same
+  // single hub to Claude Haiku — rules 20-22 are never bypassed).
+  conversation_eval: { tier: AI_TIERS.ROUTER, jsonMode: true, maxTokens: 900, temperature: 0 },
+  conversation_heal: { tier: AI_TIERS.REASONING, jsonMode: true, maxTokens: 800, temperature: 0.3 },
   default: { tier: AI_TIERS.ROUTER }
 });
 

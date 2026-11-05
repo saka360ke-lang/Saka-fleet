@@ -183,6 +183,11 @@ ask you to double-check before saving; nothing is ever written without your YES.
 - **Paid and live-trial accounts** run every **front user conversation** (intent, extraction, quiz questions, prose, small talk, nudges, admin parsing) on **Claude Sonnet**. **Free accounts with no live trial** stay on **Claude Haiku** (Tier 1). `PREMIUM_MODEL_MODE=all` (default) enforces this; `escalate` restores the legacy canary.
 - Background/system work (Sentinel synthesis, model benchmarking/research) stays on DeepSeek. Failover: **Sonnet -> GPT-4o** when `OPENAI_API_KEY` is set -> **DeepSeek** (always terminal).
 - Cloud Run needs `ANTHROPIC_API_KEY` and optionally `OPENAI_API_KEY`; `AI_TIER1_PROVIDER` / `AI_MODEL_TIER_1_ANTHROPIC` pin or override the front provider/model. Without keys the app degrades to DeepSeek automatically.
+
+## Conversation evals & self-healing (v1.60.0)
+- **DeepEval-style judge, Node-native.** `npm run eval:conv` scores replies on five criteria (loop avoidance, Persona v4 tone, shorthand precision, one question, boundary safety) with a 0.70 bar; every call rides `aiClient` (`purpose: conversation_eval`). `--live` scores real PENDING friction transcripts, `--heal` ships bounded prompt hints, `--export` emits DeepEval-compatible JSONL.
+- **Kill switches OFF by default:** `CONV_EVAL_ENABLED` (6-hourly tick) and `CONV_EVAL_HEAL_ENABLED` (healing). Prompt hints go to `saka_dynamic_rules`; code-level fixes become `PENDING_APPROVAL` proposals — the approval gateway is unchanged.
+- **Superadmin:** `admin eval`, `admin eval last 48h`, `admin eval run`, `admin eval heal <case-id>`; results live in `conversation_eval_runs` (`npm run migrate:conv-eval`) and every heal/proposal is audited + announced on WhatsApp + email.
 ## Snappy Saka — latency & OCR pause (v1.22.0)
 - **Photo OCR is paused by default** (`OCR_ENABLED=off`): photo turns answer
   instantly with clear guidance to type the details or send a PDF. PDF text

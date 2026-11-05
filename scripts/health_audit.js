@@ -107,7 +107,9 @@ const STATLESS_SUITES = [
   // v1.58.18 - care console (worker role, lifecycle, threading, audit).
   'test_care_worker.js',
   // v1.58.26 - launch award: first 50 welcome trials get 365 days, then the default flow.
-  'test_launch_award.js'
+  'test_launch_award.js',
+  // v1.60.0 — DeepEval-style conversation judge: criteria, gates, corpus, healing.
+  'test_conv_eval.js'
 ];
 
 const WORKFLOW_DIR = '.github/workflows';

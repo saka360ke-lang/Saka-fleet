@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.59.7  
+**Version:** 1.60.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.60.0** | DeepEval-style conversation eval harness + bounded self-healing + superadmin notifications/tracking (kill-switched) | 164 |
 | **1.59.7** | De-robot voice (review-card pools + banned boilerplate), 25-type expense catalog (licences/security/loading/weighbridge/hire/route split out), labels on every entry (receipts, reminders, odometer readings), support-email body fix, native scrolling + install prompt removed; rollback tag `pre-voice-v1.59.6` | 163 |
 | **1.59.6** | Supplied SAKAFLEET logo installed (real lockup, rebuilt icons + OG cover) + softened whites across the site (no glare); nav lockup at its true 8.9:1 ratio; rollback tag `pre-logo-v1.59.5` | 162 |
 | **1.59.5** | "Monolith" website theme rebuilt around the Sakafleet logo (black canvas, white ink, one lime accent), self-hosted Sora + Manrope, logo assets made from the real artwork; rollback tag `pre-monolith-v1.59.4` | 161 |
@@ -1521,6 +1522,8 @@ All LLM traffic still flows through `src/services/aiClient.js` (the only provide
 | `health_synthesis` | `superadmin.js` `handleHealthCheckCommand()` |
 | `model_benchmark` | `aiModelRegistry.js` benchmark/probe telemetry (v1.17.0) |
 | `model_research` | `aiModelRegistry.js` `researchModelLandscape()` — capability-gated web search/fetch |
+| `conversation_eval` | `convEval.js` `judgeConversation()` — DeepEval-style GEval judge (v1.60.0) |
+| `conversation_heal` | `convEvalHealer.js` `generateHealPatch()` — bounded prompt-hint repair (v1.60.0) |
 
 ### 36.4 Telemetry table & retention
 `public.ai_usage_logs` — idempotent `ensureAiUsageLogsTable()` at boot, provisioned by `npm run migrate:staging-schema`, verified in `EXPECTED_TABLES`:
@@ -4561,4 +4564,39 @@ quiz engine:
 **Frames touched.** `src/services/{flowKnowledge,conversationEngine,expenseCatalog,labelsEverywhere(new),receipts,maintenanceReminders,recordAnswers,quizEngine,inboundEmail}.js`, `src/routes/whatsapp.js`, `sakaAi.js`, `scripts/{run_labels_everywhere_migration(new),health_audit}.js`, `landing/{index.html,terms.html,assets/css/styles.css,assets/js/nav.js,data/changelog.json}`, deleted `landing/manifest.webmanifest` + `landing/assets/img/icon-192.png`, tests {expense_catalog, labels_everywhere (new), inbound_email, record_answers, landing_static (Test 20), agent_training, quiz_flow, conversation_compliance, no_canned_replies}, `.clinerules` (rule 37 additive), `package.json`, `SAKA_FLEET_ARCHITECTURE.md`, `CHANGELOG.md`.
 
 **Suites run:** `test_expense_catalog` (91), `test_labels_everywhere` (22 - new), `test_inbound_email` (29), `test_record_answers`, `test_landing_static` (Test 20 included), `test_agent_training` (177), `test_conversation_compliance` (29), `test_no_canned_replies` (ratchet 4), `test_quiz_flow` (147), `test_doc_sync` (24) — green; `npm run health` green.
+
+
+---
+
+### 164. v1.60.0 - DeepEval-style conversation evals + bounded self-healing + superadmin notifications (2026-11-05)
+
+**Why (audit first).** Sentinel could detect friction (`chat_friction_logs`) and patch prompts (`saka_dynamic_rules`), and the Model Watchdog could benchmark MODELS, but nothing scored Saka's actual conversational output against the persona laws, and nothing closed the loop "quality failure → candidate fix → re-score → ship". The DeepEval family fills exactly that gap.
+
+**Reality of the bridge.** DeepEval is a Python-only package. Rather than add a second runtime (which would break the single-hub rule 20 — every LLM call must flow through `aiClient.js` with a telemetry purpose), the judge implements DeepEval's GEval semantics natively in Node: named criteria, 0..1 score + reason per criterion, threshold verdict. `npm run eval:export` emits DeepEval-compatible JSONL if the library is ever wanted offline.
+
+**The judge (`src/services/convEval.js`).**
+- Five permanent criteria: `loop_avoidance`, `tone_compliance`, `shorthand_precision`, `single_question`, `boundary_safety`. Equal weight; a missing criterion scores 0 (safety-first) and every criterion must clear the bar (averaging can never hide a boundary failure).
+- The judge system prompt imports `SAKA_TONE_COMPASS` (voice, floors, mirror matrix, banned phrases) and `SAKA_BOUNDARY_RULES` from `flowKnowledge.js` — the same source that builds the live core prompt, so the grader cannot drift from Persona v4.
+- `purpose: 'conversation_eval'` (ROUTER tier) rides the single hub: telemetry, circuit breakers and the budget guard always apply. Background policy keeps it on DeepSeek; `CONV_EVAL_JUDGE_PROVIDER=anthropic` is the explicit opt-in that routes the judge to Claude Haiku (or Sonnet via `CONV_EVAL_JUDGE_MODEL`) — still through `aiClient`, never a direct provider client.
+- Never throws: provider/parse failures return `{ ok:false }` and the run records an `error` row.
+
+**The corpus + live cases (`src/services/convEvalCases.js`, `evals/cases/conversation_cases.json`).**
+- 14 offline fixtures covering looping, complaints, hurried shorthand, interruptions, elderly phrasing, boundary probes, report recovery and ack variety — every case carries an `expected` verdict used for calibration (a judge that disagrees with many expectations is itself suspect).
+- `buildLiveCasesFromFriction()` turns the two live PENDING friction transcripts (Sentinel's `[role]: text` snippet format) into scored cases, so existing users' pain reaches the harness without waiting for a new signup (rule 56); unparseable snippets are skipped with a reason, never guessed.
+
+**Bounded healing (`src/services/convEvalHealer.js`).**
+- `conversation_heal` proposes ONE micro-rule + the corrected reply. Deterministic gates: `refinementIsSafe` (banned phrases, security-weakening, schema marker, size), `patchViolatesBoundaryLock` (the regex extracted from Sentinel's micro-rule optimizer — one source of truth), a file-path guard, and length caps.
+- A/B gate: the corrected reply is re-judged with the same criteria and must pass the threshold AND beat the original by ≥ 0.01 (rule 52 before/after).
+- Ship paths preserve the permanent governance: prompt hints upsert `saka_dynamic_rules` (the existing autonomous precedent, rules 15-18) and mark the linked friction deployed; anything needing code mints a `PENDING_APPROVAL` `remediation_proposals` row (`category='conv_eval'`) — the superadmin gateway and CI nonce are untouched (rules 16/18/46).
+
+**Notifications + tracking (the operator-facing ask).**
+- `conversation_eval_runs` (migration `npm run migrate:conv-eval`, idempotent) records run id, case id, source, transcript hash (no message bodies), judge provider/model, criteria JSON, aggregate, threshold, friction log link, patch id, before/after scores and status (`passed|failed|healed|proposed|error`). It is telemetry: wiped with the operational slate, never preserved.
+- Every heal/proposal is audited (`CONV_EVAL_HEALED` / `CONV_EVAL_PROPOSED` / `CONV_EVAL_ERROR`) and announced to the superadmin on WhatsApp (`sendProactiveWhatsApp`) + email (`sendAdminNotificationEmail`) with the case, before → after scores, rule key or proposal code; existing remediation outcome alerts are unchanged. Judge-error alerts are throttled by `CONV_EVAL_ALERT_COOLDOWN_HOURS`.
+- Superadmin console (deterministic, zero tokens for digests): `admin eval` (24 h), `admin eval last 48h`, `admin eval run` (corpus, capped), `admin eval heal <case-id>`; audited `ADMIN_CONV_EVAL`.
+
+**Entry points.** `npm run eval:conv [--live] [--heal] [--json] [--fail-on-failures]`, `npm run eval:export` (DeepEval JSONL), an overlap-guarded 6-hourly tick in `index.js`, and the superadmin commands. All kill switches default OFF (`CONV_EVAL_ENABLED`, `CONV_EVAL_HEAL_ENABLED`); boot only detects the tracking table and warns (rule 50).
+
+**Frames touched:** `src/services/aiClient.js` (2 purposes), `src/services/convEval.js` (new), `src/services/convEvalCases.js` (new), `src/services/convEvalHealer.js` (new), `src/services/convEvalConsole.js` (new), `src/workers/convEval.js` (new), `src/workers/sentinel.js` (`PATCH_BOUNDARY_LOCK` + `patchViolatesBoundaryLock` extracted, optimizer reuses it), `src/services/superadmin.js` (parser, dispatch, help, classifier list), `src/services/envAudit.js`, `index.js` (boot detection + tick), `scripts/{run_conv_eval_migration(new),run_conv_eval(new),reset-db,health_audit,stamp_landing_assets}.js`, `evals/cases/conversation_cases.json` (new), `.env.example`, `package.json`, `README.md`, `landing/data/changelog.json` + stamped landing assets, `docs/{PRODUCT_QA,SAKA_TRAINING}.md` (version stamp), `test_conv_eval.js` (new), `SAKA_FLEET_ARCHITECTURE.md`, `CHANGELOG.md`.
+
+**Suites run:** `test_conv_eval` (108 - new), `test_model_router`, `test_agent_training`, `test_env_audit`, `test_db_reset_scope`, `test_sentinel_policy`, `test_conversation_compliance`, `test_doc_sync` - green; `npm run health` green.
 
