@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.59.5  
+**Version:** 1.59.6  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.59.6** | Supplied SAKAFLEET logo installed (real lockup, rebuilt icons + OG cover) + softened whites across the site (no glare); nav lockup at its true 8.9:1 ratio; rollback tag `pre-logo-v1.59.5` | 162 |
 | **1.59.5** | "Monolith" website theme rebuilt around the Sakafleet logo (black canvas, white ink, one lime accent), self-hosted Sora + Manrope, logo assets made from the real artwork; rollback tag `pre-monolith-v1.59.4` | 161 |
 | **1.59.4** | Re-engagement memory (returning users get labelled context), 10-second PDF link delay, warm signup copy ("Meet your car's new friend"), preview-only changelog | 160 |
 | **1.59.3** | "Afterglow Ember" website theme (fluorescent orange CTAs, ember hero glow, rim-lit pricing) + creative burger drawer menu for tablet/mobile | 159 |
@@ -4505,4 +4506,30 @@ quiz engine:
 **Frames touched.** `landing/assets/css/styles.css` (tokens, fonts, buttons, nav, drawer, launch banner, hero + `.hero-mark`, chat mock, cards, steps, pricing, uptime, changelog, FAQ, CTA band, modal, forms, OTP, alerts, legal, cookie, status), `landing/index.html` (preload, theme-color, accent span, hero mark, footer lockup), `landing/{privacy,terms,status,data-deletion}.html` (lockup ratio), `landing/assets/img/{logo.svg,favicon.svg,logo-mark.png,favicon-32.png,apple-touch-icon.png,icon-192.png,og-cover.svg,og-cover.png}`, `landing/assets/fonts/{Sora-600,Sora-700,Manrope-400,Manrope-500,Manrope-700}.woff2` (Outfit/Inter removed), `landing/manifest.webmanifest`, `landing/data/changelog.json`, `test_landing_static.js` (REQUIRED_FILES re-pinned; Test 19 rewritten with the drawer/ARIA assertions preserved), `package.json`, `SAKA_FLEET_ARCHITECTURE.md`, `CHANGELOG.md`.
 
 **Suites run:** `test_landing_static` (Test 19 + typography/logo/watermark/reduced-motion/drawer), `test_doc_sync` — green; `npm run health` green.
+
+
+---
+
+### 162. v1.59.6 - supplied SAKAFLEET lockup + softened whites (2026-11-05)
+
+**Logo swap (operator-supplied artwork).** The operator uploaded the real logo (2000x2000 black-canvas export, `Sakafleet/1.png`: interlocking chain-link mark + heavy uppercase SAKAFLEET wordmark). Every asset derives from that single source:
+- `logo-mark.png` — the mark alone (source bbox 207,924-546,1075; square 368px canvas at 256px export), alpha from luminance, tinted `#E8E9EB`.
+- `logo-lockup.png` — the full lockup (source crop 197,902 1637x184, ~8.9:1), tinted, 900px wide.
+- `logo.svg` — 1637x184 SVG embedding the lockup as a data URI (external references are blocked inside `<img>`-loaded SVGs), with `<title>` and `aria-label` "Saka Fleet".
+- Favicons/app icons (32/180/192) and `og-cover.svg`/`.png` rebuilt from the mark/lockup; the OG cover keeps the Sora/Manrope tagline treatment and the lime rule.
+- Nav sizing: the lockup now renders at its true ratio — 302x34 desktop, 28px tall at ≤960px, 22px at ≤640px; the footer uses 200x22. (The old 34x34 CSS squish is impossible with this wide wordmark.)
+
+**Brightness pass (operator feedback: "white areas and white letters are too bright").**
+- Tokens: `--text #E8E9EB` (was `#FAFAFA`); `--grad-soft` white stop `.05`.
+- Primary CTA `#E9EAED` (hover `#F2F3F5`), headline sheen begins `#EFEFF2`, cookie toggle knob `#E8E9EB`.
+- Glows and tints dialled down ~30%: hero white radial `.07 → .045`, lime radial `.06 → .04`, card icon `.05 → .04`, chat bubble `.06 → .05`, info alert `.06 → .05`, CTA band `.05/.06 → .04/.05`.
+- No `#FFFFFF`, `#FAFAFA` or `#F8FAFC` remains anywhere in the stylesheet; contrast stays AAA (`#E8E9EB` on `#0A0A0C` ≈ 15:1), so legibility is untouched.
+
+**No functionality changes.** Copy, ids, `data-*` attributes, JSON-LD and every script are byte-identical; only colours, type weights and the lockup dimensions moved.
+
+**Rollback reference.** Annotated tag `pre-logo-v1.59.5` (commit `08e3bf6`) pushed to origin before any edit.
+
+**Frames touched.** `landing/assets/img/{logo.svg,logo-mark.png,logo-lockup.png,favicon.svg,favicon-32.png,apple-touch-icon.png,icon-192.png,og-cover.svg,og-cover.png}`, `landing/assets/css/styles.css` (tokens, CTA, sheen, glows, nav sizing), `landing/index.html` + `landing/{privacy,terms,status,data-deletion}.html` (lockup ratio attributes), `test_landing_static.js` (Test 19 re-pinned, soft-white assertions added, REQUIRED_FILES += logo-lockup.png), `package.json`, `SAKA_FLEET_ARCHITECTURE.md`, `CHANGELOG.md`, `landing/data/changelog.json`.
+
+**Suites run:** `test_landing_static` (palette, soft-white retirement, lockup geometry, drawer ARIA), `test_doc_sync` — green; `npm run health` green.
 

@@ -9,23 +9,23 @@
 
 @font-face {
   font-family: 'Sora'; font-style: normal; font-weight: 600; font-display: swap;
-  src: url('/assets/fonts/Sora-600.woff2?v=1.59.5') format('woff2');
+  src: url('/assets/fonts/Sora-600.woff2?v=1.59.6') format('woff2');
 }
 @font-face {
   font-family: 'Sora'; font-style: normal; font-weight: 700; font-display: swap;
-  src: url('/assets/fonts/Sora-700.woff2?v=1.59.5') format('woff2');
+  src: url('/assets/fonts/Sora-700.woff2?v=1.59.6') format('woff2');
 }
 @font-face {
   font-family: 'Manrope'; font-style: normal; font-weight: 400; font-display: swap;
-  src: url('/assets/fonts/Manrope-400.woff2?v=1.59.5') format('woff2');
+  src: url('/assets/fonts/Manrope-400.woff2?v=1.59.6') format('woff2');
 }
 @font-face {
   font-family: 'Manrope'; font-style: normal; font-weight: 500; font-display: swap;
-  src: url('/assets/fonts/Manrope-500.woff2?v=1.59.5') format('woff2');
+  src: url('/assets/fonts/Manrope-500.woff2?v=1.59.6') format('woff2');
 }
 @font-face {
   font-family: 'Manrope'; font-style: normal; font-weight: 700; font-display: swap;
-  src: url('/assets/fonts/Manrope-700.woff2?v=1.59.5') format('woff2');
+  src: url('/assets/fonts/Manrope-700.woff2?v=1.59.6') format('woff2');
 }
 
 :root {
@@ -34,7 +34,7 @@
   --card: rgba(255, 255, 255, 0.04);
   --card-strong: rgba(255, 255, 255, 0.07);
   --line: rgba(255, 255, 255, 0.10);
-  --text: #FAFAFA;
+  --text: #E8E9EB;
   --muted: #9EA0A6;
   --ink: #0A0A0C;
   /* v1.59.5 — "Monolith": the logo is white-on-black, so the site is too.
@@ -47,8 +47,8 @@
   --amber: #D9B45C;
   --red: #E5484D;
   --green: #B8EF5C;
-  --grad: linear-gradient(100deg, #FAFAFA 0%, #D8E9B8 62%, #B8EF5C 130%);
-  --grad-soft: linear-gradient(100deg, rgba(255,255,255,.06) 0%, rgba(184,239,92,.08) 100%);
+  --grad: linear-gradient(100deg, #EFEFF2 0%, #D8E9B8 62%, #B8EF5C 130%);
+  --grad-soft: linear-gradient(100deg, rgba(255,255,255,.05) 0%, rgba(184,239,92,.08) 100%);
   --radius: 16px;
   --font-display: "Sora", "Segoe UI", system-ui, sans-serif;
   --font-body: "Manrope", "Segoe UI", system-ui, -apple-system, sans-serif;
@@ -102,8 +102,8 @@ a:hover { text-decoration: underline; text-underline-offset: 3px; }
   transition: transform .15s ease, box-shadow .15s ease, opacity .15s ease, background .15s ease;
 }
 .btn:hover { text-decoration: none; transform: translateY(-2px); }
-.btn-primary { background: #FAFAFA; color: var(--ink); box-shadow: 0 10px 34px rgba(0, 0, 0, .45); }
-.btn-primary:hover { background: #FFFFFF; box-shadow: 0 14px 44px rgba(0, 0, 0, .6), 0 0 0 1px var(--lime-line); }
+.btn-primary { background: #E9EAED; color: var(--ink); box-shadow: 0 10px 34px rgba(0, 0, 0, .45); }
+.btn-primary:hover { background: #F2F3F5; box-shadow: 0 14px 44px rgba(0, 0, 0, .6), 0 0 0 1px var(--lime-line); }
 .btn-ghost { background: transparent; color: var(--text); border: 1px solid var(--line); }
 .btn-ghost:hover { border-color: rgba(255, 255, 255, .34); background: var(--card); }
 .btn-wa { background: #22C55E; color: #052E16; box-shadow: 0 10px 30px rgba(34,197,94,.28); }
@@ -116,6 +116,9 @@ a:hover { text-decoration: underline; text-underline-offset: 3px; }
 .nav-logo:hover { text-decoration: none; opacity: .92; }
 /* v1.59.5 — the lockup keeps its intrinsic ratio (no more 34x34 squish). */
 .nav-logo .mark { width: auto; height: 34px; }
+/* v1.59.6 — the real SAKAFLEET lockup is ~8.9:1, so it shrinks on small screens. */
+@media (max-width: 960px) { .nav-logo .mark { height: 28px; } }
+@media (max-width: 640px) { .nav-logo .mark { height: 22px; } }
 .nav-links { display: flex; align-items: center; gap: 26px; }
 .nav-links a { color: var(--muted); font-weight: 600; font-size: .95rem; transition: color .15s ease; }
 .nav-links a:hover { color: var(--text); text-decoration: none; box-shadow: inset 0 -2px 0 var(--lime); }
@@ -270,8 +273,8 @@ body.nav-open .nav-menu { display: block; }
 .hero { position: relative; padding: 96px 0 64px; overflow: hidden; }
 .hero::before {
   content: ""; position: absolute; inset: -40% -20% auto; height: 90%;
-  background: radial-gradient(ellipse at 28% 12%, rgba(255,255,255,.07), transparent 55%),
-              radial-gradient(ellipse at 82% 0%, rgba(184,239,92,.06), transparent 52%);
+  background: radial-gradient(ellipse at 28% 12%, rgba(255,255,255,.045), transparent 55%),
+              radial-gradient(ellipse at 82% 0%, rgba(184,239,92,.04), transparent 52%);
   pointer-events: none;
 }
 .hero-grid { position: relative; display: grid; grid-template-columns: 1.05fr .95fr; gap: 48px; align-items: center; }
@@ -310,7 +313,7 @@ body.nav-open .nav-menu { display: block; }
 .chat-body { display: flex; flex-direction: column; gap: 10px; min-height: 300px; }
 .bubble { max-width: 85%; padding: 10px 14px; border-radius: 14px; font-size: .92rem; line-height: 1.45; }
 .bubble.me { align-self: flex-end; background: var(--card-strong); border: 1px solid var(--line); border-bottom-right-radius: 4px; }
-.bubble.saka { align-self: flex-start; background: rgba(255, 255, 255, .06); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+.bubble.saka { align-self: flex-start; background: rgba(255, 255, 255, .05); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
 .bubble.saka .tick { color: var(--lime); }
 .bubble.time { align-self: center; color: var(--muted); font-size: .72rem; background: transparent; border: 0; }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
@@ -329,7 +332,7 @@ body.nav-open .nav-menu { display: block; }
   padding: 26px; transition: transform .18s ease, border-color .18s ease;
 }
 .card:hover { transform: translateY(-4px); border-color: rgba(255, 255, 255, .24); }
-.card .icon { width: 46px; height: 46px; border-radius: 13px; background: rgba(255, 255, 255, .05); border: 1px solid var(--line); display: flex; align-items: center; justify-content: center; font-size: 1.35rem; margin-bottom: 16px; }
+.card .icon { width: 46px; height: 46px; border-radius: 13px; background: rgba(255, 255, 255, .04); border: 1px solid var(--line); display: flex; align-items: center; justify-content: center; font-size: 1.35rem; margin-bottom: 16px; }
 .card h3 { font-size: 1.15rem; margin-bottom: 8px; }
 .card p { color: var(--muted); font-size: .95rem; }
 
@@ -379,7 +382,7 @@ body.nav-open .nav-menu { display: block; }
 .faq details p { color: var(--muted); font-size: .94rem; margin-top: 10px; }
 
 /* CTA band */
-.cta-band { background: linear-gradient(120deg, rgba(255, 255, 255, .05), rgba(184, 239, 92, .06)); border: 1px solid var(--line); border-radius: 26px; padding: 56px 30px; text-align: center; }
+.cta-band { background: linear-gradient(120deg, rgba(255, 255, 255, .04), rgba(184, 239, 92, .05)); border: 1px solid var(--line); border-radius: 26px; padding: 56px 30px; text-align: center; }
 .cta-band h2 { font-size: clamp(1.7rem, 4vw, 2.4rem); margin-bottom: 12px; }
 .cta-band p { color: var(--muted); max-width: 560px; margin: 0 auto 26px; }
 
@@ -436,7 +439,7 @@ footer { border-top: 1px solid var(--line); padding: 56px 0 40px; margin-top: 40
 .alert.show { display: block; }
 .alert.err { background: rgba(251,113,133,.12); border: 1px solid rgba(251,113,133,.4); color: var(--red); }
 .alert.ok { background: rgba(184,239,92,.10); border: 1px solid rgba(184,239,92,.38); color: var(--lime); }
-.alert.info { background: rgba(255,255,255,.06); border: 1px solid var(--line); color: var(--text); }
+.alert.info { background: rgba(255,255,255,.05); border: 1px solid var(--line); color: var(--text); }
 
 /* Legal pages */
 .legal-hero { padding: 64px 0 30px; }
@@ -499,7 +502,7 @@ footer { border-top: 1px solid var(--line); padding: 56px 0 40px; margin-top: 40
 .cookie-toggle { position: relative; width: 44px; height: 24px; flex: none; margin-top: 2px; }
 .cookie-toggle input { opacity: 0; width: 0; height: 0; }
 .cookie-slider { position: absolute; cursor: pointer; inset: 0; background: var(--line); border-radius: 999px; transition: .2s; }
-.cookie-slider::before { content: ""; position: absolute; height: 18px; width: 18px; left: 3px; top: 3px; background: #F8FAFC; border-radius: 50%; transition: .2s; }
+.cookie-slider::before { content: ""; position: absolute; height: 18px; width: 18px; left: 3px; top: 3px; background: #E8E9EB; border-radius: 50%; transition: .2s; }
 .cookie-toggle input:checked + .cookie-slider { background: var(--lime); }
 .cookie-toggle input:checked + .cookie-slider::before { transform: translateX(20px); }
 .cookie-toggle input:disabled + .cookie-slider { cursor: not-allowed; opacity: .75; }

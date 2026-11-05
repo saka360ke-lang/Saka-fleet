@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.59.6] - 2026-11-05
+
+- **The supplied SAKAFLEET logo is now the site logo.** The uploaded artwork (interlocking chain-link mark + heavy uppercase SAKAFLEET wordmark) replaces the traced placeholder: `logo.svg` embeds the real lockup, `logo-mark.png` is the cropped mark (hero watermark + icon tiles), and the favicon, app icons and 1200x630 OG cover were rebuilt from it. The nav renders the lockup at its true 8.9:1 ratio (302x34 desktop, 28px tablet, 22px mobile — previously it would have squished).
+- **Softer white — no more glare.** Ink drops from `#FAFAFA` to `#E8E9EB`, primary CTAs from `#FAFAFA`/`#FFFFFF` to `#E9EAED`/`#F2F3F5`, the headline sheen starts at `#EFEFF2`, the logo itself is tinted `#E8E9EB`, and the hero glow, card icons, chat bubbles, CTA band, cookie knob and info alerts were dialled down (~30%). Contrast stays AAA (`#E8E9EB` on `#0A0A0C` ≈ 15:1); pure `#FFFFFF`/`#FAFAFA`/`#F8FAFC` no longer appears anywhere in the stylesheet (pinned by the landing suite).
+- **Rollback point.** Annotated tag `pre-logo-v1.59.5` (commit `08e3bf6`) was pushed before any edit.
+- **Frames touched:** landing/assets/img/{logo.svg,logo-mark.png,logo-lockup.png (new),favicon.svg,favicon-32.png,apple-touch-icon.png,icon-192.png,og-cover.svg,og-cover.png}, landing/assets/css/styles.css (tokens, CTA, sheen, glows, nav sizing), landing/index.html + 4 legal/status pages (lockup ratio), test_landing_static.js (Test 19 re-pinned + soft-white checks), package.json, SAKA_FLEET_ARCHITECTURE.md (section 162), landing/data/changelog.json, this file.
+- **Suites run:** test_landing_static, test_doc_sync — green; `npm run health` green.
+
 ## [1.59.5] - 2026-11-05
 
 - **"Monolith" website theme — built around the actual logo.** The Canva link the operator shared (canva.link/fi9eqo083pv9hw3, "Sakafleet" by David Njonjo) is two fluid S-leaf marks, white on black. The site now wears that palette exactly: near-black `#0A0A0C`, white ink `#FAFAFA`, hairline `rgba(255,255,255,.10)` borders and ONE restrained lime accent (`#B8EF5C`) for links, focus rings, the popular-plan rim and a single accented headline word. The ember-orange and cyan website colours are retired; every existing animation and the reduced-motion escape remain.

@@ -30,7 +30,7 @@ function check(condition, message) {
 const REQUIRED_FILES = [
   'index.html', 'privacy.html', 'terms.html', 'data-deletion.html', 'status.html', '404.html',
   'assets/css/styles.css', 'assets/js/main.js', 'assets/js/cookieConsent.js', 'assets/js/status.js', 'assets/js/locale.js', 'assets/js/nav.js',
-  'assets/img/logo.svg', 'assets/img/logo-mark.png', 'assets/img/favicon.svg', 'assets/img/og-cover.svg',
+  'assets/img/logo.svg', 'assets/img/logo-mark.png', 'assets/img/logo-lockup.png', 'assets/img/favicon.svg', 'assets/img/og-cover.svg',
   'assets/img/og-cover.png', 'assets/img/favicon-32.png', 'assets/img/apple-touch-icon.png', 'assets/img/icon-192.png',
   'assets/fonts/Sora-600.woff2', 'assets/fonts/Sora-700.woff2',
   'assets/fonts/Manrope-400.woff2', 'assets/fonts/Manrope-500.woff2', 'assets/fonts/Manrope-700.woff2',
@@ -335,23 +335,24 @@ check(mainJs.includes('signedUpMessage') && mainJs.includes('continue on WhatsAp
 check(css.includes('.avail-note'), 'the availability note is styled');
 
 console.log('\n--- Test 19: "Monolith" theme (logo-faithful black/white + one lime accent) + drawer menu (v1.59.5) ---');
-check(css.includes('--bg: #0A0A0C') && css.includes('--lime: #B8EF5C') && css.includes('--line: rgba(255, 255, 255, 0.10)'), 'the monochrome palette is declared as tokens (near-black, white ink, hairline)');
+check(css.includes('--bg: #0A0A0C') && css.includes('--lime: #B8EF5C') && css.includes('--line: rgba(255, 255, 255, 0.10)') && css.includes('--text: #E8E9EB'), 'the monochrome palette is declared as tokens (near-black, soft-white ink, hairline)');
 check(!css.includes('--orange') && !css.includes('--cyan'), 'the ember/cyan tokens are fully retired');
-check(/\.btn-primary\s*\{[^}]*#FAFAFA[^}]*var\(--ink\)/.test(css), 'the primary CTA is a white pill with ink text (premium monochrome, contrast-safe)');
+check(/\.btn-primary\s*\{[^}]*#E9EAED[^}]*var\(--ink\)/.test(css), 'the primary CTA is a soft-white pill with ink text (no glare, contrast-safe)');
+check(!css.includes('#FFFFFF') && !css.includes('#FAFAFA') && !css.includes('#F8FAFC'), 'pure white is retired from the CSS (soft #E8E9EB ink, #E9EAED CTA)');
 check(css.includes('.accent-text') && css.includes('color: var(--lime)') && indexHtml.includes('accent-text'), 'one headline word carries the single lime accent');
 check(!indexHtml.includes('grad-ember-text') && !css.includes('grad-ember-text'), 'the ember headline class is gone');
-check(/rgba\(255,255,255,\.07\)/.test(css), 'the hero carries a soft white glow layer');
+check(/rgba\(255,255,255,\.045\)/.test(css), 'the hero carries a soft white glow layer (dialled down)');
 check(/\.price-card\.popular\s*\{[^}]*var\(--lime-line\)/.test(css), 'the most-popular plan is rim-lit in lime');
 check(css.includes(':focus-visible') && /:focus-visible\s*\{[^}]*var\(--lime\)/.test(css), 'keyboard focus rings use the lime accent');
-check(css.includes('.grad-text') && css.includes('--grad: linear-gradient(100deg, #FAFAFA 0%'), 'headline sheen runs white to lime (no cool colours left)');
+check(css.includes('.grad-text') && css.includes('--grad: linear-gradient(100deg, #EFEFF2 0%'), 'headline sheen runs soft white to lime (no cool colours left)');
 check(css.includes('--font-display: "Sora"') && css.includes('--font-body: "Manrope"'), 'the display/body pairing is Sora + Manrope');
 check(css.includes("font-family: 'Sora'") && css.includes("font-family: 'Manrope'"), 'both premium families are self-hosted via @font-face');
 check(indexHtml.includes('/assets/fonts/Sora-700.woff2') && !indexHtml.includes('Outfit-') && !indexHtml.includes('Inter-'), 'the page preloads Sora (no Outfit/Inter references left)');
 check(indexHtml.includes('class="hero-mark"') && css.includes('.hero-mark') && indexHtml.includes('/assets/img/logo-mark.png'), 'the logo mark is ghosted behind the hero (decorative only)');
 check(indexHtml.includes('theme-color" content="#0A0A0C"'), 'the browser theme colour matches the black canvas');
 const logoSvg = fs.readFileSync(path.join(LANDING, 'assets/img/logo.svg'), 'utf8');
-check(logoSvg.includes('data:image/png;base64,') && logoSvg.includes('<path d="M') && logoSvg.includes('Saka Fleet'), 'the logo lockup ships the real mark (embedded) plus Sora wordmark outlines');
-check(/class="mark" src="\/assets\/img\/logo\.svg"[^>]*width="122"/.test(indexHtml), 'the nav lockup keeps its intrinsic ratio (122x34, no squish)');
+check(logoSvg.includes('data:image/png;base64,') && logoSvg.includes('viewBox="0 0 1637 184"') && logoSvg.includes('aria-label="Saka Fleet"'), 'the logo is the supplied SAKAFLEET lockup (interlocking mark + wordmark), accessibly labelled');
+check(/class="mark" src="\/assets\/img\/logo\.svg"[^>]*width="302"/.test(indexHtml), 'the nav lockup keeps its intrinsic 8.9:1 ratio (302x34, no squish)');
 check(css.includes('prefers-reduced-motion') && css.includes('@keyframes menu-rise'), 'the drawer animation honours reduced motion');
 check(css.includes('.nav-burger') && css.includes('.nav-menu') && css.includes('max-width: 960px'), 'burger + full-screen drawer appear at tablet/mobile widths');
 const navJsSource = fs.readFileSync(path.join(LANDING, 'assets/js/nav.js'), 'utf8');
