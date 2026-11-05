@@ -7,23 +7,23 @@
 
 @font-face {
   font-family: 'Outfit'; font-style: normal; font-weight: 600; font-display: swap;
-  src: url('/assets/fonts/Outfit-600.woff2?v=1.59.2') format('woff2');
+  src: url('/assets/fonts/Outfit-600.woff2?v=1.59.3') format('woff2');
 }
 @font-face {
   font-family: 'Outfit'; font-style: normal; font-weight: 800; font-display: swap;
-  src: url('/assets/fonts/Outfit-800.woff2?v=1.59.2') format('woff2');
+  src: url('/assets/fonts/Outfit-800.woff2?v=1.59.3') format('woff2');
 }
 @font-face {
   font-family: 'Inter'; font-style: normal; font-weight: 400; font-display: swap;
-  src: url('/assets/fonts/Inter-400.woff2?v=1.59.2') format('woff2');
+  src: url('/assets/fonts/Inter-400.woff2?v=1.59.3') format('woff2');
 }
 @font-face {
   font-family: 'Inter'; font-style: normal; font-weight: 600; font-display: swap;
-  src: url('/assets/fonts/Inter-600.woff2?v=1.59.2') format('woff2');
+  src: url('/assets/fonts/Inter-600.woff2?v=1.59.3') format('woff2');
 }
 @font-face {
   font-family: 'Inter'; font-style: normal; font-weight: 700; font-display: swap;
-  src: url('/assets/fonts/Inter-700.woff2?v=1.59.2') format('woff2');
+  src: url('/assets/fonts/Inter-700.woff2?v=1.59.3') format('woff2');
 }
 
 :root {
@@ -39,8 +39,18 @@
   --amber: #FBBF24;
   --red: #FB7185;
   --green: #34D399;
+  /* v1.59.3 — "Afterglow Ember": ONE hot signal colour for action & attention.
+     Cool cyan/lime stay the system colours (links, success, info); orange is
+     used selectively (CTAs, active states, rims, glows) at ~10% of the UI. */
+  --orange: #FF6A00;
+  --orange-hot: #FF8A00;
+  --orange-deep: #7A2E00;
+  --orange-glow: rgba(255, 106, 0, 0.45);
+  --text-on-orange: #04121B;
   --grad: linear-gradient(100deg, #4CC3F7 0%, #B8EF5C 100%);
   --grad-soft: linear-gradient(100deg, rgba(76,195,247,.16) 0%, rgba(184,239,92,.16) 100%);
+  --grad-orange: linear-gradient(100deg, #FF8A00 0%, #FF6A00 55%, #FF3D00 100%);
+  --grad-ember: linear-gradient(100deg, #4CC3F7 0%, #FF6A00 100%);
   --radius: 18px;
   --font-display: "Outfit", "Segoe UI", system-ui, sans-serif;
   --font-body: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
@@ -75,6 +85,15 @@ a:hover { text-decoration: underline; }
   background-clip: text;
   color: transparent;
 }
+/* v1.59.3 — one headline word burns ember: cool → hot in a single gradient. */
+.grad-ember-text {
+  background: var(--grad-ember);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+/* Orange focus ring everywhere (keyboard users see exactly where they are). */
+:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
 
 .section { padding: 84px 0; }
 .section-title { font-size: clamp(1.7rem, 4vw, 2.6rem); margin-bottom: 14px; text-align: center; }
@@ -88,8 +107,8 @@ a:hover { text-decoration: underline; }
   transition: transform .15s ease, box-shadow .15s ease, opacity .15s ease;
 }
 .btn:hover { text-decoration: none; transform: translateY(-2px); }
-.btn-primary { background: var(--grad); color: #04121B; box-shadow: 0 8px 30px rgba(56,189,248,.35); }
-.btn-primary:hover { box-shadow: 0 12px 40px rgba(56,189,248,.5); }
+.btn-primary { background: var(--grad-orange); color: var(--text-on-orange); box-shadow: 0 8px 30px var(--orange-glow); }
+.btn-primary:hover { box-shadow: 0 12px 46px rgba(255, 106, 0, .65), 0 0 0 1px rgba(255, 138, 0, .5); }
 .btn-ghost { background: var(--card-strong); color: var(--text); border: 1px solid var(--line); }
 .btn-ghost:hover { border-color: var(--cyan); }
 .btn-wa { background: #22C55E; color: #052E16; box-shadow: 0 8px 30px rgba(34,197,94,.3); }
@@ -103,12 +122,91 @@ a:hover { text-decoration: underline; }
 .nav-logo .mark { width: 34px; height: 34px; }
 .nav-links { display: flex; align-items: center; gap: 26px; }
 .nav-links a { color: var(--muted); font-weight: 600; font-size: .95rem; }
-.nav-links a:hover { color: var(--text); text-decoration: none; }
+.nav-links a:hover { color: var(--text); text-decoration: none; box-shadow: inset 0 -2px 0 var(--orange); }
 .nav-cta { display: flex; align-items: center; gap: 12px; }
 .nav-flag { display: inline-flex; align-items: center; font-size: 1.05rem; padding: 6px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--card); line-height: 1; }
 .usd-hint { color: var(--muted); font-size: 11px; font-weight: 400; white-space: nowrap; }
 .pricing-note { text-align: center; color: var(--muted); font-size: 0.9rem; margin-top: 14px; }
 .nav-cta .btn { padding: 10px 20px; font-size: .92rem; }
+
+/* v1.59.3 — Ember drawer: burger + full-screen menu for tablet & mobile.
+   The burger's bars flare orange and morph into an ✕ when open; links rise
+   in with a short stagger (tasteful, once, and off for reduced motion). */
+.nav-burger {
+  display: none;
+  width: 42px;
+  height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 5px;
+  padding: 0;
+}
+.nav-burger span {
+  display: block;
+  width: 18px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--text);
+  transition: transform .25s ease, opacity .2s ease, background .2s ease, box-shadow .2s ease;
+}
+body.nav-open .nav-burger span { background: var(--orange); box-shadow: 0 0 10px var(--orange-glow); }
+body.nav-open .nav-burger span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
+body.nav-open .nav-burger span:nth-child(2) { opacity: 0; }
+body.nav-open .nav-burger span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+body.nav-open { overflow: hidden; }
+.nav-menu {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  display: none;
+  background: radial-gradient(ellipse at 85% 0%, rgba(255, 106, 0, .18), transparent 55%), rgba(6, 10, 19, .95);
+  backdrop-filter: blur(16px);
+  padding: 104px 24px 32px;
+  overflow-y: auto;
+}
+body.nav-open .nav-menu { display: block; }
+.nav-menu-inner { display: flex; flex-direction: column; gap: 4px; max-width: 420px; margin: 0 auto; }
+.nav-menu-inner a {
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: 1.45rem;
+  font-weight: 800;
+  padding: 13px 10px;
+  border-radius: 12px;
+  border-bottom: 1px solid var(--line);
+  transform: translateY(12px);
+  opacity: 0;
+  animation: menu-rise .35s ease forwards;
+  animation-delay: calc(var(--i, 0) * 55ms);
+}
+.nav-menu-inner a:hover { color: var(--orange); text-decoration: none; }
+.nav-menu-inner .nav-menu-cta {
+  margin-top: 20px;
+  border-bottom: 0;
+  font-family: var(--font-body);
+  font-size: 1rem;
+  text-align: center;
+  color: var(--text-on-orange);
+  opacity: 0;
+  transform: translateY(12px);
+  animation: menu-rise .35s ease forwards;
+  animation-delay: calc(var(--i, 0) * 55ms);
+}
+@keyframes menu-rise { to { transform: translateY(0); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .nav-menu-inner a, .nav-menu-inner .nav-menu-cta { animation: none; opacity: 1; transform: none; }
+  .nav-burger span { transition: none; }
+}
+@media (max-width: 960px) {
+  .nav-links { display: none; }
+  .nav-cta .btn-ghost { display: none; }
+  .nav-burger { display: inline-flex; }
+}
 
 /* Launch banner (v1.59.1, sticky + glow v1.59.2) — lives inside the sticky
    header; slim, dismissible, fail-closed (hidden by default). The glow is a
@@ -143,10 +241,10 @@ a:hover { text-decoration: underline; }
   font-weight: 700;
   white-space: nowrap;
   padding: 3px 10px;
-  border: 1px solid var(--line);
+  border: 1px solid rgba(255, 106, 0, .55);
   border-radius: 999px;
   background: var(--card);
-  color: var(--cyan);
+  color: var(--orange);
   font-size: .8rem;
 }
 .launch-banner .launch-dismiss {
@@ -177,11 +275,12 @@ a:hover { text-decoration: underline; }
 .hero::before {
   content: ""; position: absolute; inset: -40% -20% auto; height: 90%;
   background: radial-gradient(ellipse at 30% 20%, rgba(56,189,248,.14), transparent 55%),
-              radial-gradient(ellipse at 70% 30%, rgba(163,230,53,.10), transparent 55%);
+              radial-gradient(ellipse at 70% 30%, rgba(163,230,53,.10), transparent 55%),
+              radial-gradient(ellipse at 86% 8%, rgba(255,106,0,.17), transparent 55%);
   pointer-events: none;
 }
 .hero-grid { position: relative; display: grid; grid-template-columns: 1.05fr .95fr; gap: 48px; align-items: center; }
-.hero-badge { display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: 999px; background: var(--grad-soft); border: 1px solid rgba(56,189,248,.35); color: var(--cyan); font-weight: 600; font-size: .9rem; margin-bottom: 22px; }
+.hero-badge { display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: 999px; background: linear-gradient(100deg, rgba(255,138,0,.14), rgba(76,195,247,.10)); border: 1px solid rgba(255,106,0,.45); color: var(--text); font-weight: 600; font-size: .9rem; margin-bottom: 22px; }
 .hero h1 { font-size: clamp(2.3rem, 5.4vw, 3.7rem); margin-bottom: 20px; }
 .hero p.lead { color: var(--muted); font-size: 1.15rem; max-width: 520px; margin-bottom: 30px; }
 #localeFlag { gap: 8px; align-items: center; }
@@ -233,7 +332,7 @@ a:hover { text-decoration: underline; }
 /* Pricing */
 .pricing { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; align-items: stretch; }
 .price-card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 28px 22px; display: flex; flex-direction: column; }
-.price-card.popular { border-color: rgba(56,189,248,.6); background: linear-gradient(180deg, rgba(56,189,248,.08), var(--card)); }
+.price-card.popular { border-color: rgba(255,106,0,.65); background: linear-gradient(180deg, rgba(255,106,0,.12), var(--card)); box-shadow: 0 0 0 1px rgba(255,138,0,.22), 0 18px 60px rgba(255,106,0,.14); }
 .price-card .plan { font-family: var(--font-display); font-weight: 800; font-size: 1.1rem; }
 .price-card .price { font-family: var(--font-display); font-weight: 800; font-size: 2rem; margin: 12px 0 2px; }
 .price-card .per { color: var(--muted); font-size: .85rem; margin-bottom: 16px; }
@@ -241,7 +340,7 @@ a:hover { text-decoration: underline; }
 .price-card li { padding: 5px 0 5px 26px; position: relative; color: var(--muted); font-size: .9rem; }
 .price-card li::before { content: "✓"; position: absolute; left: 0; color: var(--lime); font-weight: 700; }
 .price-card .btn { width: 100%; }
-.popular-tag { display: inline-block; background: var(--grad); color: #04121B; font-size: .72rem; font-weight: 800; padding: 3px 10px; border-radius: 999px; margin-bottom: 10px; }
+.popular-tag { display: inline-block; background: var(--grad-orange); color: var(--text-on-orange); font-size: .72rem; font-weight: 800; padding: 3px 10px; border-radius: 999px; margin-bottom: 10px; box-shadow: 0 6px 20px var(--orange-glow); }
 
 /* Uptime */
 .status-card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 30px; display: flex; align-items: center; gap: 24px; flex-wrap: wrap; max-width: 720px; margin: 0 auto; }
@@ -269,7 +368,7 @@ a:hover { text-decoration: underline; }
 .faq details { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px 22px; }
 .faq summary { cursor: pointer; font-weight: 700; font-family: var(--font-display); font-size: 1rem; list-style: none; }
 .faq summary::-webkit-details-marker { display: none; }
-.faq summary::after { content: "+"; float: right; color: var(--cyan); font-weight: 800; }
+.faq summary::after { content: "+"; float: right; color: var(--orange); font-weight: 800; }
 .faq details[open] summary::after { content: "−"; }
 .faq details p { color: var(--muted); font-size: .94rem; margin-top: 10px; }
 

@@ -29,7 +29,7 @@ function check(condition, message) {
 
 const REQUIRED_FILES = [
   'index.html', 'privacy.html', 'terms.html', 'data-deletion.html', 'status.html', '404.html',
-  'assets/css/styles.css', 'assets/js/main.js', 'assets/js/cookieConsent.js', 'assets/js/status.js', 'assets/js/locale.js',
+  'assets/css/styles.css', 'assets/js/main.js', 'assets/js/cookieConsent.js', 'assets/js/status.js', 'assets/js/locale.js', 'assets/js/nav.js',
   'assets/img/logo.svg', 'assets/img/favicon.svg', 'assets/img/og-cover.svg',
   'assets/img/og-cover.png', 'assets/img/favicon-32.png', 'assets/img/apple-touch-icon.png', 'assets/img/icon-192.png',
   'assets/fonts/Outfit-600.woff2', 'assets/fonts/Outfit-800.woff2',
@@ -332,6 +332,22 @@ check(mainJs.includes('/api/onboard/check') && mainJs.includes('refreshContinueG
 check(mainJs.includes('availability.failed === true') && mainJs.includes("availability.email === 'registered'"), 'a failed check fails open; a known account never advances');
 check(mainJs.includes('signedUpMessage') && mainJs.includes('continue on WhatsApp'), 'the user is told when the number/email already has an account');
 check(css.includes('.avail-note'), 'the availability note is styled');
+
+console.log('\n--- Test 19: Afterglow Ember theme + ember drawer menu (v1.59.3) ---');
+check(css.includes('--orange: #FF6A00') && css.includes('--grad-orange') && css.includes('--text-on-orange: #04121B'), 'the ember palette is declared as tokens');
+check(/\.btn-primary\s*\{[^}]*var\(--grad-orange\)[^}]*var\(--text-on-orange\)/.test(css), 'the primary CTA uses the orange gradient with dark text (contrast-safe)');
+check(css.includes('.grad-ember-text') && indexHtml.includes('grad-ember-text'), 'one headline word burns ember (cool to hot gradient)');
+check(/rgba\(255,\s*106,\s*0,\s*\.17\)/.test(css), 'the hero carries an ember glow layer');
+check(/\.price-card\.popular\s*\{[^}]*255,\s*106,\s*0/.test(css), 'the most-popular plan is rim-lit in ember');
+check(css.includes(':focus-visible') && /:focus-visible\s*\{[^}]*var\(--orange\)/.test(css), 'keyboard focus rings use the ember accent');
+check(css.includes('prefers-reduced-motion') && css.includes('@keyframes menu-rise'), 'the drawer animation honours reduced motion');
+check(css.includes('.nav-burger') && css.includes('.nav-menu') && css.includes('max-width: 960px'), 'burger + full-screen drawer appear at tablet/mobile widths');
+const navJsSource = fs.readFileSync(path.join(LANDING, 'assets/js/nav.js'), 'utf8');
+check(navJsSource.includes('aria-expanded') && navJsSource.includes('aria-controls') && navJsSource.includes("event.key === 'Escape'"), 'the drawer is keyboard and ARIA accessible');
+check(navJsSource.includes(".nav-links") && navJsSource.includes('nav-open'), 'the drawer builds from the existing nav links (no duplicated markup)');
+for (const page of ['index.html', 'status.html', 'privacy.html', 'terms.html', 'data-deletion.html']) {
+  check(fs.readFileSync(path.join(LANDING, page), 'utf8').includes('/assets/js/nav.js'), `${page} loads the shared menu script`);
+}
 
 console.log('Stateless suite: file reads only — no database, no cleanup needed.');
 

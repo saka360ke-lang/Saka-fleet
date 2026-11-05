@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.59.3] - 2026-11-05
+
+- **"Afterglow Ember" theme.** One hot signal colour — fluorescent orange — now carries action and attention: primary CTAs (hero, pricing, signup modal, cookie consent) sit on an `#FF8A00 → #FF6A00 → #FF3D00` gradient with a soft ember glow that flares on hover; the hero gains an orange glow layer, an ember-ringed badge and one gradient headline word; the "Most popular" plan gets a rim-lit card and orange tag; nav hovers, the FAQ marker, the launch slots pill and every focus ring pick up the ember accent. Text on orange is always dark `#04121B` (≈ 6.9:1, AAA) — white-on-orange is never used — and all animations switch off under `prefers-reduced-motion`.
+- **Creative drawer menu for tablet & mobile.** A new shared `nav.js` builds a burger + full-screen overlay menu from the existing nav links on every page with a header. The burger's bars flare orange and morph into an ✕, links rise in with a short stagger over a blurred navy/ember backdrop, a "Get Started Free" CTA closes the list, and Escape/backdrop/link taps close it (scroll-lock, ARIA dialog semantics, focus move). Breakpoint extended to 960px — tablet and mobile both get the menu.
+- **Frames touched:** landing/assets/css/styles.css, landing/assets/js/nav.js (new), landing/{index,status,privacy,terms,data-deletion}.html, landing/data/changelog.json, test_landing_static.js, package.json, SAKA_FLEET_ARCHITECTURE.md.
+- **Suites run:** test_landing_static (theme + contrast + ARIA drawer), test_doc_sync, test_kb_docs — green; `npm run health` green.
+
 ## [1.59.2] - 2026-11-05
 
 - **Sticky, glowing launch banner — and the copy says "signups".** The banner now lives inside the sticky header, so it stays visible while scrolling on every screen size; it carries a slow breathing glow (never a rapid strobe, with a reduced-motion fallback) and stacks/centres on mobile with the dismiss button always reachable. The offer line now reads "the first 50 signups get a full 365-day trial".

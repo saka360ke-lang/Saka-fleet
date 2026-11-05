@@ -1,6 +1,13 @@
 {
-  "latest": "1.59.2",
+  "latest": "1.59.3",
   "entries": [
+    {
+      "version": "1.59.3",
+      "date": "2026-11-05",
+      "title": "A little more fire",
+      "preview": "Ember-orange buttons and glows, a burning headline word, and a brand-new drawer menu.",
+      "summary": "The site picks up a hot signal colour: fluorescent ember orange on the primary buttons, the most-popular plan and small sparks like focus rings and the FAQ marker — always with dark, high-contrast text. On tablet and mobile a new burger opens a full-screen drawer menu whose links rise into place over a glowing navy backdrop."
+    },
     {
       "version": "1.59.2",
       "date": "2026-11-05",

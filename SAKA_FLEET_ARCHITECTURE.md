@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.59.2  
+**Version:** 1.59.3  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.59.3** | "Afterglow Ember" website theme (fluorescent orange CTAs, ember hero glow, rim-lit pricing) + creative burger drawer menu for tablet/mobile | 159 |
 | **1.59.2** | Sticky glowing launch banner (mobile-centred, "signups" copy) + live signup availability check (Continue gated) + DB unique phone/email guards + race merge | 158 |
 | **1.59.1** | Launch banner + live slot counter + opt-out tick box (checked by default), rules-of-engagement consolidation + rules 53-59 | 157 |
 | **1.59.0** | Persona v4 (brand compass + ack variety + pacing), phone-primary country lock + signup reconciliation, changelog preview feed, optional searchable record labels, live secrets audit | 156 |
@@ -4433,4 +4434,27 @@ quiz engine:
 **Frames touched.** `landing/index.html` (sticky header placement, copy, tick label, availability notes, gated Continue), `landing/assets/js/main.js` (availability checks + gate + hero-note copy), `landing/assets/css/styles.css` (sticky/glow/reduced-motion/mobile/avail-note), `src/services/webOnboarding.js` (`SIGNUP_GUARD_SQL`, `checkSignupAvailability`, race merge), `index.js` (CORS path, `/api/onboard/check`), `scripts/run_signup_guard_migration.js` (new), `package.json`, `test_duplicate_signup.js` (+8), `test_landing_static.js` (+10), `.clinerules` (rule 47 additive), `SAKA_FLEET_ARCHITECTURE.md`, `CHANGELOG.md`, `landing/data/changelog.json`.
 
 **Suites run:** `test_duplicate_signup` (21), `test_landing_static` (incl. 10 new sticky/glow/guard checks), `test_web_onboarding`, `test_launch_award`, `test_first_message_flow`, `test_doc_sync`, `test_kb_docs`, `test_env_audit`, `npm run health` - green.
+
+---
+
+### 159. v1.59.3 - "Afterglow Ember" website theme + creative drawer menu (2026-11-05)
+
+**Concept.** The marketing site is a night sky (dark navy) with a cool cyan→lime system. ONE hot signal colour — fluorescent "ember" orange — now carries action and attention (CTAs, active states, rims, glows, the open menu), while cyan/lime remain the system colours (links, success, info). The orange budget stays around 10% of the UI so the clean aesthetic survives.
+
+**Palette & accents (`landing/assets/css/styles.css`).**
+- New tokens: `--orange #FF6A00`, `--orange-hot #FF8A00`, `--orange-deep #7A2E00`, `--orange-glow rgba(255,106,0,.45)`, `--text-on-orange #04121B`, `--grad-orange` (`#FF8A00 → #FF6A00 → #FF3D00`) and `--grad-ember` (cyan → orange for one headline word via `.grad-ember-text`).
+- Applied selectively: **primary CTAs** (`.btn-primary`, hero/CTA-band/modal/cookie buttons) on the orange gradient with a soft ember glow that flares on hover; **hero** gains an orange radial glow layer and an ember-ringed badge; **pricing "Most popular"** gets a rim glow + orange tag; **micro-accents**: nav hover underline, FAQ +/− marker, launch-banner slots pill, and a global orange `:focus-visible` ring.
+- **Contrast:** text on orange is always dark `#04121B` (≈ 6.9:1 on `#FF6A00`, AAA); white-on-orange (~2.4:1) is never used; no body copy is orange; links/checks/success stay cyan/lime.
+- **Motion:** one slow glow at a time; `prefers-reduced-motion: reduce` disables every animation (drawer rise, burger morph, banner pulse).
+
+**Creative tablet/mobile menu ("the ember drawer").**
+- New shared `landing/assets/js/nav.js` (vanilla, no deps) loaded on every page with a header (index, status, privacy, terms, data-deletion); it builds the burger and a full-screen overlay **from the existing `.nav-links`**, so no markup is duplicated and pages without a link list (status/legal) stay untouched.
+- Burger bars flare orange and morph into an ✕ when open; the overlay is dark navy with an ember radial glow + blur; links rise in with a 55 ms stagger; a "Get Started Free" CTA closes the list; Escape, backdrop tap, and any link close it; body scroll locks; resizing above 960 px closes it; `aria-expanded` / `aria-controls` / `role="dialog"` / focus move on open.
+- Breakpoint: at **≤ 960 px** the inline links and the ghost "Pricing" button hide and the burger appears — tablet and mobile both get the menu (previously links simply vanished at ≤ 640 px with no alternative).
+
+**Recurrence autopsy (rule 51 — accessibility class).** Defect class *attention-seeking animation without a reduced-motion escape* → both animations audited (launch banner 3.2 s pulse; drawer rise + burger morph) and disabled under `prefers-reduced-motion`; contrast audited on every orange surface (dark text only).
+
+**Frames touched.** `landing/assets/css/styles.css` (tokens, CTA, hero, pricing, FAQ, nav hover, focus ring, banner pill, drawer), `landing/assets/js/nav.js` (new), `landing/index.html` (ember headline word + nav.js), `landing/{status,privacy,terms,data-deletion}.html` (nav.js), `test_landing_static.js` (+11 theme/menu assertions), `package.json`, `SAKA_FLEET_ARCHITECTURE.md`, `CHANGELOG.md`, `landing/data/changelog.json`, `docs/*` (version stamp).
+
+**Suites run:** `test_landing_static` (theme tokens, contrast-safe CTA, ember headline, reduced motion, drawer ARIA, shared script on every page), `test_doc_sync`, `test_kb_docs`, `npm run health` - green.
 
