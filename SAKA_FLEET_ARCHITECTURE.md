@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.59.4  
+**Version:** 1.59.5  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.59.5** | "Monolith" website theme rebuilt around the Sakafleet logo (black canvas, white ink, one lime accent), self-hosted Sora + Manrope, logo assets made from the real artwork; rollback tag `pre-monolith-v1.59.4` | 161 |
 | **1.59.4** | Re-engagement memory (returning users get labelled context), 10-second PDF link delay, warm signup copy ("Meet your car's new friend"), preview-only changelog | 160 |
 | **1.59.3** | "Afterglow Ember" website theme (fluorescent orange CTAs, ember hero glow, rim-lit pricing) + creative burger drawer menu for tablet/mobile | 159 |
 | **1.59.2** | Sticky glowing launch banner (mobile-centred, "signups" copy) + live signup availability check (Continue gated) + DB unique phone/email guards + race merge | 158 |
@@ -4480,4 +4481,28 @@ quiz engine:
 **Frames touched.** `src/services/chatHistory.js` (re-engagement helpers), `src/routes/whatsapp.js` (injection + import), `sakaAi.js` (`options.reengagementContext` → system prompt), `src/services/followups.js` (delay helper + wait), `src/services/envAudit.js` (4 knobs), `.env.example` (documented), `landing/index.html` (warm copy), `landing/assets/js/status.js` + `landing/assets/css/styles.css` (preview-only feed), `test_conversation_memory.js` (+7), `test_followups.js` (+3), `test_landing_static.js` (+/-), `.clinerules` (rule 40 additive + reference knobs), `package.json`, `SAKA_FLEET_ARCHITECTURE.md`, `CHANGELOG.md`, `landing/data/changelog.json`, `docs/*`.
 
 **Suites run:** `test_conversation_memory` (18), `test_followups` (15), `test_landing_static` (233), `test_env_audit` (44), `test_first_message_flow`, `test_agent_training`, `test_doc_sync`, `test_kb_docs`, `npm run health` - green.
+
+
+---
+
+### 161. v1.59.5 - "Monolith" website theme, rebuilt around the Sakafleet logo (2026-11-05)
+
+**Concept (rule 55 — evolve the existing site, never rebuild it).** The operator's Canva link (`canva.link/fi9eqo083pv9hw3`, "Sakafleet" logo by David Njonjo) is two identical fluid S-leaf marks, white on a black canvas. The marketing site now wears exactly that palette: near-black `#0A0A0C`, white ink `#FAFAFA`, hairline `rgba(255,255,255,.10)` borders and ONE restrained lime accent `#B8EF5C` (links, focus rings, status dots, the popular-plan rim, cookie toggles, the single accented headline word) kept under ~10% of the UI. The v1.59.3 ember orange and the cyan system colour are retired from the website only — the WhatsApp agent's voice and in-app formatting are untouched.
+
+**Typography (premium, still zero third-party requests).** **Sora** 600/700 (display) + **Manrope** 400/500/700 (body), self-hosted woff2 in `landing/assets/fonts/`, wired through `--font-display` / `--font-body`, `Sora-700` preloaded, every URL version-stamped by `npm run landing:stamp`. Outfit + Inter woff2 files removed.
+
+**Logo assets, made from the real artwork.**
+- The Canva page is JS-only for crawlers; the design's signed thumbnails were still reachable from the share page (`media.canva.com/v2/document-image/...` + the S3 `fallback` thumbnail). The 2400x1600 black/white render gave the exact geometry: the left mark crops to a 756x756 square → `landing/assets/img/logo-mark.png` (alpha from luminance, 256px, 6.6 KB).
+- `logo.svg` is now a 230x64 lockup: the real mark embedded as a data URI (external references are blocked inside `<img>`-loaded SVGs) plus "Saka Fleet" set as **Sora-700 outlines** (`GraphicsPath.AddString` from the TTF → true vectors, so the wordmark is exact without loading a webfont). `favicon.svg`, `favicon-32.png`, `apple-touch-icon.png`, `icon-192.png`, `og-cover.svg` and `og-cover.png` were regenerated in the same monochrome style (black rounded tile + white mark; the 1200x630 OG cover carries white Sora type, a Manrope tagline and one lime rule).
+- The nav lockup keeps its intrinsic ratio (CSS no longer squashes the artwork to 34x34); all five headers and the footer use 122x34 / 120x33.
+
+**Surfaces restyled (tokens only).** White pill primary CTA with ink text and no gradient; ghost buttons on hairlines; hero white glow + faint lime radial plus a ghosted pair of the logo's marks (`.hero-mark`, `aria-hidden`, opacity .05); hairline cards with white hover; lime-rimmed "Most popular" plan and lime tag; lime FAQ marker, launch slots pill, changelog version chips, OTP/input focus, checkbox accents, status dots and `::selection`; drawers, cookie banner/settings, legal pages and the status page all inherit through the tokens.
+
+**No functionality changes.** Copy, ids, `data-*` attributes, JSON-LD, forms, and every script (onboarding modal, OTP, availability checks, launch banner + opt-in, cookie consent, locale bootstrap, status ticker, drawer) are byte-identical; only `theme-color` (`#0A0A0C`) and the PWA manifest colours moved.
+
+**Rollback reference.** Annotated tag `pre-monolith-v1.59.4` (commit `dc826fe`) pushed to origin BEFORE any edit — `git checkout pre-monolith-v1.59.4` (or `git revert` the v1.59.5 commit) restores the last ember state.
+
+**Frames touched.** `landing/assets/css/styles.css` (tokens, fonts, buttons, nav, drawer, launch banner, hero + `.hero-mark`, chat mock, cards, steps, pricing, uptime, changelog, FAQ, CTA band, modal, forms, OTP, alerts, legal, cookie, status), `landing/index.html` (preload, theme-color, accent span, hero mark, footer lockup), `landing/{privacy,terms,status,data-deletion}.html` (lockup ratio), `landing/assets/img/{logo.svg,favicon.svg,logo-mark.png,favicon-32.png,apple-touch-icon.png,icon-192.png,og-cover.svg,og-cover.png}`, `landing/assets/fonts/{Sora-600,Sora-700,Manrope-400,Manrope-500,Manrope-700}.woff2` (Outfit/Inter removed), `landing/manifest.webmanifest`, `landing/data/changelog.json`, `test_landing_static.js` (REQUIRED_FILES re-pinned; Test 19 rewritten with the drawer/ARIA assertions preserved), `package.json`, `SAKA_FLEET_ARCHITECTURE.md`, `CHANGELOG.md`.
+
+**Suites run:** `test_landing_static` (Test 19 + typography/logo/watermark/reduced-motion/drawer), `test_doc_sync` — green; `npm run health` green.
 

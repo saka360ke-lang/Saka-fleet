@@ -30,10 +30,10 @@ function check(condition, message) {
 const REQUIRED_FILES = [
   'index.html', 'privacy.html', 'terms.html', 'data-deletion.html', 'status.html', '404.html',
   'assets/css/styles.css', 'assets/js/main.js', 'assets/js/cookieConsent.js', 'assets/js/status.js', 'assets/js/locale.js', 'assets/js/nav.js',
-  'assets/img/logo.svg', 'assets/img/favicon.svg', 'assets/img/og-cover.svg',
+  'assets/img/logo.svg', 'assets/img/logo-mark.png', 'assets/img/favicon.svg', 'assets/img/og-cover.svg',
   'assets/img/og-cover.png', 'assets/img/favicon-32.png', 'assets/img/apple-touch-icon.png', 'assets/img/icon-192.png',
-  'assets/fonts/Outfit-600.woff2', 'assets/fonts/Outfit-800.woff2',
-  'assets/fonts/Inter-400.woff2', 'assets/fonts/Inter-600.woff2', 'assets/fonts/Inter-700.woff2',
+  'assets/fonts/Sora-600.woff2', 'assets/fonts/Sora-700.woff2',
+  'assets/fonts/Manrope-400.woff2', 'assets/fonts/Manrope-500.woff2', 'assets/fonts/Manrope-700.woff2',
   'data/changelog.json', 'data/countries.json', 'robots.txt', 'sitemap.xml', 'llms.txt', 'manifest.webmanifest', '.htaccess'
 ];
 
@@ -189,7 +189,7 @@ check(cookieJs.includes('window.__sakaCookies') && /chosen\s*:\s*function/.test(
 check(mainJs.includes("event: 'successful_signup'") && mainJs.includes("signup_method: 'website'"), 'a successful signup pushes the successful_signup dataLayer event');
 check(mainJs.includes('window.__sakaCookies') && mainJs.includes('.chosen()'), 'the signup flow gates on a recorded cookie choice');
 const css = fs.readFileSync(path.join(LANDING, 'assets/css/styles.css'), 'utf8');
-check(css.includes('@font-face') && css.includes('/assets/fonts/Outfit-800.woff2'), 'fonts are self-hosted via @font-face');
+check(css.includes('@font-face') && css.includes('/assets/fonts/Sora-700.woff2'), 'fonts are self-hosted via @font-face');
 check(css.includes('line-clamp') && /width: min\(430px/.test(css), 'the cookie banner is compact (slim, clamped copy, small buttons)');
 
 console.log('\n--- Test 10: country dataset mirrors the live catalogs (v1.41.0) ---');
@@ -334,13 +334,24 @@ check(mainJs.includes('availability.failed === true') && mainJs.includes("availa
 check(mainJs.includes('signedUpMessage') && mainJs.includes('continue on WhatsApp'), 'the user is told when the number/email already has an account');
 check(css.includes('.avail-note'), 'the availability note is styled');
 
-console.log('\n--- Test 19: Afterglow Ember theme + ember drawer menu (v1.59.3) ---');
-check(css.includes('--orange: #FF6A00') && css.includes('--grad-orange') && css.includes('--text-on-orange: #04121B'), 'the ember palette is declared as tokens');
-check(/\.btn-primary\s*\{[^}]*var\(--grad-orange\)[^}]*var\(--text-on-orange\)/.test(css), 'the primary CTA uses the orange gradient with dark text (contrast-safe)');
-check(css.includes('.grad-ember-text') && indexHtml.includes('grad-ember-text'), 'one headline word burns ember (cool to hot gradient)');
-check(/rgba\(255,\s*106,\s*0,\s*\.17\)/.test(css), 'the hero carries an ember glow layer');
-check(/\.price-card\.popular\s*\{[^}]*255,\s*106,\s*0/.test(css), 'the most-popular plan is rim-lit in ember');
-check(css.includes(':focus-visible') && /:focus-visible\s*\{[^}]*var\(--orange\)/.test(css), 'keyboard focus rings use the ember accent');
+console.log('\n--- Test 19: "Monolith" theme (logo-faithful black/white + one lime accent) + drawer menu (v1.59.5) ---');
+check(css.includes('--bg: #0A0A0C') && css.includes('--lime: #B8EF5C') && css.includes('--line: rgba(255, 255, 255, 0.10)'), 'the monochrome palette is declared as tokens (near-black, white ink, hairline)');
+check(!css.includes('--orange') && !css.includes('--cyan'), 'the ember/cyan tokens are fully retired');
+check(/\.btn-primary\s*\{[^}]*#FAFAFA[^}]*var\(--ink\)/.test(css), 'the primary CTA is a white pill with ink text (premium monochrome, contrast-safe)');
+check(css.includes('.accent-text') && css.includes('color: var(--lime)') && indexHtml.includes('accent-text'), 'one headline word carries the single lime accent');
+check(!indexHtml.includes('grad-ember-text') && !css.includes('grad-ember-text'), 'the ember headline class is gone');
+check(/rgba\(255,255,255,\.07\)/.test(css), 'the hero carries a soft white glow layer');
+check(/\.price-card\.popular\s*\{[^}]*var\(--lime-line\)/.test(css), 'the most-popular plan is rim-lit in lime');
+check(css.includes(':focus-visible') && /:focus-visible\s*\{[^}]*var\(--lime\)/.test(css), 'keyboard focus rings use the lime accent');
+check(css.includes('.grad-text') && css.includes('--grad: linear-gradient(100deg, #FAFAFA 0%'), 'headline sheen runs white to lime (no cool colours left)');
+check(css.includes('--font-display: "Sora"') && css.includes('--font-body: "Manrope"'), 'the display/body pairing is Sora + Manrope');
+check(css.includes("font-family: 'Sora'") && css.includes("font-family: 'Manrope'"), 'both premium families are self-hosted via @font-face');
+check(indexHtml.includes('/assets/fonts/Sora-700.woff2') && !indexHtml.includes('Outfit-') && !indexHtml.includes('Inter-'), 'the page preloads Sora (no Outfit/Inter references left)');
+check(indexHtml.includes('class="hero-mark"') && css.includes('.hero-mark') && indexHtml.includes('/assets/img/logo-mark.png'), 'the logo mark is ghosted behind the hero (decorative only)');
+check(indexHtml.includes('theme-color" content="#0A0A0C"'), 'the browser theme colour matches the black canvas');
+const logoSvg = fs.readFileSync(path.join(LANDING, 'assets/img/logo.svg'), 'utf8');
+check(logoSvg.includes('data:image/png;base64,') && logoSvg.includes('<path d="M') && logoSvg.includes('Saka Fleet'), 'the logo lockup ships the real mark (embedded) plus Sora wordmark outlines');
+check(/class="mark" src="\/assets\/img\/logo\.svg"[^>]*width="122"/.test(indexHtml), 'the nav lockup keeps its intrinsic ratio (122x34, no squish)');
 check(css.includes('prefers-reduced-motion') && css.includes('@keyframes menu-rise'), 'the drawer animation honours reduced motion');
 check(css.includes('.nav-burger') && css.includes('.nav-menu') && css.includes('max-width: 960px'), 'burger + full-screen drawer appear at tablet/mobile widths');
 const navJsSource = fs.readFileSync(path.join(LANDING, 'assets/js/nav.js'), 'utf8');

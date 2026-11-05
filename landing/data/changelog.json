@@ -1,6 +1,13 @@
 {
-  "latest": "1.59.4",
+  "latest": "1.59.5",
   "entries": [
+    {
+      "version": "1.59.5",
+      "date": "2026-11-05",
+      "title": "Monochrome, like the logo",
+      "preview": "New look: the logo's black-and-white world, one lime spark, and premium Sora + Manrope type.",
+      "summary": "The website now wears the Sakafleet logo's own palette: a near-black canvas, white type, hairline borders and a single lime accent for links, focus rings and the popular plan. Headlines and body are set in Sora and Manrope (self-hosted, no third-party calls), the logo lockup is rebuilt from the real artwork, and a ghosted pair of the logo's fluid marks sits behind the hero. Nothing about how the site works changed."
+    },
     {
       "version": "1.59.4",
       "date": "2026-11-05",

@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.59.5] - 2026-11-05
+
+- **"Monolith" website theme — built around the actual logo.** The Canva link the operator shared (canva.link/fi9eqo083pv9hw3, "Sakafleet" by David Njonjo) is two fluid S-leaf marks, white on black. The site now wears that palette exactly: near-black `#0A0A0C`, white ink `#FAFAFA`, hairline `rgba(255,255,255,.10)` borders and ONE restrained lime accent (`#B8EF5C`) for links, focus rings, the popular-plan rim and a single accented headline word. The ember-orange and cyan website colours are retired; every existing animation and the reduced-motion escape remain.
+- **Premium self-hosted type.** **Sora** (600/700) headlines + **Manrope** (400/500/700) body, woff2 in `landing/assets/fonts/` with `Sora-700` preloaded and version-stamped URLs — still zero third-party requests; Outfit/Inter removed.
+- **Logo assets made from the real artwork.** The Canva page is JS-only, so the mark was recovered from the design's signed thumbnail (2400x1600), cropped (756x756) and exported as a transparent `logo-mark.png`. `logo.svg` is a 230x64 lockup: the real mark (embedded so it renders inside `<img>`) plus "Saka Fleet" as true Sora outlines (no webfont dependency). Favicon, app icons and the 1200x630 OG cover were regenerated in the same black/white style. The nav lockup no longer squishes (122x34 intrinsic ratio).
+- **Nothing functional changed.** Copy, ids, data-* attributes, JSON-LD, the onboarding modal/OTP/availability checks, the launch banner/opt-in, cookie consent, locale bootstrap, status ticker and the drawer are untouched; only `theme-color` and the manifest colours moved to `#0A0A0C`. A ghosted pair of the logo marks sits behind the hero (`aria-hidden`, opacity .05).
+- **Rollback point.** Annotated tag `pre-monolith-v1.59.4` (commit dc826fe) was pushed before any edit — `git checkout pre-monolith-v1.59.4` restores the last ember state.
+- **Frames touched:** landing/assets/css/styles.css, landing/index.html, landing/{privacy,terms,status,data-deletion}.html, landing/assets/img/{logo.svg,favicon.svg,logo-mark.png,favicon-32.png,apple-touch-icon.png,icon-192.png,og-cover.svg,og-cover.png}, landing/assets/fonts/{Sora,Manrope}-*.woff2, landing/manifest.webmanifest, landing/data/changelog.json, test_landing_static.js, package.json, SAKA_FLEET_ARCHITECTURE.md (section 161), this file.
+- **Suites run:** test_landing_static (Test 19 re-pinned to the Monolith tokens/typography/logo + drawer ARIA kept), test_doc_sync — green; `npm run health` green.
+
 ## [1.59.4] - 2026-11-05
 
 - **Saka remembers where you left off.** The 45-minute freshness guard still protects live turns, but returning users now get their last few messages (up to 14 days old) as a labelled "earlier conversation" block — so Saka can pick up mid-thread ("we were logging 40L for KAS 628T…") instead of starting cold. The block is bounded (6 messages / ~900 chars), secret-scrubbed (codes are never resurrected) and injected only when there is no fresh history.
