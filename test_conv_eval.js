@@ -34,7 +34,7 @@ import {
   validateCase
 } from './src/services/convEvalCases.js';
 import { sanitizeHealPatch, formatHealNotice, isCalibrationCase, enforceActiveRuleCap, healFailedCase, HEAL_PATCH_MAX_CHARS } from './src/services/convEvalHealer.js';
-import { buildEvalDigest, formatEvalDigestEmail, formatEvalDigestPing, sendEvalDigest, EVAL_DIGEST_CONFIG_KEY } from './src/services/evalDigest.js';
+import { buildEvalDigest, formatEvalDigestEmail, formatEvalDigestPing, sendEvalDigest, EVAL_DIGEST_CONFIG_KEY, EVAL_DIGEST_ATTEMPT_KEY } from './src/services/evalDigest.js';
 import { formatBatchFailures, handleConvEvalCommand } from './src/services/convEvalConsole.js';
 import { healsFromAuditRows, selectCorpusUpdates, applyCorpusUpdates } from './src/services/convEvalCorpusSync.js';
 import { ENV_SECTIONS } from './src/services/envAudit.js';
@@ -319,7 +319,7 @@ function digestMock(state) {
     from(table) {
       if (table === 'system_config') {
         return {
-          select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: state.lastAt ? { value: state.lastAt } : null }) }) }),
+          select: () => ({ in: () => ({ limit: async () => ({ data: state.configRows || [] }) }) }),
           upsert: async (rows) => { state.upserts.push(rows[0]); return { error: null }; }
         };
       }
@@ -337,15 +337,23 @@ function digestMock(state) {
   };
 }
 const digestNow = new Date('2026-11-05T18:00:00Z');
-const dueState = { lastAt: null, runs: digestRuns, audits: [], upserts: [] };
+const dueState = { configRows: [], runs: digestRuns, audits: [], upserts: [] };
 const dueSent = await sendEvalDigest({ supabase: digestMock(dueState), hours: 6, now: digestNow, email: async () => true, whatsapp: async () => true });
 check(dueSent.sent === true && dueSent.emailed === true, 'a due digest is emailed');
-check(dueState.upserts.length === 1 && dueState.upserts[0].key === EVAL_DIGEST_CONFIG_KEY, 'the dispatch time is stored for idempotency');
+check(dueState.upserts.length === 1 && dueState.upserts[0].key === EVAL_DIGEST_CONFIG_KEY, 'a SENT digest stores the dispatch time (window consumed)');
 check(dueState.audits.some((row) => row.action === 'CONV_EVAL_DIGEST_SENT'), 'the digest dispatch is audited');
-const recentState = { lastAt: '2026-11-05T17:00:00Z', runs: digestRuns, audits: [], upserts: [] };
+const recentState = { configRows: [{ key: EVAL_DIGEST_CONFIG_KEY, value: '2026-11-05T17:00:00Z' }], runs: digestRuns, audits: [], upserts: [] };
 const recentSent = await sendEvalDigest({ supabase: digestMock(recentState), hours: 6, now: digestNow, email: async () => true, whatsapp: async () => true });
 check(recentSent.sent === false && recentSent.reason === 'not_due', 'an already-sent window never double-sends');
-const emptyState = { lastAt: null, runs: [], audits: [], upserts: [] };
+const failedState = { configRows: [], runs: digestRuns, audits: [], upserts: [] };
+const failedSent = await sendEvalDigest({ supabase: digestMock(failedState), hours: 6, now: digestNow, email: async () => false, whatsapp: async () => true });
+check(failedSent.sent === false && failedSent.reason === 'email_failed', 'a failed email is reported honestly (quota outage)', failedSent.reason);
+check(failedSent.pinged === false, 'no WhatsApp ping when the email did not send');
+check(failedState.upserts.length === 1 && failedState.upserts[0].key === EVAL_DIGEST_ATTEMPT_KEY, 'a failed attempt records only the attempt time (window NOT consumed)');
+const retryState = { configRows: [{ key: EVAL_DIGEST_ATTEMPT_KEY, value: '2026-11-05T17:55:00Z' }], runs: digestRuns, audits: [], upserts: [] };
+const retryWait = await sendEvalDigest({ supabase: digestMock(retryState), hours: 6, now: digestNow, email: async () => true, whatsapp: async () => true });
+check(retryWait.sent === false && retryWait.reason === 'retry_wait', 'a retry waits out the 15-minute floor');
+const emptyState = { configRows: [], runs: [], audits: [], upserts: [] };
 const emptySent = await sendEvalDigest({ supabase: digestMock(emptyState), hours: 6, now: digestNow, email: async () => true, whatsapp: async () => true });
 check(emptySent.sent === false && emptySent.reason === 'no_activity', 'a quiet window sends nothing at all');
 

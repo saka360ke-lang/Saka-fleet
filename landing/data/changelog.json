@@ -1,6 +1,13 @@
 {
-  "latest": "1.61.12",
+  "latest": "1.61.13",
   "entries": [
+    {
+      "version": "1.61.13",
+      "date": "2026-11-05",
+      "title": "Digest retries when email is temporarily unavailable",
+      "preview": "If the summary email cannot be sent, it retries in 15 minutes instead of waiting six hours.",
+      "summary": "A failed summary email (for example when the mail provider's daily limit is reached) used to mark the six-hour window as delivered, so the next summary was six hours away. A failure now records only the attempt and retries every 15 minutes until the email actually goes out; the single WhatsApp note is sent only when the email really left."
+    },
     {
       "version": "1.61.12",
       "date": "2026-11-05",

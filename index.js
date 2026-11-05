@@ -1060,6 +1060,8 @@ if (convEvalBootConfig.digestHours > 0) {
       .then((result) => {
         if (result?.sent) {
           console.log(`[ConversationEval] digest sent: ${result.digest?.total || 0} case(s), ${result.digest?.healedCount || 0} healed, email=${result.emailed} whatsapp=${result.pinged}`);
+        } else if (result?.reason === 'email_failed') {
+          console.warn(`[ConversationEval] digest email FAILED (${result.digest?.total || 0} case(s) pending) — retrying in ${result.retryMinutes || 15} min`);
         } else {
           console.log(`[ConversationEval] digest skipped: ${result?.reason || 'unknown'}`);
         }

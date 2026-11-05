@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.61.13] - 2026-11-05
+
+- **A failed digest email no longer burns the 6-hour window.** Live on revision `00314`: the first digest attempt hit Resend's **daily quota** (`You have reached your daily email sending quota`) and the old code still stamped `last_eval_digest_at` — the next attempt would have been six hours away. Now only a **SENT** email consumes the window; a failure records `last_eval_digest_attempt_at` and retries after `EVAL_DIGEST_RETRY_MINUTES` (15), the WhatsApp ping fires only when the email actually sent, and the log says `digest email FAILED … retrying in 15 min`. The stale stamp from the failed attempt was cleared live.
+- **Frames touched:** `src/services/evalDigest.js`, `index.js`, `test_conv_eval.js` (+4 assertions: failure records only the attempt, no ping without email, retry floor, sent consumes the window), `package.json`, `landing/data/changelog.json` + stamped assets, `SAKA_FLEET_ARCHITECTURE.md` (§176 D2), this file.
+- **Suites run:** `test_conv_eval` (181) — green; `npm run health` green.
+
 ## [1.61.12] - 2026-11-05
 
 - **Eval notifications are now ONE 6-hour digest.** Every per-heal WhatsApp message and the per-tick failure email are gone. `sendEvalDigest()` emails a detailed summary (cases judged, pass/fail/error, each heal with before → after and rule key, proposals, refusals with reasons, cases that need a code fix at 3+ refusals, weakest criterion) every `CONV_EVAL_DIGEST_HOURS` (default 6, `0` = off), then sends **one WhatsApp ping** saying the email went out. Idempotent across instances (`system_config.last_eval_digest_at`), audited `CONV_EVAL_DIGEST_SENT`, quiet windows send nothing. Judge-error alerts stay immediate.

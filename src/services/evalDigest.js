@@ -14,7 +14,11 @@ import { sendProactiveWhatsApp } from '../workers/sentinel.js';
 import { logSystemError } from './systemErrors.js';
 
 export const EVAL_DIGEST_CONFIG_KEY = 'last_eval_digest_at';
+export const EVAL_DIGEST_ATTEMPT_KEY = 'last_eval_digest_attempt_at';
 export const EVAL_DIGEST_DEFAULT_HOURS = 6;
+// v1.61.13 — a FAILED email must not burn the 6-hour window: retry after this
+// many minutes (Resend quota exhaustion is temporary, a lost digest is not).
+export const EVAL_DIGEST_RETRY_MINUTES = 15;
 
 function num(value) {
   return Number.isFinite(Number(value)) ? Number(value) : null;
@@ -160,6 +164,13 @@ function hoursSince(iso, now) {
   return (now.getTime() - ms) / (60 * 60 * 1000);
 }
 
+function minutesSince(iso, now) {
+  if (!iso) return Infinity;
+  const ms = new Date(iso).getTime();
+  if (!Number.isFinite(ms)) return Infinity;
+  return (now.getTime() - ms) / (60 * 1000);
+}
+
 
 /**
  * Send the digest when due. Idempotent across instances via `system_config`.
@@ -177,12 +188,18 @@ export async function sendEvalDigest({
   try {
     const { data: configRow } = await supabase
       .from('system_config')
-      .select('value')
-      .eq('key', EVAL_DIGEST_CONFIG_KEY)
-      .maybeSingle();
-    const lastAt = configRow?.value || null;
+      .select('key,value')
+      .in('key', [EVAL_DIGEST_CONFIG_KEY, EVAL_DIGEST_ATTEMPT_KEY])
+      .limit(5);
+    const configMap = new Map((configRow || []).map((row) => [row.key, row.value]));
+    const lastAt = configMap.get(EVAL_DIGEST_CONFIG_KEY) || null;
+    const lastAttemptAt = configMap.get(EVAL_DIGEST_ATTEMPT_KEY) || null;
     if (hoursSince(lastAt, now) < windowHours - 0.1) {
       return { sent: false, reason: 'not_due', lastAt };
+    }
+    // A failed attempt may retry only after EVAL_DIGEST_RETRY_MINUTES.
+    if (hoursSince(lastAt, now) === Infinity && minutesSince(lastAttemptAt, now) < EVAL_DIGEST_RETRY_MINUTES) {
+      return { sent: false, reason: 'retry_wait', lastAttemptAt };
     }
 
     const since = new Date(now.getTime() - windowHours * 60 * 60 * 1000).toISOString();
@@ -215,12 +232,19 @@ export async function sendEvalDigest({
 
     const phone = process.env.SUPERADMIN_PHONE;
     let pinged = false;
-    if (phone) {
+    // The ping announces a SENT email; a failed email never pings.
+    if (emailSent && phone) {
       try { pinged = await whatsapp(phone, formatEvalDigestPing(digest)); } catch { pinged = false; }
     }
 
     try {
-      await supabase.from('system_config').upsert([{ key: EVAL_DIGEST_CONFIG_KEY, value: now.toISOString() }]);
+      // v1.61.13 — only a SENT email consumes the window; a failed attempt
+      // records the attempt time so the next cycle can retry (15-min floor).
+      if (emailSent) {
+        await supabase.from('system_config').upsert([{ key: EVAL_DIGEST_CONFIG_KEY, value: now.toISOString() }]);
+      } else {
+        await supabase.from('system_config').upsert([{ key: EVAL_DIGEST_ATTEMPT_KEY, value: now.toISOString() }]);
+      }
     } catch { /* the next window retries */ }
     try {
       await supabase.from('admin_audit_logs').insert([{
@@ -231,12 +255,19 @@ export async function sendEvalDigest({
       }]);
     } catch { /* audit is best-effort */ }
 
-    return { sent: emailSent, reason: emailSent ? 'sent' : 'email_failed', digest, emailed: emailSent, pinged };
+    return {
+      sent: emailSent,
+      reason: emailSent ? 'sent' : 'email_failed',
+      digest,
+      emailed: emailSent,
+      pinged,
+      retryMinutes: EVAL_DIGEST_RETRY_MINUTES
+    };
   } catch (err) {
     logSystemError(supabase, err, 'evalDigest.sendEvalDigest');
     return { sent: false, reason: 'error' };
   }
 }
 
-export default { EVAL_DIGEST_CONFIG_KEY, EVAL_DIGEST_DEFAULT_HOURS, buildEvalDigest, formatEvalDigestEmail, formatEvalDigestPing, sendEvalDigest };
+export default { EVAL_DIGEST_CONFIG_KEY, EVAL_DIGEST_ATTEMPT_KEY, EVAL_DIGEST_RETRY_MINUTES, EVAL_DIGEST_DEFAULT_HOURS, buildEvalDigest, formatEvalDigestEmail, formatEvalDigestPing, sendEvalDigest };
 

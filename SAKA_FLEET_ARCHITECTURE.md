@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.61.12  
+**Version:** 1.61.13  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.61.13** | Digest retry semantics: a failed email no longer burns the 6-hour window (15-min retry floor, no ping without email) | 176 |
 | **1.61.12** | Every incident logs (`systemErrors` + write-failure sweep + ratchet), machine-confirm fix, eval notifications → ONE 6-hour digest email + WhatsApp ping, CLI telemetry, generator id fix | 176 |
 | **1.61.11** | Fix: `Number(null) === 0` silently disabled the borderline re-judge (margin/budget zeroed); defaults now proven by a test | 175 |
 | **1.61.10** | Eval follow-ups: tick log shows skips/re-judges, borderline re-judge damps judge variance, `npm run eval:apply-heals` closes the corpus loop | 174 |
@@ -4889,7 +4890,11 @@ Usage: `npm run eval:apply-heals` (dry run, 48 h) · `-- --hours=72` · `-- --wr
 
 **F. Coverage attempt (honest result).** Generated one case each for the three zero-coverage edge classes (unreadable media, mixed language, capacity) with `--edge-index`; all three scored below the 0.90 curation bar (0.52 / 0.30 / 0.60) and were deleted rather than committed. Those classes still need hand-curated cases; `log_earnings` remains the one uncovered flow.
 
+**D2. v1.61.13 — retry semantics (live finding).** Revision `00314`'s first digest attempt hit Resend's **daily quota** (`You have reached your daily email sending quota`) and the old code still stamped `last_eval_digest_at`, which would have silently skipped six hours. Now only a **SENT** email consumes the window; a failure records `last_eval_digest_attempt_at` and retries after `EVAL_DIGEST_RETRY_MINUTES` (15), never pings without an email, and logs `digest email FAILED … retrying in 15 min`. The stale `last_eval_digest_at` stamped by the failed attempt was cleared live.
+
 **Frames touched:** `src/services/{systemErrors(new),evalDigest(new),convEval,convEvalHealer,quizEngine,onboarding,subscriptions,trialEngine,launchAwards,vehicles,webOnboarding,careConsole,inboundEmail,envAudit}.js`, `src/workers/{sentinel,convEval}.js`, `index.js`, `scripts/{run_conv_eval,generate_synthetic_cases,health_audit,apply_eval_heals}.js`, `test_error_logging.js` (new), `test_conv_eval.js`, `.env.example`, `package.json`, `SAKA_FLEET_ARCHITECTURE.md`, `CHANGELOG.md`.
+
+
 
 **Suites run:** `test_conv_eval` (177), `test_error_logging` (20), `test_quiz_flow` (147), `test_sentinel_policy` (25) - green; `npm run health` green.
 
