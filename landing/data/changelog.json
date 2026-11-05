@@ -1,6 +1,13 @@
 {
-  "latest": "1.61.13",
+  "latest": "1.61.14",
   "entries": [
+    {
+      "version": "1.61.14",
+      "date": "2026-11-05",
+      "title": "Saka remembers your fleet, not just the chat",
+      "preview": "At the start of every conversation Saka refreshes a snapshot of your plan, assets, expiries and spending.",
+      "summary": "Saka used to depend on the chat transcript for context. Now, whenever a conversation starts, the engine assembles a fresh snapshot of your own data (plan and trial, assets with expiry dates, this month's spend, driver documents and the one next step for any missing detail) and keeps it warm for 15 minutes. Every reply is grounded in those facts, and any change you make (a new asset, a logged expense, an updated document) refreshes the snapshot immediately. The snapshot holds facts only, never codes or secrets."
+    },
     {
       "version": "1.61.13",
       "date": "2026-11-05",

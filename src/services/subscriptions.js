@@ -34,6 +34,7 @@ import {
   listPaidTierKeys,
   isPaidTierKey
 } from './subscriptionTiers.js';
+import { invalidateUserContext } from './userContextCache.js';
 
 const ENTITLEMENT_CACHE_MS = Number(process.env.SUBSCRIPTION_CACHE_MS || 60000);
 const PAST_DUE_GRACE_DAYS = Math.max(0, Number(process.env.SUBSCRIPTION_GRACE_DAYS || 3));
@@ -989,6 +990,8 @@ export async function downgradeToFree({ supabase, ownerId, reason = 'expired' } 
     }).eq('owner_id', ownerId).in('status', ['ACTIVE', 'TRIALING', 'CANCELING', 'PAST_DUE']);
 
     invalidateEntitlements(ownerId);
+    // v1.61.14 — lapse changed the plan+asset facts: drop the cached context.
+    invalidateUserContext(supabase, { ownerId });
     return { downgraded: true, kept, paused, reason };
   } catch (err) {
     return { downgraded: false, error: err.message, reason };

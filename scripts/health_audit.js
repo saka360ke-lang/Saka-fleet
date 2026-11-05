@@ -115,7 +115,9 @@ const STATLESS_SUITES = [
   // v1.61.2 — driver-document read/confirm lane (PSV live friction, 2026-11-05).
   'test_driver_compliance_answers.js',
   // v1.61.12 — every incident reaches error_logs; silent-catch ratchet.
-  'test_error_logging.js'
+  'test_error_logging.js',
+  // v1.61.14 — per-user context cache (built at chat initiation, TTL + invalidation).
+  'test_user_context_cache.js'
 ];
 
 const WORKFLOW_DIR = '.github/workflows';

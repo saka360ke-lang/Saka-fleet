@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.61.13  
+**Version:** 1.61.14  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.61.14** | Per-user context cache: engine facts cached at chat initiation (15-min TTL, write invalidation) so Saka never relies on chat history alone | 177 |
 | **1.61.13** | Digest retry semantics: a failed email no longer burns the 6-hour window (15-min retry floor, no ping without email) | 176 |
 | **1.61.12** | Every incident logs (`systemErrors` + write-failure sweep + ratchet), machine-confirm fix, eval notifications → ONE 6-hour digest email + WhatsApp ping, CLI telemetry, generator id fix | 176 |
 | **1.61.11** | Fix: `Number(null) === 0` silently disabled the borderline re-judge (margin/budget zeroed); defaults now proven by a test | 175 |
@@ -4897,4 +4898,25 @@ Usage: `npm run eval:apply-heals` (dry run, 48 h) · `-- --hours=72` · `-- --wr
 
 
 **Suites run:** `test_conv_eval` (177), `test_error_logging` (20), `test_quiz_flow` (147), `test_sentinel_policy` (25) - green; `npm run health` green.
+
+### 177. v1.61.14 - the per-user context cache: facts at chat initiation, not history alone (2026-11-05)
+
+**Why.** Saka's only cross-turn context was chat history (`CHAT_HISTORY_MAX_MESSAGES` 40, 45-minute window) plus the labelled re-engagement block. A returning user with an empty window was invisible, and every conversation start re-read ~6-8 tables (profile, vehicles, entitlements, trial, session, history, compliance). The engine already owns the ideal facts builder — `buildUserContextSnapshot` (v1.27.0: plan, assets, expiries, trial, driver compliance, month spend, missing-field steps, relationship/memory) — but it ran per call and never reached the chat prompt.
+
+**Design (surgical; rule 55 — evolve, don't rebuild).**
+- **`src/services/userContextCache.js`** (new): `buildContextPayload()` wraps the existing snapshot engine into a sanitised `{ builtAt, plan, vehicleCount, lines, memory }` payload; `getUserContextCache()` reads `user_context_cache` and reuses it while fresh; `invalidateUserContext()` drops it on writes; `formatUserFactsBlock()` renders the deterministic prompt block. `sanitizeContextPayload()` strips any secret-shaped key (`otp|code|token|password|secret|pin`) and caps size — facts only.
+- **Table** `user_context_cache` (`phone_number PK, owner_id, payload jsonb, built_at, expires_at`) via idempotent `npm run migrate:user-context` (applied live); RLS on; added to the slate wipe.
+- **Build trigger = chat initiation.** In `processIncomingWhatsAppMessage`, after entitlements + vehicles + history load: `forceRefresh: dbHistory.length === 0` (a new conversation) — later turns reuse the cache. `USER_CONTEXT_CACHE_TTL_MINUTES` (default 15; 0 = always rebuild).
+- **Consumption.** The block rides into `processSakaMessage({ userFactsContext })` and renders in the system instruction between WORKING MEMORY and the re-engagement block: `USER FACTS (engine-provided, current as of <UTC> — authoritative; never contradict or invent beyond them)`.
+- **Invalidation (fire-and-forget, never blocks a turn):** registration save + expense log (quizEngine), asset update + soft delete (vehicles), vehicle compliance submit, `startAccountTrial`, `downgradeToFree`, onboarding asset save. Invalidation by phone or by owner_id.
+- **Degrade (rule 50):** a missing table, a DB error or a broken payload falls back to the live snapshot build — no flow depends on the cache.
+
+**Live proof (production DB).** For `+254734852529`: 12 fact lines built, row written with a 15-minute expiry (`18:41`), immediate second read `cached: true`; block header `USER FACTS (engine-provided, current as of 2026-11-05 18:26 UTC — authoritative…)` with Name/Email lines.
+
+**Tests.** New health-registered `test_user_context_cache.js` (21 assertions): TTL defaults/clamps/off, secret stripping, block format, build contents, build-then-reuse (no second write), forced refresh, expiry rebuild, TTL-0 never writes, broken DB degrades, phone + owner invalidation, slate-wipe inclusion.
+
+**Frames touched:** `src/services/userContextCache.js` (new), `src/routes/whatsapp.js` (initiation hook + `userFactsContext`), `sakaAi.js` (prompt option), `src/services/{quizEngine,vehicles,vehicleCompliance,trialEngine,subscriptions,onboarding}.js` (invalidation), `scripts/{run_user_context_migration(new),reset-db,health_audit}.js`, `test_user_context_cache.js` (new), `.env.example`, `package.json`, `SAKA_FLEET_ARCHITECTURE.md`, `CHANGELOG.md`.
+
+**Suites run:** `test_user_context_cache` (21), `test_quiz_flow` (147), `test_conv_eval` (181), `test_error_logging` (20) - green; `npm run health` green.
+
 

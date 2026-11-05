@@ -76,6 +76,7 @@ export const RESET_TABLES = [
   'error_logs',
   'ai_usage_logs',
   'conversation_eval_runs',
+  'user_context_cache',
   'support_tickets',
   'exchange_rates_cache',
   'profiles'
@@ -251,6 +252,7 @@ export async function executeDatabaseReset({ targetPhone = null, verbose = true,
           public.error_logs,
           public.ai_usage_logs,
           public.conversation_eval_runs,
+          public.user_context_cache,
           public.support_tickets,
           public.exchange_rates_cache,
           public.profiles

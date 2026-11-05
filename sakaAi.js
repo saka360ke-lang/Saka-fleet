@@ -1127,7 +1127,7 @@ export function classifyIntentTier(messageText = '', conversationHistory = []) {
  * Intelligent message parser and intent classifier for Saka Assistant
  */
 export async function processSakaMessage(targetLang = 'English', messageText = '', conversationHistory = [], mediaParts = [], providedSupabase = null, activeVehicleContext = null, options = {}) {
-  const { maxAiTier = null, ownerId = null, planSummary = null, jurisdictionContext = null, workingMemory = null, reengagementContext = null } = options || {};
+  const { maxAiTier = null, ownerId = null, planSummary = null, jurisdictionContext = null, workingMemory = null, reengagementContext = null, userFactsContext = null } = options || {};
   const now = new Date();
   const currentLocalDateTime = now.toLocaleString('en-US', { dateStyle: 'full', timeStyle: 'medium' });
   const currentIsoDate = now.toISOString().split('T')[0];
@@ -1158,6 +1158,7 @@ ${planSummary ? `- Subscription context: ${planSummary} (quote only limits/price
 ${jurisdictionContext ? `\n${jurisdictionContext}\n` : ''}
 ${fleetContextSection}
 ${workingMemory ? `\nWORKING MEMORY (the user submitted this but it is NOT saved yet — read it to stay consistent, and never claim it was saved):\n${workingMemory}\n` : ''}
+${userFactsContext ? `\n${userFactsContext}\n` : ''}
 ${reengagementContext ? `\n${reengagementContext}\n` : ''}
 `;
 

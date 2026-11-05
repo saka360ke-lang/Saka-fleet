@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.61.14] - 2026-11-05
+
+- **Saka no longer relies on chat history alone.** New `user_context_cache` (`npm run migrate:user-context`, applied live): when a conversation **starts** (no fresh history) the engine builds the user's facts once — plan/trial, assets with expiries, month spend, driver compliance, missing-field steps, relationship — and caches them for `USER_CONTEXT_CACHE_TTL_MINUTES` (default 15, `0` = always rebuild). Every later turn reuses the cache instead of re-reading six tables, and the block rides into the prompt as `USER FACTS (engine-provided, current as of … — authoritative)`.
+- **Invalidation is write-driven and never blocks a turn:** registration save, expense log, asset update/delete, vehicle compliance submit, trial start, downgrade-to-Free and onboarding asset save all drop the cached row (by phone or owner_id).
+- **Facts only.** `sanitizeContextPayload` strips any secret-shaped key (`otp|code|token|password|secret|pin`) and caps the payload; a missing table or DB error degrades to a live build (rule 50).
+- **Live proof:** `+254734852529` → 12 fact lines, row cached with a 15-minute expiry, second read `cached: true`; slate wipe includes the table.
+- **Frames touched:** `src/services/userContextCache.js` (new), `src/routes/whatsapp.js`, `sakaAi.js`, `src/services/{quizEngine,vehicles,vehicleCompliance,trialEngine,subscriptions,onboarding}.js`, `scripts/{run_user_context_migration(new),reset-db,health_audit}.js`, `test_user_context_cache.js` (new, 21 assertions), `.env.example`, `package.json`, `SAKA_FLEET_ARCHITECTURE.md` (§177), this file.
+- **Suites run:** `test_user_context_cache` (21), `test_quiz_flow` (147), `test_conv_eval` (181), `test_error_logging` (20) — green; `npm run health` green.
+
 ## [1.61.13] - 2026-11-05
 
 - **A failed digest email no longer burns the 6-hour window.** Live on revision `00314`: the first digest attempt hit Resend's **daily quota** (`You have reached your daily email sending quota`) and the old code still stamped `last_eval_digest_at` — the next attempt would have been six hours away. Now only a **SENT** email consumes the window; a failure records `last_eval_digest_attempt_at` and retries after `EVAL_DIGEST_RETRY_MINUTES` (15), the WhatsApp ping fires only when the email actually sent, and the log says `digest email FAILED … retrying in 15 min`. The stale stamp from the failed attempt was cleared live.

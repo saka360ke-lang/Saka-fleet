@@ -10,6 +10,7 @@ import {
 } from './subscriptionTiers.js';
 import { notifyDriverUnassigned } from './followups.js';
 import { logWriteFailure } from './systemErrors.js';
+import { invalidateUserContext } from './userContextCache.js';
 
 /**
  * Resolve the driver phone BEFORE the vehicle row changes (v1.16.4). Metadata
@@ -852,6 +853,8 @@ export async function updateVehicleDetails({ vehicleId, requesterId, updates = {
     } catch (emailSyncErr) { logWriteFailure(supabase, 'vehicles.ownerEmailSync', emailSyncErr); }
   }
 
+  // v1.61.14 — asset facts changed (plate, expiry, mileage…).
+  invalidateUserContext(supabase, { ownerId: updated?.owner_id || null });
   return { success: true, vehicle: updated, applied: safeUpdates, rejected };
 }
 
@@ -920,6 +923,8 @@ export async function deleteVehicle({ vehicleId, requesterId, supabase }) {
     .maybeSingle();
 
   if (error) return { success: false, error: error.message };
+  // v1.61.14 — the asset is gone: drop the cached facts for its owner/driver.
+  invalidateUserContext(supabase, { ownerId: vehicle.owner_id || null });
 
   // 3. Retire active reminders so they stop firing (history is retained).
   try {

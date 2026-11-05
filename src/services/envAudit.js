@@ -162,6 +162,12 @@ export const ENV_SECTIONS = Object.freeze([
     ]
   },
   {
+    section: 'USER CONTEXT CACHE',
+    keys: [
+      'USER_CONTEXT_CACHE_TTL_MINUTES'
+    ]
+  },
+  {
     section: 'REMEDIATION',
     keys: [
       'REMEDIATION_AUTONOMY',

@@ -98,6 +98,7 @@ import {
 import { parseVehicleComplianceParagraph, submitVehicleCompliance, resolveVehicleComplianceCatalog } from '../services/vehicleCompliance.js';
 import { handleStage1CoreCapture, handleStage2OptionalWeaving } from '../services/onboarding.js';
 import { saveChatMessage, getRecentChatHistory, getReengagementContext, CHAT_HISTORY_MAX_MESSAGES } from '../services/chatHistory.js';
+import { getUserContextCache, formatUserFactsBlock } from '../services/userContextCache.js';
 import { sendEmailOtp, sendSupportEscalationEmail, sendMfaEmail, sendCareReplyEmail } from '../services/mailer.js';
 import { handleCareRequest, escalateCareToSuperadmin } from '../services/customerCare.js';
 import { handleCareCommand } from '../services/careConsole.js';
@@ -1274,6 +1275,25 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           });
         }
 
+        // v1.61.14 — per-user context cache. Saka must never rely on chat
+        // history alone: a conversation START (no fresh history) rebuilds the
+        // user's engine facts once (plan, assets, expiries, trial, compliance,
+        // month spend, missing-field steps) and every later turn reuses the
+        // 15-minute cache. Any write that changes the facts invalidates it.
+        let userFactsContext = null;
+        try {
+          const userContext = await getUserContextCache(supabaseClient, senderPhone, {
+            forceRefresh: dbHistory.length === 0,
+            profile: profileData,
+            vehicles: existingVehicles,
+            entitlements,
+            countryInfo
+          });
+          userFactsContext = formatUserFactsBlock(userContext.payload);
+        } catch (factsErr) {
+          console.warn('[WhatsApp] user-context cache skipped:', factsErr.message);
+        }
+
         const hasVehicleRegistered = existingVehicles.length > 0;
         phaseMarks.profileReadyAt = Date.now();
         const messageLang = detectMessageLanguage(messageText);
@@ -2180,6 +2200,8 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             planSummary,
             jurisdictionContext,
             workingMemory: buildConversationMemory({ quiz: session?.quiz || null }),
+            // v1.61.14 — the cached engine facts ride with every AI turn.
+            userFactsContext,
             // v1.59.4 — returning after the fresh window: give the model the last
             // few turns as LABELLED context (never as live turns) so Saka can pick
             // up where the conversation stopped.

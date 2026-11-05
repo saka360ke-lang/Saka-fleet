@@ -7,6 +7,7 @@ import { startWelcomeTrial, recordActivationEvent, ACTIVATION_EVENTS } from './t
 import { grantLaunchAwardForTrial, formatLaunchAwardLine, getLaunchAwardConfig } from './launchAwards.js';
 import { resolveUserTimezone } from './globalization.js';
 import { logSystemError } from './systemErrors.js';
+import { invalidateUserContext } from './userContextCache.js';
 
 export async function handleStage2OptionalWeaving({
   obState,

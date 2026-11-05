@@ -22,6 +22,7 @@
 import { parseComplianceItem } from './complianceCatalog.js';
 import { createExpiryReminder, buildExpirySpecFromDate, daysUntilDue } from './maintenanceReminders.js';
 import { SYSTEM_TIMEZONE } from './dateParser.js';
+import { invalidateUserContext } from './userContextCache.js';
 
 export const VEHICLE_COMPLIANCE_CATALOG_VERSION = '2026.17.0';
 
@@ -479,6 +480,8 @@ export async function submitVehicleCompliance({
     }
   }
 
+  // v1.61.14 — expiry facts changed; refresh the user's cached context.
+  invalidateUserContext(supabase, { ownerId: ownerId || null });
   return { ok: true, compliance: saved, reminder };
 }
 
