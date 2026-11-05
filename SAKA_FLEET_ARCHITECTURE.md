@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.59.3  
+**Version:** 1.59.4  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.59.4** | Re-engagement memory (returning users get labelled context), 10-second PDF link delay, warm signup copy ("Meet your car's new friend"), preview-only changelog | 160 |
 | **1.59.3** | "Afterglow Ember" website theme (fluorescent orange CTAs, ember hero glow, rim-lit pricing) + creative burger drawer menu for tablet/mobile | 159 |
 | **1.59.2** | Sticky glowing launch banner (mobile-centred, "signups" copy) + live signup availability check (Continue gated) + DB unique phone/email guards + race merge | 158 |
 | **1.59.1** | Launch banner + live slot counter + opt-out tick box (checked by default), rules-of-engagement consolidation + rules 53-59 | 157 |
@@ -4457,4 +4458,26 @@ quiz engine:
 **Frames touched.** `landing/assets/css/styles.css` (tokens, CTA, hero, pricing, FAQ, nav hover, focus ring, banner pill, drawer), `landing/assets/js/nav.js` (new), `landing/index.html` (ember headline word + nav.js), `landing/{status,privacy,terms,data-deletion}.html` (nav.js), `test_landing_static.js` (+11 theme/menu assertions), `package.json`, `SAKA_FLEET_ARCHITECTURE.md`, `CHANGELOG.md`, `landing/data/changelog.json`, `docs/*` (version stamp).
 
 **Suites run:** `test_landing_static` (theme tokens, contrast-safe CTA, ember headline, reduced motion, drawer ARIA, shared script on every page), `test_doc_sync`, `test_kb_docs`, `npm run health` - green.
+
+---
+
+### 160. v1.59.4 - re-engagement memory, PDF link delay, warm signup copy, preview-only changelog (2026-11-05)
+
+**Re-engagement memory (surgical, no schema change).**
+- Root cause: `getRecentChatHistory` injects up to 40 turns but only inside the **45-minute freshness window** (v1.32.3 guard). A user returning later got ZERO context.
+- New in `src/services/chatHistory.js`: `CHAT_REENGAGE_MAX_MESSAGES` (6, clamped 2-12), `CHAT_REENGAGE_MAX_AGE_DAYS` (14, clamped 1-60), `CHAT_REENGAGE_MAX_CHARS` (900, clamped 200-2000), `sanitizeReengagementLine()` (standalone six-digit codes become `[code]`, 180 chars/line) and `getReengagementContext()` — reads the last few `chat_history` rows of any age up to the window and returns a labelled **`EARLIER CONVERSATION (context only — from {date}; the user is returning now…)`** block, or `''` (zero prompt cost), never throwing.
+- `whatsapp.js` computes it **only when the fresh `dbHistory` is empty** and passes `reengagementContext` through the existing options channel; `processSakaMessage` (sakaAi.js) appends it to the system instruction right after WORKING MEMORY — **labelled context, never live turns**, so Saka can pick up where the conversation stopped without pretending old messages just arrived. Rule 40 gained one additive sentence.
+
+**PDF link propagation delay (10 s).**
+- `resolveReportPdfLinkDelayMs(env)` in `followups.js` (`REPORT_PDF_LINK_DELAY_MS`, default 10000, clamped 0-30000). `runFleetReport` now waits that long **only when the follow-up message carries a `📄 PDF report:` link** — the "building your report…" ACK, the report build and the email delivery are untouched, and tests can set 0.
+
+**Warm signup copy.** "Deploy Your Fleet" (corporate/military, off-voice) is gone: the ghost CTA now reads **"Start with your car"** and the signup modal title **"🚀 Meet your car's new friend"**. The landing suite asserts the new copy AND the absence of the old phrase.
+
+**Preview-only changelog.** The /status feed renders plain cards (version chip + date + short title + one-line preview); the `details`/"Read more" expander and its `.cl-more`/`.cl-detail` styles are removed. `changelog.json` summaries remain as data (unused by the renderer).
+
+**Friction remedies (rule 38/44/51).** Live audit found 4 PENDING `INCOMPLETE_REPLY_COMPLAINT` rows for the test phone `+254799000512` (transcripts wiped; class = context-less re-engagement) — closed as DEPLOYED with resolution `rule:reengagement_memory` after this fix; earlier `USER_FRUSTRATION`/`LOOPING_PROMPTS` rows were already DEPLOYED.
+
+**Frames touched.** `src/services/chatHistory.js` (re-engagement helpers), `src/routes/whatsapp.js` (injection + import), `sakaAi.js` (`options.reengagementContext` → system prompt), `src/services/followups.js` (delay helper + wait), `src/services/envAudit.js` (4 knobs), `.env.example` (documented), `landing/index.html` (warm copy), `landing/assets/js/status.js` + `landing/assets/css/styles.css` (preview-only feed), `test_conversation_memory.js` (+7), `test_followups.js` (+3), `test_landing_static.js` (+/-), `.clinerules` (rule 40 additive + reference knobs), `package.json`, `SAKA_FLEET_ARCHITECTURE.md`, `CHANGELOG.md`, `landing/data/changelog.json`, `docs/*`.
+
+**Suites run:** `test_conversation_memory` (18), `test_followups` (15), `test_landing_static` (233), `test_env_audit` (44), `test_first_message_flow`, `test_agent_training`, `test_doc_sync`, `test_kb_docs`, `npm run health` - green.
 

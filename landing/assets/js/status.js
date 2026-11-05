@@ -105,20 +105,15 @@
     if (text.length <= 96) return text;
     return text.slice(0, 93).replace(/[\s,;:.-]+$/, '') + '…';
   }
+  // v1.59.4 — the feed is a PREVIEW only: version chip + short title + ONE line.
   function renderChangelogEntry(entry) {
     var preview = previewOf(entry);
-    var detail = String((entry && entry.summary) || '').trim();
-    var hasDetail = Boolean(detail) && detail !== preview;
-    return '<details class="cl-entry">'
-      + '<summary>'
+    return '<div class="cl-entry">'
       + '<span class="ver">v' + escapeHtml(entry.version) + '</span>'
       + '<span class="date">' + escapeHtml(entry.date) + '</span>'
       + '<h3>' + escapeHtml(entry.title) + '</h3>'
       + '<p class="cl-preview">' + escapeHtml(preview) + '</p>'
-      + (hasDetail ? '<span class="cl-more">Read more</span>' : '')
-      + '</summary>'
-      + (hasDetail ? '<p class="cl-detail">' + escapeHtml(detail) + '</p>' : '')
-      + '</details>';
+      + '</div>';
   }
   fetch('/data/changelog.json')
     .then(function (res) { return res.ok ? res.json() : Promise.reject(); })

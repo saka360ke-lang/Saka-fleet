@@ -1,6 +1,13 @@
 {
-  "latest": "1.59.3",
+  "latest": "1.59.4",
   "entries": [
+    {
+      "version": "1.59.4",
+      "date": "2026-11-05",
+      "title": "Saka picks up where you left off",
+      "preview": "Returning after a break? Saka now remembers your last few messages — and PDF links arrive ready.",
+      "summary": "When you come back after a while, Saka now gets a short labelled recap of your last messages so the conversation continues instead of restarting. Report PDF links also wait ten seconds after upload so the file is ready before you tap. Signup now reads \"Meet your car's new friend\", and the changelog is a quick preview — no read-more."
+    },
     {
       "version": "1.59.3",
       "date": "2026-11-05",

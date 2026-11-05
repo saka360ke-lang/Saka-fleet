@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.59.4] - 2026-11-05
+
+- **Saka remembers where you left off.** The 45-minute freshness guard still protects live turns, but returning users now get their last few messages (up to 14 days old) as a labelled "earlier conversation" block — so Saka can pick up mid-thread ("we were logging 40L for KAS 628T…") instead of starting cold. The block is bounded (6 messages / ~900 chars), secret-scrubbed (codes are never resurrected) and injected only when there is no fresh history.
+- **PDF links arrive ready.** The report follow-up that carries the `📄 PDF report:` link now waits `REPORT_PDF_LINK_DELAY_MS` (default 10 s, clamped 0–30 s) after upload so the file is fetchable at the edge before the link reaches you. The instant "building your report…" ACK, the report itself and the emailed copy are never delayed.
+- **Warmer signup copy.** "Deploy Your Fleet" is retired: the CTA reads **"Start with your car"** and the signup modal opens with **"🚀 Meet your car's new friend"** — consistent with Saka's one-car-first voice.
+- **Preview-only changelog.** The /status feed is now just version chip + short title + one line; the "Read more" expander (and its styles) are gone.
+- **Friction remedies.** The 4 stale PENDING `INCOMPLETE_REPLY_COMPLAINT` rows (test phone, transcripts wiped) are closed as DEPLOYED with resolution `rule:reengagement_memory` now that returning-user context ships.
+- **Frames touched:** src/services/{chatHistory,followups,envAudit}.js, src/routes/whatsapp.js, sakaAi.js, landing/{index.html,assets/js/status.js,assets/css/styles.css,data/changelog.json}, .env.example, .clinerules (rule 40 additive + knobs), tests, docs.
+- **Suites run:** test_conversation_memory (18), test_followups (15), test_landing_static (233), test_env_audit (44), test_first_message_flow, test_agent_training, test_doc_sync, test_kb_docs — green; `npm run health` green.
+
 ## [1.59.3] - 2026-11-05
 
 - **"Afterglow Ember" theme.** One hot signal colour — fluorescent orange — now carries action and attention: primary CTAs (hero, pricing, signup modal, cookie consent) sit on an `#FF8A00 → #FF6A00 → #FF3D00` gradient with a soft ember glow that flares on hover; the hero gains an orange glow layer, an ember-ringed badge and one gradient headline word; the "Most popular" plan gets a rim-lit card and orange tag; nav hovers, the FAQ marker, the launch slots pill and every focus ring pick up the ember accent. Text on orange is always dark `#04121B` (≈ 6.9:1, AAA) — white-on-orange is never used — and all animations switch off under `prefers-reduced-motion`.

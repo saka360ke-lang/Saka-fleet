@@ -23,6 +23,23 @@ export const FOLLOWUP_KINDS = Object.freeze({
   DRIVER_UNASSIGNED: 'driver_unassigned'
 });
 
+/**
+ * v1.59.4 — PDF link propagation delay.
+ * A freshly uploaded PDF can take a moment to become fetchable at the edge; the
+ * link-bearing follow-up waits `REPORT_PDF_LINK_DELAY_MS` (default 10 s, clamped
+ * 0–30 s) BEFORE it is sent. Generation and the instant ACK are never delayed,
+ * and tests can set the knob to 0.
+ */
+export function resolveReportPdfLinkDelayMs(env = process.env) {
+  const raw = Number(env?.REPORT_PDF_LINK_DELAY_MS);
+  if (Number.isFinite(raw) && raw >= 0) return Math.min(raw, 30000);
+  return 10000;
+}
+
+function waitMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /** Deterministic unassignment copy (reason-aware, never claims a write). */
 function driverUnassignedText({ plate, reason = 'owner' }) {
   const vehicle = plate || 'the vehicle';
@@ -144,6 +161,13 @@ async function runFleetReport(payload = {}) {
         event: ACTIVATION_EVENTS.REPORT_GENERATED
       });
     } catch { /* quota + activation are best-effort */ }
+  }
+
+  // v1.59.4 — the link must never arrive before the file is fetchable: delay
+  // ONLY the link-bearing follow-up message (never the report build or the ACK).
+  if (pdfNote.includes('PDF report:')) {
+    const linkDelayMs = resolveReportPdfLinkDelayMs();
+    if (linkDelayMs > 0) await waitMs(linkDelayMs);
   }
 
   return `${report.text}${pdfNote}`;

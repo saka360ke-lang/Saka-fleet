@@ -10,7 +10,7 @@
 
 import assert from 'assert';
 import { createMockSupabase } from './scripts/mockSupabase.js';
-import { notifyDriverUnassigned, processPendingFollowUps, FOLLOWUP_KINDS } from './src/services/followups.js';
+import { notifyDriverUnassigned, processPendingFollowUps, resolveReportPdfLinkDelayMs, FOLLOWUP_KINDS } from './src/services/followups.js';
 import { unassignDriverFromVehicle, deleteVehicle } from './src/services/vehicles.js';
 
 let passed = 0;
@@ -69,6 +69,11 @@ async function run() {
   const complianceText = [];
   await processPendingFollowUps({ supabase: complianceMock.client, sendFn: async (_phone, text) => { complianceText.push(text); } });
   check(/three times/i.test(complianceText[0] || ''), 'Compliance notice explains the three-strike rule');
+
+  console.log('\n--- Test 6: PDF link propagation delay knob (v1.59.4) ---');
+  check(resolveReportPdfLinkDelayMs({}) === 10000, 'the PDF link delay defaults to 10 seconds');
+  check(resolveReportPdfLinkDelayMs({ REPORT_PDF_LINK_DELAY_MS: '0' }) === 0, 'the knob can disable the delay (tests)');
+  check(resolveReportPdfLinkDelayMs({ REPORT_PDF_LINK_DELAY_MS: '99999' }) === 30000, 'the delay is clamped to 30 seconds');
 
   console.log(`\n🎉 ${passed} follow-up/unassignment assertions passed.`);
 }

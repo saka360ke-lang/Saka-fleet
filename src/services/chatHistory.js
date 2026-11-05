@@ -20,6 +20,89 @@ export const CHAT_HISTORY_MAX_MESSAGES = (() => {
   return Math.min(Math.max(raw, 20), 60);
 })();
 
+/**
+ * v1.59.4 — re-engagement memory.
+ *
+ * The 45-minute freshness guard protects the model from stale live turns, but a
+ * user coming back later used to return with ZERO context. When the fresh
+ * window is empty we now inject the last few messages (any age up to
+ * CHAT_REENGAGE_MAX_AGE_DAYS) as LABELLED CONTEXT — never as live turns.
+ */
+export const CHAT_REENGAGE_MAX_MESSAGES = (() => {
+  const raw = Number(process.env.CHAT_REENGAGE_MAX_MESSAGES || 6);
+  if (!Number.isFinite(raw) || raw <= 0) return 6;
+  return Math.min(Math.max(raw, 2), 12);
+})();
+
+export const CHAT_REENGAGE_MAX_AGE_DAYS = (() => {
+  const raw = Number(process.env.CHAT_REENGAGE_MAX_AGE_DAYS || 14);
+  if (!Number.isFinite(raw) || raw <= 0) return 14;
+  return Math.min(Math.max(raw, 1), 60);
+})();
+
+export const CHAT_REENGAGE_MAX_CHARS = (() => {
+  const raw = Number(process.env.CHAT_REENGAGE_MAX_CHARS || 900);
+  if (!Number.isFinite(raw) || raw <= 0) return 900;
+  return Math.min(Math.max(raw, 200), 2000);
+})();
+
+/** One history line, secret-scrubbed and bounded (codes never resurrect). */
+export function sanitizeReengagementLine(message) {
+  const raw = String(message || '').replace(/\s+/g, ' ').trim();
+  if (!raw) return '';
+  return raw.replace(/\b\d{6}\b/g, '[code]').slice(0, 180).trim();
+}
+
+/**
+ * Build the labelled "EARLIER CONVERSATION" context block for a returning user.
+ * Returns '' when there is nothing useful (zero prompt cost). Never throws.
+ */
+export async function getReengagementContext(supabase, userPhone, {
+  limit = CHAT_REENGAGE_MAX_MESSAGES,
+  maxAgeDays = CHAT_REENGAGE_MAX_AGE_DAYS,
+  maxChars = CHAT_REENGAGE_MAX_CHARS
+} = {}) {
+  if (!supabase || !userPhone) return '';
+  try {
+    const cleanPhone = userPhone.replace(/[^\d+]/g, '');
+    const cutoff = new Date(Date.now() - maxAgeDays * 24 * 60 * 60 * 1000).toISOString();
+    const { data, error } = await supabase
+      .from('chat_history')
+      .select('role, message, created_at')
+      .eq('user_phone', cleanPhone)
+      .gte('created_at', cutoff)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (error || !data || data.length === 0) return '';
+
+    const chronological = [...data].reverse();
+    const lines = [];
+    let chars = 0;
+    for (const row of chronological) {
+      const role = (row.role === 'assistant' || row.role === 'model') ? 'Saka' : 'User';
+      const text = sanitizeReengagementLine(row.message);
+      if (!text) continue;
+      const line = `${role}: ${text}`;
+      if (chars + line.length > maxChars) break;
+      lines.push(line);
+      chars += line.length + 1;
+    }
+    if (!lines.length) return '';
+    const lastAt = chronological[chronological.length - 1]?.created_at;
+    const when = lastAt && Number.isFinite(Date.parse(lastAt))
+      ? new Date(lastAt).toISOString().slice(0, 10)
+      : 'earlier';
+    return [
+      `EARLIER CONVERSATION (context only — from ${when}; the user is returning now.`,
+      'Use it to stay consistent; never pretend these messages just arrived, and never quote a code):',
+      ...lines
+    ].join('\n');
+  } catch (err) {
+    console.warn('[chatHistory] reengagement context failed:', err.message);
+    return '';
+  }
+}
+
 export async function saveChatMessage(supabase, userPhone, role, message) {
   if (!supabase || !userPhone || !message) return null;
 

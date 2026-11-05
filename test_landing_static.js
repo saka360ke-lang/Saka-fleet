@@ -88,10 +88,11 @@ check(changelog.entries.every((e) => previewOf(e).length > 0), 'Every changelog 
 check(changelog.entries.filter((e) => e.preview).every((e) => String(e.preview).length <= 120), 'Every explicit preview is minimal (<= 120 chars)');
 check(statusJsSource.includes('text.length <= 96'), 'The renderer caps derived previews at 96 chars (the feed stays a preview)');
 check(Boolean(changelog.entries[0].preview), 'The newest entry ships an explicit preview line');
-check(statusJsSource.includes('renderChangelogEntry') && statusJsSource.includes('<details class="cl-entry">'), 'The status page renders previews in an expandable card');
+check(statusJsSource.includes('renderChangelogEntry') && statusJsSource.includes('<div class="cl-entry">'), 'The status page renders plain preview cards');
+check(!statusJsSource.includes('Read more') && !statusJsSource.includes('cl-detail'), 'The changelog has no read-more expander (preview only)');
 check(statusJsSource.includes('previewOf') && statusJsSource.includes('firstSentence'), 'The renderer derives a preview when an entry has none');
 const stylesCss = fs.readFileSync(path.join(LANDING, 'assets/css/styles.css'), 'utf8');
-check(stylesCss.includes('.cl-preview') && stylesCss.includes('.cl-detail'), 'The changelog preview and expander are styled');
+check(stylesCss.includes('.cl-preview') && !stylesCss.includes('.cl-detail'), 'The changelog preview is styled and the expander styles are gone');
 console.log('\n--- Test 5: no secrets in static files (rule 6 isolation) ---');
 const SECRET_PATTERNS = [
   /sk_live_[A-Za-z0-9]+/, /sk_test_[A-Za-z0-9]+/,
@@ -209,7 +210,7 @@ for (const [code, entry] of Object.entries(countriesJson.countries)) {
 check(indexHtml.includes('id="localeFlag"'), 'the hero carries the country flag chip');
 check(indexHtml.includes('id="localeComplianceCards"') && indexHtml.includes('id="localeComplianceTitle"'), 'the homepage carries the country-aware compliance section');
 check(localeJs.includes('/data/countries.json'), 'locale.js loads the country dataset');
-check(/Get Started Free/.test(indexHtml) && /Deploy Your Fleet/.test(indexHtml), 'Primary CTAs are present');
+check(/Get Started Free/.test(indexHtml) && /Start with your car/.test(indexHtml) && !/Deploy Your Fleet/.test(indexHtml), 'Primary CTAs are present and warm (no "Deploy Your Fleet")');
 
 console.log('\n--- Test 11: extensionless URLs (v1.42.0) ---');
 const htaccess = fs.readFileSync(path.join(LANDING, '.htaccess'), 'utf8');

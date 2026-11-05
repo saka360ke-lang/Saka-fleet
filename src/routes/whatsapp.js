@@ -93,7 +93,7 @@ import {
 } from '../services/entryLedger.js';
 import { parseVehicleComplianceParagraph, submitVehicleCompliance, resolveVehicleComplianceCatalog } from '../services/vehicleCompliance.js';
 import { handleStage1CoreCapture, handleStage2OptionalWeaving } from '../services/onboarding.js';
-import { saveChatMessage, getRecentChatHistory, CHAT_HISTORY_MAX_MESSAGES } from '../services/chatHistory.js';
+import { saveChatMessage, getRecentChatHistory, getReengagementContext, CHAT_HISTORY_MAX_MESSAGES } from '../services/chatHistory.js';
 import { sendEmailOtp, sendSupportEscalationEmail, sendMfaEmail, sendCareReplyEmail } from '../services/mailer.js';
 import { handleCareRequest, escalateCareToSuperadmin } from '../services/customerCare.js';
 import { handleCareCommand } from '../services/careConsole.js';
@@ -2057,7 +2057,13 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             ownerId: profileData?.id || null,
             planSummary,
             jurisdictionContext,
-            workingMemory: buildConversationMemory({ quiz: session?.quiz || null })
+            workingMemory: buildConversationMemory({ quiz: session?.quiz || null }),
+            // v1.59.4 — returning after the fresh window: give the model the last
+            // few turns as LABELLED context (never as live turns) so Saka can pick
+            // up where the conversation stopped.
+            reengagementContext: dbHistory.length === 0
+              ? await getReengagementContext(supabaseClient, senderPhone)
+              : null
           });
         }
         phaseMarks.aiDoneAt = Date.now();
