@@ -1,40 +1,53 @@
 {
-  "latest": "1.58.26",
+  "latest": "1.59.0",
   "entries": [
+    {
+      "version": "1.59.0",
+      "date": "2026-11-05",
+      "title": "Saka, more human",
+      "preview": "Quick logs now get lightning confirmations; saves never end in a menu.",
+      "summary": "Persona v4: Saka mirrors your style - fire off a shorthand log and get a lightning confirmation of the key figures, or ask for a detailed breakdown and get clean bullets with precise labels. Confirmations never repeat twice in a row, a completed save never ends in a menu, your phone's country code now locks your country on day one, and every record can carry an optional label you can search."
+    },
     {
       "version": "1.58.26",
       "date": "2026-11-04",
       "title": "The first 50 get a whole year",
+      "preview": "The first 50 accounts that register their first car get 365 days, no card.",
       "summary": "A launch thank-you: the first 50 accounts that register their first car get a full 365-day trial - every feature unlocked, no card, no catch. Once the first 50 are in, the normal 30-day welcome trial keeps running for everyone else."
     },
     {
       "version": "1.58.25",
       "date": "2026-11-04",
-      "title": "Your car's friend, and a Saka that never leaves you at a menu",
+      "title": "Your car's friend",
+      "preview": "Add a PSV, licence or insurance in one line - Saka saves it or asks one question.",
       "summary": "Ask to add your PSV, licence or insurance and Saka saves it straight away — or asks one short question for the missing number or date, then remembers the rest. Owners no longer need an assigned driver for that. The website now speaks to one-car owners first, in plain words."
     },
     {
       "version": "1.58.24",
       "date": "2026-11-04",
       "title": "One plan, one model",
+      "preview": "Your plan decides the model: paid and trial get Sonnet, free stays on Haiku.",
       "summary": "Your plan now decides the model: paid and trial accounts get Sonnet on every turn, free accounts stay on fast Haiku - no more switching mid-conversation."
     },
     {
       "version": "1.58.23",
       "date": "2026-11-04",
-      "title": "No more loops, no more robots",
+      "title": "No more loops",
+      "preview": "Straight plan answers, one-line relabels, and fixes that sweep their whole bug class.",
       "summary": "Questions about your plan get straight answers, a draft can be relabelled in one line, short plate names work, and Saka stops messaging numbers that can never receive. Plus a new rule: every fix now sweeps the whole class of bug it belongs to."
     },
     {
       "version": "1.58.22",
       "date": "2026-11-04",
-      "title": "Support that actually reaches a human",
+      "title": "Support that reaches a human",
+      "preview": "Support opens a real ticket first, and part names show up in your records.",
       "summary": "Support requests now open a real ticket before Saka says it forwarded them, a waiting support intake owns your next message, and statements mid-draft park the draft instead of looping. Part names and notes show up in your records."
     },
     {
       "version": "1.58.21",
       "date": "2026-11-04",
       "title": "Trials that start on day one",
+      "preview": "Your welcome trial runs from the day your first asset is registered.",
       "summary": "Your welcome trial now runs from the day your first asset is registered, upgrading never cuts it short, and the assistant answers plan, switch and driver-profile questions straight instead of looping."
     },
     {

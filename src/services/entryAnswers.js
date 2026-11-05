@@ -21,10 +21,17 @@
 import { formatMoney, formatDate } from './globalization.js';
 import { resolveExpenseType } from './expenseCatalog.js';
 import { matchNarrativeVehicle } from './narrativeDraft.js';
+// Local binding for the editor's label parsing (the re-export below only
+// re-exports; it does not bind the name inside this module).
+import { sanitizeEntryLabel } from './entryLabels.js';
 
 export const ENTRY_PENDING_TTL_MINUTES = 15;
 export const ENTRY_RESTORE_WINDOW_MINUTES = 30;
 export const ENTRY_LIST_LIMIT = 6;
+
+// v1.59.0 — the optional record label is a pure module (no import cycles):
+// sanitisation + deterministic capture live in entryLabels.js.
+export { ENTRY_LABEL_MAX_CHARS, sanitizeEntryLabel, extractEntryLabel } from './entryLabels.js';
 
 const WORD_ORDINALS = Object.freeze({
   first: 1, second: 2, third: 3, fourth: 4, fifth: 5,
@@ -91,7 +98,7 @@ export function detectLedgerCommand(text = '') {
   if (editMatch) {
     const tail = editMatch[1] || '';
     const namesEntry = /\b(?:entr(?:y|ies)|record|expense|log|fuel|service|repair|purchase|transaction)\b/.test(tail);
-    const namesField = /\b(?:amount|type|odometer|mileage|litres|liters|notes?)\b/.test(tail);
+    const namesField = /\b(?:amount|type|odometer|mileage|litres|liters|notes?|labels?|tags?)\b/.test(tail);
     if (!namesEntry && !namesField) return null;
     return { action: 'edit', index: parseEntrySelection(tail) };
   }
@@ -182,8 +189,17 @@ export function parseEntryEditRequest(text = '') {
   if (/\bfull\s*tank\b/.test(t)) changes.fill_type = 'full_tank';
   else if (/\btop[\s-]?up\b/.test(t)) changes.fill_type = 'top_up';
 
-  const notesMatch = /(?:notes?|remarks?|comments?|description)\s*[:=]\s*([^\n]{2,240})/i.exec(raw);
-  if (notesMatch) changes.notes = notesMatch[1].trim();
+  // v1.59.0 — the optional label is editable like any other safe field. The
+  // label segment is removed before the notes parse so the two never bleed.
+  const labelMatch = /(?:label|tag)\s*[:=]\s*([^,\n]{2,48})/i.exec(raw);
+  if (labelMatch) {
+    const label = sanitizeEntryLabel(labelMatch[1]);
+    if (label) changes.label = label;
+  }
+
+  const notesSource = labelMatch ? raw.replace(labelMatch[0], ' ') : raw;
+  const notesMatch = /(?:notes?|remarks?|comments?|description)\s*[:=]\s*([^\n]{2,240})/i.exec(notesSource);
+  if (notesMatch) changes.notes = notesMatch[1].trim().replace(/[,;\s]+$/, '');
 
   return changes;
 }
@@ -312,6 +328,8 @@ export function describeEntry(entry = {}, { vehicles = [], currency = null, loca
   }
   const type = entry.expense_type || entry.earning_type || entryKindLabel(entry);
   parts.push(String(type).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
+  // v1.59.0 — the optional label rides every entry description.
+  if (entry.label) parts.push(`#${entry.label}`);
   parts.push(money(entry.amount, entry.currency || currency, locale, currency));
   if (num(entry.fuel_liters, 0) > 0) parts.push(`${num(entry.fuel_liters)} L`);
   if (num(entry.odometer_reading, 0) > 0) parts.push(`${num(entry.odometer_reading).toLocaleString('en-US')} km`);
@@ -332,7 +350,7 @@ export function formatLedgerList({ entries = [], vehicles = [], currency = null,
 export function formatEditPreview(entry, { vehicles = [], currency = null, locale = 'en-US' } = {}) {
   return `*Editing entry*\n${describeEntry(entry, { vehicles, currency, locale })}\n\n`
     + 'Tell me what to change, for example:\n'
-    + '_amount 4,800_\n_type parts_\n_odometer 50,350_\n_42 litres, full tank_\n'
+    + '_amount 4,800_\n_type parts_\n_odometer 50,350_\n_42 litres, full tank_\n_label karen run_\n'
     + 'You can put several in one message.\n\nReply *cancel* to leave it as it is.';
 }
 
@@ -349,7 +367,8 @@ export function formatEntryDiff(entry = {}, patch = {}, { currency = null, local
     fuel_liters: 'Fuel',
     fill_type: 'Fill type',
     odometer_reading: 'Odometer',
-    notes: 'Notes'
+    notes: 'Notes',
+    label: 'Label'
   };
   const render = (key, value) => {
     if (key === 'amount') return money(value, entry.currency || currency, locale, currency);
@@ -405,7 +424,7 @@ export function formatNoEntryForSelection(index) {
 export function formatLedgerHelp() {
   return '*Editing your ledger*\n\n'
     + '- *my entries* - the last 6, numbered\n'
-    + '- *edit 2* - change amount, type, litres, odometer or notes\n'
+    + '- *edit 2* - change amount, type, litres, odometer, notes or label\n'
     + '- *delete 2* - remove it (30-minute undo)\n'
     + '- *restore* - bring back the last deleted entry\n\n'
     + 'VIN, plate and entry date stay locked.';

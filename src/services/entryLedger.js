@@ -19,16 +19,25 @@
  */
 
 import { normalizeExpenseType } from './expenseCatalog.js';
-import { ENTRY_RESTORE_WINDOW_MINUTES } from './entryAnswers.js';
+import { ENTRY_RESTORE_WINDOW_MINUTES, sanitizeEntryLabel } from './entryAnswers.js';
 
 export const LEDGER_TABLES = Object.freeze({
   expense: 'expense_logs',
   earning: 'private_earnings'
 });
 
+/**
+ * v1.59.0 — optional per-record label migration (idempotent, rule 50).
+ * `npm run migrate:entry-labels`
+ */
+export const ENTRY_LABEL_SQL = `
+ALTER TABLE public.expense_logs ADD COLUMN IF NOT EXISTS label text;
+ALTER TABLE public.private_earnings ADD COLUMN IF NOT EXISTS label text;
+`;
+
 export const LEDGER_EDITABLE_FIELDS = Object.freeze({
-  expense: Object.freeze(['expense_type', 'amount', 'fuel_liters', 'fill_type', 'odometer_reading', 'notes']),
-  earning: Object.freeze(['earning_type', 'amount', 'notes'])
+  expense: Object.freeze(['expense_type', 'amount', 'fuel_liters', 'fill_type', 'odometer_reading', 'notes', 'label']),
+  earning: Object.freeze(['earning_type', 'amount', 'notes', 'label'])
 });
 
 /** Columns that may never be rewritten through the ledger (audit + identifiers). */
@@ -99,6 +108,11 @@ export function sanitizeEntryUpdate(kind = 'expense', patch = {}) {
     if (key === 'notes') {
       const value = String(rawValue || '').trim().slice(0, 500);
       clean.notes = value || null;
+      continue;
+    }
+    if (key === 'label') {
+      // v1.59.0 — optional searchable label; empty clears it.
+      clean.label = sanitizeEntryLabel(rawValue);
     }
   }
   return { ok: Object.keys(clean).length > 0, patch: clean, rejected };
@@ -144,7 +158,7 @@ export async function listLedgerEntries(supabase, {
 
   const expenseQuery = () => {
     let q = supabase.from(LEDGER_TABLES.expense)
-      .select('id,vehicle_id,driver_id,expense_type,amount,fuel_liters,fill_type,odometer_reading,notes,created_at')
+      .select('id,vehicle_id,driver_id,expense_type,amount,fuel_liters,fill_type,odometer_reading,notes,label,created_at')
       .in('vehicle_id', scoped)
       .order('created_at', { ascending: false })
       .limit(cap * 3);
@@ -154,7 +168,7 @@ export async function listLedgerEntries(supabase, {
 
   const earningQuery = () => {
     let q = supabase.from(LEDGER_TABLES.earning)
-      .select('id,vehicle_id,driver_id,revenue_amount,currency,earning_type,notes,logged_at')
+      .select('id,vehicle_id,driver_id,revenue_amount,currency,earning_type,notes,label,logged_at')
       .in('vehicle_id', scoped)
       .order('logged_at', { ascending: false })
       .limit(cap * 3);

@@ -92,13 +92,14 @@ async function runTests() {
 
   // 3. Edit parsing
   console.log('\n--- Test 3: edit request parsing ---');
-  const full = parseEntryEditRequest('amount 10500 kes, type parts, odometer 50350, 42 litres, full tank, notes: changed receipt');
+  const full = parseEntryEditRequest('amount 10500 kes, type parts, odometer 50350, 42 litres, full tank, notes: changed receipt, label: karen run');
   assert(full.amount === 10500, `amount not parsed (${full.amount})`);
   assert(full.expense_type === 'Parts', `type not canonicalised (${full.expense_type})`);
   assert(full.odometer_reading === 50350, `odometer not parsed (${full.odometer_reading})`);
   assert(full.fuel_liters === 42, `litres not parsed (${full.fuel_liters})`);
   assert(full.fill_type === 'full_tank', 'fill type not parsed');
   assert(full.notes === 'changed receipt', `notes not parsed (${full.notes})`);
+  assert(full.label === 'karen run', `label not parsed (${full.label})`);
   const money = parseEntryEditRequest('the amount should be 4,800');
   assert(money.amount === 4800, `comma amount not parsed (${money.amount})`);
   const fromTo = parseEntryEditRequest('change the type from repairs to parts');
@@ -152,7 +153,15 @@ async function runTests() {
   assert(typed.patch.expense_type === 'Repairs', `expense type not canonicalised (${typed.patch.expense_type})`);
   const earningGuard = sanitizeEntryUpdate('earning', { fuel_liters: 40, odometer_reading: 100 });
   assert(!('fuel_liters' in earningGuard.patch) && !('odometer_reading' in earningGuard.patch), 'fuel fields leaked into an earning');
-  console.log('✅ Only whitelisted, sane values reach the database.');
+  // v1.59.0 — the optional label is editable on both kinds, sanitised, and an
+  // empty value clears it.
+  const labelled = sanitizeEntryUpdate('expense', { label: '  Karen   Run!  ' });
+  assert(labelled.ok && labelled.patch.label === 'Karen Run', `label not sanitised (${labelled.patch.label})`);
+  const labelCleared = sanitizeEntryUpdate('earning', { label: '' });
+  assert(labelCleared.ok && labelCleared.patch.label === null, 'an empty label did not clear');
+  const labelCapped = sanitizeEntryUpdate('expense', { label: 'x'.repeat(80) });
+  assert(String(labelCapped.patch.label).length === 40, 'a label longer than 40 chars was not capped');
+  console.log('✅ Only whitelisted, sane values reach the database (labels included).');
 
   // 6. Copy
   console.log('\n--- Test 6: deterministic copy ---');
@@ -215,9 +224,11 @@ async function runTests() {
     fuel_liters: 40,
     fill_type: 'full_tank',
     odometer_reading: 50350,
-    notes: 'seeded by test_entry_ledger'
+    notes: 'seeded by test_entry_ledger',
+    label: 'seed label'
   }]).select().single();
   assert(!expErr && seededExpense, `Expense seed failed: ${expErr?.message}`);
+  assert(seededExpense.label === 'seed label', 'the optional label was not written on insert');
 
   const listed = await listLedgerEntries(supabase, { ownerId: owner.id, vehicleIds: [vehicle.id], limit: 6 });
   assert(listed.length === 1 && listed[0].id === seededExpense.id, 'seeded expense was not listed');
@@ -229,18 +240,20 @@ async function runTests() {
   // can never duplicate the corrected row.
   const relogged = await relogLedgerEntry(supabase, {
     entry: listed[0],
-    patch: { amount: 4800, expense_type: 'Parts', vin: 'HACKVIN', created_at: '2000-01-01' },
+    patch: { amount: 4800, expense_type: 'Parts', label: 'corrected label', vin: 'HACKVIN', created_at: '2000-01-01' },
     actorPhone: OWNER_PHONE
   });
   assert(relogged.ok, `Relog failed: ${relogged.reason}`);
   assert(relogged.patch.amount === 4800 && relogged.patch.expense_type === 'Parts', 'relog patch was not applied');
+  assert(relogged.patch.label === 'corrected label', 'the label patch was not applied on relog');
   assert(relogged.rejected.includes('vin') && relogged.rejected.includes('created_at'), 'protected fields were not rejected');
   assert(relogged.relogged === true && relogged.entry.id !== seededExpense.id, 'the correction is a fresh row, not an in-place edit');
 
   const { data: oldGone } = await supabase.from('expense_logs').select('id').eq('id', seededExpense.id);
   assert(!oldGone || oldGone.length === 0, 'the old row was removed');
-  const { data: freshRows } = await supabase.from('expense_logs').select('id,amount,expense_type,created_at').eq('id', relogged.entry.id);
+  const { data: freshRows } = await supabase.from('expense_logs').select('id,amount,expense_type,label,created_at').eq('id', relogged.entry.id);
   assert(freshRows?.length === 1 && Number(freshRows[0].amount) === 4800 && freshRows[0].expense_type === 'Parts', 'the fresh row carries the corrected values');
+  assert(freshRows[0].label === 'corrected label', 'the fresh row carries the corrected label');
   assert(String(freshRows[0].created_at).startsWith(String(seededExpense.created_at).slice(0, 10)), 'the fresh row keeps the original entry date');
   console.log('✅ Correction = delete & re-log; locked fields rejected, date preserved.');
 
@@ -265,9 +278,10 @@ async function runTests() {
   const restored = await restoreLastDeleted(supabase, { actorPhone: OWNER_PHONE, vehicleIds: [vehicle.id] });
   assert(restored.ok, `Restore failed: ${restored.reason}`);
   assert(restored.entry.id === relogged.entry.id, 'restore did not bring back the same row id');
-  const { data: backRows } = await supabase.from('expense_logs').select('id,amount').eq('id', relogged.entry.id);
+  const { data: backRows } = await supabase.from('expense_logs').select('id,amount,label').eq('id', relogged.entry.id);
   assert(backRows?.length === 1, 'restored row is not in the ledger');
   assert(Number(backRows[0].amount) === 4800, 'restore lost the corrected amount');
+  assert(backRows[0].label === 'corrected label', 'restore lost the corrected label');
   console.log('✅ Restore replays the snapshot exactly.');
 
   const restoredTwice = await restoreLastDeleted(supabase, { actorPhone: OWNER_PHONE, vehicleIds: [vehicle.id] });

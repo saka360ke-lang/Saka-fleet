@@ -18,6 +18,7 @@ import {
   formatRequiredDocumentsReply,
   formatExampleComplianceReply
 } from './src/services/countryBucket.js';
+import { resolvePhoneCountryLock } from './src/services/globalization.js';
 import { getFlowDefinition } from './src/services/quizEngine.js';
 
 /**
@@ -66,6 +67,15 @@ async function run() {
   check(resolveCountryInput('ke')?.country === 'Kenya', 'ISO codes resolve');
   check(resolveCountryInput('+254')?.country_code === 'KE', 'phone prefixes resolve');
   check(resolveCountryInput('Narnia') === null, 'unknown countries are rejected');
+
+  console.log('\n--- Test 2b: phone-primary country lock (v1.59.0) ---');
+  check(resolvePhoneCountryLock('+254711000001')?.country_code === 'KE', 'a Kenyan number locks Kenya');
+  check(resolvePhoneCountryLock('+12025550123')?.country_code === 'US', 'a US number locks the United States');
+  check(resolvePhoneCountryLock('+447700900123')?.country_code === 'GB', 'a UK number locks the United Kingdom');
+  check(resolvePhoneCountryLock('+999700000000') === null, 'an unresolvable number never locks a country');
+  check(resolvePhoneCountryLock(null) === null, 'a missing number never locks a country');
+  check(resolvePhoneCountryLock('+254711000001')?.unit_system === 'metric', 'the lock carries the country unit system');
+  check(resolvePhoneCountryLock('+12025550123')?.unit_system === 'imperial', 'the US lock is imperial');
 
   console.log('\n--- Test 3: country buckets ---');
   const kenyaCar = getCountryBucket({ countryCode: 'KE', assetKind: 'vehicle' });

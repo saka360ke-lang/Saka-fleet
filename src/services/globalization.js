@@ -141,6 +141,24 @@ export function resolveUnitSystem(countryInfo, profile = null) {
   return countryInfo?.default_units === 'imperial' ? 'imperial' : 'metric';
 }
 
+/**
+ * v1.59.0 — phone-primary country lock.
+ *
+ * The E.164 country code of the WhatsApp number is the PRIMARY determinant of a
+ * user's country. Returns the lock patch for profile writes, or `null` when the
+ * number cannot be resolved to a real region (the GLOBAL fallback never locks a
+ * country). Browser locale/country selection never overrides this.
+ */
+export function resolvePhoneCountryLock(phone) {
+  const info = detectCountryFromPhone(phone);
+  if (!info || !info.country_code || info.country_code === REGION_FALLBACK.country_code) return null;
+  return {
+    country: info.country,
+    country_code: info.country_code,
+    unit_system: info.default_units === 'imperial' ? 'imperial' : 'metric'
+  };
+}
+
 const KM_PER_MILE = 1.609344;
 const LITERS_PER_US_GALLON = 3.785411784;
 const LITERS_PER_IMPERIAL_GALLON = 4.54609;
@@ -279,6 +297,7 @@ export default {
   formatDate,
   normalizePhone,
   resolveUnitSystem,
+  resolvePhoneCountryLock,
   resolveTimezoneFromCountry,
   resolveUserTimezone
 };

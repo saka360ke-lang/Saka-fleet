@@ -173,6 +173,11 @@ check(/Narrative pre-fills are engine-determined facts/.test(await import('./src
     'the plate question belongs ONLY inside the registration quiz',
     // v1.27.0 — answer law + corporate hedging is banned.
     'ANSWER LAW',
+    // v1.59.0 — PERSONA V4: brand compass, ack variety and pacing are trained.
+    'PERSONA V4',
+    'ACK VARIETY LAW',
+    'PACING LAW',
+    'LIVE LEARNINGS',
     // v1.28.0 — no repeated greeting openers mid-conversation.
     'GREETING LAW',
     // v1.28.2 — the retired corporate identity is banned and truncation is guarded.
@@ -263,6 +268,22 @@ check(/Narrative pre-fills are engine-determined facts/.test(await import('./src
   check(DEFAULT_SAKA_CORE_PROMPT.includes('Send me as a detailed pdf'), 'deliverable-shaped requests are named as report requests');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('never silently merge'), 'draft-conflict merging is forbidden');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('CORRECTIONS to the entry under discussion'), 'follow-up totals are corrections, not new entries');
+
+  // v1.59.0 — PERSONA V4: brand compass, ack variety and pacing ride the prompt
+  // AND the tone compass (single source; the prompt renders the compass block).
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('BRAND COMPASS'), 'the tone compass block renders the v4 BRAND COMPASS');
+  check(SAKA_TONE_COMPASS.voice.some((line) => /active human verbs/i.test(line)), 'v4 voice: active human verbs over robotic formulas');
+  check(SAKA_TONE_COMPASS.voice.some((line) => /contractions/i.test(line)), 'v4 voice: natural contractions and varied rhythm');
+  check(SAKA_TONE_COMPASS.voice.some((line) => /The medium is WhatsApp/i.test(line)), 'v4 voice: the medium is WhatsApp (punchy, scannable)');
+  check(Array.isArray(SAKA_TONE_COMPASS.pacing) && SAKA_TONE_COMPASS.pacing.length >= 3, 'v4 pacing laws are declared as data');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('PACING LAWS'), 'the prompt carries the PACING LAWS block');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('ACK VARIETY'), 'the prompt carries the ACK VARIETY block');
+  check(SAKA_TONE_COMPASS.ackVariety.casual.includes('Logged ✓') && SAKA_TONE_COMPASS.ackVariety.formal.includes('Recorded.'), 'ack variety pools exist for casual and formal registers');
+  check(/never use the same confirmation opener twice in a row/i.test(DEFAULT_SAKA_CORE_PROMPT), 'the ACK VARIETY LAW forbids a repeated confirmation opener');
+  check(/no menu, no option list/i.test(DEFAULT_SAKA_CORE_PROMPT), 'the PACING LAW forbids menus after a completed write');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('change approach and PERFORM the action'), 'the folded Sentinel live learnings ride the core prompt');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('carry free-text expense detail into the draft note/label'), 'the label-echo learning is trained');
+  check(PROMPT_REFINEMENT_MARKER === 'SAKA-PROMPT-SCHEMA:2026.12.0', 'the prompt schema version is bumped for v4 (retires stale refinements)');
 
   // The composer enforces the same rule at runtime (not just in the prompt).
   check(isContentlessReply('Got your vehicle details!') === true, 'an empty acknowledgement is rejected by the composer');

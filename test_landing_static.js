@@ -74,6 +74,24 @@ check(changelog.entries.length >= 5, 'The changelog feed has recent releases');
 check(changelog.entries.every((e) => e.version && e.date && e.title && e.summary), 'Every changelog entry is complete');
 check(changelog.entries[0].version === changelog.latest, 'The newest entry matches the latest version');
 check(changelog.latest === JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'package.json'), 'utf8')).version, 'The changelog "latest" matches package.json version');
+// v1.59.0 — the feed is a PREVIEW: short titles plus one minimal line per entry
+// (explicit `preview`, or the first sentence of the summary as a fallback).
+const firstSentenceOf = (text) => {
+  const value = String(text || '').trim();
+  const match = value.match(/^[^.!?]+[.!?]/);
+  return match ? match[0].trim() : value;
+};
+const previewOf = (entry) => String(entry.preview || firstSentenceOf(entry.summary)).trim();
+const statusJsSource = fs.readFileSync(path.join(LANDING, 'assets/js/status.js'), 'utf8');
+check(changelog.entries.every((e) => e.title.length <= 60), 'Every changelog title is short (<= 60 chars)');
+check(changelog.entries.every((e) => previewOf(e).length > 0), 'Every changelog entry carries a preview line');
+check(changelog.entries.filter((e) => e.preview).every((e) => String(e.preview).length <= 120), 'Every explicit preview is minimal (<= 120 chars)');
+check(statusJsSource.includes('text.length <= 96'), 'The renderer caps derived previews at 96 chars (the feed stays a preview)');
+check(Boolean(changelog.entries[0].preview), 'The newest entry ships an explicit preview line');
+check(statusJsSource.includes('renderChangelogEntry') && statusJsSource.includes('<details class="cl-entry">'), 'The status page renders previews in an expandable card');
+check(statusJsSource.includes('previewOf') && statusJsSource.includes('firstSentence'), 'The renderer derives a preview when an entry has none');
+const stylesCss = fs.readFileSync(path.join(LANDING, 'assets/css/styles.css'), 'utf8');
+check(stylesCss.includes('.cl-preview') && stylesCss.includes('.cl-detail'), 'The changelog preview and expander are styled');
 console.log('\n--- Test 5: no secrets in static files (rule 6 isolation) ---');
 const SECRET_PATTERNS = [
   /sk_live_[A-Za-z0-9]+/, /sk_test_[A-Za-z0-9]+/,

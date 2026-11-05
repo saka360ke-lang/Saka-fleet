@@ -41,6 +41,20 @@ check(/second struggle|simplest/i.test(voice), 'the second-struggle simplest pat
 check(/mirror the register|Match formality/i.test(mirror), 'the Shenglish persona is covered by the mirror matrix (mirror the user\'s language)');
 check(SAKA_TONE_COMPASS.bannedPhrases.includes("I can't see"), 'the widened access-refusal family stays banned (v1.54.0)');
 
+console.log('--- Test 2b: Persona v4 brand compass, ack variety and pacing (v1.59.0) ---');
+const brandVoice = SAKA_TONE_COMPASS.voice.join(' ');
+check(/The medium is WhatsApp/i.test(brandVoice), 'brand compass: WhatsApp-native, punchy and scannable');
+check(/active human verbs/i.test(brandVoice) && /Logged ✓/.test(brandVoice), 'brand compass: active verbs like "Logged ✓" beat robotic formulas');
+check(/contractions/i.test(brandVoice), 'brand compass: natural contractions and varied rhythm');
+check(/Quick-log shorthand/i.test(mirror), 'mirror matrix: quick-log shorthand gets a lightning confirmation');
+check(/structured analytical asks/i.test(mirror), 'mirror matrix: formal analytical asks get structured bullets and precise labels');
+check(Array.isArray(SAKA_TONE_COMPASS.pacing) && /no menu/i.test(SAKA_TONE_COMPASS.pacing.join(' ')), 'pacing: a completed write never appends a menu');
+check(/patient-guide/i.test(SAKA_TONE_COMPASS.pacing.join(' ')), 'pacing: errors switch to patient-guide mode');
+check(/same confirmation opener/i.test(SAKA_TONE_COMPASS.ackVariety.law), 'ack variety: no repeated confirmation opener');
+check(SAKA_TONE_COMPASS.ackVariety.casual.length >= 4 && SAKA_TONE_COMPASS.ackVariety.formal.length >= 4, 'ack variety: deterministic pools for both registers');
+check(SAKA_TONE_COMPASS.floors.some((floor) => /confirmation opener/i.test(floor)), 'the ack-variety law is a floor, not a suggestion');
+check(DEFAULT_SAKA_CORE_PROMPT.includes('PERSONA V4') && DEFAULT_SAKA_CORE_PROMPT.includes('PACING LAW') && DEFAULT_SAKA_CORE_PROMPT.includes('ACK VARIETY LAW'), 'the core prompt carries the v4 laws');
+
 console.log('--- Test 3: plain-language lint over every deterministic fallback ---');
 const source = fs.readFileSync('src/routes/whatsapp.js', 'utf8');
 const fallbacks = [

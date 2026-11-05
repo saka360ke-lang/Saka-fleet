@@ -20,9 +20,33 @@ export const RECORD_ANSWER_VERSION = '1.36.0';
 const QUESTION_WORDS_RE = /\b(how much|how many|total|spent|spend|cost|costs|did i (?:spend|pay|log)|what did i (?:log|spend|pay)|my (?:expenses?|records?|entries|logs?|ledger|earnings?|revenue|income)|earnings?|revenue|income|takings|show (?:me )?(?:my )?(?:expenses?|records?|entries|ledger)|average|avg|on average|how far|km\/l|mpg|fuel economy|sum)\b/i;
 const KIND_AVERAGE_RE = /\b(average|avg|on average|km\/l|mpg|per (?:fill|litre|liter|record)|fuel economy)\b/i;
 const KIND_COUNT_RE = /\b(how many|count|number of|how many times)\b/i;
-const KIND_LIST_RE = /\b(what did i log|list|show|display|entries|records|my expenses|my entries|ledger|last time|latest|most recent)\b/i;
+const KIND_LIST_RE = /\b(what did i log|list|show|display|entries|records|my expenses|my entries|ledger|last time|latest|most recent|search|find|look for|labelled|labeled|tagged)\b/i;
 const EARNING_RE = /\b(earn(?:ed|ings?)?|revenue|income|takings?|fares?|collected)\b/i;
 const EXPENSE_SIDE_RE = /\b(spent|spend|expenses?|fuel|diesel|petrol|service|repair|parts?|tyres?|parking|fine|wash|cost)\b/i;
+
+// v1.59.0 — keyword / label search lane: "search karen", "labelled school run",
+// "#karen", "find entries tagged generator". Every entry is searchable by the
+// optional label OR its notes text.
+const KEYWORD_QUERY_RE = /(?:\b(?:search|find|look\s+for|look\s+up)\b|\b(?:labelled|labeled|tagged)\b)\s*(?:for\s+|with\s+)?(?:label\s+|tag\s+)?[:=]?\s*([\p{L}\p{N}][\p{L}\p{N} &_#/-]{0,40})/iu;
+const HASHTAG_QUERY_RE = /(?:^|\s)#([\p{L}\p{N}][\p{L}\p{N} _-]{0,32})/u;
+
+/**
+ * Extract the search keyword from a records question. Pure; never throws.
+ * Date/period words are never treated as keywords ("search last week" keeps
+ * the period filter and searches nothing).
+ */
+export function extractRecordKeyword(text = '') {
+  const source = String(text || '');
+  const match = KEYWORD_QUERY_RE.exec(source) || HASHTAG_QUERY_RE.exec(source);
+  if (!match) return null;
+  let value = String(match[1] || '').trim().replace(/\s+/g, ' ');
+  if (!value) return null;
+  value = value.split(/[.,;!?]/)[0].trim();
+  value = value.split(/\s+(?:for|from|in|during|since|last|this|past|today|yesterday)\b/i)[0].trim();
+  if (!value) return null;
+  if (/^(?:last|this|next|today|yesterday|tomorrow|week|month|year|all|time|entries|records)\b/i.test(value)) return null;
+  return value.slice(0, 40).trim() || null;
+}
 
 // v1.58.6 — LOG-vs-QUERY disambiguation (live 2026-11-04 failures):
 //  • "Repaired a puncture … cost me 300kes" is an EXPENSE TO LOG, not a records
@@ -68,13 +92,16 @@ export function parseRecordQuestion(text = '', { countryCode = 'GLOBAL', locale 
   if (/^\s*why\b/i.test(source)) return { ok: false, reason: 'why-question' };
 
   const hasPlateLike = /\b[A-Z]{2,3}\s?\d{1,4}[A-Z]?\b/.test(source.toUpperCase());
+  // v1.59.0 — a keyword search is always a records question (zero-token lane).
+  const keyword = extractRecordKeyword(source);
   // v1.58.23 - a bare "…yes?" is not a records question: '?' only counts when
   // the text also carries a ledger signal (live 2026-11-04: "i should be on
   // team fleet, yes?" was answered with an expenses total).
   const questionMarkSignal = /\?/.test(source)
     && (RECORDS_WORD_RE.test(source) || EXPENSE_SIDE_RE.test(source) || EARNING_RE.test(source) || hasPlateLike);
-  const looksLikeQuestion = QUESTION_WORDS_RE.test(source)
-    || /^(what|how|show|list|display|summarize|summarise|total|count|pull|get|fetch|give)\b/i.test(source)
+  const looksLikeQuestion = Boolean(keyword)
+    || QUESTION_WORDS_RE.test(source)
+    || /^(what|how|show|list|display|summarize|summarise|total|count|pull|get|fetch|give|search|find)\b/i.test(source)
     || (RECORDS_WORD_RE.test(source) && (EXPENSE_SIDE_RE.test(source) || EARNING_RE.test(source) || hasPlateLike))
     || questionMarkSignal;
   if (!looksLikeQuestion) return { ok: false, reason: 'not-a-question' };
@@ -107,7 +134,7 @@ export function parseRecordQuestion(text = '', { countryCode = 'GLOBAL', locale 
   const plateMatch = source.toUpperCase().match(/\b([A-Z]{2,3}\s?\d{1,4}[A-Z]?)\b/);
   const vehiclePlate = plateMatch ? plateMatch[1].replace(/\s+/g, '') : null;
 
-  return { ok: true, kind, earning, expenseTypes, range, vehiclePlate, text: source };
+  return { ok: true, kind, earning, expenseTypes, range, vehiclePlate, keyword, text: source };
 }
 
 
@@ -124,6 +151,9 @@ export function formatRecordAnswer(result = {}, question = {}, { vehicles = [], 
   const typeLabel = question.earning
     ? 'Earnings'
     : (question.expenseTypes.length ? question.expenseTypes.join(' + ') : 'Expenses');
+  // v1.59.0 — a keyword/label search names the word it matched.
+  const keywordNote = question.keyword ? ` · label "${question.keyword}"` : '';
+  const typeHeading = `${typeLabel}${keywordNote}`;
   // v1.58.22 - a scoped read names the vehicle it covers; only a genuine
   // fleet-wide read says "across your N vehicles" (live 2026-11-04: a plate
   // question still answered "Across your 2 vehicles").
@@ -139,17 +169,18 @@ export function formatRecordAnswer(result = {}, question = {}, { vehicles = [], 
     : `${typeLabel.toLowerCase()} ${missingNoun}`;
 
   if (result.count === 0) {
-    return `📊 *Nothing logged* — no ${missingLabel} ${periodLabel}. ✅${fleetNote}`;
+    const keywordMiss = question.keyword ? ` matching "${question.keyword}"` : '';
+    return `📊 *Nothing logged* — no ${missingLabel}${keywordMiss} ${periodLabel}. ✅${fleetNote}`;
   }
 
   const volumeNote = result.liters > 0 ? ` · ${formatNumber(result.liters, locale)} L` : '';
 
   if (question.kind === 'count') {
-    return `📊 *${typeLabel}:* ${result.count} record${result.count === 1 ? '' : 's'} ${periodLabel}.${volumeNote}${fleetNote}`;
+    return `📊 *${typeHeading}:* ${result.count} record${result.count === 1 ? '' : 's'} ${periodLabel}.${volumeNote}${fleetNote}`;
   }
 
   if (question.kind === 'average') {
-    return `📊 *${typeLabel} ${periodLabel}:*\n• Average: *${money(result.average)}* per record\n• Records: ${result.count}\n• Total: ${money(result.total)}${volumeNote}${fleetNote}`;
+    return `📊 *${typeHeading} ${periodLabel}:*\n• Average: *${money(result.average)}* per record\n• Records: ${result.count}\n• Total: ${money(result.total)}${volumeNote}${fleetNote}`;
   }
 
   if (question.kind === 'list') {
@@ -159,18 +190,20 @@ export function formatRecordAnswer(result = {}, question = {}, { vehicles = [], 
       // v1.58.22 - notes/part names are part of the entry; users asked three
       // times why they could not see them (live 2026-11-04).
       const note = row.notes ? ` (${String(row.notes).slice(0, 60)})` : '';
-      return `• ${money(row[result.amountCol])} — ${type} — ${day}${note}`;
+      const labelChip = row.label ? ` #${String(row.label).slice(0, 40)}` : '';
+      return `• ${money(row[result.amountCol])} — ${type} — ${day}${labelChip}${note}`;
     });
     const more = result.count > lines.length ? `\n…and ${result.count - lines.length} more (reply *my entries* for the full ledger).` : '';
-    return `📊 *${typeLabel} ${periodLabel}:* ${result.count} record${result.count === 1 ? '' : 's'}\n${lines.join('\n')}${more}${fleetNote}`;
+    return `📊 *${typeHeading} ${periodLabel}:* ${result.count} record${result.count === 1 ? '' : 's'}\n${lines.join('\n')}${more}${fleetNote}`;
   }
 
-  return `📊 *${typeLabel} ${periodLabel}:* ${money(result.total)} (${result.count} record${result.count === 1 ? '' : 's'})${volumeNote}${fleetNote}`;
+  return `📊 *${typeHeading} ${periodLabel}:* ${money(result.total)} (${result.count} record${result.count === 1 ? '' : 's'})${volumeNote}${fleetNote}`;
 }
 
 export default {
   RECORD_ANSWER_VERSION,
   parseRecordQuestion,
+  extractRecordKeyword,
   formatRecordAnswer,
   looksLikeLogStatement
 };

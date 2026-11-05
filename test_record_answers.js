@@ -129,6 +129,22 @@ check('a why-question is not parsed as a records query', whyQ.ok === false && wh
 const yesQ = parseRecordQuestion('i should be on team fleet, yes?', KE);
 check('a bare yes-question is not a records query', yesQ.ok === false, yesQ);
 
+console.log('=== v1.59.0 - keyword / label search ===');
+const searchKaren = parseRecordQuestion('search karen', KE);
+check('keyword search parses and lists', searchKaren.ok === true && searchKaren.kind === 'list' && searchKaren.keyword === 'karen', searchKaren);
+const hashtagSchool = parseRecordQuestion('#school run last week', KE);
+check('a hashtag keyword parses', hashtagSchool.ok === true && hashtagSchool.keyword === 'school run' && hashtagSchool.range?.from === '2026-10-26', hashtagSchool);
+const labelledQ = parseRecordQuestion('show entries labelled generator fuel', KE);
+check('"labelled" resolves the keyword', labelledQ.ok === true && labelledQ.keyword === 'generator fuel', labelledQ);
+const dateOnlySearch = parseRecordQuestion('search last week', KE);
+check('a date word is never a keyword', dateOnlySearch.ok === true && dateOnlySearch.keyword === null, dateOnlySearch);
+const keywordAnswerShape = formatRecordAnswer(
+  { ok: true, rows: [{ amount: 5500, expense_type: 'Fuel', label: 'karen run', created_at: '2026-10-31T09:00:00+03:00' }], count: 1, total: 5500, liters: 0, average: 5500, amountCol: 'amount' },
+  { kind: 'list', earning: false, expenseTypes: [], keyword: 'karen', range: { label: '31 Oct' } },
+  { vehicles: [], ...COPY }
+);
+check('the keyword answer names the label and the row chip', /label "karen"/.test(keywordAnswerShape) && /#karen run/.test(keywordAnswerShape), keywordAnswerShape);
+
 const emptyReply = formatRecordAnswer(
   { ok: true, rows: [], count: 0, total: 0, liters: 0, average: 0, amountCol: 'amount' },
   { kind: 'total', earning: false, expenseTypes: [], range: { label: '31 Oct' } },
@@ -181,8 +197,8 @@ async function runLive() {
     return d.toISOString();
   };
   const rows = [
-    { vehicle_id: vehicle.id, driver_id: owner.id, expense_type: 'Fuel', amount: 5500, fuel_liters: 40, created_at: daysAgo(1) },
-    { vehicle_id: vehicle.id, driver_id: owner.id, expense_type: 'Parking', amount: 300, created_at: daysAgo(1) },
+    { vehicle_id: vehicle.id, driver_id: owner.id, expense_type: 'Fuel', amount: 5500, fuel_liters: 40, label: 'karen run', created_at: daysAgo(1) },
+    { vehicle_id: vehicle.id, driver_id: owner.id, expense_type: 'Parking', amount: 300, label: 'school', created_at: daysAgo(1) },
     { vehicle_id: vehicle.id, driver_id: owner.id, expense_type: 'Fuel', amount: 4500, fuel_liters: 35, created_at: daysAgo(10) }
   ];
   const { error: seedErr } = await supabase.from('expense_logs').insert(rows);
@@ -206,6 +222,20 @@ async function runLive() {
     question: { earning: false, expenseTypes: [], range: { from: daysAgo(6).slice(0, 10), to: today } }
   });
   check('live: trailing week excludes the old row', lastWeek.count === 2 && lastWeek.total === 5800, lastWeek);
+
+  // v1.59.0 — keyword search matches the optional label (or the notes text).
+  const keywordHit = await queryRecordLedger(supabase, {
+    ownerId: owner.id, vehicleIds: [vehicle.id],
+    question: { earning: false, expenseTypes: [], range: { from: yesterday, to: yesterday }, keyword: 'karen' }
+  });
+  check('live: keyword search matches the label', keywordHit.ok && keywordHit.count === 1 && keywordHit.total === 5500, keywordHit);
+  const keywordMiss = await queryRecordLedger(supabase, {
+    ownerId: owner.id, vehicleIds: [vehicle.id],
+    question: { earning: false, expenseTypes: [], range: null, keyword: 'generator' }
+  });
+  check('live: a non-matching keyword returns nothing', keywordMiss.ok && keywordMiss.count === 0, keywordMiss);
+  const keywordAnswer = formatRecordAnswer(keywordHit, { kind: 'list', earning: false, expenseTypes: [], keyword: 'karen', range: { label: 'yesterday' } }, { vehicles: [vehicle], currency: 'KES', locale: 'en-KE' });
+  check('live: the keyword answer names the label and the row chip', /label "karen"/.test(keywordAnswer) && /#karen run/.test(keywordAnswer), keywordAnswer);
 
   const answer = formatRecordAnswer(fuelYesterday, { kind: 'total', earning: false, expenseTypes: ['Fuel'], range: { label: 'yesterday' } }, { vehicles: [vehicle], currency: 'KES', locale: 'en-KE' });
   check('live: formatted answer names the amount', /5,500/.test(answer) && /Fuel/.test(answer), answer);

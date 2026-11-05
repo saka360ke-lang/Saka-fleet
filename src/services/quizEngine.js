@@ -20,6 +20,8 @@ import {
 import { chatCompletion, parseJsonSafely } from './aiClient.js';
 import { normalizeFillType } from './fuelEconomy.js';
 import { isDuplicateExpense } from './expenseGuard.js';
+// v1.59.0 — optional per-record label (pure helper, no cycles).
+import { sanitizeEntryLabel } from './entryLabels.js';
 import { shortenUrl } from './linkShortener.js';
 import {
   EXPENSE_TYPES,
@@ -3144,7 +3146,7 @@ async function executeFlow(state, ctx) {
             completed: true
           };
         }
-        const { error: logErr } = await ctx.supabase.from('expense_logs').insert([{
+        const expenseRow = {
           vehicle_id: vehicle.id,
           driver_id: ctx.profile?.id,
           expense_type: canonicalExpenseType,
@@ -3152,13 +3154,21 @@ async function executeFlow(state, ctx) {
           fuel_liters: a.fuel_liters || 0,
           fill_type: normalizeFillType(a.fill_type),
           odometer_reading: a.odometer_reading,
+          // v1.59.0 — the optional label is searchable and never invented.
+          label: sanitizeEntryLabel(a.label || state.narrativeExtras?.label) || null,
           notes: [
             a.operating_hours ? `Engine hours: ${a.operating_hours} h` : null,
             a.notes,
             formatExtraNotes(state.extraNotes || [])
           ].filter(Boolean).join(' | ') || null,
           ...(retroIso ? { created_at: retroIso } : {})
-        }]);
+        };
+        let { error: logErr } = await ctx.supabase.from('expense_logs').insert([expenseRow]);
+        if (logErr && /label/i.test(logErr.message || '')) {
+          // Rule 50 — an un-migrated optional column never blocks a save.
+          const { label, ...legacyRow } = expenseRow;
+          ({ error: logErr } = await ctx.supabase.from('expense_logs').insert([legacyRow]));
+        }
         if (logErr) return { handled: true, reply: await fail(logErr.message), flow: state.flow, active: true };
 
         // Trial activation #2: first expense logged (no-op outside trials).
@@ -3211,16 +3221,23 @@ async function executeFlow(state, ctx) {
           state.narrativeExtras?.occurred_at_iso,
           state.narrativeExtras?.occurred_at
         );
-        const { error } = await ctx.supabase.from('private_earnings').insert([{
+        const earningRow = {
           vehicle_id: vehicle.id,
           driver_id: ctx.profile?.id,
           revenue_amount: a.amount,
           currency: ctx.countryInfo?.currency || 'USD',
           earning_type: earningType,
+          // v1.59.0 — optional searchable label (same rule as expenses).
+          label: sanitizeEntryLabel(a.label || state.narrativeExtras?.label) || null,
           notes: noteParts.join(' | '),
           logged_at: earningRetroIso || new Date().toISOString(),
           ...(earningRetroIso ? { created_at: earningRetroIso } : {})
-        }]);
+        };
+        let { error } = await ctx.supabase.from('private_earnings').insert([earningRow]);
+        if (error && /label/i.test(error.message || '')) {
+          const { label, ...legacyRow } = earningRow;
+          ({ error } = await ctx.supabase.from('private_earnings').insert([legacyRow]));
+        }
         if (error) return { handled: true, reply: await fail(error.message), flow: state.flow, active: true };
 
         if (a.odometer_reading > Number(vehicle.current_mileage || 0)) {

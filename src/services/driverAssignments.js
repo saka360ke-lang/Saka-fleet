@@ -14,7 +14,7 @@
  */
 
 import crypto from 'crypto';
-import { resolveUserTimezone } from './globalization.js';
+import { resolveUserTimezone, resolvePhoneCountryLock } from './globalization.js';
 import { sendDriverAssignmentOtp } from './mailer.js';
 import { buildExpirySpecFromDate, createExpiryReminder, daysUntilDue } from './maintenanceReminders.js';
 import { notifyDriverUnassigned } from './followups.js';
@@ -163,7 +163,12 @@ export async function createDriverAssignment({
   // Ensure the driver profile exists (Saka builds it up during onboarding).
   let { data: driver } = await supabase.from('profiles').select('*').eq('phone_number', cleanPhone).maybeSingle();
   if (!driver) {
-    const { data: created } = await supabase.from('profiles').insert([{
+    // v1.59.0 — phone-primary country lock: prefer the caller's countryInfo,
+    // otherwise derive it from the driver's own E.164 number.
+    const driverCountry = countryInfo?.country_code
+      ? { country: countryInfo.country, country_code: countryInfo.country_code, unit_system: countryInfo.default_units || 'metric' }
+      : resolvePhoneCountryLock(cleanPhone);
+    const driverRow = {
       id: crypto.randomUUID(),
       phone_number: cleanPhone,
       full_name: 'Fleet Driver',
@@ -171,10 +176,19 @@ export async function createDriverAssignment({
       // v1.58.13 — drivers get no trial; never inherit the legacy 90-day default.
       trial_ends_at: null,
       subscription_status: 'ACTIVE',
-      country: countryInfo?.country || null,
-      country_code: countryInfo?.country_code || null,
-      unit_system: countryInfo?.default_units || 'metric'
-    }]).select().single();
+      ...(driverCountry ? {
+        country: driverCountry.country,
+        country_code: driverCountry.country_code,
+        unit_system: driverCountry.unit_system
+      } : {}),
+      ...(driverCountry ? { country_source: 'phone' } : {})
+    };
+    let { data: created } = await supabase.from('profiles').insert([driverRow]).select().single();
+    if (!created && driverCountry) {
+      // Rule 50 — an un-migrated optional column never blocks the assignment.
+      const { country_source, ...legacyRow } = driverRow;
+      ({ data: created } = await supabase.from('profiles').insert([legacyRow]).select().single());
+    }
     driver = created;
   }
   if (!driver?.id) return { ok: false, error: 'Could not create the driver profile.' };

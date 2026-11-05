@@ -37,8 +37,10 @@ export async function queryRecordLedger(supabase, { ownerId = null, driverId = n
   const table = earning ? 'private_earnings' : 'expense_logs';
   const amountCol = earning ? 'revenue_amount' : 'amount';
   const selectCols = earning
-    ? 'id,revenue_amount,earning_type,notes,created_at,vehicle_id'
-    : 'id,expense_type,amount,fuel_liters,fill_type,odometer_reading,notes,created_at,vehicle_id';
+    ? 'id,revenue_amount,earning_type,notes,label,created_at,vehicle_id'
+    : 'id,expense_type,amount,fuel_liters,fill_type,odometer_reading,notes,label,created_at,vehicle_id';
+  // v1.59.0 — a keyword search matches the optional label OR the notes text.
+  const keyword = String(question?.keyword || '').replace(/[%,()]/g, '').trim().slice(0, 40);
 
   try {
     let query = supabase.from(table).select(selectCols);
@@ -46,6 +48,7 @@ export async function queryRecordLedger(supabase, { ownerId = null, driverId = n
     if (driverId) query = query.eq('driver_id', driverId);
     if (ids.length === 1) query = query.eq('vehicle_id', ids[0]);
     else query = query.in('vehicle_id', ids);
+    if (keyword) query = query.or(`label.ilike.%${keyword}%,notes.ilike.%${keyword}%`);
     if (question.range?.from) query = query.gte('created_at', nairobiDayStart(question.range.from));
     if (question.range?.to) query = query.lt('created_at', nairobiNextDayStart(question.range.to));
     query = query.order('created_at', { ascending: false }).limit(100);

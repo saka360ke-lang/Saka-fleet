@@ -22,6 +22,8 @@ import { resolveExpenseType, hasExpenseTypeMarker } from './expenseCatalog.js';
 import { parseMoneyStory } from './moneyLexicon.js';
 import { extractPastDatePhrase, SYSTEM_TIMEZONE } from './dateParser.js';
 import { formatMoney, formatDate, resolveUnitSystem, userVolumeToLiters } from './globalization.js';
+// v1.59.0 — optional record label (pure module; no import cycle).
+import { extractEntryLabel } from './entryLabels.js';
 
 export const NARRATIVE_DRAFT_VERSION = '1.34.0';
 
@@ -358,6 +360,8 @@ export function buildNarrativeDraft({ text = '', ctx = {}, vehicles = [], active
     const odometer = extractOdometer(scanned, { unitSystem: env.unitSystem });
     const fill = extractFillType(scanned);
     const vendor = extractVendor(scanned);
+    // v1.59.0 — "label: karen run" / "#karen" rides the draft deterministically.
+    const label = extractEntryLabel(clean);
     const dateResult = extractPastDatePhrase(scanned, { countryCode: env.countryCode, locale: env.locale, now });
     const mentionedDays = distinctNarrativeDays(scanned, { countryCode: env.countryCode, locale: env.locale, now });
     // Two different days in one sentence = two records; never pick one silently.
@@ -376,6 +380,7 @@ export function buildNarrativeDraft({ text = '', ctx = {}, vehicles = [], active
     if (volume.liters && expenseType === 'Fuel') fields.fuel_liters = volume.liters;
     if (fillType) fields.fill_type = fillType;
     if (odometer.km) fields.odometer_reading = odometer.km;
+    if (label) fields.label = label;
 
     const warnings = [];
     if (money.ambiguous) warnings.push('ambiguous-amount');
@@ -434,6 +439,7 @@ export function buildNarrativeDraft({ text = '', ctx = {}, vehicles = [], active
       volume,
       odometer,
       fillType,
+      label,
       vehicle,
       vehicleMatch,
       vendor: vendor.value ? { value: vendor.value, confidence: vendor.confidence } : null,
@@ -474,6 +480,8 @@ export function narrativeDraftExtras(draft) {
   if (draft.notes) extras.notes = draft.notes;
   if (draft.money?.unitPrice) extras.unit_price = draft.money.unitPrice;
   if (draft.vendor?.value) extras.vendor = draft.vendor.value;
+  // v1.59.0 — the optional label is written with the row, never invented later.
+  if (draft.label) extras.label = draft.label;
   return extras;
 }
 

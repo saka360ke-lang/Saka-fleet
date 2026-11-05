@@ -251,6 +251,38 @@ check(onbSrc.includes('profileData?.email_verified !== true'), 'saveVehicleAsset
 const waSrc = fs.readFileSync(path.join(here, 'src/routes/whatsapp.js'), 'utf8');
 check(waSrc.includes('unverified_gated') && waSrc.includes('unverified_gated_media') && /profileData\.email_verified !== true/.test(waSrc), 'the WhatsApp route hard-gates unverified numbers (text and media)');
 
+console.log('\n--- Test 10: phone-primary country lock (v1.59.0) ---');
+const lockCreateDb = createMockSupabase({ profiles: [], admin_audit_logs: [] });
+await completeWebOnboarding(lockCreateDb, { email: 'lock@example.com', phone: '+254711000001', firstName: 'Lock', lastName: 'Kenya', verified: false });
+check(lockCreateDb.__db.profiles[0].country === 'Kenya' && lockCreateDb.__db.profiles[0].country_code === 'KE', 'A website signup stores the country derived from the phone (KE)');
+check(lockCreateDb.__db.profiles[0].country_source === 'phone', 'A website signup stamps country_source=phone');
+
+const lockFillDb = createMockSupabase({
+  profiles: [{ id: 'p-lock', phone_number: '+254711000002', email: 'missed@example.com', email_verified: false, country: null, country_code: null }],
+  admin_audit_logs: []
+});
+await completeWebOnboarding(lockFillDb, { email: 'missed@example.com', phone: '+254711000002', firstName: 'Missed', lastName: 'Rule', verified: false });
+check(lockFillDb.__db.profiles[0].country_code === 'KE' && lockFillDb.__db.profiles[0].country === 'Kenya', 'A signup that missed the country rule is filled from the phone');
+check(lockFillDb.__db.admin_audit_logs.some((a) => a.action === 'WEB_ONBOARD_COUNTRY_SET' && a.details?.country_code === 'KE'), 'The country backfill is audited');
+
+const lockUserDb = createMockSupabase({
+  profiles: [{ id: 'p-user', phone_number: '+254711000003', email: 'user@example.com', email_verified: true, country: 'Uganda', country_code: 'UG', country_source: 'user' }],
+  admin_audit_logs: []
+});
+await completeWebOnboarding(lockUserDb, { email: 'user@example.com', phone: '+254711000003', firstName: 'U', lastName: 'G', verified: true });
+check(lockUserDb.__db.profiles[0].country_code === 'UG', 'An explicit user country choice is never overridden by the phone');
+
+const lockMismatchDb = createMockSupabase({
+  profiles: [{ id: 'p-mis', phone_number: '+254711000004', email: 'mis@example.com', email_verified: false, country: 'United States', country_code: 'US', country_source: 'phone' }],
+  admin_audit_logs: []
+});
+await completeWebOnboarding(lockMismatchDb, { email: 'mis@example.com', phone: '+254711000004', firstName: 'M', lastName: 'X', verified: false });
+check(lockMismatchDb.__db.profiles[0].country_code === 'KE', 'The phone code wins over a mismatched phone-sourced country');
+
+const lockUnknownDb = createMockSupabase({ profiles: [], admin_audit_logs: [] });
+await completeWebOnboarding(lockUnknownDb, { email: 'unk@example.com', phone: '+999711000005', firstName: 'U', lastName: 'N', verified: false });
+check(!lockUnknownDb.__db.profiles[0].country && !lockUnknownDb.__db.profiles[0].country_code, 'An unresolvable number never locks a country (GLOBAL stays neutral)');
+
 console.log(`\n🎉 ${passed} web-onboarding assertions passed.`);
 console.log('Stateless suite: in-memory database double only — no real rows, no cleanup needed.');
 

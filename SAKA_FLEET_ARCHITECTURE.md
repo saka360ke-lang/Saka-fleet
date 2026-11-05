@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.58.26  
+**Version:** 1.59.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.59.0** | Persona v4 (brand compass + ack variety + pacing), phone-primary country lock + signup reconciliation, changelog preview feed, optional searchable record labels, live secrets audit | 156 |
 | **1.58.26** | Launch award: the first 50 welcome-trial starts get a 365-day trial (slot-gated, idempotent, race-safe), then the default 30-day flow; public fail-closed banner + UTM attribution | 155 |
 | **1.58.25** | Warm one-car website + compliance capture that never dead-ends ("Add psv license" saves or asks ONE question for any owner or driver) + friction↔error linkage + rule 52 (deep audit + extensive test law) | 154 |
 | **1.58.24** | Plan-driven model routing: paid/live-trial accounts run Sonnet on every front turn, free accounts stay on Haiku; `PREMIUM_MODEL_MODE` knob; composer inherits the plan cap | 153 |
@@ -1188,7 +1189,7 @@ Alerts are WhatsApp-ready and unit-aware, e.g. "Service Warning (KDA 123A): Oil 
 - `SAKA_INTENT_PLAYBOOK` — non-quiz intents (greeting, discovery, analytics, buyer-side transfer, OTP, reminders, onboarding) and the allowed behaviour for each.
 - `SAKA_BOUNDARY_RULES` — VIN/passbook-token immutability, owner-only soft delete, strict 1-to-1 driver assignment, never invent OTP/PIN/amounts/dates, confirmation gate, superadmin interception, Saka/Sentinel division.
 - `buildFlowPlaybook()` is injected into `DEFAULT_SAKA_CORE_PROMPT` via `${SAKA_FLOW_PLAYBOOK}`, so **the prompt can never drift from the code**.
-- `SAKA_TONE_COMPASS` (v1.17.0) — the Tone Compass & Mirror Engine: four poles (Precision/Anchor, Empathy/Healer, Efficiency/Arrow, Warmth↔Professionalism/Weaver), a five-dimension mirror matrix (register, length, emotion, pace, relationship stage), a situation priority matrix, absolute tone floors and role framing. It is rendered by `buildToneCompassBlock()` and appended to the playbook, so the core prompt and `conversationEngine` composer share one voice policy. `test_agent_training.js` asserts `TONE COMPASS`, `MIRROR MATRIX`, `SITUATION PRIORITY MATRIX`, `user_tone`, `relationship_stage` and `MODEL IDENTITY` stay embedded.
+- `SAKA_TONE_COMPASS` (v1.17.0) — the Tone Compass & Mirror Engine: four poles (Precision/Anchor, Empathy/Healer, Efficiency/Arrow, Warmth↔Professionalism/Weaver), a five-dimension mirror matrix (register, length, emotion, pace, relationship stage), a situation priority matrix, absolute tone floors and role framing. It is rendered by `buildToneCompassBlock()` and appended to the playbook, so the core prompt and `conversationEngine` composer share one voice policy. `test_agent_training.js` asserts `TONE COMPASS`, `MIRROR MATRIX`, `SITUATION PRIORITY MATRIX`, `user_tone`, `relationship_stage` and `MODEL IDENTITY` stay embedded. **v1.59.0 — Persona v4:** the rendered block now also carries the **BRAND COMPASS** (`voice`: WhatsApp-native punch, active human verbs, contractions, no template openers), the **PACING LAWS** (a completed write never appends a menu; errors switch to patient-guide mode; numbers before prose) and the **ACK VARIETY** pools (casual `Logged ✓ · Got it · Done · Noted · All set · Saved ✓` / formal `Recorded. · Updated. · Noted. · Done. · Saved.`, never the same opener twice in a row). The mirror matrix names both archetypes (hurried shorthand → lightning confirmation; structured manager → clean bullets with precise metric labels). `SAKA_PROMPT_SCHEMA_VERSION` is now `2026.12.0` (the 2026-11-05 SENTINEL live learnings were folded into the default prompt in the same release; the stored `system_config.saka_core_prompt` refinement is retired).
 
 ### 31.2 Saka vs Sentinel vs Cline (permanent boundary)
 - **Saka** = front-facing WhatsApp agent: intent classification, structured extraction, localized prose, step-by-step guidance.
@@ -2284,9 +2285,10 @@ Every user is placed in ONE **country bucket**, created automatically at onboard
 - Freshness: `KB_REVIEW_DAYS` (90), `KB_VERIFIED_AT`, `COUNTRY_KB_VERSION`; future ingest (`scripts/kb_ingest.js`) writes draft rows for superadmin approval only.
 
 ### 53.3 Conversation & onboarding
+- **Phone-primary country lock (v1.59.0).** The E.164 country code of the WhatsApp number is the PRIMARY determinant of a profile's country. `resolvePhoneCountryLock(phone)` (`globalization.js`) returns the lock (country, country_code, unit_system) or `null` for an unresolvable/GLOBAL number — the browser locale never overrides it. `completeWebOnboarding` writes the lock on create AND backfills a missing/mismatched country on update (audited `WEB_ONBOARD_COUNTRY_SET`); the driver-profile creation in `driverAssignments.js` uses the same lock; `profiles.country_source` (`'phone'` default, `'user'` for an explicit choice) is stamped so reconciliation never overrides a deliberate `country <name>`. `npm run reconcile:country` backfills signups that missed the rule (idempotent, profiles-only, audited `COUNTRY_RECONCILED`; live run fixed +2547***605 → KE).
 - Registration: **asset kind is the first question** (Car / motorcycle / truck / bus / heavy equipment / machinery / generator / boat); plate, serial, VIN, odometer and hour-meter questions are conditional on the answer.
 - Profiles gain `jurisdiction_confirmed` / `jurisdiction_updated_at`; completing registration stamps the bucket as confirmed.
-- Deterministic commands (zero tokens): `my country` / `country <name>` (writes the profile, updates units/timezone), `my rules`, `required documents`, `example compliance` (personalized with the plate).
+- Deterministic commands (zero tokens): `my country` / `country <name>` (writes the profile + `country_source='user'`, updates units/timezone), `my rules`, `required documents`, `example compliance` (personalized with the plate).
 - `processSakaMessage({ jurisdictionContext })` injects the **JURISDICTION CONTEXT** block (authority, required documents, example submissions, verified date). Boundary rule: quote only supplied rules, never invent a law/penalty/deadline, always add the disclaimer.
 
 ### 53.4 Migration, files & tests
@@ -3278,7 +3280,7 @@ or on a report request — the suite pins those exclusions.
   `private_earnings` (kind `earning`, stored as `revenue_amount` + `logged_at`);
   `shapeRow()` normalises earnings so callers see one shape.
 - **`sanitizeEntryUpdate(kind, patch)` is the wall:** expense whitelist
-  `expense_type, amount, fuel_liters, fill_type, odometer_reading, notes`;
+  `expense_type, amount, fuel_liters, fill_type, odometer_reading, notes, label`;
   earning whitelist `earning_type, amount, notes`. `LEDGER_PROTECTED_FIELDS`
   (`id`, `vehicle_id`, `driver_id`, `owner_id`, `created_at`, `logged_at`,
   `vin`, `plate_number`, `qr_passbook_token`) are always rejected and reported.
@@ -3512,9 +3514,10 @@ right one — and the restore window can never resurrect the superseded row.
 - **`relogLedgerEntry()`** (`src/services/entryLedger.js`): reads the row,
   hard-deletes it with its full snapshot audit (`LEDGER_ENTRY_DELETED` +
   `restore_until`), inserts a FRESH row built from the snapshot + the
-  sanitized patch (whitelist unchanged: `expense_type, amount, fuel_liters,
-  fill_type, odometer_reading, notes` / earnings `earning_type, amount,
-  notes`), keeps the ORIGINAL entry date (`created_at` rides the fresh
+  sanitized patch (whitelist: `expense_type, amount, fuel_liters,
+  fill_type, odometer_reading, notes, label` / earnings `earning_type,
+  amount, notes, label` — label joined in v1.59.0), keeps the ORIGINAL
+  entry date (`created_at` rides the fresh
   insert — the v1.34 retro-date rule), and audits
   `LEDGER_ENTRY_UPDATED` with `via: 'relog'`, `old_entry_id`,
   `new_entry_id` and the consumed audit id. VIN, plate, user, vehicle and
@@ -4343,4 +4346,42 @@ quiz engine:
 - **Frames touched.** `src/services/launchAwards.js` (new), `src/services/trialEngine.js` (`extendAccountTrial` `maxTotalDays`), `src/services/onboarding.js` (grant + `saved.launchAward`), `src/services/quizEngine.js` (grant + reply), `src/services/webOnboarding.js` (UTM sanitize + attribution), `src/services/envAudit.js` (LAUNCH CAMPAIGN section), `index.js` (`/api/onboard/launch-status`, CORS, boot ensure), `scripts/run_launch_awards_migration.js` (new), `scripts/health_audit.js` (suite registry), `scripts/reset-db.js` + `scripts/provision_staging_schema.js` (launch tables), `.env.example`, `landing/assets/js/main.js`, `landing/data/changelog.json`, `test_launch_award.js` (new), `test_trial_engine.js`, `test_web_onboarding.js`, `test_landing_static.js`, `test_agent_training.js`, `.clinerules` (§46 launch knob reference lives in the latency/reference block), `package.json`, `CHANGELOG.md`, this section.
 - **Skill sync (rule 13).** `flowKnowledge.js` trial rules and `DEFAULT_SAKA_CORE_PROMPT` now teach the launch award: engine-confirmed only, never invent slot/days/end date, never offer it to an unawarded account.
 - **Suites run:** `test_launch_award` (23 - new), `test_trial_engine`, `test_subscription_billing`, `test_web_onboarding`, `test_landing_static`, `test_env_audit`, `test_doc_sync`, `test_agent_training`, `test_superadmin`, `test_quiz_flow`, `npm run health` - green.
+
+---
+
+### 156. v1.59.0 - Persona v4 + phone-primary country + changelog preview + searchable labels + live secrets audit (2026-11-05)
+
+**Persona v4 (surgical upgrade of the existing Tone Compass, never a rewrite).**
+- `SAKA_TONE_COMPASS` (`flowKnowledge.js`) gains three data blocks rendered by `buildToneCompassBlock()`: **BRAND COMPASS** (WhatsApp-native punch, active human verbs "Logged ✓", natural contractions, never a template opener), **PACING LAWS** (after a successful write: confirmation card only - no menu, no options, no follow-up questionnaire; errors -> patient-guide mode; numbers before prose) and **ACK VARIETY** (casual/formal opener pools; never the same confirmation opener twice in a row; variety never replaces data). The Register/Length mirror rows now name both archetypes: quick-log shorthand -> lightning confirmation of the key data; structured analytical ask -> clean bullets with precise metric labels. Two new floors pin the ack-variety and no-menu rules.
+- `DEFAULT_SAKA_CORE_PROMPT` (`sakaAi.js`) gains **PERSONA V4 - BRAND COMPASS**, **ACK VARIETY LAW**, **PACING LAW** and a **LIVE LEARNINGS** block that folds the five still-valid 2026-11-05 Sentinel learnings (repeat -> perform the action; cancel-first; loose tier names; free-text detail into the draft note/label; PSV vs RSL routing) - the stored `system_config.saka_core_prompt` refinement was duplicated 4-5x and is retired by the `SAKA_PROMPT_SCHEMA_VERSION` bump to `2026.12.0`.
+- `conversationEngine.composeMessage` carries the same three laws in its compact system prompt (ACK VARIETY + PACING + last three BRAND COMPASS lines), so every composed render (quiz questions, outcomes, nudges, discovery) follows the same voice policy. No new runtime state: the deterministic pools remain engine-owned (`turnAck` slow-ack lines; ACK VARIETY governs model prose), protecting the `test_no_canned_replies` ratchet (4 literals).
+
+**Phone-primary country lock.**
+- `resolvePhoneCountryLock(phone)` (`globalization.js`): E.164 code -> `{ country, country_code, unit_system }`, `null` for unresolvable/GLOBAL. `src/services/countryLock.js` (new) owns `countryPatchForProfile()` (pure), `reconcileProfileCountries()` (idempotent, profiles-only, audited `COUNTRY_RECONCILED`) and the idempotent `COUNTRY_SOURCE_SQL` (`npm run migrate:country-source`).
+- `completeWebOnboarding` stamps the lock on create (with rule-50 degrade chains for `country_source` and UTM) and backfills/corrects on update unless an explicit user choice exists (`country_source='user'`), audited `WEB_ONBOARD_COUNTRY_SET`. The driver-profile creation in `driverAssignments.js` uses the caller's countryInfo or the driver's own number, with the same degrade. `my country` / `country <name>` now stamps `country_source='user'`.
+- Live: migration applied (profiles.country_source present), `npm run reconcile:country` fixed the one signup that missed the rule (+2547***605 -> Kenya/KE, audited); all 3 live profiles now `country_source='phone'`.
+
+**Changelog as a preview (website).**
+- `landing/data/changelog.json` adds a one-line `preview` per recent entry, short titles, and the 1.59.0 entry; older entries derive their preview from the first sentence. `status.js` renders `<details class="cl-entry">` cards: version chip + short title + one capped preview line (96 chars) + "Read more" expanding the full note; `styles.css` styles the preview/expander. `test_landing_static` pins short titles (<= 60), explicit previews (<= 120), the 96-char render cap and `latest === package.json`.
+
+**Optional record labels + keyword search.**
+- New pure `src/services/entryLabels.js` (`sanitizeEntryLabel`, `extractEntryLabel`): `label:`/`tag =` markers and `#hashtags`, capped at 40 chars, letters/digits/spaces/`&_#/-` only - never money, dates, plates, VINs or OTPs. Re-exported from `entryAnswers.js`.
+- Migration `npm run migrate:entry-labels` (idempotent `label text` on `expense_logs` + `private_earnings`, applied live). Writes: `quizEngine` (log_expense + log_earnings) and BOTH quick-log siblings in `whatsapp.js`, each with the rule-50 label degrade. `sakaAi.js` extracts `label`; `narrativeDraft` captures it deterministically into the draft fields/extras.
+- Editable ledger: `label` joined `LEDGER_EDITABLE_FIELDS` (both kinds), `sanitizeEntryUpdate`, the edit grammar (`label: karen run`), the diff labels, `describeEntry` (`#label` chip), the list/edit copy and the `my entries` selects.
+- Search: `extractRecordKeyword()` (`search karen`, `find ...`, `labelled/labeled/tagged ...`, `#karen`; date words are never keywords) rides `parseRecordQuestion` as `question.keyword`; `queryRecordLedger` filters `label.ilike OR notes.ilike`; `formatRecordAnswer` names the keyword (`· label "karen"`) and shows the row chip.
+
+**Live secrets audit (project `saka-fleet-v1`, service `saka-fleet`, `europe-west1`).**
+- All 15 Secret Manager secrets exist with an ENABLED latest version and are bound to the service (supabase-service-key/access-token, paystack-secret-key, meta-whatsapp-token/app-secret/verify-token, resend-api-key, gcp-vision-api-key, deepseek/anthropic/openai keys, sentinel-secret, gh-remediation-token, SENTINEL_PROPOSALS_ENABLED).
+- **Fixed:** `EMAIL_INBOUND_SIGNING_SECRET` was a PLAINTEXT env literal (visible in `gcloud run services describe`) while the identically named secret sat unbound. It is now a `secretKeyRef` (revisions `00287` remove -> `00288` bind; the two-step swap is required because Cloud Run refuses to retype an env var in one update). `/api/health` returns 200 on revision `00288` (`/healthz` is edge-intercepted on this deployment - the documented alias reason).
+- Knobs confirmed at policy values: `REMEDIATION_AUTONOMY=off`, `SENTINEL_PROPOSALS_ENABLED=off` (secret); `PREMIUM_MODEL_ENABLED=on` (documented in §96). GitHub repo secrets (GCP_SA_KEY / GCP_PROJECT_ID / GCP_REGION) could not be listed: no `gh` CLI locally and `gh-remediation-token` is 403 on the Actions-secrets API; deploys currently run through the Cloud Build trigger (service labels) and `deploy_cloud_run.yml` skips safely when unset.
+- `npm run env:audit`: local `.env` parity OK (50/181 registered keys local; the rest live on Cloud Run), no drift.
+
+**Recurrence autopsy (rule 51).**
+- Defect class *country known per-turn but never persisted* -> siblings audited: website signup create (fixed), website signup update/duplicate (fixed), driver-profile creation (fixed), `my country` override (stamped `user` so reconciliation cannot fight it), worker/report reads (already resolve per-turn - left), demo seed/tests (out of scope - left).
+- Defect class *new optional column breaks writes on an un-migrated schema* -> siblings audited: signup insert/update (degrade chains), driver insert (degrade), quiz expense/earning inserts (degrade), both quick-log inserts (degrade), ledger list selects (migration applied first) - every path retries without `country_source`/`label`.
+- Defect class *label text bleeding into notes during an edit* -> the label segment is stripped before the notes parse; pinned by `test_entry_ledger` ("notes: changed receipt, label: karen run" -> notes exactly "changed receipt").
+
+**Frames touched.** `src/services/flowKnowledge.js` (compass v4 + renderer), `sakaAi.js` (prompt laws + learnings + schema bump + label extraction), `src/services/conversationEngine.js` (composer laws), `src/services/globalization.js` (`resolvePhoneCountryLock`), `src/services/countryLock.js` (new), `src/services/webOnboarding.js` (create/update lock + degrade + audit), `src/services/driverAssignments.js` (driver lock), `src/routes/whatsapp.js` (country command stamp, quick-log labels), `src/services/entryLabels.js` (new), `src/services/entryAnswers.js` (label grammar/copy/describe), `src/services/entryLedger.js` (whitelist/selects/SQL), `src/services/quizEngine.js` (label writes), `src/services/narrativeDraft.js` (label capture), `src/services/recordAnswers.js` (keyword lane), `src/services/recordQuery.js` (label/notes filter), `scripts/run_country_source_migration.js` (new), `scripts/reconcile_country.js` (new), `scripts/run_entry_labels_migration.js` (new), `landing/{data/changelog.json,assets/js/status.js,assets/css/styles.css,*.html (asset stamp)}`, `package.json`, `.clinerules` (rules 7/31/37), `test_agent_training.js`, `test_conversation_compliance.js`, `test_web_onboarding.js`, `test_country_bucket.js`, `test_entry_ledger.js`, `test_record_answers.js`, `test_narrative_draft.js`, `test_landing_static.js`, `CHANGELOG.md`, this section.
+
+**Suites run:** `test_agent_training` (177), `test_conversation_compliance` (29), `test_no_canned_replies` (ratchet 4), `test_web_onboarding` (53), `test_country_bucket` (61), `test_entry_ledger` (all green), `test_record_answers` (57), `test_narrative_draft` (122), `test_quiz_flow` (147), `test_edit_delete` (green), `test_landing_static` (231), `test_doc_sync`, `test_env_audit`, `test_kb_docs`, `test_turn_ack`, `test_first_message_flow`, `test_duplicate_signup`, `npm run health` - green.
 

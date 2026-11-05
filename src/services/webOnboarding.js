@@ -15,6 +15,8 @@
 import crypto from 'crypto';
 import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
 import { sendExistingAccountNoticeEmail } from './mailer.js';
+import { resolvePhoneCountryLock } from './globalization.js';
+import { countryPatchForProfile, COUNTRY_SOURCE_DEFAULT } from './countryLock.js';
 
 export const WEB_ONBOARD_OTP_TABLE = 'web_onboard_otps';
 export const WEB_ONBOARD_OTP_TTL_MS = 10 * 60 * 1000; // 10 minutes
@@ -245,8 +247,23 @@ export async function completeWebOnboarding(supabase, { email, phone, firstName,
       if (utm?.source && !existing.utm_source) updates.utm_source = utm.source;
       if (utm?.medium && !existing.utm_medium) updates.utm_medium = utm.medium;
       if (utm?.campaign && !existing.utm_campaign) updates.utm_campaign = utm.campaign;
-      const { error } = await supabase.from('profiles').update(updates).eq('id', existing.id);
+      // v1.59.0 — the phone's E.164 country code is PRIMARY: fill a missing
+      // country or correct a mismatch unless the user explicitly chose one.
+      const countryPatch = countryPatchForProfile(existing, phone);
+      if (countryPatch) Object.assign(updates, countryPatch);
+      let { error } = await supabase.from('profiles').update(updates).eq('id', existing.id);
+      if (error && /country_source/i.test(error.message || '')) {
+        // Rule 50 — an un-migrated optional column never blocks a signup.
+        delete updates.country_source;
+        ({ error } = await supabase.from('profiles').update(updates).eq('id', existing.id));
+      }
       if (error) return { ok: false, error: error.message };
+      if (countryPatch) {
+        await writeAudit(supabase, 'WEB_ONBOARD_COUNTRY_SET', {
+          email, phone, profileId: existing.id,
+          country: countryPatch.country, country_code: countryPatch.country_code, source: 'phone'
+        });
+      }
       if (verified) {
         if (existing.email && String(existing.email).toLowerCase() !== String(email).toLowerCase()) {
           await writeAudit(supabase, 'WEB_ONBOARD_EMAIL_UPDATED', { oldEmail: existing.email, newEmail: email, phone, profileId: existing.id });
@@ -257,6 +274,9 @@ export async function completeWebOnboarding(supabase, { email, phone, firstName,
       return { ok: true, created: false };
     }
 
+    // v1.59.0 — phone-primary country lock: the E.164 country code of the
+    // WhatsApp number decides the stored country. Browser locale never does.
+    const phoneCountry = resolvePhoneCountryLock(phone);
     const profileRow = {
       id: crypto.randomUUID(),
       phone_number: phone,
@@ -272,22 +292,31 @@ export async function completeWebOnboarding(supabase, { email, phone, firstName,
       // default: a fresh account has no trial until its welcome trial starts.
       trial_ends_at: null,
       is_active: true,
-      preferred_language: preferredLanguage || null
+      preferred_language: preferredLanguage || null,
+      ...(phoneCountry ? { country: phoneCountry.country, country_code: phoneCountry.country_code } : {})
     };
     // v1.58.26 — campaign attribution rides the insert when present.
     const utmColumns = {};
     if (utm?.source) utmColumns.utm_source = utm.source;
     if (utm?.medium) utmColumns.utm_medium = utm.medium;
     if (utm?.campaign) utmColumns.utm_campaign = utm.campaign;
+    // Rule 50 — every optional column degrades independently; a schema that has
+    // not been migrated yet must never block a signup.
+    const optionalColumns = { ...utmColumns };
+    if (phoneCountry) optionalColumns.country_source = COUNTRY_SOURCE_DEFAULT;
 
-    let { error } = await supabase.from('profiles').insert([{ ...profileRow, ...utmColumns }]);
-    // Rule 50 — a schema that has not been migrated yet must never block a
-    // signup: retry once without the optional attribution columns.
+    let { error } = await supabase.from('profiles').insert([{ ...profileRow, ...optionalColumns }]);
+    if (error && /country_source/i.test(error.message || '')) {
+      delete optionalColumns.country_source;
+      ({ error } = await supabase.from('profiles').insert([{ ...profileRow, ...optionalColumns }]));
+    }
     if (error && /utm_|column .* does not exist|schema cache/i.test(error.message || '')) {
       ({ error } = await supabase.from('profiles').insert([profileRow]));
     }
     if (error) return { ok: false, error: error.message };
-    await writeAudit(supabase, verified ? 'WEB_ONBOARD_VERIFIED' : 'WEB_ONBOARD_CREATED', { email, phone });
+    await writeAudit(supabase, verified ? 'WEB_ONBOARD_VERIFIED' : 'WEB_ONBOARD_CREATED', {
+      email, phone, country_code: phoneCountry?.country_code || null
+    });
     return { ok: true, created: true };
   } catch (err) {
     return { ok: false, error: err.message };
@@ -349,16 +378,30 @@ export function phoneVariants(phone) {
 }
 
 /** Find a profile by phone variants (exact E.164/bare, then 9-digit suffix). */
+const PROFILE_BASE_SELECT = 'id, email, email_verified, phone_number, full_name, preferred_language';
+// v1.59.0 — country context rides the duplicate lookup; a schema that has not
+// applied `country_source` yet degrades to the base columns (rule 50).
+const PROFILE_CONTEXT_SELECT = `${PROFILE_BASE_SELECT}, country, country_code, country_source`;
+
+async function runProfileQuery(supabase, build) {
+  let { data, error } = await build(PROFILE_CONTEXT_SELECT);
+  if (error) {
+    ({ data, error } = await build(PROFILE_BASE_SELECT));
+  }
+  return { data, error };
+}
+
 export async function findProfileByPhone(supabase, phone) {
   if (!supabase) return null;
   const variants = phoneVariants(phone);
   if (!variants.length) return null;
-  const select = 'id, email, email_verified, phone_number, full_name, preferred_language';
-  const { data: exact } = await supabase.from('profiles').select(select).in('phone_number', variants).limit(3);
+  const { data: exact } = await runProfileQuery(supabase, (select) =>
+    supabase.from('profiles').select(select).in('phone_number', variants).limit(3));
   if (exact && exact.length) return { ...exact[0] };
   const tail = variants[variants.length - 1];
   if (tail.length !== 9) return null;
-  const { data: byTail } = await supabase.from('profiles').select(select).ilike('phone_number', '%' + tail).limit(3);
+  const { data: byTail } = await runProfileQuery(supabase, (select) =>
+    supabase.from('profiles').select(select).ilike('phone_number', '%' + tail).limit(3));
   return byTail && byTail.length ? { ...byTail[0] } : null;
 }
 

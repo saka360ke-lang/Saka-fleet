@@ -82,6 +82,8 @@ import {
   ENTRY_LIST_LIMIT,
   ENTRY_RESTORE_WINDOW_MINUTES
 } from '../services/entryAnswers.js';
+// v1.59.0 — optional per-record labels on the quick-log lanes.
+import { sanitizeEntryLabel, extractEntryLabel } from '../services/entryLabels.js';
 import {
   listLedgerEntries,
   getLedgerEntry,
@@ -1517,16 +1519,25 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             };
           } else {
             try {
-              await supabaseClient.from('profiles').update({
+              // v1.59.0 — an explicit user choice is stamped country_source='user'
+              // so reconciliation never overrides it with the phone-derived country.
+              const countryUpdate = {
                 country: resolved.country,
                 country_code: resolved.country_code,
                 unit_system: resolved.default_units,
                 timezone: resolveTimezoneFromCountry(resolved.country_code),
                 jurisdiction_confirmed: true,
-                jurisdiction_updated_at: new Date().toISOString()
-              }).eq('id', profileData.id);
+                jurisdiction_updated_at: new Date().toISOString(),
+                country_source: 'user'
+              };
+              let { error: countryUpdateError } = await supabaseClient.from('profiles').update(countryUpdate).eq('id', profileData.id);
+              if (countryUpdateError && /country_source/i.test(countryUpdateError.message || '')) {
+                delete countryUpdate.country_source;
+                await supabaseClient.from('profiles').update(countryUpdate).eq('id', profileData.id);
+              }
               profileData.country_code = resolved.country_code;
               profileData.country = resolved.country;
+              profileData.country_source = 'user';
             } catch { /* best-effort */ }
             countryCommandResult = {
               intent: 'GENERAL_CHAT',
@@ -3853,7 +3864,8 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                   // 2026-11-04: a one-line fuel log rendered "Saved ✅" while the
                   // expense_logs row was never persisted; the old code also showed
                   // success for a duplicate or when no client was present).
-                  const { error: quickLogErr } = await supabaseClient.from('expense_logs').insert([{
+                  const quickExpenseLabel = sanitizeEntryLabel(mergedExt.label || extractEntryLabel(messageText));
+                  const quickExpenseRow = {
                     vehicle_id: targetVeh.id,
                     driver_id: profileData?.id,
                     expense_type: expType,
@@ -3861,8 +3873,16 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                     fuel_liters: extLiters || 0,
                     fill_type: extFillType,
                     odometer_reading: extOdo || null,
-                    notes: messageText.trim()
-                  }]);
+                    notes: messageText.trim(),
+                    // v1.59.0 — optional searchable label ("label: karen", "#karen").
+                    label: quickExpenseLabel || null
+                  };
+                  let { error: quickLogErr } = await supabaseClient.from('expense_logs').insert([quickExpenseRow]);
+                  if (quickLogErr && /label/i.test(quickLogErr.message || '')) {
+                    // Rule 50 — an un-migrated optional column never blocks a save.
+                    const { label, ...legacyQuickRow } = quickExpenseRow;
+                    ({ error: quickLogErr } = await supabaseClient.from('expense_logs').insert([legacyQuickRow]));
+                  }
                   if (quickLogErr) {
                     customReply = `⚠️ I could not save that expense just now — *nothing was written*. Please try again in a moment, or send it as *"amount type"* (e.g. *"1000 fuel"*).`;
                   } else {
@@ -3995,16 +4015,24 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
                 : (hasEarningTypeMarker(messageText) ? resolveEarningType(messageText) : null);
               if (extAmount && extAmount > 0) {
                 let earningSaveError = null;
+                const quickEarningLabel = sanitizeEntryLabel(mergedExt.label || extractEntryLabel(messageText));
                 if (supabaseClient && targetVeh) {
                   // v1.58.8 — verify the write before claiming "Recorded" (same
                   // assurance as the expense path).
-                  const { error: earnErr } = await supabaseClient.from('private_earnings').insert([{
+                  const quickEarningRow = {
                     vehicle_id: targetVeh.id,
                     revenue_amount: extAmount,
                     currency: countryInfo.currency,
                     earning_type: earnType,
+                    // v1.59.0 — optional searchable label.
+                    label: quickEarningLabel || null,
                     logged_at: new Date().toISOString()
-                  }]);
+                  };
+                  let { error: earnErr } = await supabaseClient.from('private_earnings').insert([quickEarningRow]);
+                  if (earnErr && /label/i.test(earnErr.message || '')) {
+                    const { label, ...legacyEarningRow } = quickEarningRow;
+                    ({ error: earnErr } = await supabaseClient.from('private_earnings').insert([legacyEarningRow]));
+                  }
                   if (earnErr) earningSaveError = earnErr.message;
                 } else {
                   earningSaveError = 'no vehicle or database';
@@ -4012,7 +4040,7 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
                 if (earningSaveError) {
                   customReply = `⚠️ I could not save that earning just now — *nothing was written*. Please try again in a moment.`;
                 } else {
-                  customReply = `💰 *Earnings Logged!* 🎉\n\n• *Vehicle:* *${targetVeh.plate_number}*\n• *Revenue:* ${countryInfo.currency} ${Number(extAmount).toLocaleString()}${earnType ? `\n• *Type:* ${earnType}` : ''}\n\n✅ Recorded under *${targetVeh.plate_number}*!`;
+                  customReply = `💰 *Earnings Logged!* 🎉\n\n• *Vehicle:* *${targetVeh.plate_number}*\n• *Revenue:* ${countryInfo.currency} ${Number(extAmount).toLocaleString()}${earnType ? `\n• *Type:* ${earnType}` : ''}${quickEarningLabel ? `\n• *Label:* #${quickEarningLabel}` : ''}\n\n✅ Recorded under *${targetVeh.plate_number}*!`;
                   if (existingVehicles.length > 1) {
                     customReply += `\n*(Active vehicle: ${targetVeh.plate_number})*`;
                   }

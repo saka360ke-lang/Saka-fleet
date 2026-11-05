@@ -86,11 +86,39 @@
   probe(0);
   setInterval(function () { probe(0); }, REFRESH_MS);
 
-  /* ---------- changelog ---------- */
+  /* ---------- changelog (preview-first, v1.59.0) ---------- */
   function escapeHtml(value) {
     return String(value).replace(/[&<>"']/g, function (ch) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
     });
+  }
+  // The feed is a preview, not an essay: one short title and ONE minimal line
+  // stay visible; the full note expands on demand.
+  function firstSentence(text) {
+    var value = String(text || '').trim();
+    if (!value) return '';
+    var match = value.match(/^[^.!?]+[.!?]/);
+    return match ? match[0].trim() : value;
+  }
+  function previewOf(entry) {
+    var text = String((entry && entry.preview) || firstSentence(entry && entry.summary) || '').trim();
+    if (text.length <= 96) return text;
+    return text.slice(0, 93).replace(/[\s,;:.-]+$/, '') + '…';
+  }
+  function renderChangelogEntry(entry) {
+    var preview = previewOf(entry);
+    var detail = String((entry && entry.summary) || '').trim();
+    var hasDetail = Boolean(detail) && detail !== preview;
+    return '<details class="cl-entry">'
+      + '<summary>'
+      + '<span class="ver">v' + escapeHtml(entry.version) + '</span>'
+      + '<span class="date">' + escapeHtml(entry.date) + '</span>'
+      + '<h3>' + escapeHtml(entry.title) + '</h3>'
+      + '<p class="cl-preview">' + escapeHtml(preview) + '</p>'
+      + (hasDetail ? '<span class="cl-more">Read more</span>' : '')
+      + '</summary>'
+      + (hasDetail ? '<p class="cl-detail">' + escapeHtml(detail) + '</p>' : '')
+      + '</details>';
   }
   fetch('/data/changelog.json')
     .then(function (res) { return res.ok ? res.json() : Promise.reject(); })
@@ -98,12 +126,7 @@
       var list = document.getElementById('changelogList');
       var html = '';
       (data.entries || []).forEach(function (entry) {
-        html += '<div class="cl-entry">'
-          + '<span class="ver">v' + escapeHtml(entry.version) + '</span>'
-          + '<span class="date">' + escapeHtml(entry.date) + '</span>'
-          + '<h3>' + escapeHtml(entry.title) + '</h3>'
-          + '<p>' + escapeHtml(entry.summary) + '</p>'
-          + '</div>';
+        html += renderChangelogEntry(entry);
       });
       list.innerHTML = html || '<div class="cl-entry"><div class="ver">No changelog yet.</div></div>';
     })

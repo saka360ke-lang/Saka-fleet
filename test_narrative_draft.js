@@ -215,6 +215,15 @@ check('a full-tank word is narrative', isNarrativeEligibleText('full tank') === 
 check('a vendor mention is narrative', isNarrativeEligibleText('diesel at Shell') === true);
 check('narrative extras carry the record kind', narrativeDraftExtras(draftFor('earned 4500 today')).kind === 'earning', narrativeDraftExtras(draftFor('earned 4500 today')));
 
+console.log('=== v1.59.0 - optional record labels ===');
+const labelHash = draftFor('filled 40L at 50,350 km for 5,500 at Shell #karen');
+check('a hashtag label captures deterministically', labelHash.fields?.label === 'karen', labelHash.fields);
+check('the label rides the write extras', narrativeDraftExtras(labelHash).label === 'karen', narrativeDraftExtras(labelHash));
+const labelMarker = draftFor('spent 3,000 on parking label: school run');
+check('a "label:" marker captures deterministically', labelMarker.fields?.label === 'school run', labelMarker.fields);
+const noLabel = draftFor('filled 40L at 50,350 km for 5,500');
+check('a draft without a tag carries no label', !narrativeDraftExtras(noLabel).label, narrativeDraftExtras(noLabel));
+
 console.log('=== Multi-record paragraphs (v1.38.0, D4) ===');
 const paragraph = buildNarrativeParagraphDrafts({
   text: 'yesterday I filled 40L for 5500 at Shell and paid 300 for parking',
