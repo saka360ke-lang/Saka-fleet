@@ -1022,20 +1022,30 @@ setInterval(() => {
     .catch((err) => console.warn('[Model Health Warning]:', err.message));
 }, 30 * 60 * 1000);
 
-// Conversation evals (v1.60.0): DeepEval-style judge over live friction
-// transcripts + the offline corpus. Kill-switched by CONV_EVAL_ENABLED (off by
-// default); healing is separately gated by CONV_EVAL_HEAL_ENABLED and can only
-// ship prompt-level hints autonomously (code changes remain proposals).
+// Conversation evals (v1.60.0 / v1.61.3): DeepEval-style judge over live chat
+// exchanges + friction transcripts + the offline corpus. Kill-switched by
+// CONV_EVAL_ENABLED; healing is separately gated and prompt-hint-only.
+// v1.61.4 — the first tick runs 60 s after boot (a deploy/restart can never
+// leave the loop idle), and the resolved config is logged once so "is it
+// delivering?" is answerable from the logs alone.
+const convEvalBootConfig = getConvEvalConfig();
+console.log(`[ConversationEval] enabled=${String(process.env.CONV_EVAL_ENABLED || 'off')} heal=${String(process.env.CONV_EVAL_HEAL_ENABLED || 'off')} intervalMs=${convEvalBootConfig.intervalMs} maxCases=${convEvalBootConfig.maxCases} judge=${convEvalBootConfig.judgeProvider}`);
 let convEvalTickInFlight = false;
-setInterval(() => {
+const runConvEvalGuarded = () => {
   if (convEvalTickInFlight) return;
   convEvalTickInFlight = true;
   runConvEvalTick(supabase)
+    .then((result) => {
+      if (result?.skipped) console.log(`[ConversationEval] tick skipped: ${result.skipped}`);
+      else console.log(`[ConversationEval] tick done: ${result.total} case(s), ${result.passed} passed, ${result.failed} failed, ${result.errored} errored, ${result.healed?.length || 0} healed`);
+    })
     .catch((err) => console.warn('[Conversation Eval Warning]:', err.message))
     .finally(() => {
       convEvalTickInFlight = false;
     });
-}, getConvEvalConfig().intervalMs);
+};
+setTimeout(runConvEvalGuarded, 60 * 1000);
+setInterval(runConvEvalGuarded, convEvalBootConfig.intervalMs);
 
 async function checkRemediationDigestSchedule() {
   try {

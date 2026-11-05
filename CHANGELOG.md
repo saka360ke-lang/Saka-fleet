@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.61.4] - 2026-11-05
+
+- **DeepEval delivery guarantee.** Production enablement exposed a silent trap: the 15-minute interval could pass without a single run (no rows, no calls). The governor now **runs the first tick 60 seconds after boot** (a deploy or restart can never leave the loop idle), logs the **resolved config** once at boot (`enabled/heal/intervalMs/maxCases/judge`) and logs every tick outcome (`done: N cases · P passed · F failed · H healed`), so "is it delivering?" is answerable from Cloud Run logs alone. Interval and budgets unchanged (15 min, 0 = unlimited).
+- **Frames touched:** index.js, package.json, SAKA_FLEET_ARCHITECTURE.md (§168), this file, landing/data/changelog.json + stamped assets, docs/*.
+- **Suites run:** test_doc_sync, test_landing_static — green.
+
 ## [1.61.3] - 2026-11-05
 
 - **DeepEval is online, always-on, and it now catches live friction.** The eval tick reads **live `chat_history` exchanges** (user→assistant pairs) as its primary source — friction snippets were not always transcripts (the circuit breaker wrote prompt-only rows). Cadence is now **15 minutes** (`CONV_EVAL_INTERVAL_MINUTES`, 5–360), case and heal budgets accept **0 = unlimited**, dedupe is **1 h**. Production is enabled explicitly with `CONV_EVAL_ENABLED=on`, `CONV_EVAL_HEAL_ENABLED=on` (prompt-level hints only; code fixes stay gated proposals).

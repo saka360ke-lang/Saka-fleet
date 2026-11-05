@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.61.3  
+**Version:** 1.61.4  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.61.4** | DeepEval delivery guarantee: first tick 60 s after boot, resolved config logged at boot, tick outcome logged | 168 |
 | **1.61.3** | DeepEval online & always-on (15-min ticks, 0 = unlimited, live chat-history cases) + five live lane fixes (plural driver docs, merged expiry list, number search, photo/paste capture) + coverage audit + edge taxonomy | 168 |
 | **1.61.2** | Driver-document read/confirm lane (live PSV friction 2026-11-05) + driver rows on the compliance card + judge ENGINE FACTS + expanded capture verbs | 167 |
 | **1.61.1** | Kenyan synthetic batch (8 curated cases, 2 M-PESA) + generator hardening (engine-stamped ids, per-criterion metric mapping, null-threshold fix) + launch-award reconciliation audit (0 legacy grants) | 166 |

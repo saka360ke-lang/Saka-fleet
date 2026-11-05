@@ -1,6 +1,13 @@
 {
-  "latest": "1.61.3",
+  "latest": "1.61.4",
   "entries": [
+    {
+      "version": "1.61.4",
+      "date": "2026-11-05",
+      "title": "Quality checks now start the moment Saka boots",
+      "preview": "The conversation grader runs one check right after every deploy, then every 15 minutes — visible in the logs.",
+      "summary": "Saka's quality loop now starts 60 seconds after every boot and logs both its configuration and each run's result, so the team can see at a glance that grading is delivering. The 15-minute cadence, unlimited case budget and prompt-level healing (code fixes still need approval) are unchanged."
+    },
     {
       "version": "1.61.3",
       "date": "2026-11-05",
