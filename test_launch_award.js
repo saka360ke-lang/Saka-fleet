@@ -108,6 +108,32 @@ check(totalDays >= 364 && totalDays <= 366, `The trial now runs ~365 days (got $
 check(world.db.admin_audit_logs.some((row) => row.action === 'LAUNCH_AWARD_GRANTED'), 'The grant is audited (LAUNCH_AWARD_GRANTED)');
 invalidateEntitlements('p-1');
 
+// 3b. v1.59.1 — launch-offer opt-in: the tick box is checked by default, so ONLY
+// an explicit opt-out is ineligible; a missing column is fail-open.
+clearLaunchAwardCache();
+const optOutWorld = trialWorld();
+optOutWorld.db.profiles[0].launch_opt_in = false;
+const optedOut = await tryGrantLaunchAward({ supabase: optOutWorld.client, ownerId: 'p-1', env: ENV });
+check(optedOut.granted === false && optedOut.reason === 'opted-out', 'An explicit opt-out routes to the normal 30-day flow');
+check(optOutWorld.db.launch_awards.length === 0, 'An opted-out owner consumes no slot');
+check(optOutWorld.db.admin_audit_logs.some((row) => row.action === 'LAUNCH_AWARD_SKIPPED_OPT_OUT'), 'The opt-out skip is audited');
+const optedInWorld = trialWorld();
+optedInWorld.db.profiles[0].launch_opt_in = true;
+const optedIn = await tryGrantLaunchAward({ supabase: optedInWorld.client, ownerId: 'p-1', env: ENV });
+check(optedIn.granted === true && optedIn.slot === 1, 'An opted-in owner takes slot 1');
+const legacyWorld = trialWorld();
+delete legacyWorld.db.profiles[0].launch_opt_in;
+const legacy = await tryGrantLaunchAward({ supabase: legacyWorld.client, ownerId: 'p-1', env: ENV });
+check(legacy.granted === true, 'A profile without the column (pre-migration) is fail-open and still awarded');
+const readErrorWorld = {
+  from(table) {
+    if (table === 'profiles') return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: { message: 'column launch_opt_in does not exist' } }) }) }) };
+    return world.client.from(table);
+  }
+};
+const degraded = await tryGrantLaunchAward({ supabase: readErrorWorld, ownerId: 'p-1', env: ENV });
+check(degraded.reason !== 'opted-out', 'A profile-read error never turns into an opt-out (rule 50)');
+
 // 4. Idempotence: the same owner never consumes a second slot.
 
 // 5. Automatic fallback: slot N+1 gets the normal welcome flow.

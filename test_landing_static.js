@@ -308,5 +308,17 @@ check(mainJs.includes("event: 'launch_offer_view'") && mainJs.includes('launch_a
 check(mainJs.includes('utm_source') && mainJs.includes('utm_medium') && mainJs.includes('utm_campaign'), 'main.js forwards UTM attribution on signup');
 check(mainJs.includes("'utm_' + key") && mainJs.includes('slice(0, 64)'), 'UTM values come from utm_* params and are capped at 64 chars');
 
+console.log('\n--- Test 17: launch banner + opt-in (v1.59.1) ---');
+check(indexHtml.includes('id="launchBanner"') && indexHtml.includes('id="launchSlots"') && indexHtml.includes('id="launchDismiss"'), 'the site carries a dismissible launch banner with a live slot counter');
+check(/id="launchBanner"[^>]*hidden/.test(indexHtml), 'the banner starts hidden (fail-closed until the status says it can award)');
+check(/id="launchOptInWrap"[^>]*hidden/.test(indexHtml) && /id="launchOptIn"[^>]*checked/.test(indexHtml), 'the opt-in tick box is hidden by default and CHECKED by default');
+check(indexHtml.includes('help us polish Saka for production') || indexHtml.includes('help Saka reach production'), 'the banner tells users their use helps reach production');
+check(mainJs.includes('renderLaunchBanner') && mainJs.includes('launchSlots') && mainJs.includes('launchAwardDays'), 'main.js renders the counter from the campaign status');
+check(mainJs.includes('launch_opt_in: readLaunchOptIn()'), 'the signup payload carries the launch opt-in');
+check(mainJs.includes('readLaunchOptIn') && mainJs.includes('wrap.hidden = false'), 'the opt-in box only appears while the campaign is open');
+check(mainJs.includes('launch_offer_dismiss') && mainJs.includes('saka_launch_banner_dismissed'), 'banner dismissal is remembered and tracked');
+check(mainJs.includes("event: 'successful_signup'") && mainJs.includes('launch_opt_in: typeof optedIn'), 'signup analytics record the opt-in choice');
+check(css.includes('.launch-banner') && css.includes('.launch-optin'), 'the banner and opt-in box are styled');
+
 console.log('Stateless suite: file reads only — no database, no cleanup needed.');
 

@@ -101,7 +101,12 @@ export function sanitizeOnboardPayload(body = {}) {
     medium: sanitizeUtmValue(body?.utm_medium),
     campaign: sanitizeUtmValue(body?.utm_campaign)
   };
-  return { ok: true, data: { firstName, lastName, email, phone, preferredLanguage, utm } };
+  // v1.59.1 — launch-offer opt-in. Strict boolean only: an explicit false is the
+  // only opt-out (the signup box is checked by default); anything else is null,
+  // which keeps the backend default (opted in) without overwriting a stored
+  // explicit choice on a duplicate-signup update.
+  const launchOptIn = body?.launch_opt_in === false ? false : (body?.launch_opt_in === true ? true : null);
+  return { ok: true, data: { firstName, lastName, email, phone, preferredLanguage, utm, launchOptIn } };
 }
 
 /** Campaign tag gate: null when absent/invalid (never an error for the user). */
@@ -226,7 +231,7 @@ export async function resendWebOnboardCode(supabase, { token }) {
  * Upsert the profile for a web signup. `verified` is only flipped true after a
  * code was matched. Never touches subscription state and never starts a trial.
  */
-export async function completeWebOnboarding(supabase, { email, phone, firstName, lastName, verified = false, preferredLanguage = null, utm = null }) {
+export async function completeWebOnboarding(supabase, { email, phone, firstName, lastName, verified = false, preferredLanguage = null, utm = null, launchOptIn = null }) {
   if (!supabase) return { ok: false, error: 'no_client' };
   const fullName = [firstName, lastName].filter(Boolean).join(' ').trim() || null;
   try {
@@ -251,10 +256,17 @@ export async function completeWebOnboarding(supabase, { email, phone, firstName,
       // country or correct a mismatch unless the user explicitly chose one.
       const countryPatch = countryPatchForProfile(existing, phone);
       if (countryPatch) Object.assign(updates, countryPatch);
+      // v1.59.1 — the launch-offer tick: only an EXPLICIT choice is written, so a
+      // duplicate signup that omits the field never overwrites a stored opt-out.
+      if (launchOptIn === true || launchOptIn === false) updates.launch_opt_in = launchOptIn;
       let { error } = await supabase.from('profiles').update(updates).eq('id', existing.id);
       if (error && /country_source/i.test(error.message || '')) {
         // Rule 50 — an un-migrated optional column never blocks a signup.
         delete updates.country_source;
+        ({ error } = await supabase.from('profiles').update(updates).eq('id', existing.id));
+      }
+      if (error && /launch_opt_in/i.test(error.message || '')) {
+        delete updates.launch_opt_in;
         ({ error } = await supabase.from('profiles').update(updates).eq('id', existing.id));
       }
       if (error) return { ok: false, error: error.message };
@@ -304,10 +316,16 @@ export async function completeWebOnboarding(supabase, { email, phone, firstName,
     // not been migrated yet must never block a signup.
     const optionalColumns = { ...utmColumns };
     if (phoneCountry) optionalColumns.country_source = COUNTRY_SOURCE_DEFAULT;
+    // v1.59.1 — launch-offer opt-in: checked by default, an explicit false is kept.
+    optionalColumns.launch_opt_in = launchOptIn === false ? false : true;
 
     let { error } = await supabase.from('profiles').insert([{ ...profileRow, ...optionalColumns }]);
     if (error && /country_source/i.test(error.message || '')) {
       delete optionalColumns.country_source;
+      ({ error } = await supabase.from('profiles').insert([{ ...profileRow, ...optionalColumns }]));
+    }
+    if (error && /launch_opt_in/i.test(error.message || '')) {
+      delete optionalColumns.launch_opt_in;
       ({ error } = await supabase.from('profiles').insert([{ ...profileRow, ...optionalColumns }]));
     }
     if (error && /utm_|column .* does not exist|schema cache/i.test(error.message || '')) {
@@ -315,7 +333,9 @@ export async function completeWebOnboarding(supabase, { email, phone, firstName,
     }
     if (error) return { ok: false, error: error.message };
     await writeAudit(supabase, verified ? 'WEB_ONBOARD_VERIFIED' : 'WEB_ONBOARD_CREATED', {
-      email, phone, country_code: phoneCountry?.country_code || null
+      email, phone,
+      country_code: phoneCountry?.country_code || null,
+      launch_opt_in: launchOptIn === false ? false : true
     });
     return { ok: true, created: true };
   } catch (err) {

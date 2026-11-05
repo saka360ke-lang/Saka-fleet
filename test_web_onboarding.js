@@ -283,6 +283,34 @@ const lockUnknownDb = createMockSupabase({ profiles: [], admin_audit_logs: [] })
 await completeWebOnboarding(lockUnknownDb, { email: 'unk@example.com', phone: '+999711000005', firstName: 'U', lastName: 'N', verified: false });
 check(!lockUnknownDb.__db.profiles[0].country && !lockUnknownDb.__db.profiles[0].country_code, 'An unresolvable number never locks a country (GLOBAL stays neutral)');
 
+console.log('\n--- Test 11: launch-offer opt-in (v1.59.1) ---');
+check(sanitizeOnboardPayload({ ...VALID_PAYLOAD, launch_opt_in: false }).data.launchOptIn === false, 'An explicit opt-out is carried (strict boolean)');
+check(sanitizeOnboardPayload({ ...VALID_PAYLOAD, launch_opt_in: true }).data.launchOptIn === true, 'An explicit opt-in is carried');
+check(sanitizeOnboardPayload(VALID_PAYLOAD).data.launchOptIn === null, 'A missing tick is null (the backend default applies)');
+check(sanitizeOnboardPayload({ ...VALID_PAYLOAD, launch_opt_in: 'no' }).data.launchOptIn === null, 'A non-boolean value is dropped, never guessed');
+
+const optInDb = createMockSupabase({ profiles: [], admin_audit_logs: [] });
+await completeWebOnboarding(optInDb, { email: 'in@example.com', phone: '+254711000011', firstName: 'In', lastName: 'Offer', verified: false });
+check(optInDb.__db.profiles[0].launch_opt_in === true, 'A new profile defaults to opted in (checked box)');
+check(optInDb.__db.admin_audit_logs.some((a) => a.action === 'WEB_ONBOARD_CREATED' && a.details?.launch_opt_in === true), 'The opt-in default is audited');
+
+const optOutDb = createMockSupabase({ profiles: [], admin_audit_logs: [] });
+await completeWebOnboarding(optOutDb, { email: 'out@example.com', phone: '+254711000012', firstName: 'Out', lastName: 'Offer', verified: false, launchOptIn: false });
+check(optOutDb.__db.profiles[0].launch_opt_in === false, 'An explicit opt-out is stored on a new profile');
+
+const keepOffDb = createMockSupabase({
+  profiles: [{ id: 'p-off', phone_number: '+254711000013', email: 'keep@example.com', email_verified: false, launch_opt_in: false }],
+  admin_audit_logs: []
+});
+await completeWebOnboarding(keepOffDb, { email: 'keep@example.com', phone: '+254711000013', firstName: 'Keep', lastName: 'Off', verified: false });
+check(keepOffDb.__db.profiles[0].launch_opt_in === false, 'A duplicate signup without the field never overwrites a stored opt-out');
+const switchOnDb = createMockSupabase({
+  profiles: [{ id: 'p-sw', phone_number: '+254711000014', email: 'sw@example.com', email_verified: false, launch_opt_in: false }],
+  admin_audit_logs: []
+});
+await completeWebOnboarding(switchOnDb, { email: 'sw@example.com', phone: '+254711000014', firstName: 'S', lastName: 'W', verified: false, launchOptIn: true });
+check(switchOnDb.__db.profiles[0].launch_opt_in === true, 'An explicit re-tick on a later visit updates the stored choice');
+
 console.log(`\n🎉 ${passed} web-onboarding assertions passed.`);
 console.log('Stateless suite: in-memory database double only — no real rows, no cleanup needed.');
 

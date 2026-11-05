@@ -1,6 +1,13 @@
 {
-  "latest": "1.59.0",
+  "latest": "1.59.1",
   "entries": [
+    {
+      "version": "1.59.1",
+      "date": "2026-11-05",
+      "title": "The launch offer, up front",
+      "preview": "A live banner with slots left — and a tick box to opt out of the 365-day offer.",
+      "summary": "The website now shows the launch offer in a slim banner with a live slots-left counter and a note that your use helps us polish Saka for production. The signup form carries a tick box (checked by default) for the first-50 365-day trial — uncheck it for the standard 30-day flow. The banner disappears automatically once the slots are gone."
+    },
     {
       "version": "1.59.0",
       "date": "2026-11-05",

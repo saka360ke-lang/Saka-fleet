@@ -48,6 +48,17 @@ ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS utm_medium text;
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS utm_campaign text;
 `;
 
+/**
+ * v1.59.1 — launch-offer opt-in.
+ * The signup tick box is CHECKED BY DEFAULT, so doing nothing keeps the automatic
+ * award. Only an explicit `false` (unchecked box) opts an owner out and routes
+ * them to the normal 30-day flow. Existing profiles are backfilled `true`, so the
+ * change reaches old and new users identically (rule 56).
+ */
+export const LAUNCH_OPT_IN_SQL = `
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS launch_opt_in boolean NOT NULL DEFAULT true;
+`;
+
 let tableReady = false;
 let statusCache = { value: null, at: 0 };
 
@@ -77,6 +88,13 @@ export async function ensureLaunchUtmColumns(providedSupabase) {
   return { status: result.ok ? 'ok' : 'failed' };
 }
 
+/** Ensure profiles.launch_opt_in exists (fail-soft; DDL needs SQL access). */
+export async function ensureLaunchOptInColumn(providedSupabase) {
+  if (!providedSupabase || !hasSqlAccess()) return { status: 'skipped' };
+  const result = await runSql(LAUNCH_OPT_IN_SQL, { label: 'ensureLaunchOptInColumn' });
+  return { status: result.ok ? 'ok' : 'failed' };
+}
+
 /** Ensure the launch table + UTM columns exist (fail-soft; DDL needs SQL access). */
 export async function ensureLaunchAwardTable(providedSupabase) {
   if (!providedSupabase) return { status: 'no_client' };
@@ -84,6 +102,7 @@ export async function ensureLaunchAwardTable(providedSupabase) {
   if (!error) {
     tableReady = true;
     await ensureLaunchUtmColumns(providedSupabase);
+    await ensureLaunchOptInColumn(providedSupabase);
     return { status: 'exists' };
   }
   if (hasSqlAccess()) {
@@ -91,6 +110,7 @@ export async function ensureLaunchAwardTable(providedSupabase) {
     if (result.ok) {
       tableReady = true;
       await ensureLaunchUtmColumns(providedSupabase);
+      await ensureLaunchOptInColumn(providedSupabase);
       return { status: 'created' };
     }
   }
@@ -119,6 +139,24 @@ async function readAwardRows(supabase) {
 
 export function clearLaunchAwardCache() {
   statusCache = { value: null, at: 0 };
+}
+
+/**
+ * v1.59.1 — launch-offer eligibility gate.
+ * The signup tick box is checked by default, so ONLY an explicit
+ * `launch_opt_in === false` is ineligible. A missing column, a missing profile
+ * or a failed read is fail-open: schema drift must never block the award
+ * (rule 50). Never throws.
+ */
+async function resolveLaunchOptIn(supabase, ownerId) {
+  try {
+    const { data, error } = await supabase.from('profiles').select('launch_opt_in').eq('id', ownerId).maybeSingle();
+    if (error) return { optedIn: true, degraded: true };
+    if (!data) return { optedIn: true, missing: true };
+    return { optedIn: data.launch_opt_in !== false, explicit: typeof data.launch_opt_in === 'boolean' };
+  } catch {
+    return { optedIn: true, degraded: true };
+  }
 }
 
 /**
@@ -162,6 +200,14 @@ export async function tryGrantLaunchAward({ supabase, ownerId, trialSessionId = 
   const config = getLaunchAwardConfig(env);
   if (!config.enabled) return { granted: false, reason: 'disabled' };
   if (!supabase || !ownerId) return { granted: false, reason: 'owner-required' };
+
+  // v1.59.1 — an explicit opt-out routes to the normal 30-day flow. Any read
+  // problem is fail-open (schema drift never blocks the award, rule 50).
+  const optIn = await resolveLaunchOptIn(supabase, ownerId);
+  if (!optIn.optedIn) {
+    await writeLaunchAudit(supabase, 'LAUNCH_AWARD_SKIPPED_OPT_OUT', { ownerId, source: 'welcome_trial' });
+    return { granted: false, reason: 'opted-out' };
+  }
 
   const read = await readAwardRows(supabase);
   if (!read.ok) return { granted: false, reason: 'unavailable', error: read.error };
@@ -329,6 +375,14 @@ export async function getLaunchAwardStats({ supabase, env = process.env } = {}) 
   const read = await readAwardRows(supabase);
   const rows = read.ok ? read.rows : [];
   const taken = rows.length;
+  // v1.59.1 — how many owners explicitly declined the launch offer.
+  let optedOut = 0;
+  if (read.ok && supabase) {
+    try {
+      const { data } = await supabase.from('profiles').select('id').eq('launch_opt_in', false).limit(500);
+      optedOut = (data || []).length;
+    } catch { optedOut = 0; }
+  }
   return {
     ok: read.ok,
     enabled: config.enabled,
@@ -336,6 +390,7 @@ export async function getLaunchAwardStats({ supabase, env = process.env } = {}) 
     slotsTaken: taken,
     slotsLeft: Math.max(0, config.slots - taken),
     awardDays: config.days,
+    optedOut,
     winners: rows.map((row) => ({ slot: Number(row.slot_idx), ownerId: row.owner_id, awardedAt: row.awarded_at, days: Number(row.days || config.days) }))
   };
 }
@@ -347,6 +402,7 @@ export function formatLaunchStatsReply(stats = {}) {
     `• Status: ${stats.enabled ? (stats.slotsLeft > 0 ? 'OPEN' : 'FULL — default flow active') : 'OFF (kill switch)'}`,
     `• Slots taken: ${stats.slotsTaken} / ${stats.slotsTotal}`,
     `• Slots left: ${stats.slotsLeft}`,
+    `• Opted out: ${Number(stats.optedOut || 0)} (normal 30-day flow)`,
     `• Award: ${stats.awardDays} days, card-free`
   ];
   if (stats.winners?.length) {
@@ -363,9 +419,11 @@ export default {
   LAUNCH_AWARD_ACTOR,
   LAUNCH_AWARD_SQL,
   LAUNCH_UTM_SQL,
+  LAUNCH_OPT_IN_SQL,
   getLaunchAwardConfig,
   ensureLaunchAwardTable,
   ensureLaunchUtmColumns,
+  ensureLaunchOptInColumn,
   isLaunchAwardTableReady,
   getLaunchAwardStatus,
   tryGrantLaunchAward,

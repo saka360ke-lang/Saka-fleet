@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.59.0  
+**Version:** 1.59.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.59.1** | Launch banner + live slot counter + opt-out tick box (checked by default), rules-of-engagement consolidation + rules 53-59 | 157 |
 | **1.59.0** | Persona v4 (brand compass + ack variety + pacing), phone-primary country lock + signup reconciliation, changelog preview feed, optional searchable record labels, live secrets audit | 156 |
 | **1.58.26** | Launch award: the first 50 welcome-trial starts get a 365-day trial (slot-gated, idempotent, race-safe), then the default 30-day flow; public fail-closed banner + UTM attribution | 155 |
 | **1.58.25** | Warm one-car website + compliance capture that never dead-ends ("Add psv license" saves or asks ONE question for any owner or driver) + friction↔error linkage + rule 52 (deep audit + extensive test law) | 154 |
@@ -4384,4 +4385,27 @@ quiz engine:
 **Frames touched.** `src/services/flowKnowledge.js` (compass v4 + renderer), `sakaAi.js` (prompt laws + learnings + schema bump + label extraction), `src/services/conversationEngine.js` (composer laws), `src/services/globalization.js` (`resolvePhoneCountryLock`), `src/services/countryLock.js` (new), `src/services/webOnboarding.js` (create/update lock + degrade + audit), `src/services/driverAssignments.js` (driver lock), `src/routes/whatsapp.js` (country command stamp, quick-log labels), `src/services/entryLabels.js` (new), `src/services/entryAnswers.js` (label grammar/copy/describe), `src/services/entryLedger.js` (whitelist/selects/SQL), `src/services/quizEngine.js` (label writes), `src/services/narrativeDraft.js` (label capture), `src/services/recordAnswers.js` (keyword lane), `src/services/recordQuery.js` (label/notes filter), `scripts/run_country_source_migration.js` (new), `scripts/reconcile_country.js` (new), `scripts/run_entry_labels_migration.js` (new), `landing/{data/changelog.json,assets/js/status.js,assets/css/styles.css,*.html (asset stamp)}`, `package.json`, `.clinerules` (rules 7/31/37), `test_agent_training.js`, `test_conversation_compliance.js`, `test_web_onboarding.js`, `test_country_bucket.js`, `test_entry_ledger.js`, `test_record_answers.js`, `test_narrative_draft.js`, `test_landing_static.js`, `CHANGELOG.md`, this section.
 
 **Suites run:** `test_agent_training` (177), `test_conversation_compliance` (29), `test_no_canned_replies` (ratchet 4), `test_web_onboarding` (53), `test_country_bucket` (61), `test_entry_ledger` (all green), `test_record_answers` (57), `test_narrative_draft` (122), `test_quiz_flow` (147), `test_edit_delete` (green), `test_landing_static` (231), `test_doc_sync`, `test_env_audit`, `test_kb_docs`, `test_turn_ack`, `test_first_message_flow`, `test_duplicate_signup`, `npm run health` - green.
+
+---
+
+### 157. v1.59.1 - launch banner + opt-out tick box + rules-of-engagement consolidation (2026-11-05)
+
+**Launch banner (improving the existing v1.58.26 campaign, never rebuilding it).**
+- `landing/index.html` carries a slim dismissible ribbon (`#launchBanner`, hidden by default) with the production note ("Your logs and feedback help us polish Saka for production") and a **live slot counter** (`#launchSlots` / `#launchSlotsTotal` / `#launchAwardDays`). `main.js` `renderLaunchBanner()` fills it from the existing `/api/onboard/launch-status` (PII-free, 60 s cache) and **fails closed**: `launch_active !== true` or `slots_left <= 0` leaves the banner, counter and tick box hidden and the truthful 30-day hero copy in place. Dismissal persists in `localStorage` (`saka_launch_banner_dismissed`) and emits `launch_offer_dismiss`; the view still emits `launch_offer_view`.
+- **Opt-out tick box, checked by default (operator decision 2026-11-05):** `#launchOptIn` sits in the signup legal step (`#launchOptInWrap`, hidden until the campaign is confirmed open). Only an explicit uncheck is an opt-out; the payload carries `launch_opt_in: readLaunchOptIn()` and the field is omitted when the campaign is closed. `successful_signup` now records `launch_opt_in`.
+- **Backend is the source of truth.** New idempotent `LAUNCH_OPT_IN_SQL` (`npm run migrate:launch-awards`, applied live): `profiles.launch_opt_in boolean NOT NULL DEFAULT true` — existing accounts are backfilled `true`, so they keep the automatic award (rule 56). `sanitizeOnboardPayload` accepts a strict boolean (non-booleans are dropped, never guessed); `completeWebOnboarding` stores the explicit choice on create, writes only EXPLICIT choices on update (a duplicate signup that omits the field never overwrites a stored opt-out), and every path degrades without the column (rule 50).
+- **Eligibility stays engine-owned.** `tryGrantLaunchAward` reads `profiles.launch_opt_in` via `resolveLaunchOptIn()`: an explicit `false` returns `{ granted:false, reason:'opted-out' }`, audits `LAUNCH_AWARD_SKIPPED_OPT_OUT` and takes no slot; a missing column, missing profile or failed read is **fail-open** (the award is never blocked by schema drift). The award itself still happens at welcome-trial start, through the same slot-gated ledger. `admin launch-stats` gains `• Opted out: N (normal 30-day flow)`.
+
+**Rules of engagement (audit + consolidation + additive rules).**
+- **Consolidation (approved one-time):** rule **1** is now the single canonical consult-first mandate and binds **every operator (Cline AND human developers)** in plan AND act mode; rules **39** and **45** keep their distinct emphasis (autonomous sessions / plan mode) as explicit cross-references. A **RULE MAP** note at the top freezes rule numbers permanently (code, tests, docs and CHANGELOG reference them) and states the going-forward policy: additive-only, edits only for factually wrong or unsafe rules, always reported.
+- **New additive rules 53-59:** every operator bound by the rules · use every tool at your disposal incl. `gcloud` and never guess when a live check exists · improve-first, build fresh only when the audit proves it impossible (reason recorded) · every change reaches new AND existing users (backfill/reconcile/degrade) · rules governance (deep audit every minor version as ONE approved consolidation) · smart rule updates + **rule-impact reporting in every session summary** · launch campaign opt-in semantics (fail-closed banner, checked-by-default tick, engine-owned award).
+- **Knobs reference:** the latency block now lists `LAUNCH_AWARD_ENABLED` (on), `LAUNCH_MAX_FIRST_SIGNUPS` (50), `LAUNCH_AWARD_DAYS` (365), `LAUNCH_STATUS_CACHE_MS` (60000).
+
+**Recurrence autopsy (rule 51).**
+- Defect class *campaign promise without an eligibility path* → siblings audited: status endpoint (fail-closed, unchanged), banner render (fail-closed, extended to the tick box), signup payload (strict boolean), profile persistence (explicit-only update), award gate (fail-open), stats digest (honest count) — all covered.
+- Defect class *new optional column breaking signup/award* → degrade chains added on create AND update; the award read is fail-open; pinned by tests (missing column still awards).
+
+**Frames touched.** `src/services/launchAwards.js` (opt-in SQL, gate, stats), `src/services/webOnboarding.js` (sanitize + create/update persistence + degrade), `index.js` (payload pass-through), `scripts/run_launch_awards_migration.js` (opt-in DDL), `landing/index.html` (banner + tick box), `landing/assets/js/main.js` (render/dismiss/opt-in/payload/analytics), `landing/assets/css/styles.css` (banner styles), `.clinerules` (consolidation + rules 53-59 + knobs), `test_launch_award.js` (+6 opt-in assertions), `test_web_onboarding.js` (+9), `test_landing_static.js` (+10), `SAKA_FLEET_ARCHITECTURE.md`, `CHANGELOG.md`, `landing/data/changelog.json`, `docs/*` (version stamp), `package.json`.
+
+**Suites run:** `test_launch_award` (29), `test_web_onboarding` (62), `test_landing_static` (incl. 10 new banner/opt-in checks), `test_duplicate_signup`, `test_first_message_flow`, `test_doc_sync`, `test_kb_docs`, `test_env_audit`, `npm run health` - green.
 

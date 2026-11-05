@@ -80,18 +80,21 @@
   $('legalBack').addEventListener('click', function () { showStep('stepDetails'); });
 
   function trackSignup() {
+    var optedIn = readLaunchOptIn();
     window.dataLayer = window.dataLayer || [];
     window.dataLayer.push({
       event: 'successful_signup',
       signup_method: 'website',
       launch_active: LAUNCH.active === true,
-      launch_award_days: LAUNCH.active ? LAUNCH.awardDays : 0
+      launch_award_days: LAUNCH.active ? LAUNCH.awardDays : 0,
+      launch_opt_in: typeof optedIn === 'boolean' ? optedIn : (LAUNCH.active ? true : null)
     });
   }
 
   /* ---------- v1.58.26: campaign attribution (UTM) + launch banner ---------- */
   var LAUNCH = { active: false, slotsLeft: 0, slotsTotal: 0, awardDays: 0 };
   var UTM_KEY = 'saka_utm';
+  var LAUNCH_DISMISS_KEY = 'saka_launch_banner_dismissed';
 
   function captureUtm() {
     try {
@@ -111,31 +114,76 @@
     try { return JSON.parse(sessionStorage.getItem(UTM_KEY) || '{}') || {}; } catch (err) { return {}; }
   }
 
+  function isLaunchDismissed() {
+    try { return localStorage.getItem(LAUNCH_DISMISS_KEY) === '1'; } catch (err) { return false; }
+  }
+
+  function dismissLaunchBanner() {
+    try { localStorage.setItem(LAUNCH_DISMISS_KEY, '1'); } catch (err) { /* storage may be blocked */ }
+    var banner = $('launchBanner');
+    if (banner) banner.hidden = true;
+    window.dataLayer = window.dataLayer || [];
+    window.dataLayer.push({
+      event: 'launch_offer_dismiss',
+      slots_left: LAUNCH.slotsLeft,
+      slots_total: LAUNCH.slotsTotal
+    });
+  }
+
+  // v1.59.1 — the opt-in tick box is CHECKED by default: doing nothing keeps the
+  // automatic award, only an explicit uncheck opts out. When the campaign is
+  // closed (or exhausted) the box stays hidden and the field is omitted, so the
+  // backend default applies.
+  function readLaunchOptIn() {
+    var box = $('launchOptIn');
+    var wrap = $('launchOptInWrap');
+    if (!box || !wrap || wrap.hidden) return undefined;
+    return box.checked === true;
+  }
+
   // The banner only appears while the campaign can actually award (fail-closed:
   // any API problem leaves the truthful default 30-day copy in place).
+  function renderLaunchBanner(body) {
+    LAUNCH = {
+      active: true,
+      slotsLeft: body.slots_left,
+      slotsTotal: body.slots_total,
+      awardDays: body.award_days
+    };
+    var total = $('launchSlotsTotal');
+    var days = $('launchAwardDays');
+    var slots = $('launchSlots');
+    if (total) total.textContent = String(body.slots_total);
+    if (days) days.textContent = String(body.award_days);
+    if (slots) slots.textContent = String(body.slots_left);
+    var wrap = $('launchOptInWrap');
+    if (wrap) wrap.hidden = false;
+    var banner = $('launchBanner');
+    if (banner && !isLaunchDismissed()) {
+      banner.hidden = false;
+      var close = $('launchDismiss');
+      if (close) close.addEventListener('click', dismissLaunchBanner);
+    }
+    var note = document.querySelector('.hero-note');
+    if (note) {
+      note.textContent = '🎉 Launch offer — the first ' + body.slots_total + ' new accounts get a full ' +
+        body.award_days + '-day trial · No card needed';
+    }
+    window.dataLayer = window.dataLayer || [];
+    window.dataLayer.push({
+      event: 'launch_offer_view',
+      slots_left: body.slots_left,
+      slots_total: body.slots_total,
+      award_days: body.award_days
+    });
+  }
+
   function fetchLaunchStatus() {
     fetch(API_BASE + '/api/onboard/launch-status')
       .then(function (res) { return res.json(); })
       .then(function (body) {
         if (!body || body.launch_active !== true || !(body.slots_left > 0)) return;
-        LAUNCH = {
-          active: true,
-          slotsLeft: body.slots_left,
-          slotsTotal: body.slots_total,
-          awardDays: body.award_days
-        };
-        var note = document.querySelector('.hero-note');
-        if (note) {
-          note.textContent = '🎉 Launch offer — the first ' + body.slots_total + ' new accounts get a full ' +
-            body.award_days + '-day trial · No card needed';
-        }
-        window.dataLayer = window.dataLayer || [];
-        window.dataLayer.push({
-          event: 'launch_offer_view',
-          slots_left: body.slots_left,
-          slots_total: body.slots_total,
-          award_days: body.award_days
-        });
+        renderLaunchBanner(body);
       })
       .catch(function () { /* silent — default copy stands */ });
   }
@@ -172,6 +220,9 @@
         phone: window.__onboard.phone,
         preferred_language: detectLanguageName(),
         consent: true,
+        // v1.59.1 — the launch-offer tick (checked by default). Omitted when the
+        // campaign is closed, so the backend default applies.
+        launch_opt_in: readLaunchOptIn(),
         utm_source: readUtm().source || undefined,
         utm_medium: readUtm().medium || undefined,
         utm_campaign: readUtm().campaign || undefined

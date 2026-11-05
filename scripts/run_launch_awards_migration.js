@@ -1,12 +1,14 @@
 import 'dotenv/config';
 import { pathToFileURL } from 'node:url';
 import { runSql, hasSqlAccess, getProjectRef } from '../src/db/sqlRunner.js';
-import { LAUNCH_AWARD_SQL, LAUNCH_UTM_SQL } from '../src/services/launchAwards.js';
+import { LAUNCH_AWARD_SQL, LAUNCH_UTM_SQL, LAUNCH_OPT_IN_SQL } from '../src/services/launchAwards.js';
 
 /**
- * Saka Fleet — launch campaign migration (v1.58.26).
- * Creates `launch_awards` (first-N welcome-trial award ledger) and adds the
- * optional UTM attribution columns to `profiles`. Idempotent by construction
+ * Saka Fleet — launch campaign migration (v1.58.26, opt-in v1.59.1).
+ * Creates `launch_awards` (first-N welcome-trial award ledger), adds the
+ * optional UTM attribution columns to `profiles`, and adds the launch-offer
+ * opt-in flag (`profiles.launch_opt_in`, NOT NULL DEFAULT true so existing
+ * accounts keep the automatic award). Idempotent by construction
  * (CREATE TABLE IF NOT EXISTS / ADD COLUMN IF NOT EXISTS).
  *
  * Run: npm run migrate:launch-awards
@@ -30,6 +32,12 @@ export async function applyLaunchAwardsMigration() {
     return { success: false, ...utm };
   }
   console.log('OK profiles.utm_source / utm_medium / utm_campaign ready.');
+  const optIn = await runSql(LAUNCH_OPT_IN_SQL, { label: 'launchOptInColumn' });
+  if (!optIn.ok) {
+    console.error('profiles.launch_opt_in column failed:', optIn.error || optIn.body);
+    return { success: false, ...optIn };
+  }
+  console.log('OK profiles.launch_opt_in ready (default true -> existing accounts keep the award).');
   return { success: true };
 }
 

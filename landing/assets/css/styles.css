@@ -7,23 +7,23 @@
 
 @font-face {
   font-family: 'Outfit'; font-style: normal; font-weight: 600; font-display: swap;
-  src: url('/assets/fonts/Outfit-600.woff2?v=1.59.0') format('woff2');
+  src: url('/assets/fonts/Outfit-600.woff2?v=1.59.1') format('woff2');
 }
 @font-face {
   font-family: 'Outfit'; font-style: normal; font-weight: 800; font-display: swap;
-  src: url('/assets/fonts/Outfit-800.woff2?v=1.59.0') format('woff2');
+  src: url('/assets/fonts/Outfit-800.woff2?v=1.59.1') format('woff2');
 }
 @font-face {
   font-family: 'Inter'; font-style: normal; font-weight: 400; font-display: swap;
-  src: url('/assets/fonts/Inter-400.woff2?v=1.59.0') format('woff2');
+  src: url('/assets/fonts/Inter-400.woff2?v=1.59.1') format('woff2');
 }
 @font-face {
   font-family: 'Inter'; font-style: normal; font-weight: 600; font-display: swap;
-  src: url('/assets/fonts/Inter-600.woff2?v=1.59.0') format('woff2');
+  src: url('/assets/fonts/Inter-600.woff2?v=1.59.1') format('woff2');
 }
 @font-face {
   font-family: 'Inter'; font-style: normal; font-weight: 700; font-display: swap;
-  src: url('/assets/fonts/Inter-700.woff2?v=1.59.0') format('woff2');
+  src: url('/assets/fonts/Inter-700.woff2?v=1.59.1') format('woff2');
 }
 
 :root {
@@ -109,6 +109,58 @@ a:hover { text-decoration: underline; }
 .usd-hint { color: var(--muted); font-size: 11px; font-weight: 400; white-space: nowrap; }
 .pricing-note { text-align: center; color: var(--muted); font-size: 0.9rem; margin-top: 14px; }
 .nav-cta .btn { padding: 10px 20px; font-size: .92rem; }
+
+/* Launch banner (v1.59.1) — slim, dismissible, fail-closed (hidden by default) */
+.launch-banner {
+  position: relative;
+  z-index: 85;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  padding: 10px 48px;
+  background: linear-gradient(90deg, rgba(34, 211, 238, .12), rgba(167, 139, 250, .12));
+  border-bottom: 1px solid var(--line);
+  font-size: .87rem;
+  line-height: 1.4;
+  color: var(--text);
+  text-align: center;
+}
+.launch-banner[hidden] { display: none; }
+.launch-banner strong { color: var(--cyan); }
+.launch-banner .launch-slots {
+  font-weight: 700;
+  white-space: nowrap;
+  padding: 3px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--cyan);
+  font-size: .8rem;
+}
+.launch-banner .launch-dismiss {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 6px;
+}
+.launch-banner .launch-dismiss:hover { color: var(--text); }
+.launch-optin {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+}
+.launch-optin[hidden] { display: none; }
+.launch-optin .launch-optin-note { color: var(--muted); }
 
 /* Hero */
 .hero { position: relative; padding: 96px 0 64px; overflow: hidden; }
