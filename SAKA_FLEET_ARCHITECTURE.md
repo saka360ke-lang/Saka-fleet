@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.61.6  
+**Version:** 1.61.7  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.61.7** | Eval notifications: shipped heals WhatsApp-only; failing/intervention heals also email (WhatsApp-first policy) | 171 |
 | **1.61.6** | Supplied SAKAFLEET artwork rebuilt as the site logo set (master-driven: lockup, mark, favicons, OG cover) at its true 9.9:1 ratio | 170 |
 | **1.61.5** | Records lane: short type reads ("Fuel all time"/"Fuel list") are reads, challenge phrasing replays the last query, plate false-positives fixed ("MY2"); DeepEval delivering in production | 169 |
 | **1.61.4** | DeepEval delivery guarantee: first tick 60 s after boot, resolved config logged at boot, tick outcome logged | 168 |
@@ -4599,7 +4600,7 @@ quiz engine:
 
 **Notifications + tracking (the operator-facing ask).**
 - `conversation_eval_runs` (migration `npm run migrate:conv-eval`, idempotent) records run id, case id, source, transcript hash (no message bodies), judge provider/model, criteria JSON, aggregate, threshold, friction log link, patch id, before/after scores and status (`passed|failed|healed|proposed|error`). It is telemetry: wiped with the operational slate, never preserved.
-- Every heal/proposal is audited (`CONV_EVAL_HEALED` / `CONV_EVAL_PROPOSED` / `CONV_EVAL_ERROR`) and announced to the superadmin on WhatsApp (`sendProactiveWhatsApp`) + email (`sendAdminNotificationEmail`) with the case, before → after scores, rule key or proposal code; existing remediation outcome alerts are unchanged. Judge-error alerts are throttled by `CONV_EVAL_ALERT_COOLDOWN_HOURS`.
+- Every heal/proposal is audited (`CONV_EVAL_HEALED` / `CONV_EVAL_PROPOSED` / `CONV_EVAL_ERROR`) and announced to the superadmin on WhatsApp (`sendProactiveWhatsApp`) with the case, before → after scores, rule key or proposal code. **Channel policy (v1.61.7, operator request):** a shipped heal or drafted proposal is **WhatsApp only**; a heal that FAILS or needs intervention (`generate`, `sanitize`, `ab_judge`, `ab_gate`/`no_improvement`, `proposals_disabled`, `ship_failed`) also sends email (`sendAdminNotificationEmail`) so it cannot be missed. Judge-error alerts are both channels and remain throttled by `CONV_EVAL_ALERT_COOLDOWN_HOURS`; existing remediation proposal/digest emails are unchanged (a proposal is itself an intervention item).
 - Superadmin console (deterministic, zero tokens for digests): `admin eval` (24 h), `admin eval last 48h`, `admin eval run` (corpus, capped), `admin eval heal <case-id>`; audited `ADMIN_CONV_EVAL`.
 
 **Entry points.** `npm run eval:conv [--live] [--heal] [--json] [--fail-on-failures]`, `npm run eval:export` (DeepEval JSONL), an overlap-guarded 6-hourly tick in `index.js`, and the superadmin commands. All kill switches default OFF (`CONV_EVAL_ENABLED`, `CONV_EVAL_HEAL_ENABLED`); boot only detects the tracking table and warns (rule 50).
@@ -4758,4 +4759,26 @@ quiz engine:
 **Frames touched:** `landing/assets/img/*` (9 files), `landing/{index,privacy,terms,status,data-deletion}.html`, `scripts/build_brand_assets.ps1` (new), `test_landing_static.js`, `package.json`, `landing/data/changelog.json` + stamped assets, `SAKA_FLEET_ARCHITECTURE.md`, `CHANGELOG.md`.
 
 **Suites run:** `test_landing_static` (233) - green; `npm run health` green.
+
+
+### 171. v1.61.7 - eval notification channel policy: WhatsApp for heals, email for trouble (2026-11-05)
+
+**Operator request.** "Do not send eval healed notifications via email. WhatsApp only. Send to email when healing fails or needs intervention."
+
+**Before.** `notifySuperadminConvEval()` (`src/services/convEvalHealer.js`) unconditionally sent **both** WhatsApp and email, so every successful prompt-rule heal and every drafted proposal spent a Resend send. Worse, the six heal failure paths (`generate`, `sanitize`/`patch_rejected`, `ab_judge`, `ab_gate`/`no_improvement`, `proposals_disabled`, `ship_failed`) wrote a `CONV_EVAL_ERROR` audit row and **notified nobody** — the exact events that need a human were silent.
+
+**After (single choke point, no new env knob).**
+- `notifySuperadminConvEval(text, subject, { email = false })` — WhatsApp always attempted; email only when the caller opts in. Channels remain independent (one outage never silences the other) and it never throws.
+- **Shipped heal / drafted proposal:** WhatsApp only (default options).
+- **Heal failure / intervention:** every failure path calls `announceFailure(stage, reason, { before, after })`, which renders `formatHealFailureNotice()` (case id, stage, reason, `before → after` or an explicit "not comparable", and the intervention commands `admin eval` / `admin friction pending` / `admin accept fix <CODE>`) and notifies with `{ email: true }`.
+- **Judge-error alerts** (`src/workers/convEval.js`) also pass `{ email: true }` — a tick where nothing could be scored is intervention, not news.
+- **Deliberately unchanged:** remediation proposal/digest emails (a proposal is itself an intervention item), care-console email, auth-OTP, deploy alerts.
+
+**Null-safety (rule 51 sibling of the v1.61.1 threshold bug).** `formatHealFailureNotice` checks `before`/`after` for `null`/`undefined` **before** `Number(...)`, because `Number(null) === 0` would have rendered a fabricated "0.00 → 0.00" score line. Pinned by `test_conv_eval` ("a failure without scores says so instead of inventing numbers").
+
+**Audit + observability.** `admin_audit_logs` rows are untouched (`CONV_EVAL_HEALED` / `CONV_EVAL_PROPOSED` / `CONV_EVAL_ERROR`); the returned `notified` object now reports `{ whatsapp, email }` truthfully (email stays `false` for shipped heals).
+
+**Frames touched:** `src/services/convEvalHealer.js`, `src/workers/convEval.js`, `test_conv_eval.js`, `package.json`, `landing/data/changelog.json` + stamped assets, `SAKA_FLEET_ARCHITECTURE.md` (§164 updated, this section), `CHANGELOG.md`.
+
+**Suites run:** `test_conv_eval` (131 — includes a real `healFailedCase` A/B refusal with an injected notify, and a shipped-heal run proving `email` stays off) - green; `npm run health` green.
 

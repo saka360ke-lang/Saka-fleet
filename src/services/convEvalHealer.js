@@ -22,7 +22,9 @@ import { PROMPT_REFINEMENT_MARKER } from '../../sakaAi.js';
  *        - anything else    → `remediation_proposals` PENDING_APPROVAL
  *                             (superadmin reviews; CI executes — rules 16/18).
  *   5. Every outcome is audited (`CONV_EVAL_HEALED` / `CONV_EVAL_PROPOSED` /
- *      `CONV_EVAL_ERROR`) and announced to the superadmin on WhatsApp + email.
+ *      `CONV_EVAL_ERROR`). Channel policy (v1.61.7, operator request):
+ *      a successful heal/proposal is announced on **WhatsApp only**; a heal that
+ *      FAILS or needs intervention also sends **email** so it cannot be missed.
  *
  * This module never edits source code, never touches auth/VIN/billing and never
  * throws.
@@ -135,13 +137,18 @@ async function writeAudit(supabase, action, details = {}) {
 }
 
 /**
- * WhatsApp + email, independent channels (one outage never silences the other).
- * Injected in tests. Never throws.
+ * WhatsApp-first announcements (v1.61.7, operator policy).
+ *
+ * - A successful heal or a drafted proposal is **WhatsApp only** — no email.
+ * - A heal that fails or needs intervention passes `{ email: true }`, so the
+ *   superadmin also gets mail (`sendAdminNotificationEmail`).
+ *
+ * Channels stay independent: one outage never silences the other. Never throws.
  */
-export async function notifySuperadminConvEval(text, subject = 'Saka conversation eval') {
+export async function notifySuperadminConvEval(text, subject = 'Saka conversation eval', { email = false } = {}) {
   const phone = process.env.SUPERADMIN_PHONE;
   let whatsapp = false;
-  let email = false;
+  let emailed = false;
   if (phone) {
     try {
       whatsapp = await sendProactiveWhatsApp(phone, text);
@@ -149,12 +156,14 @@ export async function notifySuperadminConvEval(text, subject = 'Saka conversatio
       whatsapp = false;
     }
   }
-  try {
-    email = await sendAdminNotificationEmail(subject, `<p>${String(text || '').replace(/\n/g, '<br>')}</p>`);
-  } catch {
-    email = false;
+  if (email) {
+    try {
+      emailed = await sendAdminNotificationEmail(subject, `<p>${String(text || '').replace(/\n/g, '<br>')}</p>`);
+    } catch {
+      emailed = false;
+    }
   }
-  return { whatsapp, email };
+  return { whatsapp, email: emailed };
 }
 
 /** Deterministic heal/proposal announcement body. */
@@ -176,6 +185,29 @@ export function formatHealNotice({ caseDef = {}, before = 0, after = 0, patch = 
 }
 
 /**
+ * Deterministic failure / intervention announcement. This one also goes by email
+ * (v1.61.7): a heal that could not ship must never be missed.
+ */
+export function formatHealFailureNotice({ caseDef = {}, stage = 'heal', reason = 'unknown', before = null, after = null } = {}) {
+  // Number(null) === 0, so null-safety must be explicit: absent scores are
+  // announced as absent, never as "0.00 → 0.00".
+  const hasScores = before !== null && before !== undefined && after !== null && after !== undefined;
+  const comparable = hasScores && Number.isFinite(Number(before)) && Number.isFinite(Number(after));
+  return [
+    '🛠️ *Conversation eval — heal needs attention*',
+    '',
+    `• Case: \`${String(caseDef.id || 'unknown').slice(0, 60)}\``,
+    `• Stage: ${String(stage).slice(0, 40)}`,
+    `• Reason: ${String(reason).slice(0, 160)}`,
+    comparable
+      ? `• Scores: ${Number(before).toFixed(2)} → ${Number(after).toFixed(2)} (did not clear the improvement gate)`
+      : '• Scores: not comparable this attempt',
+    '',
+    '_No prompt rule shipped. Review `admin eval` + `admin friction pending`; code fixes still need `admin accept fix <CODE>`._'
+  ].join('\n');
+}
+
+/**
  * Heal ONE failed case. Never throws.
  * Returns `{ ok, reason?, patch?, before, after, shipped, ruleKey?, proposalCode? }`.
  */
@@ -192,15 +224,29 @@ export async function healFailedCase({
   if (!caseDef || !caseDef.id) return { ok: false, reason: 'no_case' };
   if (!judged || judged.ok !== true || judged.passed) return { ok: false, reason: 'not_failed' };
 
+  // v1.61.7 — a heal that fails or needs intervention is emailed as well as
+  // announced on WhatsApp (successful heals stay WhatsApp-only).
+  const announceFailure = async (stage, reason, extra = {}) => {
+    try {
+      await notify(
+        formatHealFailureNotice({ caseDef, stage, reason, ...extra }),
+        `Conversation eval: heal needs attention (${caseDef.id})`,
+        { email: true }
+      );
+    } catch { /* notifications are best-effort */ }
+  };
+
   const threshold = Number.isFinite(Number(judged.threshold)) ? Number(judged.threshold) : CONV_EVAL_DEFAULT_THRESHOLD;
   const generated = await generateHealPatch({ caseDef, judged, generate });
   if (!generated.ok) {
     await writeAudit(supabase, 'CONV_EVAL_ERROR', { case_id: caseDef.id, stage: 'generate', reason: generated.reason });
+    await announceFailure('generate', generated.reason);
     return { ok: false, reason: generated.reason };
   }
   const patch = generated.patch;
   if (!patch) {
     await writeAudit(supabase, 'CONV_EVAL_ERROR', { case_id: caseDef.id, stage: 'sanitize', reason: 'patch_rejected' });
+    await announceFailure('sanitize', 'patch_rejected');
     return { ok: false, reason: 'patch_rejected' };
   }
 
@@ -208,6 +254,7 @@ export async function healFailedCase({
   const after = await judge({ caseDef, reply: patch.correctedReply, judge: { ...judgeConfig, threshold } });
   if (!after.ok) {
     await writeAudit(supabase, 'CONV_EVAL_ERROR', { case_id: caseDef.id, stage: 'ab_judge', reason: after.error });
+    await announceFailure('ab_judge', after.error || 'ab_judge_failed', { before: Number(judged.aggregate || 0) });
     return { ok: false, reason: 'ab_judge_failed', detail: after.error };
   }
   const before = Number(judged.aggregate || 0);
@@ -219,6 +266,7 @@ export async function healFailedCase({
       before,
       after: after.aggregate
     });
+    await announceFailure('ab_gate', 'no_improvement', { before, after: after.aggregate });
     return { ok: false, reason: 'no_improvement', before, after: after.aggregate, patch: { ruleKey: patch.ruleKey } };
   }
 
@@ -227,6 +275,7 @@ export async function healFailedCase({
   if (patch.patchScope === 'code') {
     if (!isSentinelProposalsEnabled()) {
       await writeAudit(supabase, 'CONV_EVAL_ERROR', { case_id: caseDef.id, stage: 'ship', reason: 'proposals_disabled' });
+      await announceFailure('ship', 'proposals_disabled', { before, after: after.aggregate });
       return { ok: false, reason: 'proposals_disabled', before, after: after.aggregate, patch: { ruleKey: patch.ruleKey } };
     }
     if (supabase) {
@@ -281,6 +330,7 @@ export async function healFailedCase({
 
   if (shipped === 'none') {
     await writeAudit(supabase, 'CONV_EVAL_ERROR', { case_id: caseDef.id, stage: 'ship', reason: 'ship_failed' });
+    await announceFailure('ship', 'ship_failed', { before, after: after.aggregate });
     return { ok: false, reason: 'ship_failed', before, after: after.aggregate, patch: { ruleKey: patch.ruleKey } };
   }
 

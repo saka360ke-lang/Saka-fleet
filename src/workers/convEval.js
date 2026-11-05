@@ -153,7 +153,9 @@ export async function runConvEvalTick(supabase, { force = false, persist = true 
         '',
         '_Nothing was healed. Check the provider keys/breaker and `admin ai-stats`._'
       ].join('\n'),
-      'Conversation eval: judge errors'
+      'Conversation eval: judge errors',
+      // v1.61.7 — judge errors mean nothing could be healed: this one is emailed too.
+      { email: true }
     );
   }
 

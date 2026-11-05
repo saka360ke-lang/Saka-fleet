@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.61.7] - 2026-11-05
+
+- **Eval notifications are WhatsApp-first.** A heal that ships (prompt rule) or a proposal that is drafted is now announced on **WhatsApp only** — no more Resend email for good news. `notifySuperadminConvEval(text, subject, { email = false })` makes email an explicit per-call opt-in; the two channels stay independent, so a WhatsApp outage still can't silence a real alert.
+- **Email now fires when healing fails or needs intervention.** All six failure paths (`generate`, `sanitize`/`patch_rejected`, `ab_judge`, `ab_gate`/`no_improvement`, `proposals_disabled`, `ship_failed`) previously wrote a `CONV_EVAL_ERROR` audit row and told nobody. Each now sends a deterministic `formatHealFailureNotice` (case, stage, reason, before → after, and the exact intervention commands `admin eval` / `admin friction pending` / `admin accept fix <CODE>`) to **WhatsApp + email**. Judge-error alerts in the worker also pass `{ email: true }` — those mean nothing could be healed.
+- **Null-safe scores.** `formatHealFailureNotice` refuses to print "0.00 → 0.00" when scores are absent — `Number(null) === 0` would have done exactly that (the same bug class as the v1.61.1 threshold fix; pinned by a test).
+- **Unchanged on purpose:** remediation proposal/digest emails (a proposal is itself an intervention item), care-console email, auth-OTP and deploy alerts.
+- **Frames touched:** `src/services/convEvalHealer.js` (channel policy, `formatHealFailureNotice`, six announce sites), `src/workers/convEval.js` (judge-error email), `test_conv_eval.js` (+10 assertions incl. a real `healFailedCase` A/B run with an injected notify), `package.json`, `landing/data/changelog.json` + stamped assets, `SAKA_FLEET_ARCHITECTURE.md` (§164 updated, §171 new), this file.
+- **Suites run:** `test_conv_eval` (131) — green; `npm run health` green.
+
 ## [1.61.6] - 2026-11-05
 
 - **The supplied SAKAFLEET artwork is now the single source of the site logo.** `landing/assets/img/brand-master.png` holds the master (white interlocking-S mark + heavy SAKAFLEET wordmark on black, 2000x2000), and the new `scripts/build_brand_assets.ps1` derives **every** logo surface from it deterministically (System.Drawing, no external tools): tight `logo-lockup.png` (1617x164, white ink on transparency), `logo-mark.png` (512px square, first ink island), `logo.svg` (base64 lockup at its intrinsic viewBox), `favicon.svg` (64px black tile) + `favicon-32.png` + `apple-touch-icon.png`, and a rebuilt `og-cover.png`/`.svg` (1200x630 black canvas, centered lockup, one lime rule).

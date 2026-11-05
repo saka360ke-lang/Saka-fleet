@@ -29,7 +29,7 @@ import {
   sampleCorpusCases,
   validateCase
 } from './src/services/convEvalCases.js';
-import { sanitizeHealPatch, formatHealNotice, HEAL_PATCH_MAX_CHARS } from './src/services/convEvalHealer.js';
+import { sanitizeHealPatch, formatHealNotice, formatHealFailureNotice, healFailedCase, HEAL_PATCH_MAX_CHARS } from './src/services/convEvalHealer.js';
 import { formatBatchFailures, handleConvEvalCommand } from './src/services/convEvalConsole.js';
 import { ENV_SECTIONS } from './src/services/envAudit.js';
 
@@ -263,6 +263,42 @@ check(sanitizeHealPatch(null) === null, 'a null patch is rejected');
 const longHint = sanitizeHealPatch({ ...goodPatch, patch_instruction: `Acknowledge repeated values before moving on. ${'detail '.repeat(80)}` });
 check(longHint && longHint.patchInstruction.length === HEAL_PATCH_MAX_CHARS, 'the hint is capped at the configured bound');
 check(sanitizeHealPatch({ ...goodPatch, patch_scope: 'code' })?.patchScope === 'code', 'a code-scope patch is preserved (proposal path)');
+
+console.log('\n--- Test 11b: notification channel policy (v1.61.7) ---');
+const failureNotice = formatHealFailureNotice({ caseDef: { id: 'loop-expense-litres' }, stage: 'ab_gate', reason: 'no_improvement', before: 0.4, after: 0.46 });
+check(failureNotice.includes('loop-expense-litres') && failureNotice.includes('ab_gate'), 'the failure notice names the case and the stage');
+check(failureNotice.includes('0.40 → 0.46') && /improvement gate/i.test(failureNotice), 'the failure notice carries before/after and the gate reason');
+check(/admin eval/.test(failureNotice) && /admin accept fix/.test(failureNotice), 'the failure notice points at the intervention commands');
+const quietFailure = formatHealFailureNotice({ caseDef: { id: 'x' }, stage: 'generate', reason: 'timeout' });
+check(/not comparable/i.test(quietFailure), 'a failure without scores says so instead of inventing numbers');
+
+// A heal that cannot ship must reach BOTH channels; a shipped heal stays WhatsApp-only.
+const notifyCalls = [];
+const mockNotify = async (text, subject, options) => {
+  notifyCalls.push({ text, subject, options });
+  return { whatsapp: true, email: Boolean(options?.email) };
+};
+const prevHealFlag = process.env.CONV_EVAL_HEAL_ENABLED;
+process.env.CONV_EVAL_HEAL_ENABLED = 'on';
+const healInput = {
+  supabase: { from: () => ({ upsert: async () => ({ error: null }) }) },
+  caseDef: { id: 'loop-expense-litres' },
+  judged: { ok: true, passed: false, aggregate: 0.55, threshold: 0.7 },
+  judgeConfig: { threshold: 0.7 },
+  generate: async () => JSON.stringify(goodPatch),
+  notify: mockNotify
+};
+const noImprove = await healFailedCase({ ...healInput, judge: async () => ({ ok: true, passed: true, aggregate: 0.56 }) });
+check(noImprove.ok === false && noImprove.reason === 'no_improvement', 'a heal that does not beat the original is refused', noImprove.reason);
+check(notifyCalls.length === 1 && notifyCalls[0].options?.email === true, 'a failed heal is emailed as well (email: true)');
+check(/heal needs attention/i.test(notifyCalls[0].text), 'the failed-heal announcement says it needs attention');
+const healedRun = await healFailedCase({ ...healInput, judge: async () => ({ ok: true, passed: true, aggregate: 0.92 }) });
+check(healedRun.ok === true && healedRun.shipped === 'rule', 'a heal that clears the gate ships the prompt rule');
+const healCall = notifyCalls[notifyCalls.length - 1];
+check(healCall.options === undefined || healCall.options?.email !== true, 'a shipped heal is WhatsApp-only (no email)');
+check(notifyCalls[0].subject !== healCall.subject, 'failure and success announcements are distinguishable by subject');
+if (prevHealFlag === undefined) delete process.env.CONV_EVAL_HEAL_ENABLED;
+else process.env.CONV_EVAL_HEAL_ENABLED = prevHealFlag;
 
 console.log('\n--- Test 12: digests + tracking reducer ---');
 const notice = formatHealNotice({ caseDef: { id: 'loop-expense-litres' }, before: 0.2, after: 0.86, patch: { ruleKey: 'ack_first', patchInstruction: 'Acknowledge the repeat first.' }, shipped: 'rule' });

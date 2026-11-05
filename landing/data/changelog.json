@@ -1,6 +1,13 @@
 {
-  "latest": "1.61.6",
+  "latest": "1.61.7",
   "entries": [
+    {
+      "version": "1.61.7",
+      "date": "2026-11-05",
+      "title": "Quieter good-news alerts, louder problems",
+      "preview": "Quality fixes are announced on WhatsApp only; anything that fails or needs a human now also reaches email.",
+      "summary": "The quality loop used to send both WhatsApp and email for every fix it shipped. Now a successful fix or a drafted proposal is announced on WhatsApp only, keeping the inbox quiet, while a fix that could not be shipped (or a provider problem that stopped grading) reaches both WhatsApp and email with the case, the stage, the reason and the exact commands to review it. Remediation, support and security emails are unchanged."
+    },
     {
       "version": "1.61.6",
       "date": "2026-11-05",
