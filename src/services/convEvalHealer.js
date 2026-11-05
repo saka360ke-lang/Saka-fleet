@@ -442,7 +442,10 @@ export async function healFailedCase({
     before,
     after: after.aggregate,
     threshold,
-    friction_log_id: caseDef.frictionLogId || null
+    friction_log_id: caseDef.frictionLogId || null,
+    // v1.61.10 — keep the corrected reply so `npm run eval:apply-heals` can
+    // refresh an `expected: pass` corpus case to the healed behaviour.
+    corrected_reply: shipped === 'rule' ? String(patch.correctedReply || '').slice(0, 900) : null
   });
 
   const notice = formatHealNotice({ caseDef, before, after: after.aggregate, patch: { ...patch, ruleKey: shippedKey }, shipped, proposalCode });

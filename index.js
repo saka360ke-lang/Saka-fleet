@@ -1037,7 +1037,7 @@ const runConvEvalGuarded = () => {
   runConvEvalTick(supabase)
     .then((result) => {
       if (result?.skipped) console.log(`[ConversationEval] tick skipped: ${result.skipped}`);
-      else console.log(`[ConversationEval] tick done: ${result.total} case(s), ${result.passed} passed, ${result.failed} failed, ${result.errored} errored, ${result.healed?.length || 0} healed`);
+      else console.log(`[ConversationEval] tick done: ${result.total} case(s), ${result.passed} passed, ${result.failed} failed, ${result.errored} errored, ${result.healed?.length || 0} healed, ${result.calibration_skipped || 0} calibration skipped, ${result.rejudged || 0} re-judged`);
     })
     .catch((err) => console.warn('[Conversation Eval Warning]:', err.message))
     .finally(() => {

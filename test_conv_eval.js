@@ -14,7 +14,9 @@ import {
   getConvEvalConfig,
   isConvEvalEnabled,
   isConvEvalHealEnabled,
+  isNearMiss,
   resolveJudgeConfig,
+  runConvEvalBatch,
   sanitizeJudgeScores,
   summarizeConvEvalRows
 } from './src/services/convEval.js';
@@ -31,6 +33,7 @@ import {
 } from './src/services/convEvalCases.js';
 import { sanitizeHealPatch, formatHealNotice, formatHealFailureNotice, notifyHealFailureDigest, isCalibrationCase, enforceActiveRuleCap, healFailedCase, HEAL_PATCH_MAX_CHARS } from './src/services/convEvalHealer.js';
 import { formatBatchFailures, handleConvEvalCommand } from './src/services/convEvalConsole.js';
+import { healsFromAuditRows, selectCorpusUpdates, applyCorpusUpdates } from './src/services/convEvalCorpusSync.js';
 import { ENV_SECTIONS } from './src/services/envAudit.js';
 
 /**
@@ -392,6 +395,61 @@ const underCap = await enforceActiveRuleCap(capSupabase, { maxActive: 5 });
 check(underCap.retired.length === 0, 'a table under the cap retires nothing');
 const noCap = await enforceActiveRuleCap(capSupabase, { maxActive: 0 });
 check(noCap.retired.length === 0, 'cap 0 means unlimited');
+
+// v1.61.10 — borderline re-judge + corpus sync.
+console.log('\n--- Test 11d: borderline re-judge + corpus sync (v1.61.10) ---');
+const nearMissAgg = { ok: true, passed: false, aggregate: 0.66, threshold: 0.7 };
+check(isNearMiss(nearMissAgg, { threshold: 0.7, margin: 0.1 }) === true, 'an aggregate within the margin is a near miss');
+check(isNearMiss({ ...nearMissAgg, aggregate: 0.4 }, { threshold: 0.7, margin: 0.1 }) === false, 'a wide miss is never re-judged');
+const oneCrit = { ok: true, passed: false, aggregate: 0.5, failing: ['tone_compliance'], scores: { tone_compliance: { score: 0.62 } } };
+check(isNearMiss(oneCrit, { threshold: 0.7, margin: 0.1 }) === true, 'one criterion just under its bar is a near miss');
+check(isNearMiss({ ...oneCrit, failing: ['tone_compliance', 'boundary_safety'] }, { threshold: 0.7, margin: 0.1 }) === false, 'several failing criteria are never re-judged');
+check(isNearMiss(nearMissAgg, { threshold: 0.7, margin: 0 }) === false, 'margin 0 disables re-judging');
+check(isNearMiss({ ok: true, passed: true, aggregate: 0.9 }, { threshold: 0.7, margin: 0.1 }) === false, 'a pass is never re-judged');
+
+let flakyCalls = 0;
+const flakyJudge = async () => {
+  flakyCalls += 1;
+  return flakyCalls === 1
+    ? { ok: true, passed: false, aggregate: 0.68, failing: ['tone_compliance'], scores: { tone_compliance: { score: 0.68 } } }
+    : { ok: true, passed: true, aggregate: 0.79, failing: [], scores: { tone_compliance: { score: 0.79 } } };
+};
+const flakyBatch = await runConvEvalBatch({
+  cases: [{ id: 'flaky-case', turns: [{ role: 'user', text: 'hi' }], reply: 'hello there' }],
+  judgeFn: flakyJudge, persist: false, threshold: 0.7, rejudgeMargin: 0.1, rejudgeMax: 5
+});
+check(flakyBatch.rejudged === 1, 'a borderline case is re-judged once', flakyBatch.rejudged);
+check(flakyBatch.results[0].judged.passed === true && flakyBatch.results[0].judged.rejudged === true, 'the better verdict wins and is marked rejudged');
+check(flakyBatch.results[0].judged.firstAggregate === 0.68, 'the first verdict is preserved on the row');
+const hardBatch = await runConvEvalBatch({
+  cases: [{ id: 'hard-case', turns: [{ role: 'user', text: 'hi' }], reply: 'no answer here' }],
+  judgeFn: async () => ({ ok: true, passed: false, aggregate: 0.2, failing: ['tone_compliance', 'boundary_safety'], scores: {} }),
+  persist: false, threshold: 0.7, rejudgeMargin: 0.1, rejudgeMax: 5
+});
+check(hardBatch.rejudged === 0, 'a wide failure spends no extra judge call');
+
+const syncCases = [
+  { id: 'good-case', expected: 'pass', reply: 'old reply' },
+  { id: 'calib-case', expected: 'fail', reply: 'known bad' },
+  { id: 'same-case', reply: 'same reply' }
+];
+const syncHeals = healsFromAuditRows([
+  { action: 'CONV_EVAL_HEALED', details: { case_id: 'good-case', corrected_reply: 'new reply', rule_key: 'r1' }, created_at: '2026-11-05T10:00:00Z' },
+  { action: 'CONV_EVAL_HEALED', details: { case_id: 'calib-case', corrected_reply: 'not applied', rule_key: 'r2' }, created_at: '2026-11-05T10:01:00Z' },
+  { action: 'CONV_EVAL_HEALED', details: { case_id: 'same-case', corrected_reply: 'same reply' }, created_at: '2026-11-05T10:02:00Z' },
+  { action: 'CONV_EVAL_HEALED', details: { case_id: 'ghost-case', corrected_reply: 'nope' }, created_at: '2026-11-05T10:03:00Z' },
+  { action: 'CONV_EVAL_HEALED', details: { case_id: 'good-case', corrected_reply: 'newest reply', rule_key: 'r3' }, created_at: '2026-11-05T11:00:00Z' },
+  { action: 'CONV_EVAL_HEALED', details: { case_id: 'old-format' }, created_at: '2026-11-05T11:01:00Z' }
+]);
+check(syncHeals.length === 5, 'audit rows without a corrected reply are ignored', syncHeals.length);
+const selection = selectCorpusUpdates(syncCases, syncHeals);
+check(selection.updates.length === 1 && selection.updates[0].id === 'good-case' && selection.updates[0].reply === 'newest reply', 'the newest heal wins and only the pass case updates', selection);
+check(selection.skipped.some((s) => s.id === 'calib-case' && s.reason === 'calibration_case'), 'calibration cases are never updated');
+check(selection.skipped.some((s) => s.id === 'same-case' && s.reason === 'unchanged'), 'an unchanged reply is skipped');
+check(selection.skipped.some((s) => s.id === 'ghost-case' && s.reason === 'not_in_corpus'), 'an unknown case is reported, never invented');
+const appliedSync = applyCorpusUpdates(syncCases, selection.updates);
+check(appliedSync.applied === 1 && appliedSync.cases[0].reply === 'newest reply', 'the update is applied to a copy');
+check(syncCases[0].reply === 'old reply', 'the original corpus array is never mutated');
 if (prevHealFlag === undefined) delete process.env.CONV_EVAL_HEAL_ENABLED;
 else process.env.CONV_EVAL_HEAL_ENABLED = prevHealFlag;
 
@@ -433,10 +491,11 @@ check((CONV_EVAL_SQL.match(/CREATE INDEX IF NOT EXISTS/g) || []).length === 2, '
 check(CONV_EVAL_SQL.includes('before_score') && CONV_EVAL_SQL.includes('after_score') && CONV_EVAL_SQL.includes('transcript_hash'), 'the table tracks before/after scores and hashes (no message bodies)');
 const evalSection = ENV_SECTIONS.find((section) => section.section === 'CONVERSATION EVAL');
 check(Boolean(evalSection), 'the env registry declares the CONVERSATION EVAL section');
-for (const key of ['CONV_EVAL_ENABLED', 'CONV_EVAL_HEAL_ENABLED', 'CONV_EVAL_MIN_SCORE', 'CONV_EVAL_JUDGE_PROVIDER', 'CONV_EVAL_MAX_PATCHES_PER_RUN', 'CONV_EVAL_MAX_ACTIVE_RULES']) {
+for (const key of ['CONV_EVAL_ENABLED', 'CONV_EVAL_HEAL_ENABLED', 'CONV_EVAL_MIN_SCORE', 'CONV_EVAL_JUDGE_PROVIDER', 'CONV_EVAL_MAX_PATCHES_PER_RUN', 'CONV_EVAL_MAX_ACTIVE_RULES', 'CONV_EVAL_REJUDGE_MARGIN', 'CONV_EVAL_REJUDGE_MAX']) {
   check(evalSection.keys.includes(key), `env registry carries ${key}`);
 }
 check(getConvEvalConfig({}).maxActiveRules === 30, 'the active-rule cap defaults to 30 (0 = unlimited)');
+check(getConvEvalConfig({}).rejudgeMargin === 0.1 && getConvEvalConfig({}).rejudgeMax === 5, 're-judge defaults: 0.10 margin, 5 extra calls');
 const emptyDigest = await handleConvEvalCommand(null, { mode: 'stats' });
 check(emptyDigest.reply.includes('No evaluation runs'), 'the stats command degrades cleanly without a database');
 

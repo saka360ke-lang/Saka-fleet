@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.61.10] - 2026-11-05
+
+- **The tick log now shows the loop's hygiene:** `[ConversationEval] tick done: … healed, N calibration skipped, M re-judged`.
+- **Borderline re-judge damps judge variance.** A **narrow miss** (aggregate within `CONV_EVAL_REJUDGE_MARGIN` = 0.10 of the bar, or exactly one criterion within 0.10 of its own bar) gets ONE extra judge call, capped at `CONV_EVAL_REJUDGE_MAX` = 5 per tick (both knobs 0 = off). The better verdict wins; the row records `__rejudged` with `first_aggregate`/`second_aggregate`, and wide failures spend nothing. This targets the `report-recovery` (0.82) / `driver-profile-psv-confirm` (0.84) pass-fail flapping seen across ticks.
+- **Corpus close-the-loop.** `CONV_EVAL_HEALED` rows now carry `corrected_reply`, and the new `npm run eval:apply-heals` (dry run by default, `-- --write` to apply, `-- --hours=N`) refreshes `expected: pass` corpus cases with the healed reply so the next tick **verifies the fix** instead of re-failing the stale transcript. Calibration cases are never touched, unknown cases are reported, the newest heal per case wins, and the pure module (`convEvalCorpusSync.js`) is fully tested.
+- **Frames touched:** `src/services/convEval.js`, `src/workers/convEval.js`, `index.js`, `src/services/convEvalHealer.js`, `src/services/convEvalCorpusSync.js` (new), `scripts/apply_eval_heals.js` (new), `src/services/envAudit.js`, `.env.example`, `package.json`, `test_conv_eval.js`, `landing/data/changelog.json` + stamped assets, `SAKA_FLEET_ARCHITECTURE.md` (§174), this file.
+- **Suites run:** `test_conv_eval` (173) — green; `npm run health` green.
+
 ## [1.61.9] - 2026-11-05
 
 - **Calibration cases are never healed.** The 8 `expected: "fail"` corpus cases are the judge's false-negative guard — their stored reply is deliberately bad, so a heal can never stick and only minted a duplicate rule every tick (200 runs since 13:00Z: 103 failed, 32 healed, 20 active rules incl. six near-identical "confirmation opener" rules). New `isCalibrationCase()` guard refuses before any token spend; the worker and `npm run eval:conv --heal` filter them out and the tick reports `calibration_skipped`.

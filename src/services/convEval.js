@@ -100,12 +100,20 @@ export function getConvEvalConfig(env = process.env) {
   // so a case that heals every tick can never grow the table forever.
   const rawActive = read('CONV_EVAL_MAX_ACTIVE_RULES');
   const maxActiveRules = Number(rawActive) === 0 ? 0 : Math.round(boundedNumber(rawActive, 30, 1, 500));
+  // v1.61.10 — borderline re-judge: a NARROW miss gets one extra judge call so
+  // provider variance cannot flip a good reply (0 disables the margin or budget).
+  const rawMargin = read('CONV_EVAL_REJUDGE_MARGIN');
+  const rejudgeMargin = Number(rawMargin) === 0 ? 0 : boundedNumber(rawMargin, 0.10, 0, 0.5);
+  const rawRejudge = read('CONV_EVAL_REJUDGE_MAX');
+  const rejudgeMax = Number(rawRejudge) === 0 ? 0 : Math.round(boundedNumber(rawRejudge, 5, 0, 50));
   return {
     threshold: boundedNumber(read('CONV_EVAL_MIN_SCORE'), CONV_EVAL_DEFAULT_THRESHOLD, 0, 1),
     maxCases,
     intervalMs: minutes * 60 * 1000,
     maxPatches,
     maxActiveRules,
+    rejudgeMargin,
+    rejudgeMax,
     dedupeHours: boundedNumber(read('CONV_EVAL_DEDUPE_HOURS'), 1, 0.25, 168),
     alertCooldownHours: boundedNumber(read('CONV_EVAL_ALERT_COOLDOWN_HOURS'), 1, 0, 48),
     judgeProvider: String(read('CONV_EVAL_JUDGE_PROVIDER') || 'deepseek').trim().toLowerCase(),
@@ -412,6 +420,25 @@ export async function recordConvEvalRun(supabase, row = {}) {
 }
 
 /**
+ * v1.61.10 — a NARROW miss only: the case failed either just below the
+ * threshold, or on exactly ONE criterion that sits within `margin` of its bar.
+ * A reply that misses on several criteria is never re-judged. Pure.
+ */
+export function isNearMiss(judged, { threshold = CONV_EVAL_DEFAULT_THRESHOLD, criterionMins = null, margin = 0.1 } = {}) {
+  if (!judged || judged.ok !== true || judged.passed) return false;
+  const m = Number.isFinite(Number(margin)) ? Number(margin) : 0;
+  if (m <= 0) return false;
+  const aggregate = Number(judged.aggregate || 0);
+  if (aggregate >= Number(threshold) - m) return true;
+  const failing = Array.isArray(judged.failing) ? judged.failing : [];
+  if (failing.length !== 1) return false;
+  const key = failing[0];
+  const bar = Number.isFinite(Number(criterionMins?.[key])) ? Number(criterionMins[key]) : Number(threshold);
+  const score = Number(judged.scores?.[key]?.score ?? 0);
+  return score >= bar - m;
+}
+
+/**
  * Score a batch of cases. Each result is persisted when a Supabase client is
  * supplied. Returns a deterministic summary for the digest/CLI.
  * A case may carry its own `minScore` (synthetic cases do) — the per-case bar
@@ -419,9 +446,12 @@ export async function recordConvEvalRun(supabase, row = {}) {
  * `judgeFn` is injectable so the release test can prove the threshold plumbing
  * without a provider call.
  */
-export async function runConvEvalBatch({ supabase = null, cases = [], threshold = null, judge = {}, persist = true, judgeFn = judgeConversation } = {}) {
+export async function runConvEvalBatch({ supabase = null, cases = [], threshold = null, judge = {}, persist = true, judgeFn = judgeConversation, rejudgeMargin = null, rejudgeMax = null } = {}) {
   const cfg = getConvEvalConfig();
   const effectiveThreshold = Number.isFinite(Number(threshold)) ? Number(threshold) : cfg.threshold;
+  const margin = Number.isFinite(Number(rejudgeMargin)) ? Number(rejudgeMargin) : cfg.rejudgeMargin;
+  let rejudgeBudget = Number.isFinite(Number(rejudgeMax)) ? Math.max(0, Math.round(Number(rejudgeMax))) : cfg.rejudgeMax;
+  let rejudgedCount = 0;
   const runId = crypto.randomUUID();
   const results = [];
   let persisted = 0;
@@ -433,7 +463,27 @@ export async function runConvEvalBatch({ supabase = null, cases = [], threshold 
     const criterionMins = (caseDef.criterionMins && typeof caseDef.criterionMins === 'object')
       ? caseDef.criterionMins
       : null;
-    const judged = await judgeFn({ caseDef, judge: { ...judge, threshold: caseThreshold, criterionMins } });
+    const judgeOpts = { ...judge, threshold: caseThreshold, criterionMins };
+    let judged = await judgeFn({ caseDef, judge: judgeOpts });
+    // v1.61.10 — one extra judge call for a NARROW miss (budget-capped), so a
+    // borderline verdict cannot flip a good reply on provider variance. The
+    // better of the two verdicts wins; both stay in the row for the record.
+    if (rejudgeBudget > 0 && isNearMiss(judged, { threshold: caseThreshold, criterionMins, margin })) {
+      rejudgeBudget -= 1;
+      const second = await judgeFn({ caseDef, judge: judgeOpts });
+      if (second && second.ok) {
+        rejudgedCount += 1;
+        const firstAggregate = Number(judged.aggregate || 0);
+        const secondAggregate = Number(second.aggregate || 0);
+        const winner = second.passed || secondAggregate > firstAggregate ? second : judged;
+        judged = {
+          ...winner,
+          rejudged: true,
+          firstAggregate,
+          secondAggregate
+        };
+      }
+    }
     results.push({
       caseId: caseDef.id,
       source: caseDef.source || 'corpus',
@@ -445,6 +495,15 @@ export async function runConvEvalBatch({ supabase = null, cases = [], threshold 
       transcriptHash: caseHash(caseDef)
     });
     if (supabase && persist) {
+      const criteriaPayload = judged.ok ? { ...(judged.scores || {}) } : {};
+      if (judged.rejudged) {
+        criteriaPayload.__rejudged = {
+          score: judged.aggregate,
+          reason: 'second verdict won (borderline)',
+          first_aggregate: judged.firstAggregate,
+          second_aggregate: judged.secondAggregate
+        };
+      }
       const saved = await recordConvEvalRun(supabase, {
         runId,
         caseId: caseDef.id,
@@ -452,7 +511,7 @@ export async function runConvEvalBatch({ supabase = null, cases = [], threshold 
         transcriptHash: caseHash(caseDef),
         judgeProvider: judged.judge?.provider || null,
         judgeModel: judged.judge?.model || null,
-        criteria: judged.scores || {},
+        criteria: criteriaPayload,
         scores: judged.ok
           ? Object.fromEntries(Object.entries(judged.scores).map(([key, entry]) => [key, entry.score]))
           : {},
@@ -490,6 +549,7 @@ export async function runConvEvalBatch({ supabase = null, cases = [], threshold 
     byCriterion,
     threshold: effectiveThreshold,
     persisted,
+    rejudged: rejudgedCount,
     results
   };
 }

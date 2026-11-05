@@ -184,6 +184,7 @@ export async function runConvEvalTick(supabase, { force = false, persist = true 
     average: summary.average,
     byCriterion: summary.byCriterion,
     persisted: summary.persisted,
+    rejudged: summary.rejudged || 0,
     live_cases: freshLive.length,
     corpus_cases: corpus.length,
     skipped_live: skippedLive.slice(0, 10),

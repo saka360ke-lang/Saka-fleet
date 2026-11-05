@@ -1,6 +1,6 @@
 # Saka Fleet — Product QA (generated)
 
-Generated from code at version **1.61.9** — do not edit by hand. Run `npm run docs:gen`.
+Generated from code at version **1.61.10** — do not edit by hand. Run `npm run docs:gen`.
 
 Registry: `src/services/productQa.js` · 19 topics · prices from `src/services/subscriptionTiers.js`
 

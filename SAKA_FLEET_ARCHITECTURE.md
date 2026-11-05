@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.61.9  
+**Version:** 1.61.10  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.61.10** | Eval follow-ups: tick log shows skips/re-judges, borderline re-judge damps judge variance, `npm run eval:apply-heals` closes the corpus loop | 174 |
 | **1.61.9** | Healer hygiene: calibration cases never healed, keys reused, active-rule cap (30), Sentinel rule minting gated off | 173 |
 | **1.61.8** | Eval failure alerts batched: per-case WhatsApp + ONE digest email per tick (Resend quota safe) | 172 |
 | **1.61.7** | Eval notifications: shipped heals WhatsApp-only; failing/intervention heals also email (WhatsApp-first policy) | 171 |
@@ -4826,5 +4827,26 @@ quiz engine:
 **Frames touched:** `src/services/convEvalHealer.js` (`isCalibrationCase`, `enforceActiveRuleCap`, key reuse, guard), `src/services/convEval.js` (`maxActiveRules`), `src/workers/convEval.js` (calibration skip + `calibration_skipped`), `src/workers/sentinel.js` (optimizer gate), `scripts/run_conv_eval.js` (CLI skip), `src/services/envAudit.js`, `.env.example`, `test_conv_eval.js` (+14), `test_sentinel_policy.js` (+2), `package.json`, `landing/data/changelog.json` + stamped assets, `SAKA_FLEET_ARCHITECTURE.md` (§2.7, §friction loop, this section), `CHANGELOG.md`.
 
 **Suites run:** `test_conv_eval` (153), `test_sentinel_policy` (25) - green; `npm run health` green.
+
+
+### 174. v1.61.10 - eval observability, borderline re-judge and the corpus close-the-loop (2026-11-05)
+
+**A. Tick log now names the skips.** The v1.61.4 tick line gains two fields: `… healed, N calibration skipped, M re-judged`. `calibration_skipped` counts `expected: "fail"` cases the healer refused (v1.61.9 guard) and `rejudged` counts borderline second verdicts — the operator can see the loop's hygiene from Cloud Run logs alone.
+
+**B. Borderline re-judge (judge-variance damping).** Provider verdicts wobble ±0.1, which flipped `report-recovery` (0.82) and `driver-profile-psv-confirm` (0.84) between pass and fail across ticks. Now a **narrow miss** gets ONE extra judge call:
+- `isNearMiss(judged, { threshold, criterionMins, margin })` — eligible only when the aggregate is within `margin` of the bar, **or** exactly ONE criterion failed within `margin` of its own bar. A reply that misses on several criteria is never re-judged.
+- `CONV_EVAL_REJUDGE_MARGIN` (default **0.10**, 0 = off) and `CONV_EVAL_REJUDGE_MAX` (default **5** extra calls per tick, 0 = off) bound the cost.
+- The better verdict wins (a second pass, or a higher aggregate); the row keeps `__rejudged` in `criteria` with `first_aggregate` / `second_aggregate`, and `judged.rejudged` is exposed to the summary (`rejudged`).
+
+**C. Corpus close-the-loop.** `CONV_EVAL_HEALED` audit rows now carry `corrected_reply` (≤900 chars, prompt-rule heals only). New pure module `src/services/convEvalCorpusSync.js` plus `npm run eval:apply-heals` (`scripts/apply_eval_heals.js`):
+- `healsFromAuditRows()` extracts `{case_id, corrected_reply, rule_key, created_at}` and ignores rows without a reply (all pre-v1.61.10 heals).
+- `selectCorpusUpdates()` picks the **newest heal per case**, skips calibration cases (`expected: "fail"`), unchanged replies and cases missing from the corpus (reported, never invented).
+- `applyCorpusUpdates()` returns a copy; the CLI only writes with `--write` (default dry run), then the next tick verifies the healed behaviour instead of re-failing the stale transcript.
+
+Usage: `npm run eval:apply-heals` (dry run, 48 h) · `-- --hours=72` · `-- --write`.
+
+**Frames touched:** `src/services/convEval.js` (`isNearMiss`, batch re-judge, `rejudged`), `src/workers/convEval.js` (summary passthrough), `index.js` (tick log), `src/services/convEvalHealer.js` (audit `corrected_reply`), `src/services/convEvalCorpusSync.js` (new), `scripts/apply_eval_heals.js` (new), `src/services/envAudit.js`, `.env.example`, `package.json` (`eval:apply-heals`), `test_conv_eval.js` (+20), `SAKA_FLEET_ARCHITECTURE.md`, `CHANGELOG.md`.
+
+**Suites run:** `test_conv_eval` (173 - near-miss boundaries, re-judge winner + first verdict preserved, wide failures never re-judged, corpus sync selection/apply incl. calibration + unknown + unchanged) - green; `npm run health` green.
 
 
