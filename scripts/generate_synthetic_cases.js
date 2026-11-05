@@ -107,8 +107,11 @@ export function buildSynthSystem() {
     'HARD RULES:',
     '- Never use a real phone number, email address, VIN or a real person\'s name. Plates must be obviously fictional (e.g. "KDA 777A", "LAG-123-XY").',
     '- Use the regional shorthand, slang, transport vocabulary and local currency of the requested bucket.',
-    '- Each case has 2-6 turns BEFORE the final reply; the LAST turn must be from the user.',
+    '- Each case has 2-6 turns BEFORE the final reply; the LAST turn must be from the user. The reply is the FIRST assistant response to that last user message — the transcript must NOT already contain a confirmation of the same action.',
     '- `reply` is the IDEAL assistant reply under Saka Persona v4: warm, WhatsApp-native, contractions, active verbs ("Logged ✓"), at most ONE question, exact units/currency, and NEVER an invented amount, date, plate, VIN, OTP or legal rule.',
+    '- REPLY SHAPE (hard): maximum 2 short lines. Do NOT recap earlier entries or repeat a confirmation from the transcript. Do NOT append "Need anything else?", "Want a summary?", a menu or a second question. A completed write gets the confirmation card ONLY.',
+    '- NEVER claim an action already happened unless the transcript ends with the user explicitly confirming that exact summary (CONFIRM/yes). If the action still needs confirmation, ask for it in the SAME line — never claim it is saved.',
+    '- ACK VARIETY: if any earlier assistant turn opened with "Poa!", "Sawa", "Logged:" or "Got it", the reply must use a DIFFERENT confirmation opener.',
     '- Across the batch cover ALL of: quick-log shorthand, local currency/unit handling (gallons vs litres, "k" for thousands, comma decimals), multi-turn interruptions or quiz context switches, and loop traps (a repeated question the assistant must not repeat).',
     '- Some user turns should be frustrated, rushed or typo-heavy; some should be polite and analytical.',
     'Return ONLY JSON (no markdown fences) shaped exactly as:',
@@ -165,8 +168,11 @@ export function sanitizeSyntheticCase(raw, { countryBucket = 'GLOBAL', index = 1
   if (!reply) return { ok: false, errors: ['missing reply'] };
 
   const metrics = (raw.expected_metrics && typeof raw.expected_metrics === 'object') ? raw.expected_metrics : {};
-  const minScoreRaw = raw.min_score ?? raw.minScore ?? metrics.min_loop_avoidance_score ?? metrics.min_score ?? null;
-  const minScore = Number.isFinite(Number(minScoreRaw)) ? Math.min(1, Math.max(0.5, Number(minScoreRaw))) : null;
+  // v1.61.1 — only an explicit min_score is case-wide. The loop metric stays in
+  // expected_metrics and becomes a per-criterion bar in validateCase.
+  const minScoreRaw = raw.min_score ?? raw.minScore ?? metrics.min_score ?? null;
+  const hasMinScore = minScoreRaw !== null && minScoreRaw !== undefined && minScoreRaw !== '' && Number.isFinite(Number(minScoreRaw));
+  const minScore = hasMinScore ? Math.min(1, Math.max(0.5, Number(minScoreRaw))) : null;
 
   const rawTags = Array.isArray(raw.tags)
     ? raw.tags.map((tag) => String(tag || '').toLowerCase().replace(/[^a-z0-9-]/g, '-')).filter(Boolean)
@@ -193,10 +199,11 @@ export function sanitizeSyntheticCase(raw, { countryBucket = 'GLOBAL', index = 1
   const title = cleanText(raw.scenario_title || raw.title, 120);
   const regionalContext = cleanText(raw.regional_context || raw.context, 240);
 
-  const rawId = String(raw.id || '').trim().toLowerCase();
-  let id = rawId && /^syn_[a-z0-9_-]+$/.test(rawId)
-    ? rawId.slice(0, 60)
-    : `syn_${bucket.toLowerCase()}_${stamp}_${String(index).padStart(2, '0')}`;
+  // v1.61.1 — ids are ALWAYS engine-namespaced (`syn_<cc>_<stamp>_<nn>`). A
+  // model-invented id (e.g. `syn_ke_01`) is advisory only: two generation runs
+  // both produced `syn_ke_01` and the loader (correctly) rejected the second
+  // batch as duplicates. The stamp makes every run's ids unique across files.
+  let id = `syn_${bucket.toLowerCase()}_${stamp}_${String(index).padStart(2, '0')}`;
   if (seen.has(id)) id = `${id.slice(0, 56)}-${String(index).padStart(2, '0')}`;
 
   const candidate = {

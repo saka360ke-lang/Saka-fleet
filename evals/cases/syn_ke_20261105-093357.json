@@ -1,0 +1,152 @@
+{
+  "generated_by": "generate_synthetic_cases",
+  "version": "1.61.0",
+  "prompt": "conversation_synth",
+  "country_bucket": "KE",
+  "created_at": "2026-11-05T09:33:57.424Z",
+  "cases": [
+    {
+      "id": "syn_ke_20261105093357_01",
+      "tags": [
+        "synth",
+        "ke",
+        "shorthand",
+        "currency",
+        "quick-log"
+      ],
+      "expected": "pass",
+      "source": "synthetic",
+      "frictionType": null,
+      "countryBucket": "KE",
+      "regionalContext": "Sheng: 'nimeweka 40l diesel 5k' means 'I put 40 litres diesel for 5000 bob'. M-PESA ref is a transaction code.",
+      "lessons": [
+        "Use 'Logged ✓' for quick-log shorthand; avoid 'Poa' if already used.",
+        "Include M-PESA ref when provided."
+      ],
+      "minScore": null,
+      "criterionMins": {
+        "loop_avoidance": 0.9
+      },
+      "expectedMetrics": {
+        "min_loop_avoidance_score": 0.9,
+        "requires_shorthand_parsing": true
+      },
+      "turns": [
+        {
+          "role": "user",
+          "text": "niaje, nimeweka 40l diesel 5k kda 777a full tank, M-PESA ref QWE123"
+        },
+        {
+          "role": "assistant",
+          "text": "Poa! Nimeandika: 40L diesel, KES 5,000, plate KDA 777A, full tank, M-PESA QWE123. Sawa?"
+        },
+        {
+          "role": "user",
+          "text": "sawa"
+        }
+      ],
+      "reply": "Logged ✓ 40L diesel, KES 5,000, KDA 777A, full tank, M-PESA QWE123.",
+      "note": "Diesel quick-log with M-PESA ref — Sheng: 'nimeweka 40l diesel 5k' means 'I put 40 litres diesel for 5000 bob'. M-PESA ref is a transaction code."
+    },
+    {
+      "id": "syn_ke_20261105093357_02",
+      "tags": [
+        "synth",
+        "ke",
+        "currency",
+        "unit-conversion",
+        "calculation",
+        "shorthand"
+      ],
+      "expected": "pass",
+      "source": "synthetic",
+      "frictionType": null,
+      "countryBucket": "KE",
+      "regionalContext": "User asks for cost per litre after logging 30L for 4500 bob. 'bob' is slang for shillings.",
+      "lessons": [
+        "Calculate cost per litre when asked; use KES and 'bob' interchangeably.",
+        "Do not repeat the log confirmation."
+      ],
+      "minScore": null,
+      "criterionMins": {
+        "loop_avoidance": 0.9
+      },
+      "expectedMetrics": {
+        "min_loop_avoidance_score": 0.9,
+        "requires_shorthand_parsing": true
+      },
+      "turns": [
+        {
+          "role": "user",
+          "text": "nimeweka 30l diesel 4500 bob kda 777a"
+        },
+        {
+          "role": "assistant",
+          "text": "Sawa, nimeandika 30L diesel KES 4,500 KDA 777A. Sawa?"
+        },
+        {
+          "role": "user",
+          "text": "yes"
+        },
+        {
+          "role": "user",
+          "text": "sasa ni bei gani per litre?"
+        }
+      ],
+      "reply": "Bei ni KES 150 per litre (4,500 ÷ 30).",
+      "note": "Fuel cost in bob per litre — User asks for cost per litre after logging 30L for 4500 bob. 'bob' is slang for shillings."
+    },
+    {
+      "id": "syn_ke_20261105093357_03",
+      "tags": [
+        "synth",
+        "ke",
+        "interruption",
+        "context-switch",
+        "quiz",
+        "shorthand"
+      ],
+      "expected": "pass",
+      "source": "synthetic",
+      "frictionType": "MULTI_QUESTION_PROMPT",
+      "countryBucket": "KE",
+      "regionalContext": "User starts a fuel efficiency quiz, then interrupts with a quick log, then resumes quiz.",
+      "lessons": [
+        "Handle interruption: log fuel first, then resume quiz.",
+        "Calculate fuel efficiency when asked."
+      ],
+      "minScore": null,
+      "criterionMins": {
+        "loop_avoidance": 0.9
+      },
+      "expectedMetrics": {
+        "min_loop_avoidance_score": 0.9,
+        "requires_shorthand_parsing": true
+      },
+      "turns": [
+        {
+          "role": "user",
+          "text": "niko na quiz ya fuel efficiency, tuanze?"
+        },
+        {
+          "role": "assistant",
+          "text": "Sawa! Swali la kwanza: gari yako inatumia diesel au petrol?"
+        },
+        {
+          "role": "user",
+          "text": "diesel. lakini ngoja kwanza, nimeweka 20l diesel 3000 bob kda 777a"
+        },
+        {
+          "role": "assistant",
+          "text": "Logged ✓ 20L diesel, KES 3,000, KDA 777A. Sasa tuendelee na quiz: unajua consumption yako ni ngapi kwa 100km?"
+        },
+        {
+          "role": "user",
+          "text": "sijui, hebu nisaidie kucalculate. nimeweka 40l juzi na nimefanya 500km"
+        }
+      ],
+      "reply": "Consumption ni 8L/100km (40L ÷ 500km × 100).",
+      "note": "Mid-quiz interruption: fuel log then quiz — User starts a fuel efficiency quiz, then interrupts with a quick log, then resumes quiz."
+    }
+  ]
+}

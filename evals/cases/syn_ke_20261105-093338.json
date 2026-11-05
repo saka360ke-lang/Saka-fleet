@@ -1,0 +1,114 @@
+{
+  "generated_by": "generate_synthetic_cases",
+  "version": "1.61.0",
+  "prompt": "conversation_synth",
+  "country_bucket": "KE",
+  "created_at": "2026-11-05T09:33:38.690Z",
+  "cases": [
+    {
+      "id": "syn_ke_20261105093338_01",
+      "tags": [
+        "synth",
+        "ke",
+        "shorthand",
+        "quick-log",
+        "currency"
+      ],
+      "expected": "pass",
+      "source": "synthetic",
+      "frictionType": null,
+      "countryBucket": "KE",
+      "regionalContext": "Sheng shorthand: 'nimeweka' = I've put in, 'bob' = shillings, 'k' = thousand, plate style KDA 777A",
+      "lessons": [
+        "Sheng fuel logs mix litres and 'bob' amounts; confirm corrected figures before saving."
+      ],
+      "minScore": null,
+      "criterionMins": {
+        "loop_avoidance": 0.9
+      },
+      "expectedMetrics": {
+        "min_loop_avoidance_score": 0.9,
+        "requires_shorthand_parsing": true
+      },
+      "turns": [
+        {
+          "role": "user",
+          "text": "niaje buda, nimeweka 8l petrol kwa boda yangu KDA 777A, 1.2k bob"
+        },
+        {
+          "role": "assistant",
+          "text": "Poa mzee! Nimekuskia — 8L petrol, KES 1,200 kwa KDA 777A. Nitailog?"
+        },
+        {
+          "role": "user",
+          "text": "eh sawa, log tu"
+        },
+        {
+          "role": "assistant",
+          "text": "Sawa, naanza kuiweka kwa record."
+        },
+        {
+          "role": "user",
+          "text": "wait, ilikuwa 8.5l sio 8, na 1,250 bob"
+        }
+      ],
+      "reply": "Sorted — 8.5L petrol, KES 1,250 kwa KDA 777A. Nikuconfirm hii ndio ilog?",
+      "note": "Boda fuel quick-log in Sheng — Sheng shorthand: 'nimeweka' = I've put in, 'bob' = shillings, 'k' = thousand, plate style KDA 777A"
+    },
+    {
+      "id": "syn_ke_20261105093338_03",
+      "tags": [
+        "synth",
+        "ke",
+        "interruption",
+        "context-switch",
+        "generator",
+        "shorthand"
+      ],
+      "expected": "pass",
+      "source": "synthetic",
+      "frictionType": "MULTI_QUESTION_PROMPT",
+      "countryBucket": "KE",
+      "regionalContext": "Owner switches from fuel quiz to generator service; 'jenereta' = generator, KRA e-TIMS receipt mentioned",
+      "lessons": [
+        "Handle context switches cleanly: park the quiz, confirm the new log, don't recap old entries."
+      ],
+      "minScore": null,
+      "criterionMins": {
+        "loop_avoidance": 0.9
+      },
+      "expectedMetrics": {
+        "min_loop_avoidance_score": 0.9,
+        "requires_shorthand_parsing": true
+      },
+      "turns": [
+        {
+          "role": "user",
+          "text": "quiz ya fuel consumption ya matatu yangu iko aje?"
+        },
+        {
+          "role": "assistant",
+          "text": "Poa! Quiz: ulijaza tank lini, na ulifika mileage gani? Niulize polepole."
+        },
+        {
+          "role": "user",
+          "text": "acha quiz kwanza, jenereta yangu ya workshop inahitaji service, e-TIMS receipt namba ET-88231"
+        },
+        {
+          "role": "assistant",
+          "text": "Sawa, nimeacha quiz. Jenereta service — ni saa ngapi ilifanywa, na ilikuwa KES ngapi?"
+        },
+        {
+          "role": "user",
+          "text": "juzi, nililipa 4,500 bob, na pia nirudie quiz ya matatu baadaye"
+        },
+        {
+          "role": "user",
+          "text": "weka hiyo service ya jenereta kwa record sasa"
+        }
+      ],
+      "reply": "Logged ✓ Jenereta service juzi, KES 4,500, e-TIMS ET-88231. Quiz ya matatu tunaendelea baadaye.",
+      "note": "Mid-quiz interruption to log generator service — Owner switches from fuel quiz to generator service; 'jenereta' = generator, KRA e-TIMS receipt mentioned"
+    }
+  ]
+}

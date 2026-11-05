@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { caseHash } from './convEval.js';
+import { caseHash, CONV_EVAL_CRITERIA_KEYS } from './convEval.js';
 
 /**
  * Saka Fleet — conversation eval corpus (v1.60.0)
@@ -72,10 +72,24 @@ export function validateCase(raw, seenIds = new Set()) {
   const metrics = (raw.expected_metrics && typeof raw.expected_metrics === 'object')
     ? raw.expected_metrics
     : ((raw.expectedMetrics && typeof raw.expectedMetrics === 'object') ? raw.expectedMetrics : null);
-  const minScoreRaw = raw.min_score ?? raw.minScore ?? metrics?.min_loop_avoidance_score ?? metrics?.min_score ?? null;
-  const minScore = Number.isFinite(Number(minScoreRaw))
-    ? Math.min(1, Math.max(0.5, Number(minScoreRaw)))
-    : null;
+  // v1.61.1 — an explicit `min_score` is a case-wide bar; the proposal's
+  // `min_loop_avoidance_score` metric raises ONLY the loop-avoidance criterion
+  // (it used to be mis-applied to all five criteria, which failed good cases).
+  const minScoreRaw = raw.min_score ?? raw.minScore ?? null;
+  const hasMinScore = minScoreRaw !== null && minScoreRaw !== undefined && minScoreRaw !== '' && Number.isFinite(Number(minScoreRaw));
+  const minScore = hasMinScore ? Math.min(1, Math.max(0.5, Number(minScoreRaw))) : null;
+  const criterionMins = {};
+  const loopMin = metrics?.min_loop_avoidance_score;
+  if (loopMin !== null && loopMin !== undefined && Number.isFinite(Number(loopMin))) {
+    criterionMins.loop_avoidance = Math.min(1, Math.max(0.5, Number(loopMin)));
+  }
+  if (metrics && metrics.min_scores && typeof metrics.min_scores === 'object') {
+    for (const key of CONV_EVAL_CRITERIA_KEYS) {
+      if (Number.isFinite(Number(metrics.min_scores[key]))) {
+        criterionMins[key] = Math.min(1, Math.max(0.5, Number(metrics.min_scores[key])));
+      }
+    }
+  }
 
   // PII guard: no real phone numbers or emails may ride a case (synthetic or
   // hand-written) into the corpus or the judge prompt.
@@ -97,6 +111,7 @@ export function validateCase(raw, seenIds = new Set()) {
       regionalContext,
       lessons,
       minScore,
+      criterionMins: Object.keys(criterionMins).length ? criterionMins : null,
       expectedMetrics: metrics,
       turns: cleanTurns,
       reply,

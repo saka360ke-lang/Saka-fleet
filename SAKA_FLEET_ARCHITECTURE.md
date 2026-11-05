@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.61.0  
+**Version:** 1.61.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.61.1** | Kenyan synthetic batch (8 curated cases, 2 M-PESA) + generator hardening (engine-stamped ids, per-criterion metric mapping, null-threshold fix) + launch-award reconciliation audit (0 legacy grants) | 166 |
 | **1.61.0** | Global synthetic scenario generator (country buckets KE/NG/ZA/BR/MX/PH/IN/AE/GLOBAL) + launch award shortened to 6 months (183 days) | 165 |
 | **1.60.0** | DeepEval-style conversation eval harness + bounded self-healing + superadmin notifications/tracking (kill-switched) | 164 |
 | **1.59.7** | De-robot voice (review-card pools + banned boilerplate), 25-type expense catalog (licences/security/loading/weighbridge/hire/route split out), labels on every entry (receipts, reminders, odometer readings), support-email body fix, native scrolling + install prompt removed; rollback tag `pre-voice-v1.59.6` | 163 |
@@ -4623,4 +4624,29 @@ quiz engine:
 **Frames touched:** `src/services/aiClient.js` (purpose), `src/services/convEval.js` (per-case `minScore`, injectable judge), `src/services/convEvalCases.js` (additive schema + synthetic loader + PII guard + underscore ids), `scripts/generate_synthetic_cases.js` (new), `scripts/run_conv_eval.js` (`--synth`), `scripts/health_audit.js`, `src/services/launchAwards.js`, `scripts/run_launch_awards_migration.js`, `src/services/flowKnowledge.js`, `landing/index.html`, `.env.example`, `.clinerules`, `evals/README.md` (new), `test_synthetic_cases.js` (new), `test_launch_award.js`, `test_trial_engine.js`, `package.json`, `README.md`, `landing/data/changelog.json` + stamped assets, `docs/{PRODUCT_QA,SAKA_TRAINING}.md` (regenerated), `SAKA_FLEET_ARCHITECTURE.md`, `CHANGELOG.md`.
 
 **Suites run:** `test_synthetic_cases` (83 - new), `test_conv_eval` (109), `test_launch_award` (29), `test_trial_engine` (80), `test_landing_static`, `test_agent_training`, `test_env_audit`, `test_doc_sync`, `test_kb_docs` - green; `npm run health` green.
+
+
+---
+
+### 166. v1.61.1 - Kenyan synthetic batch, generator hardening & launch-award reconciliation audit (2026-11-05)
+
+**A. Live Kenyan generation + judge stress-test (evidence first).**
+- **Generation:** `npm run synth:cases -- --countries=KE --batch=4` ×2 (8 validated, 0 rejected, `deepseek-chat`) → three curated batch files after quality review. Final corpus: **8 Kenyan cases, all passing the judge at 0.90–0.96**, including **2 M-PESA-reference cases** (boundary-safe: Saka never confirms a payment it did not process).
+- **Corpus calibration:** the full 22-case run (14 hand-written + 8 synthetic) ended **14/14 as designed** — every `expected: fail` case fails and every `expected: pass` case passes after the rubric refinements below.
+- **Findings & fixes (stress-test value):**
+  1. **8-case single-call truncation** — the purpose budget is 2000 output tokens, so an 8-case call truncates mid-JSON. Operator rule documented: `--batch=4` per call (the hub fails soft; nothing was written).
+  2. **Model id collisions** — two runs both emitted `syn_ke_01…04`, so the loader rejected the second batch as duplicates. Ids are now **always engine-namespaced** `syn_<cc>_<stamp>_<nn>` (the proposal's mandated format); the model id is advisory only.
+  3. **Metric mis-mapping** — `expected_metrics.min_loop_avoidance_score: 0.9` was applied to ALL five criteria, failing good cases. It now raises **only the loop-avoidance bar** (`criterionMins`); explicit `min_score` remains the case-wide override.
+  4. **Null-threshold bug** — `Number(null) === 0` made an absent `minScore` clamp to 0.5 and could turn a null threshold into 0. All threshold paths (`evaluateCriteriaResult`, `judgeConversation`, `runConvEvalBatch`, `recordConvEvalRun`, `validateCase`) now treat null/undefined as absent.
+  5. **Judge rubric refinements** — honest workflow commitments ("building your report now — the link follows") and **instant one-line quick-log confirmations** ("Logged ✓") are explicitly allowed; only financial/refund/security/code claims are boundary violations. `single_question` no longer demands a follow-up step after a completed write.
+  6. **Curation discipline** — weak generated replies (recaps, unconfirmed write claims, repeated openers) were **dropped, never shipped as expected-pass**; only cases scoring ≥0.90 were kept.
+- **Telemetry hygiene:** all 118 stress-run rows in `conversation_eval_runs` were deleted after verification (0 remaining); the curated `syn_ke_*.json` files remain.
+
+**B. Launch award 365 → 183 reconciliation audit (read-only, live).**
+- `launch_awards`: **0 rows ever**; launch coupons (`created_by='LAUNCH_AWARD'`): 0; `LAUNCH_*` audit rows: 0; profiles: 3 with **0 opt-outs**; trials: 2 ACTIVE, both standard **30-day** (2026-11-04 → 2026-12-04), none extended. **Nothing to reconcile — no account ever received the 365-day offer.**
+- Serving-code verification: revision `saka-fleet-00298-qj6` Ready 09:08Z from the 09:06Z build (= the v1.61.0 push), DB `launch_awards.days` default **183**, and the Cloud Run service carries **no `LAUNCH_*` env override** (project `saka-fleet-v1`, service `saka-fleet`, europe-west1). The 6-month clamp is live.
+
+**Frames touched:** `scripts/generate_synthetic_cases.js` (ids, prompt hardening, null-safe minScore, per-run docs), `src/services/convEval.js` (per-criterion thresholds, null-safe thresholds, rubric + boundary clarifications), `src/services/convEvalCases.js` (metric mapping, null-safe minScore, criterionMins), `scripts/run_conv_eval.js` (unchanged behaviour), `evals/cases/syn_ke_*.json` (new corpus), `evals/README.md` (operator lessons), `test_synthetic_cases.js`, `test_conv_eval.js`, `package.json`, `README.md`, `landing/data/changelog.json` + stamped assets, `docs/{PRODUCT_QA,SAKA_TRAINING}.md`, `SAKA_FLEET_ARCHITECTURE.md`, `CHANGELOG.md`.
+
+**Suites run:** `test_synthetic_cases` (91), `test_conv_eval` (111), `test_launch_award` (29), `test_trial_engine` (80), `test_landing_static`, `test_agent_training`, `test_env_audit`, `test_doc_sync`, `test_kb_docs`, `test_model_router`, `test_sentinel_policy` - green; `npm run health` green.
 

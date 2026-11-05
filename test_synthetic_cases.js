@@ -68,6 +68,9 @@ check(/Never use a real phone number/i.test(system) && /email/i.test(system), 't
 check(/NEVER an invented amount/i.test(system), 'the system prompt bans invented figures');
 check(/LAST turn must be from the user/i.test(system), 'the turn order contract is explicit');
 check(/Persona v4/.test(system) && /ONE question/i.test(system), 'the ideal reply follows Persona v4');
+check(/Do NOT recap earlier entries/i.test(system) && /Need anything else/i.test(system), 'the reply shape bans recaps and menu trailers');
+check(/NEVER claim an action already happened/i.test(system), 'a write may never be claimed without confirmation');
+check(/ACK VARIETY/i.test(system), 'ack variety is a generator law');
 check(/"country_bucket"/.test(system) && /"expected_metrics"/.test(system), 'the JSON schema names the bucket and metrics fields');
 const prompt = buildSynthPrompt({ countryBucket: 'NG', count: 3, seed: 'fuel queue' });
 check(prompt.includes('NG') && prompt.includes(SYNTH_REGIONS.NG.currency), 'the user prompt carries the bucket and its currency');
@@ -98,9 +101,11 @@ check(clean.value.countryBucket === 'KE', 'the country bucket is preserved');
 check(clean.value.turns[0].text === 'nimeweka 40l diesel 5k', '`content` maps to `text`');
 check(clean.value.tags.includes('synth') && clean.value.tags.includes('ke'), 'synthetic + bucket tags are added');
 check(clean.value.tags.includes('shorthand'), 'requires_shorthand_parsing adds the shorthand tag');
-check(clean.value.minScore === 0.9, 'min_loop_avoidance_score becomes the per-case minScore');
+check(clean.value.minScore === null, 'the loop metric never becomes a case-wide bar');
+check(clean.value.criterionMins?.loop_avoidance === 0.9, 'min_loop_avoidance_score raises ONLY the loop-avoidance bar');
 check(clean.value.source === 'synthetic', 'the source is synthetic');
 check(clean.value.expected === 'pass', 'the ideal reply is expected to pass');
+check(clean.value.id === 'syn_ke_20261105120000_01', 'the case id is always engine-namespaced (model ids never leak)');
 
 const trailing = sanitizeSyntheticCase({
   turns: [{ role: 'user', text: 'abeg log 20k petrol' }, { role: 'assistant', text: 'Logged ✓ NGN 20,000 petrol.' }]
@@ -128,10 +133,14 @@ check(scrubbed.ok === true, 'a PII lesson does not kill the case');
 check(scrubbed.value.lessons.length === 2, 'the PII lesson is dropped');
 check(!scrubbed.value.lessons.some((lesson) => lesson.includes('+2547')), 'no phone survives in the lessons');
 
-console.log('\n--- Test 7: duplicate ids are made unique, never overwritten ---');
-const seen = new Set(['syn_ke_dup_01']);
-const dup = sanitizeSyntheticCase({ ...rawCase, id: 'syn_ke_dup_01' }, { index: 3, seen });
-check(dup.ok === true && dup.value.id !== 'syn_ke_dup_01' && dup.value.id.startsWith('syn_ke_dup_01'), 'a duplicate id gets a deterministic suffix');
+console.log('\n--- Test 7: ids are engine-namespaced, never model-collided ---');
+const runA = sanitizeSyntheticCase({ ...rawCase, id: 'syn_ke_01' }, { index: 1, timestamp: '20261105120000' });
+const runB = sanitizeSyntheticCase({ ...rawCase, id: 'syn_ke_01' }, { index: 1, timestamp: '20261105120017' });
+check(runA.value.id === 'syn_ke_20261105120000_01', 'a model-invented id is replaced by the stamped id');
+check(runB.value.id !== runA.value.id, 'two runs 17s apart never collide on the same model id');
+const seenDup = new Set(['syn_ke_20261105120000_03']);
+const dup = sanitizeSyntheticCase({ ...rawCase, id: 'syn_ke_dup_01' }, { index: 3, timestamp: '20261105120000', seen: seenDup });
+check(dup.ok === true && dup.value.id !== 'syn_ke_20261105120000_03', 'an in-batch collision still gets a suffix');
 check(dup.value.id.length <= 61, 'the id stays inside the validator bound');
 
 console.log('\n--- Test 8: batch parsing is tolerant, never throws ---');
@@ -179,16 +188,17 @@ const batch = await runConvEvalBatch({
   threshold: 0.7,
   judge: { provider: null, model: null },
   judgeFn: async ({ caseDef, judge }) => {
-    captured.push({ id: caseDef.id, threshold: judge.threshold });
+    captured.push({ id: caseDef.id, threshold: judge.threshold, criterionMins: judge.criterionMins });
     return { ok: true, scores: {}, aggregate: 0.9, passed: true, failing: [], threshold: judge.threshold, judge: { provider: 'stub', model: null } };
   },
   cases: [
-    { id: 'case-strict', countryBucket: 'KE', minScore: 0.95, turns: [{ role: 'user', text: 'hi' }], reply: 'hello there' },
-    { id: 'case-default', countryBucket: 'GLOBAL', turns: [{ role: 'user', text: 'hi' }], reply: 'hello there' }
+    { id: 'case-strict', countryBucket: 'KE', minScore: 0.85, turns: [{ role: 'user', text: 'hi' }], reply: 'hello there' },
+    { id: 'case-loop', countryBucket: 'KE', criterionMins: { loop_avoidance: 0.9 }, turns: [{ role: 'user', text: 'hi' }], reply: 'hello there' }
   ]
 });
-check(captured[0].threshold === 0.95, 'a per-case minScore raises the bar for that case');
-check(captured[1].threshold === 0.7, 'untagged cases keep the batch threshold');
+check(captured[0].threshold === 0.85, 'a case-wide minScore raises the bar for that case');
+check(captured[1].threshold === 0.7, 'an untagged case keeps the batch threshold');
+check(captured[1].criterionMins?.loop_avoidance === 0.9, 'per-criterion minimums reach the judge');
 check(batch.results[0].countryBucket === 'KE', 'the bucket rides the result for tracking');
 check(batch.total === 2 && batch.passed === 2, 'the batch summary counts both cases');
 

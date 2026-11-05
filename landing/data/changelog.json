@@ -1,6 +1,13 @@
 {
-  "latest": "1.61.0",
+  "latest": "1.61.1",
   "entries": [
+    {
+      "version": "1.61.1",
+      "date": "2026-11-05",
+      "title": "Kenyan rehearsal batch + a cleaner judge",
+      "preview": "Eight Kenyan scenarios (two with M-PESA) now run on every eval — and the launch-offer audit found nothing to fix.",
+      "summary": "Saka now rehearses a curated set of Kenyan conversations — Sheng shorthand, M-PESA references and mid-quiz interruptions — with every case passing the quality judge at 0.90 or better. The judge learned two fair exceptions (honest 'building your report now' commitments and instant one-line logs such as 'Logged ✓'), synthetic cases are stricter only where it matters (loop avoidance), and the launch-offer audit confirmed no account was ever granted the old 365-day award, so nothing needed reconciling."
+    },
     {
       "version": "1.61.0",
       "date": "2026-11-05",

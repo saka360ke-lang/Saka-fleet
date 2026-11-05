@@ -1,0 +1,167 @@
+{
+  "generated_by": "generate_synthetic_cases",
+  "version": "1.61.0",
+  "prompt": "conversation_synth",
+  "country_bucket": "KE",
+  "created_at": "2026-11-05T09:37:20.282Z",
+  "cases": [
+    {
+      "id": "syn_ke_20261105093720_01",
+      "tags": [
+        "synth",
+        "ke",
+        "shorthand",
+        "currency",
+        "m-pesa"
+      ],
+      "expected": "pass",
+      "source": "synthetic",
+      "frictionType": null,
+      "countryBucket": "KE",
+      "regionalContext": "Sheng: 'niaje', 'poa', 'nimeweka', 'bob' for KES. M-PESA ref used for payment.",
+      "lessons": [
+        "Confirm shorthand entries with exact litres, plates, KES and M-PESA ref; avoid recap."
+      ],
+      "minScore": null,
+      "criterionMins": {
+        "loop_avoidance": 0.9
+      },
+      "expectedMetrics": {
+        "min_loop_avoidance_score": 0.9,
+        "requires_shorthand_parsing": true
+      },
+      "turns": [
+        {
+          "role": "user",
+          "text": "niaje, nimeweka 40l diesel kwa KDA 777A, 5k bob, M-PESA ref QWE123"
+        },
+        {
+          "role": "assistant",
+          "text": "Poa! Nimekurekodi 40L diesel kwa KDA 777A, KES 5,000, M-PESA ref QWE123. Full tank?"
+        },
+        {
+          "role": "user",
+          "text": "ndio full tank. na pia nimeweka 20l petrol kwa KDA 888B, 3k bob, cash"
+        },
+        {
+          "role": "assistant",
+          "text": "Sawa, nimekurekodi 20L petrol kwa KDA 888B, KES 3,000, cash. Full tank?"
+        },
+        {
+          "role": "user",
+          "text": "ndio full tank. asante"
+        }
+      ],
+      "reply": "Logged ✓ 40L diesel KDA 777A – KES 5,000 (M-PESA QWE123); 20L petrol KDA 888B – KES 3,000 cash. Full tanks noted.",
+      "note": "Shorthand fuel log with M-PESA reference — Sheng: 'niaje', 'poa', 'nimeweka', 'bob' for KES. M-PESA ref used for payment."
+    },
+    {
+      "id": "syn_ke_20261105093720_02",
+      "tags": [
+        "synth",
+        "ke",
+        "currency",
+        "unit-conversion",
+        "calculation"
+      ],
+      "expected": "pass",
+      "source": "synthetic",
+      "frictionType": "INCOMPLETE_REPLY",
+      "countryBucket": "KE",
+      "regionalContext": "User mixes gallons and litres; uses 'k' for thousands and comma decimals.",
+      "lessons": [
+        "Convert gallons to litres (1 gal = 3.785L) and calculate cost; confirm with exact figures."
+      ],
+      "minScore": null,
+      "criterionMins": {
+        "loop_avoidance": 0.9
+      },
+      "expectedMetrics": {
+        "min_loop_avoidance_score": 0.9,
+        "requires_shorthand_parsing": false
+      },
+      "turns": [
+        {
+          "role": "user",
+          "text": "Nimeweka 10 gallons diesel kwa KDA 777A. Bei ni 150 bob per litre. How much total?"
+        },
+        {
+          "role": "assistant",
+          "text": "10 gallons = 37.85 litres. At KES 150/L, total = KES 5,677.50. Confirm?"
+        },
+        {
+          "role": "user",
+          "text": "sawa, confirm. na pia nimeweka 5 gallons petrol kwa KDA 888B, bei 180 bob per litre."
+        },
+        {
+          "role": "assistant",
+          "text": "5 gallons = 18.93 litres. At KES 180/L, total = KES 3,407.40. Confirm?"
+        },
+        {
+          "role": "user",
+          "text": "yes confirm"
+        }
+      ],
+      "reply": "Logged ✓ 10 gal diesel KDA 777A – KES 5,677.50; 5 gal petrol KDA 888B – KES 3,407.40.",
+      "note": "Fuel unit conversion and cost calculation — User mixes gallons and litres; uses 'k' for thousands and comma decimals."
+    },
+    {
+      "id": "syn_ke_20261105093720_04",
+      "tags": [
+        "synth",
+        "ke",
+        "looping",
+        "complaint",
+        "shorthand"
+      ],
+      "expected": "pass",
+      "source": "synthetic",
+      "frictionType": "LOOPING_PROMPTS",
+      "countryBucket": "KE",
+      "regionalContext": "User repeats same request; assistant must not repeat previous confirmation.",
+      "lessons": [
+        "Avoid repeating confirmation; acknowledge existing entry."
+      ],
+      "minScore": null,
+      "criterionMins": {
+        "loop_avoidance": 0.9
+      },
+      "expectedMetrics": {
+        "min_loop_avoidance_score": 0.9,
+        "requires_shorthand_parsing": true
+      },
+      "turns": [
+        {
+          "role": "user",
+          "text": "Nimeweka 30l diesel KDA 777A, 4k bob, M-PESA ref ABC789"
+        },
+        {
+          "role": "assistant",
+          "text": "Logged: 30L diesel KDA 777A, KES 4,000, M-PESA ABC789. Full tank?"
+        },
+        {
+          "role": "user",
+          "text": "ndio full tank. asante"
+        },
+        {
+          "role": "assistant",
+          "text": "Sawa, full tank noted."
+        },
+        {
+          "role": "user",
+          "text": "Nimeweka 30l diesel KDA 777A, 4k bob, M-PESA ref ABC789"
+        },
+        {
+          "role": "assistant",
+          "text": "Hii entry imekwisha rekodiwa. Unataka kuongeza nyingine?"
+        },
+        {
+          "role": "user",
+          "text": "no, just confirming"
+        }
+      ],
+      "reply": "Sawa, 30L diesel KDA 777A – KES 4,000 (M-PESA ABC789) is already logged.",
+      "note": "Loop trap: repeated fuel log request — User repeats same request; assistant must not repeat previous confirmation."
+    }
+  ]
+}

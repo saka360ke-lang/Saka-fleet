@@ -33,6 +33,12 @@ npm run eval:export
 
 `country_bucket` is either a real ISO country code (`KE`, `NG`, `ZA`, `GH`, `BR`, `MX`, `PH`, `IN`, `AE`) or `GLOBAL` for neutral international English. The bucket is **metadata on the case**: regional lessons stay inside the batch file for review, and the generator never writes `country_learnings` (that table is derived from live chats by Sentinel, rule 41).
 
+## Generator notes (learned in the v1.61.1 Kenyan stress-test)
+
+- **Keep `--batch` at 4 per call.** The purpose budget is 2000 output tokens; an 8-case call truncates mid-JSON (the CLI reports `unparseable JSON` and writes nothing). Run twice for 8 cases.
+- **Case ids are always engine-namespaced** (`syn_<cc>_<stamp>_<nn>`). A model-invented id (`syn_ke_01`) is ignored, so two runs can never collide in the loader.
+- **Reasoning calls can exceed the 45 s default** on a slow provider day; export `AI_TIMEOUT_MS_REASONING=120000` for larger generations. The hub still fails soft — nothing is written on a timeout.
+
 ## Safety rules baked into every case
 
 - No real phone numbers, emails, VINs or people; plates are obviously fictional.

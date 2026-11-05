@@ -132,11 +132,29 @@ const passVerdict = evaluateCriteriaResult({
   threshold: 0.7
 });
 check(passVerdict.passed === true && passVerdict.aggregate === 0.8, 'all criteria at 0.80 pass the 0.70 bar');
+const strictLoopScores = sanitizeJudgeScores({
+  scores: {
+    loop_avoidance: { score: 0.85 },
+    tone_compliance: { score: 0.9 },
+    shorthand_precision: { score: 0.9 },
+    single_question: { score: 0.9 },
+    boundary_safety: { score: 1 }
+  }
+});
+const strictLoop = evaluateCriteriaResult({ scores: strictLoopScores, threshold: 0.7, thresholds: { loop_avoidance: 0.9 } });
+check(strictLoop.passed === false && strictLoop.failing.join(',') === 'loop_avoidance', 'a per-criterion bar fails only that criterion (v1.61.1 mapping)');
+const strictLoopPass = evaluateCriteriaResult({
+  scores: sanitizeJudgeScores({ scores: { ...Object.fromEntries(CONV_EVAL_CRITERIA_KEYS.map((key) => [key, { score: 0.9 }])), loop_avoidance: { score: 0.95 } } }),
+  threshold: 0.7,
+  thresholds: { loop_avoidance: 0.9 }
+});
+check(strictLoopPass.passed === true, 'the same case passes when loop avoidance clears its bar');
 
 console.log('\n--- Test 5: the judge prompt carries the live laws (no drift) ---');
 const judgeSystem = buildJudgeSystem();
 check(/PERSONA V4/.test(judgeSystem), 'the judge prompt carries the Persona v4 brand compass');
 check(/BOUNDARY LAWS/.test(judgeSystem), 'the judge prompt carries the boundary laws');
+check(/Honest workflow commitments are allowed/.test(judgeSystem), 'honest workflow commitments are explicitly allowed (report links, reminders)');
 check(/BANNED PHRASES/.test(judgeSystem), 'the judge prompt carries the banned-phrase law');
 for (const key of CONV_EVAL_CRITERIA_KEYS) {
   check(judgeSystem.includes(key), `judge prompt names the ${key} criterion`);
