@@ -351,8 +351,8 @@ check(indexHtml.includes('/assets/fonts/Sora-700.woff2') && !indexHtml.includes(
 check(indexHtml.includes('class="hero-mark"') && css.includes('.hero-mark') && indexHtml.includes('/assets/img/logo-mark.png'), 'the logo mark is ghosted behind the hero (decorative only)');
 check(indexHtml.includes('theme-color" content="#0A0A0C"'), 'the browser theme colour matches the black canvas');
 const logoSvg = fs.readFileSync(path.join(LANDING, 'assets/img/logo.svg'), 'utf8');
-check(logoSvg.includes('data:image/png;base64,') && logoSvg.includes('viewBox="0 0 1637 184"') && logoSvg.includes('aria-label="Saka Fleet"'), 'the logo is the supplied SAKAFLEET lockup (interlocking mark + wordmark), accessibly labelled');
-check(/class="mark" src="\/assets\/img\/logo\.svg"[^>]*width="302"/.test(indexHtml), 'the nav lockup keeps its intrinsic 8.9:1 ratio (302x34, no squish)');
+check(logoSvg.includes('data:image/png;base64,') && logoSvg.includes('viewBox="0 0 1617 164"') && logoSvg.includes('aria-label="Saka Fleet"'), 'the logo is the supplied SAKAFLEET lockup (interlocking mark + wordmark), accessibly labelled');
+check(/class="mark" src="\/assets\/img\/logo\.svg"[^>]*width="335"/.test(indexHtml), 'the nav lockup keeps its intrinsic 9.9:1 ratio (335x34, no squish)');
 check(css.includes('prefers-reduced-motion') && css.includes('@keyframes menu-rise'), 'the drawer animation honours reduced motion');
 check(css.includes('.nav-burger') && css.includes('.nav-menu') && css.includes('max-width: 960px'), 'burger + full-screen drawer appear at tablet/mobile widths');
 const navJsSource = fs.readFileSync(path.join(LANDING, 'assets/js/nav.js'), 'utf8');

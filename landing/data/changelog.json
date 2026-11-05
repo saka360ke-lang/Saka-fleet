@@ -1,6 +1,13 @@
 {
-  "latest": "1.61.5",
+  "latest": "1.61.6",
   "entries": [
+    {
+      "version": "1.61.6",
+      "date": "2026-11-05",
+      "title": "The brand logo is now crisp at every size",
+      "preview": "The supplied SAKAFLEET artwork now powers the nav, footer, tab icon, phone icon and share card.",
+      "summary": "The exact supplied artwork is now the single source of the logo, rebuilt into every surface the site uses: the navigation lockup (at its true 9.9:1 ratio, so it no longer looks slightly squeezed), the footer wordmark, the browser tab icon, the phone home-screen icon and the social share card on a black canvas with one lime accent. Everything is generated from one master file, so the brand stays consistent and can be refreshed in one step."
+    },
     {
       "version": "1.61.5",
       "date": "2026-11-05",

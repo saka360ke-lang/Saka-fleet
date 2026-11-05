@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.61.5  
+**Version:** 1.61.6  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.61.6** | Supplied SAKAFLEET artwork rebuilt as the site logo set (master-driven: lockup, mark, favicons, OG cover) at its true 9.9:1 ratio | 170 |
 | **1.61.5** | Records lane: short type reads ("Fuel all time"/"Fuel list") are reads, challenge phrasing replays the last query, plate false-positives fixed ("MY2"); DeepEval delivering in production | 169 |
 | **1.61.4** | DeepEval delivery guarantee: first tick 60 s after boot, resolved config logged at boot, tick outcome logged | 168 |
 | **1.61.3** | DeepEval online & always-on (15-min ticks, 0 = unlimited, live chat-history cases) + five live lane fixes (plural driver docs, merged expiry list, number search, photo/paste capture) + coverage audit + edge taxonomy | 168 |
@@ -4524,11 +4525,11 @@ quiz engine:
 ### 162. v1.59.6 - supplied SAKAFLEET lockup + softened whites (2026-11-05)
 
 **Logo swap (operator-supplied artwork).** The operator uploaded the real logo (2000x2000 black-canvas export, `Sakafleet/1.png`: interlocking chain-link mark + heavy uppercase SAKAFLEET wordmark). Every asset derives from that single source:
-- `logo-mark.png` — the mark alone (source bbox 207,924-546,1075; square 368px canvas at 256px export), alpha from luminance, tinted `#E8E9EB`.
-- `logo-lockup.png` — the full lockup (source crop 197,902 1637x184, ~8.9:1), tinted, 900px wide.
-- `logo.svg` — 1637x184 SVG embedding the lockup as a data URI (external references are blocked inside `<img>`-loaded SVGs), with `<title>` and `aria-label` "Saka Fleet".
-- Favicons/app icons (32/180/192) and `og-cover.svg`/`.png` rebuilt from the mark/lockup; the OG cover keeps the Sora/Manrope tagline treatment and the lime rule.
-- Nav sizing: the lockup now renders at its true ratio — 302x34 desktop, 28px tall at ≤960px, 22px at ≤640px; the footer uses 200x22. (The old 34x34 CSS squish is impossible with this wide wordmark.)
+- `logo-mark.png` — the mark alone (first ink island of the lockup, square canvas, alpha from luminance), exported at 512px, pure white from the master.
+- `brand-master.png` — the supplied master artwork (white SAKAFLEET lockup on black, 2000x2000); every surface below is derived from it by `scripts/build_brand_assets.ps1` (System.Drawing, no external tools), so the logo can always be rebuilt byte-for-byte from the source.
+- `logo.svg` — 1617x164 SVG embedding the lockup as a data URI (external references are blocked inside `<img>`-loaded SVGs), with `aria-label` "Saka Fleet".
+- Favicons/app icons (32/180/192) and `og-cover.svg`/`.png` rebuilt from the master mark and lockup (black rounded tile + white mark; OG cover keeps the black canvas, centered lockup and the lime rule).
+- Nav sizing: the lockup renders at its true 9.9:1 ratio — 335x34 desktop, 28px tall at ≤960px, 22px at ≤640px; the footer uses 217x22. (The old 34x34 CSS squish is impossible with this wide wordmark.)
 
 **Brightness pass (operator feedback: "white areas and white letters are too bright").**
 - Tokens: `--text #E8E9EB` (was `#FAFAFA`); `--grad-soft` white stop `.05`.
@@ -4731,4 +4732,30 @@ quiz engine:
 
 **Suites run:** `test_record_answers` (75), `test_conv_eval` (121), `test_quiz_flow` (147), `test_first_message_flow` (53), `test_entry_ledger` — green; `npm run health` green.
 
+
+
+### 170. v1.61.6 - the supplied SAKAFLEET artwork as the master logo source (2026-11-05)
+
+**What the operator asked for.** The attached image (white interlocking-S mark + heavy SAKAFLEET wordmark on black, square canvas) must be the website logo.
+
+**What shipped.** The artwork is committed as `landing/assets/img/brand-master.png` (2000x2000, the same master the earlier crops came from) and a new deterministic builder, `scripts/build_brand_assets.ps1`, derives every logo surface from it with System.Drawing (no sharp, no ImageMagick, no network):
+
+| Output | Derivation |
+|---|---|
+| `logo-lockup.png` | tight ink crop of the master (1617x164), white ink on transparency (alpha = luminance) |
+| `logo-mark.png` | first ink island (the interlocking mark), square canvas with 28% breathing room, 512x512 |
+| `logo.svg` | the lockup embedded as a base64 data URI with its intrinsic `viewBox="0 0 1617 164"` and `aria-label="Saka Fleet"` |
+| `favicon.svg` | 64x64 rounded black tile (`#0A0A0C`) + the mark |
+| `favicon-32.png`, `apple-touch-icon.png` | 32px / 180px rounded black tiles + the mark |
+| `og-cover.png`, `og-cover.svg` | 1200x630 black canvas, centered 820px lockup, one 120x4 lime rule (`#C6FF3D`) |
+
+**Aspect ratio fix.** The supplied lockup is **9.86:1**, so the previous `302x34` nav sizing squashed it by ~10%. The nav now renders `335x34` on `index.html`, `privacy.html`, `terms.html`, `status.html` and `data-deletion.html`; the footer renders `217x22`. `test_landing_static` pins `viewBox="0 0 1617 164"` and `width="335"` so the ratio can never silently regress.
+
+**Ink colour.** The assets carry the master's own pure white; the site's soft-white policy (v1.59.6) applies to CSS tokens, and the hero ghost (`logo-mark.png` at 4% opacity) is unchanged.
+
+**Rebuild contract.** `powershell -ExecutionPolicy Bypass -File scripts/build_brand_assets.ps1` regenerates every asset and prints the detected ink box, mark island and lockup ratio. A future artwork change is: replace `brand-master.png`, run the script, re-run `test_landing_static`.
+
+**Frames touched:** `landing/assets/img/*` (9 files), `landing/{index,privacy,terms,status,data-deletion}.html`, `scripts/build_brand_assets.ps1` (new), `test_landing_static.js`, `package.json`, `landing/data/changelog.json` + stamped assets, `SAKA_FLEET_ARCHITECTURE.md`, `CHANGELOG.md`.
+
+**Suites run:** `test_landing_static` (233) - green; `npm run health` green.
 

@@ -1,24 +1,24 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Live Status — Saka Fleet</title>
-  <meta name="description" content="Real-time health of Saka Fleet, checked from your browser — plus every recent update we have shipped. Plain language, no jargon.">
+  <title>Live Status â€” Saka Fleet</title>
+  <meta name="description" content="Real-time health of Saka Fleet, checked from your browser â€” plus every recent update we have shipped. Plain language, no jargon.">
   <meta name="robots" content="index, follow">
   <link rel="canonical" href="https://sakafleet.com/status">
   <meta property="og:type" content="website">
-  <meta property="og:title" content="Live Status — Saka Fleet">
+  <meta property="og:title" content="Live Status â€” Saka Fleet">
   <meta property="og:url" content="https://sakafleet.com/status">
   <link rel="icon" type="image/svg+xml" href="/assets/img/favicon.svg">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
   <link rel="apple-touch-icon" href="/assets/img/apple-touch-icon.png">
-  <link rel="stylesheet" href="/assets/css/styles.css?v=1.61.5">
+  <link rel="stylesheet" href="/assets/css/styles.css?v=1.61.6">
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
     "@type": "WebPage",
-    "name": "Live Status — Saka Fleet",
+    "name": "Live Status â€” Saka Fleet",
     "url": "https://sakafleet.com/status.html",
     "isPartOf": { "@id": "https://sakafleet.com/#website" },
     "about": "Realtime Saka Fleet service health and recent updates",
@@ -30,11 +30,11 @@
   <header class="nav">
     <div class="wrap nav-inner">
       <a class="nav-logo" href="/" aria-label="Saka Fleet home">
-        <img class="mark" src="/assets/img/logo.svg" alt="Saka Fleet wordmark" width="302" height="34">
+        <img class="mark" src="/assets/img/logo.svg" alt="Saka Fleet wordmark" width="335" height="34">
       </a>
       <div class="nav-cta">
         <span class="nav-flag" id="navFlag" style="display:none"></span>
-        <button class="btn btn-primary" onclick="window.location.href='/'">← Back to Saka Fleet</button>
+        <button class="btn btn-primary" onclick="window.location.href='/'">â† Back to Saka Fleet</button>
       </div>
     </div>
   </header>
@@ -42,7 +42,7 @@
   <section class="status-hero">
     <div class="wrap">
       <h1>Live <span class="grad-text">status</span></h1>
-      <p class="sub">Real-time health of Saka Fleet, checked from your browser — plus every recent update we've shipped. Plain language, no jargon.</p>
+      <p class="sub">Real-time health of Saka Fleet, checked from your browser â€” plus every recent update we've shipped. Plain language, no jargon.</p>
     </div>
   </section>
 
@@ -50,22 +50,22 @@
     <div class="wrap">
       <div class="status-card status-big">
         <div class="status-dot" id="statusDot" aria-hidden="true"></div>
-        <div class="status-word" id="statusWord">Checking Saka Fleet…</div>
-        <div class="status-meta" id="statusMeta">Contacting Saka Fleet's servers…</div>
+        <div class="status-word" id="statusWord">Checking Saka Fleetâ€¦</div>
+        <div class="status-meta" id="statusMeta">Contacting Saka Fleet's serversâ€¦</div>
       </div>
 
       <!-- Incident ticker: appears only while the service is having trouble -->
       <div class="incident-ticker" id="incidentTicker" role="status" aria-live="polite">
-        <h3>We're on it — live updates</h3>
+        <h3>We're on it â€” live updates</h3>
         <div class="incident-line" id="incidentLine"></div>
         <div class="incident-meta" id="incidentMeta"></div>
       </div>
 
       <div class="section" id="changelog" style="padding-top:70px">
         <h2 class="section-title">What's <span class="grad-text">new</span></h2>
-        <p class="section-sub">We ship every week — here's the latest.</p>
+        <p class="section-sub">We ship every week â€” here's the latest.</p>
         <div class="changelog" id="changelogList" aria-live="polite">
-          <div class="cl-entry"><div class="ver">Loading changelog…</div></div>
+          <div class="cl-entry"><div class="ver">Loading changelogâ€¦</div></div>
         </div>
       </div>
     </div>
@@ -73,14 +73,14 @@
 
   <footer>
     <div class="wrap foot-bottom" style="border:0">
-      <span>© 2026 Saka Fleet — a Saka360 brand.</span>
-      <span><a href="/privacy">Privacy Policy</a> · <a href="/terms">Terms &amp; Conditions</a> · <a href="#" data-cookie-settings>Cookie settings</a> · <a href="/">Home</a></span>
+      <span>Â© 2026 Saka Fleet â€” a Saka360 brand.</span>
+      <span><a href="/privacy">Privacy Policy</a> Â· <a href="/terms">Terms &amp; Conditions</a> Â· <a href="#" data-cookie-settings>Cookie settings</a> Â· <a href="/">Home</a></span>
     </div>
   </footer>
 
   <!-- Cookie consent -->
   <div class="cookie-banner" id="cookieBanner" role="region" aria-label="Cookie notice">
-    <p>🍪 We use cookies to keep the site working — and, with your consent, to measure how it's used.</p>
+    <p>ðŸª We use cookies to keep the site working â€” and, with your consent, to measure how it's used.</p>
     <div class="cookie-actions">
       <button class="btn btn-ghost" id="cookieSettingsBtn">Settings</button>
       <button class="btn btn-primary" id="cookieAcceptBtn">Accept all</button>
@@ -95,7 +95,7 @@
         <label class="cookie-toggle"><input type="checkbox" id="cookieEssential" checked disabled><span class="cookie-slider"></span></label>
       </div>
       <div class="cookie-group">
-        <div class="grow"><h4>Preferences</h4><p>Remember your choices, like your country code. Currently unused — nothing extra is stored.</p></div>
+        <div class="grow"><h4>Preferences</h4><p>Remember your choices, like your country code. Currently unused â€” nothing extra is stored.</p></div>
         <label class="cookie-toggle"><input type="checkbox" id="cookiePrefs"><span class="cookie-slider"></span></label>
       </div>
       <div class="cookie-group">
@@ -110,8 +110,8 @@
   <script>
 (function(){try{var s=localStorage.getItem('saka_country');if(s){var p=s.split('|');var f=String.fromCodePoint.apply(null,[].map.call(p[0],function(c){return 127397+c.charCodeAt(0);}));var nf=document.getElementById('navFlag');if(nf){nf.textContent=f;nf.title=p[1]||'';nf.style.display='inline-flex';}}}catch(e){}})();
 </script>
-  <script src="/assets/js/cookieConsent.js?v=1.61.5" defer></script>
-  <script src="/assets/js/nav.js?v=1.61.5" defer></script>
-  <script src="/assets/js/status.js?v=1.61.5" defer></script>
+  <script src="/assets/js/cookieConsent.js?v=1.61.6" defer></script>
+  <script src="/assets/js/nav.js?v=1.61.6" defer></script>
+  <script src="/assets/js/status.js?v=1.61.6" defer></script>
 </body>
 </html>

@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.61.6] - 2026-11-05
+
+- **The supplied SAKAFLEET artwork is now the single source of the site logo.** `landing/assets/img/brand-master.png` holds the master (white interlocking-S mark + heavy SAKAFLEET wordmark on black, 2000x2000), and the new `scripts/build_brand_assets.ps1` derives **every** logo surface from it deterministically (System.Drawing, no external tools): tight `logo-lockup.png` (1617x164, white ink on transparency), `logo-mark.png` (512px square, first ink island), `logo.svg` (base64 lockup at its intrinsic viewBox), `favicon.svg` (64px black tile) + `favicon-32.png` + `apple-touch-icon.png`, and a rebuilt `og-cover.png`/`.svg` (1200x630 black canvas, centered lockup, one lime rule).
+- **True aspect ratio, no squish.** The lockup is 9.9:1; the nav now renders it at **335x34** (was 302x34, a 10% horizontal squeeze), and the footer at **217x22**. Updated on `index.html`, `privacy.html`, `terms.html`, `status.html` and `data-deletion.html`.
+- **Rebuildable brand.** Re-running the script regenerates every asset byte-for-byte from the master, so future artwork changes are a one-file swap + one command instead of hand-edited base64.
+- **Frames touched:** `landing/assets/img/{brand-master.png (new),logo.svg,logo-lockup.png,logo-mark.png,favicon.svg,favicon-32.png,apple-touch-icon.png,og-cover.png,og-cover.svg}`, `landing/*.html` (nav + footer dimensions), `scripts/build_brand_assets.ps1` (new), `test_landing_static.js`, `package.json`, `landing/data/changelog.json` + stamped assets, `SAKA_FLEET_ARCHITECTURE.md` (§170), this file.
+- **Suites run:** `test_landing_static` (233) — green; `npm run health` green.
+
 ## [1.61.5] - 2026-11-05
 
 - **"Fuel all time" is a READ again, not a new expense quiz.** Live audit of the 12:28–12:30Z chats (post-DeepEval-enablement) caught the records lane losing short type reads: `Fuel all time` and `Fuel list` carried no question word, so `parseRecordQuestion` returned `not-a-question` and the expense quiz swallowed the turn — the bot answered *"Expense type noted. Which vehicle is this for?"*, the user cancelled twice and only got the fuel list once no draft was open. New short-form rule: a type word (`fuel`, `diesel`, `service`, `repairs`, `parking`, `expenses`, …) plus a list/period tail (`list`, `entries`, `history`, `report`, `all time`, `today`, …) with **no amount and no log verb** parses as a ledger read, which also parks an open draft through the existing `record_query` parking path.
