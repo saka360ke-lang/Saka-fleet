@@ -3,8 +3,9 @@
  * ------------------------------------
  * The launch campaign: the FIRST N new accounts that start their welcome trial
  * (i.e. register their first asset) receive a long, card-free award (default
- * 365 days) instead of the standard TRIAL_DAYS. Slot N+1 and everyone after
- * keeps the normal welcome flow — the fallback is automatic, not a special case.
+ * 183 days = 6 months since v1.61.0; shipped as 365 days in v1.58.26) instead of
+ * the standard TRIAL_DAYS. Slot N+1 and everyone after keeps the normal welcome
+ * flow — the fallback is automatic, not a special case.
  *
  * Invariants:
  *   • The grant is idempotent per owner (`launch_awards.owner_id` UNIQUE).
@@ -31,13 +32,17 @@ CREATE TABLE IF NOT EXISTS public.${LAUNCH_AWARD_TABLE} (
     owner_id uuid NOT NULL UNIQUE,
     trial_session_id uuid,
     coupon_code text,
-    days integer NOT NULL DEFAULT 365,
+    days integer NOT NULL DEFAULT 183,
     applied_ends_at timestamp with time zone,
     awarded_at timestamp with time zone NOT NULL DEFAULT now(),
     metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
     CONSTRAINT launch_awards_slot_positive CHECK (slot_idx >= 1)
 );
 CREATE INDEX IF NOT EXISTS idx_launch_awards_awarded_at ON public.${LAUNCH_AWARD_TABLE} (awarded_at DESC);
+-- v1.61.0 — the launch offer is 6 months (183 days): a re-run of the migration
+-- also fixes the column default on an existing table. Historical rows keep
+-- their awarded days value (never rewritten).
+ALTER TABLE public.${LAUNCH_AWARD_TABLE} ALTER COLUMN days SET DEFAULT 183;
 ALTER TABLE public.${LAUNCH_AWARD_TABLE} ENABLE ROW LEVEL SECURITY;
 `;
 
@@ -77,7 +82,9 @@ export function getLaunchAwardConfig(env = process.env) {
   return {
     enabled: !isOff(env?.LAUNCH_AWARD_ENABLED),
     slots: clampInt(env?.LAUNCH_MAX_FIRST_SIGNUPS, 1, 500, 50),
-    days: clampInt(env?.LAUNCH_AWARD_DAYS, 30, 365, 365),
+    // v1.61.0 — the offer is 6 months (183 days). The ceiling is the promise:
+    // no env value can extend the award past 6 months.
+    days: clampInt(env?.LAUNCH_AWARD_DAYS, 30, 183, 183),
     cacheMs: clampInt(env?.LAUNCH_STATUS_CACHE_MS, 5000, 600000, 60000)
   };
 }
@@ -356,7 +363,7 @@ export async function grantLaunchAwardForTrial({ supabase, ownerId, trial = null
 }
 
 /** Deterministic award copy (WhatsApp-ready, zero AI tokens). */
-export function formatLaunchAwardLine({ days = 365, slot = null, slotsTotal = 50 } = {}) {
+export function formatLaunchAwardLine({ days = 183, slot = null, slotsTotal = 50 } = {}) {
   return [
     `🎉 *You're one of the first ${slotsTotal}!*`,
     '',

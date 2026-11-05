@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.60.0  
+**Version:** 1.61.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.61.0** | Global synthetic scenario generator (country buckets KE/NG/ZA/BR/MX/PH/IN/AE/GLOBAL) + launch award shortened to 6 months (183 days) | 165 |
 | **1.60.0** | DeepEval-style conversation eval harness + bounded self-healing + superadmin notifications/tracking (kill-switched) | 164 |
 | **1.59.7** | De-robot voice (review-card pools + banned boilerplate), 25-type expense catalog (licences/security/loading/weighbridge/hire/route split out), labels on every entry (receipts, reminders, odometer readings), support-email body fix, native scrolling + install prompt removed; rollback tag `pre-voice-v1.59.6` | 163 |
 | **1.59.6** | Supplied SAKAFLEET logo installed (real lockup, rebuilt icons + OG cover) + softened whites across the site (no glare); nav lockup at its true 8.9:1 ratio; rollback tag `pre-logo-v1.59.5` | 162 |
@@ -1524,6 +1525,7 @@ All LLM traffic still flows through `src/services/aiClient.js` (the only provide
 | `model_research` | `aiModelRegistry.js` `researchModelLandscape()` — capability-gated web search/fetch |
 | `conversation_eval` | `convEval.js` `judgeConversation()` — DeepEval-style GEval judge (v1.60.0) |
 | `conversation_heal` | `convEvalHealer.js` `generateHealPatch()` — bounded prompt-hint repair (v1.60.0) |
+| `conversation_synth` | `scripts/generate_synthetic_cases.js` `generateForCountry()` — global scenario generator (v1.61.0) |
 
 ### 36.4 Telemetry table & retention
 `public.ai_usage_logs` — idempotent `ensureAiUsageLogsTable()` at boot, provisioned by `npm run migrate:staging-schema`, verified in `EXPECTED_TABLES`:
@@ -4599,4 +4601,26 @@ quiz engine:
 **Frames touched:** `src/services/aiClient.js` (2 purposes), `src/services/convEval.js` (new), `src/services/convEvalCases.js` (new), `src/services/convEvalHealer.js` (new), `src/services/convEvalConsole.js` (new), `src/workers/convEval.js` (new), `src/workers/sentinel.js` (`PATCH_BOUNDARY_LOCK` + `patchViolatesBoundaryLock` extracted, optimizer reuses it), `src/services/superadmin.js` (parser, dispatch, help, classifier list), `src/services/envAudit.js`, `index.js` (boot detection + tick), `scripts/{run_conv_eval_migration(new),run_conv_eval(new),reset-db,health_audit,stamp_landing_assets}.js`, `evals/cases/conversation_cases.json` (new), `.env.example`, `package.json`, `README.md`, `landing/data/changelog.json` + stamped landing assets, `docs/{PRODUCT_QA,SAKA_TRAINING}.md` (version stamp), `test_conv_eval.js` (new), `SAKA_FLEET_ARCHITECTURE.md`, `CHANGELOG.md`.
 
 **Suites run:** `test_conv_eval` (108 - new), `test_model_router`, `test_agent_training`, `test_env_audit`, `test_db_reset_scope`, `test_sentinel_policy`, `test_conversation_compliance`, `test_doc_sync` - green; `npm run health` green.
+
+
+---
+
+### 165. v1.61.0 - global synthetic scenario generator + 6-month launch award (2026-11-05)
+
+**A. Global synthetic conversation scenarios (audit-driven).**
+- **Purpose (rule 20):** new `conversation_synth` purpose in `AI_PURPOSES` — reasoning tier, JSON mode, `maxTokens 2000`, `temperature 0.75`. Every generation call rides `aiClient` (telemetry, breakers, budget guard); nothing talks to a provider directly. Background policy keeps it on DeepSeek (`deepseek-chat` confirmed live).
+- **Country buckets:** `SYNTH_REGIONS` covers `KE` (Sheng/Swahili, KES, e-TIMS), `NG` (pidgin, NGN), `ZA` (bakkie/petrol, ZAR), `GH` (TrokSi, GHS), `BR` (pt-BR, BRL, comma decimals), `MX` (es-MX, MXN), `PH` (Taglish, PHP), `IN` (Hinglish, INR lakh grouping), `AE` (Gulf English, AED) and neutral `GLOBAL`. The system prompt bans PII, invented figures and real plates, and demands Persona v4 ideal replies with ONE question max.
+- **Schema alignment (improvement over the raw proposal):** generated cases are mapped into the SAME corpus schema the judge consumes (`turns[{role,text}]` + final `reply` + `tags` + `expected`) — not the proposal's `content`/`expected_behavior` shape, which the shipped GEval harness could not score. `country_bucket`, `regional_context`, `lessons` and `expected_metrics.min_loop_avoidance_score` are additive metadata; the metric becomes a per-case `minScore` bar (clamped 0.5–1.0) honoured by `runConvEvalBatch`.
+- **Validation gates:** `sanitizeSyntheticCase()` tolerates model drift (`content`→`text`, trailing assistant turn → reply), rejects unsupported buckets, missing user turns/replies, real phone numbers/emails (also stripped from lessons/titles), and makes duplicate ids unique deterministically. `loadSyntheticCases()` reads `evals/cases/syn_*.json` into a SEPARATE `SYNTHETIC_CASES` collection (the hand-written corpus invariants stay pinned); a broken batch is reported, never thrown (rule 50).
+- **Ops:** `npm run synth:cases -- --countries=KE,NG --batch=4 [--seed=…] [--preview] [--out=…]`; atomic non-overwriting writes; `npm run eval:conv -- --synth` merges the batches into a run. Country lessons stay inside the batch for review — the generator never writes `country_learnings` (rule 41: that table is derived by Sentinel from live chats).
+- **Live proof:** `--preview --countries=KE,GLOBAL --batch=2` returned 4 validated cases / 0 rejected on `deepseek-chat`, writing nothing.
+
+**B. Launch award is now 6 months (183 days).**
+- `getLaunchAwardConfig()` default `365 → 183` and the clamp ceiling `365 → 183` (the promise is physically enforced: no env value can extend the offer past 6 months). `formatLaunchAwardLine` default, the award copy, the coupon prefix (`LAUNCH183-<slot>`, derived from days), the SQL column default (`ALTER TABLE … SET DEFAULT 183`, applied live via `npm run migrate:launch-awards`) and the website banner/opt-in copy all follow the knob.
+- **Live impact: none retroactive** — `launch_awards` was empty (0 grants) at release time, and historical rows (if any later) keep their awarded `days` value. Slot cap (50), opt-in gate, 23505 race retry and the `TRIAL_MAX_TOTAL_DAYS` (45) boundary are untouched; `extendAccountTrial({ maxTotalDays: 183 })` remains the only caller allowed past 45.
+- **Rule edit (rule 58):** `.clinerules` rule 26 + the launch knob line were factually updated (365 → 183 = 6 months) because the rule would otherwise state the wrong offer.
+
+**Frames touched:** `src/services/aiClient.js` (purpose), `src/services/convEval.js` (per-case `minScore`, injectable judge), `src/services/convEvalCases.js` (additive schema + synthetic loader + PII guard + underscore ids), `scripts/generate_synthetic_cases.js` (new), `scripts/run_conv_eval.js` (`--synth`), `scripts/health_audit.js`, `src/services/launchAwards.js`, `scripts/run_launch_awards_migration.js`, `src/services/flowKnowledge.js`, `landing/index.html`, `.env.example`, `.clinerules`, `evals/README.md` (new), `test_synthetic_cases.js` (new), `test_launch_award.js`, `test_trial_engine.js`, `package.json`, `README.md`, `landing/data/changelog.json` + stamped assets, `docs/{PRODUCT_QA,SAKA_TRAINING}.md` (regenerated), `SAKA_FLEET_ARCHITECTURE.md`, `CHANGELOG.md`.
+
+**Suites run:** `test_synthetic_cases` (83 - new), `test_conv_eval` (109), `test_launch_award` (29), `test_trial_engine` (80), `test_landing_static`, `test_agent_training`, `test_env_audit`, `test_doc_sync`, `test_kb_docs` - green; `npm run health` green.
 

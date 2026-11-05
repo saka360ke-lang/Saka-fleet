@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { caseHash } from './convEval.js';
 
@@ -28,7 +29,7 @@ export function validateCase(raw, seenIds = new Set()) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, errors: ['not an object'], value: null };
   const id = String(raw.id || '').trim();
   if (!id) errors.push('missing id');
-  else if (!/^[a-z0-9][a-z0-9-]{2,60}$/i.test(id)) errors.push('id must be a simple slug');
+  else if (!/^[a-z0-9][a-z0-9_-]{2,60}$/i.test(id)) errors.push('id must be a simple slug');
   if (id && seenIds.has(id)) errors.push('duplicate id');
   const turns = Array.isArray(raw.turns) ? raw.turns : [];
   if (turns.length === 0) errors.push('missing turns');
@@ -53,6 +54,35 @@ export function validateCase(raw, seenIds = new Set()) {
   if (tags.length === 0) errors.push('missing tags');
   const expected = String(raw.expected || 'pass').toLowerCase();
   if (!['pass', 'fail'].includes(expected)) errors.push('expected must be pass|fail');
+
+  // v1.61.0 — additive country-bucket metadata for synthetic scenarios. A case
+  // is either bound to a real ISO country code or neutral (GLOBAL); anything
+  // else is rejected so a bucket can never be invented.
+  const bucketRaw = raw.country_bucket ?? raw.countryBucket ?? null;
+  const countryBucket = bucketRaw === null || bucketRaw === '' ? null : String(bucketRaw).trim().toUpperCase();
+  if (countryBucket !== null && countryBucket !== 'GLOBAL' && !/^[A-Z]{2}$/.test(countryBucket)) {
+    errors.push('country_bucket must be a 2-letter code or GLOBAL');
+  }
+  const regionalContext = String(raw.regional_context ?? raw.regionalContext ?? '').trim().slice(0, 240);
+  const lessons = [];
+  for (const lesson of (Array.isArray(raw.lessons) ? raw.lessons : []).slice(0, 5)) {
+    const text = String(lesson || '').trim().slice(0, 200);
+    if (text) lessons.push(text);
+  }
+  const metrics = (raw.expected_metrics && typeof raw.expected_metrics === 'object')
+    ? raw.expected_metrics
+    : ((raw.expectedMetrics && typeof raw.expectedMetrics === 'object') ? raw.expectedMetrics : null);
+  const minScoreRaw = raw.min_score ?? raw.minScore ?? metrics?.min_loop_avoidance_score ?? metrics?.min_score ?? null;
+  const minScore = Number.isFinite(Number(minScoreRaw))
+    ? Math.min(1, Math.max(0.5, Number(minScoreRaw)))
+    : null;
+
+  // PII guard: no real phone numbers or emails may ride a case (synthetic or
+  // hand-written) into the corpus or the judge prompt.
+  const haystack = [reply, ...cleanTurns.map((turn) => turn.text), ...lessons].join('\n');
+  if (/(?:\+\d{9,}|\b\d{10,}\b)/.test(haystack)) errors.push('possible real phone number');
+  if (/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(haystack)) errors.push('email address not allowed');
+
   if (errors.length) return { ok: false, errors, value: null };
   return {
     ok: true,
@@ -61,8 +91,13 @@ export function validateCase(raw, seenIds = new Set()) {
       id,
       tags,
       expected,
-      source: 'corpus',
+      source: raw.source === 'synthetic' ? 'synthetic' : 'corpus',
       frictionType: raw.friction_type || null,
+      countryBucket,
+      regionalContext,
+      lessons,
+      minScore,
+      expectedMetrics: metrics,
       turns: cleanTurns,
       reply,
       note: String(raw.note || '').slice(0, 200)
@@ -171,4 +206,62 @@ export function sampleCorpusCases(limit = 12, cases = CONVERSATION_CASES) {
   const step = list.length / bounded;
   return Array.from({ length: bounded }, (_, index) => list[Math.floor(index * step)]).filter(Boolean);
 }
+
+/* ------------------------------------------------------------------ */
+/* v1.61.0 — synthetic scenario batches (global country buckets)      */
+/* ------------------------------------------------------------------ */
+
+export const SYNTHETIC_DIR = fileURLToPath(new URL('../../evals/cases', import.meta.url));
+
+/**
+ * Load every `syn_*.json` batch in the corpus directory. Batches are additive:
+ * they never touch the hand-written `conversation_cases.json`, and a broken
+ * batch is reported (not thrown) so one bad generation cannot break the app or
+ * the health gate. Each case is validated with the same strict validator and
+ * keeps its `countryBucket` metadata.
+ */
+export function loadSyntheticCases(dir = SYNTHETIC_DIR) {
+  const errors = [];
+  const cases = [];
+  let files = [];
+  try {
+    files = fs.readdirSync(dir).filter((name) => /^syn_.*\.json$/i.test(name)).sort();
+  } catch (err) {
+    return { cases, errors: [`synthetic dir unreadable: ${err?.message || 'unknown'}`], files };
+  }
+  const seen = new Set();
+  for (const file of files) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8'));
+      const list = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.cases) ? parsed.cases : []);
+      if (!list.length) {
+        errors.push(`${file}: no cases`);
+        continue;
+      }
+      for (const raw of list) {
+        const checked = validateCase({ ...raw, source: 'synthetic' }, seen);
+        if (checked.ok) {
+          seen.add(checked.value.id);
+          cases.push(checked.value);
+        } else {
+          errors.push(`${file}:${raw?.id || 'unknown'}: ${checked.errors.join(', ')}`);
+        }
+      }
+    } catch (err) {
+      errors.push(`${file}: unreadable (${err?.message || 'unknown'})`);
+    }
+  }
+  return { cases, errors, files };
+}
+
+export const SYNTHETIC = loadSyntheticCases();
+export const SYNTHETIC_CASES = SYNTHETIC.cases;
+export const SYNTHETIC_CASE_ERRORS = SYNTHETIC.errors;
+export const SYNTHETIC_CASE_FILES = SYNTHETIC.files;
+
+/** Country buckets present in a case list (release + operator reporting). */
+export function countryBucketsOf(cases = SYNTHETIC_CASES) {
+  return [...new Set((cases || []).map((caseDef) => caseDef.countryBucket).filter(Boolean))].sort();
+}
+
 

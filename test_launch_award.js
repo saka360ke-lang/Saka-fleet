@@ -4,7 +4,7 @@
  * Stateless: in-memory Supabase mock (plus one racing fake). Zero network.
  * Covers: config defaults/kill switch, public status (fail-closed), exactly-once
  * per owner, slot cap = automatic fallback, 23505 race retry, coupon + trial
- * extension (365 days via maxTotalDays), audit trail and deterministic copy.
+ * extension (183 days via maxTotalDays), audit trail and deterministic copy.
  *
  * Run: node test_launch_award.js
  */
@@ -33,7 +33,7 @@ function check(condition, message) {
 
 const DAY = 86400000;
 const future = (days) => new Date(Date.now() + days * DAY).toISOString();
-const ENV = { LAUNCH_AWARD_ENABLED: 'on', LAUNCH_MAX_FIRST_SIGNUPS: '50', LAUNCH_AWARD_DAYS: '365', LAUNCH_STATUS_CACHE_MS: '60000' };
+const ENV = { LAUNCH_AWARD_ENABLED: 'on', LAUNCH_MAX_FIRST_SIGNUPS: '50', LAUNCH_AWARD_DAYS: '183', LAUNCH_STATUS_CACHE_MS: '60000' };
 
 function trialWorld() {
   return createMockSupabase({
@@ -72,19 +72,19 @@ function trialWorld() {
 function seededAwards(count, { startAt = 1 } = {}) {
   const rows = [];
   for (let i = 0; i < count; i += 1) {
-    rows.push({ slot_idx: startAt + i, owner_id: `seed-owner-${startAt + i}`, days: 365, awarded_at: new Date().toISOString() });
+    rows.push({ slot_idx: startAt + i, owner_id: `seed-owner-${startAt + i}`, days: 183, awarded_at: new Date().toISOString() });
   }
   return rows;
 }
 
-console.log('=== v1.58.26: launch award (first 50 -> 365 days, then default) ===');
+console.log('=== v1.61.0: launch award (first 50 -> 6 months / 183 days, then default) ===');
 
 
 // 2. Public status: empty campaign is OPEN; a broken DB is CLOSED.
 clearLaunchAwardCache();
 const world = trialWorld();
 const openStatus = await getLaunchAwardStatus({ supabase: world.client, env: ENV, force: true });
-check(openStatus.active === true && openStatus.slotsLeft === 50 && openStatus.awardDays === 365, 'Empty campaign: active with all slots free');
+check(openStatus.active === true && openStatus.slotsLeft === 50 && openStatus.awardDays === 183, 'Empty campaign: active with all slots free (6-month offer)');
 const brokenStatus = await getLaunchAwardStatus({
   supabase: { from() { throw new Error('db down'); } },
   env: ENV,
@@ -94,17 +94,17 @@ check(brokenStatus.active === false, 'Fail-closed: a DB error hides the campaign
 const disabledStatus = await getLaunchAwardStatus({ supabase: world.client, env: { ...ENV, LAUNCH_AWARD_ENABLED: 'off' }, force: true });
 check(disabledStatus.active === false, 'Kill switch: status is inactive');
 
-// 3. The grant: slot 1, coupon, 365-day extension, audit.
+// 3. The grant: slot 1, coupon, 183-day (6-month) extension, audit.
 clearLaunchAwardCache();
 const award = await grantLaunchAwardForTrial({ supabase: world.client, ownerId: 'p-1', trial: { id: 't-1' }, phone: '+254700000123', env: ENV });
-check(award.granted === true && award.slot === 1 && award.days === 365, 'First grant takes slot 1 with 365 days');
-check(award.extended === true && award.couponCode === 'LAUNCH365-1', 'The award writes its coupon and extends the trial');
+check(award.granted === true && award.slot === 1 && award.days === 183, 'First grant takes slot 1 with 183 days (6 months)');
+check(award.extended === true && award.couponCode === 'LAUNCH183-1', 'The award writes its coupon and extends the trial');
 check(world.db.launch_awards.length === 1 && world.db.launch_awards[0].owner_id === 'p-1', 'Exactly one launch_awards row for the owner');
-check(world.db.coupons.some((c) => c.code === 'LAUNCH365-1' && c.created_by === 'LAUNCH_AWARD' && c.applicable_to === 'account_trial_extension'), 'A LAUNCH_AWARD coupon row exists (server-side confirmation)');
-check(world.db.coupons.some((c) => c.code === 'LAUNCH365-1' && c.owner_id === 'p-1' && c.is_redeemed === true), 'The award coupon is account-bound and marked redeemed (rule 29)');
+check(world.db.coupons.some((c) => c.code === 'LAUNCH183-1' && c.created_by === 'LAUNCH_AWARD' && c.applicable_to === 'account_trial_extension'), 'A LAUNCH_AWARD coupon row exists (server-side confirmation)');
+check(world.db.coupons.some((c) => c.code === 'LAUNCH183-1' && c.owner_id === 'p-1' && c.is_redeemed === true), 'The award coupon is account-bound and marked redeemed (rule 29)');
 const extendedTrial = world.db.trial_sessions.find((t) => t.id === 't-1');
 const totalDays = Math.round((new Date(extendedTrial.ends_at).getTime() - new Date(extendedTrial.started_at).getTime()) / DAY);
-check(totalDays >= 364 && totalDays <= 366, `The trial now runs ~365 days (got ${totalDays})`);
+check(totalDays >= 182 && totalDays <= 184, `The trial now runs ~183 days / 6 months (got ${totalDays})`);
 check(world.db.admin_audit_logs.some((row) => row.action === 'LAUNCH_AWARD_GRANTED'), 'The grant is audited (LAUNCH_AWARD_GRANTED)');
 invalidateEntitlements('p-1');
 
@@ -184,10 +184,10 @@ clearLaunchAwardCache();
 const stats = await getLaunchAwardStats({ supabase: world.client, env: ENV });
 check(stats.slotsTaken === 1 && stats.slotsLeft === 49 && stats.winners[0].ownerId === 'p-1', 'Stats show slots taken/left and the winners');
 const statsReply = formatLaunchStatsReply(stats);
-check(/Slots taken: 1 \/ 50/.test(statsReply) && /365 days/.test(statsReply), 'The digest is deterministic and readable');
+check(/Slots taken: 1 \/ 50/.test(statsReply) && /183 days/.test(statsReply), 'The digest is deterministic and readable');
 check(/unavailable/.test(formatLaunchStatsReply({ ok: false })), 'A failed stats read says so (never invents numbers)');
-const line = formatLaunchAwardLine({ days: 365, slot: 7, slotsTotal: 50 });
-check(/365 days/.test(line) && /#7/.test(line) && /first 50/.test(line), 'The award copy names the days, the slot and the cohort');
+const line = formatLaunchAwardLine({ days: 183, slot: 7, slotsTotal: 50 });
+check(/183 days/.test(line) && /#7/.test(line) && /first 50/.test(line), 'The award copy names the days, the slot and the cohort');
 
 // 8. Superadmin wiring: `admin launch-stats` is parsed, registered and rendered.
 check((await parseSuperadminCommand('admin launch-stats'))?.intent === 'ADMIN_LAUNCH_STATS', 'admin launch-stats is a deterministic command');
@@ -204,8 +204,8 @@ check(world.db.launch_awards.length === 1, 'No duplicate award rows');
 
 // 1. Config defaults + kill switch.
 const defaults = getLaunchAwardConfig({});
-check(defaults.enabled === true && defaults.slots === 50 && defaults.days === 365, 'Defaults: enabled, 50 slots, 365 days');
+check(defaults.enabled === true && defaults.slots === 50 && defaults.days === 183, 'Defaults: enabled, 50 slots, 183 days (6 months)');
 const tuned = getLaunchAwardConfig({ LAUNCH_AWARD_ENABLED: 'off', LAUNCH_MAX_FIRST_SIGNUPS: '3', LAUNCH_AWARD_DAYS: '90' });
 check(tuned.enabled === false && tuned.slots === 3 && tuned.days === 90, 'Env knobs override the defaults (kill switch off, 3 slots, 90 days)');
 const clamped = getLaunchAwardConfig({ LAUNCH_AWARD_DAYS: '9999', LAUNCH_MAX_FIRST_SIGNUPS: '0' });
-check(clamped.days === 365 && clamped.slots === 1, 'Knobs are clamped (days <= 365, slots >= 1)');
+check(clamped.days === 183 && clamped.slots === 1, 'Knobs are clamped (days <= 183, slots >= 1)');

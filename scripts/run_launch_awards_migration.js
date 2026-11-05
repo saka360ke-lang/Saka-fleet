@@ -4,12 +4,13 @@ import { runSql, hasSqlAccess, getProjectRef } from '../src/db/sqlRunner.js';
 import { LAUNCH_AWARD_SQL, LAUNCH_UTM_SQL, LAUNCH_OPT_IN_SQL } from '../src/services/launchAwards.js';
 
 /**
- * Saka Fleet — launch campaign migration (v1.58.26, opt-in v1.59.1).
+ * Saka Fleet — launch campaign migration (v1.58.26, opt-in v1.59.1, 6-month offer v1.61.0).
  * Creates `launch_awards` (first-N welcome-trial award ledger), adds the
- * optional UTM attribution columns to `profiles`, and adds the launch-offer
+ * optional UTM attribution columns to `profiles`, adds the launch-offer
  * opt-in flag (`profiles.launch_opt_in`, NOT NULL DEFAULT true so existing
- * accounts keep the automatic award). Idempotent by construction
- * (CREATE TABLE IF NOT EXISTS / ADD COLUMN IF NOT EXISTS).
+ * accounts keep the automatic award), and re-asserts the 6-month column
+ * default (`days DEFAULT 183`). Idempotent by construction
+ * (CREATE TABLE IF NOT EXISTS / ADD COLUMN IF NOT EXISTS / ALTER ... SET DEFAULT).
  *
  * Run: npm run migrate:launch-awards
  */

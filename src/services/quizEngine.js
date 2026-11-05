@@ -2869,7 +2869,7 @@ async function executeFlow(state, ctx) {
           });
         } catch { /* activation is best-effort */ }
         // v1.58.26 — launch campaign: the first N welcome-trial starts get the
-        // 365-day award. Fail-soft: a launch problem never blocks registration.
+        // 6-month (183-day) award. Fail-soft: a launch problem never blocks registration.
         let launchAward = null;
         if (welcomeTrial?.started) {
           try {

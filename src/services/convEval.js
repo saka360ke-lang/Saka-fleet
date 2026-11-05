@@ -378,8 +378,12 @@ export async function recordConvEvalRun(supabase, row = {}) {
 /**
  * Score a batch of cases. Each result is persisted when a Supabase client is
  * supplied. Returns a deterministic summary for the digest/CLI.
+ * A case may carry its own `minScore` (synthetic cases do) — the per-case bar
+ * overrides the batch threshold without weakening any other case.
+ * `judgeFn` is injectable so the release test can prove the threshold plumbing
+ * without a provider call.
  */
-export async function runConvEvalBatch({ supabase = null, cases = [], threshold = null, judge = {}, persist = true } = {}) {
+export async function runConvEvalBatch({ supabase = null, cases = [], threshold = null, judge = {}, persist = true, judgeFn = judgeConversation } = {}) {
   const cfg = getConvEvalConfig();
   const effectiveThreshold = Number.isFinite(Number(threshold)) ? Number(threshold) : cfg.threshold;
   const runId = crypto.randomUUID();
@@ -387,14 +391,18 @@ export async function runConvEvalBatch({ supabase = null, cases = [], threshold 
   let persisted = 0;
   for (const caseDef of Array.isArray(cases) ? cases : []) {
     if (!caseDef || !caseDef.id) continue;
-    const judged = await judgeConversation({ caseDef, judge: { ...judge, threshold: effectiveThreshold } });
+    const caseThreshold = Number.isFinite(Number(caseDef.minScore))
+      ? Math.min(1, Math.max(0, Number(caseDef.minScore)))
+      : effectiveThreshold;
+    const judged = await judgeFn({ caseDef, judge: { ...judge, threshold: caseThreshold } });
     results.push({
       caseId: caseDef.id,
       source: caseDef.source || 'corpus',
+      countryBucket: caseDef.countryBucket || null,
       frictionLogId: caseDef.frictionLogId || null,
       caseDef,
       judged,
-      threshold: effectiveThreshold,
+      threshold: caseThreshold,
       transcriptHash: caseHash(caseDef)
     });
     if (supabase && persist) {
@@ -411,7 +419,7 @@ export async function runConvEvalBatch({ supabase = null, cases = [], threshold 
           : {},
         averageScore: judged.ok ? judged.aggregate : null,
         passed: judged.ok ? judged.passed : false,
-        threshold: effectiveThreshold,
+        threshold: caseThreshold,
         frictionLogId: caseDef.frictionLogId || null,
         status: judged.ok ? (judged.passed ? CONV_EVAL_STATUS.PASSED : CONV_EVAL_STATUS.FAILED) : CONV_EVAL_STATUS.ERROR
       });

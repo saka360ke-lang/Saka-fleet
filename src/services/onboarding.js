@@ -204,7 +204,7 @@ export async function saveVehicleAssetRecord({
         event: ACTIVATION_EVENTS.VEHICLE_REGISTERED
       });
       // v1.58.26 — launch campaign: the first N welcome-trial starts get the
-      // 365-day award. Fail-soft: an award problem never blocks the trial.
+      // 6-month (183-day) award. Fail-soft: an award problem never blocks the trial.
       if (welcome?.started) {
         try {
           const award = await grantLaunchAwardForTrial({

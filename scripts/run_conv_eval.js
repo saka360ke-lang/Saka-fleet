@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { createClient } from '@supabase/supabase-js';
 import { CONV_EVAL_CRITERIA, formatConvEvalReply, getConvEvalConfig, resolveJudgeConfig, runConvEvalBatch } from '../src/services/convEval.js';
-import { CONVERSATION_CASES, buildLiveCasesFromFriction, sampleCorpusCases, CASE_VALIDATION_ERRORS } from '../src/services/convEvalCases.js';
+import { CONVERSATION_CASES, buildLiveCasesFromFriction, sampleCorpusCases, CASE_VALIDATION_ERRORS, SYNTHETIC_CASES, SYNTHETIC_CASE_ERRORS } from '../src/services/convEvalCases.js';
 import { healFailedCase } from '../src/services/convEvalHealer.js';
 
 /**
@@ -10,6 +10,7 @@ import { healFailedCase } from '../src/services/convEvalHealer.js';
  * Usage:
  *   node scripts/run_conv_eval.js                 # score the offline corpus
  *   node scripts/run_conv_eval.js --live          # live friction transcripts (+ corpus fill)
+ *   node scripts/run_conv_eval.js --synth         # include global synthetic batches (syn_*.json)
  *   node scripts/run_conv_eval.js --heal          # heal failures (needs CONV_EVAL_HEAL_ENABLED=on)
  *   node scripts/run_conv_eval.js --limit=6       # cap cases
  *   node scripts/run_conv_eval.js --fail-on-failures  # exit 1 when any case fails (CI gate)
@@ -20,12 +21,13 @@ import { healFailedCase } from '../src/services/convEvalHealer.js';
  */
 
 function parseArgs(argv = []) {
-  const args = { live: false, heal: false, json: false, export: false, failOnFailures: false, limit: null };
+  const args = { live: false, heal: false, json: false, export: false, synth: false, failOnFailures: false, limit: null };
   for (const raw of argv) {
     if (raw === '--live') args.live = true;
     else if (raw === '--heal') args.heal = true;
     else if (raw === '--json') args.json = true;
     else if (raw === '--export') args.export = true;
+    else if (raw === '--synth') args.synth = true;
     else if (raw === '--fail-on-failures') args.failOnFailures = true;
     else if (raw.startsWith('--limit=')) args.limit = Math.max(1, Math.min(50, Number(raw.slice(8)) || 0));
   }
@@ -86,6 +88,31 @@ async function main() {
   if (!cases.length) {
     console.error('No eval cases to run.');
     return 1;
+  }
+
+  if (args.synth) {
+    if (SYNTHETIC_CASE_ERRORS.length) {
+      console.warn(`⚠️ ${SYNTHETIC_CASE_ERRORS.length} synthetic case(s) were skipped during load:`);
+      for (const error of SYNTHETIC_CASE_ERRORS.slice(0, 5)) console.warn(`   - ${error}`);
+    }
+    if (!SYNTHETIC_CASES.length) {
+      console.warn('⚠️ --synth requested but no evals/cases/syn_*.json batches exist (run `npm run synth:cases` first).');
+    }
+    const known = new Set(cases.map((caseDef) => caseDef.id));
+    const merged = [...cases];
+    for (const caseDef of SYNTHETIC_CASES) {
+      if (merged.length >= limit) break;
+      if (!known.has(caseDef.id)) {
+        merged.push(caseDef);
+        known.add(caseDef.id);
+      }
+    }
+    const added = merged.length - cases.length;
+    if (added > 0) {
+      const buckets = [...new Set(merged.filter((caseDef) => caseDef.source === 'synthetic').map((caseDef) => caseDef.countryBucket))];
+      console.log(`🌍 Added ${added} synthetic case(s) — buckets: ${buckets.join(', ')}`);
+    }
+    cases = merged;
   }
 
   const judge = resolveJudgeConfig();

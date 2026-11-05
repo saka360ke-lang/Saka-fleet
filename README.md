@@ -184,9 +184,11 @@ ask you to double-check before saving; nothing is ever written without your YES.
 - Background/system work (Sentinel synthesis, model benchmarking/research) stays on DeepSeek. Failover: **Sonnet -> GPT-4o** when `OPENAI_API_KEY` is set -> **DeepSeek** (always terminal).
 - Cloud Run needs `ANTHROPIC_API_KEY` and optionally `OPENAI_API_KEY`; `AI_TIER1_PROVIDER` / `AI_MODEL_TIER_1_ANTHROPIC` pin or override the front provider/model. Without keys the app degrades to DeepSeek automatically.
 
-## Conversation evals & self-healing (v1.60.0)
+## Conversation evals & self-healing (v1.60.0 / v1.61.0)
 - **DeepEval-style judge, Node-native.** `npm run eval:conv` scores replies on five criteria (loop avoidance, Persona v4 tone, shorthand precision, one question, boundary safety) with a 0.70 bar; every call rides `aiClient` (`purpose: conversation_eval`). `--live` scores real PENDING friction transcripts, `--heal` ships bounded prompt hints, `--export` emits DeepEval-compatible JSONL.
+- **Global synthetic scenarios (v1.61.0).** `npm run synth:cases -- --countries=KE,NG,ZA --batch=4 [--preview]` generates messy regional conversations (Sheng, pidgin, Taglish, Hinglish, pt-BR…), validates them into `evals/cases/syn_*.json`, and `npm run eval:conv -- --synth` scores them. Country buckets are metadata; lessons stay in the batch — nothing is auto-written into `country_learnings`.
 - **Kill switches OFF by default:** `CONV_EVAL_ENABLED` (6-hourly tick) and `CONV_EVAL_HEAL_ENABLED` (healing). Prompt hints go to `saka_dynamic_rules`; code-level fixes become `PENDING_APPROVAL` proposals — the approval gateway is unchanged.
+- **Launch award (v1.61.0):** the first 50 welcome trials now run **6 months (183 days)**, not 365; the ceiling is clamped so the offer cannot drift back.
 - **Superadmin:** `admin eval`, `admin eval last 48h`, `admin eval run`, `admin eval heal <case-id>`; results live in `conversation_eval_runs` (`npm run migrate:conv-eval`) and every heal/proposal is audited + announced on WhatsApp + email.
 ## Snappy Saka — latency & OCR pause (v1.22.0)
 - **Photo OCR is paused by default** (`OCR_ENABLED=off`): photo turns answer

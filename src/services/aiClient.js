@@ -249,6 +249,9 @@ export const AI_PURPOSES = Object.freeze({
   // single hub to Claude Haiku — rules 20-22 are never bypassed).
   conversation_eval: { tier: AI_TIERS.ROUTER, jsonMode: true, maxTokens: 900, temperature: 0 },
   conversation_heal: { tier: AI_TIERS.REASONING, jsonMode: true, maxTokens: 800, temperature: 0.3 },
+  // v1.61.0 — global synthetic scenario generator (manual CLI; regional
+  // shorthand/currency variety needs the reasoning tier's latitude).
+  conversation_synth: { tier: AI_TIERS.REASONING, jsonMode: true, maxTokens: 2000, temperature: 0.75 },
   default: { tier: AI_TIERS.ROUTER }
 });
 
