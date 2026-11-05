@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.61.8] - 2026-11-05
+
+- **Live verification of 1.61.7 found the follow-on problem: six failures = six emails per tick.** Revision `00308` proved the channel policy works (4 successful heals → **no email**; 6 failed heals → 6 emails) but that is ~24 emails/hour against the Resend quota. Failure alerts are now **batched**: each failure is announced on WhatsApp immediately (per case, no email), and the worker sends **ONE `notifyHealFailureDigest()` per tick** — WhatsApp + **a single email** listing up to 10 cases with reason and before → after, plus "…and N more".
+- **Policy recap:** successful heal / drafted proposal → WhatsApp only. Failed heal / intervention → per-case WhatsApp + one digest email per tick. Judge errors → both channels, still throttled. A clean tick sends no digest at all.
+- **Frames touched:** `src/services/convEvalHealer.js` (`notifyHealFailureDigest`, per-case announce is WhatsApp-only), `src/workers/convEval.js` (one digest per tick, `failure_alert` in the tick summary), `test_conv_eval.js` (+8 assertions: single digest, subject count, listing, cap at ten, empty tick, successful heals excluded), `package.json`, `landing/data/changelog.json` + stamped assets, `SAKA_FLEET_ARCHITECTURE.md` (§164 updated, §172 new), this file.
+- **Suites run:** `test_conv_eval` (139) — green; `npm run health` green.
+
 ## [1.61.7] - 2026-11-05
 
 - **Eval notifications are WhatsApp-first.** A heal that ships (prompt rule) or a proposal that is drafted is now announced on **WhatsApp only** — no more Resend email for good news. `notifySuperadminConvEval(text, subject, { email = false })` makes email an explicit per-call opt-in; the two channels stay independent, so a WhatsApp outage still can't silence a real alert.

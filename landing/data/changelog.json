@@ -1,6 +1,13 @@
 {
-  "latest": "1.61.7",
+  "latest": "1.61.8",
   "entries": [
+    {
+      "version": "1.61.8",
+      "date": "2026-11-05",
+      "title": "One tidy alert instead of an inbox full",
+      "preview": "Failed quality fixes are grouped into a single summary email per check, not one email each.",
+      "summary": "The quality loop now collects every failed fix from a single run into one summary (WhatsApp plus one email) that lists the cases, the stage they stopped at and the scores, with a pointer to the review commands. Successful fixes remain WhatsApp-only, and a clean run sends nothing at all, so the admin inbox stays quiet and the email quota is protected."
+    },
     {
       "version": "1.61.7",
       "date": "2026-11-05",

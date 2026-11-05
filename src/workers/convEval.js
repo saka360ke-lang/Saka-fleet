@@ -9,7 +9,7 @@ import {
   CONV_EVAL_STATUS
 } from '../services/convEval.js';
 import { buildLiveCasesFromFriction, buildLiveCasesFromChatHistory, sampleCorpusCases } from '../services/convEvalCases.js';
-import { healFailedCase, notifySuperadminConvEval } from '../services/convEvalHealer.js';
+import { healFailedCase, notifySuperadminConvEval, notifyHealFailureDigest } from '../services/convEvalHealer.js';
 
 /**
  * Saka Fleet — conversation eval tick (v1.60.0)
@@ -140,7 +140,11 @@ export async function runConvEvalTick(supabase, { force = false, persist = true 
     }
   }
 
-  // 3. One throttled alert when the judge itself is unhealthy.
+  // 3. ONE failure digest per tick (WhatsApp + email, v1.61.8) — successful
+  // heals stay WhatsApp-only, and six failed heals never spend six emails.
+  const failureDigest = await notifyHealFailureDigest(healResults);
+
+  // 4. One throttled alert when the judge itself is unhealthy.
   let alerted = { whatsapp: false, email: false };
   if (summary.errored > 0 && Date.now() - lastErrorAlertAt >= cfg.alertCooldownHours * 60 * 60 * 1000) {
     lastErrorAlertAt = Date.now();
@@ -174,6 +178,7 @@ export async function runConvEvalTick(supabase, { force = false, persist = true 
     skipped_live: skippedLive.slice(0, 10),
     healed: healResults.filter((result) => result.ok),
     heal_attempts: healResults.length,
+    failure_alert: failureDigest,
     notified: alerted
   };
 }

@@ -29,7 +29,7 @@ import {
   sampleCorpusCases,
   validateCase
 } from './src/services/convEvalCases.js';
-import { sanitizeHealPatch, formatHealNotice, formatHealFailureNotice, healFailedCase, HEAL_PATCH_MAX_CHARS } from './src/services/convEvalHealer.js';
+import { sanitizeHealPatch, formatHealNotice, formatHealFailureNotice, notifyHealFailureDigest, healFailedCase, HEAL_PATCH_MAX_CHARS } from './src/services/convEvalHealer.js';
 import { formatBatchFailures, handleConvEvalCommand } from './src/services/convEvalConsole.js';
 import { ENV_SECTIONS } from './src/services/envAudit.js';
 
@@ -290,13 +290,39 @@ const healInput = {
 };
 const noImprove = await healFailedCase({ ...healInput, judge: async () => ({ ok: true, passed: true, aggregate: 0.56 }) });
 check(noImprove.ok === false && noImprove.reason === 'no_improvement', 'a heal that does not beat the original is refused', noImprove.reason);
-check(notifyCalls.length === 1 && notifyCalls[0].options?.email === true, 'a failed heal is emailed as well (email: true)');
+check(notifyCalls.length === 1 && notifyCalls[0].options === undefined, 'a failed heal announces on WhatsApp immediately (no per-case email)');
 check(/heal needs attention/i.test(notifyCalls[0].text), 'the failed-heal announcement says it needs attention');
 const healedRun = await healFailedCase({ ...healInput, judge: async () => ({ ok: true, passed: true, aggregate: 0.92 }) });
 check(healedRun.ok === true && healedRun.shipped === 'rule', 'a heal that clears the gate ships the prompt rule');
 const healCall = notifyCalls[notifyCalls.length - 1];
 check(healCall.options === undefined || healCall.options?.email !== true, 'a shipped heal is WhatsApp-only (no email)');
 check(notifyCalls[0].subject !== healCall.subject, 'failure and success announcements are distinguishable by subject');
+
+// v1.61.8 — ONE failure digest per tick carries the email (Resend quota).
+const digestCalls = [];
+const digestNotify = async (text, subject, options) => {
+  digestCalls.push({ text, subject, options });
+  return { whatsapp: true, email: Boolean(options?.email) };
+};
+const failureDigestResult = await notifyHealFailureDigest([
+  { ok: false, caseId: 'loop-expense-litres', reason: 'no_improvement', before: 0.26, after: 0.77 },
+  { ok: false, caseId: 'elderly-jargon-wall', reason: 'no_improvement' },
+  { ok: true, caseId: 'ack-repeat-robot' }
+], { notify: digestNotify });
+check(failureDigestResult.count === 2 && digestCalls.length === 1, 'a tick with several failed heals sends exactly ONE digest', digestCalls.length);
+check(digestCalls[0].options?.email === true, 'the failure digest is the email carrier (email: true)');
+check(digestCalls[0].subject.includes('2 heals need attention'), 'the digest subject counts the failed heals', digestCalls[0].subject);
+check(digestCalls[0].text.includes('loop-expense-litres') && digestCalls[0].text.includes('elderly-jargon-wall'), 'the digest lists every failed case');
+check(digestCalls[0].text.includes('0.26 → 0.77'), 'the digest carries before/after when available');
+check(!digestCalls[0].text.includes('ack-repeat-robot'), 'successful heals never appear in the failure digest');
+const cleanTickDigest = await notifyHealFailureDigest([{ ok: true, caseId: 'x' }], { notify: digestNotify });
+check(cleanTickDigest.count === 0 && digestCalls.length === 1, 'a clean tick sends no failure digest');
+const bigDigestCalls = [];
+await notifyHealFailureDigest(
+  Array.from({ length: 13 }, (_, i) => ({ ok: false, caseId: `case-${i}`, reason: 'ship_failed' })),
+  { notify: async (text, subject, options) => { bigDigestCalls.push({ text, subject, options }); return { whatsapp: true, email: true }; } }
+);
+check(bigDigestCalls.length === 1 && /and 3 more/.test(bigDigestCalls[0].text), 'the digest caps at ten lines and says how many remain');
 if (prevHealFlag === undefined) delete process.env.CONV_EVAL_HEAL_ENABLED;
 else process.env.CONV_EVAL_HEAL_ENABLED = prevHealFlag;
 
