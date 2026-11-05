@@ -352,7 +352,13 @@ check(indexHtml.includes('class="hero-mark"') && css.includes('.hero-mark') && i
 check(indexHtml.includes('theme-color" content="#0A0A0C"'), 'the browser theme colour matches the black canvas');
 const logoSvg = fs.readFileSync(path.join(LANDING, 'assets/img/logo.svg'), 'utf8');
 check(logoSvg.includes('data:image/png;base64,') && logoSvg.includes('viewBox="0 0 1617 164"') && logoSvg.includes('aria-label="Saka Fleet"'), 'the logo is the supplied SAKAFLEET lockup (interlocking mark + wordmark), accessibly labelled');
-check(/class="mark" src="\/assets\/img\/logo\.svg"[^>]*width="335"/.test(indexHtml), 'the nav lockup keeps its intrinsic 9.9:1 ratio (335x34, no squish)');
+check(/class="mark" src="\/assets\/img\/logo\.svg[^"]*"[^>]*width="335"/.test(indexHtml), 'the nav lockup keeps its intrinsic 9.9:1 ratio (335x34, no squish)');
+// v1.61.6 — the CDN caches images for 30 days, so every image reference must
+// carry the release stamp or a fresh logo keeps serving from cache.
+const unversionedImages = [...indexHtml.matchAll(/(?:src|href)="([^"]*\/assets\/img\/[^"]*)"/g)]
+  .map((m) => m[1])
+  .filter((ref) => !/\?v=\d/.test(ref));
+check(unversionedImages.length === 0, `every image reference is cache-busted${unversionedImages.length ? ` (missing: ${unversionedImages.join(', ')})` : ''}`);
 check(css.includes('prefers-reduced-motion') && css.includes('@keyframes menu-rise'), 'the drawer animation honours reduced motion');
 check(css.includes('.nav-burger') && css.includes('.nav-menu') && css.includes('max-width: 960px'), 'burger + full-screen drawer appear at tablet/mobile widths');
 const navJsSource = fs.readFileSync(path.join(LANDING, 'assets/js/nav.js'), 'utf8');
