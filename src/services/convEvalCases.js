@@ -221,6 +221,54 @@ export function buildLiveCasesFromFriction(rows = [], { limit = 6 } = {}) {
   return { cases, skipped };
 }
 
+/**
+ * v1.61.3 — live chat exchanges are the primary eval source. Friction snippets
+ * are not always transcripts (the circuit breaker wrote prompt-only rows), so a
+ * tick that reads only `chat_friction_logs` can miss real conversations. This
+ * pairs each user turn with the assistant reply that followed it.
+ * `rows` may arrive newest-first (Supabase default); the helper sorts per phone.
+ */
+export function buildLiveCasesFromChatHistory(rows = [], { limit = 6 } = {}) {
+  const byPhone = new Map();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const phone = String(row.user_phone || row.phone_number || '').trim();
+    const role = String(row.role || row.sender || '').toLowerCase();
+    const text = String(row.message || row.message_text || '').trim();
+    if (!phone || !text) continue;
+    const normalizedRole = role === 'user' ? 'user' : (role === 'assistant' || role === 'model' || role === 'bot' ? 'assistant' : null);
+    if (!normalizedRole) continue;
+    if (!byPhone.has(phone)) byPhone.set(phone, []);
+    byPhone.get(phone).push({ role: normalizedRole, text: text.slice(0, 1200), at: row.created_at || null });
+  }
+  const cases = [];
+  const skipped = [];
+  for (const [phone, turns] of byPhone.entries()) {
+    const ordered = [...turns].sort((a, b) => String(a.at || '').localeCompare(String(b.at || '')));
+    for (let index = 0; index < ordered.length - 1 && cases.length < limit; index += 1) {
+      const userTurn = ordered[index];
+      const assistantTurn = ordered[index + 1];
+      if (userTurn.role !== 'user' || assistantTurn.role !== 'assistant') continue;
+      const caseDef = {
+        id: `live-chat-${String(phone).replace(/\D/g, '').slice(-4)}-${cases.length + 1}`,
+        tags: ['live', 'chat-history'],
+        expected: 'pass',
+        source: 'live',
+        frictionType: 'LIVE_CHAT',
+        turns: [{ role: 'user', text: userTurn.text }],
+        reply: assistantTurn.text,
+        note: `live exchange ${String(userTurn.at || '').slice(0, 16)}`
+      };
+      const hash = caseHash({ id: 'live-chat', turns: caseDef.turns, reply: caseDef.reply });
+      if (cases.some((existing) => existing.__hash === hash)) continue;
+      Object.defineProperty(caseDef, '__hash', { value: hash, enumerable: false });
+      cases.push(caseDef);
+    }
+  }
+  if (!cases.length) skipped.push({ reason: 'no_user_assistant_pairs' });
+  return { cases, skipped };
+}
+
+
 /** Corpus cases for the scheduled tick: deterministic spread across tags. */
 export function sampleCorpusCases(limit = 12, cases = CONVERSATION_CASES) {
   const list = Array.isArray(cases) ? [...cases] : [];

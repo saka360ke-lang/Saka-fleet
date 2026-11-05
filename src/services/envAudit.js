@@ -145,6 +145,7 @@ export const ENV_SECTIONS = Object.freeze([
     section: 'CONVERSATION EVAL',
     keys: [
       'CONV_EVAL_ENABLED',
+      'CONV_EVAL_INTERVAL_MINUTES',
       'CONV_EVAL_INTERVAL_HOURS',
       'CONV_EVAL_MAX_CASES_PER_RUN',
       'CONV_EVAL_MIN_SCORE',

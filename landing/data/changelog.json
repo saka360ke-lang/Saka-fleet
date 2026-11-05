@@ -1,6 +1,13 @@
 {
-  "latest": "1.61.2",
+  "latest": "1.61.3",
   "entries": [
+    {
+      "version": "1.61.3",
+      "date": "2026-11-05",
+      "title": "Saka's quality checks run every 15 minutes",
+      "preview": "Live conversations are now scored continuously, and driver-document lookups, searches and photos all answer properly.",
+      "summary": "The quality loop now grades real conversations every 15 minutes, with no case limits, so friction is caught the same day instead of waiting for a report. Today's stuck session showed exactly where to look: 'driver compliances' in the plural, 'list all documents with expiry date' and 'search TSV2026' now answer from the document ledgers, photos of driver documents get a warm yes with confirm-before-save, and pasted licences are read properly. A new coverage audit tracks every flow and edge scenario, with 9 fresh regional edge cases added."
+    },
     {
       "version": "1.61.2",
       "date": "2026-11-05",

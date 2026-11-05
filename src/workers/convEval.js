@@ -8,7 +8,7 @@ import {
   caseHash,
   CONV_EVAL_STATUS
 } from '../services/convEval.js';
-import { buildLiveCasesFromFriction, sampleCorpusCases } from '../services/convEvalCases.js';
+import { buildLiveCasesFromFriction, buildLiveCasesFromChatHistory, sampleCorpusCases } from '../services/convEvalCases.js';
 import { healFailedCase, notifySuperadminConvEval } from '../services/convEvalHealer.js';
 
 /**
@@ -68,10 +68,28 @@ export async function runConvEvalTick(supabase, { force = false, persist = true 
     // Missing table (rule 50): the run still proceeds, nothing is persisted.
   }
 
-  const liveLimit = Math.max(1, Math.floor(cfg.maxCases / 2));
-  const { cases: liveCases, skipped: skippedLive } = buildLiveCasesFromFriction(liveRows, { limit: liveLimit });
-  const freshLive = liveCases.filter((caseDef) => !recentHashes.has(caseHash(caseDef)));
-  const corpus = freshLive.length < cfg.maxCases ? sampleCorpusCases(cfg.maxCases - freshLive.length) : [];
+  const liveLimit = cfg.maxCases === 0 ? 50 : Math.max(1, Math.floor(cfg.maxCases / 2));
+  // v1.61.3 — live CHAT EXCHANGES are the primary source (friction snippets are
+  // not always transcripts: the circuit breaker wrote prompt-only rows).
+  let chatRows = [];
+  try {
+    const { data } = await supabase
+      .from('chat_history')
+      .select('user_phone,role,message,created_at')
+      .order('created_at', { ascending: false })
+      .limit(120);
+    chatRows = data || [];
+  } catch {
+    chatRows = [];
+  }
+  const { cases: chatCases, skipped: skippedChat } = buildLiveCasesFromChatHistory(chatRows, { limit: liveLimit });
+  const { cases: liveCases, skipped: skippedLiveRows } = buildLiveCasesFromFriction(liveRows, { limit: liveLimit });
+  const liveCandidates = [...chatCases, ...liveCases];
+  const freshLive = liveCandidates.filter((caseDef) => !recentHashes.has(caseHash(caseDef)));
+  const skippedLive = [...skippedChat, ...skippedLiveRows];
+  const corpus = cfg.maxCases === 0
+    ? sampleCorpusCases(1000)
+    : (freshLive.length < cfg.maxCases ? sampleCorpusCases(cfg.maxCases - freshLive.length) : []);
   const cases = [...freshLive, ...corpus];
   if (!cases.length) return { ok: true, skipped: 'no_cases' };
 
@@ -83,12 +101,16 @@ export async function runConvEvalTick(supabase, { force = false, persist = true 
     persist
   });
 
-  // 2. Bounded healing (only when the operator opted in).
+  // 2. Healing (only when the operator opted in). maxPatches 0 = heal ALL
+  // failures this tick (resource-bounded), per the always-on contract.
   const healResults = [];
-  if (isConvEvalHealEnabled() && cfg.maxPatches > 0) {
+  if (isConvEvalHealEnabled()) {
+    const patchBudget = cfg.maxPatches === 0
+      ? Number.MAX_SAFE_INTEGER
+      : cfg.maxPatches;
     const failures = summary.results
       .filter((result) => result.judged?.ok && !result.judged.passed)
-      .slice(0, cfg.maxPatches);
+      .slice(0, patchBudget);
     for (const failure of failures) {
       const healed = await healFailedCase({
         supabase,

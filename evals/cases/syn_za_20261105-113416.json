@@ -1,0 +1,111 @@
+{
+  "generated_by": "generate_synthetic_cases",
+  "version": "1.61.0",
+  "prompt": "conversation_synth",
+  "country_bucket": "ZA",
+  "created_at": "2026-11-05T11:34:16.136Z",
+  "cases": [
+    {
+      "id": "syn_za_20261105113416_03",
+      "tags": [
+        "synth",
+        "za",
+        "date",
+        "ambiguity",
+        "interruption"
+      ],
+      "expected": "pass",
+      "source": "synthetic",
+      "frictionType": "MULTI_QUESTION_PROMPT",
+      "countryBucket": "ZA",
+      "regionalContext": "South Africa uses DD/MM/YYYY, but users might write MM/DD/YYYY (e.g., 05/06/2025 could be 5 June or 6 May).",
+      "lessons": [
+        "Clarify date format explicitly when ambiguous; confirm before logging."
+      ],
+      "engineFacts": [],
+      "minScore": null,
+      "criterionMins": {
+        "loop_avoidance": 0.9
+      },
+      "expectedMetrics": {
+        "min_loop_avoidance_score": 0.9,
+        "requires_shorthand_parsing": false
+      },
+      "turns": [
+        {
+          "role": "user",
+          "text": "log tyre replacement on 05/06/2025 for the truck"
+        },
+        {
+          "role": "assistant",
+          "text": "Got it, logging tyre replacement on 5 June 2025 for the truck. Confirm?"
+        },
+        {
+          "role": "user",
+          "text": "wait, is that 5 June or 6 May? I always mix up"
+        },
+        {
+          "role": "assistant",
+          "text": "In South Africa we use DD/MM, so 05/06/2025 is 5 June 2025. Shall I log it as 5 June?"
+        },
+        {
+          "role": "user",
+          "text": "ja, 5 June is correct"
+        }
+      ],
+      "reply": "Logged ✓ Tyre replacement on 5 June 2025 for the truck. All set!",
+      "note": "Date format confusion — South Africa uses DD/MM/YYYY, but users might write MM/DD/YYYY (e.g., 05/06/2025 could be 5 June or 6 May)."
+    },
+    {
+      "id": "syn_za_20261105113416_04",
+      "tags": [
+        "synth",
+        "za",
+        "looping",
+        "complaint",
+        "frustration"
+      ],
+      "expected": "pass",
+      "source": "synthetic",
+      "frictionType": "LOOPING_PROMPTS",
+      "countryBucket": "ZA",
+      "regionalContext": "User gets frustrated when assistant asks for fuel amount multiple times; 'eish' shows frustration.",
+      "lessons": [
+        "Avoid repeating questions; acknowledge frustration and proceed with given info."
+      ],
+      "engineFacts": [],
+      "minScore": null,
+      "criterionMins": {
+        "loop_avoidance": 0.95
+      },
+      "expectedMetrics": {
+        "min_loop_avoidance_score": 0.95,
+        "requires_shorthand_parsing": false
+      },
+      "turns": [
+        {
+          "role": "user",
+          "text": "eish, I need to log fuel for the bakkie"
+        },
+        {
+          "role": "assistant",
+          "text": "Sawa, how many litres of petrol?"
+        },
+        {
+          "role": "user",
+          "text": "I already told you 50 litres!"
+        },
+        {
+          "role": "assistant",
+          "text": "My bad, 50 litres. What was the cost?"
+        },
+        {
+          "role": "user",
+          "text": "R1100, and don't ask again"
+        }
+      ],
+      "reply": "Logged ✓ 50L petrol for the bakkie at R1100. No more questions.",
+      "note": "Repeated fuel question loop — User gets frustrated when assistant asks for fuel amount multiple times; 'eish' shows frustration."
+    }
+  ]
+}

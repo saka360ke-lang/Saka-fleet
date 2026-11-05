@@ -292,7 +292,7 @@ export function detectDriverComplianceRead(text = '') {
   if (/\breport\b/i.test(clean)) return null;
   if (isReminderCreation(clean)) return null;
   if (carriesExplicitDate(clean)) return null;
-  const mentionsDoc = /\b(?:psv(?:\s*badge)?|pdp|cpc|operator\s*card|medical\s*(?:certificate)?|defensive\s*driving|driver\s*(?:compliance|documents?)|driver'?s?\s+licen[cs]es?|driving\s+licen[cs]es?|my\s+licen[cs]es?)\b/i.test(clean);
+  const mentionsDoc = /\b(?:psv(?:\s*badge)?|pdp|cpc|operator\s*card|medical\s*(?:certificate)?|defensive\s*driving|driver\s*(?:compliances?|documents?)|driver'?s?\s+licen[cs]es?|driving\s+licen[cs]es?|my\s+(?:licen[cs]es?|compliances)\b|all\s+licen[cs]es?)\b/i.test(clean);
   if (!mentionsDoc) return null;
   // A spend/log line belongs to the ledger, not to a document read.
   if (/\b(?:paid|spent|cost|bought|renewed|log(?:ged)?)\b/i.test(clean) && /\d{2,}/.test(clean)) return null;
@@ -313,6 +313,90 @@ export function detectDriverComplianceRead(text = '') {
   else if (/licen[cs]e/i.test(clean)) asked = 'driving_licence';
   const confirm = /\b(?:confirm|verify|saved|submitted)\b/i.test(clean);
   return { asked, confirm };
+}
+
+/**
+ * v1.61.3 — "list all documents with expiry date" / "show all expiry documents"
+ * is a merged read: vehicle permits AND driver documents, one list.
+ */
+export function detectAllDocumentsExpiryRead(text = '') {
+  const clean = String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  if (!clean || clean.length > 120) return null;
+  if (/\breport\b/i.test(clean)) return null;
+  const docWord = /\b(?:documents?|docs?|compliances?|permits?|licen[cs]es?)\b/.test(clean);
+  const expiryWord = /\b(?:expir\w*|renew\w*|due|valid)\b/.test(clean);
+  const allWord = /\b(?:all|every|both|any)\b/.test(clean) || /\bmy\b/.test(clean);
+  if (!docWord || !expiryWord) return null;
+  if (!allWord && !/^(?:list|show|see|view)\b/.test(clean)) return null;
+  return { scope: 'all' };
+}
+
+/**
+ * v1.61.3 — document-number search: "search TSV2026" / "find DL-123456".
+ * Live 2026-11-05: the user searched the badge number and got the expense
+ * ledger's empty answer ("Now it's nowhere to be found").
+ */
+export function detectComplianceNumberSearch(text = '') {
+  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!clean || clean.length > 120) return null;
+  const explicit = /^(?:search|find|look\s*up|where\s+is|locate)\b/i.test(clean);
+  const token = clean.match(/\b([A-Z]{2,}[-\/]?\d{3,}[A-Z0-9\-\/]*|\d{6,}[A-Z0-9\-\/]*)\b/i);
+  if (!token) return null;
+  if (!explicit && !/\b(?:document|licen[cs]e|badge|psv|permit|policy|number)\b/i.test(clean)) return null;
+  return { number: String(token[1]).toUpperCase() };
+}
+
+/** Merged expiry list across BOTH ledgers (vehicle permits + driver documents). */
+export function buildAllDocumentsExpiryReply({ vehicles = [], vehicleRows = [], driverRows = [], profile = null, now = new Date() } = {}) {
+  const plateById = new Map((vehicles || []).map((vehicle) => [vehicle.id, vehicle.plate_number]));
+  const name = profile?.full_name ? String(profile.full_name).split(' ')[0] : null;
+  const lines = [];
+  for (const row of vehicleRows || []) {
+    const plate = row.vehicle_id ? plateById.get(row.vehicle_id) : null;
+    const label = row.label || CATALOG_LABELS[row.type] || row.type || 'Permit';
+    if (row.lifetime) { lines.push(`• 🚗 ${label}${plate ? ` — ${plate}` : ''} — valid for life 🟢`); continue; }
+    const days = daysFromIso(row.expiry, now);
+    lines.push(`• 🚗 ${label}${plate ? ` — ${plate}` : ''} — ${formatComplianceDate(row.expiry)} ${complianceChip(days)} · ${formatDaysLeft(days) || 'no date'}${row.number ? ` · ${row.number}` : ''}`);
+  }
+  for (const row of driverDocLines(driverRows, now)) {
+    if (row.lifetime) { lines.push(`• 🪪 ${row.label} — valid for life 🟢${row.number ? ` · ${row.number}` : ''}`); continue; }
+    const days = daysFromIso(row.expiry, now);
+    lines.push(`• 🪪 ${row.label} — ${formatComplianceDate(row.expiry)} ${complianceChip(days)} · ${formatDaysLeft(days) || 'no date'}${row.number ? ` · ${row.number}` : ''}`);
+  }
+  if (!lines.length) {
+    return `🗂️ *Documents with expiry${name ? ` — ${name}` : ''}*\n\nNothing is on file yet.\n\n_Vehicle permits: "add insurance". Driver documents: "add psv badge TSV2026 expires 8 Aug 2027"._`;
+  }
+  const sorted = lines.sort((a, b) => {
+    const da = a.match(/(\d{2}) (\w{3}) (\d{4})/);
+    const db = b.match(/(\d{2}) (\w{3}) (\d{4})/);
+    if (!da || !db) return 0;
+    return new Date(`${da[2]} ${da[1]}, ${da[3]}`) - new Date(`${db[2]} ${db[1]}, ${db[3]}`);
+  });
+  return `🗂️ *Documents with expiry${name ? ` — ${name}` : ''}*\n\n${sorted.slice(0, 20).join('\n')}\n\n_🪪 = your driver documents · 🚗 = vehicle permits. Reply "my compliance" for the vehicle card or "my driver documents" for details._`;
+}
+
+/** Deterministic result for a document-number search across both ledgers. */
+export function buildComplianceNumberSearchReply({ number = '', vehicles = [], vehicleRows = [], driverRows = [], now = new Date() } = {}) {
+  const needle = String(number || '').toUpperCase();
+  const plateById = new Map((vehicles || []).map((vehicle) => [vehicle.id, vehicle.plate_number]));
+  const hits = [];
+  for (const row of driverDocLines(driverRows, now)) {
+    if (String(row.number || '').toUpperCase().includes(needle)) {
+      const days = row.lifetime ? null : daysFromIso(row.expiry, now);
+      hits.push(`🪪 *${row.label}* — ${row.number || needle}${row.lifetime ? ' · valid for life 🟢' : ` · expires ${formatComplianceDate(row.expiry)} ${complianceChip(days)} (${formatDaysLeft(days) || 'no date'})`}\n_Your driver document._`);
+    }
+  }
+  for (const row of vehicleRows || []) {
+    if (String(row.number || '').toUpperCase().includes(needle)) {
+      const plate = row.vehicle_id ? plateById.get(row.vehicle_id) : null;
+      const days = row.lifetime ? null : daysFromIso(row.expiry, now);
+      hits.push(`🚗 *${row.label || row.type || 'Permit'}*${plate ? ` — ${plate}` : ''} — ${row.number}${row.lifetime ? ' · valid for life 🟢' : ` · expires ${formatComplianceDate(row.expiry)} ${complianceChip(days)} (${formatDaysLeft(days) || 'no date'})`}\n_Vehicle permit._`);
+    }
+  }
+  if (!hits.length) {
+    return `🔎 No document matches *${number}*.\n\n_Reply "my driver documents" for your driver records or "all documents with expiry date" for both ledgers._`;
+  }
+  return `🔎 *Found ${hits.length} match${hits.length === 1 ? '' : 'es'} for ${number}*\n\n${hits.slice(0, 5).join('\n\n')}`;
 }
 
 function driverDocLines(rows = [], now = new Date()) {
@@ -457,8 +541,12 @@ export default {
   detectComplianceCorrection,
   detectComplianceItemAsked,
   detectDriverComplianceRead,
+  detectAllDocumentsExpiryRead,
+  detectComplianceNumberSearch,
   normalizeDriverDocType,
   buildDriverComplianceReply,
+  buildAllDocumentsExpiryReply,
+  buildComplianceNumberSearchReply,
   buildComplianceExpiryAnswer,
   buildComplianceStatusReply,
   buildRemindersListReply,

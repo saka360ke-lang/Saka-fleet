@@ -32,6 +32,25 @@ export const SYNTH_PROMPT = 'conversation_synth';
 export const DEFAULT_COUNTRIES = Object.freeze(['KE', 'NG', 'ZA', 'GLOBAL']);
 export const MAX_CASES_PER_COUNTRY = 24;
 
+/**
+ * v1.61.3 — the "known AND unknown" scenario taxonomy. `--edge` rotates these
+ * seeds into each bucket so every generation pass rehearses the classes real
+ * chats produce: unreadable media, mixed languages, date chaos, ambiguity,
+ * verification friction, capacity limits, restarts and document handling.
+ */
+export const EDGE_CASES = Object.freeze([
+  'an unreadable voice note or blurry photo of a document (offer a clear next step, never claim a save)',
+  'mixed-language shorthand (local slang + English + a typo) for a fuel quick-log',
+  'a date written in the wrong convention for the user country (DD/MM vs MM/DD ambiguity)',
+  'two vehicles with the same model and an ambiguous "my car" reference',
+  'an expired verification code with a "change email" escape',
+  'a fleet at its plan limit trying to add one more vehicle',
+  'three frustrated restarts ("restart", "starts again", "ugh") mid-flow',
+  'a search by document number (badge/licence) that must hit the compliance ledger, not expenses',
+  'a pasted licence paragraph containing a number, an expiry and unfamiliar legal words',
+  'a local-currency amount that must stay in the local currency with exact units'
+]);
+
 /** Country buckets aligned with Saka's global operating reality. */
 export const SYNTH_REGIONS = Object.freeze({
   KE: {
@@ -278,9 +297,10 @@ export function writeSyntheticBatch({ dir = SYNTHETIC_DIR, countryBucket, cases 
 
 /** Parse CLI flags (exported for the release test). */
 export function parseArgs(argv = []) {
-  const args = { countries: [], batch: 4, preview: false, out: SYNTHETIC_DIR, seed: null, help: false, now: new Date() };
+  const args = { countries: [], batch: 4, preview: false, out: SYNTHETIC_DIR, seed: null, edge: false, help: false, now: new Date() };
   for (const raw of argv) {
     if (raw === '--preview') args.preview = true;
+    else if (raw === '--edge') args.edge = true;
     else if (raw === '--help' || raw === '-h') args.help = true;
     else if (raw.startsWith('--countries=')) {
       args.countries = raw.slice('--countries='.length).split(',').map((code) => code.trim().toUpperCase()).filter(Boolean);
@@ -351,6 +371,7 @@ export async function main(argv = process.argv.slice(2)) {
       '  --countries=KE,NG,ZA   buckets to generate (default KE,NG,ZA,GLOBAL)',
       '  --batch=4              cases per bucket (1-24, default 4)',
       '  --seed="text"          extra topic seed for every bucket',
+      '  --edge                 rotate the known/unknown scenario taxonomy into buckets',
       '  --preview              generate + validate, write nothing',
       '  --out=<dir>            output directory (default evals/cases)',
       '',
@@ -377,9 +398,11 @@ export async function main(argv = process.argv.slice(2)) {
   let totalCases = 0;
   let totalWritten = 0;
   let failures = 0;
-  for (const countryBucket of countries) {
+  for (const [index, countryBucket] of countries.entries()) {
     console.log(`\n🌍 ${countryBucket} — ${SYNTH_REGIONS[countryBucket].label}`);
-    const generated = await generateForCountry({ countryBucket, count: args.batch, seed: args.seed, now: args.now });
+    // v1.61.3 — `--edge` rotates the known/unknown taxonomy into every bucket.
+    const seed = [args.seed, args.edge ? EDGE_CASES[index % EDGE_CASES.length] : null].filter(Boolean).join(' + ') || null;
+    const generated = await generateForCountry({ countryBucket, count: args.batch, seed, now: args.now });
     if (!generated.ok) {
       failures += 1;
       console.warn(`  ⚠️ generation failed: ${generated.error}`);

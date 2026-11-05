@@ -265,6 +265,48 @@ export function isComplianceCaptureCancel(text = '') {
   return /^\s*(?:cancel|stop|exit|quit|never\s*mind|forget\s*it|not\s*now)\s*[.!]?\s*$/i.test(String(text));
 }
 
+/* ------------------------------------------------------------------ */
+/* v1.61.3 — photo, unreadable media and pasted-document handling      */
+/* ------------------------------------------------------------------ */
+
+/** The user asks to send a picture of the document (live: "Can I share a picture?"). */
+export function isPhotoIntent(text = '') {
+  return /\b(?:share|send|upload|attach)\s+(?:a\s+|the\s+)?(?:picture|photo|image|scan)\b|\b(?:picture|photo|image|scan)\s+of\b/i.test(String(text || ''));
+}
+
+/** The OCR path's own unreadable-media system note (never a user utterance). */
+export function isUnreadableMediaNote(text = '') {
+  return /^\s*\[Saka system note:/i.test(String(text || ''));
+}
+
+/**
+ * A correction that names the right document type ("This is a psv licence not
+ * drivers license") re-buckets the pending capture instead of looping.
+ */
+export function detectDocumentTypeCorrection(text = '') {
+  const clean = String(text || '');
+  if (!/\b(?:psv|tsv)\b/i.test(clean)) return null;
+  if (!/(?:\bnot\b|isn'?t|instead|should\s+be|it'?s\s+a)/i.test(clean)) return null;
+  return 'psv_badge';
+}
+
+/**
+ * Label-anchored extraction for a PASTED document paragraph (a whole licence
+ * photo/text pasted into chat). Never guesses: it needs a labelled number and
+ * a labelled date; otherwise the caller asks the one-line question.
+ */
+export function extractFromPastedDocument(text = '', { now = new Date(), timeZone = SYSTEM_TIMEZONE } = {}) {
+  const clean = String(text || '').replace(/\r/g, '\n');
+  if (clean.length < 40 && !/[|\n]/.test(clean)) return null;
+  const numberMatch = clean.match(/(?:psv|tsv|badge|licen[cs]e|document|permit|no\.?|number)\s*[:#-]?\s*(?=[A-Z0-9\-\/]*\d)([A-Z0-9][A-Z0-9\-\/]{3,23})/i);
+  if (!numberMatch) return null;
+  const anchor = clean.search(/expir|valid\s*(?:until|to|till)|renew|due/i);
+  const dateSource = anchor >= 0 ? clean.slice(anchor) : clean;
+  const extracted = extractDatePhrase(dateSource, { timeZone, now });
+  if (!extracted?.ok || !extracted.localDate) return null;
+  return { number: String(numberMatch[1]).toUpperCase(), expiry: extracted.localDate };
+}
+
 /** Deterministic cancel acknowledgement (lives here, never inline in the route). */
 export function complianceCaptureCancelText() {
   return '👍 No problem — nothing was saved.';
@@ -302,6 +344,10 @@ export default {
   formatComplianceSaved,
   isComplianceCaptureCancel,
   complianceCaptureCancelText,
+  isPhotoIntent,
+  isUnreadableMediaNote,
+  detectDocumentTypeCorrection,
+  extractFromPastedDocument,
   looksLikeFreshLogLine,
   isComplianceCaptureExpired
 };

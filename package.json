@@ -1,7 +1,7 @@
 {
   "name": "sakafleet-backend",
   "type": "module",
-  "version": "1.61.2",
+  "version": "1.61.3",
   "description": "Saka Fleet Backend",
   "main": "index.js",
   "scripts": {
@@ -69,6 +69,7 @@
     "eval:conv": "node scripts/run_conv_eval.js",
     "eval:export": "node scripts/run_conv_eval.js --export",
     "synth:cases": "node scripts/generate_synthetic_cases.js",
+    "audit:conv": "node scripts/audit_conv_coverage.js",
     "reconcile:country": "node scripts/reconcile_country.js",
     "reconcile:welcome-trials": "node scripts/reconcile_welcome_trials.js",
     "migrate:country-learnings": "node scripts/run_country_learnings_migration.js",

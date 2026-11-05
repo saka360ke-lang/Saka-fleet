@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.61.2  
+**Version:** 1.61.3  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.61.3** | DeepEval online & always-on (15-min ticks, 0 = unlimited, live chat-history cases) + five live lane fixes (plural driver docs, merged expiry list, number search, photo/paste capture) + coverage audit + edge taxonomy | 168 |
 | **1.61.2** | Driver-document read/confirm lane (live PSV friction 2026-11-05) + driver rows on the compliance card + judge ENGINE FACTS + expanded capture verbs | 167 |
 | **1.61.1** | Kenyan synthetic batch (8 curated cases, 2 M-PESA) + generator hardening (engine-stamped ids, per-criterion metric mapping, null-threshold fix) + launch-award reconciliation audit (0 legacy grants) | 166 |
 | **1.61.0** | Global synthetic scenario generator (country buckets KE/NG/ZA/BR/MX/PH/IN/AE/GLOBAL) + launch award shortened to 6 months (183 days) | 165 |
@@ -4677,4 +4678,30 @@ quiz engine:
 **Frames touched:** `src/services/complianceAnswers.js`, `src/services/complianceCapture.js`, `src/routes/whatsapp.js`, `src/services/flowKnowledge.js`, `sakaAi.js`, `src/services/convEval.js` (ENGINE FACTS), `src/services/convEvalCases.js` (`engine_facts`), `evals/cases/conversation_cases.json`, `test_driver_compliance_answers.js` (new), `test_conv_eval.js`, `test_agent_training.js`, `scripts/health_audit.js`, `package.json`, `landing/data/changelog.json` + stamped assets, `docs/{PRODUCT_QA,SAKA_TRAINING}.md`, `SAKA_FLEET_ARCHITECTURE.md`, `CHANGELOG.md`.
 
 **Suites run:** `test_driver_compliance_answers` (40 - new), `test_conv_eval`, `test_agent_training`, `test_compliance_capture`, `test_vehicle_compliance`, `test_record_answers`, `test_quiz_flow`, `test_first_message_flow`, `test_driver_profile_onboarding`, `test_synthetic_cases` - green; `npm run health` green.
+
+
+---
+
+### 168. v1.61.3 - DeepEval online & always-on + the five live lane gaps closed (2026-11-05)
+
+**A. DeepEval is in production and always-on.**
+- **Live source:** the tick now reads **`chat_history` user→assistant exchanges** first (`buildLiveCasesFromChatHistory`), then friction transcripts as a secondary source. This closes the real gap found at 11:0x: circuit-breaker friction snippets carried no transcript, so DeepEval skipped them as `unparseable_snippet`.
+- **Cadence & budgets:** `CONV_EVAL_INTERVAL_MINUTES` (default **15**, clamp 5–360; the old hours knob still works), `CONV_EVAL_MAX_CASES_PER_RUN` default **100** with **0 = no limit** (every live exchange + the full corpus), `CONV_EVAL_MAX_PATCHES_PER_RUN` default **10** with **0 = heal every failure**, `CONV_EVAL_DEDUPE_HOURS` default **1**. The overlap guard, sequential judging and provider timeouts are the only resource limits — exactly "as frequently as resources allow". DeepSeek remains the terminal judge and is never budget-gated (rule 22).
+- **Production enablement (explicit, non-silent):** `CONV_EVAL_ENABLED=on` and `CONV_EVAL_HEAL_ENABLED=on` on Cloud Run (`saka-fleet`, europe-west1) with `CONV_EVAL_INTERVAL_MINUTES=15`. Healing remains prompt-hint-only (`saka_dynamic_rules` + `CONV_EVAL_HEALED` audit + WhatsApp/email notice); code-level findings stay `PENDING_APPROVAL` proposals (`SENTINEL_PROPOSALS_ENABLED` stays off). Rollback: `--update-env-vars=CONV_EVAL_ENABLED=off`.
+- **Evidence (forced tick before enablement):** 6 live chat exchanges judged, **6/6 failed** (0.20–0.82) — including the admin's "See deepval catches" exchange — while the corpus kept its calibration. Rows were cleaned after the test; production telemetry then accumulates.
+
+**B. Five live lane gaps closed (the 11:01–11:07 session on the already-serving v1.61.2).**
+1. **Plural detector bug:** `driver\s*(?:compliance|documents?)` + trailing `\b` never matched "driver compliances" → expense ledger → circuit breaker hard trip. Now `compliances?` (+ `my compliances`), so `List all driver compliances` answers from `driver_compliances`.
+2. **Merged expiry read:** `detectAllDocumentsExpiryRead` + `buildAllDocumentsExpiryReply` serve "list all documents with expiry date" / "show all expiry documents" from BOTH ledgers with 🪪/🚗 labels and chips.
+3. **Document-number search:** `detectComplianceNumberSearch` + `buildComplianceNumberSearchReply` ("search TSV2026") scan `driver_compliances.number` and `vehicle_compliances.number`; a miss is honest.
+4. **Photo lane:** with a capture pending, "Can I share a picture?" gets a warm yes + confirm-before-save; an unreadable photo (OCR system note) re-asks for the number/expiry instead of tripping the fresh-log guard and falling to the menu.
+5. **Paste & type correction:** a pasted licence paragraph is parsed label-anchored (`extractFromPastedDocument`, digit-required), and "This is a psv licence not drivers license" re-buckets the pending capture to PSV.
+
+**C. Circuit-breaker evidence is now judgeable.** Soft/hard-trip friction rows write `[user]: … / [assistant]: … / [breaker]: …`, so every escalation can be scored by the tick and linked in `chat_friction_logs`.
+
+**D. Coverage audit + known/unknown taxonomy.** `npm run audit:conv` (new `scripts/audit_conv_coverage.js`, read-only) reports quiz-flow coverage (**20/21**; `log_earnings` is the remaining gap), playbook-intent coverage (heuristic), and 10 cross-cutting edge classes. Generator gains `--edge` with the `EDGE_CASES` taxonomy (unreadable media, mixed language, date chaos, ambiguity, OTP friction, capacity, restarts, number search, paste/photo docs, currency). A live edge round across KE/GLOBAL/ZA/NG produced 16 scenarios; **9 curated ≥0.90** and committed (`syn_{ke,global,za,ng}_20261105-113416.json`), bringing the synthetic corpus to 17.
+
+**Frames touched:** `src/services/{complianceAnswers,complianceCapture,convEval,convEvalCases,envAudit}.js`, `src/workers/convEval.js`, `src/routes/whatsapp.js`, `scripts/{audit_conv_coverage(new),generate_synthetic_cases}.js`, `evals/cases/syn_*_20261105-113416.json`, `.env.example`, `test_{conv_eval,driver_compliance_answers}.js`, `package.json`, `landing/data/changelog.json` + stamped assets, `docs/{PRODUCT_QA,SAKA_TRAINING}.md`, `SAKA_FLEET_ARCHITECTURE.md`, `CHANGELOG.md`.
+
+**Suites run:** `test_driver_compliance_answers` (63), `test_conv_eval` (119), `test_synthetic_cases` (91), `test_env_audit`, `test_agent_training`, `test_compliance_capture`, `test_vehicle_compliance`, `test_record_answers`, `test_quiz_flow`, `test_first_message_flow`, `test_driver_profile_onboarding`, `test_landing_static`, `test_doc_sync`, `test_kb_docs`, `test_sentinel_policy` - green; `npm run health` green.
 

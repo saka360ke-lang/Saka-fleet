@@ -1,0 +1,166 @@
+{
+  "generated_by": "generate_synthetic_cases",
+  "version": "1.61.0",
+  "prompt": "conversation_synth",
+  "country_bucket": "GLOBAL",
+  "created_at": "2026-11-05T11:34:16.136Z",
+  "cases": [
+    {
+      "id": "syn_global_20261105113416_01",
+      "tags": [
+        "synth",
+        "global",
+        "shorthand",
+        "mixed-language",
+        "typo",
+        "fuel"
+      ],
+      "expected": "pass",
+      "source": "synthetic",
+      "frictionType": null,
+      "countryBucket": "GLOBAL",
+      "regionalContext": "Neutral English with mixed units; user mixes Spanish slang 'checando' and typo 'litrs'.",
+      "lessons": [
+        "Mixed-language shorthand like 'checando' and typo 'litrs' should be parsed as fuel log intent; confirm units and currency."
+      ],
+      "engineFacts": [],
+      "minScore": null,
+      "criterionMins": {
+        "loop_avoidance": 0.9
+      },
+      "expectedMetrics": {
+        "min_loop_avoidance_score": 0.9,
+        "requires_shorthand_parsing": true
+      },
+      "turns": [
+        {
+          "role": "user",
+          "text": "checando fuel, filled 45 litrs diesel today"
+        },
+        {
+          "role": "assistant",
+          "text": "Logged 45 L diesel. What's the odometer reading?"
+        },
+        {
+          "role": "user",
+          "text": "88210 km"
+        },
+        {
+          "role": "assistant",
+          "text": "Got it, 88,210 km. Confirm this fuel entry?"
+        },
+        {
+          "role": "user",
+          "text": "si confirm, but also add cost 55 dollars"
+        }
+      ],
+      "reply": "Logged 45 L diesel at 88,210 km for $55 ✓",
+      "note": "Mixed-language fuel quick-log with typo — Neutral English with mixed units; user mixes Spanish slang 'checando' and typo 'litrs'."
+    },
+    {
+      "id": "syn_global_20261105113416_02",
+      "tags": [
+        "synth",
+        "global",
+        "currency",
+        "unit-conversion",
+        "fuel",
+        "efficiency"
+      ],
+      "expected": "pass",
+      "source": "synthetic",
+      "frictionType": "USER_FRUSTRATION",
+      "countryBucket": "GLOBAL",
+      "regionalContext": "User logs in liters and km, then asks for MPG; assistant must convert without inventing numbers.",
+      "lessons": [
+        "Convert 360 km on 40 L to MPG using standard formula: (360/1.609)/ (40/3.785) ≈ 21.2 MPG; never invent numbers."
+      ],
+      "engineFacts": [],
+      "minScore": null,
+      "criterionMins": {
+        "loop_avoidance": 0.9
+      },
+      "expectedMetrics": {
+        "min_loop_avoidance_score": 0.9,
+        "requires_shorthand_parsing": false
+      },
+      "turns": [
+        {
+          "role": "user",
+          "text": "filled 40 liters diesel, 55 dollars, 88210 km, full tank"
+        },
+        {
+          "role": "assistant",
+          "text": "Logged 40 L diesel for $55 at 88,210 km. Previous odometer?"
+        },
+        {
+          "role": "user",
+          "text": "last was 87850 km"
+        },
+        {
+          "role": "assistant",
+          "text": "Got it. That's 360 km on 40 L. Confirm?"
+        },
+        {
+          "role": "user",
+          "text": "yes but what's that in MPG? I'm confused"
+        }
+      ],
+      "reply": "Logged 40 L at 88,210 km for $55 ✓ That's about 21.2 MPG (US).",
+      "note": "Fuel efficiency in miles per gallon after liters and km — User logs in liters and km, then asks for MPG; assistant must convert without inventing numbers."
+    },
+    {
+      "id": "syn_global_20261105113416_03",
+      "tags": [
+        "synth",
+        "global",
+        "interruption",
+        "context-switch",
+        "maintenance",
+        "fuel",
+        "shorthand"
+      ],
+      "expected": "pass",
+      "source": "synthetic",
+      "frictionType": "MULTI_QUESTION_PROMPT",
+      "countryBucket": "GLOBAL",
+      "regionalContext": "User starts fuel log but interrupts with a maintenance quiz; assistant must handle context switch.",
+      "lessons": [
+        "Handle interruption by answering briefly then returning to incomplete log; avoid multi-question prompts by addressing both in one reply."
+      ],
+      "engineFacts": [],
+      "minScore": null,
+      "criterionMins": {
+        "loop_avoidance": 0.9
+      },
+      "expectedMetrics": {
+        "min_loop_avoidance_score": 0.9,
+        "requires_shorthand_parsing": true
+      },
+      "turns": [
+        {
+          "role": "user",
+          "text": "log 30 gallons diesel for $120"
+        },
+        {
+          "role": "assistant",
+          "text": "Logged 30 gal diesel for $120. Odometer?"
+        },
+        {
+          "role": "user",
+          "text": "wait, what's the recommended tire pressure for a truck? I forgot"
+        },
+        {
+          "role": "assistant",
+          "text": "Tire pressure varies by model; check the door placard. Back to fuel: odometer?"
+        },
+        {
+          "role": "user",
+          "text": "oh right, 120500 miles. and also, how often should I change oil?"
+        }
+      ],
+      "reply": "Logged 30 gal at 120,500 mi for $120 ✓ Oil change: follow your manual, typically 5,000–7,500 mi.",
+      "note": "Interruption: fuel log then quiz about tire pressure — User starts fuel log but interrupts with a maintenance quiz; assistant must handle context switch."
+    }
+  ]
+}

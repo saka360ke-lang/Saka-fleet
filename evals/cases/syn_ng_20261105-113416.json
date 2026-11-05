@@ -1,0 +1,199 @@
+{
+  "generated_by": "generate_synthetic_cases",
+  "version": "1.61.0",
+  "prompt": "conversation_synth",
+  "country_bucket": "NG",
+  "created_at": "2026-11-05T11:34:16.136Z",
+  "cases": [
+    {
+      "id": "syn_ng_20261105113416_01",
+      "tags": [
+        "synth",
+        "ng",
+        "shorthand",
+        "currency",
+        "quick-log"
+      ],
+      "expected": "pass",
+      "source": "synthetic",
+      "frictionType": null,
+      "countryBucket": "NG",
+      "regionalContext": "Lagos danfo owner types fast pidgin, uses 'k' for thousands and 'abeg' as softener; NGN amounts.",
+      "lessons": [
+        "'20k' must parse to ₦20,000, not 20 or 20,000 litres — na naira amount."
+      ],
+      "engineFacts": [],
+      "minScore": null,
+      "criterionMins": {
+        "loop_avoidance": 0.9
+      },
+      "expectedMetrics": {
+        "min_loop_avoidance_score": 0.9,
+        "requires_shorthand_parsing": true
+      },
+      "turns": [
+        {
+          "role": "user",
+          "text": "abeg how my fuel spend dey look this week?"
+        },
+        {
+          "role": "assistant",
+          "text": "This week you don spend ₦34,500 on petrol across 3 logs — highest na Tuesday at ₦15,000."
+        },
+        {
+          "role": "user",
+          "text": "ok. nw log 20k petrol for the danfo"
+        },
+        {
+          "role": "assistant",
+          "text": "Got it — ₦20,000 petrol for the danfo. Which date should I put am, today?"
+        },
+        {
+          "role": "user",
+          "text": "yes today, na morning fill"
+        },
+        {
+          "role": "assistant",
+          "text": "Noted, morning fill today. Send CONFIRM make I lock am."
+        },
+        {
+          "role": "user",
+          "text": "wait who dey drive? na Musa bus"
+        },
+        {
+          "role": "assistant",
+          "text": "Okay, so na Musa's bus. Still ₦20,000 petrol, today morning. Reply CONFIRM to save."
+        }
+      ],
+      "reply": "Logged ✓ ₦20,000 petrol — Musa's bus, today morning fill.",
+      "note": "Quick-log petrol for danfo bus in k-shorthand — Lagos danfo owner types fast pidgin, uses 'k' for thousands and 'abeg' as softener; NGN amounts."
+    },
+    {
+      "id": "syn_ng_20261105113416_03",
+      "tags": [
+        "synth",
+        "ng",
+        "interruption",
+        "context-switch",
+        "shorthand"
+      ],
+      "expected": "pass",
+      "source": "synthetic",
+      "frictionType": "MULTI_QUESTION_PROMPT",
+      "countryBucket": "NG",
+      "regionalContext": "Owner juggles a generator service and a keke fuel log in one chat; 'no wahala' and 'abeg' typical.",
+      "lessons": [
+        "When owner switches mid-flow, answer the side question then return — but only confirm the entry they actually approve."
+      ],
+      "engineFacts": [],
+      "minScore": null,
+      "criterionMins": {
+        "loop_avoidance": 0.9
+      },
+      "expectedMetrics": {
+        "min_loop_avoidance_score": 0.9,
+        "requires_shorthand_parsing": true
+      },
+      "turns": [
+        {
+          "role": "user",
+          "text": "abeg i wan log generator service for the shop, 45k"
+        },
+        {
+          "role": "assistant",
+          "text": "Okay — ₦45,000 generator service for the shop. Which date, and na which generator?"
+        },
+        {
+          "role": "user",
+          "text": "wait first, how much fuel my keke don chop this month?"
+        },
+        {
+          "role": "assistant",
+          "text": "Your keke fuel this month na ₦58,200 across 6 logs. Back to the generator — ₦45,000 service, which date?"
+        },
+        {
+          "role": "user",
+          "text": "today. na the 3.5kva gen"
+        },
+        {
+          "role": "assistant",
+          "text": "Noted — 3.5kVA generator, ₦45,000 service, today. Reply CONFIRM make I save am."
+        },
+        {
+          "role": "user",
+          "text": "CONFIRM"
+        },
+        {
+          "role": "user",
+          "text": "and abeg log 8k petrol for the keke too, today"
+        }
+      ],
+      "reply": "Logged ✓ ₦8,000 petrol — keke, today.",
+      "note": "Generator service interrupted by keke fuel question — Owner juggles a generator service and a keke fuel log in one chat; 'no wahala' and 'abeg' typical."
+    },
+    {
+      "id": "syn_ng_20261105113416_04",
+      "tags": [
+        "synth",
+        "ng",
+        "ambiguity",
+        "looping",
+        "currency",
+        "shorthand"
+      ],
+      "expected": "pass",
+      "source": "synthetic",
+      "frictionType": "LOOPING_PROMPTS",
+      "countryBucket": "NG",
+      "regionalContext": "Owner has two Toyota Corolla (2015 & 2018) — plates fictional; asks fuel average then logs for 'my car'.",
+      "lessons": [
+        "When two same-model vehicles dey, resolve 'my car' from the last vehicle discussed, no repeat the same question."
+      ],
+      "engineFacts": [],
+      "minScore": null,
+      "criterionMins": {
+        "loop_avoidance": 0.9
+      },
+      "expectedMetrics": {
+        "min_loop_avoidance_score": 0.9,
+        "requires_shorthand_parsing": true
+      },
+      "turns": [
+        {
+          "role": "user",
+          "text": "wetin be my fuel average this month?"
+        },
+        {
+          "role": "assistant",
+          "text": "You get two Corolla on file — KDA 777A (2015) and LAG-123-XY (2018). Which one you mean?"
+        },
+        {
+          "role": "user",
+          "text": "the 2018 one"
+        },
+        {
+          "role": "assistant",
+          "text": "LAG-123-XY dey do about 9.2 km/l this month, based on your logs."
+        },
+        {
+          "role": "user",
+          "text": "ok log 15k petrol for my car"
+        },
+        {
+          "role": "assistant",
+          "text": "Which car — LAG-123-XY (2018) or KDA 777A (2015)?"
+        },
+        {
+          "role": "user",
+          "text": "my car na the one we just talk about now"
+        },
+        {
+          "role": "assistant",
+          "text": "No wahala — that one na LAG-123-XY (2018). ₦15,000 petrol, today?"
+        }
+      ],
+      "reply": "Logged ✓ ₦15,000 petrol — LAG-123-XY (2018), today.",
+      "note": "Two same-model cars, ambiguous 'my car' fuel log — Owner has two Toyota Corolla (2015 & 2018) — plates fictional; asks fuel average then logs for 'my car'."
+    }
+  ]
+}

@@ -84,13 +84,24 @@ function boundedNumber(raw, fallback, min, max) {
 export function getConvEvalConfig(env = process.env) {
   const scope = env || process.env;
   const read = (key) => scope[key] ?? process.env[key];
-  const hours = boundedNumber(read('CONV_EVAL_INTERVAL_HOURS'), 6, 1, 168);
+  // v1.61.3 — "as frequently as resources allow": minutes-level cadence (the
+  // 1-hour floor is gone). CONV_EVAL_INTERVAL_HOURS still works when set.
+  const minutesRaw = read('CONV_EVAL_INTERVAL_MINUTES');
+  const hoursRaw = read('CONV_EVAL_INTERVAL_HOURS');
+  const minutes = minutesRaw !== undefined && minutesRaw !== null && Number.isFinite(Number(minutesRaw))
+    ? boundedNumber(minutesRaw, 15, 5, 360)
+    : (hoursRaw !== undefined && hoursRaw !== null && Number.isFinite(Number(hoursRaw)) ? boundedNumber(hoursRaw, 6, 1, 168) * 60 : 15);
+  // 0 = "no limit" for the case and heal budgets (resources bound the run).
+  const rawCases = read('CONV_EVAL_MAX_CASES_PER_RUN');
+  const maxCases = Number(rawCases) === 0 ? 0 : Math.round(boundedNumber(rawCases, 100, 1, 500));
+  const rawPatches = read('CONV_EVAL_MAX_PATCHES_PER_RUN');
+  const maxPatches = Number(rawPatches) === 0 ? 0 : Math.round(boundedNumber(rawPatches, 10, 1, 50));
   return {
     threshold: boundedNumber(read('CONV_EVAL_MIN_SCORE'), CONV_EVAL_DEFAULT_THRESHOLD, 0, 1),
-    maxCases: Math.round(boundedNumber(read('CONV_EVAL_MAX_CASES_PER_RUN'), 12, 1, 50)),
-    intervalMs: hours * 60 * 60 * 1000,
-    maxPatches: Math.round(boundedNumber(read('CONV_EVAL_MAX_PATCHES_PER_RUN'), 2, 0, 5)),
-    dedupeHours: boundedNumber(read('CONV_EVAL_DEDUPE_HOURS'), 24, 1, 168),
+    maxCases,
+    intervalMs: minutes * 60 * 1000,
+    maxPatches,
+    dedupeHours: boundedNumber(read('CONV_EVAL_DEDUPE_HOURS'), 1, 0.25, 168),
     alertCooldownHours: boundedNumber(read('CONV_EVAL_ALERT_COOLDOWN_HOURS'), 1, 0, 48),
     judgeProvider: String(read('CONV_EVAL_JUDGE_PROVIDER') || 'deepseek').trim().toLowerCase(),
     judgeModel: String(read('CONV_EVAL_JUDGE_MODEL') || '').trim()

@@ -1,12 +1,22 @@
 import assert from 'assert';
 import fs from 'node:fs';
 import {
+  buildAllDocumentsExpiryReply,
+  buildComplianceNumberSearchReply,
   buildComplianceStatusReply,
   buildDriverComplianceReply,
+  detectAllDocumentsExpiryRead,
+  detectComplianceNumberSearch,
   detectDriverComplianceRead,
   normalizeDriverDocType
 } from './src/services/complianceAnswers.js';
-import { detectComplianceAddRequest } from './src/services/complianceCapture.js';
+import {
+  detectComplianceAddRequest,
+  detectDocumentTypeCorrection,
+  extractFromPastedDocument,
+  isPhotoIntent,
+  isUnreadableMediaNote
+} from './src/services/complianceCapture.js';
 import { driverComplianceChoices } from './src/services/driverComplianceCatalog.js';
 import { SAKA_QUIZ_FLOWS } from './src/services/flowKnowledge.js';
 
@@ -121,5 +131,44 @@ check(route.includes('driverRows, profile: profileData'), 'the vehicle card rece
 const flow = SAKA_QUIZ_FLOWS.find((row) => row.key === 'driver_onboarding');
 check(/DRIVER DOCUMENT READS \(v1\.61\.2\)/.test(flow?.rules || ''), 'the driver-onboarding flow knowledge teaches the read lane');
 
-console.log(`\n🎉 ${passed} driver-document lane assertions passed.`);
+console.log('\n--- Test 10: plural reads, merged expiry list and number search (v1.61.3) ---');
+check(detectDriverComplianceRead('List all driver compliances')?.asked === null, 'the plural "driver compliances" is a driver read (live 11:06 loop)');
+check(detectDriverComplianceRead('List all my compliances')?.asked === null, '"my compliances" is a driver read');
+const allDocs = detectAllDocumentsExpiryRead('List all documents with expiry date');
+check(Boolean(allDocs), '"list all documents with expiry date" is a merged read');
+check(Boolean(detectAllDocumentsExpiryRead('Show all expiry documents')), '"show all expiry documents" is a merged read');
+check(detectAllDocumentsExpiryRead('compliance report') === null, 'the PDF report engine keeps its own request');
+const search = detectComplianceNumberSearch('Search TSV2026');
+check(search?.number === 'TSV2026', '"search TSV2026" extracts the number');
+check(detectComplianceNumberSearch('search tsv2026')?.number === 'TSV2026', 'lowercase searches normalise to uppercase');
+check(detectComplianceNumberSearch('Search 6086960024692740')?.number === '6086960024692740', 'a numeric document number is searchable');
+check(detectComplianceNumberSearch('log 3000 fuel') === null, 'an expense line is never a document search');
+const merged = buildAllDocumentsExpiryReply({
+  vehicles: [{ id: 'v1', plate_number: 'KAS 628T' }],
+  vehicleRows: [{ vehicle_id: 'v1', type: 'insurance', label: 'Insurance', number: 'C35343842', expiry: '2026-11-20' }],
+  driverRows: ROWS,
+  profile: { full_name: 'David Njonjo' },
+  now: NOW
+});
+check(merged.includes('Insurance') && merged.includes('PSV badge') && merged.includes('KAS 628T'), 'the merged list shows vehicle permits AND driver documents');
+check(merged.includes('🪪') && merged.includes('🚗'), 'the merged list labels both ledgers');
+const hit = buildComplianceNumberSearchReply({ number: 'TSV2026', vehicles: [{ id: 'v1', plate_number: 'KAS 628T' }], vehicleRows: [], driverRows: ROWS, now: NOW });
+check(hit.includes('PSV badge') && hit.includes('08 Aug 2027') && /driver document/i.test(hit), 'a number search finds the saved driver document');
+const miss = buildComplianceNumberSearchReply({ number: 'ZZZ999', driverRows: ROWS, now: NOW });
+check(miss.includes('No document matches'), 'a miss is honest and points at the two ledgers');
 
+console.log('\n--- Test 11: photo, unreadable media, type correction and pasted documents (v1.61.3) ---');
+check(isPhotoIntent('Can I share a picture of the psv badge?') === true, 'live photo-intent phrasing is recognised');
+check(isPhotoIntent('list my documents') === false, 'a read is never a photo request');
+check(isUnreadableMediaNote('[Saka system note: the user sent an image/document that could not be read by OCR. ...]') === true, 'the OCR system note is recognised');
+check(detectDocumentTypeCorrection('This is a psv licence not drivers license') === 'psv_badge', 'the type correction re-buckets to PSV');
+check(detectDocumentTypeCorrection('PSV badge TSV2026 expires 8 Aug 2027') === null, 'a normal capture line is not a correction');
+const pasted = extractFromPastedDocument('Add this drivers license | PSV DETAILS | Badge No TSV2026 | Valid until 8 Aug 2027 | REPUBLIC OF KENYA', { now: NOW });
+check(pasted?.number === 'TSV2026' && pasted?.expiry === '2027-08-08', 'a pasted licence paragraph extracts the labelled number and date');
+check(extractFromPastedDocument('TSV2026', { now: NOW }) === null, 'a bare token never becomes a pasted-document parse');
+const routeNow = fs.readFileSync('src/routes/whatsapp.js', 'utf8');
+check(routeNow.includes('detectAllDocumentsExpiryRead') && routeNow.includes('detectComplianceNumberSearch'), 'the merged read + number search are wired');
+check(routeNow.includes('isUnreadableMediaNote(messageText)') && routeNow.includes('isPhotoIntent(messageText)'), 'the photo/unreadable lanes are wired into the capture branch');
+check(routeNow.includes('extractFromPastedDocument') && routeNow.includes('detectDocumentTypeCorrection'), 'paste + type-correction handling is wired');
+
+console.log(`\n🎉 ${passed} driver-document lane assertions passed.`);

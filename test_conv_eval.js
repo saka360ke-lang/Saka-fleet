@@ -23,6 +23,7 @@ import {
   CASE_VALIDATION_ERRORS,
   REQUIRED_TAGS,
   buildLiveCasesFromFriction,
+  buildLiveCasesFromChatHistory,
   corpusTags,
   parseFrictionSnippet,
   sampleCorpusCases,
@@ -83,20 +84,25 @@ check(isConvEvalHealEnabled({ CONV_EVAL_HEAL_ENABLED: undefined }) === false, 'h
 check(isConvEvalHealEnabled({ CONV_EVAL_HEAL_ENABLED: 'true' }) === true, 'true enables healing');
 
 console.log('\n--- Test 3: config defaults + clamps ---');
-withEnv({ CONV_EVAL_INTERVAL_HOURS: undefined, CONV_EVAL_MAX_CASES_PER_RUN: undefined, CONV_EVAL_MIN_SCORE: undefined, CONV_EVAL_JUDGE_PROVIDER: undefined, CONV_EVAL_JUDGE_MODEL: undefined }, () => {
+withEnv({ CONV_EVAL_INTERVAL_HOURS: undefined, CONV_EVAL_INTERVAL_MINUTES: undefined, CONV_EVAL_MAX_CASES_PER_RUN: undefined, CONV_EVAL_MIN_SCORE: undefined, CONV_EVAL_JUDGE_PROVIDER: undefined, CONV_EVAL_JUDGE_MODEL: undefined, CONV_EVAL_MAX_PATCHES_PER_RUN: undefined, CONV_EVAL_DEDUPE_HOURS: undefined }, () => {
   const cfg = getConvEvalConfig();
-  check(cfg.threshold === 0.7 && cfg.maxCases === 12, 'defaults: 0.70 threshold, 12 cases');
-  check(cfg.intervalMs === 6 * 60 * 60 * 1000, 'default cadence is 6 h');
-  check(cfg.maxPatches === 2 && cfg.dedupeHours === 24, 'defaults: 2 patches, 24 h dedupe');
+  check(cfg.threshold === 0.7 && cfg.maxCases === 100, 'defaults: 0.70 threshold, 100 cases (0 = unlimited)');
+  check(cfg.intervalMs === 15 * 60 * 1000, 'default cadence is 15 minutes (always-on)');
+  check(cfg.maxPatches === 10 && cfg.dedupeHours === 1, 'defaults: 10 heals (0 = all), 1 h dedupe');
   check(cfg.judgeProvider === 'deepseek', 'judge defaults to the DeepSeek background policy');
   const judge = resolveJudgeConfig();
   check(judge.provider === null && judge.model === null, 'default judge uses the standard purpose chain');
 });
 withEnv({ CONV_EVAL_INTERVAL_HOURS: '999', CONV_EVAL_MAX_CASES_PER_RUN: '999', CONV_EVAL_MIN_SCORE: '5' }, () => {
   const cfg = getConvEvalConfig();
-  check(cfg.intervalMs === 168 * 60 * 60 * 1000, 'interval clamps to 168 h');
-  check(cfg.maxCases === 50, 'case budget clamps to 50');
+  check(cfg.intervalMs === 168 * 60 * 60 * 1000, 'hours knob clamps to 168 h');
+  check(cfg.maxCases === 500, 'case budget clamps to 500');
   check(cfg.threshold === 1, 'threshold clamps to 1');
+});
+withEnv({ CONV_EVAL_MAX_CASES_PER_RUN: '0', CONV_EVAL_MAX_PATCHES_PER_RUN: '0', CONV_EVAL_DEDUPE_HOURS: '0.25' }, () => {
+  const cfg = getConvEvalConfig();
+  check(cfg.maxCases === 0 && cfg.maxPatches === 0, '0 means unlimited cases and heals');
+  check(cfg.dedupeHours === 0.25, 'the dedupe window accepts quarter-hours');
 });
 withEnv({ CONV_EVAL_JUDGE_PROVIDER: 'anthropic', CONV_EVAL_JUDGE_MODEL: undefined }, () => {
   const judge = resolveJudgeConfig();
@@ -218,6 +224,21 @@ const liveBuilt = buildLiveCasesFromFriction([
 check(liveBuilt.cases.length === 1, 'live cases are de-duplicated by transcript hash');
 check(liveBuilt.cases[0].source === 'live' && liveBuilt.cases[0].frictionLogId === 'aaaaaaaa-1111', 'the live case keeps its friction-log link');
 check(liveBuilt.skipped.length === 2, 'duplicate and unparseable rows are reported as skipped');
+
+console.log('\n--- Test 9b: live chat exchanges are paired into cases (v1.61.3) ---');
+const chatRows = [
+  { user_phone: 'p1', role: 'assistant', message: 'Nothing under licences & permits expenses all time yet.', created_at: '2026-11-05T11:06:00Z' },
+  { user_phone: 'p1', role: 'user', message: 'List all driver compliances', created_at: '2026-11-05T11:05:00Z' },
+  { user_phone: 'p1', role: 'assistant', message: 'Your Land Cruiser is active.', created_at: '2026-11-05T11:00:00Z' },
+  { user_phone: 'p1', role: 'user', message: 'Driver licenses', created_at: '2026-11-05T10:59:00Z' },
+  { user_phone: 'p2', role: 'user', message: 'lonely user turn with no reply', created_at: '2026-11-05T10:58:00Z' }
+];
+const chatBuilt = buildLiveCasesFromChatHistory(chatRows, { limit: 5 });
+check(chatBuilt.cases.length === 2, 'two user→assistant exchanges become live cases');
+check(chatBuilt.cases.every((caseDef) => caseDef.source === 'live' && caseDef.reply && caseDef.turns.length === 1), 'each live case carries the user turn and the recorded reply');
+check(chatBuilt.cases.some((caseDef) => caseDef.reply.includes('Nothing under licences')), 'the reply is paired with the user turn that preceded it');
+check(chatBuilt.cases.every((caseDef) => caseDef.turns[0].role === 'user'), 'the paired user turn always comes first');
+check(buildLiveCasesFromChatHistory([]).cases.length === 0, 'an empty history yields no cases (never throws)');
 
 console.log('\n--- Test 10: corpus sampling is bounded + deterministic ---');
 const sample = sampleCorpusCases(6);

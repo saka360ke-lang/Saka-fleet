@@ -1,0 +1,52 @@
+{
+  "generated_by": "generate_synthetic_cases",
+  "version": "1.61.0",
+  "prompt": "conversation_synth",
+  "country_bucket": "KE",
+  "created_at": "2026-11-05T11:34:16.136Z",
+  "cases": [
+    {
+      "id": "syn_ke_20261105113416_01",
+      "tags": [
+        "synth",
+        "ke",
+        "shorthand",
+        "currency",
+        "quick-log"
+      ],
+      "expected": "pass",
+      "source": "synthetic",
+      "frictionType": null,
+      "countryBucket": "KE",
+      "regionalContext": "Sheng mix: 'niaje', 'nimeweka', 'bob' for KES, plates like KDA 777A.",
+      "lessons": [
+        "Sheng 'nimeweka' means 'I have put/logged'; '5k' means KES 5,000; 'bob' is slang for shillings."
+      ],
+      "engineFacts": [],
+      "minScore": null,
+      "criterionMins": {
+        "loop_avoidance": 0.9
+      },
+      "expectedMetrics": {
+        "min_loop_avoidance_score": 0.9,
+        "requires_shorthand_parsing": true
+      },
+      "turns": [
+        {
+          "role": "user",
+          "text": "niaje, nimeweka 40l diesel 5k kda 777a full tank"
+        },
+        {
+          "role": "assistant",
+          "text": "Poa! Nimeandika: 40L diesel, KES 5,000, plate KDA 777A, full tank. Sawa?"
+        },
+        {
+          "role": "user",
+          "text": "yes confirm"
+        }
+      ],
+      "reply": "Logged ✓ 40L diesel, KES 5,000, KDA 777A, full tank.",
+      "note": "Quick log diesel in Sheng — Sheng mix: 'niaje', 'nimeweka', 'bob' for KES, plates like KDA 777A."
+    }
+  ]
+}

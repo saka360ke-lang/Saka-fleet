@@ -64,7 +64,11 @@ import {
   isComplianceCaptureCancel,
   complianceCaptureCancelText,
   looksLikeFreshLogLine,
-  isComplianceCaptureExpired
+  isComplianceCaptureExpired,
+  isPhotoIntent,
+  isUnreadableMediaNote,
+  detectDocumentTypeCorrection,
+  extractFromPastedDocument
 } from '../services/complianceCapture.js';
 import {
   resolveLedgerTurn,
@@ -176,7 +180,11 @@ import {
   detectComplianceStatusCommand,
   detectComplianceExpiryQuestion,
   detectDriverComplianceRead,
+  detectAllDocumentsExpiryRead,
+  detectComplianceNumberSearch,
   buildDriverComplianceReply,
+  buildAllDocumentsExpiryReply,
+  buildComplianceNumberSearchReply,
   detectComplianceCorrection,
   detectComplianceItemAsked,
   detectMaintenanceScheduleQuestion,
@@ -1454,9 +1462,14 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         const driverDocRead = (quizPhaseLocked || session?.pendingComplianceCapture)
           ? null
           : detectDriverComplianceRead(commandText);
+        // v1.61.3 — merged expiry list + document-number search (live "List all
+        // documents with expiry date" and "Search TSV2026" fell into expenses).
+        const allDocsRead = quizPhaseLocked ? null : detectAllDocumentsExpiryRead(commandText);
+        const numberSearch = quizPhaseLocked ? null : detectComplianceNumberSearch(commandText);
         const complianceReadCommand = remindersListCommand || complianceStatusCommand
           || complianceExpiryQuestion || complianceCorrection.isCorrection
-          || maintenanceScheduleQuestion || Boolean(driverDocRead);
+          || maintenanceScheduleQuestion || Boolean(driverDocRead)
+          || Boolean(allDocsRead) || Boolean(numberSearch);
         if (complianceReadCommand && quizForFastPath && !quizPhaseLocked) {
           abandonQuiz(session, { reason: 'deterministic_read_command' });
         }
@@ -1757,14 +1770,41 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             extracted_data: {},
             reply_message: `🚗 Your garage is empty for now.\n\nSend your vehicle's number plate (e.g. *${countryInfo.plate_example}*) or type *REGISTER* — setup takes about two minutes.`
           };
-        } else if (driverDocRead || remindersListCommand || complianceStatusCommand || complianceExpiryQuestion || complianceCorrection.isCorrection || maintenanceScheduleQuestion) {
+        } else if (driverDocRead || allDocsRead || numberSearch || remindersListCommand || complianceStatusCommand || complianceExpiryQuestion || complianceCorrection.isCorrection || maintenanceScheduleQuestion) {
           // v1.32.2 — deterministic compliance/reminder answers (zero AI tokens).
           // Every date comes from the ledger; nothing is improvised.
           const ownedVehicles = existingVehicles.filter((v) => v.owner_id === profileData?.id);
           const targetVehicle = ownedVehicles.find((v) => v.id === currentActiveVehicle?.id)
             || (ownedVehicles.length === 1 ? ownedVehicles[0] : ownedVehicles[0] || null);
           let reply = null;
-          if (driverDocRead) {
+          if (allDocsRead || numberSearch) {
+            // v1.61.3 — merged reads across BOTH ledgers (vehicle permits +
+            // driver documents). Never answered from the expense ledger.
+            const vehicleIds = existingVehicles.map((v) => v.id).filter(Boolean);
+            let vehicleRows = [];
+            if (vehicleIds.length) {
+              try {
+                const { data } = await supabaseClient
+                  .from('vehicle_compliances')
+                  .select('vehicle_id,type,label,number,expiry,lifetime')
+                  .in('vehicle_id', vehicleIds)
+                  .limit(200);
+                vehicleRows = data || [];
+              } catch { vehicleRows = []; }
+            }
+            let driverRows = [];
+            try {
+              const { data } = await supabaseClient
+                .from('driver_compliances')
+                .select('type,label,number,expiry,lifetime')
+                .eq('driver_id', profileData.id)
+                .limit(50);
+              driverRows = data || [];
+            } catch { driverRows = []; }
+            reply = allDocsRead
+              ? buildAllDocumentsExpiryReply({ vehicles: existingVehicles, vehicleRows, driverRows, profile: profileData })
+              : buildComplianceNumberSearchReply({ number: numberSearch.number, vehicles: existingVehicles, vehicleRows, driverRows });
+          } else if (driverDocRead) {
             // v1.61.2 — driver documents never need a vehicle: read/confirm them
             // straight from driver_compliances for the caller's own profile.
             let driverRows = [];
@@ -2584,7 +2624,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         // half-answer ("445566", "8 Aug 2027") lands on the document instead of
         // the generic menu (live PSV loop 2026-11-04).
         if (!isSpecialFlowHandled && !session.quiz && session.pendingComplianceCapture
-          && !looksLikeFreshLogLine(messageText)) {
+          && (isUnreadableMediaNote(messageText) || !looksLikeFreshLogLine(messageText))) {
           const pending = session.pendingComplianceCapture;
           const pendingScope = pending.scope === 'vehicle' ? 'vehicle' : 'driver';
           const context = pickComplianceContextVehicle({ vehicles: existingVehicles, profileId: profileData?.id });
@@ -2599,9 +2639,48 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             customReply = complianceCaptureCancelText();
           } else if (isComplianceCaptureExpired(pending) || !pendingItem) {
             session.pendingComplianceCapture = null;
+          } else if (pendingScope === 'driver' && detectDocumentTypeCorrection(messageText)) {
+            // v1.61.3 — "This is a psv licence not drivers license" re-buckets
+            // the pending capture instead of looping on the wrong document.
+            const correctedType = detectDocumentTypeCorrection(messageText);
+            const correctedItem = catalogCandidates(pendingCatalog).find((entry) => entry.type === correctedType) || pendingItem;
+            session.pendingComplianceCapture = { ...pending, scope: 'driver', type: correctedItem.type, at: new Date().toISOString() };
+            isSpecialFlowHandled = true;
+            customReply = `Got it — switching to your *${correctedItem.label}* (a DRIVER document, not a vehicle permit).\n\nSend the number and expiry in one line — e.g. _${correctedItem.label} TSV2026 expires 8 Aug 2027_.`;
+          } else if (isUnreadableMediaNote(messageText)) {
+            // v1.61.3 — an unreadable photo during a capture never falls to the
+            // menu (the old system note tripped the fresh-log guard).
+            session.pendingComplianceCapture = { ...pending, at: new Date().toISOString() };
+            isSpecialFlowHandled = true;
+            customReply = `📸 I couldn't read that photo. Send the number and expiry in one line — e.g. _${pendingItem.label} 445566 expires 8 Aug 2027_ — or a clearer photo.`;
+          } else if (isPhotoIntent(messageText)) {
+            // v1.61.3 — "Can I share a picture?" gets a warm yes + the rule
+            // (confirm before save), not a looped typed-only example.
+            session.pendingComplianceCapture = { ...pending, at: new Date().toISOString() };
+            isSpecialFlowHandled = true;
+            customReply = `📸 Yes — send the photo now. I'll read the number and expiry and confirm with you before saving.${pendingScope === 'driver' ? '\n\n_Driver documents are saved on your profile, never on the vehicle._' : ''}`;
           } else {
             const timeZone = resolveUserTimezone({ countryInfo, profile: profileData });
-            const merged = mergeComplianceCapture(pending, messageText, {
+            // v1.61.3 — a pasted document paragraph is read label-anchored (a
+            // whole licence pasted into chat), never by grabbing a random token.
+            const pasted = extractFromPastedDocument(messageText, { timeZone });
+            const pastedDaysLeft = pasted ? Math.ceil((new Date(pasted.expiry).getTime() - Date.now()) / 86400000) : null;
+            const merged = pasted
+              ? {
+                ok: true,
+                parsed: {
+                  ok: true,
+                  number: pasted.number,
+                  expiry: pasted.expiry,
+                  dueAt: null,
+                  lifetime: false,
+                  daysLeft: pastedDaysLeft,
+                  expired: pastedDaysLeft !== null && pastedDaysLeft < 0,
+                  timeZone,
+                  catalogItem: pendingItem
+                }
+              }
+              : mergeComplianceCapture(pending, messageText, {
               item: pendingItem,
               countryCode: countryInfo?.country_code || 'GLOBAL',
               locale: countryInfo?.locale || 'en-US',
@@ -4940,7 +5019,7 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
                 user_phone: senderPhone,
                 session_id: senderPhone,
                 friction_type: 'LOOPING_PROMPTS',
-                transcript_snippet: `Circuit Breaker Soft Trip (Strike 3) for prompt: "${sanitizedReply}"`
+                transcript_snippet: `[user]: ${String(messageText || '').slice(0, 600)}\n[assistant]: ${String(sanitizedReply || '').slice(0, 600)}\n[breaker]: SOFT_TRIP strike 3`
               }]);
             } catch {}
           }
@@ -4964,7 +5043,7 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
                 user_phone: senderPhone,
                 session_id: senderPhone,
                 friction_type: 'SYSTEM_ERROR',
-                transcript_snippet: `Circuit Breaker Hard Trip (Strike 4). Escalated to support. User input: "${messageText}"`
+                transcript_snippet: `[user]: ${String(messageText || '').slice(0, 600)}\n[assistant]: ${String(sanitizedReply || '').slice(0, 600)}\n[breaker]: HARD_TRIP strike 4 — escalated to support`
               }]);
             }
           } catch (escErr) {

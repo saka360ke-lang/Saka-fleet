@@ -103,7 +103,7 @@ export async function handleConvEvalCommand(supabase, { mode = 'stats', hours = 
   if (normalized === 'heal') return healConvEvalCaseCommand(supabase, caseId);
   if (normalized === 'run') {
     const cfg = getConvEvalConfig();
-    const cases = sampleCorpusCases(cfg.maxCases);
+    const cases = cfg.maxCases === 0 ? sampleCorpusCases(1000) : sampleCorpusCases(cfg.maxCases);
     const summary = await runConvEvalBatch({
       supabase,
       cases,
