@@ -1,6 +1,13 @@
 {
-  "latest": "1.61.10",
+  "latest": "1.61.11",
   "entries": [
+    {
+      "version": "1.61.11",
+      "date": "2026-11-05",
+      "title": "Second-look grading actually runs now",
+      "preview": "A default-value bug had switched off the second-look check for borderline quality verdicts; it is now on and tested.",
+      "summary": "The second-look grading for conversations that land right at the pass mark shipped switched off: a default value was read as zero, so the extra check never fired while borderline answers kept flipping between pass and fail. The defaults are fixed and proven by a test that forces the sequence fail-then-pass, so a borderline answer really does get its second look and the better verdict wins."
+    },
     {
       "version": "1.61.10",
       "date": "2026-11-05",

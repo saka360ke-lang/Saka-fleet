@@ -428,6 +428,21 @@ const hardBatch = await runConvEvalBatch({
 });
 check(hardBatch.rejudged === 0, 'a wide failure spends no extra judge call');
 
+// v1.61.11 — the DEFAULT path (no explicit re-judge params) must re-judge:
+// Number(null) === 0 previously zeroed both the margin and the budget.
+let defaultCalls = 0;
+const defaultBatch = await runConvEvalBatch({
+  cases: [{ id: 'default-case', turns: [{ role: 'user', text: 'hi' }], reply: 'borderline answer' }],
+  judgeFn: async () => {
+    defaultCalls += 1;
+    return defaultCalls === 1
+      ? { ok: true, passed: false, aggregate: 0.66, failing: ['tone_compliance'], scores: { tone_compliance: { score: 0.66 } } }
+      : { ok: true, passed: true, aggregate: 0.8, failing: [], scores: { tone_compliance: { score: 0.8 } } };
+  },
+  persist: false, threshold: 0.7
+});
+check(defaultBatch.rejudged === 1 && defaultBatch.results[0].judged.passed === true, 'omitted re-judge params fall back to config defaults (no Number(null) zeroing)');
+
 const syncCases = [
   { id: 'good-case', expected: 'pass', reply: 'old reply' },
   { id: 'calib-case', expected: 'fail', reply: 'known bad' },

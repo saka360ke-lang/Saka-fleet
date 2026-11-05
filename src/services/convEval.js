@@ -449,8 +449,14 @@ export function isNearMiss(judged, { threshold = CONV_EVAL_DEFAULT_THRESHOLD, cr
 export async function runConvEvalBatch({ supabase = null, cases = [], threshold = null, judge = {}, persist = true, judgeFn = judgeConversation, rejudgeMargin = null, rejudgeMax = null } = {}) {
   const cfg = getConvEvalConfig();
   const effectiveThreshold = Number.isFinite(Number(threshold)) ? Number(threshold) : cfg.threshold;
-  const margin = Number.isFinite(Number(rejudgeMargin)) ? Number(rejudgeMargin) : cfg.rejudgeMargin;
-  let rejudgeBudget = Number.isFinite(Number(rejudgeMax)) ? Math.max(0, Math.round(Number(rejudgeMax))) : cfg.rejudgeMax;
+  // v1.61.11 — `Number(null) === 0` disabled the whole feature: an omitted
+  // param must fall back to config, never to a zero margin/budget.
+  const hasMargin = rejudgeMargin !== null && rejudgeMargin !== undefined && rejudgeMargin !== ''
+    && Number.isFinite(Number(rejudgeMargin));
+  const margin = hasMargin ? Number(rejudgeMargin) : cfg.rejudgeMargin;
+  const hasRejudgeMax = rejudgeMax !== null && rejudgeMax !== undefined && rejudgeMax !== ''
+    && Number.isFinite(Number(rejudgeMax));
+  let rejudgeBudget = hasRejudgeMax ? Math.max(0, Math.round(Number(rejudgeMax))) : cfg.rejudgeMax;
   let rejudgedCount = 0;
   const runId = crypto.randomUUID();
   const results = [];

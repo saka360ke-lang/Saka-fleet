@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.61.10  
+**Version:** 1.61.11  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.61.11** | Fix: `Number(null) === 0` silently disabled the borderline re-judge (margin/budget zeroed); defaults now proven by a test | 175 |
 | **1.61.10** | Eval follow-ups: tick log shows skips/re-judges, borderline re-judge damps judge variance, `npm run eval:apply-heals` closes the corpus loop | 174 |
 | **1.61.9** | Healer hygiene: calibration cases never healed, keys reused, active-rule cap (30), Sentinel rule minting gated off | 173 |
 | **1.61.8** | Eval failure alerts batched: per-case WhatsApp + ONE digest email per tick (Resend quota safe) | 172 |
@@ -4848,5 +4849,20 @@ Usage: `npm run eval:apply-heals` (dry run, 48 h) · `-- --hours=72` · `-- --wr
 **Frames touched:** `src/services/convEval.js` (`isNearMiss`, batch re-judge, `rejudged`), `src/workers/convEval.js` (summary passthrough), `index.js` (tick log), `src/services/convEvalHealer.js` (audit `corrected_reply`), `src/services/convEvalCorpusSync.js` (new), `scripts/apply_eval_heals.js` (new), `src/services/envAudit.js`, `.env.example`, `package.json` (`eval:apply-heals`), `test_conv_eval.js` (+20), `SAKA_FLEET_ARCHITECTURE.md`, `CHANGELOG.md`.
 
 **Suites run:** `test_conv_eval` (173 - near-miss boundaries, re-judge winner + first verdict preserved, wide failures never re-judged, corpus sync selection/apply incl. calibration + unknown + unchanged) - green; `npm run health` green.
+
+
+### 175. v1.61.11 - the re-judge was silently disabled by `Number(null) === 0` (2026-11-05)
+
+**How it was caught.** Revision `00311`/`00312` logged `0 re-judged` while failing cases sat at 0.82–0.84 (above the 0.70 bar, failing one criterion) — exactly the near-miss class the feature targets. A local probe reproduced it: `isNearMiss()` returned `true` yet the batch made a single judge call.
+
+**Root cause.** `runConvEvalBatch({ rejudgeMargin = null, rejudgeMax = null })` used `Number.isFinite(Number(rejudgeMargin))` to decide whether the caller supplied a value. `Number(null) === 0` is finite, so an **omitted** param resolved to margin **0** (re-judging disabled) and budget **0** (no calls). The tick therefore never re-judged anything in production. This is the third instance of the same defect class today (v1.61.1 threshold clamp, v1.61.7 score formatter) — `Number(null)`/`Number(undefined)` must never be trusted as "absent".
+
+**Fix.** Explicit presence checks (`!== null && !== undefined && !== '' && Number.isFinite(Number(x))`); an omitted param falls back to `getConvEvalConfig()` (`0.10` / `5`). Proven by a new default-path test (two judge calls, better verdict wins) alongside the explicit-param tests — before/after, per rule 52.
+
+**Live proof after the fix:** the probe returns `CALLS=2 REJUDGED=1`; the deployed tick line now reports a non-zero `re-judged` count when borderline cases fail.
+
+**Frames touched:** `src/services/convEval.js`, `test_conv_eval.js` (+1 assertion), `package.json`, `landing/data/changelog.json` + stamped assets, `SAKA_FLEET_ARCHITECTURE.md` (§174 note, this section), `CHANGELOG.md`.
+
+**Suites run:** `test_conv_eval` (174) - green; `npm run health` green.
 
 

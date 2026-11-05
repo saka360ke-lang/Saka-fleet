@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.61.11] - 2026-11-05
+
+- **The borderline re-judge never ran (fixed).** `runConvEvalBatch` defaulted `rejudgeMargin`/`rejudgeMax` to `null`, and `Number(null) === 0` is finite — so an omitted param resolved to margin 0 and budget 0, silently disabling the feature (live tick showed `0 re-judged` while cases sat at 0.82–0.84). Presence checks are now explicit; an omitted param falls back to `getConvEvalConfig()` (0.10 / 5). A new default-path test proves two judge calls and the better verdict winning.
+- **Same defect class, third strike today** (v1.61.1 threshold clamp, v1.61.7 score formatter): `Number(null)`/`Number(undefined)` is never evidence of absence. Every numeric knob in this family now checks presence before coercion.
+- **Frames touched:** `src/services/convEval.js`, `test_conv_eval.js`, `package.json`, `landing/data/changelog.json` + stamped assets, `SAKA_FLEET_ARCHITECTURE.md` (§175), this file.
+- **Suites run:** `test_conv_eval` (174) — green; `npm run health` green.
+
 ## [1.61.10] - 2026-11-05
 
 - **The tick log now shows the loop's hygiene:** `[ConversationEval] tick done: … healed, N calibration skipped, M re-judged`.
