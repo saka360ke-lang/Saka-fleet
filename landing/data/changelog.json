@@ -1,6 +1,13 @@
 {
-  "latest": "1.59.6",
+  "latest": "1.59.7",
   "entries": [
+    {
+      "version": "1.59.7",
+      "date": "2026-11-05",
+      "title": "Saka loosens up",
+      "preview": "Fewer robotic checks, sharper expense types, labels on everything — and a calmer, native-scroll site.",
+      "summary": "Review cards open with a rotating human line instead of the same template, quiz menus are shorter, and empty answers encourage instead of reporting zeros. Twenty-five expense types now cover licences, security, loading, weighbridge, hire and route fees properly. Every receipt, reminder and odometer reading can carry your own label — search any keyword to find them. Support emails also keep their real message body now, and the site scrolls natively with no install prompt."
+    },
     {
       "version": "1.59.6",
       "date": "2026-11-05",

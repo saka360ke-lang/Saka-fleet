@@ -37,6 +37,12 @@ export const EXPENSE_CATEGORIES = Object.freeze({
   wages: { label: 'Crew wages', badge: 'WAGES', tone: 'negative' },
   consumables: { label: 'Consumables & fluids', badge: 'FLUIDS', tone: 'warn' },
   berthing: { label: 'Mooring & berthing', badge: 'MOORING', tone: 'negative' },
+  // v1.59.7 — types that used to land in Insurance or Other (live audit).
+  security: { label: 'Security', badge: 'SECURITY', tone: 'negative' },
+  loading: { label: 'Loading & offloading', badge: 'LOADING', tone: 'negative' },
+  weighbridge: { label: 'Weighbridge', badge: 'WEIGHBRIDGE', tone: 'negative' },
+  hire: { label: 'Hire & rental', badge: 'HIRE', tone: 'negative' },
+  route: { label: 'Route & stage fees', badge: 'ROUTE', tone: 'negative' },
   other: { label: 'Other', badge: 'OTHER', tone: 'neutral' }
 });
 
@@ -93,7 +99,13 @@ export const EXPENSE_TYPES = Object.freeze([
   },
   {
     value: 'Insurance', category: 'compliance', kinds: ALL_KINDS, menu: true, odometerMode: 'never',
-    aliases: ['insurance', 'insurer', 'policy', 'premium', 'licence', 'license', 'road licence', 'road license', 'inspection', 'mot', 'permit', 'speed limiter', 'sticker', 'renewal', 'compliance']
+    aliases: ['insurance', 'insurer', 'policy', 'policy number', 'premium', 'comprehensive cover', 'third party', 'cover note', 'cover']
+  },
+  {
+    // v1.59.7 — licences/permissions split out of Insurance (live audit: "renewed
+    // my licence" was being typed as Insurance). Same compliance category.
+    value: 'Licences & Permits', category: 'compliance', kinds: ALL_KINDS, menu: false, odometerMode: 'never',
+    aliases: ['licence', 'license', 'road licence', 'road license', 'driving licence', 'driving license', 'permit', 'permits', 'inspection', 'mot', 'renewal', 'renewals', 'sticker', 'speed limiter', 'psv licence', 'psv', 'pdp', 'badge', 'compliance']
   },
   {
     value: 'Accessories', category: 'accessories', kinds: ALL_KINDS, menu: false, odometerMode: 'never',
@@ -120,6 +132,27 @@ export const EXPENSE_TYPES = Object.freeze([
     aliases: ['mooring', 'berthing', 'harbour', 'harbor', 'marina', 'slipway', 'dock', 'docking', 'anchorage', 'port fee', 'port fees']
   },
   {
+    // v1.59.7 — live audit: these real fleet spends had no home and fell in Other.
+    value: 'Security', category: 'security', kinds: ALL_KINDS, menu: false, odometerMode: 'never',
+    aliases: ['security', 'askari', 'guard', 'guards', 'watchman', 'night guard', 'security fee', 'security fees', 'security guard']
+  },
+  {
+    value: 'Loading & Offloading', category: 'loading', kinds: ['truck', 'bus', 'heavy_equipment', 'machinery', 'watercraft'], menu: false, odometerMode: 'never',
+    aliases: ['loading', 'offloading', 'off-loading', 'off loading', 'loading fee', 'loading fees', 'loading charges', 'loader', 'loaders', 'cartage', 'turnboy']
+  },
+  {
+    value: 'Weighbridge', category: 'weighbridge', kinds: ['truck'], menu: false, odometerMode: 'never',
+    aliases: ['weighbridge', 'weigh bridge', 'weighing fee', 'weighing fees', 'scale fee', 'scale fees']
+  },
+  {
+    value: 'Hire & Rental', category: 'hire', kinds: ALL_KINDS, menu: false, odometerMode: 'never',
+    aliases: ['hire', 'rental', 'rent', 'hired', 'car hire', 'equipment hire', 'lease', 'leasing', 'charter']
+  },
+  {
+    value: 'Route & Stage Fees', category: 'route', kinds: ['bus', 'motorcycle', 'truck'], menu: false, odometerMode: 'never',
+    aliases: ['stage fee', 'stage fees', 'route fee', 'route fees', 'county fee', 'county fees', 'matatu fee', 'terminus fee', 'route charge']
+  },
+  {
     value: 'Other', category: 'other', kinds: ALL_KINDS, menu: true, odometerMode: 'never',
     aliases: ['other', 'others', 'misc', 'miscellaneous', 'sundry', 'sundries']
   }
@@ -141,19 +174,33 @@ function isElectric(fuelType) {
   return /^(?:electric|ev|bev)$/i.test(String(fuelType || '').trim());
 }
 
-/** Quiz menu for the asset kind (max 8, always including an "Other" escape). */
+/**
+ * Quiz menu for the asset kind (v1.59.7 — five real choices + "Other", so the
+ * question stays WhatsApp-short; every other type is still reachable by free
+ * text through its aliases).
+ */
+const MENU_PRIORITY = Object.freeze({
+  road: ['Fuel', 'Charging', 'Maintenance', 'Parts', 'Tyres', 'Repairs'],
+  hours: ['Fuel', 'Maintenance', 'Parts', 'Repairs', 'Consumables', 'Crew Wages']
+});
+
 export function expenseTypeChoices(assetKind = 'vehicle', { fuelType = null } = {}) {
   const kind = normalizeKind(assetKind);
   const electric = isElectric(fuelType);
-  return EXPENSE_TYPES
-    .filter((type) => {
-      if (!type.menu) return false;
-      if (!type.kinds.includes(kind)) return false;
-      if (type.value === 'Fuel' && electric) return false;
-      if (type.electric && !electric) return false;
-      return true;
-    })
-    .slice(0, 8)
+  const eligible = EXPENSE_TYPES.filter((type) => {
+    if (!type.menu || type.value === 'Other') return false;
+    if (!type.kinds.includes(kind)) return false;
+    if (type.value === 'Fuel' && electric) return false;
+    if (type.electric && !electric) return false;
+    return true;
+  });
+  const priority = MENU_PRIORITY[HOURS_KINDS.includes(kind) ? 'hours' : 'road'] || [];
+  const ranked = [
+    ...priority.map((value) => eligible.find((type) => type.value === value)).filter(Boolean),
+    ...eligible.filter((type) => !priority.includes(type.value))
+  ];
+  const other = EXPENSE_TYPES.find((type) => type.value === 'Other');
+  return [...ranked.slice(0, 5), other]
     .map((type) => ({ value: type.value, aliases: [...type.aliases] }));
 }
 

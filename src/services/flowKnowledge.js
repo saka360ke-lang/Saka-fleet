@@ -133,7 +133,7 @@ export const SAKA_QUIZ_FLOWS = [
     fields: 'vehicle → type → amount → fuel volume → fill type (full tank or top-up) → reading (odometer for road assets, engine hours for machines — per the odometer policy) → note or part name → confirm',
     extracted: ['plate_number', 'expense_type', 'amount', 'fuel_liters', 'fill_type', 'odometer', 'operating_hours', 'notes', '_narrative: occurred_at, vendor, unit_price'],
     writes: 'expense_logs + expenses + vehicle odometer; engine hours ride the entry notes; a narrative stated past date lands in created_at on the fresh write',
-    rules: 'expense types come from the shared expenseCatalog (Fuel, Charging, Maintenance, Parts, Tyres, Repairs, Bodywork & Paint, Washing, Parking, Tolls, Fines, Insurance, Accessories, Subscriptions, Towing & Recovery, Crew Wages, Consumables, Mooring & Berthing, Other); the menu follows the asset kind and any free-text alias resolves (puncture → Tyres, fuel filter → Parts, oil change → Maintenance, hydraulic oil → Consumables); fuel volume and fill type only when type is fuel; top-ups are valid but only full tanks anchor an exact km/L segment; THE ODOMETER POLICY (v1.39.0, catalog-driven): a full-tank fuel fill REQUIRES the odometer — Skip is refused because the reading anchors the km/L math; top-ups, Charging and service events (Maintenance, Parts, Tyres, Repairs, Consumables) ask with Skip allowed; Parking, Tolls, Fines, Washing, Insurance, Accessories, Subscriptions, Towing & Recovery, Crew Wages, Mooring & Berthing, Bodywork & Paint and Other are NEVER asked for a reading; hours-led assets (heavy equipment, machinery, generators, watercraft) substitute the engine-hours meter, which is optional and stored in the entry notes; receipt OCR pre-fills hints; narrative intake (v1.34.0) deterministically pre-fills a pasted sentence — the engine resolves the money, volume, odometer, vendor, per-litre price and a stated PAST date (never a future one), two different days in one message ask the user which day, ambiguous amounts stay unresolved and are never invented; the pre-filled draft confirms through an engine-rendered card with 1 Save / 2 Change / 3 Cancel quick actions (v1.35.0); one paragraph with several complete records becomes a numbered plan card with 1 Save all / 2 Edit one / 3 Cancel — an additive line is never split, a record never gets an invented date (v1.38.0)'
+    rules: 'expense types come from the shared expenseCatalog (Fuel, Charging, Maintenance, Parts, Tyres, Repairs, Bodywork & Paint, Washing, Parking, Tolls, Fines, Insurance, Licences & Permits, Accessories, Subscriptions, Towing & Recovery, Crew Wages, Consumables, Mooring & Berthing, Security, Loading & Offloading, Weighbridge, Hire & Rental, Route & Stage Fees, Other); the menu follows the asset kind (five real choices + Other) and any free-text alias resolves (puncture → Tyres, fuel filter → Parts, oil change → Maintenance, hydraulic oil → Consumables, renewed licence → Licences & Permits, askari → Security, weighbridge fee → Weighbridge); an optional record label (label: karen run or #karen) is captured on every write; fuel volume and fill type only when type is fuel; top-ups are valid but only full tanks anchor an exact km/L segment; THE ODOMETER POLICY (v1.39.0, catalog-driven): a full-tank fuel fill REQUIRES the odometer — Skip is refused because the reading anchors the km/L math; top-ups, Charging and service events (Maintenance, Parts, Tyres, Repairs, Consumables) ask with Skip allowed; Parking, Tolls, Fines, Washing, Insurance, Licences & Permits, Accessories, Subscriptions, Towing & Recovery, Crew Wages, Mooring & Berthing, Bodywork & Paint, Security, Loading & Offloading, Weighbridge, Hire & Rental, Route & Stage Fees and Other are NEVER asked for a reading; hours-led assets (heavy equipment, machinery, generators, watercraft) substitute the engine-hours meter, which is optional and stored in the entry notes; receipt OCR pre-fills hints; narrative intake (v1.34.0) deterministically pre-fills a pasted sentence — the engine resolves the money, volume, odometer, vendor, per-litre price and a stated PAST date (never a future one), two different days in one message ask the user which day, ambiguous amounts stay unresolved and are never invented; the pre-filled draft confirms through an engine-rendered card with 1 Save / 2 Change / 3 Cancel quick actions (v1.35.0); one paragraph with several complete records becomes a numbered plan card with 1 Save all / 2 Edit one / 3 Cancel — an additive line is never split, a record never gets an invented date (v1.38.0)'
   },
   {
     key: 'log_earnings',
@@ -406,7 +406,9 @@ export const SAKA_TONE_COMPASS = {
     // v1.59.0 — PERSONA V4 brand compass: WhatsApp-native, human, never a template.
     'The medium is WhatsApp: punchy, scannable lines with clean breaks; bold only the anchor; never a dense paragraph.',
     'Use active human verbs over robotic formulas: "Logged ✓", "Got it — KAS 628T is updated" — never "I have successfully recorded your transaction".',
-    'Natural contractions and varied sentence lengths are mandatory (don\'t, you\'ll, it\'s); never open two replies in a row the same way.'
+    'Natural contractions and varied sentence lengths are mandatory (don\'t, you\'ll, it\'s); never open two replies in a row the same way.',
+    // v1.59.7 — review cards and empty searches are the loudest robot tells (live audit 2026-11-05).
+    'Review/confirm cards open with ONE short human line from the rotating pool and close with the engine\'s action line; never "Here\'s what I have", never "please check it over", never "which field would you like to change".'
   ],
   bannedPhrases: [
     'Let\'s keep moving', 'Happy to help you begin', 'Welcome! Let\'s get you started', 'I\'m still here with you',
@@ -418,7 +420,10 @@ export const SAKA_TONE_COMPASS = {
     // v1.52.0 — the user's own data is never withheld behind an access refusal.
     "I don't have access to", "I can't access", 'I do not have that data', 'that data is not available to me',
     // v1.54.0 — ANSWER LAW v2 widens the refusal family.
-    "I can't see", 'not stored on my side', "I don't hold that data", 'no record of'
+    "I can't see", 'not stored on my side', "I don't hold that data", 'no record of',
+    // v1.59.7 — review-card boilerplate retired (live audit: ~120 repeated openers).
+    "Here's what I have for this", "Here's everything I have", 'please check it over',
+    "which field you'd like to change", 'Got your expense type'
   ],
   poles: [
     { id: 'anchor', name: 'Precision (Anchor)', law: 'Numbers, dates, currency and units are sacred: use only supplied facts, never approximate database values, and state exactly what was saved.' },
@@ -497,6 +502,17 @@ export const SAKA_TONE_COMPASS = {
     casual: ['Logged ✓', 'Got it', 'Done', 'Noted', 'All set', 'Saved ✓'],
     formal: ['Recorded.', 'Updated.', 'Noted.', 'Done.', 'Saved.'],
     rule: 'The confirmation always carries the facts (asset + amount/reading + updated total); variety never replaces data.'
+  },
+  // v1.59.7 — review cards and empty searches (live audit: "Here's what I have…"
+  // opened ~120 turns; "please check it over" repeated verbatim).
+  reviewCards: {
+    law: 'A review card opens with ONE short, rotated human line and closes with the engine action line — never boilerplate, never the same opener twice in a row.',
+    openers: ['📋 Check this before I save it', '📋 One look and it\'s saved', '📋 Ready when you are —', '📋 Quick check 👇', '📋 Here\'s the card (last look)'],
+    footers: ['Reply *{word}* (or *1*) to save — or tell me what to change.', 'Happy with this? Reply *{word}*. Not quite? Say what to fix.', 'Reply *{word}* to save it, or name the one thing to change.']
+  },
+  nothingFound: {
+    law: 'An empty search is a friendly nudge, never a dashboard zero.',
+    lines: ['Nothing under that yet — log the next one and I\'ll keep it tidy.', 'Nothing matched that so far — want to log something now?', 'No entries there yet — say the word and I\'ll start the record.']
   }
 };
 
@@ -521,6 +537,13 @@ export function buildToneCompassBlock() {
     `- Casual openers: ${SAKA_TONE_COMPASS.ackVariety.casual.join(' · ')}`,
     `- Formal openers: ${SAKA_TONE_COMPASS.ackVariety.formal.join(' · ')}`,
     `- ${SAKA_TONE_COMPASS.ackVariety.rule}`,
+    'REVIEW CARD VOICE (v1.59.7):',
+    `- ${SAKA_TONE_COMPASS.reviewCards.law}`,
+    `- Opener pool: ${SAKA_TONE_COMPASS.reviewCards.openers.join(' · ')}`,
+    `- Action lines: ${SAKA_TONE_COMPASS.reviewCards.footers.join(' · ')}`,
+    'EMPTY SEARCH VOICE (v1.59.7):',
+    `- ${SAKA_TONE_COMPASS.nothingFound.law}`,
+    `- ${SAKA_TONE_COMPASS.nothingFound.lines.join(' · ')}`,
     'UX & INCLUSION (permanent):',
     ...SAKA_TONE_COMPASS.inclusion.map((rule) => `- ${rule}`),
     'EMOJI POLICY (creative scaffolding):',

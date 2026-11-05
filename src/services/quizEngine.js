@@ -22,6 +22,8 @@ import { normalizeFillType } from './fuelEconomy.js';
 import { isDuplicateExpense } from './expenseGuard.js';
 // v1.59.0 — optional per-record label (pure helper, no cycles).
 import { sanitizeEntryLabel } from './entryLabels.js';
+// v1.59.7 — labels on every entry: standalone odometer readings get a ledger row.
+import { recordLabeledReading } from './labelsEverywhere.js';
 import { shortenUrl } from './linkShortener.js';
 import {
   EXPENSE_TYPES,
@@ -616,7 +618,7 @@ function expenseFields(ctx) {
       { value: 'Top-up', aliases: ['top up', 'top-up', 'topped up', 'partial', 'half tank', 'not full', 'some fuel'] }
     ], { optional: true, when: (answers) => answers.expense_type === 'Fuel' }),
     ...expenseReadingFields(ctx),
-    field('notes', 'Note or part name', 'optional — e.g. brake pads, oil filter, Shell station', {
+    field('notes', 'Note or part name', 'optional — e.g. brake pads, or tag it: label: karen run', {
       optional: true, aliases: ['notes'], parse: (text) => String(text).trim() || null
     })
   ];
@@ -3203,7 +3205,8 @@ async function executeFlow(state, ctx) {
           amount: formatMoney(a.amount, buildGlobalContext(ctx.countryInfo, ctx.profile).currency),
           volume: a.fuel_liters ? `${a.fuel_liters} L` : undefined,
           odometer: a.odometer_reading,
-          notes: a.notes || undefined
+          notes: a.notes || undefined,
+          label: expenseRow.label ? `#${expenseRow.label}` : undefined
         });
         return { handled: true, reply, flow: state.flow, completed: true };
       }
@@ -3253,7 +3256,8 @@ async function executeFlow(state, ctx) {
           revenue: formatMoney(a.amount, buildGlobalContext(ctx.countryInfo, ctx.profile).currency),
           odometer: a.odometer_reading,
           period: a.period || undefined,
-          earningType: earningType || undefined
+          earningType: earningType || undefined,
+          label: earningRow.label ? `#${earningRow.label}` : undefined
         });
         return { handled: true, reply, flow: state.flow, completed: true };
       }
@@ -3266,6 +3270,16 @@ async function executeFlow(state, ctx) {
           updated_at: new Date().toISOString()
         }).eq('id', vehicle.id);
         if (error) return { handled: true, reply: await fail(error.message), flow: state.flow, active: true };
+
+        const readingLabel = sanitizeEntryLabel(a.label || state.narrativeExtras?.label) || null;
+        // v1.59.7 — every reading keeps its own labelled ledger row (never
+        // blocks the mileage update; degrades on an un-migrated schema).
+        await recordLabeledReading(ctx.supabase, {
+          vehicleId: vehicle.id,
+          profileId: ctx.profile?.id || null,
+          reading: a.odometer_reading,
+          label: readingLabel
+        });
 
         // Odometer monitoring: evaluate active distance reminders immediately
         // so approaching/overdue alerts reach the owner without waiting for
@@ -3280,7 +3294,7 @@ async function executeFlow(state, ctx) {
           console.warn('[quizEngine] Reminder evaluation skipped:', remErr.message);
         }
 
-        const reply = await ok({ vehicle: vehicle.plate_number, odometer: a.odometer_reading });
+        const reply = await ok({ vehicle: vehicle.plate_number, odometer: a.odometer_reading, label: readingLabel ? `#${readingLabel}` : undefined });
         return { handled: true, reply, flow: state.flow, completed: true };
       }
 
@@ -3469,6 +3483,7 @@ async function executeFlow(state, ctx) {
 
       case 'set_reminder': {
         if (!vehicle) return { handled: true, reply: await fail('Vehicle not found.'), flow: state.flow, active: true };
+        const reminderLabel = sanitizeEntryLabel(a.label || state.narrativeExtras?.label) || null;
         const due = a.due;
         const normalizedReminderType = normalizeReminderType(a.reminder_type) || a.reminder_type;
         const extraNotes = formatExtraNotes(state.extraNotes || []);
@@ -3489,6 +3504,7 @@ async function executeFlow(state, ctx) {
             category,
             spec,
             notes: extraNotes,
+            label: reminderLabel,
             timeZone,
             linkedColumn: expiryLinkedColumn(category)
           });
@@ -3510,7 +3526,8 @@ async function executeFlow(state, ctx) {
           const reply = await ok({
             vehicle: vehicle.plate_number,
             reminder: normalizedReminderType,
-            due: describeExpirySpec(spec, { locale: ctx.countryInfo?.locale || 'en-US' })
+            due: describeExpirySpec(spec, { locale: ctx.countryInfo?.locale || 'en-US' }),
+            label: reminderLabel ? `#${reminderLabel}` : undefined
           });
           return { handled: true, reply, flow: state.flow, completed: true };
         }
@@ -3524,10 +3541,11 @@ async function executeFlow(state, ctx) {
           profileId: ctx.profile?.id,
           reminderType: normalizedReminderType,
           spec: due,
-          notes: extraNotes
+          notes: extraNotes,
+          label: reminderLabel
         });
         if (!created.ok) return { handled: true, reply: await fail(created.error), flow: state.flow, active: true };
-        const reply = await ok({ vehicle: vehicle.plate_number, reminder: normalizedReminderType, due: describeThresholdSpec(due) });
+        const reply = await ok({ vehicle: vehicle.plate_number, reminder: normalizedReminderType, due: describeThresholdSpec(due), label: reminderLabel ? `#${reminderLabel}` : undefined });
         return { handled: true, reply, flow: state.flow, completed: true };
       }
 

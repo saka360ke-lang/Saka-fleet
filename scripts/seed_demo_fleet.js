@@ -125,6 +125,13 @@ export function buildDemoSeedPayload(now = new Date()) {
   addExpense(3, 'Tolls', 300, { odo: 209500, notes: 'Expressway toll', daysAgo: 2 });
   addExpense(0, 'Fines', 1500, { odo: 50200, notes: 'Speeding fine', daysAgo: 22 });
   addExpense(0, 'Insurance', 42000, { notes: 'Comprehensive insurance renewal', daysAgo: 35 });
+  // v1.59.7 — the licensed/permit split and the five new Kenyan fleet types.
+  addExpense(0, 'Licences & Permits', 1800, { notes: 'Road licence renewal', daysAgo: 7 });
+  addExpense(3, 'Security', 1500, { notes: 'Night askari - stage security', daysAgo: 5 });
+  addExpense(2, 'Loading & Offloading', 2500, { notes: 'Loading charges - Industrial Area', daysAgo: 6 });
+  addExpense(2, 'Weighbridge', 400, { notes: 'Weighbridge fee - Mariakani', daysAgo: 4 });
+  addExpense(0, 'Hire & Rental', 6000, { notes: 'Hired vehicle for the weekend', daysAgo: 21 });
+  addExpense(3, 'Route & Stage Fees', 900, { notes: 'Stage fees - CBD route', daysAgo: 3 });
   addExpense(0, 'Accessories', 3500, { notes: 'Seat covers', daysAgo: 50 });
   addExpense(1, 'Subscriptions', 1200, { notes: 'GPS tracking subscription', daysAgo: 60 });
   addExpense(2, 'Towing & Recovery', 5000, { odo: 116000, notes: 'Breakdown recovery', daysAgo: 33 });

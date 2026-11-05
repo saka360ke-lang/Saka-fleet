@@ -283,7 +283,7 @@ check(/Narrative pre-fills are engine-determined facts/.test(await import('./src
   check(/no menu, no option list/i.test(DEFAULT_SAKA_CORE_PROMPT), 'the PACING LAW forbids menus after a completed write');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('change approach and PERFORM the action'), 'the folded Sentinel live learnings ride the core prompt');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('carry free-text expense detail into the draft note/label'), 'the label-echo learning is trained');
-  check(PROMPT_REFINEMENT_MARKER === 'SAKA-PROMPT-SCHEMA:2026.12.0', 'the prompt schema version is bumped for v4 (retires stale refinements)');
+  check(PROMPT_REFINEMENT_MARKER === 'SAKA-PROMPT-SCHEMA:2026.13.0', 'the prompt schema version is bumped for v5 (retires stale refinements)');
 
   // The composer enforces the same rule at runtime (not just in the prompt).
   check(isContentlessReply('Got your vehicle details!') === true, 'an empty acknowledgement is rejected by the composer');

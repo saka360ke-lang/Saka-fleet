@@ -87,6 +87,8 @@ const STATLESS_SUITES = [
   'test_env_audit.js',
   // v1.33.0 — editable ledger: detectors, whitelist, audit + restore round-trip.
   'test_entry_ledger.js',
+  // v1.59.7 - labels on every entry (receipts, reminders, odometer readings).
+  'test_labels_everywhere.js',
   // v1.34.0 — narrative draft engine: deterministic one-sentence records.
   'test_narrative_draft.js',
   // v1.36.0 — record answers: deterministic ledger Q&A (sum/count/avg/list).

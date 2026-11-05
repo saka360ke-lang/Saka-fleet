@@ -23,6 +23,8 @@
 
 import { kmToUserDistance, userDistanceToKm, formatNumber, formatDate } from './globalization.js';
 import { complianceCategory } from './complianceCatalog.js';
+// v1.59.7 — reminders can carry the same optional label as any other entry.
+import { sanitizeEntryLabel } from './entryLabels.js';
 import {
   parseFlexibleDate,
   extractDatePhrase,
@@ -299,7 +301,7 @@ export function describeThresholdSpec(spec, { relative = null } = {}) {
  * is the vehicle's current reading, so remaining distance/time is tracked
  * from the moment of creation.
  */
-export async function createThresholdReminder({ supabase, vehicle, profileId = null, reminderType = 'Service', spec, notes = null }) {
+export async function createThresholdReminder({ supabase, vehicle, profileId = null, reminderType = 'Service', spec, notes = null, label = null }) {
   if (!supabase || !vehicle?.id) return { ok: false, error: 'Vehicle or database unavailable.' };
   if (!spec || spec.ok === false) return { ok: false, error: 'Invalid threshold specification.' };
 
@@ -323,10 +325,16 @@ export async function createThresholdReminder({ supabase, vehicle, profileId = n
     remaining_updated_at: new Date().toISOString(),
     display_unit: spec.kind === 'hours' ? 'hours' : (unitSystem === 'imperial' ? 'mi' : 'km'),
     notes: notes || null,
+    label: sanitizeEntryLabel(label),
     created_at: new Date().toISOString()
   };
 
-  const { error } = await supabase.from('reminders').insert([row]);
+  let { error } = await supabase.from('reminders').insert([row]);
+  // Rule 50 — an un-migrated label column must never block the reminder.
+  if (error && /column|schema|does not exist/i.test(error.message || '')) {
+    const { label: _dropped, ...legacy } = row;
+    ({ error } = await supabase.from('reminders').insert([legacy]));
+  }
   if (error) return { ok: false, error: error.message };
   return { ok: true, reminder: row };
 }
@@ -349,7 +357,8 @@ export async function createExpiryReminder({
   timeZone = SYSTEM_TIMEZONE,
   linkedColumn = null,
   subjectType = null,
-  subjectId = null
+  subjectId = null,
+  label = null
 }) {
   if (!supabase) return { ok: false, error: 'Database unavailable.' };
   if (!spec?.localDate) return { ok: false, error: 'Invalid expiry date.' };
@@ -376,6 +385,7 @@ export async function createExpiryReminder({
     subject_id: resolvedSubjectId,
     status: 'active',
     notes: notes || null,
+    label: sanitizeEntryLabel(label),
     notified_30d: false,
     notified_14d: false,
     notified_7d: false,
@@ -402,10 +412,18 @@ export async function createExpiryReminder({
   }
 
   if (existingId) {
-    const { error } = await supabase.from('reminders').update(row).eq('id', existingId);
+    let { error } = await supabase.from('reminders').update(row).eq('id', existingId);
+    if (error && /column|schema|does not exist/i.test(error.message || '')) {
+      const { label: _dropped, ...legacy } = row;
+      ({ error } = await supabase.from('reminders').update(legacy).eq('id', existingId));
+    }
     if (error) return { ok: false, error: error.message };
   } else {
-    const { data: inserted, error } = await supabase.from('reminders').insert([row]).select();
+    let { data: inserted, error } = await supabase.from('reminders').insert([row]).select();
+    if (error && /column|schema|does not exist/i.test(error.message || '')) {
+      const { label: _dropped, ...legacy } = row;
+      ({ data: inserted, error } = await supabase.from('reminders').insert([legacy]).select());
+    }
     if (error) return { ok: false, error: error.message };
     const stored = Array.isArray(inserted) ? inserted[0] : inserted;
     existingId = stored?.id || null;

@@ -81,4 +81,20 @@
   window.addEventListener('resize', function () {
     if (window.innerWidth > 960 && isOpen()) setOpen(false);
   });
+
+  // v1.59.7 — smooth scrolling ONLY for nav anchor clicks. The old CSS-wide
+  // `scroll-behavior: smooth` made holding a scroll button feel sticky; this
+  // keeps anchor jumps smooth while normal scrolling stays native.
+  document.addEventListener('click', function (event) {
+    var anchor = event.target && event.target.closest ? event.target.closest('a[href^="#"]') : null;
+    if (!anchor) return;
+    var hash = anchor.getAttribute('href') || '';
+    if (hash.length < 2) return;
+    var section = document.getElementById(hash.slice(1));
+    if (!section) return;
+    var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    event.preventDefault();
+    if (isOpen()) setOpen(false);
+    section.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'start' });
+  });
 })();

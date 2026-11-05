@@ -31,10 +31,10 @@ const REQUIRED_FILES = [
   'index.html', 'privacy.html', 'terms.html', 'data-deletion.html', 'status.html', '404.html',
   'assets/css/styles.css', 'assets/js/main.js', 'assets/js/cookieConsent.js', 'assets/js/status.js', 'assets/js/locale.js', 'assets/js/nav.js',
   'assets/img/logo.svg', 'assets/img/logo-mark.png', 'assets/img/logo-lockup.png', 'assets/img/favicon.svg', 'assets/img/og-cover.svg',
-  'assets/img/og-cover.png', 'assets/img/favicon-32.png', 'assets/img/apple-touch-icon.png', 'assets/img/icon-192.png',
+  'assets/img/og-cover.png', 'assets/img/favicon-32.png', 'assets/img/apple-touch-icon.png',
   'assets/fonts/Sora-600.woff2', 'assets/fonts/Sora-700.woff2',
   'assets/fonts/Manrope-400.woff2', 'assets/fonts/Manrope-500.woff2', 'assets/fonts/Manrope-700.woff2',
-  'data/changelog.json', 'data/countries.json', 'robots.txt', 'sitemap.xml', 'llms.txt', 'manifest.webmanifest', '.htaccess'
+  'data/changelog.json', 'data/countries.json', 'robots.txt', 'sitemap.xml', 'llms.txt', '.htaccess'
 ];
 
 console.log('--- Test 1: required files ---');
@@ -361,6 +361,13 @@ check(navJsSource.includes(".nav-links") && navJsSource.includes('nav-open'), 't
 for (const page of ['index.html', 'status.html', 'privacy.html', 'terms.html', 'data-deletion.html']) {
   check(fs.readFileSync(path.join(LANDING, page), 'utf8').includes('/assets/js/nav.js'), `${page} loads the shared menu script`);
 }
+
+console.log('\n--- Test 20: native scrolling + no install prompt (v1.59.7) ---');
+check(!/html\s*\{[^}]*scroll-behavior:\s*smooth/.test(css), 'no CSS-wide smooth scrolling (held-button scrolling stays native)');
+const navJsScroll = fs.readFileSync(path.join(LANDING, 'assets/js/nav.js'), 'utf8');
+check(navJsScroll.includes('scrollIntoView') && navJsScroll.includes("behavior: reduced ? 'auto' : 'smooth'"), 'nav anchors smooth-scroll in JS (reduced-motion aware)');
+check(!indexHtml.includes('rel="manifest"') && !fs.existsSync(path.join(LANDING, 'manifest.webmanifest')) && !fs.existsSync(path.join(LANDING, 'assets/img/icon-192.png')), 'the PWA manifest and install surface are gone (no install prompt)');
+check(!indexHtml.includes('apple-mobile-web-app-capable'), 'no iOS standalone install meta');
 
 console.log('Stateless suite: file reads only — no database, no cleanup needed.');
 

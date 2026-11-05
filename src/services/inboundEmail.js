@@ -68,6 +68,27 @@ export async function fetchInboundEmailBody(emailId, apiKey = process.env.RESEND
   }
 }
 
+/** v1.59.7 — HTML-only mail must never become a subject-only ticket. */
+export function htmlToPlainText(html = '') {
+  return String(html || '')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(?:p|div|li|tr|h[1-6])>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&#39;/gi, "'")
+    .replace(/&quot;/gi, '"')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+    .slice(0, 4000);
+}
+
 export async function handleInboundEmail(supabase, { payload = {}, headers = {}, rawBody = '', secret = null, notify = null, notifyPhone = null, skipFetch = false } = {}) {
   const verify = verifyResendSignature({ headers, rawBody, secret });
   if (!verify.ok) return { ok: false, rejected: true, reason: verify.reason };
@@ -89,6 +110,12 @@ export async function handleInboundEmail(supabase, { payload = {}, headers = {},
     const fetched = await fetchInboundEmailBody(email.emailId);
     if (fetched.ok) body = fetched;
   }
+  // v1.59.7 — prefer the text part, fall back to the HTML part, and only use
+  // the subject when neither exists (live audit: an HTML-only enquiry became a
+  // ticket whose whole body was "Enquiry").
+  const bodyText = (body && body.text && String(body.text).trim())
+    ? String(body.text).trim()
+    : (body && body.html ? htmlToPlainText(body.html) : '');
   let ticketId = null;
   let careCategory = null;
   let carePriority = null;
@@ -98,7 +125,7 @@ export async function handleInboundEmail(supabase, { payload = {}, headers = {},
     const outcome = await openOrAppendEmailTicket(supabase, {
       fromEmail: email.fromEmail,
       subject: email.subject,
-      text: (body && body.text) || email.subject
+      text: bodyText || email.subject
     }).catch(() => null);
     ticketId = outcome ? outcome.ticketId : null;
     if (outcome) {
@@ -106,16 +133,24 @@ export async function handleInboundEmail(supabase, { payload = {}, headers = {},
       carePriority = outcome.priority || null;
       careCreated = outcome.created;
     }
+    // Never lose the failure silently: a body-less ticket says why.
+    if (ticketId && !bodyText) {
+      try {
+        await supabase.from('support_tickets').update({
+          internal_note: 'Body fetch returned no text (HTML-only mail or fetch failure) - subject stored. Open it in the Resend dashboard.'
+        }).eq('id', ticketId);
+      } catch { /* best-effort, never blocks the ticket */ }
+    }
   }
   let notified = false;
   if (typeof notify === 'function' && notifyPhone) {
-    const snippet = String((body && body.text) || '').slice(0, 900);
+    const snippet = String(bodyText || '').slice(0, 900);
     const label = careCreated === false ? ' (update)' : '';
     const meta = [careCategory, carePriority].filter(Boolean).join(' · ');
     const text = '[Support email' + label + ']\n\nFrom: ' + email.fromEmail + '\nSubject: ' + email.subject + (meta ? '\n' + meta : '') + (snippet ? '\n\n' + snippet : '') + '\n\n_Tend it: care reply <id> — or reply from support@reports.sakafleet.com._';
     try { notified = (await notify(notifyPhone, text)) !== false; } catch { notified = false; }
   }
-  return { ok: true, email, textBody: body ? body.text : null, ticketId, notified, verified: Boolean(verify.verified), category: careCategory, priority: carePriority, threadUpdate: careCreated === false };
+  return { ok: true, email, textBody: bodyText || null, ticketId, notified, verified: Boolean(verify.verified), category: careCategory, priority: carePriority, threadUpdate: careCreated === false };
 }
 
 export default { verifyResendSignature, parseInboundEmail, fetchInboundEmailBody, handleInboundEmail };/** List recent inbound support emails (stored as support_tickets category=email). */

@@ -1,4 +1,6 @@
 import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
+// v1.59.7 — receipts can carry the same optional label as any other entry.
+import { sanitizeEntryLabel } from './entryLabels.js';
 
 /**
  * Saka Fleet — Receipt Vault (v1.19.0)
@@ -115,28 +117,36 @@ export async function recordReceipt(providedSupabase, {
   vendor = null,
   imageUrl = null,
   textSha = null,
+  label = null,
   error = null
 } = {}) {
   const supabase = getClient(providedSupabase);
   if (!supabase || !mediaId) return { ok: false, error: 'Missing media id' };
+  const row = {
+    media_id: String(mediaId),
+    owner_id: ownerId,
+    driver_id: driverId,
+    vehicle_id: vehicleId,
+    document_kind: documentKind,
+    status,
+    confidence,
+    currency,
+    amount,
+    fuel_liters: fuelLiters,
+    odometer,
+    vendor,
+    image_url: imageUrl,
+    text_sha: textSha,
+    label: sanitizeEntryLabel(label),
+    error
+  };
   try {
-    const { data, error: insertError } = await supabase.from(RECEIPTS_TABLE).insert([{
-      media_id: String(mediaId),
-      owner_id: ownerId,
-      driver_id: driverId,
-      vehicle_id: vehicleId,
-      document_kind: documentKind,
-      status,
-      confidence,
-      currency,
-      amount,
-      fuel_liters: fuelLiters,
-      odometer,
-      vendor,
-      image_url: imageUrl,
-      text_sha: textSha,
-      error
-    }]).select('*').maybeSingle();
+    let { data, error: insertError } = await supabase.from(RECEIPTS_TABLE).insert([row]).select('*').maybeSingle();
+    // Rule 50 — an un-migrated label column must never lose the receipt.
+    if (insertError && /column|schema|does not exist/i.test(insertError.message || '')) {
+      const { label: _dropped, ...legacy } = row;
+      ({ data, error: insertError } = await supabase.from(RECEIPTS_TABLE).insert([legacy]).select('*').maybeSingle());
+    }
     if (insertError) return { ok: false, error: insertError.message };
     return { ok: true, receipt: data };
   } catch (err) {
@@ -219,7 +229,8 @@ export function formatReceiptsReply({ receipts = [], vehicles = [], fallbackCurr
     const amount = formatAmount(receipt.amount, receipt.currency || fallbackCurrency);
     const vendor = receipt.vendor ? String(receipt.vendor).split('|')[0].trim() : (receipt.document_kind || 'Receipt');
     const bits = [amount, vehicle?.plate_number, formatWhen(receipt.created_at)].filter(Boolean);
-    return `• ${statusDot(receipt.status)} *${vendor}* — ${bits.join(' · ')}`;
+    const labelChip = receipt.label ? ` · #${receipt.label}` : '';
+    return `• ${statusDot(receipt.status)} *${vendor}* — ${bits.join(' · ')}${labelChip}`;
   });
   return `📸 *Your recent receipts*\n\n${lines.join('\n')}\n\nDelete one: *delete receipt N* (1 = newest; add DELETE to confirm). Send another photo anytime, or type *"receipts"* to see this list again.`;
 }

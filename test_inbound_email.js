@@ -1,7 +1,7 @@
 /** Saka Fleet - Resend inbound email tests (v1.58.14, stateless) */
 import assert from 'assert';
 import crypto from 'node:crypto';
-import { verifyResendSignature, parseInboundEmail, handleInboundEmail, SUPPORT_INBOX } from './src/services/inboundEmail.js';
+import { verifyResendSignature, parseInboundEmail, handleInboundEmail, htmlToPlainText, SUPPORT_INBOX } from './src/services/inboundEmail.js';
 
 let passed = 0;
 function check(cond, label) { assert.ok(cond, label); passed += 1; console.log('  ok ' + label); }
@@ -28,6 +28,11 @@ check(parsed.fromEmail === 'customer@example.com', 'the sender is lower-cased');
 check(parsed.toEmails.length === 1 && parsed.toEmails[0] === 'support@reports.sakafleet.com', 'the recipients are parsed');
 check(parsed.toEmails[0] === SUPPORT_INBOX, 'the parsed recipient is the canonical support inbox');
 check(parsed.subject === 'Help with my truck', 'the subject is parsed');
+
+console.log('--- html-only body fallback (v1.59.7) ---');
+check(htmlToPlainText('<p>Hello <b>there</b></p><br/>Second &amp; last') === 'Hello there\n\nSecond & last', 'html-only mail converts to plain text (tags stripped, entities decoded)');
+check(htmlToPlainText('<style>x</style><script>y</script><div>Ok</div>') === 'Ok', 'style/script blocks never leak into the ticket body');
+check(htmlToPlainText('') === '', 'an empty html part is empty text');
 
 console.log('--- handler ---');
 function mock() {

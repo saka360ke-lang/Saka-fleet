@@ -30,6 +30,40 @@ const COMPASS_POLES = SAKA_TONE_COMPASS.poles.map((pole) => pole.name.split(' ('
 const COMPASS_FLOORS = SAKA_TONE_COMPASS.floors.slice(0, 3).join(' ');
 
 /**
+ * v1.59.7 — review-card voice (live audit 2026-11-05: "Here's what I have…"
+ * opened ~120 turns and "please check it over" repeated verbatim). The engine
+ * owns the opener and the action line; the model renders the checklist body
+ * only. Boilerplate that still slips through is stripped deterministically.
+ */
+const REVIEW_OPENERS = SAKA_TONE_COMPASS.reviewCards.openers;
+const REVIEW_FOOTERS = SAKA_TONE_COMPASS.reviewCards.footers;
+const REVIEW_BANNED_LINE_RE = /^(?:here'?s\s+(?:what|everything|all|your)\b|please check (?:it|this) over\b|reply\s*\*?confirm\*?\s+to save\b|tell me which field\b|which field would you like\b|got your expense type\b)/i;
+let reviewRotation = 0;
+
+export function stripReviewBoilerplate(text) {
+  const kept = String(text || '')
+    .split('\n')
+    .filter((line) => {
+      const clean = line.trim();
+      if (!clean) return true;
+      return !REVIEW_BANNED_LINE_RE.test(clean);
+    })
+    .join('\n');
+  return kept
+    .replace(/please check (?:it|this) over/gi, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+export function nextReviewOpener(variant = null) {
+  const index = Number.isFinite(variant) ? Math.abs(Math.trunc(variant)) : reviewRotation++;
+  return {
+    opener: REVIEW_OPENERS[index % REVIEW_OPENERS.length],
+    footer: REVIEW_FOOTERS[index % REVIEW_FOOTERS.length]
+  };
+}
+
+/**
  * Map a compose purpose to the AI router purpose (tier + telemetry). Quiz
  * question renders and background nudges never need the conversational tier;
  * every other render is prose (Tier 2 when premium routing is enabled).
@@ -121,6 +155,7 @@ export async function composeMessage({
     `ACK VARIETY & PACING (v1.59.0): ${SAKA_TONE_COMPASS.ackVariety.law} Casual openers: ${SAKA_TONE_COMPASS.ackVariety.casual.join(' · ')}; formal openers: ${SAKA_TONE_COMPASS.ackVariety.formal.join(' · ')}. ${SAKA_TONE_COMPASS.ackVariety.rule}`,
     `PACING (v1.59.0): ${SAKA_TONE_COMPASS.pacing.join(' ')}`,
     `BRAND COMPASS (v1.59.0): ${SAKA_TONE_COMPASS.voice.slice(-3).join(' ')}`,
+    'REVIEW CARD VOICE (v1.59.7): a confirmation/review card is a checklist body only — no opening sentence, no closing instruction, no boilerplate. The engine supplies the opener and the action line. Never write "Here\'s what I have", "please check it over" or "which field would you like to change".',
     'Never introduce yourself or repeat a welcome when the conversation already has history or the user is mid-onboarding; an ambiguous turn gets ONE short clarifying question.',
     'GREETING LAW (v1.28.0): never open a reply with a bare greeting (Hi, Hello, Hey, Habari, Mambo, Jambo, Good morning/afternoon/evening) unless this is the first contact or the user greeted you in this turn. Lead with the answer, result or next useful thing.',
     'After a photo that could not be read, apologise once and offer a typed or clearer-photo fallback — never repeat the same question verbatim and never claim the photo was saved.',
@@ -235,7 +270,7 @@ export function seedQuizQuestions(flowLabel, language, questionMap = {}) {
  * NATURAL_INTAKE=on (default) keeps Saka conversational; setting it to
  * off|false|0 restores the original strict wording without a code change.
  */
-export const QUIZ_INSTRUCTION_NATURAL = 'Ask for that ONE item in a natural, varied sentence the way a helpful human would - never sound like a form, never list future questions, never repeat the question verbatim if it was already asked. If the engine reports the question was already answered, acknowledge briefly and never repeat it. Do not praise answers, never invent one, and do not ask for anything else. If dispatchFailed is true, say the last message could not be sent and offer to resend or use a different address. Narrative pre-fills are engine-determined facts (v1.34.0): never contradict or re-derive a pre-filled amount, type, volume, odometer or date, and never claim the engine invented a value the user typed.';
+export const QUIZ_INSTRUCTION_NATURAL = 'Ask for that ONE item in a natural, varied sentence the way a helpful human would - never sound like a form, never list future questions, never repeat the question verbatim if it was already asked. Never open with "Got your ..." - keep any acknowledgement to four words or skip straight to the question, and vary the wording every time. If the engine reports the question was already answered, acknowledge briefly and never repeat it. Do not praise answers, never invent one, and do not ask for anything else. If dispatchFailed is true, say the last message could not be sent and offer to resend or use a different address. Narrative pre-fills are engine-determined facts (v1.34.0): never contradict or re-derive a pre-filled amount, type, volume, odometer or date, and never claim the engine invented a value the user typed.';
 
 export const QUIZ_INSTRUCTION_STRICT = 'State the current question exactly once and ask ONLY for that. If the engine reports the question was already answered, acknowledge that briefly and never repeat it. Do not acknowledge or praise any answer - never invent one. Do not ask for anything else. Do not list future questions. If dispatchFailed is true, say the last message could not be sent and offer to resend or use a different address.';
 
@@ -325,30 +360,39 @@ export async function renderConfirmationSummary({
   language = 'English',
   countryInfo = null,
   profile = null,
-  confirmWord = 'CONFIRM'
+  confirmWord = 'CONFIRM',
+  variant = null
 }) {
+  // v1.59.7 — the engine owns the opener and the action line (rotated, never
+  // the same twice in a row); the model renders only the checklist body.
+  const { opener, footer } = nextReviewOpener(variant);
+  const actionLine = footer.replace('{word}', confirmWord);
+
   const facts = {
     flow: flowLabel,
     summaryRows,
     notes,
-    instruction: `Present a clean checklist summary of every collected item. End by asking the user to reply ${confirmWord} to save, or to name any field they want to change. Do not invent missing values. If a note starts with "Extra note:", show it under a short Extra notes section.`
+    instruction: 'Render ONLY the checklist body: one line per collected item (bold label + value), then an "Extra notes" section only when notes exist. Do NOT add any opening sentence, greeting or closing instruction - the engine adds those. Never use the phrases "Here\'s what I have", "please check it over" or "which field would you like to change".'
   };
 
   const fallbackLines = summaryRows.map((r) => `• ${r.label}: ${r.value}`).join('\n');
   const noteLines = (notes || []).length
     ? `\n\nExtra notes:\n${notes.map((n) => `• ${n}`).join('\n')}`
     : '';
-  const fallback = `${flowLabel}\n${fallbackLines}${noteLines}\n\nReply ${confirmWord} to save or name a field to change.`.trim();
+  const fallbackBody = `${fallbackLines}${noteLines}`.trim();
 
-  return composeMessage({
+  const composed = await composeMessage({
     purpose: 'confirmation_summary',
     facts,
     language,
     countryInfo,
     profile,
     maxTokens: 520,
-    fallbackText: fallback
+    fallbackText: fallbackBody
   });
+
+  const body = stripReviewBoilerplate(composed || '') || fallbackBody;
+  return `${opener}\n\n${body}\n\n${actionLine}`;
 }
 
 /**

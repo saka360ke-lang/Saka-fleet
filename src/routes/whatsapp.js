@@ -136,6 +136,8 @@ import { parseRecordQuestion, formatRecordAnswer } from '../services/recordAnswe
 import { isDeliveryBlocked, markDeliveryBlocked } from '../services/deliveryGuard.js';
 import { recordFriction } from '../services/frictionTracker.js';
 import { queryRecordLedger } from '../services/recordQuery.js';
+// v1.59.7 — labels live on every entry: keyword search spans receipts/reminders/readings.
+import { searchOtherLabels, formatOtherLabelMatches } from '../services/labelsEverywhere.js';
 import { renderActionDiscovery, composeMessage } from '../services/conversationEngine.js';
 import { enqueueFollowUp, FOLLOWUP_KINDS, followUpAckText } from '../services/followups.js';
 import { enqueueUserMessage } from '../services/messageQueue.js';
@@ -1365,6 +1367,8 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                 vendor: receiptHints.vendor || null,
                 imageUrl,
                 textSha: ocrTextSha,
+                // v1.59.7 — a receipt can carry its own searchable label.
+                label: extractEntryLabel(messageText),
                 error: ocrError
               });
             }
@@ -1998,6 +2002,16 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               vehicleIds: recordVehicleIds,
               question: recordQuestion
             });
+            // v1.59.7 — a keyword also matches labels on receipts, reminders and
+            // odometer readings (labels live on every entry now).
+            let otherLabelBlock = '';
+            if (recordQuestion.keyword) {
+              const otherLabelGroups = await searchOtherLabels(supabaseClient, {
+                vehicleIds: recordVehicleIds,
+                keyword: recordQuestion.keyword
+              });
+              otherLabelBlock = formatOtherLabelMatches(otherLabelGroups);
+            }
             aiResult = {
               intent: 'QUERY_RECORDS',
               extracted_data: {},
@@ -2008,7 +2022,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                 locale: countryInfo?.locale || 'en-US',
                 // v1.58.22 - only claim a vehicle scope when one actually resolved.
                 scopePlate: recordScope.reason === 'plate' ? recordQuestion.vehiclePlate : false
-              })
+              }) + otherLabelBlock
             };
           }
 
@@ -3439,12 +3453,12 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                 session.onboardingStep = initPlate ? 2 : 1;
                 session.onboardingStage = 1;
                 if (initPlate) {
-                  customReply = `🚘 *Stage 1 of 2 · Step 2 of 4: Vehicle Core Details* 📝\n\nGot registration plate *${initPlate}*!\n\nCould you share the **Make & Model**, **Year of Manufacture (YOM)**, **Fuel Type (Diesel/Petrol/Hybrid/EV)**, **Current Mileage**, and your **Email**?\n\n💡 *Tip:* Send them all together in one message (e.g. "1991 diesel 80 series, mileage 366700, email user@mail.com").\n\n_(Type *Cancel* to stop, or *Restart* to begin again.)_`;
+                  customReply = `🚘 *Vehicle core details* 📝\n\nGot registration plate *${initPlate}*!\n\nCould you share the **Make & Model**, **Year of Manufacture (YOM)**, **Fuel Type (Diesel/Petrol/Hybrid/EV)**, **Current Mileage**, and your **Email**?\n\n💡 *Tip:* Send them all together in one message (e.g. "1991 diesel 80 series, mileage 366700, email user@mail.com").\n\n_(Type *Cancel* to stop, or *Restart* to begin again.)_`;
                 } else {
                   customReply = await composeMessage({
                     purpose: 'registration_plate_question',
                     facts: {
-                      stage: 'Stage 1 of 2 · Step 1 of 4',
+                      stage: 'Vehicle registration',
                       nextStep: 'reply with the registration plate number for the new vehicle',
                       examples: ['KDA 123A', 'KBC 456X'],
                       cancelWord: 'Cancel'

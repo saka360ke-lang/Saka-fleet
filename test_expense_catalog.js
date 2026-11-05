@@ -74,7 +74,15 @@ const liveCases = [
   ['toll fees', 'Tolls'],
   ['speeding fine', 'Fines'],
   ['annual insurance renewal', 'Insurance'],
-  ['road licence', 'Insurance'],
+  ['renewed insurance', 'Insurance'],
+  ['road licence', 'Licences & Permits'],
+  ['renewed my licence', 'Licences & Permits'],
+  ['inspection fee', 'Licences & Permits'],
+  ['askari fee', 'Security'],
+  ['loading charges', 'Loading & Offloading'],
+  ['weighbridge fee', 'Weighbridge'],
+  ['car hire', 'Hire & Rental'],
+  ['stage fees', 'Route & Stage Fees'],
   ['mooring fees', 'Mooring & Berthing'],
   ['crew salary', 'Crew Wages'],
   ['tyre rotation', 'Tyres'],
@@ -92,7 +100,7 @@ check(resolveExpenseType('fuel filter') === 'Parts', '"fuel filter" is Parts, no
 check(resolveExpenseType('oil change') === 'Maintenance', '"oil change" is Maintenance, not Consumables');
 check(resolveExpenseType('engine oil') === 'Maintenance', '"engine oil" is Maintenance, not Repairs');
 check(resolveExpenseType('brake pads') === 'Parts' && resolveExpenseType('brake fluid') === 'Consumables', 'Brake parts vs brake fluid split correctly');
-check(resolveExpenseType('road licence') === 'Insurance', '"road licence" is compliance, not tolls');
+check(resolveExpenseType('road licence') === 'Licences & Permits', '"road licence" is the licence type, not insurance');
 check(hasExpenseTypeMarker('log expense') === false, 'The trigger word "expense" is never mistaken for a type');
 
 console.log('\n--- Test 4: categories, labels and badges ---');
@@ -109,11 +117,12 @@ const vehicleMenu = expenseTypeChoices('vehicle', { fuelType: 'Diesel' }).map((c
 const evMenu = expenseTypeChoices('vehicle', { fuelType: 'Electric' }).map((choice) => choice.value);
 const generatorMenu = expenseTypeChoices('generator').map((choice) => choice.value);
 const boatMenu = expenseTypeChoices('watercraft').map((choice) => choice.value);
-check(vehicleMenu.length <= 8, 'Road menu stays WhatsApp-short (max 8)');
-check(vehicleMenu.includes('Fuel') && vehicleMenu.includes('Tyres') && vehicleMenu.includes('Parking'), 'Road menu includes fuel, tyres and parking');
+check(vehicleMenu.length === 6, 'Road menu is five real choices + Other (WhatsApp-short)');
+check(vehicleMenu.includes('Fuel') && vehicleMenu.includes('Tyres') && vehicleMenu.includes('Other'), 'Road menu includes fuel, tyres and the Other escape');
 check(!vehicleMenu.includes('Consumables') && !vehicleMenu.includes('Crew Wages'), 'Road menu excludes machine-only types');
 check(evMenu.includes('Charging') && !evMenu.includes('Fuel'), 'EV menu swaps Fuel for Charging');
-check(generatorMenu.includes('Consumables') && generatorMenu.includes('Crew Wages'), 'Generator menu includes consumables and crew wages');
+check(generatorMenu.includes('Consumables'), 'Generator menu includes consumables');
+check(resolveExpenseType('crew salary') === 'Crew Wages', 'Crew wages stay reachable by free text for every asset kind');
 check(!generatorMenu.includes('Tyres') && !generatorMenu.includes('Parking'), 'Generator menu excludes road-only types');
 check(boatMenu.includes('Consumables'), 'Watercraft menu includes machine consumables');
 check(expenseTypeMenu('vehicle').includes('Fuel'), 'Menu copy is available for prompts');

@@ -169,8 +169,10 @@ export function formatRecordAnswer(result = {}, question = {}, { vehicles = [], 
     : `${typeLabel.toLowerCase()} ${missingNoun}`;
 
   if (result.count === 0) {
-    const keywordMiss = question.keyword ? ` matching "${question.keyword}"` : '';
-    return `📊 *Nothing logged* — no ${missingLabel}${keywordMiss} ${periodLabel}. ✅${fleetNote}`;
+    // v1.59.7 — the empty answer is a friendly nudge, not a dashboard zero
+    // (live audit: "📊 Nothing logged — no tyres + repairs expenses matching …").
+    const keywordMiss = question.keyword ? ` for "${question.keyword}"` : '';
+    return `Nothing under ${missingLabel}${keywordMiss} ${periodLabel} yet — send the next one and I'll keep it here.${fleetNote}`;
   }
 
   const volumeNote = result.liters > 0 ? ` · ${formatNumber(result.liters, locale)} L` : '';

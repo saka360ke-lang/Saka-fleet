@@ -150,7 +150,7 @@ const emptyReply = formatRecordAnswer(
   { kind: 'total', earning: false, expenseTypes: [], range: { label: '31 Oct' } },
   { vehicles: [], ...COPY }
 );
-check('no records is stated plainly', /Nothing logged/.test(emptyReply), emptyReply);
+check('no records is stated plainly', /Nothing under/.test(emptyReply) && !/📊/.test(emptyReply), emptyReply);
 
 // v1.56.1 — the empty typed answer must name a noun ("no other expenses"), not
 // the broken "no other all time" seen live on 2026-11-03.
@@ -159,7 +159,7 @@ const otherEmpty = formatRecordAnswer(
   { kind: 'total', earning: false, expenseTypes: ['Other'], range: null },
   { vehicles: [], ...COPY }
 );
-check('an empty typed answer names a noun (no "no other all time")', /no other expenses all time/.test(otherEmpty) && !/no other all time/.test(otherEmpty), otherEmpty);
+check('an empty typed answer names a noun (no "no other all time")', /other expenses/.test(otherEmpty) && !/no other all time/.test(otherEmpty), otherEmpty);
 
 const fleetReply = formatRecordAnswer(
   { ok: true, rows: [], count: 1, total: 500, liters: 0, average: 500, amountCol: 'amount' },

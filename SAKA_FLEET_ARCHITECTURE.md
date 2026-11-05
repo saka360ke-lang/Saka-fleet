@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.59.6  
+**Version:** 1.59.7  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.59.7** | De-robot voice (review-card pools + banned boilerplate), 25-type expense catalog (licences/security/loading/weighbridge/hire/route split out), labels on every entry (receipts, reminders, odometer readings), support-email body fix, native scrolling + install prompt removed; rollback tag `pre-voice-v1.59.6` | 163 |
 | **1.59.6** | Supplied SAKAFLEET logo installed (real lockup, rebuilt icons + OG cover) + softened whites across the site (no glare); nav lockup at its true 8.9:1 ratio; rollback tag `pre-logo-v1.59.5` | 162 |
 | **1.59.5** | "Monolith" website theme rebuilt around the Sakafleet logo (black canvas, white ink, one lime accent), self-hosted Sora + Manrope, logo assets made from the real artwork; rollback tag `pre-monolith-v1.59.4` | 161 |
 | **1.59.4** | Re-engagement memory (returning users get labelled context), 10-second PDF link delay, warm signup copy ("Meet your car's new friend"), preview-only changelog | 160 |
@@ -4532,4 +4533,32 @@ quiz engine:
 **Frames touched.** `landing/assets/img/{logo.svg,logo-mark.png,logo-lockup.png,favicon.svg,favicon-32.png,apple-touch-icon.png,icon-192.png,og-cover.svg,og-cover.png}`, `landing/assets/css/styles.css` (tokens, CTA, sheen, glows, nav sizing), `landing/index.html` + `landing/{privacy,terms,status,data-deletion}.html` (lockup ratio attributes), `test_landing_static.js` (Test 19 re-pinned, soft-white assertions added, REQUIRED_FILES += logo-lockup.png), `package.json`, `SAKA_FLEET_ARCHITECTURE.md`, `CHANGELOG.md`, `landing/data/changelog.json`.
 
 **Suites run:** `test_landing_static` (palette, soft-white retirement, lockup geometry, drawer ARIA), `test_doc_sync` — green; `npm run health` green.
+
+
+---
+
+### 163. v1.59.7 - de-robot voice, 25-type expense catalog, labels on every entry, support-email body fix, native scrolling (2026-11-05)
+
+**The chat-log deep dive (evidence first).** 2,137 messages (1,084 Saka turns, 1,053 user turns) across the wipe backups plus live `chat_history`/`chat_transcripts` were analysed: the "Here's…" review-card family opened ~120 turns ("Here's your vehicle summary" 42x, "Here's everything I have" 63x combined, "Here's what I have" 27x, "Which field would you like to change?" 24x), `Reply *CONFIRM*` appeared 153 times, "Stage 1 of 2 · Step 2 of 4" 9x (already banned by §73), "Nothing logged" 27x, and users sent 114 corrective turns. The robot feel was structural, not model mood.
+
+**Voice (data layer, no prompt drift).**
+- `SAKA_TONE_COMPASS` gains **REVIEW CARD VOICE** (opener pool: "📋 Check this before I save it", "📋 One look and it's saved", "📋 Ready when you are —", "📋 Quick check 👇", "📋 Here's the card (last look)"; footer pool with `{word}`) and **EMPTY SEARCH VOICE**; both render through `buildToneCompassBlock()` into the core prompt, and the composer carries a matching REVIEW CARD VOICE line.
+- `renderConfirmationSummary()` (conversationEngine) now = rotated engine opener + model-rendered checklist body + rotated engine action line ("Reply *CONFIRM* (or *1*) to save…"); `stripReviewBoilerplate()` deterministically removes "Here's what I have…", "please check it over", "reply CONFIRM to save…", "tell me which field…" lines that slip through. The confirmation gate itself is untouched (boundary rule §16/§18).
+- `QUIZ_INSTRUCTION_NATURAL` forbids "Got your…" openers and demands varied wording; banned phrases += "Here's what I have for this", "Here's everything I have", "please check it over", "which field you'd like to change", "Got your expense type"; `SAKA_PROMPT_SCHEMA_VERSION` = `2026.13.0`.
+- `recordAnswers.formatRecordAnswer` empty state is now "Nothing under <type> for <period> yet — send the next one and I'll keep it here." (no 📊 dashboard zero, no "matching"). Legacy onboarding strings "Stage 1 of 2 · Step 1/2 of 4" replaced with "Vehicle registration" / "Vehicle core details".
+
+**Expense catalog (additive, legacy values preserved).** New `Licences & Permits` type (category `compliance`) takes licence/license/permit/inspection/mot/renewal/sticker/speed-limiter/psv/pdp/badge/compliance aliases away from Insurance ("renewed my licence" is no longer Insurance; "renewed insurance" still is via longest-alias). New types: `Security` (askari/guard), `Loading & Offloading` (loader/cartage/turnboy, non-road kinds), `Weighbridge` (trucks), `Hire & Rental`, `Route & Stage Fees` (bus/motorcycle/truck) with new report categories `security/loading/weighbridge/hire/route`. Catalog = **25 types / 23 categories**. Quiz menu is now **five real choices + Other** with per-family priority (`road`: Fuel/Charging · Maintenance · Parts · Tyres · Repairs; `hours`: Fuel · Maintenance · Parts · Repairs · Consumables) — everything else stays reachable by free text. Public copy swept to "25 expense types" (landing FAQ/JSON-LD/feature card, terms).
+
+**Labels on every entry (operator-approved largest scope).** New `src/services/labelsEverywhere.js` (never throws): `LABELS_EVERYWHERE_SQL` (idempotent `receipts.label`, `reminders.label`, `odometer_readings` table + index), `recordLabeledReading()` (degrades per rule 50 — an un-migrated column retries without the label so a mileage update is never lost), `searchOtherLabels()` (receipts/reminders/readings by `label ILIKE`, empty on any error) and `formatOtherLabelMatches()` ("Also labelled:" block). Wiring: quiz `log_mileage` writes a labelled reading row and shows the `#label` chip; `log_expense`/`log_earnings` confirmations carry the chip; `set_reminder` passes the label to both reminder creators; `receipts.recordReceipt` stores/displays it; the OCR lane captures it from the caption; reminder inserts degrade on schema drift; `recordAnswers` note hint teaches "label: karen run"; keyword search appends other-kind matches. Migration `npm run migrate:labels-everywhere` applied live. Rule 37 updated additively (rule 58).
+
+
+**Support email deep audit + fix.** Live ticket `c7e279b1` (huguadventures@gmail.com, subject "Enquiry") proved the flow fires end-to-end (classify → thread → OPEN + priority) but its body was the subject fallback: the Resend body fetch returned no text part for an HTML-only mail. `htmlToPlainText()` now converts the HTML part (tags/entities stripped, 4,000-char cap) as the middle leg of text → HTML → subject, and a body-less ticket gets an `internal_note` explaining the fetch failure (never silent). The original body can be re-read from the Resend dashboard; the ticket row itself was left intact.
+
+**Website (rule 55 evolution).** CSS-wide `scroll-behavior: smooth` removed (holding a scroll button/autoscroll animated every step — the "sticky" feel); `nav.js` smooth-scrolls nav anchor clicks only (reduced-motion aware); the sticky nav `backdrop-filter` dropped 16px → 8px to cut scroll repaint jank. The PWA install surface is gone: `manifest.webmanifest` + `<link rel="manifest">` + `icon-192.png` removed (no install prompt); favicons/apple-touch-icon stay as plain icons. Landing suite gains Test 20 (native scrolling + no manifest/install meta).
+
+**Rollback reference.** Annotated tag `pre-voice-v1.59.6` (commit `30e59e0`) pushed before any edit.
+
+**Frames touched.** `src/services/{flowKnowledge,conversationEngine,expenseCatalog,labelsEverywhere(new),receipts,maintenanceReminders,recordAnswers,quizEngine,inboundEmail}.js`, `src/routes/whatsapp.js`, `sakaAi.js`, `scripts/{run_labels_everywhere_migration(new),health_audit}.js`, `landing/{index.html,terms.html,assets/css/styles.css,assets/js/nav.js,data/changelog.json}`, deleted `landing/manifest.webmanifest` + `landing/assets/img/icon-192.png`, tests {expense_catalog, labels_everywhere (new), inbound_email, record_answers, landing_static (Test 20), agent_training, quiz_flow, conversation_compliance, no_canned_replies}, `.clinerules` (rule 37 additive), `package.json`, `SAKA_FLEET_ARCHITECTURE.md`, `CHANGELOG.md`.
+
+**Suites run:** `test_expense_catalog` (91), `test_labels_everywhere` (22 - new), `test_inbound_email` (29), `test_record_answers`, `test_landing_static` (Test 20 included), `test_agent_training` (177), `test_conversation_compliance` (29), `test_no_canned_replies` (ratchet 4), `test_quiz_flow` (147), `test_doc_sync` (24) — green; `npm run health` green.
 
