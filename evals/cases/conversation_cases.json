@@ -159,6 +159,30 @@
         { "role": "user", "text": "now log 1500 service" }
       ],
       "reply": "Got it ✓ KES 1,500 service logged for KDA 777A."
+    },
+    {
+      "id": "driver-profile-psv-confirm",
+      "tags": ["driver-profile", "compliance", "confirm"],
+      "expected": "pass",
+      "note": "Live 2026-11-05 (+254734852529): the saved PSV badge is confirmed from driver_compliances, never invented.",
+      "engine_facts": [
+        "driver_compliances: PSV badge — number TSV2026, expiry 2027-08-08",
+        "driver_compliances: Driver licence (NTSA) — number 6086960024692740, expiry 2028-11-28"
+      ],
+      "turns": [
+        { "role": "user", "text": "I just submitted a psv badge for my driver profile. Confirm" }
+      ],
+      "reply": "✅ *On file ✓ PSV badge — David*\n\n• Number: TSV2026\n• Expires: 08 Aug 2027 🟢 (in 276 days)\n\n_Stored in your driver documents — reply \"my driver documents\" to see them all._"
+    },
+    {
+      "id": "driver-profile-psv-read-hijack",
+      "tags": ["driver-profile", "compliance", "regression"],
+      "expected": "fail",
+      "note": "The live defect: a driver-document read answered from the EXPENSE ledger instead of driver_compliances.",
+      "turns": [
+        { "role": "user", "text": "List psv badge" }
+      ],
+      "reply": "Nothing under licences & permits expenses all time yet — send the next one and I'll keep it here.\n🚗 Across your 2 vehicles."
     }
   ]
 }

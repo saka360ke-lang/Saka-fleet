@@ -155,6 +155,7 @@ const judgeSystem = buildJudgeSystem();
 check(/PERSONA V4/.test(judgeSystem), 'the judge prompt carries the Persona v4 brand compass');
 check(/BOUNDARY LAWS/.test(judgeSystem), 'the judge prompt carries the boundary laws');
 check(/Honest workflow commitments are allowed/.test(judgeSystem), 'honest workflow commitments are explicitly allowed (report links, reminders)');
+check(/ENGINE FACTS are authoritative/.test(judgeSystem), 'engine-supplied ledger facts are authoritative, never invention');
 check(/BANNED PHRASES/.test(judgeSystem), 'the judge prompt carries the banned-phrase law');
 for (const key of CONV_EVAL_CRITERIA_KEYS) {
   check(judgeSystem.includes(key), `judge prompt names the ${key} criterion`);
@@ -163,6 +164,12 @@ const judgePrompt = buildJudgePrompt({ id: 'unit-case', turns: [{ role: 'user', 
 check(judgePrompt.includes('USER: 40l diesel 5k'), 'the prompt renders the transcript');
 check(judgePrompt.includes('Logged ✓ 40 L diesel'), 'the prompt renders the reply under evaluation');
 check(judgePrompt.includes('Grade the reply now.'), 'the prompt ends with the grading instruction');
+const judgedWithFacts = buildJudgePrompt({
+  id: 'facts-case',
+  turns: [{ role: 'user', text: 'confirm my psv badge' }],
+  engineFacts: ['driver_compliances: PSV badge — number TSV2026, expiry 2027-08-08']
+}, '✅ On file ✓ PSV badge — TSV2026 · 08 Aug 2027');
+check(judgedWithFacts.includes('ENGINE FACTS') && judgedWithFacts.includes('TSV2026'), 'engine facts are rendered as authoritative context');
 
 console.log('\n--- Test 6: hash stability ---');
 const hashA = caseHash({ id: 'stable', turns: [{ role: 'user', text: 'hi' }], reply: 'hello there' });

@@ -31,7 +31,7 @@ export const COMPLIANCE_CAPTURE_TTL_MINUTES = 15;
 export const DRIVER_DOC_RE = /\b(licen[cs]e|psv|cpc|cdl|pdp|permit|operator\s*card|badge|compliance|documents?)\b/i;
 export const VEHICLE_DOC_RE = /\b(insurance|insured|inspection|mot|roadworthy|road\s*service|psl|road\s*tax|licence\s*disc|license\s*disc|speed\s*limiter|registration|emissions|policy)\b/i;
 
-const ADD_VERB_RE = /\b(add|save|record|register|update|upload|store|attach|renew|capture|keep|submit)\b/i;
+const ADD_VERB_RE = /\b(add(?:ed)?|save(?:d)?|record(?:ed)?|register(?:ed)?|update(?:d)?|upload(?:ed)?|store(?:d)?|attach(?:ed)?|renew(?:ed)?|capture(?:d)?|keep|submit(?:ted)?|sent)\b/i;
 /** Read/ask openers are answered by the read lanes, never turned into a capture. */
 const READ_OR_QUESTION_RE = /^\s*(?:can|could|how|what|whats|what's|where|when|why|which|who|do|does|did|is|are|was|should|would|will|show|list|view|see|open|display|read|check|send|print)\b/i;
 

@@ -111,7 +111,9 @@ const STATLESS_SUITES = [
   // v1.60.0 — DeepEval-style conversation judge: criteria, gates, corpus, healing.
   'test_conv_eval.js',
   // v1.61.0 — global synthetic scenario generator: buckets, prompts, sanitizer, writes.
-  'test_synthetic_cases.js'
+  'test_synthetic_cases.js',
+  // v1.61.2 — driver-document read/confirm lane (PSV live friction, 2026-11-05).
+  'test_driver_compliance_answers.js'
 ];
 
 const WORKFLOW_DIR = '.github/workflows';

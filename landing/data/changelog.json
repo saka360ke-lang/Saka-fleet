@@ -1,6 +1,13 @@
 {
-  "latest": "1.61.1",
+  "latest": "1.61.2",
   "entries": [
+    {
+      "version": "1.61.2",
+      "date": "2026-11-05",
+      "title": "Driver documents answer from their own ledger",
+      "preview": "Ask for your PSV badge or licence and Saka now confirms the saved record — never an empty expense search.",
+      "summary": "Driver documents (PSV badge, driving licence, PDP, CPC, operator card, medical) now have their own read lane: listing them shows the saved numbers and expiry dates with colour chips, and a confirmation reads \"On file ✓\" straight from the driver record. The vehicle compliance card also shows your driver documents, while vehicle permits (insurance, inspection, PSL) stay separate. This closes the live 5 Nov case where a submitted PSV badge existed but \"list psv badge\" answered from the expense ledger."
+    },
     {
       "version": "1.61.1",
       "date": "2026-11-05",

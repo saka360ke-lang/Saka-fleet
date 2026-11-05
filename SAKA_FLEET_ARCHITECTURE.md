@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.61.1  
+**Version:** 1.61.2  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.61.2** | Driver-document read/confirm lane (live PSV friction 2026-11-05) + driver rows on the compliance card + judge ENGINE FACTS + expanded capture verbs | 167 |
 | **1.61.1** | Kenyan synthetic batch (8 curated cases, 2 M-PESA) + generator hardening (engine-stamped ids, per-criterion metric mapping, null-threshold fix) + launch-award reconciliation audit (0 legacy grants) | 166 |
 | **1.61.0** | Global synthetic scenario generator (country buckets KE/NG/ZA/BR/MX/PH/IN/AE/GLOBAL) + launch award shortened to 6 months (183 days) | 165 |
 | **1.60.0** | DeepEval-style conversation eval harness + bounded self-healing + superadmin notifications/tracking (kill-switched) | 164 |
@@ -4649,4 +4650,31 @@ quiz engine:
 **Frames touched:** `scripts/generate_synthetic_cases.js` (ids, prompt hardening, null-safe minScore, per-run docs), `src/services/convEval.js` (per-criterion thresholds, null-safe thresholds, rubric + boundary clarifications), `src/services/convEvalCases.js` (metric mapping, null-safe minScore, criterionMins), `scripts/run_conv_eval.js` (unchanged behaviour), `evals/cases/syn_ke_*.json` (new corpus), `evals/README.md` (operator lessons), `test_synthetic_cases.js`, `test_conv_eval.js`, `package.json`, `README.md`, `landing/data/changelog.json` + stamped assets, `docs/{PRODUCT_QA,SAKA_TRAINING}.md`, `SAKA_FLEET_ARCHITECTURE.md`, `CHANGELOG.md`.
 
 **Suites run:** `test_synthetic_cases` (91), `test_conv_eval` (111), `test_launch_award` (29), `test_trial_engine` (80), `test_landing_static`, `test_agent_training`, `test_env_audit`, `test_doc_sync`, `test_kb_docs`, `test_model_router`, `test_sentinel_policy` - green; `npm run health` green.
+
+
+---
+
+### 167. v1.61.2 - driver-document read lane, profile separation & the live PSV friction (2026-11-05)
+
+**The live friction (evidence first).** Live `chat_history` 2026-11-05 09:28–09:29 UTC (+254734852529): "Driver licenses", "List my licenses" and "List psv badge" were answered with *"Nothing under licences & permits expenses all time yet"* — the **expense ledger** swallowing a driver-document read — and "I just submitted a psv badge for my driver profile. Confirm" fell to a generic vehicle menu. Meanwhile `driver_compliances` held the truth: `psv_badge` TSV2026 · 2027-08-08 (saved 05:26Z that morning) and `driver_license` · 2028-11-28. The save path (v1.58.25) worked; the **read/confirm path never existed**.
+
+**DeepEval status (asked explicitly).** The eval loop has never flagged this class: `CONV_EVAL_ENABLED` is off in production and `conversation_eval_runs` was empty; no friction row, proposal or dynamic rule named driver-document reads (the nearest rule covers vehicle-vs-account profile wording). The v1.58.25 autopsy had explicitly left read lanes "answered, never captured". This release closes that gap and adds the live exchange to the corpus.
+
+**The three profiles (audited).** VEHICLE = `vehicles` + `vehicle_compliances` (insurance, inspection, PSL, speed limiter) read by "my compliance"/reminders. OWNER = `profiles` row (`roles:['Owner']`) with self driver documents in `driver_compliances`. DRIVER = `profiles` row (`roles:['Driver']`) linked by `driver_assignments`, documents in `driver_compliances`. The two ledgers never merge; this release only changes **presentation and routing**, never storage.
+
+**A. Driver-document read/confirm lane (`complianceAnswers.js` + `whatsapp.js`).**
+- `detectDriverComplianceRead()` — `{ asked, confirm }` for "Driver licenses", "List my licenses", "List psv badge", "my driver documents", "I submitted my PSV badge, confirm". Never matches vehicle permits (insurance/inspection/PSL), the PDF report engine, reminder creation, date-bearing answers, spend/log lines or capture requests ("add psv badge").
+- `buildDriverComplianceReply()` — reads `driver_compliances` for the caller's own profile (owner self-profile included), normalises legacy types (`driver_license` → `driving_licence`), shows 🟢🟡🔴 chips + days-left, and confirms a stored row as **"On file ✓"** — never "Saved ✓" (nothing was saved that turn) and never a different document when one is asked for.
+- Wired in the deterministic read branch **before** the record/expense lane; parks a non-registration draft; a pending capture and a locked PIN/OTP phase always win (rule 37).
+- `buildComplianceStatusReply()` gains an optional DRIVER DOCUMENTS section (own rows) — the two ledgers stay separate.
+
+**B. Capture verbs accept the past tense.** `ADD_VERB_RE` now matches `submitted/sent/added/saved/recorded/…`, so "I submitted my psv badge" enters the pending-capture lane instead of falling through.
+
+**C. Judge ENGINE FACTS (DeepEval correctness).** The judge cannot see the database, so a true ledger confirmation (PSV number + expiry) was scored as fabrication (0.67, boundary 0.6). Cases may now carry `engine_facts` (≤5 authoritative strings), rendered as an **ENGINE FACTS** block; quoting them is correct, and a value absent from both transcript and facts is still invention. The live confirmation case now scores **0.92** while the expense-hijack reply scores **0.32** (expected fail).
+
+**D. Corpus + tracking.** Two hand-written cases: `driver-profile-psv-confirm` (expected pass) and `driver-profile-psv-read-hijack` (expected fail). The live exchange is recorded as a friction row and marked DEPLOYED once this revision ships.
+
+**Frames touched:** `src/services/complianceAnswers.js`, `src/services/complianceCapture.js`, `src/routes/whatsapp.js`, `src/services/flowKnowledge.js`, `sakaAi.js`, `src/services/convEval.js` (ENGINE FACTS), `src/services/convEvalCases.js` (`engine_facts`), `evals/cases/conversation_cases.json`, `test_driver_compliance_answers.js` (new), `test_conv_eval.js`, `test_agent_training.js`, `scripts/health_audit.js`, `package.json`, `landing/data/changelog.json` + stamped assets, `docs/{PRODUCT_QA,SAKA_TRAINING}.md`, `SAKA_FLEET_ARCHITECTURE.md`, `CHANGELOG.md`.
+
+**Suites run:** `test_driver_compliance_answers` (40 - new), `test_conv_eval`, `test_agent_training`, `test_compliance_capture`, `test_vehicle_compliance`, `test_record_answers`, `test_quiz_flow`, `test_first_message_flow`, `test_driver_profile_onboarding`, `test_synthetic_cases` - green; `npm run health` green.
 

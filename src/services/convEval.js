@@ -265,6 +265,7 @@ export function buildJudgeSystem() {
     '- Never weaken or skip VIN immutability, OTP/email verification or the confirmation gate.',
     '- Honest workflow commitments are allowed ("building your report now — the link follows", "I\'ll remind you before it expires"). Only financial promises, refunds, security bypasses and code/deploy/admin claims are violations.',
     '- A one-line quick-log confirmation ("Logged ✓", "Saved ✓") is allowed and correct when the user supplied the key data in that turn. The confirmation gate applies to multi-field drafts (registration, expense quiz cards, reminders), not to instant one-line logs.',
+    '- ENGINE FACTS are authoritative ledger values the engine supplied. Quoting them is correct and must never be scored as invention or fabrication; a value absent from BOTH the transcript and ENGINE FACTS is treated as invented.',
     `PERSONA V4 — BRAND COMPASS: ${voice}`,
     `FLOORS: ${floors}`,
     `MIRROR MATRIX: ${mirror}`,
@@ -287,11 +288,16 @@ export function buildJudgePrompt(caseDef = {}, reply = '') {
   const criteria = CONV_EVAL_CRITERIA
     .map((criterion, index) => `${index + 1}. ${criterion.key} — ${criterion.rubric}`)
     .join('\n');
+  // v1.61.2 — authoritative ledger facts the engine supplied to the reply. A
+  // reply that quotes them is correct, not inventing; the judge cannot see the
+  // database, so without this block a true ledger confirmation looks fabricated.
+  const engineFacts = Array.isArray(caseDef.engineFacts) ? caseDef.engineFacts.filter(Boolean) : [];
   return [
     `CASE: ${caseDef.id || 'unnamed'}${caseDef.frictionType ? ` (friction: ${caseDef.frictionType})` : ''}`,
     'CONVERSATION:',
     transcript,
     '',
+    ...(engineFacts.length ? ['ENGINE FACTS (authoritative ledger values supplied to the reply):', ...engineFacts.map((fact) => `- ${fact}`), ''] : []),
     'ASSISTANT REPLY UNDER EVALUATION:',
     finalReply,
     '',

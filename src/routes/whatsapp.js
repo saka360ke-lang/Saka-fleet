@@ -175,6 +175,8 @@ import {
   detectRemindersListCommand,
   detectComplianceStatusCommand,
   detectComplianceExpiryQuestion,
+  detectDriverComplianceRead,
+  buildDriverComplianceReply,
   detectComplianceCorrection,
   detectComplianceItemAsked,
   detectMaintenanceScheduleQuestion,
@@ -1445,8 +1447,16 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         const complianceExpiryQuestion = detectComplianceExpiryQuestion(commandText);
         const complianceCorrection = detectComplianceCorrection(commandText);
         const maintenanceScheduleQuestion = detectMaintenanceScheduleQuestion(commandText);
+        // v1.61.2 — DRIVER documents have their own deterministic read/confirm
+        // lane (live 2026-11-05: "List psv badge" and "…Confirm" were answered
+        // from the expense ledger / a generic menu). A pending capture owns the
+        // turn first (rule 37), and a locked PIN/OTP phase is never hijacked.
+        const driverDocRead = (quizPhaseLocked || session?.pendingComplianceCapture)
+          ? null
+          : detectDriverComplianceRead(commandText);
         const complianceReadCommand = remindersListCommand || complianceStatusCommand
-          || complianceExpiryQuestion || complianceCorrection.isCorrection || maintenanceScheduleQuestion;
+          || complianceExpiryQuestion || complianceCorrection.isCorrection
+          || maintenanceScheduleQuestion || Boolean(driverDocRead);
         if (complianceReadCommand && quizForFastPath && !quizPhaseLocked) {
           abandonQuiz(session, { reason: 'deterministic_read_command' });
         }
@@ -1747,14 +1757,32 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             extracted_data: {},
             reply_message: `🚗 Your garage is empty for now.\n\nSend your vehicle's number plate (e.g. *${countryInfo.plate_example}*) or type *REGISTER* — setup takes about two minutes.`
           };
-        } else if (remindersListCommand || complianceStatusCommand || complianceExpiryQuestion || complianceCorrection.isCorrection || maintenanceScheduleQuestion) {
+        } else if (driverDocRead || remindersListCommand || complianceStatusCommand || complianceExpiryQuestion || complianceCorrection.isCorrection || maintenanceScheduleQuestion) {
           // v1.32.2 — deterministic compliance/reminder answers (zero AI tokens).
           // Every date comes from the ledger; nothing is improvised.
           const ownedVehicles = existingVehicles.filter((v) => v.owner_id === profileData?.id);
           const targetVehicle = ownedVehicles.find((v) => v.id === currentActiveVehicle?.id)
             || (ownedVehicles.length === 1 ? ownedVehicles[0] : ownedVehicles[0] || null);
           let reply = null;
-          if (!targetVehicle) {
+          if (driverDocRead) {
+            // v1.61.2 — driver documents never need a vehicle: read/confirm them
+            // straight from driver_compliances for the caller's own profile.
+            let driverRows = [];
+            try {
+              const { data } = await supabaseClient
+                .from('driver_compliances')
+                .select('type,label,number,expiry,lifetime')
+                .eq('driver_id', profileData.id)
+                .limit(50);
+              driverRows = data || [];
+            } catch { driverRows = []; }
+            reply = buildDriverComplianceReply({
+              rows: driverRows,
+              profile: profileData,
+              asked: driverDocRead.asked,
+              confirm: driverDocRead.confirm
+            });
+          } else if (!targetVehicle) {
             reply = `🚗 I do not have a vehicle on file yet.\n\nSend the plate (e.g. *${countryInfo?.plate_example || 'KDA 123A'}*) to register it, then I can track compliance and reminders.`;
           } else if (complianceCorrection.isCorrection) {
             const corrected = await applyComplianceCorrection({
@@ -1785,7 +1813,17 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               .from('vehicle_compliances')
               .select('type,label,number,expiry,lifetime')
               .eq('vehicle_id', targetVehicle.id);
-            reply = buildComplianceStatusReply({ vehicle: targetVehicle, rows: rows || [] });
+            // v1.61.2 — the same card shows the caller's DRIVER documents.
+            let driverRows = [];
+            try {
+              const { data } = await supabaseClient
+                .from('driver_compliances')
+                .select('type,label,number,expiry,lifetime')
+                .eq('driver_id', profileData.id)
+                .limit(50);
+              driverRows = data || [];
+            } catch { driverRows = []; }
+            reply = buildComplianceStatusReply({ vehicle: targetVehicle, rows: rows || [], driverRows, profile: profileData });
           } else if (maintenanceScheduleQuestion) {
             const { data: reminders } = await supabaseClient
               .from('reminders')

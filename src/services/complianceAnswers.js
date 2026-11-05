@@ -220,8 +220,8 @@ export function buildComplianceExpiryAnswer({ vehicle = null, rows = [], asked =
   return `🗓️ *${plate} — expiry*\n\n${lines.join('\n')}\n\n_Reply "my compliance" for the full card, or "my reminders" for what is coming up._`;
 }
 
-/** Full compliance card for the active vehicle. */
-export function buildComplianceStatusReply({ vehicle = null, rows = [], now = new Date() } = {}) {
+/** Full compliance card for the active vehicle (+ the caller's driver documents). */
+export function buildComplianceStatusReply({ vehicle = null, rows = [], driverRows = [], profile = null, now = new Date() } = {}) {
   const plate = vehicle?.plate_number || 'your vehicle';
   const order = ['insurance', 'inspection', 'road_service_licence'];
   const sorted = [...rows].sort((a, b) => {
@@ -235,7 +235,136 @@ export function buildComplianceStatusReply({ vehicle = null, rows = [], now = ne
     const days = daysFromIso(row.expiry, now);
     return `• ${label} — ${formatComplianceDate(row.expiry)} ${complianceChip(days)} · ${formatDaysLeft(days) || 'no date'}${row.number ? ` · ${row.number}` : ''}`;
   });
-  return `🛡️ *Compliance — ${plate}*\n\n${lines.length ? lines.join('\n') : 'No compliance documents on file yet.'}\n\n_Reply "my reminders" for upcoming dates, or send a document photo to add one._`;
+  // v1.61.2 — owners and drivers see their DRIVER documents on the same card
+  // (the two ledgers stay separate; this is presentation only).
+  const driverDocs = driverDocLines(driverRows, now);
+  const driverBlock = driverDocs.length
+    ? `\n\n🪪 *Driver documents${profile?.full_name ? ` — ${String(profile.full_name).split(' ')[0]}` : ''}*\n${driverDocs.map((row) => {
+      if (row.lifetime) return `• ${row.label} — valid for life 🟢${row.number ? ` · ${row.number}` : ''}`;
+      const days = daysFromIso(row.expiry, now);
+      return `• ${row.label} — ${formatComplianceDate(row.expiry)} ${complianceChip(days)} · ${formatDaysLeft(days) || 'no date'}${row.number ? ` · ${row.number}` : ''}`;
+    }).join('\n')}`
+    : '';
+  return `🛡️ *Compliance — ${plate}*\n\n${lines.length ? lines.join('\n') : 'No compliance documents on file yet.'}${driverBlock}\n\n_Reply "my reminders" for upcoming dates, or send a document photo to add one._`;
+}
+
+/* ------------------------------------------------------------------ */
+/* v1.61.2 — DRIVER documents (owner self-profile + assigned drivers)  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Live 2026-11-05: "Driver licenses" / "List my licenses" / "List psv badge"
+ * were answered from the EXPENSE ledger ("Nothing under licences & permits")
+ * and "I just submitted a psv badge for my driver profile. Confirm" fell to a
+ * generic menu — while driver_compliances held the saved badge. These helpers
+ * give driver documents their own deterministic read/confirm lane.
+ */
+
+export function normalizeDriverDocType(value = '') {
+  const clean = String(value || '').toLowerCase().replace(/\s+/g, '_');
+  if (['driver_license', 'driver_licence', 'driving_license', 'licence', 'license', 'dl'].includes(clean)) return 'driving_licence';
+  if (['psv', 'psv_badge', 'badge', 'public_service_vehicle_badge'].includes(clean)) return 'psv_badge';
+  if (['professional_driving_permit'].includes(clean)) return 'pdp';
+  if (['operator_license', 'operator_licence'].includes(clean)) return 'operator_card';
+  if (['medical'].includes(clean)) return 'medical_certificate';
+  return clean || 'other';
+}
+
+const DRIVER_DOC_LABELS = {
+  driving_licence: 'Driving Licence',
+  psv_badge: 'PSV Badge',
+  pdp: 'PDP',
+  cpc: 'CPC',
+  operator_card: 'Operator Card',
+  medical_certificate: 'Medical Certificate',
+  defensive_driving: 'Defensive Driving',
+  other: 'Other Document'
+};
+
+/**
+ * Is this a DRIVER-document read/confirm? Returns `{ asked, confirm }` or null.
+ * Never matches vehicle permits (insurance/inspection/PSL), the PDF report
+ * engine, reminder creation, date-bearing answers or spend/log lines.
+ */
+export function detectDriverComplianceRead(text = '') {
+  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!clean || clean.length > 140) return null;
+  if (/\breport\b/i.test(clean)) return null;
+  if (isReminderCreation(clean)) return null;
+  if (carriesExplicitDate(clean)) return null;
+  const mentionsDoc = /\b(?:psv(?:\s*badge)?|pdp|cpc|operator\s*card|medical\s*(?:certificate)?|defensive\s*driving|driver\s*(?:compliance|documents?)|driver'?s?\s+licen[cs]es?|driving\s+licen[cs]es?|my\s+licen[cs]es?)\b/i.test(clean);
+  if (!mentionsDoc) return null;
+  // A spend/log line belongs to the ledger, not to a document read.
+  if (/\b(?:paid|spent|cost|bought|renewed|log(?:ged)?)\b/i.test(clean) && /\d{2,}/.test(clean)) return null;
+  const startsWithRead = /^(?:list|show|see|view|check|confirm|display|verify)\b/i.test(clean);
+  const readCue = startsWithRead
+    || /\b(?:my|confirm|verify|status|details?|saved|on\s+file)\b/i.test(clean);
+  const hasAddVerb = /\b(?:add|save|record|register|upload|attach|renew|capture|submit(?:ted)?|sent)\b/i.test(clean);
+  // "add psv badge" is a capture, not a read; a confirm/read cue always wins.
+  if (!readCue && hasAddVerb) return null;
+  if (!readCue && clean.split(/\s+/).filter(Boolean).length > 3) return null;
+  let asked = null;
+  if (/\bpsv\b/i.test(clean)) asked = 'psv_badge';
+  else if (/\bpdp\b/i.test(clean)) asked = 'pdp';
+  else if (/\bcpc\b/i.test(clean)) asked = 'cpc';
+  else if (/operator\s*card/i.test(clean)) asked = 'operator_card';
+  else if (/medical/i.test(clean)) asked = 'medical_certificate';
+  else if (/defensive/i.test(clean)) asked = 'defensive_driving';
+  else if (/licen[cs]e/i.test(clean)) asked = 'driving_licence';
+  const confirm = /\b(?:confirm|verify|saved|submitted)\b/i.test(clean);
+  return { asked, confirm };
+}
+
+function driverDocLines(rows = [], now = new Date()) {
+  const order = ['driving_licence', 'psv_badge', 'pdp', 'cpc', 'operator_card', 'medical_certificate', 'defensive_driving', 'other'];
+  return [...(rows || [])]
+    .map((row) => {
+      const type = normalizeDriverDocType(row.type);
+      return { ...row, type, label: row.label || DRIVER_DOC_LABELS[type] || 'Document' };
+    })
+    .sort((a, b) => {
+      const ai = order.indexOf(a.type);
+      const bi = order.indexOf(b.type);
+      return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+    });
+}
+
+/** Deterministic driver-document card / confirmation (zero tokens). */
+export function buildDriverComplianceReply({ rows = [], profile = null, asked = null, confirm = false, now = new Date() } = {}) {
+  const name = profile?.full_name ? String(profile.full_name).split(' ')[0] : null;
+  const all = driverDocLines(rows, now);
+  const wanted = asked ? all.filter((row) => row.type === asked) : all;
+  const askedLabel = asked ? (DRIVER_DOC_LABELS[asked] || 'document') : 'driver document';
+  if (confirm) {
+    // An asked document never falls back to a different one — confirming a CPC
+    // must never confirm the driving licence instead.
+    const row = wanted[0] || (asked ? null : all[0] || null);
+    if (!row) {
+      return `🪪 I don't have your ${askedLabel.toLowerCase()} on file yet.\n\nSend it in one line — number + expiry:\nExample: _${asked === 'psv_badge' ? 'PSV badge TSV2026 expires 8 Aug 2027' : 'Driving Licence DL123456 expires 28 Nov 2028'}_`;
+    }
+    const days = row.lifetime ? null : daysFromIso(row.expiry, now);
+    return [
+      `✅ *On file ✓ ${row.label}*${name ? ` — ${name}` : ''}`,
+      '',
+      `• Number: ${row.number || '—'}`,
+      row.lifetime ? '• Valid for life' : `• Expires: ${formatComplianceDate(row.expiry)} ${complianceChip(days)}${Number.isFinite(days) ? ` (${formatDaysLeft(days)})` : ''}`,
+      '',
+      '_Stored in your driver documents — reply "my driver documents" to see them all._'
+    ].join('\n');
+  }
+  if (!all.length) {
+    return `🪪 *Driver documents${name ? ` — ${name}` : ''}*\n\nNo driver documents on file yet.\n\nSend one in a line — number + expiry:\nExample: _PSV badge TSV2026 expires 8 Aug 2027_\n\n_Vehicle permits (insurance, inspection, PSL) live under "my compliance"._`;
+  }
+  const list = wanted.length ? wanted : all;
+  const intro = asked && wanted.length === 0
+    ? `I don't have a ${askedLabel.toLowerCase()} on file yet — here's what is saved:\n`
+    : '';
+  const lines = list.map((row) => {
+    if (row.lifetime) return `• ${row.label} — valid for life 🟢${row.number ? ` · ${row.number}` : ''}`;
+    const days = daysFromIso(row.expiry, now);
+    return `• ${row.label} — ${formatComplianceDate(row.expiry)} ${complianceChip(days)} · ${formatDaysLeft(days) || 'no date'}${row.number ? ` · ${row.number}` : ''}`;
+  });
+  return `🪪 *Driver documents${name ? ` — ${name}` : ''}*\n\n${intro}${lines.join('\n')}\n\n_Vehicle permits (insurance, inspection, PSL) live under "my compliance"._`;
 }
 
 /** Upcoming/overdue reminders list (all active reminders). */
@@ -327,6 +456,9 @@ export default {
   detectComplianceExpiryQuestion,
   detectComplianceCorrection,
   detectComplianceItemAsked,
+  detectDriverComplianceRead,
+  normalizeDriverDocType,
+  buildDriverComplianceReply,
   buildComplianceExpiryAnswer,
   buildComplianceStatusReply,
   buildRemindersListReply,

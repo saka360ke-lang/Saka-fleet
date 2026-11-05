@@ -70,6 +70,9 @@ check(SAKA_INTENT_PLAYBOOK.some((row) => row.intent === 'QUERY_RECORDS' && /reco
   check(SAKA_INTENT_PLAYBOOK.some((row) => row.intent === 'DELETE_ENTRY' && /30-minute "restore"/.test(row.behavior)), 'Delete intent playbook names the restore window');
 check(/LAUNCH AWARD \(v1\.58\.26\)/.test(DEFAULT_SAKA_CORE_PROMPT), 'Core prompt teaches the launch award (engine-confirmed only)');
 check(/LAUNCH AWARD \(v1\.58\.26\)/.test(SAKA_FLOW_PLAYBOOK), 'Flow playbook teaches the launch award (engine-confirmed only)');
+check(/DRIVER DOCUMENT READS \(v1\.61\.2\)/.test(SAKA_FLOW_PLAYBOOK), 'Flow playbook teaches the driver-document read lane (never the expense ledger)');
+check(/DRIVER DOCUMENT READS \(v1\.61\.2\)/.test(DEFAULT_SAKA_CORE_PROMPT), 'Core prompt teaches the driver-document read lane');
+check(DEFAULT_SAKA_CORE_PROMPT.includes('driver_compliances'), 'Core prompt names the driver compliance ledger');
   check(SAKA_BOUNDARY_RULES.some((rule) => /LEDGER_ENTRY_DELETED/.test(rule)), 'Boundary: every ledger edit/delete is audited');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('EDITABLE LEDGER (v1.33.0'), 'Core prompt teaches the editable ledger');
 check(DEFAULT_SAKA_CORE_PROMPT.includes('NARRATIVE INTAKE (v1.34.0'), 'Core prompt teaches narrative intake');

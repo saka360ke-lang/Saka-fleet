@@ -69,6 +69,13 @@ export function validateCase(raw, seenIds = new Set()) {
     const text = String(lesson || '').trim().slice(0, 200);
     if (text) lessons.push(text);
   }
+  // v1.61.2 — authoritative ledger facts the engine supplied to the reply
+  // (so a true PSV/insurance confirmation is not scored as invention).
+  const engineFacts = [];
+  for (const fact of (Array.isArray(raw.engine_facts ?? raw.engineFacts) ? (raw.engine_facts ?? raw.engineFacts) : []).slice(0, 5)) {
+    const text = String(fact || '').trim().slice(0, 220);
+    if (text) engineFacts.push(text);
+  }
   const metrics = (raw.expected_metrics && typeof raw.expected_metrics === 'object')
     ? raw.expected_metrics
     : ((raw.expectedMetrics && typeof raw.expectedMetrics === 'object') ? raw.expectedMetrics : null);
@@ -110,6 +117,7 @@ export function validateCase(raw, seenIds = new Set()) {
       countryBucket,
       regionalContext,
       lessons,
+      engineFacts,
       minScore,
       criterionMins: Object.keys(criterionMins).length ? criterionMins : null,
       expectedMetrics: metrics,
