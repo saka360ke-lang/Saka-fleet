@@ -613,7 +613,11 @@ async function upsertSubscriptionRow({
       }
     }
     await supabase.from('subscriptions').insert([{ ...base, created_at: nowIso }]);
-  } catch { /* ledger is best-effort; profiles is authoritative for gates */ }
+  } catch (ledgerErr) {
+    // v1.61.12 — the subscriptions ledger mirrors Paystack; a silent failure
+    // makes billing forensics impossible (rule 50).
+    logWriteFailure(supabase, 'subscriptions.ledgerInsert', ledgerErr);
+  }
 }
 
 async function resolveOwnerForEvent({ supabase, metadata = {}, subscriptionCode = null, email = null }) {
@@ -659,7 +663,9 @@ async function markTrialConverted(supabase, ownerId, subscriptionCode = null) {
       paystack_subscription_code: subscriptionCode || null,
       updated_at: new Date().toISOString()
     }).eq('owner_id', ownerId).in('status', ['ACTIVE', 'EXTENDED']);
-  } catch { /* fail-soft */ }
+  } catch (convertErr) {
+    logWriteFailure(supabase, 'subscriptions.trialConvertedStamp', convertErr);
+  }
 }
 
 async function handleAddonCharge({ supabase, data, metadata, sendWhatsAppFn }) {

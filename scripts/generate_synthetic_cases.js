@@ -4,6 +4,8 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { chatCompletion, parseJsonSafely, AI_PURPOSES, AI_TIERS } from '../src/services/aiClient.js';
 import { validateCase, SYNTHETIC_DIR } from '../src/services/convEvalCases.js';
+import { createClient } from '@supabase/supabase-js';
+import { installAiUsageSink } from '../src/services/aiUsageLog.js';
 
 /**
  * Saka Fleet — global synthetic conversation scenario generator (v1.61.0)
@@ -280,7 +282,14 @@ export function writeSyntheticBatch({ dir = SYNTHETIC_DIR, countryBucket, cases 
       prompt: SYNTH_PROMPT,
       country_bucket: countryBucket,
       created_at: new Date(now).toISOString(),
-      cases
+      // v1.61.12 — ids must be unique across batches that share a timestamp:
+      // the filename suffix (-1, -2 …) is folded into every id. Live 2026-11-05:
+      // two batches in the same second produced duplicate ids and were dropped.
+      cases: cases.map((item) => (
+        suffix && item && typeof item.id === 'string'
+          ? { ...item, id: item.id.replace(/_(\d{2})$/, `${suffix.replace('-', '_')}_$1`) }
+          : item
+      ))
     };
     const tmp = `${target}.tmp`;
     fs.writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
@@ -297,10 +306,11 @@ export function writeSyntheticBatch({ dir = SYNTHETIC_DIR, countryBucket, cases 
 
 /** Parse CLI flags (exported for the release test). */
 export function parseArgs(argv = []) {
-  const args = { countries: [], batch: 4, preview: false, out: SYNTHETIC_DIR, seed: null, edge: false, help: false, now: new Date() };
+  const args = { countries: [], batch: 4, preview: false, out: SYNTHETIC_DIR, seed: null, edge: false, edgeIndex: null, help: false, now: new Date() };
   for (const raw of argv) {
     if (raw === '--preview') args.preview = true;
     else if (raw === '--edge') args.edge = true;
+  else if (raw.startsWith('--edge-index=')) args.edgeIndex = Math.max(0, Number(raw.slice('--edge-index='.length)) || 0);
     else if (raw === '--help' || raw === '-h') args.help = true;
     else if (raw.startsWith('--countries=')) {
       args.countries = raw.slice('--countries='.length).split(',').map((code) => code.trim().toUpperCase()).filter(Boolean);
@@ -372,6 +382,7 @@ export async function main(argv = process.argv.slice(2)) {
       '  --batch=4              cases per bucket (1-24, default 4)',
       '  --seed="text"          extra topic seed for every bucket',
       '  --edge                 rotate the known/unknown scenario taxonomy into buckets',
+      '  --edge-index=N         force ONE edge class for every bucket (0-9, see EDGE_CASES)',
       '  --preview              generate + validate, write nothing',
       '  --out=<dir>            output directory (default evals/cases)',
       '',
@@ -394,6 +405,15 @@ export async function main(argv = process.argv.slice(2)) {
     return 1;
   }
 
+  // v1.61.12 — generator calls are AI traffic too: log them (rules 20/21).
+  if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY) {
+    installAiUsageSink(createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false }
+    }));
+  } else {
+    console.warn('⚠️ No Supabase credentials: generator usage will not reach ai_usage_logs.');
+  }
+
   console.log(`🧪 Synthetic scenarios: ${countries.length} bucket(s) × ${args.batch} case(s)${args.preview ? ' · PREVIEW (no writes)' : ''}`);
   let totalCases = 0;
   let totalWritten = 0;
@@ -401,7 +421,12 @@ export async function main(argv = process.argv.slice(2)) {
   for (const [index, countryBucket] of countries.entries()) {
     console.log(`\n🌍 ${countryBucket} — ${SYNTH_REGIONS[countryBucket].label}`);
     // v1.61.3 — `--edge` rotates the known/unknown taxonomy into every bucket.
-    const seed = [args.seed, args.edge ? EDGE_CASES[index % EDGE_CASES.length] : null].filter(Boolean).join(' + ') || null;
+    const seed = [
+    args.seed,
+    args.edgeIndex !== null && args.edgeIndex !== undefined
+      ? EDGE_CASES[args.edgeIndex % EDGE_CASES.length]
+      : (args.edge ? EDGE_CASES[index % EDGE_CASES.length] : null)
+  ].filter(Boolean).join(' + ') || null;
     const generated = await generateForCountry({ countryBucket, count: args.batch, seed, now: args.now });
     if (!generated.ok) {
       failures += 1;

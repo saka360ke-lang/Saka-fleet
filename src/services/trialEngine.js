@@ -32,6 +32,7 @@ import {
   invalidateEntitlements
 } from './subscriptions.js';
 import { shortenUrl } from './linkShortener.js';
+import { logWriteFailure } from './systemErrors.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -613,7 +614,11 @@ async function buildNudgeCheckout({ supabase, owner, trial, currency }) {
 async function stampTrial(supabase, trialId, patch) {
   try {
     await supabase.from('trial_sessions').update({ ...patch, updated_at: new Date().toISOString() }).eq('id', trialId);
-  } catch { /* fail-soft */ }
+  } catch (stampErr) {
+    // v1.61.12 — trial state transitions drive expiry + nudge ladders; a silent
+    // failure hides them from every operator view.
+    logWriteFailure(supabase, 'trialEngine.stampTrial', stampErr);
+  }
 }
 
 function accountExtensionOfferText({ ownerName, coupon, trial, locale = 'en-US', timeZone = 'Africa/Nairobi' }) {

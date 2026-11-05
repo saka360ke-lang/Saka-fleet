@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { CONV_EVAL_CRITERIA, formatConvEvalReply, getConvEvalConfig, resolveJudgeConfig, runConvEvalBatch } from '../src/services/convEval.js';
 import { CONVERSATION_CASES, buildLiveCasesFromFriction, sampleCorpusCases, CASE_VALIDATION_ERRORS, SYNTHETIC_CASES, SYNTHETIC_CASE_ERRORS } from '../src/services/convEvalCases.js';
 import { healFailedCase, isCalibrationCase } from '../src/services/convEvalHealer.js';
+import { installAiUsageSink } from '../src/services/aiUsageLog.js';
 
 /**
  * Saka Fleet — conversation eval CLI (v1.60.0)
@@ -67,6 +68,8 @@ async function main() {
     ? createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } })
     : null;
   const persist = Boolean(supabase);
+  // v1.61.12 — CLI judge calls must reach ai_usage_logs (rules 20/21).
+  if (supabase) installAiUsageSink(supabase);
 
   let cases = sampleCorpusCases(limit);
   if (args.live) {

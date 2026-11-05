@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.61.12] - 2026-11-05
+
+- **Eval notifications are now ONE 6-hour digest.** Every per-heal WhatsApp message and the per-tick failure email are gone. `sendEvalDigest()` emails a detailed summary (cases judged, pass/fail/error, each heal with before → after and rule key, proposals, refusals with reasons, cases that need a code fix at 3+ refusals, weakest criterion) every `CONV_EVAL_DIGEST_HOURS` (default 6, `0` = off), then sends **one WhatsApp ping** saying the email went out. Idempotent across instances (`system_config.last_eval_digest_at`), audited `CONV_EVAL_DIGEST_SENT`, quiet windows send nothing. Judge-error alerts stay immediate.
+- **Machinery registration loop fixed (live 16:00 session).** A bare `Retry` at the confirm gate was parsed as `make_model`, corrupting the draft and failing every save ("didn't go through, that's on our side" ×2). `isYes` now accepts retry/try again/submit/done/send it/go ahead/save it, and a bare word at the confirm gate can never become an AI-extracted field value — the card is re-shown with "nothing changed".
+- **Every incident logs.** `logSystemError` moved to `src/services/systemErrors.js` (sentinel re-exports it), with `logWriteFailure` wired into 10 user-impacting write paths (registration ×2, subscriptions ledger + trial conversion, trial state stamps, launch-award metadata, vehicle email sync, reminder cancel on delete, onboarding race merge, care priority bump, inbound-email note). Refused registration saves now reach `error_logs` (the 16:00 failure logged nothing).
+- **Silent-catch ratchet.** New `test_error_logging.js` (registered in health) pins the silent-catch budget at 100 and proves the logger's behaviour (context folded, empty/benign skipped) — a NEW swallowed catch fails the suite.
+- **CLI telemetry.** `run_conv_eval.js` and `generate_synthetic_cases.js` install `installAiUsageSink` (rules 20/21).
+- **Generator id collision fixed + `--edge-index`.** Two batches in the same second produced duplicate ids (silently dropped); ids now fold the filename suffix. Coverage attempt for the three zero-coverage edge classes scored 0.52/0.30/0.60 and was **not committed** — those still need hand-curated cases.
+- **Asset→trial→tier audit:** one lifetime trial anchored to the passbook issue, second asset never re-anchors, expiry → Free with excess assets PAUSED (never deleted), paid-live owners skipped, non-road assets consume vehicle slots (documented).
+- **Frames touched:** 14 services, 2 workers, `index.js`, 4 scripts, 2 new services, 2 test suites, `.env.example`, `package.json`, `SAKA_FLEET_ARCHITECTURE.md` (§176), this file.
+- **Suites run:** `test_conv_eval` (177), `test_error_logging` (20), `test_quiz_flow` (147), `test_sentinel_policy` (25) — green; `npm run health` green.
+
 ## [1.61.11] - 2026-11-05
 
 - **The borderline re-judge never ran (fixed).** `runConvEvalBatch` defaulted `rejudgeMargin`/`rejudgeMax` to `null`, and `Number(null) === 0` is finite — so an omitted param resolved to margin 0 and budget 0, silently disabling the feature (live tick showed `0 re-judged` while cases sat at 0.82–0.84). Presence checks are now explicit; an omitted param falls back to `getConvEvalConfig()` (0.10 / 5). A new default-path test proves two judge calls and the better verdict winning.

@@ -22,6 +22,7 @@
 
 import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
 import { extendAccountTrial } from './trialEngine.js';
+import { logWriteFailure } from './systemErrors.js';
 
 export const LAUNCH_AWARD_TABLE = 'launch_awards';
 export const LAUNCH_AWARD_ACTOR = 'LAUNCH_AWARD';
@@ -339,7 +340,7 @@ export async function grantLaunchAwardForTrial({ supabase, ownerId, trial = null
       applied_ends_at: extension?.ok ? extension.endsAt : null,
       metadata: { source: 'welcome_trial', extended: Boolean(extension?.ok) }
     }).eq('slot_idx', grant.slot);
-  } catch { /* metadata is best-effort */ }
+  } catch (metaErr) { logWriteFailure(supabase, 'launchAwards.awardMetadata', metaErr); }
 
   await writeLaunchAudit(supabase, 'LAUNCH_AWARD_GRANTED', {
     ownerId,

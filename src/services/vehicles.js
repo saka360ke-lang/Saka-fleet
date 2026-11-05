@@ -9,6 +9,7 @@ import {
   getAddonPriceUSD
 } from './subscriptionTiers.js';
 import { notifyDriverUnassigned } from './followups.js';
+import { logWriteFailure } from './systemErrors.js';
 
 /**
  * Resolve the driver phone BEFORE the vehicle row changes (v1.16.4). Metadata
@@ -848,7 +849,7 @@ export async function updateVehicleDetails({ vehicleId, requesterId, updates = {
         .from('profiles')
         .update({ email: safeUpdates.owner_email, updated_at: new Date().toISOString() })
         .eq('id', vehicle.owner_id);
-    } catch {}
+    } catch (emailSyncErr) { logWriteFailure(supabase, 'vehicles.ownerEmailSync', emailSyncErr); }
   }
 
   return { success: true, vehicle: updated, applied: safeUpdates, rejected };
@@ -927,7 +928,7 @@ export async function deleteVehicle({ vehicleId, requesterId, supabase }) {
       .update({ status: 'cancelled' })
       .eq('vehicle_id', vehicleId)
       .eq('status', 'active');
-  } catch {}
+  } catch (reminderErr) { logWriteFailure(supabase, 'vehicles.cancelRemindersOnDelete', reminderErr); }
 
   // 4. Tell the released driver the vehicle is gone (v1.16.4, fail-soft).
   if (driverPhone) {

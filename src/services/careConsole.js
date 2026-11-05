@@ -17,6 +17,7 @@
  */
 import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
 import { classifyCareRequest } from './customerCare.js';
+import { logWriteFailure } from './systemErrors.js';
 
 export const CARE_TICKETS_TABLE = 'support_tickets';
 export const CARE_MESSAGES_TABLE = 'support_ticket_messages';
@@ -175,7 +176,7 @@ export async function openOrAppendEmailTicket(supabase, { fromEmail, subject, te
     await appendTicketMessage(supabase, { ticketId: existing.id, direction: 'in', channel: 'email', body: bodyText });
     const bump = { updated_at: nowIso() };
     if (priority === CARE_PRIORITY.HIGH && existing.priority !== CARE_PRIORITY.HIGH) bump.priority = CARE_PRIORITY.HIGH;
-    try { await supabase.from(CARE_TICKETS_TABLE).update(bump).eq('id', existing.id); } catch { /* best effort */ }
+    try { await supabase.from(CARE_TICKETS_TABLE).update(bump).eq('id', existing.id); } catch (bumpErr) { logWriteFailure(supabase, 'careConsole.priorityBump', bumpErr); }
     return {
       ok: true,
       ticketId: existing.id,

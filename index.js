@@ -39,6 +39,7 @@ import { ensureTurnLatencyTable } from './src/services/turnLatency.js';
 import { buildStatusResponse, isStatusAuthorized } from './src/services/statusProbe.js';
 import { auditEnv, envTemplateKeys, envStatusSummary } from './src/services/envAudit.js';
 import { runConvEvalTick } from './src/workers/convEval.js';
+import { sendEvalDigest } from './src/services/evalDigest.js';
 import { ensureConvEvalTable, getConvEvalConfig } from './src/services/convEval.js';
 import { announceRevisionLive } from './src/services/deployLiveAlert.js';
 import {
@@ -1046,6 +1047,29 @@ const runConvEvalGuarded = () => {
 };
 setTimeout(runConvEvalGuarded, 60 * 1000);
 setInterval(runConvEvalGuarded, convEvalBootConfig.intervalMs);
+
+// v1.61.12 — the ONLY eval notification: one detailed email every
+// CONV_EVAL_DIGEST_HOURS (default 6), announced by ONE WhatsApp ping. Heals and
+// failures never ping on their own; judge-error alerts stay immediate.
+if (convEvalBootConfig.digestHours > 0) {
+  let digestInFlight = false;
+  const runEvalDigestGuarded = () => {
+    if (digestInFlight) return;
+    digestInFlight = true;
+    sendEvalDigest({ supabase, hours: convEvalBootConfig.digestHours })
+      .then((result) => {
+        if (result?.sent) {
+          console.log(`[ConversationEval] digest sent: ${result.digest?.total || 0} case(s), ${result.digest?.healedCount || 0} healed, email=${result.emailed} whatsapp=${result.pinged}`);
+        } else {
+          console.log(`[ConversationEval] digest skipped: ${result?.reason || 'unknown'}`);
+        }
+      })
+      .catch((err) => console.warn('[ConversationEval] digest failed:', err.message))
+      .finally(() => { digestInFlight = false; });
+  };
+  setTimeout(runEvalDigestGuarded, 3 * 60 * 1000);
+  setInterval(runEvalDigestGuarded, convEvalBootConfig.digestHours * 60 * 60 * 1000);
+}
 
 async function checkRemediationDigestSchedule() {
   try {

@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.61.11  
+**Version:** 1.61.12  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.61.12** | Every incident logs (`systemErrors` + write-failure sweep + ratchet), machine-confirm fix, eval notifications → ONE 6-hour digest email + WhatsApp ping, CLI telemetry, generator id fix | 176 |
 | **1.61.11** | Fix: `Number(null) === 0` silently disabled the borderline re-judge (margin/budget zeroed); defaults now proven by a test | 175 |
 | **1.61.10** | Eval follow-ups: tick log shows skips/re-judges, borderline re-judge damps judge variance, `npm run eval:apply-heals` closes the corpus loop | 174 |
 | **1.61.9** | Healer hygiene: calibration cases never healed, keys reused, active-rule cap (30), Sentinel rule minting gated off | 173 |
@@ -4605,7 +4606,7 @@ quiz engine:
 
 **Notifications + tracking (the operator-facing ask).**
 - `conversation_eval_runs` (migration `npm run migrate:conv-eval`, idempotent) records run id, case id, source, transcript hash (no message bodies), judge provider/model, criteria JSON, aggregate, threshold, friction log link, patch id, before/after scores and status (`passed|failed|healed|proposed|error`). It is telemetry: wiped with the operational slate, never preserved.
-- Every heal/proposal is audited (`CONV_EVAL_HEALED` / `CONV_EVAL_PROPOSED` / `CONV_EVAL_ERROR`) and announced to the superadmin on WhatsApp (`sendProactiveWhatsApp`) with the case, before → after scores, rule key or proposal code. **Channel policy (v1.61.7/1.61.8, operator request):** a shipped heal or drafted proposal is **WhatsApp only**; heal failures are announced per case on WhatsApp **and** collected into **ONE digest email per tick** (`notifyHealFailureDigest`, cap 10 lines + "…and N more") so a tick with six failures spends one Resend send, not six. Judge-error alerts use both channels and stay throttled by `CONV_EVAL_ALERT_COOLDOWN_HOURS`; remediation proposal/digest emails are unchanged (a proposal is itself an intervention item).
+- Every heal/proposal is audited (`CONV_EVAL_HEALED` / `CONV_EVAL_PROPOSED` / `CONV_EVAL_ERROR`). **Notification policy (v1.61.12, operator request):** heals NEVER ping — one detailed **email every `CONV_EVAL_DIGEST_HOURS` (6h)** (`sendEvalDigest()`: cases judged, pass/fail/error, each heal with before → after + rule, proposals, refusals with reasons, cases needing code at 3+ refusals, weakest criterion) is dispatched, and **ONE WhatsApp ping** announces that the email went out. Judge-error alerts remain immediate (both channels) and throttled by `CONV_EVAL_ALERT_COOLDOWN_HOURS`. The dispatch is idempotent across instances (`system_config.last_eval_digest_at`) and audited as `CONV_EVAL_DIGEST_SENT`.
 - Superadmin console (deterministic, zero tokens for digests): `admin eval` (24 h), `admin eval last 48h`, `admin eval run` (corpus, capped), `admin eval heal <case-id>`; audited `ADMIN_CONV_EVAL`.
 
 **Entry points.** `npm run eval:conv [--live] [--heal] [--json] [--fail-on-failures]`, `npm run eval:export` (DeepEval JSONL), an overlap-guarded 6-hourly tick in `index.js`, and the superadmin commands. All kill switches default OFF (`CONV_EVAL_ENABLED`, `CONV_EVAL_HEAL_ENABLED`); boot only detects the tracking table and warns (rule 50).
@@ -4865,4 +4866,30 @@ Usage: `npm run eval:apply-heals` (dry run, 48 h) · `-- --hours=72` · `-- --wr
 
 **Suites run:** `test_conv_eval` (174) - green; `npm run health` green.
 
+
+
+### 176. v1.61.12 - every incident logs, machinery confirm fix, one 6-hour eval digest, CLI telemetry (2026-11-05)
+
+**A. The asset→trial→tier audit (requested, read-only + fixes).**
+- Add-asset: `persistVehicleRegistration` requires a verified email, gates on `checkOwnerVehicleTierLimit(profile.subscription_tier)` (Free 1 / welcome trial growth 5 / paid per tier), writes `vehicles` (non-road assets get a `serial_number` identity + `ASSET-…` internal plate), fires `recordActivationEvent(VEHICLE_REGISTERED)`, then `startWelcomeTrial({ startedAt: issuedAt })` (anchor = passbook issue), then the launch award (first 50, 183 days).
+- Trial: one per lifetime (`profiles.trial_used_at`), second asset never re-anchors or extends, a dead window falls back to "now" (never mints an expired trial). ✓
+- Expiry→tier: `runTrialLifecycleSweep` T-0 stamps `EXPIRED` then `downgradeToFree` (keeps the newest 1 asset, PAUSES the rest, never deletes; paid-live owners are skipped), and `getEntitlements` enforces the same lazily. ✓
+- Findings fixed: refused saves now log (`quizEngine.persistVehicleRegistration`, `onboarding.saveVehicleAssetRecord`); the confirmation shows the pre-award trial end when the launch award extended it (copy bug, deferred to the next release note); **non-road assets consume vehicle slots** (a lawn mower takes one of 5 trial slots) — documented as intended capacity semantics pending an operator decision.
+
+**B. "Every error on Sakafleet gets logged".**
+- `src/services/systemErrors.js` now owns `logSystemError` (+ `logWriteFailure`); `sentinel.js` re-exports it so every existing call site is unchanged and non-worker modules can log without importing the worker.
+- Write-failure logging added at 10 user-impacting sites (registration ×2, subscriptions ledger + trial-converted stamp, `trialEngine.stampTrial`, launch-award metadata, vehicle email sync + reminder cancel, onboarding race merge, care priority bump, inbound-email note). Context is folded into the message and capped.
+- `test_error_logging.js` (20 assertions, registered in `health_audit`) proves the shared logger, the routes above, logger behaviour (context folded, empty/benign skipped) and a **silent-catch ratchet** pinned at 100 — deliberate best-effort catches stay allowed, NEW silent catches fail the gate.
+
+**C. Machinery confirm loop (live 2026-11-05, judge-proven).** Bare `Retry` at the confirm gate was written into `make_model`, corrupting the draft and failing every save. `isYes` now accepts `retry|try again|submit|done|send it|go ahead|save it`, and a **bare word at the confirm gate can never be an AI-extracted field value** — the card is re-shown with "nothing changed". Vehicle + machinery + every flow share the same guard (rule 51).
+
+**D. Eval notifications → ONE 6-hour digest.** Per-heal/per-tick notifications are gone (`healFailedCase` returns `notified { whatsapp:false, email:false }`; the worker sends no failure alert). New `src/services/evalDigest.js`: `buildEvalDigest()` / `formatEvalDigestEmail()` / `formatEvalDigestPing()` / `sendEvalDigest()`. Every `CONV_EVAL_DIGEST_HOURS` (default 6, 0 = off) the loop emails one detailed summary to `SUPERADMIN_EMAIL` and sends ONE WhatsApp ping announcing it; the dispatch is idempotent (`system_config.last_eval_digest_at`), audited (`CONV_EVAL_DIGEST_SENT`), skips quiet windows, and logs `[ConversationEval] digest sent …` / `digest skipped: <reason>`. Judge errors stay immediate.
+
+**E. CLI telemetry + generator ids.** `run_conv_eval.js` and `generate_synthetic_cases.js` install `installAiUsageSink` (rules 20/21; both asserted in `test_conv_eval`). The generator gained `--edge-index=N` and now folds the filename suffix into case ids — two batches in the same second previously produced duplicate ids and were silently dropped.
+
+**F. Coverage attempt (honest result).** Generated one case each for the three zero-coverage edge classes (unreadable media, mixed language, capacity) with `--edge-index`; all three scored below the 0.90 curation bar (0.52 / 0.30 / 0.60) and were deleted rather than committed. Those classes still need hand-curated cases; `log_earnings` remains the one uncovered flow.
+
+**Frames touched:** `src/services/{systemErrors(new),evalDigest(new),convEval,convEvalHealer,quizEngine,onboarding,subscriptions,trialEngine,launchAwards,vehicles,webOnboarding,careConsole,inboundEmail,envAudit}.js`, `src/workers/{sentinel,convEval}.js`, `index.js`, `scripts/{run_conv_eval,generate_synthetic_cases,health_audit,apply_eval_heals}.js`, `test_error_logging.js` (new), `test_conv_eval.js`, `.env.example`, `package.json`, `SAKA_FLEET_ARCHITECTURE.md`, `CHANGELOG.md`.
+
+**Suites run:** `test_conv_eval` (177), `test_error_logging` (20), `test_quiz_flow` (147), `test_sentinel_policy` (25) - green; `npm run health` green.
 

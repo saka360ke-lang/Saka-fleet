@@ -1,6 +1,13 @@
 {
-  "latest": "1.61.11",
+  "latest": "1.61.12",
   "entries": [
+    {
+      "version": "1.61.12",
+      "date": "2026-11-05",
+      "title": "One quiet digest, and every error now leaves a trace",
+      "preview": "Quality news arrives as a single 6-hour email (with one WhatsApp ping); failed saves are always logged.",
+      "summary": "The quality loop no longer messages you for every fix: once every six hours it emails one detailed summary of what it graded, healed and could not fix, and sends a single WhatsApp note that the email went out. Separately, every failed save or booking on the platform now writes an incident to the error log, including a machinery-registration bug found today where a bare \"Retry\" was being saved as the vehicle's make and model."
+    },
     {
       "version": "1.61.11",
       "date": "2026-11-05",

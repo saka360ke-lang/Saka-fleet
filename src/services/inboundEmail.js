@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 /** v1.58.17 - the one inbox that opens care tickets (Resend inbound domain). */
 export const SUPPORT_INBOX = 'support@reports.sakafleet.com';
 import { openOrAppendEmailTicket } from './careConsole.js';
+import { logWriteFailure } from './systemErrors.js';
 
 function headerOf(headers, name) {
   if (!headers) return null;
@@ -139,7 +140,7 @@ export async function handleInboundEmail(supabase, { payload = {}, headers = {},
         await supabase.from('support_tickets').update({
           internal_note: 'Body fetch returned no text (HTML-only mail or fetch failure) - subject stored. Open it in the Resend dashboard.'
         }).eq('id', ticketId);
-      } catch { /* best-effort, never blocks the ticket */ }
+      } catch (noteErr) { logWriteFailure(supabase, 'inboundEmail.internalNote', noteErr); }
     }
   }
   let notified = false;

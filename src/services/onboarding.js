@@ -6,6 +6,7 @@ import { createExpiryReminder, buildExpirySpecFromDate } from './maintenanceRemi
 import { startWelcomeTrial, recordActivationEvent, ACTIVATION_EVENTS } from './trialEngine.js';
 import { grantLaunchAwardForTrial, formatLaunchAwardLine, getLaunchAwardConfig } from './launchAwards.js';
 import { resolveUserTimezone } from './globalization.js';
+import { logSystemError } from './systemErrors.js';
 
 export async function handleStage2OptionalWeaving({
   obState,
@@ -183,7 +184,16 @@ export async function saveVehicleAssetRecord({
       if (insErr.code === '23505') {
         await supabaseClient.from('vehicles').update(vehRecord).eq('plate_number', corePlate);
       } else {
+        // v1.61.12 — log the refusal, not just the console (rule 50).
         console.error('[saveVehicleAssetRecord Error]:', insErr);
+        try {
+          await logSystemError(
+            supabaseClient,
+            new Error(`Asset save failed: ${insErr.message}`),
+            'onboarding.saveVehicleAssetRecord',
+            { plate: corePlate, code: insErr.code || null }
+          );
+        } catch { /* logging must never block onboarding */ }
       }
     }
     await supabaseClient.from('profiles').update({

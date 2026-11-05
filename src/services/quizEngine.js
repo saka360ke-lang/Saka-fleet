@@ -24,6 +24,7 @@ import { isDuplicateExpense } from './expenseGuard.js';
 import { sanitizeEntryLabel } from './entryLabels.js';
 // v1.59.7 — labels on every entry: standalone odometer readings get a ledger row.
 import { recordLabeledReading } from './labelsEverywhere.js';
+import { logSystemError } from './systemErrors.js';
 import { shortenUrl } from './linkShortener.js';
 import {
   EXPENSE_TYPES,
@@ -251,7 +252,10 @@ function expiryLinkedColumn(category) {
 function isYes(text) {
   // "1" / "1️⃣" is the draft-card save action (v1.35.0); safe here because this
   // helper is only consulted during the confirmation phase.
-  return /^(yes|y|yeah|yep|confirm|save|correct|ok|okay|sure|proceed|do it|1|1️⃣|✅)$/i.test(String(text).trim());
+  // v1.61.12 — a user who just saw a failed save says "Retry"/"Try again"/
+  // "Submit". Those are save commands, never field values (live 2026-11-05:
+  // "Retry" was written into make/model and corrupted the draft).
+  return /^(yes|y|yeah|yep|confirm|save|save it|correct|ok|okay|sure|proceed|do it|retry|try again|resend|submit|done|send it|go ahead|1|1️⃣|✅)$/i.test(String(text).trim());
 }
 
 function isNo(text) {
@@ -2706,6 +2710,22 @@ async function handleConfirmation(state, def, clean, ctx, aiExtracted) {
       return { handled: true, reply, flow: state.flow, active: true };
     }
   }
+  // v1.61.12 — a BARE word at the confirm gate is never a field value. AI
+  // extraction used to map "Retry" onto make/model, corrupting the draft and
+  // making every save fail (live 2026-11-05 machinery loop). Ask instead.
+  const bareWord = clean.split(/\s+/).filter(Boolean).length <= 1 && !/[:=]/.test(clean);
+  if (bareWord && !state.narrativeCard) {
+    const reply = await renderConfirmationSummary({
+      flowLabel: def?.label || 'confirmation',
+      summaryRows: buildSummaryRows(def, state.answers, ctx),
+      notes: [`The user replied "${clean}". Nothing changed. Ask which field to change (e.g. "make and model: Toyota"), or whether to save.`],
+      language: ctx.language,
+      countryInfo: ctx.countryInfo,
+      profile: ctx.profile
+    });
+    return { handled: true, reply, flow: state.flow, active: true };
+  }
+
   const changed = applyCorrections(state, def, aiExtracted || {}, ctx);
   if (changed.length === 0 && isSubstantiveText(clean)) {
     state.extraNotes = mergeExtraNotes(state.extraNotes || [], [clean]);
@@ -2843,6 +2863,22 @@ async function executeFlow(state, ctx) {
         }
         const saved = await persistVehicleRegistration(state, ctx);
         if (!saved.success) {
+          // v1.61.12 — a refused save is an incident (rule 50). Live 2026-11-05:
+          // the machinery registration failed twice, the user was told "that's
+          // on our side", and error_logs stayed empty.
+          try {
+            await logSystemError(
+              ctx.supabase,
+              new Error(`Registration save failed: ${saved.error}`),
+              'quizEngine.persistVehicleRegistration',
+              {
+                flow: state.flow,
+                asset_kind: state.answers?.asset_kind || null,
+                plate: state.answers?.plate_number || state.answers?.serial_number || null,
+                code: saved.code || null
+              }
+            );
+          } catch { /* logging must never block the user */ }
           const reply = await fail(saved.error);
           return { handled: true, reply, flow: state.flow, active: true };
         }
@@ -3798,9 +3834,9 @@ async function persistVehicleRegistration(state, ctx) {
   }
   if (insertErr) {
     if (insertErr.code === '23505') {
-      return { success: false, error: `Plate ${displayName} or VIN ${a.vin} is already registered.` };
+      return { success: false, error: `Plate ${displayName} or VIN ${a.vin} is already registered.`, code: insertErr.code };
     }
-    return { success: false, error: insertErr.message };
+    return { success: false, error: insertErr.message, code: insertErr.code || null };
   }
   const insertedVehicleId = insertRes.data?.id || null;
 

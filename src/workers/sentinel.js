@@ -15,6 +15,7 @@ import { PROMPT_REFINEMENT_MARKER, MAX_STORED_PROMPT_REFINEMENT_CHARS } from '..
 import { normalizeFrictionPhone, markFrictionDeployed } from '../services/frictionTracker.js';
 import { isSentinelProposalsEnabled } from '../services/sentinelPolicy.js';
 import { isDeliveryBlocked } from '../services/deliveryGuard.js';
+import { logSystemError as logSystemErrorImpl } from '../services/systemErrors.js';
 
 function getSupabase(providedSupabase) {
   if (providedSupabase) return providedSupabase;
@@ -503,44 +504,13 @@ Return strictly a single valid JSON object matching this schema (no markdown ast
 
 
 /**
- * Helper to log system error to error_logs table
+ * Helper to log system error to error_logs table.
+ * v1.61.12 — the implementation moved to `services/systemErrors.js` so modules
+ * that cannot import this worker (quizEngine, onboarding) can log incidents.
+ * This re-export keeps every existing call site unchanged.
  */
-export async function logSystemError(providedSupabase, error, route = 'unknown') {
-  try {
-    const message = error?.message || (typeof error === 'string' ? error : '');
-    // Ignore empty/serialized-empty errors and benign status codes — these are
-    // observability noise (e.g. INFO 200 webhook logs) and must not pollute
-    // error_logs or Sentinel AI diagnosis.
-    if (!message || message === '{}' || message === 'undefined' || message === 'null') return;
-    if (error?.statusCode && Number(error.statusCode) < 400) return;
-
-    const supabase = getSupabase(providedSupabase);
-    // v1.58.20 - roll up identical failures: one row per (route, message) per
-    // ERROR_ROLLUP_HOURS. 40 identical WhatsApp 131026 rows used to drown
-    // error_logs and burn one AI diagnosis each.
-    const rollupHours = Math.max(1, Number(process.env.ERROR_ROLLUP_HOURS || 24));
-    const cutoff = new Date(Date.now() - rollupHours * 60 * 60 * 1000).toISOString();
-    try {
-      const existing = await supabase
-        .from('error_logs')
-        .select('id')
-        .eq('route', route)
-        .eq('error_message', message)
-        .gte('created_at', cutoff)
-        .limit(1);
-      if ((existing.data || []).length) return existing.data[0].id;
-    } catch { /* fall through to a fresh insert */ }
-    const { data } = await supabase.from('error_logs').insert([{
-      error_message: message,
-      stack_trace: error.stack || null,
-      route: route,
-      status: 'unresolved',
-      created_at: new Date().toISOString()
-    }]).select('id').maybeSingle();
-    return data ? data.id : null;
-  } catch (err) {
-    console.error('[Sentinel Helper] Failed to log error to error_logs table:', err.message);
-  }
+export async function logSystemError(providedSupabase, error, route = 'unknown', context = null) {
+  return logSystemErrorImpl(providedSupabase, error, route, context);
 }
 
 /**

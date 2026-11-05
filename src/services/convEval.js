@@ -106,6 +106,9 @@ export function getConvEvalConfig(env = process.env) {
   const rejudgeMargin = Number(rawMargin) === 0 ? 0 : boundedNumber(rawMargin, 0.10, 0, 0.5);
   const rawRejudge = read('CONV_EVAL_REJUDGE_MAX');
   const rejudgeMax = Number(rawRejudge) === 0 ? 0 : Math.round(boundedNumber(rawRejudge, 5, 0, 50));
+  // v1.61.12 — the ONLY eval email: one detailed summary every N hours (0 = off).
+  const rawDigest = read('CONV_EVAL_DIGEST_HOURS');
+  const digestHours = Number(rawDigest) === 0 ? 0 : boundedNumber(rawDigest, 6, 1, 168);
   return {
     threshold: boundedNumber(read('CONV_EVAL_MIN_SCORE'), CONV_EVAL_DEFAULT_THRESHOLD, 0, 1),
     maxCases,
@@ -114,6 +117,7 @@ export function getConvEvalConfig(env = process.env) {
     maxActiveRules,
     rejudgeMargin,
     rejudgeMax,
+    digestHours,
     dedupeHours: boundedNumber(read('CONV_EVAL_DEDUPE_HOURS'), 1, 0.25, 168),
     alertCooldownHours: boundedNumber(read('CONV_EVAL_ALERT_COOLDOWN_HOURS'), 1, 0, 48),
     judgeProvider: String(read('CONV_EVAL_JUDGE_PROVIDER') || 'deepseek').trim().toLowerCase(),

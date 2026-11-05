@@ -17,6 +17,7 @@ import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
 import { sendExistingAccountNoticeEmail } from './mailer.js';
 import { resolvePhoneCountryLock } from './globalization.js';
 import { countryPatchForProfile, COUNTRY_SOURCE_DEFAULT } from './countryLock.js';
+import { logWriteFailure } from './systemErrors.js';
 
 export const WEB_ONBOARD_OTP_TABLE = 'web_onboard_otps';
 export const WEB_ONBOARD_OTP_TTL_MS = 10 * 60 * 1000; // 10 minutes
@@ -354,7 +355,7 @@ export async function completeWebOnboarding(supabase, { email, phone, firstName,
           raceUpdates.email_verified = true;
         }
         if (launchOptIn === true || launchOptIn === false) raceUpdates.launch_opt_in = launchOptIn;
-        try { await supabase.from('profiles').update(raceUpdates).eq('id', raced.id); } catch { /* merge is best-effort */ }
+        try { await supabase.from('profiles').update(raceUpdates).eq('id', raced.id); } catch (mergeErr) { logWriteFailure(supabase, 'webOnboarding.raceMerge', mergeErr); }
         await writeAudit(supabase, 'WEB_ONBOARD_RACE_MERGED', { email, phone, profileId: raced.id });
         return { ok: true, created: false, raced: true };
       }

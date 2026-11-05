@@ -22,9 +22,9 @@ import { PROMPT_REFINEMENT_MARKER } from '../../sakaAi.js';
  *        - anything else    → `remediation_proposals` PENDING_APPROVAL
  *                             (superadmin reviews; CI executes — rules 16/18).
  *   5. Every outcome is audited (`CONV_EVAL_HEALED` / `CONV_EVAL_PROPOSED` /
- *      `CONV_EVAL_ERROR`). Channel policy (v1.61.7, operator request):
- *      a successful heal/proposal is announced on **WhatsApp only**; a heal that
- *      FAILS or needs intervention also sends **email** so it cannot be missed.
+ *      `CONV_EVAL_ERROR`). v1.61.12 — heals NEVER notify: one detailed email
+ *      every `CONV_EVAL_DIGEST_HOURS` (`sendEvalDigest`) plus ONE WhatsApp ping
+ *      announcing it is the whole story (judge-error alerts stay immediate).
  *
  * This module never edits source code, never touches auth/VIN/billing and never
  * throws.
@@ -253,38 +253,6 @@ export function formatHealFailureNotice({ caseDef = {}, stage = 'heal', reason =
 }
 
 /**
- * One failure digest per tick (v1.61.8). Batching protects the Resend quota:
- * a tick with six failed heals sends ONE email, never six.
- * Never throws; returns `{ notified, count }`.
- */
-export async function notifyHealFailureDigest(failures = [], { notify = notifySuperadminConvEval } = {}) {
-  const list = (Array.isArray(failures) ? failures : []).filter((f) => f && !f.ok);
-  if (list.length === 0) return { notified: { whatsapp: false, email: false }, count: 0 };
-  const lines = list.slice(0, 10).map((f) => {
-    const caseId = String(f.caseId || f.case_id || 'unknown').slice(0, 60);
-    const reason = String(f.reason || 'unknown').slice(0, 80);
-    const scores = Number.isFinite(Number(f.before)) && Number.isFinite(Number(f.after))
-      ? ` (${Number(f.before).toFixed(2)} → ${Number(f.after).toFixed(2)})`
-      : '';
-    return `• \`${caseId}\` — ${reason}${scores}`;
-  });
-  const more = list.length > lines.length ? `\n…and ${list.length - lines.length} more (reply \`admin eval\`).` : '';
-  const body = [
-    `🛠️ *Conversation eval — ${list.length} heal${list.length === 1 ? '' : 's'} need attention*`,
-    '',
-    ...lines,
-    more,
-    '',
-    '_Successful heals are WhatsApp-only. Review `admin eval` + `admin friction pending`; code fixes still need `admin accept fix <CODE>`._'
-  ].filter((line) => line !== undefined).join('\n').trim();
-  let notified = { whatsapp: false, email: false };
-  try {
-    notified = await notify(body, `Conversation eval: ${list.length} heal${list.length === 1 ? '' : 's'} need attention`, { email: true });
-  } catch { /* never throws */ }
-  return { notified, count: list.length };
-}
-
-/**
  * Heal ONE failed case. Never throws.
  * Returns `{ ok, reason?, patch?, before, after, shipped, ruleKey?, proposalCode? }`.
  */
@@ -294,8 +262,7 @@ export async function healFailedCase({
   judged = null,
   judgeConfig = {},
   generate = generateText,
-  judge = judgeConversation,
-  notify = notifySuperadminConvEval
+  judge = judgeConversation
 } = {}) {
   if (!isConvEvalHealEnabled()) return { ok: false, reason: 'heal_disabled' };
   if (!caseDef || !caseDef.id) return { ok: false, reason: 'no_case' };
@@ -306,29 +273,19 @@ export async function healFailedCase({
   if (isCalibrationCase(caseDef)) return { ok: false, reason: 'calibration_case' };
   if (!judged || judged.ok !== true || judged.passed) return { ok: false, reason: 'not_failed' };
 
-  // v1.61.7/1.61.8 — a failed heal is announced on WhatsApp immediately; the
-  // EMAIL is one digest per tick (the worker sends it), so a tick with six
-  // failures can never spend six Resend sends.
-  const announceFailure = async (stage, reason, extra = {}) => {
-    try {
-      await notify(
-        formatHealFailureNotice({ caseDef, stage, reason, ...extra }),
-        `Conversation eval: heal needs attention (${caseDef.id})`
-      );
-    } catch { /* notifications are best-effort */ }
-  };
+  // v1.61.12 — heals never ping the superadmin. Every outcome is audited here,
+  // and `sendEvalDigest()` emails ONE detailed 6-hour summary (with one WhatsApp
+  // ping announcing it). Failure notifications are part of that digest.
 
   const threshold = Number.isFinite(Number(judged.threshold)) ? Number(judged.threshold) : CONV_EVAL_DEFAULT_THRESHOLD;
   const generated = await generateHealPatch({ caseDef, judged, generate });
   if (!generated.ok) {
     await writeAudit(supabase, 'CONV_EVAL_ERROR', { case_id: caseDef.id, stage: 'generate', reason: generated.reason });
-    await announceFailure('generate', generated.reason);
     return { ok: false, reason: generated.reason };
   }
   const patch = generated.patch;
   if (!patch) {
     await writeAudit(supabase, 'CONV_EVAL_ERROR', { case_id: caseDef.id, stage: 'sanitize', reason: 'patch_rejected' });
-    await announceFailure('sanitize', 'patch_rejected');
     return { ok: false, reason: 'patch_rejected' };
   }
 
@@ -336,7 +293,6 @@ export async function healFailedCase({
   const after = await judge({ caseDef, reply: patch.correctedReply, judge: { ...judgeConfig, threshold } });
   if (!after.ok) {
     await writeAudit(supabase, 'CONV_EVAL_ERROR', { case_id: caseDef.id, stage: 'ab_judge', reason: after.error });
-    await announceFailure('ab_judge', after.error || 'ab_judge_failed', { before: Number(judged.aggregate || 0) });
     return { ok: false, reason: 'ab_judge_failed', detail: after.error };
   }
   const before = Number(judged.aggregate || 0);
@@ -348,7 +304,6 @@ export async function healFailedCase({
       before,
       after: after.aggregate
     });
-    await announceFailure('ab_gate', 'no_improvement', { before, after: after.aggregate });
     return { ok: false, reason: 'no_improvement', before, after: after.aggregate, patch: { ruleKey: patch.ruleKey } };
   }
 
@@ -375,7 +330,6 @@ export async function healFailedCase({
   if (patch.patchScope === 'code') {
     if (!isSentinelProposalsEnabled()) {
       await writeAudit(supabase, 'CONV_EVAL_ERROR', { case_id: caseDef.id, stage: 'ship', reason: 'proposals_disabled' });
-      await announceFailure('ship', 'proposals_disabled', { before, after: after.aggregate });
       return { ok: false, reason: 'proposals_disabled', before, after: after.aggregate, patch: { ruleKey: patch.ruleKey } };
     }
     if (supabase) {
@@ -431,7 +385,6 @@ export async function healFailedCase({
 
   if (shipped === 'none') {
     await writeAudit(supabase, 'CONV_EVAL_ERROR', { case_id: caseDef.id, stage: 'ship', reason: 'ship_failed' });
-    await announceFailure('ship', 'ship_failed', { before, after: after.aggregate });
     return { ok: false, reason: 'ship_failed', before, after: after.aggregate, patch: { ruleKey: patch.ruleKey } };
   }
 
@@ -449,15 +402,9 @@ export async function healFailedCase({
   });
 
   const notice = formatHealNotice({ caseDef, before, after: after.aggregate, patch: { ...patch, ruleKey: shippedKey }, shipped, proposalCode });
-  let notified = { whatsapp: false, email: false };
-  try {
-    notified = await notify(
-      notice,
-      shipped === 'proposal' ? `Conversation eval proposal: ${proposalCode}` : `Conversation eval healed: ${caseDef.id}`
-    );
-  } catch {
-    notified = { whatsapp: false, email: false };
-  }
+  // v1.61.12 — no per-heal notification. The audit row above plus the 6-hourly
+  // `sendEvalDigest()` email (announced by ONE WhatsApp ping) is the whole story.
+  const notified = { whatsapp: false, email: false };
 
   return {
     ok: true,

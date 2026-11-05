@@ -9,7 +9,7 @@ import {
   CONV_EVAL_STATUS
 } from '../services/convEval.js';
 import { buildLiveCasesFromFriction, buildLiveCasesFromChatHistory, sampleCorpusCases } from '../services/convEvalCases.js';
-import { healFailedCase, notifySuperadminConvEval, notifyHealFailureDigest, isCalibrationCase } from '../services/convEvalHealer.js';
+import { healFailedCase, notifySuperadminConvEval, isCalibrationCase } from '../services/convEvalHealer.js';
 
 /**
  * Saka Fleet — conversation eval tick (v1.60.0)
@@ -151,9 +151,10 @@ export async function runConvEvalTick(supabase, { force = false, persist = true 
     }
   }
 
-  // 3. ONE failure digest per tick (WhatsApp + email, v1.61.8) — successful
-  // heals stay WhatsApp-only, and six failed heals never spend six emails.
-  const failureDigest = await notifyHealFailureDigest(healResults);
+  // 3. No per-tick failure alert any more (v1.61.12): failures are audited and
+  // land in the 6-hourly `sendEvalDigest()` email. Judge errors below stay
+  // immediate — a tick where nothing could be scored is an outage, not news.
+  const failureDigest = { count: 0 };
 
   // 4. One throttled alert when the judge itself is unhealthy.
   let alerted = { whatsapp: false, email: false };

@@ -1,4 +1,6 @@
 import assert from 'assert';
+import fs from 'node:fs';
+import path from 'node:path';
 import { AI_PURPOSES, AI_TIERS, USER_FACING_PURPOSES } from './src/services/aiClient.js';
 import {
   CONV_EVAL_CRITERIA,
@@ -31,7 +33,8 @@ import {
   sampleCorpusCases,
   validateCase
 } from './src/services/convEvalCases.js';
-import { sanitizeHealPatch, formatHealNotice, formatHealFailureNotice, notifyHealFailureDigest, isCalibrationCase, enforceActiveRuleCap, healFailedCase, HEAL_PATCH_MAX_CHARS } from './src/services/convEvalHealer.js';
+import { sanitizeHealPatch, formatHealNotice, isCalibrationCase, enforceActiveRuleCap, healFailedCase, HEAL_PATCH_MAX_CHARS } from './src/services/convEvalHealer.js';
+import { buildEvalDigest, formatEvalDigestEmail, formatEvalDigestPing, sendEvalDigest, EVAL_DIGEST_CONFIG_KEY } from './src/services/evalDigest.js';
 import { formatBatchFailures, handleConvEvalCommand } from './src/services/convEvalConsole.js';
 import { healsFromAuditRows, selectCorpusUpdates, applyCorpusUpdates } from './src/services/convEvalCorpusSync.js';
 import { ENV_SECTIONS } from './src/services/envAudit.js';
@@ -267,20 +270,8 @@ const longHint = sanitizeHealPatch({ ...goodPatch, patch_instruction: `Acknowled
 check(longHint && longHint.patchInstruction.length === HEAL_PATCH_MAX_CHARS, 'the hint is capped at the configured bound');
 check(sanitizeHealPatch({ ...goodPatch, patch_scope: 'code' })?.patchScope === 'code', 'a code-scope patch is preserved (proposal path)');
 
-console.log('\n--- Test 11b: notification channel policy (v1.61.7) ---');
-const failureNotice = formatHealFailureNotice({ caseDef: { id: 'loop-expense-litres' }, stage: 'ab_gate', reason: 'no_improvement', before: 0.4, after: 0.46 });
-check(failureNotice.includes('loop-expense-litres') && failureNotice.includes('ab_gate'), 'the failure notice names the case and the stage');
-check(failureNotice.includes('0.40 → 0.46') && /improvement gate/i.test(failureNotice), 'the failure notice carries before/after and the gate reason');
-check(/admin eval/.test(failureNotice) && /admin accept fix/.test(failureNotice), 'the failure notice points at the intervention commands');
-const quietFailure = formatHealFailureNotice({ caseDef: { id: 'x' }, stage: 'generate', reason: 'timeout' });
-check(/not comparable/i.test(quietFailure), 'a failure without scores says so instead of inventing numbers');
-
-// A heal that cannot ship must reach BOTH channels; a shipped heal stays WhatsApp-only.
-const notifyCalls = [];
-const mockNotify = async (text, subject, options) => {
-  notifyCalls.push({ text, subject, options });
-  return { whatsapp: true, email: Boolean(options?.email) };
-};
+console.log('\n--- Test 11b: 6-hourly eval digest policy (v1.61.12) ---');
+// Heals never notify anybody any more: the audit row + the digest is the story.
 const prevHealFlag = process.env.CONV_EVAL_HEAL_ENABLED;
 process.env.CONV_EVAL_HEAL_ENABLED = 'on';
 const healInput = {
@@ -288,44 +279,75 @@ const healInput = {
   caseDef: { id: 'loop-expense-litres' },
   judged: { ok: true, passed: false, aggregate: 0.55, threshold: 0.7 },
   judgeConfig: { threshold: 0.7 },
-  generate: async () => JSON.stringify(goodPatch),
-  notify: mockNotify
+  generate: async () => JSON.stringify(goodPatch)
 };
 const noImprove = await healFailedCase({ ...healInput, judge: async () => ({ ok: true, passed: true, aggregate: 0.56 }) });
 check(noImprove.ok === false && noImprove.reason === 'no_improvement', 'a heal that does not beat the original is refused', noImprove.reason);
-check(notifyCalls.length === 1 && notifyCalls[0].options === undefined, 'a failed heal announces on WhatsApp immediately (no per-case email)');
-check(/heal needs attention/i.test(notifyCalls[0].text), 'the failed-heal announcement says it needs attention');
 const healedRun = await healFailedCase({ ...healInput, judge: async () => ({ ok: true, passed: true, aggregate: 0.92 }) });
 check(healedRun.ok === true && healedRun.shipped === 'rule', 'a heal that clears the gate ships the prompt rule');
-const healCall = notifyCalls[notifyCalls.length - 1];
-check(healCall.options === undefined || healCall.options?.email !== true, 'a shipped heal is WhatsApp-only (no email)');
-check(notifyCalls[0].subject !== healCall.subject, 'failure and success announcements are distinguishable by subject');
+check(healedRun.notified?.whatsapp === false && healedRun.notified?.email === false, 'a shipped heal notifies nobody (digest only)');
 
-// v1.61.8 — ONE failure digest per tick carries the email (Resend quota).
-const digestCalls = [];
-const digestNotify = async (text, subject, options) => {
-  digestCalls.push({ text, subject, options });
-  return { whatsapp: true, email: Boolean(options?.email) };
-};
-const failureDigestResult = await notifyHealFailureDigest([
-  { ok: false, caseId: 'loop-expense-litres', reason: 'no_improvement', before: 0.26, after: 0.77 },
-  { ok: false, caseId: 'elderly-jargon-wall', reason: 'no_improvement' },
-  { ok: true, caseId: 'ack-repeat-robot' }
-], { notify: digestNotify });
-check(failureDigestResult.count === 2 && digestCalls.length === 1, 'a tick with several failed heals sends exactly ONE digest', digestCalls.length);
-check(digestCalls[0].options?.email === true, 'the failure digest is the email carrier (email: true)');
-check(digestCalls[0].subject.includes('2 heals need attention'), 'the digest subject counts the failed heals', digestCalls[0].subject);
-check(digestCalls[0].text.includes('loop-expense-litres') && digestCalls[0].text.includes('elderly-jargon-wall'), 'the digest lists every failed case');
-check(digestCalls[0].text.includes('0.26 → 0.77'), 'the digest carries before/after when available');
-check(!digestCalls[0].text.includes('ack-repeat-robot'), 'successful heals never appear in the failure digest');
-const cleanTickDigest = await notifyHealFailureDigest([{ ok: true, caseId: 'x' }], { notify: digestNotify });
-check(cleanTickDigest.count === 0 && digestCalls.length === 1, 'a clean tick sends no failure digest');
-const bigDigestCalls = [];
-await notifyHealFailureDigest(
-  Array.from({ length: 13 }, (_, i) => ({ ok: false, caseId: `case-${i}`, reason: 'ship_failed' })),
-  { notify: async (text, subject, options) => { bigDigestCalls.push({ text, subject, options }); return { whatsapp: true, email: true }; } }
-);
-check(bigDigestCalls.length === 1 && /and 3 more/.test(bigDigestCalls[0].text), 'the digest caps at ten lines and says how many remain');
+// The digest is the only notification: counts, heals, refusals, weakest criterion.
+const digestRuns = [
+  { case_id: 'a', source: 'live', status: 'passed', passed: true, average_score: 0.9, criteria: { tone_compliance: { score: 0.9 }, loop_avoidance: { score: 0.6 } } },
+  { case_id: 'b', source: 'live', status: 'failed', passed: false, average_score: 0.4, criteria: { tone_compliance: { score: 0.4 }, loop_avoidance: { score: 0.5 } } },
+  { case_id: 'c', source: 'corpus', status: 'healed', passed: true, average_score: 0.88, before_score: 0.3, after_score: 0.88, patch_id: 'rule_c', criteria: {} },
+  { case_id: 'd', source: 'corpus', status: 'error', criteria: {} }
+];
+const digestAudits = [
+  { action: 'CONV_EVAL_PROPOSED', details: { case_id: 'x', proposal_code: 'PROP-2026-11-05-01' } },
+  { action: 'CONV_EVAL_ERROR', details: { case_id: 'loop', stage: 'ab_gate', reason: 'no_improvement' } },
+  { action: 'CONV_EVAL_ERROR', details: { case_id: 'loop', stage: 'ab_gate', reason: 'no_improvement' } },
+  { action: 'CONV_EVAL_ERROR', details: { case_id: 'loop', stage: 'ab_gate', reason: 'no_improvement' } }
+];
+const evalDigest = buildEvalDigest(digestRuns, digestAudits, { hours: 6 });
+check(evalDigest.total === 4 && evalDigest.passed === 2 && evalDigest.failed === 1 && evalDigest.errored === 1, 'the digest counts passed/failed/errored', evalDigest);
+check(evalDigest.healedCount === 1 && evalDigest.healed[0].caseId === 'c' && evalDigest.healed[0].before === 0.3, 'the digest carries each heal with before/after');
+check(evalDigest.proposals.length === 1 && evalDigest.proposals[0].code === 'PROP-2026-11-05-01', 'the digest lists drafted proposals');
+check(evalDigest.refusals[0].caseId === 'loop' && evalDigest.refusals[0].count === 3, 'the digest groups refusals per case');
+check(evalDigest.deterministicCandidates.includes('loop'), '3+ refusals flag a deterministic-lane candidate');
+check(evalDigest.weakestCriterion === 'loop_avoidance' && evalDigest.weakestAverage === 0.55, 'the weakest criterion is averaged across the window', evalDigest.weakestCriterion);
+const digestEmail = formatEvalDigestEmail(evalDigest);
+check(/Conversation eval — last 6 hours/.test(digestEmail) && /Healed: 1/.test(digestEmail), 'the email body carries the window and the heal count');
+check(/Needs a code fix/.test(digestEmail) && digestEmail.includes('loop'), 'the email flags cases that need code');
+const digestPing = formatEvalDigestPing(evalDigest);
+check(/summary emailed/.test(digestPing) && digestPing.includes('Healed: 1'), 'the WhatsApp ping announces the email and its headline counts');
+
+// sendEvalDigest: not due, no activity, and a real send (one email + one ping).
+function digestMock(state) {
+  return {
+    from(table) {
+      if (table === 'system_config') {
+        return {
+          select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: state.lastAt ? { value: state.lastAt } : null }) }) }),
+          upsert: async (rows) => { state.upserts.push(rows[0]); return { error: null }; }
+        };
+      }
+      if (table === 'conversation_eval_runs') {
+        return { select: () => ({ gte: () => ({ order: () => ({ limit: async () => ({ data: state.runs }) }) }) }) };
+      }
+      if (table === 'admin_audit_logs') {
+        return {
+          select: () => ({ in: () => ({ gte: () => ({ limit: async () => ({ data: state.audits }) }) }) }),
+          insert: async (rows) => { state.audits.push(rows[0]); return { error: null }; }
+        };
+      }
+      return {};
+    }
+  };
+}
+const digestNow = new Date('2026-11-05T18:00:00Z');
+const dueState = { lastAt: null, runs: digestRuns, audits: [], upserts: [] };
+const dueSent = await sendEvalDigest({ supabase: digestMock(dueState), hours: 6, now: digestNow, email: async () => true, whatsapp: async () => true });
+check(dueSent.sent === true && dueSent.emailed === true, 'a due digest is emailed');
+check(dueState.upserts.length === 1 && dueState.upserts[0].key === EVAL_DIGEST_CONFIG_KEY, 'the dispatch time is stored for idempotency');
+check(dueState.audits.some((row) => row.action === 'CONV_EVAL_DIGEST_SENT'), 'the digest dispatch is audited');
+const recentState = { lastAt: '2026-11-05T17:00:00Z', runs: digestRuns, audits: [], upserts: [] };
+const recentSent = await sendEvalDigest({ supabase: digestMock(recentState), hours: 6, now: digestNow, email: async () => true, whatsapp: async () => true });
+check(recentSent.sent === false && recentSent.reason === 'not_due', 'an already-sent window never double-sends');
+const emptyState = { lastAt: null, runs: [], audits: [], upserts: [] };
+const emptySent = await sendEvalDigest({ supabase: digestMock(emptyState), hours: 6, now: digestNow, email: async () => true, whatsapp: async () => true });
+check(emptySent.sent === false && emptySent.reason === 'no_activity', 'a quiet window sends nothing at all');
 
 // v1.61.9 — calibration cases are never healed; rule keys are reused; the
 // active-rule table is capped (oldest retires, audited).
@@ -499,6 +521,14 @@ check(formatBatchFailures({
     { caseId: 'case-c', judged: { ok: false, error: 'judge returned empty' } }
   ]
 }).includes('case-a'), 'failed cases are listed for the superadmin');
+
+console.log('\n--- Test 14b: CLI telemetry + error logging parity (v1.61.12) ---');
+const runConvEvalSource = fs.readFileSync('scripts/run_conv_eval.js', 'utf8');
+const synthSource = fs.readFileSync('scripts/generate_synthetic_cases.js', 'utf8');
+check(runConvEvalSource.includes('installAiUsageSink(supabase)'), 'the eval CLI installs the AI usage sink');
+check(synthSource.includes('installAiUsageSink('), 'the synthetic generator installs the AI usage sink');
+check(fs.existsSync('src/services/systemErrors.js'), 'the shared system-error logger exists');
+check(fs.readFileSync('src/services/quizEngine.js', 'utf8').includes('quizEngine.persistVehicleRegistration'), 'registration failures reach error_logs');
 
 console.log('\n--- Test 13: tracking schema + env parity + command routing ---');
 check(CONV_EVAL_SQL.includes('CREATE TABLE IF NOT EXISTS public.conversation_eval_runs'), 'the migration creates the tracking table idempotently');
