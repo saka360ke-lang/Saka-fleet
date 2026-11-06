@@ -10,6 +10,7 @@ import { isConversationDiagnosisEnabled, recordConversationProposal } from './sr
 import { mintFindingLog, mintFindingProposal } from './src/services/deepAudit.js';
 import { recordFriction } from './src/services/frictionTracker.js';
 import { markDeliveryBlocked, isDeliveryBlocked, clearDeliveryBlock, PERMANENT_FAILURE_CODES } from './src/services/deliveryGuard.js';
+import { sendProactiveWhatsApp } from './src/workers/sentinel.js';
 
 let passed = 0;
 function check(cond, label) { assert.ok(cond, label); passed += 1; console.log('  ok ' + label); }
@@ -87,6 +88,34 @@ const gateIndex = sentinelSource.lastIndexOf('if (isSentinelProposalsEnabled()) 
 check(optimizerIndex > 0 && gateIndex > 0 && optimizerIndex - gateIndex < 600, 'the micro-rule optimizer is gated by SENTINEL_PROPOSALS_ENABLED');
 check(sentinelSource.includes('Sentinel keeps detecting and logging friction'), 'the gate is documented in the source');
 
+
+console.log('--- proactive template routing (v1.63.0, sec 182) ---');
+const savedPhoneId = process.env.META_PHONE_NUMBER_ID;
+const savedWaToken = process.env.META_WHATSAPP_TOKEN;
+const savedTpl = process.env.META_TPL_SERVICE_REMINDER;
+const originalFetch = global.fetch;
+const payloads = [];
+process.env.META_PHONE_NUMBER_ID = '1234567890';
+process.env.META_WHATSAPP_TOKEN = 'test-token';
+delete process.env.META_TPL_SERVICE_REMINDER;
+global.fetch = async (url, options) => { payloads.push(JSON.parse(options.body)); return { ok: true }; };
+const textSent = await sendProactiveWhatsApp('+254700000099', 'Hello there', 'service_reminder', { plate: 'KDA 123A' });
+check(textSent === true && payloads.length === 1 && payloads[0].type === 'text' && payloads[0].text.body === 'Hello there', 'unset knob sends the byte-identical free-form text');
+process.env.META_TPL_SERVICE_REMINDER = 'saka_service_reminder';
+payloads.length = 0;
+const templateSent = await sendProactiveWhatsApp('+254700000099', 'Hello there', 'service_reminder', { plate: 'KDA 123A' });
+check(templateSent === true && payloads.length === 1 && payloads[0].type === 'template' && payloads[0].template.name === 'saka_service_reminder', 'a configured knob sends the approved template');
+check(payloads[0].template.components[0].parameters[0].text === 'KDA 123A', 'the template carries the ordered body variable');
+payloads.length = 0;
+const degradedSent = await sendProactiveWhatsApp('+254700000099', 'Hello there', 'service_reminder', {});
+check(degradedSent === true && payloads.length === 1 && payloads[0].type === 'text' && payloads[0].text.body === 'Hello there', 'a missing variable degrades to the free-form text');
+payloads.length = 0;
+const plainSent = await sendProactiveWhatsApp('+254700000099', 'Plain line');
+check(plainSent === true && payloads.length === 1 && payloads[0].type === 'text' && payloads[0].text.body === 'Plain line', 'kinds are optional (legacy two-argument calls unchanged)');
+global.fetch = originalFetch;
+if (savedPhoneId === undefined) delete process.env.META_PHONE_NUMBER_ID; else process.env.META_PHONE_NUMBER_ID = savedPhoneId;
+if (savedWaToken === undefined) delete process.env.META_WHATSAPP_TOKEN; else process.env.META_WHATSAPP_TOKEN = savedWaToken;
+if (savedTpl === undefined) delete process.env.META_TPL_SERVICE_REMINDER; else process.env.META_TPL_SERVICE_REMINDER = savedTpl;
 
 console.log('');
 console.log(passed + ' sentinel-policy assertions passed.');

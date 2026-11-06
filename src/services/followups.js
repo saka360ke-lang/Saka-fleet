@@ -228,7 +228,11 @@ export async function processPendingFollowUps({ supabase, sendFn, now = new Date
     }
 
     try {
-      await sendFn(job.phone, text);
+      // v1.63.0 - the driver-release notice rides the driver_unassigned template
+      // when configured; otherwise the same text goes out unchanged (sec 182).
+      const followupKind = job.kind === FOLLOWUP_KINDS.DRIVER_UNASSIGNED ? 'driver_unassigned' : null;
+      const followupVars = followupKind ? { plate: String(job.payload?.plate || job.payload?.plate_number || '') } : null;
+      await sendFn(job.phone, text, followupKind, followupVars);
       await supabase.from('pending_followups').update({
         status: 'sent',
         processed_at: new Date().toISOString()

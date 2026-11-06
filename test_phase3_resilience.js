@@ -362,13 +362,15 @@ async function runTests() {
     check(status.enabled === true && status.overBudget === true, 'checkAiDailyBudget uses the summary cost');
 
     const sent = [];
+    const whatsappArgs = [];
     const senders = {
-      whatsapp: async () => { sent.push('whatsapp'); return true; },
+      whatsapp: async (...args) => { sent.push('whatsapp'); whatsappArgs.push(args); return true; },
       email: async () => { sent.push('email'); return true; }
     };
     const first = await maybeSendAiBudgetAlert(fake, { senders });
     check(first.status === 'success' && first.threshold === 100, '100% threshold alerts');
     check(sent.length === 2, 'both notification channels are attempted');
+    check(whatsappArgs.length === 1 && whatsappArgs[0].length === 2, 'the budget alert keeps the legacy two-argument text send (no template kind - deliberately left)');
     check([...config.keys()].some((key) => key.startsWith('ai_budget_alert_100_')), 'dedupe key is persisted');
     check(audit.some((row) => row.action === 'AI_BUDGET_ALERT'), 'alert is audit-logged');
     const second = await maybeSendAiBudgetAlert(fake, { senders });

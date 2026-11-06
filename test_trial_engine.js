@@ -264,8 +264,9 @@ async function run() {
       ...extra
     });
     const sent = [];
-    const send = async (_to, message) => { sent.push(message); };
-    return { mock, sent, send };
+    const kinds = [];
+    const send = async (_to, message, kind) => { sent.push(message); kinds.push(kind); };
+    return { mock, sent, kinds, send };
   };
 
   const t3 = makeSweep({ started_at: past(27.5), ends_at: future(2.5), nudge_activation_sent_at: past(20) });
@@ -273,6 +274,7 @@ async function run() {
   check(t3stats.t3 === 1 && t3.sent.length === 1, 'T-3 digest is sent once');
   check(/trial ends in 3 days/i.test(t3.sent[0]) && /hour\(s\) saved|hours? saved/i.test(t3.sent[0]), 'T-3 digest contains value metrics');
   check(Boolean(t3.mock.db.trial_sessions[0].nudge_t3_sent_at), 'T-3 timestamp is persisted');
+  check(t3.kinds[0] === 'trial_ending', 'T-3 digest carries the trial_ending template kind');
   const t3again = await runTrialLifecycleSweep({ supabase: t3.mock.client, sendWhatsAppFn: t3.send });
   check(t3again.t3 === 0 && t3.sent.length === 1, 'T-3 digest never repeats');
 
@@ -280,6 +282,7 @@ async function run() {
   const t24stats = await runTrialLifecycleSweep({ supabase: t24.mock.client, sendWhatsAppFn: t24.send });
   check(t24stats.t24 === 1 || t24stats.t3 === 1, 'T-24h / T-3 urgency stage fires');
   check(t24.sent.length === 1, 'Only one nudge per sweep tick');
+  check(t24.kinds[0] === 'trial_ending', 'T-24h urgency carries the trial_ending template kind');
 
   const activationNudge = makeSweep({ started_at: past(8), ends_at: future(22) });
   const actStats = await runTrialLifecycleSweep({ supabase: activationNudge.mock.client, sendWhatsAppFn: activationNudge.send });
@@ -311,9 +314,10 @@ async function run() {
     ]
   });
   const expiryMessages = [];
+  const expiryKinds = [];
   const expiryStats = await runTrialLifecycleSweep({
     supabase: expiry.client,
-    sendWhatsAppFn: async (_to, message) => { expiryMessages.push(message); }
+    sendWhatsAppFn: async (_to, message, kind) => { expiryMessages.push(message); expiryKinds.push(kind); }
   });
   // v1.61.16 — the trial ends into a bounded decision window: nothing pauses yet.
   check(expiryStats.graceStarted === 1, 'An expired trial opens the decision window');
@@ -322,13 +326,15 @@ async function run() {
   check(expiry.db.vehicles.every((v) => v.status === 'ACTIVE'), 'Every asset stays active while the owner chooses');
   check(expiryMessages.length === 1 && /nothing is paused yet/i.test(expiryMessages[0]), 'Owner receives the fitted-plan card first');
   check(/keep <plate>/i.test(expiryMessages[0]), 'The card names the downsize choice');
+  check(expiryKinds[0] === 'trial_grace', 'the fitted-plan card carries the trial_grace template kind');
 
   // Grace end: the same sweep falls back to Free, pausing (never deleting) excess.
   expiry.db.trial_sessions[0].grace_ends_at = past(1);
   const graceEndMessages = [];
+  const graceEndKinds = [];
   const graceEndStats = await runTrialLifecycleSweep({
     supabase: expiry.client,
-    sendWhatsAppFn: async (_to, message) => { graceEndMessages.push(message); }
+    sendWhatsAppFn: async (_to, message, kind) => { graceEndMessages.push(message); graceEndKinds.push(kind); }
   });
   check(graceEndStats.graceEnded === 1 && graceEndStats.expired === 1, 'Grace end is processed by the sweep');
   check(expiry.db.profiles[0].subscription_tier === 'free' && expiry.db.profiles[0].subscription_status === 'ACTIVE', 'Account downgrades to Free at grace end');
@@ -336,6 +342,7 @@ async function run() {
   check(expiry.db.vehicles.every((v) => Boolean(v.plate_number)), 'Paused vehicles keep their identity (passbooks intact)');
   check(graceEndMessages.length === 1 && /trial has ended/i.test(graceEndMessages[0]), 'Owner receives the expiry message at grace end');
   check(/keep vehicle/i.test(graceEndMessages[0]), 'Expiry message prompts the KEEP_VEHICLE choice');
+  check(graceEndKinds[0] === 'trial_grace', 'grace-end expiry carries the trial_grace template kind');
   const expiryAgain = await runTrialLifecycleSweep({ supabase: expiry.client, sendWhatsAppFn: async () => {} });
   check(expiryAgain.expired === 0, 'Expired trial is not reprocessed');
 

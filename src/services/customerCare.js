@@ -71,7 +71,7 @@ export async function escalateCareToSuperadmin({ phone, text, category, priority
   if (adminPhone) {
     try {
       const msg = `🎫 *New ${priority} support ticket* (${category})\n\n👤 ${phone}\n\n"${String(text || '').slice(0, 500)}"\n\n_Reply from support@reports.sakafleet.com — Saka will relay it to the user's WhatsApp._`;
-      pinged = Boolean(await sendProactiveWhatsApp(adminPhone, msg));
+      pinged = Boolean(await sendProactiveWhatsApp(adminPhone, msg, 'care_escalation'));
     } catch { pinged = false; }
   }
   let emailed = false;

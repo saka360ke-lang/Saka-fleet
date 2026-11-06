@@ -1,6 +1,13 @@
 {
-  "latest": "1.62.0",
+  "latest": "1.63.0",
   "entries": [
+    {
+      "version": "1.63.0",
+      "date": "2026-11-06",
+      "title": "Reminders now reach you outside WhatsApp 24-hour window",
+      "preview": "Proactive messages ride approved WhatsApp templates, so reminders and trial nudges no longer go silent.",
+      "summary": "WhatsApp only allows free-form business messages inside 24 hours of your last reply; after that, reminders were silently dropped. Saka now sends every business-initiated message through an approved WhatsApp template when one is configured - service reminders, expiry alerts, trial-ending nudges, payment reminders, win-back offers, driver releases and admin alerts. With no template configured, every message is exactly what it was before: no copy changes, no surprises."
+    },
     {
       "version": "1.62.0",
       "date": "2026-11-06",

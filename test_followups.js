@@ -36,9 +36,10 @@ async function run() {
 
   console.log('\n--- Test 2: the worker sends the deterministic notice once ---');
   const sent = [];
-  const stats = await processPendingFollowUps({ supabase: mock.client, sendFn: async (phone, text) => { sent.push({ phone, text }); } });
+  const stats = await processPendingFollowUps({ supabase: mock.client, sendFn: async (phone, text, kind, templateVars) => { sent.push({ phone, text, kind, templateVars }); } });
   check(stats.sent === 1 && sent.length === 1, 'Worker sends exactly one message');
   check(/unassigned/i.test(sent[0].text) && sent[0].text.includes('KDA 123A'), 'Copy names the unassignment and the plate');
+  check(sent[0].kind === 'driver_unassigned' && sent[0].templateVars?.plate === 'KDA 123A', 'the release notice carries the driver_unassigned kind and the plate variable');
   check(mock.db.pending_followups[0].status === 'sent', 'Job is marked sent');
   const again = await processPendingFollowUps({ supabase: mock.client, sendFn: async () => { throw new Error('should not resend'); } });
   check(again.sent === 0, 'Sent jobs never resend');

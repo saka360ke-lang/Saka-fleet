@@ -3,6 +3,7 @@ import { isDeployNoiseLog } from './src/workers/sentinel.js';
 import { formatRemediationBlockedReply } from './src/workers/remediation.js';
 import { buildDeploymentAlertText } from './scripts/notify_git_push.js';
 import { buildDeployLiveText, announceRevisionLive } from './src/services/deployLiveAlert.js';
+import { PROACTIVE_TEMPLATE_KINDS } from './src/services/proactiveTemplates.js';
 
 /** Plain-English superadmin notifications & deploy-noise decoding (v1.23.2). */
 let passed = 0;
@@ -47,6 +48,7 @@ const repeat = await announceRevisionLive({ supabase: firstDb, revision: 'rev-1'
 check(repeat.sent === false && repeat.reason === 'already announced' && sent.length === 1, 'restarting the same revision stays silent');
 const noRevision = await announceRevisionLive({ supabase: fakeSupabase(null), revision: null, send: async () => { throw new Error('should not send'); } });
 check(noRevision.sent === false, 'missing revision never announces');
+check(PROACTIVE_TEMPLATE_KINDS.deploy_live.env === 'META_TPL_DEPLOY_LIVE' && PROACTIVE_TEMPLATE_KINDS.deploy_live.audience === 'superadmin' && PROACTIVE_TEMPLATE_KINDS.deploy_live.variables.length === 0, 'the LIVE announcement owns the deploy_live template slot (static body)');
 
 console.log('--- Test 2: remediation watchdog in plain English ---');
 const blocked = formatRemediationBlockedReply({ minutes: 583 });

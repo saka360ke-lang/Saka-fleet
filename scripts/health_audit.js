@@ -15,6 +15,8 @@ import { auditEnv, envTemplateKeys } from '../src/services/envAudit.js';
 
 const STATLESS_SUITES = [
   'test_trial_unbind.js',
+  // v1.63.0 - proactive template registry (11 kinds, env-gated, byte-identical fallback).
+  'test_proactive_templates.js',
   'test_vehicle_compliance.js',
   'test_driver_profile_onboarding.js',
   'test_dunning_reengagement.js',

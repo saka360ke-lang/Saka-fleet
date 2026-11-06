@@ -339,10 +339,12 @@ function digestMock(state) {
 }
 const digestNow = new Date('2026-11-05T18:00:00Z');
 const dueState = { configRows: [], runs: digestRuns, audits: [], upserts: [] };
-const dueSent = await sendEvalDigest({ supabase: digestMock(dueState), hours: 6, now: digestNow, email: async () => true, whatsapp: async () => true });
+const duePingArgs = [];
+const dueSent = await sendEvalDigest({ supabase: digestMock(dueState), hours: 6, now: digestNow, email: async () => true, whatsapp: async (...args) => { duePingArgs.push(args); return true; } });
 check(dueSent.sent === true && dueSent.emailed === true, 'a due digest is emailed');
 check(dueState.upserts.length === 1 && dueState.upserts[0].key === EVAL_DIGEST_CONFIG_KEY, 'a SENT digest stores the dispatch time (window consumed)');
 check(dueState.audits.some((row) => row.action === 'CONV_EVAL_DIGEST_SENT'), 'the digest dispatch is audited');
+check(duePingArgs.length === 1 && duePingArgs[0][2] === 'eval_digest_ping', 'the digest ping carries the eval_digest_ping template kind');
 const recentState = { configRows: [{ key: EVAL_DIGEST_CONFIG_KEY, value: '2026-11-05T17:00:00Z' }], runs: digestRuns, audits: [], upserts: [] };
 const recentSent = await sendEvalDigest({ supabase: digestMock(recentState), hours: 6, now: digestNow, email: async () => true, whatsapp: async () => true });
 check(recentSent.sent === false && recentSent.reason === 'not_due', 'an already-sent window never double-sends');

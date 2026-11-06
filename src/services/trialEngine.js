@@ -812,7 +812,7 @@ export async function runTrialEndStage({
       if (phone && sendWhatsAppFn) {
         const pausedPlates = (downgraded.paused || []).map((v) => v.plate_number).filter(Boolean);
         const checkoutUrl = await buildNudgeCheckout({ supabase, owner, trial, currency });
-        await sendWhatsAppFn(phone, expiryText({ tierLabel: label, pausedPlates, checkoutUrl })).catch(() => {});
+        await sendWhatsAppFn(phone, expiryText({ tierLabel: label, pausedPlates, checkoutUrl }), 'trial_grace', { tier: label }).catch(() => {});
         stats.sent = (stats.sent || 0) + 1;
       }
       return true;
@@ -828,7 +828,7 @@ export async function runTrialEndStage({
           locale: ownerCtx.locale,
           timeZone: ownerCtx.timeZone,
           graceEndsAt: graceEndsRaw
-        })).catch(() => {});
+        }), 'trial_grace', { tier: label }).catch(() => {});
         stats.sent = (stats.sent || 0) + 1;
         stats.graceT24 = (stats.graceT24 || 0) + 1;
       }
@@ -843,7 +843,7 @@ export async function runTrialEndStage({
           locale: ownerCtx.locale,
           timeZone: ownerCtx.timeZone,
           graceEndsAt: graceEndsRaw
-        })).catch(() => {});
+        }), 'trial_grace', { tier: label }).catch(() => {});
         stats.sent = (stats.sent || 0) + 1;
         stats.graceT3 = (stats.graceT3 || 0) + 1;
       }
@@ -878,7 +878,7 @@ export async function runTrialEndStage({
           graceDays: TRIAL_END_GRACE_DAYS,
           locale: ownerCtx.locale,
           timeZone: ownerCtx.timeZone
-        })).catch(() => {});
+        }), 'trial_grace', { tier: label }).catch(() => {});
         stats.sent = (stats.sent || 0) + 1;
       }
       return true;
@@ -891,7 +891,7 @@ export async function runTrialEndStage({
   if (phone && sendWhatsAppFn) {
     const pausedPlates = (downgraded.paused || []).map((v) => v.plate_number).filter(Boolean);
     const checkoutUrl = await buildNudgeCheckout({ supabase, owner, trial, currency });
-    await sendWhatsAppFn(phone, expiryText({ tierLabel: label, pausedPlates, checkoutUrl })).catch(() => {});
+    await sendWhatsAppFn(phone, expiryText({ tierLabel: label, pausedPlates, checkoutUrl }), 'trial_grace', { tier: label }).catch(() => {});
     stats.sent = (stats.sent || 0) + 1;
   }
   return true;
@@ -1010,7 +1010,7 @@ async function dispatchDueAccountTrialCoupons({ supabase, sendWhatsAppFn, now = 
         const ctx = ownerLocaleContext(owner || { phone_number: phone });
         await sendWhatsAppFn(phone, accountExtensionOfferText({
           ownerName: owner?.full_name, coupon, trial, locale: ctx.locale, timeZone: ctx.timeZone
-        })).catch(() => {});
+        }), 'trial_ending', null).catch(() => {});
         stats.sent = (stats.sent || 0) + 1;
         stats.extensionOffers = (stats.extensionOffers || 0) + 1;
       }
@@ -1079,7 +1079,7 @@ async function processAccountWinbacks({ supabase, sendWhatsAppFn, now = new Date
 
       await sendWhatsAppFn(owner.phone_number, winbackText({
         coupon, checkoutUrl: checkout?.checkoutUrl, locale: ctx.locale, timeZone: ctx.timeZone
-      })).catch(() => {});
+      }), 'winback', { coupon: coupon.code }).catch(() => {});
       stats.sent = (stats.sent || 0) + 1;
       stats.winbacks = (stats.winbacks || 0) + 1;
     }
@@ -1144,7 +1144,7 @@ export async function processPastDueDunning({ supabase, sendWhatsAppFn, now = ne
         daysPast,
         daysLeft: PAST_DUE_GRACE_DAYS - daysPast,
         checkoutUrl: await shortenUrl(supabase, checkout?.checkoutUrl)
-      })).catch(() => {});
+      }), 'dunning', { tier: getTierLabel(tierKey), days: String(PAST_DUE_GRACE_DAYS - daysPast) }).catch(() => {});
 
       await supabase.from('profiles').update({
         past_due_notice_count: count + 1,
@@ -1222,7 +1222,7 @@ export async function processSilentReengagement({ supabase, sendWhatsAppFn, now 
         .limit(1);
       if (!Array.isArray(vehicles) || vehicles.length === 0) continue;
 
-      await sendWhatsAppFn(phone, reengagementText({ ownerName: owner.full_name })).catch(() => {});
+      await sendWhatsAppFn(phone, reengagementText({ ownerName: owner.full_name }), 're_engagement', { name: owner.full_name }).catch(() => {});
       await supabase.from('profiles').update({
         reengage_nudged_at: new Date(now).toISOString(),
         updated_at: new Date(now).toISOString()
@@ -1351,7 +1351,7 @@ export async function processAbandonedCheckouts({ supabase, sendWhatsAppFn, now 
         coupon: coupon ? { code: coupon.code, discount_percent: coupon.discount_percent } : null,
         couponExpiryLabel: coupon?.expires_at ? trialDateLabel(coupon.expires_at, ctx) : null,
         checkoutUrl
-      })).catch(() => {});
+      }), 'trial_ending', null).catch(() => {});
       await stampTrial(supabase, trial.id, {
         checkout_reminder_count: count + 1,
         last_checkout_reminder_at: now.toISOString()
@@ -1424,7 +1424,7 @@ export async function processExpiredRenewalNudges({ supabase, sendWhatsAppFn, no
         priceLabel: monthly?.formattedPrice ? `${monthly.formattedPrice}/month` : null,
         annualLabel: annual?.formattedPrice ? `${annual.formattedPrice}/year` : null,
         checkoutUrl
-      })).catch(() => {});
+      }), 'winback', null).catch(() => {});
       try {
         await supabase.from('profiles').update({
           renewal_nudge_count: count + 1,
@@ -1547,7 +1547,7 @@ export async function runTrialLifecycleSweep({ supabase, sendWhatsAppFn = null, 
           ownerName: owner?.full_name, tierLabel, trial, metrics,
           priceLabel: null, annualLabel: null, checkoutUrl,
           locale: ownerCtx.locale, timeZone: ownerCtx.timeZone
-        })).catch(() => {});
+        }), 'trial_ending', { days: String(Math.max(1, Math.ceil((endsMs - nowMs) / DAY_MS))) }).catch(() => {});
         stats.sent += 1;
         stats.midpoint += 1;
       }
@@ -1569,7 +1569,7 @@ export async function runTrialLifecycleSweep({ supabase, sendWhatsAppFn = null, 
           annualLabel: annual?.formattedPrice ? `${annual.formattedPrice}/year` : null,
           checkoutUrl,
           locale: ownerCtx.locale, timeZone: ownerCtx.timeZone
-        })).catch(() => {});
+        }), 'trial_ending', { days: String(Math.max(1, Math.ceil((endsMs - nowMs) / DAY_MS))) }).catch(() => {});
         stats.sent += 1;
         stats.t3 += 1;
       }
@@ -1583,7 +1583,7 @@ export async function runTrialLifecycleSweep({ supabase, sendWhatsAppFn = null, 
         const checkoutUrl = await buildNudgeCheckout({ supabase, owner, trial, currency: ownerCtx.currency });
         await sendWhatsAppFn(phone, t24Text({
           tierLabel, trial, checkoutUrl, locale: ownerCtx.locale, timeZone: ownerCtx.timeZone
-        })).catch(() => {});
+        }), 'trial_ending', { days: String(Math.max(1, Math.ceil((endsMs - nowMs) / DAY_MS))) }).catch(() => {});
         stats.sent += 1;
         stats.t24 += 1;
       }

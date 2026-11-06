@@ -198,7 +198,7 @@ async function run() {
   const ladderSent = [];
   const firstSweep = await evaluateExpiryReminders({
     supabase: ladderMock.client,
-    sendFn: async (phone, text) => ladderSent.push({ phone, text }),
+    sendFn: async (phone, text, _vehicle, kind, templateVars) => ladderSent.push({ phone, text, kind, templateVars }),
     canDeliver: (phone) => phone !== '+254700000002',
     now
   });
@@ -216,6 +216,8 @@ async function run() {
   check(byId('rfar').notified_30d !== true, 'A 40-day expiry stays silent until the 30-day window');
   check((ladderMock.tables.expiry_notification_log || []).length === 5, 'Every dispatch writes an audit row to expiry_notification_log');
   check(ladderSent.some((entry) => /expires in 30 days/.test(entry.text)), 'Tier copy states the days remaining');
+  check(ladderSent.every((entry) => entry.kind === 'expiry_reminder'), 'expiry ladder dispatches carry the expiry_reminder template kind');
+  check(ladderSent.every((entry) => entry.templateVars && typeof entry.templateVars.item === 'string' && entry.templateVars.item.length > 0), 'expiry dispatches carry the item variable for the template body');
 
   const secondSweep = await evaluateExpiryReminders({
     supabase: ladderMock.client,

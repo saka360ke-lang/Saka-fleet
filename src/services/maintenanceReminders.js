@@ -545,7 +545,7 @@ export async function evaluateVehicleReminders({ supabase, vehicle, sendFn = nul
         seen.add(key);
         if (canDeliver && !canDeliver(phone, vehicle)) continue;
         try {
-          if (sendFn) await sendFn(phone, text, vehicle);
+          if (sendFn) await sendFn(phone, text, vehicle, 'service_reminder', { plate: vehicle?.plate_number || null });
           dispatched += 1;
         } catch (sendErr) {
           console.warn('[maintenanceReminders] WhatsApp dispatch failed:', sendErr.message);
@@ -691,7 +691,7 @@ export async function evaluateExpiryReminders({ supabase, sendFn = null, canDeli
         seen.add(key);
         if (canDeliver && !canDeliver(phone, vehicle)) continue;
         try {
-          if (sendFn) await sendFn(phone, text, vehicle);
+          if (sendFn) await sendFn(phone, text, vehicle, 'expiry_reminder', { item: String(rem?.label || rem?.type || category || 'document'), due: Number.isFinite(daysLeft) ? (daysLeft > 0 ? 'in ' + daysLeft + ' day(s)' : (daysLeft === 0 ? 'today' : 'now overdue')) : '' });
           dispatched += 1;
           try {
             await supabase.from('expiry_notification_log').insert([{

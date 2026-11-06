@@ -171,6 +171,7 @@ check(Boolean(graceEnt.graceEndsAt), 'the grace deadline is exposed to copy');
 
 console.log('\n--- 9. trial end opens the window; grace end falls back safely ---');
 const stageMessages = [];
+const stageKinds = [];
 const stageMock = seed({
   trial: liveTrial(past(1)),
   vehicles: Array.from({ length: 6 }, (_, index) => vehicleRow(index + 1, 'ACTIVE', index))
@@ -183,7 +184,7 @@ const consumed = await runTrialEndStage({
   phone: '+254700000001',
   ownerCtx: { currency: 'KES', locale: 'en-KE', timeZone: 'Africa/Nairobi' },
   now: new Date(),
-  sendWhatsAppFn: async (to, text) => { stageMessages.push(text); return true; },
+  sendWhatsAppFn: async (to, text, kind) => { stageMessages.push(text); stageKinds.push(kind); return true; },
   stats: stageStats,
   checkoutFn: async () => ({ ok: true, checkoutUrl: 'https://checkout.test/fit' }),
   addonCheckoutFn: async () => ({ ok: true, checkoutUrl: 'https://checkout.test/addon' })
@@ -194,12 +195,14 @@ const choiceText = stageMessages[0] || '';
 check(/nothing is paused yet/.test(choiceText) && /6 assets/.test(choiceText), 'the card names the asset count and promises no pause');
 check(choiceText.includes('https://checkout.test/fit') && choiceText.includes('https://checkout.test/addon'), 'the fit link and the add-on link are engine-supplied');
 check(/keep <plate>/.test(choiceText), 'the downsize path is named with the real command');
+check(stageKinds[0] === 'trial_grace', 'the fitted-plan card carries the trial_grace template kind');
 
 const graceEndMock = seed({
   trial: { ...liveTrial(past(9)), status: 'GRACE', grace_ends_at: past(1) },
   vehicles: [1, 2, 3].map((id) => vehicleRow(id, 'ACTIVE', id))
 });
 const endMessages = [];
+const endKinds = [];
 await runTrialEndStage({
   supabase: graceEndMock.client,
   trial: graceEndMock.db.trial_sessions[0],
@@ -207,12 +210,13 @@ await runTrialEndStage({
   phone: '+254700000001',
   ownerCtx: { currency: 'KES' },
   now: new Date(),
-  sendWhatsAppFn: async (to, text) => { endMessages.push(text); return true; },
+  sendWhatsAppFn: async (to, text, kind) => { endMessages.push(text); endKinds.push(kind); return true; },
   stats: {}
 });
 check(graceEndMock.db.profiles[0].subscription_tier === 'free', 'grace end falls back to Free');
 check(graceEndMock.db.vehicles.filter((v) => v.status === 'PAUSED').length === 2, 'excess assets are PAUSED, never deleted');
 check(endMessages.some((text) => /trial has ended/i.test(text)), 'the fallback message explains the Free plan honestly');
+check(endKinds[0] === 'trial_grace', 'grace-end expiry carries the trial_grace template kind');
 
 console.log('\n--- 10. paid-live owners are never touched at trial end ---');
 const paidMock = seed({

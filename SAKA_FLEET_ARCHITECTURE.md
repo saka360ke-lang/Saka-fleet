@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.62.0  
+**Version:** 1.63.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.63.0** | Proactive template registry: 11 proactive kinds route through approved Meta templates (META_TPL_<KIND>, unset = byte-identical free-form fallback); shared template transport; docs/TEMPLATES.md approval contract; no-canned-replies exemption | 182 |
 | **1.62.0** | DeepSeek off-peak scheduling engine: UTC/EAT peak detection + Chinese-holiday windows; CLI gates defer heavy batches (`synth:cases`, `eval:conv`) with `--force` escape + `DEEPSEEK_DEFERRED_TO_OFF_PEAK` audit; telemetry prices off-peak calls at half rate (`approxCostSavedUsd`); rule 61 | 181 |
 | **1.61.17** | Lawn-mower unblock: canonical asset_type vocabulary + legacy-constraint save fallback + live constraint migration; confirm-gate complaint guard; save-failure Support ladder; mower aliases | 180 |
 | **1.61.16** | Trial never caps the garage (anti-abuse ceiling only) → bounded trial-end decision window (fit / downsize / Free) with engine-owned payment links; coupon integrity (canonical admin creation, dual binding, atomic claims, audits); rule 60 stuck-guidance on every flow | 179 |
@@ -3042,8 +3043,8 @@ The category layer stays `EXPIRY_CATEGORIES` (maintenanceReminders.js); the new 
   and until v1.48.0 the app had no `message_status` handling to see it.
 - **Operator follow-ups:** redeploy Cloud Run (advances the revision marker and
   fires the LIVE alert), verify the `Deploy & Push WhatsApp Notification`
-  Actions workflow runs on push, and (recommended) approve a Meta template for
-  deploy alerts so they deliver regardless of the 24-hour window.
+  Actions workflow runs on push, and (recommended) approve the deploy_live template slot (section 182) so
+  deploy alerts deliver regardless of the 24-hour window once META_TPL_DEPLOY_LIVE is set.
 
 ### 87.4 Files, tests, knobs
 
@@ -5010,4 +5011,31 @@ Usage: `npm run eval:apply-heals` (dry run, 48 h) · `-- --hours=72` · `-- --wr
 
 **Recurrence autopsy (rule 51).** *Time-dependent pricing without a single clock source* → one pure schedule module; siblings audited: budget guard (net spend via the same summary), digest formatter (savings line deterministic), CLI cost paths (gate before spend). *Exact-value fixtures bound to list prices* → phase-2 cost total and phase-3 80%-alert fixture updated, with before/after proof in `test_deepseek_schedule`. *Holiday calendars that drift yearly* → fail-open fixed windows + env override (never invented lunar dates).
 
+
+
+### 182. v1.63.0 - proactive template registry: business-initiated messages survive the 24-hour window (2026-11-06)
+
+**Why (P0-1).** Meta accepts a business-initiated free-form message and then silently drops it outside the 24-hour customer-service window (section 87.3 is the deploy-alert post-mortem: a valid `wamid`, no delivery). The product core promise is reminders, so every proactive family now has an approved Meta template slot.
+
+**A. Pure registry (new `src/services/proactiveTemplates.js`).** One frozen registry of 11 kinds: `service_reminder, expiry_reminder, trial_ending, trial_grace, dunning, re_engagement, driver_unassigned, winback, deploy_live, eval_digest_ping, care_escalation`. Each kind declares `{ env, variables[], audience }`. `templateNameForKind()` reads `META_TPL_<KIND>` (default unset). `templateVariablesForKind()` returns the ordered body parameters and returns null when any required variable is missing or blank. `resolveProactiveMode()` is the single routing decision: template (name + variables) or text. No fetch, no DB, no transport lives in this module - tests never hit Meta.
+
+**B. One transport, every sender.** `sendWhatsAppTemplateMessage()` (`src/workers/sentinel.js`) is the shared template POST (deliveryGuard respected). `sendProactiveWhatsApp(toPhone, text, kind, templateVars)` and `index.js sendMetaWhatsAppMessage(toPhone, body, kind, templateVars)` route through `resolveProactiveMode`; a failed template attempt falls through to the text path. Kinds wired: reminder sweep (`service_reminder` thresholds, `expiry_reminder` ladder), trial lifecycle sweep (`trial_ending` T-14/T-3/T-24 + extension offers + abandoned checkout; `trial_grace` fitted-plan card + grace countdowns + hard expiry; `dunning`; `winback` WINBACK40 + renewal benefits; `re_engagement`), follow-ups (`driver_unassigned`), eval digest (`eval_digest_ping`), customer care (`care_escalation`), boot LIVE alert (`deploy_live`).
+
+**C. Deliberately left free-form.** In-window replies; Paystack/payment confirmations (the user just paid, the window is open); trial activation reward + T+7 nudge (fresh activity); superadmin budget/remediation pings (ops, two-way traffic); the existing `web_signup_welcome` template (unchanged).
+
+**D. No-canned-replies exemption (explicit).** The ratchet applies to FALLBACK TEXT only. Template BODIES live in Meta Business Manager (`docs/TEMPLATES.md` is the approval contract); code carries names and variable contracts, never prose. A template can only fire after the operator sets its knob, so the codebase stays free of canned conversational replies.
+
+**E. Degrade and rollback (rule 50).** Unset knob = today free-form text, byte-identical (asserted). Missing variable = text. Meta template failure = text fallback. No schema, no migration; rollback is unsetting the knobs.
+
+**F. Operator path.** `docs/TEMPLATES.md` carries the 11 bodies, variable specs, the Meta submission workflow and the exact `gcloud run services update --update-env-vars=META_TPL_<KIND>=<name>` commands. `npm run env:audit` proves parity; all 11 knobs are registered in `ENV_SECTIONS` (META WHATSAPP).
+
+**G. Env knobs (11, all default unset).** META_TPL_SERVICE_REMINDER, META_TPL_EXPIRY_REMINDER, META_TPL_TRIAL_ENDING, META_TPL_TRIAL_GRACE, META_TPL_DUNNING, META_TPL_RE_ENGAGEMENT, META_TPL_DRIVER_UNASSIGNED, META_TPL_WINBACK, META_TPL_DEPLOY_LIVE, META_TPL_EVAL_DIGEST_PING, META_TPL_CARE_ESCALATION. Registered in `ENV_SECTIONS` and documented in `.env.example`; unset means the free-form fallback above.
+
+**Tests.** New health-registered `test_proactive_templates.js` (39 assertions: completeness, uniqueness, name resolution, blank/missing degrade, ordered variables, routing, purity, wiring reachability). Kind + byte-identical assertions extended in test_sentinel_policy (30), test_maintenance_reminders (47), test_expiry_reminders (47), test_trial_engine (89), test_trial_capacity (43), test_followups (16), test_conv_eval (203), test_phase3_resilience (73), test_subscription_billing (86), test_notifications (19) and test_doc_sync.
+
+**Frames touched:** `src/services/{proactiveTemplates(new),trialEngine,maintenanceReminders,followups,evalDigest,customerCare,envAudit}.js`, `src/workers/sentinel.js`, `index.js`, `scripts/health_audit.js`, `test_proactive_templates.js` (new), eleven sender suites, `.env.example`, `docs/TEMPLATES.md` (new), `package.json`, `landing/data/changelog.json`, this file.
+
+**Suites run:** test_proactive_templates (39), test_sentinel_policy (30), test_maintenance_reminders (47), test_expiry_reminders (47), test_trial_engine (89), test_trial_capacity (43), test_followups (16), test_conv_eval (203), test_phase3_resilience (73), test_subscription_billing (86), test_notifications (19), test_doc_sync - green; `npm run health` green.
+
+**Recurrence autopsy (rule 51).** *Class 1 - a business-initiated message with no window-safe channel:* siblings = all 11 proactive families; each is registered, wired and reachable (one assertion per kind); in-window replies and the welcome template are documented as intentionally out of scope. *Class 2 - a routing layer that silently rewrites message text:* siblings = every sender suite that stubs a transport; each asserts unchanged fallback text when knobs are unset (the sentinel sender proves the exact payload; the deliberately-left two-argument senders - budget alert, Paystack confirmations - are pinned by assertion). *Class 3 - edit tooling writing a broken call tail:* the trialEngine kind insertion emitted an extra paren, caught by importing the module in a suite; all edited files are syntax-checked and exercised by their suites before the push.
 

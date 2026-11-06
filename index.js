@@ -6,7 +6,7 @@ import crypto from 'crypto';
 import { generateFleetReport, uploadReportToSupabase } from './reports.js';
 import { sendReportByEmail, sendMfaEmail, sendEmailOtp } from './src/services/mailer.js';
 import { processSakaMessage } from './sakaAi.js';
-import { runHealthCheck, runConversationRefinement, evaluateConversationalFriction, monitorActiveConversations, logSystemError, logChatTranscript, ensureSentinelTables, scanCloudRunAnomalies, sendProactiveWhatsApp } from './src/workers/sentinel.js';
+import { runHealthCheck, runConversationRefinement, evaluateConversationalFriction, monitorActiveConversations, logSystemError, logChatTranscript, ensureSentinelTables, scanCloudRunAnomalies, sendProactiveWhatsApp, sendWhatsAppTemplateMessage } from './src/workers/sentinel.js';
 import { ensureSuperadminTables, isSuperadminPhone, sendMorningExecutiveBriefing, maybeSendAiBudgetAlert } from './src/services/superadmin.js';
 import { ensureVehicleTableColumns } from './src/services/vehicles.js';
 import { ensureTrialSchemaDefaults } from './src/services/trialSchema.js';
@@ -42,6 +42,7 @@ import { runConvEvalTick } from './src/workers/convEval.js';
 import { sendEvalDigest } from './src/services/evalDigest.js';
 import { ensureConvEvalTable, getConvEvalConfig } from './src/services/convEval.js';
 import { announceRevisionLive } from './src/services/deployLiveAlert.js';
+import { resolveProactiveMode } from './src/services/proactiveTemplates.js';
 import {
   ensureAiModelRegistryTables,
   installModelRuntime,
@@ -256,7 +257,7 @@ setInterval(processPendingOwnerNotifications, 30000); // Check every 30s
 setInterval(() => {
   processPendingFollowUps({
     supabase,
-    sendFn: (phone, text) => sendMetaWhatsAppMessage(phone, text)
+    sendFn: (phone, text, kind, templateVars) => sendMetaWhatsAppMessage(phone, text, kind, templateVars)
   }).catch((err) => console.warn('[Worker] Follow-up sweep failed:', err.message));
 }, 30000);
 
@@ -302,7 +303,7 @@ async function runMaintenanceReminderSweep() {
   try {
     const result = await runReminderSweep({
       supabase,
-      sendFn: (phone, text) => sendMetaWhatsAppMessage(phone, text),
+      sendFn: (phone, text, _vehicle, kind, templateVars) => sendMetaWhatsAppMessage(phone, text, kind, templateVars),
       canDeliver: canDeliverVehicleAlert
     });
     if (result?.alerts) {
@@ -365,7 +366,16 @@ setInterval(() => {
 }, 3600000);
 
 // Helper: Send WhatsApp Message via Meta Cloud API
-async function sendMetaWhatsAppMessage(toPhone, messageBody) {
+async function sendMetaWhatsAppMessage(toPhone, messageBody, kind = null, templateVars = null) {
+  // v1.63.0 - proactive kinds ride an approved Meta template when configured
+  // (META_TPL_<KIND>); unset knobs keep today's free-form text (sec 182).
+  const mode = kind ? resolveProactiveMode({ kind, templateVars }) : { mode: 'text' };
+  if (mode.mode === 'template') {
+    const templateSent = await sendWhatsAppTemplateMessage(toPhone, mode.templateName, { variables: mode.variables || [] });
+    if (templateSent) return { messaging_product: 'whatsapp', sent: true, template: mode.templateName };
+    // Fall through: the text path still delivers inside the 24-hour window.
+  }
+
   const phoneNumberId = process.env.META_PHONE_NUMBER_ID;
   const token = process.env.META_WHATSAPP_TOKEN;
   
@@ -1349,7 +1359,7 @@ const start = async () => {
       await announceRevisionLive({
         supabase,
         revision: currentRevision,
-        send: (text) => sendMetaWhatsAppMessage(process.env.SUPERADMIN_PHONE, text)
+        send: (text) => sendMetaWhatsAppMessage(process.env.SUPERADMIN_PHONE, text, 'deploy_live')
       });
     }
   } catch (err) {

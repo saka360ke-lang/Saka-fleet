@@ -179,7 +179,7 @@ async function run() {
   };
   const mock3 = createMockSupabase({ reminders: [{ ...baseReminder }] });
   const sent = [];
-  const sendFn = async (phone, text, vehicle) => sent.push({ phone, text, vehicle: vehicle?.id });
+  const sendFn = async (phone, text, vehicle, kind, templateVars) => sent.push({ phone, text, vehicle: vehicle?.id, kind, templateVars });
 
   const early = await evaluateVehicleReminders({ supabase: mock3.client, vehicle: makeVehicle({ current_mileage: 1000 }), sendFn });
   check(early.alerts.length === 0 && sent.length === 0, 'No alert while 80% of the interval remains');
@@ -189,6 +189,7 @@ async function run() {
   check(mock3.tables.reminders[0].remaining_value === 3000, 'Remaining value is persisted on evaluation');
   check(mock3.tables.reminders[0].notified_75p === true, 'Approach tier is marked notified');
   check(sent.length === 1 && /60% remaining/.test(sent[0].text) && /5,000/.test(sent[0].text), 'Alert shows the target and remaining percentage');
+  check(sent[0].kind === 'service_reminder', 'threshold dispatches carry the service_reminder template kind');
 
   const approachAgain = await evaluateVehicleReminders({ supabase: mock3.client, vehicle: makeVehicle({ current_mileage: 2000 }), sendFn });
   check(approachAgain.alerts.length === 0 && sent.length === 1, 'The same tier never re-notifies');

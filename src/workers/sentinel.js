@@ -15,6 +15,7 @@ import { PROMPT_REFINEMENT_MARKER, MAX_STORED_PROMPT_REFINEMENT_CHARS } from '..
 import { normalizeFrictionPhone, markFrictionDeployed } from '../services/frictionTracker.js';
 import { isSentinelProposalsEnabled } from '../services/sentinelPolicy.js';
 import { isDeliveryBlocked } from '../services/deliveryGuard.js';
+import { resolveProactiveMode } from '../services/proactiveTemplates.js';
 import { logSystemError as logSystemErrorImpl } from '../services/systemErrors.js';
 
 function getSupabase(providedSupabase) {
@@ -1170,10 +1171,61 @@ ${rawCorpus.slice(0, 15000)}`;
 /* ------------------------------------------------------------------ */
 
 /**
+ * Dispatch an approved Meta template message (business-initiated; delivers
+ * outside the 24-hour customer-service window). 'variables' are the ordered
+ * body parameters ({ type: 'text', text }). Never throws; true only on 2xx.
+ */
+export async function sendWhatsAppTemplateMessage(toPhone, templateName, { languageCode = 'en', variables = [] } = {}) {
+  const phoneNumberId = process.env.META_PHONE_NUMBER_ID;
+  const token = process.env.META_WHATSAPP_TOKEN;
+  if (!phoneNumberId || !token || !toPhone || !templateName) return false;
+
+  const cleanPhone = String(toPhone).replace(/[^\d]/g, '');
+  if (!cleanPhone) return false;
+  // v1.58.23 - respect the delivery blocklist (permanent 131026-style failures).
+  if (isDeliveryBlocked(cleanPhone)) return false;
+
+  try {
+    const res = await fetch(`https://graph.facebook.com/v21.0/${phoneNumberId}/messages`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        to: cleanPhone,
+        type: 'template',
+        template: {
+          name: templateName,
+          language: { code: languageCode },
+          components: [{ type: 'body', parameters: variables }]
+        }
+      })
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Dispatch a plain WhatsApp text through the Meta Cloud API.
  * Used for proactive Sentinel nudges (not replies).
+ *
+ * v1.63.0 - when 'kind' names a registered proactive kind AND its
+ * META_TPL_<KIND> template is configured, the message rides the approved
+ * template (delivers outside the 24-hour window). Otherwise the text path
+ * below is byte-identical to the pre-v1.63.0 behaviour (sec 182).
  */
-export async function sendProactiveWhatsApp(toPhone, text) {
+export async function sendProactiveWhatsApp(toPhone, text, kind = null, templateVars = null) {
+  const mode = kind ? resolveProactiveMode({ kind, templateVars }) : { mode: 'text' };
+  if (mode.mode === 'template') {
+    const templateSent = await sendWhatsAppTemplateMessage(toPhone, mode.templateName, { variables: mode.variables || [] });
+    if (templateSent) return true;
+    // Fall through: the text path still delivers inside the 24-hour window.
+  }
+
   const phoneNumberId = process.env.META_PHONE_NUMBER_ID;
   const token = process.env.META_WHATSAPP_TOKEN;
   if (!phoneNumberId || !token || !toPhone || !text) return false;
@@ -1365,6 +1417,7 @@ export async function monitorActiveConversations(providedSupabase) {
 
 export default {
   monitorActiveConversations,
-  sendProactiveWhatsApp
+  sendProactiveWhatsApp,
+  sendWhatsAppTemplateMessage
 };
 

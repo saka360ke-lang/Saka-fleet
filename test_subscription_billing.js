@@ -6,6 +6,7 @@
  */
 
 import assert from 'assert';
+import fs from 'node:fs';
 import { createMockSupabase } from './scripts/mockSupabase.js';
 import {
   TIER_MATRIX,
@@ -374,6 +375,9 @@ async function run() {
   const yearEnd = computePeriodEnd('annual', new Date('2026-01-01T00:00:00.000Z'));
   check(monthEnd.toISOString().startsWith('2026-01-31'), 'Monthly period = +30 days');
   check(yearEnd.toISOString().startsWith('2027-01-01'), 'Annual period = +1 year');
+
+  const subsSource = fs.readFileSync('./src/services/subscriptions.js', 'utf8');
+  check(subsSource.split('sendWhatsAppFn(owner.phone_number,').length - 1 === 3, 'the three Paystack confirmations keep the legacy two-argument text sender (deliberately not template-routed)');
 
   return passed;
 }

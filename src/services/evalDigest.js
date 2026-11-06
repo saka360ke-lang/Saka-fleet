@@ -263,7 +263,7 @@ export async function sendEvalDigest({
     let pinged = false;
     // The ping announces a SENT email; a failed email never pings.
     if (emailSent && phone) {
-      try { pinged = await whatsapp(phone, formatEvalDigestPing(digest)); } catch { pinged = false; }
+      try { pinged = await whatsapp(phone, formatEvalDigestPing(digest), 'eval_digest_ping'); } catch { pinged = false; }
     }
 
     try {
