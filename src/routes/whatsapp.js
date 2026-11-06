@@ -140,7 +140,7 @@ import { ensureCountryBucket, getCountryLearningsLine } from '../services/countr
 import { applyOdometerReading, applyOperatingHours } from '../services/maintenanceReminders.js';
 import { handleQuizTurn, detectQuizStart, shouldPauseQuizForChat, getCurrentQuizField, detectFlowSwitch, getFlowDefinition, looksLikeReportRequest, getActiveQuiz, markQuizTurn, abandonQuiz } from '../services/quizEngine.js';
 import { matchNarrativeVehicle, buildNarrativeDraft, narrativeDraftFields, narrativeDraftExtras, shouldPrefillNarrativeDraft, isNarrativeIntakeEnabled, isNarrativeEligibleText, buildNarrativeParagraphDrafts, renderNarrativeBatchCard, resolveNarrativeBatchTurn, describeNarrativeDraft } from '../services/narrativeDraft.js';
-import { parseRecordQuestion, formatRecordAnswer, isRecordChallenge } from '../services/recordAnswers.js';
+import { parseRecordQuestion, formatRecordAnswer, isRecordChallenge, buildRecordChallengeScopeLine } from '../services/recordAnswers.js';
 import { isDeliveryBlocked, markDeliveryBlocked } from '../services/deliveryGuard.js';
 import { recordFriction } from '../services/frictionTracker.js';
 import { queryRecordLedger } from '../services/recordQuery.js';
@@ -2171,7 +2171,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               extracted_data: {},
               __deterministicRecords: true,
               reply_message: recordChallenge
-                ? `↩️ Same record, straight from your ledger — nothing changed:\n\n${recordAnswerText}\n\nIf a row looks wrong, reply *my entries* to edit or delete it.`
+                ? `↩️ Fair check — here's the same record, unchanged:\n\n${recordAnswerText}${buildRecordChallengeScopeLine({ challengeText: commandText, vehiclePlate: lastRecordQuery?.spec?.vehiclePlate || null, vehicleCount: existingVehicles.length, expenseTypes: lastRecordQuery?.spec?.expenseTypes || [], earning: Boolean(lastRecordQuery?.spec?.earning) }) || '\n\nIf a row looks wrong, reply *my entries* to edit or delete it.'}`
                 : recordAnswerText
             };
           }

@@ -1,6 +1,13 @@
 {
-  "latest": "1.63.1",
+  "latest": "1.63.2",
   "entries": [
+    {
+      "version": "1.63.2",
+      "date": "2026-11-06",
+      "title": "A warmer answer when you question a figure",
+      "preview": "When you say a record looks wrong, Saka now checks it with you instead of just repeating it.",
+      "summary": "If you challenge a figure - \"that cannot be right\" - Saka replays the exact same record from your ledger. The replay used to open defensively (\"Same record... nothing changed\"); it now opens by checking it with you before showing the numbers, and still points you at my entries to fix anything that looks off. Nothing else changed: same figures, same scope, same correction path. The quality harness also learned to measure real pass rates separately from the calibration cases that are meant to fail."
+    },
     {
       "version": "1.63.1",
       "date": "2026-11-06",

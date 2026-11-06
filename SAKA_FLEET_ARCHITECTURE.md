@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.63.1  
+**Version:** 1.63.2  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.63.2** | Record-challenge tone fix (Persona v4 acknowledge-distress) + calibration-aware eval gate (`--exclude-calibration`; Phase 3 baseline 23/23 signal pass, 12/12 calibration hold) | 184 |
 | **1.63.1** | Complete user-context cache invalidation: one after-write hook across 42 facts-changing writes in 12 files, 5-minute safety TTL, rule-51 ratchet + deliberately-left registry, Phase 1 completion (driver_activity, fleet_auto_audit kinds) | 183 |
 | **1.63.0** | Proactive template registry: 11 proactive kinds route through approved Meta templates (META_TPL_<KIND>, unset = byte-identical free-form fallback); shared template transport; docs/TEMPLATES.md approval contract; no-canned-replies exemption | 182 |
 | **1.62.0** | DeepSeek off-peak scheduling engine: UTC/EAT peak detection + Chinese-holiday windows; CLI gates defer heavy batches (`synth:cases`, `eval:conv`) with `--force` escape + `DEEPSEEK_DEFERRED_TO_OFF_PEAK` audit; telemetry prices off-peak calls at half rate (`approxCostSavedUsd`); rule 61 | 181 |
@@ -4631,6 +4632,8 @@ quiz engine:
 
 ---
 
+The recommended gate is `npm run eval:conv --exclude-calibration` with 100% pass rate; calibration cases are still run to detect regressions in the regression guards themselves.
+
 ### 165. v1.61.0 - global synthetic scenario generator + 6-month launch award (2026-11-05)
 
 **A. Global synthetic conversation scenarios (audit-driven).**
@@ -5064,5 +5067,21 @@ Usage: `npm run eval:apply-heals` (dry run, 48 h) · `-- --hours=72` · `-- --wr
 
 **Known limitation.** The ledger sites invalidate by the actor's phone only (section 177 "Known limitations"); the 5-minute TTL bounds the other party's staleness. Pinned by assertion.
 
-**Eval baseline (D3 gate).** `npm run eval:conv` at the pre-2C HEAD: aggregate 0.6897, 23/35 passed, per-case threshold 0.70. Diagnosis before proceeding: the corpus carries explicit calibration expected-fails (trial-end-invented-price, coupon-invented-discount, machinery-loop-calibration and the two 6 Nov regression shapes), and Phase 2 changed zero prompt/composer code (`flowKnowledge.js` / `sakaAi.js` untouched in all three sub-commits) — no mechanism exists for a quality change. Recorded as the Phase 3 baseline.
+**Eval baseline (D3 gate).** `npm run eval:conv` at the pre-2C HEAD: aggregate 0.6897, 23/35 passed, per-case threshold 0.70. Diagnosis before proceeding: the corpus carries explicit calibration expected-fails (trial-end-invented-price, coupon-invented-discount, machinery-loop-calibration and the two 6 Nov regression shapes), and Phase 2 changed zero prompt/composer code (`flowKnowledge.js` / `sakaAi.js` untouched in all three sub-commits) — no mechanism exists for a quality change. This is the pre-fix reference; the calibration-aware gate (section 184) supersedes it — **the Phase 3 baseline is 23/23 signal cases passing (0 real fails) with a 12/12 calibration hold.**
+
+### 184. v1.63.2 - record-challenge lane: acknowledge before data + scope reconciliation; eval gate is now calibration-aware (2026-11-06)
+
+**A. The tone fix.** The v1.61.5 record-challenge replay shipped with the opener "↩️ Same record, straight from your ledger — nothing changed:" — the eval judge scored tone_compliance 0.6 (*"defensive and slightly robotic; no contractions, template-like card"*) while every other criterion passed (aggregate 0.78, above the 0.70 bar). The rule the lane needed — acknowledge distress before data — was already Persona v4 law (and the v1.61.5 heal `acknowledge_distress_before_data`); the lane simply never applied it. The opener is now `↩️ Fair check — here's the same record, unchanged:` — a short human acknowledgement with no banned-family phrasing (the judge rejects the "Let's keep moving" family; an earlier draft "Let's check that together" scored tone 0.4 for exactly that reason) — and it leads with the concern before the data. Final judged verdict: **aggregate 0.88, tone_compliance 0.8**.
+
+**A2. The scope reconciliation.** After the tone fix the case still failed — on loop_avoidance 0.6: *"re-presents a ledger summary rather than addressing the 'across my 2 vehicles' challenge"*. The replay was contract-correct (last answered query, unchanged) but it never reconciled the user's stated scope with the replayed one-vehicle record. New pure helper `buildRecordChallengeScopeLine()` (`src/services/recordAnswers.js`): when the challenge text names a fleet scope (across/both/all/every/my N vehicles|cars|assets) AND the replayed query is vehicle-scoped (`lastRecordQuery.spec.vehiclePlate` set) AND the account holds 2+ vehicles, append: *"You mentioned N vehicles — this is the <plate> record. For a fleet-wide view, reply *<type> all time*."* The pointed phrase is a VERIFIED fleet-wide read (`fuel all time` / `expenses all time` / `earnings all time` all parse with `vehiclePlate:null`; bare "all vehicles" does NOT parse and is never offered). Scope-silent challenges, fleet-wide replays and single-vehicle accounts get no line (guards noise and `single_question`). When the scope line fires it REPLACES the `my entries` pointer — exactly ONE next step (two prompts read as a menu wall and fail `single_question`; the pointer remains the fallback when no scope line fires). The challenge text is the current turn's `commandText` — no session schema change was needed. `session.lastAssistantPrompt` storage is untouched (reply text only, normal path).
+
+**B. The measurement filter.** `scripts/run_conv_eval.js --exclude-calibration`: all cases are still judged and persisted to `conversation_eval_runs` (calibration history preserved), but the headline and `--fail-on-failures` gate are computed over the signal cases only — printing "N cases (calibration excluded) · threshold X", "Real-fail rate: X%" and "Calibration hold: Y%". Section 164 documents the recommended gate.
+
+**Frames touched:** `src/routes/whatsapp.js` (one-line reply), `scripts/run_conv_eval.js` (flag + gate), `evals/cases/conversation_cases.json` (case reply updated; historical rows not backfilled), `SAKA_FLEET_ARCHITECTURE.md` (section 164 line, 183 baseline note, this section), `CHANGELOG.md`, `landing/data/changelog.json` (+stamped assets), `docs/{PRODUCT_QA,SAKA_TRAINING}.md` (generated), `package.json`.
+
+**Suites run:** `test_record_answers` (75, no prefix assertions), `test_conv_eval`, `test_doc_sync`, `test_no_canned_replies`; `npm run eval:conv -- --exclude-calibration` (23/23 signal pass, 12/12 calibration hold); `npm run eval:conv` (full aggregate recorded, below 0.70 by design); `npm run health` green.
+
+**Recurrence autopsy (rule 51) — two defect classes.** (i) *A lane that ships an ack rule and does not apply it* — the tone opener; sibling sweep across every deterministic reply lane with a canned prefix (`grep -rn "Same record" src/` = one hit; the `↩️` opener = the same single hit; receipt-delete, reminder and ledger lanes open with a direct answer) — no sibling carries a defensive variant. (ii) *A replay that satisfies the case contract but not the user's actual question* — the scope mismatch; sibling sweep = every lane that replays a prior answer (`grep -rn "lastRecordQuery" src/` = the record lane only; `lastAssistantPrompt` read paths feed repeat detection, not replay) — the scope-reconciliation helper now covers the record lane; no other lane replays prior answers today, so none needed the same guard.
+
+**Baseline correction.** Pre-fix (fe29b00): 1 real fail / 23 = 4.3%. Post-fix (v1.63.2): 0 real fail / 23 = 100% pass, 12/12 calibration hold. This is the Phase 3 baseline.
 

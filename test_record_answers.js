@@ -6,7 +6,7 @@ dotenv.config();
 import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 import { runWithCleanup } from './scripts/testCleanup.js';
-import { parseRecordQuestion, formatRecordAnswer, RECORD_ANSWER_VERSION, looksLikeLogStatement, isRecordChallenge, extractPlate } from './src/services/recordAnswers.js';
+import { parseRecordQuestion, formatRecordAnswer, RECORD_ANSWER_VERSION, looksLikeLogStatement, isRecordChallenge, extractPlate, buildRecordChallengeScopeLine } from './src/services/recordAnswers.js';
 import { queryRecordLedger } from './src/services/recordQuery.js';
 import { resolveDateRange, formatNairobiDate } from './src/services/dateParser.js';
 
@@ -179,6 +179,18 @@ const replayAnswer = formatRecordAnswer(
   { vehicles: [], ...COPY }
 );
 check('a replayed fuel read names Fuel and the amount', /Fuel/.test(replayAnswer) && /2,000/.test(replayAnswer), replayAnswer);
+
+// v1.63.2 (a+) — scope reconciliation: only a cross-vehicle challenge on a
+// scoped replay gets the extra line; everything else stays noise-free.
+const silentScope = buildRecordChallengeScopeLine({ challengeText: "That record can't be right", vehiclePlate: 'KBJ819C', vehicleCount: 2, expenseTypes: ['Fuel'] });
+check('a scope-silent challenge adds no scope line', silentScope === '', silentScope);
+const fleetReplayScope = buildRecordChallengeScopeLine({ challengeText: "That's wrong, all vehicles please", vehiclePlate: null, vehicleCount: 2, expenseTypes: ['Fuel'] });
+check('a fleet-wide replay adds no scope line (nothing to reconcile)', fleetReplayScope === '', fleetReplayScope);
+const mismatchScope = buildRecordChallengeScopeLine({ challengeText: 'That record | Across my 2 vehicles. Cannot be right', vehiclePlate: 'KBJ819C', vehicleCount: 2, expenseTypes: ['Fuel'] });
+check('a cross-vehicle challenge on a scoped replay reconciles the scope', /You mentioned 2 vehicles/.test(mismatchScope) && /KBJ 819C/.test(mismatchScope) && /\*fuel all time\*/.test(mismatchScope), mismatchScope);
+check('a single-vehicle account never gets a scope line', buildRecordChallengeScopeLine({ challengeText: 'both my cars are wrong', vehiclePlate: 'KBJ819C', vehicleCount: 1, expenseTypes: ['Fuel'] }) === '');
+const earningsScope = buildRecordChallengeScopeLine({ challengeText: 'both cars wrong', vehiclePlate: 'KBJ819C', vehicleCount: 3, expenseTypes: [], earning: true });
+check('an earnings replay points at the earnings phrase', /\*earnings all time\*/.test(earningsScope), earningsScope);
 
 const emptyReply = formatRecordAnswer(
   { ok: true, rows: [], count: 0, total: 0, liters: 0, average: 0, amountCol: 'amount' },

@@ -99,6 +99,27 @@ export function isRecordChallenge(text = '') {
   return RECORD_CHALLENGE_RE.test(s);
 }
 
+/**
+ * v1.63.2 — scope reconciliation for a challenge replay.
+ * When the user's challenge names a fleet scope ("across my 2 vehicles") but the
+ * replayed query was scoped to one vehicle, say which record this is and give
+ * the exact fleet-wide phrase the record parser already understands (a verified
+ * `<type> all time` / `expenses all time` / `earnings all time` read).
+ * Returns '' for scope-silent challenges, fleet-wide replays (no plate) and
+ * single-vehicle accounts — the line is never noise (single_question stays safe).
+ */
+export function buildRecordChallengeScopeLine({ challengeText = '', vehiclePlate = null, vehicleCount = 0, expenseTypes = [], earning = false } = {}) {
+  if (!vehiclePlate) return '';
+  const mentionsScope = /\b(?:across|both|all|every)\b|\bmy\s+\d+\s+(?:vehicles?|cars?|assets?)\b/i.test(String(challengeText || ''));
+  if (!mentionsScope) return '';
+  const count = Math.max(0, Math.floor(Number(vehicleCount) || 0));
+  if (count < 2) return '';
+  const prettyPlate = String(vehiclePlate).toUpperCase().replace(/^([A-Z]+)(\d+)([A-Z]+)$/, '$1 $2$3');
+  const typeWord = Array.isArray(expenseTypes) && expenseTypes.length ? String(expenseTypes[0]).toLowerCase() : null;
+  const fleetPhrase = earning ? 'earnings all time' : (typeWord ? `${typeWord} all time` : 'expenses all time');
+  return `\n\nYou mentioned ${count} vehicles — this is the ${prettyPlate} record. For a fleet-wide view, reply *${fleetPhrase}*.`;
+}
+
 /** True when the text is a past-tense expense statement to LOG, not a question. */
 export function looksLikeLogStatement(text = '') {
   const s = String(text || '').replace(/\s+/g, ' ').trim();

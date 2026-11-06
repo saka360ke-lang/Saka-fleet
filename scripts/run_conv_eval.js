@@ -17,6 +17,7 @@ import { evaluateDeepSeekOffPeakGate, logDeepSeekDeferralAudit } from '../src/se
  *   node scripts/run_conv_eval.js --limit=6       # cap cases
  *   node scripts/run_conv_eval.js --case=id1,id2  # judge only these cases (curation)
  *   node scripts/run_conv_eval.js --fail-on-failures  # exit 1 when any case fails (CI gate)
+ *   node scripts/run_conv_eval.js --exclude-calibration  # gate on signal cases only (calibration still judged + persisted)
  *   node scripts/run_conv_eval.js --export        # DeepEval-compatible JSONL (no provider calls)
  *   node scripts/run_conv_eval.js --force         # override the DeepSeek peak-hours gate
  *
@@ -25,7 +26,7 @@ import { evaluateDeepSeekOffPeakGate, logDeepSeekDeferralAudit } from '../src/se
  */
 
 function parseArgs(argv = []) {
-  const args = { live: false, heal: false, json: false, export: false, synth: false, failOnFailures: false, force: false, limit: null, caseIds: null };
+  const args = { live: false, heal: false, json: false, export: false, synth: false, failOnFailures: false, force: false, excludeCalibration: false, limit: null, caseIds: null };
   for (const raw of argv) {
     if (raw === '--live') args.live = true;
     else if (raw === '--heal') args.heal = true;
@@ -34,6 +35,8 @@ function parseArgs(argv = []) {
     else if (raw === '--synth') args.synth = true;
     else if (raw === '--force') args.force = true;
     else if (raw === '--fail-on-failures') args.failOnFailures = true;
+    // v1.63.2 — calibration-aware gate: signal cases decide the headline.
+    else if (raw === '--exclude-calibration') args.excludeCalibration = true;
     else if (raw.startsWith('--limit=')) args.limit = Math.max(1, Math.min(50, Number(raw.slice(8)) || 0));
     // v1.61.15 — curate specific cases without spending judge calls on the rest.
     else if (raw.startsWith('--case=')) args.caseIds = raw.slice(7).split(',').map((id) => id.trim()).filter(Boolean);
@@ -191,6 +194,21 @@ async function main() {
   }
 
   if (summary.errored > 0) return 1;
+  // v1.63.2 — the calibration-aware gate. Calibration cases are still judged
+  // and persisted above; only signal cases decide pass/fail here.
+  const calibrationResults = summary.results.filter((result) => isCalibrationCase(result.caseDef));
+  const signalResults = summary.results.filter((result) => !isCalibrationCase(result.caseDef));
+  if (args.excludeCalibration) {
+    const signalFailed = signalResults.filter((result) => result.judged?.ok && !result.judged.passed).length;
+    const calibrationHeld = calibrationResults.filter((result) => result.judged?.ok && !result.judged.passed).length;
+    const realFailRate = signalResults.length ? (signalFailed / signalResults.length) * 100 : 0;
+    const holdRate = calibrationResults.length ? (calibrationHeld / calibrationResults.length) * 100 : 0;
+    console.log(`\n🎯 Calibration-aware gate: ${signalResults.length} cases (calibration excluded) · threshold ${cfg.threshold}`);
+    console.log(`   Real-fail rate: ${realFailRate.toFixed(1)}% (${signalFailed}/${signalResults.length})`);
+    console.log(`   Calibration hold: ${holdRate.toFixed(1)}% (${calibrationHeld}/${calibrationResults.length})`);
+    if (args.failOnFailures && signalFailed > 0) return 1;
+    return 0;
+  }
   if (args.failOnFailures && summary.failed > 0) return 1;
   return 0;
 }
