@@ -25,7 +25,7 @@ import { sanitizeEntryLabel } from './entryLabels.js';
 // v1.59.7 — labels on every entry: standalone odometer readings get a ledger row.
 import { recordLabeledReading } from './labelsEverywhere.js';
 import { logSystemError, logWriteFailure } from './systemErrors.js';
-import { invalidateUserContext } from './userContextCache.js';
+import { markUserDataChanged } from './afterWrite.js';
 import { shortenUrl } from './linkShortener.js';
 import {
   EXPENSE_TYPES,
@@ -2931,8 +2931,8 @@ async function executeFlow(state, ctx) {
           const reply = await fail(`${saved.error}${ladder}`);
           return { handled: true, reply, flow: state.flow, active: true };
         }
-        // v1.61.14 — a new asset changes the cached facts immediately.
-        invalidateUserContext(ctx.supabase, { phone: ctx.formattedPhone || ctx.profile?.phone_number, ownerId: ctx.profile?.id });
+        // v1.63.1 — a new asset changes the cached facts immediately.
+        markUserDataChanged({ supabase: ctx.supabase, phone: ctx.formattedPhone || ctx.profile?.phone_number, ownerId: ctx.profile?.id, reason: 'quizEngine.vehicle_registration' });
         // v1.16.4 — every NEW owner starts the full-featured welcome trial
         // (one per account lifetime; lapse returns the account to Free).
         let welcomeTrial = null;
@@ -3267,8 +3267,8 @@ async function executeFlow(state, ctx) {
           });
           return { handled: true, reply: await fail(logErr.message), flow: state.flow, active: true };
         }
-        // v1.61.14 — the month-spend / relationship facts just changed.
-        invalidateUserContext(ctx.supabase, { phone: ctx.formattedPhone || ctx.profile?.phone_number, ownerId: ctx.profile?.id });
+        // v1.63.1 — the month-spend / relationship facts just changed.
+        markUserDataChanged({ supabase: ctx.supabase, phone: ctx.formattedPhone || ctx.profile?.phone_number, ownerId: ctx.profile?.id, reason: 'quizEngine.logExpense' });
 
         // Trial activation #2: first expense logged (no-op outside trials).
         try {

@@ -61,7 +61,9 @@ function countSilentCatches() {
 }
 // Pinned at the v1.61.14 audit: remaining silent catches are best-effort UI,
 // telemetry, notify and cache paths. A NEW silent catch fails this ratchet.
-const SILENT_CATCH_BUDGET = 103;
+// v1.63.1 — +1: src/services/afterWrite.js (the sanctioned cache-invalidation
+// hook; a failed invalidation must never break the user's write, rule 50).
+const SILENT_CATCH_BUDGET = 104;
 const silentNow = countSilentCatches();
 check(`silent catches stay within the pinned budget (${silentNow}/${SILENT_CATCH_BUDGET})`, silentNow <= SILENT_CATCH_BUDGET);
 console.log('\n=== 4. logger behaviour ===');

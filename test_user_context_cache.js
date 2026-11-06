@@ -1,5 +1,6 @@
-// v1.61.14 — per-user context cache: built at chat initiation, reused for 15
-// minutes, invalidated by writes. Facts only (never OTP/token/quiz state).
+// v1.63.1 — per-user context cache: built at chat initiation, reused for 5
+// minutes (a safety net), invalidated by EVERY facts-changing write through
+// src/services/afterWrite.js. Facts only (never OTP/token/quiz state).
 import fs from 'node:fs';
 import {
   USER_CONTEXT_CACHE_TABLE,
@@ -11,6 +12,7 @@ import {
   getUserContextCache,
   invalidateUserContext
 } from './src/services/userContextCache.js';
+import { markUserDataChanged } from './src/services/afterWrite.js';
 
 let pass = 0;
 let fail = 0;
@@ -25,7 +27,7 @@ function check(name, condition, detail = '') {
 }
 
 console.log('=== 1. config + pure helpers ===');
-check('TTL defaults to 15 minutes', getUserContextTtlMinutes({}) === 15, getUserContextTtlMinutes({}));
+check('TTL defaults to 5 minutes (safety net, not the design)', getUserContextTtlMinutes({}) === 5, getUserContextTtlMinutes({}));
 check('TTL 0 means "always rebuild"', getUserContextTtlMinutes({ USER_CONTEXT_CACHE_TTL_MINUTES: '0' }) === 0);
 check('TTL clamps to 1..1440', getUserContextTtlMinutes({ USER_CONTEXT_CACHE_TTL_MINUTES: '-5' }) === 1 && getUserContextTtlMinutes({ USER_CONTEXT_CACHE_TTL_MINUTES: '99999' }) === 1440);
 const dirty = { lines: ['Plan: Free.'], otp: '123456', token: 'secret', nested: { pin: '9999', ok: 'keep' } };
@@ -99,6 +101,51 @@ check('an owner-level write drops by owner_id', invState.deletes.some((entry) =>
 invalidateUserContext(null, { ownerId: 'p-1' });
 check('invalidation without a client is a no-op (never throws)', true);
 check('the slate wipe includes the cache table', fs.readFileSync('scripts/reset-db.js', 'utf8').includes("'user_context_cache'"));
+
+console.log('\n=== 4. afterWrite hook (v1.63.1) ===');
+const hookState = { row: null, upserts: [], deletes: [] };
+const hookSupabase = makeSupabase(hookState);
+const hookReturn = markUserDataChanged({ supabase: hookSupabase, phone: '+254734852529', reason: 'test.phone' });
+check('markUserDataChanged is synchronous fire-and-forget (returns undefined)', hookReturn === undefined);
+await new Promise((resolve) => setTimeout(resolve, 10));
+check('markUserDataChanged drops the cache by phone', hookState.deletes.some((entry) => entry.col === 'phone_number' && entry.value === '+254734852529'), hookState.deletes);
+markUserDataChanged({ supabase: hookSupabase, ownerId: 'p-1', reason: 'test.owner' });
+await new Promise((resolve) => setTimeout(resolve, 10));
+check('markUserDataChanged drops the cache by owner_id', hookState.deletes.some((entry) => entry.col === 'owner_id' && entry.value === 'p-1'), hookState.deletes);
+let hookThrew = false;
+try {
+  markUserDataChanged({});
+  markUserDataChanged(null);
+} catch { hookThrew = true; }
+check('markUserDataChanged without a client is a no-op (never throws)', !hookThrew);
+let downThrew = false;
+try {
+  markUserDataChanged({ supabase: makeSupabase({ row: null, upserts: [], deletes: [], failAll: true }), ownerId: 'p-1', reason: 'test.db_down' });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+} catch { downThrew = true; }
+check('a dead database never breaks the write that triggered it (rule 50)', !downThrew);
+const missingTableSupabase = { from: () => ({ delete: () => ({ eq: () => Promise.reject(new Error('relation "user_context_cache" does not exist')) }) }) };
+let missingThrew = false;
+try {
+  markUserDataChanged({ supabase: missingTableSupabase, phone: '+254700000009', reason: 'test.missing_table' });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+} catch { missingThrew = true; }
+check('a missing cache table never breaks the write (rule 50)', !missingThrew);
+
+console.log('\n=== 5. converted call sites route through the hook (v1.63.1) ===');
+const CONVERTED_SITES = [
+  ['src/services/quizEngine.js', 2],
+  ['src/services/subscriptions.js', 1],
+  ['src/services/trialEngine.js', 1],
+  ['src/services/vehicleCompliance.js', 1],
+  ['src/services/vehicles.js', 2]
+];
+for (const [file, minCalls] of CONVERTED_SITES) {
+  const src = fs.readFileSync(file, 'utf8');
+  const calls = (src.match(/markUserDataChanged\(/g) || []).length;
+  check(`${file} routes its facts-changing writes through markUserDataChanged (${calls}/${minCalls})`, calls >= minCalls, calls);
+  check(`${file} no longer calls invalidateUserContext directly`, !src.includes('invalidateUserContext'));
+}
 
 console.log('');
 console.log(`${pass} passed, ${fail} failed`);

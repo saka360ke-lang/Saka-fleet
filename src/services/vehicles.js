@@ -10,7 +10,7 @@ import {
 } from './subscriptionTiers.js';
 import { notifyDriverUnassigned } from './followups.js';
 import { logWriteFailure } from './systemErrors.js';
-import { invalidateUserContext } from './userContextCache.js';
+import { markUserDataChanged } from './afterWrite.js';
 import { getEntitlements } from './subscriptions.js';
 
 /**
@@ -879,8 +879,8 @@ export async function updateVehicleDetails({ vehicleId, requesterId, updates = {
     } catch (emailSyncErr) { logWriteFailure(supabase, 'vehicles.ownerEmailSync', emailSyncErr); }
   }
 
-  // v1.61.14 — asset facts changed (plate, expiry, mileage…).
-  invalidateUserContext(supabase, { ownerId: updated?.owner_id || null });
+  // v1.63.1 — asset facts changed (plate, expiry, mileage…).
+  markUserDataChanged({ supabase, ownerId: updated?.owner_id || null, reason: 'vehicles.updateVehicleDetails' });
   return { success: true, vehicle: updated, applied: safeUpdates, rejected };
 }
 
@@ -949,8 +949,8 @@ export async function deleteVehicle({ vehicleId, requesterId, supabase }) {
     .maybeSingle();
 
   if (error) return { success: false, error: error.message };
-  // v1.61.14 — the asset is gone: drop the cached facts for its owner/driver.
-  invalidateUserContext(supabase, { ownerId: vehicle.owner_id || null });
+  // v1.63.1 — the asset is gone: drop the cached facts for its owner/driver.
+  markUserDataChanged({ supabase, ownerId: vehicle.owner_id || null, reason: 'vehicles.deleteVehicle' });
 
   // 3. Retire active reminders so they stop firing (history is retained).
   try {

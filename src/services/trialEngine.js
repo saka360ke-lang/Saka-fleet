@@ -35,7 +35,7 @@ import {
 } from './subscriptions.js';
 import { shortenUrl } from './linkShortener.js';
 import { logWriteFailure } from './systemErrors.js';
-import { invalidateUserContext } from './userContextCache.js';
+import { markUserDataChanged } from './afterWrite.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -290,8 +290,8 @@ export async function startAccountTrial({ supabase, ownerId, tierKey, interval =
   }).eq('id', ownerId);
 
   invalidateEntitlements(ownerId);
-  // v1.61.14 — plan/trial state changed: refresh the cached user facts.
-  invalidateUserContext(supabase, { ownerId });
+  // v1.63.1 — plan/trial state changed: refresh the cached user facts.
+  markUserDataChanged({ supabase, ownerId, reason: 'trialEngine.startAccountTrial' });
 
   // v1.16.0 — schedule the account-bound T-3 extension offer against the REAL
   // account trial end (never a VIN). Fire-and-forget: scheduling can never

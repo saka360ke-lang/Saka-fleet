@@ -5,7 +5,7 @@
  * STARTS (no fresh history), the engine assembles the user's facts ONCE — plan,
  * assets, expiries, trial state, driver compliance, month spend, missing-field
  * steps (the existing `buildUserContextSnapshot` engine) — and caches them here.
- * Every later turn in the conversation reuses the cache (15-minute TTL) instead
+ * Every later turn in the conversation reuses the cache (5-minute safety-net TTL) instead
  * of re-reading six tables, and any write that changes the facts invalidates it.
  *
  * Facts only: masked email, no OTP codes, no tokens, no quiz state. Never
@@ -15,7 +15,9 @@
 import { buildUserContextSnapshot } from './userContextSnapshot.js';
 
 export const USER_CONTEXT_CACHE_TABLE = 'user_context_cache';
-export const USER_CONTEXT_DEFAULT_TTL_MINUTES = 15;
+// v1.63.1 — 5 minutes is a safety net for a missed invalidation, not the design:
+// every user-data write must invalidate (src/services/afterWrite.js).
+export const USER_CONTEXT_DEFAULT_TTL_MINUTES = 5;
 export const USER_CONTEXT_MAX_PAYLOAD_CHARS = 12000;
 
 // Idempotent DDL for `npm run migrate:user-context`.
