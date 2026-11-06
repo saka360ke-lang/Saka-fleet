@@ -1,6 +1,13 @@
 {
-  "latest": "1.63.0",
+  "latest": "1.63.1",
   "entries": [
+    {
+      "version": "1.63.1",
+      "date": "2026-11-06",
+      "title": "Saka always answers from your latest numbers",
+      "preview": "Every correction, reminder and payment now refreshes what Saka knows instantly - no more stale facts.",
+      "summary": "Saka keeps a short-lived memory of your facts - plan, assets, expiries, spending, reminders - so replies stay fast. Some updates used to wait up to 15 minutes before that memory refreshed; now every write (a corrected entry, a new reminder, a payment, a plan change, an onboarding detail) refreshes it immediately, and the safety window shrank to 5 minutes. Two quieter reminders - driver activity summaries and the daily fleet audit - can also now reach you outside WhatsApp's 24-hour window when their templates are approved."
+    },
     {
       "version": "1.63.0",
       "date": "2026-11-06",

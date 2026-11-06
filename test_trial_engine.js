@@ -243,6 +243,7 @@ async function run() {
     vehicles: []
   });
   const redeemed = await applyAccountTrialExtensionCoupon({ supabase: couponMock.client, ownerId: 'p-1', code: 'extend15' });
+  check(couponMock.state.deletes.some((d) => d.table === 'user_context_cache' && d.col === 'owner_id' && d.value === 'p-1'), 'the trial extension coupon invalidates the cached facts (v1.63.1)');
   check(redeemed.ok === true && redeemed.daysAdded > 0, 'Trial-extension coupon extends the account trial');
   check(couponMock.db.coupons[0].status === 'applied' && couponMock.db.coupons[0].current_uses === 1, 'Coupon is marked applied');
   const redeemedAgain = await applyAccountTrialExtensionCoupon({ supabase: couponMock.client, ownerId: 'p-1', code: 'EXTEND15' });

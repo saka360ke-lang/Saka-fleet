@@ -238,11 +238,33 @@ async function runTests() {
   // with a snapshot audit, a FRESH row carries the corrected values and the
   // original entry date, and the DELETE audit row is consumed so `restore`
   // can never duplicate the corrected row.
+  // v1.63.1 (2C) — each ledger write must drop the actor's cached facts.
+  // The seeded row has owner_id NULL, so only the actorPhone delete can remove it
+  // (behavioural proof of the documented C1 phone-only invalidation design).
+  const seedUserContext = async () => {
+    await supabase.from('user_context_cache').upsert([{
+      phone_number: OWNER_PHONE,
+      owner_id: null,
+      payload: {},
+      built_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 3600000).toISOString()
+    }], { onConflict: 'phone_number' });
+  };
+  const userContextGone = async () => {
+    for (let i = 0; i < 25; i += 1) {
+      const { data } = await supabase.from('user_context_cache').select('phone_number').eq('phone_number', OWNER_PHONE);
+      if (!data || data.length === 0) return true;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return false;
+  };
+
   const relogged = await relogLedgerEntry(supabase, {
     entry: listed[0],
     patch: { amount: 4800, expense_type: 'Parts', label: 'corrected label', vin: 'HACKVIN', created_at: '2000-01-01' },
     actorPhone: OWNER_PHONE
   });
+  assert(await userContextGone(), 'relogLedgerEntry drops the actor cache (v1.63.1)');
   assert(relogged.ok, `Relog failed: ${relogged.reason}`);
   assert(relogged.patch.amount === 4800 && relogged.patch.expense_type === 'Parts', 'relog patch was not applied');
   assert(relogged.patch.label === 'corrected label', 'the label patch was not applied on relog');
@@ -260,7 +282,9 @@ async function runTests() {
   const restoreAfterRelog = await restoreLastDeleted(supabase, { actorPhone: OWNER_PHONE, vehicleIds: [vehicle.id] });
   assert(!restoreAfterRelog.ok, 'a corrected (re-logged) row can never be restored into a duplicate');
 
+  await seedUserContext();
   const removed = await deleteLedgerEntry(supabase, { entry: relogged.entry, actorPhone: OWNER_PHONE });
+  assert(await userContextGone(), 'deleteLedgerEntry drops the actor cache (v1.63.1)');
   assert(removed.ok, `Delete failed: ${removed.reason}`);
   const { data: goneRows } = await supabase.from('expense_logs').select('id').eq('id', relogged.entry.id);
   assert(!goneRows || goneRows.length === 0, 'row was not hard-deleted');
@@ -275,7 +299,9 @@ async function runTests() {
   assert(auditRows[0].details?.snapshot?.id === relogged.entry.id, 'audit snapshot is missing the deleted row');
   console.log('✅ Hard delete + audit snapshot of the full row.');
 
+  await seedUserContext();
   const restored = await restoreLastDeleted(supabase, { actorPhone: OWNER_PHONE, vehicleIds: [vehicle.id] });
+  assert(await userContextGone(), 'restoreLastDeleted drops the actor cache (v1.63.1)');
   assert(restored.ok, `Restore failed: ${restored.reason}`);
   assert(restored.entry.id === relogged.entry.id, 'restore did not bring back the same row id');
   const { data: backRows } = await supabase.from('expense_logs').select('id,amount,label').eq('id', relogged.entry.id);

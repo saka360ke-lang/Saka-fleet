@@ -605,6 +605,73 @@ async function run() {
   console.log(`\n🎉 ALL QUIZ ENGINE TESTS PASSED (${passed} assertions).`);
 }
 
+// v1.63.1 (2C) — six completion-path invalidation spies (stateless).
+console.log('\n--- v1.63.1: quiz completion invalidation spies ---');
+{
+  const makeQuizMock = () => {
+    const deletes = [];
+    const builder = (table) => {
+      const api = {
+        select: () => api,
+        eq: () => api,
+        neq: () => api,
+        in: () => api,
+        is: () => api,
+        gte: () => api,
+        lte: () => api,
+        lt: () => api,
+        gt: () => api,
+        order: () => api,
+        limit: () => api,
+        insert: (rows) => {
+          const data = Array.isArray(rows) ? rows : [rows];
+          const chain = {
+            select: () => chain,
+            maybeSingle: async () => ({ data: data[0] || null, error: null }),
+            single: async () => ({ data: data[0] || null, error: null }),
+            then: (a, b) => Promise.resolve({ data, error: null }).then(a, b)
+          };
+          return chain;
+        },
+        update: () => {
+          const chain = {
+            eq: () => chain,
+            in: () => chain,
+            is: () => chain,
+            select: () => chain,
+            maybeSingle: async () => ({ data: null, error: null }),
+            single: async () => ({ data: null, error: null }),
+            then: (a, b) => Promise.resolve({ data: null, error: null }).then(a, b)
+          };
+          return chain;
+        },
+        delete: () => ({
+          eq: (col, value) => { deletes.push({ table, col, value }); return Promise.resolve({ error: null }); },
+          in: () => Promise.resolve({ error: null })
+        }),
+        maybeSingle: async () => ({ data: null, error: null }),
+        single: async () => ({ data: null, error: null }),
+        then: (a, b) => Promise.resolve({ data: [], error: null }).then(a, b)
+      };
+      return api;
+    };
+    return { client: { from: builder }, deletes };
+  };
+  const runCompletion = async (flow, answers) => {
+    const mock = makeQuizMock();
+    const session = { quiz: { flow, phase: 'confirm', startedAt: Date.now(), answers: { vehicle_id: vehicle.id, ...answers }, extraNotes: [] } };
+    await handleQuizTurn({ session, messageText: 'yes', ctx: baseCtx({ vehicles: [vehicle], supabase: mock.client }) });
+    return mock.deletes.some((d) => d.table === 'user_context_cache' && d.col === 'phone_number' && d.value === '+254700000001');
+  };
+  assert(await runCompletion('log_earnings', { amount: 5000, odometer_reading: 360000, earning_type: 'Fare' }), 'log_earnings invalidates the cached facts (v1.63.1)');
+  assert(await runCompletion('log_mileage', { odometer_reading: 360500 }), 'log_mileage invalidates the cached facts (v1.63.1)');
+  assert(await runCompletion('log_operating_hours', { hours: 1250 }), 'log_operating_hours invalidates the cached facts (v1.63.1)');
+  assert(await runCompletion('edit_profile', { profile_field: 'Full name', new_value: 'Test Owner' }), 'edit_profile invalidates the cached facts (v1.63.1)');
+  const quizEngineSource = fs.readFileSync('./src/services/quizEngine.js', 'utf8');
+  assert(quizEngineSource.includes("reason: 'quizEngine.deleteAccount'") && quizEngineSource.includes("markUserDataChanged({ supabase: ctx.supabase, phone: ctx.senderPhone"), 'delete_account invalidates the cached facts (source-pinned: the MFA gate blocks stateless completion, v1.63.1)');
+  assert(await runCompletion('email_update', { new_email: 'new@example.com' }), 'email_update invalidates the cached facts (v1.63.1)');
+}
+
 run().catch((err) => {
   console.error(err.message);
   process.exit(1);

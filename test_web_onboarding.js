@@ -26,6 +26,7 @@ import {
   WEB_ONBOARD_OTP_TABLE,
   WEB_ONBOARD_MAX_ATTEMPTS
 } from './src/services/webOnboarding.js';
+import { handleStage2OptionalWeaving, saveVehicleAssetRecord } from './src/services/onboarding.js';
 
 let passed = 0;
 function check(condition, message) {
@@ -310,6 +311,76 @@ const switchOnDb = createMockSupabase({
 });
 await completeWebOnboarding(switchOnDb, { email: 'sw@example.com', phone: '+254711000014', firstName: 'S', lastName: 'W', verified: false, launchOptIn: true });
 check(switchOnDb.__db.profiles[0].launch_opt_in === true, 'An explicit re-tick on a later visit updates the stored choice');
+
+// v1.63.1 (2C) — onboarding write invalidation spies (stateless chain mock).
+console.log('\n--- v1.63.1: onboarding invalidation spies ---');
+{
+  const deletes = [];
+  const builder = (table) => {
+    const api = {
+      select: () => api,
+      eq: () => api,
+      in: () => api,
+      is: () => api,
+      limit: () => api,
+      insert: (rows) => {
+        const data = Array.isArray(rows) ? rows : [rows];
+        const chain = {
+          select: () => chain,
+          maybeSingle: async () => ({ data: data[0], error: null }),
+          single: async () => ({ data: data[0], error: null }),
+          then: (resolve, reject) => Promise.resolve({ data, error: null }).then(resolve, reject)
+        };
+        return chain;
+      },
+      update: () => {
+        const vehicleRow = table === 'vehicles' ? { id: 'v-1', owner_id: 'own-1' } : null;
+        const chain = {
+          eq: () => chain,
+          is: () => chain,
+          select: () => chain,
+          maybeSingle: async () => ({ data: vehicleRow, error: null }),
+          single: async () => ({ data: vehicleRow, error: null }),
+          then: (resolve, reject) => Promise.resolve({ data: vehicleRow, error: null }).then(resolve, reject)
+        };
+        return chain;
+      },
+      delete: () => ({ eq: (col, value) => { deletes.push({ table, col, value }); return Promise.resolve({ error: null }); } }),
+      maybeSingle: async () => ({ data: null, error: null }),
+      single: async () => ({ data: null, error: null }),
+      then: (resolve, reject) => Promise.resolve({ data: [], error: null }).then(resolve, reject)
+    };
+    return api;
+  };
+  const client = { from: builder, storage: { from: () => ({ remove: async () => ({ error: null }) }) } };
+  const savedResendKey = process.env.RESEND_API_KEY;
+  delete process.env.RESEND_API_KEY; // stateless suite: never call the mailer
+
+  const stage2 = await handleStage2OptionalWeaving({
+    obState: { core: { plate_number: 'KDA 123A' }, optional: {}, registered_plate: 'KDA 123A' },
+    mergedExt: { insurance_expiry: '2026-12-15' },
+    messageText: 'insurance expires 2026-12-15',
+    senderPhone: '+254712345678',
+    session: { state: 'ONBOARDING_STAGE_2', history: [] },
+    countryInfo: { country_code: 'KE', default_units: 'metric' },
+    supabaseClient: client
+  });
+  check(typeof stage2 === 'string' && deletes.some((d) => d.table === 'user_context_cache' && d.col === 'phone_number' && d.value === '+254712345678'), 'handleStage2OptionalWeaving invalidates the owner cache (v1.63.1)');
+
+  const saved = await saveVehicleAssetRecord({
+    obState: {
+      core: { plate_number: 'KDB 456B', make_model: 'Toyota Hilux', yom: '2020', fuel_type: 'Diesel', current_mileage: '1000', vin: 'JT1WEB0000000001', owner_email: 'amina@example.com' },
+      optional: {},
+      role: 'Owner'
+    },
+    profileData: { id: 'own-1', email: 'amina@example.com', email_verified: true, trial_used_at: '2026-01-01T00:00:00Z', phone_number: '+254712345678', unit_system: 'metric' },
+    countryInfo: { default_units: 'metric', country_code: 'KE' },
+    supabaseClient: client,
+    formattedPhone: '+254712345678'
+  });
+  check(saved.corePlate === 'KDB 456B' && deletes.some((d) => d.table === 'user_context_cache' && d.value === '+254712345678'), 'saveVehicleAssetRecord invalidates the cached facts (v1.63.1 - the section 177 claim made true)');
+  if (savedResendKey === undefined) delete process.env.RESEND_API_KEY; else process.env.RESEND_API_KEY = savedResendKey;
+}
 
 console.log(`\n🎉 ${passed} web-onboarding assertions passed.`);
 console.log('Stateless suite: in-memory database double only — no real rows, no cleanup needed.');

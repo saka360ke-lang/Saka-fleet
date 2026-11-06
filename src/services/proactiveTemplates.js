@@ -89,7 +89,7 @@ export const PROACTIVE_TEMPLATE_KINDS = Object.freeze({
   // the original 11-kind sweep missed (rule-51 correction, section 182).
   driver_activity: {
     env: 'META_TPL_DRIVER_ACTIVITY',
-    variables: ['plate', 'driver'],
+    variables: ['driver', 'plate'],
     audience: 'owner',
     note: 'Driver Activity Summary delivered by the pending-owner-notifications worker (index.js).'
   },

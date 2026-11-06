@@ -30,7 +30,10 @@ import {
   handlePaystackEvent,
   invalidateEntitlements,
   formatSubscriptionSummary,
-  findTierForPlanCode
+  findTierForPlanCode,
+  cancelSubscription,
+  resumeSubscription,
+  selectVehiclesToKeep
 } from './src/services/subscriptions.js';
 import { validateCouponForCheckout } from './src/services/coupons.js';
 import { resolveTier, AI_TIERS } from './src/services/aiClient.js';
@@ -381,6 +384,73 @@ async function run() {
 
   return passed;
 }
+
+// v1.63.1 (2C) — behavioural spies: every subscription write path must drop
+// the user-context cache (one delete recorded per path).
+console.log('\n--- v1.63.1: user-context invalidation spies (8 paths) ---');
+const spyMock = (overrides = {}) => createMockSupabase({
+  profiles: [profile(overrides)],
+  trial_sessions: [],
+  subscriptions: [],
+  usage_counters: [],
+  vehicles: overrides.vehicles || [],
+  paystack_webhook_events: []
+});
+const invDeleted = (mock, ownerId = 'p-1') => mock.state.deletes.some((d) => d.table === 'user_context_cache' && d.col === 'owner_id' && d.value === ownerId);
+
+const invCreate = spyMock();
+await handlePaystackEvent({ supabase: invCreate.client, event: {
+  event: 'subscription.create',
+  data: { id: 8101, subscription_code: 'SUB_INV1', status: 'active', customer: { email: 'owner@example.com' }, metadata: { user_id: 'p-1', target_tier: 'growth', billing_interval: 'monthly' }, next_payment_date: future(30) }
+} });
+check(invDeleted(invCreate), 'subscription.create (applySubscriptionState) invalidates the cache');
+
+const invFailed = spyMock();
+await handlePaystackEvent({ supabase: invFailed.client, event: {
+  event: 'invoice.payment_failed',
+  data: { id: 8102, status: 'failed', customer: { email: 'owner@example.com' }, metadata: { user_id: 'p-1' } }
+} });
+check(invDeleted(invFailed), 'invoice.payment_failed invalidates the cache');
+
+const invAddon = spyMock();
+await handlePaystackEvent({ supabase: invAddon.client, event: {
+  event: 'charge.success',
+  data: { id: 8103, reference: 'REF_INV3', customer: { email: 'owner@example.com', customer_code: 'CUS_1' }, metadata: { type: 'fleet_addon', addon_quantity: 2, user_id: 'p-1' } }
+} });
+check(invDeleted(invAddon), 'a fleet add-on charge invalidates the cache');
+
+const invScheduled = spyMock({ subscription_period_end: future(10), paystack_subscription_code: 'SUB_INV4' });
+await handlePaystackEvent({ supabase: invScheduled.client, event: {
+  event: 'subscription.disable',
+  data: { id: 8104, subscription_code: 'SUB_INV4', customer: { email: 'owner@example.com' }, metadata: { user_id: 'p-1' } }
+} });
+check(invDeleted(invScheduled), 'subscription.disable (period open, CANCELING) invalidates the cache');
+
+const invExpired = spyMock({ subscription_period_end: past(2) });
+await handlePaystackEvent({ supabase: invExpired.client, event: {
+  event: 'subscription.disable',
+  data: { id: 8105, subscription_code: 'SUB_INV5', customer: { email: 'owner@example.com' }, metadata: { user_id: 'p-1' } }
+} });
+check(invDeleted(invExpired), 'subscription.disable (expired, downgradeToFree) invalidates the cache');
+
+const invNotRenew = spyMock();
+await handlePaystackEvent({ supabase: invNotRenew.client, event: {
+  event: 'subscription.not_renew',
+  data: { id: 8106, subscription_code: 'SUB_INV6', customer: { email: 'owner@example.com' }, metadata: { user_id: 'p-1' } }
+} });
+check(invDeleted(invNotRenew), 'subscription.not_renew (CANCELING) invalidates the cache');
+
+const invCancel = spyMock();
+await cancelSubscription({ supabase: invCancel.client, ownerId: 'p-1' });
+check(invDeleted(invCancel), 'cancelSubscription invalidates the cache');
+
+const invResume = spyMock({ subscription_status: 'CANCELING', cancel_at_period_end: true });
+await resumeSubscription({ supabase: invResume.client, ownerId: 'p-1' });
+check(invDeleted(invResume), 'resumeSubscription invalidates the cache');
+
+const invKeep = spyMock({ vehicles: [{ id: 'v-1', owner_id: 'p-1', status: 'ACTIVE', updated_at: future(1) }] });
+await selectVehiclesToKeep({ supabase: invKeep.client, ownerId: 'p-1', keepVehicleIds: ['v-1'] });
+check(invDeleted(invKeep), 'selectVehiclesToKeep invalidates the cache');
 
 run()
   .then((count) => console.log(`\n✅ PART 1 OK (${count} assertions).`))

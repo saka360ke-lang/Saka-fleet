@@ -21,7 +21,9 @@ import {
   OCR_UNREADABLE_NOTE,
   OCR_CONFIRM_THRESHOLD,
   formatReceiptsReply,
-  formatDuplicateReceiptReply
+  formatDuplicateReceiptReply,
+  recordReceipt,
+  deleteReceipt
 } from './src/services/receipts.js';
 import { handleQuizTurn } from './src/services/quizEngine.js';
 
@@ -453,6 +455,41 @@ async function run() {
   global.fetch = realFetch;
   delete process.env.GCP_VISION_API_KEY;
   console.log(`\n🎉 ALL OCR FLOW TESTS PASSED (${passed} assertions).`);
+}
+
+// v1.63.1 (2C) — receipt write/delete invalidation spies (stateless chain mock).
+console.log('\n--- v1.63.1: receipt invalidation spies ---');
+{
+  const deletes = [];
+  const receiptRow = { id: 'rc-1', owner_id: 'owner-r', driver_id: null, media_id: 'm-1' };
+  const builder = (table) => {
+    const api = {
+      select: () => api,
+      eq: () => api,
+      in: () => api,
+      is: () => api,
+      limit: () => api,
+      insert: (rows) => {
+        const data = Array.isArray(rows) ? rows : [rows];
+        const chain = {
+          select: () => chain,
+          maybeSingle: async () => ({ data: data[0], error: null }),
+          then: (resolve, reject) => Promise.resolve({ data, error: null }).then(resolve, reject)
+        };
+        return chain;
+      },
+      delete: () => ({ eq: (col, value) => { deletes.push({ table, col, value }); return Promise.resolve({ error: null }); } }),
+      maybeSingle: async () => ({ data: table === 'receipts' ? receiptRow : null, error: null }),
+      then: (resolve, reject) => Promise.resolve({ data: [], error: null }).then(resolve, reject)
+    };
+    return api;
+  };
+  const client = { from: builder, storage: { from: () => ({ remove: async () => ({ error: null }) }) } };
+  const recorded = await recordReceipt(client, { mediaId: 'm-1', ownerId: 'owner-r', documentKind: 'fuel', amount: 100 });
+  check(recorded.ok === true && deletes.some((d) => d.table === 'user_context_cache' && d.col === 'owner_id' && d.value === 'owner-r'), 'recordReceipt invalidates the owner cache (v1.63.1)');
+  deletes.length = 0;
+  const removed = await deleteReceipt(client, { receiptId: 'rc-1', ownerId: 'owner-r' });
+  check(removed.ok === true && deletes.some((d) => d.table === 'user_context_cache' && d.col === 'owner_id' && d.value === 'owner-r'), 'deleteReceipt invalidates the owner cache (v1.63.1)');
 }
 
 run().catch((err) => {

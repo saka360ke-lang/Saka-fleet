@@ -17,6 +17,11 @@ Variables are USER DATA ONLY (name, plate, days, tier, coupon). If a required
 variable is missing or empty, the sender falls back to the free-form text -
 a template can never fire with a broken body parameter.
 
+Variable note: **saka_re_engagement {{1}}=name**: profiles may have null
+full_name. If you cannot guarantee a name at send time, either reword the
+body to remove the name, or add a name fallback in resolveProactiveMode
+before submitting this template for Meta approval.
+
 Language: en (PROACTIVE_TEMPLATE_LANGUAGE).
 
 ------------------------------------------------------------
@@ -93,7 +98,7 @@ Each entry: kind | env knob | audience | recommended category | variables
 
 9. deploy_live
    env: META_TPL_DEPLOY_LIVE
-   audience: superadmin
+   audience: superadmin - internal operations, superadmin recipient only
    category: Utility
    variables: none (static body)
    body: Saka update is LIVE. The new revision is now answering WhatsApp
@@ -101,7 +106,7 @@ Each entry: kind | env knob | audience | recommended category | variables
 
 10. eval_digest_ping
     env: META_TPL_EVAL_DIGEST_PING
-    audience: superadmin
+    audience: superadmin - internal operations, superadmin recipient only
     category: Utility
     variables: none (static body)
     body: The 6-hour conversation eval digest just went out by email. Check
@@ -109,7 +114,7 @@ Each entry: kind | env knob | audience | recommended category | variables
 
 11. care_escalation
     env: META_TPL_CARE_ESCALATION
-    audience: care worker
+    audience: care worker - internal operations, superadmin recipient only
     category: Utility
     variables: none (static body)
     body: New support ticket in Saka. Open the care console to review and
@@ -119,8 +124,8 @@ Each entry: kind | env knob | audience | recommended category | variables
     env: META_TPL_DRIVER_ACTIVITY
     audience: owner
     category: Utility
-    variables: {{1}} = plate, {{2}} = driver name
-    body: Hi! It's Saka. Driver {{2}} submitted new activity on {{1}}. Open
+    variables: {{1}} = driver name, {{2}} = plate
+    body: Hi! It's Saka. Driver {{1}} submitted new activity on {{2}}. Open
           Saka to review the details.
 
 13. fleet_auto_audit

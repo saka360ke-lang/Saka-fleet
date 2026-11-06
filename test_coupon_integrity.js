@@ -102,8 +102,11 @@ const raceMock = createMockSupabase({
 });
 const stale = { ...raceMock.db.coupons[0] };
 const first = await markCouponRedeemed({ supabase: raceMock.client, coupon: stale, ownerId: 'p-1' });
+check(raceMock.state.deletes.some((d) => d.table === 'user_context_cache' && d.col === 'owner_id' && d.value === 'p-1'), 'a claimed coupon invalidates the cached facts (v1.63.1)');
+const deletesAfterClaim = raceMock.state.deletes.length;
 check(first.ok === true && raceMock.db.coupons[0].current_uses === 1 && raceMock.db.coupons[0].status === 'applied', 'the first claim wins and stamps the row');
 const second = await markCouponRedeemed({ supabase: raceMock.client, coupon: stale, ownerId: 'p-1' });
+check(raceMock.state.deletes.length === deletesAfterClaim, 'a lost coupon race writes nothing and invalidates nothing (v1.63.1)');
 check(second.ok === false && second.reason === 'already_redeemed', 'a stale second claim is refused (no double-use race)');
 check(raceMock.db.coupons[0].current_uses === 1, 'the usage counter never double-increments');
 

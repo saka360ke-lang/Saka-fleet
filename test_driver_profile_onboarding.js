@@ -9,6 +9,7 @@
 
 import assert from 'assert';
 import { getFlowDefinition, detectQuizStart, startQuiz, handleQuizTurn } from './src/services/quizEngine.js';
+import { submitDriverCompliance, recordInvalidMinimalSubmission, handleDriverResponse } from './src/services/driverAssignments.js';
 
 // Keep the suite deterministic/offline: no AI question prefetch.
 delete process.env.DEEPSEEK_API_KEY;
@@ -157,6 +158,93 @@ async function run() {
   check(skipSession.quiz?.answers?.otp === null && skipSession.quiz?.emailSkipped === true, 'Owner OTP step is skipped deterministically');
 
   console.log(`\n🎉 ${passed} owner-driver-profile assertions passed.`);
+}
+
+// v1.63.1 (2C) — driver assignment/compliance invalidation spies (stateless).
+console.log('\n--- v1.63.1: driver-compliance invalidation spies ---');
+{
+  const makeDriverMock = (assignmentOverrides = {}) => {
+    const deletes = [];
+    const assignmentRow = {
+      id: 'a-1', vehicle_id: 'v-1', driver_id: 'drv-1', owner_id: 'own-1',
+      driver_phone: '+254700000002', status: 'PENDING_DRIVER_ACCEPTANCE',
+      accepted_at: new Date().toISOString(), created_at: new Date().toISOString(),
+      invalid_compliance_attempts: 0,
+      ...assignmentOverrides
+    };
+    const vehicleRow = { id: 'v-1', owner_id: 'own-1', plate_number: 'KDA 123A', asset_type: 'ICE', current_mileage: 1000, metadata: {} };
+    const builder = (table) => {
+      const api = {
+        select: () => api,
+        eq: () => api,
+        neq: () => api,
+        in: () => api,
+        is: () => api,
+        order: () => api,
+        limit: () => api,
+        insert: (rows) => {
+          const data = Array.isArray(rows) ? rows : [rows];
+          const chain = {
+            select: () => chain,
+            maybeSingle: async () => ({ data: data[0] || null, error: null }),
+            single: async () => ({ data: data[0] || null, error: null }),
+            then: (a, b) => Promise.resolve({ data, error: null }).then(a, b)
+          };
+          return chain;
+        },
+        update: () => {
+          const row = table === 'vehicles' ? vehicleRow : assignmentRow;
+          const chain = {
+            eq: () => chain,
+            in: () => chain,
+            is: () => chain,
+            select: () => chain,
+            maybeSingle: async () => ({ data: row, error: null }),
+            single: async () => ({ data: row, error: null }),
+            then: (a, b) => Promise.resolve({ data: row, error: null }).then(a, b)
+          };
+          return chain;
+        },
+        delete: () => ({
+          eq: (col, value) => { deletes.push({ table, col, value }); return Promise.resolve({ error: null }); },
+          in: () => Promise.resolve({ error: null })
+        }),
+        maybeSingle: async () => ({
+          data: table === 'vehicles' ? vehicleRow : (table === 'profiles' ? { id: 'drv-1', email_verified: true, phone_number: '+254700000002' } : null),
+          error: null
+        }),
+        single: async () => ({ data: table === 'vehicles' ? vehicleRow : null, error: null }),
+        then: (a, b) => {
+          let data = [];
+          if (table === 'driver_assignments') data = [assignmentRow];
+          if (table === 'profiles') data = [{ id: 'drv-1', email_verified: true, phone_number: '+254700000002' }];
+          return Promise.resolve({ data, error: null }).then(a, b);
+        }
+      };
+      return api;
+    };
+    return { client: { from: builder }, deletes };
+  };
+
+  const submitMock = makeDriverMock();
+  const submitted = await submitDriverCompliance({
+    supabase: submitMock.client,
+    driverId: 'drv-1',
+    item: { type: 'driver_license', label: 'Driver licence' },
+    parsed: { ok: true, number: 'DL-1', expiry: '2027-12-15', lifetime: false, expired: false },
+    isMinimal: true,
+    countryCode: 'KE',
+    assetType: 'ICE'
+  });
+  check(submitted.ok === true && submitMock.deletes.some((d) => d.table === 'user_context_cache' && d.col === 'owner_id' && d.value === 'drv-1'), 'submitDriverCompliance invalidates the driver cache (v1.63.1)');
+
+  const cancelMock = makeDriverMock({ invalid_compliance_attempts: 2, status: 'ACTIVE' });
+  const cancelled = await recordInvalidMinimalSubmission({ supabase: cancelMock.client, driverId: 'drv-1', itemLabel: 'Driver licence', expiry: '2026-01-01' });
+  check(cancelled.cancelled === true && cancelMock.deletes.some((d) => d.table === 'user_context_cache' && d.col === 'owner_id' && d.value === 'own-1'), 'a compliance cancellation invalidates the owner cache (v1.63.1)');
+
+  const acceptMock = makeDriverMock();
+  const accepted = await handleDriverResponse({ driverPhone: '+254700000002', response: 'ACCEPT', supabase: acceptMock.client });
+  check(accepted && accepted.status === 'ACCEPTED' && acceptMock.deletes.some((d) => d.table === 'user_context_cache' && d.col === 'owner_id' && d.value === 'own-1'), 'driver ACCEPT invalidates the owner cache (v1.63.1)');
 }
 
 run().catch((err) => {

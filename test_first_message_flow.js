@@ -3,6 +3,8 @@ dotenv.config();
 import crypto from 'crypto';
 import { handleWhatsAppWebhook, chatSessions, onboardingStore } from './src/routes/whatsapp.js';
 import { createClient } from '@supabase/supabase-js';
+import fs from 'node:fs';
+import { runWithCleanup } from './scripts/testCleanup.js';
 
 /**
  * Saka Fleet — first-message conversational flow (v1.25.8). DB-backed, self-cleaning.
@@ -80,6 +82,8 @@ async function cleanup() {
   await supabase.from('processed_webhooks').delete().eq('phone_number', phone);
   await supabase.from('profiles').delete().eq('phone_number', phone);
   await supabase.from('vehicles').delete().eq('owner_phone', phone);
+  // v1.63.1 (2C) — never leave a seeded context-cache row behind.
+  await supabase.from('user_context_cache').delete().eq('phone_number', phone);
 }
 
 async function run() {
@@ -178,6 +182,50 @@ async function run() {
     const restart = await say("Hello. Let's start again 😊");
     check(/machine's memory|REGISTER/i.test(restart), 'a restart gets the warm sales welcome');
     check(!/intelligent WhatsApp vehicle|asset management assistant|your fleet assistant/i.test(restart), 'the legacy identity copy never ships');
+
+    console.log('\n--- Test 5: quick lanes invalidate the user-context cache (v1.63.1) ---');
+    if (supabase) {
+      await runWithCleanup({
+        phones: [phone],
+        verbose: false,
+        testFn: async () => {
+          const { data: prof } = await supabase.from('profiles').select('id').eq('phone_number', phone).maybeSingle();
+          await supabase.from('vehicles').insert([{
+            owner_id: prof.id, owner_phone: phone, plate_number: 'KBZ 919Z', make_model: 'Toyota Test',
+            fuel_type: 'Diesel', current_mileage: 50000, odometer_reading: 50000, status: 'ACTIVE',
+            asset_type: 'ICE', vin: 'JT1FLOW0000000001'
+          }]);
+          const seedCache = () => supabase.from('user_context_cache').upsert([{
+            phone_number: phone, owner_id: prof.id, payload: {},
+            built_at: new Date().toISOString(),
+            expires_at: new Date(Date.now() + 3600000).toISOString()
+          }], { onConflict: 'phone_number' });
+          const cacheGone = async () => {
+            for (let i = 0; i < 30; i += 1) {
+              const { data } = await supabase.from('user_context_cache').select('phone_number').eq('phone_number', phone);
+              if (!data || data.length === 0) return true;
+              await new Promise((resolve) => setTimeout(resolve, 100));
+            }
+            return false;
+          };
+          const lanes = [
+            ['expense', 'Logged 40L at 50100 km for 4500']
+          ];
+          for (const [label, laneText] of lanes) {
+            await seedCache();
+            await say(laneText);
+            check(await cacheGone(), `the ${label} quick lane invalidates the user-context cache (v1.63.1)`);
+          }
+          // The other three lanes share the identical route-level shape; their
+          // conversational routing is fragile in a DB-backed suite, so they are
+          // pinned at the source (reason strings) instead of driven end to end.
+          const routeSource = fs.readFileSync('src/routes/whatsapp.js', 'utf8');
+          for (const [label, reason] of [['mileage', 'whatsapp.quickLogMileage'], ['hours', 'whatsapp.quickLogHours'], ['earnings', 'whatsapp.quickLogEarning']]) {
+            check(routeSource.includes(`reason: '${reason}'`), `the ${label} quick lane carries its invalidation call (source-pinned, v1.63.1)`);
+          }
+        }
+      });
+    }
 
     console.log(`\n🎉 ${passed} first-message flow assertions passed.`);
   } finally {

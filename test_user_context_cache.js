@@ -13,6 +13,8 @@ import {
   invalidateUserContext
 } from './src/services/userContextCache.js';
 import { markUserDataChanged } from './src/services/afterWrite.js';
+import { assignDriverToVehicle, unassignDriverFromVehicle } from './src/services/vehicles.js';
+import { runReminderSweep } from './src/services/maintenanceReminders.js';
 
 let pass = 0;
 let fail = 0;
@@ -146,6 +148,212 @@ for (const [file, minCalls] of CONVERTED_SITES) {
   check(`${file} routes its facts-changing writes through markUserDataChanged (${calls}/${minCalls})`, calls >= minCalls, calls);
   check(`${file} no longer calls invalidateUserContext directly`, !src.includes('invalidateUserContext'));
 }
+
+console.log('\n=== 6. rule-51 ratchet: every audited site routes through the hook (v1.63.1) ===');
+const RATCHET_FILES = [
+  'src/services/entryLedger.js',
+  'src/services/quizEngine.js',
+  'src/services/maintenanceReminders.js',
+  'src/services/vehicles.js',
+  'src/services/driverAssignments.js',
+  'src/services/receipts.js',
+  'src/services/coupons.js',
+  'src/services/subscriptions.js',
+  'src/services/trialEngine.js',
+  'src/services/onboarding.js',
+  'src/services/vehicleCompliance.js',
+  'src/routes/whatsapp.js'
+];
+let totalCalls = 0;
+for (const file of RATCHET_FILES) {
+  const src = fs.readFileSync(file, 'utf8');
+  const calls = (src.match(/markUserDataChanged\(\{/g) || []).length;
+  totalCalls += calls;
+  check(`${file} carries its audited invalidation call(s) (${calls})`, calls >= 1, calls);
+}
+// Baseline pinned at v1.63.1: 42 call sites across 12 files (7 converted in 2A +
+// 35 added in 2B).
+// The file count will change during structural refactors (e.g., Phase 6
+// whatsapp.js split). When it does, update the baseline AND confirm each new
+// file's site still invalidates - do not just bump the count.
+check('the rule-51 baseline is exactly 42 call sites in 12 files', totalCalls === 42, totalCalls);
+const REASONS = [
+  ['src/services/entryLedger.js', ['ledger.relog', 'ledger.delete', 'ledger.restore']],
+  ['src/services/quizEngine.js', ['quizEngine.vehicle_registration', 'quizEngine.logExpense', 'quizEngine.logEarnings', 'quizEngine.logMileage', 'quizEngine.logOperatingHours', 'quizEngine.editProfile', 'quizEngine.deleteAccount', 'quizEngine.emailUpdate']],
+  ['src/services/maintenanceReminders.js', ['reminders.createThreshold', 'reminders.createExpiry', 'reminders.sweep']],
+  ['src/services/vehicles.js', ['vehicles.assignDriver', 'vehicles.unassignDriver', 'vehicles.updateVehicleDetails', 'vehicles.deleteVehicle']],
+  ['src/services/driverAssignments.js', ['driverAssignments.complianceCancelled', 'driverAssignments.submitCompliance', 'driverAssignments.accept']],
+  ['src/services/receipts.js', ['receipts.record', 'receipts.delete']],
+  ['src/services/coupons.js', ['coupons.redeemed']],
+  ['src/services/subscriptions.js', ['subscriptions.applyState', 'subscriptions.addon', 'subscriptions.paymentFailed', 'subscriptions.cancelScheduled', 'subscriptions.notRenew', 'subscriptions.cancel', 'subscriptions.resume', 'subscriptions.downgradeToFree', 'subscriptions.keepVehicles']],
+  ['src/services/trialEngine.js', ['trialEngine.startAccountTrial', 'trialEngine.extendCoupon']],
+  ['src/services/onboarding.js', ['onboarding.saveAssetRecord', 'onboarding.stage2Specs']],
+  ['src/services/vehicleCompliance.js', ['vehicleCompliance.submit']],
+  ['src/routes/whatsapp.js', ['whatsapp.quickLogExpense', 'whatsapp.quickLogMileage', 'whatsapp.quickLogHours', 'whatsapp.quickLogEarning']]
+];
+let reasonCount = 0;
+for (const [file, reasons] of REASONS) {
+  const src = fs.readFileSync(file, 'utf8');
+  for (const reason of reasons) {
+    reasonCount += 1;
+    check(`${file} pins reason ${reason}`, src.includes(`reason: '${reason}'`));
+  }
+}
+check('all 42 call-site reasons are pinned', reasonCount === 42, reasonCount);
+
+console.log('\n=== 7. deliberately-left registry (rule-51 sweep, v1.63.1) ===');
+// These tables are NOT in section 177's snapshot. A future snapshot expansion
+// must remove from this list and add to the ratchet above.
+const DELIBERATELY_LEFT = {
+  chat_history: 'src/routes/whatsapp.js',
+  chat_transcripts: 'src/routes/whatsapp.js',
+  chat_sessions: 'src/services/sessionStore.js',
+  processed_webhooks: 'src/routes/whatsapp.js',
+  chat_friction_logs: 'src/services/frictionTracker.js',
+  error_logs: 'src/services/systemErrors.js',
+  admin_audit_logs: 'src/services/entryLedger.js',
+  usage_counters: 'src/services/subscriptions.js',
+  vin_registry: 'src/services/vehicles.js',
+  driver_assignments: 'src/services/driverAssignments.js',
+  odometer_readings: 'src/services/labelsEverywhere.js'
+};
+const afterWriteSource = fs.readFileSync('src/services/afterWrite.js', 'utf8');
+for (const [table, ownerFile] of Object.entries(DELIBERATELY_LEFT)) {
+  check(`${table} is documented as deliberately-left in afterWrite.js`, afterWriteSource.includes(table));
+  const offenders = RATCHET_FILES.filter((file) => fs.readFileSync(file, 'utf8')
+    .split('\n')
+    .some((line) => line.includes('markUserDataChanged') && line.includes(table)));
+  check(`${table} never rides a markUserDataChanged call`, offenders.length === 0, offenders);
+  check(`${table} is still written by ${ownerFile} (registry stays honest)`, fs.readFileSync(ownerFile, 'utf8').includes(`'${table}'`));
+}
+check('the deliberately-left list covers all 11 non-snapshot table families', Object.keys(DELIBERATELY_LEFT).length === 11);
+
+console.log('\n=== 8. C1 known limitation: ledger invalidates by actor phone only (v1.63.1) ===');
+// deleteLedgerEntry invalidates by actorPhone, not ownerId - cross-party
+// invalidation deferred and documented in section 177 (Known limitations).
+const ledgerSource = fs.readFileSync('src/services/entryLedger.js', 'utf8');
+const ledgerCalls = ledgerSource.split('\n').filter((line) => line.includes('markUserDataChanged({'));
+check('the three ledger calls pass the actor phone', ledgerCalls.length === 3 && ledgerCalls.every((line) => line.includes('phone: actorPhone')), ledgerCalls);
+check('the ledger calls never pass ownerId in the call itself (deferred, documented)', ledgerCalls.every((line) => !line.includes('ownerId')), ledgerCalls);
+
+console.log('\n=== 9. remaining sites: assign, unassign, sweep (behavioural, v1.63.1) ===');
+function makeChainMock(tableHooks = {}) {
+  const deletes = [];
+  const builder = (table) => {
+    const filters = [];
+    const api = {
+      select: () => api,
+      eq: (col, value) => { filters.push([col, value]); return api; },
+      neq: (col, value) => { filters.push(['neq', col, value]); return api; },
+      like: (col, value) => { filters.push(['like', col, value]); return api; },
+      ilike: (col, value) => { filters.push(['ilike', col, value]); return api; },
+      in: (col, values) => { filters.push([col, values]); return api; },
+      is: (col, value) => { filters.push([col, value]); return api; },
+      gte: () => api,
+      lte: () => api,
+      lt: () => api,
+      gt: () => api,
+      not: () => api,
+      or: () => api,
+      order: () => api,
+      limit: () => api,
+      insert: (rows) => {
+        const data = Array.isArray(rows) ? rows : [rows];
+        const chain = {
+          select: () => chain,
+          maybeSingle: async () => ({ data: data[0] || null, error: null }),
+          single: async () => ({ data: data[0] || null, error: null }),
+          then: (resolve, reject) => Promise.resolve({ data, error: null }).then(resolve, reject)
+        };
+        return chain;
+      },
+      update: () => {
+        const hook = tableHooks[table];
+        const chain = {
+          eq: (col, value) => { filters.push([col, value]); return chain; },
+          in: () => chain,
+          is: () => chain,
+          select: () => chain,
+          maybeSingle: async () => (hook?.maybeSingle ? hook.maybeSingle(filters) : { data: null, error: null }),
+          single: async () => (hook?.single ? hook.single(filters) : { data: null, error: null }),
+          then: (resolve, reject) => {
+            const result = hook?.single ? hook.single(filters) : { data: null, error: null };
+            return Promise.resolve(result).then(resolve, reject);
+          }
+        };
+        return chain;
+      },
+      delete: () => ({
+        eq: (col, value) => { deletes.push({ table, col, value }); return Promise.resolve({ error: null }); },
+        in: () => Promise.resolve({ error: null })
+      }),
+      then: (resolve, reject) => {
+        const hook = tableHooks[table];
+        const result = hook?.select ? hook.select(filters) : { data: [], error: null };
+        return Promise.resolve(result).then(resolve, reject);
+      },
+      maybeSingle: async () => {
+        const hook = tableHooks[table];
+        return hook?.maybeSingle ? hook.maybeSingle(filters) : { data: null, error: null };
+      },
+      single: async () => {
+        const hook = tableHooks[table];
+        return hook?.single ? hook.single(filters) : { data: null, error: null };
+      }
+    };
+    return api;
+  };
+  const client = { from: (table) => builder(table), storage: { from: () => ({ remove: async () => ({ error: null }) }) } };
+  return { client, deletes };
+}
+
+const assignMock = makeChainMock({
+  vehicles: {
+    maybeSingle: async (filters) => {
+      const isTargetFetch = filters.some(([col, value]) => col === 'id' && value === 'veh-9');
+      return { data: isTargetFetch
+        ? { id: 'veh-9', owner_id: 'owner-9', assigned_driver_id: null, plate_number: 'KDN 001A', status: 'ACTIVE' }
+        : null, error: null };
+    },
+    single: async () => ({ data: { id: 'veh-9', owner_id: 'owner-9', assigned_driver_id: 'drv-7', plate_number: 'KDN 001A' }, error: null })
+  }
+});
+const assigned = await assignDriverToVehicle({ vehicleId: 'veh-9', driverId: 'drv-7', supabase: assignMock.client });
+check('assignDriverToVehicle succeeds against the chain mock', assigned.success === true, assigned);
+check('assignDriverToVehicle invalidates the owner cache by owner_id', assignMock.deletes.some((d) => d.table === 'user_context_cache' && d.col === 'owner_id' && d.value === 'owner-9'), assignMock.deletes);
+
+const unassignMock = makeChainMock({
+  vehicles: {
+    maybeSingle: async () => ({ data: { id: 'veh-9', owner_id: 'owner-9', assigned_driver_id: 'drv-7', plate_number: 'KDN 001A', metadata: {} }, error: null }),
+    single: async () => ({ data: { id: 'veh-9', owner_id: 'owner-9', assigned_driver_id: null, plate_number: 'KDN 001A' }, error: null })
+  }
+});
+const unassigned = await unassignDriverFromVehicle({ vehicleId: 'veh-9', supabase: unassignMock.client });
+check('unassignDriverFromVehicle succeeds against the chain mock', unassigned.success === true, unassigned);
+check('unassignDriverFromVehicle invalidates the owner cache by owner_id', unassignMock.deletes.some((d) => d.table === 'user_context_cache' && d.col === 'owner_id' && d.value === 'owner-9'), unassignMock.deletes);
+
+const sweepMock = makeChainMock({
+  reminders: {
+    select: (filters) => (filters.some(([col]) => col === 'threshold_unit')
+      ? { data: [{ id: 'rem-1', vehicle_id: 'veh-1', status: 'active', threshold_unit: 'distance', target_value: 50000, last_service_value: 40000 }], error: null }
+      : { data: [], error: null })
+  },
+  vehicles: {
+    select: (filters) => {
+      const all = [
+        { id: 'veh-1', owner_id: 'owner-a', assigned_driver_id: 'driver-b', plate_number: 'KDA 111A', current_mileage: 40000 },
+        { id: 'veh-2', owner_id: 'owner-c', assigned_driver_id: null, plate_number: 'KDA 222B', current_mileage: 20000 }
+      ];
+      const idFilter = filters.find(([col]) => col === 'id');
+      return { data: idFilter ? all.filter((v) => idFilter[1].includes(v.id)) : all, error: null };
+    }
+  }
+});
+const swept = await runReminderSweep({ supabase: sweepMock.client });
+const sweepDeletes = sweepMock.deletes.filter((d) => d.table === 'user_context_cache');
+check('runReminderSweep runs clean against the chain mock', swept.ok === true, swept);
+check('the sweep invalidates once per distinct swept profile (2), not once per sweep', sweepDeletes.length === 2 && new Set(sweepDeletes.map((d) => d.value)).size === 2, sweepDeletes);
+check('the sweep covers the owner and the assigned driver', sweepDeletes.some((d) => d.value === 'owner-a') && sweepDeletes.some((d) => d.value === 'driver-b'), sweepDeletes);
 
 console.log('');
 console.log(`${pass} passed, ${fail} failed`);

@@ -36,6 +36,7 @@ function createMockSupabase(initial = {}) {
   };
   const inserts = [];
   const updates = [];
+  const deletes = [];
 
   function makeBuilder(table) {
     const filters = [];
@@ -49,6 +50,9 @@ function createMockSupabase(initial = {}) {
       limit(n) { limitN = n; return builder; },
       insert(rows) { insertRows = rows; return builder; },
       update(p) { patch = p; return builder; },
+      delete() {
+        return { eq: (col, val) => { deletes.push({ table, col, val }); return Promise.resolve({ error: null }); } };
+      },
       then(resolve, reject) {
         try {
           if (insertRows) {
@@ -83,7 +87,8 @@ function createMockSupabase(initial = {}) {
     client: { from: (table) => makeBuilder(table) },
     tables,
     inserts,
-    updates
+    updates,
+    deletes
   };
 }
 
@@ -275,6 +280,11 @@ async function run() {
     'Owner/driver phones are deduped and canDeliver guards delivery');
   check(mock6.tables.reminders[0].remaining_value === 3000, 'Sweep persists remaining distance');
   check(mock6.tables.reminders[1].remaining_value === 20, 'Sweep persists remaining operating hours');
+  check(mock6.deletes.some((d) => d.table === 'user_context_cache' && d.col === 'owner_id' && d.val === 'p1'), 'the reminder sweep invalidates the owner cache (v1.63.1)');
+  check(mock6.deletes.some((d) => d.table === 'user_context_cache' && d.col === 'owner_id' && d.val === 'p2'), 'the reminder sweep invalidates the assigned driver cache too (v1.63.1)');
+  const thresholdInvMock = createMockSupabase({ reminders: [] });
+  await createThresholdReminder({ supabase: thresholdInvMock.client, vehicle: { id: 'veh-inv', owner_id: 'owner-inv' }, spec: parseThresholdSpec('oil change in 5000 km') });
+  check(thresholdInvMock.deletes.some((d) => d.table === 'user_context_cache' && d.col === 'owner_id' && d.val === 'owner-inv'), 'createThresholdReminder invalidates the owner cache (v1.63.1)');
 
   console.log('\n--- Test 7: imperial reminders display miles ---');
   const imperialReminder = {

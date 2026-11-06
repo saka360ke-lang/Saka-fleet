@@ -48,6 +48,7 @@ function matches(row, filters) {
 
 function createMockSupabase(seed = {}) {
   const tables = {};
+  const deletes = [];
   for (const [table, rows] of Object.entries(seed)) tables[table] = rows.map((row) => ({ ...row }));
 
   function ensure(table) {
@@ -67,6 +68,9 @@ function createMockSupabase(seed = {}) {
       limit(n) { limitN = n; return builder; },
       insert(rows) { insertRows = rows; return builder; },
       update(p) { patch = p; return builder; },
+      delete() {
+        return { eq: (col, val) => { deletes.push({ table, col, val }); return Promise.resolve({ error: null }); } };
+      },
       then(resolve) {
         const rows = ensure(table);
         if (insertRows) {
@@ -87,7 +91,7 @@ function createMockSupabase(seed = {}) {
     return builder;
   }
 
-  return { tables, client: { from: (table) => makeBuilder(table) } };
+  return { tables, deletes, client: { from: (table) => makeBuilder(table) } };
 }
 
 function expiryRow(overrides = {}) {
@@ -159,6 +163,7 @@ async function run() {
   check(firstCreate.ok && linkedMock.tables.reminders.length === 1, 'Linked insurance expiry creates exactly one reminder');
   check(linkedMock.tables.reminders[0].due_at === '2026-11-20T09:00:00.000Z', 'Expiry reminder stores the canonical due_at timestamp');
   check(linkedMock.tables.vehicles[0].insurance_expiry === '2026-11-20', 'Linked vehicle insurance column is kept in sync');
+  check(linkedMock.deletes.some((d) => d.table === 'user_context_cache' && d.col === 'owner_id' && d.val === 'p1'), 'createExpiryReminder invalidates the owner cache (v1.63.1)');
 
   await evaluateExpiryReminders({ supabase: linkedMock.client, sendFn: async () => {}, now });
   check(linkedMock.tables.reminders[0].notified_30d === true, 'First sweep flags the 30-day tier');

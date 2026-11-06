@@ -100,12 +100,12 @@ check(indexSrc.includes("'deploy_live'") && indexSrc.includes('sendWhatsAppTempl
 check(KINDS.every((kind) => PROACTIVE_TEMPLATE_ENV_KEYS.includes(PROACTIVE_TEMPLATE_KINDS[kind].env)), 'every kind is reachable through the registry env contract');
 
 console.log('--- 8. Phase-1 completion kinds (v1.63.1, 2B) ---');
-check(PROACTIVE_TEMPLATE_KINDS.driver_activity.variables.join(',') === 'plate,driver', 'driver_activity takes plate + driver name');
+check(PROACTIVE_TEMPLATE_KINDS.driver_activity.variables.join(',') === 'driver,plate', 'driver_activity takes driver name + plate (sequential placeholders)');
 check(PROACTIVE_TEMPLATE_KINDS.fleet_auto_audit.variables.join(',') === 'net', 'fleet_auto_audit takes the net figure');
 check(resolveProactiveMode({ kind: 'driver_activity', templateVars: { plate: 'KDA 123A', driver: 'Jane' } }).mode === 'text', 'driver_activity with the knob unset falls back to today\'s free-form text');
 process.env.META_TPL_DRIVER_ACTIVITY = 'saka_driver_activity';
 const driverRouted = resolveProactiveMode({ kind: 'driver_activity', templateVars: { plate: 'KDA 123A', driver: 'Jane' } });
-check(driverRouted.mode === 'template' && driverRouted.templateName === 'saka_driver_activity' && driverRouted.variables.map((v) => v.text).join('|') === 'KDA 123A|Jane', 'a configured driver_activity knob routes to the template sender with ordered variables');
+check(driverRouted.mode === 'template' && driverRouted.templateName === 'saka_driver_activity' && driverRouted.variables.map((v) => v.text).join('|') === 'Jane|KDA 123A', 'a configured driver_activity knob routes to the template sender with ordered variables');
 delete process.env.META_TPL_DRIVER_ACTIVITY;
 check(resolveProactiveMode({ kind: 'fleet_auto_audit', templateVars: { net: 'KES 4,250' } }).mode === 'text', 'fleet_auto_audit with the knob unset falls back to today\'s free-form text');
 process.env.META_TPL_FLEET_AUTO_AUDIT = 'saka_fleet_auto_audit';

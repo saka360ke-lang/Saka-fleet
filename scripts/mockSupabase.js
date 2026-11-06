@@ -15,7 +15,7 @@ export function createMockSupabase(seed = {}, options = {}) {
   for (const [table, rows] of Object.entries(seed)) {
     db[table] = rows.map((row) => ({ ...row }));
   }
-  const state = { inserts: [], updates: [], calls: 0 };
+  const state = { inserts: [], updates: [], deletes: [], calls: 0 };
 
   const tableRows = (table) => {
     if (!db[table]) db[table] = [];
@@ -66,6 +66,12 @@ export function createMockSupabase(seed = {}, options = {}) {
       update(patch) {
         query.action = 'update';
         query.payload = patch;
+        return api;
+      },
+      // v1.63.1 (2C) — delete support so context-cache invalidation is spyable.
+      delete(options = {}) {
+        query.action = 'delete';
+        query.counting = Boolean(options.count);
         return api;
       },
       eq(column, value) { query.filters.push(['eq', column, value]); return api; },
@@ -128,6 +134,23 @@ export function createMockSupabase(seed = {}, options = {}) {
         state.updates.push({ table, patch: query.payload, rows: patched });
         if (kind === 'maybeSingle' || kind === 'single') return { data: patched[0] || null, error: null };
         return { data: patched, error: null, count: patched.length };
+      }
+
+      if (query.action === 'delete') {
+        // v1.63.1 (2C) — deterministic delete + recorder (user_context_cache spy).
+        const doomed = new Set(selected);
+        const removed = selected.length;
+        db[table] = rows.filter((row) => !doomed.has(row));
+        const eqFilter = query.filters.find(([op]) => op === 'eq') || null;
+        state.deletes.push({
+          table,
+          col: eqFilter ? eqFilter[1] : null,
+          value: eqFilter ? eqFilter[2] : null,
+          filters: query.filters.map(([op, col, value]) => ({ op, col, value })),
+          removed
+        });
+        if (query.head || query.counting) return { data: null, error: null, count: removed };
+        return { data: null, error: null, count: removed };
       }
 
       if (query.orderBy) {

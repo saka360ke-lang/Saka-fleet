@@ -18,6 +18,9 @@
  *   admin_audit_logs                  (audit trail)
  *   usage_counters                    (report quota — read live by getEntitlements)
  *   vin_registry                      (provenance ledger, rule 29)
+ *   driver_assignments status bookkeeping (create/cancel/expire) — the vehicle
+ *   link changes are covered at the accept/cancel sites
+ *   odometer_readings                 (labelled readings; vehicles carry the fact)
  */
 import { invalidateUserContext } from './userContextCache.js';
 
