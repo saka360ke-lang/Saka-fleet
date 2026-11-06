@@ -12,4 +12,6 @@ export * from './webhook.js';
 export * from './messages.js';
 export * from './helpers.js';
 export * from './replies.js';
+export * from './media.js';
+export * from './hooks.js';
 

@@ -1,6 +1,13 @@
 {
-  "latest": "1.66.0",
+  "latest": "1.67.0",
   "entries": [
+    {
+      "version": "1.67.0",
+      "date": "2026-11-07",
+      "title": "A tidier intake desk and a steadier rhythm",
+      "preview": "Saka's photo intake and per-turn habits now live in their own tidy files - same answers, same speed, unchanged.",
+      "summary": "Two more of Saka's busy backstage jobs moved into their own clear files. The first is the documents desk: reading every photo and PDF you send, checking for duplicates, storing receipts and pre-filling registration forms. The second is the steady per-turn rhythm: keeping the conversation's memory, saving the transcript, queuing slow reports and timing each reply. A written rule now keeps these files leaf modules - they hand data back and never reach into the main conversation file - while every send, menu and question stays exactly where it was. Nothing you see changes: proven by comparing 179 moved code lines against the previous release (97 percent identical, the four differences are wiring-only) and the full quality suite."
+    },
     {
       "version": "1.66.0",
       "date": "2026-11-06",

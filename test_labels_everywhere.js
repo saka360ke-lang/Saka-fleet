@@ -96,7 +96,7 @@ check(quiz.includes('label: reminderLabel') && quiz.includes('const reminderLabe
 check(quiz.includes("field('notes', 'Note or part name', 'optional — e.g. brake pads, or tag it: label: karen run'"), 'the note step teaches the label syntax');
 const receipts = fs.readFileSync('src/services/receipts.js', 'utf8');
 check(receipts.includes('label: sanitizeEntryLabel(label)') && receipts.includes('labelChip'), 'receipts store and display the label');
-const whatsapp = fs.readFileSync('src/routes/whatsapp/messages.js', 'utf8');
+const whatsapp = fs.readFileSync('src/routes/whatsapp/media.js', 'utf8');
 check(whatsapp.includes('label: extractEntryLabel(messageText)'), 'the OCR lane captures the label from the caption');
 const readRegistry = fs.readFileSync('src/services/readCommands.js', 'utf8');
 check(readRegistry.includes('searchOtherLabels(') && readRegistry.includes('formatOtherLabelMatches('), 'keyword search spans receipts/reminders/readings (read registry)');

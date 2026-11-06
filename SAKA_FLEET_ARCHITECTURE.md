@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.66.0  
+**Version:** 1.67.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.67.0** | whatsapp split Phase 5B-2: the media/OCR intake lane moves verbatim to `src/routes/whatsapp/media.js` (M1-M14: envelope, gate, ack-first, OCR run, text assembly, kind/confidence, ocr_requests telemetry, Document Lens, semantic top-up, receipt dedupe/vault, logbook prefill) and the per-turn hooks to `hooks.js` (H1-H14: snapshot persist/load, pending hydration, transcript+chat logging, context cache, re-engagement, follow-up queue, turn-latency telemetry); the route-module boundary contract is formalized in section 189 (leaf modules import services + workers/sentinel only, never messages.js); messages.js drops 136 non-empty lines (4,402 -> 4,266; media.js 337 + hooks.js 162), the barrel resolves 46 public symbols (was 26), 179 moved statement lines with 174 exact + 4 sanctioned interface deltas, one source-pin repoint (test_labels_everywhere) and the no-canned-replies ratchet now scans both files | 189 |
 | **1.66.0** | whatsapp split Phase 5B-1: the 10 pure helpers + the 2 subscription parsers move verbatim to `src/routes/whatsapp/helpers.js` and the Meta sender to `replies.js`; messages.js drops 285 lines (4,876 -> 4,591), the barrel resolves 26 public symbols (was 23), `renderRoleActions` deliberately stays (AI-backed); 294 moved lines byte-identical across 8 blocks, all 15 source-pin suites zero edits (every pin is in the processor body) | 188 |
 | **1.65.0** | whatsapp.js split Phase 5A: the webhook (GET verification + POST HMAC + wamid dedupe + instant 200 ACK + per-phone enqueue) moves to `src/routes/whatsapp/webhook.js` and the processor to `messages.js`; a barrel `index.js` re-exports all 23 public symbols and `whatsapp.js` becomes a one-line shim, so every importer works unchanged - verbatim block proof (4,950 lines byte-identical), 15 source-pin suites repointed (paths only), zero behavioural test edits | 187 |
 | **1.64.0** | Unified session.pending (Phase 4): 13 independent pending* session fields become ONE `{ kind, data, at }` object with one `PENDING_KINDS` registry + `resolvePendingTurn()` + a migration-on-read shim (legacy fields become non-enumerable accessors, so `whatsapp.js` branches stay byte-identical); today's per-kind truth table preserved, proven by a 434-assertion harness including a 300-turn differential replay; 2 PROPs minted (uniform fresh-log override, driver-assignment cancel) | 186 |
@@ -5219,4 +5220,52 @@ src/routes/
 
 **Recurrence autopsy (rule 51).** *Defect class: a structural split can strand source-pinned guards, dead imports and export surfaces.* Sibling sweep: every `fs.readFileSync` reader of the moved symbols (15 suites — 0 needed edits, every pin located in the retained processor), the two dead-import candidates found by grep and removed (`detectCountryGlobal` alias, `isDeliveryBlocked`), the barrel surface (26 symbols, 0 collisions), and the session maps that services/tests import through the shim (kept in messages.js). Rule 13: `flowKnowledge.js` / `sakaAi.js` / `conversationEngine.js` untouched — pure structural move, no intent/flow/copy change.
 
+
+
+### 189. v1.67.0 (5B-2/4) — whatsapp split: media + hooks extracted (boundary contract formalized) (2026-11-07)
+
+**Why.** Phase 5B-1 (section 188) moved the pure helpers and the Meta transport out of the processor. Phase 5B-2 extracts the two remaining structural families so 5B-3 (reads + quiz + pending) works against a genuinely thin processor: the **media/OCR intake lane** (`src/routes/whatsapp/media.js`) and the **per-turn wrap-around hooks** (`src/routes/whatsapp/hooks.js`). Not one behaviour line changes.
+
+**A. The media lane (media.js, 337 lines, M1-M14).** A one-way leaf module: `resolveMediaEnvelope` (M1), `resolveMediaGate` (M3, the unverified-number gate read), `prepareMediaAck` (M4+M5, the OCR-paused + ack-first decision), `startMediaOcr` (M6, the OCR promise + start stamp so the processor still overlaps it with hydration), `finalizeMediaOcr` (M7-M12: text assembly incl. the unreadable-media system note, kind classification, confidence flag, the `ocr_requests` telemetry row written BEFORE the crash-prone lens, the Document Lens parse and the semantic top-up), `resolveReceiptVault` (M13+M14: media-id/text-hash dedupe, paid-tier vault upload, the `receipts` row incl. its label, and the logbook prefill). Two exported literal constants carry the voice-note line and the unverified-media line; everything else is data.
+
+**B. The hooks (hooks.js, 162 lines, H1-H14).** A one-way leaf module: `persistTurnSnapshot` (H1), `loadTurnSnapshot` (H4), `logUserTurn` (H6), `finalizeAssistantTurn` (H13), `logTurnPairSequential` + `logAssistantTranscript` (H14 — the lane transcript shapes, including transcript-only progress acks which never wrote chat_history), `hydrateTurnSession` (H7), `loadUserFactsContext` (H8, context cache), `loadReengagementContext` (H9), `queueReportFollowUp` (H10) and `recordTurnLatency` (H11+H12 — phase breakdown on the success path, a bare row on the catch path). Decision (a) from the approved 5B-2 plan is adopted: hooks.js imports `logChatTranscript` from `src/workers/sentinel.js`; sentinel imports no route modules, so no cycle is possible.
+
+**C. Processor wiring (messages.js).** Identical call positions to v1.66.0: gate -> ack-send -> `Promise.all([startMediaOcr, loadTurnSnapshot])` -> `finalizeMediaOcr` -> snapshot restore -> `logUserTurn` -> care/superadmin intercepts -> `hydrateTurnSession` -> profile/entitlements/vehicles/history -> `loadUserFactsContext` -> bucket context -> `resolveReceiptVault` (it needs entitlements, so it runs exactly where the old vault block ran) -> reads/quiz -> final `recordTurnLatency` + `finalizeAssistantTurn` + `persistSnap`. The session maps (`chatSessions`, `onboardingStore`) stay in messages.js; hooks receive their values. `messages.js` drops 136 non-empty lines (4,402 -> 4,266 by the line measure used for this release; media.js + hooks.js together carry 499).
+
+**D. Boundary contract (permanent).** Phase 5B-2 establishes the route module boundary: media.js and hooks.js are leaf modules that may import from src/services/* and src/workers/sentinel.js, but never from messages.js. They take state as arguments and return data. Any future addition to either module must obey this rule — if a new function needs to call back into the processor, it does not belong in these modules.
+
+**E. Dependency graph (verbatim from the approved 5B-2 plan).**
+
+```
+services/* (+ workers/sentinel.js for logChatTranscript — decision (a))
+     ▲
+     ├── media.js  ──► ./helpers.js (detectCountryFromPhone), services/{ocrService, documentLens, ocrSemantic,
+     │                       ocrTelemetry, receipts, entryLabels, superadmin}
+     ├── hooks.js  ──► services/{userContextCache, chatHistory, sessionStore, pendingState, turnLatency, followups}
+     │
+     ├── messages.js ──► ./helpers.js, ./replies.js, ./media.js, ./hooks.js, services/*, workers/sentinel.js
+     │        ▲
+     ├── webhook.js ──► ./messages.js
+     │
+     └── index.js (barrel): export * from {webhook, messages, helpers, replies, media, hooks}   ← +2 lines
+              ▲
+        src/routes/whatsapp.js (shim) ──► src/services/onboarding.js (maps resolve unchanged)
+```
+
+Cycle check: media.js → helpers.js → services only (no path back to messages.js); hooks.js → services + sentinel (sentinel's import list is supabase/aiClient/conversationEngine/services only — no routes); messages.js → media/hooks one-way; webhook → messages; the barrel re-exports only. **No cycle exists.** The barrel resolves **46 public symbols** (was 26; +9 media +11 hooks), 0 collisions. `src/services/onboarding.js:2` still imports `onboardingStore`/`chatSessions` through the shim because the maps stay in messages.js.
+
+**F. What is NOT moving — the boundary contract proof (verbatim from the approved 5B-2 audit; line numbers are v1.66.0).**
+
+**Stays in the processor** (consumers of media.js's returned state — quiz orchestration, final-reply phase):
+- `duplicateReceipt` intent short-circuit 1136–1141; `receiptHints` → `mergedExt` merge 1159–1165; `isReceiptDocument` + `receiptQuizStart` 1839–1844; `handleQuizTurn({ startFlow: forcedNarrativeFlow || receiptQuizStart, aiExtracted: narrativeExt })` 2118–2127; logbook quiz start + "I read these…" card 2107–2144; upload hints (`uploadHintFor`) 3846–3862; duplicate-receipt confirmation card (`composeMessage purpose:'receipt_duplicate'` + `formatDuplicateReceiptReply`) 3864–3883; `OCR_LOW_CONFIDENCE_NOTE` 3882; OCR recovery ladder (`OCR_UNREADABLE_NOTE`) 3963–3980; compliance-capture lane (`isUnreadableMediaNote/isPhotoIntent/extractFromPastedDocument/detectDocumentTypeCorrection`) 1592–1631; receipts list/delete lane 1067–1088; `isDuplicateExpense` quick-log guard 2957.
+
+**G. Byte-verbatim proof.** Eighteen moved blocks compared against `HEAD:src/routes/whatsapp/messages.js` (v1.66.0; LF-normalized, leading whitespace trimmed because an inline block becomes a function body — the only structural delta). **179 moved statement lines, 174 exact (97%)**; the only four deltas are sanctioned interface threading: H4 `const hydrationPromise = supabaseClient` → `return supabaseClient`; H6 `userLogPromise = Promise.all([` → `return Promise.all([`; H8 `forceRefresh: dbHistory.length === 0,` → `forceRefresh,` (the caller computes it); H13 `finalReply` → `text` (parameterized). Zero content edits inside every moved region; the two exported literals (`VOICE_NOTE_REPLY`, `UNVERIFIED_MEDIA_REPLY`), `const startedAt = Date.now();` and `ackText = buildMediaAckText(...)` are boundary declarations outside the moved statement lines.
+
+**H. Source pins and the ratchet.** Exactly ONE source-pin repoint: `test_labels_everywhere.js:99-100` now reads `src/routes/whatsapp/media.js` (the pinned string is unchanged: `label: extractEntryLabel(messageText)`). Every other pin stays in the processor by design: the status literals `voice_note_fallback` and `unverified_gated_media` remain in messages.js early returns (test_conv_eval, test_web_onboarding); the silent-crash guards (`let session = null`, `session?.slowAckSent === true`, `logSystemError(...'/webhook/whatsapp')`) remain in the catch/final blocks (test_ocr_flow). `test_user_context_cache`'s "still written by messages.js" pins keep passing (the save-only chat_history writes and the circuit-breaker raw inserts stay), and the 42-call/12-file `markUserDataChanged` baseline is untouched — media.js/hooks.js add zero calls. `test_no_canned_replies.js` now scans BOTH messages.js and media.js (the ratchet follows the user-facing strings): **4 canned literals remain (ratchet ≤ 4, the whitelisted 📖 reading ack)** and a new assertion proves media.js contributes ZERO direct replies (`customReply`/`finalReply` assignments and `sendWhatsAppReply(` are absent).
+
+**Frames touched:** `src/routes/whatsapp/media.js` (new, 337 lines), `src/routes/whatsapp/hooks.js` (new, 162 lines), `src/routes/whatsapp/messages.js` (4,402 -> 4,266), `src/routes/whatsapp/index.js` (+2 export lines), `test_labels_everywhere.js` (one path repoint), `test_no_canned_replies.js` (dual-file scan + leaf assertion), `package.json`, `landing/data/changelog.json` (+ stamped assets), `docs/` (generated), `SAKA_FLEET_ARCHITECTURE.md` (section 189, version + history), `CHANGELOG.md`.
+
+**Suites run:** test_asset_type_check (39), test_conversation_compliance (29), test_conv_eval (203), test_coupon_integrity (30), test_customer_care (18), test_deep_audit (28), test_driver_compliance_answers (64), test_feature_notice (25), test_first_message_flow (57), test_labels_everywhere (22), test_no_canned_replies (3 assertions / 4 literals), test_ocr_flow (122), test_pending_state (434), test_user_context_cache (136), test_web_onboarding (64), test_greetings (110), test_first_time_flow, test_new_features, test_doc_sync (30) — green before and after. Two stateful live suites (test_first_message_flow, test_new_features) failed once mid-batch on external state (an Anthropic credit-balance 400 was logged; a live-DB row read raced), then passed individually and in the clean batch re-run — not refactor-caused. `npm run eval:conv -- --exclude-calibration`: 23/23 signal cases, 0.0% real-fail, 12/12 calibration held (exit 0). `npm run health` green before and after.
+
+**Recurrence autopsy (rule 51).** *Defect class 1 — a split can strand a user-facing literal outside the ratchet:* the media lane carries deterministic copy (voice note, unverified gate) that a messages.js-only lint would stop seeing; sibling sweep = every source-reading lint (test_no_canned_replies now scans both files and asserts the leaf module owns zero replies; test_conversation_compliance still counts ≥25 fallbacks, all in the processor). *Defect class 2 — parameter threading can silently change telemetry:* the catch-path latency row must stay bare (no phase_ms); `recordTurnLatency` adds `phaseMs` only when markers are passed, and the catch call passes none. *Defect class 3 — a repair edit can drop a live import:* the `isDuplicateExpense` import was dropped and restored inside this session before any suite ran; the final grep sweep confirms zero dangling names for every moved symbol and every remaining consumer still imports what it uses. Rule 13: `flowKnowledge.js` / `sakaAi.js` / `conversationEngine.js` untouched — pure structural move, no intent/flow/copy change.
 

@@ -12,7 +12,7 @@
 import crypto from 'crypto';
 import { handleSuperadminFlow, isSuperadminPhone } from '../../services/superadmin.js';
 import { processSakaMessage, extractVehicleAttributes, classifyIntentWithRegex } from '../../../sakaAi.js';
-import { logChatTranscript, logSystemError } from '../../workers/sentinel.js';
+import { logSystemError } from '../../workers/sentinel.js';
 import { verifyPaystackSignature, formatUsdInLocalCurrency } from '../../services/paystack.js';
 import {
   ensureVehicleTableColumns,
@@ -84,8 +84,7 @@ import { sanitizeEntryLabel, extractEntryLabel } from '../../services/entryLabel
 import { markUserDataChanged } from '../../services/afterWrite.js';
 import { parseVehicleComplianceParagraph, submitVehicleCompliance, resolveVehicleComplianceCatalog } from '../../services/vehicleCompliance.js';
 import { handleStage1CoreCapture, handleStage2OptionalWeaving } from '../../services/onboarding.js';
-import { saveChatMessage, getRecentChatHistory, getReengagementContext, CHAT_HISTORY_MAX_MESSAGES } from '../../services/chatHistory.js';
-import { getUserContextCache, formatUserFactsBlock } from '../../services/userContextCache.js';
+import { saveChatMessage, getRecentChatHistory, CHAT_HISTORY_MAX_MESSAGES } from '../../services/chatHistory.js';
 import { sendEmailOtp, sendSupportEscalationEmail, sendMfaEmail, sendCareReplyEmail } from '../../services/mailer.js';
 import { handleCareRequest, escalateCareToSuperadmin } from '../../services/customerCare.js';
 import { handleCareCommand } from '../../services/careConsole.js';
@@ -127,12 +126,8 @@ import { handleQuizTurn, detectQuizStart, shouldPauseQuizForChat, getCurrentQuiz
 import { matchNarrativeVehicle, buildNarrativeDraft, narrativeDraftFields, narrativeDraftExtras, shouldPrefillNarrativeDraft, isNarrativeIntakeEnabled, isNarrativeEligibleText, buildNarrativeParagraphDrafts, renderNarrativeBatchCard, resolveNarrativeBatchTurn, describeNarrativeDraft } from '../../services/narrativeDraft.js';
 import { recordFriction } from '../../services/frictionTracker.js';
 import { renderActionDiscovery, composeMessage } from '../../services/conversationEngine.js';
-import { enqueueFollowUp, FOLLOWUP_KINDS, followUpAckText } from '../../services/followups.js';
-import { loadSessionSnapshot, persistSessionSnapshot } from '../../services/sessionStore.js';
-import { hydrateSessionPending } from '../../services/pendingState.js';
-import { ocrWhatsAppMedia, extractDocumentHints, isOcrEnabled, isOcrAckFirstEnabled, buildMediaAckText, classifyOcrDocument } from '../../services/ocrService.js';
-import { parseDocumentFields, uploadHintFor } from '../../services/documentLens.js';
-import { semanticOcrTopUp } from '../../services/ocrSemantic.js';
+import { followUpAckText } from '../../services/followups.js';
+import { uploadHintFor } from '../../services/documentLens.js';
 import {
   normalizeAssetKind,
   getCountryBucket,
@@ -140,20 +135,13 @@ import {
   resolveCountryInput
 } from '../../services/countryBucket.js';
 import {
-  findReceiptByMediaId,
-  findRecentReceiptByTextSha,
-  recordReceipt,
-  uploadReceiptImage,
   listReceipts,
   deleteReceipt,
   formatDuplicateReceiptReply,
-  OCR_CONFIRM_THRESHOLD,
   OCR_LOW_CONFIDENCE_NOTE,
   OCR_UNREADABLE_NOTE
 } from '../../services/receipts.js';
-import { recordOcrRequest, buildOcrTextSha } from '../../services/ocrTelemetry.js';
 import { isDuplicateExpense } from '../../services/expenseGuard.js';
-import { logTurnLatency } from '../../services/turnLatency.js';
 import { resolveReadCommand, inspectRecordQuestion, isVehicleSummaryCommand } from '../../services/readCommands.js';
 // v1.66.0 — Phase 5B-1 module split: pure helpers + the outbound Meta sender.
 import {
@@ -169,6 +157,30 @@ import {
   parseIntervalFromMessage
 } from './helpers.js';
 import { sendWhatsAppReply } from './replies.js';
+// v1.67.0 — Phase 5B-2 module split: the media intake lane + the per-turn hooks.
+import {
+  VOICE_NOTE_REPLY,
+  VOICE_NOTE_USER_TEXT,
+  resolveMediaEnvelope,
+  resolveMediaGate,
+  prepareMediaAck,
+  startMediaOcr,
+  finalizeMediaOcr,
+  resolveReceiptVault
+} from './media.js';
+import {
+  persistTurnSnapshot,
+  loadTurnSnapshot,
+  logUserTurn,
+  finalizeAssistantTurn,
+  logTurnPairSequential,
+  logAssistantTranscript,
+  hydrateTurnSession,
+  loadUserFactsContext,
+  loadReengagementContext,
+  queueReportFollowUp,
+  recordTurnLatency
+} from './hooks.js';
 
 export const onboardingStore = new Map();
 export const chatSessions = new Map();
@@ -189,15 +201,13 @@ export async function renderRoleActions({ profileData, vehicles, senderPhone, la
 export async function processIncomingWhatsAppMessage({ messageObj, fastify, supabaseClient }) {
   const sessionPhone = messageObj?.from || '';
   const formattedPhoneForSession = sessionPhone.startsWith('+') ? sessionPhone : `+${sessionPhone.replace(/[^\d]/g, '')}`;
-  const persistSnap = async () => {
-    if (!supabaseClient || !sessionPhone) return;
-    try {
-      await persistSessionSnapshot(supabaseClient, formattedPhoneForSession, {
-        session: chatSessions.get(sessionPhone) || null,
-        onboarding: onboardingStore.get(sessionPhone) || null
-      });
-    } catch {}
-  };
+  const persistSnap = async () => persistTurnSnapshot({
+    supabaseClient,
+    sessionPhone,
+    formattedPhoneForSession,
+    session: chatSessions.get(sessionPhone) || null,
+    onboarding: onboardingStore.get(sessionPhone) || null
+  });
   // Overlaps the two user-log writes with AI processing; awaited before the
   // assistant log so transcript ordering stays correct.
   let userLogPromise = Promise.resolve();
@@ -223,25 +233,20 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
     // --- MEDIA / OCR INGESTION (parallel with durable session hydration) ------
     // WhatsApp photos and documents carry no `.text`. Download them from Meta,
     // OCR with Google Cloud Vision, and treat the extracted text as the turn.
-    const imageObj = messageObj.image || null;
-    const documentObj = messageObj.document || null;
-    const audioObj = messageObj.audio || null;
-    const mediaObj = imageObj || documentObj;
-    const mediaCaption = (imageObj?.caption || documentObj?.caption || '').trim();
-    const mediaMimeType = imageObj?.mime_type || documentObj?.mime_type || null;
+    // v1.67.0 — Phase 5B-2: the intake lane lives in ./media.js (state in, data out).
+    const envelope = resolveMediaEnvelope(messageObj);
+    const { mediaObj, mediaCaption, mediaMimeType } = envelope;
 
     // v1.61.15 — voice notes carry no text and no OCR path. Answer them
     // deterministically (zero tokens, zero menu wall) instead of letting an
     // empty turn fall through to the generic help menu. The transcript keeps a
     // durable marker so eval/digest can see these turns.
-    if (audioObj && !messageObj.text?.body) {
-      const voiceReply = '🎙️ I can\'t listen to voice notes yet — type it in and I\'ll take it from there.';
+    if (envelope.isVoiceNote) {
+      const voiceReply = VOICE_NOTE_REPLY;
       try {
-        await logChatTranscript(supabaseClient, senderPhone, 'user', '[voice note]');
-        await saveChatMessage(supabaseClient, senderPhone, 'user', '[voice note]');
+        await logTurnPairSequential(supabaseClient, senderPhone, 'user', VOICE_NOTE_USER_TEXT);
         await sendWhatsAppReply(senderPhone, voiceReply);
-        await logChatTranscript(supabaseClient, senderPhone, 'assistant', voiceReply);
-        await saveChatMessage(supabaseClient, senderPhone, 'assistant', voiceReply);
+        await logTurnPairSequential(supabaseClient, senderPhone, 'assistant', voiceReply);
       } catch (err) {
         console.warn('[VoiceNote] fallback reply failed:', err?.message || 'unknown');
       }
@@ -250,20 +255,18 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
 
     // v1.51.6 — an unverified number never gets the OCR ack or runs Vision:
     // short-circuit to the website line BEFORE any media download/OCR.
-    if (mediaObj?.id && supabaseClient && !isSuperadminPhone(senderPhone)) {
-      const { data: earlyProfile } = await supabaseClient
-        .from('profiles')
-        .select('email_verified')
-        .eq('phone_number', formattedPhoneForSession)
-        .maybeSingle();
-      if (!earlyProfile || earlyProfile.email_verified !== true) {
-        const verifyReply = '🔒 Please sign up first at https://sakafleet.com — tap *Get Started Free* and verify your email, then I\'ll meet you right back here on WhatsApp.';
+    if (mediaObj?.id) {
+      const mediaGate = await resolveMediaGate({
+        supabaseClient,
+        formattedPhoneForSession,
+        isSuperadmin: isSuperadminPhone(senderPhone)
+      });
+      if (mediaGate) {
+        const verifyReply = mediaGate.replyText;
         try {
-          await logChatTranscript(supabaseClient, senderPhone, 'user', mediaCaption || '[document]');
-          await saveChatMessage(supabaseClient, senderPhone, 'user', mediaCaption || '[document]');
+          await logTurnPairSequential(supabaseClient, senderPhone, 'user', mediaCaption || '[document]');
           await sendWhatsAppReply(senderPhone, verifyReply);
-          await logChatTranscript(supabaseClient, senderPhone, 'assistant', verifyReply);
-          await saveChatMessage(supabaseClient, senderPhone, 'assistant', verifyReply);
+          await logTurnPairSequential(supabaseClient, senderPhone, 'assistant', verifyReply);
         } catch { /* best-effort */ }
         return { status: 'unverified_gated_media' };
       }
@@ -273,142 +276,47 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
     // immediately (deterministic, no AI) so the user never waits in silence
     // while the document is downloaded and read. The parsed result arrives as
     // the follow-up message.
-    const ocrPaused = Boolean(mediaObj?.id)
-      && !/pdf/i.test(String(mediaMimeType || ''))
-      && !isOcrEnabled();
-    if (mediaObj?.id && !ocrPaused && isOcrAckFirstEnabled()) {
+    const { ocrPaused, ackText: mediaAckText } = prepareMediaAck({ mediaObj, mediaMimeType });
+    if (mediaAckText) {
       try {
-        const ack = buildMediaAckText({ mimeType: mediaMimeType });
+        const ack = mediaAckText;
         await sendWhatsAppReply(senderPhone, ack);
         if (supabaseClient) {
-          await logChatTranscript(supabaseClient, senderPhone, 'assistant', ack);
-          await saveChatMessage(supabaseClient, senderPhone, 'assistant', ack);
+          await logTurnPairSequential(supabaseClient, senderPhone, 'assistant', ack);
         }
       } catch { /* the ack is best-effort; the turn still proceeds */ }
     }
 
     // OCR and session hydration are independent and side-effect free: run them
     // together so media turns do not pay two serial round trips.
-    const ocrPromise = mediaObj?.id
-      ? ocrWhatsAppMedia({
-          mediaId: mediaObj.id,
-          mimeType: mediaMimeType,
-          token: process.env.META_WHATSAPP_TOKEN
-        }).catch((err) => ({ text: '', error: err?.message || 'ocr_failed' }))
-      : Promise.resolve({ text: '', error: null });
-    const ocrStartedAt = Date.now();
+    const { ocrPromise, startedAt: ocrStartedAt } = startMediaOcr({ mediaObj, mediaMimeType });
 
     // Durable session hydration — restores quiz/onboarding/OTP state from
     // Supabase so any Cloud Run instance can continue the conversation.
-    const hydrationPromise = supabaseClient
-      ? loadSessionSnapshot(supabaseClient, formattedPhoneForSession).catch(() => null)
-      : Promise.resolve(null);
+    const hydrationPromise = loadTurnSnapshot(supabaseClient, formattedPhoneForSession);
 
     const [ocrResult, snapshot] = await Promise.all([ocrPromise, hydrationPromise]);
-    const ocrText = (ocrResult?.text || '').trim();
-    const ocrError = ocrResult?.error || null;
-    if (ocrError) console.warn('[OCR] Media could not be read:', ocrError);
-
-    const baseText = messageObj.text?.body || mediaCaption || '';
-    let messageText = baseText;
-    if (ocrText) {
-      messageText = `${baseText ? `${baseText}\n\n` : ''}${ocrText}`.slice(0, 4000);
-    } else if (mediaObj && !baseText) {
-      messageText = '[Saka system note: the user sent an image/document that could not be read by OCR. Apologize ONCE with 📸 and 🙏, never claim anything was saved, and offer a clearer photo or typed details (e.g. "Logged 40L at 50350 km for KES 5500 — full tank"). If it was a PDF scan without a text layer, ask them to send the pages as photos.]';
-    }
-
-    const ocrCountry = detectCountryFromPhone(formattedPhoneForSession);
-
-    // Safe, deterministic family classification (guarded; never throws) — used
-    // for the telemetry row so a crash in the richer Document Lens below can
-    // never make a media turn invisible.
-    let safeKind = 'unknown';
-    try { safeKind = ocrText ? classifyOcrDocument(ocrText) : 'unknown'; } catch { /* guarded */ }
-
-    const ocrLowConfidence = Boolean(
-      ocrText
-      && Number.isFinite(Number(ocrResult?.confidence))
-      && Number(ocrResult.confidence) > 0
-      && Number(ocrResult.confidence) < OCR_CONFIRM_THRESHOLD
-    );
-
-    // v1.32.1 — OCR request telemetry (Rule 36): one durable row per media turn,
-    // written BEFORE the crash-prone Document Lens parsing. A dead turn is now
-    // diagnosable and countable; country_code always comes from the WhatsApp
-    // number (E.164).
-    const ocrTextSha = buildOcrTextSha(ocrText);
-    if (mediaObj?.id) {
-      const ocrStatus = ocrPaused
-        ? 'paused'
-        : (ocrResult?.kind === 'pdf'
-          ? (ocrText ? 'pdf_text' : 'pdf_scanned')
-          : (ocrText ? (ocrLowConfidence ? 'low_confidence' : 'read') : 'failed'));
-      void recordOcrRequest(supabaseClient, {
-        mediaId: mediaObj.id,
-        phone: senderPhone,
-        countryCode: ocrCountry?.country_code || null,
-        mimeType: mediaMimeType,
-        provider: ocrResult?.kind === 'pdf' ? 'local_pdf' : 'google_vision',
-        documentKind: safeKind || null,
-        status: ocrStatus,
-        confidence: ocrResult?.confidence ?? null,
-        attempts: ocrResult?.attempts ?? null,
-        latencyMs: Math.max(0, Date.now() - ocrStartedAt),
-        error: ocrError || null
-      }).catch(() => {});
-    }
-
-    // v1.51.7 — Document Lens parsing is best-effort: a crash here must never
-    // kill the turn (live 2026-11-02 logbook crash: "toUpperCase of undefined").
-    // Degrade to the raw OCR text and let the normal turn continue.
-    let lens = null;
-    let ocrKind = safeKind;
-    let receiptHints = {};
-    try {
-      lens = ocrText
-        ? parseDocumentFields(ocrText, { countryCode: ocrCountry?.country_code || 'GLOBAL' })
-        : null;
-      ocrKind = lens?.family || safeKind;
-      // Deterministic Vision hints + the richer Document Lens field map (v1.20.0).
-      // v1.32.1 — the country-aware extractor wins on the keys it knows (amount,
-      // vendor, policy, expiry), so a lens misread can never override a labelled
-      // value (e.g. EXPIRING vs COMMENCING on an insurance certificate).
-      receiptHints = ocrText
-        ? {
-          ...(lens?.hints || {}),
-          ...extractDocumentHints(ocrText, ocrKind, { countryCode: ocrCountry?.country_code || 'GLOBAL' })
-        }
-        : {};
-    } catch (lensErr) {
-      console.warn('[OCR] Document Lens failed (degrading to raw OCR text):', lensErr?.message || lensErr);
-    }
-
-    // v1.54.1 — zero-shot extraction top-up (OCR_AI_EXTRACTION, default off).
-    // The deterministic lens is ALWAYS the authority: the AI may only fill
-    // fields the lens genuinely missed, every value is re-validated through
-    // the country-resolved normalizers, and everything still lands in the
-    // confirm-before-save gate. Any failure keeps today's behavior.
-    if (lens && ocrText) {
-      try {
-        const semanticHints = await semanticOcrTopUp({
-          text: ocrText,
-          family: lens.family,
-          countryCode: ocrCountry?.country_code || 'GLOBAL',
-          locale: ocrCountry?.locale || null,
-          existing: receiptHints
-        });
-        if (semanticHints && Object.keys(semanticHints).length) {
-          receiptHints = { ...semanticHints, ...receiptHints };
-          for (const [key, value] of Object.entries(semanticHints)) {
-            lens.fields[key] = { value, confidence: 0.7, source: 'ai_topup' };
-          }
-          lens.found = Object.keys(lens.fields);
-          lens.missing = (lens.missing || []).filter((key) => !(key in lens.fields));
-        }
-      } catch (semanticErr) {
-        console.warn('[OCR] semantic top-up failed (deterministic hints stand):', semanticErr?.message || semanticErr);
-      }
-    }
+    const {
+      ocrText,
+      ocrError,
+      messageText,
+      ocrCountry,
+      ocrKind,
+      ocrLowConfidence,
+      ocrTextSha,
+      receiptHints
+    } = await finalizeMediaOcr({
+      ocrResult,
+      ocrPaused,
+      ocrStartedAt,
+      mediaObj,
+      mediaCaption,
+      mediaMimeType,
+      senderPhone,
+      formattedPhoneForSession,
+      supabaseClient,
+      messageObj
+    });
 
     if (snapshot) {
       if (snapshot.session && !chatSessions.has(senderPhone)) chatSessions.set(senderPhone, snapshot.session);
@@ -416,12 +324,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
     }
 
     if (fastify?.log) fastify.log.info(`Incoming WhatsApp message from ${senderPhone}: "${messageText}"`);
-    if (supabaseClient) {
-      userLogPromise = Promise.all([
-        logChatTranscript(supabaseClient, senderPhone, 'user', messageText),
-        saveChatMessage(supabaseClient, senderPhone, 'user', messageText)
-      ]).catch(() => {});
-    }
+    userLogPromise = logUserTurn(supabaseClient, senderPhone, messageText);
 
     // v1.58.18 - Care console (worker role). CUSTOMER_CARE_PHONE is OFF by
     // default; the superadmin can always run `care ...` too. Anything that is
@@ -437,8 +340,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
       });
       if (careRes && careRes.reply) {
         await sendWhatsAppReply(senderPhone, careRes.reply);
-        await logChatTranscript(supabaseClient, senderPhone, 'assistant', careRes.reply);
-        await saveChatMessage(supabaseClient, senderPhone, 'assistant', careRes.reply);
+        await logTurnPairSequential(supabaseClient, senderPhone, 'assistant', careRes.reply);
         await userLogPromise;
         await persistSnap();
         return { status: 'care_handled' };
@@ -451,8 +353,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
       if (superadminRes.isSuperadmin) {
         if (superadminRes.reply) {
           await sendWhatsAppReply(senderPhone, superadminRes.reply);
-          await logChatTranscript(supabaseClient, senderPhone, 'assistant', superadminRes.reply);
-          await saveChatMessage(supabaseClient, senderPhone, 'assistant', superadminRes.reply);
+          await logTurnPairSequential(supabaseClient, senderPhone, 'assistant', superadminRes.reply);
         }
         await userLogPromise;
         await persistSnap();
@@ -464,8 +365,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
       if (isSuperadminPhone(senderPhone)) {
         const hub = generateRoleBasedActionDiscovery({ profileData: null, vehicles: [], senderPhone });
         await sendWhatsAppReply(senderPhone, hub);
-        await logChatTranscript(supabaseClient, senderPhone, 'assistant', hub);
-        await saveChatMessage(supabaseClient, senderPhone, 'assistant', hub);
+        await logTurnPairSequential(supabaseClient, senderPhone, 'assistant', hub);
         await userLogPromise;
         await persistSnap();
         return { status: 'superadmin_handled' };
@@ -476,7 +376,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
     // folds every legacy pending* field of a restored snapshot into
     // `session.pending` and re-exposes the legacy names as accessors, so the
     // branch code below is byte-identical while the physical state is unified.
-    session = hydrateSessionPending(chatSessions.get(senderPhone) || { history: [], lastActive: Date.now() });
+    session = hydrateTurnSession(chatSessions.get(senderPhone) || { history: [], lastActive: Date.now() });
     session.lastActive = Date.now();
     session.slowAckSent = false;
 
@@ -564,8 +464,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
       try { await sendWhatsAppReply(senderPhone, pauseReply); } catch { /* best-effort */ }
       if (supabaseClient) {
         try {
-          await logChatTranscript(supabaseClient, senderPhone, 'assistant', pauseReply);
-          await saveChatMessage(supabaseClient, senderPhone, 'assistant', pauseReply);
+          await logTurnPairSequential(supabaseClient, senderPhone, 'assistant', pauseReply);
         } catch { /* best-effort */ }
       }
       await userLogPromise;
@@ -685,8 +584,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           chatSessions.set(senderPhone, session);
           try {
             await sendWhatsAppReply(senderPhone, verifyReply);
-            await logChatTranscript(supabaseClient, senderPhone, 'assistant', verifyReply);
-            await saveChatMessage(supabaseClient, senderPhone, 'assistant', verifyReply);
+            await logTurnPairSequential(supabaseClient, senderPhone, 'assistant', verifyReply);
           } catch { /* best-effort */ }
           await userLogPromise;
           await persistSnap();
@@ -744,19 +642,15 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         // user's engine facts once (plan, assets, expiries, trial, compliance,
         // month spend, missing-field steps) and every later turn reuses the
         // 15-minute cache. Any write that changes the facts invalidates it.
-        let userFactsContext = null;
-        try {
-          const userContext = await getUserContextCache(supabaseClient, senderPhone, {
-            forceRefresh: dbHistory.length === 0,
-            profile: profileData,
-            vehicles: existingVehicles,
-            entitlements,
-            countryInfo
-          });
-          userFactsContext = formatUserFactsBlock(userContext.payload);
-        } catch (factsErr) {
-          console.warn('[WhatsApp] user-context cache skipped:', factsErr.message);
-        }
+        const userFactsContext = await loadUserFactsContext({
+          supabaseClient,
+          senderPhone,
+          forceRefresh: dbHistory.length === 0,
+          profileData,
+          existingVehicles,
+          entitlements,
+          countryInfo
+        });
 
         const hasVehicleRegistered = existingVehicles.length > 0;
         phaseMarks.profileReadyAt = Date.now();
@@ -826,63 +720,25 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         const countryLearningsLine = await getCountryLearningsLine({ supabase: supabaseClient, countryCode: bucketCountryCode }).catch(() => "");
         if (countryLearningsLine) jurisdictionContext = jurisdictionContext + "\n" + countryLearningsLine;
 
-        let duplicateReceipt = null;
-        if (mediaObj?.id && supabaseClient && !ocrPaused && (ocrKind === 'receipt_fuel' || ocrKind === 'receipt_general')) {
-          try {
-            // v1.32.1 — a re-uploaded document gets a NEW WhatsApp media id, so
-            // content matching (text hash, 48 h) is what actually stops the
-            // second quiz/expense. Media-id matching stays for Meta retries.
-            duplicateReceipt = await findReceiptByMediaId(supabaseClient, mediaObj.id)
-              || await findRecentReceiptByTextSha(supabaseClient, {
-                textSha: ocrTextSha,
-                windowHours: Number(process.env.OCR_DUPLICATE_WINDOW_HOURS || 48)
-              });
-            if (!duplicateReceipt) {
-              // v1.23.1 - Free tier keeps the parsed data but NOT the document (no bucket upload without receiptVaultStorage).
-              const vaultAllowed = entitlements?.receiptVaultStorage !== false;
-              const imageUrl = vaultAllowed && ocrResult?.buffer
-                ? await uploadReceiptImage(supabaseClient, ocrResult.buffer, mediaObj.id, ocrResult.mimeType)
-                : null;
-              await recordReceipt(supabaseClient, {
-                mediaId: mediaObj.id,
-                ownerId: existingVehicles.some((v) => v.owner_id === profileData?.id) ? profileData?.id : null,
-                driverId: existingVehicles.some((v) => v.assigned_driver_id === profileData?.id) ? profileData?.id : null,
-                vehicleId: currentActiveVehicle?.id || existingVehicles[0]?.id || null,
-                documentKind: ocrKind || 'unknown',
-                status: ocrText ? (ocrLowConfidence ? 'low_confidence' : 'read') : 'failed',
-                confidence: ocrResult?.confidence ?? null,
-                currency: receiptHints.currency || countryInfo?.currency || null,
-                amount: receiptHints.amount ?? null,
-                fuelLiters: receiptHints.fuel_liters ?? null,
-                odometer: receiptHints.odometer ?? null,
-                // v1.32.4 — the vendor column carried the raw OCR notes line
-                // ("Shell Thika|Diesel"), so receipts printed junk. `vendor` is
-                // the real merchant (ocrService.extractDocumentHints).
-                vendor: receiptHints.vendor || null,
-                imageUrl,
-                textSha: ocrTextSha,
-                // v1.59.7 — a receipt can carry its own searchable label.
-                label: extractEntryLabel(messageText),
-                error: ocrError
-              });
-            }
-          } catch { /* the receipt vault is best-effort */ }
-        }
-
-        // v1.51.11 — a registration certificate (logbook) is a registration
-        // document, never a receipt. Extract the vehicle fields so the
-        // registration quiz can be prefilled and confirmed.
-        let logbookPrefill = null;
-        if (mediaObj?.id && ocrKind === 'logbook' && ocrText) {
-          try {
-            const lbHints = extractDocumentHints(ocrText, 'logbook', { countryCode: ocrCountry?.country_code || 'GLOBAL' });
-            const picked = {};
-            for (const key of ['plate_number', 'vin', 'make_model', 'yom', 'fuel_type', 'engine_number', 'color']) {
-              if (lbHints?.[key] !== undefined && lbHints[key] !== null && String(lbHints[key]).trim() !== '') picked[key] = lbHints[key];
-            }
-            if (Object.keys(picked).length > 0) logbookPrefill = picked;
-          } catch { /* best-effort */ }
-        }
+        const { duplicateReceipt, logbookPrefill } = await resolveReceiptVault({
+          supabaseClient,
+          mediaObj,
+          ocrPaused,
+          ocrKind,
+          ocrText,
+          ocrTextSha,
+          ocrLowConfidence,
+          ocrResult,
+          ocrError,
+          receiptHints,
+          countryInfo,
+          entitlements,
+          profileData,
+          existingVehicles,
+          currentActiveVehicle,
+          messageText,
+          ocrCountry
+        });
 
         // Pass message through DeepSeek Intent Classifier (sakaAi.js) with Active Fleet Context
         const activeVehicleContext = hasVehicleRegistered ? {
@@ -985,7 +841,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           try {
             await sendWhatsAppReply(senderPhone, '📖 Got it - reading that now.');
             session.instantAckSent = true;
-            if (supabaseClient) await logChatTranscript(supabaseClient, senderPhone, 'assistant', 'Got it - reading that now.');
+            if (supabaseClient) await logAssistantTranscript(supabaseClient, senderPhone, 'Got it - reading that now.');
           } catch { /* ack is best-effort */ }
         }
 
@@ -1004,7 +860,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             try {
               await sendWhatsAppReply(senderPhone, line);
               if (supabaseClient) {
-                await logChatTranscript(supabaseClient, senderPhone, 'assistant', line);
+                await logAssistantTranscript(supabaseClient, senderPhone, line);
               }
             } catch { /* ack is best-effort */ }
           }, slowAckMs);
@@ -1101,9 +957,11 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               // v1.59.4 — returning after the fresh window: give the model the last
               // few turns as LABELLED context (never as live turns) so Saka can pick
               // up where the conversation stopped.
-              reengagementContext: dbHistory.length === 0
-                ? await getReengagementContext(supabaseClient, senderPhone)
-                : null
+              reengagementContext: await loadReengagementContext({
+                supabaseClient,
+                senderPhone,
+                hasFreshHistory: dbHistory.length > 0
+              })
             });
           }
         }
@@ -3206,10 +3064,9 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
               // v1.16.0 — slow-report lane: ACK instantly (zero AI tokens),
               // build in the background, deliver the result as a follow-up while
               // the user keeps chatting.
-              const queued = (reportType === 'custom' && metricIds.length === 0) ? false : await enqueueFollowUp({
+              const queued = (reportType === 'custom' && metricIds.length === 0) ? false : await queueReportFollowUp({
                 supabase: supabaseClient,
                 phone: senderPhone,
-                kind: FOLLOWUP_KINDS.FLEET_REPORT,
                 payload: {
                   ownerId: existingVehicles.some((v) => v.owner_id === profileData?.id) ? profileData?.id : null,
                   driverId: existingVehicles.some((v) => v.assigned_driver_id === profileData?.id) ? profileData?.id : null,
@@ -4112,23 +3969,17 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
         }
         await sendWhatsAppReply(senderPhone, finalReply);
         replyDispatched = true;
-        const phaseMs = {
-          setup: phaseMarks.profileReadyAt ? phaseMarks.profileReadyAt - turnStartedAt : null,
-          preAi: phaseMarks.profileReadyAt && phaseMarks.aiStartedAt ? phaseMarks.aiStartedAt - phaseMarks.profileReadyAt : null,
-          ai: phaseMarks.aiStartedAt && phaseMarks.aiDoneAt ? phaseMarks.aiDoneAt - phaseMarks.aiStartedAt : null,
-          postAi: phaseMarks.aiDoneAt ? Math.max(0, Date.now() - phaseMarks.aiDoneAt) : null
-        };
-        void logTurnLatency(supabaseClient, {
+        void recordTurnLatency({
+          supabaseClient,
           phone: senderPhone,
-          turnMs: Date.now() - turnStartedAt,
+          turnStartedAt,
           ackSent: session.instantAckSent === true || session.slowAckSent === true,
-          phaseMs
+          phaseMarks
         });
         await userLogPromise;
         if (supabaseClient) {
           await Promise.all([
-            logChatTranscript(supabaseClient, senderPhone, 'assistant', finalReply),
-            saveChatMessage(supabaseClient, senderPhone, 'assistant', finalReply),
+            finalizeAssistantTurn(supabaseClient, senderPhone, finalReply),
             persistSnap()
           ]);
         } else {
@@ -4149,7 +4000,12 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
         // the real error is persisted to error_logs (the 2026-11-01 photo turns
         // died silently because this line threw "session is not defined").
         await logSystemError(supabaseClient, err, '/webhook/whatsapp').catch(() => {});
-        void logTurnLatency(supabaseClient, { phone: messageObj?.from || null, turnMs: Date.now() - turnStartedAt, ackSent: session?.slowAckSent === true });
+        void recordTurnLatency({
+          supabaseClient,
+          phone: messageObj?.from || null,
+          turnStartedAt,
+          ackSent: session?.slowAckSent === true
+        });
         // v1.58.x — never leave the user in silence: if the turn crashed before
         // any reply was dispatched, send one short deterministic recovery line.
         if (!replyDispatched && messageObj?.from) {

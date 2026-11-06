@@ -17,16 +17,30 @@ import assert from 'assert';
  * instant "reading now" progress ack stays literal.)
  */
 
-const source = fs.readFileSync('src/routes/whatsapp/messages.js', 'utf8');
-
-const directReplies = [
-  ...source.matchAll(/customReply\s*=\s*'([^'\n]{25,})'/g),
-  ...source.matchAll(/finalReply\s*=\s*'([^'\n]{25,})'/g),
-  ...source.matchAll(/sendWhatsAppReply\(\s*\w+\s*,\s*'([^'\n]{25,})'/g),
-  ...source.matchAll(/customReply\s*=\s*`([^`\n$]{25,})`/g),
-  ...source.matchAll(/finalReply\s*=\s*`([^`\n$]{25,})`/g),
-  ...source.matchAll(/sendWhatsAppReply\(\s*\w+\s*,\s*`([^`\n$]{25,})`/g)
-].map((m) => String(m[1]).trim());
+// v1.67.0 — the ratchet follows the user-facing strings: Phase 5B-2 moved the
+// media intake lane into media.js, so the scan covers BOTH the processor and the
+// leaf module. media.js must keep contributing ZERO direct replies (it returns
+// data; the processor sends) — asserted below so a future literal there can
+// never hide outside the ratchet.
+const SOURCE_FILES = [
+  'src/routes/whatsapp/messages.js',
+  'src/routes/whatsapp/media.js'
+];
+const DIRECT_REPLY_PATTERNS = [
+  /customReply\s*=\s*'([^'\n]{25,})'/g,
+  /finalReply\s*=\s*'([^'\n]{25,})'/g,
+  /sendWhatsAppReply\(\s*\w+\s*,\s*'([^'\n]{25,})'/g,
+  /customReply\s*=\s*`([^`\n$]{25,})`/g,
+  /finalReply\s*=\s*`([^`\n$]{25,})`/g,
+  /sendWhatsAppReply\(\s*\w+\s*,\s*`([^`\n$]{25,})`/g
+];
+const directReplies = [];
+for (const file of SOURCE_FILES) {
+  const fileSource = fs.readFileSync(file, 'utf8');
+  for (const pattern of DIRECT_REPLY_PATTERNS) {
+    directReplies.push(...[...fileSource.matchAll(pattern)].map((m) => String(m[1]).trim()));
+  }
+}
 
 // Progress indicators only — never answers, never data, never instruction.
 const ALLOWED = new Set([
@@ -44,6 +58,12 @@ const currentCount = directReplies.length;
 assert(currentCount <= 4, `Canned literal replies grew beyond the ratchet (${currentCount}). Convert them to composeMessage instead.`);
 passed += 1;
 assert(directReplies.includes('📖 Got it - reading that now.'), 'the instant reading ack remains the only whitelisted literal');
+passed += 1;
+
+// v1.67.0 — the leaf media module must never own a user-facing reply. It returns
+// data (ack/page text included) and the processor performs every send/compose.
+const mediaSource = fs.readFileSync('src/routes/whatsapp/media.js', 'utf8');
+assert(!/(?:customReply|finalReply)\s*=/.test(mediaSource) && !mediaSource.includes('sendWhatsAppReply('), 'media.js never owns a reply - it returns data and the processor sends');
 passed += 1;
 
 console.log(`\n🎉 ${passed} no-canned-replies assertions passed — ${currentCount} canned literals remain (ratchet ≤ 4; every new literal must be composed).`);
