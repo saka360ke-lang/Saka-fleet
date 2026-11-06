@@ -37,6 +37,7 @@ import { sanitizeHealPatch, formatHealNotice, isCalibrationCase, enforceActiveRu
 import { buildEvalDigest, formatEvalDigestEmail, formatEvalDigestPing, sendEvalDigest, EVAL_DIGEST_CONFIG_KEY, EVAL_DIGEST_ATTEMPT_KEY } from './src/services/evalDigest.js';
 import { formatBatchFailures, handleConvEvalCommand } from './src/services/convEvalConsole.js';
 import { healsFromAuditRows, selectCorpusUpdates, applyCorpusUpdates } from './src/services/convEvalCorpusSync.js';
+import { FLOW_GUIDANCE, guidanceForFlow, SAKA_QUIZ_FLOWS, buildToneCompassBlock } from './src/services/flowKnowledge.js';
 import { ENV_SECTIONS } from './src/services/envAudit.js';
 
 /**
@@ -558,7 +559,13 @@ check(totalCorpusIds.includes('capacity-trial-sixth-asset') && totalCorpusIds.in
 check(CONVERSATION_CASES.some((caseDef) => (caseDef.tags || []).includes('earnings')), 'earnings logging has corpus coverage');
 check(CONVERSATION_CASES.some((caseDef) => (caseDef.tags || []).includes('voice')), 'voice notes have corpus coverage');
 check(CONVERSATION_CASES.some((caseDef) => (caseDef.tags || []).includes('sheng')) && CONVERSATION_CASES.some((caseDef) => (caseDef.tags || []).includes('pidgin')), 'mixed-language (Sheng + pidgin) has corpus coverage');
-check(CONVERSATION_CASES.length >= 27, `the corpus grew without dropping a case (${CONVERSATION_CASES.length})`);
+check(CONVERSATION_CASES.length >= 32, `the corpus grew without dropping a case (${CONVERSATION_CASES.length})`);
+check(SAKA_QUIZ_FLOWS.every((flow) => Boolean(guidanceForFlow(flow.key))), 'every quiz flow has a stuck-guidance line (rule 60)');
+check(Object.keys(FLOW_GUIDANCE).length >= SAKA_QUIZ_FLOWS.length, 'the guidance registry covers every flow plus the engine lanes');
+const compassBlock = buildToneCompassBlock();
+check(compassBlock.includes('STUCK GUIDANCE LAW') && compassBlock.includes('subscription_trial_end:'), 'the core prompt renders the stuck-guidance law and registry');
+check(CONVERSATION_CASES.some((caseDef) => (caseDef.tags || []).includes('trial-end')), 'the trial-end journey has corpus coverage');
+check(CONVERSATION_CASES.some((caseDef) => (caseDef.tags || []).includes('coupon')), 'coupon integrity has corpus coverage');
 for (const key of ['CONV_EVAL_MAX_JUDGE_CALLS_PER_TICK', 'CONV_EVAL_PASS_STREAK', 'CONV_EVAL_PASS_REST_TICKS', 'CONV_EVAL_MAX_REFUSALS_PER_CASE', 'CONV_EVAL_REFUSAL_COOLDOWN_HOURS', 'EVAL_DAILY_CALL_ALERT']) {
   check(evalSection.keys.includes(key), `env registry carries ${key}`);
 }

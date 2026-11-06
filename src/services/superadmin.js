@@ -592,14 +592,39 @@ export async function handleCouponGenerationCommand(supabase, adminPhone, messag
   const couponId = crypto.randomUUID();
   const nowIso = new Date().toISOString();
 
+  // v1.61.16 — canonical fields (live defect): the checkout validator reads
+  // discount_percent / discount_amount / max_uses / status / applicable_to. The
+  // old insert stored ONLY display text, so every admin coupon validated as a
+  // silent 0% off, and the literal 'ALL' phone failed the ownership check for
+  // every real owner. Refuse shapes the engine cannot price honestly.
+  const percentMatch = String(discountValue).match(/(\d+(?:\.\d+)?)\s*(?:%|percent)/i);
+  const usdMatch = String(discountValue).match(/^\$?\s*(\d+(?:\.\d+)?)\s*$/);
+  const discountPercent = percentMatch ? Math.min(100, Math.max(0, Number(percentMatch[1]))) : 0;
+  const discountAmount = !discountPercent && usdMatch ? Number(usdMatch[1]) : 0;
+  if (!discountPercent && !discountAmount) {
+    return {
+      reply: '⚠️ *No coupon created.*\n\nGive a percentage (*generate coupon 20%*) or a USD amount (*generate coupon $5*). A local-currency flat amount would need FX pricing the engine cannot guarantee, so it is not issued.',
+      details: { refused: true, discount_value: discountValue }
+    };
+  }
+  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+
   const { error } = await supabase.from('coupons').insert([{
     id: couponId,
     code: couponCode,
     discount_value: discountValue,
-    assigned_to_phone: formattedTargetPhone,
+    discount_percent: discountPercent,
+    discount_amount: discountAmount,
+    max_uses: 1,
+    current_uses: 0,
+    status: 'dispatched',
+    applicable_to: 'subscription',
+    applies_to_interval: 'both',
+    assigned_to_phone: formattedTargetPhone === 'ALL' ? null : formattedTargetPhone,
     is_redeemed: false,
     created_by: adminPhone || 'SUPERADMIN_WHATSAPP',
-    created_at: nowIso
+    created_at: nowIso,
+    expires_at: expiresAt
   }]);
 
   if (error) {
@@ -614,7 +639,8 @@ export async function handleCouponGenerationCommand(supabase, adminPhone, messag
     `• *Coupon Code*: \`${couponCode}\`\n` +
     `• *Discount Value*: ${discountValue}\n` +
     `• *Assigned Profile*: ${assignedDisplay}\n` +
-    `• *Status*: Active & Unredeemed`;
+    `• *Status*: Active & Unredeemed\n` +
+    `• *Valid*: one checkout, until ${expiresAt.slice(0, 10)}`;
 
   return {
     reply,
@@ -622,7 +648,10 @@ export async function handleCouponGenerationCommand(supabase, adminPhone, messag
       coupon_id: couponId,
       code: couponCode,
       discount_value: discountValue,
+      discount_percent: discountPercent,
+      discount_amount: discountAmount,
       assigned_to_phone: formattedTargetPhone,
+      expires_at: expiresAt,
       profile_name: profileName
     }
   };

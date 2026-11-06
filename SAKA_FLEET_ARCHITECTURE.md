@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.61.15  
+**Version:** 1.61.16  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.61.16** | Trial never caps the garage (anti-abuse ceiling only) → bounded trial-end decision window (fit / downsize / Free) with engine-owned payment links; coupon integrity (canonical admin creation, dual binding, atomic claims, audits); rule 60 stuck-guidance on every flow | 179 |
 | **1.61.15** | Trial capacity is an entitlement (lapse-on-read, 15-asset proof) + eval spend controls (call budget, rest lane, heal cooldown, digest spend line) + coverage lanes (earnings, voice notes, Sheng/pidgin) | 178 |
 | **1.61.14** | Per-user context cache: engine facts cached at chat initiation (15-min TTL, write invalidation) so Saka never relies on chat history alone | 177 |
 | **1.61.13** | Digest retry semantics: a failed email no longer burns the 6-hour window (15-min retry floor, no ping without email) | 176 |
@@ -4941,5 +4942,30 @@ Usage: `npm run eval:apply-heals` (dry run, 48 h) · `-- --hours=72` · `-- --wr
 **Recurrence autopsy (rule 51).** *Raw column read bypasses the entitlement choke point* → siblings: `onboarding.saveVehicleAssetRecord` (shares the fixed gate), `transfers.js` buyer capacity (already `evaluateVehicleCapacity`), report quota (already `getReportQuota`), add-on pricing (entitlement-derived) — fixed/verified. *Unhandled inbound message type* → voice note fixed; sticker/reaction/location remain generic-menu — deliberately left (no data lane, safe). *Refused write without telemetry* → expense + earnings inserts fixed; ledger edit/delete already return reasons + audits.
 
 **Suites run:** `test_trial_capacity` (21), `test_eval_spend` (23), `test_conv_eval` (190), `test_subscription_billing` (84), `test_trial_engine` (80), `test_quiz_flow`, `test_error_logging` (22), `test_v1571` (20), `test_agent_training`, `test_doc_sync` — green; `npm run health` green.
+
+### 179. v1.61.16 - grow free, choose the plan at the end + coupon integrity + stuck-guidance rule (2026-11-06)
+
+**Operator request.** "Trial users should add as many assets as possible; after the trial, drop them to the tier that fits the asset count, let them downgrade, calculate the upgrade and send a payment link. Deep-audit coupon creation/application and tighten it. Save as rule: always short guidance on every flow when the user gets stuck."
+
+**A. Trial = unlimited garage, then a bounded decision window.**
+- `getEntitlements` grants the trial safety ceiling `TRIAL_MAX_ASSETS` (default 50, 0 = unlimited) while `trialLive && !hasPaidAccess`; the persist gate already resolves through entitlements, so every asset is free to add. The old 5-asset plan-limit copy is retired; `formatCapacityRefusal` now speaks only about the safety ceiling + support lane.
+- **Trial end no longer downgrades.** `runTrialEndStage()` stamps the row `GRACE` with `grace_ends_at = ends_at + TRIAL_END_GRACE_DAYS` (default 7, 0 = legacy hard downgrade) and sends the fitted-plan card: asset count, `fittedTierForAssets()` tier (+ add-on slots), the engine's local price and Paystack checkout link(s). Paths: **keep all** (one tap, link), **keep `<plate>`** (pause the rest, fitted plan recomputed on the ACTIVE garage), or **nothing** (grace end → Free, newest asset active, rest PAUSED, never deleted). Countdown nudges at grace T-3/T-24. Paid-live owners are skipped; the missing-column degrade falls back to the exact old behaviour (rule 50).
+- **`fittedTierForAssets(count)`** (subscriptionTiers, pure): 0-1 Solo Pro, 2-3 Team Fleet, 4-5 Growth, 6+ Fleet Command + (count − 5) add-ons; prices from the frozen registry. Migration `npm run migrate:trial-end-grace` adds `grace_ends_at`, `trial_end_choice`, `grace_t3_sent_at`, `grace_t24_sent_at` (idempotent).
+- WhatsApp lanes: "keep all"/"what fits" → fitted card; "upgrade" during GRACE → fitted card (no menu); "keep `<plate>`" → downsize card with the recomputed plan.
+
+**B. Coupon integrity audit (live defects fixed).**
+- **C1 (silent 0%):** superadmin creation stored only `discount_value` display text while the checkout validator reads `discount_percent`/`discount_amount` — every admin coupon priced at a silent 0%. Creation now writes the canonical row (`discount_percent` or USD `discount_amount`, `max_uses=1`, `status=dispatched`, `applicable_to=subscription`, `applies_to_interval=both`, `expires_at` +30 days, universal = null) and REFUSES unpriceable local-currency flats.
+- **C2 (double-use race):** `markCouponRedeemed` and extension redemption now CLAIM atomically (`.eq(id).neq(status,'applied').lt(current_uses,max_uses).select('id')`); no row matched = refused. Extension claim is rolled back if the trial extension fails.
+- **C3/C4 (binding):** extension coupons enforce `owner_id` AND `assigned_to_phone` (null/`ALL` = universal); checkout validation enforces `owner_id` too; every redemption/refusal is audited (`COUPON_REDEEMED` / `COUPON_REFUSED`).
+- **C5 (legacy path):** the EXT30 route redeems account-bound first, with the deprecated VIN function only as a historical fallback.
+- **C6:** admin coupons carry a 30-day expiry shown in the reply; legacy `discount_value` rows still price correctly via a parser fallback; `is_redeemed` refuses at checkout.
+
+**C. Rule 60 (additive) — stuck guidance on every flow.** `FLOW_GUIDANCE` (flowKnowledge) registers ONE deterministic next step for all 21 quiz flows plus engine lanes (trial-end, ledger edit/delete, onboarding OTP, support). It renders into the core prompt as the STUCK GUIDANCE block AND is used directly: quiz `help`/`hint`/`?` answers with the field hint + simplest typed path deterministically (zero tokens), staying on the same question; the trial-end lane always carries its line.
+
+**Frames touched:** `src/services/{subscriptions,trialEngine,subscriptionTiers,trialSchema,coupons,superadmin,quizEngine,flowKnowledge,envAudit}.js`, `sakaAi.js`, `src/routes/whatsapp.js`, `scripts/{run_trial_end_grace_migration(new),mockSupabase,health_audit}.js`, `evals/cases/conversation_cases.json` (32), `test_{trial_capacity,coupon_integrity(new),trial_engine,subscription_billing,conv_eval}.js`, `.clinerules` (rule 60), `.env.example`, `package.json`, this file, `CHANGELOG.md`.
+
+**Recurrence autopsy (rule 51).** *Display text stored where the engine reads numbers* → admin coupons (fixed via canonical fields + fallback parser); siblings audited: winback/activation coupons (already canonical), launch award (numeric), FX price labels (display-only). *Read-modify-write on a counter* → coupon claims (fixed atomically); siblings: `extendAccountTrial` cap stamps (single-owner serial flow, left), report usage counters (monthly rollup, left). *Cap enforced at the wrong layer* → trial garage (fixed at entitlements); sibling: transfer-buyer capacity (already `evaluateVehicleCapacity`).
+
+**Suites run:** `test_trial_capacity` (41), `test_coupon_integrity` (28), `test_trial_engine` (85), `test_subscription_billing` (85), `test_conv_eval` (202), `test_quiz_flow` (147), `test_agent_training` (180), `test_error_logging` (22), `test_env_audit` (44), `test_v1571` (20), `test_synthetic_cases` (91), `test_launch_award` (29) — green; curated eval: trial-end-fit 0.87, downsize 0.88, coupon refusal 0.90, calibration fails 0.34/0.16; `npm run health` green.
 
 

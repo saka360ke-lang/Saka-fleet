@@ -293,7 +293,7 @@ async function run() {
   const rewardAgain = await runTrialLifecycleSweep({ supabase: reward.mock.client, sendWhatsAppFn: reward.send });
   check(rewardAgain.activationRewards === undefined || rewardAgain.activationRewards === 0, 'Activation reward never repeats');
 
-  console.log('\n--- Test 7: expiry -> Free with PAUSED vehicles (data preserved) ---');
+  console.log('\n--- Test 7: expiry -> bounded decision window -> Free (data preserved) ---');
   const expiry = createMockSupabase({
     profiles: [ownerProfile({ subscription_tier: 'growth', subscription_status: 'TRIALING', trial_used_at: past(31) })],
     trial_sessions: [trialRow({ started_at: past(31), ends_at: past(1), activated: true, activated_at: past(20) })],
@@ -315,13 +315,27 @@ async function run() {
     supabase: expiry.client,
     sendWhatsAppFn: async (_to, message) => { expiryMessages.push(message); }
   });
-  check(expiryStats.expired === 1, 'Expired trial is processed by the sweep');
-  check(expiry.db.trial_sessions[0].status === 'EXPIRED' && Boolean(expiry.db.trial_sessions[0].expiry_processed_at), 'Trial row is marked EXPIRED');
-  check(expiry.db.profiles[0].subscription_tier === 'free' && expiry.db.profiles[0].subscription_status === 'ACTIVE', 'Account downgrades to Free');
+  // v1.61.16 — the trial ends into a bounded decision window: nothing pauses yet.
+  check(expiryStats.graceStarted === 1, 'An expired trial opens the decision window');
+  check(expiry.db.trial_sessions[0].status === 'GRACE' && Boolean(expiry.db.trial_sessions[0].grace_ends_at), 'Trial row is marked GRACE with a deadline');
+  check(expiry.db.profiles[0].subscription_tier === 'growth', 'The account stays on the trial tier during the window');
+  check(expiry.db.vehicles.every((v) => v.status === 'ACTIVE'), 'Every asset stays active while the owner chooses');
+  check(expiryMessages.length === 1 && /nothing is paused yet/i.test(expiryMessages[0]), 'Owner receives the fitted-plan card first');
+  check(/keep <plate>/i.test(expiryMessages[0]), 'The card names the downsize choice');
+
+  // Grace end: the same sweep falls back to Free, pausing (never deleting) excess.
+  expiry.db.trial_sessions[0].grace_ends_at = past(1);
+  const graceEndMessages = [];
+  const graceEndStats = await runTrialLifecycleSweep({
+    supabase: expiry.client,
+    sendWhatsAppFn: async (_to, message) => { graceEndMessages.push(message); }
+  });
+  check(graceEndStats.graceEnded === 1 && graceEndStats.expired === 1, 'Grace end is processed by the sweep');
+  check(expiry.db.profiles[0].subscription_tier === 'free' && expiry.db.profiles[0].subscription_status === 'ACTIVE', 'Account downgrades to Free at grace end');
   check(expiry.db.vehicles.filter((v) => v.status === 'PAUSED').length === 2, 'Excess vehicles are PAUSED, never deleted');
   check(expiry.db.vehicles.every((v) => Boolean(v.plate_number)), 'Paused vehicles keep their identity (passbooks intact)');
-  check(expiryMessages.length === 1 && /trial has ended/i.test(expiryMessages[0]), 'Owner receives the expiry message');
-  check(/keep vehicle/i.test(expiryMessages[0]), 'Expiry message prompts the KEEP_VEHICLE choice');
+  check(graceEndMessages.length === 1 && /trial has ended/i.test(graceEndMessages[0]), 'Owner receives the expiry message at grace end');
+  check(/keep vehicle/i.test(graceEndMessages[0]), 'Expiry message prompts the KEEP_VEHICLE choice');
   const expiryAgain = await runTrialLifecycleSweep({ supabase: expiry.client, sendWhatsAppFn: async () => {} });
   check(expiryAgain.expired === 0, 'Expired trial is not reprocessed');
 

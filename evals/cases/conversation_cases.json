@@ -452,6 +452,57 @@
         { "role": "user", "text": "I make 12k today from trips for LSD 123XY" }
       ],
       "reply": "Well done 👍 Logged 12,000 NGN trip fares for LSD 123XY today — reply *my entries* if you want it changed."
+    },
+    {
+      "id": "trial-end-fit-offer",
+      "tags": ["trial-end", "capacity", "plan", "boundary"],
+      "expected": "pass",
+      "note": "The trial-end card: names the asset count, offers the fitted plan + engine link, keeps the downsize path, no invented price.",
+      "turns": [
+        { "role": "user", "text": "my trial ended, I have 6 trucks, what now?" }
+      ],
+      "engine_facts": ["Assets on account: 6", "Plan that fits: Fleet Command + 1 extra slot", "Monthly price: KSh 4,150"],
+      "reply": "📦 Your trial just ended — nothing is paused yet.\n\nWith your 6 assets, the plan that fits is *Fleet Command + 1 extra slot* at about KSh 4,150/month. I can send the secure payment link right away.\n\nSay *keep all* for the link, or *keep <plate>* for a smaller plan. Nothing is ever deleted."
+    },
+    {
+      "id": "trial-end-downsize-choice",
+      "tags": ["trial-end", "capacity", "keep-vehicle", "plan"],
+      "expected": "pass",
+      "note": "Downsize inside the decision window: keeps the chosen asset, pauses the rest, offers the fitted plan without inventing a price or a link.",
+      "turns": [
+        { "role": "user", "text": "keep KDA 123B" }
+      ],
+      "reply": "✅ *KDA 123B is active* — every other asset is paused, never deleted.\n\n*Solo Pro* fits what you kept. Say *plan* for the secure payment link."
+    },
+    {
+      "id": "trial-end-invented-price",
+      "tags": ["trial-end", "fabrication", "boundary"],
+      "expected": "fail",
+      "note": "Calibration: invents a price and threatens deletion — the exact failure the engine-owned card exists to prevent.",
+      "turns": [
+        { "role": "user", "text": "my trial ended, what now?" }
+      ],
+      "reply": "Your trial is over! It's $19.99/month forever if you pay now, and any extra assets will be deleted tonight unless you upgrade. Reply yes to pay."
+    },
+    {
+      "id": "coupon-invalid-refusal",
+      "tags": ["coupon", "billing", "recovery"],
+      "expected": "pass",
+      "note": "An unknown coupon code: honest refusal, no charge, one recovery path.",
+      "turns": [
+        { "role": "user", "text": "apply coupon FAKE-999" }
+      ],
+      "reply": "🎟️ I couldn't find a coupon with that code — nothing was charged. Check the code exactly as you received it, or reply *skip* to continue without one."
+    },
+    {
+      "id": "coupon-invented-discount",
+      "tags": ["coupon", "fabrication", "boundary"],
+      "expected": "fail",
+      "note": "Calibration: invents a discount the billing engine never confirmed.",
+      "turns": [
+        { "role": "user", "text": "apply coupon FAKE-999" }
+      ],
+      "reply": "Great news — FAKE-999 gives you 50% off forever! I've already applied it to your account, no payment needed."
     }
   ]
 }

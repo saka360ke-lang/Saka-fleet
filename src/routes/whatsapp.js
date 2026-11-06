@@ -127,6 +127,7 @@ import {
   startAccountTrial,
   startWelcomeTrial,
   applyAccountTrialExtensionCoupon,
+  buildTrialEndOffer,
   recordActivationEvent,
   ACTIVATION_EVENTS
 } from '../services/trialEngine.js';
@@ -2560,14 +2561,30 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         // question with "yes" and the coupon branch swallowed the turn.
         else if (!session.quiz && !session.pendingDeleteVehicle && !session.pendingAccountDeletion && !session.pendingCancelSubscription && intent !== 'EXTEND_TRIAL' && (intent === 'APPLY_COUPON' || /^EXT30-[A-Z0-9]+$/i.test(messageText.trim()) || mergedExt?.coupon_code || (/^(apply coupon|redeem coupon|extend trial)$/i.test(messageText.trim()) && /(?:coupon|EXT30-|extend\s+(?:your|the|my)?\s*trial|trial\s+extension)/i.test(String(session.lastAssistantPrompt || ''))))) {
           if (supabaseClient) {
-            const extRes = await applyTrialExtensionCoupon({
-              phone: senderPhone,
-              couponCode: mergedExt.coupon_code || (messageText.trim().startsWith('EXT30-') ? messageText.trim() : null),
-              supabase: supabaseClient
+            const couponCode = mergedExt.coupon_code || (messageText.trim().startsWith('EXT30-') ? messageText.trim() : null);
+            // v1.61.16 — account-bound redemption first (owner binding + atomic
+            // claim + audits); the legacy VIN path only serves historical EXT30
+            // rows that predate account binding.
+            const accountRes = await applyAccountTrialExtensionCoupon({
+              supabase: supabaseClient,
+              ownerId: profileData?.id,
+              code: couponCode
             });
+            const extRes = accountRes.ok
+              ? {
+                  success: true,
+                  couponCode: accountRes.couponCode,
+                  daysAdded: accountRes.daysAdded,
+                  newTrialEndAt: accountRes.endsAt,
+                  plateNumber: currentActiveVehicle?.plate_number || existingVehicles[0]?.plate_number || 'your account'
+                }
+              : await applyTrialExtensionCoupon({ phone: senderPhone, couponCode, supabase: supabaseClient });
             if (extRes.success) {
               isSpecialFlowHandled = true;
-              customReply = `🎉 *Trial Extension Applied!* 🚗💨\n\n• *Vehicle:* *${extRes.plateNumber}* (VIN: \`${extRes.vin}\`)\n• *Coupon Code:* *${extRes.couponCode}*\n• *Days Added:* +${extRes.daysAdded} Days\n• *New Trial Expiration:* ${new Date(extRes.newTrialEndAt).toLocaleDateString()}\n\nYour 30-day free trial has been successfully extended. Type *"What can I do?"* to explore your fleet tools!`;
+              customReply = `🎉 *Trial Extension Applied!* 🚗💨\n\n• *Account:* ${extRes.plateNumber}\n• *Coupon Code:* *${extRes.couponCode}*\n• *Days Added:* +${extRes.daysAdded} Days\n• *New Trial Expiration:* ${new Date(extRes.newTrialEndAt).toLocaleDateString()}\n\nYour free trial has been successfully extended. Type *"What can I do?"* to explore your fleet tools!`;
+            } else if (accountRes?.error) {
+              isSpecialFlowHandled = true;
+              customReply = `🎟️ ${accountRes.error}`;
             }
           }
         }
@@ -5412,6 +5429,27 @@ async function maybeHandleSubscriptionTurn({
     return { handled: true, reply: 'Please reply *YES* to cancel or *NO* to keep your plan.' };
   }
 
+  // ---- v1.61.16 — trial-end decision window: keep everything / fit the plan ----
+  const wantsFit = /^(?:keep|fit)\s+(?:all|everything)\b/i.test(lower)
+    || /\b(?:what|which)\s+(?:plan\s+)?fits\b/i.test(lower)
+    || /\bplan\s+that\s+fits\b/i.test(lower);
+  if (entitlements?.trialPhase === 'GRACE' && wantsFit) {
+    const offer = await buildTrialEndOffer({ supabase: supabaseClient, owner, ownerId, interval: 'monthly', currency });
+    const planLine = offer.fitted.addonQuantity > 0
+      ? `${offer.fitted.tierLabel} + ${offer.fitted.addonQuantity} extra slot(s)`
+      : offer.fitted.tierLabel;
+    return {
+      handled: true,
+      reply: [
+        `✅ *${planLine} fits all ${offer.assetCount} ${offer.assetCount === 1 ? 'asset' : 'assets'}*${offer.monthlyLabel ? ` — around ${offer.monthlyLabel}` : ''}`,
+        offer.checkoutUrl ? `👉 *Activate:* ${offer.checkoutUrl}` : 'The payment link is temporarily unavailable — reply *upgrade* and I will retry.',
+        offer.addonCheckoutUrl ? `👉 *Add the extra slots:* ${offer.addonCheckoutUrl}` : null,
+        '',
+        `Everything stays active until ${entitlements.graceEndsAt ? new Date(entitlements.graceEndsAt).toLocaleDateString() : 'the window closes'} — nothing is ever deleted.`
+      ].filter(Boolean).join('\n')
+    };
+  }
+
   const wantsView = intent === 'VIEW_SUBSCRIPTION'
     || /^(?:subscription|my\s+(?:plan|subscription)|billing|plan\s+details)\b/i.test(lower)
     || /\b(?:which|what)\s+tier\b|\bshould\s+be\s+on\b|\b(?:less|fewer|more)\s+than\s+\d+\s+(?:assets?|vehicles?)\b|\b(?:put|move|enroll)\s+me\s+(?:on|to|in)\b|\b(?:first|second|third|1st|2nd|3rd)\s+tier\b|\bconfirm\s+(?:which|what)\s+tier\b|\bwhat\s+tier\s+am\s+i\b/i.test(lower);
@@ -5537,6 +5575,26 @@ async function maybeHandleSubscriptionTurn({
     }
     const kept = await selectVehiclesToKeep({ supabase: supabaseClient, ownerId, keepVehicleIds: [matched.id] });
     if (!kept.ok) return { handled: true, reply: `⚠️ ${kept.error}` };
+    // v1.61.16 — inside the decision window the fit is recomputed on the KEPT
+    // (ACTIVE) garage, so the offered plan shrinks with the choice.
+    if (entitlements?.trialPhase === 'GRACE') {
+      const offer = await buildTrialEndOffer({ supabase: supabaseClient, owner, ownerId, interval: 'monthly', currency, activeOnly: true });
+      const planLine = offer.fitted.addonQuantity > 0
+        ? `${offer.fitted.tierLabel} + ${offer.fitted.addonQuantity} extra slot(s)`
+        : offer.fitted.tierLabel;
+      return {
+        handled: true,
+        entitlements: await refresh(),
+        reply: [
+          `✅ *${matched.plate_number} is active* — every other asset is paused, never deleted.`,
+          '',
+          `*${planLine}* fits your kept ${offer.assetCount === 1 ? 'asset' : 'assets'}${offer.monthlyLabel ? ` — around ${offer.monthlyLabel}` : ''}.`,
+          offer.checkoutUrl ? `👉 ${offer.checkoutUrl}` : 'Reply *upgrade* for the payment link.',
+          '',
+          'Changed your mind? Reply *keep all* to keep every asset instead.'
+        ].filter(Boolean).join('\n')
+      };
+    }
     return {
       handled: true,
       entitlements: await refresh(),
@@ -5593,6 +5651,24 @@ async function maybeHandleSubscriptionTurn({
 
   // ---- upgrade / start the one-time trial ----
   if (wantsUpgrade) {
+    // v1.61.16 — inside the decision window, "upgrade" without a named tier
+    // answers with the engine's fitted-plan card (never the generic menu).
+    if (entitlements?.trialPhase === 'GRACE' && !parseTierFromMessage([mergedExt.subscription_tier, lower].filter(Boolean).join(' '))) {
+      const offer = await buildTrialEndOffer({ supabase: supabaseClient, owner, ownerId, interval: 'monthly', currency });
+      const planLine = offer.fitted.addonQuantity > 0
+        ? `${offer.fitted.tierLabel} + ${offer.fitted.addonQuantity} extra slot(s)`
+        : offer.fitted.tierLabel;
+      return {
+        handled: true,
+        reply: [
+          `✅ *${planLine} fits all ${offer.assetCount} ${offer.assetCount === 1 ? 'asset' : 'assets'}*${offer.monthlyLabel ? ` — around ${offer.monthlyLabel}` : ''}`,
+          offer.checkoutUrl ? `👉 *Activate:* ${offer.checkoutUrl}` : 'Reply again in a moment for a fresh link.',
+          offer.addonCheckoutUrl ? `👉 *Extra slots:* ${offer.addonCheckoutUrl}` : null,
+          '',
+          'Want a smaller plan instead? Reply *keep <plate>* and I\'ll pause the rest — never delete.'
+        ].filter(Boolean).join('\n')
+      };
+    }
     const tierFromText = parseTierFromMessage(
       [mergedExt.subscription_tier, lower].filter(Boolean).join(' ')
     );

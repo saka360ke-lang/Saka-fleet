@@ -173,9 +173,12 @@ async function run() {
     vehicles: []
   });
   const floorEnt = await getEntitlements({ supabase: floorMock.client, ownerId: 'p-1', profile: floorProfile, useCache: false });
-  check(floorEnt.tierKey === 'growth' && floorEnt.isTrial === true && floorEnt.effectiveVehicleCapacity === 5, 'A free profile with a live trial keeps the trial floor (growth rides on it)');
+  // v1.61.16 — the trial floor keeps the growth FEATURES, and the garage is the
+  // trial safety ceiling (never a 5-asset plan limit).
+  check(floorEnt.tierKey === 'growth' && floorEnt.isTrial === true && floorEnt.effectiveVehicleCapacity >= 5, 'A free profile with a live trial keeps the trial floor (growth rides on it)');
   check(trialEnt.maxAiTier === 3 && trialEnt.reportsPerMonth === Infinity, 'Trial unlocks full AI + unlimited reports');
-  check(trialEnt.effectiveVehicleCapacity === 5, 'Trial capacity follows the trialed tier');
+  check(trialEnt.effectiveVehicleCapacity >= 5, 'Trial capacity is the safety ceiling, never a plan limit');
+  check(trialEnt.trialPhase === 'TRIAL', 'A live trial is reported in the TRIAL phase');
   check(trialEnt.trialDaysLeft >= 27, 'Trial days-left is reported');
 
   const paidProfile = profile({

@@ -120,7 +120,9 @@ const STATLESS_SUITES = [
   'test_user_context_cache.js',
   // v1.61.15 — trial capacity (15-asset walk, lapse-on-read) + eval spend controls.
   'test_trial_capacity.js',
-  'test_eval_spend.js'
+  'test_eval_spend.js',
+  // v1.61.16 — coupon integrity (canonical creation, binding, atomic claims).
+  'test_coupon_integrity.js'
 ];
 
 const WORKFLOW_DIR = '.github/workflows';

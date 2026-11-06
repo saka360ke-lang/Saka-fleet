@@ -94,7 +94,9 @@ export async function getActiveTrialRow(supabase, ownerId) {
       .from('trial_sessions')
       .select('*')
       .eq('owner_id', ownerId)
-      .in('status', ['ACTIVE', 'EXTENDED'])
+      // v1.61.16 — a trial in its decision window (GRACE) stays the live floor
+      // until grace_ends_at, so assets never blink paused while the owner chooses.
+      .in('status', ['ACTIVE', 'EXTENDED', 'GRACE'])
       .maybeSingle();
     return data || null;
   } catch {
@@ -191,9 +193,16 @@ export async function getEntitlements({ supabase, ownerId, profile = null, now =
   // trial"). A paid plan wins while it grants access; if it lapses before the
   // window ends, the trial takes over instead of Free.
   const trialRowEarly = await getActiveTrialRow(supabase, id);
-  const trialEndMs = trialRowEarly ? new Date(trialRowEarly.ends_at || 0).getTime() : 0;
+  // v1.61.16 — the trial-end decision window (GRACE) keeps the floor until
+  // grace_ends_at. The window is bounded by TRIAL_END_GRACE_DAYS, so it can
+  // never become an endless free plan; at grace end the sweep downgrades.
+  const trialStatusEarly = String(trialRowEarly?.status || '').toUpperCase();
+  const trialAnchor = trialStatusEarly === 'GRACE'
+    ? (trialRowEarly?.grace_ends_at || trialRowEarly?.ends_at || 0)
+    : (trialRowEarly?.ends_at || 0);
+  const trialEndMs = trialRowEarly ? new Date(trialAnchor).getTime() : 0;
   const trialLive = Boolean(trialRowEarly)
-    && ['ACTIVE', 'EXTENDED'].includes(String(trialRowEarly.status))
+    && ['ACTIVE', 'EXTENDED', 'GRACE'].includes(trialStatusEarly)
     && Number.isFinite(trialEndMs) && trialEndMs > now.getTime();
   const trialTierKeyEarly = trialLive ? normalizeTierKey(trialRowEarly.tier || trialRowEarly.tier_key) : null;
   const profileTierKey = normalizeTierKey(prof.subscription_tier);
@@ -255,7 +264,19 @@ export async function getEntitlements({ supabase, ownerId, profile = null, now =
   const accessGranted = hasPaidAccess || Boolean(trialLive);
   const effective = accessGranted ? getTierDefinition(tierKey) : getTierDefinition('free');
   const effectiveTierKey = accessGranted ? tierKey : 'free';
-  const capacity = getEffectiveVehicleLimit(effectiveTierKey, effective.addonEligible ? addons : 0);
+  // v1.61.16 — the welcome trial NEVER caps the garage: every asset the owner
+  // adds while the trial (or its bounded decision window) is live is free to
+  // add. TRIAL_MAX_ASSETS is an anti-abuse ceiling only (default 50, 0 = no cap).
+  const trialAssetCeiling = (() => {
+    const raw = Number(process.env.TRIAL_MAX_ASSETS ?? 50);
+    if (!Number.isFinite(raw)) return 50;
+    const clamped = Math.min(500, Math.max(0, Math.floor(raw)));
+    return clamped === 0 ? Infinity : clamped;
+  })();
+  const trialGarage = Boolean(trialLive) && !hasPaidAccess;
+  const capacity = trialGarage
+    ? trialAssetCeiling
+    : getEffectiveVehicleLimit(effectiveTierKey, effective.addonEligible ? addons : 0);
   const reportsUsed = Number.isFinite(effective.reportsPerMonth)
     ? await getMonthlyReportCount(supabase, id, now)
     : 0;
@@ -269,8 +290,11 @@ export async function getEntitlements({ supabase, ownerId, profile = null, now =
     billingInterval: prof.billing_interval || 'monthly',
     isPaid: hasPaidAccess,
     isTrial,
-    trialEndsAt: isTrial ? trial.ends_at : null,
-    trialDaysLeft: isTrial ? daysBetween(trial.ends_at, now) : 0,
+    trialEndsAt: isTrial ? (trialStatusEarly === 'GRACE' ? (trialRowEarly?.grace_ends_at || trial.ends_at) : trial.ends_at) : null,
+    trialDaysLeft: isTrial ? daysBetween(trialStatusEarly === 'GRACE' ? (trialRowEarly?.grace_ends_at || trial.ends_at) : trial.ends_at, now) : 0,
+    // v1.61.16 — the trial-end decision window is explicit to every consumer.
+    trialPhase: isTrial ? (trialStatusEarly === 'GRACE' ? 'GRACE' : 'TRIAL') : null,
+    graceEndsAt: trialStatusEarly === 'GRACE' ? (trialRowEarly?.grace_ends_at || null) : null,
     trialStartedAt: isTrial ? trial.started_at : null,
     addonQuantity: effective.addonEligible ? addons : 0,
     addonEligible: Boolean(effective.addonEligible),

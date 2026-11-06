@@ -45,6 +45,8 @@ export const ENV_SECTIONS = Object.freeze([
     keys: [
       'TRIAL_DAYS',
       'TRIAL_MAX_TOTAL_DAYS',
+      'TRIAL_MAX_ASSETS',
+      'TRIAL_END_GRACE_DAYS',
       'TRIAL_ACTIVATION_COUPON_PCT',
       'TRIAL_ACTIVATION_COUPON_TTL_DAYS',
       'TRIAL_ACTIVATION_NUDGE_HOURS',

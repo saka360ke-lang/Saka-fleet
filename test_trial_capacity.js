@@ -12,6 +12,13 @@ import { createMockSupabase } from './scripts/mockSupabase.js';
 import { getEntitlements, invalidateEntitlements } from './src/services/subscriptions.js';
 import { checkOwnerVehicleTierLimit } from './src/services/vehicles.js';
 import { formatCapacityRefusal } from './src/services/quizEngine.js';
+import { fittedTierForAssets } from './src/services/subscriptionTiers.js';
+import {
+  runTrialEndStage,
+  trialEndChoiceText,
+  TRIAL_MAX_ASSETS,
+  TRIAL_END_GRACE_DAYS
+} from './src/services/trialEngine.js';
 
 let passed = 0;
 function check(condition, message) {
@@ -79,12 +86,12 @@ function seed({ profile = profileRow(), trial = null, vehicles = [] } = {}) {
 
 console.log('=== SAKA FLEET — trial capacity suite (v1.61.15) ===');
 
-console.log('\n--- 1. live welcome trial resolves growth capacity (5) ---');
+console.log('\n--- 1. live welcome trial = unlimited garage (anti-abuse ceiling only) ---');
 invalidateEntitlements();
 const liveMock = seed({ trial: liveTrial() });
 const liveEnt = await getEntitlements({ supabase: liveMock.client, ownerId: 'p-1', useCache: false });
-check(liveEnt.tierKey === 'growth' && liveEnt.effectiveVehicleCapacity === 5, 'a live welcome trial grants growth capacity 5');
-check(liveEnt.isTrial === true && liveEnt.trialDaysLeft > 0, 'the account is reported as on trial with days left');
+check(liveEnt.tierKey === 'growth' && liveEnt.effectiveVehicleCapacity === TRIAL_MAX_ASSETS, 'a live trial grants the safety ceiling, not a plan limit');
+check(liveEnt.isTrial === true && liveEnt.trialPhase === 'TRIAL' && liveEnt.trialDaysLeft > 0, 'the account is reported as on trial with days left');
 
 console.log('\n--- 2. expired trial window lapses ON READ (T1 fix) ---');
 invalidateEntitlements();
@@ -99,15 +106,15 @@ check(expiredMock.db.profiles[0].subscription_tier === 'free' && expiredMock.db.
 check(expiredMock.db.vehicles.filter((v) => v.status === 'PAUSED').length === 2, 'excess assets are PAUSED, never deleted');
 check(expiredMock.db.vehicles.every((v) => Boolean(v.plate_number)), 'paused assets keep their identity and passbooks');
 
-console.log('\n--- 3. the 15-asset walk: trial gate blocks the 6th ---');
-for (const count of [0, 1, 4, 5, 14, 15]) {
+console.log('\n--- 3. the 15-asset walk: every asset is free to add on trial ---');
+for (const count of [0, 1, 4, 5, 14, 15, TRIAL_MAX_ASSETS - 1, TRIAL_MAX_ASSETS]) {
   invalidateEntitlements();
   const mock = seed({
     trial: liveTrial(),
     vehicles: Array.from({ length: count }, (_, index) => vehicleRow(index + 1, 'ACTIVE', index))
   });
   const gate = await checkOwnerVehicleTierLimit({ ownerId: 'p-1', subscriptionTier: 'growth', supabase: mock.client });
-  check(gate.limit === 5 && gate.isTrial === true && gate.canAdd === (count < 5), `trial gate at ${count} asset(s): limit 5, canAdd ${count < 5}`);
+  check(gate.limit === TRIAL_MAX_ASSETS && gate.isTrial === true && gate.canAdd === (count < TRIAL_MAX_ASSETS), `trial gate at ${count} asset(s): ceiling ${TRIAL_MAX_ASSETS}, canAdd ${count < TRIAL_MAX_ASSETS}`);
 }
 
 console.log('\n--- 4. post-downgrade: PAUSED assets still consume the free slot ---');
@@ -131,12 +138,100 @@ check(lapseGate.limit === 1 && lapseGate.canAdd === false && lapseGate.isTrial =
 check(lapseMock.db.profiles[0].subscription_tier === 'free', 'the gate itself lapses the account — no 15-minute blind spot');
 check(lapseMock.db.vehicles.filter((v) => v.status === 'PAUSED').length === 4, 'the lapse pauses the excess immediately');
 
-console.log('\n--- 6. refusal copy: trial vs plan (engine-owned) ---');
-const trialCopy = formatCapacityRefusal({ isTrial: true, limit: 5, currentCount: 5 });
-check(/welcome trial allows 5 vehicles/.test(trialCopy) && /upgrade/.test(trialCopy), 'the trial refusal names the trial limit and the upgrade path');
-check(!/current plan/.test(trialCopy), 'the trial refusal never calls the trial a current plan');
+console.log('\n--- 6. refusal copy: safety ceiling vs plan (engine-owned) ---');
+const trialCopy = formatCapacityRefusal({ isTrial: true, limit: TRIAL_MAX_ASSETS, currentCount: TRIAL_MAX_ASSETS });
+check(/safety ceiling/.test(trialCopy) && /support/.test(trialCopy), 'the trial ceiling refusal says safety ceiling + support lane');
+check(!/welcome trial allows/.test(trialCopy), 'the trial refusal never claims a plan limit');
 const planCopy = formatCapacityRefusal({ isTrial: false, limit: 1, currentCount: 1 });
 check(/current plan allows 1 vehicle/.test(planCopy) && /upgrade/.test(planCopy), 'the plan refusal stays unchanged for non-trial accounts');
+
+console.log('\n--- 7. fitted tier math (trial-end journey) ---');
+const fit1 = fittedTierForAssets(1);
+const fit2 = fittedTierForAssets(2);
+const fit5 = fittedTierForAssets(5);
+const fit6 = fittedTierForAssets(6);
+const fit15 = fittedTierForAssets(15);
+check(fit1.tierKey === 'solo_pro' && fit1.totalUSD === 9.99, '1 asset fits Solo Pro at its list price');
+check(fit2.tierKey === 'team_fleet' && fit2.capacity === 3, '2 assets fit Team Fleet (capacity 3)');
+check(fit5.tierKey === 'growth' && fit5.addonQuantity === 0, '5 assets fit Growth with no add-ons');
+check(fit6.tierKey === 'fleet_command' && fit6.addonQuantity === 1 && fit6.totalUSD === 31.98, '6 assets fit Fleet Command + 1 add-on ($27.99 + $3.99)');
+check(fit15.tierKey === 'fleet_command' && fit15.addonQuantity === 10 && fit15.capacity === 15, '15 assets fit Fleet Command + 10 add-ons (capacity 15)');
+check(fittedTierForAssets(2, { interval: 'annual' }).totalUSD === 151.12, 'annual pricing comes from the same registry');
+
+console.log('\n--- 8. GRACE floor: assets stay active while the owner chooses ---');
+invalidateEntitlements();
+const graceMock = seed({
+  trial: { ...liveTrial(past(1)), status: 'GRACE', grace_ends_at: future(5) },
+  vehicles: [1, 2, 3, 4, 5, 6, 7].map((id) => vehicleRow(id, 'ACTIVE', id))
+});
+const graceEnt = await getEntitlements({ supabase: graceMock.client, ownerId: 'p-1', useCache: false });
+check(graceEnt.isTrial === true && graceEnt.trialPhase === 'GRACE', 'the decision window is reported as GRACE');
+check(graceEnt.effectiveVehicleCapacity === TRIAL_MAX_ASSETS && graceEnt.trialDaysLeft > 0, 'the garage stays open during the bounded window');
+check(Boolean(graceEnt.graceEndsAt), 'the grace deadline is exposed to copy');
+
+console.log('\n--- 9. trial end opens the window; grace end falls back safely ---');
+const stageMessages = [];
+const stageMock = seed({
+  trial: liveTrial(past(1)),
+  vehicles: Array.from({ length: 6 }, (_, index) => vehicleRow(index + 1, 'ACTIVE', index))
+});
+const stageStats = {};
+const consumed = await runTrialEndStage({
+  supabase: stageMock.client,
+  trial: stageMock.db.trial_sessions[0],
+  owner: stageMock.db.profiles[0],
+  phone: '+254700000001',
+  ownerCtx: { currency: 'KES', locale: 'en-KE', timeZone: 'Africa/Nairobi' },
+  now: new Date(),
+  sendWhatsAppFn: async (to, text) => { stageMessages.push(text); return true; },
+  stats: stageStats,
+  checkoutFn: async () => ({ ok: true, checkoutUrl: 'https://checkout.test/fit' }),
+  addonCheckoutFn: async () => ({ ok: true, checkoutUrl: 'https://checkout.test/addon' })
+});
+check(consumed === true && stageStats.graceStarted === 1, 'T-0 opens the decision window instead of downgrading');
+check(stageMock.db.trial_sessions[0].status === 'GRACE' && Boolean(stageMock.db.trial_sessions[0].grace_ends_at), 'the trial row is stamped GRACE with a deadline');
+const choiceText = stageMessages[0] || '';
+check(/nothing is paused yet/.test(choiceText) && /6 assets/.test(choiceText), 'the card names the asset count and promises no pause');
+check(choiceText.includes('https://checkout.test/fit') && choiceText.includes('https://checkout.test/addon'), 'the fit link and the add-on link are engine-supplied');
+check(/keep <plate>/.test(choiceText), 'the downsize path is named with the real command');
+
+const graceEndMock = seed({
+  trial: { ...liveTrial(past(9)), status: 'GRACE', grace_ends_at: past(1) },
+  vehicles: [1, 2, 3].map((id) => vehicleRow(id, 'ACTIVE', id))
+});
+const endMessages = [];
+await runTrialEndStage({
+  supabase: graceEndMock.client,
+  trial: graceEndMock.db.trial_sessions[0],
+  owner: graceEndMock.db.profiles[0],
+  phone: '+254700000001',
+  ownerCtx: { currency: 'KES' },
+  now: new Date(),
+  sendWhatsAppFn: async (to, text) => { endMessages.push(text); return true; },
+  stats: {}
+});
+check(graceEndMock.db.profiles[0].subscription_tier === 'free', 'grace end falls back to Free');
+check(graceEndMock.db.vehicles.filter((v) => v.status === 'PAUSED').length === 2, 'excess assets are PAUSED, never deleted');
+check(endMessages.some((text) => /trial has ended/i.test(text)), 'the fallback message explains the Free plan honestly');
+
+console.log('\n--- 10. paid-live owners are never touched at trial end ---');
+const paidMock = seed({
+  profile: profileRow({ subscription_tier: 'growth', subscription_status: 'ACTIVE', subscription_period_end: future(20) }),
+  trial: liveTrial(past(1)),
+  vehicles: [1, 2].map((id) => vehicleRow(id, 'ACTIVE', id))
+});
+const paidStats = {};
+await runTrialEndStage({
+  supabase: paidMock.client,
+  trial: paidMock.db.trial_sessions[0],
+  owner: paidMock.db.profiles[0],
+  phone: '+254700000001',
+  ownerCtx: { currency: 'KES' },
+  now: new Date(),
+  sendWhatsAppFn: async () => true,
+  stats: paidStats
+});
+check(paidMock.db.trial_sessions[0].status === 'EXPIRED' && paidMock.db.vehicles.every((v) => v.status === 'ACTIVE'), 'a live paid plan keeps every asset active');
 
 console.log(`\n🎉 ALL TRIAL CAPACITY TESTS PASSED (${passed} assertions).`);
 

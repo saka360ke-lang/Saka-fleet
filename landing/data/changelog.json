@@ -1,6 +1,13 @@
 {
-  "latest": "1.61.15",
+  "latest": "1.61.16",
   "entries": [
+    {
+      "version": "1.61.16",
+      "date": "2026-11-06",
+      "title": "Grow free on trial, pick your plan at the end",
+      "preview": "Add as many assets as you like during the trial — when it ends, Saka offers the plan that fits them.",
+      "summary": "The welcome trial no longer limits how many vehicles, machines or equipment you add. When it ends nothing is paused: Saka opens a short choice window, works out the plan that fits the assets you have, and sends the exact price and a secure payment link. You can keep everything in one tap, or reply keep <plate> to shrink to a smaller plan — extra assets pause, never disappear. Coupon codes now apply the real discount they promise, and help is one short reply away on every step."
+    },
     {
       "version": "1.61.15",
       "date": "2026-11-06",

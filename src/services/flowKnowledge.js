@@ -79,7 +79,7 @@ export const SAKA_QUIZ_FLOWS = [
     fields: 'asset kind (car/motorcycle/truck/bus/machinery/heavy equipment/generator/boat) → plate or serial → make/model → YOM → fuel → odometer or hour meter → VIN (road assets only) → optional specs → confirm',
     extracted: ['asset_kind', 'plate_number', 'serial_number', 'make_model', 'yom', 'fuel_type', 'current_mileage', 'operating_hours', 'vin'],
     writes: 'vehicles + VIN provenance ledger (no VIN trial) + profile email (from the website-verified account) + passbook email + the one-time full-featured welcome trial + owner driver-profile start',
-    rules: 'VIN is permanent; the asset kind selects the identity track (plate+VIN for road assets, serial + hour meter for generators/machinery) and the country-bucket compliance catalog; one question per turn; optional specs skippable as a group; a pasted paragraph fills several fields at once; on completion Saka immediately starts the owner\'s own driver profile (minimum compliance, skippable); an owner who ALREADY has a vehicle can register another asset the same way — capacity and verified email are enforced at save; v1.61.15 — capacity is an ENTITLEMENT: the welcome trial allows 5 active assets, so the 6th add is refused with the real limit and the upgrade path (never a fake save); when the trial lapses the newest asset stays active and the rest are PAUSED, never deleted — say so plainly and offer the keep-vehicle command; v1.58.25 — vehicle permits (insurance, inspection, PSL, road tax) are captured at any time from chat, and a bare "add insurance" gets the one-line example instead of the menu'
+    rules: 'VIN is permanent; the asset kind selects the identity track (plate+VIN for road assets, serial + hour meter for generators/machinery) and the country-bucket compliance catalog; one question per turn; optional specs skippable as a group; a pasted paragraph fills several fields at once; on completion Saka immediately starts the owner\'s own driver profile (minimum compliance, skippable); an owner who ALREADY has a vehicle can register another asset the same way — capacity and verified email are enforced at save; v1.61.16 — the welcome trial NEVER caps the garage: add as many assets as you like (a 50-asset safety ceiling only); when the trial ends a bounded decision window opens and Saka offers the plan that fits the asset count with the engine-owned payment link — keeping all is one tap, a smaller plan pauses the rest (never deletes) via *keep <plate>*, and doing nothing falls back to Free with everything safe; v1.58.25 — vehicle permits (insurance, inspection, PSL, road tax) are captured at any time from chat, and a bare "add insurance" gets the one-line example instead of the menu'
   },
   {
     key: 'email_update',
@@ -394,6 +394,48 @@ export const SAKA_METRIC_GLOSSARY = buildMetricGlossaryBlock();
  * The Compass keeps Saka true (values that never bend). The Mirror keeps Saka
  * human (adaptive register for different personalities, roles and cultures).
  */
+/**
+ * v1.61.16 — STUCK GUIDANCE REGISTRY (rule 60).
+ * Every multi-step flow owns exactly ONE deterministic next step. The engine
+ * renders the matching line when the user is stuck (explicit help/hint/"?" or
+ * two failed turns in the same step) — warm, ≤2 lines, zero AI tokens. Data
+ * only: the same lines render into the core prompt, so behaviour and prompt can
+ * never drift.
+ */
+export const FLOW_GUIDANCE = Object.freeze({
+  vehicle_registration: 'Type the plate (e.g. KDA 123A) or say *cancel* — nothing is saved until you confirm the card.',
+  log_expense: 'Type the amount (e.g. 5,000) — I already have the rest, and nothing saves until you confirm.',
+  log_earnings: 'Type the amount you earned — reply *Skip* on any optional step.',
+  set_reminder: 'Pick a number from the list (e.g. 1) or say the type in your own words; reply *Skip* for anything optional.',
+  assign_driver: 'Type the driver phone (e.g. +254712345678) — the owner email code comes next.',
+  transfer_seller: 'Say *transfer* and I will start the handover card — nothing moves until the buyer accepts.',
+  keep_vehicles: 'Reply *keep <plate>* (e.g. keep KDA 123A) and I will pause the rest — never delete.',
+  edit_entry: 'Say *my entries*, then *edit 2* — or tell me the amount to fix and I will find it.',
+  delete_entry: 'Say *my entries*, then *delete 2*, and confirm with the word DELETE.',
+  apply_coupon: 'Send the coupon code exactly as you received it, or reply *skip* to continue without one.',
+  onboarding_otp: 'Type the 6-digit code from your email — reply *resend* for a fresh one.',
+  subscription_upgrade: 'Reply with the plan name (e.g. *growth monthly*) — I will send the engine payment link.',
+  subscription_trial_end: 'Reply *keep all* for the plan that fits every asset, or *keep <plate>* for a smaller plan — nothing is deleted either way.',
+  cancel_subscription: 'Reply *YES* to cancel or *NO* to keep your plan — access runs to the paid period end.',
+  contact_support: 'Type what happened in one line — I will send it to the care team and confirm.',
+  // v1.61.16 — every one of the 21 quiz flows carries a line (rule 60).
+  email_update: 'Type the new email address — I will send a 6-digit code to verify it.',
+  driver_onboarding: 'Reply *ACCEPT* to start the driver setup, or *decline* — nothing changes until you accept.',
+  unassign_driver: 'Reply *remove driver* and I will detach them; their history stays with the vehicle.',
+  log_mileage: 'Type the odometer reading (e.g. 367410) — one number is all I need.',
+  log_operating_hours: 'Type the engine hours (e.g. 1240) — one number is all I need.',
+  edit_vehicle: 'Say which detail to change (e.g. *make and model: Toyota Hiace*) — VIN and plate stay locked.',
+  edit_profile: 'Type the new detail (name, country or language) — I will confirm before saving.',
+  delete_vehicle: 'Reply with the plate you want removed, then confirm — history and passbook are preserved.',
+  delete_account: 'Reply *delete account* and confirm with the emailed code — this cannot be undone.',
+  reactivate_account: 'Reply *reactivate* and I will restore your account — data is kept while deactivated.'
+});
+
+/** Deterministic one next step for a flow key, or null when unregistered. */
+export function guidanceForFlow(key) {
+  return FLOW_GUIDANCE[String(key || '').trim()] || null;
+}
+
 export const SAKA_TONE_COMPASS = {
   voice: [
     'You are Saka — the machine memory, money-saver and paperwork wizard. Never "a support assistant".',
@@ -497,6 +539,10 @@ export const SAKA_TONE_COMPASS = {
     'Errors or confusion -> patient-guide mode: "No worries" + what still stands + ONE retry path; never scold, never repeat the identical question verbatim.',
     'Numbers before prose -> the figure the user asked for comes first; explanation comes after, short and optional.'
   ],
+  // v1.61.16 — STUCK GUIDANCE LAW (rule 60): a user who is stuck (explicit help,
+  // a repeated message, or two failed turns in the same step) gets exactly ONE
+  // engine-supplied next step for the active flow — never a menu wall.
+  guidance: 'A stuck user gets ONE short next step (2 lines max), from the STUCK GUIDANCE block for the active flow — never a menu wall, never blame, never rush.',
   ackVariety: {
     law: 'Never use the same confirmation opener twice in a row in one conversation; rotate among active verbs and match the register.',
     casual: ['Logged ✓', 'Got it', 'Done', 'Noted', 'All set', 'Saved ✓'],
@@ -532,6 +578,9 @@ export function buildToneCompassBlock() {
     ...SAKA_TONE_COMPASS.floors.map((rule) => `- ${rule}`),
     'PACING LAWS (v1.59.0 — silence is golden):',
     ...SAKA_TONE_COMPASS.pacing.map((rule) => `- ${rule}`),
+    'STUCK GUIDANCE LAW (v1.61.16 — every flow has one next step):',
+    `- ${SAKA_TONE_COMPASS.guidance}`,
+    ...Object.entries(FLOW_GUIDANCE).map(([key, line]) => `- ${key}: ${line}`),
     'ACK VARIETY (v1.59.0 — never a metronome):',
     `- ${SAKA_TONE_COMPASS.ackVariety.law}`,
     `- Casual openers: ${SAKA_TONE_COMPASS.ackVariety.casual.join(' · ')}`,

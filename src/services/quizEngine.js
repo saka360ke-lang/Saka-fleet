@@ -2344,6 +2344,19 @@ export async function handleQuizTurn({
     return { handled: true, reply, flow: state.flow, active: true };
   }
 
+  // v1.61.16 — STUCK GUIDANCE LAW (rule 60): an explicit help/hint request on a
+  // quiz field gets the engine's ONE next step deterministically (zero tokens)
+  // instead of pausing to a generic menu answer. The question never changes.
+  if (/^(?:help|hint|\?|how do i (?:do |answer )?this|what do i (?:do|type)(?: next)?|guide me)$/i.test(clean)) {
+    state.turnNote = 'The user asked for help — give ONLY the engine step below, warm and short. Stay on the same question.';
+    return {
+      handled: true,
+      reply: `🫶 No problem — I'm right here.\n\n${current.hint} Easiest way: ${simplestTypedPath(current, vctx)}.`,
+      flow: state.flow,
+      active: true
+    };
+  }
+
   // "Already told you" recovery (v1.16.2): never loop on a compliance item.
   // Runs BEFORE parsing so it also covers messages whose text parses into an
   // invalid value. If the user says they already provided it, answer from what
@@ -3758,8 +3771,10 @@ async function executeFlow(state, ctx) {
 export function formatCapacityRefusal(tier = {}) {
   const limit = Number.isFinite(Number(tier.limit)) ? Number(tier.limit) : 0;
   const current = Number.isFinite(Number(tier.currentCount)) ? Number(tier.currentCount) : 0;
+  // v1.61.16 — the trial no longer has a plan limit; this branch only fires on
+  // the anti-abuse safety ceiling (TRIAL_MAX_ASSETS) and says exactly that.
   return tier.isTrial
-    ? `Your welcome trial allows ${limit} vehicles and you already have ${current}. Everything on your account stays safe — upgrade to add more.`
+    ? `You already have ${current} assets on your trial — that's our safety ceiling for now. Reply *support* and we'll raise it; nothing you built is lost.`
     : `Your current plan allows ${limit} vehicle(s). Please upgrade to add more.`;
 }
 

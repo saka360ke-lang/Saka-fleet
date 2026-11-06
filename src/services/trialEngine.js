@@ -23,12 +23,14 @@ import { detectCountryFromPhone, resolveUserTimezone } from './globalization.js'
 import {
   getTierLabel,
   normalizeTierKey,
-  isPaidTierKey
+  isPaidTierKey,
+  fittedTierForAssets
 } from './subscriptionTiers.js';
 import {
   downgradeToFree,
   getActiveTrialRow,
   checkoutForTier,
+  checkoutForAddon,
   invalidateEntitlements
 } from './subscriptions.js';
 import { shortenUrl } from './linkShortener.js';
@@ -50,6 +52,14 @@ export const TRIAL_ACTIVATION_COUPON_TTL_DAYS = clampNumber(process.env.TRIAL_AC
 export const TRIAL_ACTIVATION_NUDGE_HOURS = clampNumber(process.env.TRIAL_ACTIVATION_NUDGE_HOURS, 24, 24 * 14, 24 * 7);
 export const TRIAL_CONVERSION_LADDER = /^(on|true|1)$/i.test(String(process.env.TRIAL_CONVERSION_LADDER || 'off'));
 export const TRIAL_MIDPOINT_COUPON_PCT = clampNumber(process.env.TRIAL_MIDPOINT_COUPON_PCT, 0, 100, 15);
+/**
+ * v1.61.16 — the trial never caps the garage. TRIAL_MAX_ASSETS is an anti-abuse
+ * ceiling only (default 50; 0 = unlimited; mirrors subscriptions.getEntitlements).
+ * TRIAL_END_GRACE_DAYS opens a bounded decision window at trial end: assets stay
+ * active while the owner picks the plan that fits. 0 = the old hard downgrade.
+ */
+export const TRIAL_MAX_ASSETS = clampNumber(process.env.TRIAL_MAX_ASSETS, 0, 500, 50);
+export const TRIAL_END_GRACE_DAYS = clampNumber(process.env.TRIAL_END_GRACE_DAYS, 0, 14, 7);
 
 export const ACTIVATION_EVENTS = Object.freeze({
   VEHICLE_REGISTERED: 'vehicle_registered',
@@ -580,7 +590,7 @@ function t3DigestText({ ownerName, tierLabel, trial, metrics, priceLabel, annual
 }
 
 function t24Text({ tierLabel, trial, checkoutUrl, locale = 'en-US', timeZone = 'Africa/Nairobi' }) {
-  return `⏳ *24 hours left on your ${tierLabel} trial*\n\nYour trial ends ${trialDateLabel(trial.ends_at, { locale, timeZone })}. After that your account moves to Free (1 vehicle, 1 report/month, Tier-1 AI) and extra vehicles are paused — nothing is deleted.\n\n👉 Activate your plan: ${checkoutUrl || 'https://sakafleet.com/pricing'}`;
+  return `⏳ *24 hours left on your ${tierLabel} trial*\n\nYour trial ends ${trialDateLabel(trial.ends_at, { locale, timeZone })}. Nothing is paused at the end — you'll get a short window to pick the plan that fits your assets, and every asset stays safe either way.\n\n👉 Activate your plan: ${checkoutUrl || 'https://sakafleet.com/pricing'}`;
 }
 
 function expiryText({ tierLabel, pausedPlates, checkoutUrl }) {
@@ -595,6 +605,296 @@ function expiryText({ tierLabel, pausedPlates, checkoutUrl }) {
   }
   lines.push(`\n🚀 Ready to unlock everything again? ${checkoutUrl || 'https://sakafleet.com/pricing'}`);
   return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// v1.61.16 — trial-end decision window: never cap the garage, choose the plan
+// ---------------------------------------------------------------------------
+
+/** Count the owner's live assets (deleted excluded) — the fit input. */
+export async function countOwnerAssets(supabase, ownerId, { activeOnly = false } = {}) {
+  if (!supabase || !ownerId) return 0;
+  try {
+    let query = supabase
+      .from('vehicles')
+      .select('id', { count: 'exact', head: true })
+      .eq('owner_id', ownerId)
+      .is('deleted_at', null);
+    // v1.61.16 — after a downsize choice the fit is recomputed on the ACTIVE
+    // garage only, so pausing assets immediately lowers the offered plan.
+    if (activeOnly) query = query.eq('status', 'ACTIVE');
+    const { count } = await query;
+    return count || 0;
+  } catch (err) {
+    logWriteFailure(supabase, 'trialEngine.countOwnerAssets', err, { owner_id: ownerId });
+    return 0;
+  }
+}
+
+/** Paid plans that must never be downgraded when a trial ages out. */
+function isPaidLiveNow(owner, nowMs) {
+  if (!owner) return false;
+  const paidEndRaw = owner.subscription_period_end || owner.subscription_expires_at || null;
+  const paidEndMs = paidEndRaw ? new Date(paidEndRaw).getTime() : 0;
+  return isPaidTierKey(owner.subscription_tier)
+    && ['ACTIVE', 'CANCELING', 'PAST_DUE'].includes(String(owner.subscription_status || '').toUpperCase())
+    && (paidEndMs === 0 || paidEndMs > nowMs);
+}
+
+/**
+ * Build the trial-end offer: asset count, the fitted tier and the engine's own
+ * checkout link(s). Amounts come from the registry + the FX engine only, never
+ * from the model. Checkout functions are injectable so tests never call Paystack.
+ */
+export async function buildTrialEndOffer({
+  supabase,
+  owner = {},
+  ownerId = null,
+  interval = 'monthly',
+  currency = 'USD',
+  activeOnly = false,
+  checkoutFn = checkoutForTier,
+  addonCheckoutFn = checkoutForAddon
+} = {}) {
+  const resolvedOwnerId = ownerId || owner.id || null;
+  const assetCount = await countOwnerAssets(supabase, resolvedOwnerId, { activeOnly });
+  const fitted = fittedTierForAssets(assetCount, { interval });
+  const local = await getTierLocalPrice(supabase, fitted.tierKey, currency, fitted.interval).catch(() => null);
+  const offer = {
+    assetCount,
+    fitted,
+    monthlyLabel: local?.formattedPrice
+      ? `${local.formattedPrice}/${fitted.interval === 'annual' ? 'year' : 'month'}`
+      : null,
+    checkoutUrl: null,
+    addonCheckoutUrl: null
+  };
+  if (!supabase || !resolvedOwnerId) return offer;
+  try {
+    const checkout = await checkoutFn({
+      supabase,
+      owner: { ...owner, id: resolvedOwnerId },
+      targetTierKey: fitted.tierKey,
+      interval: fitted.interval,
+      currency,
+      metadata: { trial_end_fit: true, asset_count: assetCount }
+    });
+    if (checkout?.ok) offer.checkoutUrl = await shortenUrl(supabase, checkout.checkoutUrl) || checkout.checkoutUrl;
+  } catch (err) {
+    logWriteFailure(supabase, 'trialEngine.buildTrialEndOffer', err, { owner_id: resolvedOwnerId });
+  }
+  if (fitted.addonQuantity > 0) {
+    try {
+      const addon = await addonCheckoutFn({
+        supabase,
+        owner: { ...owner, id: resolvedOwnerId },
+        addonQuantity: fitted.addonQuantity,
+        interval: fitted.interval,
+        currency
+      });
+      if (addon?.ok) offer.addonCheckoutUrl = await shortenUrl(supabase, addon.checkoutUrl) || addon.checkoutUrl;
+    } catch (err) {
+      logWriteFailure(supabase, 'trialEngine.buildTrialEndOffer.addon', err, {
+        owner_id: resolvedOwnerId,
+        addon_quantity: fitted.addonQuantity
+      });
+    }
+  }
+  return offer;
+}
+
+/** Deterministic trial-end choice card: one decision, three plain paths. */
+export function trialEndChoiceText({
+  ownerName = null,
+  offer = {},
+  graceEndsAt = null,
+  graceDays = TRIAL_END_GRACE_DAYS,
+  locale = 'en-US',
+  timeZone = 'Africa/Nairobi'
+} = {}) {
+  const name = ownerName ? `, ${String(ownerName).split(/\s+/)[0]}` : '';
+  const fitted = offer.fitted || fittedTierForAssets(offer.assetCount || 0);
+  const count = Number(offer.assetCount || 0);
+  const assetWord = count === 1 ? 'asset' : 'assets';
+  const planLine = fitted.addonQuantity > 0
+    ? `${fitted.tierLabel} + ${fitted.addonQuantity} extra slot${fitted.addonQuantity === 1 ? '' : 's'}`
+    : fitted.tierLabel;
+  const price = offer.monthlyLabel ? ` — around ${offer.monthlyLabel}` : '';
+  return [
+    `🎉 *Your trial just ended${name} — nothing is paused yet*`,
+    '',
+    `You built ${count} ${assetWord} on Saka. Keeping all of them active fits *${planLine}*${price}.`,
+    offer.checkoutUrl ? `👉 *Keep all ${count}:* ${offer.checkoutUrl}` : null,
+    offer.addonCheckoutUrl ? `👉 *Add the extra slots:* ${offer.addonCheckoutUrl}` : null,
+    '',
+    '• Want a smaller plan? Reply *keep <plate>* and I\'ll pause the rest — never delete.',
+    graceDays > 0 && graceEndsAt
+      ? `• No rush: this choice stays open until ${trialDateLabel(graceEndsAt, { locale, timeZone })}. After that the account moves to Free (1 active asset, the rest paused). Everything stays safe.`
+      : '• If you do nothing, the account moves to Free (1 active asset, the rest paused). Everything stays safe.'
+  ].filter((line) => line !== null).join('\n');
+}
+
+/** Deterministic countdown nudge inside the decision window. */
+export function graceCountdownText({
+  offer = {},
+  daysLeft = 0,
+  locale = 'en-US',
+  timeZone = 'Africa/Nairobi',
+  graceEndsAt = null
+} = {}) {
+  const fitted = offer.fitted || fittedTierForAssets(offer.assetCount || 0);
+  const count = Number(offer.assetCount || 0);
+  const planLine = fitted.addonQuantity > 0
+    ? `${fitted.tierLabel} + ${fitted.addonQuantity} extra slot${fitted.addonQuantity === 1 ? '' : 's'}`
+    : fitted.tierLabel;
+  return [
+    `⏳ *${daysLeft} day${daysLeft === 1 ? '' : 's'} left to choose*`,
+    '',
+    `Your ${count} ${count === 1 ? 'asset stays' : 'assets stay'} active for now. Keep them all on *${planLine}*${offer.monthlyLabel ? ` — around ${offer.monthlyLabel}` : ''}.`,
+    offer.checkoutUrl ? `👉 ${offer.checkoutUrl}` : null,
+    graceEndsAt ? `_After ${trialDateLabel(graceEndsAt, { locale, timeZone })}: Free plan, 1 active asset, the rest paused — never deleted._` : null,
+    '',
+    'Reply *keep <plate>* to choose a smaller plan instead.'
+  ].filter((line) => line !== null).join('\n');
+}
+
+/**
+ * v1.61.16 — the whole trial-end stage for ONE trial row: the bounded decision
+ * window (GRACE), its countdown, and the final Free fallback. Returns true when
+ * it consumed the row (the sweep loop then continues to the next trial).
+ */
+export async function runTrialEndStage({
+  supabase,
+  trial = null,
+  owner = null,
+  phone = null,
+  ownerCtx = {},
+  tierLabel = null,
+  now = new Date(),
+  sendWhatsAppFn = null,
+  stats = {},
+  checkoutFn = null,
+  addonCheckoutFn = null
+} = {}) {
+  if (!supabase || !trial) return false;
+  const nowMs = now.getTime();
+  const nowIso = now.toISOString();
+  const endsMs = new Date(trial.ends_at).getTime();
+  const label = tierLabel || getTierLabel(trial.tier);
+  const status = String(trial.status || '').toUpperCase();
+  const paidLive = isPaidLiveNow(owner, nowMs);
+  const currency = ownerCtx.currency || 'USD';
+  const offer = () => buildTrialEndOffer({
+    supabase,
+    owner,
+    ownerId: trial.owner_id,
+    interval: trial.interval || 'monthly',
+    currency,
+    ...(checkoutFn ? { checkoutFn } : {}),
+    ...(addonCheckoutFn ? { addonCheckoutFn } : {})
+  });
+
+  // ---- the DECISION WINDOW (the trial already ended, nothing paused yet) ----
+  if (status === 'GRACE') {
+    const graceEndsRaw = trial.grace_ends_at || trial.ends_at;
+    const graceEndsMs = new Date(graceEndsRaw).getTime();
+    if (paidLive) {
+      stats.expired = (stats.expired || 0) + 1;
+      return true;
+    }
+    if (!Number.isFinite(graceEndsMs) || nowMs >= graceEndsMs) {
+      // v1.61.16 — stamp EXPIRED FIRST so the same row can never re-enter the
+      // window on the next tick (double downgrade + repeated messages).
+      await stampTrial(supabase, trial.id, { status: 'EXPIRED', expiry_processed_at: nowIso });
+      const downgraded = await downgradeToFree({ supabase, ownerId: trial.owner_id, reason: 'trial.grace_ended' });
+      stats.expired = (stats.expired || 0) + 1;
+      stats.graceEnded = (stats.graceEnded || 0) + 1;
+      if (phone && sendWhatsAppFn) {
+        const pausedPlates = (downgraded.paused || []).map((v) => v.plate_number).filter(Boolean);
+        const checkoutUrl = await buildNudgeCheckout({ supabase, owner, trial, currency });
+        await sendWhatsAppFn(phone, expiryText({ tierLabel: label, pausedPlates, checkoutUrl })).catch(() => {});
+        stats.sent = (stats.sent || 0) + 1;
+      }
+      return true;
+    }
+    const current = await offer();
+    const daysLeft = Math.max(1, Math.ceil((graceEndsMs - nowMs) / DAY_MS));
+    if (!trial.grace_t24_sent_at && nowMs >= graceEndsMs - DAY_MS) {
+      await stampTrial(supabase, trial.id, { grace_t24_sent_at: nowIso });
+      if (phone && sendWhatsAppFn) {
+        await sendWhatsAppFn(phone, graceCountdownText({
+          offer: current,
+          daysLeft,
+          locale: ownerCtx.locale,
+          timeZone: ownerCtx.timeZone,
+          graceEndsAt: graceEndsRaw
+        })).catch(() => {});
+        stats.sent = (stats.sent || 0) + 1;
+        stats.graceT24 = (stats.graceT24 || 0) + 1;
+      }
+      return true;
+    }
+    if (!trial.grace_t3_sent_at && nowMs >= graceEndsMs - 3 * DAY_MS) {
+      await stampTrial(supabase, trial.id, { grace_t3_sent_at: nowIso });
+      if (phone && sendWhatsAppFn) {
+        await sendWhatsAppFn(phone, graceCountdownText({
+          offer: current,
+          daysLeft,
+          locale: ownerCtx.locale,
+          timeZone: ownerCtx.timeZone,
+          graceEndsAt: graceEndsRaw
+        })).catch(() => {});
+        stats.sent = (stats.sent || 0) + 1;
+        stats.graceT3 = (stats.graceT3 || 0) + 1;
+      }
+      return true;
+    }
+    return true;
+  }
+
+  // ---- T-0: open the decision window (or the old hard downgrade when off) ----
+  if (nowMs < endsMs) return false;
+  if (paidLive) {
+    await stampTrial(supabase, trial.id, { status: 'EXPIRED', expiry_processed_at: nowIso });
+    stats.expired = (stats.expired || 0) + 1;
+    return true;
+  }
+  if (TRIAL_END_GRACE_DAYS > 0) {
+    const graceEndsAt = new Date(endsMs + TRIAL_END_GRACE_DAYS * DAY_MS).toISOString();
+    const started = await setTrialFields(supabase, trial.id, {
+      status: 'GRACE',
+      grace_ends_at: graceEndsAt,
+      trial_end_choice: null,
+      expiry_processed_at: nowIso
+    });
+    if (started) {
+      stats.graceStarted = (stats.graceStarted || 0) + 1;
+      if (phone && sendWhatsAppFn) {
+        const current = await offer();
+        await sendWhatsAppFn(phone, trialEndChoiceText({
+          ownerName: owner?.full_name,
+          offer: current,
+          graceEndsAt,
+          graceDays: TRIAL_END_GRACE_DAYS,
+          locale: ownerCtx.locale,
+          timeZone: ownerCtx.timeZone
+        })).catch(() => {});
+        stats.sent = (stats.sent || 0) + 1;
+      }
+      return true;
+    }
+    // Column missing (schema drift) -> fall through to the hard downgrade.
+  }
+  await stampTrial(supabase, trial.id, { status: 'EXPIRED', expiry_processed_at: nowIso });
+  const downgraded = await downgradeToFree({ supabase, ownerId: trial.owner_id, reason: 'trial.expired' });
+  stats.expired = (stats.expired || 0) + 1;
+  if (phone && sendWhatsAppFn) {
+    const pausedPlates = (downgraded.paused || []).map((v) => v.plate_number).filter(Boolean);
+    const checkoutUrl = await buildNudgeCheckout({ supabase, owner, trial, currency });
+    await sendWhatsAppFn(phone, expiryText({ tierLabel: label, pausedPlates, checkoutUrl })).catch(() => {});
+    stats.sent = (stats.sent || 0) + 1;
+  }
+  return true;
 }
 
 async function buildNudgeCheckout({ supabase, owner, trial, currency }) {
@@ -621,6 +921,40 @@ async function stampTrial(supabase, trialId, patch) {
     // v1.61.12 — trial state transitions drive expiry + nudge ladders; a silent
     // failure hides them from every operator view.
     logWriteFailure(supabase, 'trialEngine.stampTrial', stampErr);
+  }
+}
+
+/** v1.61.16 — a stamp whose failure the caller must SEE (grace state). */
+async function setTrialFields(supabase, trialId, patch) {
+  try {
+    const { error } = await supabase
+      .from('trial_sessions')
+      .update({ ...patch, updated_at: new Date().toISOString() })
+      .eq('id', trialId);
+    if (error) {
+      logWriteFailure(supabase, 'trialEngine.setTrialFields', error, { trial_id: trialId });
+      return false;
+    }
+    return true;
+  } catch (err) {
+    logWriteFailure(supabase, 'trialEngine.setTrialFields', err, { trial_id: trialId });
+    return false;
+  }
+}
+
+/** v1.61.16 — coupon redemption/refusal trail (rule 28: engine-owned). */
+async function auditCoupon(supabase, action, details = {}) {
+  try {
+    await supabase.from('admin_audit_logs').insert([{
+      admin_phone: process.env.SUPERADMIN_PHONE || 'system',
+      action,
+      details,
+      created_at: new Date().toISOString()
+    }]);
+    return true;
+  } catch (err) {
+    logWriteFailure(supabase, `trialEngine.${String(action).toLowerCase()}`, err, details);
+    return false;
   }
 }
 
@@ -1111,13 +1445,15 @@ export async function processExpiredRenewalNudges({ supabase, sendWhatsAppFn, no
  * Each stage fires exactly once per trial, guarded by one-shot timestamps.
  */
 export async function runTrialLifecycleSweep({ supabase, sendWhatsAppFn = null, now = new Date(), limit = 100 } = {}) {
-  const stats = { scanned: 0, sent: 0, activationNudges: 0, midpoint: 0, t3: 0, t24: 0, expired: 0, extensionOffers: 0, winbacks: 0, dunning: 0, reengaged: 0, abandonedRecoveries: 0, renewalNudges: 0 };
+  const stats = { scanned: 0, sent: 0, activationNudges: 0, midpoint: 0, t3: 0, t24: 0, expired: 0, extensionOffers: 0, winbacks: 0, dunning: 0, reengaged: 0, abandonedRecoveries: 0, renewalNudges: 0, graceStarted: 0, graceT3: 0, graceT24: 0, graceEnded: 0 };
   if (!supabase) return stats;
 
   const { data: trials, error } = await supabase
     .from('trial_sessions')
     .select('*')
-    .in('status', ['ACTIVE', 'EXTENDED'])
+    // v1.61.16 — GRACE rows ride the same sweep: the decision window countdown
+    // and its final Free fallback are part of the trial lifecycle.
+    .in('status', ['ACTIVE', 'EXTENDED', 'GRACE'])
     .limit(limit);
   if (error || !trials?.length) return stats;
 
@@ -1132,31 +1468,21 @@ export async function runTrialLifecycleSweep({ supabase, sendWhatsAppFn = null, 
     const nowMs = now.getTime();
     const nowIso = now.toISOString();
 
-    // ---- T-0: expire -> Free (PAUSED vehicles, data preserved) ----
-    if (nowMs >= endsMs) {
-      await stampTrial(supabase, trial.id, { status: 'EXPIRED', expiry_processed_at: nowIso });
-      // v1.58.21 - growth rides on the trial: an owner whose PAID subscription
-      // is still live must never be downgraded when the old trial ages out.
-      const paidEndRaw = owner?.subscription_period_end || owner?.subscription_expires_at || null;
-      const paidEndMs = paidEndRaw ? new Date(paidEndRaw).getTime() : 0;
-      const paidLive = Boolean(owner)
-        && isPaidTierKey(owner.subscription_tier)
-        && ['ACTIVE', 'CANCELING', 'PAST_DUE'].includes(String(owner.subscription_status || '').toUpperCase())
-        && (paidEndMs === 0 || paidEndMs > nowMs);
-      if (paidLive) {
-        stats.expired += 1;
-        continue;
-      }
-      const downgraded = await downgradeToFree({ supabase, ownerId: trial.owner_id, reason: 'trial.expired' });
-      stats.expired += 1;
-      if (phone && sendWhatsAppFn) {
-        const pausedPlates = (downgraded.paused || []).map((v) => v.plate_number).filter(Boolean);
-        const checkoutUrl = await buildNudgeCheckout({ supabase, owner, trial, currency: ownerCtx.currency });
-        await sendWhatsAppFn(phone, expiryText({ tierLabel, pausedPlates, checkoutUrl })).catch(() => {});
-        stats.sent += 1;
-      }
-      continue;
-    }
+    // v1.61.16 — trial-end stages: the bounded decision window (GRACE), its
+    // countdown, and the final Free fallback. Paid-live owners are skipped
+    // inside the stage exactly as before.
+    const trialEnded = await runTrialEndStage({
+      supabase,
+      trial,
+      owner,
+      phone,
+      ownerCtx,
+      tierLabel,
+      now,
+      sendWhatsAppFn,
+      stats
+    });
+    if (trialEnded) continue;
 
     // ---- activation reward (one sweep after the first "aha" event) ----
     if (trial.activated && !trial.nudge_activation_sent_at) {
@@ -1290,12 +1616,60 @@ export async function applyAccountTrialExtensionCoupon({ supabase, ownerId, code
       .eq('code', cleanCode)
       .eq('applicable_to', 'account_trial_extension')
       .maybeSingle();
-    if (!coupon) return { ok: false, error: 'No account trial extension coupon found.' };
+    if (!coupon) {
+      await auditCoupon(supabase, 'COUPON_REFUSED', { code: cleanCode, owner_id: ownerId, reason: 'not_found' });
+      return { ok: false, error: 'No account trial extension coupon found.' };
+    }
     if (coupon.status === 'applied' || Number(coupon.current_uses || 0) >= Number(coupon.max_uses || 1)) {
+      await auditCoupon(supabase, 'COUPON_REFUSED', { code: coupon.code, owner_id: ownerId, reason: 'already_redeemed' });
       return { ok: false, error: 'That extension coupon has already been redeemed.' };
     }
     if (coupon.expires_at && new Date(coupon.expires_at).getTime() < Date.now()) {
+      await auditCoupon(supabase, 'COUPON_REFUSED', { code: coupon.code, owner_id: ownerId, reason: 'expired' });
       return { ok: false, error: 'That extension coupon has expired.' };
+    }
+
+    // v1.61.16 — account binding: an assigned coupon can never be redeemed by a
+    // different account (live audit: any code used to be redeemable by anyone).
+    if (coupon.owner_id && String(coupon.owner_id) !== String(ownerId)) {
+      await auditCoupon(supabase, 'COUPON_REFUSED', { code: coupon.code, owner_id: ownerId, reason: 'owner_mismatch' });
+      return { ok: false, error: 'That coupon belongs to another account.' };
+    }
+    const assignedPhone = String(coupon.assigned_to_phone || '').toUpperCase();
+    if (assignedPhone && assignedPhone !== 'ALL') {
+      const { data: ownerProfile } = await supabase
+        .from('profiles')
+        .select('phone_number')
+        .eq('id', ownerId)
+        .maybeSingle();
+      const ownerDigits = String(ownerProfile?.phone_number || '').replace(/\D/g, '');
+      const couponDigits = String(coupon.assigned_to_phone || '').replace(/\D/g, '');
+      if (!ownerDigits || ownerDigits !== couponDigits) {
+        await auditCoupon(supabase, 'COUPON_REFUSED', { code: coupon.code, owner_id: ownerId, reason: 'phone_mismatch' });
+        return { ok: false, error: 'That coupon belongs to another account.' };
+      }
+    }
+
+    // v1.61.16 — claim atomically BEFORE extending: two parallel turns can never
+    // both redeem a single-use code (read-modify-write used to allow exactly that).
+    const maxUses = Number(coupon.max_uses || 1);
+    const { data: claimed } = await supabase
+      .from('coupons')
+      .update({
+        status: 'applied',
+        current_uses: Number(coupon.current_uses || 0) + 1,
+        redeemed_at: new Date().toISOString(),
+        redemption_type: 'trial_extension',
+        dispatched_at: coupon.dispatched_at || new Date().toISOString(),
+        is_redeemed: true
+      })
+      .eq('id', coupon.id)
+      .neq('status', 'applied')
+      .lt('current_uses', maxUses)
+      .select('id');
+    if (!claimed || claimed.length === 0) {
+      await auditCoupon(supabase, 'COUPON_REFUSED', { code: coupon.code, owner_id: ownerId, reason: 'usage_race' });
+      return { ok: false, error: 'That extension coupon has already been redeemed.' };
     }
 
     const extension = await extendAccountTrial({
@@ -1304,15 +1678,28 @@ export async function applyAccountTrialExtensionCoupon({ supabase, ownerId, code
       days: Number(coupon.trial_extension_days || 15),
       couponCode: coupon.code
     });
-    if (!extension.ok) return extension;
+    if (!extension.ok) {
+      // Roll the claim back so a failed extension never burns the coupon.
+      try {
+        await supabase.from('coupons').update({
+          status: coupon.status || 'dispatched',
+          current_uses: Number(coupon.current_uses || 0),
+          redeemed_at: null,
+          redemption_type: null,
+          is_redeemed: false
+        }).eq('id', coupon.id);
+      } catch (rollbackErr) {
+        logWriteFailure(supabase, 'trialEngine.couponClaimRollback', rollbackErr, { coupon_id: coupon.id });
+      }
+      return extension;
+    }
 
-    await supabase.from('coupons').update({
-      status: 'applied',
-      current_uses: Number(coupon.current_uses || 0) + 1,
-      redeemed_at: new Date().toISOString(),
-      redemption_type: 'trial_extension',
-      dispatched_at: coupon.dispatched_at || new Date().toISOString()
-    }).eq('id', coupon.id);
+    await auditCoupon(supabase, 'COUPON_REDEEMED', {
+      code: coupon.code,
+      owner_id: ownerId,
+      days_added: extension.daysAdded,
+      ends_at: extension.endsAt
+    });
 
     return { ok: true, couponCode: coupon.code, daysAdded: extension.daysAdded, endsAt: extension.endsAt, totalDays: extension.totalDays };
   } catch (err) {
@@ -1409,6 +1796,8 @@ export default {
   TRIAL_DAYS,
   TRIAL_MAX_TOTAL_DAYS,
   TRIAL_ACTIVATION_COUPON_PCT,
+  TRIAL_MAX_ASSETS,
+  TRIAL_END_GRACE_DAYS,
   ACTIVATION_EVENTS,
   ACTIVATION_EVENT_VALUES,
   getTrialConfig,
@@ -1425,6 +1814,11 @@ export default {
   applyAccountTrialExtensionCoupon,
   formatActivationReward,
   buildTrialMetrics,
+  countOwnerAssets,
+  buildTrialEndOffer,
+  trialEndChoiceText,
+  graceCountdownText,
+  runTrialEndStage,
   runTrialLifecycleSweep,
   getTrialFunnelStats,
   formatTrialStatsReply

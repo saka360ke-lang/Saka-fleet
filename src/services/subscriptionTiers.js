@@ -209,6 +209,42 @@ export function getAnnualDiscountPercent(tierKey) {
   return Math.round((1 - tier.annualUSD / fullYear) * 100);
 }
 
+/**
+ * v1.61.16 — the tier that FITS an owner's asset count (trial-end journey).
+ * The trial never caps how many assets an owner adds; when it ends, this is the
+ * smallest plan that keeps every one of them active. Pure + deterministic: the
+ * amounts come straight from the frozen registry (never invented).
+ *   0-1 → Solo Pro · 2-3 → Team Fleet · 4-5 → Growth · 6+ → Fleet Command + add-ons
+ */
+export function fittedTierForAssets(assetCount = 0, { interval = 'monthly' } = {}) {
+  const count = Math.max(0, Math.floor(Number(assetCount) || 0));
+  const safeInterval = interval === 'annual' ? 'annual' : 'monthly';
+  let tierKey;
+  let addonQuantity = 0;
+  if (count <= 1) tierKey = 'solo_pro';
+  else if (count <= 3) tierKey = 'team_fleet';
+  else if (count <= 5) tierKey = 'growth';
+  else {
+    tierKey = 'fleet_command';
+    addonQuantity = count - 5;
+  }
+  const tier = getTierDefinition(tierKey);
+  const baseUSD = getTierPriceUSD(tierKey, safeInterval);
+  const addonUnitUSD = getAddonPriceUSD(tierKey, safeInterval);
+  const totalUSD = Number((baseUSD + addonUnitUSD * addonQuantity).toFixed(2));
+  return {
+    assetCount: count,
+    tierKey,
+    tierLabel: tier.label,
+    interval: safeInterval,
+    addonQuantity,
+    baseUSD,
+    addonUnitUSD,
+    totalUSD,
+    capacity: getEffectiveVehicleLimit(tierKey, addonQuantity)
+  };
+}
+
 export default {
   TIER_ORDER,
   LEGACY_TIER_ALIASES,
@@ -228,5 +264,6 @@ export default {
   listTierKeys,
   getPlanCode,
   hasRecurringPlan,
-  getAnnualDiscountPercent
+  getAnnualDiscountPercent,
+  fittedTierForAssets
 };

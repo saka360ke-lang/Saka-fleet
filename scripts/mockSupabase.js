@@ -31,6 +31,8 @@ export function createMockSupabase(seed = {}) {
     if (op === 'like') return String(current ?? '').startsWith(String(value ?? '').replace(/%/g, ''));
     if (op === 'gte') return new Date(current).getTime() >= new Date(value).getTime();
     if (op === 'lte') return new Date(current).getTime() <= new Date(value).getTime();
+    if (op === 'lt') return new Date(current).getTime() < new Date(value).getTime();
+    if (op === 'gt') return new Date(current).getTime() > new Date(value).getTime();
     return true;
   });
 
@@ -73,6 +75,8 @@ export function createMockSupabase(seed = {}) {
       like(column, pattern) { query.filters.push(['like', column, pattern]); return api; },
       gte(column, value) { query.filters.push(['gte', column, value]); return api; },
       lte(column, value) { query.filters.push(['lte', column, value]); return api; },
+      lt(column, value) { query.filters.push(['lt', column, value]); return api; },
+      gt(column, value) { query.filters.push(['gt', column, value]); return api; },
       order(column, options = {}) {
         query.orderBy = { column, ascending: options.ascending !== false };
         return api;
