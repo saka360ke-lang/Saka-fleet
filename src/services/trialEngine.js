@@ -1701,6 +1701,8 @@ export async function applyAccountTrialExtensionCoupon({ supabase, ownerId, code
       ends_at: extension.endsAt
     });
 
+    // v1.63.1 — the extended trial end is a cached fact.
+    markUserDataChanged({ supabase, ownerId, reason: 'trialEngine.extendCoupon' });
     return { ok: true, couponCode: coupon.code, daysAdded: extension.daysAdded, endsAt: extension.endsAt, totalDays: extension.totalDays };
   } catch (err) {
     return { ok: false, error: err.message };

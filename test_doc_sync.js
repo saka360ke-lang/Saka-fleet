@@ -51,11 +51,12 @@ check(/v1\.25/.test(readme), 'README mentions the current release line');
 check(Boolean(pkg.scripts?.health) && Boolean(pkg.scripts?.['test:all']), 'package scripts expose health and test:all');
 check(/VOICE LAW/.test(doc) && /PRODUCT ANSWERS|Product Q&A/.test(doc), 'the voice and product-answer policies are documented');
 
-console.log('--- Test 6: proactive template registry (v1.63.0, sec 182) ---');
+console.log('--- Test 6: proactive template registry (v1.63.1, sec 182) ---');
 const proactiveRegistry = await import('./src/services/proactiveTemplates.js');
 const envAuditModule = await import('./src/services/envAudit.js');
 const envKeys = envAuditModule.ENV_SECTIONS.flatMap((section) => section.keys);
-check(proactiveRegistry.PROACTIVE_TEMPLATE_ENV_KEYS.length === 11, 'the registry declares 11 template knobs');
+// v1.63.1 (2B) — Phase 1 completion added driver_activity + fleet_auto_audit.
+check(proactiveRegistry.PROACTIVE_TEMPLATE_ENV_KEYS.length === 13, 'the registry declares 13 template knobs');
 check(proactiveRegistry.PROACTIVE_TEMPLATE_ENV_KEYS.every((key) => envKeys.includes(key)), 'every META_TPL_* knob is registered in envAudit');
 check(proactiveRegistry.PROACTIVE_TEMPLATE_ENV_KEYS.every((key) => doc.includes(key)), 'every META_TPL_* knob is documented in the architecture file');
 check(Object.keys(proactiveRegistry.PROACTIVE_TEMPLATE_KINDS).every((kind) => doc.includes(kind)), 'every proactive kind is named in the architecture file');

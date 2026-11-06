@@ -84,6 +84,20 @@ export const PROACTIVE_TEMPLATE_KINDS = Object.freeze({
     variables: [],
     audience: 'care_worker',
     note: 'New-support-ticket ping to the care channel (ticket detail rides the console/email; static body).'
+  },
+  // v1.63.1 (2B) — Phase 1 completion: two owner-facing proactive senders that
+  // the original 11-kind sweep missed (rule-51 correction, section 182).
+  driver_activity: {
+    env: 'META_TPL_DRIVER_ACTIVITY',
+    variables: ['plate', 'driver'],
+    audience: 'owner',
+    note: 'Driver Activity Summary delivered by the pending-owner-notifications worker (index.js).'
+  },
+  fleet_auto_audit: {
+    env: 'META_TPL_FLEET_AUTO_AUDIT',
+    variables: ['net'],
+    audience: 'owner',
+    note: 'Daily fleet auto-audit report announcement (index.js cron).'
   }
 });
 

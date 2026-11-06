@@ -609,6 +609,8 @@ export async function assignDriverToVehicle({ vehicleId, driverId, supabase }) {
   if (error) {
     return { success: false, error: error.message };
   }
+  // v1.63.1 — the asset's driver fact changed.
+  markUserDataChanged({ supabase, ownerId: data?.owner_id || null, reason: 'vehicles.assignDriver' });
 
   return { success: true, vehicle: data };
 }
@@ -636,6 +638,8 @@ export async function unassignDriverFromVehicle({ vehicleId, supabase }) {
   if (error) {
     return { success: false, error: error.message };
   }
+  // v1.63.1 — the asset's driver fact changed.
+  markUserDataChanged({ supabase, ownerId: previous?.owner_id || data?.owner_id || null, reason: 'vehicles.unassignDriver' });
 
   if (previousPhone) {
     try {

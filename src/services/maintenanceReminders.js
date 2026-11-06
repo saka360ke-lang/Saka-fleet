@@ -25,6 +25,8 @@ import { kmToUserDistance, userDistanceToKm, formatNumber, formatDate } from './
 import { complianceCategory } from './complianceCatalog.js';
 // v1.59.7 — reminders can carry the same optional label as any other entry.
 import { sanitizeEntryLabel } from './entryLabels.js';
+// v1.63.1 — reminder writes land through the shared after-write hook.
+import { markUserDataChanged } from './afterWrite.js';
 import {
   parseFlexibleDate,
   extractDatePhrase,
@@ -336,6 +338,8 @@ export async function createThresholdReminder({ supabase, vehicle, profileId = n
     ({ error } = await supabase.from('reminders').insert([legacy]));
   }
   if (error) return { ok: false, error: error.message };
+  // v1.63.1 — a new reminder changes the user's upcoming-reminders facts.
+  markUserDataChanged({ supabase, ownerId: vehicle?.owner_id || profileId || null, reason: 'reminders.createThreshold' });
   return { ok: true, reminder: row };
 }
 
@@ -439,6 +443,8 @@ export async function createExpiryReminder({
     }
   }
 
+  // v1.63.1 — a created/refreshed expiry changes the user's expiry facts.
+  markUserDataChanged({ supabase, ownerId: vehicle?.owner_id || profileId || null, reason: 'reminders.createExpiry' });
   return { ok: true, reminderId: existingId, updated: Boolean(existingId), reminder: { ...row, id: existingId } };
 }
 
@@ -591,7 +597,7 @@ function buildExpiryAlertText({ plate, reminder, tier, daysLeft, dueLabel, categ
  * expiry_notification_log for the Compliance report.
  */
 export async function evaluateExpiryReminders({ supabase, sendFn = null, canDeliver = null, now = new Date() }) {
-  const empty = { ok: true, evaluated: 0, alerts: [], dispatched: 0, overdue: 0 };
+  const empty = { ok: true, evaluated: 0, alerts: [], dispatched: 0, overdue: 0, profileIds: [] };
   if (!supabase) return { ...empty, ok: false, error: 'Database unavailable.' };
 
   const { data: allReminders, error } = await supabase
@@ -726,7 +732,10 @@ export async function evaluateExpiryReminders({ supabase, sendFn = null, canDeli
     }
   }
 
-  return { ok: true, evaluated: reminders.length, alerts, dispatched, overdue };
+  // v1.63.1 — additive field: the profiles whose reminders this sweep touched
+  // (owners + assigned drivers + driver-subject profiles), so the sweep can
+  // invalidate exactly those cached contexts.
+  return { ok: true, evaluated: reminders.length, alerts, dispatched, overdue, profileIds: [...profileIds] };
 }
 
 /**
@@ -822,6 +831,8 @@ export async function runReminderSweep({ supabase, sendFn = null, canDeliver = n
   let thresholdEvaluated = 0;
   let thresholdAlerts = 0;
   let thresholdDispatched = 0;
+  // v1.63.1 — every profile whose reminder facts this sweep mutates.
+  const sweptProfileIds = new Set();
 
   const { data: reminders, error } = await supabase
     .from('reminders')
@@ -836,6 +847,10 @@ export async function runReminderSweep({ supabase, sendFn = null, canDeliver = n
       const { data: vehicles } = await supabase.from('vehicles').select('*').in('id', vehicleIds);
       if (vehicles?.length) {
         vehiclesChecked = vehicles.length;
+        for (const v of vehicles) {
+          if (v.owner_id) sweptProfileIds.add(v.owner_id);
+          if (v.assigned_driver_id) sweptProfileIds.add(v.assigned_driver_id);
+        }
         const profileIds = [...new Set([
           ...vehicles.map((v) => v.owner_id),
           ...vehicles.map((v) => v.assigned_driver_id)
@@ -879,6 +894,13 @@ export async function runReminderSweep({ supabase, sendFn = null, canDeliver = n
     expiry = await evaluateExpiryReminders({ supabase, sendFn, canDeliver, now });
   } catch (expiryErr) {
     console.warn('[maintenanceReminders] Expiry sweep failed:', expiryErr.message);
+  }
+
+  for (const id of (expiry.profileIds || [])) sweptProfileIds.add(id);
+  // v1.63.1 — the sweep mutated reminder facts (remaining values, tier stamps,
+  // newly promoted driver reminders): drop each affected user's cached context.
+  for (const id of sweptProfileIds) {
+    markUserDataChanged({ supabase, ownerId: id, reason: 'reminders.sweep' });
   }
 
   const expiryAlerts = (expiry.alerts || []).length;

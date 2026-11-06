@@ -20,6 +20,8 @@ import { buildExpirySpecFromDate, createExpiryReminder, daysUntilDue } from './m
 import { notifyDriverUnassigned } from './followups.js';
 import { SYSTEM_TIMEZONE } from './dateParser.js';
 import { complianceCategory, getComplianceCatalog } from './complianceCatalog.js';
+// v1.63.1 — assignment/compliance writes land through the shared after-write hook.
+import { markUserDataChanged } from './afterWrite.js';
 
 export const ASSIGNMENT_STATUS = Object.freeze({
   PENDING_OWNER_OTP: 'PENDING_OWNER_OTP',
@@ -516,6 +518,8 @@ export async function recordInvalidMinimalSubmission({
     } catch (unassignErr) {
       console.warn('[driverAssignments] Cancellation unassign skipped:', unassignErr.message);
     }
+    // v1.63.1 — the cancelled assignment released the asset.
+    markUserDataChanged({ supabase, ownerId: assignment.owner_id || null, reason: 'driverAssignments.complianceCancelled' });
     // v1.16.4 — the driver is told their access ended (follow-up lane).
     await notifyDriverUnassigned({
       supabase,
@@ -640,6 +644,8 @@ export async function submitDriverCompliance({
     });
   }
 
+  // v1.63.1 — the driver's compliance facts (profile mirror + reminder) changed.
+  markUserDataChanged({ supabase, ownerId: driverId, reason: 'driverAssignments.submitCompliance' });
   return { ok: true, compliance: row, reminder };
 }
 
@@ -739,6 +745,8 @@ export async function handleDriverResponse({
     updates.odometer_reading = Number(row.handover_odometer);
   }
   await supabase.from('vehicles').update(updates).eq('id', vehicle.id);
+  // v1.63.1 — the vehicle link + handover mileage change the owner's facts.
+  markUserDataChanged({ supabase, ownerId: row.owner_id || null, reason: 'driverAssignments.accept' });
 
   if (compliance.canManage) {
     await notifyOwnerComplianceCleared({ supabase, assignment: row, status: compliance, now });

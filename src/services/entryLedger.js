@@ -20,6 +20,8 @@
 
 import { normalizeExpenseType } from './expenseCatalog.js';
 import { ENTRY_RESTORE_WINDOW_MINUTES, sanitizeEntryLabel } from './entryAnswers.js';
+// v1.63.1 — every facts-changing write lands through the shared after-write hook.
+import { markUserDataChanged } from './afterWrite.js';
 
 export const LEDGER_TABLES = Object.freeze({
   expense: 'expense_logs',
@@ -369,6 +371,8 @@ export async function relogLedgerEntry(supabase, { entry = null, patch = {}, act
       }
     });
 
+    // v1.63.1 — a corrections re-log changes the ledger facts (actor's view).
+    markUserDataChanged({ supabase, phone: actorPhone || null, reason: 'ledger.relog' });
     return { ok: true, entry: shapeRow(inserted, kind), patch: clean, rejected, relogged: true, oldId: entry.id };
   } catch (err) {
     return { ok: false, reason: 'relog_failed', message: err.message };
@@ -407,6 +411,8 @@ export async function deleteLedgerEntry(supabase, { entry = null, actorPhone = n
         restore_until: restoreUntil
       }
     });
+    // v1.63.1 — deleting an entry changes the month-spend/recent-log facts.
+    markUserDataChanged({ supabase, phone: actorPhone || null, reason: 'ledger.delete' });
     return { ok: true, entry: shapeRow(snapshot, kind), restoreUntil };
   } catch (err) {
     return { ok: false, reason: 'delete_failed', message: err.message };
@@ -461,6 +467,8 @@ export async function restoreLastDeleted(supabase, { key = null, actorPhone = nu
     actorPhone,
     details: { kind, table, entry_id: details.entry_id, vehicle_id: details.vehicle_id, from_audit_id: match.id }
   });
+  // v1.63.1 — a restored entry re-enters the ledger facts.
+  markUserDataChanged({ supabase, phone: actorPhone || null, reason: 'ledger.restore' });
   return { ok: true, entry: shapeRow(details.snapshot, kind) };
 }
 

@@ -1,4 +1,4 @@
-# Saka Fleet - Meta template approval contract (v1.63.0, section 182)
+# Saka Fleet - Meta template approval contract (v1.63.1, section 182)
 
 This file is the approval contract between the code and Meta Business Manager.
 WhatsApp only allows free-form business-initiated messages inside the 24-hour
@@ -20,7 +20,7 @@ a template can never fire with a broken body parameter.
 Language: en (PROACTIVE_TEMPLATE_LANGUAGE).
 
 ------------------------------------------------------------
-1. The 11 templates
+1. The 13 templates
 ------------------------------------------------------------
 
 Each entry: kind | env knob | audience | recommended category | variables
@@ -115,6 +115,22 @@ Each entry: kind | env knob | audience | recommended category | variables
     body: New support ticket in Saka. Open the care console to review and
           reply.
 
+12. driver_activity
+    env: META_TPL_DRIVER_ACTIVITY
+    audience: owner
+    category: Utility
+    variables: {{1}} = plate, {{2}} = driver name
+    body: Hi! It's Saka. Driver {{2}} submitted new activity on {{1}}. Open
+          Saka to review the details.
+
+13. fleet_auto_audit
+    env: META_TPL_FLEET_AUTO_AUDIT
+    audience: owner
+    category: Utility
+    variables: {{1}} = net earnings today (for example KES 4,250)
+    body: Hi! It's Saka. Your Fleet Auto-Audit report is ready. Net earnings
+          today: {{1}}. Open Saka to view the full report.
+
 ------------------------------------------------------------
 2. Submission workflow (Meta Business Manager)
 ------------------------------------------------------------
@@ -143,6 +159,8 @@ Suggested template names:
     saka_deploy_live
     saka_eval_digest_ping
     saka_care_escalation
+    saka_driver_activity
+    saka_fleet_auto_audit
 
 ------------------------------------------------------------
 3. Setting the knobs in Cloud Run
@@ -164,7 +182,7 @@ Verify parity afterwards:
     npm run env:audit
     npm run health
 
-The env registry registers all 11 knobs under META WHATSAPP, so a typo in a
+The env registry registers all 13 knobs under META WHATSAPP, so a typo in a
 knob name is reported (names only, never values).
 
 ------------------------------------------------------------

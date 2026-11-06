@@ -88,6 +88,8 @@ import {
 } from '../services/entryAnswers.js';
 // v1.59.0 — optional per-record labels on the quick-log lanes.
 import { sanitizeEntryLabel, extractEntryLabel } from '../services/entryLabels.js';
+// v1.63.1 — quick-log lanes land through the shared after-write hook.
+import { markUserDataChanged } from '../services/afterWrite.js';
 import {
   listLedgerEntries,
   getLedgerEntry,
@@ -4127,6 +4129,8 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                       }).eq('id', targetVeh.id);
                       targetVeh.current_mileage = extOdo;
                     }
+                    // v1.63.1 — the quick-log expense changed the ledger facts.
+                    markUserDataChanged({ supabase: supabaseClient, phone: senderPhone, ownerId: profileData?.id, reason: 'whatsapp.quickLogExpense' });
                     const expenseCardText = `⛽ *Expense Logged Successfully!* 📝\n\n` +
                       `• *Vehicle:* *${targetVeh.plate_number}* (${targetVeh.make_model || 'Vehicle'})\n` +
                       `• *Category:* ${expType}\n` +
@@ -4174,6 +4178,10 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                   if (recorded?.ok === false) odometerSaveError = recorded.error;
                   if (recorded?.canonicalKm) targetVeh.current_mileage = recorded.canonicalKm;
                 }
+                if (supabaseClient && targetVeh && !odometerSaveError) {
+                  // v1.63.1 — the odometer update changed the asset facts.
+                  markUserDataChanged({ supabase: supabaseClient, phone: senderPhone, ownerId: profileData?.id, reason: 'whatsapp.quickLogMileage' });
+                }
                 if (odometerSaveError) {
                   customReply = `⚠️ Could not update the odometer for *${targetVeh.plate_number}*: ${odometerSaveError}`;
                 } else {
@@ -4209,6 +4217,10 @@ Please reply with your updated odometer reading (e.g. *"Odometer 45000 km"*).`;
                   sendFn: (phone, text) => sendWhatsAppReply(phone, text),
                   canDeliver: (phone) => String(phone || '').replace(/[^\d]/g, '') !== String(senderPhone || '').replace(/[^\d]/g, '')
                 });
+                if (recorded.ok) {
+                  // v1.63.1 — the hour-meter update changed the asset facts.
+                  markUserDataChanged({ supabase: supabaseClient, phone: senderPhone, ownerId: profileData?.id, reason: 'whatsapp.quickLogHours' });
+                }
                 if (!recorded.ok) {
                   customReply = `⚠️ Could not update operating hours for *${targetVeh.plate_number}*: ${recorded.error}`;
                 } else {
@@ -4261,6 +4273,10 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
                   if (earnErr) earningSaveError = earnErr.message;
                 } else {
                   earningSaveError = 'no vehicle or database';
+                }
+                if (!earningSaveError) {
+                  // v1.63.1 — the quick-log earning changed the ledger facts.
+                  markUserDataChanged({ supabase: supabaseClient, phone: senderPhone, ownerId: profileData?.id, reason: 'whatsapp.quickLogEarning' });
                 }
                 if (earningSaveError) {
                   customReply = `⚠️ I could not save that earning just now — *nothing was written*. Please try again in a moment.`;

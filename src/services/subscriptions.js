@@ -605,6 +605,9 @@ export async function applySubscriptionState({
       addonQuantity: updates.addon_quantity ?? null
     });
     invalidateEntitlements(owner.id);
+    // v1.63.1 — one choke point covers subscription.create, invoice-paid and
+    // legacy-charge events (tier/status/period facts).
+    markUserDataChanged({ supabase, ownerId: owner.id, reason: 'subscriptions.applyState' });
     return { ok: true, tierKey: canonicalTier, status: updates.subscription_status };
   } catch (err) {
     return { ok: false, error: err.message };
@@ -717,6 +720,8 @@ async function handleAddonCharge({ supabase, data, metadata, sendWhatsAppFn }) {
     await updatePaystackSubscription({ code: owner.paystack_subscription_code, quantity: total }).catch(() => null);
   }
   invalidateEntitlements(owner.id);
+  // v1.63.1 — add-on quantity changes the capacity facts.
+  markUserDataChanged({ supabase, ownerId: owner.id, reason: 'subscriptions.addon' });
   if (owner.phone_number && sendWhatsAppFn) {
     await sendWhatsAppFn(owner.phone_number,
       `✅ *Fleet Command add-on activated!*\n\n+${quantity} garage slot(s) added — your fleet can now hold ${5 + total} active vehicles.\n\nReply *"subscription"* to review your plan.`).catch(() => {});
@@ -788,6 +793,8 @@ async function handleInvoiceEvent({ supabase, data, metadata, sendWhatsAppFn }) 
       updated_at: now.toISOString()
     }).eq('id', owner.id);
     invalidateEntitlements(owner.id);
+    // v1.63.1 — PAST_DUE changes the plan-status fact.
+    markUserDataChanged({ supabase, ownerId: owner.id, reason: 'subscriptions.paymentFailed' });
     if (owner.phone_number && sendWhatsAppFn) {
       await sendWhatsAppFn(owner.phone_number,
         `⚠️ *Payment failed*\n\nWe could not renew your ${getTierLabel(owner.subscription_tier)} plan. Please update your card to keep premium features.\n\n👉 ${process.env.PUBLIC_PRICING_URL || 'https://sakafleet.com/pricing'}`).catch(() => {});
@@ -810,6 +817,8 @@ async function handleDisableEvent({ supabase, data, metadata }) {
       updated_at: now.toISOString()
     }).eq('id', owner.id);
     invalidateEntitlements(owner.id);
+    // v1.63.1 — CANCELING changes the plan-status fact.
+    markUserDataChanged({ supabase, ownerId: owner.id, reason: 'subscriptions.cancelScheduled' });
     return { handled: true, type: 'subscription.disable.scheduled', ownerId: owner.id };
   }
   const downgraded = await downgradeToFree({ supabase, ownerId: owner.id, reason: 'paystack.disable' });
@@ -907,6 +916,8 @@ export async function handlePaystackEvent({ supabase, event, sendWhatsAppFn = nu
         updated_at: new Date().toISOString()
       }).eq('id', owner.id);
       invalidateEntitlements(owner.id);
+      // v1.63.1 — CANCELING changes the plan-status fact.
+      markUserDataChanged({ supabase, ownerId: owner.id, reason: 'subscriptions.notRenew' });
       return { handled: true, type: 'subscription.not_renew', ownerId: owner.id };
     }
 
@@ -952,6 +963,8 @@ export async function cancelSubscription({ supabase, ownerId, profile = null } =
     updated_at: nowIso
   }).eq('id', ownerId);
   invalidateEntitlements(ownerId);
+  // v1.63.1 — cancellation changes the plan-status fact.
+  markUserDataChanged({ supabase, ownerId, reason: 'subscriptions.cancel' });
 
   return { ok: true, trial: false, immediate: false, effectiveAt, paystackDisabled };
 }
@@ -973,6 +986,8 @@ export async function resumeSubscription({ supabase, ownerId, profile = null } =
     updated_at: new Date().toISOString()
   }).eq('id', ownerId);
   invalidateEntitlements(ownerId);
+  // v1.63.1 — resuming clears the cancellation fact.
+  markUserDataChanged({ supabase, ownerId, reason: 'subscriptions.resume' });
   return { ok: true, paystackEnabled };
 }
 
@@ -1058,6 +1073,8 @@ export async function selectVehiclesToKeep({ supabase, ownerId, keepVehicleIds =
     }).eq('id', vehicle.id);
     if (keep) resumed.push(vehicle.plate_number || vehicle.id);
   }
+  // v1.63.1 — vehicle ACTIVE/PAUSED statuses are asset facts.
+  markUserDataChanged({ supabase, ownerId, reason: 'subscriptions.keepVehicles' });
   return { ok: true, resumed, capacity };
 }
 

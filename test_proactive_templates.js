@@ -1,5 +1,5 @@
 /**
- * Saka Fleet - Proactive template registry tests (v1.63.0, sec 182).
+ * Saka Fleet - Proactive template registry tests (v1.63.1, sec 182).
  * Stateless: env-driven, zero network, zero DB.
  */
 import assert from 'assert';
@@ -26,13 +26,14 @@ const KINDS = Object.keys(PROACTIVE_TEMPLATE_KINDS);
 const EXPECTED = [
   'service_reminder', 'expiry_reminder', 'trial_ending', 'trial_grace',
   'dunning', 're_engagement', 'driver_unassigned', 'winback',
-  'deploy_live', 'eval_digest_ping', 'care_escalation'
+  'deploy_live', 'eval_digest_ping', 'care_escalation',
+  'driver_activity', 'fleet_auto_audit'
 ];
 
 console.log('--- 1. registry completeness ---');
-check(KINDS.length === 11, '11 proactive kinds are registered');
+check(KINDS.length === 13, '13 proactive kinds are registered');
 check(KINDS.join(',') === EXPECTED.join(','), 'the canonical kind list is stable');
-check(PROACTIVE_TEMPLATE_ENV_KEYS.length === 11 && new Set(PROACTIVE_TEMPLATE_ENV_KEYS).size === 11, 'every kind has a unique META_TPL_ env knob');
+check(PROACTIVE_TEMPLATE_ENV_KEYS.length === 13 && new Set(PROACTIVE_TEMPLATE_ENV_KEYS).size === 13, 'every kind has a unique META_TPL_ env knob');
 check(PROACTIVE_TEMPLATE_ENV_KEYS.every((key) => key.startsWith('META_TPL_') && key.length > 9), 'every env knob follows META_TPL_<KIND>');
 check(Object.isFrozen(PROACTIVE_TEMPLATE_KINDS), 'the registry is frozen (no runtime drift)');
 check(KINDS.every((kind) => Array.isArray(PROACTIVE_TEMPLATE_KINDS[kind].variables)), 'every kind declares a variables array');
@@ -97,6 +98,23 @@ check(careSrc.includes("'care_escalation'"), 'customer care passes care_escalati
 const indexSrc = fs.readFileSync('./index.js', 'utf8');
 check(indexSrc.includes("'deploy_live'") && indexSrc.includes('sendWhatsAppTemplateMessage'), 'the LIVE announcement passes deploy_live through the template sender');
 check(KINDS.every((kind) => PROACTIVE_TEMPLATE_ENV_KEYS.includes(PROACTIVE_TEMPLATE_KINDS[kind].env)), 'every kind is reachable through the registry env contract');
+
+console.log('--- 8. Phase-1 completion kinds (v1.63.1, 2B) ---');
+check(PROACTIVE_TEMPLATE_KINDS.driver_activity.variables.join(',') === 'plate,driver', 'driver_activity takes plate + driver name');
+check(PROACTIVE_TEMPLATE_KINDS.fleet_auto_audit.variables.join(',') === 'net', 'fleet_auto_audit takes the net figure');
+check(resolveProactiveMode({ kind: 'driver_activity', templateVars: { plate: 'KDA 123A', driver: 'Jane' } }).mode === 'text', 'driver_activity with the knob unset falls back to today\'s free-form text');
+process.env.META_TPL_DRIVER_ACTIVITY = 'saka_driver_activity';
+const driverRouted = resolveProactiveMode({ kind: 'driver_activity', templateVars: { plate: 'KDA 123A', driver: 'Jane' } });
+check(driverRouted.mode === 'template' && driverRouted.templateName === 'saka_driver_activity' && driverRouted.variables.map((v) => v.text).join('|') === 'KDA 123A|Jane', 'a configured driver_activity knob routes to the template sender with ordered variables');
+delete process.env.META_TPL_DRIVER_ACTIVITY;
+check(resolveProactiveMode({ kind: 'fleet_auto_audit', templateVars: { net: 'KES 4,250' } }).mode === 'text', 'fleet_auto_audit with the knob unset falls back to today\'s free-form text');
+process.env.META_TPL_FLEET_AUTO_AUDIT = 'saka_fleet_auto_audit';
+const auditRouted = resolveProactiveMode({ kind: 'fleet_auto_audit', templateVars: { net: 'KES 4,250' } });
+check(auditRouted.mode === 'template' && auditRouted.templateName === 'saka_fleet_auto_audit' && auditRouted.variables[0].text === 'KES 4,250', 'a configured fleet_auto_audit knob routes to the template sender with its variable');
+delete process.env.META_TPL_FLEET_AUTO_AUDIT;
+const indexFallbackSrc = fs.readFileSync('./index.js', 'utf8');
+check(indexFallbackSrc.includes("'driver_activity', { plate, driver: driverName }") && indexFallbackSrc.includes('🔔 *Driver Activity Summary (${plate})*'), 'the driver_activity fallback text is byte-identical to the pre-v1.63.1 message');
+check(indexFallbackSrc.includes("'fleet_auto_audit', { net: formatMoney(fleetTotalEarnings - fleetTotalExpenses, cur, loc) }") && indexFallbackSrc.includes('📊 Your Fleet Auto-Audit Report is ready.'), 'the fleet_auto_audit fallback text is byte-identical to the pre-v1.63.1 message');
 
 console.log('');
 console.log('ALL PROACTIVE TEMPLATE TESTS PASSED (' + passed + ' assertions).');

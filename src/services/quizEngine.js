@@ -3007,6 +3007,9 @@ async function executeFlow(state, ctx) {
           .eq('owner_id', ctx.profile.id)
           .is('deleted_at', null);
 
+        // v1.63.1 — the email/verification facts changed.
+        markUserDataChanged({ supabase: ctx.supabase, phone: ctx.formattedPhone || ctx.profile?.phone_number, ownerId: ctx.profile?.id, reason: 'quizEngine.emailUpdate' });
+
         const reply = await ok({ email: a.new_email, verified: true });
         return { handled: true, reply, flow: state.flow, completed: true };
       }
@@ -3357,6 +3360,9 @@ async function executeFlow(state, ctx) {
           }).eq('id', vehicle.id);
         }
 
+        // v1.63.1 — the earnings/recent-log facts just changed.
+        markUserDataChanged({ supabase: ctx.supabase, phone: ctx.formattedPhone || ctx.profile?.phone_number, ownerId: ctx.profile?.id, reason: 'quizEngine.logEarnings' });
+
         const reply = await ok({
           vehicle: vehicle.plate_number,
           revenue: formatMoney(a.amount, buildGlobalContext(ctx.countryInfo, ctx.profile).currency),
@@ -3376,6 +3382,8 @@ async function executeFlow(state, ctx) {
           updated_at: new Date().toISOString()
         }).eq('id', vehicle.id);
         if (error) return { handled: true, reply: await fail(error.message), flow: state.flow, active: true };
+        // v1.63.1 — the odometer/vehicle facts just changed.
+        markUserDataChanged({ supabase: ctx.supabase, phone: ctx.formattedPhone || ctx.profile?.phone_number, ownerId: ctx.profile?.id, reason: 'quizEngine.logMileage' });
 
         const readingLabel = sanitizeEntryLabel(a.label || state.narrativeExtras?.label) || null;
         // v1.59.7 — every reading keeps its own labelled ledger row (never
@@ -3413,6 +3421,8 @@ async function executeFlow(state, ctx) {
           updated_at: nowIso
         }).eq('id', vehicle.id);
         if (error) return { handled: true, reply: await fail(error.message), flow: state.flow, active: true };
+        // v1.63.1 — the hour-meter/vehicle facts just changed.
+        markUserDataChanged({ supabase: ctx.supabase, phone: ctx.formattedPhone || ctx.profile?.phone_number, ownerId: ctx.profile?.id, reason: 'quizEngine.logOperatingHours' });
 
         try {
           await evaluateVehicleReminders({
@@ -3498,6 +3508,8 @@ async function executeFlow(state, ctx) {
 
         const { error } = await ctx.supabase.from('profiles').update(updates).eq('id', ctx.profile.id);
         if (error) return { handled: true, reply: await fail(error.message), flow: state.flow, active: true };
+        // v1.63.1 — name/language/units are cached facts.
+        markUserDataChanged({ supabase: ctx.supabase, phone: ctx.formattedPhone || ctx.profile?.phone_number, ownerId: ctx.profile?.id, reason: 'quizEngine.editProfile' });
 
         const reply = await ok({ field: a.profile_field, newValue: a.new_value });
         return { handled: true, reply, flow: state.flow, completed: true };
@@ -3529,6 +3541,8 @@ async function executeFlow(state, ctx) {
             .update({ is_active: false, deleted_at: nowIso, updated_at: nowIso })
             .eq('id', ctx.profile.id);
         }
+        // v1.63.1 — the account and its vehicles are gone.
+        markUserDataChanged({ supabase: ctx.supabase, phone: ctx.senderPhone || ctx.formattedPhone || null, ownerId: ctx.profile?.id, reason: 'quizEngine.deleteAccount' });
         await ctx.supabase.from('chat_history').delete().eq('user_phone', ctx.senderPhone);
         await ctx.supabase.from('chat_transcripts').delete().eq('phone_number', ctx.senderPhone);
         await ctx.supabase.from('processed_webhooks').delete().eq('phone_number', ctx.senderPhone);

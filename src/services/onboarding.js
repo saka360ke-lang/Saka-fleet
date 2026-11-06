@@ -8,7 +8,7 @@ import { startWelcomeTrial, recordActivationEvent, ACTIVATION_EVENTS } from './t
 import { grantLaunchAwardForTrial, formatLaunchAwardLine, getLaunchAwardConfig } from './launchAwards.js';
 import { resolveUserTimezone } from './globalization.js';
 import { logSystemError } from './systemErrors.js';
-import { invalidateUserContext } from './userContextCache.js';
+import { markUserDataChanged } from './afterWrite.js';
 
 export async function handleStage2OptionalWeaving({
   obState,
@@ -89,6 +89,8 @@ export async function handleStage2OptionalWeaving({
           linkedColumn: item.column
         });
       }
+      // v1.63.1 — stage-2 specs (expiries etc.) changed the asset facts.
+      markUserDataChanged({ supabase: supabaseClient, phone: senderPhone || null, ownerId: updatedVeh?.owner_id || null, reason: 'onboarding.stage2Specs' });
     }
   }
 
@@ -206,6 +208,8 @@ export async function saveVehicleAssetRecord({
         } catch { /* logging must never block onboarding */ }
       }
     }
+    // v1.63.1 — the new asset (and the 23505 re-claim path) changed the facts.
+    markUserDataChanged({ supabase: supabaseClient, phone: formattedPhone || profileData?.phone_number || null, ownerId: profileData?.id || null, reason: 'onboarding.saveAssetRecord' });
     await supabaseClient.from('profiles').update({
       email: coreEmail || profileData.email,
       updated_at: new Date().toISOString()

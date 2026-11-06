@@ -1,6 +1,8 @@
 import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
 // v1.59.7 — receipts can carry the same optional label as any other entry.
 import { sanitizeEntryLabel } from './entryLabels.js';
+// v1.63.1 — receipt writes land through the shared after-write hook.
+import { markUserDataChanged } from './afterWrite.js';
 
 /**
  * Saka Fleet — Receipt Vault (v1.19.0)
@@ -148,6 +150,8 @@ export async function recordReceipt(providedSupabase, {
       ({ data, error: insertError } = await supabase.from(RECEIPTS_TABLE).insert([legacy]).select('*').maybeSingle());
     }
     if (insertError) return { ok: false, error: insertError.message };
+    // v1.63.1 — a new receipt is user data (uniform invalidation contract).
+    markUserDataChanged({ supabase, ownerId: ownerId || driverId || null, reason: 'receipts.record' });
     return { ok: true, receipt: data };
   } catch (err) {
     return { ok: false, error: err.message };
@@ -276,6 +280,8 @@ export async function deleteReceipt(providedSupabase, { receiptId, ownerId = nul
     if (paths.length) { try { await supabase.storage.from(RECEIPTS_BUCKET).remove(paths); } catch { /* best effort */ } }
     const { error } = await supabase.from(RECEIPTS_TABLE).delete().eq('id', receiptId);
     if (error) return { ok: false, error: error.message };
+    // v1.63.1 — a deleted receipt is user data (uniform invalidation contract).
+    markUserDataChanged({ supabase, ownerId: row?.owner_id || row?.driver_id || ownerId || driverId || null, reason: 'receipts.delete' });
     return { ok: true, receipt: row, objects: paths.length };
   } catch (err) {
     return { ok: false, error: err.message };

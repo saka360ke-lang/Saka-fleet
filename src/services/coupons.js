@@ -1,4 +1,6 @@
 import crypto from 'crypto';
+// v1.63.1 — coupon redemption lands through the shared after-write hook.
+import { markUserDataChanged } from './afterWrite.js';
 
 /**
  * Schedule a 30-day trial extension coupon upon email OTP confirmation
@@ -399,6 +401,8 @@ export async function markCouponRedeemed({ supabase, coupon, ownerId = null, red
       .lt('current_uses', maxUses)
       .select('id');
     if (!claimed || claimed.length === 0) return { ok: false, reason: 'already_redeemed' };
+    // v1.63.1 — a claimed coupon is user data (uniform invalidation contract).
+    markUserDataChanged({ supabase, ownerId: ownerId || null, reason: 'coupons.redeemed' });
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err.message };

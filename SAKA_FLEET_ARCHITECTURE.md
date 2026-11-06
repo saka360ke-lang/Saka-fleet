@@ -5023,13 +5023,15 @@ Usage: `npm run eval:apply-heals` (dry run, 48 h) · `-- --hours=72` · `-- --wr
 
 **C. Deliberately left free-form.** In-window replies; Paystack/payment confirmations (the user just paid, the window is open); trial activation reward + T+7 nudge (fresh activity); superadmin budget/remediation pings (ops, two-way traffic); the existing `web_signup_welcome` template (unchanged).
 
+**C2. v1.63.1 (2B) - Phase 1 completion (rule-51 correction).** Two owner-facing proactive senders were missed in the original 11-kind sweep and are now kinds 12-13: `driver_activity` (the pending-owner-notifications worker delivering the Driver Activity Summary to the owner) and `fleet_auto_audit` (the daily Fleet Auto-Audit report announcement cron). Both pass their kind through `sendMetaWhatsAppMessage`; with the knobs unset the free-form text is byte-identical to v1.63.0, and `docs/TEMPLATES.md` carries both bodies.
+
 **D. No-canned-replies exemption (explicit).** The ratchet applies to FALLBACK TEXT only. Template BODIES live in Meta Business Manager (`docs/TEMPLATES.md` is the approval contract); code carries names and variable contracts, never prose. A template can only fire after the operator sets its knob, so the codebase stays free of canned conversational replies.
 
 **E. Degrade and rollback (rule 50).** Unset knob = today free-form text, byte-identical (asserted). Missing variable = text. Meta template failure = text fallback. No schema, no migration; rollback is unsetting the knobs.
 
 **F. Operator path.** `docs/TEMPLATES.md` carries the 11 bodies, variable specs, the Meta submission workflow and the exact `gcloud run services update --update-env-vars=META_TPL_<KIND>=<name>` commands. `npm run env:audit` proves parity; all 11 knobs are registered in `ENV_SECTIONS` (META WHATSAPP).
 
-**G. Env knobs (11, all default unset).** META_TPL_SERVICE_REMINDER, META_TPL_EXPIRY_REMINDER, META_TPL_TRIAL_ENDING, META_TPL_TRIAL_GRACE, META_TPL_DUNNING, META_TPL_RE_ENGAGEMENT, META_TPL_DRIVER_UNASSIGNED, META_TPL_WINBACK, META_TPL_DEPLOY_LIVE, META_TPL_EVAL_DIGEST_PING, META_TPL_CARE_ESCALATION. Registered in `ENV_SECTIONS` and documented in `.env.example`; unset means the free-form fallback above.
+**G. Env knobs (13 since v1.63.1; all default unset).** META_TPL_SERVICE_REMINDER, META_TPL_EXPIRY_REMINDER, META_TPL_TRIAL_ENDING, META_TPL_TRIAL_GRACE, META_TPL_DUNNING, META_TPL_RE_ENGAGEMENT, META_TPL_DRIVER_UNASSIGNED, META_TPL_WINBACK, META_TPL_DEPLOY_LIVE, META_TPL_EVAL_DIGEST_PING, META_TPL_CARE_ESCALATION, META_TPL_DRIVER_ACTIVITY, META_TPL_FLEET_AUTO_AUDIT. Registered in `ENV_SECTIONS` and documented in `.env.example`; unset means the free-form fallback above.
 
 **Tests.** New health-registered `test_proactive_templates.js` (39 assertions: completeness, uniqueness, name resolution, blank/missing degrade, ordered variables, routing, purity, wiring reachability). Kind + byte-identical assertions extended in test_sentinel_policy (30), test_maintenance_reminders (47), test_expiry_reminders (47), test_trial_engine (89), test_trial_capacity (43), test_followups (16), test_conv_eval (203), test_phase3_resilience (73), test_subscription_billing (86), test_notifications (19) and test_doc_sync.
 

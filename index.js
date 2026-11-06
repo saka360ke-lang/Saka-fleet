@@ -236,7 +236,8 @@ async function processPendingOwnerNotifications() {
 
       if (ownerPhone && canDeliverVehicleAlert(ownerPhone, item.vehicle)) {
         const msg = `🔔 *Driver Activity Summary (${plate})*\nDriver *${driverName}* submitted:\n👉 ${item.details_summary}`;
-        await sendMetaWhatsAppMessage(ownerPhone, msg);
+        // v1.63.1 — Phase 1 completion: window-safe proactive kind (fallback text above is byte-identical).
+        await sendMetaWhatsAppMessage(ownerPhone, msg, 'driver_activity', { plate, driver: driverName });
       }
 
       await supabase
@@ -811,7 +812,8 @@ async function processAutoAudits() {
         const reportUrl = await uploadReportToSupabase(supabase, pdfBuffer, `Fleet_${Date.now()}`);
         const shortReportUrl = await shortenUrl(supabase, reportUrl);
         const msg = `📊 Your Fleet Auto-Audit Report is ready.\n\nNet Earnings Today: ${formatMoney(fleetTotalEarnings - fleetTotalExpenses, cur, loc)}\nView PDF: ${shortReportUrl}`;
-        await sendMetaWhatsAppMessage(phone, msg);
+        // v1.63.1 — Phase 1 completion: window-safe proactive kind (fallback text above is byte-identical).
+        await sendMetaWhatsAppMessage(phone, msg, 'fleet_auto_audit', { net: formatMoney(fleetTotalEarnings - fleetTotalExpenses, cur, loc) });
         fastify.log.info(`Auto-audit sent to ${phone} for entire fleet.`);
       } catch (repErr) {
         fastify.log.error(`Failed to generate auto-audit for fleet owner ${phone}:`, repErr);
