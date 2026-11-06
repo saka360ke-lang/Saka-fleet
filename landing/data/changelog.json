@@ -1,6 +1,13 @@
 {
-  "latest": "1.63.2",
+  "latest": "1.63.3",
   "entries": [
+    {
+      "version": "1.63.3",
+      "date": "2026-11-06",
+      "title": "A sturdier map for Saka's answers",
+      "preview": "One ordered map decides whether a message is a read, a log or a question - same answers, fewer surprises.",
+      "summary": "Saka recognises dozens of everyday reads: reminders, compliance cards, expiry questions, your ledger, receipts, mileage, records and product questions. Those rules now live in one ordered list instead of a long chain of checks, so a new rule can never accidentally grab a message meant for another. Nothing you see changes: every answer routes exactly as before, now proven by 121 automated checks against a frozen copy of the old routing."
+    },
     {
       "version": "1.63.2",
       "date": "2026-11-06",

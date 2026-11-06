@@ -61,7 +61,9 @@ check(isDeployNoiseLog('') === false, 'empty text is safe');
 
 console.log('--- Test 5: route wiring ---');
 const routeSource = readFileSync('./src/routes/whatsapp.js', 'utf8');
-check(/const summaryCommand[\s\S]*emailVehicleSummary/.test(routeSource), 'WhatsApp route builds and emails the registration summary');
+const readRegistry = readFileSync('./src/services/readCommands.js', 'utf8');
+check(/const summaryCommand[\s\S]*isVehicleSummaryCommand/.test(routeSource), 'the route recognises the registration-summary command');
+check(/buildVehicleSummary[\s\S]*emailVehicleSummary/.test(readRegistry), 'the read registry builds and emails the registration summary');
 check(/shouldShowFeatureNotice\(/.test(routeSource) && /markFeatureNoticeSeen\(/.test(routeSource), 'digest is appended and stamped in the live route');
 
 console.log(`\n🎉 ${passed} rollout & feature-notice assertions passed.`);

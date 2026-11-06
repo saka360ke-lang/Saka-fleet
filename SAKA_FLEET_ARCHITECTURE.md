@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.63.2  
+**Version:** 1.63.3  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.63.3** | Read Command Registry (Phase 3): the 560-line deterministic read if/else chain in `whatsapp.js` becomes ONE ordered registry (`src/services/readCommands.js`) in the old dispatch precedence — zero behaviour change, proven by a 121-assertion differential harness against a frozen copy of the old chain (`whatsapp.js` −707/+85) | 185 |
 | **1.63.2** | Record-challenge tone fix (Persona v4 acknowledge-distress) + calibration-aware eval gate (`--exclude-calibration`; Phase 3 baseline 23/23 signal pass, 12/12 calibration hold) | 184 |
 | **1.63.1** | Complete user-context cache invalidation: one after-write hook across 42 facts-changing writes in 12 files, 5-minute safety TTL, rule-51 ratchet + deliberately-left registry, Phase 1 completion (driver_activity, fleet_auto_audit kinds) | 183 |
 | **1.63.0** | Proactive template registry: 11 proactive kinds route through approved Meta templates (META_TPL_<KIND>, unset = byte-identical free-form fallback); shared template transport; docs/TEMPLATES.md approval contract; no-canned-replies exemption | 182 |
@@ -5084,4 +5085,26 @@ Usage: `npm run eval:apply-heals` (dry run, 48 h) · `-- --hours=72` · `-- --wr
 **Recurrence autopsy (rule 51) — two defect classes.** (i) *A lane that ships an ack rule and does not apply it* — the tone opener; sibling sweep across every deterministic reply lane with a canned prefix (`grep -rn "Same record" src/` = one hit; the `↩️` opener = the same single hit; receipt-delete, reminder and ledger lanes open with a direct answer) — no sibling carries a defensive variant. (ii) *A replay that satisfies the case contract but not the user's actual question* — the scope mismatch; sibling sweep = every lane that replays a prior answer (`grep -rn "lastRecordQuery" src/` = the record lane only; `lastAssistantPrompt` read paths feed repeat detection, not replay) — the scope-reconciliation helper now covers the record lane; no other lane replays prior answers today, so none needed the same guard.
 
 **Baseline correction.** Pre-fix (fe29b00): 1 real fail / 23 = 4.3%. Post-fix (v1.63.2): 0 real fail / 23 = 100% pass, 12/12 calibration hold. This is the Phase 3 baseline.
+
+### 185. v1.63.3 — Read Command Registry (Phase 3): one ordered registry for every deterministic read (2026-11-06)
+
+**Why.** The deterministic read lanes in `src/routes/whatsapp.js` were an implicit if/else chain of ~560 lines (old lines 1677-2234). Nineteen detectors ran in a hand-maintained order, and DETECTION order differed from DISPATCH order (receipts was detected first but dispatched near-last; help menu and product Q&A were detected last but dispatched first). Adding a lane required finding the exact insertion point, and a catch-all parser could silently hijack an intent lane — the section 152 defect class.
+
+**A. The registry (`src/services/readCommands.js`, new).** A frozen `READ_COMMANDS` array in the OLD DISPATCH precedence: help_menu → product_qa → country_knowledge → vehicle_summary → upload_menu → garage_empty → all_documents_expiry → document_number_search → driver_documents → compliance_correction → compliance_expiry → compliance_status → maintenance_schedule → reminders_list → ledger_turn → odometer_read → driver_profile_read → records_query → receipts_list. Each lane carries `{ id, parksQuiz, skipWhenLocked, skipWhenPendingCapture?, detect(text, ctx), render(hit, ctx) }`. `resolveReadCommand(text, ctx)` walks the array, honours the gates (PIN/OTP locked phase; `session.pendingComplianceCapture`) and returns an augmented lane `{ id, hit, parksNow, abandonReason, render(ctx) }` — or null. `render()` returns the COMPLETE aiResult; a claimed turn never shows the message to a second lane.
+
+**B. Parking is reproduced, not re-invented.** `computeParking()` mirrors the old preamble (1515-1568): the first matching parking detector wins the recorded abandon reason in the old order — compliance family → ledger → records → odometer → driver profile — regardless of which lane answers, only when a fast quiz turn exists and no phase is locked. This preserves quirks such as "what is the current mileage?" recording `record_query` while the odometer lane answers, and "what can you do" parking a draft while the help lane answers.
+
+**C. Kept inline in the route (by design).** The `ocrPaused` guard, the country command (a profile WRITE), `delete receipt N` (a WRITE, rule 37), the fast quiz turn and the AI fallback. Both post-hoc overrides are byte-identical: `looksLikeReportRequest` (old 2271) and the `looks-like-log` intent fix, which now reads the SAME `readCtx.recordSpec` the registry used.
+
+**D. Golden capture (before any edit).** `test_read_registry.js` carries a FROZEN re-implementation of the old chain (`oldResolve` + `oldParking`, with verbatim inline regexes). The capture ran first: 41 fixtures, 0 mismatches. It exposed two live quirks now pinned as declarations: "how much did I spend on fuel last week?" and "what documents can I send?" are claimed by product Q&A ahead of the records/upload lanes (old precedence). Fixing them would be a behaviour change and is out of Phase 3 scope.
+
+**E. Equivalence harness.** After the refactor: 121 assertions — every fixture resolves to the same lane id as the frozen old chain; first-claim precedence matches on 14 declared cross-lane overlap fixtures; parking reasons match on every fixture; kept-inline branches resolve to null; negatives (log lines, capture verbs, reminder creation, date-bearing corrections, report words, why-questions, a bare PIN) stay null; locked-phase and pending-capture gates match.
+
+**F. Blast radius.** `whatsapp.js` −707/+85 lines (the chain + 59 orphaned imports). The route builds ONE `readCtx` snapshot and dispatches through `resolveReadCommand`; `isVehicleSummaryCommand()` keeps the feature-notice suppression (`summaryCommand`) working without a duplicated regex.
+
+**Frames touched:** `src/services/readCommands.js` (new), `src/routes/whatsapp.js`, `test_read_registry.js` (new), `test_driver_compliance_answers.js`, `test_labels_everywhere.js`, `test_feature_notice.js`, `package.json`, `landing/data/changelog.json`, `CHANGELOG.md`, this file.
+
+**Suites run:** test_read_registry (121), test_driver_compliance_answers (64), test_vehicle_compliance (67), test_odometer_answer (11), test_product_qa (152), test_record_answers (80), test_entry_ledger (all), test_labels_everywhere (22), test_feature_notice (25), test_no_canned_replies (2), test_quiz_flow (153), test_edit_delete (all), test_agent_training (180), test_web_onboarding (64), test_meta_signature (16), test_doc_sync — green; `npm run health` green.
+
+**Recurrence autopsy (rule 51).** *Defect class: a catch-all parser hijacks an intent lane* → sibling sweep = all 19 registry lanes + the 5 kept-inline branches + both post-hoc overrides. The harness pins first-claim precedence on every fixture and declares the 14 legitimate overlaps, so an undeclared double-claim fails CI. Deliberately left: the two product-Q&A shadowing quirks above (documented; a future behaviour change must update the declared table). Rule 13: `flowKnowledge.js` / `sakaAi.js` untouched — pure structural refactor, no flow/intent/copy change (test_agent_training 180 green).
 

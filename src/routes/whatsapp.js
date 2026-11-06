@@ -20,14 +20,11 @@ import { resolveExpenseType, normalizeExpenseType, hasExpenseTypeMarker } from '
 import { resolveEarningType, normalizeEarningType, hasEarningTypeMarker } from '../services/earningCatalog.js';
 import { shortenUrl } from '../services/linkShortener.js';
 import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly, shouldReplaceIntroCopy, isRepeatedReply, isStopRequest, PAUSE_REPLY, pickRepeatNudge, pickNewcomerNudge, isFirstTimeMessage, shouldReplacePlateAsk, isIncompleteReplyComplaint, replyContinuationRequestFor, asksToUploadLogbook, isLegacyWelcomeCopy, websiteSignupNextStep, isConfusedUnverifiedTurn } from '../services/greetings.js';
-import { matchProductQa, buildProductQaReply, buildProductFactsContext, buildLocalPricingFacts, stripUsdFigures, hasLocalFigure, recommendTierForFleet, sanitizeSakaReply } from '../services/productQa.js';
+import { matchProductQa, buildProductFactsContext, buildLocalPricingFacts, stripUsdFigures, sanitizeSakaReply } from '../services/productQa.js';
 import { shouldSuggestContactSave, isLostChatMessage, buildContactSaveFacts, markContactSaveSuggested } from '../services/contactNudge.js';
 import { buildUserContextSnapshot, buildUserFactsLines } from '../services/userContextSnapshot.js';
 import { buildConversationMemory } from '../services/conversationMemory.js';
-import { isOdometerQuestion, buildOdometerAnswer } from '../services/odometerAnswer.js';
-import { buildDriverComplianceCard } from '../services/driverReports.js';
 import { resolveSlowAckMs, pickSlowAckLine, shouldSendSlowAck } from '../services/turnAck.js';
-import { buildVehicleSummary, emailVehicleSummary } from '../services/vehicleSummary.js';
 import {
   buildFeatureNotice,
   shouldShowFeatureNotice,
@@ -70,33 +67,10 @@ import {
   detectDocumentTypeCorrection,
   extractFromPastedDocument
 } from '../services/complianceCapture.js';
-import {
-  resolveLedgerTurn,
-  resolveLedgerVehicleScope,
-  ledgerEntryKey,
-  formatLedgerList,
-  formatEditPreview,
-  formatDeleteConfirm,
-  formatEntryUpdated,
-  formatEntryRelogged,
-  formatEntryDeleted,
-  formatEntryRestored,
-  formatRestoreEmpty,
-  formatNoEntryForSelection,
-  ENTRY_LIST_LIMIT,
-  ENTRY_RESTORE_WINDOW_MINUTES
-} from '../services/entryAnswers.js';
 // v1.59.0 — optional per-record labels on the quick-log lanes.
 import { sanitizeEntryLabel, extractEntryLabel } from '../services/entryLabels.js';
 // v1.63.1 — quick-log lanes land through the shared after-write hook.
 import { markUserDataChanged } from '../services/afterWrite.js';
-import {
-  listLedgerEntries,
-  getLedgerEntry,
-  relogLedgerEntry,
-  deleteLedgerEntry,
-  restoreLastDeleted
-} from '../services/entryLedger.js';
 import { parseVehicleComplianceParagraph, submitVehicleCompliance, resolveVehicleComplianceCatalog } from '../services/vehicleCompliance.js';
 import { handleStage1CoreCapture, handleStage2OptionalWeaving } from '../services/onboarding.js';
 import { saveChatMessage, getRecentChatHistory, getReengagementContext, CHAT_HISTORY_MAX_MESSAGES } from '../services/chatHistory.js';
@@ -140,28 +114,20 @@ import { ensureCountryBucket, getCountryLearningsLine } from '../services/countr
 import { applyOdometerReading, applyOperatingHours } from '../services/maintenanceReminders.js';
 import { handleQuizTurn, detectQuizStart, shouldPauseQuizForChat, getCurrentQuizField, detectFlowSwitch, getFlowDefinition, looksLikeReportRequest, getActiveQuiz, markQuizTurn, abandonQuiz } from '../services/quizEngine.js';
 import { matchNarrativeVehicle, buildNarrativeDraft, narrativeDraftFields, narrativeDraftExtras, shouldPrefillNarrativeDraft, isNarrativeIntakeEnabled, isNarrativeEligibleText, buildNarrativeParagraphDrafts, renderNarrativeBatchCard, resolveNarrativeBatchTurn, describeNarrativeDraft } from '../services/narrativeDraft.js';
-import { parseRecordQuestion, formatRecordAnswer, isRecordChallenge, buildRecordChallengeScopeLine } from '../services/recordAnswers.js';
 import { isDeliveryBlocked, markDeliveryBlocked } from '../services/deliveryGuard.js';
 import { recordFriction } from '../services/frictionTracker.js';
-import { queryRecordLedger } from '../services/recordQuery.js';
-// v1.59.7 — labels live on every entry: keyword search spans receipts/reminders/readings.
-import { searchOtherLabels, formatOtherLabelMatches } from '../services/labelsEverywhere.js';
 import { renderActionDiscovery, composeMessage } from '../services/conversationEngine.js';
 import { enqueueFollowUp, FOLLOWUP_KINDS, followUpAckText } from '../services/followups.js';
 import { enqueueUserMessage } from '../services/messageQueue.js';
 import { loadSessionSnapshot, persistSessionSnapshot } from '../services/sessionStore.js';
 import { createResilientClient } from '../services/supabaseClient.js';
 import { ocrWhatsAppMedia, extractDocumentHints, isOcrEnabled, isOcrAckFirstEnabled, buildMediaAckText, classifyOcrDocument } from '../services/ocrService.js';
-import { parseDocumentFields, uploadHintFor, DOCUMENT_SUPPORT_MENU } from '../services/documentLens.js';
+import { parseDocumentFields, uploadHintFor } from '../services/documentLens.js';
 import { semanticOcrTopUp } from '../services/ocrSemantic.js';
 import {
   normalizeAssetKind,
   getCountryBucket,
-  loadCountryBucket,
   buildJurisdictionContext,
-  formatCountryRulesReply,
-  formatRequiredDocumentsReply,
-  formatExampleComplianceReply,
   resolveCountryInput
 } from '../services/countryBucket.js';
 import {
@@ -171,7 +137,6 @@ import {
   uploadReceiptImage,
   listReceipts,
   deleteReceipt,
-  formatReceiptsReply,
   formatDuplicateReceiptReply,
   OCR_CONFIRM_THRESHOLD,
   OCR_LOW_CONFIDENCE_NOTE,
@@ -179,28 +144,8 @@ import {
 } from '../services/receipts.js';
 import { recordOcrRequest, buildOcrTextSha } from '../services/ocrTelemetry.js';
 import { isDuplicateExpense } from '../services/expenseGuard.js';
-import {
-  detectRemindersListCommand,
-  detectComplianceStatusCommand,
-  detectComplianceExpiryQuestion,
-  detectDriverComplianceRead,
-  detectAllDocumentsExpiryRead,
-  detectComplianceNumberSearch,
-  buildDriverComplianceReply,
-  buildAllDocumentsExpiryReply,
-  buildComplianceNumberSearchReply,
-  detectComplianceCorrection,
-  detectComplianceItemAsked,
-  detectMaintenanceScheduleQuestion,
-  detectMaintenancePart,
-  buildMaintenanceScheduleAnswer,
-  buildComplianceExpiryAnswer,
-  buildComplianceStatusReply,
-  buildRemindersListReply,
-  applyComplianceCorrection,
-  formatComplianceDate
-} from '../services/complianceAnswers.js';
 import { logTurnLatency } from '../services/turnLatency.js';
+import { resolveReadCommand, inspectRecordQuestion, isVehicleSummaryCommand } from '../services/readCommands.js';
 
 let supabaseClient = createResilientClient();
 
@@ -1456,121 +1401,21 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         const quizPhaseLocked = !!quizForFastPath && (quizForFastPath.phase === 'pin' || quizForFastPath.phase === 'account_otp');
         const fastQuizTurn = !!quizForFastPath && !quizPhaseLocked;
 
-        // Deterministic receipt history ("receipts") — zero AI tokens.
-        // v1.32.3 — also catches ledger read requests in the user's own words
-        // ("Do you have a record of any parts purchases?") that used to fall to
-        // the model and come back as "I don't have that information".
-        const receiptsCommand = (() => {
-          const text = String(messageText || '').trim();
-          if (/^(?:my\s+)?receipts?$|^show\s+(?:my\s+)?receipts?$|^last\s+receipt$/i.test(text)) return true;
-          if (/\b(?:log|record|add|save|spent|paid)\b/i.test(text) && !/\brecords?\b|\bhistory\b|\bany\b/i.test(text)) return false;
-          return /\b(?:receipts?|purchases?|parts?\s+(?:purchases?|bought|bought\s+parts?))\b/i.test(text)
-            && /\b(?:show|list|see|view|any|history|record|records|last|recent|what|which|do\s+you\s+have)\b/i.test(text);
-        })();
+        // Phase 3 (v1.63.3) — every deterministic read lane lives in
+        // src/services/readCommands.js, ordered by the OLD dispatch precedence.
+        // Detection order no longer matters: the registry is the one decision point.
+        const commandText = String(messageText || '').trim();
 
-        // v1.58.15 - deterministic receipt delete. "delete receipt 2" previews;
-        // adding DELETE confirms. The expense entry stays in the ledger.
-        const receiptDeleteMatch = String(messageText || '').trim().match(/^(?:delete|remove)\s+receipts?\s+([1-5])(?:\s+(DELETE))?$/i);
+        // v1.58.15 — deterministic receipt delete stays a WRITE lane in the
+        // route (rule 37); no read lane can ever claim "delete receipt N".
+        const receiptDeleteMatch = commandText.match(/^(?:delete|remove)\s+receipts?\s+([1-5])(?:\s+(DELETE))?$/i);
         const receiptDeleteCommand = receiptDeleteMatch ? { index: Number(receiptDeleteMatch[1]), confirmed: Boolean(receiptDeleteMatch[2]) } : null;
 
-        // Deterministic garage list ("list my cars") — zero AI tokens. Only the
-        // empty state is intercepted here; populated lists keep the numbered
-        // switch menu in the AI branch below.
-        const vehiclesCommand = /^(?:(?:list|show|view)\s+)?(?:my\s+)?(?:cars|vehicles|fleet)$|^(?:vehicle|car)\s+list$|^manage\s+(?:my\s+)?(?:vehicles?|cars?)$/i.test(String(messageText || '').trim());
-
-        // v1.20.0 — deterministic document menu ("what documents can I send?").
-        const uploadMenuCommand = /^(?:upload|send|share|scan)\s+(?:a\s+)?(?:document|doc|documents|photo|file|files)s?$|^what\s+(?:documents?|files?)\s+(?:can|may|do)\s+(?:i|you)\s+(?:send|upload|accept)\b|^(?:documents?|docs?)\s+(?:list|supported)$/i.test(String(messageText || '').trim());
-
-        // v1.32.2 — deterministic compliance & reminder answers (zero AI tokens).
-        // Live evidence 2026-11-01: three unanswered "when does insurance
-        // expire?" questions and an ignored typed correction.
-        //
-        // v1.32.3 — a READ command is always answered. These flags no longer
-        // require an idle quiz slot: a stale/abandoned draft used to silence
-        // every deterministic answer for up to 45 minutes (live evidence 08:57
-        // "Report of recent tired alerts" and 08:49 "active reminders" were both
-        // swallowed). When a read command arrives mid-quiz the draft is parked,
-        // never destroyed, and the question is answered from the ledger.
-        const commandText = String(messageText || '').trim();
-        const remindersListCommand = detectRemindersListCommand(commandText);
-        const complianceStatusCommand = detectComplianceStatusCommand(commandText);
-        const complianceExpiryQuestion = detectComplianceExpiryQuestion(commandText);
-        const complianceCorrection = detectComplianceCorrection(commandText);
-        const maintenanceScheduleQuestion = detectMaintenanceScheduleQuestion(commandText);
-        // v1.61.2 — DRIVER documents have their own deterministic read/confirm
-        // lane (live 2026-11-05: "List psv badge" and "…Confirm" were answered
-        // from the expense ledger / a generic menu). A pending capture owns the
-        // turn first (rule 37), and a locked PIN/OTP phase is never hijacked.
-        const driverDocRead = (quizPhaseLocked || session?.pendingComplianceCapture)
-          ? null
-          : detectDriverComplianceRead(commandText);
-        // v1.61.3 — merged expiry list + document-number search (live "List all
-        // documents with expiry date" and "Search TSV2026" fell into expenses).
-        const allDocsRead = quizPhaseLocked ? null : detectAllDocumentsExpiryRead(commandText);
-        const numberSearch = quizPhaseLocked ? null : detectComplianceNumberSearch(commandText);
-        const complianceReadCommand = remindersListCommand || complianceStatusCommand
-          || complianceExpiryQuestion || complianceCorrection.isCorrection
-          || maintenanceScheduleQuestion || Boolean(driverDocRead)
-          || Boolean(allDocsRead) || Boolean(numberSearch);
-        if (complianceReadCommand && quizForFastPath && !quizPhaseLocked) {
-          abandonQuiz(session, { reason: 'deterministic_read_command' });
-        }
-        // v1.33.0 — Editable ledger. One decision point (resolveLedgerTurn)
-        // covers the list, the numbered selection, the pending edit/delete
-        // confirmation and the restore window. Zero AI tokens, and a PIN/OTP
-        // phase is never hijacked.
-        const pendingEntryAction = session?.pendingEntryAction || null;
-        const ledgerTurn = quizPhaseLocked
-          ? { type: 'none' }
-          : resolveLedgerTurn({ pending: pendingEntryAction, text: commandText });
-        if (ledgerTurn.dropPending && session) session.pendingEntryAction = null;
-        if (ledgerTurn.type !== 'none' && quizForFastPath && !quizPhaseLocked) {
-          // A ledger command outranks an abandoned draft; the draft is parked,
-          // never destroyed (same contract as the read commands above).
-          abandonQuiz(session, { reason: 'ledger_command' });
-        }
-        // v1.36.0 — Record answers (QUERY_RECORDS): deterministic zero-token
-        // answers from the ledger. Same guards as the ledger lane above.
-        // v1.61.5 — a challenge ("that record cannot be right") replays the LAST
-        // answered record query (same type, same window, same scope) instead of
-        // falling through to a fresh fleet-wide total (live 2026-11-05: a fuel
-        // complaint was answered with an all-expenses total).
-        const lastRecordQuery = session?.lastRecordQuery
-          && (Date.now() - Number(session.lastRecordQuery.at || 0) <= 15 * 60 * 1000)
-          ? session.lastRecordQuery
-          : null;
-        const recordChallenge = !quizPhaseLocked && lastRecordQuery?.spec
-          && isRecordChallenge(commandText)
-          ? { ...lastRecordQuery.spec, ok: true, challenge: true }
-          : null;
-        const recordQuestion = quizPhaseLocked
-          ? { ok: false }
-          : (recordChallenge || parseRecordQuestion(commandText, {
-            countryCode: countryInfo?.country_code || 'GLOBAL',
-            locale: countryInfo?.locale || 'en-US'
-          }));
-        if (recordQuestion.ok && quizForFastPath && !quizPhaseLocked) {
-          abandonQuiz(session, { reason: 'record_query' });
-        }
-        // v1.56.0 — "current mileage / odometer" questions answer from the
-        // VEHICLE record, never the expense ledger.
-        const odometerQuestion = !quizPhaseLocked && isOdometerQuestion(commandText);
-        if (odometerQuestion && quizForFastPath && !quizPhaseLocked) {
-          abandonQuiz(session, { reason: 'odometer_query' });
-        }
-        // v1.58.21 - "show me my driver profile" is a deterministic READ of the
-        // owner's own compliance card, never a restart of driver onboarding
-        // (live 2026-11-04: two misroutes into fleet context / reminders).
-        const driverProfileQuestion = !quizPhaseLocked
-          && /^(?:(?:show|see|view|open|check|what(?:'s| is))\s+(?:me\s+)?(?:my\s+)?(?:own\s+)?(?:personal\s+)?driver(?:'s|’s|s)?\s+(?:profile|licen[cs]e|record|card|compliance)|(?:my|our|personal|own)\s+driver(?:'s|’s|s)?\s+(?:profile|licen[cs]e|record|card|compliance)|(?:my\s+)?personal\s+compliance)\b/i.test(commandText);
-        if (driverProfileQuestion && quizForFastPath && !quizPhaseLocked) {
-          abandonQuiz(session, { reason: 'driver_profile_read' });
-        }
 
 
 
         // Vehicle registration summary ("send me registration summary as PDF").
-        const summaryCommand = /(?:(?:send|email|resend|share|mail)\b[\s\S]{0,40}(?:registration|vehicle|passbook)\b[\s\S]{0,20}(?:summary|details|copy|pdf|email))|(?:registration|vehicle)\s+(?:summary|details|passbook)/i.test(String(messageText || ''));
+        const summaryCommand = isVehicleSummaryCommand(String(messageText || ''));
 
         // v1.21.0 — Country Bucket commands (deterministic, zero tokens).
         const textForCommands = String(messageText || '').trim();
@@ -1669,12 +1514,35 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           if (typeof slowAckTimer.unref === 'function') slowAckTimer.unref();
         }
 
-        const helpMenuCommand = /^(?:help|menu|options|what can you do|what can i do|how (?:do i|can i) (?:use|start|begin))\s*\??$/i.test(String(messageText || '').trim());
         const productQaMatch = matchProductQa(textForCommands);
+
+        // Phase 3 (v1.63.3) — the Read Command Registry snapshot. The registry
+        // and the post-hoc records intent fix both read THIS context, so a
+        // message can never be parsed two different ways in one turn.
+        const readCtx = {
+          quizPhaseLocked,
+          quizForFastPath: fastQuizTurn,
+          hasVehicleRegistered,
+          session,
+          profile: profileData,
+          supabaseClient,
+          countryInfo,
+          vehicles: existingVehicles,
+          activeVehicle: currentActiveVehicle,
+          senderPhone,
+          targetLang,
+          conversationHistory,
+          messageText,
+          commandText,
+          bucketCountryCode,
+          bucketAssetKind
+        };
+        readCtx.recordSpec = inspectRecordQuestion(commandText, readCtx);
 
         let aiResult;
         phaseMarks.aiStartedAt = Date.now();
         if (ocrPaused) {
+          // (unchanged) photo reading paused guard — checked before the registry.
           aiResult = {
             intent: 'APP_HELP',
             extracted_data: {},
@@ -1682,562 +1550,72 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           };
         } else if (countryCommandResult) {
           aiResult = countryCommandResult;
-        } else if (helpMenuCommand) {
-          // v1.25.0 — compact deterministic tour. Never a wall of text.
-          aiResult = {
-            intent: 'APP_HELP',
-            extracted_data: {},
-            reply_message: '🙂 Quick tour:\n\n' +
-              '• *REGISTER* — add your machine\n' +
-              '• "Logged 40L at 50350 km for KES 5500" — fuel in one line\n' +
-              '• *reminders* — what\'s due soon\n' +
-              '• *report* — this month\'s numbers\n' +
-              '• *pricing* — plans and your free trial\n\n' +
-              '_Where shall we start?_ 🚗'
-          };
-        } else if (productQaMatch) {
-          // v1.27.0 — Answer Path. The question is answered from verified facts
-          // (live tier registry + the user's own realtime data snapshot) and the
-          // prose is composed fresh. The fact lines are only the outage fallback.
-          const productFacts = buildProductQaReply(productQaMatch);
-          const fleetCountMatch = messageText.match(/\b(\d{1,3})\s*(?:cars?|vehicles?|units?|machines?|trucks?|bikes?|motorbikes?|matatus?|lorries?|pickups?)\b/i);
-          const fleetCount = fleetCountMatch ? Number(fleetCountMatch[1]) : null;
-          const planTopic = ['pricing', 'packages', 'tier_details', 'addons', 'limits'].includes(productQaMatch.id);
-          const recommendation = fleetCount && planTopic ? recommendTierForFleet(fleetCount) : null;
-          // v1.28.0/1.28.1 — payment answers in the user's own currency. When the
-          // user's currency is not USD, dollar figures are REMOVED entirely: the
-          // facts are filtered, the composer is instructed to quote local only,
-          // and the finished reply is scrubbed as a hard invariant.
-          let localPricingFacts = null;
-          if (planTopic && countryInfo?.currency && String(countryInfo.currency).toUpperCase() !== 'USD') {
-            try {
-              localPricingFacts = await buildLocalPricingFacts({
-                supabase: supabaseClient,
-                currency: countryInfo.currency,
-                locale: countryInfo.locale,
-                fleetCount
-              });
-            } catch { localPricingFacts = null; }
-          }
-          const usdFree = (line) => !/\$|\bUSD\b/i.test(String(line || ''));
-          const verifiedFactLines = localPricingFacts ? productFacts.split('\n').filter(usdFree) : productFacts.split('\n');
-          const recommendationLines = recommendation
-            ? recommendation.lines.filter((line) => !localPricingFacts || usdFree(line))
-            : [];
-          let userFacts = '';
-          try {
-            const snapshot = await buildUserContextSnapshot({
-              supabase: supabaseClient,
-              profile: profileData,
-              vehicles: existingVehicles,
-              currency: countryInfo?.currency || 'USD'
-            });
-            userFacts = snapshot.lines.join('\n');
-          } catch { userFacts = ''; }
-          const fallbackAnswer = [...verifiedFactLines, ...recommendationLines, ...(localPricingFacts || [])].join('\n');
-          const composedAnswer = await composeMessage({
-            purpose: 'product_answer',
-            facts: {
-              userQuestion: messageText,
-              topic: productQaMatch.id,
-              verifiedFacts: fallbackAnswer,
-              localPricingFacts: localPricingFacts ? localPricingFacts.join('\n') : 'None supplied — use the verified facts above.',
-              userDataFacts: userFacts || 'No account data on file yet.',
-              accountVehicles: existingVehicles.length,
-              instruction: localPricingFacts
-                ? 'Answer the user\'s question in 1-3 short conversational lines using ONLY the verified facts. Quote ONLY the local-currency figures supplied in localPricingFacts. NEVER mention $, USD or any dollar amount, not even in brackets. Never use the word "plate" — say "registration number". If accountVehicles is 0, end by inviting REGISTER — never ask the user to send a registration number directly. For features or package questions, give the concrete list from the facts (up to 4 short lines). If the user gave a fleet size, use the computed local total exactly. Warm and human, at most one emoji per line. End with ONE gentle next step. Do not paste a menu, do not repeat the question back, and never say you do not have information — the facts above are complete.'
-                : 'Answer the user\'s question in 1-3 short conversational lines using ONLY the verified facts. Never use the word "plate" — say "registration number". If accountVehicles is 0, end by inviting REGISTER — never ask the user to send a registration number directly. For features or package questions, give the concrete list from the facts (up to 4 short lines). If the user gave a fleet size, use the computed recommendation exactly. Warm and human, at most one emoji per line. End with ONE gentle next step. Do not paste a menu, do not repeat the question back, and never say you do not have information — the facts above are complete.'
-            },
-            language: targetLang,
-            countryInfo,
-            profile: profileData,
-            fallbackText: fallbackAnswer
-          });
-          const sanitizedText = sanitizeSakaReply(composedAnswer, fallbackAnswer, { historyLength: conversationHistory.length });
-          const composedText = localPricingFacts
-            ? stripUsdFigures(sanitizedText, { currency: countryInfo.currency })
-            : sanitizedText;
-          const needsFigures = ['pricing', 'packages', 'trial', 'tier_details', 'addons', 'limits'].includes(productQaMatch.id);
-          const currencyCode = String(countryInfo?.currency || '').toUpperCase();
-          const carriesLocalFigure = !localPricingFacts || hasLocalFigure(composedText, currencyCode);
-          const usableAnswer = composedText.length >= 60 && (!needsFigures || /\d/.test(composedText)) && carriesLocalFigure
-            ? composedText
-            : stripUsdFigures(fallbackAnswer, { currency: countryInfo?.currency });
-          aiResult = {
-            intent: 'GENERAL_CHAT',
-            extracted_data: {},
-            reply_message: usableAnswer
-          };
-        } else if (myRulesCommand || requiredDocsCommand || exampleComplianceCommand) {
-          const bucket = await loadCountryBucket(supabaseClient, {
-            countryCode: bucketCountryCode,
-            assetKind: bucketAssetKind
-          });
-          const reply = myRulesCommand
-            ? formatCountryRulesReply(bucket)
-            : (requiredDocsCommand
-              ? formatRequiredDocumentsReply(bucket)
-              : formatExampleComplianceReply(bucket, { plate: currentActiveVehicle?.plate_number || null }));
-          aiResult = { intent: 'APP_HELP', extracted_data: {}, reply_message: reply };
-        } else if (summaryCommand) {
-          const summaryVehicle = currentActiveVehicle || existingVehicles[0] || null;
-          if (!summaryVehicle) {
-            aiResult = {
-              intent: 'GENERAL_CHAT',
-              extracted_data: {},
-              reply_message: '🚗 Register a vehicle first and I will prepare its summary for you.'
-            };
-          } else if (summaryVehicle.owner_id !== profileData?.id && !isSuperadminPhone(senderPhone)) {
-            aiResult = {
-              intent: 'GENERAL_CHAT',
-              extracted_data: {},
-              reply_message: '🔒 That registration summary belongs to the vehicle owner. As the assigned driver you can ask for *vehicle health* 🩺 or *driver daybook* 📓 instead.'
-            };
-          } else {
-            const summary = await buildVehicleSummary({ supabase: supabaseClient, vehicle: summaryVehicle, owner: profileData, countryInfo });
-            let reply = summary.ok ? summary.text : '🙏 I could not build that summary right now.';
-            const wantsEmail = /pdf|email|mail|inbox/i.test(messageText);
-            if (summary.ok && wantsEmail) {
-              const delivery = await emailVehicleSummary({
-                supabase: supabaseClient,
-                summary,
-                ownerEmail: profileData?.email || null,
-                plateNumber: summaryVehicle.plate_number
-              });
-              if (delivery.ok && delivery.emailed) reply += `\n\n📄 Sent to *${profileData.email}* ✅`;
-              else if (delivery.ok && delivery.url) reply += `\n\n📄 *PDF:* ${delivery.url}`;
-              else reply += '\n\n🙏 I could not email it just now — your summary is above.';
-            } else if (summary.ok) {
-              reply += '\n\n💡 Reply *"send summary as PDF to my email"* for a branded copy.';
+        } else {
+          // Phase 3 — the Read Command Registry owns every deterministic read.
+          // A matched lane returns its complete aiResult here; nothing below
+          // can ever see the message (no accidental fall-through).
+          const resolveReadTurn = async () => {
+            const readLane = resolveReadCommand(commandText, readCtx);
+            if (!readLane) return null;
+            if (readLane.parksNow && quizForFastPath && !quizPhaseLocked) {
+              abandonQuiz(session, { reason: readLane.abandonReason });
             }
-            aiResult = { intent: 'GENERAL_CHAT', extracted_data: {}, reply_message: reply };
-          }
-        } else if (uploadMenuCommand) {
-          aiResult = {
-            intent: 'APP_HELP',
-            extracted_data: {},
-            reply_message: `${DOCUMENT_SUPPORT_MENU}\n\n💡 Send one document at a time — I will always show what I read before saving.`
+            return await readLane.render(readCtx);
           };
-        } else if (vehiclesCommand && !hasVehicleRegistered) {
-          aiResult = {
-            intent: 'MANAGE_VEHICLE',
-            extracted_data: {},
-            reply_message: `🚗 Your garage is empty for now.\n\nSend your vehicle's number plate (e.g. *${countryInfo.plate_example}*) or type *REGISTER* — setup takes about two minutes.`
-          };
-        } else if (driverDocRead || allDocsRead || numberSearch || remindersListCommand || complianceStatusCommand || complianceExpiryQuestion || complianceCorrection.isCorrection || maintenanceScheduleQuestion) {
-          // v1.32.2 — deterministic compliance/reminder answers (zero AI tokens).
-          // Every date comes from the ledger; nothing is improvised.
-          const ownedVehicles = existingVehicles.filter((v) => v.owner_id === profileData?.id);
-          const targetVehicle = ownedVehicles.find((v) => v.id === currentActiveVehicle?.id)
-            || (ownedVehicles.length === 1 ? ownedVehicles[0] : ownedVehicles[0] || null);
-          let reply = null;
-          if (allDocsRead || numberSearch) {
-            // v1.61.3 — merged reads across BOTH ledgers (vehicle permits +
-            // driver documents). Never answered from the expense ledger.
-            const vehicleIds = existingVehicles.map((v) => v.id).filter(Boolean);
-            let vehicleRows = [];
-            if (vehicleIds.length) {
-              try {
-                const { data } = await supabaseClient
-                  .from('vehicle_compliances')
-                  .select('vehicle_id,type,label,number,expiry,lifetime')
-                  .in('vehicle_id', vehicleIds)
-                  .limit(200);
-                vehicleRows = data || [];
-              } catch { vehicleRows = []; }
-            }
-            let driverRows = [];
-            try {
-              const { data } = await supabaseClient
-                .from('driver_compliances')
-                .select('type,label,number,expiry,lifetime')
-                .eq('driver_id', profileData.id)
-                .limit(50);
-              driverRows = data || [];
-            } catch { driverRows = []; }
-            reply = allDocsRead
-              ? buildAllDocumentsExpiryReply({ vehicles: existingVehicles, vehicleRows, driverRows, profile: profileData })
-              : buildComplianceNumberSearchReply({ number: numberSearch.number, vehicles: existingVehicles, vehicleRows, driverRows });
-          } else if (driverDocRead) {
-            // v1.61.2 — driver documents never need a vehicle: read/confirm them
-            // straight from driver_compliances for the caller's own profile.
-            let driverRows = [];
-            try {
-              const { data } = await supabaseClient
-                .from('driver_compliances')
-                .select('type,label,number,expiry,lifetime')
-                .eq('driver_id', profileData.id)
-                .limit(50);
-              driverRows = data || [];
-            } catch { driverRows = []; }
-            reply = buildDriverComplianceReply({
-              rows: driverRows,
-              profile: profileData,
-              asked: driverDocRead.asked,
-              confirm: driverDocRead.confirm
+          const readTurn = await resolveReadTurn();
+          if (readTurn) {
+            aiResult = readTurn;
+          } else if (receiptDeleteCommand) {
+            const isOwner = existingVehicles.some((v) => v.owner_id === profileData?.id);
+            const rows = await listReceipts(supabaseClient, {
+              ownerId: isOwner ? profileData?.id : null,
+              driverId: isOwner ? null : profileData?.id,
+              vehicleIds: existingVehicles.map((v) => v.id)
             });
-          } else if (!targetVehicle) {
-            reply = `🚗 I do not have a vehicle on file yet.\n\nSend the plate (e.g. *${countryInfo?.plate_example || 'KDA 123A'}*) to register it, then I can track compliance and reminders.`;
-          } else if (complianceCorrection.isCorrection) {
-            const corrected = await applyComplianceCorrection({
-              supabase: supabaseClient,
-              vehicle: targetVehicle,
-              kind: complianceCorrection.kind,
-              text: commandText,
-              countryCode: countryInfo?.country_code || 'GLOBAL',
-              locale: countryInfo?.locale || 'en-US',
-              timeZone: resolveUserTimezone({ countryInfo, profile: profileData }),
-              ownerId: profileData?.id
-            });
-            reply = corrected.ok
-              ? `✅ *Corrected — ${targetVehicle.plate_number} ${corrected.label}*\n\nExpiry is now *${formatComplianceDate(corrected.expiry)}*${corrected.number ? ` (${corrected.number})` : ''}.\n\nThe linked renewal reminders were moved to the corrected date.`
-              : '⚠️ I could not find an expiry date in that message. Try: _"insurance expires 20/11/2026"_.';
-          } else if (complianceExpiryQuestion) {
-            const { data: rows } = await supabaseClient
-              .from('vehicle_compliances')
-              .select('type,label,number,expiry,lifetime')
-              .eq('vehicle_id', targetVehicle.id);
-            reply = buildComplianceExpiryAnswer({
-              vehicle: targetVehicle,
-              rows: rows || [],
-              asked: detectComplianceItemAsked(commandText)
-            });
-          } else if (complianceStatusCommand) {
-            const { data: rows } = await supabaseClient
-              .from('vehicle_compliances')
-              .select('type,label,number,expiry,lifetime')
-              .eq('vehicle_id', targetVehicle.id);
-            // v1.61.2 — the same card shows the caller's DRIVER documents.
-            let driverRows = [];
-            try {
-              const { data } = await supabaseClient
-                .from('driver_compliances')
-                .select('type,label,number,expiry,lifetime')
-                .eq('driver_id', profileData.id)
-                .limit(50);
-              driverRows = data || [];
-            } catch { driverRows = []; }
-            reply = buildComplianceStatusReply({ vehicle: targetVehicle, rows: rows || [], driverRows, profile: profileData });
-          } else if (maintenanceScheduleQuestion) {
-            const { data: reminders } = await supabaseClient
-              .from('reminders')
-              .select('reminder_type,due_date,status,threshold_value,threshold_unit')
-              .eq('status', 'active')
-              .in('vehicle_id', [targetVehicle.id])
-              .limit(50);
-            reply = buildMaintenanceScheduleAnswer({
-              vehicle: targetVehicle,
-              reminders: reminders || [],
-              asked: detectMaintenancePart(commandText)
-            });
-          } else {
-            const { data: reminders } = await supabaseClient
-              .from('reminders')
-              .select('reminder_type,due_date,status,vehicle_id')
-              .eq('status', 'active')
-              .in('vehicle_id', existingVehicles.map((v) => v.id))
-              .limit(50);
-            reply = buildRemindersListReply({ reminders: reminders || [], vehicles: existingVehicles });
-          }
-          aiResult = { intent: 'GENERAL_CHAT', extracted_data: {}, reply_message: reply };
-        } else if (ledgerTurn.type !== 'none') {
-          // v1.33.0 — editable ledger (deterministic, zero AI tokens).
-          // Every figure comes from the row itself; nothing is improvised.
-          const laneOwner = existingVehicles.some((v) => v.owner_id === profileData?.id);
-          // v1.58.3 - scope to ONE vehicle (pending, then plate, then active, then single).
-          const scope = resolveLedgerVehicleScope({
-            text: commandText,
-            vehicles: existingVehicles,
-            activeVehicle: currentActiveVehicle,
-            pendingVehicleId: pendingEntryAction?.vehicleId || null
-          });
-          const ledgerScope = {
-            ownerId: laneOwner ? profileData?.id : null,
-            driverId: laneOwner ? null : profileData?.id,
-            vehicleIds: scope.vehicleIds,
-            limit: ENTRY_LIST_LIMIT
-          };
-          const locale = countryInfo?.locale || 'en-US';
-          const currency = countryInfo?.currency || null;
-          const copy = { vehicles: existingVehicles, currency, locale };
-          const remember = (mode, key, vehicleId) => {
-            if (session) session.pendingEntryAction = { mode, key, at: new Date().toISOString(), vehicleId };
-          };
-          const clearPending = () => {
-            if (session) session.pendingEntryAction = null;
-          };
-          const entries = await listLedgerEntries(supabaseClient, ledgerScope);
-          const atIndex = (index) => (index ? entries[Number(index) - 1] || null : null);
-          const pendingKey = pendingEntryAction?.key || null;
-          // v1.58.x — a pinned edit must resolve the ORIGINAL row even if it has
-          // scrolled out of the top-6 list; never silently retarget entries[0].
-          const pendingEntryInList = pendingKey
-            ? entries.find((entry) => ledgerEntryKey(entry) === pendingKey) || null
-            : null;
-          const resolvePinnedEntry = async () => {
-            if (pendingEntryInList) return pendingEntryInList;
-            if (!pendingKey) return null;
-            return await getLedgerEntry(supabaseClient, {
-              key: pendingKey,
-              vehicleIds: ledgerScope.vehicleIds,
-              driverId: ledgerScope.driverId,
-              ownerId: ledgerScope.ownerId
-            });
-          };
-          let reply = null;
-          let ledgerIntent = 'GENERAL_CHAT';
-
-          if (scope.ambiguous) {
-            clearPending();
-            const plateLines = [];
-            existingVehicles.forEach(function (v, i) {
-              plateLines.push((i + 1) + '. ' + v.plate_number + (v.make_model ? ' (' + v.make_model + ')' : ''));
-            });
-            reply = 'Which vehicle should I use?\n\n' + plateLines.join('\n') + '\n\nReply the number or the plate.';
-          } else if (ledgerTurn.type === 'cancel') {
-            clearPending();
-            reply = 'No changes made. Everything is still as you logged it.';
-          } else if (ledgerTurn.type === 'command' && ledgerTurn.action === 'list') {
-            clearPending();
-            reply = formatLedgerList({ entries, ...copy });
-          } else if (ledgerTurn.type === 'command' && ledgerTurn.action === 'restore') {
-            clearPending();
-            const restored = await restoreLastDeleted(supabaseClient, {
-              actorPhone: senderPhone,
-              vehicleIds: ledgerScope.vehicleIds
-            });
-            reply = restored.ok
-              ? formatEntryRestored({ entry: restored.entry, ...copy })
-              : formatRestoreEmpty(ENTRY_RESTORE_WINDOW_MINUTES);
-          } else if (ledgerTurn.type === 'command') {
-            // "edit my last entry" / "delete entry 2" — resolve the target now.
-            const target = atIndex(ledgerTurn.index) || (ledgerTurn.index ? null : entries[0] || null);
+            const target = rows[receiptDeleteCommand.index - 1];
             if (!target) {
-              const head = ledgerTurn.index
-                ? formatNoEntryForSelection(ledgerTurn.index)
-                : 'I could not find an entry to change.';
-              reply = `${head}\n\n${formatLedgerList({ entries, ...copy })}`;
-            } else if (ledgerTurn.action === 'edit') {
-              ledgerIntent = 'EDIT_ENTRY';
-              remember('edit', ledgerEntryKey(target), target.vehicle_id);
-              reply = formatEditPreview(target, copy);
+              aiResult = { intent: 'GENERAL_CHAT', extracted_data: {}, reply_message: 'I could not find receipt ' + receiptDeleteCommand.index + '. Type *receipts* to see the numbered list.' };
+            } else if (!receiptDeleteCommand.confirmed) {
+              const label = target.vendor ? String(target.vendor).split('|')[0].trim() : (target.document_kind || 'receipt');
+              aiResult = { intent: 'GENERAL_CHAT', extracted_data: {}, reply_message: 'Delete receipt ' + receiptDeleteCommand.index + ' (' + label + ')? Reply *delete receipt ' + receiptDeleteCommand.index + ' DELETE* to confirm. Your expense log stays untouched.' };
             } else {
-              ledgerIntent = 'DELETE_ENTRY';
-              remember('delete', ledgerEntryKey(target), target.vehicle_id);
-              reply = formatDeleteConfirm(target, copy);
-            }
-          } else if (ledgerTurn.type === 'select') {
-            const target = atIndex(ledgerTurn.index);
-            if (!target) {
-              reply = `${formatNoEntryForSelection(ledgerTurn.index)}\n\n${formatLedgerList({ entries, ...copy })}`;
-            } else if (ledgerTurn.mode === 'delete') {
-              ledgerIntent = 'DELETE_ENTRY';
-              remember('delete', ledgerEntryKey(target), target.vehicle_id);
-              reply = formatDeleteConfirm(target, copy);
-            } else {
-              ledgerIntent = 'EDIT_ENTRY';
-              remember('edit', ledgerEntryKey(target), target.vehicle_id);
-              reply = formatEditPreview(target, copy);
-            }
-          } else if (ledgerTurn.type === 'edit-apply') {
-            ledgerIntent = 'EDIT_ENTRY';
-            const target = (await resolvePinnedEntry()) || (!pendingKey ? entries[0] || null : null);
-            if (!target) {
-              clearPending();
-              reply = formatLedgerList({ entries, ...copy });
-            } else {
-              // v1.37.0 (D1) — corrections are delete & re-log: the old row is
-              // removed (snapshot audit), a fresh row carries the corrected
-              // values and the original entry date, and the DELETE audit row is
-              // consumed so `restore` can never duplicate the corrected row.
-              const updated = await relogLedgerEntry(supabaseClient, {
-                entry: target,
-                patch: ledgerTurn.changes,
-                actorPhone: senderPhone,
-                vehicleIds: ledgerScope.vehicleIds
-              });
-              if (updated.ok) {
-                clearPending();
-                reply = formatEntryRelogged({ entry: target, patch: updated.patch, ...copy });
+              const del = await deleteReceipt(supabaseClient, { receiptId: target.id, ownerId: isOwner ? profileData?.id : null, driverId: isOwner ? null : profileData?.id });
+              if (del.ok) {
+                try {
+                  await supabaseClient.from('admin_audit_logs').insert([{ admin_phone: senderPhone, action: 'RECEIPT_DELETED', details: { receipt_id: target.id, media_id: target.media_id || null, vehicle_id: target.vehicle_id || null, objects: del.objects || 0 } }]);
+                } catch { /* audit best effort */ }
+                aiResult = { intent: 'GENERAL_CHAT', extracted_data: {}, reply_message: 'Receipt ' + receiptDeleteCommand.index + ' deleted, along with its photo. Your expense entry is still in the ledger - use *my entries* to edit or delete it.' };
               } else {
-                const blocked = (updated.rejected || []).join(', ');
-                reply = `⚠️ I could not save that change${blocked ? ` (locked or invalid: ${blocked})` : ''}.\n\n`
-                  + formatEditPreview(target, copy);
+                aiResult = { intent: 'GENERAL_CHAT', extracted_data: {}, reply_message: 'I could not delete that receipt (' + (del.error || 'unknown') + '). It may already be gone.' };
               }
             }
-          } else if (ledgerTurn.type === 'delete-confirm') {
-            ledgerIntent = 'DELETE_ENTRY';
-            const target = (await resolvePinnedEntry()) || (!pendingKey ? entries[0] || null : null);
-            if (!target) {
-              clearPending();
-              reply = formatLedgerList({ entries, ...copy });
-            } else {
-              const removed = await deleteLedgerEntry(supabaseClient, { entry: target, actorPhone: senderPhone, vehicleIds: ledgerScope.vehicleIds });
-              clearPending();
-              reply = removed.ok
-                ? formatEntryDeleted({ entry: target, ...copy })
-                : '⚠️ I could not delete that entry just now. Nothing was changed — please try again in a moment.';
-            }
-          }
-
-          aiResult = { intent: ledgerIntent, extracted_data: {}, reply_message: reply };
-
-        } else if (odometerQuestion) {
-          // v1.56.0 — current mileage / odometer answers come from the VEHICLE,
-          // never the expense ledger (hours meter for hours-led assets).
-          const veh = currentActiveVehicle || existingVehicles[0] || null;
-          aiResult = { intent: 'GENERAL_CHAT', extracted_data: {}, reply_message: buildOdometerAnswer(veh) };
-
-        } else if (driverProfileQuestion && supabaseClient && profileData?.id) {
-          // v1.58.21 - the owner's OWN driver profile (compliance card) is a
-          // read; an empty profile offers the setup instead of fleet context.
-          try {
-            const card = await buildDriverComplianceCard({ supabase: supabaseClient, driverId: profileData.id, countryInfo });
-            const rows = card?.data?.tables?.[0]?.rows || [];
-            aiResult = {
-              intent: 'GENERAL_CHAT',
-              extracted_data: {},
-              reply_message: rows.length
-                ? card.text
-                : '🪪 *Your driver profile*\n\nNo driver documents are on file yet. Reply *driver profile* and I will set it up with you — licence number and expiry, one step at a time.'
-            };
-          } catch {
-            aiResult = { intent: 'GENERAL_CHAT', extracted_data: {}, reply_message: 'Your driver profile is unavailable right now. Please try again in a moment.' };
-          }
-
-        } else if (recordQuestion.ok && supabaseClient && profileData?.id) {
-          // v1.36.0 — record answers: every figure comes from the ledger rows.
-          const laneOwner = existingVehicles.some((v) => v.owner_id === profileData?.id);
-          // v1.58.3/1.58.6 — scope the read to ONE vehicle (plate → active →
-          // single). When the ask is genuinely ambiguous (several vehicles, no
-          // plate, no active) ASK which vehicle instead of silently summing the
-          // fleet (live 2026-11-04: "total liters fuelled" summed both cars).
-          const recordScope = resolveLedgerVehicleScope({
-            text: commandText,
-            vehicles: existingVehicles,
-            activeVehicle: currentActiveVehicle
-          });
-          const wantsAllVehicles = /\b(?:all|both|every)\s+(?:vehicles?|cars?|assets?)\b|\b(?:across|for)\s+(?:the\s+)?(?:whole\s+)?fleet\b|\bfleet[-\s]?wide\b/i.test(commandText);
-          if (recordScope.ambiguous && !wantsAllVehicles && existingVehicles.length >= 2) {
-            const plates = existingVehicles.map((v) => v.plate_number).filter(Boolean);
-            aiResult = {
-              intent: 'QUERY_RECORDS',
-              extracted_data: {},
-              __deterministicRecords: true,
-              reply_message: `📊 Which vehicle should I pull that for — *${plates.join('* or *')}*?\n\nOr reply *all vehicles* for the fleet total.`
-            };
+          } else if (fastQuizTurn) {
+            const quick = classifyIntentWithRegex(messageText);
+            aiResult = { intent: quick.intent, extracted_data: {}, reply_message: null };
           } else {
-            const recordVehicleIds = recordScope.ambiguous ? existingVehicles.map((v) => v.id) : recordScope.vehicleIds;
-            const recordResult = await queryRecordLedger(supabaseClient, {
-              ownerId: laneOwner ? profileData?.id : null,
-              driverId: laneOwner ? null : profileData?.id,
-              vehicleIds: recordVehicleIds,
-              question: recordQuestion
+            aiResult = await processSakaMessage(targetLang, messageText, conversationHistory, [], supabaseClient, activeVehicleContext, {
+              maxAiTier: entitlements?.maxAiTier ?? null,
+              ownerId: profileData?.id || null,
+              planSummary,
+              jurisdictionContext,
+              workingMemory: buildConversationMemory({ quiz: session?.quiz || null }),
+              // v1.61.14 — the cached engine facts ride with every AI turn.
+              userFactsContext,
+              // v1.59.4 — returning after the fresh window: give the model the last
+              // few turns as LABELLED context (never as live turns) so Saka can pick
+              // up where the conversation stopped.
+              reengagementContext: dbHistory.length === 0
+                ? await getReengagementContext(supabaseClient, senderPhone)
+                : null
             });
-            // v1.59.7 — a keyword also matches labels on receipts, reminders and
-            // odometer readings (labels live on every entry now).
-            let otherLabelBlock = '';
-            if (recordQuestion.keyword) {
-              const otherLabelGroups = await searchOtherLabels(supabaseClient, {
-                vehicleIds: recordVehicleIds,
-                keyword: recordQuestion.keyword
-              });
-              otherLabelBlock = formatOtherLabelMatches(otherLabelGroups);
-            }
-            const recordAnswerText = formatRecordAnswer(recordResult, recordQuestion, {
-              vehicles: existingVehicles,
-              currency: countryInfo?.currency || 'USD',
-              locale: countryInfo?.locale || 'en-US',
-              // v1.58.22 - only claim a vehicle scope when one actually resolved.
-              scopePlate: recordScope.reason === 'plate' ? recordQuestion.vehiclePlate : false
-            }) + otherLabelBlock;
-            // v1.61.5 — remember the answered query so a challenge replays it.
-            if (session && !recordChallenge) {
-              session.lastRecordQuery = {
-                at: Date.now(),
-                spec: {
-                  kind: recordQuestion.kind,
-                  earning: recordQuestion.earning,
-                  expenseTypes: recordQuestion.expenseTypes,
-                  range: recordQuestion.range,
-                  vehiclePlate: recordQuestion.vehiclePlate,
-                  keyword: recordQuestion.keyword,
-                  text: recordQuestion.text
-                }
-              };
-            }
-            aiResult = {
-              intent: 'QUERY_RECORDS',
-              extracted_data: {},
-              __deterministicRecords: true,
-              reply_message: recordChallenge
-                ? `↩️ Fair check — here's the same record, unchanged:\n\n${recordAnswerText}${buildRecordChallengeScopeLine({ challengeText: commandText, vehiclePlate: lastRecordQuery?.spec?.vehiclePlate || null, vehicleCount: existingVehicles.length, expenseTypes: lastRecordQuery?.spec?.expenseTypes || [], earning: Boolean(lastRecordQuery?.spec?.earning) }) || '\n\nIf a row looks wrong, reply *my entries* to edit or delete it.'}`
-                : recordAnswerText
-            };
           }
-
-        } else if (receiptDeleteCommand) {
-          const isOwner = existingVehicles.some((v) => v.owner_id === profileData?.id);
-          const rows = await listReceipts(supabaseClient, {
-            ownerId: isOwner ? profileData?.id : null,
-            driverId: isOwner ? null : profileData?.id,
-            vehicleIds: existingVehicles.map((v) => v.id)
-          });
-          const target = rows[receiptDeleteCommand.index - 1];
-          if (!target) {
-            aiResult = { intent: 'GENERAL_CHAT', extracted_data: {}, reply_message: 'I could not find receipt ' + receiptDeleteCommand.index + '. Type *receipts* to see the numbered list.' };
-          } else if (!receiptDeleteCommand.confirmed) {
-            const label = target.vendor ? String(target.vendor).split('|')[0].trim() : (target.document_kind || 'receipt');
-            aiResult = { intent: 'GENERAL_CHAT', extracted_data: {}, reply_message: 'Delete receipt ' + receiptDeleteCommand.index + ' (' + label + ')? Reply *delete receipt ' + receiptDeleteCommand.index + ' DELETE* to confirm. Your expense log stays untouched.' };
-          } else {
-            const del = await deleteReceipt(supabaseClient, { receiptId: target.id, ownerId: isOwner ? profileData?.id : null, driverId: isOwner ? null : profileData?.id });
-            if (del.ok) {
-              try {
-                await supabaseClient.from('admin_audit_logs').insert([{ admin_phone: senderPhone, action: 'RECEIPT_DELETED', details: { receipt_id: target.id, media_id: target.media_id || null, vehicle_id: target.vehicle_id || null, objects: del.objects || 0 } }]);
-              } catch { /* audit best effort */ }
-              aiResult = { intent: 'GENERAL_CHAT', extracted_data: {}, reply_message: 'Receipt ' + receiptDeleteCommand.index + ' deleted, along with its photo. Your expense entry is still in the ledger - use *my entries* to edit or delete it.' };
-            } else {
-              aiResult = { intent: 'GENERAL_CHAT', extracted_data: {}, reply_message: 'I could not delete that receipt (' + (del.error || 'unknown') + '). It may already be gone.' };
-            }
-          }
-        } else if (receiptsCommand) {
-          const isOwner = existingVehicles.some((v) => v.owner_id === profileData?.id);
-          const receipts = await listReceipts(supabaseClient, {
-            ownerId: isOwner ? profileData?.id : null,
-            driverId: isOwner ? null : profileData?.id,
-            vehicleIds: existingVehicles.map((v) => v.id)
-          });
-          aiResult = {
-            intent: 'GENERAL_CHAT',
-            extracted_data: {},
-            reply_message: formatReceiptsReply({ receipts, vehicles: existingVehicles, fallbackCurrency: countryInfo?.currency || null })
-          };
-        } else if (fastQuizTurn) {
-          const quick = classifyIntentWithRegex(messageText);
-          aiResult = { intent: quick.intent, extracted_data: {}, reply_message: null };
-        } else {
-          aiResult = await processSakaMessage(targetLang, messageText, conversationHistory, [], supabaseClient, activeVehicleContext, {
-            maxAiTier: entitlements?.maxAiTier ?? null,
-            ownerId: profileData?.id || null,
-            planSummary,
-            jurisdictionContext,
-            workingMemory: buildConversationMemory({ quiz: session?.quiz || null }),
-            // v1.61.14 — the cached engine facts ride with every AI turn.
-            userFactsContext,
-            // v1.59.4 — returning after the fresh window: give the model the last
-            // few turns as LABELLED context (never as live turns) so Saka can pick
-            // up where the conversation stopped.
-            reengagementContext: dbHistory.length === 0
-              ? await getReengagementContext(supabaseClient, senderPhone)
-              : null
-          });
         }
         phaseMarks.aiDoneAt = Date.now();
         let intent = aiResult.intent;
         // v1.58.6 — a clear past-tense expense statement ("Repaired a puncture,
         // cost me 300kes") is LOGGED, never answered as a query, even if the
         // classifier hedged (live 2026-11-04: it kept replying "Nothing logged").
-        if (recordQuestion.reason === 'looks-like-log' && !['LOG_EXPENSE', 'LOG_EARNINGS'].includes(intent)) {
+        if (readCtx.recordSpec.question.reason === 'looks-like-log' && !['LOG_EXPENSE', 'LOG_EARNINGS'].includes(intent)) {
           intent = 'LOG_EXPENSE';
         }
         let customReply = aiResult.reply_message;

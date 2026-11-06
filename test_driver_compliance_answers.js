@@ -122,12 +122,16 @@ const withoutDriver = buildComplianceStatusReply({ vehicle: { plate_number: 'KAS
 check(!withoutDriver.includes('Driver documents'), 'no driver section is added when no driver rows exist');
 
 console.log('\n--- Test 9: the lane is wired BEFORE the record/expense lane (rule 51 sibling) ---');
+// v1.63.3 — the deterministic read lanes moved into the Read Command Registry;
+// lane ORDER is now asserted on the registry itself.
+const registry = fs.readFileSync('src/services/readCommands.js', 'utf8');
 const route = fs.readFileSync('src/routes/whatsapp.js', 'utf8');
-const driverIndex = route.indexOf('const driverDocRead');
-const recordIndex = route.indexOf('recordQuestion.ok && supabaseClient');
-check(driverIndex !== -1 && recordIndex !== -1 && driverIndex < recordIndex, 'driver-document detection runs before the record-query branch');
-check(route.includes('buildDriverComplianceReply(') && route.includes(".eq('driver_id', profileData.id)"), 'the route reads driver_compliances for the caller profile');
-check(route.includes('driverRows, profile: profileData'), 'the vehicle card receives the driver rows');
+const driverIndex = registry.indexOf("id: 'driver_documents'");
+const recordIndex = registry.indexOf("id: 'records_query'");
+check(driverIndex !== -1 && recordIndex !== -1 && driverIndex < recordIndex, 'driver-document lane runs before the record-query lane in the registry');
+check(registry.includes('buildDriverComplianceReply(') && registry.includes(".eq('driver_id', ctx.profile.id)"), 'the registry reads driver_compliances for the caller profile');
+check(registry.includes('driverRows, profile: ctx.profile'), 'the vehicle card receives the driver rows');
+check(route.includes('resolveReadCommand(commandText, readCtx)'), 'the route dispatches every deterministic read through the registry');
 const flow = SAKA_QUIZ_FLOWS.find((row) => row.key === 'driver_onboarding');
 check(/DRIVER DOCUMENT READS \(v1\.61\.2\)/.test(flow?.rules || ''), 'the driver-onboarding flow knowledge teaches the read lane');
 
@@ -167,7 +171,8 @@ const pasted = extractFromPastedDocument('Add this drivers license | PSV DETAILS
 check(pasted?.number === 'TSV2026' && pasted?.expiry === '2027-08-08', 'a pasted licence paragraph extracts the labelled number and date');
 check(extractFromPastedDocument('TSV2026', { now: NOW }) === null, 'a bare token never becomes a pasted-document parse');
 const routeNow = fs.readFileSync('src/routes/whatsapp.js', 'utf8');
-check(routeNow.includes('detectAllDocumentsExpiryRead') && routeNow.includes('detectComplianceNumberSearch'), 'the merged read + number search are wired');
+const registryNow = fs.readFileSync('src/services/readCommands.js', 'utf8');
+check(registryNow.includes('detectAllDocumentsExpiryRead') && registryNow.includes('detectComplianceNumberSearch'), 'the merged read + number search are wired through the registry');
 check(routeNow.includes('isUnreadableMediaNote(messageText)') && routeNow.includes('isPhotoIntent(messageText)'), 'the photo/unreadable lanes are wired into the capture branch');
 check(routeNow.includes('extractFromPastedDocument') && routeNow.includes('detectDocumentTypeCorrection'), 'paste + type-correction handling is wired');
 
