@@ -60,7 +60,7 @@ check(isDeployNoiseLog('TypeError: Cannot read properties of undefined') === fal
 check(isDeployNoiseLog('') === false, 'empty text is safe');
 
 console.log('--- Test 5: route wiring ---');
-const routeSource = readFileSync('./src/routes/whatsapp.js', 'utf8');
+const routeSource = readFileSync('./src/routes/whatsapp/messages.js', 'utf8');
 const readRegistry = readFileSync('./src/services/readCommands.js', 'utf8');
 check(/const summaryCommand[\s\S]*isVehicleSummaryCommand/.test(routeSource), 'the route recognises the registration-summary command');
 check(/buildVehicleSummary[\s\S]*emailVehicleSummary/.test(readRegistry), 'the read registry builds and emails the registration summary');

@@ -17,7 +17,7 @@ import assert from 'assert';
  * instant "reading now" progress ack stays literal.)
  */
 
-const source = fs.readFileSync('src/routes/whatsapp.js', 'utf8');
+const source = fs.readFileSync('src/routes/whatsapp/messages.js', 'utf8');
 
 const directReplies = [
   ...source.matchAll(/customReply\s*=\s*'([^'\n]{25,})'/g),

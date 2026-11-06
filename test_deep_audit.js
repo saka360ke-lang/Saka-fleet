@@ -67,12 +67,12 @@ async function run() {
 
   const scoped = lintLedgerScoping([
     { path: 'src/services/entryLedger.js', text: "q = q.in('vehicle_id', scoped);" },
-    { path: 'src/routes/whatsapp.js', text: 'resolveLedgerVehicleScope({}); await queryRecordLedger();' }
+    { path: 'src/routes/whatsapp/messages.js', text: 'resolveLedgerVehicleScope({}); await queryRecordLedger();' }
   ]);
   check(scoped.length === 0, 'scoped ledger passes');
   const unscoped = lintLedgerScoping([
     { path: 'src/services/entryLedger.js', text: "q = q.eq('owner_id', ownerId);" },
-    { path: 'src/routes/whatsapp.js', text: 'await queryRecordLedger();' }
+    { path: 'src/routes/whatsapp/messages.js', text: 'await queryRecordLedger();' }
   ]);
   check(unscoped.length === 2, 'unscoped ledger flags both guards');
 

@@ -162,7 +162,7 @@ const RATCHET_FILES = [
   'src/services/trialEngine.js',
   'src/services/onboarding.js',
   'src/services/vehicleCompliance.js',
-  'src/routes/whatsapp.js'
+  'src/routes/whatsapp/messages.js'
 ];
 let totalCalls = 0;
 for (const file of RATCHET_FILES) {
@@ -189,7 +189,7 @@ const REASONS = [
   ['src/services/trialEngine.js', ['trialEngine.startAccountTrial', 'trialEngine.extendCoupon']],
   ['src/services/onboarding.js', ['onboarding.saveAssetRecord', 'onboarding.stage2Specs']],
   ['src/services/vehicleCompliance.js', ['vehicleCompliance.submit']],
-  ['src/routes/whatsapp.js', ['whatsapp.quickLogExpense', 'whatsapp.quickLogMileage', 'whatsapp.quickLogHours', 'whatsapp.quickLogEarning']]
+  ['src/routes/whatsapp/messages.js', ['whatsapp.quickLogExpense', 'whatsapp.quickLogMileage', 'whatsapp.quickLogHours', 'whatsapp.quickLogEarning']]
 ];
 let reasonCount = 0;
 for (const [file, reasons] of REASONS) {
@@ -205,10 +205,10 @@ console.log('\n=== 7. deliberately-left registry (rule-51 sweep, v1.63.1) ===');
 // These tables are NOT in section 177's snapshot. A future snapshot expansion
 // must remove from this list and add to the ratchet above.
 const DELIBERATELY_LEFT = {
-  chat_history: 'src/routes/whatsapp.js',
-  chat_transcripts: 'src/routes/whatsapp.js',
+  chat_history: 'src/routes/whatsapp/messages.js',
+  chat_transcripts: 'src/routes/whatsapp/messages.js',
   chat_sessions: 'src/services/sessionStore.js',
-  processed_webhooks: 'src/routes/whatsapp.js',
+  processed_webhooks: 'src/routes/whatsapp/webhook.js',
   chat_friction_logs: 'src/services/frictionTracker.js',
   error_logs: 'src/services/systemErrors.js',
   admin_audit_logs: 'src/services/entryLedger.js',

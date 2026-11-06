@@ -1,6 +1,13 @@
 {
-  "latest": "1.64.0",
+  "latest": "1.65.0",
   "entries": [
+    {
+      "version": "1.65.0",
+      "date": "2026-11-06",
+      "title": "The same Saka, in tidier rooms",
+      "preview": "We split Saka's WhatsApp code into tidy rooms - same answers, same speed, same behaviour.",
+      "summary": "Saka's WhatsApp brain lived in one very large file. It now lives in two clear rooms - one that greets Meta's messages and one that does the thinking - with a thin doorway that keeps every old entrance working. Nothing you see changes: every reply, confirmation and record flows exactly as before, proven by a byte-for-byte comparison of the moved code and the full quality suite."
+    },
     {
       "version": "1.64.0",
       "date": "2026-11-06",

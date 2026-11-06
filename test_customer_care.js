@@ -71,7 +71,7 @@ async function run() {
   if (savedMail !== undefined) process.env.SUPERADMIN_EMAIL = savedMail;
 
   // v1.58.22 - route-level guards for the live 2026-11-04 frictions.
-  const wa = fs.readFileSync('./src/routes/whatsapp.js', 'utf8');
+  const wa = fs.readFileSync('./src/routes/whatsapp/messages.js', 'utf8');
   check(/support_intake_handled/.test(wa) && wa.indexOf('support_intake_handled') < wa.indexOf('isStopRequest(cleanCmd)'), 'the support intake lock runs before stop/quiz handling');
   check(/ticketCreated\s*\?/.test(wa), 'the forwarded copy is gated on a real ticket');
   check(/statement_not_answer/.test(wa), 'a statement mid-draft parks the draft instead of looping');

@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.64.0  
+**Version:** 1.65.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.65.0** | whatsapp.js split Phase 5A: the webhook (GET verification + POST HMAC + wamid dedupe + instant 200 ACK + per-phone enqueue) moves to `src/routes/whatsapp/webhook.js` and the processor to `messages.js`; a barrel `index.js` re-exports all 23 public symbols and `whatsapp.js` becomes a one-line shim, so every importer works unchanged - verbatim block proof (4,950 lines byte-identical), 15 source-pin suites repointed (paths only), zero behavioural test edits | 187 |
 | **1.64.0** | Unified session.pending (Phase 4): 13 independent pending* session fields become ONE `{ kind, data, at }` object with one `PENDING_KINDS` registry + `resolvePendingTurn()` + a migration-on-read shim (legacy fields become non-enumerable accessors, so `whatsapp.js` branches stay byte-identical); today's per-kind truth table preserved, proven by a 434-assertion harness including a 300-turn differential replay; 2 PROPs minted (uniform fresh-log override, driver-assignment cancel) | 186 |
 | **1.63.3** | Read Command Registry (Phase 3): the 560-line deterministic read if/else chain in `whatsapp.js` becomes ONE ordered registry (`src/services/readCommands.js`) in the old dispatch precedence — zero behaviour change, proven by a 121-assertion differential harness against a frozen copy of the old chain (`whatsapp.js` −707/+85) | 185 |
 | **1.63.2** | Record-challenge tone fix (Persona v4 acknowledge-distress) + calibration-aware eval gate (`--exclude-calibration`; Phase 3 baseline 23/23 signal pass, 12/12 calibration hold) | 184 |
@@ -5149,4 +5150,38 @@ Usage: `npm run eval:apply-heals` (dry run, 48 h) · `-- --hours=72` · `-- --wr
 **Suites run:** test_pending_state (434), test_read_registry (121), test_entry_ledger (all), test_narrative_draft (122), test_compliance_capture (30), test_driver_assignment_gate (54), test_quiz_flow (153), test_agent_training (180), test_conv_eval (203), test_first_message_flow (57), test_doc_sync — green; `npm run health` green.
 
 **Recurrence autopsy (rule 51).** *Defect class: a pending interaction that swallows or yields the wrong turn because its TTL/fresh-log/priority lives in its own branch* → sibling sweep = all 13 slot kinds + the 3 documented out-of-slot kinds; every quirk preserved and pinned (driver-assignment cancel, no-TTL confirm gates, transfer/assignment no-quiz guards, entry-edit delete-mode yielding, the stateless buyer sink). Deliberately left: the uniform fresh-log override (PROP-2026-11-06-01) and the driver-assignment cancel escape (PROP-2026-11-06-02) — both are behaviour changes and belong to their own releases. Rule 13: `flowKnowledge.js` gained one `FLOW_GUIDANCE` line per kind (rendered into the core prompt by the existing block); `sakaAi.js` and `conversationEngine.js` are unchanged — pure state-layer refactor, no intent/flow/copy change (test_agent_training 180 green).
+
+### 187. v1.65.0 (5A/3) — whatsapp.js split: webhook + messages + barrel + shim (2026-11-06)
+
+**Why.** `src/routes/whatsapp.js` was a 5,111-line monolith: the Meta handshake, HMAC, wamid dedupe, enqueue and the entire message processor in one file. Phase 5 splits it in three releases; **5A is a pure file move — not one behaviour line changes.**
+
+**A. Layout (5A).**
+
+```
+src/routes/
+├── whatsapp.js            <- temporary one-line shim: export * from './whatsapp/index.js';
+└── whatsapp/
+    ├── webhook.js         <- GET verification, POST HMAC, wamid dedupe, 200 ACK, enqueue
+    ├── messages.js        <- the message processor + the 14 public helpers
+    └── index.js           <- barrel: export * from './webhook.js'; export * from './messages.js';
+```
+
+- `webhook.js` (272 lines): `handleWhatsAppWebhookVerification` (moved verbatim from `index.js`), `META_APP_SECRET_PLACEHOLDER`, `verifyMetaWebhookSignature`, `processedWebhooksCache`, `DEDUPLICATION_TTL_MS`, `isMessageProcessed`, `markMessageProcessed`, `checkAndRecordWamid`, `handleWhatsAppWebhook`, plus the module-level resilient Supabase client.
+- `messages.js` (4,876 lines): `onboardingStore`, `chatSessions`, the 12 helper exports and `processIncomingWhatsAppMessage`.
+- `index.js` (barrel, 11 lines) and the one-line `whatsapp.js` shim every existing importer keeps using until 5C. Root `index.js` imports both webhook handlers straight from `./src/routes/whatsapp/webhook.js`; the three GET routes wrap it with `fastify`.
+
+**B. Dependency graph — acyclic.** `webhook.js -> messages.js` (static `import { processIncomingWhatsAppMessage } from './messages.js'`, dereferenced only inside the queued task). `messages.js` imports only services, never the webhook. Reverse direction verified: the processor uses none of the dedupe/signature symbols, and the webhook never touches `chatSessions`/`onboardingStore`. No lazy `import()` anywhere.
+
+**C. Verbatim proof.** Every moved line was compared byte-for-byte against `HEAD:src/routes/whatsapp.js`: processor 4,415 lines, helpers 300, webhook handler 122, dedupe 55, signature 55, session maps 2 and the client declaration 1 — all OK. UTF-8 bytes preserved (emoji round-trip check). The barrel resolves exactly 23 public symbols (22 original + the relocated GET verifier).
+
+**D. Source-pin repoints (path only; every pinned string/regex untouched).** `test_asset_type_check`, `test_conversation_compliance`, `test_conv_eval`, `test_coupon_integrity`, `test_customer_care`, `test_deep_audit` (rule-51 sibling: the fixtures feed the exact path `deepAudit.js` looks up), `test_driver_compliance_answers` (2 sites), `test_feature_notice`, `test_first_message_flow` (source scan only; its import stays on the shim), `test_labels_everywhere`, `test_no_canned_replies`, `test_ocr_flow`, `test_pending_state`, `test_user_context_cache` (2 ratchet paths + 3 deliberately-left registry entries; `processed_webhooks` correctly follows its write into `webhook.js`), `test_web_onboarding`. Plus `src/services/deepAudit.js` (ledger-lint lookup, finding description, files array) and `src/services/conversationDiagnosis.js` (routing-map label + fallback file).
+
+**E. Zero behavioural test edits.** The seven behavioural suites (`test_meta_signature`, `test_first_message_flow`, `test_update_suggest`, `test_greetings`, `test_first_time_flow`, `test_new_features`, `test_reliability`) were **not edited at all** and exercise the move through the shim. `test_reliability` Test 4 (3-strike breaker) fails identically on a stashed pristine v1.64.0 tree in this local environment (the suite deletes the AI keys and the keyless fallback no longer produces a repeated reply) — proven pre-existing, not a regression, and it is not part of `npm run health`.
+
+**Frames touched:** `src/routes/whatsapp/webhook.js` (new), `src/routes/whatsapp/messages.js` (new), `src/routes/whatsapp/index.js` (new barrel), `src/routes/whatsapp.js` (1-line shim), `index.js` (import + GET verification moved out), `src/services/deepAudit.js`, `src/services/conversationDiagnosis.js`, the 15 source-pin suites above, `package.json`, `landing/data/changelog.json` (+ stamped assets), `docs/` (generated), `SAKA_FLEET_ARCHITECTURE.md` (section 187, version + history), `CHANGELOG.md`.
+
+**Suites run:** test_meta_signature (16), test_first_message_flow, test_update_suggest, test_greetings, test_first_time_flow, test_new_features — green; the 15 repointed source-pin suites — green; `npm run eval:conv -- --exclude-calibration` 23/23 (0.0% real-fail, 12/12 calibration hold); `npm run health` green.
+
+**Recurrence autopsy (rule 51).** *Defect class: a monolith route file* — every consumer couples to one 5,111-line path, so a structural move can silently strand source-pinned guards, lints and registries. Sibling sweep: every `fs.readFileSync`/`textOf` reader of the old path (15 test suites + `deepAudit.js` + `conversationDiagnosis.js`), the rule-51 invalidation ratchet (42 call sites incl. the 4 `whatsapp.quickLog*` reasons) and the deliberately-left table registry (`processed_webhooks` re-homed to `webhook.js` because its upsert moved). Guard: the one-line shim keeps every importer working, all pinned strings are unchanged, and the verbatim block comparison proves the moved code is byte-identical. Rule 13: `flowKnowledge.js`, `sakaAi.js`, `conversationEngine.js` unchanged — pure structural refactor, no intent/flow/copy change.
+
 

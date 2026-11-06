@@ -10,7 +10,7 @@ import { runHealthCheck, runConversationRefinement, evaluateConversationalFricti
 import { ensureSuperadminTables, isSuperadminPhone, sendMorningExecutiveBriefing, maybeSendAiBudgetAlert } from './src/services/superadmin.js';
 import { ensureVehicleTableColumns } from './src/services/vehicles.js';
 import { ensureTrialSchemaDefaults } from './src/services/trialSchema.js';
-import { handleWhatsAppWebhook as handleWhatsAppWebhookRoute } from './src/routes/whatsapp.js';
+import { handleWhatsAppWebhook as handleWhatsAppWebhookRoute, handleWhatsAppWebhookVerification } from './src/routes/whatsapp/webhook.js';
 import { verifyPaystackSignature } from './src/services/paystack.js';
 import { runReminderSweep } from './src/services/maintenanceReminders.js';
 import { ensureComplianceCatalog, reviewComplianceCatalog, COMPLIANCE_CATALOG_VERSION } from './src/services/complianceCatalog.js';
@@ -1179,24 +1179,11 @@ fastify.post('/api/paystack/webhook', handlePaystackWebhook);
 // 8. Meta WhatsApp Webhook Integration
 // ==========================================
 
-async function handleWhatsAppWebhookVerification(request, reply) {
-  const mode = request.query['hub.mode'];
-  const token = request.query['hub.verify_token'];
-  const challenge = request.query['hub.challenge'];
-
-  const expectedToken = process.env.WHATSAPP_VERIFY_TOKEN || process.env.META_VERIFY_TOKEN;
-
-  if (mode === 'subscribe' && token === expectedToken) {
-    fastify.log.info('Meta WhatsApp webhook verified successfully.');
-    return reply.status(200).send(challenge);
-  } else {
-    return reply.status(403).send('Forbidden');
-  }
-}
-
-fastify.get('/webhook', handleWhatsAppWebhookVerification);
-fastify.get('/webhook/whatsapp', handleWhatsAppWebhookVerification);
-fastify.get('/api/whatsapp/webhook', handleWhatsAppWebhookVerification);
+// v1.65.0 (5A/3) - the GET verification handshake now lives with the rest of the
+// webhook in src/routes/whatsapp/webhook.js; these wrappers pass the app instance.
+fastify.get('/webhook', (request, reply) => handleWhatsAppWebhookVerification(request, reply, fastify));
+fastify.get('/webhook/whatsapp', (request, reply) => handleWhatsAppWebhookVerification(request, reply, fastify));
+fastify.get('/api/whatsapp/webhook', (request, reply) => handleWhatsAppWebhookVerification(request, reply, fastify));
 
 async function handleWhatsAppWebhook(request, reply) {
   return handleWhatsAppWebhookRoute(request, reply, fastify);

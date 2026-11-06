@@ -158,7 +158,7 @@ const again = await applyAccountTrialExtensionCoupon({ supabase: goodMock.client
 check(again.ok === false && /already been redeemed/.test(again.error), 'the same coupon can never be redeemed twice');
 
 console.log('\n--- 5. the route prefers account-bound redemption (C5) ---');
-const routeSource = fs.readFileSync('src/routes/whatsapp.js', 'utf8');
+const routeSource = fs.readFileSync('src/routes/whatsapp/messages.js', 'utf8');
 check(routeSource.includes('applyAccountTrialExtensionCoupon({'), 'the EXT30 lane calls the account-bound redemption');
 check(routeSource.indexOf('applyAccountTrialExtensionCoupon({') < routeSource.indexOf('applyTrialExtensionCoupon({'), 'the account-bound path runs before the legacy VIN fallback');
 

@@ -571,7 +571,7 @@ check(CONVERSATION_CASES.some((caseDef) => (caseDef.tags || []).includes('coupon
 for (const key of ['CONV_EVAL_MAX_JUDGE_CALLS_PER_TICK', 'CONV_EVAL_PASS_STREAK', 'CONV_EVAL_PASS_REST_TICKS', 'CONV_EVAL_MAX_REFUSALS_PER_CASE', 'CONV_EVAL_REFUSAL_COOLDOWN_HOURS', 'EVAL_DAILY_CALL_ALERT']) {
   check(evalSection.keys.includes(key), `env registry carries ${key}`);
 }
-check(fs.readFileSync('src/routes/whatsapp.js', 'utf8').includes('voice_note_fallback'), 'the voice-note fallback lane is wired in the route');
+check(fs.readFileSync('src/routes/whatsapp/messages.js', 'utf8').includes('voice_note_fallback'), 'the voice-note fallback lane is wired in the route');
 const emptyDigest = await handleConvEvalCommand(null, { mode: 'stats' });
 check(emptyDigest.reply.includes('No evaluation runs'), 'the stats command degrades cleanly without a database');
 

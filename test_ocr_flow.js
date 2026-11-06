@@ -446,7 +446,7 @@ async function run() {
   check(ocrDigest.includes('unusable: 1'), 'OCR digest counts unusable reads');
 
   console.log('\n--- Test 14: silent-crash regression guard (v1.32.1) ---');
-  const whatsappSource = readFileSync(new URL('./src/routes/whatsapp.js', import.meta.url), 'utf8');
+  const whatsappSource = readFileSync(new URL('./src/routes/whatsapp/messages.js', import.meta.url), 'utf8');
   check(/let session = null;/.test(whatsappSource), 'session is hoisted before the try block');
   check(/session\?\.slowAckSent === true/.test(whatsappSource), 'catch block uses optional chaining (no masking ReferenceError)');
   check(!/ackSent: session\.slowAckSent/.test(whatsappSource), 'no bare session reference remains in the latency call');

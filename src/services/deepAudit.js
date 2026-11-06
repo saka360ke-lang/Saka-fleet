@@ -149,14 +149,14 @@ export function lintLedgerScoping(sources = []) {
       remediation: "Restore the `.in('vehicle_id', scoped)` guard in listLedgerEntries."
     });
   }
-  const whatsapp = textOf('src/routes/whatsapp.js');
+  const whatsapp = textOf('src/routes/whatsapp/messages.js');
   if (whatsapp.includes('queryRecordLedger(') && !whatsapp.includes('resolveLedgerVehicleScope')) {
     findings.push({
       slug: 'ledger-scope-record',
       severity: 'medium',
       title: 'Record query is not vehicle-scoped',
-      description: 'src/routes/whatsapp.js calls queryRecordLedger without resolveLedgerVehicleScope.',
-      files: ['src/routes/whatsapp.js'],
+      description: 'src/routes/whatsapp/messages.js calls queryRecordLedger without resolveLedgerVehicleScope.',
+      files: ['src/routes/whatsapp/messages.js'],
       remediation: 'Scope the record lane with resolveLedgerVehicleScope before queryRecordLedger.'
     });
   }

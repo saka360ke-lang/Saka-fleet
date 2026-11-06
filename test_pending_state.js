@@ -376,7 +376,7 @@ check(differential >= 220, `the differential matrix replays ${differential} turn
 // Deliberate kept-inline lane pin (rule 51): a bare 6-digit message still falls
 // into the stateless buyer-OTP sink today, even while another pending is set.
 // Phase 4 does not move it; Phase 5 must keep its position before any rewiring.
-const routeSource = fs.readFileSync('src/routes/whatsapp.js', 'utf8');
+const routeSource = fs.readFileSync('src/routes/whatsapp/messages.js', 'utf8');
 check(routeSource.includes('session.pendingTransferBuyerOtp || (messageText.trim().match(/^\\d{6}$/)'),
   'kept-inline pin: the stateless 6-digit buyer-OTP sink is still in the route (not a pending, not migrated)');
 

@@ -249,7 +249,7 @@ const quizSrc = fs.readFileSync(path.join(here, 'src/services/quizEngine.js'), '
 check(quizSrc.includes('ctx.profile?.email_verified !== true'), 'persistVehicleRegistration refuses unverified accounts');
 const onbSrc = fs.readFileSync(path.join(here, 'src/services/onboarding.js'), 'utf8');
 check(onbSrc.includes('profileData?.email_verified !== true'), 'saveVehicleAssetRecord refuses unverified accounts');
-const waSrc = fs.readFileSync(path.join(here, 'src/routes/whatsapp.js'), 'utf8');
+const waSrc = fs.readFileSync(path.join(here, 'src/routes/whatsapp/messages.js'), 'utf8');
 check(waSrc.includes('unverified_gated') && waSrc.includes('unverified_gated_media') && /profileData\.email_verified !== true/.test(waSrc), 'the WhatsApp route hard-gates unverified numbers (text and media)');
 
 console.log('\n--- Test 10: phone-primary country lock (v1.59.0) ---');

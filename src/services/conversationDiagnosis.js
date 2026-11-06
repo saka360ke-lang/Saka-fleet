@@ -34,7 +34,7 @@ const ROUTING_MAP = [
   'src/services/entryAnswers.js::resolveLedgerTurn — single ledger decision point (list/select/edit/delete/cancel).',
   'src/services/quizEngine.js::detectQuizStart — intent → quiz flow; REGISTER_VEHICLE only starts when the user has NO vehicle yet.',
   'src/services/quizEngine.js::detectRegistrationCorrection — "edit <field>: value" / "you read X wrong" (registration only).',
-  'src/routes/whatsapp.js::isRegisterCommand — regexes that recognise "register / add car / new vehicle".',
+  'src/routes/whatsapp/messages.js::isRegisterCommand — regexes that recognise "register / add car / new vehicle".',
   'src/services/documentLens.js::parseDocumentFields — deterministic OCR field extraction (the Document Lens).',
   'src/services/conversationMemory.js::buildConversationMemory — the unsaved-draft block injected into prompts.'
 ].join('\n');
@@ -56,7 +56,7 @@ export function sanitizeConversationDiagnosis(candidate) {
   const minimalChange = String(candidate.minimal_change || '').trim().slice(0, 200);
   if (!rootCause || !minimalChange) return null;
   if (likelyFile && DIAGNOSIS_FORBIDDEN.test(likelyFile)) return null;
-  return { rootCause, likelyFile: likelyFile || 'src/routes/whatsapp.js', minimalChange };
+  return { rootCause, likelyFile: likelyFile || 'src/routes/whatsapp/messages.js', minimalChange };
 }
 
 /** Flag-gated, reasoning-tier diagnosis (read-only; never edits code). */

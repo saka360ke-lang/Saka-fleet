@@ -188,7 +188,7 @@ check((failingMock.db.error_logs || []).some((row) => row.route === 'quizEngine.
 console.log('\n--- 8. siblings use the same helper (rule 51) ---');
 const onboardingSource = fs.readFileSync('src/services/onboarding.js', 'utf8');
 check(onboardingSource.includes('assetTypeForKind') && onboardingSource.includes('legacyAssetType'), 'onboarding uses the shared vocabulary + legacy degrade');
-const routeSource = fs.readFileSync('src/routes/whatsapp.js', 'utf8');
+const routeSource = fs.readFileSync('src/routes/whatsapp/messages.js', 'utf8');
 check(/mower/.test(routeSource), 'the register detector recognises mower wording');
 
 console.log(`\n🎉 ALL ASSET-TYPE + POLLUTION TESTS PASSED (${passed} assertions).`);
