@@ -88,7 +88,7 @@ import {
 import { grantLaunchAwardForTrial, formatLaunchAwardLine, getLaunchAwardConfig } from './launchAwards.js';
 import { normalizeTierKey, getTierLabel } from './subscriptionTiers.js';
 import { parseFlexibleDate } from './dateParser.js';
-import { normalizeAssetKind, requiresPlate, requiresVin, meterForAssetKind } from './countryBucket.js';
+import { normalizeAssetKind, requiresPlate, requiresVin, meterForAssetKind, assetTypeForKind, legacyAssetType } from './countryBucket.js';
 import { prepareRoutingText } from './textNormalizer.js';
 import {
   parseThresholdSpec,
@@ -1313,6 +1313,13 @@ export function isPollutedFieldValue(text) {
   const verbs = ["change", "update", "edit", "set", "save", "delete", "remove", "register", "add", "move", "switch"];
   if (verbs.includes(first) && (clean.includes(" to ") || clean.includes(" as "))) return true;
   if (["confirm", "yes", "no", "ok", "okay", "done", "cancel", "skip", "reset", "restart"].includes(clean)) return true;
+  // v1.61.17 — multi-word frustration / imperative text is never a field value
+  // (live 2026-11-06: "Add machine" and "This problem ahs been persistent
+  // since yesterday" were banked as make/model at the confirm gate, and every
+  // retry re-corrupted the machinery draft).
+  if (/^(?:add|register|create|new)\s+\S/i.test(clean)) return true;
+  if (/\b(?:problem|persistent|keeps? (?:failing|asking|saying)|not saved|nothing (?:was )?saved|still (?:not|can'?t|cannot)|why (?:is|does|can'?t|won'?t))\b/i.test(clean)) return true;
+  if (/\bsaved\?\s*$/.test(clean)) return true;
   return false;
 }
 function applyExtraction(state, def, ext, ctx) {
@@ -1990,6 +1997,8 @@ function applyCorrections(state, def, ext, ctx) {
         if (parsed === null || parsed === undefined) continue;
         const check = f.validate(parsed, { ...ctx, answers: state.answers }, state.answers);
         if (check.ok && parsed !== state.answers[f.key]) {
+          // v1.61.17 — the AI must never bank a message as a field value.
+          if (typeof parsed === 'string' && isPollutedFieldValue(parsed)) continue;
           state.answers[f.key] = parsed;
           changed.push(f.label);
         }
@@ -2740,8 +2749,24 @@ async function handleConfirmation(state, def, clean, ctx, aiExtracted) {
     return { handled: true, reply, flow: state.flow, active: true };
   }
 
+  // v1.61.17 — a complaint or imperative at the confirm gate is a conversation,
+  // never a field value. The card is re-shown unchanged with the one next step
+  // (live lawn-mower loop: "Add machine" / "This problem…" kept overwriting
+  // make/model on every retry). Only when NO field changed: a real correction
+  // ("change it to 4,300") keeps working through applyCorrections above.
   const changed = applyCorrections(state, def, aiExtracted || {}, ctx);
-  if (changed.length === 0 && isSubstantiveText(clean)) {
+  if (changed.length === 0 && isSubstantiveText(clean) && isPollutedFieldValue(clean) && !state.narrativeCard) {
+    const reply = await renderConfirmationSummary({
+      flowLabel: def?.label || 'confirmation',
+      summaryRows: buildSummaryRows(def, state.answers, ctx),
+      notes: ['The user sent a message, not a field correction. Nothing changed. Ask them to reply 1/YES to save, or name the field to fix (e.g. "Make and model: Bumble Bee X200").'],
+      language: ctx.language,
+      countryInfo: ctx.countryInfo,
+      profile: ctx.profile
+    });
+    return { handled: true, reply, flow: state.flow, active: true };
+  }
+  if (changed.length === 0 && isSubstantiveText(clean) && !isPollutedFieldValue(clean)) {
     state.extraNotes = mergeExtraNotes(state.extraNotes || [], [clean]);
   }
   const extraNoteLines = (state.extraNotes || []).map((n) => `Extra note: ${n}`);
@@ -2880,20 +2905,30 @@ async function executeFlow(state, ctx) {
           // v1.61.12 — a refused save is an incident (rule 50). Live 2026-11-05:
           // the machinery registration failed twice, the user was told "that's
           // on our side", and error_logs stayed empty.
-          try {
-            await logSystemError(
-              ctx.supabase,
-              new Error(`Registration save failed: ${saved.error}`),
-              'quizEngine.persistVehicleRegistration',
-              {
-                flow: state.flow,
-                asset_kind: state.answers?.asset_kind || null,
-                plate: state.answers?.plate_number || state.answers?.serial_number || null,
-                code: saved.code || null
-              }
-            );
-          } catch { /* logging must never block the user */ }
-          const reply = await fail(saved.error);
+          // v1.61.17 — business refusals (capacity / a message-as-value) are NOT
+          // incidents; real write failures also climb the save ladder so a user
+          // is never trapped in an endless confirm loop.
+          const businessRefusal = saved.code === 'capacity_limit' || saved.code === 'polluted_field';
+          if (!businessRefusal) {
+            try {
+              await logSystemError(
+                ctx.supabase,
+                new Error(`Registration save failed: ${saved.error}`),
+                'quizEngine.persistVehicleRegistration',
+                {
+                  flow: state.flow,
+                  asset_kind: state.answers?.asset_kind || null,
+                  plate: state.answers?.plate_number || state.answers?.serial_number || null,
+                  code: saved.code || null
+                }
+              );
+            } catch { /* logging must never block the user */ }
+          }
+          state.saveFailures = businessRefusal ? 0 : (state.saveFailures || 0) + 1;
+          const ladder = state.saveFailures >= 2
+            ? ' Nothing was saved. Reply *Support* for a human, or *Cancel* and we can start fresh — your account and other assets are safe.'
+            : '';
+          const reply = await fail(`${saved.error}${ladder}`);
           return { handled: true, reply, flow: state.flow, active: true };
         }
         // v1.61.14 — a new asset changes the cached facts immediately.
@@ -3787,6 +3822,20 @@ async function persistVehicleRegistration(state, ctx) {
     return { success: false, error: 'Please sign up on the website (sakafleet.com) and verify your email first.' };
   }
 
+  // v1.61.17 — a message is never a machine name. Refuse deterministically and
+  // re-ask for the make/model with an example (live lawn-mower loop).
+  if (a.make_model && isPollutedFieldValue(a.make_model)) {
+    delete state.answers.make_model;
+    state.phase = 'question';
+    state.lastAcceptedAnswer = null;
+    state.turnNote = 'The saved make/model looked like a message, not the machine. Ask for it again with an example; do not write anything yet.';
+    return {
+      success: false,
+      error: 'That looks like a message to me, not the machine name. Reply with the make and model — e.g. "Bumble Bee X200". Nothing was saved.',
+      code: 'polluted_field'
+    };
+  }
+
   const tier = await checkOwnerVehicleTierLimit({
     ownerId: ctx.profile.id,
     subscriptionTier: ctx.profile.subscription_tier || 'free',
@@ -3814,9 +3863,11 @@ async function persistVehicleRegistration(state, ctx) {
   }
   const unitSystem = buildGlobalContext(ctx.countryInfo, ctx.profile).unitSystem;
 
-  const assetType = roadAsset
-    ? (/electric|ev/i.test(a.fuel_type) ? 'EV' : (/hybrid/i.test(a.fuel_type) ? 'HYBRID' : 'ICE'))
-    : assetKind.toUpperCase();
+  // v1.61.17 — ONE canonical asset_type vocabulary (EV / HYBRID / ICE for road
+  // assets, the KIND for machinery/equipment/generators/boats). The inline
+  // `assetKind.toUpperCase()` used to write 'MACHINERY', which the live DB's
+  // orphaned legacy constraint rejected — every lawn-mower save failed.
+  const assetType = assetTypeForKind(assetKind, a.fuel_type);
 
   const record = {
     owner_id: ctx.profile.id,
@@ -3883,6 +3934,20 @@ async function persistVehicleRegistration(state, ctx) {
     delete legacyRecord.serial_number;
     delete legacyRecord.operating_hours;
     insertRes = await ctx.supabase.from('vehicles').insert([legacyRecord]).select('id').maybeSingle();
+    insertErr = insertRes.error || null;
+  }
+  // v1.61.17 — an UN-MIGRATED DB still has the orphaned legacy constraint
+  // (ICE / EV / HEAVY_MACHINERY). Never lose a registration to schema drift:
+  // retry once with the legacy-safe value, keep the canonical kind in
+  // asset_kind/metadata, and leave the incident in error_logs.
+  if (insertErr && /asset_type_check/i.test(insertErr.message || '')) {
+    const safeRecord = { ...record, asset_type: legacyAssetType(record.asset_type) };
+    logWriteFailure(ctx.supabase, 'quizEngine.assetTypeLegacyFallback', insertErr, {
+      asset_kind: assetKind,
+      asset_type: record.asset_type,
+      safe_asset_type: safeRecord.asset_type
+    });
+    insertRes = await ctx.supabase.from('vehicles').insert([safeRecord]).select('id').maybeSingle();
     insertErr = insertRes.error || null;
   }
   if (insertErr) {

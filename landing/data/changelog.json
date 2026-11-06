@@ -1,6 +1,13 @@
 {
-  "latest": "1.61.16",
+  "latest": "1.61.17",
   "entries": [
+    {
+      "version": "1.61.17",
+      "date": "2026-11-06",
+      "title": "Lawn mowers and machines can finally save",
+      "preview": "A database rule was blocking every machinery, generator and boat save — fixed, with a safe fallback.",
+      "summary": "Machinery, generators, boats and even hybrid cars were being rejected by an old database rule that only accepted three values, so a lawn-mower registration could never finish. That rule now accepts every asset type, and if a database ever lags behind the app again, the save falls back to a safe value instead of failing. Complaints typed on the confirmation card are treated as messages (never as the machine name), and repeated save failures now offer a human or a clean restart instead of looping."
+    },
     {
       "version": "1.61.16",
       "date": "2026-11-06",

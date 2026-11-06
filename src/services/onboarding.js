@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { onboardingStore, chatSessions } from '../routes/whatsapp.js';
 import { sendEmailOtp, sendPassbookWelcomeEmail } from './mailer.js';
 import { checkOwnerVehicleTierLimit, ensureVinRegistryEntry } from './vehicles.js';
+import { assetTypeForKind, legacyAssetType } from './countryBucket.js';
 import { createExpiryReminder, buildExpirySpecFromDate } from './maintenanceReminders.js';
 import { startWelcomeTrial, recordActivationEvent, ACTIVATION_EVENTS } from './trialEngine.js';
 import { grantLaunchAwardForTrial, formatLaunchAwardLine, getLaunchAwardConfig } from './launchAwards.js';
@@ -155,7 +156,7 @@ export async function saveVehicleAssetRecord({
     owner_phone: formattedPhone,
     status: 'ACTIVE',
     vin: coreVin,
-    asset_type: (/electric|ev/i.test(coreFuel)) ? 'EV' : (/hybrid/i.test(coreFuel) ? 'HYBRID' : 'ICE'),
+    asset_type: assetTypeForKind('vehicle', coreFuel),
     unit_system: profileData?.unit_system || countryInfo?.default_units || 'metric',
     qr_passbook_token: token,
     custom_attributes: customAttrs,
@@ -181,18 +182,26 @@ export async function saveVehicleAssetRecord({
     // v1.58.21 - the passbook issuance moment is the trial anchor.
     const issuedAt = new Date().toISOString();
     const { error: insErr } = await supabaseClient.from('vehicles').insert([vehRecord]);
-    if (insErr) {
-      if (insErr.code === '23505') {
+    let saveErr = insErr || null;
+    // v1.61.17 — an un-migrated DB still carries the orphaned legacy constraint
+    // (ICE / EV / HEAVY_MACHINERY): never lose the asset to schema drift.
+    if (saveErr && /asset_type_check/i.test(saveErr.message || '')) {
+      const safeRecord = { ...vehRecord, asset_type: legacyAssetType(vehRecord.asset_type) };
+      const retry = await supabaseClient.from('vehicles').insert([safeRecord]);
+      saveErr = retry.error || null;
+    }
+    if (saveErr) {
+      if (saveErr.code === '23505') {
         await supabaseClient.from('vehicles').update(vehRecord).eq('plate_number', corePlate);
       } else {
         // v1.61.12 — log the refusal, not just the console (rule 50).
-        console.error('[saveVehicleAssetRecord Error]:', insErr);
+        console.error('[saveVehicleAssetRecord Error]:', saveErr);
         try {
           await logSystemError(
             supabaseClient,
-            new Error(`Asset save failed: ${insErr.message}`),
+            new Error(`Asset save failed: ${saveErr.message}`),
             'onboarding.saveVehicleAssetRecord',
-            { plate: corePlate, code: insErr.code || null }
+            { plate: corePlate, code: saveErr.code || null }
           );
         } catch { /* logging must never block onboarding */ }
       }

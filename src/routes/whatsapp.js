@@ -2288,7 +2288,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         }
 
         const isRegisterCommand = /^\s*(register|onboard|add car|add vehicle|new vehicle)\b/i.test(messageText)
-          || /\b(?:add|register|onboard)\b[^.!?]{0,24}\b(?:my\s+)?(?:vehicle|car|truck|bike|bus|machine|boat|asset)\b/i.test(messageText)
+          || /\b(?:add|register|onboard)\b[^.!?]{0,24}\b(?:my\s+)?(?:vehicle|car|truck|bike|bus|machine|boat|asset|mower|generator|equipment|compressor|pump)\b/i.test(messageText)
           || /\b(?:upload|send)\b[^.!?]{0,24}\b(?:reg(?:istration)?\s*(?:cert|certificate)|log\s?book)\b/i.test(messageText)
           // v1.56.0 — an existing owner adding another asset ("I have another
           // car", "a second vehicle", "one more truck") is a register command.

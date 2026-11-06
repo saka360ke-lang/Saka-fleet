@@ -32,7 +32,9 @@ export const ASSET_KINDS = Object.freeze({
 const ASSET_ALIASES = [
   { kind: 'generator', re: /\b(generator|genset|gen set|power ?plant|standby power)\b/i },
   { kind: 'heavy_equipment', re: /\b(excavator|bulldozer|loader|grader|crane|forklift|backhoe|dozer|heavy equipment)\b/i },
-  { kind: 'machinery', re: /\b(machinery|machine|tractor|plant|compressor|pump|tiller)\b/i },
+  // v1.61.17 — lawn-care and site machines resolve deterministically (live
+  // 2026-11-06: "lawn mower" needed AI inference to reach machinery).
+  { kind: 'machinery', re: /\b(machinery|machine|tractor|plant|compressor|pump|tiller|mower|lawn ?mower|chainsaw|strimmer|brush ?cutter)\b/i },
   { kind: 'watercraft', re: /\b(boat|vessel|watercraft|ship|ferry|canoe)\b/i },
   { kind: 'motorcycle', re: /\b(motorcycle|motorbike|bike|boda|tuk ?tuk|scooter)\b/i },
   { kind: 'bus', re: /\b(bus|matatu|minibus|coach|daladala)\b/i },
@@ -40,11 +42,25 @@ const ASSET_ALIASES = [
   { kind: 'vehicle', re: /\b(car|van|suv|saloon|sedan|vehicle|auto)\b/i }
 ];
 
+/**
+ * v1.61.17 — legacy `vehicles.asset_type` values (pre asset-kind era) map back
+ * to a canonical kind so old rows keep correct metrics and identity tracks.
+ */
+export const LEGACY_ASSET_TYPE_KIND = Object.freeze({
+  heavy_machinery: 'machinery',
+  heavy: 'machinery'
+});
+
 export function normalizeAssetKind(value) {
   const clean = String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
   if (!clean) return 'vehicle';
   if (ASSET_KINDS[clean]) return clean;
-  const match = ASSET_ALIASES.find((entry) => entry.re.test(clean));
+  const legacyKind = LEGACY_ASSET_TYPE_KIND[clean];
+  if (legacyKind) return legacyKind;
+  // v1.61.17 — aliases are word-boundary regexes; test the raw text AND the
+  // underscore-stripped form so "lawn_mower" / "heavy_machinery" resolve.
+  const spaced = clean.replace(/_+/g, ' ').trim();
+  const match = ASSET_ALIASES.find((entry) => entry.re.test(clean) || (spaced !== clean && entry.re.test(spaced)));
   return match ? match.kind : 'vehicle';
 }
 
@@ -71,6 +87,55 @@ export function requiresVin(kind) {
 export function meterForAssetKind(kind) {
   return ASSET_KINDS[normalizeAssetKind(kind)].meter;
 }
+
+/**
+ * v1.61.17 — ONE canonical `vehicles.asset_type` vocabulary for every write path.
+ * Root cause of the live 2026-11-06 lawn-mower loop: quizEngine wrote
+ * `assetKind.toUpperCase()` ('MACHINERY'), while the live DB carried an orphaned
+ * legacy CHECK constraint allowing only ICE / EV / HEAVY_MACHINERY — every
+ * non-road save (and every hybrid) was rejected, so the user could never finish.
+ */
+export const ASSET_TYPE_VALUES = Object.freeze([
+  'ICE', 'EV', 'HYBRID',
+  'MACHINERY', 'HEAVY_EQUIPMENT', 'GENERATOR', 'WATERCRAFT',
+  // retained so pre-existing rows (and un-migrated DBs) stay valid
+  'HEAVY_MACHINERY'
+]);
+
+export function assetTypeForKind(kind, fuelType = '') {
+  const normalized = normalizeAssetKind(kind);
+  if (ASSET_KINDS[normalized].requiresPlate) {
+    if (/electric|\bev\b/i.test(String(fuelType))) return 'EV';
+    if (/hybrid/i.test(String(fuelType))) return 'HYBRID';
+    return 'ICE';
+  }
+  return normalized.toUpperCase();
+}
+
+/**
+ * The value an UN-MIGRATED DB still accepts (the orphaned legacy constraint).
+ * Used only as a one-shot save fallback so a user never loses a registration to
+ * schema drift (rule 50); the canonical kind stays in asset_kind + metadata.
+ */
+export function legacyAssetType(value) {
+  const type = String(value || '').toUpperCase();
+  if (type === 'EV') return 'EV';
+  if (type === 'HYBRID') return 'ICE';
+  if (['MACHINERY', 'HEAVY_EQUIPMENT', 'GENERATOR', 'WATERCRAFT', 'HEAVY_MACHINERY'].includes(type)) return 'HEAVY_MACHINERY';
+  return 'ICE';
+}
+
+/** Idempotent DDL: replace the orphaned constraint with the canonical vocabulary. */
+export const ASSET_TYPE_CHECK_SQL = `
+  ALTER TABLE public.vehicles DROP CONSTRAINT IF EXISTS vehicles_asset_type_check;
+  ALTER TABLE public.vehicles ADD CONSTRAINT vehicles_asset_type_check CHECK (
+    asset_type IS NULL OR asset_type = ANY (ARRAY[
+      'ICE', 'EV', 'HYBRID',
+      'MACHINERY', 'HEAVY_EQUIPMENT', 'GENERATOR', 'WATERCRAFT',
+      'HEAVY_MACHINERY'
+    ])
+  );
+`;
 
 /** Plate for road assets, serial/model identity for everything else. */
 export function assetDisplayName(asset = {}) {

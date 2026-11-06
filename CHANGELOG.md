@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.61.17] - 2026-11-06
+
+- **Lawn mowers (and every non-road asset) can finally save.** Live root cause: the code wrote `asset_type='MACHINERY'`, but the live DB carried an orphaned legacy constraint allowing only `ICE / EV / HEAVY_MACHINERY` — every machinery/generator/boat save (and every hybrid car) was rejected. One canonical vocabulary now drives both write paths, the constraint was migrated live (`npm run migrate:asset-type-check`, legacy value kept valid), and an un-migrated DB gets a one-shot legacy-safe retry so a save can never be lost to schema drift again. `lawn mower` also resolves to machinery without AI.
+- **Complaints can no longer become make/model.** At the confirm gate, multi-word text like "Add machine" / "This problem ahs been persistent since yesterday" is treated as a message: the card is re-shown untouched with ONE next step; a polluted draft is refused honestly and re-asked; AI corrections never bank polluted values. Narrative draft cards keep their own correction flow.
+- **No more endless failure loops.** A real write failure is logged and, on the second consecutive failure, the card offers `Support` and `Cancel` — nothing is ever silently repeated forever.
+- **Frames touched:** `src/services/{countryBucket,quizEngine,onboarding}.js`, `src/routes/whatsapp.js`, `scripts/{run_asset_type_check_migration(new),mockSupabase,health_audit}.js`, `evals/cases/conversation_cases.json` (35), `test_asset_type_check.js` (new, 39 assertions), `package.json`, `SAKA_FLEET_ARCHITECTURE.md` (§180), this file.
+- **Suites run:** `test_asset_type_check` (39), `test_quiz_flow` (147), `test_narrative_draft` (122), `test_country_bucket` (61), `test_v1571` (20), `test_error_logging` (22), `test_entry_ledger` — green; `npm run health` green.
+- **Recurrence autopsy (rule 51).** *Code vocabulary vs orphaned DB constraint* → both writers + fallback + migration; siblings: asset_type updates (immutable), report readers (legacy-aware), driver compliance (free text). *Multi-word text banked as a value* → confirm gate + extraction + persist guards; siblings: direct-answer guard, narrative cards (untouched). *Endless failure loop* → save ladder; sibling: answer patience ladder (existing).
+
 ## [1.61.16] - 2026-11-06
 
 - **The trial never caps your garage.** While the welcome trial runs, add as many assets as you like (a 50-asset safety ceiling only). When the trial ends, nothing is paused: a bounded decision window opens and Saka offers the plan that fits your asset count — keep everything with one engine payment link, reply *keep <plate>* to downsize (the rest pause, never delete), or do nothing and the account moves to Free with everything safe. `TRIAL_END_GRACE_DAYS` (7) bounds the window; `TRIAL_MAX_ASSETS` (50) is the anti-abuse ceiling. New migration `npm run migrate:trial-end-grace`.

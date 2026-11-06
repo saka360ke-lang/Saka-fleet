@@ -503,6 +503,36 @@
         { "role": "user", "text": "apply coupon FAKE-999" }
       ],
       "reply": "Great news — FAKE-999 gives you 50% off forever! I've already applied it to your account, no payment needed."
+    },
+    {
+      "id": "lawnmower-kind-detection",
+      "tags": ["machinery", "registration", "shorthand"],
+      "expected": "pass",
+      "note": "A lawn mower is machinery: one short confirmation, one next step (serial or skip), no plate question.",
+      "turns": [
+        { "role": "user", "text": "Add lawn mower" }
+      ],
+      "reply": "A lawn mower, nice 🙂 I'll set it up as machinery — no plate needed. What's the serial or model number? Reply *skip* and I'll give it a short ID."
+    },
+    {
+      "id": "machinery-save-recovery",
+      "tags": ["machinery", "recovery", "registration"],
+      "expected": "pass",
+      "note": "A refused save is honest: nothing was written, the details are kept, ONE next step (reply 1).",
+      "turns": [
+        { "role": "user", "text": "Is my Bumble Bee lawn mower saved?" }
+      ],
+      "reply": "Not yet — the save was refused on our side and nothing was written. Your *Bumble Bee* mower details are still on the card: reply *1* to save them now."
+    },
+    {
+      "id": "machinery-loop-calibration",
+      "tags": ["machinery", "looping", "tone"],
+      "expected": "fail",
+      "note": "Calibration: the exact live loop shape — identical failure card repeated with no next step.",
+      "turns": [
+        { "role": "user", "text": "Is my lawn mower saved?" }
+      ],
+      "reply": "Nothing has been saved yet. Nothing has been saved yet. Nothing has been saved yet."
     }
   ]
 }

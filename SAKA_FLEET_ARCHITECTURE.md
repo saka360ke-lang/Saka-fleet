@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.61.16  
+**Version:** 1.61.17  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.61.17** | Lawn-mower unblock: canonical asset_type vocabulary + legacy-constraint save fallback + live constraint migration; confirm-gate complaint guard; save-failure Support ladder; mower aliases | 180 |
 | **1.61.16** | Trial never caps the garage (anti-abuse ceiling only) → bounded trial-end decision window (fit / downsize / Free) with engine-owned payment links; coupon integrity (canonical admin creation, dual binding, atomic claims, audits); rule 60 stuck-guidance on every flow | 179 |
 | **1.61.15** | Trial capacity is an entitlement (lapse-on-read, 15-asset proof) + eval spend controls (call budget, rest lane, heal cooldown, digest spend line) + coverage lanes (earnings, voice notes, Sheng/pidgin) | 178 |
 | **1.61.14** | Per-user context cache: engine facts cached at chat initiation (15-min TTL, write invalidation) so Saka never relies on chat history alone | 177 |
@@ -4967,5 +4968,24 @@ Usage: `npm run eval:apply-heals` (dry run, 48 h) · `-- --hours=72` · `-- --wr
 **Recurrence autopsy (rule 51).** *Display text stored where the engine reads numbers* → admin coupons (fixed via canonical fields + fallback parser); siblings audited: winback/activation coupons (already canonical), launch award (numeric), FX price labels (display-only). *Read-modify-write on a counter* → coupon claims (fixed atomically); siblings: `extendAccountTrial` cap stamps (single-owner serial flow, left), report usage counters (monthly rollup, left). *Cap enforced at the wrong layer* → trial garage (fixed at entitlements); sibling: transfer-buyer capacity (already `evaluateVehicleCapacity`).
 
 **Suites run:** `test_trial_capacity` (41), `test_coupon_integrity` (28), `test_trial_engine` (85), `test_subscription_billing` (85), `test_conv_eval` (202), `test_quiz_flow` (147), `test_agent_training` (180), `test_error_logging` (22), `test_env_audit` (44), `test_v1571` (20), `test_synthetic_cases` (91), `test_launch_award` (29) — green; curated eval: trial-end-fit 0.87, downsize 0.88, coupon refusal 0.90, calibration fails 0.34/0.16; `npm run health` green.
+
+### 180. v1.61.17 - the lawn-mower unblock: canonical asset_type + complaint-proof confirm (2026-11-06)
+
+**Live evidence.** `error_logs` 2026-11-05T16:53:11: `Registration save failed: new row for relation "vehicles" violates check constraint "vehicles_asset_type_check" [asset_kind=machinery plate=JOYCELAWNMOWER]`. Live DB constraint: `CHECK (asset_type IN ('ICE','EV','HEAVY_MACHINERY'))` — an orphaned legacy constraint (no migration in the repo owned it). The code wrote `assetKind.toUpperCase()` = `'MACHINERY'`, so **every non-road save failed**, and `onboarding` wrote `'HYBRID'`, which the same constraint rejected. The user looped 2026-11-05 16:54 → 2026-11-06 08:44; at the confirm gate his complaints were also being banked as `make_model` ("Add machine", "This problem ahs been persistent since yesterday") because the v1.61.12 bare-word guard only blocked single words.
+
+**Fixes.**
+1. **Canonical vocabulary** (`countryBucket.js`): `assetTypeForKind(kind, fuel)` — EV/HYBRID/ICE for road assets, the KIND for non-road; `ASSET_TYPE_VALUES` includes legacy `HEAVY_MACHINERY`; `legacyAssetType()` maps to the old-constraint-safe value; `normalizeAssetKind` now reads legacy `HEAVY_MACHINERY` and resolves `lawn_mower` (underscore-normalised alias match). Used by `persistVehicleRegistration` AND `onboarding.saveVehicleAssetRecord`.
+2. **Rule-50 save fallback** (both write paths): an `asset_type_check` rejection retries once with the legacy-safe value and logs `quizEngine.assetTypeLegacyFallback` — a user can never lose a registration to schema drift again.
+3. **Migration `npm run migrate:asset-type-check`** (applied live): drops the orphaned constraint and re-adds it with the canonical vocabulary (+ legacy value). Idempotent.
+4. **Confirm-gate complaint guard:** `isPollutedFieldValue` now rejects multi-word imperative/frustration text ("Add machine", "This problem…", "still not saved", "Is my mower saved?"); when NO field changed the card is re-shown untouched with the one next step; AI corrections can never bank polluted values. Narrative draft cards keep their own correction flow (guard skipped only when nothing changed).
+5. **Polluted persist refusal:** a draft whose `make_model` is a message is refused (`code=polluted_field`), the field is cleared and re-asked — a business refusal, not an incident log.
+6. **Save-failure ladder:** real write failures are logged and after the 2nd consecutive failure the card offers `Support` + `Cancel` (never an endless loop).
+7. **Detection parity:** mower/chainsaw/strimmer aliases; `isRegisterCommand` recognises mower/generator/equipment/compressor/pump wording.
+
+**Frames touched:** `src/services/{countryBucket,quizEngine,onboarding}.js`, `src/routes/whatsapp.js`, `scripts/{run_asset_type_check_migration(new),mockSupabase,health_audit}.js`, `evals/cases/conversation_cases.json` (35), `test_asset_type_check.js` (new, 39), `.env.example` untouched (no new knobs), `package.json`, this file, `CHANGELOG.md`.
+
+**Recurrence autopsy (rule 51).** *Code vocabulary vs an orphaned DB constraint* → both write paths fixed + degrade + migration; siblings audited: `vehicles.asset_type` updates (none — immutable after creation), report readers (`normalizeAssetKind` now legacy-aware), `driver_compliances.asset_type` (free text, no constraint). *Multi-word text banked as a field value* → confirm gate + applyCorrections + persist guard fixed; siblings: direct-answer lane (v1.58.2 guard), AI extraction (polluted values skipped), narrative cards (own deterministic flow, untouched). *Endless failure loop* → save-failure ladder; sibling: patience ladder for invalid answers (already existed).
+
+**Suites run:** `test_asset_type_check` (39), `test_quiz_flow` (147), `test_narrative_draft` (122), `test_country_bucket` (61), `test_v1571` (20), `test_error_logging` (22), `test_entry_ledger` — green; curated eval: lawnmower detection 0.91, save recovery 0.85, loop calibration 0.26 (expected fail); migration applied live; `npm run health` green.
 
 

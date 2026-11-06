@@ -122,7 +122,9 @@ const STATLESS_SUITES = [
   'test_trial_capacity.js',
   'test_eval_spend.js',
   // v1.61.16 — coupon integrity (canonical creation, binding, atomic claims).
-  'test_coupon_integrity.js'
+  'test_coupon_integrity.js',
+  // v1.61.17 — asset_type CHECK (legacy-constraint proof) + confirm-gate pollution.
+  'test_asset_type_check.js'
 ];
 
 const WORKFLOW_DIR = '.github/workflows';

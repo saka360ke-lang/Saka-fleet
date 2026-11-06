@@ -10,7 +10,7 @@
  * Not a general PostgREST implementation — deliberately small and predictable.
  */
 
-export function createMockSupabase(seed = {}) {
+export function createMockSupabase(seed = {}, options = {}) {
   const db = {};
   for (const [table, rows] of Object.entries(seed)) {
     db[table] = rows.map((row) => ({ ...row }));
@@ -94,6 +94,12 @@ export function createMockSupabase(seed = {}) {
       const rows = tableRows(table);
 
       if (query.action === 'insert' || query.action === 'upsert') {
+        // v1.61.17 — optional constraint hook (e.g. simulate the live legacy
+        // asset_type CHECK so the save path can be proven against it).
+        if (query.action === 'insert' && typeof options.beforeInsert === 'function') {
+          const rejection = options.beforeInsert(table, query.payload);
+          if (rejection && rejection.error) return { data: null, error: rejection.error };
+        }
         const incoming = query.payload.map((row, index) => ({
           id: row.id || `mock-${table}-${rows.length + index + 1}`,
           created_at: row.created_at || new Date().toISOString(),
