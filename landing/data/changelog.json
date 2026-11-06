@@ -1,6 +1,13 @@
 {
-  "latest": "1.63.3",
+  "latest": "1.64.0",
   "entries": [
+    {
+      "version": "1.64.0",
+      "date": "2026-11-06",
+      "title": "One tidy memory for every unfinished step",
+      "preview": "Edits, confirmations and security codes now live in one place - same behaviour, far fewer mix-ups.",
+      "summary": "When Saka is waiting on you - a correction to an entry, a YES to delete a vehicle, a document number, a 6-digit code - that unfinished step used to be remembered in a dozen separate pockets, each with its own timeout and its own rule. They now live in one tidy note with one rulebook. Everything behaves exactly as before: the same priorities, the same fresh-log protection, the same codes and confirms, and the same clearing rules. A 434-check harness, including a 300-turn replay against the old routing, proves nothing you see has changed."
+    },
     {
       "version": "1.63.3",
       "date": "2026-11-06",

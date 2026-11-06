@@ -128,7 +128,9 @@ const STATLESS_SUITES = [
   // v1.61.17 — asset_type CHECK (legacy-constraint proof) + confirm-gate pollution.
   'test_asset_type_check.js',
   // v1.62.0 — DeepSeek off-peak schedule: windows, CLI gates, discount accounting.
-  'test_deepseek_schedule.js'
+  'test_deepseek_schedule.js',
+  // v1.64.0 — unified session.pending: registry, resolver, truth table, shim.
+  'test_pending_state.js'
 ];
 
 const WORKFLOW_DIR = '.github/workflows';

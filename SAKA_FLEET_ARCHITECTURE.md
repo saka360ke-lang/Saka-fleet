@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.63.3  
+**Version:** 1.64.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.64.0** | Unified session.pending (Phase 4): 13 independent pending* session fields become ONE `{ kind, data, at }` object with one `PENDING_KINDS` registry + `resolvePendingTurn()` + a migration-on-read shim (legacy fields become non-enumerable accessors, so `whatsapp.js` branches stay byte-identical); today's per-kind truth table preserved, proven by a 434-assertion harness including a 300-turn differential replay; 2 PROPs minted (uniform fresh-log override, driver-assignment cancel) | 186 |
 | **1.63.3** | Read Command Registry (Phase 3): the 560-line deterministic read if/else chain in `whatsapp.js` becomes ONE ordered registry (`src/services/readCommands.js`) in the old dispatch precedence — zero behaviour change, proven by a 121-assertion differential harness against a frozen copy of the old chain (`whatsapp.js` −707/+85) | 185 |
 | **1.63.2** | Record-challenge tone fix (Persona v4 acknowledge-distress) + calibration-aware eval gate (`--exclude-calibration`; Phase 3 baseline 23/23 signal pass, 12/12 calibration hold) | 184 |
 | **1.63.1** | Complete user-context cache invalidation: one after-write hook across 42 facts-changing writes in 12 files, 5-minute safety TTL, rule-51 ratchet + deliberately-left registry, Phase 1 completion (driver_activity, fleet_auto_audit kinds) | 183 |
@@ -5107,4 +5108,45 @@ Usage: `npm run eval:apply-heals` (dry run, 48 h) · `-- --hours=72` · `-- --wr
 **Suites run:** test_read_registry (121), test_driver_compliance_answers (64), test_vehicle_compliance (67), test_odometer_answer (11), test_product_qa (152), test_record_answers (80), test_entry_ledger (all), test_labels_everywhere (22), test_feature_notice (25), test_no_canned_replies (2), test_quiz_flow (153), test_edit_delete (all), test_agent_training (180), test_web_onboarding (64), test_meta_signature (16), test_doc_sync — green; `npm run health` green.
 
 **Recurrence autopsy (rule 51).** *Defect class: a catch-all parser hijacks an intent lane* → sibling sweep = all 19 registry lanes + the 5 kept-inline branches + both post-hoc overrides. The harness pins first-claim precedence on every fixture and declares the 14 legitimate overlaps, so an undeclared double-claim fails CI. Deliberately left: the two product-Q&A shadowing quirks above (documented; a future behaviour change must update the declared table). Rule 13: `flowKnowledge.js` / `sakaAi.js` untouched — pure structural refactor, no flow/intent/copy change (test_agent_training 180 green).
+
+### 186. v1.64.0 — Unified session.pending (Phase 4): one state machine, one resolver (2026-11-06)
+
+**Why.** A chat session carried 13 independent pending* interaction fields (`pendingEntryAction`, `pendingSupportEscalation`, `pendingComplianceCapture`, `narrativeBatch`, `pendingAssignmentOtp`, `pendingTransferBuyerOtp`, `pendingCancelSubscription`, `pendingClearChat`, `pendingDeleteVehicle`, `pendingDriverAssignment`, `pendingEmailUpdate`, `pendingAccountDeletion`, `transferFlow`). Each owned its own TTL (15 min inline compares, 10 min OTP compares, or none at all), its own "fresh log outranks pending" rule and its own if/else branch in `whatsapp.js` — the section 152 / 169 defect class ("a pending support intake swallowed a quiz", "a draft correction became a saved edit"). Phase 4 is a PURE STRUCTURAL refactor: one state object, one registry, one resolver, zero behaviour change.
+
+**A. The registry (`src/services/pendingState.js`, new).** `PENDING_KINDS` is frozen and declares, per kind: `ttlMs`, `priority` (today's route claim order), `freshLog` (`drops | yields | yields+clears | swallows | N/A`), `parksQuiz`, `blockedByQuizLock` (read-registry `skipWhenLocked`), `blockedByQuiz` (the `!session.quiz` guards on the ACTIVE chain), `otp`, `slot`, `boolean`, `legacyField`. 16 kinds are registered: 13 own the slot; three are documented out-of-slot members of the family — `record-challenge` (a replay memory on `session.lastRecordQuery`; migrating it would evict real pendings), `quiz-otp` (`session.quiz.phase` + `state.otp`/`otpDispatch`) and `onboarding-otp` (`onboardingStore.pending_otp`).
+
+| Kind | TTL | Priority | freshLog | Quiz gates | Slot | Legacy field |
+|---|---|---|---|---|---|---|
+| clear-chat | — | 100 | yields+clears | — | yes | pendingClearChat |
+| support-intake | — | 95 | swallows | — | yes | pendingSupportEscalation |
+| entry-edit | 15 min | 80 | drops (edit mode) | lock | yes | pendingEntryAction |
+| record-challenge | 15 min | 75 | N/A | lock | no (memory) | lastRecordQuery |
+| transfer-release-otp | 10 min | 70 | swallows | — | yes | transferFlow |
+| assignment-otp | 10 min | 65 | yields (shape-gated) | — | yes | pendingAssignmentOtp |
+| transfer-buyer-otp | 10 min | 60 | swallows | — | yes | pendingTransferBuyerOtp |
+| cancel-subscription | — | 55 | swallows | blocked | yes | pendingCancelSubscription |
+| compliance-capture | 15 min | 50 | yields | blocked | yes | pendingComplianceCapture |
+| narrative-batch | 15 min | 45 | yields | — | yes | narrativeBatch |
+| delete-vehicle | — | 40 | swallows | blocked | yes | pendingDeleteVehicle |
+| driver-assignment | — | 35 | swallows (cancel → reprompt, PROP-02) | blocked | yes | pendingDriverAssignment |
+| account-deletion-otp | 10 min | 30 | swallows | blocked | yes | pendingAccountDeletion |
+| email-update-otp | 10 min | 25 | swallows | blocked | yes | pendingEmailUpdate |
+| onboarding-otp | 10 min | 20 | swallows | — | no (onboardingStore) | — |
+| quiz-otp | 10 min | gate | swallows | lock | no (session.quiz) | — |
+
+**B. The resolver.** `resolvePendingTurn(session, text, ctx)` returns `{ kind, consumed, nextAction }` or `null`. `ctx = { now, quizPhaseLocked, hasQuiz }`. `consumed:true` means the pending owns the turn and `nextAction` names its handler (`confirm`, `cancel`, `apply-edit`, `select`, `delete-confirm`, `command`, `capture-issue`, `capture-answer`, `release-otp`, `otp-verify`, `resend`, `save-all`, `edit-row`, `annual`, `capture-phone`, `reprompt`, `quiz-otp-turn`). `consumed:false` means the message proceeds and the action says what happened to the pending: `drop-fresh-log` (entry-edit), `yield` (yields kinds and the quiz gates), `clear-and-continue` (clear-chat), `ttl-expired`. Precedence is the registry, not the caller: an expired slot is cleared first; `blockedByQuizLock` kinds (read-registry lanes) skip a locked PIN/account-OTP phase; `blockedByQuiz` kinds (ACTIVE chain) skip while any draft is open; then the kind's parser decides.
+
+**C. Migration-on-read shim.** `hydrateSessionPending(session)` runs for EVERY message at `whatsapp.js` (line 987, before any branch): it validates an existing slot, TTL-cleans it, otherwise migrates the highest-priority live legacy field into `{ kind, data, at }` (collisions follow the table; expired fields are dropped), deletes the legacy own properties and re-exposes each legacy name as a NON-ENUMERABLE accessor over the slot. Consequences: (1) old snapshots in `chat_sessions.state` keep their pending state; (2) old branch code (`session.pendingEntryAction = …`, `session.transferFlow.step = …`) keeps working byte-identically; (3) a persisted snapshot now carries ONE `pending` value and no legacy keys. Writes follow the priority rule — a lower-priority legacy write cannot evict a higher-priority pending (the single intentional semantic of the one-slot model). `otpDispatch`/`state.otp` stay inside `session.quiz` and `onboarding-otp` stays in `onboardingStore` (security state is never folded into the slot; both are documented out-of-slot registry rows).
+
+**D. Wiring and blast radius.** `whatsapp.js` adds ONE import and ONE hydration call; every branch body is untouched. The stateless 6-digit buyer-OTP sink (`session.pendingTransferBuyerOtp || (messageText.match(/^\d{6}$/) && …)`) is deliberately NOT a pending — it is a kept-inline route lane, still in place and pinned by a source assertion (Phase 5 must keep its position). No DDL: the slot rides the existing `chat_sessions.state` jsonb and the existing 24-hour snapshot age guard.
+
+**E. Equivalence harness (`test_pending_state.js`, new, 434 assertions).** **A** — the fresh-log truth table per kind, derived from the declared `freshLog` and the observed outcome (13 kinds; support-intake swallows and clears, compliance/narrative survive, entry-edit drops, clear-chat clears-and-continues), plus the entry-edit delete-mode nuance and the driver-assignment missing-cancel bug. **B** — OTP/locked precedence: all 6-digit codes consumed, `looksLikeFreshLogLine('123456') === false`, a locked phase outranks `entry-edit` (skipWhenLocked) without destroying it, and the two no-quiz-guard quirks (`transferFlow`, `pendingAssignmentOtp`, buyer) still claim; an open quiz gates the ACTIVE-chain kinds. **C** — corrupt double-set priority equals the old claim order (entry-edit > compliance, assignment > cancel, delete > driver-assignment, transfer > assignment, clear > support; expired high-priority dropped). **D** — per-kind TTL expiry (15 min / 10 min families) and the deliberate no-TTL gates (30-day-old pendings still resolve). **E** — differential replay: **300 turns** (13 kinds × 12 texts + 6 quiz-gated/6 transparent kinds × 12 texts with an open draft) against a FROZEN re-implementation of the v1.63.3 claim order; both sides agree on every turn. The capture surfaced exactly one model mismatch — today a bare 6-digit message falls into the stateless buyer-OTP sink even while another pending is set; the sink is not a pending, so it stays a kept-inline lane and is pinned by a source assertion instead (no production behaviour change). **F** — the migration-on-read shim: legacy `pendingEntryAction → entry-edit`, legacy `pendingSupportEscalation → support-intake`, `otpDispatch` intact inside `session.quiz` and never migrated; JSON round-trip stores only `pending`; the accessor bridge write-through, clearing and priority rule. **G** — every pending kind has a `FLOW_GUIDANCE` line (rule 60).
+
+**F. PROPs minted (deferred work, no code change implied by this release).** `PROP-2026-11-06-01` — make the fresh-log override UNIFORM across all non-OTP pendings (today's per-kind truth table is preserved here; generalising it changes behaviour for delete-vehicle, cancel-subscription, support-intake and driver-assignment). `PROP-2026-11-06-02` — `pendingDriverAssignment` does not honour "cancel" (it re-prompts); preserved for Phase 4 with a source TODO at the missing-cancel site and a dedicated assertion.
+
+**Frames touched:** `src/services/pendingState.js` (new), `src/routes/whatsapp.js` (import + hydration + the PROP-02 TODO comment), `src/services/flowKnowledge.js` (16 pending-kind `FLOW_GUIDANCE` lines), `test_pending_state.js` (new), `scripts/health_audit.js` (suite registered), `package.json`, `landing/data/changelog.json`, `SAKA_FLEET_ARCHITECTURE.md` (section 186, version + history), `CHANGELOG.md`.
+
+**Suites run:** test_pending_state (434), test_read_registry (121), test_entry_ledger (all), test_narrative_draft (122), test_compliance_capture (30), test_driver_assignment_gate (54), test_quiz_flow (153), test_agent_training (180), test_conv_eval (203), test_first_message_flow (57), test_doc_sync — green; `npm run health` green.
+
+**Recurrence autopsy (rule 51).** *Defect class: a pending interaction that swallows or yields the wrong turn because its TTL/fresh-log/priority lives in its own branch* → sibling sweep = all 13 slot kinds + the 3 documented out-of-slot kinds; every quirk preserved and pinned (driver-assignment cancel, no-TTL confirm gates, transfer/assignment no-quiz guards, entry-edit delete-mode yielding, the stateless buyer sink). Deliberately left: the uniform fresh-log override (PROP-2026-11-06-01) and the driver-assignment cancel escape (PROP-2026-11-06-02) — both are behaviour changes and belong to their own releases. Rule 13: `flowKnowledge.js` gained one `FLOW_GUIDANCE` line per kind (rendered into the core prompt by the existing block); `sakaAi.js` and `conversationEngine.js` are unchanged — pure state-layer refactor, no intent/flow/copy change (test_agent_training 180 green).
 

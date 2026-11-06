@@ -120,6 +120,7 @@ import { renderActionDiscovery, composeMessage } from '../services/conversationE
 import { enqueueFollowUp, FOLLOWUP_KINDS, followUpAckText } from '../services/followups.js';
 import { enqueueUserMessage } from '../services/messageQueue.js';
 import { loadSessionSnapshot, persistSessionSnapshot } from '../services/sessionStore.js';
+import { hydrateSessionPending } from '../services/pendingState.js';
 import { createResilientClient } from '../services/supabaseClient.js';
 import { ocrWhatsAppMedia, extractDocumentHints, isOcrEnabled, isOcrAckFirstEnabled, buildMediaAckText, classifyOcrDocument } from '../services/ocrService.js';
 import { parseDocumentFields, uploadHintFor } from '../services/documentLens.js';
@@ -979,7 +980,11 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
       }
     }
 
-    session = chatSessions.get(senderPhone) || { history: [], lastActive: Date.now() };
+    // v1.64.0 — ONE pending state object (Phase 4). The migration-on-read shim
+    // folds every legacy pending* field of a restored snapshot into
+    // `session.pending` and re-exposes the legacy names as accessors, so the
+    // branch code below is byte-identical while the physical state is unified.
+    session = hydrateSessionPending(chatSessions.get(senderPhone) || { history: [], lastActive: Date.now() });
     session.lastActive = Date.now();
     session.slowAckSent = false;
 
@@ -3143,6 +3148,9 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                   driverPhone = manualPhoneMatch[0];
                 }
 
+                // TODO(PROP-2026-11-06-02): pendingDriverAssignment does not
+                // honour "cancel" — real bug; preserved here for the Phase 4
+                // refactor, tracked for a dedicated release.
                 if (!driverPhone) {
                   session.pendingDriverAssignment = { vehicleId: assignTarget.id, plateNumber: assignTarget.plate_number };
                   customReply = `🚗 *Assign Driver to Vehicle*\n\n• Target Vehicle: *${assignTarget.plate_number}*\n\nPlease reply with the driver's WhatsApp phone number (e.g. *+254712345678*).\n\n_(Reply 'cancel' to abort)_`;
