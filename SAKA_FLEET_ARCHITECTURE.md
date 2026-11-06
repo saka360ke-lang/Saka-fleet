@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.65.0  
+**Version:** 1.66.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.66.0** | whatsapp split Phase 5B-1: the 10 pure helpers + the 2 subscription parsers move verbatim to `src/routes/whatsapp/helpers.js` and the Meta sender to `replies.js`; messages.js drops 285 lines (4,876 -> 4,591), the barrel resolves 26 public symbols (was 23), `renderRoleActions` deliberately stays (AI-backed); 294 moved lines byte-identical across 8 blocks, all 15 source-pin suites zero edits (every pin is in the processor body) | 188 |
 | **1.65.0** | whatsapp.js split Phase 5A: the webhook (GET verification + POST HMAC + wamid dedupe + instant 200 ACK + per-phone enqueue) moves to `src/routes/whatsapp/webhook.js` and the processor to `messages.js`; a barrel `index.js` re-exports all 23 public symbols and `whatsapp.js` becomes a one-line shim, so every importer works unchanged - verbatim block proof (4,950 lines byte-identical), 15 source-pin suites repointed (paths only), zero behavioural test edits | 187 |
 | **1.64.0** | Unified session.pending (Phase 4): 13 independent pending* session fields become ONE `{ kind, data, at }` object with one `PENDING_KINDS` registry + `resolvePendingTurn()` + a migration-on-read shim (legacy fields become non-enumerable accessors, so `whatsapp.js` branches stay byte-identical); today's per-kind truth table preserved, proven by a 434-assertion harness including a 300-turn differential replay; 2 PROPs minted (uniform fresh-log override, driver-assignment cancel) | 186 |
 | **1.63.3** | Read Command Registry (Phase 3): the 560-line deterministic read if/else chain in `whatsapp.js` becomes ONE ordered registry (`src/services/readCommands.js`) in the old dispatch precedence — zero behaviour change, proven by a 121-assertion differential harness against a frozen copy of the old chain (`whatsapp.js` −707/+85) | 185 |
@@ -5183,5 +5184,39 @@ src/routes/
 **Suites run:** test_meta_signature (16), test_first_message_flow, test_update_suggest, test_greetings, test_first_time_flow, test_new_features — green; the 15 repointed source-pin suites — green; `npm run eval:conv -- --exclude-calibration` 23/23 (0.0% real-fail, 12/12 calibration hold); `npm run health` green.
 
 **Recurrence autopsy (rule 51).** *Defect class: a monolith route file* — every consumer couples to one 5,111-line path, so a structural move can silently strand source-pinned guards, lints and registries. Sibling sweep: every `fs.readFileSync`/`textOf` reader of the old path (15 test suites + `deepAudit.js` + `conversationDiagnosis.js`), the rule-51 invalidation ratchet (42 call sites incl. the 4 `whatsapp.quickLog*` reasons) and the deliberately-left table registry (`processed_webhooks` re-homed to `webhook.js` because its upsert moved). Guard: the one-line shim keeps every importer working, all pinned strings are unchanged, and the verbatim block comparison proves the moved code is byte-identical. Rule 13: `flowKnowledge.js`, `sakaAi.js`, `conversationEngine.js` unchanged — pure structural refactor, no intent/flow/copy change.
+
+
+### 188. v1.66.0 (5B-1/4) — whatsapp split: helpers + replies extracted (zero test edits) (2026-11-06)
+
+**Why.** `messages.js` still carried the pure helper block and the Meta transport inside a 4,876-line processor. Phase 5B-1 moves both into dedicated modules so 5B-2 (media + hooks) and 5C (shim removal) work against a thin processor. **Not one behaviour line changes.**
+
+**A. Layout (5B-1).**
+
+```
+src/routes/
+├── whatsapp.js            <- unchanged one-line shim: export * from './whatsapp/index.js';
+└── whatsapp/
+    ├── webhook.js         <- unchanged: GET verification, POST HMAC, wamid dedupe, 200 ACK, enqueue
+    ├── messages.js        <- processor (4,591 lines, was 4,876): session hydration, OCR, quiz,
+    │                         reads, billing, compliance, renderRoleActions (AI-backed) + the maps
+    ├── helpers.js         <- NEW (290 lines): the 10 pure helpers + parseTierFromMessage /
+    │                         parseIntervalFromMessage (now exported for testability)
+    ├── replies.js         <- NEW (40 lines): sendWhatsAppReply (Meta Cloud API POST, delivery-guarded)
+    └── index.js           <- barrel: export * from webhook / messages / helpers / replies
+```
+
+**B. Dependency graph — still acyclic.** `helpers.js -> src/services/*` only (globalization, superadmin). `replies.js -> src/services/deliveryGuard.js` only. `messages.js -> ./helpers.js + ./replies.js` (one-way; neither imports messages.js or the webhook). The barrel resolves 26 public symbols (was 23): the 10 helpers were already public through messages.js, so only `sendWhatsAppReply`, `parseTierFromMessage` and `parseIntervalFromMessage` are new public names. No name collisions across the four `export *` lines.
+
+**C. renderRoleActions deliberately stays.** It is `export async function` but not pure: it delegates to `conversationEngine.renderActionDiscovery`, which calls `composeMessage` (AI + discovery cache). The pure set moved: `detectCountryFromPhone, detectMessageLanguage, languageSwitchConfirmation, checkIsConversationalFeedback, extractNumberFromText, extractOdometerFromText, matchVehicle, buildRoleContext, buildFirstTimeWelcome, generateRoleBasedActionDiscovery` + the two parsers. The mutable session maps (`onboardingStore`, `chatSessions`) also stay in messages.js — `src/services/onboarding.js` and two behavioural suites import them through the shim.
+
+**D. Verbatim proof.** Eight blocks (294 lines) compared byte-for-byte against `HEAD:src/routes/whatsapp/messages.js` (LF-normalized against the CRLF working tree): detectCountry..checkIsConversationalFeedback 62, extractNumber..matchVehicle 29, sendWhatsAppReply 28, buildRoleContext incl. doc comments 55, buildFirstTimeWelcome 22, generateRoleBasedActionDiscovery incl. comment 86, parseTier 9, parseInterval 3 — 8/8 identical, 0 present in messages.js afterwards. The only sanctioned deltas are OUTSIDE the moved blocks: a trailing `export { sendWhatsAppReply }` and `export { parseTierFromMessage, parseIntervalFromMessage }` statement in the new modules (the three were private before) and the module header comments.
+
+**E. Zero test edits.** All 15 source-pin readers still target `messages.js` and stayed green untouched — every pinned literal lives in the processor body or the bottom subscription block (verified line-by-line): `test_no_canned_replies` (reading-ack at the OCR lane + customReply), `test_ocr_flow` (session hoist / slowAckSent / logSystemError), `test_customer_care` (support intake locks), `test_conversation_compliance` (fallbackText count), `test_driver_compliance_answers` (registry dispatch + OCR lanes), `test_first_message_flow` (`whatsapp.quickLog*` reasons), `test_feature_notice`, `test_labels_everywhere` (extractEntryLabel lane), `test_pending_state` (6-digit buyer-OTP sink), `test_user_context_cache` (42-site ratchet), `test_web_onboarding` (unverified gates), `test_asset_type_check` (mower detector), `test_coupon_integrity` (account-bound coupon order), `test_conv_eval` (voice_note_fallback), `test_deep_audit` (path-label fixtures). Barrel importers (`test_greetings`, `test_first_time_flow`, `test_new_features`; the `chatSessions`/`onboardingStore` consumers; `onboarding.js` via the shim) resolve through the extended barrel unchanged.
+
+**Frames touched:** `src/routes/whatsapp/helpers.js` (new), `src/routes/whatsapp/replies.js` (new), `src/routes/whatsapp/messages.js` (moved bodies out, dead `detectCountryGlobal` alias + `deliveryGuard` import dropped, 12 helper imports in), `src/routes/whatsapp/index.js` (barrel +2 lines), `package.json`, `landing/data/changelog.json` (+ stamped assets), `docs/` (generated), `SAKA_FLEET_ARCHITECTURE.md` (section 188, version + history), `CHANGELOG.md`.
+
+**Suites run:** test_greetings, test_first_time_flow, test_new_features, test_first_message_flow green before and after; test_reliability Test 4 (3-strike breaker, keyless fallback) fails identically on the untouched baseline — pre-existing, not part of `npm run health`; the 15 source-pin suites green with zero edits; `npm run eval:conv -- --exclude-calibration` — run 1: all 23 signal cases ✅ (0 real-fail), 11/12 calibration held with 1 unparseable judge output, which trips the script's `errored > 0` short-circuit (exit 1) before the gate line prints; run 2 reproduced the documented judge variance (22/23 signal, `trial-end-downsize-choice` 0.83 boundary_safety, 2 parse flakes). The corpus replies are static files and the judge is an external model, so a verbatim move cannot influence this signal; `npm run health` green before and after.
+
+**Recurrence autopsy (rule 51).** *Defect class: a structural split can strand source-pinned guards, dead imports and export surfaces.* Sibling sweep: every `fs.readFileSync` reader of the moved symbols (15 suites — 0 needed edits, every pin located in the retained processor), the two dead-import candidates found by grep and removed (`detectCountryGlobal` alias, `isDeliveryBlocked`), the barrel surface (26 symbols, 0 collisions), and the session maps that services/tests import through the shim (kept in messages.js). Rule 13: `flowKnowledge.js` / `sakaAi.js` / `conversationEngine.js` untouched — pure structural move, no intent/flow/copy change.
 
 

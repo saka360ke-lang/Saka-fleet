@@ -1,6 +1,13 @@
 {
-  "latest": "1.65.0",
+  "latest": "1.66.0",
   "entries": [
+    {
+      "version": "1.66.0",
+      "date": "2026-11-06",
+      "title": "A neater workshop for Saka's tools",
+      "preview": "Saka's behind-the-scenes tools now live in their own tidy drawers - same answers, same speed, same behaviour.",
+      "summary": "The little helpers that power Saka - detecting your country and language, reading amounts and odometer figures from your words, and building your role-aware menu - together with the sender that delivers every WhatsApp reply, now live in their own clear files instead of one very large one. Nothing you see changes: every reply, card and confirmation flows exactly as before, proven by a byte-for-byte comparison of the moved code and the full quality suite."
+    },
     {
       "version": "1.65.0",
       "date": "2026-11-06",
