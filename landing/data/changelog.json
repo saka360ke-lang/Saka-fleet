@@ -1,6 +1,13 @@
 {
-  "latest": "1.61.17",
+  "latest": "1.62.0",
   "entries": [
+    {
+      "version": "1.62.0",
+      "date": "2026-11-06",
+      "title": "Saka's background work now runs at half price",
+      "preview": "Heavy background AI jobs wait for DeepSeek's off-peak window — lower running costs, same instant replies.",
+      "summary": "Saka's heavy background jobs — like generating practice conversations and running quality checks — now wait for DeepSeek's off-peak window, when the same work costs half as much. Your chats, reminders and reports are untouched: live replies never wait. The admin cost digest now shows the real off-peak saving, which keeps the service lean as the fleet grows."
+    },
     {
       "version": "1.61.17",
       "date": "2026-11-06",

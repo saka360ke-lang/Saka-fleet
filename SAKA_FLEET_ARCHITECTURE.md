@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.61.17  
+**Version:** 1.62.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.62.0** | DeepSeek off-peak scheduling engine: UTC/EAT peak detection + Chinese-holiday windows; CLI gates defer heavy batches (`synth:cases`, `eval:conv`) with `--force` escape + `DEEPSEEK_DEFERRED_TO_OFF_PEAK` audit; telemetry prices off-peak calls at half rate (`approxCostSavedUsd`); rule 61 | 181 |
 | **1.61.17** | Lawn-mower unblock: canonical asset_type vocabulary + legacy-constraint save fallback + live constraint migration; confirm-gate complaint guard; save-failure Support ladder; mower aliases | 180 |
 | **1.61.16** | Trial never caps the garage (anti-abuse ceiling only) → bounded trial-end decision window (fit / downsize / Free) with engine-owned payment links; coupon integrity (canonical admin creation, dual binding, atomic claims, audits); rule 60 stuck-guidance on every flow | 179 |
 | **1.61.15** | Trial capacity is an entitlement (lapse-on-read, 15-asset proof) + eval spend controls (call budget, rest lane, heal cooldown, digest spend line) + coverage lanes (earnings, voice notes, Sheng/pidgin) | 178 |
@@ -1586,6 +1587,9 @@ Analytics (v1.13.0): `getAiUsageSummary(supabase, hours = 24)` aggregates a 1–
 | `AI_USAGE_LOGGING_ENABLED` | on | telemetry writes kill switch |
 | `AI_USAGE_LOG_MAX_ROWS` | 10000 | retention cap |
 | `AI_USAGE_TRIM_EVERY` | 250 | writes between retention sweeps |
+| `DEEPSEEK_OFF_PEAK_GATE` | on | batch CLIs (`synth:cases`, `eval:conv`) refuse peak starts; `--force` overrides one run (§181) |
+| `DEEPSEEK_OFF_PEAK_DISCOUNT_FACTOR` | 0.5 | off-peak DeepSeek price multiplier used by telemetry (§181) |
+| `DEEPSEEK_CN_HOLIDAYS` | (unset) | extra Chinese holiday dates (Beijing, CSV YYYY-MM-DD) treated as fully off-peak (§181) |
 | `AI_MODEL_SCOUT_ENABLED` | off | Model Watchdog discovery/benchmark cycle kill switch (§45) |
 | `AI_MODEL_AUTO_ADOPT` | off | auto-canary only (never full adoption); off ⇒ proposals only (§45) |
 | `AI_WEB_SEARCH_ENABLED` | off | web search/fetch research leg (capability-gated) (§45) |
@@ -1596,6 +1600,7 @@ Analytics (v1.13.0): `getAiUsageSummary(supabase, hours = 24)` aggregates a 1–
 ### 36.6 Files & tests
 - `src/services/aiClient.js` — purpose registry, tier resolution, provider clients, telemetry sink, Phase 3 failover chain (`buildProviderChain`), per-provider circuit breakers and the budget-guard seam.
 - `src/services/aiUsageLog.js` — `ensureAiUsageLogsTable` (incl. the `attempts` self-migration), `logAiUsage`, `trimAiUsageLogs`, `installAiUsageSink`, Phase 2 analytics (`getAiUsageSummary`, `estimateAiUsageCostUsd`, `AI_USAGE_COST_RULES`) and Phase 3 budget guard (`computeAiBudgetStatus`, `checkAiDailyBudget`, `installAiBudgetGuard`).
+- `src/services/deepseekSchedule.js` — v1.62.0 pure off-peak clock: peak windows, Beijing-date Chinese-holiday windows, next-transition math, the CLI gate (`evaluateDeepSeekOffPeakGate`) and the fail-soft `DEEPSEEK_DEFERRED_TO_OFF_PEAK` audit (§181).
 - `src/services/superadmin.js` — `ADMIN_AI_STATS` parsing, `handleAiStatsCommand`, `formatAiStatsReply` (v1.13.0) and `maybeSendAiBudgetAlert` (v1.14.0).
 - `index.js` — boot chain ensures the table, installs the usage sink **and** the budget guard after `ensureRemediationTables()`; a 5-minute ticker runs `maybeSendAiBudgetAlert`.
 - `test_model_router.js` — 71 assertions: tier resolution for every purpose, premium toggle, Tier 0, unknown purpose, missing-key degradation + single telemetry record, provider caching, helper contracts, DB provisioning/insert/cleanup (zero live API calls).
@@ -1634,13 +1639,14 @@ Phase 2 closes the loop opened by the Phase 0/1 telemetry seam: `ai_usage_logs` 
 | `avgLatencyMs` / `p50LatencyMs` | wall-clock latency (lower median for even samples) |
 | `promptTokens` / `completionTokens` / `totalTokens` | provider-reported usage summed |
 | `approxCostUsd` / `unpricedTokens` | approximate list-price cost; tokens with no pricing rule |
+| `approxCostSavedUsd` / `offPeakTokens` | off-peak DeepSeek savings (gross − net) and tokens served at the half-price window (v1.62.0) |
 | `fallbacks` | legs after the first in `attempts` (v1.14.0) |
 | `byTier` / `byProvider` / `byPurpose` | the same bucket metrics keyed by `0/1/2/3/unknown`, provider and purpose |
 | `truncated` | true when the window exceeded the retention cap |
 | `ok` / `error` | query outcome; failures return zeroed totals instead of throwing |
 
 - Reads are paged at `AI_USAGE_PAGE_SIZE` (1,000, PostgREST's default max) up to `AI_USAGE_LOG_MAX_ROWS` (10,000) with a stable `created_at` + `id` ordering.
-- `estimateAiUsageCostUsd(provider, model, promptTokens, completionTokens)` uses `AI_USAGE_COST_RULES` approximate public prices (USD / 1M tokens): `deepseek-chat` $0.27/$1.10, `deepseek-reasoner` $0.55/$2.19, Claude Sonnet $3/$15, Haiku $1/$5, Opus $15/$75, OpenAI fallback $2.50/$10. Informational only — never billing.
+- `estimateAiUsageCostUsd(provider, model, promptTokens, completionTokens, at?)` uses `AI_USAGE_COST_RULES` approximate public PEAK list prices (USD / 1M tokens): `deepseek-chat`/flash $0.30/$1.20, `deepseek-reasoner`/pro $1.32/$3.96, Claude Sonnet $2/$10, Haiku $0.10/$0.50, Opus $4/$20, Fable $10/$50, OpenAI fallback $2.50/$10. Since v1.62.0 the optional `at` timestamp applies the official DeepSeek off-peak factor (half price); a missing timestamp stays gross so an estimate never understates a bill. Informational only — never billing.
 - Unknown providers/models return `null` pricing (the digest shows `n/a`), never a guessed figure.
 
 ### 37.3 Superadmin WhatsApp command
@@ -4987,5 +4993,21 @@ Usage: `npm run eval:apply-heals` (dry run, 48 h) · `-- --hours=72` · `-- --wr
 **Recurrence autopsy (rule 51).** *Code vocabulary vs an orphaned DB constraint* → both write paths fixed + degrade + migration; siblings audited: `vehicles.asset_type` updates (none — immutable after creation), report readers (`normalizeAssetKind` now legacy-aware), `driver_compliances.asset_type` (free text, no constraint). *Multi-word text banked as a field value* → confirm gate + applyCorrections + persist guard fixed; siblings: direct-answer lane (v1.58.2 guard), AI extraction (polluted values skipped), narrative cards (own deterministic flow, untouched). *Endless failure loop* → save-failure ladder; sibling: patience ladder for invalid answers (already existed).
 
 **Suites run:** `test_asset_type_check` (39), `test_quiz_flow` (147), `test_narrative_draft` (122), `test_country_bucket` (61), `test_v1571` (20), `test_error_logging` (22), `test_entry_ledger` — green; curated eval: lawnmower detection 0.91, save recovery 0.85, loop calibration 0.26 (expected fail); migration applied live; `npm run health` green.
+
+### 181. v1.62.0 - DeepSeek off-peak scheduling engine, CLI gates + discount accounting + rule 61 (2026-11-06)
+
+**Official facts (verified 2026-11-06, api-docs.deepseek.com/quick_start/pricing.md).** "Peak hours are 01:00 - 04:00 and 06:00 - 10:00 UTC, Monday through Friday, excluding Chinese public holidays. All other hours are off-peak, including weekends and Chinese public holidays in full. Off-peak rates are half of the peak rates." In EAT (UTC+3) peak reads 04:00-07:00 and 09:00-13:00; peak covers 35 h/week (~21%), so ~79% of the week is half price.
+
+**A. `src/services/deepseekSchedule.js` (new, pure).** `DEEPSEEK_PEAK_WINDOWS_UTC` (minute-of-day, end-exclusive), `isChinesePublicHoliday()` (Beijing-date resolution; built-in fixed windows Jan 1, Apr 4-6, May 1-5, Oct 1-7; lunar festivals deliberately NOT invented — `DEEPSEEK_CN_HOLIDAYS` CSV adds them from the official State Council notice, fail-open for unlisted years), `getDeepSeekPricingState()` (`peak_window | outside_peak_window | weekend | chinese_holiday | unknown_time` + `discountFactor` + `nextTransition`), `isDeepSeekPeakTime()`, `getDeepSeekDiscountFactor()` (unknown timestamp = gross), `evaluateDeepSeekOffPeakGate()`, `formatOffPeakGateMessage()` (EAT + UTC, one next step) and `logDeepSeekDeferralAudit()` (fail-soft `admin_audit_logs` insert, no DDL). `src/utils/` does not exist in this repo — services live in `src/services/` (rule 55).
+
+**B. CLI gates (rule 61).** `npm run synth:cases` and `npm run eval:conv` (provider-consuming modes; `--export` is exempt) call the gate BEFORE spending tokens: during peak they print the exact next off-peak time in EAT + UTC, write `DEEPSEEK_DEFERRED_TO_OFF_PEAK` and exit 2. `--force` overrides one run; `DEEPSEEK_OFF_PEAK_GATE=off` disables the gate globally. Deliberately NOT deferred: front-user purposes (latency paramount, rules 20/24), Sentinel scan/synthesis, the 6-hourly eval tick (the `CONV_EVAL_MAX_JUDGE_CALLS_PER_TICK` cap already lands most calls off-peak) and the weekly model-scout cycle — supervision cadence beats the residual saving, and the proposal's persisted queue was downgraded to a deterministic gate because there is no live batch dispatcher to queue.
+
+**C. Discount accounting.** `AI_USAGE_COST_RULES` now carries the official DeepSeek peak list (`deepseek-chat`/flash $0.30/$1.20, reasoner/pro $1.32/$3.96; off-peak halves to $0.15/$0.60 and $0.66/$1.98). New `getAiUsageCostBreakdownUsd()` prices every row at ITS `created_at` (the summary query now selects `created_at`); `getAiUsageSummary()` gains `approxCostSavedUsd` + `offPeakTokens` (totals and every bucket), `computeAiBudgetStatus()` therefore tracks real (net) spend, and `formatAiStatsReply()` shows `Off-peak savings: ~$X` when present. Rows without a timestamp are priced gross, so estimates never understate a bill. Rule 56: existing rows re-price from stored timestamps — no backfill.
+
+**Frames touched:** `src/services/{deepseekSchedule(new),aiUsageLog,superadmin,envAudit}.js`, `scripts/{generate_synthetic_cases,run_conv_eval,health_audit}.js`, `test_{deepseek_schedule(new),phase2_analytics,phase3_resilience}.js`, `.clinerules` (rule 61), `.env.example`, `README.md`, `package.json`, this file, `CHANGELOG.md`.
+
+**Suites run:** `test_deepseek_schedule` (50), `test_phase2_analytics`, `test_phase3_resilience`, `test_synthetic_cases` (91), `test_env_audit` (44), `test_conv_eval`, `test_model_router`, `test_eval_spend`, `test_doc_sync` — green; `npm run health` green.
+
+**Recurrence autopsy (rule 51).** *Time-dependent pricing without a single clock source* → one pure schedule module; siblings audited: budget guard (net spend via the same summary), digest formatter (savings line deterministic), CLI cost paths (gate before spend). *Exact-value fixtures bound to list prices* → phase-2 cost total and phase-3 80%-alert fixture updated, with before/after proof in `test_deepseek_schedule`. *Holiday calendars that drift yearly* → fail-open fixed windows + env override (never invented lunar dates).
 
 

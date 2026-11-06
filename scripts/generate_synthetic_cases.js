@@ -6,6 +6,7 @@ import { chatCompletion, parseJsonSafely, AI_PURPOSES, AI_TIERS } from '../src/s
 import { validateCase, SYNTHETIC_DIR } from '../src/services/convEvalCases.js';
 import { createClient } from '@supabase/supabase-js';
 import { installAiUsageSink } from '../src/services/aiUsageLog.js';
+import { evaluateDeepSeekOffPeakGate, logDeepSeekDeferralAudit } from '../src/services/deepseekSchedule.js';
 
 /**
  * Saka Fleet — global synthetic conversation scenario generator (v1.61.0)
@@ -23,10 +24,15 @@ import { installAiUsageSink } from '../src/services/aiUsageLog.js';
  *  - Country buckets are metadata on the case (rule 41 isolation): regional
  *    lessons stay inside the batch for human/Sentinel review — this script never
  *    writes `country_learnings` (that table is derived from live chats).
- *  - On-demand only: no scheduler, no env knob, bounded batches, `--preview`
- *    spends tokens but writes nothing.
+ *  - On-demand only: no scheduler, bounded batches, `--preview` spends tokens but
+ *    writes nothing; the v1.62.0 off-peak gate (DEEPSEEK_OFF_PEAK_GATE) defers
+ *    peak runs with `--force` as the explicit override (rule 61).
  *
- * Run: npm run synth:cases -- --countries=KE,NG,ZA --batch=4 [--preview]
+ * Run: npm run synth:cases -- --countries=KE,NG,ZA --batch=4 [--preview] [--force]
+ *
+ * v1.62.0 (rule 61) — heavy DeepSeek generation is an OFF-PEAK job. During
+ * DeepSeek peak hours the CLI prints the exact next off-peak time, audits
+ * DEEPSEEK_DEFERRED_TO_OFF_PEAK and exits 2. `--force` runs at the peak rate.
  */
 
 export const SYNTH_VERSION = '1.61.0';
@@ -306,9 +312,10 @@ export function writeSyntheticBatch({ dir = SYNTHETIC_DIR, countryBucket, cases 
 
 /** Parse CLI flags (exported for the release test). */
 export function parseArgs(argv = []) {
-  const args = { countries: [], batch: 4, preview: false, out: SYNTHETIC_DIR, seed: null, edge: false, edgeIndex: null, help: false, now: new Date() };
+  const args = { countries: [], batch: 4, preview: false, out: SYNTHETIC_DIR, seed: null, edge: false, edgeIndex: null, help: false, force: false, now: new Date() };
   for (const raw of argv) {
     if (raw === '--preview') args.preview = true;
+    else if (raw === '--force') args.force = true;
     else if (raw === '--edge') args.edge = true;
   else if (raw.startsWith('--edge-index=')) args.edgeIndex = Math.max(0, Number(raw.slice('--edge-index='.length)) || 0);
     else if (raw === '--help' || raw === '-h') args.help = true;
@@ -384,6 +391,7 @@ export async function main(argv = process.argv.slice(2)) {
       '  --edge                 rotate the known/unknown scenario taxonomy into buckets',
       '  --edge-index=N         force ONE edge class for every bucket (0-9, see EDGE_CASES)',
       '  --preview              generate + validate, write nothing',
+      '  --force                run now even during DeepSeek peak hours',
       '  --out=<dir>            output directory (default evals/cases)',
       '',
       `Buckets: ${Object.keys(SYNTH_REGIONS).join(', ')}`
@@ -406,12 +414,30 @@ export async function main(argv = process.argv.slice(2)) {
   }
 
   // v1.61.12 — generator calls are AI traffic too: log them (rules 20/21).
-  if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY) {
-    installAiUsageSink(createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY, {
+  const supabase = process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY
+    ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY, {
       auth: { persistSession: false, autoRefreshToken: false }
-    }));
+    })
+    : null;
+  if (supabase) {
+    installAiUsageSink(supabase);
   } else {
     console.warn('⚠️ No Supabase credentials: generator usage will not reach ai_usage_logs.');
+  }
+
+  // v1.62.0 — rule 61: DeepSeek generation is heavy batch work. Peak runs are
+  // deferred with exact next-off-peak guidance (audited), never silently billed
+  // at the peak rate. `--force` is the explicit operator escape hatch.
+  const gate = evaluateDeepSeekOffPeakGate({ now: args.now, force: args.force });
+  if (!gate.allowed) {
+    console.error(gate.message);
+    await logDeepSeekDeferralAudit(supabase, {
+      adminPhone: 'cli:synth',
+      script: 'generate_synthetic_cases',
+      reason: gate.reason,
+      next_off_peak: gate.state?.nextTransition ? gate.state.nextTransition.toISOString() : null
+    });
+    return 2;
   }
 
   console.log(`🧪 Synthetic scenarios: ${countries.length} bucket(s) × ${args.batch} case(s)${args.preview ? ' · PREVIEW (no writes)' : ''}`);

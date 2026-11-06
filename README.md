@@ -190,6 +190,9 @@ ask you to double-check before saving; nothing is ever written without your YES.
 - **Kill switches OFF by default:** `CONV_EVAL_ENABLED` (6-hourly tick) and `CONV_EVAL_HEAL_ENABLED` (healing). Prompt hints go to `saka_dynamic_rules`; code-level fixes become `PENDING_APPROVAL` proposals — the approval gateway is unchanged.
 - **Launch award (v1.61.0):** the first 50 welcome trials now run **6 months (183 days)**, not 365; the ceiling is clamped so the offer cannot drift back.
 - **Superadmin:** `admin eval`, `admin eval last 48h`, `admin eval run`, `admin eval heal <case-id>`; results live in `conversation_eval_runs` (`npm run migrate:conv-eval`) and every heal/proposal is audited + announced on WhatsApp + email.
+## DeepSeek off-peak scheduling (v1.62.0, rule 61)
+- **Heavy batch work shelves itself to the half-price window.** `npm run synth:cases` and `npm run eval:conv` refuse to start during DeepSeek peak hours (Mon-Fri 01:00-04:00 & 06:00-10:00 UTC = 04:00-07:00 & 09:00-13:00 EAT; Chinese public holidays are off-peak all day), print the exact next off-peak time in EAT + UTC, audit `DEEPSEEK_DEFERRED_TO_OFF_PEAK` and exit 2. `--force` overrides one run; `DEEPSEEK_OFF_PEAK_GATE=off` disables the gate. Front-user chat never defers.
+- **Telemetry tells the truth.** Every `ai_usage_logs` row is priced at its own timestamp, so `admin ai-stats` shows net cost plus `Off-peak savings`; the budget guard tracks real spend. Lunar holiday dates come from the official State Council notice via `DEEPSEEK_CN_HOLIDAYS` — never hardcoded guesses.
 ## Snappy Saka — latency & OCR pause (v1.22.0)
 - **Photo OCR is paused by default** (`OCR_ENABLED=off`): photo turns answer
   instantly with clear guidance to type the details or send a PDF. PDF text

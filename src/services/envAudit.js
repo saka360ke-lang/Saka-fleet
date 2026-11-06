@@ -124,6 +124,10 @@ export const ENV_SECTIONS = Object.freeze([
   },
   { section: 'AI TELEMETRY', keys: ['AI_USAGE_LOGGING_ENABLED', 'AI_USAGE_LOG_MAX_ROWS', 'AI_USAGE_TRIM_EVERY', 'AI_USAGE_PAGE_SIZE'] },
   {
+    section: 'DEEPSEEK OFF-PEAK',
+    keys: ['DEEPSEEK_OFF_PEAK_GATE', 'DEEPSEEK_OFF_PEAK_DISCOUNT_FACTOR', 'DEEPSEEK_CN_HOLIDAYS']
+  },
+  {
     section: 'AI MODEL WATCHDOG',
     keys: [
       'AI_MODEL_SCOUT_ENABLED',

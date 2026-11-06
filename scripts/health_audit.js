@@ -124,7 +124,9 @@ const STATLESS_SUITES = [
   // v1.61.16 — coupon integrity (canonical creation, binding, atomic claims).
   'test_coupon_integrity.js',
   // v1.61.17 — asset_type CHECK (legacy-constraint proof) + confirm-gate pollution.
-  'test_asset_type_check.js'
+  'test_asset_type_check.js',
+  // v1.62.0 — DeepSeek off-peak schedule: windows, CLI gates, discount accounting.
+  'test_deepseek_schedule.js'
 ];
 
 const WORKFLOW_DIR = '.github/workflows';

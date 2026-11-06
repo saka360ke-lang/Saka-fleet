@@ -4,6 +4,7 @@ import { CONV_EVAL_CRITERIA, formatConvEvalReply, getConvEvalConfig, resolveJudg
 import { CONVERSATION_CASES, buildLiveCasesFromFriction, sampleCorpusCases, CASE_VALIDATION_ERRORS, SYNTHETIC_CASES, SYNTHETIC_CASE_ERRORS } from '../src/services/convEvalCases.js';
 import { healFailedCase, isCalibrationCase } from '../src/services/convEvalHealer.js';
 import { installAiUsageSink } from '../src/services/aiUsageLog.js';
+import { evaluateDeepSeekOffPeakGate, logDeepSeekDeferralAudit } from '../src/services/deepseekSchedule.js';
 
 /**
  * Saka Fleet — conversation eval CLI (v1.60.0)
@@ -17,19 +18,21 @@ import { installAiUsageSink } from '../src/services/aiUsageLog.js';
  *   node scripts/run_conv_eval.js --case=id1,id2  # judge only these cases (curation)
  *   node scripts/run_conv_eval.js --fail-on-failures  # exit 1 when any case fails (CI gate)
  *   node scripts/run_conv_eval.js --export        # DeepEval-compatible JSONL (no provider calls)
+ *   node scripts/run_conv_eval.js --force         # override the DeepSeek peak-hours gate
  *
  * The judge rides `aiClient` (`purpose: conversation_eval`); DEEPSEEK_API_KEY is
  * required unless CONV_EVAL_JUDGE_PROVIDER=anthropic (ANTHROPIC_API_KEY).
  */
 
 function parseArgs(argv = []) {
-  const args = { live: false, heal: false, json: false, export: false, synth: false, failOnFailures: false, limit: null, caseIds: null };
+  const args = { live: false, heal: false, json: false, export: false, synth: false, failOnFailures: false, force: false, limit: null, caseIds: null };
   for (const raw of argv) {
     if (raw === '--live') args.live = true;
     else if (raw === '--heal') args.heal = true;
     else if (raw === '--json') args.json = true;
     else if (raw === '--export') args.export = true;
     else if (raw === '--synth') args.synth = true;
+    else if (raw === '--force') args.force = true;
     else if (raw === '--fail-on-failures') args.failOnFailures = true;
     else if (raw.startsWith('--limit=')) args.limit = Math.max(1, Math.min(50, Number(raw.slice(8)) || 0));
     // v1.61.15 — curate specific cases without spending judge calls on the rest.
@@ -73,6 +76,22 @@ async function main() {
   const persist = Boolean(supabase);
   // v1.61.12 — CLI judge calls must reach ai_usage_logs (rules 20/21).
   if (supabase) installAiUsageSink(supabase);
+
+  // v1.62.0 — rule 61: judge batches are heavy DeepSeek work. Peak runs are
+  // deferred with exact next-off-peak guidance (audited), never silently billed
+  // at the peak rate. `--export` returned above (no provider calls); `--force`
+  // is the explicit operator escape hatch.
+  const gate = evaluateDeepSeekOffPeakGate({ now: new Date(), force: args.force });
+  if (!gate.allowed) {
+    console.warn(gate.message);
+    await logDeepSeekDeferralAudit(supabase, {
+      adminPhone: 'cli:eval',
+      script: 'run_conv_eval',
+      reason: gate.reason,
+      next_off_peak: gate.state?.nextTransition ? gate.state.nextTransition.toISOString() : null
+    });
+    return 2;
+  }
 
   let cases = sampleCorpusCases(limit);
   if (args.live) {

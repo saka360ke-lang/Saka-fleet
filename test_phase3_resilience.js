@@ -376,7 +376,9 @@ async function runTests() {
 
     const lowRows = [{
       id: 'r2', tier: 1, provider: 'deepseek', model: 'deepseek-chat', purpose: 'extraction',
-      latency_ms: 100, ok: true, prompt_tokens: 333333, completion_tokens: 0, attempts: []
+      // v1.62.0 — priced at the official $0.30/M list rate: 300k tokens = $0.09,
+      // i.e. 90% of the $0.10 cap, so the 80% alert fires below the 100% one.
+      latency_ms: 100, ok: true, prompt_tokens: 300000, completion_tokens: 0, attempts: []
     }];
     const lowFake = makeBudgetSupabase({ rows: lowRows, config: new Map(), audit: [] });
     const low = await maybeSendAiBudgetAlert(lowFake, { senders: { whatsapp: async () => true, email: async () => true } });

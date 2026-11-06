@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
 import { setAiUsageSink, setBudgetGuard } from './aiClient.js';
+import { getDeepSeekDiscountFactor } from './deepseekSchedule.js';
 
 /**
  * Saka Fleet — AI Usage Telemetry (v1.12.0, Phase 0)
@@ -25,12 +26,17 @@ export const AI_USAGE_PAGE_SIZE = Math.max(100, Math.min(1000, Number(process.en
 
 /**
  * Approximate public list prices (USD per 1M tokens) used ONLY by the
- * Superadmin cost-performance digest. Informational, never billing — update
- * when a provider changes pricing. `match: null` is the provider default.
+ * Superadmin cost-performance digest. These are DEEPSEEK PEAK rates — the
+ * official off-peak window bills at half price (v1.62.0, `deepseekSchedule.js`
+ * applies the live factor). Informational, never billing — update when a
+ * provider changes pricing. `match: null` is the provider default.
  */
 export const AI_USAGE_COST_RULES = Object.freeze([
-  { provider: 'deepseek', match: /reasoner/i, input: 0.55, output: 2.19 },
-  { provider: 'deepseek', match: null, input: 0.27, output: 1.10 },
+  // DeepSeek (2026 docs): flash $0.30/$1.20, v4-pro $1.32/$3.96 peak. Legacy
+  // `deepseek-chat` is served by flash; `deepseek-reasoner` rides the pro model.
+  { provider: 'deepseek', match: /reasoner|pro/i, input: 1.32, output: 3.96 },
+  { provider: 'deepseek', match: /flash/i, input: 0.30, output: 1.20 },
+  { provider: 'deepseek', match: null, input: 0.30, output: 1.20 },
   { provider: 'anthropic', match: /fable/i, input: 10, output: 50 },
   { provider: 'anthropic', match: /opus/i, input: 4, output: 20 },
   { provider: 'anthropic', match: /sonnet/i, input: 2, output: 10 },
@@ -52,13 +58,39 @@ function resolveCostRule(provider, model) {
   return null;
 }
 
-/** Estimate the USD cost of one call. Returns null when pricing is unknown. */
-export function estimateAiUsageCostUsd(provider, model, promptTokens = 0, completionTokens = 0) {
+function normalizeUsageTimestamp(at) {
+  if (at === null || at === undefined) return null;
+  const date = at instanceof Date ? at : new Date(at);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+/**
+ * Full cost breakdown for one call (v1.62.0). `at` is the call timestamp:
+ * DeepSeek calls inside the official off-peak window cost half the list price.
+ * A missing/unknown timestamp returns the GROSS peak price (deterministic,
+ * never understates a bill). Anthropic/OpenAI are never discounted.
+ */
+export function getAiUsageCostBreakdownUsd(provider, model, promptTokens = 0, completionTokens = 0, at = null) {
   const rule = resolveCostRule(provider, model);
   if (!rule) return null;
   const prompt = Number.isFinite(promptTokens) ? promptTokens : 0;
   const completion = Number.isFinite(completionTokens) ? completionTokens : 0;
-  return (prompt / 1e6) * rule.input + (completion / 1e6) * rule.output;
+  const grossCostUsd = (prompt / 1e6) * rule.input + (completion / 1e6) * rule.output;
+  const discountFactor = String(provider || '').toLowerCase() === 'deepseek'
+    ? getDeepSeekDiscountFactor(normalizeUsageTimestamp(at))
+    : 1;
+  return {
+    grossCostUsd,
+    costUsd: grossCostUsd * discountFactor,
+    discountFactor,
+    offPeak: discountFactor < 1
+  };
+}
+
+/** Estimate the USD cost of one call. Returns null when pricing is unknown. */
+export function estimateAiUsageCostUsd(provider, model, promptTokens = 0, completionTokens = 0, at = null) {
+  const breakdown = getAiUsageCostBreakdownUsd(provider, model, promptTokens, completionTokens, at);
+  return breakdown ? breakdown.costUsd : null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -301,6 +333,8 @@ function newUsageBucket() {
     promptTokens: 0,
     completionTokens: 0,
     approxCostUsd: 0,
+    approxCostSavedUsd: 0,
+    offPeakTokens: 0,
     pricedTokens: 0,
     unpricedTokens: 0,
     latencies: []
@@ -324,11 +358,15 @@ function addUsageRow(bucket, row = {}) {
 
   const rowTokens = promptTokens + completionTokens;
   if (rowTokens > 0) {
-    const cost = estimateAiUsageCostUsd(row.provider, row.model, promptTokens, completionTokens);
-    if (cost === null) {
+    // v1.62.0 — price each row at ITS timestamp: DeepSeek off-peak calls are
+    // half price, so the digest reflects real spend (and shows the savings).
+    const breakdown = getAiUsageCostBreakdownUsd(row.provider, row.model, promptTokens, completionTokens, row.created_at ?? null);
+    if (breakdown === null) {
       bucket.unpricedTokens += rowTokens;
     } else {
-      bucket.approxCostUsd += cost;
+      bucket.approxCostUsd += breakdown.costUsd;
+      bucket.approxCostSavedUsd += breakdown.grossCostUsd - breakdown.costUsd;
+      if (breakdown.offPeak) bucket.offPeakTokens += rowTokens;
       bucket.pricedTokens += rowTokens;
     }
   }
@@ -357,6 +395,10 @@ function finalizeUsageBucket(bucket) {
     approxCostUsd: bucket.pricedTokens > 0
       ? Number(bucket.approxCostUsd.toFixed(6))
       : (bucket.unpricedTokens > 0 ? null : 0),
+    approxCostSavedUsd: bucket.pricedTokens > 0
+      ? Number(bucket.approxCostSavedUsd.toFixed(6))
+      : (bucket.unpricedTokens > 0 ? null : 0),
+    offPeakTokens: bucket.offPeakTokens,
     unpricedTokens: bucket.unpricedTokens
   };
 }
@@ -395,7 +437,9 @@ export async function getAiUsageSummary(providedSupabase, hours = AI_USAGE_DEFAU
     promptTokens: 0,
     completionTokens: 0,
     totalTokens: 0,
+    offPeakTokens: 0,
     approxCostUsd: 0,
+    approxCostSavedUsd: 0,
     unpricedTokens: 0,
     truncated: false,
     byTier: {},
@@ -417,7 +461,7 @@ export async function getAiUsageSummary(providedSupabase, hours = AI_USAGE_DEFAU
       const pageSize = Math.min(AI_USAGE_PAGE_SIZE, AI_USAGE_LOG_MAX_ROWS - fetched);
       const { data, error } = await supabase
         .from(AI_USAGE_TABLE)
-        .select('id,tier,provider,model,purpose,latency_ms,ok,prompt_tokens,completion_tokens,attempts')
+        .select('id,tier,provider,model,purpose,latency_ms,ok,prompt_tokens,completion_tokens,attempts,created_at')
         .gte('created_at', since)
         .order('created_at', { ascending: false })
         .order('id', { ascending: false })
@@ -462,6 +506,8 @@ export async function getAiUsageSummary(providedSupabase, hours = AI_USAGE_DEFAU
     summary.completionTokens = total.completionTokens;
     summary.totalTokens = total.totalTokens;
     summary.approxCostUsd = total.approxCostUsd;
+    summary.approxCostSavedUsd = total.approxCostSavedUsd;
+    summary.offPeakTokens = total.offPeakTokens;
     summary.unpricedTokens = total.unpricedTokens;
     summary.truncated = !exhausted;
     summary.byTier = Object.fromEntries([...byTier].map(([key, bucket]) => [key, finalizeUsageBucket(bucket)]));
@@ -494,6 +540,7 @@ export default {
   isAiUsageLoggingEnabled,
   getAiUsageSummary,
   estimateAiUsageCostUsd,
+  getAiUsageCostBreakdownUsd,
   computeAiBudgetStatus,
   checkAiDailyBudget,
   installAiBudgetGuard,

@@ -800,6 +800,9 @@ export function formatAiStatsReply(summary, budget = null, latency = null) {
     `• Latency: avg ${formatDuration(summary.avgLatencyMs)} · p50 ${formatDuration(summary.p50LatencyMs)}\n` +
     `• Tokens: ${formatCount(summary.promptTokens)} in / ${formatCount(summary.completionTokens)} out\n` +
     `• Est. cost: ${formatApproxCost(summary.approxCostUsd, summary.unpricedTokens)} (approx list price)\n` +
+    (Number.isFinite(summary.approxCostSavedUsd) && summary.approxCostSavedUsd > 0
+      ? `• Off-peak savings: ${formatApproxCost(summary.approxCostSavedUsd)} (DeepSeek half-price window)\n`
+      : '') +
     budgetLine +
     `\n` +
     `*By Tier*\n${tierLines || '• none'}\n\n` +

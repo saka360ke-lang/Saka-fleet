@@ -75,7 +75,10 @@ async function runTests() {
   console.log('=== SAKA FLEET — PHASE 2 TELEMETRY ANALYTICS TESTS ===\n');
 
   console.log('--- Test 1: approximate pricing rules ---');
-  check(estimateAiUsageCostUsd('deepseek', 'deepseek-chat', 1000000, 0) === 0.27, 'deepseek-chat input pricing');
+  check(estimateAiUsageCostUsd('deepseek', 'deepseek-chat', 1000000, 0) === 0.30, 'deepseek-chat input pricing (official peak list)');
+  // v1.62.0 — DeepSeek off-peak calls are half price; unknown timestamps stay gross.
+  check(estimateAiUsageCostUsd('deepseek', 'deepseek-chat', 1000000, 0, '2026-11-09T02:00:00Z') === 0.30, 'peak timestamps pay the list price');
+  check(estimateAiUsageCostUsd('deepseek', 'deepseek-chat', 1000000, 0, '2026-11-09T11:00:00Z') === 0.15, 'off-peak timestamps are half price');
   check(Math.abs(estimateAiUsageCostUsd('anthropic', 'claude-sonnet-4-5', 1000000, 0) - 2) < 1e-9, 'Claude Sonnet input pricing');
   check(Math.abs(estimateAiUsageCostUsd('anthropic', 'claude-haiku-4-5', 0, 1000000) - 0.5) < 1e-9, 'Claude Haiku output pricing');
   check(estimateAiUsageCostUsd('mystery', 'unknown-model', 100, 100) === null, 'unknown provider pricing is null, never guessed');
@@ -90,7 +93,7 @@ async function runTests() {
   check(summary.avgLatencyMs === 1150, 'average latency');
   check(summary.p50LatencyMs === 500, 'lower-median latency');
   check(summary.promptTokens === 2500 && summary.completionTokens === 550 && summary.totalTokens === 3050, 'token totals');
-  check(Math.abs(summary.approxCostUsd - 0.0083) < 1e-6, 'approximate cost totals');
+  check(Math.abs(summary.approxCostUsd - 0.00833) < 1e-6, 'approximate cost totals');
   check(summary.byTier['1'].requests === 2 && summary.byTier['2'].requests === 3 && summary.byTier.unknown.requests === 1, 'tier buckets');
   check(summary.byProvider.deepseek.requests === 3 && summary.byProvider.anthropic.requests === 2, 'provider buckets');
   check(summary.byPurpose.intent_classify.requests === 2, 'purpose buckets');
