@@ -27,6 +27,8 @@ check(sentinelSource.includes('export async function logSystemError'), 'sentinel
 console.log('\n=== 2. user-impacting writes log their failures ===');
 const requiredRoutes = [
   ['src/services/quizEngine.js', 'quizEngine.persistVehicleRegistration'],
+  ['src/services/quizEngine.js', 'quizEngine.logExpense'],
+  ['src/services/quizEngine.js', 'quizEngine.logEarnings'],
   ['src/services/onboarding.js', 'onboarding.saveVehicleAssetRecord'],
   ['src/services/subscriptions.js', 'subscriptions.ledgerInsert'],
   ['src/services/subscriptions.js', 'subscriptions.trialConvertedStamp'],

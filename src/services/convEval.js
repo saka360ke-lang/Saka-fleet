@@ -106,6 +106,28 @@ export function getConvEvalConfig(env = process.env) {
   const rejudgeMargin = Number(rawMargin) === 0 ? 0 : boundedNumber(rawMargin, 0.10, 0, 0.5);
   const rawRejudge = read('CONV_EVAL_REJUDGE_MAX');
   const rejudgeMax = Number(rawRejudge) === 0 ? 0 : Math.round(boundedNumber(rawRejudge, 5, 0, 50));
+  // v1.61.15 — eval SPEND controls. Call-based and deterministic on purpose:
+  // telemetry costs are approximate list prices, never a bill, so a call budget
+  // is the only honest unit. 0 = unlimited (resources bound the run).
+  const rawCalls = read('CONV_EVAL_MAX_JUDGE_CALLS_PER_TICK');
+  const maxJudgeCallsPerTick = Number(rawCalls) === 0 ? 0 : Math.round(boundedNumber(rawCalls, 24, 1, 500));
+  // Proven-green cases rest: after N consecutive passes a case is re-checked
+  // only every R ticks (time-based = R × interval). Live + calibration never rest
+  // (they are the production-pain and judge-honesty baselines). 0 disables.
+  const rawStreak = read('CONV_EVAL_PASS_STREAK');
+  const passStreak = Number(rawStreak) === 0 ? 0 : Math.round(boundedNumber(rawStreak, 3, 1, 20));
+  const rawRest = read('CONV_EVAL_PASS_REST_TICKS');
+  const restTicks = Number(rawRest) === 0 ? 0 : Math.round(boundedNumber(rawRest, 5, 1, 50));
+  // Deterministic-lane churn guard: after N ab_gate refusals inside the cooldown
+  // window a case stops burning generate + A/B judge calls (the digest still
+  // flags it as a code-fix candidate). 0 disables the cap.
+  const rawRefusals = read('CONV_EVAL_MAX_REFUSALS_PER_CASE');
+  const maxRefusalsPerCase = Number(rawRefusals) === 0 ? 0 : Math.round(boundedNumber(rawRefusals, 3, 1, 50));
+  const rawCooldown = read('CONV_EVAL_REFUSAL_COOLDOWN_HOURS');
+  const refusalCooldownHours = Math.round(boundedNumber(rawCooldown, 24, 1, 168));
+  // Soft daily call alert for the eval purpose (alert-only; evals never stop).
+  const rawAlert = read('EVAL_DAILY_CALL_ALERT');
+  const evalDailyCallAlert = Number(rawAlert) === 0 ? 0 : Math.round(boundedNumber(rawAlert, 1500, 1, 1000000));
   // v1.61.12 — the ONLY eval email: one detailed summary every N hours (0 = off).
   const rawDigest = read('CONV_EVAL_DIGEST_HOURS');
   const digestHours = Number(rawDigest) === 0 ? 0 : boundedNumber(rawDigest, 6, 1, 168);
@@ -117,6 +139,12 @@ export function getConvEvalConfig(env = process.env) {
     maxActiveRules,
     rejudgeMargin,
     rejudgeMax,
+    maxJudgeCallsPerTick,
+    passStreak,
+    restTicks,
+    maxRefusalsPerCase,
+    refusalCooldownHours,
+    evalDailyCallAlert,
     digestHours,
     dedupeHours: boundedNumber(read('CONV_EVAL_DEDUPE_HOURS'), 1, 0.25, 168),
     alertCooldownHours: boundedNumber(read('CONV_EVAL_ALERT_COOLDOWN_HOURS'), 1, 0, 48),
@@ -442,6 +470,90 @@ export function isNearMiss(judged, { threshold = CONV_EVAL_DEFAULT_THRESHOLD, cr
   return score >= bar - m;
 }
 
+export const EVAL_CALL_ALERT_CONFIG_KEY = 'last_eval_call_alert_date';
+
+/**
+ * v1.61.15 — eval SPEND selector: which cases may this tick judge?
+ * ----------------------------------------------------------------
+ * Deterministic, pure, zero tokens. Priority is hard-coded so a budget cut can
+ * never silence the lanes that protect quality:
+ *   0 live friction transcripts   (real user pain — always judged)
+ *   1 calibration cases           (expected-fail judge-honesty baseline)
+ *   2 recently failed cases       (a regression must re-judge next tick)
+ *   3 corpus cases                (rotate; proven-green ones rest)
+ *   4 synthetic cases             (curation only)
+ * A case with `CONV_EVAL_PASS_STREAK` consecutive passes rests for
+ * `CONV_EVAL_PASS_REST_TICKS` ticks; ONE failure returns it to the hot lane on
+ * the very next tick. `CONV_EVAL_MAX_JUDGE_CALLS_PER_TICK` caps the tick.
+ */
+export function selectCasesForTick({ cases = [], recentRuns = [], config = {}, now = new Date() } = {}) {
+  const list = Array.isArray(cases) ? cases.filter((caseDef) => caseDef && caseDef.id) : [];
+  const rows = Array.isArray(recentRuns) ? [...recentRuns] : [];
+  const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
+  const maxCalls = Number.isFinite(Number(config.maxJudgeCallsPerTick)) && Number(config.maxJudgeCallsPerTick) > 0
+    ? Math.round(Number(config.maxJudgeCallsPerTick))
+    : 0;
+  const passStreak = Number.isFinite(Number(config.passStreak)) && Number(config.passStreak) > 0
+    ? Math.round(Number(config.passStreak))
+    : 0;
+  const restTicks = Number.isFinite(Number(config.restTicks)) && Number(config.restTicks) > 0
+    ? Math.round(Number(config.restTicks))
+    : 0;
+  const intervalMs = Number.isFinite(Number(config.intervalMs)) && Number(config.intervalMs) > 0
+    ? Number(config.intervalMs)
+    : 15 * 60 * 1000;
+
+  // Newest first; a broken streak stops counting for that case.
+  rows.sort((a, b) => new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime());
+  const lastByCase = new Map();
+  const streakByCase = new Map();
+  for (const row of rows) {
+    const caseId = String(row?.case_id || '');
+    if (!caseId) continue;
+    if (!lastByCase.has(caseId)) lastByCase.set(caseId, row);
+    const state = streakByCase.get(caseId);
+    if (!state) {
+      streakByCase.set(caseId, { streak: row?.passed === true ? 1 : 0, broken: row?.passed !== true });
+    } else if (!state.broken) {
+      if (row?.passed === true) state.streak += 1;
+      else state.broken = true;
+    }
+  }
+
+  const decorated = list.map((caseDef, index) => {
+    const last = lastByCase.get(caseDef.id) || null;
+    const streakState = streakByCase.get(caseDef.id);
+    const streak = streakState && !streakState.broken ? streakState.streak : 0;
+    const lastAt = last ? new Date(last.created_at || 0).getTime() : 0;
+    const isLive = caseDef.source === 'live';
+    const isCalibration = String(caseDef.expected || '').toLowerCase() === 'fail';
+    const resting = !isLive && !isCalibration && passStreak > 0 && restTicks > 0
+      && Boolean(lastAt) && streak >= passStreak && (nowMs - lastAt) < restTicks * intervalMs;
+    const recentlyFailed = Boolean(last) && last.passed !== true;
+    const priority = isLive ? 0 : (isCalibration ? 1 : (recentlyFailed ? 2 : (caseDef.source === 'synthetic' ? 4 : 3)));
+    return { caseDef, index, priority, resting };
+  });
+
+  const skippedRest = decorated.filter((entry) => entry.resting).map((entry) => entry.caseDef.id);
+  const ranked = decorated
+    .filter((entry) => !entry.resting)
+    .sort((a, b) => (a.priority - b.priority) || (a.index - b.index));
+  const selected = maxCalls > 0 ? ranked.slice(0, maxCalls) : ranked;
+  return {
+    cases: selected.map((entry) => entry.caseDef),
+    skippedRest,
+    capped: Math.max(0, ranked.length - selected.length)
+  };
+}
+
+/** One soft alert per Nairobi day when eval calls cross the threshold. Pure. */
+export function shouldSendEvalCallAlert({ calls = 0, threshold = 0, todayKey = '', lastAlertKey = '' } = {}) {
+  const limit = Number(threshold);
+  if (!Number.isFinite(limit) || limit <= 0) return false;
+  if (!todayKey || String(lastAlertKey || '') === String(todayKey)) return false;
+  return Number(calls) >= limit;
+}
+
 /**
  * Score a batch of cases. Each result is persisted when a Supabase client is
  * supplied. Returns a deterministic summary for the digest/CLI.
@@ -450,9 +562,15 @@ export function isNearMiss(judged, { threshold = CONV_EVAL_DEFAULT_THRESHOLD, cr
  * `judgeFn` is injectable so the release test can prove the threshold plumbing
  * without a provider call.
  */
-export async function runConvEvalBatch({ supabase = null, cases = [], threshold = null, judge = {}, persist = true, judgeFn = judgeConversation, rejudgeMargin = null, rejudgeMax = null } = {}) {
+export async function runConvEvalBatch({ supabase = null, cases = [], threshold = null, judge = {}, persist = true, judgeFn = judgeConversation, rejudgeMargin = null, rejudgeMax = null, callBudget = null } = {}) {
   const cfg = getConvEvalConfig();
   const effectiveThreshold = Number.isFinite(Number(threshold)) ? Number(threshold) : cfg.threshold;
+  // v1.61.15 — hard per-run judge call budget (re-judges included). The selector
+  // already caps the case list; this guards the extra re-judge calls so a run
+  // can never overspend the configured tick budget.
+  const hasCallBudget = callBudget !== null && callBudget !== undefined && callBudget !== ''
+    && Number.isFinite(Number(callBudget));
+  let judgeBudget = hasCallBudget ? Math.max(0, Math.round(Number(callBudget))) : Infinity;
   // v1.61.11 — `Number(null) === 0` disabled the whole feature: an omitted
   // param must fall back to config, never to a zero margin/budget.
   const hasMargin = rejudgeMargin !== null && rejudgeMargin !== undefined && rejudgeMargin !== ''
@@ -467,6 +585,7 @@ export async function runConvEvalBatch({ supabase = null, cases = [], threshold 
   let persisted = 0;
   for (const caseDef of Array.isArray(cases) ? cases : []) {
     if (!caseDef || !caseDef.id) continue;
+    if (judgeBudget <= 0) break;
     const caseThreshold = caseDef.minScore !== null && caseDef.minScore !== undefined && Number.isFinite(Number(caseDef.minScore))
       ? Math.min(1, Math.max(0, Number(caseDef.minScore)))
       : effectiveThreshold;
@@ -474,12 +593,14 @@ export async function runConvEvalBatch({ supabase = null, cases = [], threshold 
       ? caseDef.criterionMins
       : null;
     const judgeOpts = { ...judge, threshold: caseThreshold, criterionMins };
+    judgeBudget -= 1;
     let judged = await judgeFn({ caseDef, judge: judgeOpts });
     // v1.61.10 — one extra judge call for a NARROW miss (budget-capped), so a
     // borderline verdict cannot flip a good reply on provider variance. The
     // better of the two verdicts wins; both stay in the row for the record.
-    if (rejudgeBudget > 0 && isNearMiss(judged, { threshold: caseThreshold, criterionMins, margin })) {
+    if (rejudgeBudget > 0 && judgeBudget > 0 && isNearMiss(judged, { threshold: caseThreshold, criterionMins, margin })) {
       rejudgeBudget -= 1;
+      judgeBudget -= 1;
       const second = await judgeFn({ caseDef, judge: judgeOpts });
       if (second && second.ok) {
         rejudgedCount += 1;

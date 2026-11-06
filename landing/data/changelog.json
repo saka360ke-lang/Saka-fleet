@@ -1,6 +1,13 @@
 {
-  "latest": "1.61.14",
+  "latest": "1.61.15",
   "entries": [
+    {
+      "version": "1.61.15",
+      "date": "2026-11-06",
+      "title": "Trial limits are honest, and voice notes get a real answer",
+      "preview": "A welcome trial covers 5 vehicles: the next one is refused with the exact limit and the upgrade path, never a fake save.",
+      "summary": "Adding a sixth vehicle during the welcome trial now says exactly what the trial covers and offers the upgrade, instead of failing late or quietly. When the trial ends your newest vehicle stays active and the rest are paused — nothing is deleted, and one short reply brings back whichever you choose. Voice notes now get a clear reply asking you to type it, and a photo Saka cannot read asks for a clearer shot or the details typed, without ever claiming a save."
+    },
     {
       "version": "1.61.14",
       "date": "2026-11-05",

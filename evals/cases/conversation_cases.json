@@ -356,6 +356,102 @@
         }
       ],
       "reply": "↩️ Same record, straight from your ledger — nothing changed:\n\n📊 *Fuel all time:* Ksh 2,000 (1 record) · 8.97 L\n🚗 For *KBJ 819C*.\n\nIf a row looks wrong, reply *my entries* to edit or delete it."
+    },
+    {
+      "id": "capacity-trial-sixth-asset",
+      "tags": ["capacity", "trial", "plan", "boundary"],
+      "expected": "pass",
+      "note": "The welcome trial allows 5 vehicles; the 6th add must name the real limit, keep the account safe and offer the upgrade path — never a fake save.",
+      "turns": [
+        { "role": "user", "text": "add another truck KDA 123B" },
+        { "role": "assistant", "text": "Sure — what's the make and model for KDA 123B?" },
+        { "role": "user", "text": "Isuzu FRR" }
+      ],
+      "reply": "Your welcome trial covers 5 vehicles and you already have 5, so KDA 123B can't be added yet — nothing on your account is affected. When you upgrade I'll add the Isuzu FRR straight away. Say *upgrade* to see the options."
+    },
+    {
+      "id": "capacity-trial-refusal-loop",
+      "tags": ["capacity", "looping", "tone", "trial"],
+      "friction_type": "LOOPING_PROMPTS",
+      "expected": "fail",
+      "note": "Repeating the same refusal twice with no next step and a menu wall — the 6 Nov failure shape.",
+      "turns": [
+        { "role": "user", "text": "add another truck KDA 123B" },
+        { "role": "user", "text": "why not" }
+      ],
+      "reply": "Your current plan allows 5 vehicles. Your current plan allows 5 vehicles. I could not save KDA 123B. Need anything else? Reply 1 for fuel, 2 for expenses, 3 for reports, 4 for earnings."
+    },
+    {
+      "id": "trial-expiry-paused-keep-vehicle",
+      "tags": ["trial", "expiry", "capacity", "fleet"],
+      "expected": "pass",
+      "note": "After the trial lapses one vehicle stays active, the rest are paused (never deleted) and the real keep-vehicle command is offered.",
+      "turns": [
+        { "role": "user", "text": "Why can't I log fuel for KBJ 819C?" }
+      ],
+      "reply": "Your trial has ended, so KBJ 819C is paused — nothing has been deleted and its passbook history is intact. To make it your active vehicle again, reply *keep vehicle KBJ 819C*."
+    },
+    {
+      "id": "earning-quick-log",
+      "tags": ["earnings", "shorthand", "quick-log"],
+      "expected": "pass",
+      "note": "One-line earnings log: exact amount, currency and plate confirmed once, nothing invented.",
+      "turns": [
+        { "role": "user", "text": "earned 4500 today trips KDA 123B" }
+      ],
+      "reply": "Logged ✓ 4,500 KES trip fares for KDA 123B today."
+    },
+    {
+      "id": "earning-type-quiz",
+      "tags": ["earnings", "quiz", "single-question"],
+      "expected": "pass",
+      "note": "The earnings quiz mirrors the amount, then asks exactly ONE optional type question and allows Skip.",
+      "turns": [
+        { "role": "user", "text": "log earnings 4500 today" }
+      ],
+      "reply": "Got it — 4,500 KES today. What kind of earnings? Trip fares, daily takings, cargo, hire or other — reply *Skip* to leave the type blank."
+    },
+    {
+      "id": "media-unreadable-typed-fallback",
+      "tags": ["media", "unreadable", "photo", "fallback"],
+      "expected": "pass",
+      "note": "An unreadable photo: apologize once, offer a typed example, never claim anything was saved.",
+      "turns": [
+        { "role": "user", "text": "[photo of an insurance certificate — could not be read]" }
+      ],
+      "reply": "📸 I could not read that photo — nothing has been saved. Send a clearer shot of the certificate, or type it: *my insurance expires 15 March 2027*."
+    },
+    {
+      "id": "voice-note-fallback",
+      "tags": ["voice", "media", "fallback"],
+      "expected": "pass",
+      "note": "Voice notes have no text lane: say so plainly once, offer the typed example, no menu wall.",
+      "turns": [
+        { "role": "user", "text": "[voice note]" }
+      ],
+      "reply": "🎙️ I can't listen to voice notes yet — type it in and I'll take it from there. If it's a log, one line works: *fuel 30L at 50350 km for 5500*."
+    },
+    {
+      "id": "mixed-language-sheng-quicklog",
+      "tags": ["sheng", "mixed-language", "shorthand", "expense"],
+      "expected": "pass",
+      "country_bucket": "KE",
+      "note": "Sheng + shorthand fuel log: mirror the language, confirm the exact litres/km/currency with units.",
+      "turns": [
+        { "role": "user", "text": "nimeweka mafuta 30L at 50350 km, 5500 bob" }
+      ],
+      "reply": "Sawa 👍 Logged 30L at 50,350 km for 5,500 KES. Full tank or partial?"
+    },
+    {
+      "id": "mixed-language-pidgin-earnings",
+      "tags": ["pidgin", "mixed-language", "earnings", "shorthand"],
+      "expected": "pass",
+      "country_bucket": "NG",
+      "note": "Nigerian pidgin earnings log: confirm the exact amount with the local currency and the plate.",
+      "turns": [
+        { "role": "user", "text": "I make 12k today from trips for LSD 123XY" }
+      ],
+      "reply": "Well done 👍 Logged 12,000 NGN trip fares for LSD 123XY today — reply *my entries* if you want it changed."
     }
   ]
 }

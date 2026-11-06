@@ -24,7 +24,7 @@ import { isDuplicateExpense } from './expenseGuard.js';
 import { sanitizeEntryLabel } from './entryLabels.js';
 // v1.59.7 — labels on every entry: standalone odometer readings get a ledger row.
 import { recordLabeledReading } from './labelsEverywhere.js';
-import { logSystemError } from './systemErrors.js';
+import { logSystemError, logWriteFailure } from './systemErrors.js';
 import { invalidateUserContext } from './userContextCache.js';
 import { shortenUrl } from './linkShortener.js';
 import {
@@ -3210,7 +3210,15 @@ async function executeFlow(state, ctx) {
           const { label, ...legacyRow } = expenseRow;
           ({ error: logErr } = await ctx.supabase.from('expense_logs').insert([legacyRow]));
         }
-        if (logErr) return { handled: true, reply: await fail(logErr.message), flow: state.flow, active: true };
+        if (logErr) {
+          // v1.61.15 — a refused ledger write is an incident (rule 50).
+          logWriteFailure(ctx.supabase, 'quizEngine.logExpense', logErr, {
+            owner_id: ctx.profile?.id || null,
+            vehicle_id: vehicle.id,
+            amount: a.amount ?? null
+          });
+          return { handled: true, reply: await fail(logErr.message), flow: state.flow, active: true };
+        }
         // v1.61.14 — the month-spend / relationship facts just changed.
         invalidateUserContext(ctx.supabase, { phone: ctx.formattedPhone || ctx.profile?.phone_number, ownerId: ctx.profile?.id });
 
@@ -3282,7 +3290,16 @@ async function executeFlow(state, ctx) {
           const { label, ...legacyRow } = earningRow;
           ({ error } = await ctx.supabase.from('private_earnings').insert([legacyRow]));
         }
-        if (error) return { handled: true, reply: await fail(error.message), flow: state.flow, active: true };
+        if (error) {
+          // v1.61.15 — a refused earnings write is an incident (rule 50).
+          logWriteFailure(ctx.supabase, 'quizEngine.logEarnings', error, {
+            owner_id: ctx.profile?.id || null,
+            vehicle_id: vehicle.id,
+            amount: a.amount ?? null,
+            earning_type: earningType || null
+          });
+          return { handled: true, reply: await fail(error.message), flow: state.flow, active: true };
+        }
 
         if (a.odometer_reading > Number(vehicle.current_mileage || 0)) {
           await ctx.supabase.from('vehicles').update({
@@ -3733,6 +3750,19 @@ async function executeFlow(state, ctx) {
 /* Vehicle registration persistence                                    */
 /* ------------------------------------------------------------------ */
 
+/**
+ * v1.61.15 — engine-owned capacity refusal copy (pure, testable, zero tokens).
+ * A welcome trial keeps every feature until it ends, so the wording never calls
+ * the trial a "current plan"; the upgrade path is always the next step.
+ */
+export function formatCapacityRefusal(tier = {}) {
+  const limit = Number.isFinite(Number(tier.limit)) ? Number(tier.limit) : 0;
+  const current = Number.isFinite(Number(tier.currentCount)) ? Number(tier.currentCount) : 0;
+  return tier.isTrial
+    ? `Your welcome trial allows ${limit} vehicles and you already have ${current}. Everything on your account stays safe — upgrade to add more.`
+    : `Your current plan allows ${limit} vehicle(s). Please upgrade to add more.`;
+}
+
 async function persistVehicleRegistration(state, ctx) {
   const a = state.answers;
   if (!ctx.supabase || !ctx.profile?.id) {
@@ -3748,7 +3778,10 @@ async function persistVehicleRegistration(state, ctx) {
     supabase: ctx.supabase
   });
   if (!tier.canAdd) {
-    return { success: false, error: `Your current plan allows ${tier.limit} vehicle(s). Please upgrade to add more.` };
+    // v1.61.15 — trial-aware, engine-owned refusal copy (zero tokens) with a
+    // machine-readable code so error_logs can separate a business refusal from
+    // an actual write failure.
+    return { success: false, error: formatCapacityRefusal(tier), code: 'capacity_limit' };
   }
 
   const token = `SK-PASSBOOK-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;

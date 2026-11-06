@@ -549,6 +549,20 @@ for (const key of ['CONV_EVAL_ENABLED', 'CONV_EVAL_HEAL_ENABLED', 'CONV_EVAL_MIN
 }
 check(getConvEvalConfig({}).maxActiveRules === 30, 'the active-rule cap defaults to 30 (0 = unlimited)');
 check(getConvEvalConfig({}).rejudgeMargin === 0.1 && getConvEvalConfig({}).rejudgeMax === 5, 're-judge defaults: 0.10 margin, 5 extra calls');
+check(getConvEvalConfig({}).maxJudgeCallsPerTick === 24 && getConvEvalConfig({}).passStreak === 3 && getConvEvalConfig({}).restTicks === 5, 'spend defaults: 24 judge calls, 3-pass streak, 5-tick rest');
+check(getConvEvalConfig({}).maxRefusalsPerCase === 3 && getConvEvalConfig({}).refusalCooldownHours === 24, 'deterministic-lane defaults: 3 refusals, 24h cooldown');
+check(getConvEvalConfig({}).evalDailyCallAlert === 1500, 'the soft eval call alert defaults to 1500/day (0 = off)');
+check(fs.readFileSync('scripts/run_conv_eval.js', 'utf8').includes('--case='), 'the eval CLI supports per-case curation');
+const totalCorpusIds = CONVERSATION_CASES.map((caseDef) => caseDef.id);
+check(totalCorpusIds.includes('capacity-trial-sixth-asset') && totalCorpusIds.includes('capacity-trial-refusal-loop'), 'the trial-capacity lane has pass + calibration cases');
+check(CONVERSATION_CASES.some((caseDef) => (caseDef.tags || []).includes('earnings')), 'earnings logging has corpus coverage');
+check(CONVERSATION_CASES.some((caseDef) => (caseDef.tags || []).includes('voice')), 'voice notes have corpus coverage');
+check(CONVERSATION_CASES.some((caseDef) => (caseDef.tags || []).includes('sheng')) && CONVERSATION_CASES.some((caseDef) => (caseDef.tags || []).includes('pidgin')), 'mixed-language (Sheng + pidgin) has corpus coverage');
+check(CONVERSATION_CASES.length >= 27, `the corpus grew without dropping a case (${CONVERSATION_CASES.length})`);
+for (const key of ['CONV_EVAL_MAX_JUDGE_CALLS_PER_TICK', 'CONV_EVAL_PASS_STREAK', 'CONV_EVAL_PASS_REST_TICKS', 'CONV_EVAL_MAX_REFUSALS_PER_CASE', 'CONV_EVAL_REFUSAL_COOLDOWN_HOURS', 'EVAL_DAILY_CALL_ALERT']) {
+  check(evalSection.keys.includes(key), `env registry carries ${key}`);
+}
+check(fs.readFileSync('src/routes/whatsapp.js', 'utf8').includes('voice_note_fallback'), 'the voice-note fallback lane is wired in the route');
 const emptyDigest = await handleConvEvalCommand(null, { mode: 'stats' });
 check(emptyDigest.reply.includes('No evaluation runs'), 'the stats command degrades cleanly without a database');
 

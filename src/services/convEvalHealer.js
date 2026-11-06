@@ -137,6 +137,34 @@ async function writeAudit(supabase, action, details = {}) {
 }
 
 /**
+ * v1.61.15 — is this case's heal lane cooling down?
+ * Counts `CONV_EVAL_ERROR` / `no_improvement` audits for the case inside the
+ * cooldown window. Fail-open (a lookup failure never blocks a legitimate heal)
+ * but reports the reason so the worker can log it.
+ */
+export async function healCooldownStatus({ supabase, caseId = null, now = new Date() } = {}) {
+  const cfg = getConvEvalConfig();
+  const hours = cfg.refusalCooldownHours;
+  if (!supabase || !caseId || !cfg.maxRefusalsPerCase || cfg.maxRefusalsPerCase <= 0) {
+    return { cooling: false, count: 0, hours };
+  }
+  try {
+    const since = new Date(now.getTime() - hours * 60 * 60 * 1000).toISOString();
+    const { data } = await supabase
+      .from('admin_audit_logs')
+      .select('action,details,created_at')
+      .eq('action', 'CONV_EVAL_ERROR')
+      .gte('created_at', since)
+      .limit(200);
+    const count = (data || []).filter((row) => String(row?.details?.case_id || '') === String(caseId)
+      && String(row?.details?.reason || '') === 'no_improvement').length;
+    return { cooling: count >= cfg.maxRefusalsPerCase, count, hours };
+  } catch (err) {
+    return { cooling: false, count: 0, hours, error: err?.message || 'lookup_failed' };
+  }
+}
+
+/**
  * WhatsApp-first announcements (v1.61.7, operator policy).
  *
  * - A successful heal or a drafted proposal is **WhatsApp only** — no email.
@@ -272,6 +300,21 @@ export async function healFailedCase({
   // cases fed 60% of heal attempts and ~6 near-identical rules).
   if (isCalibrationCase(caseDef)) return { ok: false, reason: 'calibration_case' };
   if (!judged || judged.ok !== true || judged.passed) return { ok: false, reason: 'not_failed' };
+
+  // v1.61.15 — deterministic-lane churn guard. Once a case has produced
+  // `CONV_EVAL_MAX_REFUSALS_PER_CASE` ab_gate refusals inside
+  // `CONV_EVAL_REFUSAL_COOLDOWN_HOURS`, a prompt hint has proven it cannot fix
+  // it: stop spending the generate + A/B judge calls every tick. The 6-hourly
+  // digest still flags it as a code-fix candidate (the developer signal).
+  const cooldown = await healCooldownStatus({ supabase, caseId: caseDef.id });
+  if (cooldown.cooling) {
+    await writeAudit(supabase, 'CONV_EVAL_HEAL_SKIPPED_COOLDOWN', {
+      case_id: caseDef.id,
+      refusals: cooldown.count,
+      cooldown_hours: cooldown.hours
+    });
+    return { ok: false, reason: 'heal_cooldown', refusals: cooldown.count };
+  }
 
   // v1.61.12 — heals never ping the superadmin. Every outcome is audited here,
   // and `sendEvalDigest()` emails ONE detailed 6-hour summary (with one WhatsApp

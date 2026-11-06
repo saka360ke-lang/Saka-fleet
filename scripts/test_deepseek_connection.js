@@ -1,5 +1,15 @@
 import 'dotenv/config';
+import { createClient } from '@supabase/supabase-js';
 import { chatCompletion, generateText, parseJsonSafely } from '../src/services/aiClient.js';
+import { installAiUsageSink } from '../src/services/aiUsageLog.js';
+
+// v1.61.15 — diagnostic calls are AI traffic too: log them when a database is
+// configured (rules 20/21). Without Supabase the check still runs, unlogged.
+if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY) {
+  installAiUsageSink(createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false }
+  }));
+}
 
 async function run() {
   console.log('=== DEEPSEEK CONNECTIVITY CHECK ===\n');

@@ -784,9 +784,28 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
     // OCR with Google Cloud Vision, and treat the extracted text as the turn.
     const imageObj = messageObj.image || null;
     const documentObj = messageObj.document || null;
+    const audioObj = messageObj.audio || null;
     const mediaObj = imageObj || documentObj;
     const mediaCaption = (imageObj?.caption || documentObj?.caption || '').trim();
     const mediaMimeType = imageObj?.mime_type || documentObj?.mime_type || null;
+
+    // v1.61.15 — voice notes carry no text and no OCR path. Answer them
+    // deterministically (zero tokens, zero menu wall) instead of letting an
+    // empty turn fall through to the generic help menu. The transcript keeps a
+    // durable marker so eval/digest can see these turns.
+    if (audioObj && !messageObj.text?.body) {
+      const voiceReply = '🎙️ I can\'t listen to voice notes yet — type it in and I\'ll take it from there.';
+      try {
+        await logChatTranscript(supabaseClient, senderPhone, 'user', '[voice note]');
+        await saveChatMessage(supabaseClient, senderPhone, 'user', '[voice note]');
+        await sendWhatsAppReply(senderPhone, voiceReply);
+        await logChatTranscript(supabaseClient, senderPhone, 'assistant', voiceReply);
+        await saveChatMessage(supabaseClient, senderPhone, 'assistant', voiceReply);
+      } catch (err) {
+        console.warn('[VoiceNote] fallback reply failed:', err?.message || 'unknown');
+      }
+      return { status: 'voice_note_fallback' };
+    }
 
     // v1.51.6 — an unverified number never gets the OCR ack or runs Vision:
     // short-circuit to the website line BEFORE any media download/OCR.

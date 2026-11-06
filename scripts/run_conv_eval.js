@@ -14,6 +14,7 @@ import { installAiUsageSink } from '../src/services/aiUsageLog.js';
  *   node scripts/run_conv_eval.js --synth         # include global synthetic batches (syn_*.json)
  *   node scripts/run_conv_eval.js --heal          # heal failures (needs CONV_EVAL_HEAL_ENABLED=on)
  *   node scripts/run_conv_eval.js --limit=6       # cap cases
+ *   node scripts/run_conv_eval.js --case=id1,id2  # judge only these cases (curation)
  *   node scripts/run_conv_eval.js --fail-on-failures  # exit 1 when any case fails (CI gate)
  *   node scripts/run_conv_eval.js --export        # DeepEval-compatible JSONL (no provider calls)
  *
@@ -22,7 +23,7 @@ import { installAiUsageSink } from '../src/services/aiUsageLog.js';
  */
 
 function parseArgs(argv = []) {
-  const args = { live: false, heal: false, json: false, export: false, synth: false, failOnFailures: false, limit: null };
+  const args = { live: false, heal: false, json: false, export: false, synth: false, failOnFailures: false, limit: null, caseIds: null };
   for (const raw of argv) {
     if (raw === '--live') args.live = true;
     else if (raw === '--heal') args.heal = true;
@@ -31,6 +32,8 @@ function parseArgs(argv = []) {
     else if (raw === '--synth') args.synth = true;
     else if (raw === '--fail-on-failures') args.failOnFailures = true;
     else if (raw.startsWith('--limit=')) args.limit = Math.max(1, Math.min(50, Number(raw.slice(8)) || 0));
+    // v1.61.15 — curate specific cases without spending judge calls on the rest.
+    else if (raw.startsWith('--case=')) args.caseIds = raw.slice(7).split(',').map((id) => id.trim()).filter(Boolean);
   }
   return args;
 }
@@ -119,6 +122,15 @@ async function main() {
   }
 
   const judge = resolveJudgeConfig();
+  // v1.61.15 — curation filter: judge ONLY the named cases (spend control).
+  if (args.caseIds?.length) {
+    const wanted = new Set(args.caseIds);
+    cases = cases.filter((caseDef) => wanted.has(caseDef.id));
+    if (!cases.length) {
+      console.warn(`⚠️ --case matched none of: ${args.caseIds.join(', ')}`);
+      return 1;
+    }
+  }
   console.log(`🧪 Running ${cases.length} conversation eval case(s) · threshold ${cfg.threshold} · judge ${judge.provider || 'default'}${judge.model ? `:${judge.model}` : ''}`);
   const summary = await runConvEvalBatch({ supabase, cases, threshold: cfg.threshold, judge, persist });
   if (args.json) {

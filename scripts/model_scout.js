@@ -10,6 +10,7 @@ import {
   runModelScoutCycle,
   verifyModelUpdateAgainstRegistry
 } from '../src/services/aiModelRegistry.js';
+import { installAiUsageSink } from '../src/services/aiUsageLog.js';
 
 /**
  * Saka Fleet — Model Watchdog ops CLI (v1.17.0).
@@ -28,7 +29,10 @@ function getClient() {
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_KEY;
   if (!url || !key) throw new Error('SUPABASE_URL / SUPABASE_SERVICE_KEY missing in environment');
-  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+  const client = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+  // v1.61.15 — scout-cycle AI calls are AI traffic too (rules 20/21).
+  installAiUsageSink(client);
+  return client;
 }
 
 function readFlag(name, fallback = null) {

@@ -117,7 +117,10 @@ const STATLESS_SUITES = [
   // v1.61.12 — every incident reaches error_logs; silent-catch ratchet.
   'test_error_logging.js',
   // v1.61.14 — per-user context cache (built at chat initiation, TTL + invalidation).
-  'test_user_context_cache.js'
+  'test_user_context_cache.js',
+  // v1.61.15 — trial capacity (15-asset walk, lapse-on-read) + eval spend controls.
+  'test_trial_capacity.js',
+  'test_eval_spend.js'
 ];
 
 const WORKFLOW_DIR = '.github/workflows';

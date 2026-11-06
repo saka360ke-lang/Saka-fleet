@@ -12,6 +12,7 @@
 import { sendAdminNotificationEmail } from './mailer.js';
 import { sendProactiveWhatsApp } from '../workers/sentinel.js';
 import { logSystemError } from './systemErrors.js';
+import { getAiUsageSummary } from './aiUsageLog.js';
 
 export const EVAL_DIGEST_CONFIG_KEY = 'last_eval_digest_at';
 export const EVAL_DIGEST_ATTEMPT_KEY = 'last_eval_digest_attempt_at';
@@ -29,7 +30,7 @@ function num(value) {
  * @param {Array} audits admin_audit_logs rows (CONV_EVAL_* in the window)
  * @param {{hours:number, threshold:number}} opts
  */
-export function buildEvalDigest(runs = [], audits = [], { hours = EVAL_DIGEST_DEFAULT_HOURS, threshold = 0.7 } = {}) {
+export function buildEvalDigest(runs = [], audits = [], { hours = EVAL_DIGEST_DEFAULT_HOURS, threshold = 0.7, usage = null } = {}) {
   const rows = Array.isArray(runs) ? runs : [];
   const auditRows = Array.isArray(audits) ? audits : [];
   const judged = rows.filter((row) => row && row.status !== 'error');
@@ -86,6 +87,19 @@ export function buildEvalDigest(runs = [], audits = [], { hours = EVAL_DIGEST_DE
     }
   }
 
+  // v1.61.15 — eval AI spend in the window. Pure read of the purpose bucket that
+  // `getAiUsageSummary()` already computes: calls are exact, the cost is an
+  // APPROXIMATE list price and is labelled that way (never a bill).
+  const evalUsage = usage?.byPurpose?.conversation_eval || null;
+  const evalSpend = evalUsage && Number.isFinite(Number(evalUsage.requests))
+    ? {
+        calls: Number(evalUsage.requests),
+        approxCostUsd: Number.isFinite(Number(evalUsage.approxCostUsd))
+          ? Math.round(Number(evalUsage.approxCostUsd) * 100) / 100
+          : null
+      }
+    : null;
+
   return {
     hours,
     threshold,
@@ -93,6 +107,7 @@ export function buildEvalDigest(runs = [], audits = [], { hours = EVAL_DIGEST_DE
     passed,
     failed,
     errored,
+    evalSpend,
     healedCount: healed.length,
     healed,
     proposals,
@@ -115,6 +130,10 @@ export function formatEvalDigestEmail(digest = {}) {
   lines.push(`Passed: ${digest.passed || 0} · Failed: ${digest.failed || 0} · Could not score: ${digest.errored || 0}`);
   if (digest.weakestCriterion) {
     lines.push(`Weakest criterion: ${digest.weakestCriterion} (${score(digest.weakestAverage)})`);
+  }
+  if (digest.evalSpend) {
+    // v1.61.15 — spend visibility: calls are exact, cost is approximate.
+    lines.push(`Eval AI spend: ${digest.evalSpend.calls} calls${digest.evalSpend.approxCostUsd !== null ? ` · ~$${digest.evalSpend.approxCostUsd.toFixed(2)} approximate list price` : ''}`);
   }
   lines.push('');
   lines.push(`Healed: ${digest.healedCount || 0}`);
@@ -219,7 +238,17 @@ export async function sendEvalDigest({
       .gte('created_at', since)
       .limit(1000);
 
-    const digest = buildEvalDigest(runs, audits || [], { hours: windowHours });
+    // v1.61.15 — purpose-level usage for the window (zero extra tokens; the
+    // summary is a paged read of ai_usage_logs only).
+    let usage = null;
+    try {
+      usage = await getAiUsageSummary(supabase, windowHours);
+    } catch (err) {
+      usage = null;
+      console.warn('[ConversationEval] usage summary unavailable for the digest:', err?.message || 'unknown');
+    }
+
+    const digest = buildEvalDigest(runs, audits || [], { hours: windowHours, usage });
     const body = formatEvalDigestEmail(digest);
     const escaped = body.replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
     let emailSent = false;

@@ -207,8 +207,17 @@ export async function getEntitlements({ supabase, ownerId, profile = null, now =
   // v1.58.21 - paid access follows the PROFILE's own paid plan; the trial tier
   // (used while no paid plan is live) is a floor, not a payment.
   if (isPaidTierKey(profileTierKey)) {
-    if (status === 'ACTIVE' || status === 'TRIAL' || status === 'TRIALING') {
+    if (status === 'ACTIVE' || status === 'TRIAL') {
       hasPaidAccess = true;
+    } else if (status === 'TRIALING') {
+      // v1.61.15 — TRIALING is the ACCOUNT-trial stamp (startAccountTrial writes
+      // it; Paystack never does). It must not self-grant paid access once its
+      // trial row has lapsed: the trial floor is `trialLive` below, and a paid
+      // window (trial conversion / renewal) still counts. Before this fix an
+      // expired trial rode the stale stamp until the 15-minute sweep ran, so
+      // capacity stayed at the trial tier during that window and an extra asset
+      // could save only to be paused minutes later.
+      hasPaidAccess = endMs > 0 && endMs > nowMs;
     } else if (status === 'CANCELING') {
       // Cancellations keep access exactly until the paid period ends (no grace).
       hasPaidAccess = endMs === 0 || endMs > nowMs;

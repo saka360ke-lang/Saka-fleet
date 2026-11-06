@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.61.14  
+**Version:** 1.61.15  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.61.15** | Trial capacity is an entitlement (lapse-on-read, 15-asset proof) + eval spend controls (call budget, rest lane, heal cooldown, digest spend line) + coverage lanes (earnings, voice notes, Sheng/pidgin) | 178 |
 | **1.61.14** | Per-user context cache: engine facts cached at chat initiation (15-min TTL, write invalidation) so Saka never relies on chat history alone | 177 |
 | **1.61.13** | Digest retry semantics: a failed email no longer burns the 6-hour window (15-min retry floor, no ping without email) | 176 |
 | **1.61.12** | Every incident logs (`systemErrors` + write-failure sweep + ratchet), machine-confirm fix, eval notifications → ONE 6-hour digest email + WhatsApp ping, CLI telemetry, generator id fix | 176 |
@@ -4918,5 +4919,27 @@ Usage: `npm run eval:apply-heals` (dry run, 48 h) · `-- --hours=72` · `-- --wr
 **Frames touched:** `src/services/userContextCache.js` (new), `src/routes/whatsapp.js` (initiation hook + `userFactsContext`), `sakaAi.js` (prompt option), `src/services/{quizEngine,vehicles,vehicleCompliance,trialEngine,subscriptions,onboarding}.js` (invalidation), `scripts/{run_user_context_migration(new),reset-db,health_audit}.js`, `test_user_context_cache.js` (new), `.env.example`, `package.json`, `SAKA_FLEET_ARCHITECTURE.md`, `CHANGELOG.md`.
 
 **Suites run:** `test_user_context_cache` (21), `test_quiz_flow` (147), `test_conv_eval` (181), `test_error_logging` (20) - green; `npm run health` green.
+
+### 178. v1.61.15 - trial capacity as an entitlement + eval spend controls (2026-11-06)
+
+**Operator request.** "Audit and test the trial flow — what happens when a user on trial adds 15 assets — and streamline AI spend, especially eval operations, without compromising app integrity and quality. Be surgical, do not guess."
+
+**A. Trial capacity audit (live code, verified).** The welcome trial stamps `profiles.subscription_tier='growth'` + `TRIALING`, so assets 1-5 save; the 6th walks the whole quiz and is refused at persist (`checkOwnerVehicleTierLimit`); at T-0 the sweep stamps `EXPIRED` → `downgradeToFree` keeps the newest 1 ACTIVE and PAUSES the rest (never deletes); PAUSED rows still count toward the limit. Two defects found and fixed:
+1. **Lapse-on-read (T1).** `getEntitlements` granted `hasPaidAccess` for status `TRIALING` unconditionally (subscriptions.js), so an EXPIRED trial rode the stamp until the 15-minute sweep — `getEntitlements` kept returning growth 5. Paystack never writes `TRIALING` (verified), so `TRIALING` now grants paid access only while a paid window is live; the existing lazy downgrade fires on the first entitlement read. Excess assets pause immediately.
+2. **The persist gate bypassed the choke point.** `persistVehicleRegistration` read the raw profile tier; `checkOwnerVehicleTierLimit` now resolves capacity through `getEntitlements` (rule 24), inheriting the lazy lapse for both registration paths (quiz + `onboarding.saveVehicleAssetRecord`). Refusal copy is trial-aware and pure (`formatCapacityRefusal`), with a `capacity_limit` code so error_logs can separate a business refusal from a write failure.
+
+**B. Eval spend controls (call-based, quality-first).** Costs in telemetry are approximate list prices (never a bill), so every budget is expressed in CALLS: `CONV_EVAL_MAX_JUDGE_CALLS_PER_TICK` (24, re-judges included via a hard `callBudget` in `runConvEvalBatch`). `selectCasesForTick()` is a pure selector with a hard-coded priority that a budget cut can never invert: live friction (0) → calibration expected-fail (1) → recently failed (2) → corpus (3) → synthetic (4). Proven-green cases rest after `CONV_EVAL_PASS_STREAK` (3) passes for `CONV_EVAL_PASS_REST_TICKS` (5); ONE failure returns a case to the hot lane on the next tick; live + calibration never rest. The worker reuses the existing dedupe read (no extra query). The 6-hour digest carries `Eval AI spend: N calls · ~$X approximate list price` from `getAiUsageSummary().byPurpose.conversation_eval` (pure read); `EVAL_DAILY_CALL_ALERT` (1500) sends ONE soft WhatsApp per Nairobi day and never hard-stops supervision.
+
+**C. Deterministic-lane churn guarded.** `healCooldownStatus()` counts `CONV_EVAL_ERROR`/`no_improvement` audits per case in the window; at `CONV_EVAL_MAX_REFUSALS_PER_CASE` (3) inside `CONV_EVAL_REFUSAL_COOLDOWN_HOURS` (24) heals are skipped (audited `CONV_EVAL_HEAL_SKIPPED_COOLDOWN`) — no generate + A/B judge spend every tick on a defect a prompt hint cannot fix. The digest's `deterministicCandidates` (3+ refusals) remains the developer signal.
+
+**D. Coverage + integrity lanes.** Refused `log_expense`/`log_earnings` inserts now log (`quizEngine.logExpense`/`logEarnings`). Voice notes get a deterministic fallback lane (audio message → one warm line + `[voice note]` transcript marker) instead of an empty turn falling into the menu. Corpus grew 18 → 27 hand-curated cases: trial capacity (pass + calibration fail), trial-expiry keep-vehicle, earnings quick-log + type quiz, unreadable media, voice note, Sheng, pidgin. `run_conv_eval.js --case=<ids>` curates without judging the rest. `test_deepseek_connection.js` and `model_scout.js` now install `installAiUsageSink` (rules 20/21).
+
+**E. Tests.** New health-registered suites: `test_trial_capacity.js` (21 — live trial 5, 15-asset walk, lapse-on-read + pause, PAUSED-slot, refusal copy) and `test_eval_spend.js` (23 — config bounds, rest lane entry/exit/wake, priority cap, call budget + re-judge cap, digest spend, daily alert, heal cooldown). `test_conv_eval.js` +9 (knob defaults, env registry keys, coverage tags, CLI curation, voice lane), `test_error_logging.js` +2 routes.
+
+**Frames touched:** `src/services/{subscriptions,vehicles,quizEngine,convEval,convEvalHealer,evalDigest,envAudit,flowKnowledge}.js`, `src/workers/convEval.js`, `src/routes/whatsapp.js`, `scripts/{run_conv_eval,test_deepseek_connection,model_scout,health_audit}.js`, `evals/cases/conversation_cases.json`, `test_{trial_capacity,eval_spend}.js` (new), `test_{conv_eval,error_logging}.js`, `.env.example`, `package.json`, this file, `CHANGELOG.md`.
+
+**Recurrence autopsy (rule 51).** *Raw column read bypasses the entitlement choke point* → siblings: `onboarding.saveVehicleAssetRecord` (shares the fixed gate), `transfers.js` buyer capacity (already `evaluateVehicleCapacity`), report quota (already `getReportQuota`), add-on pricing (entitlement-derived) — fixed/verified. *Unhandled inbound message type* → voice note fixed; sticker/reaction/location remain generic-menu — deliberately left (no data lane, safe). *Refused write without telemetry* → expense + earnings inserts fixed; ledger edit/delete already return reasons + audits.
+
+**Suites run:** `test_trial_capacity` (21), `test_eval_spend` (23), `test_conv_eval` (190), `test_subscription_billing` (84), `test_trial_engine` (80), `test_quiz_flow`, `test_error_logging` (22), `test_v1571` (20), `test_agent_training`, `test_doc_sync` — green; `npm run health` green.
 
 

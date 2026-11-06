@@ -11,6 +11,7 @@ import {
 import { notifyDriverUnassigned } from './followups.js';
 import { logWriteFailure } from './systemErrors.js';
 import { invalidateUserContext } from './userContextCache.js';
+import { getEntitlements } from './subscriptions.js';
 
 /**
  * Resolve the driver phone BEFORE the vehicle row changes (v1.16.4). Metadata
@@ -273,7 +274,24 @@ export async function ensureVehicleTableColumns(providedSupabase = null) {
  * Command add-on quantity — there is no local tier table any more.
  */
 export async function checkOwnerVehicleTierLimit({ ownerId, subscriptionTier = 'free', addonQuantity = null, supabase }) {
-  const tierKey = normalizeTierKey(subscriptionTier);
+  // v1.61.15 — capacity is an ENTITLEMENT (rule 24), not a raw profile column.
+  // The welcome trial stamps `profiles.subscription_tier`, but only
+  // getEntitlements knows whether that stamp is still live (trial window, grace,
+  // add-ons). Reading the raw column let an EXPIRED trial keep trial capacity
+  // until the 15-minute sweep ran; a resolved entitlement lapses on read and the
+  // existing lazy downgrade pauses excess assets immediately.
+  let entitlements = null;
+  if (ownerId && supabase) {
+    try {
+      entitlements = await getEntitlements({ supabase, ownerId });
+    } catch (err) {
+      // Never block a registration on an entitlement read: degrade to the
+      // caller-supplied tier but leave the incident in error_logs (rule 50).
+      logWriteFailure(supabase, 'vehicles.checkOwnerVehicleTierLimit', err, { owner_id: ownerId });
+      entitlements = null;
+    }
+  }
+  const tierKey = normalizeTierKey(entitlements?.tierKey || subscriptionTier);
   const tier = getTierDefinition(tierKey);
   const nextTierKey = getNextTierKey(tierKey);
 
@@ -290,8 +308,12 @@ export async function checkOwnerVehicleTierLimit({ ownerId, subscriptionTier = '
       addons = 0;
     }
   }
-  const effectiveAddons = tier.addonEligible ? Math.max(0, Math.floor(Number(addons) || 0)) : 0;
-  const limit = getEffectiveVehicleLimit(tierKey, effectiveAddons);
+  const effectiveAddons = entitlements
+    ? Math.max(0, Math.floor(Number(entitlements.addonQuantity) || 0))
+    : (tier.addonEligible ? Math.max(0, Math.floor(Number(addons) || 0)) : 0);
+  const limit = entitlements && Number.isFinite(Number(entitlements.effectiveVehicleCapacity))
+    ? Number(entitlements.effectiveVehicleCapacity)
+    : getEffectiveVehicleLimit(tierKey, effectiveAddons);
 
   const { count, error } = await supabase
     .from('vehicles')
@@ -308,6 +330,10 @@ export async function checkOwnerVehicleTierLimit({ ownerId, subscriptionTier = '
     limit,
     tier: tierKey,
     nextTierKey,
+    // v1.61.15 — the persist gate's copy is trial-aware (engine-owned wording).
+    isTrial: Boolean(entitlements?.isTrial),
+    trialEndsAt: entitlements?.trialEndsAt || null,
+    tierName: entitlements?.tierName || tier.label,
     addonEligible: Boolean(tier.addonEligible),
     addonQuantity: effectiveAddons,
     addonPriceUSD: tier.addonEligible ? getAddonPriceUSD(tierKey, 'monthly') : 0
