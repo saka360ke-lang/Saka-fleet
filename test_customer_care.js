@@ -1,5 +1,5 @@
 // v1.58.10 - autonomous customer care (mock; stateless, no real email/WhatsApp).
-import { classifyCareRequest, shouldEscalateCare, openCareTicket, handleInboundSupportEmail, handleCareRequest } from './src/services/customerCare.js';
+import { classifyCareRequest, shouldEscalateCare, openCareTicket, handleInboundSupportEmail, handleCareRequest, listUserTickets, formatUserTicketsReply, USER_TICKET_LIMIT } from './src/services/customerCare.js';
 import fs from 'node:fs';
 
 let pass = 0;
@@ -100,6 +100,58 @@ async function run() {
   check(m4.inserts.some((i) => i.table === 'support_tickets'), 'care request opens a ticket');
   if (saved !== undefined) process.env.SUPERADMIN_PHONE = saved;
   if (savedEmail !== undefined) process.env.SUPERADMIN_EMAIL = savedEmail;
+
+  // v1.73.0 (Phase 10, P3-3) — user-side ticket status: OWN DATA only, honest
+  // empty state (A2), and a rule-50 degrade on a pre-migration table.
+  function userTicketsMock({ rows = [], columnsError = null } = {}) {
+    const calls = [];
+    return {
+      calls,
+      client: {
+        from(table) {
+          const api = {
+            __columns: null,
+            __eq: null,
+            select(columns) { api.__columns = columns; return api; },
+            eq(col, val) { api.__eq = [col, val]; return api; },
+            order() { return api; },
+            limit(max) {
+              calls.push({ table, columns: api.__columns, eq: api.__eq, limit: max });
+              if (columnsError && String(api.__columns || '').includes('status')) {
+                return Promise.resolve({ data: null, error: columnsError });
+              }
+              const filtered = (rows || []).filter((row) => !api.__eq || row[api.__eq[0]] === api.__eq[1]);
+              return Promise.resolve({ data: filtered, error: null });
+            }
+          };
+          return api;
+        }
+      }
+    };
+  }
+  const OWNER_PHONE = '+254700000000';
+  const ownedTicket = { id: 'abc123de-0000', subject: 'Fuel entry missing', status: 'IN_PROGRESS', priority: 'high', updated_at: '2026-11-05T08:00:00Z', whatsapp_number: OWNER_PHONE };
+  const otherTicket = { id: 'def456gh-0000', subject: 'Other user ticket', status: 'OPEN', priority: 'medium', updated_at: '2026-11-04T08:00:00Z', whatsapp_number: '+254711111111' };
+  const ownMock = userTicketsMock({ rows: [ownedTicket, otherTicket] });
+  const ownTickets = await listUserTickets(ownMock.client, { phone: OWNER_PHONE });
+  check(ownMock.calls[0]?.eq?.[0] === 'whatsapp_number' && ownMock.calls[0]?.eq?.[1] === OWNER_PHONE, 'my-ticket query is scoped by the caller phone');
+  check(ownMock.calls[0]?.limit === USER_TICKET_LIMIT, 'the user ticket list caps at 3 (USER_TICKET_LIMIT)');
+  check(ownTickets.length === 1 && ownTickets[0].id === ownedTicket.id, 'another phone\'s tickets never leak into the result');
+  const ownReply = formatUserTicketsReply({ tickets: ownTickets });
+  check(ownReply.includes('#abc123') && ownReply.includes('🟡') && ownReply.includes('❗ high'), 'ticket reply shows ref, status and priority chips');
+  check(ownReply.includes('last update'), 'ticket reply shows the last update date');
+  check(!ownReply.includes('Other user ticket'), 'ticket reply never carries another phone\'s subject');
+  const emptyOne = formatUserTicketsReply({ tickets: [] });
+  const emptyTwo = formatUserTicketsReply({ tickets: await listUserTickets(userTicketsMock({ rows: [] }).client, { phone: OWNER_PHONE }) });
+  check(emptyOne === emptyTwo, 'A2: repeated empty states are identical');
+  check(emptyOne.includes("don't have any tickets") && !emptyOne.includes('forward it to'), 'A2: the empty state is honest, never the intake prompt');
+  const degradeClient = userTicketsMock({
+    rows: [{ id: 'legacy-1', issue_category: 'bug', message_body: 'App is stuck', created_at: '2026-11-04T08:00:00Z', whatsapp_number: OWNER_PHONE }],
+    columnsError: { message: 'column "status" of relation "support_tickets" does not exist' }
+  });
+  const degraded = await listUserTickets(degradeClient.client, { phone: OWNER_PHONE });
+  check(degraded.length === 1 && degradeClient.calls.length === 2, 'a pre-migration table degrades to the slim columns (one retry)');
+  check(formatUserTicketsReply({ tickets: degraded }).includes('App is stuck'), 'slim-shape rows still render honestly');
 }
 
 run().then(() => {

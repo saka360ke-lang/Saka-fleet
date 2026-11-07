@@ -130,4 +130,74 @@ export async function handleInboundSupportEmail(supabase, { fromEmail = null, su
   return { ok: true, phone: profile.phone_number, sent };
 }
 
-export default { classifyCareRequest, shouldEscalateCare, openCareTicket, escalateCareToSuperadmin, handleCareRequest, handleInboundSupportEmail };
+/* ------------------------------------------------------------------ */
+/* v1.73.0 (Phase 10, P3-3) — user-side ticket status (OWN DATA ONLY)  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The caller's OWN last tickets, newest activity first. Scoped by
+ * `whatsapp_number` — the exact value the intake wrote (customerCare
+ * openCareTicket). Email-source tickets store a sender email in that column,
+ * so they can never match a phone. This module never replies, edits or closes
+ * a ticket — that stays the staff console (rule 49). Never throws (rule 50).
+ */
+export const USER_TICKET_LIMIT = 3;
+
+export async function listUserTickets(supabase, { phone = null, limit = USER_TICKET_LIMIT } = {}) {
+  if (!supabase || !phone) return [];
+  const max = Math.min(Math.max(Number(limit) || USER_TICKET_LIMIT, 1), USER_TICKET_LIMIT);
+  const run = (columns) => supabase
+    .from('support_tickets')
+    .select(columns)
+    .eq('whatsapp_number', phone)
+    .order('updated_at', { ascending: false })
+    .limit(max);
+  try {
+    let { data, error } = await run('id,subject,status,priority,updated_at,created_at');
+    if (error && /column|does not exist|schema/i.test(error.message || '')) {
+      // Pre-care-console tables carry only the slim shape — degrade, never kill.
+      ({ data, error } = await run('id,issue_category,message_body,created_at'));
+    }
+    if (error) return [];
+    return data || [];
+  } catch {
+    return [];
+  }
+}
+
+const USER_TICKET_STATUS_CHIP = { OPEN: '🔵', IN_PROGRESS: '🟡', RESOLVED: '🟢', CLOSED: '⚪' };
+
+function userTicketRef(ticket = {}) {
+  const id = String(ticket.id || '').replace(/[^a-zA-Z0-9]/g, '');
+  return id ? `#${id.slice(0, 6).toLowerCase()}` : '#ticket';
+}
+
+/**
+ * Deterministic `my ticket` reply — last 3, OWN data only, zero AI tokens.
+ * The empty state is honest and repeatable (A2): calling it twice with no
+ * tickets yields the same reply, never the support-intake prompt.
+ */
+export function formatUserTicketsReply({ tickets = [] } = {}) {
+  if (!Array.isArray(tickets) || tickets.length === 0) {
+    return "🎫 *Your support tickets*\n\nYou don't have any tickets with us yet — that's good news 🙂\n\nIf something ever goes wrong, reply *contact support* and describe it in one message; I'll open a ticket and our team picks it up from there.";
+  }
+  const lines = tickets.slice(0, USER_TICKET_LIMIT).map((ticket) => {
+    const status = String(ticket.status || 'OPEN').toUpperCase();
+    const chip = USER_TICKET_STATUS_CHIP[status] || '🔵';
+    const subject = String(ticket.subject || ticket.message_body || ticket.issue_category || 'Support request')
+      .replace(/\s+/g, ' ').trim().slice(0, 60);
+    const priority = String(ticket.priority || '').toLowerCase() === 'high' ? ' · ❗ high' : '';
+    const when = ticket.updated_at || ticket.created_at;
+    let stamp = null;
+    if (when) {
+      const date = new Date(when);
+      if (!Number.isNaN(date.getTime())) {
+        stamp = date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+      }
+    }
+    return `• ${userTicketRef(ticket)} *${subject}* — ${chip} ${status.replace(/_/g, ' ').toLowerCase()}${priority}${stamp ? `\n   _last update ${stamp}_` : ''}`;
+  });
+  return `🎫 *Your support tickets*\n\n${lines.join('\n')}\n\nOur team replies here on WhatsApp. Need to add something? Reply *contact support* with the details.`;
+}
+
+export default { classifyCareRequest, shouldEscalateCare, openCareTicket, escalateCareToSuperadmin, handleCareRequest, handleInboundSupportEmail, listUserTickets, formatUserTicketsReply };

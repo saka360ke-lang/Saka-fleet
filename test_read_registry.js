@@ -431,4 +431,92 @@ check(capRendered.reply_message.includes('*search <keyword>*') && !/Reply \*more
   'the 5-page cap redirects to search/report and never offers more');
 check(capSession.paginationCursor === null, 'the cursor clears at the 5-page cap');
 
+console.log('\n--- Test 6: v1.73.0 my_ticket lane (Phase 10, P3-3, A2) ---');
+// OWN-DATA only: the lane queries support_tickets by the CALLER's phone number
+// (the exact value the intake stored). Read-only: reply/edit/close stay staff.
+function ticketsMock({ rows = [], columnsError = null, fail = null } = {}) {
+  const calls = [];
+  return {
+    calls,
+    from(table) {
+      const api = {
+        __columns: null,
+        __eq: null,
+        select(columns) { api.__columns = columns; return api; },
+        eq(col, val) { api.__eq = [col, val]; return api; },
+        order() { return api; },
+        limit() {
+          calls.push({ table, columns: api.__columns, eq: api.__eq });
+          if (fail) return Promise.resolve({ data: null, error: fail });
+          if (columnsError && String(api.__columns || '').includes('status')) {
+            return Promise.resolve({ data: null, error: columnsError });
+          }
+          const filtered = (rows || []).filter((row) => !api.__eq || row[api.__eq[0]] === api.__eq[1]);
+          return Promise.resolve({ data: filtered, error: null });
+        }
+      };
+      return api;
+    }
+  };
+}
+const TICKET_PHONE = '+254700000000';
+const ticketCtx = (over = {}) => baseCtx({ senderPhone: TICKET_PHONE, ...over });
+async function renderTicket(text, over = {}) {
+  const ctx = ticketCtx(over);
+  const lane = registry.resolveReadCommand(text, ctx);
+  return { lane, rendered: lane ? await lane.render(ctx) : null };
+}
+for (const text of ['my ticket', 'my tickets', 'ticket status']) {
+  check(registry.resolveReadCommand(text, ticketCtx())?.id === 'my_ticket', `"${text}" -> my_ticket`);
+}
+for (const text of ['my ticket has not arrived yet', 'raise a ticket', 'ticket 3 is wrong', 'my support']) {
+  const lane = registry.resolveReadCommand(text, ticketCtx());
+  check(!lane || lane.id !== 'my_ticket', `"${text}" is never claimed by my_ticket (exact $ anchor)`);
+}
+check(registry.resolveReadCommand('my ticket', ticketCtx({ quizPhaseLocked: true }))?.id !== 'my_ticket',
+  'a locked PIN/OTP phase keeps my_ticket out (skipWhenLocked)');
+check(registry.resolveReadCommand('my ticket', ticketCtx({ profile: null }))?.id !== 'my_ticket',
+  'an unregistered session never reaches my_ticket');
+const ticketClaims = registry.READ_COMMANDS
+  .filter((lane) => Boolean(lane.detect('my ticket', ticketCtx())))
+  .map((lane) => lane.id);
+check(JSON.stringify(ticketClaims) === JSON.stringify(['my_ticket']),
+  `my_ticket owns the phrase with no silent overlap: ${JSON.stringify(ticketClaims)}`);
+// OWN-DATA scoping: another phone's ticket is filtered out by the query.
+const scopedTickets = ticketsMock({
+  rows: [
+    { id: 'abc123de-0000-1111', subject: 'Fuel entry missing', status: 'OPEN', priority: 'high', updated_at: '2026-11-05T08:00:00Z', whatsapp_number: TICKET_PHONE },
+    { id: 'def456gh-0000-2222', subject: 'Refund question', status: 'RESOLVED', priority: 'medium', updated_at: '2026-11-01T08:00:00Z', whatsapp_number: '+254711111111' }
+  ]
+});
+const scopedRender = await renderTicket('my ticket', { supabaseClient: scopedTickets });
+check(scopedTickets.calls[0]?.eq?.[0] === 'whatsapp_number' && scopedTickets.calls[0]?.eq?.[1] === TICKET_PHONE,
+  'the query filters by the caller\'s OWN phone number');
+check(scopedRender.rendered.reply_message.includes('#abc123') && scopedRender.rendered.reply_message.includes('Fuel entry missing'),
+  'the caller\'s own ticket is rendered with its short reference and subject');
+check(!scopedRender.rendered.reply_message.includes('Refund question'),
+  'another phone\'s ticket NEVER appears (OWN DATA only)');
+check(scopedRender.rendered.reply_message.includes('🔵') && scopedRender.rendered.reply_message.includes('❗ high'),
+  'status and priority chips render deterministically');
+// A2 — empty-state idempotency: two consecutive calls both produce the honest
+// empty state, never the support-intake prompt.
+const emptyTickets = ticketsMock({ rows: [] });
+const firstEmpty = await renderTicket('my ticket', { supabaseClient: emptyTickets });
+const secondEmpty = await renderTicket('my ticket', { supabaseClient: emptyTickets });
+check(firstEmpty.rendered.reply_message === secondEmpty.rendered.reply_message,
+  'A2: two consecutive `my ticket` calls with zero tickets produce the SAME empty state');
+check(firstEmpty.rendered.reply_message.includes("don't have any tickets"),
+  'A2: the empty state is honest about having zero tickets');
+check(!firstEmpty.rendered.reply_message.includes('forward it to'),
+  'A2: the empty state is never the support-intake prompt');
+// Rule 50 — a pre-care-console table degrades to the slim shape (OPEN chip).
+const degradeMock = ticketsMock({
+  rows: [{ id: 'legacy1', issue_category: 'bug', message_body: 'The app is stuck', created_at: '2026-11-04T08:00:00Z', whatsapp_number: TICKET_PHONE }],
+  columnsError: { message: 'column "status" of relation "support_tickets" does not exist' }
+});
+const degradedRender = await renderTicket('my ticket', { supabaseClient: degradeMock });
+check(degradedRender.rendered.reply_message.includes('The app is stuck') && degradedRender.rendered.reply_message.includes('🔵'),
+  'a pre-migration support_tickets table degrades to the slim shape (OPEN chip)');
+check(degradeMock.calls.length === 2, 'the degrade retries exactly once with the slim columns');
+
 console.log(`\n🎉 ${passed} read-registry equivalence assertions passed.`);

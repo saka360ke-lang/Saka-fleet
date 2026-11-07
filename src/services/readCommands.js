@@ -58,6 +58,7 @@ import {
   formatComplianceDate
 } from './complianceAnswers.js';
 import { parseRecordQuestion, formatRecordAnswer, isRecordChallenge, buildRecordChallengeScopeLine } from './recordAnswers.js';
+import { listUserTickets, formatUserTicketsReply } from './customerCare.js';
 import { queryRecordLedger } from './recordQuery.js';
 import { searchOtherLabels, formatOtherLabelMatches } from './labelsEverywhere.js';
 import { composeMessage } from './conversationEngine.js';
@@ -249,6 +250,24 @@ export const READ_COMMANDS = Object.freeze([
         return result(buildProductQaReply(matchProductQa('trial')), 'GENERAL_CHAT');
       }
       return { intent: 'VIEW_SUBSCRIPTION', extracted_data: {}, reply_message: null };
+    }
+  },
+  {
+    // v1.73.0 (Phase 10, P3-3) — user-side ticket status. OWN DATA ONLY: the
+    // query filters by the caller's own phone number, exactly the value the
+    // intake wrote. Read-only — replying/editing/closing stays the staff
+    // console (rule 49). parksQuiz (it IS a read) + skipWhenLocked mirror the
+    // ledger/records read family. The exact-phrase `$` anchor keeps longer
+    // phrasings ("my ticket hasn't arrived", "raise a ticket") out.
+    id: 'my_ticket',
+    parksQuiz: true,
+    skipWhenLocked: true,
+    detect: (text, ctx = {}) => (
+      /^(?:my\s+tickets?|ticket\s+status)$/i.test(String(text || '').trim()) && ctx.profile?.id ? true : null
+    ),
+    render: async (hit, ctx = {}) => {
+      const tickets = await listUserTickets(ctx.supabaseClient, { phone: ctx.senderPhone });
+      return result(formatUserTicketsReply({ tickets }));
     }
   },
   {
