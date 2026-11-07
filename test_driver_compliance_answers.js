@@ -125,7 +125,8 @@ console.log('\n--- Test 9: the lane is wired BEFORE the record/expense lane (rul
 // v1.63.3 — the deterministic read lanes moved into the Read Command Registry;
 // lane ORDER is now asserted on the registry itself.
 const registry = fs.readFileSync('src/services/readCommands.js', 'utf8');
-const route = fs.readFileSync('src/routes/whatsapp/messages.js', 'utf8');
+// v1.68.0 — Phase 5B-3: the registry dispatch lives in src/routes/whatsapp/reads.js.
+const route = fs.readFileSync('src/routes/whatsapp/reads.js', 'utf8');
 const driverIndex = registry.indexOf("id: 'driver_documents'");
 const recordIndex = registry.indexOf("id: 'records_query'");
 check(driverIndex !== -1 && recordIndex !== -1 && driverIndex < recordIndex, 'driver-document lane runs before the record-query lane in the registry');
@@ -170,7 +171,8 @@ check(detectDocumentTypeCorrection('PSV badge TSV2026 expires 8 Aug 2027') === n
 const pasted = extractFromPastedDocument('Add this drivers license | PSV DETAILS | Badge No TSV2026 | Valid until 8 Aug 2027 | REPUBLIC OF KENYA', { now: NOW });
 check(pasted?.number === 'TSV2026' && pasted?.expiry === '2027-08-08', 'a pasted licence paragraph extracts the labelled number and date');
 check(extractFromPastedDocument('TSV2026', { now: NOW }) === null, 'a bare token never becomes a pasted-document parse');
-const routeNow = fs.readFileSync('src/routes/whatsapp/messages.js', 'utf8');
+// v1.68.0 — Phase 5B-3: the capture lane lives in src/routes/whatsapp/pending.js.
+const routeNow = fs.readFileSync('src/routes/whatsapp/pending.js', 'utf8');
 const registryNow = fs.readFileSync('src/services/readCommands.js', 'utf8');
 check(registryNow.includes('detectAllDocumentsExpiryRead') && registryNow.includes('detectComplianceNumberSearch'), 'the merged read + number search are wired through the registry');
 check(routeNow.includes('isUnreadableMediaNote(messageText)') && routeNow.includes('isPhotoIntent(messageText)'), 'the photo/unreadable lanes are wired into the capture branch');

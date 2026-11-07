@@ -56,7 +56,13 @@ check(SAKA_TONE_COMPASS.floors.some((floor) => /confirmation opener/i.test(floor
 check(DEFAULT_SAKA_CORE_PROMPT.includes('PERSONA V4') && DEFAULT_SAKA_CORE_PROMPT.includes('PACING LAW') && DEFAULT_SAKA_CORE_PROMPT.includes('ACK VARIETY LAW'), 'the core prompt carries the v4 laws');
 
 console.log('--- Test 3: plain-language lint over every deterministic fallback ---');
-const source = fs.readFileSync('src/routes/whatsapp/messages.js', 'utf8');
+// v1.68.0 — Phase 5B-3: the fallback lint follows the user-facing copy into the
+// pending + quiz leaf modules (rule 51 sibling sweep: no literal escapes the lint).
+const source = [
+  'src/routes/whatsapp/messages.js',
+  'src/routes/whatsapp/pending.js',
+  'src/routes/whatsapp/quiz.js'
+].map((file) => fs.readFileSync(file, 'utf8')).join('\n');
 const fallbacks = [
   ...source.matchAll(/fallbackText:\s*'([^'\n]{25,})'/g),
   ...source.matchAll(/fallbackText:\s*`([^`\n$]{25,})`/g)

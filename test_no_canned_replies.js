@@ -22,9 +22,14 @@ import assert from 'assert';
 // leaf module. media.js must keep contributing ZERO direct replies (it returns
 // data; the processor sends) — asserted below so a future literal there can
 // never hide outside the ratchet.
+// v1.68.0 — Phase 5B-3: the scan also covers the three new leaf modules
+// (reads.js, pending.js, quiz.js); each must contribute ZERO direct replies.
 const SOURCE_FILES = [
   'src/routes/whatsapp/messages.js',
-  'src/routes/whatsapp/media.js'
+  'src/routes/whatsapp/media.js',
+  'src/routes/whatsapp/reads.js',
+  'src/routes/whatsapp/pending.js',
+  'src/routes/whatsapp/quiz.js'
 ];
 const DIRECT_REPLY_PATTERNS = [
   /customReply\s*=\s*'([^'\n]{25,})'/g,
@@ -65,6 +70,15 @@ passed += 1;
 const mediaSource = fs.readFileSync('src/routes/whatsapp/media.js', 'utf8');
 assert(!/(?:customReply|finalReply)\s*=/.test(mediaSource) && !mediaSource.includes('sendWhatsAppReply('), 'media.js never owns a reply - it returns data and the processor sends');
 passed += 1;
+
+// v1.68.0 — Phase 5B-3: the three new leaf modules return data and own ZERO direct
+// replies (same patterns as the ratchet); the processor performs every send/compose.
+for (const leaf of ['src/routes/whatsapp/reads.js', 'src/routes/whatsapp/pending.js', 'src/routes/whatsapp/quiz.js']) {
+  const leafSource = fs.readFileSync(leaf, 'utf8');
+  const leafHits = DIRECT_REPLY_PATTERNS.reduce((sum, pattern) => sum + [...leafSource.matchAll(pattern)].length, 0);
+  assert(leafHits === 0, `${leaf} never owns a direct reply - it returns data and the processor sends`);
+  passed += 1;
+}
 
 console.log(`\n🎉 ${passed} no-canned-replies assertions passed — ${currentCount} canned literals remain (ratchet ≤ 4; every new literal must be composed).`);
 

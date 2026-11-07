@@ -1,6 +1,13 @@
 {
-  "latest": "1.67.0",
+  "latest": "1.68.0",
   "entries": [
+    {
+      "version": "1.68.0",
+      "date": "2026-11-07",
+      "title": "Three steady hands keep the conversation on track",
+      "preview": "Read answers, waiting steps and quiz turns now live in tidy files - same answers, same order, unchanged.",
+      "summary": "Three more of Saka's busiest jobs moved into their own clear files. The first answers every straight question - reminders, compliance, your ledger, receipts and mileage - through one ordered map. The second holds every 'waiting on you' step: a CLEAR confirmation, a support note, a passbook handover, a security code, a document capture, a multi-record save, a deletion yes/no. The third runs the quiz: how a draft pauses for a chat, how it parks when you change your mind, and how a finished flow is confirmed. A written rule keeps the order exactly as it was - reads first, waiting steps in their old positions around the quiz - and the background loop-breaker stays in the main file where it belongs. Nothing you see changes: proven by comparing 899 moved code lines against the previous release (88 percent identical, the rest are wiring-only) and the full quality suite."
+    },
     {
       "version": "1.67.0",
       "date": "2026-11-07",

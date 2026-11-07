@@ -14,4 +14,8 @@ export * from './helpers.js';
 export * from './replies.js';
 export * from './media.js';
 export * from './hooks.js';
+// v1.68.0 — Phase 5B-3: reads + pending + quiz (turn-owners separated).
+export * from './reads.js';
+export * from './pending.js';
+export * from './quiz.js';
 
