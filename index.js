@@ -13,6 +13,7 @@ import { ensureTrialSchemaDefaults } from './src/services/trialSchema.js';
 import { handleWhatsAppWebhook as handleWhatsAppWebhookRoute, handleWhatsAppWebhookVerification } from './src/routes/whatsapp/webhook.js';
 import { verifyPaystackSignature } from './src/services/paystack.js';
 import { runReminderSweep } from './src/services/maintenanceReminders.js';
+import { runWeeklyReportsSweep } from './src/workers/weeklyReports.js';
 import { ensureComplianceCatalog, reviewComplianceCatalog, COMPLIANCE_CATALOG_VERSION } from './src/services/complianceCatalog.js';
 import { expireStaleAssignments } from './src/services/driverAssignments.js';
 import {
@@ -316,6 +317,26 @@ async function runMaintenanceReminderSweep() {
 }
 setTimeout(runMaintenanceReminderSweep, 90 * 1000); // First pass shortly after boot
 setInterval(runMaintenanceReminderSweep, 30 * 60 * 1000); // Every 30 minutes
+
+// Worker (Phase 10, P3-4): weekly report opt-in sweep — Monday 08:00 EAT.
+// The 30-minute tick is a cheap gate check; the worker itself only runs inside
+// the Monday 08:00–08:05 window and dedupes on the Nairobi day marker in
+// system_config (claim-first, at-least-once — see weeklyReports.js).
+async function runWeeklyReportSweep() {
+  try {
+    const result = await runWeeklyReportsSweep({
+      supabase,
+      sendFn: (phone, text, _profile, kind) => sendMetaWhatsAppMessage(phone, text, kind)
+    });
+    if (result?.sent) {
+      console.log(`[WeeklyReports] sent ${result.sent} weekly summary(ies) for ${result.date} (${result.skippedEmpty} empty garage(s), ${result.failed} failed).`);
+    }
+  } catch (err) {
+    console.error('[Worker] Weekly report sweep failed:', err.message);
+  }
+}
+setTimeout(runWeeklyReportSweep, 5 * 60 * 1000); // First check after boot
+setInterval(runWeeklyReportSweep, 30 * 60 * 1000); // Every 30 minutes (gated inside)
 
 // Worker: expire driver assignment requests the driver never accepted (48h).
 async function runDriverAssignmentExpiry() {

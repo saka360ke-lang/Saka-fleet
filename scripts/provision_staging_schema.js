@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   driver_license_expiry date,
   timezone text,
   timezone_confirmed_at timestamp with time zone,
+  weekly_report_opt_in boolean NOT NULL DEFAULT false,
   is_active boolean DEFAULT true,
   deleted_at timestamp with time zone,
   created_at timestamp with time zone DEFAULT now(),

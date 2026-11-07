@@ -75,6 +75,17 @@ check(/DRIVER DOCUMENT READS \(v1\.61\.2\)/.test(DEFAULT_SAKA_CORE_PROMPT), 'Cor
 check(DEFAULT_SAKA_CORE_PROMPT.includes('driver_compliances'), 'Core prompt names the driver compliance ledger');
   check(SAKA_BOUNDARY_RULES.some((rule) => /LEDGER_ENTRY_DELETED/.test(rule)), 'Boundary: every ledger edit/delete is audited');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('EDITABLE LEDGER (v1.33.0'), 'Core prompt teaches the editable ledger');
+// v1.73.0 (Phase 10) — pagination, my-ticket status and the weekly-report toggle.
+check(DEFAULT_SAKA_CORE_PROMPT.includes('DETERMINISTIC COMMANDS (v1.73.0'), 'Core prompt teaches the v1.73.0 deterministic commands');
+check(DEFAULT_SAKA_CORE_PROMPT.includes('"my ticket"') && DEFAULT_SAKA_CORE_PROMPT.includes('Read-only'), 'Core prompt teaches the own-ticket status read (read-only)');
+check(DEFAULT_SAKA_CORE_PROMPT.includes('"weekly report on"') && DEFAULT_SAKA_CORE_PROMPT.includes('never uses the report quota'), 'Core prompt teaches the weekly-report toggle (no quota)');
+check(DEFAULT_SAKA_CORE_PROMPT.includes('Pagination (v1.73.0)') && DEFAULT_SAKA_CORE_PROMPT.includes('VIEW-ONLY'), 'Core prompt teaches view-only pagination');
+const editEntryBehavior = SAKA_INTENT_PLAYBOOK.find((row) => row.intent === 'EDIT_ENTRY');
+check(Boolean(editEntryBehavior) && editEntryBehavior.behavior.includes('v1.73.0 pagination'), 'EDIT_ENTRY playbook documents pagination');
+const reportBehavior = SAKA_INTENT_PLAYBOOK.find((row) => row.intent === 'REQUEST_REPORT');
+check(Boolean(reportBehavior) && reportBehavior.behavior.includes('weekly report on|off'), 'REQUEST_REPORT playbook documents the weekly toggle');
+const supportFlow = SAKA_QUIZ_FLOWS.find((flow) => flow.key === 'contact_support');
+check(Boolean(supportFlow) && supportFlow.rules.includes('my ticket'), 'contact_support flow documents the own-ticket read');
 check(DEFAULT_SAKA_CORE_PROMPT.includes('NARRATIVE INTAKE (v1.34.0'), 'Core prompt teaches narrative intake');
 check(DEFAULT_SAKA_CORE_PROMPT.includes('1 Save / 2 Change / 3 Cancel'), 'Core prompt teaches the draft-card quick actions');
 // v1.58.25 — any owner or driver can add a document at any time (rule 51 sibling lane).

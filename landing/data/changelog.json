@@ -1,6 +1,13 @@
 {
-  "latest": "1.72.2",
+  "latest": "1.73.0",
   "entries": [
+    {
+      "version": "1.73.0",
+      "date": "2026-11-07",
+      "title": "More pages, your tickets, weekly reports",
+      "preview": "Reply \"more\" to page older entries and receipts, check your own support tickets, and opt into a Monday fleet summary.",
+      "summary": "Three everyday conveniences: \"more\" now pages older entries (6 at a time) and receipts (5 at a time) - paged rows are view-only, so editing and deleting always point at your newest list. \"my ticket\" shows the last three tickets you opened with our team, with status and last update. And \"weekly report on\" sends you a one-message fleet summary every Monday at 8am - text only, never using your report quota; \"weekly report off\" stops it."
+    },
     {
       "version": "1.72.2",
       "date": "2026-11-07",
@@ -216,7 +223,7 @@
       "date": "2026-11-05",
       "title": "Fuel reads answer instantly; disputed figures get the record",
       "preview": "Short asks like \"Fuel all time\" now read your ledger, and disputing a figure replays that exact record.",
-      "summary": "Two records-lane fixes from live chats: a short type ask such as \"Fuel all time\", \"Fuel list\" or \"fuel report\" now answers straight from your logged entries (it used to be mistaken for a new expense being logged, so you had to cancel), and a challenge like \"that record cannot be right\" re-shows the very record you were disputing \u2014 same vehicle, same window, same numbers \u2014 instead of a fresh fleet-wide total. Phrases like \"my 2 vehicles\" can no longer be mistaken for a plate number."
+      "summary": "Two records-lane fixes from live chats: a short type ask such as \"Fuel all time\", \"Fuel list\" or \"fuel report\" now answers straight from your logged entries (it used to be mistaken for a new expense being logged, so you had to cancel), and a challenge like \"that record cannot be right\" re-shows the very record you were disputing — same vehicle, same window, same numbers — instead of a fresh fleet-wide total. Phrases like \"my 2 vehicles\" can no longer be mistaken for a plate number."
     },
     {
       "version": "1.61.4",

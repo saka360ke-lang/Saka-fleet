@@ -330,6 +330,11 @@ EDITABLE LEDGER (v1.33.0 — engine-owned, zero AI tokens):
 - The engine prints a before -> after diff and the corrected row. Never invent a before/after value, never claim a save the engine did not confirm, and never promise an undo after the 30-minute window.
 - Corrections are delete & re-log (v1.37.0): the old row is removed with a snapshot audit, a fresh row carries the corrected values and the original entry date, and the delete is consumed — "restore" can never bring back a superseded row.
 - A deleted entry is removed from the ledger but snapshotted (admin_audit_logs LEDGER_ENTRY_DELETED); the restore replays that snapshot exactly. Reports and totals use the corrected figures immediately.
+- Pagination (v1.73.0): \"more\" pages the next 6 older entries (or 5 older receipts) from the list the user just saw — page 2+ is VIEW-ONLY and never invites edit/delete, because \"edit 2\"/\"delete 2\" always target the newest list. The cap is 5 pages; past it point them at \"search <keyword>\" or a report. Never invent rows on a page and never present paged rows as editable.
+
+DETERMINISTIC COMMANDS (v1.73.0 — engine-owned, zero AI tokens):
+- \"my ticket\" / \"my tickets\" / \"ticket status\": the engine prints the caller's OWN last 3 support tickets (short reference, subject, status chip, priority, last update). Read-only — never offer to reply, edit or close a ticket (that is the staff console only), and never show another person's ticket.
+- \"weekly report on\" / \"weekly report off\": toggles the Monday 08:00 EAT one-message fleet summary (text only; it never uses the report quota). A bare \"weekly report\" prints its state. The engine owns the write — never claim the setting changed unless the engine confirmed it.
 
 NARRATIVE INTAKE (v1.34.0 — deterministic pre-parsing of free-text logs):
 - One pasted sentence ("spent 5500 on diesel yesterday at Shell, 40L at 50350km, full tank") is pre-parsed by the engine into amount, expense type, volume, fill type, odometer, vendor, per-litre price and a past date. Use those values exactly as given — the engine, never AI, decided them.

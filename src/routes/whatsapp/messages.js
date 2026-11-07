@@ -134,6 +134,7 @@ import { arbitrateQuizTurn, finalizeQuizOutcome, renderRoleActions } from './qui
 // v1.69.0 — Phase 5B-4: the final leaf modules (commands + admin + conversation + support).
 import {
   resolveCountryCommand,
+  resolveWeeklyReportToggle,
   parseReceiptDeleteCommand,
   parseVehicleSummaryCommand,
   handleReceiptDeleteTurn,
@@ -675,11 +676,17 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         // v1.69.0 — Phase 5B-4: the country command (parse + profile write) lives in ./commands.js.
         const countryCommandResult = await resolveCountryCommand({ messageText, profileData, supabaseClient, bucketAssetKind });
 
+        // v1.73.0 (Phase 10, P3-4) — the weekly-report toggle is a PRE-READ
+        // profile-write lane (the read registry's contract keeps writes out).
+        // A bare "weekly report" is answered as a state read so the phrase can
+        // never be misclassified as a report request (quota hijack).
+        const weeklyReportToggleResult = await resolveWeeklyReportToggle({ messageText, profileData, supabaseClient });
+
         // v1.24.0 - perceived speed: long free-form paragraphs get an instant ack
         // while this turn parses and records in the background.
         const instantAckEnabled = !/^(?:off|false|0)$/i.test(String(process.env.INSTANT_ACK_ENABLED || 'on'));
         const instantAckChars = Number(process.env.INSTANT_ACK_CHARS || 180);
-        if (instantAckEnabled && !mediaObj && !session.quiz && !countryCommandResult
+        if (instantAckEnabled && !mediaObj && !session.quiz && !countryCommandResult && !weeklyReportToggleResult
           && String(messageText || '').trim().length >= instantAckChars) {
           try {
             await sendWhatsAppReply(senderPhone, '📖 Got it - reading that now.');
@@ -693,7 +700,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         // anti-spam floor so it never feels like a metronome.
         const slowAckMs = resolveSlowAckMs(process.env);
         if (instantAckEnabled && !session.instantAckSent && !mediaObj && !session.quiz
-          && !countryCommandResult && slowAckMs > 0) {
+          && !countryCommandResult && !weeklyReportToggleResult && slowAckMs > 0) {
           slowAckTimer = setTimeout(async () => {
             if (!shouldSendSlowAck({ turnFinalized, now: Date.now(), lastAckAt: session.lastSlowAckAt || 0 })) return;
             session.slowAckSent = true;
@@ -745,6 +752,9 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           };
         } else if (countryCommandResult) {
           aiResult = countryCommandResult;
+        } else if (weeklyReportToggleResult) {
+          // v1.73.0 (Phase 10, P3-4) — deterministic weekly-report toggle/state.
+          aiResult = weeklyReportToggleResult;
         } else {
           // Phase 3 — the Read Command Registry owns every deterministic read.
           // A matched lane returns its complete aiResult here; nothing below

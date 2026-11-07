@@ -111,6 +111,76 @@ export async function resolveCountryCommand({ messageText, profileData, supabase
 }
 
 /* ------------------------------------------------------------------ */
+/* 1b. weekly report toggle (a profile write - zero tokens)            */
+/* v1.73.0 (Phase 10, P3-4): "weekly report on|off" flips               */
+/* profiles.weekly_report_opt_in; a bare "weekly report" is a           */
+/* deterministic state read so the phrase can NEVER be misclassified    */
+/* as a report request (which would consume the monthly quota).         */
+/* Kept beside the country command (a pre-read write lane) because the  */
+/* read registry's contract keeps writes out (section 190).             */
+/* ------------------------------------------------------------------ */
+
+export const WEEKLY_REPORT_TOGGLE_RE = /^weekly\s+reports?\s+(on|off|enable|disable|yes|no)$/i;
+export const WEEKLY_REPORT_STATUS_RE = /^weekly\s+reports?$/i;
+
+const WEEKLY_REPORT_ON_COPY = '🗓️ *Weekly report on*\n\nEvery Monday at 8:00 AM I\'ll send you a one-message fleet summary — it never uses your report quota.\n\nReply *weekly report off* to stop it.';
+const WEEKLY_REPORT_OFF_COPY = '🗓️ *Weekly report off*\n\nNo more Monday summaries. Reply *weekly report on* whenever you want them back.';
+
+export function parseWeeklyReportToggle({ messageText }) {
+  const text = String(messageText || '').trim();
+  const toggle = WEEKLY_REPORT_TOGGLE_RE.exec(text);
+  if (toggle) {
+    const word = toggle[1].toLowerCase();
+    return { action: ['on', 'enable', 'yes'].includes(word) ? 'on' : 'off' };
+  }
+  if (WEEKLY_REPORT_STATUS_RE.test(text)) return { action: 'status' };
+  return null;
+}
+
+export async function resolveWeeklyReportToggle({ messageText, profileData, supabaseClient }) {
+  const command = parseWeeklyReportToggle({ messageText });
+  if (!command || !profileData?.id) return null;
+  const base = { intent: 'GENERAL_CHAT', extracted_data: {} };
+  if (command.action === 'status') {
+    let enabled = null;
+    try {
+      const { data, error } = await supabaseClient
+        .from('profiles')
+        .select('weekly_report_opt_in')
+        .eq('id', profileData.id)
+        .limit(1);
+      if (!error) enabled = Boolean((data || [])[0]?.weekly_report_opt_in);
+    } catch { enabled = null; }
+    if (enabled === null) {
+      return {
+        ...base,
+        reply_message: '🗓️ *Weekly report*\n\nI could not read that setting just now. Reply *weekly report on* or *weekly report off* and I\'ll set it.'
+      };
+    }
+    return {
+      ...base,
+      reply_message: enabled
+        ? '🗓️ *Weekly report is ON*\n\nEvery Monday at 8:00 AM you get a one-message fleet summary — it never uses your report quota.\n\nReply *weekly report off* to stop it.'
+        : '🗓️ *Weekly report is OFF*\n\nReply *weekly report on* and every Monday at 8:00 AM I\'ll send you a one-message fleet summary.'
+    };
+  }
+  const enabled = command.action === 'on';
+  let saved = false;
+  try {
+    const { error } = await supabaseClient
+      .from('profiles')
+      .update({ weekly_report_opt_in: enabled })
+      .eq('id', profileData.id);
+    saved = !error;
+  } catch { saved = false; }
+  if (!saved) {
+    // Rule 50 — an un-migrated column (or a DB hiccup) never fakes success.
+    return { ...base, reply_message: '⚠️ I could not save that setting just now — nothing changed. Please try again in a moment.' };
+  }
+  return { ...base, reply_message: enabled ? WEEKLY_REPORT_ON_COPY : WEEKLY_REPORT_OFF_COPY };
+}
+
+/* ------------------------------------------------------------------ */
 /* 2. receipt delete (write lane, rule 37)                             */
 /* ------------------------------------------------------------------ */
 

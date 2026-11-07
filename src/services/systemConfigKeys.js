@@ -47,6 +47,12 @@ export const SYSTEM_CONFIG_KEYS = Object.freeze({
   }),
   'admin.wipe_pending': Object.freeze({
     legacyKey: 'admin_wipe_pending', owner: 'superadmin', default: null, bootCritical: false, kind: 'fixed'
+  }),
+  'weeklyreports.last_sent_date': Object.freeze({
+    // v1.73.0 (Phase 10, P3-4) — Nairobi calendar-day marker for the weekly
+    // report sweep. Brand-new key: no legacy name existed before it. (The
+    // registry law allows letters only in the domain segment.)
+    legacyKey: null, owner: 'weeklyReports', default: null, bootCritical: false, kind: 'fixed'
   })
 });
 
@@ -60,6 +66,7 @@ export const CONFIG_KEY_EVAL_DIGEST_LAST_AT = 'eval.digest_last_at';
 export const CONFIG_KEY_EVAL_DIGEST_ATTEMPT_AT = 'eval.digest_attempt_at';
 export const CONFIG_KEY_EVAL_CALL_ALERT_DATE = 'eval.call_alert_date';
 export const CONFIG_KEY_ADMIN_WIPE_PENDING = 'admin.wipe_pending';
+export const CONFIG_KEY_WEEKLY_REPORTS_LAST_SENT = 'weeklyreports.last_sent_date';
 
 /** Dynamic per-day family: `budget.alert.<pct>_<YYYY-MM-DD>`. */
 export const BUDGET_ALERT_FAMILY = Object.freeze({
