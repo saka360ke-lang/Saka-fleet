@@ -992,6 +992,9 @@ export async function maybeHandleSubscriptionTurn({
 
   const wantsView = intent === 'VIEW_SUBSCRIPTION'
     || /^(?:subscription|my\s+(?:plan|subscription)|billing|plan\s+details)\b/i.test(lower)
+    // v1.72.2 (Phase 9, P3-6) — deterministic trial-status aliases (exact
+    // phrase; "my trial ended…" and "extend my trial" never match this anchor).
+    || /^(?:my\s+)?trial(?:\s+status)?[.!?]*$/i.test(lower)
     || /\b(?:which|what)\s+tier\b|\bshould\s+be\s+on\b|\b(?:less|fewer|more)\s+than\s+\d+\s+(?:assets?|vehicles?)\b|\b(?:put|move|enroll)\s+me\s+(?:on|to|in)\b|\b(?:first|second|third|1st|2nd|3rd)\s+tier\b|\bconfirm\s+(?:which|what)\s+tier\b|\bwhat\s+tier\s+am\s+i\b/i.test(lower);
   const wantsResume = /^resume\s+(?:my\s+)?(?:subscription|plan)\b/i.test(lower);
   const wantsCancel = intent === 'CANCEL_SUBSCRIPTION'

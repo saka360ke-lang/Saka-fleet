@@ -39,6 +39,7 @@ import { validateCouponForCheckout } from './src/services/coupons.js';
 import { resolveTier, AI_TIERS } from './src/services/aiClient.js';
 import { checkOwnerVehicleTierLimit } from './src/services/vehicles.js';
 import { runTrialLifecycleSweep } from './src/services/trialEngine.js';
+import { maybeHandleSubscriptionTurn } from './src/routes/whatsapp/pending.js';
 
 let passed = 0;
 function check(condition, message) {
@@ -383,6 +384,25 @@ async function run() {
   const summary = await formatSubscriptionSummary({ supabase: paidMock.client, entitlements: paidEnt, currency: 'USD' });
   check(summary.includes('Fleet Command') && summary.includes('Unlimited'), 'Subscription summary renders plan + quotas');
   check(summary.includes('base 5 + 2 add-on'), 'Subscription summary explains add-on slots');
+
+  // v1.72.2 (Phase 9, P3-6) — the deterministic trial-status aliases reach the
+  // engine-owned summary with zero AI. The trialing mock re-resolves the same
+  // trial entitlements inside maybeHandleSubscriptionTurn's refresh().
+  for (const alias of ['trial', 'trial status', 'my trial']) {
+    const aliasTurn = await maybeHandleSubscriptionTurn({
+      intent: null,
+      messageText: alias,
+      session: {},
+      profileData: trialingProfile,
+      supabaseClient: trialingMock.client,
+      countryInfo: { currency: 'USD' },
+      senderPhone: '+254700000001',
+      entitlements: trialEnt,
+      existingVehicles: []
+    });
+    check(aliasTurn.handled === true && /Free trial/.test(aliasTurn.reply || ''),
+      `"${alias}" routes to the deterministic trial summary (v1.72.2)`);
+  }
 
   const monthEnd = computePeriodEnd('monthly', new Date('2026-01-01T00:00:00.000Z'));
   const yearEnd = computePeriodEnd('annual', new Date('2026-01-01T00:00:00.000Z'));

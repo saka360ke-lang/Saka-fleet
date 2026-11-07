@@ -1,6 +1,13 @@
 {
-  "latest": "1.72.1",
+  "latest": "1.72.2",
   "entries": [
+    {
+      "version": "1.72.2",
+      "date": "2026-11-07",
+      "title": "Your trial, answered straight",
+      "preview": "Ask \"trial status\" or \"my trial\" and Saka answers with your own days left - instantly, with no detour.",
+      "summary": "A small routing fix with a big clarity win: short trial questions (\"trial\", \"trial status\", \"my trial\") now go straight to your own plan summary - the days left, your asset slots and your report quota - instead of a general marketing note. Longer sentences like \"my trial ended, what now?\" keep their own guided flow, and nothing else changes. Behind the scenes the quality suite also gained a new calibration test that proves the evaluation gate can catch an invented earnings amount."
+    },
     {
       "version": "1.72.1",
       "date": "2026-11-07",

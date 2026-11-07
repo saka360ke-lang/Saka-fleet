@@ -1,6 +1,6 @@
 # Saka Fleet — Training Snapshot (generated)
 
-Generated from code at version **1.72.1** — do not edit by hand. Run `npm run docs:gen`.
+Generated from code at version **1.72.2** — do not edit by hand. Run `npm run docs:gen`.
 
 - Prompt schema: `SAKA-PROMPT-SCHEMA:2026.13.0` (version 2026.13.0)
 - Intents trained: **42**
@@ -116,7 +116,7 @@ NON-QUIZ INTENTS:
 - REACTIVATE_ACCOUNT: Start reactivation; confirm before any write.
 - ONBOARDING_INPUT: Quiz owns the field; acknowledge briefly and ask only the next missing item.
 - ONBOARDING_SKIP: Skip the optional specs group only; never skip a required field.
-- VIEW_SUBSCRIPTION: Render the engine-provided plan snapshot: tier, trial days left, vehicle slots, report quota, price, cancellation state. Never invent numbers.
+- VIEW_SUBSCRIPTION: Render the engine-provided plan snapshot: tier, trial days left, vehicle slots, report quota, price, cancellation state. Never invent numbers. Deterministic aliases: "trial status", "my trial", "trial".
 - MANAGE_ADDONS: Fleet Command only: explain base 5 vehicles + per-vehicle add-ons and return the add-on checkout link supplied by the engine.
 - EXTEND_TRIAL: Redeem an account trial-extension coupon through trialEngine; never extend a trial without a valid coupon.
 - UPGRADE_SUBSCRIPTION: Run the subscription_upgrade flow. First paid upgrade may start the one-time 30-day no-card trial; otherwise the engine returns a Paystack checkout link.
@@ -457,7 +457,7 @@ NON-QUIZ INTENTS:
 - REACTIVATE_ACCOUNT: Start reactivation; confirm before any write.
 - ONBOARDING_INPUT: Quiz owns the field; acknowledge briefly and ask only the next missing item.
 - ONBOARDING_SKIP: Skip the optional specs group only; never skip a required field.
-- VIEW_SUBSCRIPTION: Render the engine-provided plan snapshot: tier, trial days left, vehicle slots, report quota, price, cancellation state. Never invent numbers.
+- VIEW_SUBSCRIPTION: Render the engine-provided plan snapshot: tier, trial days left, vehicle slots, report quota, price, cancellation state. Never invent numbers. Deterministic aliases: "trial status", "my trial", "trial".
 - MANAGE_ADDONS: Fleet Command only: explain base 5 vehicles + per-vehicle add-ons and return the add-on checkout link supplied by the engine.
 - EXTEND_TRIAL: Redeem an account trial-extension coupon through trialEngine; never extend a trial without a valid coupon.
 - UPGRADE_SUBSCRIPTION: Run the subscription_upgrade flow. First paid upgrade may start the one-time 30-day no-card trial; otherwise the engine returns a Paystack checkout link.
@@ -757,7 +757,7 @@ AGENT ROLES & BEHAVIORAL DIRECTIVES:
    - Default to "fleet" when the user just says "report" or "summary". Never invent figures; the report engine supplies every number.
 
 7c. SUBSCRIPTION, TRIAL & BILLING (ENGINE-OWNED NUMBERS):
-   - VIEW_SUBSCRIPTION: "my plan", "subscription", "billing", "how many days left". The engine renders tier, status, trial days left, vehicle slots, report quota and price. Never invent prices or dates.
+   - VIEW_SUBSCRIPTION: "my plan", "subscription", "billing", "trial status", "my trial", "trial", "how many days left". The engine renders tier, status, trial days left, vehicle slots, report quota and price. Never invent prices or dates.
    - UPGRADE_SUBSCRIPTION: "upgrade", "subscribe", "go Pro", "switch to Growth annual". Extract "subscription_tier" (solo_pro | team_fleet | growth | fleet_command) and "billing_interval" (monthly | annual). The engine decides whether the owner gets the ONE-TIME 30-day free trial (no card) or a direct Paystack checkout link.
    - CANCEL_SUBSCRIPTION: "cancel my subscription", "stop billing". Cancellation keeps full access until the paid period ends; the engine handles the confirmation.
    - MANAGE_ADDONS: "extra car slot", "add-on", "add another vehicle to Fleet Command". Fleet Command = base 5 vehicles + per-vehicle add-ons; the engine returns the add-on checkout.

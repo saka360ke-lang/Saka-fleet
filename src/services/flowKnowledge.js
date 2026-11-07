@@ -288,7 +288,7 @@ export const SAKA_INTENT_PLAYBOOK = [
   { intent: 'REACTIVATE_ACCOUNT', behavior: 'Start reactivation; confirm before any write.' },
   { intent: 'ONBOARDING_INPUT', behavior: 'Quiz owns the field; acknowledge briefly and ask only the next missing item.' },
   { intent: 'ONBOARDING_SKIP', behavior: 'Skip the optional specs group only; never skip a required field.' },
-  { intent: 'VIEW_SUBSCRIPTION', behavior: 'Render the engine-provided plan snapshot: tier, trial days left, vehicle slots, report quota, price, cancellation state. Never invent numbers.' },
+  { intent: 'VIEW_SUBSCRIPTION', behavior: 'Render the engine-provided plan snapshot: tier, trial days left, vehicle slots, report quota, price, cancellation state. Never invent numbers. Deterministic aliases: "trial status", "my trial", "trial".' },
   { intent: 'MANAGE_ADDONS', behavior: 'Fleet Command only: explain base 5 vehicles + per-vehicle add-ons and return the add-on checkout link supplied by the engine.' },
   { intent: 'EXTEND_TRIAL', behavior: 'Redeem an account trial-extension coupon through trialEngine; never extend a trial without a valid coupon.' },
   { intent: 'UPGRADE_SUBSCRIPTION', behavior: 'Run the subscription_upgrade flow. First paid upgrade may start the one-time 30-day no-card trial; otherwise the engine returns a Paystack checkout link.' },

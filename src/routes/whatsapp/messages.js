@@ -909,6 +909,10 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           && (session.pendingCancelSubscription
             || ['VIEW_SUBSCRIPTION', 'UPGRADE_SUBSCRIPTION', 'CANCEL_SUBSCRIPTION', 'MANAGE_ADDONS', 'KEEP_VEHICLE', 'EXTEND_TRIAL'].includes(intent)
             || /^(?:subscription|billing)\b/i.test(messageText.trim())
+            // v1.72.2 (Phase 9, P3-6) — deterministic trial-status aliases. A
+            // separate `^…$` anchor: the trailing \b of the next line cannot
+            // express the exact phrase, and "my trial ended…" must stay out.
+            || /^(?:my\s+)?trial(?:\s+status)?[.!?]*$/i.test(messageText.trim())
             || /\b(?:my\s+(?:plan|subscription)|upgrade|subscribe|cancel\s+(?:my\s+)?(?:subscription|plan)|unsubscribe|keep\s+(?:vehicle|car)\b|extra\s+(?:car|vehicle|slot)|add[- ]?on|extend\s+(?:my\s+)?trial|which\s+tier|should\s+be\s+on|(?:less|fewer|more)\s+than\s+\d+\s+(?:assets?|vehicles?)|put\s+me\s+on|move\s+me\s+to|enroll\s+me|confirm\s+(?:which|what)\s+tier|what\s+tier\s+am\s+i)\b/i.test(messageText.trim()))) {
           isSpecialFlowHandled = true;
           // v1.68.0 — Phase 5B-3: the subscription/trial lane lives in ./pending.js.

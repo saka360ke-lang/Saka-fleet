@@ -316,4 +316,39 @@ for (const fixture of differentialFixtures) {
   check(newPark === oldPark, `${JSON.stringify(fixture.text).slice(0, 44)} park=${String(newPark)} (old ${String(oldPark)})`);
 }
 
+console.log('\n--- Test 4: v1.72.2 subscription_status lane (Phase 9, P3-6) ---');
+// The aliases route to the engine-owned billing turn with zero AI tokens. They
+// are exact-phrase matches; product_qa also matches them, and the registry
+// order (subscription_status before product_qa) is the fix.
+const SUB_ALIASES = ['trial', 'trial status', 'my trial', 'my trial status'];
+for (const text of SUB_ALIASES) {
+  const lane = registry.resolveReadCommand(text, baseCtx());
+  check(lane?.id === 'subscription_status', `"${text}" -> subscription_status`);
+  const rendered = await lane.render(baseCtx());
+  check(rendered.intent === 'VIEW_SUBSCRIPTION' && rendered.reply_message === null,
+    `"${text}" hands the turn to the engine-owned VIEW_SUBSCRIPTION summary`);
+}
+// Declared overlap: the QA 'trial' topic matches these strings too; the lane
+// order is what keeps the owner summary ahead of the marketing card.
+const aliasOverlaps = SUB_ALIASES.map((text) => [
+  text,
+  registry.READ_COMMANDS.filter((lane) => Boolean(lane.detect(text, baseCtx()))).map((lane) => lane.id)
+]);
+check(JSON.stringify(aliasOverlaps) === JSON.stringify(SUB_ALIASES.map((text) => [text, ['subscription_status', 'product_qa']])),
+  `alias overlaps are exactly the declared set: ${JSON.stringify(aliasOverlaps)}`);
+// Negatives: the trial-end window, EXTEND_TRIAL and every longer phrasing keep
+// their own turns — the `$` anchor must never hijack them.
+for (const text of ['my trial ended, I have 6 trucks, what now?', 'extend my trial', 'trial extension', 'my trial is ending soon', 'trial ended yesterday', 'keep all']) {
+  const lane = registry.resolveReadCommand(text, baseCtx());
+  check(!lane || lane.id !== 'subscription_status', `"${text}" is never claimed by subscription_status`);
+}
+// A locked PIN/OTP phase keeps the lane out (skipWhenLocked).
+const lockedLane = registry.resolveReadCommand('trial status', baseCtx({ quizPhaseLocked: true }));
+check(!lockedLane || lockedLane.id !== 'subscription_status', 'a locked PIN/OTP phase keeps subscription_status out');
+// Ownerless sessions keep today's marketing trial card — never a null reply.
+const ownerlessLane = registry.resolveReadCommand('trial status', baseCtx({ profile: null }));
+const ownerlessRender = await ownerlessLane.render(baseCtx({ profile: null }));
+check(ownerlessRender.intent !== 'VIEW_SUBSCRIPTION' && typeof ownerlessRender.reply_message === 'string' && /trial/i.test(ownerlessRender.reply_message),
+  'ownerless sessions keep the marketing trial card (no null reply, no owner summary)');
+
 console.log(`\n🎉 ${passed} read-registry equivalence assertions passed.`);

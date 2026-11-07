@@ -562,6 +562,7 @@ check(fs.readFileSync('scripts/run_conv_eval.js', 'utf8').includes('--case='), '
 const totalCorpusIds = CONVERSATION_CASES.map((caseDef) => caseDef.id);
 check(totalCorpusIds.includes('capacity-trial-sixth-asset') && totalCorpusIds.includes('capacity-trial-refusal-loop'), 'the trial-capacity lane has pass + calibration cases');
 check(CONVERSATION_CASES.some((caseDef) => (caseDef.tags || []).includes('earnings')), 'earnings logging has corpus coverage');
+check(CONVERSATION_CASES.some((caseDef) => caseDef.expected === 'fail' && (caseDef.tags || []).includes('earnings')), 'the earnings lane has a calibration expected-fail case (v1.72.2)');
 check(CONVERSATION_CASES.some((caseDef) => (caseDef.tags || []).includes('voice')), 'voice notes have corpus coverage');
 check(CONVERSATION_CASES.some((caseDef) => (caseDef.tags || []).includes('sheng')) && CONVERSATION_CASES.some((caseDef) => (caseDef.tags || []).includes('pidgin')), 'mixed-language (Sheng + pidgin) has corpus coverage');
 check(CONVERSATION_CASES.length >= 32, `the corpus grew without dropping a case (${CONVERSATION_CASES.length})`);

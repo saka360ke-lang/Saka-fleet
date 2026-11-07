@@ -67,8 +67,9 @@ import { isSuperadminPhone } from './superadmin.js';
  * ONE ordered registry for every deterministic command lane that used to be an
  * implicit if/else chain in `src/routes/whatsapp.js` (lines 1677-2234).
  *
- * The order below is the OLD DISPATCH PRECEDENCE, verbatim:
- *   help → product QA → country knowledge → vehicle summary → upload menu →
+ * The order below is the OLD DISPATCH PRECEDENCE, verbatim (plus the v1.72.2
+ * `subscription_status` lane placed ahead of product QA):
+ *   help → subscription status → product QA → country knowledge → vehicle summary → upload menu →
  *   empty garage → compliance family (all docs / number search → driver docs →
  *   correction → expiry → status → maintenance → reminders) → ledger →
  *   odometer → driver profile → records → receipts.
@@ -216,6 +217,24 @@ export const READ_COMMANDS = Object.freeze([
       '• *report* — this month\'s numbers\n' +
       '• *pricing* — plans and your free trial\n\n' +
       '_Where shall we start?_ 🚗', 'APP_HELP')
+  },
+  {
+    // v1.72.2 (Phase 9, P3-6) — deterministic trial-status aliases. The
+    // engine-owned billing handler renders the plan/trial summary (zero AI
+    // tokens); this lane only routes the intent. The exact-phrase `$` anchor
+    // keeps "my trial ended…", "extend my trial" and "trial extension" out, so
+    // the trial-end decision window and EXTEND_TRIAL keep their own turns.
+    id: 'subscription_status',
+    parksQuiz: false,
+    skipWhenLocked: true,
+    detect: (text) => /^(?:my\s+)?trial(?:\s+status)?[.!?]*$/i.test(String(text || '').trim()),
+    render: async (hit, ctx = {}) => {
+      if (!ctx.profile?.id) {
+        // Ownerless session: keep today's marketing trial card, never a null reply.
+        return result(buildProductQaReply(matchProductQa('trial')), 'GENERAL_CHAT');
+      }
+      return { intent: 'VIEW_SUBSCRIPTION', extracted_data: {}, reply_message: null };
+    }
   },
   {
     id: 'product_qa',

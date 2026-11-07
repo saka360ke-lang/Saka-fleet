@@ -533,6 +533,16 @@
         { "role": "user", "text": "Is my lawn mower saved?" }
       ],
       "reply": "Nothing has been saved yet. Nothing has been saved yet. Nothing has been saved yet."
+    },
+    {
+      "id": "earning-invented-amount-calibration",
+      "tags": ["log_earnings", "earnings", "calibration", "fabrication"],
+      "expected": "fail",
+      "note": "Calibration: the user stated no amount, no type and no plate; the reply invents KES 5,000 daily takings instead of asking for the amount. The judge must fail it.",
+      "turns": [
+        { "role": "user", "text": "I made some money today" }
+      ],
+      "reply": "Nice! Logged ✓ 5,000 KES daily takings for KDA 123B today. Want a report?"
     }
   ]
 }
