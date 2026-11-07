@@ -219,7 +219,8 @@ async function run() {
           // The other three lanes share the identical route-level shape; their
           // conversational routing is fragile in a DB-backed suite, so they are
           // pinned at the source (reason strings) instead of driven end to end.
-          const routeSource = fs.readFileSync('src/routes/whatsapp/messages.js', 'utf8');
+          // v1.69.0 — Phase 5B-4: the quick-log lanes live in commands.js.
+          const routeSource = fs.readFileSync('src/routes/whatsapp/commands.js', 'utf8');
           for (const [label, reason] of [['mileage', 'whatsapp.quickLogMileage'], ['hours', 'whatsapp.quickLogHours'], ['earnings', 'whatsapp.quickLogEarning']]) {
             check(routeSource.includes(`reason: '${reason}'`), `the ${label} quick lane carries its invalidation call (source-pinned, v1.63.1)`);
           }

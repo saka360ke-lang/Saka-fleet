@@ -24,12 +24,19 @@ import assert from 'assert';
 // never hide outside the ratchet.
 // v1.68.0 — Phase 5B-3: the scan also covers the three new leaf modules
 // (reads.js, pending.js, quiz.js); each must contribute ZERO direct replies.
+// v1.69.0 — Phase 5B-4: the final four leaf modules join the scan, and the
+// patterns follow the sanctioned `customReply -> reply` rename so a literal can
+// never escape the ratchet by moving into commands/conversation/support.
 const SOURCE_FILES = [
   'src/routes/whatsapp/messages.js',
   'src/routes/whatsapp/media.js',
   'src/routes/whatsapp/reads.js',
   'src/routes/whatsapp/pending.js',
-  'src/routes/whatsapp/quiz.js'
+  'src/routes/whatsapp/quiz.js',
+  'src/routes/whatsapp/commands.js',
+  'src/routes/whatsapp/admin.js',
+  'src/routes/whatsapp/conversation.js',
+  'src/routes/whatsapp/support.js'
 ];
 const DIRECT_REPLY_PATTERNS = [
   /customReply\s*=\s*'([^'\n]{25,})'/g,
@@ -37,7 +44,9 @@ const DIRECT_REPLY_PATTERNS = [
   /sendWhatsAppReply\(\s*\w+\s*,\s*'([^'\n]{25,})'/g,
   /customReply\s*=\s*`([^`\n$]{25,})`/g,
   /finalReply\s*=\s*`([^`\n$]{25,})`/g,
-  /sendWhatsAppReply\(\s*\w+\s*,\s*`([^`\n$]{25,})`/g
+  /sendWhatsAppReply\(\s*\w+\s*,\s*`([^`\n$]{25,})`/g,
+  /\breply\s*=\s*'([^'\n]{25,})'/g,
+  /\breply\s*=\s*`([^`\n$]{25,})`/g
 ];
 const directReplies = [];
 for (const file of SOURCE_FILES) {
@@ -77,6 +86,15 @@ for (const leaf of ['src/routes/whatsapp/reads.js', 'src/routes/whatsapp/pending
   const leafSource = fs.readFileSync(leaf, 'utf8');
   const leafHits = DIRECT_REPLY_PATTERNS.reduce((sum, pattern) => sum + [...leafSource.matchAll(pattern)].length, 0);
   assert(leafHits === 0, `${leaf} never owns a direct reply - it returns data and the processor sends`);
+  passed += 1;
+}
+
+// v1.69.0 — Phase 5B-4: the final four leaf modules carry the lane replies as DATA
+// (counted by the extended ratchet above) but never send and never touch the
+// processor's reply variables. The boundary is asserted, not assumed.
+for (const leaf of ['src/routes/whatsapp/commands.js', 'src/routes/whatsapp/admin.js', 'src/routes/whatsapp/conversation.js', 'src/routes/whatsapp/support.js']) {
+  const leafSource = fs.readFileSync(leaf, 'utf8');
+  assert(!leafSource.includes('sendWhatsAppReply(') && !/\b(?:customReply|finalReply)\b/.test(leafSource), `${leaf} returns data and never sends or owns the processor reply vars`);
   passed += 1;
 }
 

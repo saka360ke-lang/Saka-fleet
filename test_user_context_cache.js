@@ -162,7 +162,9 @@ const RATCHET_FILES = [
   'src/services/trialEngine.js',
   'src/services/onboarding.js',
   'src/services/vehicleCompliance.js',
-  'src/routes/whatsapp/messages.js'
+  // v1.69.0 — Phase 5B-4: the four quick-log sites moved verbatim from
+  // messages.js into commands.js; the ratchet follows the code (rule 51).
+  'src/routes/whatsapp/commands.js'
 ];
 let totalCalls = 0;
 for (const file of RATCHET_FILES) {
@@ -189,7 +191,7 @@ const REASONS = [
   ['src/services/trialEngine.js', ['trialEngine.startAccountTrial', 'trialEngine.extendCoupon']],
   ['src/services/onboarding.js', ['onboarding.saveAssetRecord', 'onboarding.stage2Specs']],
   ['src/services/vehicleCompliance.js', ['vehicleCompliance.submit']],
-  ['src/routes/whatsapp/messages.js', ['whatsapp.quickLogExpense', 'whatsapp.quickLogMileage', 'whatsapp.quickLogHours', 'whatsapp.quickLogEarning']]
+  ['src/routes/whatsapp/commands.js', ['whatsapp.quickLogExpense', 'whatsapp.quickLogMileage', 'whatsapp.quickLogHours', 'whatsapp.quickLogEarning']]
 ];
 let reasonCount = 0;
 for (const [file, reasons] of REASONS) {

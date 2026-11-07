@@ -58,10 +58,16 @@ check(DEFAULT_SAKA_CORE_PROMPT.includes('PERSONA V4') && DEFAULT_SAKA_CORE_PROMP
 console.log('--- Test 3: plain-language lint over every deterministic fallback ---');
 // v1.68.0 — Phase 5B-3: the fallback lint follows the user-facing copy into the
 // pending + quiz leaf modules (rule 51 sibling sweep: no literal escapes the lint).
+// v1.69.0 — Phase 5B-4: all seven route files are linted (commands, admin,
+// conversation and support joined the scan with the final extraction).
 const source = [
   'src/routes/whatsapp/messages.js',
   'src/routes/whatsapp/pending.js',
-  'src/routes/whatsapp/quiz.js'
+  'src/routes/whatsapp/quiz.js',
+  'src/routes/whatsapp/commands.js',
+  'src/routes/whatsapp/admin.js',
+  'src/routes/whatsapp/conversation.js',
+  'src/routes/whatsapp/support.js'
 ].map((file) => fs.readFileSync(file, 'utf8')).join('\n');
 const fallbacks = [
   ...source.matchAll(/fallbackText:\s*'([^'\n]{25,})'/g),

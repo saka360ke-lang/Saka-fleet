@@ -18,4 +18,9 @@ export * from './hooks.js';
 export * from './reads.js';
 export * from './pending.js';
 export * from './quiz.js';
+// v1.69.0 — Phase 5B-4: commands + admin + conversation + support (final split).
+export * from './commands.js';
+export * from './admin.js';
+export * from './conversation.js';
+export * from './support.js';
 

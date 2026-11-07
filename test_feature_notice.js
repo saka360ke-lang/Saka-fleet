@@ -62,7 +62,9 @@ check(isDeployNoiseLog('') === false, 'empty text is safe');
 console.log('--- Test 5: route wiring ---');
 const routeSource = readFileSync('./src/routes/whatsapp/messages.js', 'utf8');
 const readRegistry = readFileSync('./src/services/readCommands.js', 'utf8');
-check(/const summaryCommand[\s\S]*isVehicleSummaryCommand/.test(routeSource), 'the route recognises the registration-summary command');
+// v1.69.0 — Phase 5B-4: the flag parse lives in commands.js; the route calls it.
+const commandsSource = readFileSync('./src/routes/whatsapp/commands.js', 'utf8');
+check(/const summaryCommand[\s\S]*parseVehicleSummaryCommand/.test(routeSource) && /parseVehicleSummaryCommand[\s\S]*isVehicleSummaryCommand/.test(commandsSource), 'the route recognises the registration-summary command');
 check(/buildVehicleSummary[\s\S]*emailVehicleSummary/.test(readRegistry), 'the read registry builds and emails the registration summary');
 check(/shouldShowFeatureNotice\(/.test(routeSource) && /markFeatureNoticeSeen\(/.test(routeSource), 'digest is appended and stamped in the live route');
 

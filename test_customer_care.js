@@ -74,8 +74,11 @@ async function run() {
   const wa = fs.readFileSync('./src/routes/whatsapp/messages.js', 'utf8');
   // v1.68.0 — Phase 5B-3: the statement park lives in src/routes/whatsapp/quiz.js.
   const quizSrc = fs.readFileSync('./src/routes/whatsapp/quiz.js', 'utf8');
+  // v1.69.0 — Phase 5B-4: the support trigger + its pending branch live in support.js
+  // (the test pin follows the code — rule 51 sibling sweep).
+  const supportSrc = fs.readFileSync('./src/routes/whatsapp/support.js', 'utf8');
   check(/support_intake_handled/.test(wa) && wa.indexOf('support_intake_handled') < wa.indexOf('isStopRequest(cleanCmd)'), 'the support intake lock runs before stop/quiz handling');
-  check(/ticketCreated\s*\?/.test(wa), 'the forwarded copy is gated on a real ticket');
+  check(/ticketCreated\s*\?/.test(supportSrc), 'the forwarded copy is gated on a real ticket');
   check(/statement_not_answer/.test(quizSrc), 'a statement mid-draft parks the draft instead of looping');
 
   const m2 = makeMock({ profile: { id: 'p1', phone_number: '+254700000000', email: 'd@x.com' } });

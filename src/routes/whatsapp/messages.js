@@ -10,46 +10,24 @@
  */
 
 import crypto from 'crypto';
-import { handleSuperadminFlow, isSuperadminPhone } from '../../services/superadmin.js';
-import { processSakaMessage, extractVehicleAttributes, classifyIntentWithRegex } from '../../../sakaAi.js';
+import { isSuperadminPhone } from '../../services/superadmin.js';
+import { extractVehicleAttributes } from '../../../sakaAi.js';
 import { logSystemError } from '../../workers/sentinel.js';
-import { verifyPaystackSignature, formatUsdInLocalCurrency } from '../../services/paystack.js';
-import {
-  ensureVehicleTableColumns,
-  unassignDriverFromVehicle,
-  checkOwnerVehicleTierLimit,
-  getActiveVehicle,
-  setActiveVehicle,
-  findVehicleByCandidate,
-  updateVehicleDetails,
-  deleteVehicle,
-  sanitizeVehicleUpdates
-} from '../../services/vehicles.js';
-import { calculateFuelConsumption } from '../../services/analytics.js';
-import { normalizeFillType } from '../../services/fuelEconomy.js';
-import { resolveExpenseType, normalizeExpenseType, hasExpenseTypeMarker } from '../../services/expenseCatalog.js';
-import { resolveEarningType, normalizeEarningType, hasEarningTypeMarker } from '../../services/earningCatalog.js';
+import { getActiveVehicle, findVehicleByCandidate } from '../../services/vehicles.js';
 import { shortenUrl } from '../../services/linkShortener.js';
-import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly, shouldReplaceIntroCopy, isRepeatedReply, isStopRequest, PAUSE_REPLY, pickRepeatNudge, pickNewcomerNudge, isFirstTimeMessage, shouldReplacePlateAsk, isIncompleteReplyComplaint, replyContinuationRequestFor, asksToUploadLogbook, isLegacyWelcomeCopy, websiteSignupNextStep, isConfusedUnverifiedTurn } from '../../services/greetings.js';
-import { matchProductQa, buildProductFactsContext, buildLocalPricingFacts, stripUsdFigures, sanitizeSakaReply } from '../../services/productQa.js';
+import { sakaIntroText, isFirstContact, isIntroCopy, wantsIntroduction, asksForPlateDirectly, shouldReplaceIntroCopy, isRepeatedReply, isStopRequest, PAUSE_REPLY, isFirstTimeMessage, shouldReplacePlateAsk, isConfusedUnverifiedTurn } from '../../services/greetings.js';
+import { sanitizeSakaReply } from '../../services/productQa.js';
 import { isLostChatMessage } from '../../services/contactNudge.js';
-import { buildUserContextSnapshot, buildUserFactsLines } from '../../services/userContextSnapshot.js';
-import { buildConversationMemory } from '../../services/conversationMemory.js';
+import { buildUserFactsLines } from '../../services/userContextSnapshot.js';
 import { resolveSlowAckMs, pickSlowAckLine, shouldSendSlowAck } from '../../services/turnAck.js';
 import {
   buildFeatureNotice,
   shouldShowFeatureNotice,
-  markFeatureNoticeSeen,
-  ensureFeatureNoticeSchema
+  markFeatureNoticeSeen
 } from '../../services/featureNotice.js';
-import { buildFleetReport, resolveReportType } from '../../services/fleetReports.js';
-import { resolveAnyReportType, buildReportForLane } from '../../services/reportDelivery.js';
-import { resolveMetricIds, customMetricMenu } from '../../services/reportMetrics.js';
-import { resolveReportAccess } from '../../services/reportAccess.js';
 import {
   handleDriverResponse,
-  canManageVehicle,
-  getDriverComplianceStatus
+  canManageVehicle
 } from '../../services/driverAssignments.js';
 import { resolveBundledCatalog } from '../../services/complianceCatalog.js';
 import {
@@ -64,16 +42,10 @@ import {
   looksLikeFreshLogLine,
   isUnreadableMediaNote
 } from '../../services/complianceCapture.js';
-// v1.59.0 — optional per-record labels on the quick-log lanes.
-import { sanitizeEntryLabel, extractEntryLabel } from '../../services/entryLabels.js';
-// v1.63.1 — quick-log lanes land through the shared after-write hook.
-import { markUserDataChanged } from '../../services/afterWrite.js';
 import { parseVehicleComplianceParagraph, submitVehicleCompliance, resolveVehicleComplianceCatalog } from '../../services/vehicleCompliance.js';
 import { handleStage1CoreCapture, handleStage2OptionalWeaving } from '../../services/onboarding.js';
 import { saveChatMessage, getRecentChatHistory, CHAT_HISTORY_MAX_MESSAGES } from '../../services/chatHistory.js';
-import { sendSupportEscalationEmail, sendMfaEmail, sendCareReplyEmail } from '../../services/mailer.js';
-import { handleCareRequest, escalateCareToSuperadmin } from '../../services/customerCare.js';
-import { handleCareCommand } from '../../services/careConsole.js';
+import { sendSupportEscalationEmail, sendMfaEmail } from '../../services/mailer.js';
 import {
   initiatePassbookTransfer,
   handleBuyerAcceptance
@@ -82,53 +54,37 @@ import { applyTrialExtensionCoupon } from '../../services/coupons.js';
 import {
   getEntitlements,
   evaluateVehicleCapacity,
-  getReportQuota,
-  recordReportUsage,
   checkoutForTier,
   checkoutForAddon
 } from '../../services/subscriptions.js';
 import {
   startWelcomeTrial,
-  applyAccountTrialExtensionCoupon,
-  recordActivationEvent,
-  ACTIVATION_EVENTS
+  applyAccountTrialExtensionCoupon
 } from '../../services/trialEngine.js';
-import { normalizeTierKey, getTierLabel } from '../../services/subscriptionTiers.js';
-import { resolveUserTimezone, resolveTimezoneFromCountry } from '../../services/globalization.js';
+import { getTierLabel } from '../../services/subscriptionTiers.js';
+import { resolveUserTimezone } from '../../services/globalization.js';
 import { getCountryCommStyleLine } from '../../services/countryCommStyles.js';
 import { ensureCountryBucket, getCountryLearningsLine } from '../../services/countryLearnings.js';
-import { applyOdometerReading, applyOperatingHours } from '../../services/maintenanceReminders.js';
-import { detectQuizStart, getCurrentQuizField, looksLikeReportRequest, getActiveQuiz } from '../../services/quizEngine.js';
-import { matchNarrativeVehicle, buildNarrativeDraft, narrativeDraftFields, narrativeDraftExtras, shouldPrefillNarrativeDraft, isNarrativeIntakeEnabled, isNarrativeEligibleText, buildNarrativeParagraphDrafts, renderNarrativeBatchCard, resolveNarrativeBatchTurn, describeNarrativeDraft } from '../../services/narrativeDraft.js';
-import { recordFriction } from '../../services/frictionTracker.js';
+import { detectQuizStart, getCurrentQuizField, getActiveQuiz } from '../../services/quizEngine.js';
+import { matchNarrativeVehicle, buildNarrativeDraft, narrativeDraftFields, narrativeDraftExtras, shouldPrefillNarrativeDraft, isNarrativeIntakeEnabled, isNarrativeEligibleText, buildNarrativeParagraphDrafts, renderNarrativeBatchCard } from '../../services/narrativeDraft.js';
 import { composeMessage } from '../../services/conversationEngine.js';
-import { followUpAckText } from '../../services/followups.js';
 import { uploadHintFor } from '../../services/documentLens.js';
 import {
   normalizeAssetKind,
   getCountryBucket,
-  buildJurisdictionContext,
-  resolveCountryInput
+  buildJurisdictionContext
 } from '../../services/countryBucket.js';
 import {
-  listReceipts,
-  deleteReceipt,
   formatDuplicateReceiptReply,
   OCR_LOW_CONFIDENCE_NOTE,
   OCR_UNREADABLE_NOTE
 } from '../../services/receipts.js';
-import { isDuplicateExpense } from '../../services/expenseGuard.js';
-import { inspectRecordQuestion, isVehicleSummaryCommand } from '../../services/readCommands.js';
+import { inspectRecordQuestion } from '../../services/readCommands.js';
 // v1.66.0 — Phase 5B-1 module split: pure helpers + the outbound Meta sender.
 import {
   detectCountryFromPhone,
   detectMessageLanguage,
-  languageSwitchConfirmation,
-  checkIsConversationalFeedback,
-  extractNumberFromText,
-  extractOdometerFromText,
-  buildRoleContext,
-  generateRoleBasedActionDiscovery
+  languageSwitchConfirmation
 } from './helpers.js';
 import { sendWhatsAppReply } from './replies.js';
 // v1.67.0 — Phase 5B-2 module split: the media intake lane + the per-turn hooks.
@@ -175,6 +131,33 @@ import {
   persistCapturedCompliance
 } from './pending.js';
 import { arbitrateQuizTurn, finalizeQuizOutcome, renderRoleActions } from './quiz.js';
+// v1.69.0 — Phase 5B-4: the final leaf modules (commands + admin + conversation + support).
+import {
+  resolveCountryCommand,
+  parseReceiptDeleteCommand,
+  parseVehicleSummaryCommand,
+  handleReceiptDeleteTurn,
+  renderPassbookSnapshot,
+  handleUnassignDriverTurn,
+  handleViewProfileTurn,
+  handleEditVehicleTurn,
+  handleSwitchVehicleTurn,
+  handleFuelEfficiencyTurn,
+  handleFleetSummaryTurn,
+  handleGreetingTurn,
+  handleLogExpenseTurn,
+  handleUpdateMileageTurn,
+  handleOperatingHoursTurn,
+  handleLogEarningsTurn,
+  renderReminderPrompt,
+  handleReportRequestTurn,
+  renderVehicleList,
+  handleEditProfileTurn,
+  renderActiveDefault
+} from './commands.js';
+import { handleAdminIntercepts } from './admin.js';
+import { runSakaAiTurn, applyPostAiIntentFixes, renderIdleConversationTurn } from './conversation.js';
+import { resolveSupportFlowTurn } from './support.js';
 // The public surface stays identical: renderRoleActions is re-exported from here.
 export { renderRoleActions };
 
@@ -309,50 +292,16 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
     if (fastify?.log) fastify.log.info(`Incoming WhatsApp message from ${senderPhone}: "${messageText}"`);
     userLogPromise = logUserTurn(supabaseClient, senderPhone, messageText);
 
-    // v1.58.18 - Care console (worker role). CUSTOMER_CARE_PHONE is OFF by
-    // default; the superadmin can always run `care ...` too. Anything that is
-    // not a care command falls through untouched.
-    if (supabaseClient) {
-      const careRes = await handleCareCommand(supabaseClient, {
-        phone: senderPhone,
-        text: messageText,
-        sendWhatsApp: sendWhatsAppReply,
-        sendEmail: sendCareReplyEmail,
-        notifySuperadmin: (payload) => escalateCareToSuperadmin(payload),
-        isSuperadminActor: isSuperadminPhone(senderPhone)
-      });
-      if (careRes && careRes.reply) {
-        await sendWhatsAppReply(senderPhone, careRes.reply);
-        await logTurnPairSequential(supabaseClient, senderPhone, 'assistant', careRes.reply);
-        await userLogPromise;
-        await persistSnap();
-        return { status: 'care_handled' };
+    // v1.69.0 — Phase 5B-4: the care-console + superadmin gates live in ./admin.js.
+    const adminIntercept = await handleAdminIntercepts({ supabaseClient, senderPhone, messageText, sendWhatsApp: sendWhatsAppReply });
+    if (adminIntercept) {
+      if (adminIntercept.reply) {
+        await sendWhatsAppReply(senderPhone, adminIntercept.reply);
+        await logTurnPairSequential(supabaseClient, senderPhone, 'assistant', adminIntercept.reply);
       }
-    }
-
-    // Superadmin Intercept Middleware
-    if (supabaseClient) {
-      const superadminRes = await handleSuperadminFlow(supabaseClient, senderPhone, messageText);
-      if (superadminRes.isSuperadmin) {
-        if (superadminRes.reply) {
-          await sendWhatsAppReply(senderPhone, superadminRes.reply);
-          await logTurnPairSequential(supabaseClient, senderPhone, 'assistant', superadminRes.reply);
-        }
-        await userLogPromise;
-        await persistSnap();
-        return { status: 'superadmin_handled' };
-      }
-      // v1.50.0 — superadmin is superadmin-only: a non-admin message from the
-      // superadmin phone is answered with the admin hub instead of falling
-      // through to owner/driver flows.
-      if (isSuperadminPhone(senderPhone)) {
-        const hub = generateRoleBasedActionDiscovery({ profileData: null, vehicles: [], senderPhone });
-        await sendWhatsAppReply(senderPhone, hub);
-        await logTurnPairSequential(supabaseClient, senderPhone, 'assistant', hub);
-        await userLogPromise;
-        await persistSnap();
-        return { status: 'superadmin_handled' };
-      }
+      await userLogPromise;
+      await persistSnap();
+      return { status: adminIntercept.status };
     }
 
     // v1.64.0 — ONE pending state object (Phase 4). The migration-on-read shim
@@ -711,76 +660,20 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
 
         // v1.58.15 — deterministic receipt delete stays a WRITE lane in the
         // route (rule 37); no read lane can ever claim "delete receipt N".
-        const receiptDeleteMatch = commandText.match(/^(?:delete|remove)\s+receipts?\s+([1-5])(?:\s+(DELETE))?$/i);
-        const receiptDeleteCommand = receiptDeleteMatch ? { index: Number(receiptDeleteMatch[1]), confirmed: Boolean(receiptDeleteMatch[2]) } : null;
+        // v1.58.15 — deterministic receipt delete stays a WRITE lane (rule 37).
+        // v1.69.0 — Phase 5B-4: the parse lives in ./commands.js.
+        const receiptDeleteCommand = parseReceiptDeleteCommand({ commandText });
 
 
 
 
         // Vehicle registration summary ("send me registration summary as PDF").
-        const summaryCommand = isVehicleSummaryCommand(String(messageText || ''));
+        // v1.69.0 — Phase 5B-4: the flag parse lives in ./commands.js.
+        const summaryCommand = parseVehicleSummaryCommand({ messageText });
 
         // v1.21.0 — Country Bucket commands (deterministic, zero tokens).
-        const textForCommands = String(messageText || '').trim();
-        const countryChangeCandidate = textForCommands.match(/^(?:change|set|switch)\s+country\s+(?:to\s+)?(.+)$/i)?.[1]
-          || textForCommands.match(/^country\s+(.+)$/i)?.[1]
-          || null;
-        // "country rules/documents/example" are knowledge commands, not a country.
-        const isKnowledgeSuffix = Boolean(countryChangeCandidate)
-          && /^(?:rules?|documents?|docs?|requirements?|examples?)$/i.test(countryChangeCandidate.trim());
-        const countryChangeMatch = countryChangeCandidate && !isKnowledgeSuffix
-          ? [null, countryChangeCandidate]
-          : null;
-        const wantsCountryInfo = /^(?:my\s+country|country|where\s+am\s+i)$/i.test(textForCommands);
-        const myRulesCommand = /^(?:my\s+rules?|country\s+rules?|what\s+(?:are\s+)?my\s+rules?|compliance\s+rules?)$/i.test(textForCommands);
-        const requiredDocsCommand = /^(?:required\s+(?:documents?|docs?)|what\s+documents?\s+do\s+i\s+need|my\s+document\s+requirements?)$/i.test(textForCommands);
-        const exampleComplianceCommand = /^(?:example\s+(?:compliance|document|submission)|give\s+me\s+an\s+example|example\s+text)$/i.test(textForCommands);
-
-        // Country change is a profile write — resolved before any AI call.
-        let countryCommandResult = null;
-        if (countryChangeMatch) {
-          const resolved = resolveCountryInput(countryChangeMatch[1]);
-          if (!resolved) {
-            countryCommandResult = {
-              intent: 'GENERAL_CHAT',
-              extracted_data: {},
-              reply_message: `🌍 I could not match *${countryChangeMatch[1]}*. Reply *country Kenya* (or another country name) and I will switch your rules, units and documents.`
-            };
-          } else {
-            try {
-              // v1.59.0 — an explicit user choice is stamped country_source='user'
-              // so reconciliation never overrides it with the phone-derived country.
-              const countryUpdate = {
-                country: resolved.country,
-                country_code: resolved.country_code,
-                unit_system: resolved.default_units,
-                timezone: resolveTimezoneFromCountry(resolved.country_code),
-                jurisdiction_confirmed: true,
-                jurisdiction_updated_at: new Date().toISOString(),
-                country_source: 'user'
-              };
-              let { error: countryUpdateError } = await supabaseClient.from('profiles').update(countryUpdate).eq('id', profileData.id);
-              if (countryUpdateError && /country_source/i.test(countryUpdateError.message || '')) {
-                delete countryUpdate.country_source;
-                await supabaseClient.from('profiles').update(countryUpdate).eq('id', profileData.id);
-              }
-              profileData.country_code = resolved.country_code;
-              profileData.country = resolved.country;
-              profileData.country_source = 'user';
-            } catch { /* best-effort */ }
-            countryCommandResult = {
-              intent: 'GENERAL_CHAT',
-              extracted_data: {},
-              reply_message: `🌍 Country bucket updated to *${resolved.country}* (${resolved.country_code}). Your compliance rules, examples, units and documents now follow ${resolved.country}.\n\nReply *required documents* to see what your ${bucketAssetKind.replace(/_/g, ' ')} needs.`
-            };
-          }
-        } else if (wantsCountryInfo) {
-          countryCommandResult = {
-            intent: 'GENERAL_CHAT',
-            extracted_data: {},
-            reply_message: `🌍 Your country bucket is *${countryInfo.country}* (${countryInfo.country_code})${profileData?.jurisdiction_confirmed ? ' ✅ confirmed' : ''}.\n\nIt sets your compliance rules, document examples, currency, units and dates. Reply *country <name>* to change it.`
-          };
-        }
+        // v1.69.0 — Phase 5B-4: the country command (parse + profile write) lives in ./commands.js.
+        const countryCommandResult = await resolveCountryCommand({ messageText, profileData, supabaseClient, bucketAssetKind });
 
         // v1.24.0 - perceived speed: long free-form paragraphs get an instant ack
         // while this turn parses and records in the background.
@@ -817,7 +710,6 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           if (typeof slowAckTimer.unref === 'function') slowAckTimer.unref();
         }
 
-        const productQaMatch = matchProductQa(textForCommands);
 
         // Phase 3 (v1.63.3) — the Read Command Registry snapshot. The registry
         // and the post-hoc records intent fix both read THIS context, so a
@@ -862,93 +754,23 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           if (readTurn) {
             aiResult = readTurn;
           } else if (receiptDeleteCommand) {
-            const isOwner = existingVehicles.some((v) => v.owner_id === profileData?.id);
-            const rows = await listReceipts(supabaseClient, {
-              ownerId: isOwner ? profileData?.id : null,
-              driverId: isOwner ? null : profileData?.id,
-              vehicleIds: existingVehicles.map((v) => v.id)
-            });
-            const target = rows[receiptDeleteCommand.index - 1];
-            if (!target) {
-              aiResult = { intent: 'GENERAL_CHAT', extracted_data: {}, reply_message: 'I could not find receipt ' + receiptDeleteCommand.index + '. Type *receipts* to see the numbered list.' };
-            } else if (!receiptDeleteCommand.confirmed) {
-              const label = target.vendor ? String(target.vendor).split('|')[0].trim() : (target.document_kind || 'receipt');
-              aiResult = { intent: 'GENERAL_CHAT', extracted_data: {}, reply_message: 'Delete receipt ' + receiptDeleteCommand.index + ' (' + label + ')? Reply *delete receipt ' + receiptDeleteCommand.index + ' DELETE* to confirm. Your expense log stays untouched.' };
-            } else {
-              const del = await deleteReceipt(supabaseClient, { receiptId: target.id, ownerId: isOwner ? profileData?.id : null, driverId: isOwner ? null : profileData?.id });
-              if (del.ok) {
-                try {
-                  await supabaseClient.from('admin_audit_logs').insert([{ admin_phone: senderPhone, action: 'RECEIPT_DELETED', details: { receipt_id: target.id, media_id: target.media_id || null, vehicle_id: target.vehicle_id || null, objects: del.objects || 0 } }]);
-                } catch { /* audit best effort */ }
-                aiResult = { intent: 'GENERAL_CHAT', extracted_data: {}, reply_message: 'Receipt ' + receiptDeleteCommand.index + ' deleted, along with its photo. Your expense entry is still in the ledger - use *my entries* to edit or delete it.' };
-              } else {
-                aiResult = { intent: 'GENERAL_CHAT', extracted_data: {}, reply_message: 'I could not delete that receipt (' + (del.error || 'unknown') + '). It may already be gone.' };
-              }
-            }
-          } else if (fastQuizTurn) {
-            const quick = classifyIntentWithRegex(messageText);
-            aiResult = { intent: quick.intent, extracted_data: {}, reply_message: null };
+            // v1.69.0 — Phase 5B-4: the receipt-delete write lane lives in ./commands.js.
+            aiResult = await handleReceiptDeleteTurn({ supabaseClient, profileData, existingVehicles, receiptDeleteCommand, senderPhone });
           } else {
-            aiResult = await processSakaMessage(targetLang, messageText, conversationHistory, [], supabaseClient, activeVehicleContext, {
-              maxAiTier: entitlements?.maxAiTier ?? null,
-              ownerId: profileData?.id || null,
-              planSummary,
-              jurisdictionContext,
-              workingMemory: buildConversationMemory({ quiz: session?.quiz || null }),
-              // v1.61.14 — the cached engine facts ride with every AI turn.
-              userFactsContext,
-              // v1.59.4 — returning after the fresh window: give the model the last
-              // few turns as LABELLED context (never as live turns) so Saka can pick
-              // up where the conversation stopped.
-              reengagementContext: await loadReengagementContext({
-                supabaseClient,
-                senderPhone,
-                hasFreshHistory: dbHistory.length > 0
-              })
+            // v1.69.0 — Phase 5B-4: the AI turn (fast-quiz regex or provider call) lives in ./conversation.js.
+            aiResult = await runSakaAiTurn({
+              targetLang, messageText, conversationHistory, supabaseClient, activeVehicleContext,
+              entitlements, profileData, planSummary, jurisdictionContext, session, senderPhone, dbHistory,
+              userFactsContext, fastQuizTurn, loadReengagementContext
             });
           }
         }
         phaseMarks.aiDoneAt = Date.now();
-        let intent = aiResult.intent;
-        // v1.58.6 — a clear past-tense expense statement ("Repaired a puncture,
-        // cost me 300kes") is LOGGED, never answered as a query, even if the
-        // classifier hedged (live 2026-11-04: it kept replying "Nothing logged").
-        if (readCtx.recordSpec.question.reason === 'looks-like-log' && !['LOG_EXPENSE', 'LOG_EARNINGS'].includes(intent)) {
-          intent = 'LOG_EXPENSE';
-        }
-        let customReply = aiResult.reply_message;
-
-        // v1.36.0 — a QUERY_RECORDS message the engine could not parse gets a
-        // deterministic nudge instead of an AI answer (figures are never invented).
-        if (intent === 'QUERY_RECORDS' && !aiResult.__deterministicRecords) {
-          customReply = await composeMessage({
-            purpose: 'records_query_hint',
-            facts: {
-              examples: '"how much did I spend on fuel last week?" or "what did I log yesterday?"',
-              note: 'The numbers come straight from the user\'s own ledger.'
-            },
-            language: targetLang,
-            countryInfo,
-            profile: profileData,
-            fallbackText: '📊 Ask me like this: *"how much did I spend on fuel last week?"* or *"what did I log yesterday?"* — I read the numbers straight from your ledger.'
-          });
-        }
-
-        // A receipt photo that was already processed never re-enters the
-        // expense flow — the duplicate reply below is deterministic.
-        if (duplicateReceipt) {
-          intent = 'GENERAL_CHAT';
-          aiResult = { ...aiResult, intent, extracted_data: {}, reply_message: null };
-        }
-
-        // v1.28.6 — report/summary/analysis requests always route to the report
-        // engine, even when the classifier leans LOG_EXPENSE because the
-        // message mentions fuel ("Give me a fuel report for kas").
-        if (looksLikeReportRequest(messageText)
-            && ['LOG_EXPENSE', 'LOG_EARNINGS', 'UPDATE_MILEAGE', 'QUERY_FUEL_EFFICIENCY'].includes(intent)) {
-          intent = 'REQUEST_REPORT';
-          aiResult = { ...aiResult, intent, reply_message: null };
-        }
+        // v1.69.0 — Phase 5B-4: post-AI intent fixes + the reply seed live in ./conversation.js.
+        const postAi = await applyPostAiIntentFixes({ aiResult, duplicateReceipt, messageText, readCtx, targetLang, countryInfo, profileData });
+        aiResult = postAi.aiResult;
+        let intent = postAi.intent;
+        let customReply = postAi.reply;
 
         // Extract and merge structured vehicle attributes
         const regexAttrs = extractVehicleAttributes(messageText);
@@ -973,54 +795,14 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           || /\b(?:another|second|one\s+more|an?\s+extra)\s+(?:vehicle|car|truck|bike|motorbike|bus|machine|boat|asset)\b/i.test(messageText);
         const hasVehicleAttributes = !!(mergedExt.plate_number || (mergedExt.yom && (mergedExt.fuel_type || mergedExt.make_model)) || (mergedExt.fuel_type && mergedExt.current_mileage) || mergedExt.vin);
 
-        let isSupportFlow = false;
         // --- SUPPORT ESCALATION FLOW (support@reports.sakafleet.com) ---
-        if (session.pendingSupportEscalation) {
-          isSupportFlow = true;
-          const cleanText = messageText.trim().toLowerCase();
-          if (/^(cancel|exit|stop)$/i.test(cleanText)) {
-            session.pendingSupportEscalation = false;
-            customReply = `Support escalation cancelled. ${hasVehicleRegistered ? "You are back in active menu mode." : "How can I assist you today?"}`;
-          } else {
-            // v1.58.10 — autonomous customer care: open a ticket + email
-            // support@ + ping the superadmin for high-priority cases.
-            const care = await handleCareRequest(supabaseClient, {
-              phone: senderPhone,
-              text: messageText.trim(),
-              profile: profileData,
-              userEmail: profileData?.email,
-              vehiclesList: existingVehicles
-            });
-            session.pendingSupportEscalation = false;
-            // v1.58.22 - only claim "forwarded" when a ticket row actually exists.
-            customReply = care?.ticketCreated
-              ? await composeMessage({
-                  purpose: 'support_escalation',
-                  facts: { supportEmail: 'support@reports.sakafleet.com', forwarded: true },
-                  language: targetLang,
-                  countryInfo,
-                  profile: profileData,
-                  fallbackText: "I've forwarded your message to our support team at support@reports.sakafleet.com. They will reach out to you shortly!"
-                })
-              : "Thanks — I couldn't open a support ticket automatically just now. Please email support@reports.sakafleet.com with a line about what happened, or reply *Support* to try again.";
-          }
-        } else if (
-          /\b(support team|contact support|talk to support|human help|help from (?:a )?human|talk to (?:a )?(?:human|person|agent|representative)|human (?:agent|support)|customer (?:care|support)|file a complaint|escalat(?:e|ion)|dispute|admin intervention|confus(?:ed|ing)|doesn'?t make sense|not clear)\b/i.test(messageText)
-        ) {
-          isSupportFlow = true;
-          session.pendingSupportEscalation = true;
-          customReply = await composeMessage({
-            purpose: 'support_intake',
-            facts: {
-              instruction: 'Ask the user to describe the issue in one message so it can be forwarded to support.',
-              supportEmail: 'support@reports.sakafleet.com'
-            },
-            language: targetLang,
-            countryInfo,
-            profile: profileData,
-            fallbackText: 'Please describe your issue in one message and I will forward it to support@reports.sakafleet.com.'
-          });
-        }
+        // v1.69.0 — Phase 5B-4: the support intake flow lives in ./support.js.
+        const supportFlow = await resolveSupportFlowTurn({
+          session, messageText, hasVehicleRegistered, profileData, existingVehicles,
+          senderPhone, supabaseClient, targetLang, countryInfo
+        });
+        const isSupportFlow = supportFlow.isSupportFlow;
+        if (isSupportFlow) customReply = supportFlow.reply;
 
         if (!isSupportFlow) {
 
@@ -1146,33 +928,11 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           if (subTurn.entitlements) entitlements = subTurn.entitlements;
         }
         // 4c. PASSBOOK SNAPSHOT (v1.16.2) — deterministic, zero AI tokens.
+        // v1.69.0 — Phase 5B-4: the snapshot lives in ./commands.js.
         else if (!session.quiz && existingVehicles.length > 0
           && /^(?:passbook(?:\s+details)?|my\s+passbook|vehicle\s+snapshot)$/i.test(messageText.trim())) {
-          isSpecialFlowHandled = true;
-          const snapshotVehicle = currentActiveVehicle || existingVehicles[0];
-          let expenseLines = [];
-          if (supabaseClient && snapshotVehicle?.id) {
-            try {
-              const { data: recentExpenses } = await supabaseClient
-                .from('expense_logs')
-                .select('expense_type,amount,created_at')
-                .eq('vehicle_id', snapshotVehicle.id)
-                .order('created_at', { ascending: false })
-                .limit(5);
-              expenseLines = (recentExpenses || []).map((row) =>
-                `• ${row.expense_type || 'Expense'}: ${countryInfo?.currency || 'USD'} ${Number(row.amount || 0).toLocaleString()}`
-              );
-            } catch { expenseLines = []; }
-          }
-          const planLine = entitlements?.isTrial
-            ? `🎁 Trial: ${entitlements.tierName} — ${entitlements.trialDaysLeft} day(s) left`
-            : `📦 Plan: ${entitlements?.tierName || 'Free'}${entitlements?.isPaid ? ' (paid)' : ''}`;
-          const vehicleLines = existingVehicles.map((v) =>
-            `• ${v.plate_number} — ${Number(v.current_mileage || v.odometer_reading || 0).toLocaleString()} km${v.id === snapshotVehicle.id ? ' *(active)*' : ''}`
-          ).join('\n');
-          customReply = `📘 *Your Saka passbook*\n\n${vehicleLines}\n\n${planLine}\n\n${expenseLines.length
-            ? `🧾 *Recent expenses — ${snapshotVehicle.plate_number}*\n${expenseLines.join('\n')}`
-            : '🧾 No expenses logged yet — reply *"log expense"* to add your first one.'}`;
+          const passbookTurn = await renderPassbookSnapshot({ supabaseClient, existingVehicles, currentActiveVehicle, entitlements, countryInfo });
+          customReply = passbookTurn.reply;
         }
 
         // 5. Action Discovery & Role Help (AI-rendered from the role index)
@@ -1904,172 +1664,19 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               customReply = assignTurn.reply;
             }
             else if (activeIntent === 'UNASSIGN_DRIVER' || /^unassign\s+driver/i.test(messageText.trim()) || /^remove\s+driver/i.test(messageText.trim())) {
-              let unassignTarget = targetVeh;
-              if (mergedExt.plate_number) {
-                const found = findVehicleByCandidate(existingVehicles, mergedExt.plate_number);
-                if (found) unassignTarget = found;
-              }
-
-              if (!unassignTarget) {
-                customReply = await composeMessage({
-                  purpose: 'unassign_driver_notice',
-                  facts: { issue: 'The vehicle for the driver unassignment could not be identified' },
-                  language: targetLang,
-                  countryInfo,
-                  profile: profileData,
-                  fallbackText: '⚠️ Could not identify the vehicle to unassign the driver from.'
-                });
-              } else {
-                await unassignDriverFromVehicle({ vehicleId: unassignTarget.id, supabase: supabaseClient });
-                customReply = `✅ Driver unassigned from vehicle *${unassignTarget.plate_number}*. Vehicle is now available for a new driver.`;
-              }
+              // v1.69.0 — Phase 5B-4: the unassign lane lives in ./commands.js.
+              const unassignTurn = await handleUnassignDriverTurn({ mergedExt, messageText, existingVehicles, targetVeh, supabaseClient, targetLang, countryInfo, profileData });
+              customReply = unassignTurn.reply;
             }
             else if (activeIntent === 'VIEW_PROFILE' || /^(?:view|show|display|see)\s+(?:my\s+)?(?:profile|account)|^my\s+profile\b|^profile\s+details$|^profile$|^account\s+details$|^who\s+am\s+i$/i.test(messageText.trim())) {
-              const roles = buildRoleContext(profileData, existingVehicles, senderPhone).roles;
-              const assigned = existingVehicles.find((v) => v.assigned_driver_id === profileData?.id) || null;
-              let complianceLine = null;
-              if (assigned && supabaseClient) {
-                try {
-                  const st = await getDriverComplianceStatus({
-                    supabase: supabaseClient,
-                    driverId: profileData.id,
-                    countryCode: countryInfo?.country_code,
-                    assetType: assigned.asset_type || assigned.metadata?.asset_type || null
-                  });
-                  const min = st.minimal;
-                  complianceLine = `${min.label}: ${min.status}${min.lifetime ? ' (valid for life)' : min.expiry ? ` (expires ${min.expiry})` : ''}`;
-                } catch {
-                  complianceLine = null;
-                }
-              }
-              const facts = {
-                name: profileData?.full_name || 'Not set',
-                phone: formattedPhone,
-                email: profileData?.email || 'Not set',
-                emailVerified: Boolean(profileData?.email_verified),
-                language: targetLang,
-                unitSystem: profileData?.unit_system || countryInfo?.default_units || 'metric',
-                timezone: resolveUserTimezone({ countryInfo, profile: profileData }),
-                country: countryInfo?.country,
-                roles,
-                subscriptionTier: profileData?.subscription_tier || 'free',
-                compliance: complianceLine,
-                instruction: 'Present a compact read-only profile snapshot. Do not start an edit flow or ask for new values.'
-              };
-              const fallback = `👤 *Your Profile*\n\n` +
-                `• Name: ${facts.name}\n` +
-                `• Phone: ${facts.phone}\n` +
-                `• Email: ${facts.email} (${facts.emailVerified ? 'verified ✅' : 'not verified ⚠️'})\n` +
-                `• Language: ${facts.language}\n` +
-                `• Units: ${facts.unitSystem}\n` +
-                `• Timezone: ${facts.timezone}` +
-                (complianceLine ? `\n• ${complianceLine}` : '') +
-                `\n\nTo change something, say e.g. *"update my language to Swahili"*.`;
-              isSpecialFlowHandled = true;
-              customReply = await composeMessage({
-                purpose: 'profile_overview',
-                facts,
-                language: targetLang,
-                countryInfo,
-                profile: profileData,
-                fallbackText: fallback
-              });
+              // v1.69.0 — Phase 5B-4: the profile snapshot lane lives in ./commands.js.
+              const profileTurn = await handleViewProfileTurn({ profileData, existingVehicles, senderPhone, formattedPhone, supabaseClient, countryInfo, targetLang });
+              customReply = profileTurn.reply;
             }
             else if (activeIntent === 'EDIT_VEHICLE' || /^(?:edit|update|change|modify)\s+(?:my\s+)?(?:vehicle|car)\b/i.test(messageText.trim())) {
-              const editTarget = mergedExt.plate_number
-                ? (findVehicleByCandidate(existingVehicles, mergedExt.plate_number) || targetVeh)
-                : targetVeh;
-
-              if (!editTarget) {
-                customReply = await composeMessage({
-                  purpose: 'vehicle_not_found_notice',
-                  facts: { issue: 'No matching vehicle found in the registered fleet' },
-                  language: targetLang,
-                  countryInfo,
-                  profile: profileData,
-                  fallbackText: '⚠️ I could not find that vehicle in your registered fleet.'
-                });
-              } else {
-                const fieldAliasMap = {
-                  make: 'make_model', model: 'make_model', make_model: 'make_model', make_and_model: 'make_model',
-                  year: 'yom', yom: 'yom',
-                  fuel: 'fuel_type', fuel_type: 'fuel_type',
-                  color: 'color', colour: 'color',
-                  transmission: 'transmission',
-                  engine: 'engine_number', engine_number: 'engine_number',
-                  tire: 'tire_size', tyre: 'tire_size', tire_size: 'tire_size',
-                  insurance: 'insurance_expiry', insurance_expiry: 'insurance_expiry',
-                  inspection: 'inspection_expiry', inspection_expiry: 'inspection_expiry',
-                  plate: 'plate_number', plate_number: 'plate_number',
-                  mileage: 'current_mileage', odometer: 'current_mileage', current_mileage: 'current_mileage',
-                  email: 'owner_email', owner_email: 'owner_email',
-                  phone: 'owner_phone', owner_phone: 'owner_phone',
-                  vin: 'vin'
-                };
-
-                const candidateUpdates = {};
-                // Note: plate_number is excluded from auto-merge so that mentioning
-                // the target plate never accidentally renames the vehicle.
-                const attrKeys = ['make_model', 'yom', 'year_of_manufacture', 'fuel_type', 'current_mileage', 'color', 'transmission', 'engine_number', 'tire_size', 'insurance_expiry', 'insurance_policy', 'inspection_expiry', 'purchase_cost', 'custom_attributes', 'owner_email', 'owner_phone'];
-                for (const key of attrKeys) {
-                  const value = mergedExt[key];
-                  if (value !== undefined && value !== null && value !== '') candidateUpdates[key] = value;
-                }
-
-                // Flexible "<field> to <value>" parser (tolerates plates/digits in the middle).
-                const explicitFieldMatch = messageText.match(/\b(make(?:\s*(?:&|and|\/)\s*model)?|model|year|yom|fuel(?:\s*type)?|mileage|odometer|color|colour|transmission|engine(?:\s*number)?|tire|tyre|insurance(?:\s*expiry)?|inspection(?:\s*expiry)?|plate(?:\s*number)?|email|owner\s*email|phone|owner\s*phone)\b\s*(?:to|as|=)\s*(.+)$/i);
-                if (explicitFieldMatch) {
-                  const rawFieldName = explicitFieldMatch[1].trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
-                  const rawFieldValue = explicitFieldMatch[2].trim().replace(/^["']|["']$/g, '');
-                  const mappedField = fieldAliasMap[rawFieldName] || rawFieldName;
-                  const numericFields = ['current_mileage', 'odometer_reading', 'yom', 'year_of_manufacture', 'purchase_cost'];
-                  if (numericFields.includes(mappedField)) {
-                    const numericValue = Number(rawFieldValue.replace(/[^\d.]/g, ''));
-                    if (!Number.isNaN(numericValue)) candidateUpdates[mappedField] = numericValue;
-                  } else {
-                    candidateUpdates[mappedField] = rawFieldValue;
-                  }
-                }
-
-                // Honour explicit field/value pairs supplied by the AI classifier.
-                if (mergedExt.edit_field && mergedExt.edit_value) {
-                  const aiField = String(mergedExt.edit_field).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
-                  candidateUpdates[fieldAliasMap[aiField] || aiField] = mergedExt.edit_value;
-                }
-
-                // VIN is immutable — always reject an attempted VIN change.
-                if (mergedExt.vin || candidateUpdates.vin) {
-                  delete candidateUpdates.vin;
-                  customReply = await composeMessage({
-                    purpose: 'vin_lock_notice',
-                    facts: { invariant: 'The VIN / chassis number is permanently tied to the passbook and can never be edited; all other vehicle details can still be updated.' },
-                    language: targetLang,
-                    countryInfo,
-                    profile: profileData,
-                    fallbackText: `🔒 *VIN Is Permanently Locked*\n\nYour VIN / chassis number is permanently tied to your passbook and can never be edited. All other vehicle details can still be updated.`
-                  });
-                } else if (Object.keys(candidateUpdates).length === 0) {
-                  const currentList = `• Plate: ${editTarget.plate_number}\n• Make/Model: ${editTarget.make_model || '-'}\n• Year: ${editTarget.yom || editTarget.year_of_manufacture || '-'}\n• Fuel: ${editTarget.fuel_type || '-'}\n• Odometer: ${(editTarget.current_mileage || editTarget.odometer_reading || 0).toLocaleString()} km\n• VIN: ${editTarget.vin || '-'} 🔒`;
-                  customReply = `🛠️ *Edit Vehicle — ${editTarget.plate_number}*\n\n${currentList}\n\nReply with the change, e.g. *"update vehicle ${editTarget.plate_number} color to White"* or *"change fuel for ${editTarget.plate_number} to Diesel"*.\n\n🔒 *Note:* The VIN is permanently immutable.`;
-                } else {
-                  const editRes = await updateVehicleDetails({
-                    vehicleId: editTarget.id,
-                    requesterId: profileData?.id,
-                    updates: candidateUpdates,
-                    supabase: supabaseClient
-                  });
-
-                  if (!editRes.success) {
-                    customReply = `❌ *Vehicle Update Failed*\n\n${editRes.error}`;
-                  } else {
-                    const appliedLines = Object.entries(editRes.applied || {})
-                      .filter(([k]) => k !== 'updated_at')
-                      .map(([k, v]) => `• *${k}:* ${v}`)
-                      .join('\n');
-                    customReply = `✅ *Vehicle Details Updated!* 🚗\n\n• *Vehicle:* *${editRes.vehicle?.plate_number || editTarget.plate_number}*\n${appliedLines ? appliedLines + '\n' : ''}${editRes.rejected?.length ? '\n🔒 VIN / passbook token remain permanently locked and unchanged.' : ''}`;
-                  }
-                }
-              }
+              // v1.69.0 — Phase 5B-4: the edit-vehicle lane lives in ./commands.js.
+              const editTurn = await handleEditVehicleTurn({ mergedExt, messageText, existingVehicles, targetVeh, profileData, supabaseClient, targetLang, countryInfo });
+              customReply = editTurn.reply;
             }
             else if (activeIntent === 'DELETE_VEHICLE' || /^(?:delete|remove|discard|scrap|decommission)\s+(?:my\s+)?(?:vehicle|car)\b/i.test(messageText.trim())) {
               const deleteTarget = mergedExt.plate_number
@@ -2093,426 +1700,59 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
               }
             }
             else if (activeIntent === 'SWITCH_VEHICLE') {
-              const candidate = mergedExt.target_vehicle || mergedExt.plate_number || messageText.replace(/^(?:switch(?:\s+to)?|manage|select)\s+(?:car|vehicle)?\s*/i, '').trim();
-              const found = findVehicleByCandidate(existingVehicles, candidate);
-              if (found) {
-                setActiveVehicle({ senderPhone, vehicleId: found.id, chatSessions });
-                targetVeh = found;
-                const switchCardText = `🔄 *Switched Active Vehicle!*\n\n` +
-                  `Now managing: *${found.plate_number}* (${found.make_model || 'Vehicle'})\n` +
-                  `• Fuel Type: ${found.fuel_type || 'Fuel'}\n` +
-                  `• Current Odometer: ${(found.current_mileage || found.odometer_reading || 0).toLocaleString()} ${found.unit_system === 'imperial' ? 'mi' : 'km'}\n\n` +
-                  `All subsequent fuel logs, mileage updates, and queries will automatically apply to this vehicle.`;
-                customReply = await composeMessage({
-                  purpose: 'flow_outcome_card',
-                  facts: { cardText: switchCardText, instruction: 'Re-render this engine card conversationally: keep EVERY figure, label, emoji anchor and next step exactly as written. Never drop or invent a figure.' },
-                  language: targetLang,
-                  countryInfo,
-                  profile: profileData,
-                  fallbackText: switchCardText
-                });
-              } else {
-                const vList = existingVehicles.map((v, i) => `${i + 1}️⃣ *${v.plate_number}* (${v.make_model || 'Vehicle'})`).join('\n');
-                const generic = !candidate || /^(?:car|vehicle|truck|asset|one|another|other)$/i.test(String(candidate).trim());
-                customReply = generic
-                  ? `🔄 *Which vehicle should be active?*\n\n${vList}\n\nReply with a number or plate (e.g. *"switch to 1"*).`
-                  : `⚠️ Could not find "${candidate}" in your fleet.\n\nYour registered vehicles:\n${vList}\n\nReply with a number or plate (e.g. *"switch to 1"* or *"switch to ${existingVehicles[0]?.plate_number}"*) to select.`;
-              }
+              // v1.69.0 — Phase 5B-4: the switch-vehicle lane lives in ./commands.js.
+              const switchTurn = await handleSwitchVehicleTurn({ mergedExt, messageText, existingVehicles, senderPhone, sessions: chatSessions, targetLang, countryInfo, profileData });
+              customReply = switchTurn.reply;
+              if (switchTurn.vehicle) targetVeh = switchTurn.vehicle;
             }
             else if (activeIntent === 'QUERY_FUEL_EFFICIENCY') {
-              const fuelAnalysis = await calculateFuelConsumption({
-                supabase: supabaseClient,
-                vehicleId: targetVeh?.id,
-                plateNumber: mergedExt.plate_number || targetVeh?.plate_number,
-                targetUnit: targetVeh?.unit_system || countryInfo.default_units,
-                currency: countryInfo?.currency || null
-              });
-
-              if (fuelAnalysis && fuelAnalysis.explanation) {
-                customReply = fuelAnalysis.explanation;
-                if (existingVehicles.length > 1) {
-                  customReply += `\n\n📌 *(Vehicle: ${targetVeh.plate_number}. Type "switch to [plate]" to analyze another)*`;
-                }
-              } else {
-                customReply = `Could not calculate fuel consumption for ${targetVeh?.plate_number || 'vehicle'}.`;
-              }
+              // v1.69.0 — Phase 5B-4: the fuel-efficiency lane lives in ./commands.js.
+              const fuelTurn = await handleFuelEfficiencyTurn({ mergedExt, targetVeh, existingVehicles, supabaseClient, countryInfo });
+              customReply = fuelTurn.reply;
             }
             else if (activeIntent === 'QUERY_FLEET_SUMMARY') {
-              const fleetReport = await buildFleetReport({
-                supabase: supabaseClient,
-                type: 'fleet',
-                ownerId: existingVehicles.some((v) => v.owner_id === profileData?.id) ? profileData?.id : null,
-                driverId: existingVehicles.some((v) => v.assigned_driver_id === profileData?.id) ? profileData?.id : null,
-                countryInfo,
-                profile: profileData
-              });
-              customReply = fleetReport?.ok && fleetReport.text
-                ? fleetReport.text
-                : `Could not retrieve the fleet summary right now.`;
+              // v1.69.0 — Phase 5B-4: the fleet-summary lane lives in ./commands.js.
+              const fleetTurn = await handleFleetSummaryTurn({ supabaseClient, profileData, existingVehicles, countryInfo });
+              customReply = fleetTurn.reply;
             }
             else if (activeIntent === 'GREETING') {
-              customReply = aiResult.reply_message && !aiResult.reply_message.includes('I am your Saka Fleet WhatsApp assistant') && !isLegacyWelcomeCopy(aiResult.reply_message)
-                ? aiResult.reply_message
-                : await composeMessage({
-                    purpose: 'greeting',
-                    facts: {
-                      activeVehicle: targetVeh?.plate_number || null,
-                      makeModel: targetVeh?.make_model || null,
-                      fleetSize: existingVehicles.length,
-                      nextSteps: ['log expense/fuel', 'update odometer', 'set a reminder', 'log earnings', 'view summary']
-                    },
-                    language: targetLang,
-                    countryInfo,
-                    profile: profileData,
-                    fallbackText: `👋 ${targetVeh?.plate_number || 'Fleet'} — what would you like to do today?`
-                  });
+              // v1.69.0 — Phase 5B-4: the greeting lane lives in ./commands.js.
+              const greetingTurn = await handleGreetingTurn({ aiResult, targetVeh, existingVehicles, targetLang, countryInfo, profileData });
+              customReply = greetingTurn.reply;
             }
             else if (activeIntent === 'LOG_EXPENSE') {
-              const extAmount = mergedExt.amount || extractNumberFromText(messageText);
-              const extLiters = mergedExt.fuel_liters || mergedExt.liters || null;
-              const extOdo = mergedExt.odometer || mergedExt.current_mileage || extractOdometerFromText(messageText);
-              // v1.30.0 — canonicalise the expense type from the catalog so a
-              // one-liner like "repaired a puncture... front tyre" lands in Tyres.
-              const expType = normalizeExpenseType(
-                mergedExt.expense_type
-                || (hasExpenseTypeMarker(messageText) ? resolveExpenseType(messageText) : null)
-              );
-              const extFillType = normalizeFillType(mergedExt.fill_type) || normalizeFillType(messageText);
-
-              if ((extAmount && extAmount > 0) || (extLiters && extLiters > 0)) {
-                // v1.32.1 — write-time duplicate guard: the same expense (plate +
-                // amount + type + Nairobi day, within 3 h) is never written twice,
-                // even when a receipt is uploaded repeatedly. A different odometer
-                // reading proves a separate fill and passes through.
-                const duplicateExpense = (supabaseClient && targetVeh && extAmount && extAmount > 0)
-                  ? await isDuplicateExpense(supabaseClient, {
-                    plate: targetVeh.plate_number,
-                    amount: extAmount,
-                    expenseType: expType,
-                    odometer: extOdo || null,
-                    windowHours: Number(process.env.OCR_EXPENSE_DEDUPE_HOURS || 3)
-                  })
-                  : { duplicate: false };
-                if (duplicateExpense.duplicate) {
-                  customReply = `⚠️ *Already logged* — I found *${countryInfo.currency} ${Number(extAmount).toLocaleString()}* (${expType}) for *${targetVeh.plate_number}* in the last few hours, so I did *not* save a duplicate. ✅\n\nIf this is a genuinely separate fill, send the new odometer reading (e.g. *"Logged ${extLiters || ''}L at 367,500 km"*) and I will log it.`;
-                } else if (supabaseClient && targetVeh) {
-                  // v1.58.6 — never claim "Saved" without a VERIFIED write (live
-                  // 2026-11-04: a one-line fuel log rendered "Saved ✅" while the
-                  // expense_logs row was never persisted; the old code also showed
-                  // success for a duplicate or when no client was present).
-                  const quickExpenseLabel = sanitizeEntryLabel(mergedExt.label || extractEntryLabel(messageText));
-                  const quickExpenseRow = {
-                    vehicle_id: targetVeh.id,
-                    driver_id: profileData?.id,
-                    expense_type: expType,
-                    amount: extAmount || 0,
-                    fuel_liters: extLiters || 0,
-                    fill_type: extFillType,
-                    odometer_reading: extOdo || null,
-                    notes: messageText.trim(),
-                    // v1.59.0 — optional searchable label ("label: karen", "#karen").
-                    label: quickExpenseLabel || null
-                  };
-                  let { error: quickLogErr } = await supabaseClient.from('expense_logs').insert([quickExpenseRow]);
-                  if (quickLogErr && /label/i.test(quickLogErr.message || '')) {
-                    // Rule 50 — an un-migrated optional column never blocks a save.
-                    const { label, ...legacyQuickRow } = quickExpenseRow;
-                    ({ error: quickLogErr } = await supabaseClient.from('expense_logs').insert([legacyQuickRow]));
-                  }
-                  if (quickLogErr) {
-                    customReply = `⚠️ I could not save that expense just now — *nothing was written*. Please try again in a moment, or send it as *"amount type"* (e.g. *"1000 fuel"*).`;
-                  } else {
-                    await supabaseClient.from('expenses').insert([{
-                      plate: targetVeh.plate_number,
-                      expense_type: expType,
-                      amount: extAmount || 0,
-                      liters: extLiters || 0,
-                      odometer_reading: extOdo || null
-                    }]).select().maybeSingle();
-
-                    if (extOdo && extOdo > (targetVeh.current_mileage || 0)) {
-                      await supabaseClient.from('vehicles').update({
-                        current_mileage: extOdo,
-                        odometer_reading: extOdo,
-                        updated_at: new Date().toISOString()
-                      }).eq('id', targetVeh.id);
-                      targetVeh.current_mileage = extOdo;
-                    }
-                    // v1.63.1 — the quick-log expense changed the ledger facts.
-                    markUserDataChanged({ supabase: supabaseClient, phone: senderPhone, ownerId: profileData?.id, reason: 'whatsapp.quickLogExpense' });
-                    const expenseCardText = `⛽ *Expense Logged Successfully!* 📝\n\n` +
-                      `• *Vehicle:* *${targetVeh.plate_number}* (${targetVeh.make_model || 'Vehicle'})\n` +
-                      `• *Category:* ${expType}\n` +
-                      (extAmount ? `• *Amount:* ${countryInfo.currency} ${Number(extAmount).toLocaleString()}\n` : '') +
-                      (extLiters ? `• *Volume:* ${extLiters} Liters\n` : '') +
-                      (extFillType ? `• *Fill:* ${extFillType === 'full' ? 'Full tank' : 'Top-up'}\n` : '') +
-                      (extOdo ? `• *Odometer:* ${Number(extOdo).toLocaleString()} km\n` : '') +
-                      `\n✅ Saved to database under *${targetVeh.plate_number}*.` +
-                      (expType.toLowerCase().includes('fuel') && !extFillType
-                        ? `\n\n💡 *Tip:* say *"full tank"* or *"top-up"* with your next fuel log so I can measure exact fuel economy.`
-                        : '');
-                    customReply = await composeMessage({
-                      purpose: 'flow_outcome_card',
-                      facts: { cardText: expenseCardText, instruction: 'Re-render this engine card conversationally: keep EVERY figure, label, emoji anchor and next step exactly as written. Never drop or invent a figure.' },
-                      language: targetLang,
-                      countryInfo,
-                      profile: profileData,
-                      fallbackText: expenseCardText
-                    });
-                    if (existingVehicles.length > 1) {
-                      customReply += `\n*(Active vehicle: ${targetVeh.plate_number}. Type "switch to [car]" to change)*`;
-                    }
-                  }
-                } else {
-                  customReply = `⛽ I can't save that right now — please try again in a moment.`;
-                }
-              } else {
-                customReply = `⛽ *Log Expense / Fuel for ${targetVeh.plate_number}*\n\nPlease reply with expense details. For example:\n• *"Logged 45L fuel at 368000 km for KES 8500"*\n• *"Oil change KES 5000"*`;
-              }
+              // v1.69.0 — Phase 5B-4: the quick-log expense lane lives in ./commands.js.
+              const expenseTurn = await handleLogExpenseTurn({ mergedExt, messageText, targetVeh, supabaseClient, profileData, senderPhone, countryInfo, targetLang, existingVehicles, sendWhatsApp: sendWhatsAppReply });
+              customReply = expenseTurn.reply;
             }
             else if (activeIntent === 'UPDATE_MILEAGE') {
-              const extOdometer = mergedExt.odometer || mergedExt.current_mileage || extractOdometerFromText(messageText);
-              if (extOdometer && extOdometer > 0) {
-                const inputUnit = targetVeh?.unit_system === 'imperial' ? 'mi' : 'km';
-                let odometerSaveError = null;
-                if (supabaseClient && targetVeh) {
-                  const recorded = await applyOdometerReading({
-                    supabase: supabaseClient,
-                    vehicle: targetVeh,
-                    reading: extOdometer,
-                    inputUnit,
-                    sendFn: (phone, text) => sendWhatsAppReply(phone, text),
-                    canDeliver: (phone) => String(phone || '').replace(/[^\d]/g, '') !== String(senderPhone || '').replace(/[^\d]/g, '')
-                  });
-                  if (recorded?.ok === false) odometerSaveError = recorded.error;
-                  if (recorded?.canonicalKm) targetVeh.current_mileage = recorded.canonicalKm;
-                }
-                if (supabaseClient && targetVeh && !odometerSaveError) {
-                  // v1.63.1 — the odometer update changed the asset facts.
-                  markUserDataChanged({ supabase: supabaseClient, phone: senderPhone, ownerId: profileData?.id, reason: 'whatsapp.quickLogMileage' });
-                }
-                if (odometerSaveError) {
-                  customReply = `⚠️ Could not update the odometer for *${targetVeh.plate_number}*: ${odometerSaveError}`;
-                } else {
-                  customReply = `📈 *Odometer Updated!* 🚗
-
-` +
-                    `• *Vehicle:* *${targetVeh.plate_number}* (${targetVeh.make_model || 'Vehicle'})
-` +
-                    `• *New Odometer:* ${Number(extOdometer).toLocaleString()} ${inputUnit}
-
-` +
-                    `✅ Saved to database under *${targetVeh.plate_number}*!`;
-                  if (existingVehicles.length > 1) {
-                    customReply += `
-*(Active vehicle: ${targetVeh.plate_number})*`;
-                  }
-                }
-              } else {
-                customReply = `📈 *Update Mileage / Odometer*
-
-Please reply with your updated odometer reading (e.g. *"Odometer 45000 km"*).`;
-              }
+              // v1.69.0 — Phase 5B-4: the odometer lane lives in ./commands.js.
+              const mileageTurn = await handleUpdateMileageTurn({ mergedExt, messageText, targetVeh, supabaseClient, senderPhone, profileData, existingVehicles, sendWhatsApp: sendWhatsAppReply });
+              customReply = mileageTurn.reply;
             }
             else if (activeIntent === 'LOG_OPERATING_HOURS') {
-              const extHours = mergedExt.operating_hours !== undefined && mergedExt.operating_hours !== null
-                ? Number(mergedExt.operating_hours)
-                : extractNumberFromText(messageText);
-              if (supabaseClient && targetVeh && extHours !== null && Number.isFinite(extHours) && extHours >= 0) {
-                const recorded = await applyOperatingHours({
-                  supabase: supabaseClient,
-                  vehicle: targetVeh,
-                  hours: extHours,
-                  sendFn: (phone, text) => sendWhatsAppReply(phone, text),
-                  canDeliver: (phone) => String(phone || '').replace(/[^\d]/g, '') !== String(senderPhone || '').replace(/[^\d]/g, '')
-                });
-                if (recorded.ok) {
-                  // v1.63.1 — the hour-meter update changed the asset facts.
-                  markUserDataChanged({ supabase: supabaseClient, phone: senderPhone, ownerId: profileData?.id, reason: 'whatsapp.quickLogHours' });
-                }
-                if (!recorded.ok) {
-                  customReply = `⚠️ Could not update operating hours for *${targetVeh.plate_number}*: ${recorded.error}`;
-                } else {
-                  targetVeh.operating_hours = extHours;
-                  customReply = `⏱️ *Operating Hours Updated!*
-
-` +
-                    `• *Vehicle:* *${targetVeh.plate_number}* (${targetVeh.make_model || 'Vehicle'})
-` +
-                    `• *New Hour Meter:* ${Number(extHours).toLocaleString()} operating hours
-
-` +
-                    `✅ Saved to database under *${targetVeh.plate_number}*!`;
-                  if (existingVehicles.length > 1) {
-                    customReply += `
-*(Active vehicle: ${targetVeh.plate_number})*`;
-                  }
-                }
-              } else {
-                customReply = `⏱️ *Log Operating Hours*
-
-Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
-              }
+              // v1.69.0 — Phase 5B-4: the hour-meter lane lives in ./commands.js.
+              const hoursTurn = await handleOperatingHoursTurn({ mergedExt, messageText, targetVeh, supabaseClient, senderPhone, profileData, existingVehicles, sendWhatsApp: sendWhatsAppReply });
+              customReply = hoursTurn.reply;
             }
             else if (activeIntent === 'LOG_EARNINGS') {
-              const extAmount = mergedExt.amount || extractNumberFromText(messageText);
-              const earnType = mergedExt.earning_type
-                ? normalizeEarningType(mergedExt.earning_type)
-                : (hasEarningTypeMarker(messageText) ? resolveEarningType(messageText) : null);
-              if (extAmount && extAmount > 0) {
-                let earningSaveError = null;
-                const quickEarningLabel = sanitizeEntryLabel(mergedExt.label || extractEntryLabel(messageText));
-                if (supabaseClient && targetVeh) {
-                  // v1.58.8 — verify the write before claiming "Recorded" (same
-                  // assurance as the expense path).
-                  const quickEarningRow = {
-                    vehicle_id: targetVeh.id,
-                    revenue_amount: extAmount,
-                    currency: countryInfo.currency,
-                    earning_type: earnType,
-                    // v1.59.0 — optional searchable label.
-                    label: quickEarningLabel || null,
-                    logged_at: new Date().toISOString()
-                  };
-                  let { error: earnErr } = await supabaseClient.from('private_earnings').insert([quickEarningRow]);
-                  if (earnErr && /label/i.test(earnErr.message || '')) {
-                    const { label, ...legacyEarningRow } = quickEarningRow;
-                    ({ error: earnErr } = await supabaseClient.from('private_earnings').insert([legacyEarningRow]));
-                  }
-                  if (earnErr) earningSaveError = earnErr.message;
-                } else {
-                  earningSaveError = 'no vehicle or database';
-                }
-                if (!earningSaveError) {
-                  // v1.63.1 — the quick-log earning changed the ledger facts.
-                  markUserDataChanged({ supabase: supabaseClient, phone: senderPhone, ownerId: profileData?.id, reason: 'whatsapp.quickLogEarning' });
-                }
-                if (earningSaveError) {
-                  customReply = `⚠️ I could not save that earning just now — *nothing was written*. Please try again in a moment.`;
-                } else {
-                  customReply = `💰 *Earnings Logged!* 🎉\n\n• *Vehicle:* *${targetVeh.plate_number}*\n• *Revenue:* ${countryInfo.currency} ${Number(extAmount).toLocaleString()}${earnType ? `\n• *Type:* ${earnType}` : ''}${quickEarningLabel ? `\n• *Label:* #${quickEarningLabel}` : ''}\n\n✅ Recorded under *${targetVeh.plate_number}*!`;
-                  if (existingVehicles.length > 1) {
-                    customReply += `\n*(Active vehicle: ${targetVeh.plate_number})*`;
-                  }
-                }
-              } else {
-                customReply = await composeMessage({
-                  purpose: 'quiz_intro_prompt',
-                  facts: { flow: 'Log earnings', example: 'Earned KES 5000 today' },
-                  language: targetLang,
-                  countryInfo,
-                  profile: profileData,
-                  fallbackText: `💰 *Log Earnings*\n\nPlease reply with your revenue details (e.g. *"Earned KES 5000 today"*).`
-                });
-              }
+              // v1.69.0 — Phase 5B-4: the quick-log earning lane lives in ./commands.js.
+              const earningTurn = await handleLogEarningsTurn({ mergedExt, messageText, targetVeh, supabaseClient, profileData, senderPhone, countryInfo, targetLang, existingVehicles });
+              customReply = earningTurn.reply;
             }
             else if (activeIntent === 'SET_REMINDER') {
-              customReply = `🔔 *Set Reminder for ${targetVeh.plate_number}*\n\nReply with the item and its date, distance or operating hours. Examples:\n• *"Insurance expires on 15th Dec 2026"*, *"Inspection due next month"*, *"License renewal in 14 days"*\n• *"Road license expires 2027-03-31"* or *"Permit due in 30 days"*\n• *"Oil change in 5000 km"*, *"Brake pads in 3000 miles"* or *"Spare part change in 36 operating hours"*`;
+              // v1.69.0 — Phase 5B-4: the reminder prompt lives in ./commands.js.
+              customReply = renderReminderPrompt({ targetVeh }).reply;
             }
             else if (activeIntent === 'REQUEST_REPORT') {
-              const quota = await getReportQuota({
-                supabase: supabaseClient,
-                ownerId: profileData?.id,
-                profile: profileData
-              });
-              if (!quota.canGenerate) {
-                const upgrade = await checkoutForTier({
-                  supabase: supabaseClient,
-                  owner: {
-                    id: profileData?.id,
-                    phone_number: senderPhone,
-                    email: profileData?.email
-                  },
-                  targetTierKey: entitlements?.nextTierKey || 'solo_pro',
-                  interval: entitlements?.billingInterval || 'annual',
-                  currency: countryInfo?.currency || 'USD'
-                });
-                customReply = `📊 *Monthly Report Limit Reached*\n\nThe Free plan includes *${quota.limit} report per month* and you have used it (resets monthly).\n\nUnlock unlimited reports, full AI and compliance tracking with *${getTierLabel(entitlements?.nextTierKey || 'solo_pro')}*:\n👉 ${await shortenUrl(supabaseClient, upgrade.ok ? upgrade.checkoutUrl : 'https://sakafleet.com/pricing')}\n\n💡 Annual billing saves *${getAnnualDiscountPercent(entitlements?.nextTierKey || 'solo_pro')}%* — reply *"upgrade annual"* to see it.`;
-              } else {
-              const reportType = resolveAnyReportType(mergedExt.report_type || messageText, 'fleet');
-              const metricIds = resolveMetricIds(messageText);
-              const dateRange = /last\s*(?:3|three)\s*months?/i.test(messageText)
-                ? 'last_3_months'
-                : /(this\s*year|yearly|annual|year\s*review)/i.test(messageText) ? 'this_year' : 'this_month';
-              // v1.16.0 — slow-report lane: ACK instantly (zero AI tokens),
-              // build in the background, deliver the result as a follow-up while
-              // the user keeps chatting.
-              const queued = (reportType === 'custom' && metricIds.length === 0) ? false : await queueReportFollowUp({
-                supabase: supabaseClient,
-                phone: senderPhone,
-                payload: {
-                  ownerId: existingVehicles.some((v) => v.owner_id === profileData?.id) ? profileData?.id : null,
-                  driverId: existingVehicles.some((v) => v.assigned_driver_id === profileData?.id) ? profileData?.id : null,
-                  profileId: profileData?.id || null,
-                  reportType,
-                  metricIds,
-                  range: dateRange,
-                  roles: profileData?.roles || [],
-                  plate: targetVeh?.plate_number || null,
-                  countryCode: countryInfo?.country_code || null,
-                  locale: countryInfo?.locale || 'en-US',
-                  currency: countryInfo?.currency || 'USD',
-                  country: countryInfo?.country || null,
-                  language: targetLang,
-                  unitSystem: profileData?.unit_system || 'metric',
-                  timeZone: resolveUserTimezone({ countryInfo, profile: profileData }),
-                  phone: senderPhone,
-                  email: profileData?.email || null
-                }
-              });
-              if (queued) {
-                customReply = followUpAckText(reportType);
-              } else if (reportType === 'custom' && metricIds.length === 0) {
-                const access = resolveReportAccess({
-                  reportType: 'custom',
-                  profile: profileData,
-                  vehicles: existingVehicles,
-                  roles: profileData?.roles || []
-                });
-                customReply = `📊 *Bespoke report — pick your metrics*\n\nAvailable: ${customMetricMenu(access)}\n\n` +
-                  'Reply, for example:\n_"custom report: fuel economy, total spend and distance for last 3 months"_\n\n' +
-                  'You can also ask for "fuel economy report", "driver daybook", "vehicle health" or "compliance card".';
-              } else {
-                const laneReport = await buildReportForLane({
-                  supabase: supabaseClient,
-                  reportType,
-                  ownerId: existingVehicles.some((v) => v.owner_id === profileData?.id) ? profileData?.id : null,
-                  driverId: existingVehicles.some((v) => v.assigned_driver_id === profileData?.id) ? profileData?.id : null,
-                  plate: targetVeh?.plate_number || null,
-                  profile: profileData,
-                  countryInfo,
-                  metricIds,
-                  range: dateRange
-                });
-                customReply = laneReport.ok
-                  ? laneReport.text
-                  : (laneReport.text || `📊 *Fleet Reports & Summary*\n\nYou have ${existingVehicles.length} active vehicle(s).\n\nAsk for *fleet status*, *compliance report*, *maintenance report* or *financial report*.`);
-                if (profileData?.id && laneReport?.ok) {
-                  try {
-                    await recordReportUsage({ supabase: supabaseClient, ownerId: profileData.id });
-                    // Trial activation #3: first fleet report generated.
-                    await recordActivationEvent({
-                      supabase: supabaseClient,
-                      ownerId: profileData.id,
-                      event: ACTIVATION_EVENTS.REPORT_GENERATED
-                    });
-                    entitlements = await getEntitlements({
-                      supabase: supabaseClient,
-                      ownerId: profileData.id,
-                      profile: profileData,
-                      useCache: false
-                    });
-                  } catch { /* quota/activation are best-effort */ }
-                }
-              }
-              }
+              // v1.69.0 — Phase 5B-4: the report-request lane lives in ./commands.js.
+              const reportTurn = await handleReportRequestTurn({ mergedExt, messageText, supabaseClient, profileData, senderPhone, existingVehicles, targetVeh, entitlements, countryInfo, targetLang, queueReportFollowUp });
+              customReply = reportTurn.reply;
+              if (reportTurn.entitlements) entitlements = reportTurn.entitlements;
             }
             else if (activeIntent === 'MANAGE_VEHICLE' || activeIntent === 'LIST_VEHICLES') {
-              const vehicleList = existingVehicles.map((v, i) => {
-                const isActive = v.id === targetVeh?.id;
-                return `${i + 1}️⃣ *${v.plate_number}* - ${v.make_model || 'Vehicle'} (${v.fuel_type || 'Fuel'}, ${(v.current_mileage || v.odometer_reading || 0).toLocaleString()} km)${isActive ? ' 👉 *(ACTIVE)*' : ''}`;
-              }).join('\n');
-              customReply = `🚗 *Your Registered Fleet:*\n\n${vehicleList}\n\n💡 *To switch active vehicle:* Reply *"switch to [plate]"* or *"switch to [number]"*!`;
+              // v1.69.0 — Phase 5B-4: the vehicle-list card lives in ./commands.js.
+              customReply = renderVehicleList({ existingVehicles, targetVeh }).reply;
             }
             else if (session.pendingAccountDeletion) {
               // v1.68.0 — Phase 5B-3: the account-deletion verification lives in ./pending.js.
@@ -2542,34 +1782,9 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
               }
             }
             else if (activeIntent === 'EDIT_PROFILE' || /^(?:edit|update|change|modify)\s+(?:my\s+)?(?:profile|details|name|language|units?|unit\s+system|settings|contact)\b/i.test(messageText.trim())) {
-              const profileUpdates = {};
-              const nameMatch = messageText.match(/^(?:edit|update|change|modify)\s+(?:my\s+)?(?:full\s+)?name\s+(?:to|as|=)\s+(.+)$/i);
-              const langMatch = messageText.match(/\b(english|swahili|french|spanish|german|arabic)\b/i);
-              const unitMatch = messageText.match(/\b(metric|imperial)\b/i);
-
-              if (nameMatch) profileUpdates.full_name = nameMatch[1].trim();
-              if (mergedExt.full_name) profileUpdates.full_name = mergedExt.full_name;
-              if (langMatch) profileUpdates.preferred_language = langMatch[1][0].toUpperCase() + langMatch[1].slice(1).toLowerCase();
-              if (mergedExt.preferred_language) profileUpdates.preferred_language = mergedExt.preferred_language;
-              if (unitMatch) profileUpdates.unit_system = unitMatch[1].toLowerCase();
-              if (mergedExt.unit_system) profileUpdates.unit_system = mergedExt.unit_system;
-
-              if (Object.keys(profileUpdates).length === 0) {
-                customReply = `⚙️ *Profile & Settings*\n\n• Name: ${profileData?.full_name || '-'}\n• Email: ${profileData?.email || '-'}\n• Language: ${profileData?.preferred_language || 'English'}\n• Units: ${profileData?.unit_system || 'metric'}\n\nReply with a change, e.g. *"update my name to Jane Doe"*, *"change my language to Swahili"*, or *"change my units to imperial"*.\n\n_(Use "update email to ..." to change your email with OTP verification.)_`;
-              } else if (supabaseClient && profileData) {
-                profileUpdates.updated_at = new Date().toISOString();
-                const { error: profileErr } = await supabaseClient.from('profiles').update(profileUpdates).eq('id', profileData.id);
-                if (profileErr) {
-                  customReply = `❌ *Profile Update Failed*\n\n${profileErr.message}`;
-                } else {
-                  Object.assign(profileData, profileUpdates);
-                  const changed = Object.entries(profileUpdates)
-                    .filter(([k]) => k !== 'updated_at')
-                    .map(([k, v]) => `• *${k}:* ${v}`)
-                    .join('\n');
-                  customReply = `✅ *Profile Updated!* ⚙️\n\n${changed}\n\nThese settings now apply across your whole fleet.`;
-                }
-              }
+              // v1.69.0 — Phase 5B-4: the profile-edit lane lives in ./commands.js.
+              const profileEditTurn = await handleEditProfileTurn({ messageText, mergedExt, profileData, supabaseClient });
+              customReply = profileEditTurn.reply;
             }
             else if (session.pendingEmailUpdate) {
               // v1.68.0 — Phase 5B-3: the email-update verification lives in ./pending.js.
@@ -2616,328 +1831,20 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
               });
             }
             else {
-              if (aiResult.reply_message && !aiResult.reply_message.includes('I am your Saka Fleet WhatsApp assistant. How can I help with your vehicle') && !isLegacyWelcomeCopy(aiResult.reply_message)) {
-                customReply = aiResult.reply_message;
-              } else {
-                customReply = await composeMessage({
-                  purpose: 'active_user_default',
-                  facts: {
-                    activeVehicle: targetVeh?.plate_number || null,
-                    makeModel: targetVeh?.make_model || null,
-                    fleetSize: existingVehicles.length
-                  },
-                  language: targetLang,
-                  countryInfo,
-                  profile: profileData,
-                  fallbackText: `How can I help with ${targetVeh?.plate_number || 'your fleet'} today?`
-                });
-              }
+              // v1.69.0 — Phase 5B-4: the active-user default lane lives in ./commands.js.
+              customReply = (await renderActiveDefault({ aiResult, targetVeh, existingVehicles, targetLang, countryInfo, profileData })).reply;
             }
           }
         }
 
         // --- BRANCH C: UNREGISTERED / IDLE USER DEFAULT ---
         else if (!isSpecialFlowHandled) {
-          const clean = messageText.trim().toLowerCase();
-
-          // 1. User asks to pause / stop
-          if (/^(stop|pause|halt|quiet|exit|cancel)$/i.test(clean)) {
-            customReply = await composeMessage({
-              purpose: 'pause_acknowledgement',
-              facts: { state: 'paused', note: 'Acknowledge the pause warmly and say they can return anytime.' },
-              language: targetLang,
-              countryInfo,
-              profile: profileData,
-              fallbackText: 'Paused — message me anytime to continue.'
-            });
-          }
-          // 1b. Farewell — a goodbye must never fall through to the welcome.
-          else if (/^(?:ok(?:ay)?[\s.,!]*)?(?:bye|goodbye|good bye|see you|see ya|talk later|good ?night|kwaheri|tutaonana)\b[\s!.…]*$/i.test(messageText.trim())) {
-            customReply = await composeMessage({
-              purpose: 'farewell',
-              facts: { note: 'One warm line of goodbye. No sales pitch, no question, keep the door open.' },
-              language: targetLang,
-              countryInfo,
-              profile: profileData,
-              fallbackText: '👋 Anytime — I am here whenever you need me. Just say Hi. 🚗'
-            });
-          }
-          // 1b-2. Reply-quality complaint ("your last reply was incomplete") —
-          // v1.28.1. NEVER answer this with the welcome. Recover the answer, and
-          // if the complaint mentions a fleet size, answer it now in local currency.
-          else if (asksToUploadLogbook(messageText)) {
-            customReply = await composeMessage({
-              purpose: 'logbook_upload_invite',
-              facts: {
-                whatToSend: 'a clear photo of the logbook or registration certificate',
-                whatHappens: 'Saka reads the plate, make and model from it and finishes registration together.',
-                alternative: 'reply REGISTER for a few quick questions instead'
-              },
-              language: targetLang,
-              countryInfo,
-              profile: profileData,
-              fallbackText: 'Yes! 📄 Send a clear photo of your logbook or registration certificate and I will read the plate, make and model from it — then we finish registration together. If the photo is tricky, reply *REGISTER* and I will ask a few quick questions instead. 🙂'
-            });
-          }
-          else if (isIncompleteReplyComplaint(messageText)) {
-            // v1.51.9 — one shared grammar; the fleet count is parsed in ONE place.
-            const continuation = replyContinuationRequestFor(messageText);
-            const complaintFleet = continuation.detectedFleetCount;
-            let recoveryFacts = null;
-            if (complaintFleet) {
-              try {
-                recoveryFacts = await buildLocalPricingFacts({
-                  supabase: supabaseClient,
-                  currency: countryInfo?.currency || 'USD',
-                  locale: countryInfo?.locale,
-                  fleetCount: complaintFleet
-                });
-              } catch { recoveryFacts = null; }
-            }
-            const recoveryTotal = recoveryFacts
-              ? (recoveryFacts.find((line) => /For \d+ vehicles/.test(line)) || recoveryFacts[0])
-              : null;
-            const recoveryDetail = {};
-            // v1.54.0 — ANSWER LAW v2: the user's own data rides this turn too,
-            // so a cut-off answer about their fleet is finished from facts.
-            let recoveryUserFacts = '';
-            try {
-              recoveryUserFacts = await buildUserFactsLines({
-                supabase: supabaseClient,
-                profile: profileData,
-                vehicles: existingVehicles,
-                currency: countryInfo?.currency || 'USD'
-              });
-            } catch { recoveryUserFacts = ''; }
-            const recoveryReply = await composeMessage({
-              purpose: 'complaint_recovery',
-              facts: {
-                userNote: messageText,
-                fleetCount: complaintFleet || null,
-                pricedAnswer: recoveryTotal || 'None supplied.',
-                userDataFacts: recoveryUserFacts || 'No account data on file yet.',
-                instruction: recoveryTotal
-                  ? 'In 1-2 short lines, acknowledge the previous reply was cut short and give the full recommendation now using pricedAnswer ONLY. Never mention $, USD or any dollar amount. No re-introduction, no welcome, no menu. userDataFacts is the user\'s own data — never claim you lack access to it.'
-                  : 'In 1-2 short lines, acknowledge the previous reply was cut short and say you will give the full answer now. Ask for the one detail you need, if any. No re-introduction, no welcome, no menu, no defensiveness. userDataFacts is the user\'s own data — never claim you lack access to it.'
-              },
-              language: targetLang,
-              countryInfo,
-              profile: profileData,
-              detail: recoveryDetail,
-              fallbackText: recoveryTotal
-                ? `You are right — that reply was cut short. ${recoveryTotal}`
-                : 'You are right — that reply was cut short. Tell me again and I will give you the full answer in one message. 🙏'
-            });
-            const acknowledgementRe = /(?:sorry|apolog|cut short|incomplete|again|redo|full answer|complete)/i;
-            const ackReply = acknowledgementRe.test(String(recoveryReply || ''))
-              ? recoveryReply
-              : (recoveryTotal
-                ? `You are right — that reply was cut short. ${recoveryTotal}`
-                : 'You are right — that reply was cut short. Tell me again and I will give you the full answer in one message. 🙏');
-            // v1.51.9 — if the composer itself was cut short, use the deterministic facts.
-            customReply = (recoveryDetail.stoppedAtCap && recoveryTotal)
-              ? stripUsdFigures(`You are right — that reply was cut short. ${recoveryTotal}`, { currency: countryInfo?.currency || 'USD' })
-              : (recoveryFacts
-                ? stripUsdFigures(ackReply, { currency: countryInfo?.currency || 'USD' })
-                : ackReply);
-            if (supabaseClient) {
-              try {
-                // v1.58.25 — a complaint is linked to the delivery errors that
-                // explain it (live 2026-11-04: an INCOMPLETE_REPLY_COMPLAINT row
-                // carried no error ids while 131026 failures piled up for the
-                // same number). `admin friction done` now clears both sides.
-                const recentErrors = await supabaseClient
-                  .from('error_logs')
-                  .select('id,stack_trace')
-                  .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
-                  .order('created_at', { ascending: false })
-                  .limit(40);
-                const digits = String(senderPhone || '').replace(/\D/g, '');
-                const relatedIds = (recentErrors?.data || [])
-                  .filter((row) => digits && String(row.stack_trace || '').includes(digits))
-                  .map((row) => row.id)
-                  .slice(0, 10);
-                await recordFriction(supabaseClient, {
-                  phone: senderPhone,
-                  frictionType: 'INCOMPLETE_REPLY_COMPLAINT',
-                  snippet: `Reply complaint [recovered: ${recoveryTotal ? 'pricing' : 'no-facts'}]: "${messageText}"`,
-                  source: 'chat',
-                  errorLogIds: relatedIds
-                });
-              } catch { /* logging is best effort */ }
-            }
-          }
-          // 1c. Feedback / tester notes v1.27.0 — acknowledge the specific point,
-          // never a canned apology for an opinion. Logged for the team.
-          else if (/\b(feedback|tester|testing|notes?|suggestion|improve|improvement|canned|templates?|robotic|scripted)\b/i.test(messageText)
-            && /\b(stupid|bad|wrong|hate|annoy|boring|canned|template|robotic|scripted|pre-?made|prewritten|pre-written|dumb)\b/i.test(messageText)) {
-            if (supabaseClient) {
-              try {
-                await supabaseClient.from('chat_friction_logs').insert([{
-                  user_phone: senderPhone,
-                  session_id: senderPhone,
-                  friction_type: 'USER_FEEDBACK',
-                  transcript_snippet: `Feedback: "${messageText}"`.slice(0, 500)
-                }]);
-              } catch { /* logging is best effort */ }
-            }
-            customReply = await composeMessage({
-              purpose: 'feedback_ack',
-              facts: {
-                userNote: messageText,
-                instruction: 'Answer in 1-2 short lines. Acknowledge their specific point in plain words, no apology theatre, no corporate phrasing, no defensiveness. State the one concrete thing you will do about it. Thank them once, briefly.'
-              },
-              language: targetLang,
-              countryInfo,
-              profile: profileData,
-              fallbackText: 'Noted — fair point. I will keep the answers fresh and specific instead of scripted. 🙏'
-            });
-          }
-          // 1d. ANY question — product or the user's own data — gets a composed
-          // answer from realtime facts (v1.27.0). Never the welcome, never a menu.
-          else if (!productQaMatch && messageText.trim().length >= 5
-            && (/^(?:what|how|why|when|where|which|who|is|are|was|were|do|does|did|can|could|should|would|tell me|explain|show me|give me|list|any)\b/i.test(messageText.trim()) || /\?\s*$/.test(messageText.trim()))) {
-            let userFacts = [];
-            try {
-              const snapshot = await buildUserContextSnapshot({
-                supabase: supabaseClient,
-                profile: profileData,
-                vehicles: existingVehicles,
-                currency: countryInfo?.currency || 'USD'
-              });
-              userFacts = snapshot.lines;
-            } catch { userFacts = []; }
-            const questionFallback = userFacts.length
-              ? userFacts.slice(0, 3).join('\n')
-              : 'I do not have that on file yet — tell me in one line what you need and I will handle it.';
-            // v1.28.1 — money questions from a non-USD user are answered in their
-            // currency only; no dollar figure may appear anywhere in the reply.
-            let localPricingFacts = null;
-            const dataFleetMatch = messageText.match(/\b(\d{1,3})\s*(?:cars?|vehicles?|units?|machines?|trucks?|bikes?|motorbikes?|matatus?|lorries?|pickups?)\b/i);
-            if (countryInfo?.currency && String(countryInfo.currency).toUpperCase() !== 'USD') {
-              try {
-                localPricingFacts = await buildLocalPricingFacts({
-                  supabase: supabaseClient,
-                  currency: countryInfo.currency,
-                  locale: countryInfo.locale,
-                  fleetCount: dataFleetMatch ? Number(dataFleetMatch[1]) : null
-                });
-              } catch { localPricingFacts = null; }
-            }
-            const dataAnswer = await composeMessage({
-              purpose: 'user_data_answer',
-              facts: {
-                userQuestion: messageText,
-                userDataFacts: userFacts.length ? userFacts.join('\n') : 'No account data on file yet.',
-                productFacts: localPricingFacts
-                  ? buildProductFactsContext().split('\n').filter((line) => !/\$|\bUSD\b/i.test(line)).join('\n')
-                  : buildProductFactsContext(),
-                localPricingFacts: localPricingFacts ? localPricingFacts.join('\n') : 'None supplied.',
-                instruction: localPricingFacts
-                  ? 'Answer the question directly in 1-4 short conversational lines using ONLY these facts. userDataFacts is the user\'s own data — read from it FIRST. Account data lives in userDataFacts; product knowledge in productFacts. If the answer involves money, quote ONLY the local-currency figures in localPricingFacts — NEVER mention $, USD or any dollar amount. If neither can answer it, say exactly which field is missing and offer the single most useful next step. No menus, no corporate phrasing, never the word plate, and never claim you lack information or access when the facts above contain it.'
-                  : 'Answer the question directly in 1-4 short conversational lines using ONLY these facts. userDataFacts is the user\'s own data — read from it FIRST. Account data lives in userDataFacts; product knowledge in productFacts. If neither can answer it, say exactly which field is missing and offer the single most useful next step. No menus, no corporate phrasing, never the word plate, and never claim you lack information or access when the facts above contain it.'
-              },
-              language: targetLang,
-              countryInfo,
-              profile: profileData,
-              fallbackText: questionFallback
-            });
-            customReply = sanitizeSakaReply(
-              localPricingFacts ? stripUsdFigures(dataAnswer, { currency: countryInfo.currency }) : dataAnswer,
-              questionFallback,
-              { historyLength: conversationHistory.length }
-            );
-          }
-          // 2. Conversational feedback / frustration / message looping detected
-          // v1.26.0 — a recognised product question always outranks the apology.
-          else if (!productQaMatch && (checkIsConversationalFeedback(messageText, 1) || /\b(many replies|lot of responses|too many messages|repeating|looping|frustrat|bot broken|why so many)\b/i.test(clean))) {
-            if (supabaseClient) {
-              try {
-                await supabaseClient.from('chat_friction_logs').insert([{
-                  user_phone: senderPhone,
-                  session_id: senderPhone,
-                  friction_type: 'LOOPING_PROMPTS',
-                  transcript_snippet: `User reported loop/friction in idle state: "${messageText}"`
-                }]);
-              } catch {}
-            }
-            customReply = await composeMessage({
-              purpose: 'friction_apology',
-              facts: {
-                issue: 'The user reported too many or repeating messages',
-                actionTaken: 'Automated prompts paused for this chat',
-                nextSteps: ['Type Support to reach support@reports.sakafleet.com', 'Send a vehicle plate when ready to onboard'],
-                // v1.54.0 — ANSWER LAW v2: the user's own data rides this turn.
-                userDataFacts: (await buildUserFactsLines({
-                  supabase: supabaseClient,
-                  profile: profileData,
-                  vehicles: existingVehicles,
-                  currency: countryInfo?.currency || 'USD'
-                })) || 'No account data on file yet.',
-                instruction: 'In 1-2 short lines, acknowledge the issue in plain words without apology theatre. State what was paused and give ONE next step. userDataFacts is the user\'s own data — never claim you lack access to it.'
-              },
-              language: targetLang,
-              countryInfo,
-              profile: profileData,
-              fallbackText: 'Apologies for the message overload — I have paused automated prompts. Type Support for help, or send your plate when ready.'
-            });
-          }
-          // 3. Greetings — Saka introduces itself on first contact (deterministic),
-          // otherwise a warm AI-rendered one-liner.
-          else if (/^(habari|mambo|jambo|hujambo|salama)\b/i.test(clean) || intent === 'GREETING') {
-            // v1.51.4 — an unverified number is pointed to the website, never invited to register.
-            const unverified = !profileData || profileData.email_verified !== true;
-            const firstName = profileData?.full_name ? String(profileData.full_name).split(/\s+/)[0] : '';
-            if (firstContact) {
-              customReply = sakaIntroText({ countryInfo, profile: profileData, nextStep: unverified ? websiteSignupNextStep() : null });
-              session.sakaIntroduced = true;
-            } else if (!unverified && !hasVehicleRegistered) {
-              // v1.58.11 — a verified user with no vehicle already met Saka on the
-              // web: ADVANCE to the first vehicle, never re-introduce (live 2026-11-04).
-              customReply = `Hi${firstName ? ` ${firstName}` : ''}! 👋 You're all set ✅ — what do you drive? One line is enough, e.g. *"Toyota Probox"*.`;
-            } else {
-              customReply = aiResult.reply_message && !aiResult.reply_message.includes('I am your Saka Fleet WhatsApp assistant') && !isLegacyWelcomeCopy(aiResult.reply_message)
-                ? aiResult.reply_message
-                : await composeMessage({
-                    purpose: 'first_time_welcome',
-                    facts: {
-                      prompt: unverified
-                        ? 'Introduce Saka warmly in two short lines (what it does for their machine) and invite them to set up at https://sakafleet.com (Get Started Free). The word "plate" must not appear in your reply.'
-                        : 'Greet warmly in ONE short line and offer ONE next step (log a fuel/expense, check the fleet, or set a reminder). Never ask them to introduce themselves again. The word "plate" must not appear in your reply.',
-                      region: countryInfo,
-                      plateExample: countryInfo.plate_example,
-                      setupSteps: ['plate number', 'make/model, year, fuel, odometer', 'email OTP', 'VIN-locked passbook'],
-                      helpHint: 'Type Help anytime, Restart or Cancel to recover.'
-                    },
-                    language: targetLang,
-                    countryInfo,
-                    profile: profileData,
-                    fallbackText: `Hi${firstName ? ` ${firstName}` : ''}! 👋 What would you like to do — log a fuel/expense, or check your fleet?`
-                  });
-            }
-          }
-          // 4. General informational questions answered by Saka AI
-          else if (aiResult.reply_message && !aiResult.reply_message.includes('I am your Saka Fleet WhatsApp assistant. How can I help with your vehicle') && !isLegacyWelcomeCopy(aiResult.reply_message)) {
-            customReply = aiResult.reply_message;
-          }
-          // 5. Default: AI-rendered single next step
-          else {
-            const unverified = !profileData || profileData.email_verified !== true;
-            customReply = await composeMessage({
-              purpose: 'first_time_default',
-              facts: {
-                prompt: unverified
-                  ? 'Give exactly ONE warm next step: invite them to https://sakafleet.com (Get Started Free). The word "plate" must not appear in your reply.'
-                  : 'Give exactly ONE warm next step: ask what they drive (one line is enough), or invite them to https://sakafleet.com. The word "plate" must not appear in your reply.',
-                plateExample: countryInfo.plate_example,
-                region: countryInfo
-              },
-              language: targetLang,
-              countryInfo,
-              profile: profileData,
-              fallbackText: `What do you drive? Tell me in one line — or set up at https://sakafleet.com.`
-            });
-          }
+          // v1.69.0 — Phase 5B-4: the idle/unregistered conversation lanes live in ./conversation.js.
+          const idleTurn = await renderIdleConversationTurn({
+            session, messageText, intent, aiResult, firstContact, hasVehicleRegistered,
+            profileData, existingVehicles, countryInfo, targetLang, supabaseClient, senderPhone, conversationHistory
+          });
+          customReply = idleTurn.reply;
         }
         }
         }
@@ -3311,4 +2218,5 @@ Please reply with the current hour-meter reading (e.g. *"1250 engine hours"*).`;
 /* ------------------------------------------------------------------ */
 /* Compliance capture persistence (v1.58.25)                           */
 /* ------------------------------------------------------------------ */
+
 

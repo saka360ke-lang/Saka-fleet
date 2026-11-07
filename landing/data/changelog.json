@@ -1,6 +1,13 @@
 {
-  "latest": "1.68.0",
+  "latest": "1.69.0",
   "entries": [
+    {
+      "version": "1.69.0",
+      "date": "2026-11-07",
+      "title": "The last four rooms get their own doors",
+      "preview": "Commands, admin, the AI turn and support intake now live in tidy files - same answers, same order, unchanged.",
+      "summary": "The final four backstage jobs moved into their own clear files. The first runs every straight command - country, receipts, passbook, reports, quick logs, vehicle and profile edits. The second holds the team gates: the care console and the admin console. The third runs the real conversation: the AI turn plus the honest answers to questions, complaints, feedback and greetings. The fourth catches every support request. A written rule keeps them leaves - they hand data back and never reach into the main file - and the loop-breaker, the slow-turn ack, onboarding and the final polish stay in the orchestrator where they belong. Nothing you see changes: proven by comparing 1,106 moved code lines against the previous release (99.9 percent identical, one wiring-only difference) and the full quality suite."
+    },
     {
       "version": "1.68.0",
       "date": "2026-11-07",
