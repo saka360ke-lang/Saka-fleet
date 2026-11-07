@@ -26,6 +26,8 @@ import {
   sanitizeEntryUpdate,
   LEDGER_AUDIT_ACTIONS
 } from './src/services/entryLedger.js';
+// v1.71.1 (P2-5) — the module namespace proves the dead export is gone.
+import * as entryLedgerModule from './src/services/entryLedger.js';
 import { runWithCleanup } from './scripts/testCleanup.js';
 
 const OWNER_PHONE = '+254799123458';
@@ -35,6 +37,11 @@ const TEST_PLATE = 'KZL 331Z';
 function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
+
+// v1.71.1 (P2-5) — the dead in-place editor is gone; the live correction path
+// is relogLedgerEntry (delete & re-log, v1.37.0). Pinned so nobody re-adds it.
+assert(!('applyEntryUpdate' in entryLedgerModule), 'P2-5: dead export applyEntryUpdate was removed');
+assert(typeof entryLedgerModule.relogLedgerEntry === 'function', 'the live correction path relogLedgerEntry still exports');
 
 const VEHICLES = [{ id: 'veh-1', plate_number: TEST_PLATE, owner_id: 'owner-1' }];
 const COPY = { vehicles: VEHICLES, currency: 'KES', locale: 'en-KE' };

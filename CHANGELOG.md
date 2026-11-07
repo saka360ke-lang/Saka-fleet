@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.71.1] - 2026-11-07
+
+- **Dead ledger export removed (Phase 8A, P2-5).** `applyEntryUpdate` — the in-place editor superseded by `relogLedgerEntry` in v1.37.0 — is deleted from `src/services/entryLedger.js`. Zero importers were proven by grep across `src/` and every `test_*.js` before deletion (only historical CHANGELOG/architecture mentions remained). `test_entry_ledger` now pins that the export does not exist and that the live correction path (`relogLedgerEntry`) still exports.
+- **Frames touched.** `src/services/entryLedger.js` (−40 lines), `test_entry_ledger.js` (+8), `package.json`, `SAKA_FLEET_ARCHITECTURE.md` (§194 + version/history), this file.
+- **Suites run.** test_entry_ledger, `npm run health` — green.
+- **Recurrence autopsy (rule 51).** Defect class *dead code left behind by a superseded write path* -> siblings: every export of `entryLedger.js` audited for importers; `relogLedgerEntry`, `deleteLedgerEntry`, `restoreLastDeleted`, `sanitizeEntryUpdate`, `markDeletedEntryRelogged`, `LEDGER_TABLES`, `LEDGER_AUDIT_ACTIONS` all have live importers (`readCommands.js` + suites). No other zero-importer export found in the module. Rule 13: no intent/flow change — `flowKnowledge.js` / `sakaAi.js` untouched.
+
 ## [1.71.0] - 2026-11-07
 
 - **The fitted-plan card now arrives 3 days before the trial ends (Phase 7).** The T-3 digest keeps its value summary and now carries the plan that fits the garage: the tier that fits the asset count (e.g. *Fleet Command + 1 extra slot*), the engine's local-currency price and the shortened Paystack checkout link(s) — one message, engine-owned amounts only. The user gets the full week from T-3 to grace-end to decide.

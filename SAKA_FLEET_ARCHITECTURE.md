@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.71.0  
+**Version:** 1.71.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.71.1** | Phase 8A (P2-5): the dead `applyEntryUpdate` export is removed from `entryLedger.js` — the in-place editor was superseded by `relogLedgerEntry` in v1.37.0 and had zero importers (proven by grep); `test_entry_ledger` pins the absence of the export and the presence of the live correction path | 194 |
 | **1.71.0** | Phase 7: the fitted-plan card moves to T-3 (a full 7-day conversion window), deduped by a `trial_sessions.t3_fitted_plan` tier snapshot — T-0 re-sends the full card only when the fitted tier changed, otherwise the grace card is a pure urgency nudge with no tier/price/link; the skip guard (paid-live + PAST_DUE/CANCELED/CANCELLED/CANCELING) now covers T-3 AND T-24; the T-3 link arms the abandoned-checkout ladder (cap 3, stops at GRACE); GRACE countdowns deliberately keep their in-window repetition; pre-existing `test_eval_spend` date-bomb fixed with an injectable clock | 193 |
 | **1.70.1** | Eval measurement robustness (Phase 6.5): flake-tolerant gate (`--repeat N`, `--min-pass-rate 0..1`) aggregates every run's signal pool, calibration expected-fails are held, errored cases leave the denominator (judge hiccups exit 2, never 1) and the old `errored > 0` short-circuit is gone; pure helpers `parseConvEvalArgs` / `aggregateEvalRuns` / `evalGateExitCode` in convEval.js (+14 tests); the A1 re-evaluation ran 3 × 23 signal cases — 23/23 judged pass (100%), 20/20 calibration held, 62 judge timeouts demoted to exit 2 — and **intent_classify ships enabled** (full 4-override registry, ~64% AI cost reduction on heavy paid users) | 192.1 |
 | **1.70.0** | Per-purpose AI tier optimization: `PURPOSE_TIER_OVERRIDES` caps mechanical renders (`question_render`, `stall_nudge`, `small_talk`) at Tier-1 Haiku on every plan inside the plan-driven branch, quality-critical purposes (prose_render, extraction, complaint_recovery) keep the plan tier, and the complaint_recovery compose lane is remapped from `question_render` to its own Tier-2 AI purpose (latent-bug fix); the `intent_classify` cap is parked by the A1 eval gate (first gated run 22/23 on the documented judge-variance case) and the shipped 3-override registry re-gated at 23/23 signal + 12/12 calibration; escalate mode ignores the caps (documented delta: paid complaints Haiku -> Sonnet); modeled saving ≈ $0.4/mo mechanical today with ≈ $18.4/mo (~64%) parked behind intent_classify | 192 |
@@ -5474,4 +5475,17 @@ reads.js / pending.js / quiz.js / media.js / hooks.js : unchanged (5B-2 / 5B-3 e
 **I. Suites run.** test_trial_engine (114), test_trial_capacity (48), test_subscription_billing (101), test_recovery_ladders (30), test_eval_spend (23), test_agent_training (180), test_doc_sync (30), test_proactive_templates (47), test_conv_eval (216), `npm run health` — green. `npm run eval:conv -- --exclude-calibration`: signal 22/23 (95.7%) — the single miss is the documented `trial-end-downsize-choice` judge variance (0.83 `boundary_safety`; eval replies are static fixtures and no routing/AI path changed in this release), calibration 11/11 held, 1 unparseable judge output (warning only).
 
 **J. Recurrence autopsy (rule 51).** Defect classes *pricing card re-sent without change detection* and *end-of-trial nudges to accounts that can't convert* → siblings audited in the table above; fixed = T-3 card dedupe (snapshot), T-3/T-24 skip guard, T-0 EXPIRED retirement; deliberately left = GRACE countdown repetition (D4), activation/midpoint engagement copy, T-24 generic copy. Two test-suite clock defects (frozen fixture vs wall clock) closed by injectable `now`. Rule 13: `flowKnowledge.js` playbook + `FLOW_GUIDANCE.subscription_trial_end` and the `sakaAi.js` trial law updated in the same commit; `test_agent_training` green.
+
+---
+
+### 194. v1.72.x (Phase 8) — ledger hygiene (dual-write flag, superadmin double-count fix, dead export removal) + config namespacing (SYSTEM_CONFIG_KEYS registry, dual-window) (2026-11-07)
+
+**Scope.** Three hygiene items from the Phase 7 backlog: P2-5 (dead `applyEntryUpdate` export), P2-3 (`expenses` vs `expense_logs` dual-write retirement behind a flag, with the three critical reads migrated) and P2-6 (`system_config` key namespacing behind a one-release dual-read/dual-write window). Release split approved by the operator: **v1.72.0/v1.72.1 prepare → v1.73.0 flips**.
+
+**8A (v1.71.1) — P2-5 map: the dead export.**
+- **Definition:** `entryLedger.js:221-259` — `applyEntryUpdate(supabase, { entry, patch, actorPhone, vehicleIds })`: scope check → `sanitizeEntryUpdate` → kind-aware column remap (earnings `amount`→`revenue_amount`) → in-place `.update()` on `LEDGER_TABLES[kind]` → `LEDGER_ENTRY_UPDATED` audit → returns `{ ok, entry, patch, rejected }`.
+- **Superseded:** v1.37.0 (D1) replaced in-place edits with `relogLedgerEntry` (delete & re-log: hard-delete + full-row snapshot audit + fresh row keeps the original `created_at`, DELETE audit marked consumed so `restore` can never duplicate). The v1.63.0 route switch (`readCommands.js` edit-apply branch) was the last live reference.
+- **Importers:** ZERO — proven by grep across `src/` and every `test_*.js` (only the definition + historical CHANGELOG/architecture mentions remained; the v1.63.0 recurrence autopsy had already flagged it as a Phase 9 P2-5 cleanup).
+- **Action:** export deleted; `test_entry_ledger` pins `!('applyEntryUpdate' in entryLedger)` and that `relogLedgerEntry` still exports. All symbols the function used (`sanitizeEntryUpdate`, `writeAudit`, `LEDGER_TABLES`, `LEDGER_AUDIT_ACTIONS.UPDATED`) remain live via relog/delete/restore — no orphans.
+
 

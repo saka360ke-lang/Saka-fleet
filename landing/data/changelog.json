@@ -1,6 +1,13 @@
 {
-  "latest": "1.71.0",
+  "latest": "1.71.1",
   "entries": [
+    {
+      "version": "1.71.1",
+      "date": "2026-11-07",
+      "title": "A quiet tidy-up behind the scenes",
+      "preview": "One unused leftover from an older edit flow was removed - every answer, record and report stays exactly the same.",
+      "summary": "A small internal cleanup: the old in-place entry editor was retired when corrections became delete-and-re-log, and the leftover code has now been removed. Saka's ledger, records, reports and replies are completely unchanged - proven by the full quality suite."
+    },
     {
       "version": "1.71.0",
       "date": "2026-11-07",

@@ -217,47 +217,6 @@ async function writeAudit(supabase, { action, actorPhone, details }) {
   } catch { /* the ledger write already succeeded; audit is best-effort */ }
 }
 
-/** Apply a sanitized patch + write the audit row. */
-export async function applyEntryUpdate(supabase, { entry = null, patch = {}, actorPhone = null, vehicleIds = null } = {}) {
-  if (!supabase || !entry) return { ok: false, reason: 'no_entry' };
-  const entryScope = (vehicleIds || []).filter(Boolean);
-  if (entryScope.length && !entryScope.includes(entry.vehicle_id)) return { ok: false, reason: 'not_yours' };
-  const kind = entry.kind === 'earning' ? 'earning' : 'expense';
-  const { ok, patch: clean, rejected } = sanitizeEntryUpdate(kind, patch);
-  if (!ok) return { ok: false, reason: 'no_valid_change', rejected };
-
-  // Earnings keep their money in `revenue_amount` and have no fuel columns.
-  const write = { ...clean };
-  if (kind === 'earning') {
-    if (write.amount !== undefined) { write.revenue_amount = write.amount; delete write.amount; }
-    delete write.fuel_liters;
-    delete write.fill_type;
-    delete write.odometer_reading;
-  }
-
-  try {
-    const { error } = await supabase.from(LEDGER_TABLES[kind]).update(write).eq('id', entry.id);
-    if (error) return { ok: false, reason: 'write_failed', message: error.message };
-  } catch (err) {
-    return { ok: false, reason: 'write_failed', message: err.message };
-  }
-
-  await writeAudit(supabase, {
-    action: LEDGER_AUDIT_ACTIONS.UPDATED,
-    actorPhone,
-    details: {
-      kind,
-      table: LEDGER_TABLES[kind],
-      entry_id: entry.id,
-      vehicle_id: entry.vehicle_id,
-      before: { ...entry },
-      after: clean
-    }
-  });
-
-  return { ok: true, entry: { ...entry, ...clean }, patch: clean, rejected };
-}
-
 /**
  * v1.37.0 (D1) — mark a DELETE audit row consumed once its snapshot has been
  * superseded by a correction re-log, so `restore` can never resurrect a
