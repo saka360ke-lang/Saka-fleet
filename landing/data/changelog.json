@@ -1,6 +1,13 @@
 {
-  "latest": "1.70.1",
+  "latest": "1.71.0",
   "entries": [
+    {
+      "version": "1.71.0",
+      "date": "2026-11-07",
+      "title": "A whole week to choose your plan",
+      "preview": "The plan that fits your assets now arrives 3 days before your trial ends - and you are never shown the same price twice.",
+      "summary": "Three days before your trial ends, Saka now sends the plan that fits your garage - the tier for your asset count, your local price and a working payment link - so you have a full week to decide instead of a few days. When the trial ends, the reminder is a gentle nudge: it repeats the price and link only if your fleet changed and the plan is different; otherwise it simply keeps the choice open and points back to the link you already have. Accounts with a failed or cancelled payment are quietly spared the sales nudges, and a payment link also triggers up to three gentle reminders to help you finish. Proven by the full quality suite."
+    },
     {
       "version": "1.70.1",
       "date": "2026-11-07",

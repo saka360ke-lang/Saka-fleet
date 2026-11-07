@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.70.1  
+**Version:** 1.71.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.71.0** | Phase 7: the fitted-plan card moves to T-3 (a full 7-day conversion window), deduped by a `trial_sessions.t3_fitted_plan` tier snapshot — T-0 re-sends the full card only when the fitted tier changed, otherwise the grace card is a pure urgency nudge with no tier/price/link; the skip guard (paid-live + PAST_DUE/CANCELED/CANCELLED/CANCELING) now covers T-3 AND T-24; the T-3 link arms the abandoned-checkout ladder (cap 3, stops at GRACE); GRACE countdowns deliberately keep their in-window repetition; pre-existing `test_eval_spend` date-bomb fixed with an injectable clock | 193 |
 | **1.70.1** | Eval measurement robustness (Phase 6.5): flake-tolerant gate (`--repeat N`, `--min-pass-rate 0..1`) aggregates every run's signal pool, calibration expected-fails are held, errored cases leave the denominator (judge hiccups exit 2, never 1) and the old `errored > 0` short-circuit is gone; pure helpers `parseConvEvalArgs` / `aggregateEvalRuns` / `evalGateExitCode` in convEval.js (+14 tests); the A1 re-evaluation ran 3 × 23 signal cases — 23/23 judged pass (100%), 20/20 calibration held, 62 judge timeouts demoted to exit 2 — and **intent_classify ships enabled** (full 4-override registry, ~64% AI cost reduction on heavy paid users) | 192.1 |
 | **1.70.0** | Per-purpose AI tier optimization: `PURPOSE_TIER_OVERRIDES` caps mechanical renders (`question_render`, `stall_nudge`, `small_talk`) at Tier-1 Haiku on every plan inside the plan-driven branch, quality-critical purposes (prose_render, extraction, complaint_recovery) keep the plan tier, and the complaint_recovery compose lane is remapped from `question_render` to its own Tier-2 AI purpose (latent-bug fix); the `intent_classify` cap is parked by the A1 eval gate (first gated run 22/23 on the documented judge-variance case) and the shipped 3-override registry re-gated at 23/23 signal + 12/12 calibration; escalate mode ignores the caps (documented delta: paid complaints Haiku -> Sonnet); modeled saving ≈ $0.4/mo mechanical today with ≈ $18.4/mo (~64%) parked behind intent_classify | 192 |
 | **1.69.0** | whatsapp split Phase 5B-4 (final): the deterministic command lanes move verbatim to `src/routes/whatsapp/commands.js` (country command, receipt delete, passbook snapshot, report request, quick logs, profile, vehicle edit/switch/unassign, fuel, fleet summary, greeting, reminder prompt, vehicle list, active default), the care-console + superadmin gates to `admin.js`, the AI turn + post-AI intent fixes + idle conversation lanes (user_data_answer, complaint recovery, feedback, friction, greeting, first-time) to `conversation.js`, and the support trigger + its pinned pending branch to `support.js`; the global circuit breaker, slow-ack timer, media intake, snapshot hydration, final-reply stage, legacy onboarding branch and compliance-intake lanes deliberately STAY in messages.js; leaf modules may import `./helpers.js` only (zero-cycle exception, section 191); messages.js drops 1,092 net lines (3,315 -> 2,223; commands 891 + admin 57 + conversation 412 + support 72), the barrel resolves 92 public symbols (was 66, 0 collisions), 1,105/1,106 moved statement lines byte-verbatim (99.9%, 1 named delta), 6 source-pin suites repointed, the no-canned scan extended to 9 files (ratchet counted back to exactly 4) and the fallback lint now covers all 7 route files; scope correction documented (est. 1,500-1,800 -> actual ~2,223) | 191 |
@@ -733,6 +734,7 @@ Owners exceeding capacity are prompted with the next-tier upgrade checkout (or t
   1. **Transactional Email:** Dispatches reminder via Resend (`sendTrialExtensionReminderEmail`) with coupon code and vehicle details.
   2. **Proactive WhatsApp Message:** *"Hi [Name]! 👋 Your trial for VIN [X] ends in 3 days! Would you like me to apply your extension coupon to add 30 free days? Reply 'Yes' to activate!"*
 - If the user replies `"Yes"`, Saka automatically applies the coupon, extends `trial_end_at` by 30 days on both `vehicles` and `vin_registry`, and sends a WhatsApp confirmation.
+- **v1.71.0 — the T-3 day now carries up to three messages:** the value digest, the extension-coupon offer and the fitted-plan card. The card rides INSIDE the digest (one message, not a fourth): digest metrics + the plan that fits the asset count, its local price and the engine checkout link(s); the extension-coupon offer stays its own scheduled message (§193).
 
 ### 12.3 Lapse Reminders & 15-Day Overdue Win-Back Offer
 - **7 Days & 1 Day Reminders:** Proactive WhatsApp alerts regarding impending trial expiration.
@@ -1815,7 +1817,8 @@ _End of document — v1.14.1._
 - `trial_sessions` is the funnel ledger: `ACTIVE → EXTENDED → CONVERTED | EXPIRED | CANCELLED`, with activation data and one-shot nudge timestamps.
 - **Activation ("Aha!") — strictly three events:** `vehicle_registered` (vehicle + passbook), `expense_logged`, `report_generated`. Reminders are engagement metrics only and NEVER activate.
 - On first activation: `ACTIVATE20-XXXX` coupon (20% off first cycle, 7-day TTL) is issued and delivered by the sweep (deterministic copy).
-- **Nudge lifecycle** (`runTrialLifecycleSweep`, 15-min tick in `index.js`): activation reward → T+7d nudge if still un-activated → optional T−14d midpoint (`TRIAL_CONVERSION_LADDER=on`) → T−3d value digest (counts + ≈hours saved + localized price + checkout URL) → T−24h urgent → T−0 expiry. Each stage fires exactly once.
+- **Nudge lifecycle** (`runTrialLifecycleSweep`, 15-min tick in `index.js`): activation reward → T+7d nudge if still un-activated → optional T−14d midpoint (`TRIAL_CONVERSION_LADDER=on`) → T−3d value digest + fitted-plan card (counts + ≈hours saved + the fitted tier, its localized price and engine checkout link(s)) → T−24h urgent → T−0 expiry. Each stage fires exactly once.
+- **v1.71.0 — the fitted-plan card now arrives at T−3**, giving the owner a full week (T−3 → grace end) to decide. The T−3 digest stamps `trial_sessions.t3_fitted_plan` (e.g. `team_fleet`, `fleet_command+2`); T−0 opens the grace window and re-sends the full card ONLY when the fitted tier changed (assets added/removed) or no snapshot exists — otherwise the grace card is a pure urgency nudge with no tier, price or link (the T−3 payment link still works). T−3 and T−24 skip paid-live accounts and `PAST_DUE` / `CANCELED` / `CANCELLED` / `CANCELING` statuses. Migration `npm run migrate:trial-end-grace` adds `t3_fitted_plan` (idempotent; a missing column degrades to the pre-v1.71.0 digest + always-full T−0 card). See §193.
 - **Expiry:** trial → `EXPIRED`, account → Free, excess vehicles → `PAUSED` (never deleted), owner prompted to `KEEP_VEHICLE`. The existing 15-day winback worker still fires afterwards.
 - **Extensions:** `account_trial_extension` coupons only; cumulative lifetime capped by `TRIAL_MAX_TOTAL_DAYS` (45); nudges re-arm after an extension.
 - **Funnel:** `getTrialFunnelStats()` + `admin trial-stats [Nd]` (deterministic, audited `ADMIN_TRIAL_STATS`).
@@ -5431,4 +5434,44 @@ reads.js / pending.js / quiz.js / media.js / hooks.js : unchanged (5B-2 / 5B-3 e
 **E. Suites run.** test_conv_eval (216), test_phase6_purpose_tiers (51), test_subscription_billing (100), test_model_router (79), test_phase1_canary (37), test_phase2_analytics (59), test_phase3_resilience (73), test_agent_training (180), test_env_audit (44), test_conversation_compliance (29), test_doc_sync (30) — green; `npm run health` green.
 
 **F. Recurrence autopsy (rule 51).** Defect class *judge noise treated as a quality signal by the CLI exit contract* -> siblings audited and closed: the `errored > 0` short-circuit (removed, exit 2), plain-path calibration counting under `--fail-on-failures` (signal-pool gate), heal-on-every-repeat (first run only), deferral/error both exiting 2 (documented), typo-weakened flags (clamped). Rule 13: no `flowKnowledge.js` / `sakaAi.js` change.
+
+
+---
+
+### 193. v1.71.0 (Phase 7) — fitted-plan card at T-3: tier-snapshot dedupe, T-0 becomes the grace reminder, PAST_DUE skip extended to T-24 (2026-11-07)
+
+**Operator request.** "Move the fitted-plan card to three days before the trial ends so the user has a full week to decide; T-0 keeps the grace card as the final urgency nudge." Locked decisions from the approved plan: the card rides the existing T-3 digest (one message), the unchanged T-0 card carries no tier/price/link, the skip guard covers T-3 AND T-24, and the GRACE countdown repetition is deliberately left (§D4 below).
+
+**A. The T-3 card (one message).** The T-3 stage of `runTrialLifecycleSweep` keeps the value digest (vehicles / expenses / reminders / reports / AI answers / ≈hours saved) and appends the fitted-plan card: `buildTrialEndOffer()` (reused as-is) → `fittedTierForAssets()` tier (+ add-on slots), the engine's local price and the shortened Paystack checkout link(s) (`metadata.trial_end_fit=true`). `t3DigestText()` renders the fitted block when an offer is supplied and the pre-v1.71.0 line otherwise (the T-14 midpoint recap is unchanged). The extension-coupon offer (`dispatchDueAccountTrialCoupons`) stays its own scheduled message — the T-3 day now carries up to three messages (digest + coupon + card, see §12.2).
+
+**B. The dedupe rule (tier snapshot).** The T-3 stamp writes `nudge_t3_sent_at` AND `t3_fitted_plan` (`fittedPlanKey(fitted)` = `team_fleet` / `fleet_command+2`) atomically. At T-0 `runTrialEndStage()` compares the freshly computed key with the snapshot: different or null → the full `trialEndChoiceText()` card (today's behaviour — covers added/removed assets, trials shorter than 3 days and late-migrated rows); equal → the new `graceChoiceText()` — the decision, the grace deadline and the `keep <plate>` path with **no tier name, no price and no checkout link**, pointing back to "the payment link I sent you 3 days ago still works". `extendAccountTrial()` re-arms `t3_fitted_plan` with the nudge ladder. Known limit (documented): a price/currency change with an unchanged tier does not trigger a re-send — registry prices are frozen and the profile currency rarely changes mid-window.
+
+**C. The skip guard (T-3 + T-24).** `isPaidLiveNow(owner, nowMs) || skipsTrialEndNudge(owner)` — the helper matches `PAST_DUE`, `CANCELED`, `CANCELLED`, `CANCELING` case-insensitively. Skipped rows are NOT stamped (a recovered account can still receive the card later). At T-0 the same guard retires the row to `EXPIRED` without a message (capacity lapses on read); the GRACE branch is deliberately untouched so an open window can never be stranded.
+
+**D. Schema (migration `npm run migrate:trial-end-grace`, idempotent).** `trial_sessions.t3_fitted_plan text` joins `TRIAL_END_GRACE_SQL` and the boot `CREATE TABLE` mirror. Rule 50: the T-3 stamp is two-step (`setTrialFields` with both fields → on error `stampTrial` with `nudge_t3_sent_at` only) and the digest degrades to pre-v1.71.0 copy; T-0 with a missing snapshot always sends the full card.
+
+
+**E. Addition A1 — the abandoned-checkout ladder is armed by the T-3 link.** `checkoutForTier` stamps `checkout_started_at`, so the T-3 card gives up to 3 recovery nudges (`T+30 min`, `T+24 h`, coupon `T-2 d`), capped by `CHECKOUT_REMINDER_MAX` and stopped at the GRACE transition (the ladder only targets ACTIVE/EXTENDED rows). Bonus — the T-3 card arms the abandoned-checkout ladder. Up to 3 recovery nudges; cap enforced by `CHECKOUT_REMINDER_MAX`; stopped at GRACE transition.
+
+**D4 (deliberate) — GRACE countdowns keep their repetition.** `graceCountdownText()` (GRACE T-3/T-24) still repeats the fitted plan line, price and checkout link: it is an in-window urgency re-nudge whose link IS the action, the window is bounded (≤ `TRIAL_END_GRACE_DAYS`, 2 nudges), and the dedupe rule governs the T-3 → T-0 boundary only. Documented here so nobody "fixes" it into silence.
+
+**F. Testability + a pre-existing date-bomb (fixed).** `runTrialLifecycleSweep` gained optional `checkoutFn`/`addonCheckoutFn` (mirrors `runTrialEndStage`); `scripts/mockSupabase.js` gained an optional `beforeUpdate` rejection hook (mirrors `beforeInsert`) to simulate the un-migrated column. Baseline `npm run health` was RED before any Phase 7 edit: `test_eval_spend` pinned its audit fixtures to a frozen `now = 2026-11-06T10:00Z` while `healCooldownStatus()`/`healFailedCase()` read the wall clock, so from 2026-11-07 the 24 h window excluded them (product code correct — reproduced green with a live clock). `healFailedCase()` now accepts an injectable `now` (defaulted) and the suite passes its frozen clock — deterministic forever.
+
+**G. Rule 51 sibling sweep.**
+| Defect class | Sibling | Verdict |
+|---|---|---|
+| (i) Pricing card re-sent without change detection | `t24Text` pre-end urgency | Left — generic, carries no fitted pricing. |
+| (i) | `graceCountdownText` (GRACE T-3/T-24) | **Deliberately left (D4)** — in-window urgency re-nudge, link is the action, window bounded. |
+| (i) | Abandoned-checkout ladder | Verified compatible: arms from the T-3 link, cap 3, stops at GRACE. |
+| (ii) End-of-trial nudges to accounts that can't convert | T-3 digest | Fixed (skip guard, no stamp). |
+| (ii) | T-24 urgency | **Fixed alongside** (same guard). |
+| (ii) | Activation reward / midpoint recap | Left — engagement copy, no conversion pricing. |
+| (ii) | T-0 / GRACE branches | T-0 fixed (EXPIRED, no message); GRACE left on purpose (the window must close). |
+| (clock vs fixture) | `healCooldownStatus` + `healFailedCase` call sites | Both clock-aware; the suite injects its frozen `now`. |
+
+**H. Frames touched.** `src/services/trialEngine.js` (t3DigestText, graceChoiceText, fittedPlanKey, skipsTrialEndNudge, extendAccountTrial re-arm, T-0 comparison + guard, sweep signature/stats/T-3/T-24, exports), `src/services/trialSchema.js`, `src/db/subscriptionSchema.js`, `src/services/convEvalHealer.js` (injectable `now`), `scripts/run_trial_end_grace_migration.js`, `scripts/mockSupabase.js` (`beforeUpdate`), `src/services/flowKnowledge.js` (playbook + FLOW_GUIDANCE), `sakaAi.js` (trial law), `test_trial_engine.js` (+24), `test_trial_capacity.js` (+5), `test_subscription_billing.js` (+1), `test_eval_spend.js` (clock fix), `docs/` (generated), `landing/data/changelog.json` (+ stamped assets), `package.json`, `CHANGELOG.md`, this file.
+
+**I. Suites run.** test_trial_engine (114), test_trial_capacity (48), test_subscription_billing (101), test_recovery_ladders (30), test_eval_spend (23), test_agent_training (180), test_doc_sync (30), test_proactive_templates (47), test_conv_eval (216), `npm run health` — green. `npm run eval:conv -- --exclude-calibration`: signal 22/23 (95.7%) — the single miss is the documented `trial-end-downsize-choice` judge variance (0.83 `boundary_safety`; eval replies are static fixtures and no routing/AI path changed in this release), calibration 11/11 held, 1 unparseable judge output (warning only).
+
+**J. Recurrence autopsy (rule 51).** Defect classes *pricing card re-sent without change detection* and *end-of-trial nudges to accounts that can't convert* → siblings audited in the table above; fixed = T-3 card dedupe (snapshot), T-3/T-24 skip guard, T-0 EXPIRED retirement; deliberately left = GRACE countdown repetition (D4), activation/midpoint engagement copy, T-24 generic copy. Two test-suite clock defects (frozen fixture vs wall clock) closed by injectable `now`. Rule 13: `flowKnowledge.js` playbook + `FLOW_GUIDANCE.subscription_trial_end` and the `sakaAi.js` trial law updated in the same commit; `test_agent_training` green.
 

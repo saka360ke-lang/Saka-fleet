@@ -237,6 +237,48 @@ await runTrialEndStage({
 });
 check(paidMock.db.trial_sessions[0].status === 'EXPIRED' && paidMock.db.vehicles.every((v) => v.status === 'ACTIVE'), 'a live paid plan keeps every asset active');
 
+console.log('\n--- 11. T-0 dedupe: full card only when the fitted tier changed (v1.71.0) ---');
+const unchangedMock = seed({
+  trial: { ...liveTrial(past(1)), t3_fitted_plan: 'team_fleet' },
+  vehicles: [1, 2].map((id) => vehicleRow(id, 'ACTIVE', id))
+});
+const unchangedMessages = [];
+const unchangedStats = {};
+await runTrialEndStage({
+  supabase: unchangedMock.client,
+  trial: unchangedMock.db.trial_sessions[0],
+  owner: unchangedMock.db.profiles[0],
+  phone: '+254700000001',
+  ownerCtx: { currency: 'KES', locale: 'en-KE', timeZone: 'Africa/Nairobi' },
+  now: new Date(),
+  sendWhatsAppFn: async (to, text) => { unchangedMessages.push(text); return true; },
+  stats: unchangedStats,
+  checkoutFn: async () => ({ ok: true, checkoutUrl: 'https://checkout.test/fit' })
+});
+const unchangedText = unchangedMessages[0] || '';
+check(unchangedStats.graceStarted === 1 && unchangedStats.graceNudge === 1, 'an unchanged fitted plan opens the window with the grace card');
+check(/nothing is paused yet/.test(unchangedText) && /keep <plate>/.test(unchangedText), 'the grace card keeps the decision paths');
+check(!/Team Fleet|KES|https?:\/\//.test(unchangedText), 'the grace card repeats no tier, price or link');
+check(/payment link I sent you 3 days ago still works/.test(unchangedText), 'the grace card points back to the T-3 link');
+
+const changedMock = seed({
+  trial: { ...liveTrial(past(1)), t3_fitted_plan: 'solo_pro' },
+  vehicles: [1, 2, 3, 4].map((id) => vehicleRow(id, 'ACTIVE', id))
+});
+const changedMessages = [];
+await runTrialEndStage({
+  supabase: changedMock.client,
+  trial: changedMock.db.trial_sessions[0],
+  owner: changedMock.db.profiles[0],
+  phone: '+254700000001',
+  ownerCtx: { currency: 'KES', locale: 'en-KE', timeZone: 'Africa/Nairobi' },
+  now: new Date(),
+  sendWhatsAppFn: async (to, text) => { changedMessages.push(text); return true; },
+  stats: {},
+  checkoutFn: async () => ({ ok: true, checkoutUrl: 'https://checkout.test/fit' })
+});
+check(/Growth/.test(changedMessages[0] || '') && /https:\/\/checkout.test\/fit/.test(changedMessages[0] || ''), 'a changed fitted tier re-sends the full card with a fresh link');
+
 console.log(`\n🎉 ALL TRIAL CAPACITY TESTS PASSED (${passed} assertions).`);
 
 

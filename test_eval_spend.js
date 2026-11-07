@@ -166,9 +166,9 @@ const coolMock = createMockSupabase({
   saka_dynamic_rules: [],
   conversation_eval_runs: []
 });
-const cooling = await healCooldownStatus({ supabase: coolMock.client, caseId: 'loop' });
+const cooling = await healCooldownStatus({ supabase: coolMock.client, caseId: 'loop', now });
 check(cooling.cooling === true && cooling.count === 3, 'three ab_gate refusals put the case into cooldown');
-const notCooling = await healCooldownStatus({ supabase: coolMock.client, caseId: 'other' });
+const notCooling = await healCooldownStatus({ supabase: coolMock.client, caseId: 'other', now });
 check(notCooling.cooling === false && notCooling.count === 1, 'refusals are counted per case');
 
 process.env.CONV_EVAL_HEAL_ENABLED = 'on';
@@ -185,7 +185,8 @@ const skipped = await healFailedCase({
   supabase: coolMock.client,
   caseDef: { id: 'loop', expected: 'pass', turns: [{ role: 'user', text: 'hello' }], reply: 'A long enough failing reply.' },
   judged: failedJudged,
-  generate: async () => { generated += 1; return '{}'; }
+  generate: async () => { generated += 1; return '{}'; },
+  now
 });
 check(skipped.ok === false && skipped.reason === 'heal_cooldown' && generated === 0, 'a cooling case never spends a generate call');
 check(coolMock.db.admin_audit_logs.some((row) => row.action === 'CONV_EVAL_HEAL_SKIPPED_COOLDOWN'), 'the skip is audited, never silent');
@@ -194,7 +195,8 @@ const proceeded = await healFailedCase({
   supabase: coolMock.client,
   caseDef: { id: 'other', expected: 'pass', turns: [{ role: 'user', text: 'hello' }], reply: 'A long enough failing reply.' },
   judged: failedJudged,
-  generate: async () => { generated += 1; return '{}'; }
+  generate: async () => { generated += 1; return '{}'; },
+  now
 });
 check(generated === 1 && proceeded.reason === 'patch_rejected', 'an uncooled case still attempts the heal');
 

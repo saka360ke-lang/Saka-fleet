@@ -19,12 +19,17 @@ export const TRIAL_DEFAULTS_SQL = `
  * v1.61.16 — trial-end decision window columns. All additive + idempotent; every
  * read/write degrades when they are absent (rule 50): the sweep then behaves
  * exactly like the pre-grace hard downgrade.
+ * v1.71.0 — `t3_fitted_plan` stores the fitted-plan snapshot stamped with the
+ * T-3 card (e.g. `team_fleet`, `fleet_command+2`) so T-0 can re-send the full
+ * card ONLY when the fitted tier changed; a missing column degrades to the
+ * pre-v1.71.0 behaviour (T-3 digest without the card, T-0 always full card).
  */
 export const TRIAL_END_GRACE_SQL = `
   ALTER TABLE public.trial_sessions ADD COLUMN IF NOT EXISTS grace_ends_at timestamp with time zone;
   ALTER TABLE public.trial_sessions ADD COLUMN IF NOT EXISTS trial_end_choice text;
   ALTER TABLE public.trial_sessions ADD COLUMN IF NOT EXISTS grace_t3_sent_at timestamp with time zone;
   ALTER TABLE public.trial_sessions ADD COLUMN IF NOT EXISTS grace_t24_sent_at timestamp with time zone;
+  ALTER TABLE public.trial_sessions ADD COLUMN IF NOT EXISTS t3_fitted_plan text;
 `;
 
 /**

@@ -4,10 +4,12 @@ import { runSql, hasSqlAccess, getProjectRef } from '../src/db/sqlRunner.js';
 import { TRIAL_END_GRACE_SQL } from '../src/services/trialSchema.js';
 
 /**
- * Saka Fleet - trial-end decision window migration (v1.61.16).
+ * Saka Fleet - trial-end decision window migration (v1.61.16, extended v1.71.0).
  * Adds trial_sessions.grace_ends_at / trial_end_choice / grace_t3_sent_at /
  * grace_t24_sent_at so a trial can end into a bounded "choose your plan"
- * window instead of an instant downgrade. Idempotent.
+ * window instead of an instant downgrade, plus t3_fitted_plan (v1.71.0 — the
+ * fitted-plan snapshot stamped with the T-3 card; T-0 re-sends the full card
+ * only when the fitted tier changed). Idempotent.
  * Run: npm run migrate:trial-end-grace
  */
 
@@ -22,7 +24,7 @@ export async function applyTrialEndGraceMigration() {
     console.error('Migration failed:', result.error || result.body);
     return { success: false, ...result };
   }
-  console.log('OK trial-end grace migration applied (grace_ends_at, trial_end_choice, grace_t3/t24 stamps).');
+  console.log('OK trial-end grace migration applied (grace_ends_at, trial_end_choice, grace_t3/t24 stamps, t3_fitted_plan).');
   return { success: true, ...result };
 }
 

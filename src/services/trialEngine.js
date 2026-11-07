@@ -460,6 +460,8 @@ export async function extendAccountTrial({ supabase, ownerId, days = 15, couponC
     nudge_midpoint_sent_at: null,
     nudge_t3_sent_at: null,
     nudge_t24_sent_at: null,
+    // v1.71.0 — the T-3 fitted-plan snapshot is re-armed with the nudge ladder.
+    t3_fitted_plan: null,
     expiry_processed_at: null,
     updated_at: nowIso
   }).eq('id', trial.id);
@@ -576,17 +578,49 @@ function activationRewardText({
   return lines.join('\n');
 }
 
-function t3DigestText({ ownerName, tierLabel, trial, metrics, priceLabel, annualLabel, checkoutUrl, locale = 'en-US', timeZone = 'Africa/Nairobi' }) {
-  return `📊 *Your Saka Fleet ${tierLabel} trial ends in 3 days!*\n\nHere's what you built, ${ownerName || 'there'}:\n` +
-    `• 🚗 ${metrics.vehicles} vehicle(s) managed\n` +
-    `• 💰 ${metrics.expenses} expense(s) logged\n` +
-    `• 🔔 ${metrics.reminders} reminder(s) set\n` +
-    `• 📄 ${metrics.reports} report(s) generated\n` +
-    `• 🧠 ${metrics.aiAnswers} question(s) answered by Saka\n` +
-    `• ⏱️ ≈${metrics.hoursSaved} hour(s) saved vs manual tracking\n\n` +
-    `Keep everything unlocked: *${priceLabel || `${tierLabel} plan`}*${annualLabel ? ` (or ${annualLabel} yearly)` : ''}.\n` +
-    `👉 ${checkoutUrl || 'https://sakafleet.com/pricing'}\n\n` +
-    `Trial ends ${trialDateLabel(trial.ends_at, { locale, timeZone })}.`;
+function t3DigestText({
+  ownerName,
+  tierLabel,
+  trial,
+  metrics,
+  priceLabel,
+  annualLabel,
+  checkoutUrl,
+  fittedOffer = null,
+  locale = 'en-US',
+  timeZone = 'Africa/Nairobi'
+}) {
+  const lines = [
+    `📊 *Your Saka Fleet ${tierLabel} trial ends in 3 days!*`,
+    '',
+    `Here's what you built, ${ownerName || 'there'}:`,
+    `• 🚗 ${metrics.vehicles} vehicle(s) managed`,
+    `• 💰 ${metrics.expenses} expense(s) logged`,
+    `• 🔔 ${metrics.reminders} reminder(s) set`,
+    `• 📄 ${metrics.reports} report(s) generated`,
+    `• 🧠 ${metrics.aiAnswers} question(s) answered by Saka`,
+    `• ⏱️ ≈${metrics.hoursSaved} hour(s) saved vs manual tracking`,
+    ''
+  ];
+  if (fittedOffer) {
+    // v1.71.0 — the fitted-plan card rides the T-3 digest (one message): the
+    // tier that fits the garage, the engine's local price and its checkout
+    // link(s). Amounts and links come from the registry + Paystack ONLY.
+    const fitted = fittedOffer.fitted || fittedTierForAssets(fittedOffer.assetCount || 0);
+    const count = Number(fittedOffer.assetCount || 0);
+    const planLine = fitted.addonQuantity > 0
+      ? `${fitted.tierLabel} + ${fitted.addonQuantity} extra slot${fitted.addonQuantity === 1 ? '' : 's'}`
+      : fitted.tierLabel;
+    lines.push(`📦 *The plan that fits your ${count} ${count === 1 ? 'asset' : 'assets'}:* ${planLine}${fittedOffer.monthlyLabel ? ` — around ${fittedOffer.monthlyLabel}` : ''}`);
+    if (fittedOffer.checkoutUrl) lines.push(`👉 *Keep all ${count}:* ${fittedOffer.checkoutUrl}`);
+    if (fittedOffer.addonCheckoutUrl) lines.push(`👉 *Add the extra slots:* ${fittedOffer.addonCheckoutUrl}`);
+    lines.push('_Nothing pauses when the trial ends — you get a week to decide._');
+  } else {
+    lines.push(`Keep everything unlocked: *${priceLabel || `${tierLabel} plan`}*${annualLabel ? ` (or ${annualLabel} yearly)` : ''}.`);
+    lines.push(`👉 ${checkoutUrl || 'https://sakafleet.com/pricing'}`);
+  }
+  lines.push('', `Trial ends ${trialDateLabel(trial.ends_at, { locale, timeZone })}.`);
+  return lines.join('\n');
 }
 
 function t24Text({ tierLabel, trial, checkoutUrl, locale = 'en-US', timeZone = 'Africa/Nairobi' }) {
@@ -639,6 +673,27 @@ function isPaidLiveNow(owner, nowMs) {
   return isPaidTierKey(owner.subscription_tier)
     && ['ACTIVE', 'CANCELING', 'PAST_DUE'].includes(String(owner.subscription_status || '').toUpperCase())
     && (paidEndMs === 0 || paidEndMs > nowMs);
+}
+
+/**
+ * v1.71.0 — trial-end nudges (T-3 digest, T-24 urgency) never target an account
+ * that cannot act on them: a failed payment (PAST_DUE) or a cancellation
+ * (CANCELED / CANCELLED / CANCELING) gets no conversion card. Paired with
+ * `isPaidLiveNow()` by the call sites.
+ */
+export function skipsTrialEndNudge(owner) {
+  const status = String(owner?.subscription_status || '').toUpperCase();
+  return ['PAST_DUE', 'CANCELED', 'CANCELLED', 'CANCELING'].includes(status);
+}
+
+/**
+ * v1.71.0 — the fitted-plan snapshot key stamped with the T-3 card and compared
+ * at T-0 (e.g. `team_fleet`, `fleet_command+2`). Pure + null-safe.
+ */
+export function fittedPlanKey(fitted) {
+  if (!fitted || !fitted.tierKey) return null;
+  const addons = Math.max(0, Math.floor(Number(fitted.addonQuantity) || 0));
+  return addons > 0 ? `${fitted.tierKey}+${addons}` : String(fitted.tierKey);
 }
 
 /**
@@ -732,6 +787,37 @@ export function trialEndChoiceText({
       ? `• No rush: this choice stays open until ${trialDateLabel(graceEndsAt, { locale, timeZone })}. After that the account moves to Free (1 active asset, the rest paused). Everything stays safe.`
       : '• If you do nothing, the account moves to Free (1 active asset, the rest paused). Everything stays safe.'
   ].filter((line) => line !== null).join('\n');
+}
+
+/**
+ * v1.71.0 — T-0 urgency card when the fitted plan is UNCHANGED since T-3.
+ * The price, tier and payment link were already sent three days earlier, so
+ * this card restates the decision (nothing paused, deadline, downsize path)
+ * WITHOUT repeating any pricing — no tier name, no amount, no URL.
+ */
+export function graceChoiceText({
+  ownerName = null,
+  assetCount = 0,
+  graceEndsAt = null,
+  graceDays = TRIAL_END_GRACE_DAYS,
+  locale = 'en-US',
+  timeZone = 'Africa/Nairobi'
+} = {}) {
+  const name = ownerName ? `, ${String(ownerName).split(/\s+/)[0]}` : '';
+  const count = Number(assetCount || 0);
+  return [
+    `⏳ *Your trial just ended${name} — nothing is paused yet*`,
+    '',
+    count > 0
+      ? `All ${count} ${count === 1 ? 'asset stays' : 'assets stay'} active while you decide.`
+      : 'Every asset stays exactly as it is while you decide.',
+    'The payment link I sent you 3 days ago still works — reply *keep all* if you need it again.',
+    '',
+    '• Want a smaller plan? Reply *keep <plate>* and I\'ll pause the rest — never delete.',
+    graceDays > 0 && graceEndsAt
+      ? `• This choice stays open until ${trialDateLabel(graceEndsAt, { locale, timeZone })}. After that the account moves to Free (1 active asset, the rest paused). Everything stays safe.`
+      : '• If you do nothing, the account moves to Free (1 active asset, the rest paused). Everything stays safe.'
+  ].join('\n');
 }
 
 /** Deterministic countdown nudge inside the decision window. */
@@ -854,7 +940,10 @@ export async function runTrialEndStage({
 
   // ---- T-0: open the decision window (or the old hard downgrade when off) ----
   if (nowMs < endsMs) return false;
-  if (paidLive) {
+  // v1.71.0 — a paid-live plan is never touched (as before); an account whose
+  // payment failed or was cancelled cannot act on a conversion card either, so
+  // it is retired to EXPIRED without a message (capacity lapses on read).
+  if (paidLive || skipsTrialEndNudge(owner)) {
     await stampTrial(supabase, trial.id, { status: 'EXPIRED', expiry_processed_at: nowIso });
     stats.expired = (stats.expired || 0) + 1;
     return true;
@@ -871,15 +960,33 @@ export async function runTrialEndStage({
       stats.graceStarted = (stats.graceStarted || 0) + 1;
       if (phone && sendWhatsAppFn) {
         const current = await offer();
-        await sendWhatsAppFn(phone, trialEndChoiceText({
-          ownerName: owner?.full_name,
-          offer: current,
-          graceEndsAt,
-          graceDays: TRIAL_END_GRACE_DAYS,
-          locale: ownerCtx.locale,
-          timeZone: ownerCtx.timeZone
-        }), 'trial_grace', { tier: label }).catch(() => {});
+        // v1.71.0 — the fitted-plan card arrived at T-3. T-0 re-sends the full
+        // card ONLY when the fitted tier changed (assets added/removed) or no
+        // snapshot exists; otherwise the grace card is a pure urgency nudge
+        // with no repeated pricing (dedupe rule, §193).
+        const currentKey = fittedPlanKey(current.fitted);
+        const t3Key = trial.t3_fitted_plan ? String(trial.t3_fitted_plan) : null;
+        const planChanged = !t3Key || currentKey !== t3Key;
+        const text = planChanged
+          ? trialEndChoiceText({
+            ownerName: owner?.full_name,
+            offer: current,
+            graceEndsAt,
+            graceDays: TRIAL_END_GRACE_DAYS,
+            locale: ownerCtx.locale,
+            timeZone: ownerCtx.timeZone
+          })
+          : graceChoiceText({
+            ownerName: owner?.full_name,
+            assetCount: current.assetCount,
+            graceEndsAt,
+            graceDays: TRIAL_END_GRACE_DAYS,
+            locale: ownerCtx.locale,
+            timeZone: ownerCtx.timeZone
+          });
+        await sendWhatsAppFn(phone, text, 'trial_grace', { tier: label }).catch(() => {});
         stats.sent = (stats.sent || 0) + 1;
+        if (!planChanged) stats.graceNudge = (stats.graceNudge || 0) + 1;
       }
       return true;
     }
@@ -1444,8 +1551,8 @@ export async function processExpiredRenewalNudges({ supabase, sendWhatsAppFn, no
  * Trial lifecycle sweep (15-minute tick in index.js).
  * Each stage fires exactly once per trial, guarded by one-shot timestamps.
  */
-export async function runTrialLifecycleSweep({ supabase, sendWhatsAppFn = null, now = new Date(), limit = 100 } = {}) {
-  const stats = { scanned: 0, sent: 0, activationNudges: 0, midpoint: 0, t3: 0, t24: 0, expired: 0, extensionOffers: 0, winbacks: 0, dunning: 0, reengaged: 0, abandonedRecoveries: 0, renewalNudges: 0, graceStarted: 0, graceT3: 0, graceT24: 0, graceEnded: 0 };
+export async function runTrialLifecycleSweep({ supabase, sendWhatsAppFn = null, now = new Date(), limit = 100, checkoutFn = null, addonCheckoutFn = null } = {}) {
+  const stats = { scanned: 0, sent: 0, activationNudges: 0, midpoint: 0, t3: 0, t3Skipped: 0, t24: 0, t24Skipped: 0, expired: 0, extensionOffers: 0, winbacks: 0, dunning: 0, reengaged: 0, abandonedRecoveries: 0, renewalNudges: 0, graceStarted: 0, graceT3: 0, graceT24: 0, graceEnded: 0, graceNudge: 0 };
   if (!supabase) return stats;
 
   const { data: trials, error } = await supabase
@@ -1480,7 +1587,9 @@ export async function runTrialLifecycleSweep({ supabase, sendWhatsAppFn = null, 
       tierLabel,
       now,
       sendWhatsAppFn,
-      stats
+      stats,
+      ...(checkoutFn ? { checkoutFn } : {}),
+      ...(addonCheckoutFn ? { addonCheckoutFn } : {})
     });
     if (trialEnded) continue;
 
@@ -1554,20 +1663,54 @@ export async function runTrialLifecycleSweep({ supabase, sendWhatsAppFn = null, 
       continue;
     }
 
-    // ---- T-3d value digest ----
+    // ---- T-3d value digest + fitted-plan card (v1.71.0) ----
     if (!trial.nudge_t3_sent_at && nowMs >= endsMs - 3 * DAY_MS) {
-      await stampTrial(supabase, trial.id, { nudge_t3_sent_at: nowIso });
+      // v1.71.0 — a paid-live account or one whose payment failed / was
+      // cancelled can never act on a conversion card: skip the whole stage
+      // (no digest, no card, no stamp) so a recovered account can still get it.
+      if (isPaidLiveNow(owner, nowMs) || skipsTrialEndNudge(owner)) {
+        stats.t3Skipped += 1;
+        continue;
+      }
+      // Build the engine offer first so the card and the snapshot agree.
+      const fittedOffer = await buildTrialEndOffer({
+        supabase,
+        owner,
+        ownerId: trial.owner_id,
+        interval: trial.interval || 'monthly',
+        currency: ownerCtx.currency,
+        ...(checkoutFn ? { checkoutFn } : {}),
+        ...(addonCheckoutFn ? { addonCheckoutFn } : {})
+      }).catch(() => null);
+      const planStamp = fittedOffer ? fittedPlanKey(fittedOffer.fitted) : null;
+      // Rule 50 — two-step stamp: the one-shot marker must survive a missing
+      // t3_fitted_plan column; the fallback keeps the pre-v1.71.0 digest.
+      const stamped = await setTrialFields(supabase, trial.id, {
+        nudge_t3_sent_at: nowIso,
+        ...(planStamp ? { t3_fitted_plan: planStamp } : {})
+      });
+      let cardOffer = fittedOffer;
+      if (!stamped && planStamp) {
+        await stampTrial(supabase, trial.id, { nudge_t3_sent_at: nowIso });
+        cardOffer = null;
+      }
       if (phone && sendWhatsAppFn) {
         const currency = ownerCtx.currency;
         const metrics = await buildTrialMetrics({ supabase, ownerId: trial.owner_id, trial });
-        const monthly = await getTierLocalPrice(supabase, trial.tier, currency, 'monthly').catch(() => null);
-        const annual = await getTierLocalPrice(supabase, trial.tier, currency, 'annual').catch(() => null);
-        const checkoutUrl = await buildNudgeCheckout({ supabase, owner, trial, currency });
+        let priceLabel = null;
+        let annualLabel = null;
+        let checkoutUrl = null;
+        if (!cardOffer) {
+          const monthly = await getTierLocalPrice(supabase, trial.tier, currency, 'monthly').catch(() => null);
+          const annual = await getTierLocalPrice(supabase, trial.tier, currency, 'annual').catch(() => null);
+          priceLabel = monthly?.formattedPrice ? `${monthly.formattedPrice}/month` : null;
+          annualLabel = annual?.formattedPrice ? `${annual.formattedPrice}/year` : null;
+          checkoutUrl = await buildNudgeCheckout({ supabase, owner, trial, currency });
+        }
         await sendWhatsAppFn(phone, t3DigestText({
           ownerName: owner?.full_name, tierLabel, trial, metrics,
-          priceLabel: monthly?.formattedPrice ? `${monthly.formattedPrice}/month` : null,
-          annualLabel: annual?.formattedPrice ? `${annual.formattedPrice}/year` : null,
-          checkoutUrl,
+          priceLabel, annualLabel, checkoutUrl,
+          fittedOffer: cardOffer,
           locale: ownerCtx.locale, timeZone: ownerCtx.timeZone
         }), 'trial_ending', { days: String(Math.max(1, Math.ceil((endsMs - nowMs) / DAY_MS))) }).catch(() => {});
         stats.sent += 1;
@@ -1578,6 +1721,12 @@ export async function runTrialLifecycleSweep({ supabase, sendWhatsAppFn = null, 
 
     // ---- T-24h urgent reminder ----
     if (!trial.nudge_t24_sent_at && nowMs >= endsMs - DAY_MS) {
+      // v1.71.0 — same guard class as T-3: no urgency nudge to accounts that
+      // can never act on it (paid-live, PAST_DUE, cancelled).
+      if (isPaidLiveNow(owner, nowMs) || skipsTrialEndNudge(owner)) {
+        stats.t24Skipped += 1;
+        continue;
+      }
       await stampTrial(supabase, trial.id, { nudge_t24_sent_at: nowIso });
       if (phone && sendWhatsAppFn) {
         const checkoutUrl = await buildNudgeCheckout({ supabase, owner, trial, currency: ownerCtx.currency });
@@ -1819,7 +1968,10 @@ export default {
   countOwnerAssets,
   buildTrialEndOffer,
   trialEndChoiceText,
+  graceChoiceText,
   graceCountdownText,
+  fittedPlanKey,
+  skipsTrialEndNudge,
   runTrialEndStage,
   runTrialLifecycleSweep,
   getTrialFunnelStats,

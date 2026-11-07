@@ -126,6 +126,12 @@ export function createMockSupabase(seed = {}, options = {}) {
       let selected = rows.filter((row) => matches(row, query.filters));
 
       if (query.action === 'update') {
+        // v1.71.0 — optional rejection hook (e.g. simulate an un-migrated
+        // column: beforeUpdate returns { error } and the update fails).
+        if (typeof options.beforeUpdate === 'function') {
+          const rejection = options.beforeUpdate(table, query.payload);
+          if (rejection && rejection.error) return { data: null, error: rejection.error };
+        }
         const patched = [];
         for (const row of selected) {
           Object.assign(row, query.payload);

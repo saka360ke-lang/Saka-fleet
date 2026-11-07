@@ -119,6 +119,9 @@ CREATE TABLE IF NOT EXISTS public.trial_sessions (
   nudge_midpoint_sent_at timestamptz,
   nudge_t3_sent_at timestamptz,
   nudge_t24_sent_at timestamptz,
+  -- v1.71.0 — fitted-plan snapshot stamped with the T-3 card ("team_fleet",
+  -- "fleet_command+2"); T-0 re-sends the full card only when this differs.
+  t3_fitted_plan text,
   expiry_processed_at timestamptz,
   checkout_started_at timestamptz,
   converted_at timestamptz,

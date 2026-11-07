@@ -24,6 +24,9 @@ import {
   extendAccountTrial,
   applyAccountTrialExtensionCoupon,
   runTrialLifecycleSweep,
+  graceChoiceText,
+  fittedPlanKey,
+  skipsTrialEndNudge,
   getTrialFunnelStats,
   formatTrialStatsReply
 } from './src/services/trialEngine.js';
@@ -278,6 +281,88 @@ async function run() {
   check(t3.kinds[0] === 'trial_ending', 'T-3 digest carries the trial_ending template kind');
   const t3again = await runTrialLifecycleSweep({ supabase: t3.mock.client, sendWhatsAppFn: t3.send });
   check(t3again.t3 === 0 && t3.sent.length === 1, 'T-3 digest never repeats');
+
+  // ---- v1.71.0 (Phase 7): the fitted-plan card rides the T-3 digest ----
+  const fitVehicles = (n) => Array.from({ length: n }, (_, i) => ({
+    id: `fv-${i + 1}`,
+    owner_id: 'p-1',
+    plate_number: `KDA 2${i}`,
+    status: 'ACTIVE',
+    updated_at: past(1),
+    deleted_at: null
+  }));
+  const fitCheckout = async () => ({ ok: true, checkoutUrl: 'https://checkout.test/fit' });
+  const fitAddon = async () => ({ ok: true, checkoutUrl: 'https://checkout.test/addon' });
+
+  const t3fit = makeSweep({ started_at: past(27.5), ends_at: future(2.5), nudge_activation_sent_at: past(20) }, {}, { vehicles: fitVehicles(6) });
+  const t3fitStats = await runTrialLifecycleSweep({ supabase: t3fit.mock.client, sendWhatsAppFn: t3fit.send, checkoutFn: fitCheckout, addonCheckoutFn: fitAddon });
+  check(t3fitStats.t3 === 1 && t3fit.sent.length === 1, 'T-3 + fitted card fire exactly once (one message)');
+  const t3fitText = t3fit.sent[0] || '';
+  check(/trial ends in 3 days/i.test(t3fitText) && /hour\(s\) saved/i.test(t3fitText), 'the fitted digest keeps the value metrics');
+  check(/The plan that fits your 6 assets:\* Fleet Command \+ 1 extra slot/.test(t3fitText), 'the T-3 card names the tier that fits 6 assets (Fleet Command + 1 slot)');
+  check(/KES/.test(t3fitText) && !/\$|USD/.test(t3fitText), 'the T-3 card prices in the local currency from the engine');
+  check(t3fitText.includes('https://checkout.test/fit') && t3fitText.includes('https://checkout.test/addon'), 'the T-3 card carries the engine checkout links');
+  check(t3fit.mock.db.trial_sessions[0].t3_fitted_plan === 'fleet_command+1', 'the fitted-tier snapshot is stamped with the T-3 card');
+  const t3fitAgain = await runTrialLifecycleSweep({ supabase: t3fit.mock.client, sendWhatsAppFn: t3fit.send, checkoutFn: fitCheckout, addonCheckoutFn: fitAddon });
+  check(t3fitAgain.t3 === 0 && t3fit.sent.length === 1, 'the T-3 card never repeats');
+
+  // T-0: unchanged fitted plan → grace card without any repeated pricing.
+  const graceSame = makeSweep({ status: 'ACTIVE', started_at: past(31), ends_at: past(0.5), nudge_activation_sent_at: past(20), nudge_t3_sent_at: past(3), t3_fitted_plan: 'team_fleet' }, {}, { vehicles: fitVehicles(2) });
+  const graceSameStats = await runTrialLifecycleSweep({ supabase: graceSame.mock.client, sendWhatsAppFn: graceSame.send, checkoutFn: fitCheckout });
+  check(graceSameStats.graceStarted === 1 && graceSameStats.graceNudge === 1, 'T-0 opens the window with the no-repeat grace card');
+  const graceSameText = graceSame.sent[0] || '';
+  check(/nothing is paused yet/i.test(graceSameText) && /keep <plate>/i.test(graceSameText), 'the grace card keeps the decision + downsize path');
+  check(!/Team Fleet/.test(graceSameText) && !/KES/.test(graceSameText) && !/https?:\/\//.test(graceSameText), 'the grace card repeats no tier, price or link');
+  check(/payment link I sent you 3 days ago still works/i.test(graceSameText), 'the grace card points back to the T-3 link');
+
+  // T-0: the garage changed (2 → 4 assets) → the full card is re-sent.
+  const graceChanged = makeSweep({ status: 'ACTIVE', started_at: past(31), ends_at: past(0.5), nudge_activation_sent_at: past(20), nudge_t3_sent_at: past(3), t3_fitted_plan: 'team_fleet' }, {}, { vehicles: fitVehicles(4) });
+  const graceChangedStats = await runTrialLifecycleSweep({ supabase: graceChanged.mock.client, sendWhatsAppFn: graceChanged.send, checkoutFn: fitCheckout });
+  const graceChangedText = graceChanged.sent[0] || '';
+  check(graceChangedStats.graceStarted === 1 && /Growth/.test(graceChangedText), 'a changed fitted tier re-sends the full card at T-0 (4 assets → Growth)');
+  check(graceChangedText.includes('https://checkout.test/fit'), 'the re-sent card carries a fresh engine link');
+
+  // T-0: no snapshot (e.g. trial shorter than 3 days) → the old full card.
+  const graceNoSnapshot = makeSweep({ status: 'ACTIVE', started_at: past(31), ends_at: past(0.5), nudge_activation_sent_at: past(20) }, {}, { vehicles: fitVehicles(2) });
+  await runTrialLifecycleSweep({ supabase: graceNoSnapshot.mock.client, sendWhatsAppFn: graceNoSnapshot.send, checkoutFn: fitCheckout });
+  check(/Team Fleet/.test(graceNoSnapshot.sent[0] || '') && /nothing is paused yet/i.test(graceNoSnapshot.sent[0] || ''), 'a missing snapshot falls back to the full fitted card');
+
+  // PAST_DUE and CANCELED accounts never receive the T-3 card.
+  const pastDue = makeSweep({ started_at: past(27.5), ends_at: future(2.5), nudge_activation_sent_at: past(20) }, { subscription_status: 'PAST_DUE', subscription_period_end: past(2) }, { vehicles: fitVehicles(6) });
+  const pastDueStats = await runTrialLifecycleSweep({ supabase: pastDue.mock.client, sendWhatsAppFn: pastDue.send, checkoutFn: fitCheckout });
+  check(pastDueStats.t3 === 0 && pastDueStats.t3Skipped === 1 && !pastDue.sent.some((m) => /plan that fits|trial ends in 3 days/i.test(m)), 'PAST_DUE accounts skip T-3 entirely (no digest, no card)');
+  const canceled = makeSweep({ started_at: past(27.5), ends_at: future(2.5), nudge_activation_sent_at: past(20) }, { subscription_status: 'CANCELED' }, { vehicles: fitVehicles(6) });
+  const canceledStats = await runTrialLifecycleSweep({ supabase: canceled.mock.client, sendWhatsAppFn: canceled.send, checkoutFn: fitCheckout });
+  check(canceledStats.t3 === 0 && canceledStats.t3Skipped === 1 && !canceled.sent.some((m) => /plan that fits|trial ends in 3 days/i.test(m)), 'CANCELED accounts skip T-3 entirely (no digest, no card)');
+  const pastDueT24 = makeSweep({ started_at: past(29.5), ends_at: future(0.5), nudge_activation_sent_at: past(22), nudge_t3_sent_at: past(2) }, { subscription_status: 'PAST_DUE', subscription_period_end: past(2) }, { vehicles: fitVehicles(2) });
+  const pastDueT24Stats = await runTrialLifecycleSweep({ supabase: pastDueT24.mock.client, sendWhatsAppFn: pastDueT24.send, checkoutFn: fitCheckout });
+  check(pastDueT24Stats.t24 === 0 && pastDueT24Stats.t24Skipped === 1 && !pastDueT24.sent.some((m) => /24 hours left/i.test(m)), 'PAST_DUE accounts skip the T-24 urgency nudge too');
+
+  // Rule 50: a missing t3_fitted_plan column degrades to the old digest + full T-0 card.
+  const driftMock = createMockSupabase({
+    profiles: [ownerProfile({ subscription_tier: 'growth', subscription_status: 'TRIALING', trial_used_at: past(5) })],
+    trial_sessions: [trialRow({ started_at: past(27.5), ends_at: future(2.5), nudge_activation_sent_at: past(20) })],
+    coupons: [], usage_counters: [], vehicles: fitVehicles(6), expense_logs: [], reminders: [], ai_usage_logs: []
+  }, {
+    beforeUpdate: (table, patch) => (table === 'trial_sessions' && patch && Object.prototype.hasOwnProperty.call(patch, 't3_fitted_plan')
+      ? { error: { message: 'column "t3_fitted_plan" of relation "trial_sessions" does not exist' } }
+      : null)
+  });
+  const driftSent = [];
+  const driftStats = await runTrialLifecycleSweep({ supabase: driftMock.client, sendWhatsAppFn: async (_to, message) => { driftSent.push(message); }, checkoutFn: fitCheckout });
+  check(driftStats.t3 === 1 && driftSent.length === 1, 'schema drift still sends the T-3 digest once');
+  check(/Keep everything unlocked/.test(driftSent[0] || '') && !/The plan that fits/.test(driftSent[0] || ''), 'schema drift degrades to the pre-v1.71.0 digest (no fitted card)');
+  check(Boolean(driftMock.db.trial_sessions[0].nudge_t3_sent_at) && !driftMock.db.trial_sessions[0].t3_fitted_plan, 'the one-shot marker survives; no snapshot is claimed');
+  driftMock.db.trial_sessions[0].ends_at = past(0.5);
+  const driftT0Sent = [];
+  await runTrialLifecycleSweep({ supabase: driftMock.client, sendWhatsAppFn: async (_to, message) => { driftT0Sent.push(message); }, checkoutFn: fitCheckout });
+  check(/You built 6 assets/.test(driftT0Sent[0] || '') && /Fleet Command/.test(driftT0Sent[0] || ''), 'schema drift at T-0 falls back to the full fitted card');
+
+  // Pure helper pins.
+  check(fittedPlanKey({ tierKey: 'team_fleet', addonQuantity: 0 }) === 'team_fleet' && fittedPlanKey({ tierKey: 'fleet_command', addonQuantity: 2 }) === 'fleet_command+2' && fittedPlanKey(null) === null, 'fittedPlanKey encodes tier + add-on slots (null-safe)');
+  check(skipsTrialEndNudge({ subscription_status: 'past_due' }) === true && skipsTrialEndNudge({ subscription_status: 'ACTIVE' }) === false, 'the skip guard matches PAST_DUE/CANCELED/CANCELLING statuses case-insensitively');
+  const graceCopy = graceChoiceText({ ownerName: 'Test Owner', assetCount: 2, graceEndsAt: future(6), graceDays: 7 });
+  check(!/Team Fleet|Solo Pro|Growth|Fleet Command/.test(graceCopy) && !/KES|\$/.test(graceCopy) && !/https?:\/\//.test(graceCopy), 'graceChoiceText carries no tier, price or link');
 
   const t24 = makeSweep({ started_at: past(29.5), ends_at: future(0.5), nudge_activation_sent_at: past(22) });
   const t24stats = await runTrialLifecycleSweep({ supabase: t24.mock.client, sendWhatsAppFn: t24.send });

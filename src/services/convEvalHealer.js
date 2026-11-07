@@ -290,7 +290,10 @@ export async function healFailedCase({
   judged = null,
   judgeConfig = {},
   generate = generateText,
-  judge = judgeConversation
+  judge = judgeConversation,
+  // v1.71.0 — injectable clock (test-only; defaults to now) so the cooldown
+  // window is provable against a frozen fixture instead of the wall clock.
+  now = new Date()
 } = {}) {
   if (!isConvEvalHealEnabled()) return { ok: false, reason: 'heal_disabled' };
   if (!caseDef || !caseDef.id) return { ok: false, reason: 'no_case' };
@@ -306,7 +309,7 @@ export async function healFailedCase({
   // `CONV_EVAL_REFUSAL_COOLDOWN_HOURS`, a prompt hint has proven it cannot fix
   // it: stop spending the generate + A/B judge calls every tick. The 6-hourly
   // digest still flags it as a code-fix candidate (the developer signal).
-  const cooldown = await healCooldownStatus({ supabase, caseId: caseDef.id });
+  const cooldown = await healCooldownStatus({ supabase, caseId: caseDef.id, now });
   if (cooldown.cooling) {
     await writeAudit(supabase, 'CONV_EVAL_HEAL_SKIPPED_COOLDOWN', {
       case_id: caseDef.id,

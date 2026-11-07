@@ -38,6 +38,7 @@ import {
 import { validateCouponForCheckout } from './src/services/coupons.js';
 import { resolveTier, AI_TIERS } from './src/services/aiClient.js';
 import { checkOwnerVehicleTierLimit } from './src/services/vehicles.js';
+import { runTrialLifecycleSweep } from './src/services/trialEngine.js';
 
 let passed = 0;
 function check(condition, message) {
@@ -390,6 +391,32 @@ async function run() {
 
   const subsSource = fs.readFileSync('./src/services/subscriptions.js', 'utf8');
   check(subsSource.split('sendWhatsAppFn(owner.phone_number,').length - 1 === 3, 'the three Paystack confirmations keep the legacy two-argument text sender (deliberately not template-routed)');
+
+  console.log('\n--- Test 12: the PAST_DUE T-3 skip reuses the paid-live semantics (v1.71.0) ---');
+  const skipTrial = () => ({
+    id: 'ts-skip',
+    owner_id: 'p-1',
+    tier: 'growth',
+    interval: 'monthly',
+    status: 'ACTIVE',
+    started_at: past(27.5),
+    ends_at: future(2.5),
+    activated: false,
+    activation_events: [],
+    nudge_activation_sent_at: past(20),
+    nudge_midpoint_sent_at: null,
+    nudge_t3_sent_at: null,
+    nudge_t24_sent_at: null,
+    expiry_processed_at: null
+  });
+  // PAST_DUE with the paid period still open = isPaidLiveNow() -> skipped, no stamp.
+  const pdOpen = createMockSupabase({
+    profiles: [profile({ subscription_tier: 'growth', subscription_status: 'PAST_DUE', subscription_period_end: future(2) })],
+    trial_sessions: [skipTrial()],
+    coupons: [], usage_counters: [], vehicles: [], expense_logs: [], reminders: [], ai_usage_logs: []
+  });
+  const pdOpenStats = await runTrialLifecycleSweep({ supabase: pdOpen.client, sendWhatsAppFn: async () => true });
+  check(pdOpenStats.t3 === 0 && pdOpenStats.t3Skipped === 1 && !pdOpen.db.trial_sessions[0].nudge_t3_sent_at, 'a PAST_DUE account inside its paid period skips T-3 via isPaidLiveNow (no stamp, no card)');
 
   return passed;
 }
