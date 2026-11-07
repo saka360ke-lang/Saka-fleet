@@ -43,11 +43,50 @@ const TRUTHY = new Set(['on', 'true', '1']);
 /** Purposes that get one extra attempt when a provider returns an empty body. */
 export const EMPTY_RETRY_PURPOSES = new Set(['intent_classify', 'question_render', 'prose_render']);
 
-/** v1.23.0 - Sonnet serves FRONT user conversations only; background/system purposes stay DeepSeek. */
+/**
+ * v1.23.0 - Sonnet serves FRONT user conversations only; background/system
+ * purposes stay DeepSeek. v1.70.0 - complaint_recovery joins the front set:
+ * its own AI purpose existed since v1.12.0 but the compose lane mapped it to
+ * question_render, so Tier-1 clamps would have routed it to the background
+ * DeepSeek leg instead of the front Haiku tier.
+ */
 export const USER_FACING_PURPOSES = new Set([
   'intent_classify', 'extraction', 'question_render', 'prose_render',
-  'small_talk', 'stall_nudge', 'admin_parse'
+  'small_talk', 'stall_nudge', 'complaint_recovery', 'admin_parse'
 ]);
+
+/**
+ * v1.70.0 - per-purpose tier optimization: MECHANICAL purposes are capped back
+ * to Tier 1 (Haiku) inside the plan-driven branch of resolveTier(), even on
+ * paid/live-trial plans where the v1.58.24 plan floor would otherwise raise
+ * them to Sonnet. These are cached, rare or scaffolding renders where the
+ * cheap model is indistinguishable. Quality-critical purposes (prose_render,
+ * extraction, complaint_recovery, product/user answers via prose_render) are
+ * deliberately absent and keep the plan tier. PREMIUM_MODEL_MODE='escalate'
+ * skips the whole branch, so the legacy canary runs without these caps.
+ *
+ * v1.70.0 (A1 eval gate) - intent_classify is deliberately PARKED out of this
+ * registry: the eval gate landed at 22/23 (the prose case
+ * `trial-end-downsize-choice`, 0.83 boundary_safety) and the release rule is
+ * "never ship a quality risk to hit a savings target". The honor-forced
+ * plumbing below stays so re-enabling it is a one-line change once a clean
+ * 23/23 gate proves the downgrade is invisible.
+ */
+export const PURPOSE_TIER_OVERRIDES = Object.freeze({
+  question_render: AI_TIERS.ROUTER,
+  stall_nudge: AI_TIERS.ROUTER,
+  small_talk: AI_TIERS.ROUTER
+});
+
+/**
+ * v1.70.0 - the deterministic canary's high-stakes verdict (a caller-forced
+ * CONVERSATIONAL tier) still wins above a mechanical cap for these purposes.
+ * sakaAi passes classifyIntentTier()'s verdict as the forced tier for
+ * intent_classify; the entry is parked with the registry override above and
+ * only takes effect when intent_classify is re-enabled in
+ * PURPOSE_TIER_OVERRIDES.
+ */
+export const PURPOSE_TIER_OVERRIDE_HONORS_FORCED = new Set(['intent_classify']);
 
 /** v1.22.0 — a slow empty answer must not spend a second full timeout. */
 export const EMPTY_RETRY_MAX_FIRST_MS = (() => {
@@ -286,6 +325,17 @@ export function resolveTier(purpose = 'default', { tier: forcedTier, maxTier = n
       && Number(maxTier) >= AI_TIERS.CONVERSATIONAL
       && tier > AI_TIERS.DETERMINISTIC && tier < AI_TIERS.REASONING) {
     tier = AI_TIERS.CONVERSATIONAL;
+    // v1.70.0 - per-purpose tier optimization: mechanical purposes are capped
+    // back to Tier 1 (Haiku) after the plan-floor raise. A caller-forced
+    // CONVERSATIONAL tier (the deterministic canary's high-stakes verdict)
+    // still wins for purposes that honor it (intent_classify).
+    const overrideCap = PURPOSE_TIER_OVERRIDES[String(purpose || '')];
+    if (overrideCap !== undefined
+        && !(PURPOSE_TIER_OVERRIDE_HONORS_FORCED.has(String(purpose || ''))
+          && forcedTier !== null && forcedTier !== undefined
+          && Number(forcedTier) > overrideCap)) {
+      tier = overrideCap;
+    }
   }
   if (tier === AI_TIERS.CONVERSATIONAL && !isPremiumModelEnabled()) {
     tier = AI_TIERS.ROUTER;

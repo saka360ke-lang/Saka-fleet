@@ -114,17 +114,26 @@ async function run() {
   process.env.PREMIUM_MODEL_ENABLED = 'on';
   delete process.env.PREMIUM_MODEL_MODE;
   check(resolveTier('intent_classify', { maxTier: 1 }).tier === AI_TIERS.ROUTER, 'Free clamp forces Tier 1');
-  check(resolveTier('intent_classify', { maxTier: 3 }).tier === AI_TIERS.CONVERSATIONAL, 'Paid clamp allows Tier 2');
+  // v1.70.0 - mechanical purposes (question_render, stall_nudge, small_talk) are
+  // capped to Tier 1 on paid plans; intent_classify is parked out of the
+  // registry by the A1 eval gate, so the v1.58.24 plan floor still governs it.
+  check(resolveTier('intent_classify', { maxTier: 3 }).tier === AI_TIERS.CONVERSATIONAL, 'Paid intent_classify keeps the plan floor (override parked)');
+  check(resolveTier('intent_classify', { maxTier: 3, tier: AI_TIERS.CONVERSATIONAL }).tier === AI_TIERS.CONVERSATIONAL, 'The canary high-stakes verdict keeps intent_classify on Sonnet');
   check(resolveTier('health_synthesis', {}).tier === AI_TIERS.REASONING, 'Background purposes keep Tier 3 (no clamp)');
 
-  // v1.58.24 - plan-driven model routing: paid/live-trial front purposes (even
-  // the formerly Tier-1 ones) run Sonnet; free stays Haiku.
-  check(resolveTier('question_render', { maxTier: 3 }).tier === AI_TIERS.CONVERSATIONAL, 'Paid front question_render climbs to Sonnet');
-  check(resolveTier('stall_nudge', { maxTier: 3 }).tier === AI_TIERS.CONVERSATIONAL, 'Paid front stall_nudge climbs to Sonnet');
+  // v1.70.0 - mechanical purposes are capped back to Tier 1 on paid plans
+  // (v1.58.24 raised them to Sonnet via the plan floor; Phase 6 supersedes that
+  // for cached/rare renders). Quality-critical purposes keep the plan tier.
+  check(resolveTier('question_render', { maxTier: 3 }).tier === AI_TIERS.ROUTER, 'Paid question_render stays on Haiku (mechanical cap)');
+  check(resolveTier('stall_nudge', { maxTier: 3 }).tier === AI_TIERS.ROUTER, 'Paid stall_nudge stays on Haiku (mechanical cap)');
+  check(resolveTier('small_talk', { maxTier: 3 }).tier === AI_TIERS.ROUTER, 'Paid small_talk stays on Haiku (mechanical cap)');
   check(resolveTier('question_render', { maxTier: 1 }).tier === AI_TIERS.ROUTER, 'Free front question_render stays on Haiku');
+  check(resolveTier('prose_render', { maxTier: 3 }).tier === AI_TIERS.CONVERSATIONAL, 'Paid prose_render keeps Sonnet (quality-critical)');
+  check(resolveTier('complaint_recovery', { maxTier: 3 }).tier === AI_TIERS.CONVERSATIONAL, 'Paid complaint_recovery keeps Sonnet (its own Tier-2 purpose)');
   check(resolveTier('extraction', { maxTier: 3, tier: AI_TIERS.ROUTER }).tier === AI_TIERS.CONVERSATIONAL, 'The canary tier is raised for paid front purposes');
   process.env.PREMIUM_MODEL_MODE = 'escalate';
   check(resolveTier('question_render', { maxTier: 3 }).tier === AI_TIERS.ROUTER, 'PREMIUM_MODEL_MODE=escalate keeps the legacy canary');
+  check(resolveTier('intent_classify', { maxTier: 3 }).tier === AI_TIERS.CONVERSATIONAL, 'escalate mode ignores the per-purpose caps (registry default wins)');
   delete process.env.PREMIUM_MODEL_MODE;
   process.env.PREMIUM_MODEL_ENABLED = 'off';
   check(resolveTier('question_render', { maxTier: 3 }).tier === AI_TIERS.ROUTER, 'The premium kill switch still degrades everyone to Tier 1');

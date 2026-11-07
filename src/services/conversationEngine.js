@@ -67,16 +67,22 @@ export function nextReviewOpener(variant = null) {
  * Map a compose purpose to the AI router purpose (tier + telemetry). Quiz
  * question renders and background nudges never need the conversational tier;
  * every other render is prose (Tier 2 when premium routing is enabled).
+ *
+ * v1.70.0 (cleanup) - complaint_recovery maps to its OWN AI purpose (which has
+ * existed since v1.12.0 but had zero callers). The old mapping pointed at
+ * question_render and only reached Sonnet because the v1.58.24 plan floor
+ * raised that purpose; without this remap the Phase 6 question_render tier
+ * downgrade would silently degrade the most sensitive reply lane to Haiku.
  */
 const ROUTER_PURPOSE_BY_COMPOSE = Object.freeze({
   quiz_intro_question: 'question_render',
   quiz_next_question: 'question_render',
   conversation_stall_nudge: 'stall_nudge',
-  complaint_recovery: 'question_render',
+  complaint_recovery: 'complaint_recovery',
   website_signup_gate_clarify: 'question_render'
 });
 
-function routerPurposeForCompose(purpose) {
+export function routerPurposeForCompose(purpose) {
   return ROUTER_PURPOSE_BY_COMPOSE[purpose] || 'prose_render';
 }
 

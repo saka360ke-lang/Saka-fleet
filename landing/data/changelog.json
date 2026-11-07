@@ -1,6 +1,13 @@
 {
-  "latest": "1.69.0",
+  "latest": "1.70.0",
   "entries": [
+    {
+      "version": "1.70.0",
+      "date": "2026-11-07",
+      "title": "Saka's quick notes get the fast pen",
+      "preview": "Quick, repeatable messages now use the lighter model - the important answers keep the best one.",
+      "summary": "Saka now picks the right-sized brain for each job. The quick, repeatable bits - quiz prompts, little nudges, one-line small talk - run on the lighter model on every plan, while the answers that matter (your own data, pricing, complaints, parsing your logs) keep the best one. A quiet cleanup also fixed a hidden wiring issue so the complaint lane keeps its full-quality model no matter what. Proven by the full quality suite and the conversation eval gate."
+    },
     {
       "version": "1.69.0",
       "date": "2026-11-07",

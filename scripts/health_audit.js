@@ -22,6 +22,8 @@ const STATLESS_SUITES = [
   'test_dunning_reengagement.js',
   'test_followups.js',
   'test_subscription_billing.js',
+  // v1.70.0 — per-purpose tier overrides (mechanical -> Haiku, canary-honored intent_classify).
+  'test_phase6_purpose_tiers.js',
   'test_trial_engine.js',
   'test_agent_training.js',
   // v1.52.0 — the user's own data (expiries, trial, compliance) rides every snapshot.
