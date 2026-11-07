@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.71.1  
+**Version:** 1.72.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.72.0** | Phase 8B (P2-3 + PRI-1): `LEGACY_EXPENSES_WRITE_ENABLED` retires the legacy `expenses` mirror behind a default-on flag, the three critical reads migrate to the canonical `expense_logs` (dedupe guard by `vehicle_id`, admin report, vehicle passbook), and the live superadmin double-count bug is fixed — the report summed both tables, counting every dual-written expense twice; pinned by a mock assertion | 194 |
 | **1.71.1** | Phase 8A (P2-5): the dead `applyEntryUpdate` export is removed from `entryLedger.js` — the in-place editor was superseded by `relogLedgerEntry` in v1.37.0 and had zero importers (proven by grep); `test_entry_ledger` pins the absence of the export and the presence of the live correction path | 194 |
 | **1.71.0** | Phase 7: the fitted-plan card moves to T-3 (a full 7-day conversion window), deduped by a `trial_sessions.t3_fitted_plan` tier snapshot — T-0 re-sends the full card only when the fitted tier changed, otherwise the grace card is a pure urgency nudge with no tier/price/link; the skip guard (paid-live + PAST_DUE/CANCELED/CANCELLED/CANCELING) now covers T-3 AND T-24; the T-3 link arms the abandoned-checkout ladder (cap 3, stops at GRACE); GRACE countdowns deliberately keep their in-window repetition; pre-existing `test_eval_spend` date-bomb fixed with an injectable clock | 193 |
 | **1.70.1** | Eval measurement robustness (Phase 6.5): flake-tolerant gate (`--repeat N`, `--min-pass-rate 0..1`) aggregates every run's signal pool, calibration expected-fails are held, errored cases leave the denominator (judge hiccups exit 2, never 1) and the old `errored > 0` short-circuit is gone; pure helpers `parseConvEvalArgs` / `aggregateEvalRuns` / `evalGateExitCode` in convEval.js (+14 tests); the A1 re-evaluation ran 3 × 23 signal cases — 23/23 judged pass (100%), 20/20 calibration held, 62 judge timeouts demoted to exit 2 — and **intent_classify ships enabled** (full 4-override registry, ~64% AI cost reduction on heavy paid users) | 192.1 |
@@ -5487,5 +5488,14 @@ reads.js / pending.js / quiz.js / media.js / hooks.js : unchanged (5B-2 / 5B-3 e
 - **Superseded:** v1.37.0 (D1) replaced in-place edits with `relogLedgerEntry` (delete & re-log: hard-delete + full-row snapshot audit + fresh row keeps the original `created_at`, DELETE audit marked consumed so `restore` can never duplicate). The v1.63.0 route switch (`readCommands.js` edit-apply branch) was the last live reference.
 - **Importers:** ZERO — proven by grep across `src/` and every `test_*.js` (only the definition + historical CHANGELOG/architecture mentions remained; the v1.63.0 recurrence autopsy had already flagged it as a Phase 9 P2-5 cleanup).
 - **Action:** export deleted; `test_entry_ledger` pins `!('applyEntryUpdate' in entryLedger)` and that `relogLedgerEntry` still exports. All symbols the function used (`sanitizeEntryUpdate`, `writeAudit`, `LEDGER_TABLES`, `LEDGER_AUDIT_ACTIONS.UPDATED`) remain live via relog/delete/restore — no orphans.
+
+**8B (v1.72.0) — P2-3 map: `expenses` vs `expense_logs`, and the PRI-1 live double-count fix.**
+- **Writes.** Canonical `expense_logs` at `commands.js:607/611` (quick path) and `quizEngine.js:3258/3262` (`log_expense`); the legacy `expenses` mirror at `commands.js:616-622` (no `created_at`, no label/notes/fill_type/currency/driver linkage) and `quizEngine.js:3285-3292` (carries the retro `created_at`). Both mirror writes now sit behind `LEGACY_EXPENSES_WRITE_ENABLED` (default `true` = today's behaviour; `false` stops the mirror). The switch lives in `expenseGuard.js` (`legacyExpensesWriteEnabled()`), the module both writers already import.
+- **Reads (4 audited).** `expenseGuard.isDuplicateExpense` — the only write-time dedupe — migrated to the canonical `expense_logs` by `vehicle_id` (both writers pass the vehicle they already hold; a plate-only caller resolves the vehicle first); `superadmin.handleAdminReportCommand` migrated to `expense_logs` only (**PRI-1**); `superadmin.handleAdminAuditCommand` vehicle passbook migrated to `expense_logs` by `vehicle_id`; `analytics.calculateFuelConsumption` legacy fallback **deliberately left** (archival read, dropped in v1.73.0).
+- **PRI-1 — live bug fixed.** `totalExpenses` summed `expenses` + `expense_logs`, so every dual-written expense had been counted **twice** since the dual-write began. The report now reads `expense_logs` only; fleet totals match reality. Pinned in `test_superadmin.js`: a mock where the legacy table holds 999,999 and the ledger holds 150 asserts `total_expenses === 150` and that `handleAdminReportCommand` never queries `expenses`.
+- **Schema divergence (documented).** `expenses` = `id, plate, expense_type, amount, liters, odometer_reading, created_at`; `expense_logs` is the canonical superset keyed by `vehicle_id` (+ `driver_id, category, cost, currency, fuel_liters, fill_type, notes, logged_at`, and `label` since v1.59.0). The mirror loses label, notes, fill type, currency and the driver/vehicle linkage by design.
+- **No backfill.** `expenses` shares no reliable join key with the ledger and dual-write kept it in sync, so backfilling would risk minting duplicate ledger rows. It stays a **read-only archival table**; wipe/cleanup paths (`profileWipe`, `testCleanup`, `reset-db`, seed) keep deleting from it.
+- **Teardown plan.** v1.73.0 flips `LEGACY_EXPENSES_WRITE_ENABLED=false`, drops the `analytics` archival fallback and removes the flag code — only after the three migrated reads are proven in production.
+- **Frames touched (8B).** `src/services/expenseGuard.js` (flag + `vehicle_id` read + plate resolver), `src/routes/whatsapp/commands.js` (vehicleId + flag), `src/services/quizEngine.js` (vehicleId + flag), `src/services/superadmin.js` (report + passbook reads), `test_quiz_flow.js` (+4), `test_superadmin.js` (+3), `test_expense_guard.js` (new, 24), `.env.example`.
 
 

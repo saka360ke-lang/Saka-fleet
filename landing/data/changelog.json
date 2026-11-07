@@ -1,6 +1,13 @@
 {
-  "latest": "1.71.1",
+  "latest": "1.72.0",
   "entries": [
+    {
+      "version": "1.72.0",
+      "date": "2026-11-07",
+      "title": "Counted once, counted right",
+      "preview": "Fleet totals in admin reports now match reality - every expense is counted exactly once.",
+      "summary": "The executive report briefly counted each expense twice: Saka writes your ledger and kept an older mirror copy, and the report added both together. The report now reads the one real ledger, so expense totals, net profit and per-vehicle passbooks all match reality. A behind-the-scenes flag also prepares the retirement of that old mirror copy - nothing you see changes, and every record, report and reply works exactly as before, proven by the full quality suite."
+    },
     {
       "version": "1.71.1",
       "date": "2026-11-07",

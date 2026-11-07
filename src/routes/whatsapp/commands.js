@@ -27,7 +27,7 @@ import { findVehicleByCandidate, setActiveVehicle, updateVehicleDetails, unassig
 import { normalizeExpenseType, resolveExpenseType, hasExpenseTypeMarker } from '../../services/expenseCatalog.js';
 import { normalizeEarningType, resolveEarningType, hasEarningTypeMarker } from '../../services/earningCatalog.js';
 import { sanitizeEntryLabel, extractEntryLabel } from '../../services/entryLabels.js';
-import { isDuplicateExpense } from '../../services/expenseGuard.js';
+import { isDuplicateExpense, legacyExpensesWriteEnabled } from '../../services/expenseGuard.js';
 import { normalizeFillType } from '../../services/fuelEconomy.js';
 import { applyOdometerReading, applyOperatingHours } from '../../services/maintenanceReminders.js';
 import { markUserDataChanged } from '../../services/afterWrite.js';
@@ -578,6 +578,8 @@ export async function handleLogExpenseTurn({ mergedExt, messageText, targetVeh, 
     const duplicateExpense = (supabaseClient && targetVeh && extAmount && extAmount > 0)
       ? await isDuplicateExpense(supabaseClient, {
         plate: targetVeh.plate_number,
+        // v1.72.0 (P2-3) — the guard reads expense_logs by vehicle_id.
+        vehicleId: targetVeh.id,
         amount: extAmount,
         expenseType: expType,
         odometer: extOdo || null,
@@ -613,13 +615,17 @@ export async function handleLogExpenseTurn({ mergedExt, messageText, targetVeh, 
       if (quickLogErr) {
         reply = `⚠️ I could not save that expense just now — *nothing was written*. Please try again in a moment, or send it as *"amount type"* (e.g. *"1000 fuel"*).`;
       } else {
-        await supabaseClient.from('expenses').insert([{
-          plate: targetVeh.plate_number,
-          expense_type: expType,
-          amount: extAmount || 0,
-          liters: extLiters || 0,
-          odometer_reading: extOdo || null
-        }]).select().maybeSingle();
+        // v1.72.0 (P2-3) — the legacy `expenses` mirror retires behind
+        // LEGACY_EXPENSES_WRITE_ENABLED (default on = today's behaviour).
+        if (legacyExpensesWriteEnabled()) {
+          await supabaseClient.from('expenses').insert([{
+            plate: targetVeh.plate_number,
+            expense_type: expType,
+            amount: extAmount || 0,
+            liters: extLiters || 0,
+            odometer_reading: extOdo || null
+          }]).select().maybeSingle();
+        }
 
         if (extOdo && extOdo > (targetVeh.current_mileage || 0)) {
           await supabaseClient.from('vehicles').update({

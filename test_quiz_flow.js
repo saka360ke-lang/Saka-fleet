@@ -565,6 +565,51 @@ async function run() {
   const expenseRow = cardInserted.find((entry) => entry.table === 'expense_logs')?.rows?.[0] || null;
   assert(Boolean(expenseRow), 'a narrative-saved expense row is written');
   assert(String(expenseRow.created_at || '').startsWith('2026-10-31'), 'the retro date lands in created_at (1-save path)');
+  // v1.72.0 (P2-3) — the legacy mirror still writes by default.
+  assert(cardInserted.some((entry) => entry.table === 'expenses'), 'the legacy expenses mirror is written while the flag is on (default)');
+
+  // v1.72.0 (P2-3) — LEGACY_EXPENSES_WRITE_ENABLED=false stops the mirror and
+  // never blocks the canonical expense_logs write.
+  const flagOffInserted = [];
+  const flagOffMockSupabase = {
+    from(table) {
+      const builder = {
+        eq: () => builder,
+        gte: () => builder,
+        lte: () => builder,
+        gt: () => builder,
+        in: () => builder,
+        order: () => builder,
+        limit: () => builder,
+        select: () => builder,
+        update: () => builder,
+        delete: () => builder,
+        insert: async (rows) => { flagOffInserted.push({ table, rows }); return { error: null, data: rows }; },
+        maybeSingle: async () => ({ data: null, error: null }),
+        single: async () => ({ data: null, error: null })
+      };
+      return builder;
+    }
+  };
+  const previousLegacyFlag = process.env.LEGACY_EXPENSES_WRITE_ENABLED;
+  process.env.LEGACY_EXPENSES_WRITE_ENABLED = 'false';
+  try {
+    const offSession = {};
+    await handleQuizTurn({
+      session: offSession,
+      messageText: 'spent 3000 on fuel today',
+      startFlow: 'log_expense',
+      aiExtracted: { expense_type: 'Fuel', amount: 3000, odometer_reading: 360200, _narrative: { kind: 'expense' } },
+      ctx: { ...cardCtx, supabase: flagOffMockSupabase }
+    });
+    const offTurn = await handleQuizTurn({ session: offSession, messageText: '1', ctx: { ...cardCtx, supabase: flagOffMockSupabase } });
+    assert(offTurn.completed === true, 'the flag-off save still completes');
+    assert(flagOffInserted.some((entry) => entry.table === 'expense_logs'), 'the canonical expense_logs row is still written with the flag off');
+    assert(!flagOffInserted.some((entry) => entry.table === 'expenses'), 'P2-3: no INSERT into expenses when LEGACY_EXPENSES_WRITE_ENABLED=false');
+  } finally {
+    if (previousLegacyFlag !== undefined) process.env.LEGACY_EXPENSES_WRITE_ENABLED = previousLegacyFlag;
+    else delete process.env.LEGACY_EXPENSES_WRITE_ENABLED;
+  }
 
   console.log('--- Test 11: engine-owned patience ladder (v1.54.4) ---');
   const originalKeys = {

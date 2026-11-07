@@ -57,28 +57,62 @@ export function isSameExpenseCandidate(existing = {}, candidate = {}) {
 }
 
 /**
- * Query recent expenses for the same plate and decide whether this write is a
+ * v1.72.0 — legacy `expenses` mirror kill switch (P2-3).
+ * Default ON keeps today's dual-write behaviour; `false` stops the mirror so
+ * `expenses` can become a read-only archival table (flip scheduled v1.73.0).
+ */
+export function legacyExpensesWriteEnabled() {
+  const raw = String(process.env.LEGACY_EXPENSES_WRITE_ENABLED ?? 'true').trim().toLowerCase();
+  return !['false', 'off', '0', 'no'].includes(raw);
+}
+
+/** Resolve the canonical vehicle id (callers hold it; plate is a fallback). */
+async function resolveGuardVehicleId(providedSupabase, { vehicleId = null, plate = null } = {}) {
+  if (vehicleId) return vehicleId;
+  if (!plate) return null;
+  try {
+    const { data } = await providedSupabase
+      .from('vehicles')
+      .select('id, plate_number')
+      .ilike('plate_number', String(plate))
+      .limit(1);
+    return data?.[0]?.id || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Query recent expenses for the same vehicle and decide whether this write is a
  * duplicate. Returns `{ duplicate, existing }`; on any failure `duplicate:false`.
  * Window is short (3 h) on purpose: two genuine identical fills on the same day
  * are normally hours apart, while a re-uploaded receipt lands within minutes.
+ *
+ * v1.72.0 (P2-3) — reads the canonical `expense_logs` ledger by `vehicle_id`
+ * (never the legacy `expenses` mirror). Both callers pass the vehicle they
+ * already hold; a plate-only lookup resolves the vehicle as a fallback.
  */
 export async function isDuplicateExpense(providedSupabase, {
   plate = null,
+  vehicleId = null,
   amount = null,
   expenseType = null,
   odometer = null,
   windowHours = 3
 } = {}) {
-  if (!providedSupabase || !plate) return { duplicate: false, existing: null };
+  if (!providedSupabase) return { duplicate: false, existing: null };
+  if (!vehicleId && !plate) return { duplicate: false, existing: null };
   const numericAmount = Number(amount);
   if (!Number.isFinite(numericAmount) || numericAmount <= 0) return { duplicate: false, existing: null };
   const hours = Number.isFinite(Number(windowHours)) ? Math.max(1, Math.min(168, Number(windowHours))) : 3;
   try {
+    const resolvedVehicleId = await resolveGuardVehicleId(providedSupabase, { vehicleId, plate });
+    if (!resolvedVehicleId) return { duplicate: false, existing: null };
     const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
     const { data, error } = await providedSupabase
-      .from('expenses')
-      .select('plate, amount, expense_type, odometer_reading, created_at')
-      .eq('plate', String(plate))
+      .from('expense_logs')
+      .select('vehicle_id, amount, expense_type, odometer_reading, created_at')
+      .eq('vehicle_id', resolvedVehicleId)
       .gte('created_at', cutoff)
       .order('created_at', { ascending: false })
       .limit(25);
@@ -95,4 +129,4 @@ export async function isDuplicateExpense(providedSupabase, {
   }
 }
 
-export default { isDuplicateExpense, isSameExpenseCandidate, nairobiDateKey };
+export default { isDuplicateExpense, isSameExpenseCandidate, nairobiDateKey, legacyExpensesWriteEnabled };

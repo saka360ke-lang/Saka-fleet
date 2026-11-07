@@ -1,15 +1,54 @@
 import dotenv from 'dotenv';
 dotenv.config();
+import assert from 'assert';
 import { createClient } from '@supabase/supabase-js';
 import {
   isSuperadminPhone,
   ensureSuperadminTables,
-  handleSuperadminFlow
+  handleSuperadminFlow,
+  handleAdminReportCommand
 } from './src/services/superadmin.js';
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 const superadminPhone = process.env.SUPERADMIN_PHONE || '+254712345678';
 const normalUserPhone = '+254799000111';
+
+// v1.72.0 (PRI-1) — the admin report must read `expense_logs` only. This mock
+// proof pins the live-bug fix: summing BOTH tables double-counted every
+// dual-written expense (the legacy `expenses` mirror + the canonical ledger).
+{
+  const tables = {
+    vehicles: { rows: [{ id: 'v1', plate_number: 'KDA 100A', current_mileage: 1000, odometer_reading: 1000, status: 'ACTIVE', owner_id: 'o1', assigned_driver_id: 'd1' }], count: 1 },
+    profiles: { rows: [{ id: 'o1' }], count: 1 },
+    expenses: { rows: [{ amount: 999999 }], count: 1 },
+    expense_logs: { rows: [{ amount: 100 }, { amount: 50 }], count: 2 },
+    private_earnings: { rows: [{ revenue_amount: 2000 }], count: 1 },
+    error_logs: { rows: [], count: 0 },
+    saka_dynamic_rules: { rows: [], count: 0 },
+    chat_friction_logs: { rows: [], count: 0 }
+  };
+  const queried = [];
+  const mockClient = {
+    from(table) {
+      queried.push(table);
+      const api = {
+        select() { return api; },
+        is() { return api; },
+        eq() { return api; },
+        gte() { return api; },
+        then(resolve) {
+          const entry = tables[table] || { rows: [] };
+          resolve({ data: entry.rows || [], count: entry.count ?? (entry.rows || []).length, error: null });
+        }
+      };
+      return api;
+    }
+  };
+  const report = await handleAdminReportCommand(mockClient);
+  assert.strictEqual(report.details.total_expenses, 150, 'PRI-1: the report total sums expense_logs only (150, never 999,999 + 150)');
+  assert.ok(!queried.includes('expenses'), 'PRI-1: handleAdminReportCommand does not read the legacy expenses table — no double-count');
+  console.log('✅ PRI-1: superadmin report double-count fix verified (expense_logs only)');
+}
 
 async function runSuperadminTests() {
   console.log('====================================================');

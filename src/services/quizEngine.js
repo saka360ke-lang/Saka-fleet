@@ -19,7 +19,7 @@ import {
 } from './conversationEngine.js';
 import { chatCompletion, parseJsonSafely } from './aiClient.js';
 import { normalizeFillType } from './fuelEconomy.js';
-import { isDuplicateExpense } from './expenseGuard.js';
+import { isDuplicateExpense, legacyExpensesWriteEnabled } from './expenseGuard.js';
 // v1.59.0 — optional per-record label (pure helper, no cycles).
 import { sanitizeEntryLabel } from './entryLabels.js';
 // v1.59.7 — labels on every entry: standalone odometer readings get a ledger row.
@@ -3225,6 +3225,8 @@ async function executeFlow(state, ctx) {
         // second expense row. Different odometer reading = separate fill → passes.
         const duplicate = await isDuplicateExpense(ctx.supabase, {
           plate: vehicle.plate_number,
+          // v1.72.0 (P2-3) — the guard reads expense_logs by vehicle_id.
+          vehicleId: vehicle.id,
           amount: a.amount,
           expenseType: canonicalExpenseType,
           odometer: a.odometer_reading,
@@ -3282,14 +3284,18 @@ async function executeFlow(state, ctx) {
           });
         } catch { /* activation is best-effort */ }
 
-        await ctx.supabase.from('expenses').insert([{
-          plate: vehicle.plate_number,
-          expense_type: canonicalExpenseType,
-          amount: a.amount,
-          liters: a.fuel_liters || 0,
-          odometer_reading: a.odometer_reading,
-          ...(retroIso ? { created_at: retroIso } : {})
-        }]);
+        // v1.72.0 (P2-3) — the legacy `expenses` mirror retires behind
+        // LEGACY_EXPENSES_WRITE_ENABLED (default on = today's behaviour).
+        if (legacyExpensesWriteEnabled()) {
+          await ctx.supabase.from('expenses').insert([{
+            plate: vehicle.plate_number,
+            expense_type: canonicalExpenseType,
+            amount: a.amount,
+            liters: a.fuel_liters || 0,
+            odometer_reading: a.odometer_reading,
+            ...(retroIso ? { created_at: retroIso } : {})
+          }]);
+        }
 
         if (a.odometer_reading > Number(vehicle.current_mileage || 0)) {
           await ctx.supabase.from('vehicles').update({

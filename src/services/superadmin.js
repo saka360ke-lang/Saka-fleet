@@ -1194,16 +1194,13 @@ export async function handleAdminReportCommand(supabase) {
   const uniqueDrivers = new Set((driversData || []).map(v => v.assigned_driver_id).filter(Boolean)).size;
 
   // 3. Financial aggregates
-  const { data: expenses } = await supabase
-    .from('expenses')
-    .select('amount');
-  const expTotal1 = expenses ? expenses.reduce((s, e) => s + (Number(e.amount) || 0), 0) : 0;
-
+  // v1.72.0 (PRI-1, live bug) — the total previously summed BOTH `expenses`
+  // (the legacy mirror) AND `expense_logs`, so every dual-written expense was
+  // counted twice. `expense_logs` is the canonical ledger; read it only.
   const { data: expLogs } = await supabase
     .from('expense_logs')
     .select('amount');
-  const expTotal2 = expLogs ? expLogs.reduce((s, e) => s + (Number(e.amount) || 0), 0) : 0;
-  const totalExpenses = expTotal1 + expTotal2;
+  const totalExpenses = expLogs ? expLogs.reduce((s, e) => s + (Number(e.amount) || 0), 0) : 0;
 
   const { data: earnings } = await supabase
     .from('private_earnings')
@@ -1307,10 +1304,12 @@ export async function handleAdminAuditCommand(supabase, queryParam) {
     };
   }
 
+  // v1.72.0 (P2-3) — the passbook reads the canonical ledger; the legacy
+  // `expenses` mirror misses every expense_logs row.
   const { data: vExpenses } = await supabase
-    .from('expenses')
+    .from('expense_logs')
     .select('amount, expense_type, created_at')
-    .eq('plate', vehicle.plate_number)
+    .eq('vehicle_id', vehicle.id)
     .order('created_at', { ascending: false })
     .limit(5);
 
