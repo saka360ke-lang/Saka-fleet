@@ -571,6 +571,8 @@ check(Object.keys(FLOW_GUIDANCE).length >= SAKA_QUIZ_FLOWS.length, 'the guidance
 const compassBlock = buildToneCompassBlock();
 check(compassBlock.includes('STUCK GUIDANCE LAW') && compassBlock.includes('subscription_trial_end:'), 'the core prompt renders the stuck-guidance law and registry');
 check(CONVERSATION_CASES.some((caseDef) => (caseDef.tags || []).includes('trial-end')), 'the trial-end journey has corpus coverage');
+const downsizeCase = CONVERSATION_CASES.find((caseDef) => caseDef.id === 'trial-end-downsize-choice');
+check(Boolean(downsizeCase) && Array.isArray(downsizeCase.engineFacts) && downsizeCase.engineFacts.some((fact) => /Solo Pro/.test(fact)) && downsizeCase.engineFacts.some((fact) => /never delete/i.test(fact)), 'trial-end-downsize-choice declares engine_facts covering the plan fit and pause-never-delete contract (v1.73.1)');
 check(CONVERSATION_CASES.some((caseDef) => (caseDef.tags || []).includes('coupon')), 'coupon integrity has corpus coverage');
 for (const key of ['CONV_EVAL_MAX_JUDGE_CALLS_PER_TICK', 'CONV_EVAL_PASS_STREAK', 'CONV_EVAL_PASS_REST_TICKS', 'CONV_EVAL_MAX_REFUSALS_PER_CASE', 'CONV_EVAL_REFUSAL_COOLDOWN_HOURS', 'EVAL_DAILY_CALL_ALERT']) {
   check(evalSection.keys.includes(key), `env registry carries ${key}`);

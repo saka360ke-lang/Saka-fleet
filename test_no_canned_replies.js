@@ -36,7 +36,11 @@ const SOURCE_FILES = [
   'src/routes/whatsapp/commands.js',
   'src/routes/whatsapp/admin.js',
   'src/routes/whatsapp/conversation.js',
-  'src/routes/whatsapp/support.js'
+  'src/routes/whatsapp/support.js',
+  // v1.73.1 — Phase 11: the legacy onboarding lane moved out of the processor
+  // into its own leaf module; the ratchet follows the code so a literal can
+  // never escape it (§191 F1 defect class).
+  'src/routes/whatsapp/onboarding.js'
 ];
 const DIRECT_REPLY_PATTERNS = [
   /customReply\s*=\s*'([^'\n]{25,})'/g,
@@ -97,6 +101,18 @@ for (const leaf of ['src/routes/whatsapp/commands.js', 'src/routes/whatsapp/admi
   assert(!leafSource.includes('sendWhatsAppReply(') && !/\b(?:customReply|finalReply)\b/.test(leafSource), `${leaf} returns data and never sends or owns the processor reply vars`);
   passed += 1;
 }
+
+// v1.73.1 — Phase 11: the extracted legacy onboarding lane (§191 branch A +
+// the registration starter). It carries its replies as DATA (counted by the
+// ratchet above), never sends and never imports the processor. The extraction
+// also repaired two pre-existing latent ReferenceErrors: the branch always
+// called checkIsConversationalFeedback and formatUsdInLocalCurrency but
+// messages.js never imported either — the leaf declares both (rule 52 pins).
+const onboardingLeaf = fs.readFileSync('src/routes/whatsapp/onboarding.js', 'utf8');
+assert(!onboardingLeaf.includes('sendWhatsAppReply(') && !/from\s+['"]\.\/messages\.js['"]/.test(onboardingLeaf), 'onboarding.js carries lane replies as data and never sends or imports messages.js');
+passed += 1;
+assert(onboardingLeaf.includes("import { checkIsConversationalFeedback } from './helpers.js';") && onboardingLeaf.includes("import { formatUsdInLocalCurrency } from '../../services/paystack.js';"), 'onboarding.js imports its helpers (pre-existing latent ReferenceErrors repaired)');
+passed += 1;
 
 console.log(`\n🎉 ${passed} no-canned-replies assertions passed — ${currentCount} canned literals remain (ratchet ≤ 4; every new literal must be composed).`);
 

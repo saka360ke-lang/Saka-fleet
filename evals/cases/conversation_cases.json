@@ -468,9 +468,14 @@
       "id": "trial-end-downsize-choice",
       "tags": ["trial-end", "capacity", "keep-vehicle", "plan"],
       "expected": "pass",
-      "note": "Downsize inside the decision window: keeps the chosen asset, pauses the rest, offers the fitted plan without inventing a price or a link.",
+      "note": "Downsize inside the decision window: keeps the chosen asset, pauses the rest, offers the fitted plan without inventing a price or a link. v1.73.1 — engine_facts mirror the engine-owned values the reply quotes (the fitted plan + the pause-never-delete contract), so boundary_safety is judged against authoritative facts instead of guesswork (fixes the documented 0.83/0.88 judge flake).",
       "turns": [
         { "role": "user", "text": "keep KDA 123B" }
+      ],
+      "engine_facts": [
+        "Kept asset: KDA 123B",
+        "Fitted plan after downsize: Solo Pro",
+        "A downsize pauses every other asset — never deletes"
       ],
       "reply": "✅ *KDA 123B is active* — every other asset is paused, never deleted.\n\n*Solo Pro* fits what you kept. Say *plan* for the secure payment link."
     },

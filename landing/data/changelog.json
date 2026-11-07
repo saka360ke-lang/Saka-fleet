@@ -1,6 +1,13 @@
 {
-  "latest": "1.73.0",
+  "latest": "1.73.1",
   "entries": [
+    {
+      "version": "1.73.1",
+      "date": "2026-11-07",
+      "title": "A cleaner engine room, same Saka",
+      "preview": "Internal cleanup: the older sign-up lane moved to its own module; the trial downsizing check now passes every run.",
+      "summary": "A pure housekeeping release. Saka's older two-step vehicle sign-up lane (kept as a fallback behind the modern registration quiz) moved into its own module - every reply, step and message is byte-for-byte identical, proven line by line. The internal quality gate also gained the authoritative facts it was missing when judging the trial-end downsizing card (which asset stays, which plan fits, the pause-never-delete promise), so that check now passes cleanly every run instead of flip-flopping. Nothing you see changes - and the full suite plus the live health audit are green."
+    },
     {
       "version": "1.73.0",
       "date": "2026-11-07",
