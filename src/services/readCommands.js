@@ -10,7 +10,7 @@ import {
   formatExampleComplianceReply
 } from './countryBucket.js';
 import { DOCUMENT_SUPPORT_MENU } from './documentLens.js';
-import { listReceipts, formatReceiptsReply } from './receipts.js';
+import { listReceipts, formatReceiptsReply, pageReceipts, RECEIPT_PAGE_SIZE, RECEIPT_MAX_OFFSET } from './receipts.js';
 import {
   resolveLedgerTurn,
   resolveLedgerVehicleScope,
@@ -23,7 +23,10 @@ import {
   formatEntryRestored,
   formatRestoreEmpty,
   formatNoEntryForSelection,
+  paginationCursorActive,
   ENTRY_LIST_LIMIT,
+  ENTRY_PAGE_SIZE,
+  ENTRY_MAX_OFFSET,
   ENTRY_RESTORE_WINDOW_MINUTES
 } from './entryAnswers.js';
 import {
@@ -68,11 +71,12 @@ import { isSuperadminPhone } from './superadmin.js';
  * implicit if/else chain in `src/routes/whatsapp.js` (lines 1677-2234).
  *
  * The order below is the OLD DISPATCH PRECEDENCE, verbatim (plus the v1.72.2
- * `subscription_status` lane placed ahead of product QA):
- *   help → subscription status → product QA → country knowledge → vehicle summary → upload menu →
- *   empty garage → compliance family (all docs / number search → driver docs →
- *   correction → expiry → status → maintenance → reminders) → ledger →
- *   odometer → driver profile → records → receipts.
+ * `subscription_status` lane placed ahead of product QA and the v1.73.0
+ * `my_ticket` lane beside it, and the v1.73.0 `pagination_more` lane LAST):
+ *   help → subscription status → my ticket → product QA → country knowledge →
+ *   vehicle summary → upload menu → empty garage → compliance family (all docs /
+ *   number search → driver docs → correction → expiry → status → maintenance →
+ *   reminders) → ledger → odometer → driver profile → records → receipts → more.
  * Detection order in the old preamble differed from dispatch order; the
  * registry deliberately follows DISPATCH order (see test_read_registry.js,
  * which pins every lane against a frozen copy of the old chain).
@@ -100,10 +104,21 @@ function result(reply, intent = 'GENERAL_CHAT') {
   return { intent, extracted_data: {}, reply_message: reply };
 }
 
+// v1.73.0 (Phase 10, P3-1) — the list-continuation grammar, shared by the
+// `pagination_more` lane and the records guard below.
+const PAGINATION_MORE_RE = /^(?:more|next(?: page)?|older|show (?:me )?(?:more|next page|older))$/i;
+
 // ── Shared context helpers ─────────────────────────────────────────────────
 /** The exact records spec the old preamble computed (1538-1551). */
 export function inspectRecordQuestion(text, ctx = {}) {
   const t = String(text || '').trim();
+  // v1.73.0 (Phase 10, P3-1 / A1) — a list-continuation phrase ("show me
+  // more") is a PAGINATION turn, never a records question: the records lane
+  // used to answer it with a degenerate ledger list. With a fresh cursor the
+  // pagination lane owns it; without one it falls through to the AI.
+  if (PAGINATION_MORE_RE.test(t)) {
+    return { challenge: null, question: { ok: false }, lastRecordQuery: ctx.session?.lastRecordQuery || null };
+  }
   const nowMs = Number.isFinite(ctx.now) ? ctx.now : Date.now();
   const lastRecordQuery = ctx.session?.lastRecordQuery
     && (nowMs - Number(ctx.session.lastRecordQuery.at || 0) <= 15 * 60 * 1000)
@@ -544,7 +559,7 @@ export const READ_COMMANDS = Object.freeze([
         ownerId: laneOwner ? profileData?.id : null,
         driverId: laneOwner ? null : profileData?.id,
         vehicleIds: scope.vehicleIds,
-        limit: ENTRY_LIST_LIMIT
+        limit: ENTRY_LIST_LIMIT + 1
       };
       const locale = countryInfo?.locale || 'en-US';
       const currency = countryInfo?.currency || null;
@@ -555,7 +570,35 @@ export const READ_COMMANDS = Object.freeze([
       const clearPending = () => {
         if (session) session.pendingEntryAction = null;
       };
-      const entries = await listLedgerEntries(supabaseClient, ledgerScope);
+      // v1.73.0 (Phase 10, P3-1) — the pagination cursor lives on the SESSION as
+      // memory (D1), never in the pending slot. It is rewritten on every fresh
+      // list render and cleared when the newest window is the whole list.
+      const rememberListCursor = (hasMore) => {
+        if (!session) return;
+        session.paginationCursor = hasMore
+          ? {
+            at: Date.now(),
+            listType: 'entries',
+            offset: ENTRY_PAGE_SIZE,
+            maxOffset: ENTRY_MAX_OFFSET,
+            scope: { ownerId: ledgerScope.ownerId, driverId: ledgerScope.driverId, vehicleIds: ledgerScope.vehicleIds }
+          }
+          : null;
+      };
+      const fetchLedgerWindow = async () => {
+        const fetched = await listLedgerEntries(supabaseClient, ledgerScope);
+        const hasMore = fetched.length > ENTRY_LIST_LIMIT;
+        return { entries: hasMore ? fetched.slice(0, ENTRY_LIST_LIMIT) : fetched, hasMore };
+      };
+      const ledgerWindow = await fetchLedgerWindow();
+      const entries = ledgerWindow.entries;
+      const entriesHasMore = ledgerWindow.hasMore;
+      // Every render of the numbered newest window refreshes the cursor, so a
+      // later `more` always pages from the list the user actually saw.
+      const renderEntriesList = () => {
+        rememberListCursor(entriesHasMore);
+        return formatLedgerList({ entries, ...copy, hasMore: entriesHasMore });
+      };
       const atIndex = (index) => (index ? entries[Number(index) - 1] || null : null);
       const pendingKey = pendingEntryAction?.key || null;
       const pendingEntryInList = pendingKey
@@ -586,7 +629,7 @@ export const READ_COMMANDS = Object.freeze([
         reply = 'No changes made. Everything is still as you logged it.';
       } else if (ledgerTurn.type === 'command' && ledgerTurn.action === 'list') {
         clearPending();
-        reply = formatLedgerList({ entries, ...copy });
+        reply = renderEntriesList();
       } else if (ledgerTurn.type === 'command' && ledgerTurn.action === 'restore') {
         clearPending();
         const restored = await restoreLastDeleted(supabaseClient, {
@@ -602,7 +645,7 @@ export const READ_COMMANDS = Object.freeze([
           const head = ledgerTurn.index
             ? formatNoEntryForSelection(ledgerTurn.index)
             : 'I could not find an entry to change.';
-          reply = `${head}\n\n${formatLedgerList({ entries, ...copy })}`;
+          reply = `${head}\n\n${renderEntriesList()}`;
         } else if (ledgerTurn.action === 'edit') {
           ledgerIntent = 'EDIT_ENTRY';
           remember('edit', ledgerEntryKey(target), target.vehicle_id);
@@ -615,7 +658,7 @@ export const READ_COMMANDS = Object.freeze([
       } else if (ledgerTurn.type === 'select') {
         const target = atIndex(ledgerTurn.index);
         if (!target) {
-          reply = `${formatNoEntryForSelection(ledgerTurn.index)}\n\n${formatLedgerList({ entries, ...copy })}`;
+          reply = `${formatNoEntryForSelection(ledgerTurn.index)}\n\n${renderEntriesList()}`;
         } else if (ledgerTurn.mode === 'delete') {
           ledgerIntent = 'DELETE_ENTRY';
           remember('delete', ledgerEntryKey(target), target.vehicle_id);
@@ -630,7 +673,7 @@ export const READ_COMMANDS = Object.freeze([
         const target = (await resolvePinnedEntry()) || (!pendingKey ? entries[0] || null : null);
         if (!target) {
           clearPending();
-          reply = formatLedgerList({ entries, ...copy });
+          reply = renderEntriesList();
         } else {
           const updated = await relogLedgerEntry(supabaseClient, {
             entry: target,
@@ -652,7 +695,7 @@ export const READ_COMMANDS = Object.freeze([
         const target = (await resolvePinnedEntry()) || (!pendingKey ? entries[0] || null : null);
         if (!target) {
           clearPending();
-          reply = formatLedgerList({ entries, ...copy });
+          reply = renderEntriesList();
         } else {
           const removed = await deleteLedgerEntry(supabaseClient, { entry: target, actorPhone: senderPhone, vehicleIds: ledgerScope.vehicleIds });
           clearPending();
@@ -782,12 +825,109 @@ export const READ_COMMANDS = Object.freeze([
     },
     render: async (hit, ctx = {}) => {
       const isOwner = (ctx.vehicles || []).some((v) => v.owner_id === ctx.profile?.id);
-      const receipts = await listReceipts(ctx.supabaseClient, {
+      const scope = {
         ownerId: isOwner ? ctx.profile?.id : null,
         driverId: isOwner ? null : ctx.profile?.id,
         vehicleIds: (ctx.vehicles || []).map((v) => v.id)
+      };
+      // v1.73.0 (Phase 10, P3-1) — fetch one extra row for `hasMore`, render the
+      // page-1 window unchanged (5 rows) and refresh the pagination cursor.
+      const rows = await listReceipts(ctx.supabaseClient, { ...scope, limit: RECEIPT_PAGE_SIZE + 1 });
+      const hasMore = rows.length > RECEIPT_PAGE_SIZE;
+      const receipts = hasMore ? rows.slice(0, RECEIPT_PAGE_SIZE) : rows;
+      if (ctx.session) {
+        ctx.session.paginationCursor = hasMore
+          ? {
+            at: Date.now(),
+            listType: 'receipts',
+            offset: RECEIPT_PAGE_SIZE,
+            maxOffset: RECEIPT_MAX_OFFSET,
+            scope
+          }
+          : null;
+      }
+      return result(formatReceiptsReply({
+        receipts,
+        vehicles: ctx.vehicles || [],
+        fallbackCurrency: ctx.countryInfo?.currency || null,
+        hasMore
+      }));
+    }
+  },
+  {
+    // v1.73.0 (Phase 10, P3-1) — the `more` turn. View-only: page 2+ never
+    // invites edit/delete (D2), because the numbered edit/delete window always
+    // points at the newest list. The cursor is session MEMORY with a
+    // 15-minute TTL (D1). Without a FRESH cursor this lane never claims (A1):
+    // a bare "more" falls through to the AI exactly as before.
+    id: 'pagination_more',
+    parksQuiz: false,
+    skipWhenLocked: false,
+    detect: (text, ctx = {}) => {
+      const t = String(text || '').trim();
+      if (!PAGINATION_MORE_RE.test(t)) return null;
+      return paginationCursorActive(ctx.session?.paginationCursor, ctx.now);
+    },
+    render: async (cursor, ctx = {}) => {
+      const session = ctx.session;
+      if (cursor.listType === 'receipts') {
+        const page = await pageReceipts(ctx.supabaseClient, {
+          ownerId: cursor.scope?.ownerId || null,
+          driverId: cursor.scope?.driverId || null,
+          vehicleIds: cursor.scope?.vehicleIds || [],
+          offset: cursor.offset
+        });
+        if (!page.rows.length) {
+          if (session) session.paginationCursor = null;
+          return result('📸 That is the end of your receipt history. Reply *receipts* to see the newest again, or send a new photo anytime.');
+        }
+        const nextOffset = cursor.offset + RECEIPT_PAGE_SIZE;
+        const atCap = nextOffset > (Number(cursor.maxOffset) || RECEIPT_MAX_OFFSET);
+        const canMore = page.hasMore && !atCap;
+        if (session) {
+          session.paginationCursor = canMore
+            ? { ...cursor, at: Date.now(), offset: nextOffset }
+            : null;
+        }
+        return result(formatReceiptsReply({
+          receipts: page.rows.slice(0, RECEIPT_PAGE_SIZE),
+          vehicles: ctx.vehicles || [],
+          fallbackCurrency: ctx.countryInfo?.currency || null,
+          hasMore: canMore,
+          paged: true,
+          atCap: atCap && page.hasMore
+        }));
+      }
+      const page = await listLedgerEntries(ctx.supabaseClient, {
+        ownerId: cursor.scope?.ownerId || null,
+        driverId: cursor.scope?.driverId || null,
+        vehicleIds: cursor.scope?.vehicleIds || [],
+        limit: ENTRY_PAGE_SIZE + 1,
+        offset: cursor.offset
       });
-      return result(formatReceiptsReply({ receipts, vehicles: ctx.vehicles || [], fallbackCurrency: ctx.countryInfo?.currency || null }));
+      if (!page.length) {
+        if (session) session.paginationCursor = null;
+        return result('📒 That is the end of your ledger for this vehicle. Reply *my entries* to see the newest again.');
+      }
+      const hasMore = page.length > ENTRY_PAGE_SIZE;
+      const entries = page.slice(0, ENTRY_PAGE_SIZE);
+      const nextOffset = cursor.offset + ENTRY_PAGE_SIZE;
+      const atCap = nextOffset > (Number(cursor.maxOffset) || ENTRY_MAX_OFFSET);
+      const canMore = hasMore && !atCap;
+      if (session) {
+        session.paginationCursor = canMore
+          ? { ...cursor, at: Date.now(), offset: nextOffset }
+          : null;
+      }
+      return result(formatLedgerList({
+        entries,
+        vehicles: ctx.vehicles || [],
+        currency: ctx.countryInfo?.currency || null,
+        locale: ctx.countryInfo?.locale || 'en-US',
+        paged: true,
+        hasMore: canMore,
+        atCap: atCap && hasMore
+      }));
     }
   }
 ]);

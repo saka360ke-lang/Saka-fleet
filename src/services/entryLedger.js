@@ -144,9 +144,16 @@ export async function listLedgerEntries(supabase, {
   driverId = null,
   vehicleIds = [],
   limit = 6,
+  offset = 0,
   includeEarnings = true
 } = {}) {
   const cap = Math.max(1, Math.min(20, Number(limit) || 6));
+  // v1.73.0 (Phase 10, P3-1) — pagination offset. Because the list is a MERGE
+  // of two tables, each table is fetched from its own position 0 far enough to
+  // cover the window, merged newest-first, then sliced [offset, offset+cap).
+  // Bounded: at the 24-row pagination cap that is 42 rows per table.
+  const start = Math.max(0, Math.min(Number(offset) || 0, 200));
+  const fetchCap = cap * 3 + start;
   const scoped = (vehicleIds || []).filter(Boolean);
   if (!supabase || !scoped.length) return [];
 
@@ -163,7 +170,7 @@ export async function listLedgerEntries(supabase, {
       .select('id,vehicle_id,driver_id,expense_type,amount,fuel_liters,fill_type,odometer_reading,notes,label,created_at')
       .in('vehicle_id', scoped)
       .order('created_at', { ascending: false })
-      .limit(cap * 3);
+      .limit(fetchCap);
     if (driverId && !ownerId) q = q.eq('driver_id', driverId);
     return q;
   };
@@ -173,7 +180,7 @@ export async function listLedgerEntries(supabase, {
       .select('id,vehicle_id,driver_id,revenue_amount,currency,earning_type,notes,label,logged_at')
       .in('vehicle_id', scoped)
       .order('logged_at', { ascending: false })
-      .limit(cap * 3);
+      .limit(fetchCap);
     if (driverId && !ownerId) q = q.eq('driver_id', driverId);
     return q;
   };
@@ -186,7 +193,7 @@ export async function listLedgerEntries(supabase, {
   return [...expenses, ...earnings]
     .filter((row) => row && row.created_at)
     .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-    .slice(0, cap);
+    .slice(start, start + cap);
 }
 
 /** Fetch one row by `kind:id` and prove the caller can see its vehicle. */

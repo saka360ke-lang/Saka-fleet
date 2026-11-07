@@ -223,6 +223,25 @@ async function run() {
   });
   check(receiptsReply.includes('🟢') && receiptsReply.includes('🟡'), 'Receipt list uses status chips');
   check(receiptsReply.includes('KDA 123A') && receiptsReply.includes('5,500'), 'Receipt list shows vehicle and amount');
+  // v1.73.0 (Phase 10, P3-1) — pagination offers *more* only when more exists,
+  // and page 2+ is view-only (never invites `delete receipt N`).
+  const fiveReceipts = Array.from({ length: 5 }, (_, i) => ({
+    amount: 1000 + i,
+    currency: 'KES',
+    vendor: `SHOP ${i + 1}`,
+    status: 'read',
+    created_at: new Date(Date.UTC(2026, 9, 20 - i)).toISOString(),
+    vehicle_id: 'v1'
+  }));
+  const defaultReply = formatReceiptsReply({ receipts: fiveReceipts, vehicles: [{ id: 'v1', plate_number: 'KDA 123A' }], fallbackCurrency: 'KES' });
+  check(!defaultReply.includes('*more*'), 'the default receipt list never offers *more* without hasMore');
+  const moreReply = formatReceiptsReply({ receipts: fiveReceipts, vehicles: [{ id: 'v1', plate_number: 'KDA 123A' }], fallbackCurrency: 'KES', hasMore: true });
+  check(moreReply.includes('Reply *more* for the next 5 older receipts'), 'a full receipt page offers *more*');
+  const pagedReply = formatReceiptsReply({ receipts: fiveReceipts, vehicles: [], fallbackCurrency: 'KES', hasMore: true, paged: true });
+  check(pagedReply.includes('Older receipts') && !/delete receipt N/.test(pagedReply), 'page 2+ is view-only (no delete hint)');
+  check(pagedReply.includes('go back to the newest'), 'page 2+ points back to the newest list');
+  const capReply = formatReceiptsReply({ receipts: fiveReceipts, vehicles: [], fallbackCurrency: 'KES', hasMore: true, paged: true, atCap: true });
+  check(capReply.includes('report covers anything older') && !/Reply \*more\*/.test(capReply), 'the 5-page cap redirects to a report');
   const duplicateReply = formatDuplicateReceiptReply({ vendor: 'SHELL KAREN', amount: 5500, currency: 'KES', created_at: '2026-10-12T08:00:00Z' });
   check(duplicateReply.includes('already read') && duplicateReply.includes('receipts'), 'Duplicate receipt reply is warm and offers history');
 

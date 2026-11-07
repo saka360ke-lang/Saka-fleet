@@ -192,6 +192,11 @@ const FIXTURES = [
   { text: 'that record cannot be right', ctx: baseCtx({ session: { lastRecordQuery: { at: new Date('2026-11-06T08:55:00+03:00').getTime(), spec: { kind: 'total', earning: false, expenseTypes: ['fuel'], range: null, vehiclePlate: null, keyword: null, text: 'how much did I spend on fuel last week?' } } } }), expected: 'records_query' },
   { text: 'receipts', ctx: baseCtx(), expected: 'receipts_list' },
 
+  // v1.73.0 (Phase 10, P3-1 / A1) — a CURSORLESS "more"/"next" must never be
+  // claimed by the registry; it falls through to the AI exactly as before.
+  { text: 'more', ctx: baseCtx(), expected: null },
+  { text: 'next', ctx: baseCtx(), expected: null },
+
   // Kept-inline branches — the registry must never claim them
   { text: 'my country', ctx: baseCtx(), expected: 'country_command' },
   { text: 'delete receipt 2', ctx: baseCtx(), expected: 'receipt_delete' },
@@ -350,5 +355,80 @@ const ownerlessLane = registry.resolveReadCommand('trial status', baseCtx({ prof
 const ownerlessRender = await ownerlessLane.render(baseCtx({ profile: null }));
 check(ownerlessRender.intent !== 'VIEW_SUBSCRIPTION' && typeof ownerlessRender.reply_message === 'string' && /trial/i.test(ownerlessRender.reply_message),
   'ownerless sessions keep the marketing trial card (no null reply, no owner summary)');
+
+console.log('\n--- Test 5: v1.73.0 pagination_more lane (Phase 10, P3-1, A1) ---');
+// The `more` turn exists ONLY while a fresh session.paginationCursor is alive
+// (D1: 15-minute TTL). Cursorless/expired turns fall through to the AI; the
+// fixture corpus above pins the cursorless case in the frozen chain.
+const MORE_ALIASES = ['more', 'next', 'next page', 'older', 'show me more'];
+for (const text of MORE_ALIASES) {
+  check(registry.resolveReadCommand(text, baseCtx()) === null,
+    `"${text}" with NO cursor falls through to the AI`);
+}
+const CURSOR_AT = new Date('2026-11-06T08:58:00+03:00').getTime();
+const freshCursor = {
+  at: CURSOR_AT,
+  listType: 'entries',
+  offset: 6,
+  maxOffset: 24,
+  scope: { ownerId: 'p1', driverId: null, vehicleIds: ['v1'] }
+};
+for (const text of MORE_ALIASES) {
+  const lane = registry.resolveReadCommand(text, baseCtx({ session: { paginationCursor: freshCursor } }));
+  check(lane?.id === 'pagination_more', `"${text}" with a FRESH cursor -> pagination_more`);
+}
+const expiredCursor = { ...freshCursor, at: CURSOR_AT - 16 * 60 * 1000 };
+check(registry.resolveReadCommand('more', baseCtx({ session: { paginationCursor: expiredCursor } })) === null,
+  'an EXPIRED cursor never claims "more" (15-minute TTL)');
+const receiptsCursor = { ...freshCursor, listType: 'receipts', offset: 5, maxOffset: 20 };
+check(registry.resolveReadCommand('more', baseCtx({ session: { paginationCursor: receiptsCursor } }))?.id === 'pagination_more',
+  'a receipts cursor pages receipts through the same lane');
+// Render: 7 expense rows with the cursor at offset 6 → one older row, end-of-list
+// copy, and the cursor clears (D2: never invites edit/delete on page 2+).
+function ledgerMock(expenseRows) {
+  return {
+    from(table) {
+      const rows = table === 'expense_logs' ? expenseRows : [];
+      const chain = {
+        select() { return chain; },
+        in() { return chain; },
+        order() { return chain; },
+        eq() { return chain; },
+        limit() { return Promise.resolve({ data: rows, error: null }); }
+      };
+      return chain;
+    }
+  };
+}
+const FIXED_NOW = new Date('2026-11-06T09:00:00+03:00').getTime();
+const sevenRows = Array.from({ length: 7 }, (_, i) => ({
+  id: `e${7 - i}`,
+  vehicle_id: 'v1',
+  expense_type: 'Fuel',
+  amount: 100 + i,
+  created_at: new Date(Date.UTC(2026, 10, 1, 8, 7 - i)).toISOString()
+}));
+const pageSession = { paginationCursor: { ...freshCursor, at: FIXED_NOW - 60 * 1000 } };
+const pageCtx = baseCtx({ session: pageSession, supabaseClient: ledgerMock(sevenRows), now: FIXED_NOW });
+const pageRendered = await registry.resolveReadCommand('more', pageCtx).render(pageCtx);
+check(pageRendered.reply_message.includes('Older entries'), 'page 2+ is titled "Older entries"');
+check(!/edit \d|delete \d/.test(pageRendered.reply_message), 'page 2+ never invites edit/delete (D2)');
+check(pageRendered.reply_message.includes('*my entries*'), 'page 2+ points back to the newest list');
+check(pageSession.paginationCursor === null, 'the cursor clears at the end of the list');
+// The 5-page cap: at offset 24 a further page shows the search/report redirect
+// and offers NO `more` line (D3).
+const fortyRows = Array.from({ length: 40 }, (_, i) => ({
+  id: `e${40 - i}`,
+  vehicle_id: 'v1',
+  expense_type: 'Fuel',
+  amount: 100 + i,
+  created_at: new Date(Date.UTC(2026, 9, 1, 8, 40 - i)).toISOString()
+}));
+const capSession = { paginationCursor: { ...freshCursor, at: FIXED_NOW - 60 * 1000, offset: 24 } };
+const capCtx = baseCtx({ session: capSession, supabaseClient: ledgerMock(fortyRows), now: FIXED_NOW });
+const capRendered = await registry.resolveReadCommand('more', capCtx).render(capCtx);
+check(capRendered.reply_message.includes('*search <keyword>*') && !/Reply \*more\*/.test(capRendered.reply_message),
+  'the 5-page cap redirects to search/report and never offers more');
+check(capSession.paginationCursor === null, 'the cursor clears at the 5-page cap');
 
 console.log(`\n🎉 ${passed} read-registry equivalence assertions passed.`);

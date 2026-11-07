@@ -29,6 +29,32 @@ export const ENTRY_PENDING_TTL_MINUTES = 15;
 export const ENTRY_RESTORE_WINDOW_MINUTES = 30;
 export const ENTRY_LIST_LIMIT = 6;
 
+// v1.73.0 (Phase 10, P3-1) — pagination. Page 1 stays at 6 rows; `more` serves
+// 6-row pages, capped at 5 pages total (30 rows) so a 100-entry ledger never
+// turns into a 17-page scroll: past the cap the user is redirected to
+// `search <keyword>` or a report. The cursor is session MEMORY, not a pending
+// interaction — 15 minutes, exactly like `lastRecordQuery` (decision D1).
+export const ENTRY_PAGE_SIZE = ENTRY_LIST_LIMIT;
+export const ENTRY_MAX_OFFSET = 24;
+export const PAGINATION_CURSOR_TTL_MINUTES = 15;
+
+/**
+ * True when a pagination cursor is still fresh. Pure; used by the read
+ * registry's `pagination_more` lane so a cursorless/expired `more` can NEVER
+ * claim a turn (it falls through to the AI exactly as before).
+ */
+export function paginationCursorActive(cursor, now = Date.now()) {
+  if (!cursor || !cursor.listType) return null;
+  const at = Number(cursor.at || 0);
+  if (!Number.isFinite(at) || at <= 0) return null;
+  const nowMs = now instanceof Date ? now.getTime() : Number(now);
+  if (!Number.isFinite(nowMs)) return null;
+  if (nowMs - at > PAGINATION_CURSOR_TTL_MINUTES * 60 * 1000) return null;
+  const offset = Number(cursor.offset);
+  if (!Number.isFinite(offset) || offset <= 0) return null;
+  return cursor;
+}
+
 // v1.59.0 — the optional record label is a pure module (no import cycles):
 // sanitisation + deterministic capture live in entryLabels.js.
 export { ENTRY_LABEL_MAX_CHARS, sanitizeEntryLabel, extractEntryLabel } from './entryLabels.js';
@@ -338,13 +364,24 @@ export function describeEntry(entry = {}, { vehicles = [], currency = null, loca
 }
 
 /** The numbered "which one?" list that every edit/delete starts from. */
-export function formatLedgerList({ entries = [], vehicles = [], currency = null, locale = 'en-US', title = null } = {}) {
-  const head = title || 'Your last entries';
+export function formatLedgerList({ entries = [], vehicles = [], currency = null, locale = 'en-US', title = null, hasMore = false, paged = false, atCap = false } = {}) {
+  const head = title || (paged ? 'Older entries' : 'Your last entries');
   if (!entries.length) {
     return `${head}\n\nNothing logged yet. Send a one-liner like:\n_Logged 40L at 50,350 km for 4,500_\nor a receipt photo, and I will log it.`;
   }
   const lines = entries.map((entry, i) => `*${i + 1}.* ${describeEntry(entry, { vehicles, currency, locale })}`);
-  return `${head}\n\n${lines.join('\n')}\n\nReply *edit 2* or *delete 2* (use the number).`;
+  if (paged) {
+    // D2 — page 2+ is VIEW-ONLY: never invites edit/delete, because the
+    // numbered edit/delete window always points at the newest list.
+    const footer = atCap
+      ? "That's as far back as I can list here. For anything older, reply *search <keyword>* or ask for a report. Reply *my entries* to go back to the newest."
+      : (hasMore
+        ? `Reply *more* for the next ${ENTRY_PAGE_SIZE} older entries, or *my entries* to go back to the newest.`
+        : "That's the end of your ledger on this vehicle. Reply *my entries* to go back to the newest.");
+    return `${head}\n\n${lines.join('\n')}\n\n${footer}`;
+  }
+  const moreLine = hasMore ? `\n\nReply *more* for the next ${ENTRY_PAGE_SIZE} older entries.` : '';
+  return `${head}\n\n${lines.join('\n')}\n\nReply *edit 2* or *delete 2* (use the number).${moreLine}`;
 }
 
 export function formatEditPreview(entry, { vehicles = [], currency = null, locale = 'en-US' } = {}) {

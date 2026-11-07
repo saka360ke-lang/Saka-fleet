@@ -191,6 +191,36 @@ export async function listReceipts(providedSupabase, { ownerId = null, driverId 
   }
 }
 
+// v1.73.0 (Phase 10, P3-1) — receipts pagination. Page 1 stays at 5 rows; the
+// `more` turn serves 5-row pages, capped at 5 pages total (25 rows). The
+// vehicle scope is pushed INTO the query here (the page-1 client filter cannot
+// page correctly), and `hasMore` comes from a limit+1 fetch.
+export const RECEIPT_PAGE_SIZE = 5;
+export const RECEIPT_MAX_OFFSET = 20;
+
+/** One page of receipts for the pagination lane. Never throws. */
+export async function pageReceipts(providedSupabase, { ownerId = null, driverId = null, vehicleIds = [], offset = 0, limit = RECEIPT_PAGE_SIZE } = {}) {
+  const supabase = getClient(providedSupabase);
+  if (!supabase) return { rows: [], hasMore: false };
+  const size = Math.max(1, Math.min(20, Number(limit) || RECEIPT_PAGE_SIZE));
+  const start = Math.max(0, Number(offset) || 0);
+  try {
+    let query = supabase.from(RECEIPTS_TABLE)
+      .select('*')
+      .order('created_at', { ascending: false })
+      .range(start, start + size);
+    if (ownerId) query = query.eq('owner_id', ownerId);
+    else if (driverId) query = query.eq('driver_id', driverId);
+    const scoped = (vehicleIds || []).filter(Boolean);
+    if (scoped.length) query = query.in('vehicle_id', scoped);
+    const { data } = await query;
+    const rows = data || [];
+    return { rows: rows.slice(0, size), hasMore: rows.length > size };
+  } catch {
+    return { rows: [], hasMore: false };
+  }
+}
+
 export const OCR_LOW_CONFIDENCE_NOTE = '📸 I read these from the photo — double-check the numbers before saving 🙏';
 
 /**
@@ -224,11 +254,11 @@ function statusDot(status) {
 }
 
 /** Deterministic "my receipts" reply (zero tokens). */
-export function formatReceiptsReply({ receipts = [], vehicles = [], fallbackCurrency = null } = {}) {
+export function formatReceiptsReply({ receipts = [], vehicles = [], fallbackCurrency = null, hasMore = false, paged = false, atCap = false } = {}) {
   if (!Array.isArray(receipts) || receipts.length === 0) {
     return '📸 No receipts yet.\n\nSend a clear photo of any fuel or service receipt and I will read the amount, litres and odometer for you.';
   }
-  const lines = receipts.slice(0, 5).map((receipt) => {
+  const lines = receipts.slice(0, RECEIPT_PAGE_SIZE).map((receipt) => {
     const vehicle = vehicles.find((row) => row.id === receipt.vehicle_id);
     const amount = formatAmount(receipt.amount, receipt.currency || fallbackCurrency);
     const vendor = receipt.vendor ? String(receipt.vendor).split('|')[0].trim() : (receipt.document_kind || 'Receipt');
@@ -236,7 +266,21 @@ export function formatReceiptsReply({ receipts = [], vehicles = [], fallbackCurr
     const labelChip = receipt.label ? ` · #${receipt.label}` : '';
     return `• ${statusDot(receipt.status)} *${vendor}* — ${bits.join(' · ')}${labelChip}`;
   });
-  return `📸 *Your recent receipts*\n\n${lines.join('\n')}\n\nDelete one: *delete receipt N* (1 = newest; add DELETE to confirm). Send another photo anytime, or type *"receipts"* to see this list again.`;
+  const head = paged ? '📸 *Older receipts*' : '📸 *Your recent receipts*';
+  let footer;
+  if (paged) {
+    // D2 — page 2+ is VIEW-ONLY: never invites `delete receipt N`, because the
+    // numbered delete window always points at the newest list.
+    footer = atCap
+      ? "That's as far back as I can list here — a report covers anything older. Reply *receipts* to go back to the newest."
+      : (hasMore
+        ? `Reply *more* for the next ${RECEIPT_PAGE_SIZE} older receipts, or *receipts* to go back to the newest.`
+        : "That's the end of your receipt history. Reply *receipts* to go back to the newest.");
+  } else {
+    footer = 'Delete one: *delete receipt N* (1 = newest; add DELETE to confirm). Send another photo anytime, or type *"receipts"* to see this list again.'
+      + (hasMore ? `\n\nReply *more* for the next ${RECEIPT_PAGE_SIZE} older receipts.` : '');
+  }
+  return `${head}\n\n${lines.join('\n')}\n\n${footer}`;
 }
 
 /** Warm duplicate-receipt reply (never re-logs silently). */

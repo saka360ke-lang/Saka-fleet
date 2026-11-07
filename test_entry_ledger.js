@@ -141,6 +141,41 @@ async function runTests() {
   assert(resolveLedgerTurn({ text: 'my entries', now }).type === 'command', 'a plain list command was not resolved');
   console.log('✅ Pending edit/delete state, expiry and fresh-log protection all behave.');
 
+  // v1.73.0 (Phase 10, P3-1) — pagination offset slices the merged list without
+  // changing the default page (scoping + ordering intact).
+  console.log('\n--- Test 4b: pagination offset (v1.73.0) ---');
+  function ledgerListMock(expenseRows, earningRows = []) {
+    return {
+      from(table) {
+        const rows = table === 'private_earnings' ? earningRows : expenseRows;
+        const chain = {
+          select() { return chain; },
+          in() { return chain; },
+          order() { return chain; },
+          eq() { return chain; },
+          limit() { return Promise.resolve({ data: rows, error: null }); }
+        };
+        return chain;
+      }
+    };
+  }
+  const tenExpenses = Array.from({ length: 10 }, (_, i) => ({
+    id: `pg-${i + 1}`,
+    vehicle_id: 'veh-pg',
+    expense_type: 'Fuel',
+    amount: 100 + i,
+    created_at: new Date(Date.UTC(2026, 10, 1, 8, i + 1)).toISOString()
+  }));
+  const listMock = ledgerListMock(tenExpenses);
+  const firstPage = await listLedgerEntries(listMock, { ownerId: 'owner-pg', vehicleIds: ['veh-pg'], limit: 6 });
+  const secondPage = await listLedgerEntries(listMock, { ownerId: 'owner-pg', vehicleIds: ['veh-pg'], limit: 6, offset: 6 });
+  assert(firstPage.length === 6 && secondPage.length === 4, 'offset pages slice the merged list without loss');
+  assert(firstPage[0].id === 'pg-10' && firstPage[5].id === 'pg-5', 'page 1 is the newest 6, newest first');
+  assert(secondPage[0].id === 'pg-4' && secondPage[3].id === 'pg-1', 'page 2 continues exactly where page 1 stopped');
+  const beyond = await listLedgerEntries(listMock, { ownerId: 'owner-pg', vehicleIds: ['veh-pg'], limit: 6, offset: 40 });
+  assert(beyond.length === 0, 'an offset past the end yields an empty page');
+  console.log('✅ Offset pagination is deterministic and page 1 is unchanged.');
+
   // 5. Sanitizer: whitelist + immutability
   console.log('\n--- Test 5: sanitizeEntryUpdate whitelist ---');
   const locked = sanitizeEntryUpdate('expense', {
