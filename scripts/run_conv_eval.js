@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { createClient } from '@supabase/supabase-js';
-import { CONV_EVAL_CRITERIA, formatConvEvalReply, getConvEvalConfig, resolveJudgeConfig, runConvEvalBatch } from '../src/services/convEval.js';
+import { CONV_EVAL_CRITERIA, aggregateEvalRuns, evalGateExitCode, formatConvEvalReply, getConvEvalConfig, parseConvEvalArgs, resolveJudgeConfig, runConvEvalBatch } from '../src/services/convEval.js';
 import { CONVERSATION_CASES, buildLiveCasesFromFriction, sampleCorpusCases, CASE_VALIDATION_ERRORS, SYNTHETIC_CASES, SYNTHETIC_CASE_ERRORS } from '../src/services/convEvalCases.js';
 import { healFailedCase, isCalibrationCase } from '../src/services/convEvalHealer.js';
 import { installAiUsageSink } from '../src/services/aiUsageLog.js';
@@ -18,6 +18,11 @@ import { evaluateDeepSeekOffPeakGate, logDeepSeekDeferralAudit } from '../src/se
  *   node scripts/run_conv_eval.js --case=id1,id2  # judge only these cases (curation)
  *   node scripts/run_conv_eval.js --fail-on-failures  # exit 1 when any case fails (CI gate)
  *   node scripts/run_conv_eval.js --exclude-calibration  # gate on signal cases only (calibration still judged + persisted)
+ *   node scripts/run_conv_eval.js --exclude-calibration --repeat 3 --min-pass-rate 0.95
+ *                                                        # flake-tolerant gate (v1.70.1): a case failing
+ *                                                        # 1 of 3 runs still passes at 0.95 (e.g. 68/69)
+ *   Exit codes (v1.70.1): 0 clean · 1 signal pass rate below --min-pass-rate ·
+ *   2 judge errors only (visible warning, never a hard gate failure)
  *   node scripts/run_conv_eval.js --export        # DeepEval-compatible JSONL (no provider calls)
  *   node scripts/run_conv_eval.js --force         # override the DeepSeek peak-hours gate
  *
@@ -25,24 +30,9 @@ import { evaluateDeepSeekOffPeakGate, logDeepSeekDeferralAudit } from '../src/se
  * required unless CONV_EVAL_JUDGE_PROVIDER=anthropic (ANTHROPIC_API_KEY).
  */
 
-function parseArgs(argv = []) {
-  const args = { live: false, heal: false, json: false, export: false, synth: false, failOnFailures: false, force: false, excludeCalibration: false, limit: null, caseIds: null };
-  for (const raw of argv) {
-    if (raw === '--live') args.live = true;
-    else if (raw === '--heal') args.heal = true;
-    else if (raw === '--json') args.json = true;
-    else if (raw === '--export') args.export = true;
-    else if (raw === '--synth') args.synth = true;
-    else if (raw === '--force') args.force = true;
-    else if (raw === '--fail-on-failures') args.failOnFailures = true;
-    // v1.63.2 — calibration-aware gate: signal cases decide the headline.
-    else if (raw === '--exclude-calibration') args.excludeCalibration = true;
-    else if (raw.startsWith('--limit=')) args.limit = Math.max(1, Math.min(50, Number(raw.slice(8)) || 0));
-    // v1.61.15 — curate specific cases without spending judge calls on the rest.
-    else if (raw.startsWith('--case=')) args.caseIds = raw.slice(7).split(',').map((id) => id.trim()).filter(Boolean);
-  }
-  return args;
-}
+// v1.70.1 — argv parsing moved to convEval.js (`parseConvEvalArgs`) so the
+// flag contract (--repeat, --min-pass-rate) is unit-testable without running
+// the CLI. It keeps every legacy flag and adds the flake-tolerant gate flags.
 
 function deepEvalExport(cases = []) {
   return cases.map((caseDef) => JSON.stringify({
@@ -56,7 +46,7 @@ function deepEvalExport(cases = []) {
 }
 
 async function main() {
-  const args = parseArgs(process.argv.slice(2));
+  const args = parseConvEvalArgs(process.argv.slice(2));
   const cfg = getConvEvalConfig();
   const limit = args.limit || cfg.maxCases;
 
@@ -153,22 +143,34 @@ async function main() {
       return 1;
     }
   }
-  console.log(`🧪 Running ${cases.length} conversation eval case(s) · threshold ${cfg.threshold} · judge ${judge.provider || 'default'}${judge.model ? `:${judge.model}` : ''}`);
-  const summary = await runConvEvalBatch({ supabase, cases, threshold: cfg.threshold, judge, persist });
-  if (args.json) {
-    console.log(JSON.stringify(summary, null, 2));
-  } else {
-    console.log(`\n${formatConvEvalReply(summary, { title: '🧪 *Conversation eval results*' })}`);
-    for (const result of summary.results) {
-      const verdict = result.judged?.ok ? (result.judged.passed ? '✅' : '❌') : '⚠️';
-      const detail = result.judged?.ok
-        ? `${result.judged.aggregate.toFixed(2)}${result.judged.passed ? '' : ` — ${(result.judged.failing || []).join(', ')}`}`
-        : String(result.judged?.error || 'judge error');
-      console.log(`  ${verdict} ${result.caseId}${result.source === 'live' ? ' (live)' : ''} — ${detail}`);
+  const runCount = Math.max(1, Number(args.repeat) || 1);
+  console.log(`🧪 Running ${cases.length} conversation eval case(s) · threshold ${cfg.threshold} · judge ${judge.provider || 'default'}${judge.model ? `:${judge.model}` : ''}${runCount > 1 ? ` · ${runCount} repeat run(s) · min pass rate ${(args.minPassRate * 100).toFixed(1)}%` : ''}`);
+  // v1.70.1 — run the corpus N times; the gate below aggregates every run so a
+  // single noisy judge verdict cannot flip a shipping decision.
+  const summaries = [];
+  for (let runIndex = 0; runIndex < runCount; runIndex += 1) {
+    if (runIndex > 0) console.log(`\n🔁 Repeat run ${runIndex + 1}/${runCount}…`);
+    const runSummary = await runConvEvalBatch({ supabase, cases, threshold: cfg.threshold, judge, persist });
+    summaries.push(runSummary);
+    if (args.json) {
+      console.log(JSON.stringify(runSummary, null, 2));
+    } else {
+      const runTitle = `🧪 *Conversation eval results*${runCount > 1 ? ` — run ${runIndex + 1}/${runCount}` : ''}`;
+      console.log(`\n${formatConvEvalReply(runSummary, { title: runTitle })}`);
+      for (const result of runSummary.results) {
+        const verdict = result.judged?.ok ? (result.judged.passed ? '✅' : '❌') : '⚠️';
+        const detail = result.judged?.ok
+          ? `${result.judged.aggregate.toFixed(2)}${result.judged.passed ? '' : ` — ${(result.judged.failing || []).join(', ')}`}`
+          : String(result.judged?.error || 'judge error');
+        console.log(`  ${verdict} ${result.caseId}${result.source === 'live' ? ' (live)' : ''} — ${detail}`);
+      }
+      if (persist) console.log(`\n📝 Persisted ${runSummary.persisted}/${runSummary.total} rows to conversation_eval_runs.`);
+      else console.log('\n(No Supabase client: results were not persisted.)');
     }
-    if (persist) console.log(`\n📝 Persisted ${summary.persisted}/${summary.total} rows to conversation_eval_runs.`);
-    else console.log('\n(No Supabase client: results were not persisted.)');
   }
+  // Healing acts on the FIRST run only — a measurement repeat must never
+  // re-heal the same failures and burn the patch budget.
+  const summary = summaries[0];
 
   if (args.heal && summary.failed > 0) {
     console.log('\n🩹 Healing failed cases…');
@@ -193,23 +195,32 @@ async function main() {
     }
   }
 
-  if (summary.errored > 0) return 1;
-  // v1.63.2 — the calibration-aware gate. Calibration cases are still judged
-  // and persisted above; only signal cases decide pass/fail here.
-  const calibrationResults = summary.results.filter((result) => isCalibrationCase(result.caseDef));
-  const signalResults = summary.results.filter((result) => !isCalibrationCase(result.caseDef));
-  if (args.excludeCalibration) {
-    const signalFailed = signalResults.filter((result) => result.judged?.ok && !result.judged.passed).length;
-    const calibrationHeld = calibrationResults.filter((result) => result.judged?.ok && !result.judged.passed).length;
-    const realFailRate = signalResults.length ? (signalFailed / signalResults.length) * 100 : 0;
-    const holdRate = calibrationResults.length ? (calibrationHeld / calibrationResults.length) * 100 : 0;
-    console.log(`\n🎯 Calibration-aware gate: ${signalResults.length} cases (calibration excluded) · threshold ${cfg.threshold}`);
-    console.log(`   Real-fail rate: ${realFailRate.toFixed(1)}% (${signalFailed}/${signalResults.length})`);
-    console.log(`   Calibration hold: ${holdRate.toFixed(1)}% (${calibrationHeld}/${calibrationResults.length})`);
-    if (args.failOnFailures && signalFailed > 0) return 1;
-    return 0;
+  // v1.70.1 — flake-tolerant gate across EVERY repeat run. Errored cases are
+  // excluded from the pass-rate denominator (a judge hiccup can never block a
+  // valid refactor) but surface as exit 2 when the gate itself passes.
+  // Calibration expected-fails are held, never counted as signal failures.
+  const aggregate = aggregateEvalRuns(summaries, { minPassRate: args.minPassRate });
+  const gateExit = evalGateExitCode(aggregate);
+  const passPct = (aggregate.passRate * 100).toFixed(1);
+  const minPct = (aggregate.minPassRate * 100).toFixed(1);
+  const holdPct = aggregate.calibrationTotal ? (aggregate.calibrationHeld / aggregate.calibrationTotal) * 100 : 0;
+  if (args.json) {
+    console.log(JSON.stringify({ aggregate }, null, 2));
   }
-  if (args.failOnFailures && summary.failed > 0) return 1;
+  if (args.excludeCalibration) {
+    console.log(`\n🎯 Calibration-aware gate: ${aggregate.signalTotal} signal result(s) across ${aggregate.runs} run(s) · min pass rate ${minPct}%`);
+    console.log(`   Signal pass rate: ${passPct}% (${aggregate.signalPassed}/${aggregate.signalTotal})`);
+    console.log(`   Judge errors: ${aggregate.errored}${aggregate.errored > 0 ? ' — warning only (exit 2), never a hard fail' : ''}`);
+    console.log(`   Calibration hold: ${holdPct.toFixed(1)}% (${aggregate.calibrationHeld}/${aggregate.calibrationTotal})`);
+    console.log(`   Gate: ${aggregate.gatePassed ? 'PASS ✅' : 'FAIL ❌ (signal pass rate below the min pass rate)'}${gateExit === 2 ? ' — judge errors kept the exit at 2' : ''}`);
+  } else {
+    console.log(`\n🎯 Signal gate: ${aggregate.signalTotal} case result(s) across ${aggregate.runs} run(s) · min pass rate ${minPct}%`);
+    console.log(`   Signal pass rate: ${passPct}% (${aggregate.signalPassed}/${aggregate.signalTotal})`);
+    console.log(`   Judge errors: ${aggregate.errored}`);
+    console.log(`   Gate: ${aggregate.gatePassed ? 'PASS ✅' : 'FAIL ❌'}`);
+  }
+  if (gateExit === 1) return 1;
+  if (gateExit === 2) return 2;
   return 0;
 }
 

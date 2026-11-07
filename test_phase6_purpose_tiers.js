@@ -68,12 +68,11 @@ async function runTests() {
 
   console.log('--- Test 1: registry shape ---');
   check(Object.isFrozen(PURPOSE_TIER_OVERRIDES), 'the override registry is frozen');
-  check(Object.keys(PURPOSE_TIER_OVERRIDES).length === 3, 'exactly three mechanical purposes are capped (A1 eval gate)');
-  check(['question_render', 'stall_nudge', 'small_talk']
+  check(Object.keys(PURPOSE_TIER_OVERRIDES).length === 4, 'all four mechanical purposes are capped (v1.70.1 re-enable)');
+  check(['question_render', 'stall_nudge', 'small_talk', 'intent_classify']
     .every((purpose) => PURPOSE_TIER_OVERRIDES[purpose] === AI_TIERS.ROUTER), 'every override pins Tier 1');
-  check(PURPOSE_TIER_OVERRIDES.intent_classify === undefined, 'intent_classify is parked out of the registry (A1 eval gate)');
   check(PURPOSE_TIER_OVERRIDE_HONORS_FORCED.size === 1
-    && PURPOSE_TIER_OVERRIDE_HONORS_FORCED.has('intent_classify'), 'the honor-forced plumbing stays parked for re-enable');
+    && PURPOSE_TIER_OVERRIDE_HONORS_FORCED.has('intent_classify'), 'intent_classify is the only purpose that honors a caller-forced tier');
   check(USER_FACING_PURPOSES.has('complaint_recovery'), 'complaint_recovery rides the front provider set');
 
   console.log('\n--- Test 2: mechanical purposes stay on Haiku for paid plans ---');
@@ -86,12 +85,12 @@ async function runTests() {
     }
   });
 
-  console.log('\n--- Test 3: intent_classify keeps the plan floor (override parked by A1) ---');
+  console.log('\n--- Test 3: intent_classify caps unless the canary forces Tier 2 (v1.70.1) ---');
   withEnv(PAID_ENV, () => {
     const simple = resolveTier('intent_classify', { maxTier: 3, tier: AI_TIERS.ROUTER });
-    check(simple.tier === AI_TIERS.CONVERSATIONAL, 'paid plan: the v1.58.24 floor still raises the canary Tier-1 verdict');
+    check(simple.tier === AI_TIERS.ROUTER && simple.model === DEFAULT_ANTHROPIC_TIER1_MODEL, 'simple turn (canary Tier 1) stays on Haiku');
     const unforced = resolveTier('intent_classify', { maxTier: 3 });
-    check(unforced.tier === AI_TIERS.CONVERSATIONAL, 'paid unforced intent_classify stays on the plan tier');
+    check(unforced.tier === AI_TIERS.ROUTER, 'unforced intent_classify stays on Haiku');
     const highStakes = resolveTier('intent_classify', { maxTier: 3, tier: AI_TIERS.CONVERSATIONAL });
     check(highStakes.tier === AI_TIERS.CONVERSATIONAL, 'the canary high-stakes verdict keeps Tier 2');
     check(highStakes.provider === AI_PROVIDERS.ANTHROPIC && highStakes.model === 'claude-sonnet-test', 'high-stakes intent_classify is served by Sonnet');

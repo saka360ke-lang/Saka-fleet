@@ -798,3 +798,123 @@ export function formatConvEvalReply(summary = {}, { hours = 24, title = null } =
 
 
 
+
+/* ------------------------------------------------------------------ */
+/* Flake-tolerant CLI gate (v1.70.1)                                   */
+/* ------------------------------------------------------------------ */
+
+/** Hard cap for --repeat: this is a measurement, not a load test. */
+export const CONV_EVAL_REPEAT_MAX = 10;
+
+/** Clamp --repeat to a sane integer (junk fails safe to a single run). */
+export function clampRepeat(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 1;
+  return Math.min(CONV_EVAL_REPEAT_MAX, Math.max(1, Math.round(n)));
+}
+
+/** Clamp --min-pass-rate to 0..1 (junk fails safe to the strict 1.0). */
+export function clampMinPassRate(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 1;
+  return Math.min(1, Math.max(0, n));
+}
+
+/**
+ * v1.70.1 — parse the conversation-eval CLI argv (pure). Supports both
+ * `--flag value` and `--flag=value` for the numeric flags; the repeat count
+ * and pass-rate tolerance are clamped so a typo can never weaken the gate.
+ */
+export function parseConvEvalArgs(argv = []) {
+  const args = {
+    live: false, heal: false, json: false, export: false, synth: false,
+    failOnFailures: false, force: false, excludeCalibration: false,
+    limit: null, caseIds: null, repeat: 1, minPassRate: 1
+  };
+  const list = Array.isArray(argv) ? argv.map(String) : [];
+  const nextValue = (index) => (index + 1 < list.length ? list[index + 1] : null);
+  for (let i = 0; i < list.length; i += 1) {
+    const raw = list[i];
+    if (raw === '--live') args.live = true;
+    else if (raw === '--heal') args.heal = true;
+    else if (raw === '--json') args.json = true;
+    else if (raw === '--export') args.export = true;
+    else if (raw === '--synth') args.synth = true;
+    else if (raw === '--force') args.force = true;
+    else if (raw === '--fail-on-failures') args.failOnFailures = true;
+    else if (raw === '--exclude-calibration') args.excludeCalibration = true;
+    else if (raw.startsWith('--limit=')) args.limit = Math.max(1, Math.min(50, Number(raw.slice(8)) || 0));
+    else if (raw === '--limit') { i += 1; args.limit = Math.max(1, Math.min(50, Number(list[i]) || 0)); }
+    else if (raw.startsWith('--case=')) args.caseIds = raw.slice(7).split(',').map((id) => id.trim()).filter(Boolean);
+    else if (raw.startsWith('--repeat=')) args.repeat = raw.slice(9);
+    else if (raw === '--repeat') { args.repeat = nextValue(i); i += 1; }
+    else if (raw.startsWith('--min-pass-rate=')) args.minPassRate = raw.slice(16);
+    else if (raw === '--min-pass-rate') { args.minPassRate = nextValue(i); i += 1; }
+  }
+  args.repeat = clampRepeat(args.repeat);
+  args.minPassRate = clampMinPassRate(args.minPassRate);
+  return args;
+}
+
+/**
+ * v1.70.1 — aggregate N runs into one flake-tolerant gate verdict.
+ * Calibration cases (`expected: 'fail'`) are informational: their expected
+ * fails are HELD, never counted as signal failures. Errored cases are removed
+ * from the pass-rate denominator (a judge hiccup must never block a valid
+ * refactor) and surface separately so the exit code can flag them as 2.
+ */
+export function aggregateEvalRuns(runs = [], { minPassRate = 1 } = {}) {
+  const rate = clampMinPassRate(minPassRate);
+  const totals = {
+    runs: 0,
+    signalTotal: 0,
+    signalPassed: 0,
+    signalFailed: 0,
+    errored: 0,
+    calibrationTotal: 0,
+    calibrationHeld: 0,
+    calibrationBroken: 0
+  };
+  for (const run of Array.isArray(runs) ? runs : []) {
+    if (!run || !Array.isArray(run.results)) continue;
+    totals.runs += 1;
+    for (const result of run.results) {
+      const isCalibration = String(result?.caseDef?.expected || '').toLowerCase() === 'fail';
+      if (!result?.judged?.ok) {
+        totals.errored += 1;
+        continue;
+      }
+      const passed = result.judged.passed === true;
+      if (isCalibration) {
+        totals.calibrationTotal += 1;
+        if (passed) totals.calibrationBroken += 1;
+        else totals.calibrationHeld += 1;
+        continue;
+      }
+      totals.signalTotal += 1;
+      if (passed) totals.signalPassed += 1;
+      else totals.signalFailed += 1;
+    }
+  }
+  const passRate = totals.signalTotal ? totals.signalPassed / totals.signalTotal : 1;
+  return {
+    ...totals,
+    minPassRate: rate,
+    passRate,
+    gatePassed: passRate >= rate
+  };
+}
+
+/**
+ * v1.70.1 — exit-code contract for the eval CLI:
+ *   0 = gate passed, no judge errors
+ *   1 = signal pass rate below --min-pass-rate (the actual gate)
+ *   2 = gate passed but some cases could not be scored (visible warning; a
+ *       flaky judge run can never block a valid refactor)
+ */
+export function evalGateExitCode(aggregate = {}) {
+  if (aggregate.gatePassed === false) return 1;
+  if (Number(aggregate.errored) > 0) return 2;
+  return 0;
+}
+

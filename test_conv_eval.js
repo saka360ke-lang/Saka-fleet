@@ -20,7 +20,10 @@ import {
   resolveJudgeConfig,
   runConvEvalBatch,
   sanitizeJudgeScores,
-  summarizeConvEvalRows
+  summarizeConvEvalRows,
+  parseConvEvalArgs,
+  aggregateEvalRuns,
+  evalGateExitCode
 } from './src/services/convEval.js';
 import {
   CONVERSATION_CASES,
@@ -592,6 +595,45 @@ try {
 } finally {
   if (savedDeepSeek !== undefined) process.env.DEEPSEEK_API_KEY = savedDeepSeek;
 }
+
+console.log('\n--- Phase 6.5: flake-tolerant eval gate (v1.70.1) ---');
+const gateArgs = parseConvEvalArgs(['--exclude-calibration', '--repeat', '3', '--min-pass-rate', '0.95']);
+check(gateArgs.excludeCalibration === true && gateArgs.repeat === 3 && gateArgs.minPassRate === 0.95, 'space-form --repeat/--min-pass-rate parse next to --exclude-calibration');
+const equalsArgs = parseConvEvalArgs(['--repeat=2', '--min-pass-rate=0.8']);
+check(equalsArgs.repeat === 2 && equalsArgs.minPassRate === 0.8, 'equals-form --repeat/--min-pass-rate parse');
+const defaultGateArgs = parseConvEvalArgs([]);
+check(defaultGateArgs.repeat === 1 && defaultGateArgs.minPassRate === 1, 'gate defaults stay strict (repeat 1, min pass rate 1.0)');
+const clampedGateArgs = parseConvEvalArgs(['--repeat', '0', '--min-pass-rate', '1.5']);
+check(clampedGateArgs.repeat === 1 && clampedGateArgs.minPassRate === 1, 'out-of-range flags clamp to the safe bounds');
+check(parseConvEvalArgs(['--repeat', '99']).repeat === 10, 'the repeat count is capped at 10');
+
+const makeGateResults = (failIds = [], { calibration = [], errorIds = [] } = {}) => ({
+  results: Array.from({ length: 23 }, (_, index) => {
+    const id = `case-${index}`;
+    const isCal = calibration.includes(id);
+    const errored = errorIds.includes(id);
+    return {
+      caseDef: { id, expected: isCal ? 'fail' : 'pass' },
+      judged: errored
+        ? { ok: false, error: 'judge timeout' }
+        : { ok: true, passed: isCal ? false : !failIds.includes(id) }
+    };
+  })
+});
+const cleanGateRun = makeGateResults();
+const perfectPool = aggregateEvalRuns([cleanGateRun, makeGateResults(), makeGateResults()], { minPassRate: 0.95 });
+check(perfectPool.signalTotal === 69 && perfectPool.signalPassed === 69 && perfectPool.gatePassed === true, 'a clean 3-run pool is 69/69 and passes');
+const noisyPool = aggregateEvalRuns([cleanGateRun, makeGateResults(), makeGateResults(['case-7'])], { minPassRate: 0.95 });
+check(noisyPool.signalPassed === 68 && noisyPool.signalTotal === 69 && noisyPool.gatePassed === true, 'a case failing 1 of 3 runs (68/69 = 98.6%) still passes at 0.95');
+check(evalGateExitCode(noisyPool) === 0, 'the noisy-but-tolerated pool exits 0');
+const strictPool = aggregateEvalRuns([cleanGateRun, makeGateResults(), makeGateResults(['case-7'])], { minPassRate: 1 });
+check(strictPool.gatePassed === false && evalGateExitCode(strictPool) === 1, 'the same pool fails at min pass rate 1.0 (exit 1)');
+const errorPool = aggregateEvalRuns([makeGateResults([], { errorIds: ['case-3'] })], { minPassRate: 1 });
+check(errorPool.errored === 1 && errorPool.signalTotal === 22 && errorPool.gatePassed === true, 'errored cases leave the denominator (22 judged, never a hard fail)');
+check(evalGateExitCode(errorPool) === 2, 'judge errors surface as exit 2 (visible warning, not a gate failure)');
+const calibrationPool = aggregateEvalRuns([makeGateResults([], { calibration: ['case-1', 'case-2'] })], { minPassRate: 1 });
+check(calibrationPool.calibrationHeld === 2 && calibrationPool.signalFailed === 0 && evalGateExitCode(calibrationPool) === 0, 'calibration expected-fails are held, never counted as signal failures');
+check(evalGateExitCode(aggregateEvalRuns([], { minPassRate: 0.95 })) === 0, 'an empty pool degrades cleanly to exit 0');
 
 console.log(`\n🎉 ${passed} conversation-eval assertions passed.`);
 

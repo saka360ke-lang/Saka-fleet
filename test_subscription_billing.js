@@ -114,10 +114,10 @@ async function run() {
   process.env.PREMIUM_MODEL_ENABLED = 'on';
   delete process.env.PREMIUM_MODEL_MODE;
   check(resolveTier('intent_classify', { maxTier: 1 }).tier === AI_TIERS.ROUTER, 'Free clamp forces Tier 1');
-  // v1.70.0 - mechanical purposes (question_render, stall_nudge, small_talk) are
-  // capped to Tier 1 on paid plans; intent_classify is parked out of the
-  // registry by the A1 eval gate, so the v1.58.24 plan floor still governs it.
-  check(resolveTier('intent_classify', { maxTier: 3 }).tier === AI_TIERS.CONVERSATIONAL, 'Paid intent_classify keeps the plan floor (override parked)');
+  // v1.70.1 - all four mechanical purposes (question_render, stall_nudge,
+  // small_talk, intent_classify) are capped to Tier 1 on paid plans; the
+  // canary's forced CONVERSATIONAL verdict still wins for intent_classify.
+  check(resolveTier('intent_classify', { maxTier: 3 }).tier === AI_TIERS.ROUTER, 'Paid unforced intent_classify stays on Haiku (mechanical cap)');
   check(resolveTier('intent_classify', { maxTier: 3, tier: AI_TIERS.CONVERSATIONAL }).tier === AI_TIERS.CONVERSATIONAL, 'The canary high-stakes verdict keeps intent_classify on Sonnet');
   check(resolveTier('health_synthesis', {}).tier === AI_TIERS.REASONING, 'Background purposes keep Tier 3 (no clamp)');
 

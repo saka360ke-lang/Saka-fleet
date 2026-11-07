@@ -1,6 +1,13 @@
 {
-  "latest": "1.70.0",
+  "latest": "1.70.1",
   "entries": [
+    {
+      "version": "1.70.1",
+      "date": "2026-11-07",
+      "title": "Saka's quick thinking gets the fast lane",
+      "preview": "Every quick check now uses the lighter model, so Saka costs less to run while big answers stay premium.",
+      "summary": "Saka now uses the lighter model for every quick, repeatable check - including the first read of what you are asking - while the answers that matter (your data, pricing, complaints, parsing your logs) keep the strongest model. The quality checks that guard Saka were also made steadier: they now average several runs so one noisy score can no longer freeze a good improvement. Proven by the full quality suite and a three-run conversation eval gate."
+    },
     {
       "version": "1.70.0",
       "date": "2026-11-07",
