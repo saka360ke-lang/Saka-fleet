@@ -13,9 +13,13 @@ import { sendAdminNotificationEmail } from './mailer.js';
 import { sendProactiveWhatsApp } from '../workers/sentinel.js';
 import { logSystemError } from './systemErrors.js';
 import { getAiUsageSummary } from './aiUsageLog.js';
+// v1.72.1 (P2-6) — system_config access rides the dual-window service.
+import { readConfigMany, writeConfig } from './systemConfigService.js';
+import { CONFIG_KEY_EVAL_DIGEST_LAST_AT, CONFIG_KEY_EVAL_DIGEST_ATTEMPT_AT } from './systemConfigKeys.js';
 
-export const EVAL_DIGEST_CONFIG_KEY = 'last_eval_digest_at';
-export const EVAL_DIGEST_ATTEMPT_KEY = 'last_eval_digest_attempt_at';
+// v1.72.1 (P2-6) — namespaced keys; the service dual-reads/writes the legacy names.
+export const EVAL_DIGEST_CONFIG_KEY = CONFIG_KEY_EVAL_DIGEST_LAST_AT;
+export const EVAL_DIGEST_ATTEMPT_KEY = CONFIG_KEY_EVAL_DIGEST_ATTEMPT_AT;
 export const EVAL_DIGEST_DEFAULT_HOURS = 6;
 // v1.61.13 — a FAILED email must not burn the 6-hour window: retry after this
 // many minutes (Resend quota exhaustion is temporary, a lost digest is not).
@@ -205,12 +209,7 @@ export async function sendEvalDigest({
   if (!supabase) return { sent: false, reason: 'no_client' };
   const windowHours = Number(hours) > 0 ? Number(hours) : EVAL_DIGEST_DEFAULT_HOURS;
   try {
-    const { data: configRow } = await supabase
-      .from('system_config')
-      .select('key,value')
-      .in('key', [EVAL_DIGEST_CONFIG_KEY, EVAL_DIGEST_ATTEMPT_KEY])
-      .limit(5);
-    const configMap = new Map((configRow || []).map((row) => [row.key, row.value]));
+    const configMap = await readConfigMany(supabase, [EVAL_DIGEST_CONFIG_KEY, EVAL_DIGEST_ATTEMPT_KEY]);
     const lastAt = configMap.get(EVAL_DIGEST_CONFIG_KEY) || null;
     const lastAttemptAt = configMap.get(EVAL_DIGEST_ATTEMPT_KEY) || null;
     if (hoursSince(lastAt, now) < windowHours - 0.1) {
@@ -270,9 +269,9 @@ export async function sendEvalDigest({
       // v1.61.13 — only a SENT email consumes the window; a failed attempt
       // records the attempt time so the next cycle can retry (15-min floor).
       if (emailSent) {
-        await supabase.from('system_config').upsert([{ key: EVAL_DIGEST_CONFIG_KEY, value: now.toISOString() }]);
+        await writeConfig(supabase, EVAL_DIGEST_CONFIG_KEY, now.toISOString());
       } else {
-        await supabase.from('system_config').upsert([{ key: EVAL_DIGEST_ATTEMPT_KEY, value: now.toISOString() }]);
+        await writeConfig(supabase, EVAL_DIGEST_ATTEMPT_KEY, now.toISOString());
       }
     } catch { /* the next window retries */ }
     try {

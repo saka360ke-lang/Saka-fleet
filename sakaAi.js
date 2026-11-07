@@ -9,6 +9,9 @@ import {
 import { buildFlowPlaybook, buildOperationsBlock, SAKA_METRIC_GLOSSARY } from './src/services/flowKnowledge.js';
 import { buildProductQaContext } from './src/services/productQa.js';
 import { prepareRoutingText } from './src/services/textNormalizer.js';
+// v1.72.1 (P2-6) — system_config access rides the dual-window service.
+import { readConfig } from './src/services/systemConfigService.js';
+import { CONFIG_KEY_SAKA_CORE_PROMPT } from './src/services/systemConfigKeys.js';
 
 // v1.28.9 — re-exported for training tests and admin audits; the glossary is
 // authored once in flowKnowledge/assetMetrics.
@@ -407,14 +410,14 @@ export async function getSakaCorePrompt(providedSupabase = null) {
   }
 
   try {
-    const [configRes, rulesRes] = await Promise.all([
-      client.from('system_config').select('value').eq('key', 'saka_core_prompt').maybeSingle(),
+    const [corePromptValue, rulesRes] = await Promise.all([
+      // v1.72.1 (P2-6) — one atomic dual read (namespaced key, legacy fallback).
+      readConfig(client, CONFIG_KEY_SAKA_CORE_PROMPT),
       client.from('saka_dynamic_rules').select('rule_key, patch_instruction').eq('is_active', true)
     ]);
 
-    const configData = configRes?.data;
-    if (configData && configData.value) {
-      const stored = String(configData.value).trim();
+    if (corePromptValue) {
+      const stored = String(corePromptValue).trim();
       const isVersioned = stored.includes(PROMPT_REFINEMENT_MARKER);
       const withinBound = stored.length <= MAX_STORED_PROMPT_REFINEMENT_CHARS;
       if (isVersioned && withinBound) {

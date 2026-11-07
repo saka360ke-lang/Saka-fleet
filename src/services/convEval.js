@@ -1,6 +1,8 @@
 import crypto from 'node:crypto';
 import { generateText, parseJsonSafely, DEFAULT_ANTHROPIC_TIER1_MODEL, DEFAULT_ANTHROPIC_TIER2_MODEL } from './aiClient.js';
 import { SAKA_TONE_COMPASS, SAKA_BOUNDARY_RULES } from './flowKnowledge.js';
+// v1.72.1 (P2-6) — namespaced config key (the service dual-reads the legacy name).
+import { CONFIG_KEY_EVAL_CALL_ALERT_DATE } from './systemConfigKeys.js';
 
 /**
  * Saka Fleet — DeepEval-style conversation evaluation (v1.60.0)
@@ -470,7 +472,7 @@ export function isNearMiss(judged, { threshold = CONV_EVAL_DEFAULT_THRESHOLD, cr
   return score >= bar - m;
 }
 
-export const EVAL_CALL_ALERT_CONFIG_KEY = 'last_eval_call_alert_date';
+export const EVAL_CALL_ALERT_CONFIG_KEY = CONFIG_KEY_EVAL_CALL_ALERT_DATE;
 
 /**
  * v1.61.15 — eval SPEND selector: which cases may this tick judge?

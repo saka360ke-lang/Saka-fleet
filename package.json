@@ -1,7 +1,7 @@
 {
   "name": "sakafleet-backend",
   "type": "module",
-  "version": "1.72.0",
+  "version": "1.72.1",
   "description": "Saka Fleet Backend",
   "main": "index.js",
   "scripts": {
@@ -79,7 +79,8 @@
     "remediate:phantom-trials": "node scripts/remediate_phantom_trials.js",
     "landing:stamp": "node scripts/stamp_landing_assets.cjs",
     "eval:apply-heals": "node scripts/apply_eval_heals.js",
-    "migrate:user-context": "node scripts/run_user_context_migration.js"
+    "migrate:user-context": "node scripts/run_user_context_migration.js",
+    "migrate:system-config-keys": "node scripts/run_system_config_keys_migration.js"
   },
   "dependencies": {
     "@fastify/formbody": "^9.0.1",

@@ -1,4 +1,7 @@
 import fs from 'node:fs';
+// v1.72.1 (P2-6) — config reads/writes ride the dual-window service.
+import { readConfig, writeConfig } from './systemConfigService.js';
+import { CONFIG_KEY_DEPLOY_LAST_REVISION } from './systemConfigKeys.js';
 
 /**
  * Saka Fleet — "deployment is LIVE" announcement (v1.25.7).
@@ -35,15 +38,16 @@ export function buildDeployLiveText({ version = 'unknown', revision = null, now 
 export async function announceRevisionLive({ supabase, revision, version = readReleaseVersion(), send = null, logger = console, now = new Date() } = {}) {
   try {
     if (!supabase || !revision) return { sent: false, reason: 'missing input' };
-    const { data: config } = await supabase.from('system_config').select('value').eq('key', 'last_deployed_revision').maybeSingle();
-    if (config && config.value === revision) return { sent: false, reason: 'already announced' };
-    const { error: configError } = await supabase
-      .from('system_config')
-      .upsert([{ key: 'last_deployed_revision', value: revision }], { onConflict: 'key' });
+    // v1.72.1 (P2-6) — ONE atomic dual read [namespaced, legacy] through the
+    // service: a rename or a mixed-version rolling deploy can never miss the
+    // marker and re-announce the same revision.
+    const lastRevision = await readConfig(supabase, CONFIG_KEY_DEPLOY_LAST_REVISION);
+    if (lastRevision === revision) return { sent: false, reason: 'already announced' };
+    const markerWrite = await writeConfig(supabase, CONFIG_KEY_DEPLOY_LAST_REVISION, revision);
     // v1.32.2 — a missing onConflict silently failed the upsert, so the marker
     // stayed frozen at the 2026-10-28 revision and every boot re-announced.
-    if (configError && logger?.warn) {
-      logger.warn('[deployLiveAlert] revision marker not persisted:', configError.message);
+    if (!markerWrite.ok && logger?.warn) {
+      logger.warn('[deployLiveAlert] revision marker not persisted:', markerWrite.error);
     }
     const text = buildDeployLiveText({ version, revision, now });
     if (typeof send === 'function') await send(text);

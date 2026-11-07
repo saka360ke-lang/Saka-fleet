@@ -222,7 +222,18 @@ check(/Narrative pre-fills are engine-determined facts/.test(await import('./src
   const makePromptMock = (configValue) => ({
     from(table) {
       if (table === 'system_config') {
-        return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: configValue ? { value: configValue } : null, error: null }) }) }) };
+        // v1.72.1 (P2-6) — the dual-window service reads with ONE atomic
+        // `.in('key', [namespaced, legacy])` query; answer for every asked key.
+        return {
+          select: () => ({
+            in: (column, keys) => ({
+              limit: async () => ({
+                data: configValue ? keys.map((key) => ({ key, value: configValue })) : [],
+                error: null
+              })
+            })
+          })
+        };
       }
       return { select: () => ({ eq: async () => ({ data: [], error: null }) }) };
     }

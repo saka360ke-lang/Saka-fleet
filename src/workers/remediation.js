@@ -10,6 +10,13 @@ import { sendProactiveWhatsApp } from './sentinel.js';
 import { upsertIncident } from '../services/incidents.js';
 import { validateAiModelUpdatePlan, verifyModelUpdateAgainstRegistry, getModelWatchdogSummary } from '../services/aiModelRegistry.js';
 import { getOcrCountryWatchlist } from '../services/ocrTelemetry.js';
+// v1.72.1 (P2-6) — system_config access rides the dual-window service.
+import { readConfig, writeConfig } from '../services/systemConfigService.js';
+import {
+  CONFIG_KEY_REMEDIATION_DIGEST_FREQUENCY,
+  CONFIG_KEY_REMEDIATION_DIGEST_LAST_SENT,
+  CONFIG_KEY_REMEDIATION_URGENT_LAST_SENT
+} from '../services/systemConfigKeys.js';
 
 /**
  * Saka Fleet — Autonomous Sentinel ↔ Cline Remediation Pipeline (v1.10.0)
@@ -67,9 +74,10 @@ export const REMEDIATION_URGENT_ERROR_THRESHOLD = REMEDIATION_URGENT_PENDING_THR
 export const REMEDIATION_URGENT_COOLDOWN_MS = Number(process.env.REMEDIATION_URGENT_COOLDOWN_MS || 60 * 60 * 1000);
 export const REMEDIATION_AUDIT_WINDOW_HOURS = Math.min(72, Math.max(1, Number(process.env.REMEDIATION_AUDIT_WINDOW_HOURS || 4)));
 
-const DIGEST_FREQUENCY_KEY = 'remediation_digest_frequency';
-const DIGEST_LAST_SENT_KEY = 'remediation_digest_last_sent';
-const URGENT_LAST_SENT_KEY = 'remediation_urgent_last_sent';
+// v1.72.1 (P2-6) — namespaced keys; the service dual-reads/writes the legacy names.
+const DIGEST_FREQUENCY_KEY = CONFIG_KEY_REMEDIATION_DIGEST_FREQUENCY;
+const DIGEST_LAST_SENT_KEY = CONFIG_KEY_REMEDIATION_DIGEST_LAST_SENT;
+const URGENT_LAST_SENT_KEY = CONFIG_KEY_REMEDIATION_URGENT_LAST_SENT;
 
 
 /**
@@ -1111,24 +1119,19 @@ export async function checkRemediationPlanTriggers(providedSupabase, { now = new
 /* Twice-daily digest + adaptive frequency + urgent escalation        */
 /* ------------------------------------------------------------------ */
 
+/** v1.72.1 (P2-6) — every config read rides the dual-window service. */
 export async function getConfigValue(supabase, key) {
-  try {
-    const { data } = await supabase.from('system_config').select('value').eq('key', key).maybeSingle();
-    return data?.value || null;
-  } catch {
-    return null;
-  }
+  return readConfig(supabase, key);
 }
 
+/** v1.72.1 (P2-6) — dual write (namespaced + legacy) in the transition release. */
 export async function setConfigValue(supabase, key, value) {
-  try {
-    const { error } = await supabase
-      .from('system_config')
-      .upsert([{ key, value, updated_by: 'SENTINEL', updated_at: new Date().toISOString() }], { onConflict: 'key' });
-    if (error) console.warn(`[Remediation] ${key} write failed:`, error.message);
-  } catch (err) {
-    console.warn(`[Remediation] ${key} write exception:`, err.message);
-  }
+  const result = await writeConfig(supabase, key, value, {
+    updatedBy: 'SENTINEL',
+    updatedAt: new Date().toISOString()
+  });
+  if (!result.ok) console.warn(`[Remediation] ${key} write failed:`, result.error);
+  return result.ok;
 }
 
 /**

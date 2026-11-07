@@ -17,6 +17,9 @@ import { isSentinelProposalsEnabled } from '../services/sentinelPolicy.js';
 import { isDeliveryBlocked } from '../services/deliveryGuard.js';
 import { resolveProactiveMode } from '../services/proactiveTemplates.js';
 import { logSystemError as logSystemErrorImpl } from '../services/systemErrors.js';
+// v1.72.1 (P2-6) — system_config access rides the dual-window service.
+import { readConfig, writeConfig } from '../services/systemConfigService.js';
+import { CONFIG_KEY_SAKA_CORE_PROMPT } from '../services/systemConfigKeys.js';
 
 function getSupabase(providedSupabase) {
   if (providedSupabase) return providedSupabase;
@@ -338,15 +341,12 @@ export async function runConversationRefinement(providedSupabase) {
   }
 
   // 2. Fetch current core prompt from system_config (if available)
+  // v1.72.1 (P2-6) — dual read: namespaced key first, legacy fallback.
   let currentCorePrompt = null;
-  const { data: configRow } = await supabase
-    .from('system_config')
-    .select('value')
-    .eq('key', 'saka_core_prompt')
-    .single();
+  const storedCorePrompt = await readConfig(supabase, CONFIG_KEY_SAKA_CORE_PROMPT);
 
-  if (configRow && configRow.value) {
-    currentCorePrompt = configRow.value;
+  if (storedCorePrompt) {
+    currentCorePrompt = storedCorePrompt;
   }
 
   // Guard against unbounded prompt growth (Sentinel refinement feedback loop):
@@ -447,17 +447,14 @@ Return strictly a single valid JSON object matching this schema (no markdown ast
   }
 
   // 3. Persist the bounded, content-gated learnings block.
-  const { error: configErr } = await supabase
-    .from('system_config')
-    .upsert({
-      key: 'saka_core_prompt',
-      value: persistedPrompt,
-      updated_by: 'sentinel_worker',
-      updated_at: nowIso
-    });
+  // v1.72.1 (P2-6) — dual write (namespaced + legacy) through the service.
+  const configWrite = await writeConfig(supabase, CONFIG_KEY_SAKA_CORE_PROMPT, persistedPrompt, {
+    updatedBy: 'sentinel_worker',
+    updatedAt: nowIso
+  });
 
-  if (configErr) {
-    console.error('[Sentinel ConversationRefinement] Failed to upsert system_config:', configErr.message);
+  if (!configWrite.ok) {
+    console.error('[Sentinel ConversationRefinement] Failed to upsert system_config:', configWrite.error);
   }
 
   // 4. Record insights inside conversation_analytics
@@ -499,7 +496,7 @@ Return strictly a single valid JSON object matching this schema (no markdown ast
     period_end: nowIso,
     insights: parsedAnalysis.insights,
     prompt_adjustments: parsedAnalysis.prompt_adjustments,
-    saka_core_prompt_updated: !configErr
+    saka_core_prompt_updated: configWrite.ok
   };
 }
 

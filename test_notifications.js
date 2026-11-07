@@ -29,15 +29,25 @@ const live = buildDeployLiveText({ version: '1.25.7', revision: 'saka-fleet-0013
 check(live.includes('Saka is LIVE') && live.includes('v1.25.7') && live.includes('00139-abc'), 'the LIVE text names the version and revision');
 check(live.includes('12:30 UTC'), 'the LIVE text carries the announce time');
 const fakeSupabase = (stored) => {
-  const state = { value: stored };
+  // v1.72.1 (P2-6) — deployLiveAlert now reads via the dual-window service
+  // (ONE atomic `.in('key', [namespaced, legacy])`) and writes both keys.
+  const state = new Map();
+  if (stored !== null && stored !== undefined) state.set('deploy.last_deployed_revision', stored);
   return {
     from() {
       return {
-        select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: state.value === null ? null : { value: state.value }, error: null }) }) }),
-        upsert: async (rows) => { state.value = rows[0].value; return { error: null }; }
+        select: () => ({
+          in: (column, keys) => ({
+            limit: async () => ({
+              data: keys.filter((key) => state.has(key)).map((key) => ({ key, value: state.get(key) })),
+              error: null
+            })
+          })
+        }),
+        upsert: async (rows) => { for (const row of rows) state.set(row.key, row.value); return { error: null }; }
       };
     },
-    get value() { return state.value; }
+    get value() { return state.get('last_deployed_revision') ?? state.get('deploy.last_deployed_revision') ?? null; }
   };
 };
 const firstDb = fakeSupabase(null);

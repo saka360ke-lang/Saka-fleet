@@ -14,6 +14,8 @@ import {
 import { buildLiveCasesFromFriction, buildLiveCasesFromChatHistory, sampleCorpusCases } from '../services/convEvalCases.js';
 import { healFailedCase, notifySuperadminConvEval, isCalibrationCase } from '../services/convEvalHealer.js';
 import { AI_USAGE_TABLE } from '../services/aiUsageLog.js';
+// v1.72.1 (P2-6) — system_config access rides the dual-window service.
+import { readConfig, writeConfig } from '../services/systemConfigService.js';
 
 /**
  * Saka Fleet — conversation eval tick (v1.60.0)
@@ -219,12 +221,8 @@ export async function runConvEvalTick(supabase, { force = false, persist = true 
         .select('id', { count: 'exact', head: true })
         .eq('purpose', 'conversation_eval')
         .gte('created_at', since);
-      const { data: alertRows } = await supabase
-        .from('system_config')
-        .select('key,value')
-        .eq('key', EVAL_CALL_ALERT_CONFIG_KEY)
-        .limit(1);
-      const lastAlertKey = alertRows?.[0]?.value || '';
+      // v1.72.1 (P2-6) — dual read (namespaced key, legacy fallback).
+      const lastAlertKey = (await readConfig(supabase, EVAL_CALL_ALERT_CONFIG_KEY)) || '';
       if (shouldSendEvalCallAlert({ calls: count || 0, threshold: cfg.evalDailyCallAlert, todayKey, lastAlertKey })) {
         await notifySuperadminConvEval([
           '📈 *Conversation eval — daily call budget*',
@@ -234,7 +232,7 @@ export async function runConvEvalTick(supabase, { force = false, persist = true 
           '',
           '_`admin ai-stats` shows the full picture; the 6-hourly digest shows spend._'
         ].join('\n'), 'Conversation eval: daily call budget', { email: false });
-        await supabase.from('system_config').upsert([{ key: EVAL_CALL_ALERT_CONFIG_KEY, value: todayKey }]);
+        await writeConfig(supabase, EVAL_CALL_ALERT_CONFIG_KEY, todayKey);
         await supabase.from('admin_audit_logs').insert([{
           admin_phone: process.env.SUPERADMIN_PHONE || 'system',
           action: 'CONV_EVAL_CALL_ALERT',

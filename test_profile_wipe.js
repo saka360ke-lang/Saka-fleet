@@ -32,7 +32,13 @@ function makeMock({ pending = null } = {}) {
       upsert(rows) { rows.forEach((r) => { cfg[r.key] = r.value; }); return Promise.resolve({ error: null }); },
       delete() { return { in: (col, vals) => { deleted.push(table); deleteCalls.push({ table, col, vals: vals || [] }); return Promise.resolve({ count: (vals && vals.length) ? 1 : 0 }); } }; },
       then(resolve) {
-        if (table === 'profiles') resolve({ data: [{ id: 'p1', phone_number: '+254734852529' }] });
+        // v1.72.1 (P2-6) — the dual-window service lists config rows with ONE
+        // atomic `.in()` query; answer for the requested keys.
+        if (table === 'system_config') {
+          const asked = state.inKeys || Object.keys(cfg);
+          resolve({ data: asked.filter((k) => cfg[k] !== undefined && cfg[k] !== null).map((k) => ({ key: k, value: cfg[k] })), error: null });
+        }
+        else if (table === 'profiles') resolve({ data: [{ id: 'p1', phone_number: '+254734852529' }] });
         else if (table === 'vehicles') resolve({ data: [{ id: 'v1', plate_number: 'KBJ 819C', vin: 'KBJ123456789' }] });
         else resolve({ data: [] });
       }

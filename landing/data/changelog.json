@@ -1,6 +1,13 @@
 {
-  "latest": "1.72.0",
+  "latest": "1.72.1",
   "entries": [
+    {
+      "version": "1.72.1",
+      "date": "2026-11-07",
+      "title": "Steadier housekeeping, same Saka",
+      "preview": "Saka's internal settings now live under clear names - every reminder, digest and alert keeps working as before.",
+      "summary": "A behind-the-scenes tidy-up: Saka's internal settings (its learned tone notes, deploy markers, digest and alert timers) now live under clear, grouped names. During the transition every setting is read from both the old and the new name and written to both, so a deploy can never miss a reminder or repeat an alert. The migration copies every existing setting into its new name and keeps the old one until the next release - nothing you see changes, proven by the full quality suite."
+    },
     {
       "version": "1.72.0",
       "date": "2026-11-07",

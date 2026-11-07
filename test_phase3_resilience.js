@@ -123,6 +123,14 @@ function makeBudgetSupabase({ rows = [], config = new Map(), audit = [] } = {}) 
                   data: config.has(key) ? { value: config.get(key) } : null,
                   error: null
                 })
+              }),
+              // v1.72.1 (P2-6) — the dual-window service reads both keys in ONE
+              // atomic `.in()` query; answer for every asked key.
+              in: (column, keys) => ({
+                limit: async () => ({
+                  data: keys.filter((key) => config.has(key)).map((key) => ({ key, value: config.get(key) })),
+                  error: null
+                })
               })
             };
           },

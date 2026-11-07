@@ -18,6 +18,9 @@ import {
   getAiBudgetAlertPct
 } from './aiUsageLog.js';
 import { formatNairobiDate } from './dateParser.js';
+// v1.72.1 (P2-6) — system_config access rides the dual-window service.
+import { readConfig, writeConfig } from './systemConfigService.js';
+import { CONFIG_KEY_ADMIN_WIPE_PENDING, dynamicConfigKey } from './systemConfigKeys.js';
 import { formatQuickEditPreview } from './interactiveReply.js';
 import {
   listIncidents,
@@ -1109,7 +1112,9 @@ export async function maybeSendAiBudgetAlert(providedSupabase, { now = new Date(
   if (crossed.length === 0) return { status: 'skipped', reason: 'Within budget.' };
 
   const threshold = crossed[crossed.length - 1];
-  const configKey = `ai_budget_alert_${threshold}_${formatNairobiDate(now)}`;
+  // v1.72.1 (P2-6) — namespaced dynamic key (budget.alert.<pct>_<date>); the
+  // service resolves and dual-reads the legacy ai_budget_alert_* form.
+  const configKey = dynamicConfigKey(threshold, formatNairobiDate(now));
   const existing = await getConfigValue(providedSupabase, configKey);
   if (existing) return { status: 'skipped', reason: `Threshold ${threshold}% already alerted today.` };
 
@@ -1420,21 +1425,22 @@ export async function handleAdminAlertsCommand(supabase) {
   };
 }
 
-const WIPE_PENDING_KEY = 'admin_wipe_pending';
+const WIPE_PENDING_KEY = CONFIG_KEY_ADMIN_WIPE_PENDING;
 const WIPE_TTL_MINUTES = 10;
 const WIPE_MAX_ATTEMPTS = 5;
 
 async function readWipePending(supabase) {
   try {
-    const { data } = await supabase.from('system_config').select('value').eq('key', WIPE_PENDING_KEY).maybeSingle();
-    if (!data?.value) return null;
-    const parsed = JSON.parse(data.value);
+    // v1.72.1 (P2-6) — dual read via the service.
+    const stored = await readConfig(supabase, WIPE_PENDING_KEY);
+    if (!stored) return null;
+    const parsed = JSON.parse(stored);
     return parsed && parsed.code && parsed.targetPhone ? parsed : null;
   } catch { return null; }
 }
 
 async function clearWipePending(supabase) {
-  try { await supabase.from('system_config').upsert([{ key: WIPE_PENDING_KEY, value: null }], { onConflict: 'key' }); } catch { /* best effort */ }
+  try { await writeConfig(supabase, WIPE_PENDING_KEY, null); } catch { /* best effort */ }
 }
 
 /** Step 1 of the OTP-gated profile wipe: email a code to SUPERADMIN_EMAIL. */
@@ -1448,10 +1454,9 @@ export async function handleAdminProfileWipeInitiate(supabase, targetPhone) {
   const code = String(crypto.randomInt(100000, 1000000));
   const expiresAt = new Date(Date.now() + WIPE_TTL_MINUTES * 60 * 1000).toISOString();
   try {
-    await supabase.from('system_config').upsert(
-      [{ key: WIPE_PENDING_KEY, value: JSON.stringify({ targetPhone: e164, code, expiresAt, attempts: 0 }) }],
-      { onConflict: 'key' }
-    );
+    // v1.72.1 (P2-6) — dual write via the service (a refused write is reported).
+    const started = await writeConfig(supabase, WIPE_PENDING_KEY, JSON.stringify({ targetPhone: e164, code, expiresAt, attempts: 0 }));
+    if (!started.ok) return { reply: `⚠️ Could not start the wipe: ${started.error}` };
   } catch (err) { return { reply: `⚠️ Could not start the wipe: ${err.message}` }; }
   try {
     await sendEmailOtp(email, code);
@@ -1485,7 +1490,7 @@ export async function handleAdminProfileWipeConfirm(supabase, code) {
       return { wiped: false, reply: '🛑 Too many wrong codes — the wipe request was cancelled. Start again if needed.' };
     }
     try {
-      await supabase.from('system_config').upsert([{ key: WIPE_PENDING_KEY, value: JSON.stringify({ ...pending, attempts }) }], { onConflict: 'key' });
+      await writeConfig(supabase, WIPE_PENDING_KEY, JSON.stringify({ ...pending, attempts }));
     } catch { /* best effort */ }
     return { wiped: false, reply: `⚠️ That code is not correct (${attempts}/${WIPE_MAX_ATTEMPTS}). Reply \`admin wipe confirm <code>\`.` };
   }
