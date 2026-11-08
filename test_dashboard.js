@@ -825,6 +825,8 @@ async function run() {
   check(noImage.ok === false && noImage.reason === 'no_image', 'a receipt with no stored image never yields a URL');
   const noStorage = await signReceiptUrl({}, { media_id: 'm1' });
   check(noStorage.ok === false && noStorage.reason === 'no_storage', 'a client without storage degrades honestly');
+  const signError = await signReceiptUrl({ storage: { from: () => ({ createSignedUrl: async () => ({ data: null, error: { message: 'Bucket not found' } }) }) } }, { media_id: 'm1' });
+  check(signError.ok === false && signError.reason === 'sign_failed', 'a missing bucket / failed sign degrades to an honest 404 (the live state on 2026-11-08)');
 
   console.log('\n--- Test 26: serializeRecordsCsv ---');
   const csvRows = [
