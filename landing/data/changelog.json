@@ -1,6 +1,13 @@
 {
-  "latest": "1.77.0",
+  "latest": "1.78.0",
   "entries": [
+    {
+      "version": "1.78.0",
+      "date": "2026-11-08",
+      "title": "Your numbers, in your country's format",
+      "preview": "Older accounts now show the right currency, dates and timezone - plus faster behind-the-scenes checks.",
+      "summary": "Two quiet improvements this week. First: every account now shows money, dates and times in its own country's format, including the accounts created before those settings existed - if you signed up early, your reports and answers now use your local currency and timezone instead of a generic default. Second, the Saka team can now check system health, AI usage and the fix backlog by simply asking in plain English, so issues get noticed and handled faster. Nothing about your records changed: this release is about the right numbers in the right place, and a team that can see problems sooner."
+    },
     {
       "version": "1.77.0",
       "date": "2026-11-08",

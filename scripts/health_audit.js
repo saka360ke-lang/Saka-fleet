@@ -137,7 +137,10 @@ const STATLESS_SUITES = [
   'test_interactive_reply.js',
   // v1.74.0 — Phase 13 dashboard foundation: flag gate, hashed tokens, TTLs,
   // attempts cap, single-use links, 30-day sessions, cookie contract.
-  'test_dashboard.js'
+  'test_dashboard.js',
+  // v1.78.0 — Phase 17: conversational superadmin agent + legacy profile backfill.
+  'test_admin_agent.js',
+  'test_profile_backfill.js'
 ];
 
 const WORKFLOW_DIR = '.github/workflows';

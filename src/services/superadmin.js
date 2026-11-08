@@ -13,6 +13,7 @@ import { generateText, parseJsonSafely } from './aiClient.js';
 import {
   getAiUsageSummary,
   AI_USAGE_LOG_MAX_ROWS,
+  AI_USAGE_MAX_WINDOW_HOURS,
   computeAiBudgetStatus,
   checkAiDailyBudget,
   getAiBudgetAlertPct
@@ -482,7 +483,13 @@ Command: "${text}"`;
 }
 
 
-export async function handleHealthCheckCommand(supabase) {
+/**
+ * v1.78.0 (Phase 17, section 206) — raw live health telemetry, shared by the
+ * `check health` command and the Admin AI Agent's `get_system_health` tool so
+ * the two can never drift. One injected Sentinel scan + two count reads; the
+ * scan is best-effort (a dead scan degrades to 'Executed', never throws).
+ */
+export async function collectHealthFacts(supabase, { healthCheck = runHealthCheck } = {}) {
   let sentinelResult = null;
   let dbStatus = 'Disconnected';
   let unresolvedCount = 0;
@@ -490,7 +497,7 @@ export async function handleHealthCheckCommand(supabase) {
   let uptimeSec = Math.floor(process.uptime());
 
   try {
-    sentinelResult = await runHealthCheck(supabase);
+    sentinelResult = await healthCheck(supabase);
   } catch (err) {
     console.error('[Superadmin HealthCheck] Sentinel error:', err.message);
   }
@@ -520,6 +527,22 @@ Recent Unresolved Error Logs: ${unresolvedCount}
 AI Diagnosed Errors in Last Run: ${sentinelResult?.diagnosed_count || 0}
 `;
 
+  return {
+    rawInfo,
+    telemetry: {
+      dbStatus,
+      unresolvedCount,
+      memoryMB,
+      uptimeSec,
+      diagnosedCount: sentinelResult?.diagnosed_count || 0
+    }
+  };
+}
+
+export async function handleHealthCheckCommand(supabase) {
+  const { rawInfo, telemetry } = await collectHealthFacts(supabase);
+  const { dbStatus, unresolvedCount, memoryMB, uptimeSec, diagnosedCount } = telemetry;
+
   const synthesisPrompt = `You are the Saka Fleet Superadmin Sentinel Assistant.
 Synthesize the following system health diagnostic telemetry into a short, well-formatted, professional WhatsApp summary for the superadmin. Include emojis and key status items (Container Status, Database Connection, Error Stats).
 
@@ -539,18 +562,12 @@ ${rawInfo}`;
       `• *Container Status*: Operational (Uptime: ${Math.floor(uptimeSec / 60)}m ${uptimeSec % 60}s | Heap: ${memoryMB}MB)\n` +
       `• *Database Connection*: ${dbStatus}\n` +
       `• *Unresolved Error Logs*: ${unresolvedCount}\n` +
-      `• *Sentinel AI Diagnoses*: ${sentinelResult?.diagnosed_count || 0} errors reviewed`;
+      `• *Sentinel AI Diagnoses*: ${diagnosedCount} errors reviewed`;
   }
 
   return {
     summary: summaryText,
-    telemetry: {
-      dbStatus,
-      unresolvedCount,
-      memoryMB,
-      uptimeSec,
-      diagnosedCount: sentinelResult?.diagnosed_count || 0
-    }
+    telemetry
   };
 }
 
@@ -2233,7 +2250,9 @@ export const ADMIN_COMMAND_REGISTRY = Object.freeze([
     { cmd: 'admin report', desc: 'full system snapshot (users, vehicles, health)', ex: ['admin report'] },
     { cmd: 'admin alerts', desc: 'recent alerts + unresolved errors', ex: ['admin alerts'] },
     { cmd: 'admin audit <query>', desc: 'search the admin audit log', ex: ['admin audit wipe'] },
-    { cmd: 'check health', desc: 'live health check', ex: ['check health'] }
+    { cmd: 'check health', desc: 'live health check', ex: ['check health'] },
+    // v1.78.0 (Phase 17) — plain-English admin questions ride the Admin AI Agent.
+    { cmd: 'just ask', desc: 'plain-English admin questions (health, AI usage, proposals)', ex: ['how many tokens did we use today?'] }
   ] },
   { group: 'Fleet', items: [
     { cmd: 'profiles report', desc: 'user / profile statistics', ex: ['profiles report'] },
@@ -2330,7 +2349,200 @@ export function formatAdminHelpReply() {
   return lines.join('\n');
 }
 
-export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
+/**
+ * v1.78.0 (Phase 17, section 206) — Conversational superadmin (Admin AI Agent).
+ * --------------------------------------------------------------------------
+ * A superadmin-phone message that matches no static command is answered from
+ * live ENGINE data with the two-call pattern:
+ *   1. `admin_tool_call` — the model PICKS one tool (JSON only, no prose);
+ *   2. the engine executes the tool through the existing deterministic
+ *      handlers (health facts, AI telemetry digest, proposal backlog);
+ *   3. `admin_synthesis` — the model WORDs the reply from those facts only.
+ * Every number/status is copied from engine output (rule 28), both calls flow
+ * through `aiClient` with a purpose (rule 20), and any AI failure degrades to
+ * the deterministic tool reply or `buildAdminClarifyReply` — never worse than
+ * the static clarify that preceded this feature.
+ */
+export const ADMIN_AGENT_TOOLS = Object.freeze([
+  {
+    name: 'get_system_health',
+    args: [],
+    description: 'Live system health: container uptime/memory, database connection, unresolved error logs and Sentinel diagnoses.',
+    examples: ['is everything okay', 'any errors', 'system status', 'health']
+  },
+  {
+    name: 'get_ai_usage',
+    args: ['hours'],
+    description: 'AI router telemetry: requests, tokens, approximate cost, reply latency and per-purpose usage. hours 1-168 (default 24; "today" = 24, "this week" = 168).',
+    examples: ['how many tokens did we use today', 'what did AI cost', 'reply latency']
+  },
+  {
+    name: 'get_open_proposals',
+    args: [],
+    description: 'The remediation proposal backlog: pending / needs-modification fixes with codes, status and risk.',
+    examples: ['what is pending', 'open fixes', 'proposals', 'backlog']
+  }
+]);
+
+const ADMIN_AGENT_HOURS_DEFAULT = 24;
+const ADMIN_AGENT_MAX_REPLY_CHARS = 1200;
+
+/** Clamp a model-proposed telemetry window to the real 1-168h registry bounds. */
+export function clampAdminAgentHours(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return ADMIN_AGENT_HOURS_DEFAULT;
+  return Math.min(AI_USAGE_MAX_WINDOW_HOURS, Math.max(1, Math.round(num)));
+}
+
+/** Tool-router prompt, generated from the registry so the two can never drift. */
+export function buildAdminToolPrompt(messageText = '') {
+  const toolLines = ADMIN_AGENT_TOOLS.map((tool) => {
+    const args = tool.args.length ? `(${tool.args.join(', ')})` : '()';
+    return `- ${tool.name}${args}: ${tool.description}`;
+  }).join('\n');
+  return [
+    'You are the Saka Fleet superadmin tool router.',
+    'Choose exactly ONE tool whose DATA answers the superadmin question, or "none". Never answer the question yourself.',
+    '',
+    'TOOLS:',
+    toolLines,
+    '- none: anything else (small talk, unclear or out-of-scope requests).',
+    '',
+    'Return ONLY JSON: {"tool":"get_system_health|get_ai_usage|get_open_proposals|none","hours":<integer or null>}',
+    '',
+    `Question: "${String(messageText || '').slice(0, 500)}"`
+  ].join('\n');
+}
+
+/** One classifier call. Never throws; anything unexpected degrades to `none`. */
+export async function classifyAdminToolRequest(messageText, { generate = generateText } = {}) {
+  const allowed = new Set(ADMIN_AGENT_TOOLS.map((tool) => tool.name));
+  try {
+    const raw = await generate({
+      prompt: buildAdminToolPrompt(messageText),
+      jsonMode: true,
+      maxTokens: 256,
+      temperature: 0.2,
+      purpose: 'admin_tool_call'
+    });
+    if (!raw) return { tool: 'none', hours: null };
+    const parsed = parseJsonSafely(String(raw));
+    if (!parsed || typeof parsed !== 'object') return { tool: 'none', hours: null };
+    const tool = String(parsed.tool || '').trim();
+    if (tool === 'none' || !allowed.has(tool)) return { tool: 'none', hours: null };
+    return { tool, hours: tool === 'get_ai_usage' ? clampAdminAgentHours(parsed.hours) : null };
+  } catch {
+    return { tool: 'none', hours: null };
+  }
+}
+
+/** Synthesis prompt: the model may ONLY word the engine facts it is given. */
+export function buildAdminSynthesisPrompt(messageText, tool, facts) {
+  return [
+    'You are Saka, answering your SUPERADMIN on WhatsApp.',
+    'Use ONLY the FACTS below. Copy every number, cost, count and status verbatim - never invent, round, estimate or extrapolate.',
+    'Lead with the direct answer, keep it under 120 words, WhatsApp formatting, at most one emoji per line, plain language.',
+    'If the FACTS say something failed or is unavailable, say so plainly. Never claim an action was taken.',
+    '',
+    `SUPERADMIN QUESTION: "${String(messageText || '').slice(0, 500)}"`,
+    `FACTS (tool: ${tool}):`,
+    String(facts || '').slice(0, 6000)
+  ].join('\n');
+}
+
+/**
+ * Execute one agent tool through the existing deterministic handlers.
+ * Returns `{ ok, tool, facts, fallbackReply, details }`; never throws.
+ */
+export async function executeAdminAgentTool(supabase, tool, { hours = null, healthCheck = runHealthCheck } = {}) {
+  if (tool === 'get_system_health') {
+    const facts = await collectHealthFacts(supabase, { healthCheck });
+    const uptimeMin = Math.floor(facts.telemetry.uptimeSec / 60);
+    const fallbackReply = [
+      '🖥️ *Saka health*',
+      '',
+      `• Container: up ${uptimeMin}m · heap ${facts.telemetry.memoryMB}MB`,
+      `• Database: ${facts.telemetry.dbStatus}`,
+      `• Unresolved errors: ${facts.telemetry.unresolvedCount}`,
+      `• Sentinel diagnoses: ${facts.telemetry.diagnosedCount}`
+    ].join('\n');
+    return { ok: true, tool, facts: facts.rawInfo, fallbackReply, details: facts.telemetry };
+  }
+  if (tool === 'get_ai_usage') {
+    const usage = await handleAiStatsCommand(supabase, clampAdminAgentHours(hours));
+    return {
+      ok: usage?.details?.ok !== false,
+      tool,
+      facts: usage?.reply || '',
+      fallbackReply: usage?.reply || null,
+      details: usage?.details || null
+    };
+  }
+  if (tool === 'get_open_proposals') {
+    const list = await handleAdminRemediationsList(supabase, 'pending');
+    return { ok: true, tool, facts: list?.reply || '', fallbackReply: list?.reply || null };
+  }
+  return { ok: false, tool, facts: null, fallbackReply: null, error: 'unknown tool' };
+}
+
+/**
+ * The Admin AI Agent turn. Returns `{ reply, tool, ok, synthesized }`;
+ * audits ADMIN_AI_TOOL (execution) + ADMIN_AI_AGENT (the turn) and never throws.
+ */
+export async function processAdminMessage(supabase, formattedPhone, messageText, { generate = generateText, healthCheck = runHealthCheck } = {}) {
+  const text = String(messageText || '').slice(0, 500);
+  const decision = await classifyAdminToolRequest(messageText, { generate });
+
+  if (decision.tool === 'none') {
+    const clarify = buildAdminClarifyReply(messageText);
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_AI_AGENT', {
+      text: text.slice(0, 160),
+      tool: 'none',
+      reply_chars: clarify.length,
+      fallback: 'clarify'
+    });
+    return { reply: clarify, tool: 'none', ok: false, synthesized: false };
+  }
+
+  let execution = null;
+  try {
+    execution = await executeAdminAgentTool(supabase, decision.tool, { hours: decision.hours, healthCheck });
+  } catch (err) {
+    execution = { ok: false, tool: decision.tool, facts: null, fallbackReply: null, error: err?.message || 'tool failed' };
+  }
+  await logAdminAudit(supabase, formattedPhone, 'ADMIN_AI_TOOL', {
+    tool: decision.tool,
+    ok: Boolean(execution?.ok),
+    hours: decision.hours || null,
+    error: execution?.ok ? null : String(execution?.error || 'unknown').slice(0, 160)
+  });
+
+  let synthesized = null;
+  if (execution?.ok && execution.facts) {
+    try {
+      const raw = await generate({
+        prompt: buildAdminSynthesisPrompt(messageText, decision.tool, execution.facts),
+        maxTokens: 700,
+        temperature: 0.4,
+        purpose: 'admin_synthesis'
+      });
+      synthesized = String(raw || '').trim().slice(0, ADMIN_AGENT_MAX_REPLY_CHARS) || null;
+    } catch {
+      synthesized = null;
+    }
+  }
+
+  const finalReply = synthesized || execution?.fallbackReply || buildAdminClarifyReply(messageText);
+  await logAdminAudit(supabase, formattedPhone, 'ADMIN_AI_AGENT', {
+    text: text.slice(0, 160),
+    tool: decision.tool,
+    reply_chars: finalReply.length,
+    fallback: synthesized ? null : (execution?.fallbackReply ? 'deterministic_tool_reply' : 'clarify')
+  });
+  return { reply: finalReply, tool: decision.tool, ok: Boolean(execution?.ok), synthesized: Boolean(synthesized) };
+}
+
+export async function handleSuperadminFlow(supabase, senderPhone, messageText, options = {}) {
   if (!isSuperadminPhone(senderPhone)) {
     return { isSuperadmin: false };
   }
@@ -2384,11 +2596,11 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
   // the normal Owner/Driver conversational flow (multi-role coexistence).
   const parsedCommand = await parseSuperadminCommand(messageText);
 
-  // v1.58.10 — an admin-looking message that matches no command gets a helpful
-  // "did you mean…" clarification (deterministic). Non-admin chat still falls
-  // through to normal Saka (multi-role coexistence).
-  const adminIsh = parsedCommand.intent === 'UNKNOWN' && ADMIN_DIRECTIVE_RE.test(String(messageText || ''));
-  if (!ADMIN_INTENTS.has(parsedCommand.intent) && !adminIsh) {
+  // v1.78.0 (Phase 17, section 206) — everything that matches no static command
+  // is a natural-language admin question and now rides the Admin AI Agent
+  // (session-gated below). Static commands still win every matching turn with
+  // ZERO tokens; non-superadmin phones never reach this function (phone gate).
+  if (!ADMIN_INTENTS.has(parsedCommand.intent) && parsedCommand.intent !== 'UNKNOWN') {
     return { isSuperadmin: false };
   }
 
@@ -2438,8 +2650,10 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText) {
 
   // 5. Command Routing
   if (parsedCommand.intent === 'UNKNOWN') {
-    await logAdminAudit(supabase, formattedPhone, 'ADMIN_CLARIFY', { text: String(messageText || '').slice(0, 120) });
-    return { isSuperadmin: true, reply: buildAdminClarifyReply(messageText) };
+    // v1.78.0 (Phase 17) — natural-language admin question → Admin AI Agent.
+    // Audits ADMIN_AI_TOOL + ADMIN_AI_AGENT; degrades to buildAdminClarifyReply.
+    const agentRes = await processAdminMessage(supabase, formattedPhone, messageText, options);
+    return { isSuperadmin: true, reply: agentRes.reply };
   }
   if (parsedCommand.intent === 'ADMIN_HELP') {
     await logAdminAudit(supabase, formattedPhone, 'ADMIN_HELP', {});

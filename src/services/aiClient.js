@@ -52,7 +52,11 @@ export const EMPTY_RETRY_PURPOSES = new Set(['intent_classify', 'question_render
  */
 export const USER_FACING_PURPOSES = new Set([
   'intent_classify', 'extraction', 'question_render', 'prose_render',
-  'small_talk', 'stall_nudge', 'complaint_recovery', 'admin_parse'
+  'small_talk', 'stall_nudge', 'complaint_recovery', 'admin_parse',
+  // v1.78.0 (Phase 17) — conversational superadmin: the tool router and the
+  // synthesis ride the front set exactly like admin_parse (ops conversation,
+  // low volume, deliberately uncapped by the mechanical overrides).
+  'admin_tool_call', 'admin_synthesis'
 ]);
 
 /**
@@ -274,6 +278,11 @@ export const AI_PURPOSES = Object.freeze({
   small_talk: { tier: AI_TIERS.ROUTER, maxTokens: 320, temperature: 0.6 },
   complaint_recovery: { tier: AI_TIERS.CONVERSATIONAL, maxTokens: 600, temperature: 0.4 },
   admin_parse: { tier: AI_TIERS.ROUTER, jsonMode: true, maxTokens: 512, temperature: 0.2 },
+  // v1.78.0 (Phase 17, section 206) — conversational superadmin. The model only
+  // PICKS a tool (JSON) and WORDS the reply; every number comes from engine
+  // functions, never from the model. Both stay Tier 1 (DeepSeek by default).
+  admin_tool_call: { tier: AI_TIERS.ROUTER, jsonMode: true, maxTokens: 256, temperature: 0.2 },
+  admin_synthesis: { tier: AI_TIERS.ROUTER, maxTokens: 700, temperature: 0.4 },
   health_synthesis: { tier: AI_TIERS.REASONING, maxTokens: 900, temperature: 0.5 },
   sentinel_diagnosis: { tier: AI_TIERS.REASONING, maxTokens: 900, temperature: 0.3 },
   prompt_refinement: { tier: AI_TIERS.REASONING, jsonMode: true, maxTokens: 4096, temperature: 0.4 },

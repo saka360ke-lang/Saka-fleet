@@ -80,6 +80,9 @@ leg stays automatic.
 `admin accept fix <CODE> [override]`,
 `admin modify fix <CODE> <guidance>`, `admin decline fix <CODE>`,
 `UPDATE-SUGGEST> <your update description>` (files a `SUG-` proposal, Model A).
+Plain English works too (v1.78.0): "how many tokens did we use today?", "is
+everything okay?", "anything pending?" — the Admin AI Agent answers from live
+engine data (health, AI usage, proposals) with the same admin session.
 
 ## Reports quick reference (v1.18.0)
 Ask Saka: `fleet status report`, `financial report`, `compliance report`,

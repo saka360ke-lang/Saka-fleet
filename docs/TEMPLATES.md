@@ -191,6 +191,38 @@ The env registry registers all 13 knobs under META WHATSAPP, so a typo in a
 knob name is reported (names only, never values).
 
 ------------------------------------------------------------
+3.1 Deploy-live activation runbook (v1.78.0, Phase 17)
+------------------------------------------------------------
+
+Live evidence (2026-11-08): `saka-fleet` on Cloud Run (europe-west1) had NO
+`META_TPL_*` variable set, so the boot LIVE alert degraded to free-form text
+and Meta silently dropped it whenever the superadmin had not messaged Saka in
+the last 24 hours (the section 87.3 failure). The "building" alert from
+scripts/notify_git_push.js stays free-form BY DESIGN (D1, v1.78.0) - the boot
+LIVE alert is the guaranteed channel, and it needs the template.
+
+Activation steps (operator, once):
+
+1. Meta Business Manager -> WhatsApp Manager -> Account tools -> Message
+   templates -> Create template.
+     name:      saka_deploy_live
+     category:  Utility
+     language:  English (en)
+     variables: none (static body - leave the body exactly as written)
+     body:      Saka update is LIVE. The new revision is now answering
+                WhatsApp conversations.
+2. Submit for review and wait for APPROVED. Nothing else changes while it is
+   pending: the knob stays unset and the alert keeps its free-form fallback.
+3. Set the knob on Cloud Run (creates one new revision; the next boot
+   announces itself through the template):
+     gcloud run services update saka-fleet --region=europe-west1 --update-env-vars="META_TPL_DEPLOY_LIVE=saka_deploy_live"
+4. Verify parity: npm run env:audit (META WHATSAPP section) and npm run health
+   - both green. The next deployed revision emits the LIVE alert through the
+   approved template even outside the 24-hour window.
+5. Rollback: unset the knob. No schema, no migration, no flag.
+
+
+------------------------------------------------------------
 4. Fallback contract (never worse than today)
 ------------------------------------------------------------
 

@@ -165,6 +165,16 @@ async function runTests() {
     check(AI_PURPOSES.complaint_recovery.tier === AI_TIERS.CONVERSATIONAL, 'the registry keeps complaint_recovery at Tier 2 by default');
   });
 
+  console.log('\n--- Test 11: conversational superadmin purposes (v1.78.0, section 206) ---');
+  check(AI_PURPOSES.admin_tool_call.tier === AI_TIERS.ROUTER && AI_PURPOSES.admin_tool_call.jsonMode === true, 'admin_tool_call is a Tier-1 JSON router');
+  check(AI_PURPOSES.admin_synthesis.tier === AI_TIERS.ROUTER, 'admin_synthesis is a Tier-1 synthesis');
+  check(USER_FACING_PURPOSES.has('admin_tool_call') && USER_FACING_PURPOSES.has('admin_synthesis'), 'both admin agent purposes ride the front set (mirroring admin_parse)');
+  withEnv(PAID_ENV, () => {
+    check(resolveTier('admin_tool_call', { maxTier: 3 }).tier === AI_TIERS.CONVERSATIONAL, 'the paid plan floor raises the tool router to the plan tier (deliberately uncapped)');
+    check(resolveTier('admin_synthesis', { maxTier: 3 }).tier === AI_TIERS.CONVERSATIONAL, 'the paid plan floor raises the synthesis too');
+  });
+  check(resolveTier('admin_tool_call').tier === AI_TIERS.ROUTER, 'without a plan cap the tool router stays Tier 1');
+
   console.log(`\n=== ALL ${passed} PHASE 6 ASSERTIONS PASSED ===`);
 }
 
