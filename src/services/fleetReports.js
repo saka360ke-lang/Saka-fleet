@@ -23,7 +23,7 @@ import {
   resolveUserTimezone
 } from './globalization.js';
 import { detectExpiryCategory, reminderDueDate, daysUntilDue } from './maintenanceReminders.js';
-import { buildLedgerGroups } from './reportLedger.js';
+import { buildLedgerGroups, expenseToLedgerRow, earningToLedgerRow } from './reportLedger.js';
 import { EXPENSE_CATEGORY_KEYS, expenseCategoryLabel, expenseCategoryOf } from './expenseCatalog.js';
 
 export const REPORT_TYPES = Object.freeze({
@@ -909,6 +909,176 @@ export async function upcomingExpiryItems(supabase, ownerId, limit = 6) {
 }
 
 /* ------------------------------------------------------------------ */
+/* 6. Dashboard vehicle surface (v1.75.0, Phase 14A)                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Amounts logged inside the current calendar month for ONE vehicle. Uses the
+ * same UTC month window as the four reports (`monthStartMs`) and the same
+ * timestamp precedence as the merged ledger (`reportLedger.js`), so the
+ * dashboard can never disagree with the PDF.
+ */
+function monthTotalsFor(expenses, earnings, vehicleId, now) {
+  const start = monthStartMs(now);
+  const sum = (rows, amountOf, atOf) => {
+    let total = 0;
+    for (const row of rows || []) {
+      if (row.vehicle_id !== vehicleId) continue;
+      const ts = new Date(atOf(row) || 0).getTime();
+      if (!Number.isFinite(ts) || ts < start) continue;
+      total += toNumber(amountOf(row));
+    }
+    return Math.round(total * 100) / 100;
+  };
+  return {
+    spend: sum(expenses, (row) => row.amount, (row) => row.created_at || row.logged_at),
+    earnings: sum(earnings, (row) => row.revenue_amount ?? row.amount, (row) => row.logged_at || row.created_at)
+  };
+}
+
+function driverNameFor(vehicle, profiles) {
+  const id = vehicle?.assigned_driver_id;
+  if (!id) return null;
+  const driver = (profiles || []).find((p) => p.id === id);
+  if (!driver) return null;
+  return driver.full_name || driver.phone_number || null;
+}
+
+/** Shared identity block for the index rows and the detail page. */
+function vehicleSummary(vehicle, dataset, ctx, now) {
+  const display = vehicleDisplay(vehicle, ctx);
+  const money = monthTotalsFor(dataset.expenses, dataset.earnings, vehicle.id, now);
+  return {
+    id: vehicle.id,
+    plate: vehicle.plate_number || 'Fleet vehicle',
+    makeModel: vehicle.make_model || null,
+    assetKind: vehicle.asset_kind || null,
+    status: isActiveVehicle(vehicle) ? 'active' : String(vehicle.status || 'inactive').toLowerCase(),
+    active: isActiveVehicle(vehicle),
+    odometer: display.odometer,
+    distanceUnit: display.distanceUnit,
+    driverName: driverNameFor(vehicle, dataset.profiles),
+    monthSpend: money.spend,
+    monthEarnings: money.earnings
+  };
+}
+
+/**
+ * The dashboard's vehicle list (Phase 14A). Owner-scoped through loadFleetData.
+ * Each row carries what an owner asks first: plate + model, status, odometer,
+ * driver, this month's money and the soonest document due. Never throws.
+ */
+export async function buildVehicleDirectory({ supabase, ownerId = null, countryInfo = null, profile = null, now = new Date() } = {}) {
+  if (!supabase) return { ok: false };
+  try {
+    const ctx = buildGlobalContext(countryInfo, profile);
+    const dataset = await loadFleetData({ supabase, ownerId });
+    const expiryItems = collectExpiryItems(dataset, now, ctx);
+    const vehicles = (dataset.vehicles || []).map((vehicle) => {
+      const summary = vehicleSummary(vehicle, dataset, ctx, now);
+      const scoped = expiryItems.filter((item) => item.vehicleId === vehicle.id);
+      const upcoming = scoped.filter((item) => item.daysLeft !== null && item.daysLeft >= 0);
+      const overdue = scoped.filter((item) => item.daysLeft !== null && item.daysLeft < 0);
+      const soonest = upcoming[0] || null;
+      return {
+        ...summary,
+        soonest: soonest
+          ? {
+              category: soonest.category,
+              label: CATEGORY_LABELS[soonest.category] || soonest.reminderType || soonest.category,
+              dueDate: soonest.dueDate,
+              daysLeft: soonest.daysLeft,
+              status: soonest.status
+            }
+          : null,
+        dueCount: upcoming.length,
+        overdueCount: overdue.length
+      };
+    }).sort((a, b) => (a.active === b.active ? String(a.plate).localeCompare(String(b.plate)) : a.active ? -1 : 1));
+    return {
+      ok: true,
+      generatedAt: now.toISOString(),
+      currency: ctx.currency,
+      locale: ctx.locale,
+      timeZone: ctx.timeZone,
+      distanceUnit: ctx.labels.distance,
+      vehicles
+    };
+  } catch (err) {
+    console.warn('[fleetReports] buildVehicleDirectory failed:', err.message);
+    return { ok: false };
+  }
+}
+
+/**
+ * One vehicle's page model (Phase 14A): identity + this month's money + every
+ * document tracked for it + its most recent merged ledger rows.
+ *
+ * Ownership is STRUCTURAL (D2): the vehicle is looked up inside the
+ * owner-scoped dataset, so another owner's vehicle id simply is not there and
+ * answers `not_found` — the same guarantee the `my_ticket` lane uses. VIN is
+ * deliberately never included (rule 8: immutable asset identifier).
+ */
+export async function buildVehicleDetail({
+  supabase,
+  ownerId = null,
+  vehicleId = null,
+  countryInfo = null,
+  profile = null,
+  now = new Date(),
+  recordLimit = 8
+} = {}) {
+  if (!supabase) return { ok: false, reason: 'db_error' };
+  if (!ownerId || !vehicleId) return { ok: false, reason: 'not_found' };
+  try {
+    const ctx = buildGlobalContext(countryInfo, profile);
+    const dataset = await loadFleetData({ supabase, ownerId });
+    const vehicle = (dataset.vehicles || []).find((row) => String(row.id) === String(vehicleId));
+    if (!vehicle) return { ok: false, reason: 'not_found' };
+
+    const reminders = (dataset.reminders || []).filter((row) => row.vehicle_id === vehicle.id);
+    const documents = collectExpiryItems({ vehicles: [vehicle], reminders }, now, ctx).map((item) => ({
+      category: item.category,
+      label: CATEGORY_LABELS[item.category] || item.reminderType || item.category,
+      item: item.reminderType || CATEGORY_LABELS[item.category] || item.category,
+      dueDate: item.dueDate,
+      daysLeft: item.daysLeft,
+      status: item.status
+    }));
+
+    const limit = Math.max(1, Math.min(50, Number(recordLimit) || 8));
+    const rows = [
+      ...(dataset.expenses || [])
+        .filter((row) => row.vehicle_id === vehicle.id)
+        .map((row) => expenseToLedgerRow(row, { ctx, vehiclePlate: vehicle.plate_number || null })),
+      ...(dataset.earnings || [])
+        .filter((row) => row.vehicle_id === vehicle.id)
+        .map((row) => earningToLedgerRow(row, { ctx, vehiclePlate: vehicle.plate_number || null }))
+    ];
+    const records = rows
+      .filter((row) => row.at)
+      .sort((a, b) => new Date(b.at) - new Date(a.at))
+      .slice(0, limit)
+      .map((row) => ({ at: row.at, dateLabel: row.date, kind: row.kind, description: row.description, amount: row.amount }));
+
+    return {
+      ok: true,
+      generatedAt: now.toISOString(),
+      currency: ctx.currency,
+      locale: ctx.locale,
+      timeZone: ctx.timeZone,
+      distanceUnit: ctx.labels.distance,
+      vehicle: vehicleSummary(vehicle, dataset, ctx, now),
+      documents,
+      records
+    };
+  } catch (err) {
+    console.warn('[fleetReports] buildVehicleDetail failed:', err.message);
+    return { ok: false, reason: 'db_error' };
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* Dispatcher                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -943,6 +1113,8 @@ export default {
   buildComplianceReport,
   buildMaintenanceReport,
   buildFinancialReport,
-  upcomingExpiryItems
+  upcomingExpiryItems,
+  buildVehicleDirectory,
+  buildVehicleDetail
 };
 

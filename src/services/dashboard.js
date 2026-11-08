@@ -1,8 +1,9 @@
 /**
- * Saka Fleet — Dashboard service (v1.74.0, Phase 13)
- * -------------------------------------------------
+ * Saka Fleet — Dashboard service (v1.74.0, Phase 13; vehicle pages in v1.75.0)
+ * --------------------------------------------------------------------------
  * The web dashboard is the PRIMARY data surface; the PDF stays an export.
- * Phase 13 ships the auth foundation + a single overview page:
+ * Phase 13 ships the auth foundation + the overview page; Phase 14A adds the
+ * vehicle list and one page per vehicle:
  *
  *   1. WhatsApp "dashboard"  -> requestDashboardAccess() emails ONE message
  *      carrying a magic link (15-min TTL) AND a 6-digit code (10-min TTL).
@@ -11,6 +12,8 @@
  *   3. POST /d/verify        -> verifyDashboardOtp() issues a raw session token
  *      that lives ONLY in an HttpOnly cookie; the database stores its sha256.
  *   4. GET /d                -> getSessionByToken() renders the overview card.
+ *   5. GET /d/vehicles      -> buildVehiclesIndex() (Phase 14A fleet list).
+ *   6. GET /d/vehicles/:id  -> buildVehiclePage() (owner-scoped vehicle page).
  *
  * Security contract (Phase 13, A3):
  *   - The magic-link token, the OTP and the session token are all stored as
@@ -28,8 +31,8 @@ import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
 import { shortLinkBase } from './linkShortener.js';
 import { sendDashboardMagicLinkEmail } from './mailer.js';
 import { logWriteFailure } from './systemErrors.js';
-import { buildFleetReport, upcomingExpiryItems } from './fleetReports.js';
-import { buildGlobalContext, formatMoney, formatDate } from './globalization.js';
+import { buildFleetReport, upcomingExpiryItems, buildVehicleDirectory, buildVehicleDetail } from './fleetReports.js';
+import { buildGlobalContext, formatMoney, formatDate, formatNumber } from './globalization.js';
 
 export const DASHBOARD_SESSIONS_TABLE = 'dashboard_sessions';
 export const DASHBOARD_LINK_TTL_MS = 15 * 60 * 1000; // 15 minutes
@@ -528,6 +531,57 @@ export async function buildOverviewCard({
 }
 
 /* ------------------------------------------------------------------ */
+/* 6. Vehicle pages (Phase 14A) — the index and one page per vehicle    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Page model for `/d/vehicles`. Thin by design: the fleet-report service owns
+ * the data and the shaping; this wrapper only makes the dependency injectable
+ * for suites and guarantees a `{ ok:false }` answer instead of a throw.
+ */
+export async function buildVehiclesIndex({
+  supabase,
+  ownerId,
+  profile = null,
+  countryInfo = null,
+  now = new Date(),
+  loadDirectory = buildVehicleDirectory
+} = {}) {
+  if (!supabase || !ownerId) return { ok: false };
+  try {
+    const result = await loadDirectory({ supabase, ownerId, countryInfo, profile, now });
+    return result?.ok ? result : { ok: false };
+  } catch (err) {
+    logWriteFailure(supabase, 'dashboard.buildVehiclesIndex', err);
+    return { ok: false };
+  }
+}
+
+/**
+ * Page model for `/d/vehicles/:id`. `not_found` keeps its meaning all the way
+ * to the route (404 page), every other failure is a `db_error` (503).
+ */
+export async function buildVehiclePage({
+  supabase,
+  ownerId,
+  vehicleId,
+  profile = null,
+  countryInfo = null,
+  now = new Date(),
+  loadDetail = buildVehicleDetail
+} = {}) {
+  if (!supabase || !ownerId || !vehicleId) return { ok: false, reason: 'not_found' };
+  try {
+    const result = await loadDetail({ supabase, ownerId, vehicleId, countryInfo, profile, now });
+    if (result?.ok) return result;
+    return { ok: false, reason: result?.reason === 'not_found' ? 'not_found' : 'db_error' };
+  } catch (err) {
+    logWriteFailure(supabase, 'dashboard.buildVehiclePage', err);
+    return { ok: false, reason: 'db_error' };
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* HTML shell (shared by every dashboard page, Phase 14 reuses it)     */
 /* ------------------------------------------------------------------ */
 
@@ -541,6 +595,8 @@ header.bar a { color:var(--muted); text-decoration:none; font-size:14px; }
 main { max-width:960px; margin:0 auto; padding:20px 16px 48px; }
 h1 { font-size:22px; margin:8px 0 4px; }
 p.muted { color:var(--muted); }
+main a { color:var(--accent); text-decoration:none; }
+main a:hover { text-decoration:underline; }
 .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; margin:14px 0; }
 h2 { font-size:16px; margin:22px 0 8px; }
 .kpis { display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:12px; }
@@ -548,6 +604,7 @@ h2 { font-size:16px; margin:22px 0 8px; }
 .kpi .value { font-size:20px; font-weight:700; margin-top:2px; word-break:break-word; }
 .chip { display:inline-block; padding:1px 8px; border-radius:999px; font-size:12px; border:1px solid var(--line); color:var(--muted); }
 .chip.due { color:var(--accent); border-color:var(--accent); }
+.chip.ok { color:#3FB950; border-color:#2E6B39; }
 input[type=text] { width:100%; padding:14px; font-size:22px; letter-spacing:8px; text-align:center; background:#0F0F11; color:var(--ink); border:1px solid var(--line); border-radius:10px; }
 button { width:100%; margin-top:12px; padding:14px; font-size:16px; font-weight:600; color:#0A0A0C; background:var(--accent); border:0; border-radius:10px; cursor:pointer; }
 .error { color:var(--bad); font-size:14px; margin-top:10px; }
@@ -629,6 +686,28 @@ function daysLabel(daysLeft) {
   return `in ${daysLeft} d`;
 }
 
+/** The three destinations every signed-in page offers (Phase 14A). */
+function dashboardNav() {
+  return '<a href="/d">Overview</a> · <a href="/d/vehicles">Vehicles</a> · <a href="/d/logout">Log out</a>';
+}
+
+/** Active / paused / inactive — a chip, never a raw database enum. */
+function vehicleStatusChip(vehicle) {
+  if (vehicle?.active) return '<span class="chip ok">Active</span>';
+  const raw = String(vehicle?.status || '').toLowerCase();
+  const label = raw === 'paused' ? 'Paused' : raw === 'deleted' ? 'Deleted' : 'Inactive';
+  return `<span class="chip">${escapeHtml(label)}</span>`;
+}
+
+/** "in 3 d" / "today" / "expired 2 d ago" — the document chip. */
+function dueChip(doc) {
+  const days = doc?.daysLeft;
+  if (days === null || days === undefined || !Number.isFinite(Number(days))) return '';
+  const numeric = Number(days);
+  const text = numeric < 0 ? `expired ${Math.abs(numeric)} d ago` : daysLabel(numeric);
+  return `<span class="chip${numeric <= 7 ? ' due' : ''}">${escapeHtml(text)}</span>`;
+}
+
 /** The one Phase 13 page: KPIs, six upcoming expiries, five recent rows. */
 export function renderOverviewPage({ data, emailMasked }) {
   if (!data?.ok) {
@@ -661,14 +740,109 @@ export function renderOverviewPage({ data, emailMasked }) {
 <h1>Your fleet at a glance</h1>
 <p class="muted">Signed in as ${escapeHtml(emailMasked)} • updated ${escapeHtml(when)}</p>
 ${kpis}
+<p class="muted"><a href="/d/vehicles">See your vehicles →</a></p>
 <h2>Coming up</h2>
 <div class="card">${upcoming}</div>
 <h2>Recent activity</h2>
 <div class="card">${recent}</div>
 <p class="muted" style="font-size:13px;">Your PDF reports are still one message away in WhatsApp.</p>`;
   return renderPageShell('Your dashboard', body, {
-    headerRight: '<a href="/d/logout">Log out</a>'
+    headerRight: dashboardNav()
   });
+}
+
+/**
+ * `/d/vehicles` (Phase 14A) — one row per vehicle: plate + model, status,
+ * odometer, driver, this month's spend and the soonest document due.
+ */
+export function renderVehiclesPage({ data, emailMasked }) {
+  if (!data?.ok) {
+    return renderErrorPage(503, 'Your vehicles could not be loaded just now. Please try again in a moment.').html;
+  }
+  const money = (value) => formatMoney(value, data.currency, data.locale);
+  const when = formatDate(data.generatedAt, data.locale, { timeZone: data.timeZone });
+  const vehicles = Array.isArray(data.vehicles) ? data.vehicles : [];
+  const rows = vehicles.length
+    ? `<ul class="plain">${vehicles.map((vehicle) => {
+        const facts = [
+          `${formatNumber(vehicle.odometer, data.locale)} ${vehicle.distanceUnit}`,
+          vehicle.driverName ? `Driver: ${vehicle.driverName}` : 'No driver assigned',
+          `${money(vehicle.monthSpend)} this month`
+        ];
+        return `
+      <li>
+        <a href="/d/vehicles/${encodeURIComponent(vehicle.id)}"><strong>${escapeHtml(vehicle.plate)}</strong></a>${vehicle.makeModel ? `<span class="muted"> · ${escapeHtml(vehicle.makeModel)}</span>` : ''}
+        <div class="muted" style="font-size:13px;margin-top:4px;">
+          ${vehicleStatusChip(vehicle)}
+          ${escapeHtml(facts.join(' • '))}
+          ${vehicle.overdueCount ? `<span class="chip due">${escapeHtml(`${vehicle.overdueCount} overdue`)}</span>` : ''}
+          ${vehicle.soonest ? dueChip(vehicle.soonest) : ''}
+        </div>
+      </li>`;
+      }).join('')}</ul>`
+    : '<p class="muted">No vehicles yet — register your first one in WhatsApp and it appears here.</p>';
+
+  const body = `
+<h1>Your vehicles</h1>
+<p class="muted">${vehicles.length} ${vehicles.length === 1 ? 'vehicle' : 'vehicles'} • signed in as ${escapeHtml(emailMasked)} • updated ${escapeHtml(when)}</p>
+<div class="card">${rows}</div>
+<p class="muted" style="font-size:13px;">Tap a vehicle for its documents and recent records.</p>`;
+  return renderPageShell('Your vehicles', body, { headerRight: dashboardNav() });
+}
+
+/**
+ * `/d/vehicles/:id` (Phase 14A) — identity + this month's money, every document
+ * tracked for the vehicle, then its most recent ledger rows.
+ */
+export function renderVehiclePage({ data, emailMasked }) {
+  if (!data?.ok || !data.vehicle) {
+    return renderErrorPage(503, 'This vehicle could not be loaded just now. Please try again in a moment.').html;
+  }
+  const money = (value) => formatMoney(value, data.currency, data.locale);
+  const when = formatDate(data.generatedAt, data.locale, { timeZone: data.timeZone });
+  const vehicle = data.vehicle;
+  const documents = Array.isArray(data.documents) ? data.documents : [];
+  const records = Array.isArray(data.records) ? data.records : [];
+
+  const identity = `
+  <div class="kpis card">
+    <div class="kpi"><div class="label">Odometer</div><div class="value">${escapeHtml(`${formatNumber(vehicle.odometer, data.locale)} ${vehicle.distanceUnit}`)}</div></div>
+    <div class="kpi"><div class="label">Spend this month</div><div class="value">${escapeHtml(money(vehicle.monthSpend))}</div></div>
+    <div class="kpi"><div class="label">Earnings this month</div><div class="value">${escapeHtml(money(vehicle.monthEarnings))}</div></div>
+  </div>`;
+
+  const documentList = documents.length
+    ? `<ul class="plain">${documents.map((doc) => `
+      <li>${escapeHtml(doc.label)}
+        <span class="chip">${escapeHtml(formatDate(doc.dueDate, data.locale, { timeZone: data.timeZone }))}</span>
+        ${dueChip(doc)}</li>`).join('')}
+    </ul>`
+    : '<p class="muted">No documents on file yet — tell me an expiry in WhatsApp and I will track it.</p>';
+
+  const recordList = records.length
+    ? `<ul class="plain">${records.map((row) => `
+      <li>${escapeHtml(row.description)} <strong>${escapeHtml(money(row.amount))}</strong>
+        <span class="chip">${escapeHtml(formatDate(row.at, data.locale, { timeZone: data.timeZone }))}</span></li>`).join('')}
+    </ul>`
+    : '<p class="muted">No records in this vehicle yet — log fuel, a repair or an earning in WhatsApp.</p>';
+
+  const subtitle = [
+    vehicle.makeModel || null,
+    vehicle.driverName ? `Driver: ${vehicle.driverName}` : 'No driver assigned',
+    `updated ${when}`
+  ].filter(Boolean).map((part) => escapeHtml(part)).join(' • ');
+
+  const body = `
+<p class="muted"><a href="/d/vehicles">← All vehicles</a></p>
+<h1>${escapeHtml(vehicle.plate)} ${vehicleStatusChip(vehicle)}</h1>
+<p class="muted">${subtitle}</p>
+${identity}
+<h2>Documents</h2>
+<div class="card">${documentList}</div>
+<h2>Recent records</h2>
+<div class="card">${recordList}</div>
+<p class="muted" style="font-size:13px;">Your PDF reports are still one message away in WhatsApp.</p>`;
+  return renderPageShell(`${vehicle.plate} — your vehicle`, body, { headerRight: dashboardNav() });
 }
 
 export function renderLogoutPage() {
@@ -726,7 +900,11 @@ export default {
   escapeHtml,
   renderOtpPage,
   renderOverviewPage,
+  renderVehiclesPage,
+  renderVehiclePage,
   renderLogoutPage,
   renderErrorPage,
-  buildOverviewCard
+  buildOverviewCard,
+  buildVehiclesIndex,
+  buildVehiclePage
 };

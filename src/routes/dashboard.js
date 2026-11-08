@@ -1,10 +1,12 @@
 /**
- * Saka Fleet — Dashboard routes (v1.74.0, Phase 13)
- * -------------------------------------------------
- * GET  /d/:token   -> OTP entry page (magic-link landing)
- * POST /d/verify   -> OTP check -> HttpOnly session cookie -> 303 /d
- * GET  /d          -> overview (session cookie required)
- * GET  /d/logout   -> clears the session + cookie
+ * Saka Fleet — Dashboard routes (v1.74.0, Phase 13; + Phase 14A in v1.75.0)
+ * -----------------------------------------------------------------------
+ * GET  /d/:token        -> OTP entry page (magic-link landing)
+ * POST /d/verify        -> OTP check -> HttpOnly session cookie -> 303 /d
+ * GET  /d               -> overview (session cookie required)
+ * GET  /d/vehicles      -> fleet list (v1.75.0, session required)
+ * GET  /d/vehicles/:id  -> one vehicle (v1.75.0, session required, owner-scoped)
+ * GET  /d/logout        -> clears the session + cookie
  *
  * A1: while DASHBOARD_ENABLED is off every route answers exactly like an
  * unregistered Fastify route (generic 404 JSON) — the dashboard's existence is
@@ -27,10 +29,15 @@ import {
   maskEmail,
   renderOtpPage,
   renderOverviewPage,
+  renderVehiclesPage,
+  renderVehiclePage,
   renderLogoutPage,
   renderErrorPage,
-  buildOverviewCard
+  buildOverviewCard,
+  buildVehiclesIndex,
+  buildVehiclePage
 } from '../services/dashboard.js';
+import { detectCountryFromPhone } from '../services/globalization.js';
 import { logSystemError, logWriteFailure } from '../services/systemErrors.js';
 
 /** A1 — identical to Fastify's own "route not found" payload. */
@@ -79,8 +86,41 @@ async function loadDashboardProfile(supabase, ownerId) {
 }
 
 // Page renderers live in src/services/dashboard.js (D1 shared shell) and are
-// imported above: renderOtpPage / renderOverviewPage / renderLogoutPage /
-// renderErrorPage.
+// imported above: renderOtpPage / renderOverviewPage / renderVehiclesPage /
+// renderVehiclePage / renderLogoutPage / renderErrorPage.
+
+/**
+ * Rule 7 — the phone's country code is the primary determinant of a profile's
+ * country, so money, units, locale and dates on every dashboard page resolve
+ * from the WhatsApp number (v1.75.0 fixes 13C, which passed no countryInfo and
+ * silently fell back to USD/en-US for every owner).
+ */
+function countryForProfile(profile) {
+  const phone = profile?.phone_number;
+  return phone ? detectCountryFromPhone(phone) : null;
+}
+
+/**
+ * The one session gate every signed-in page shares. Sends the 401 page (and
+ * clears a dead cookie) itself and returns null, so a caller can simply
+ * `if (!session) return reply;`.
+ */
+async function requireOwnerSession(request, reply, supabase) {
+  const sessionToken = readDashboardCookie(request.headers);
+  if (!sessionToken) {
+    const page = renderErrorPage(401, 'Reply *dashboard* in the WhatsApp chat and I will email you a fresh link.');
+    sendHtml(reply, page.status, page.html);
+    return null;
+  }
+  const session = await getSessionByToken({ supabase, sessionToken });
+  if (!session.ok) {
+    reply.header('set-cookie', dashboardClearCookieHeader({ secure: isSecureRequest(request) }));
+    const page = renderErrorPage(401, 'Your session has ended. Reply *dashboard* in the WhatsApp chat and I will email you a fresh link.');
+    sendHtml(reply, page.status, page.html);
+    return null;
+  }
+  return session;
+}
 
 
 export async function registerDashboardRoutes(fastify, { supabase } = {}) {
@@ -93,22 +133,69 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
     scope.get('/d', async (request, reply) => {
       if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
       try {
-        const sessionToken = readDashboardCookie(request.headers);
-        if (!sessionToken) {
-          const page = renderErrorPage(401, 'Reply *dashboard* in the WhatsApp chat and I will email you a fresh link.');
-          return sendHtml(reply, page.status, page.html);
-        }
-        const session = await getSessionByToken({ supabase, sessionToken });
-        if (!session.ok) {
-          reply.header('set-cookie', dashboardClearCookieHeader({ secure: isSecureRequest(request) }));
-          const page = renderErrorPage(401, 'Your session has ended. Reply *dashboard* in the WhatsApp chat and I will email you a fresh link.');
-          return sendHtml(reply, page.status, page.html);
-        }
+        const session = await requireOwnerSession(request, reply, supabase);
+        if (!session) return reply;
         const profile = await loadDashboardProfile(supabase, session.ownerId);
-        const card = await buildOverviewCard({ supabase, ownerId: session.ownerId, profile });
+        const card = await buildOverviewCard({
+          supabase,
+          ownerId: session.ownerId,
+          profile,
+          countryInfo: countryForProfile(profile)
+        });
         return sendHtml(reply, 200, renderOverviewPage({ data: card, emailMasked: maskEmail(session.email || profile?.email) }));
       } catch (err) {
         await logSystemError(supabase, err, '/d');
+        const page = renderErrorPage(500, 'Please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    /* -------------------------------------------------------------- */
+    /* GET /d/vehicles — the fleet list (Phase 14A)                    */
+    /* -------------------------------------------------------------- */
+    scope.get('/d/vehicles', async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      try {
+        const session = await requireOwnerSession(request, reply, supabase);
+        if (!session) return reply;
+        const profile = await loadDashboardProfile(supabase, session.ownerId);
+        const data = await buildVehiclesIndex({
+          supabase,
+          ownerId: session.ownerId,
+          profile,
+          countryInfo: countryForProfile(profile)
+        });
+        return sendHtml(reply, 200, renderVehiclesPage({ data, emailMasked: maskEmail(session.email || profile?.email) }));
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/vehicles');
+        const page = renderErrorPage(500, 'Please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    /* -------------------------------------------------------------- */
+    /* GET /d/vehicles/:id — one vehicle (Phase 14A)                   */
+    /* -------------------------------------------------------------- */
+    scope.get('/d/vehicles/:id', async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      try {
+        const session = await requireOwnerSession(request, reply, supabase);
+        if (!session) return reply;
+        const profile = await loadDashboardProfile(supabase, session.ownerId);
+        const data = await buildVehiclePage({
+          supabase,
+          ownerId: session.ownerId,
+          vehicleId: String(request.params?.id || ''),
+          profile,
+          countryInfo: countryForProfile(profile)
+        });
+        if (!data.ok && data.reason === 'not_found') {
+          const page = renderErrorPage(404, 'That vehicle is not on your fleet. Reply *dashboard* on WhatsApp if you think it should be.');
+          return sendHtml(reply, page.status, page.html);
+        }
+        return sendHtml(reply, 200, renderVehiclePage({ data, emailMasked: maskEmail(session.email || profile?.email) }));
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/vehicles/:id');
         const page = renderErrorPage(500, 'Please try again in a moment.');
         return sendHtml(reply, page.status, page.html);
       }

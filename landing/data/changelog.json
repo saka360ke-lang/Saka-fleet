@@ -1,6 +1,13 @@
 {
-  "latest": "1.74.2",
+  "latest": "1.75.0",
   "entries": [
+    {
+      "version": "1.75.0",
+      "date": "2026-11-08",
+      "title": "Your vehicles, each with its own page",
+      "preview": "Open your dashboard and see every vehicle, what is coming due, and what each one has cost you this month.",
+      "summary": "The dashboard now opens onto your fleet. One list shows every vehicle with its plate and model, whether it is active or paused, its odometer, its driver, what it has cost you this month and the very next document coming due. Tap any vehicle and you get its own page: the odometer, this month's spend and earnings, every document Saka tracks for it with how long is left, and its eight most recent records - fuel, repairs, earnings - each with its amount and date. Everything is in your own currency and units, and only ever your own fleet. The dashboard is still switched off in production while we finish the walk-through; your PDF reports stay one message away in WhatsApp."
+    },
     {
       "version": "1.74.2",
       "date": "2026-11-08",

@@ -694,7 +694,8 @@ export const SAKA_WEB_DASHBOARD_PLAYBOOK = [
   'WEB DASHBOARD (v1.74.0 — Phase 13, flag-gated):',
   '- "dashboard" (also "my dashboard" / "open my dashboard" / "web dashboard") emails a private link (15 minutes) AND a 6-digit code (10 minutes) to the account email address.',
   '- The 6-digit code arrives by EMAIL ONLY: never repeat it in WhatsApp, never accept a dashboard code typed in chat, and never invent or guess a link.',
-  '- The dashboard needs a verified email plus a trial or paid plan; on Free, point the user to *pricing*. The dashboard currently shows the fleet overview card only — never promise pages that have not shipped.'
+  '- The dashboard needs a verified email plus a trial or paid plan; on Free, point the user to *pricing*.',
+  '- Since v1.75.0 the dashboard also lists the owner\'s vehicles and opens one page per vehicle with its documents and its most recent records. Charts, exports, settings, search and driver/superadmin views have NOT shipped — never promise them.'
 ];
 
 export function buildFlowPlaybook() {

@@ -336,6 +336,11 @@ check(/Narrative pre-fills are engine-determined facts/.test(await import('./src
   check(/code arrives by EMAIL ONLY/.test(SAKA_FLOW_PLAYBOOK), 'the playbook states the dashboard code arrives by email only');
   check(SAKA_FLOW_PLAYBOOK.includes('dashboard: Reply *dashboard*'), 'the dashboard guidance line renders into the prompt (rule 60)');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('WEB DASHBOARD (v1.74.0)'), 'the core prompt carries the dashboard feature line (v1.74.0)');
+  // v1.75.0 (Phase 14A) — prompt and behaviour stay in lock-step: the model must
+  // know the dashboard grew a vehicle list + one page per vehicle.
+  check(SAKA_FLOW_PLAYBOOK.includes('opens one page per vehicle'), 'the playbook states the v1.75.0 vehicle pages');
+  check(SAKA_FLOW_PLAYBOOK.includes('have NOT shipped'), 'the playbook keeps the unshipped dashboard pages off-limits');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('the vehicle list and one vehicle'), 'the core prompt states the shipped dashboard scope (v1.75.0)');
 
   console.log(`\n\u2705 ALL AGENT TRAINING TESTS PASSED (${passed} assertions).`);
   console.log('Stateless suite: no real database rows were created, so no cleanup is required.');

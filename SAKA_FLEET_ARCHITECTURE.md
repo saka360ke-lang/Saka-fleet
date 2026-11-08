@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.74.2  
+**Version:** 1.75.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.75.0** | Phase 14A: the vehicle pages — `/d/vehicles` list (status, odometer, driver, this-month spend, soonest document) and `/d/vehicles/:id` (identity KPIs, every document with due chips, last 8 merged ledger rows), owner-scoped structurally; fixes the 13C country regression so money/units resolve from the phone (KES, not USD) | 200 |
 | **1.74.2** | Phase 13C: dashboard pages — inline HTML shell (D1), OTP entry page, the overview card (KPIs, 6 upcoming expiries via `upcomingExpiryItems`, 5 recent rows), logout + error pages, cookie contract + session gates; flag remains OFF pending live verification | 199C |
 | **1.74.1** | Phase 13B: dashboard WhatsApp lane — exact-phrase `dashboard` read lane (parks the quiz, locked-phase safe), one email carrying the link + code, the code NEVER in WhatsApp, deterministic refusals (unverified → website, free → pricing, cooldown, email failure, crash-safe) | 199B |
 | **1.74.0** | Phase 13A: dashboard foundation — `dashboard_sessions` (sha256-only tokens), magic link (15 min) + email OTP (10 min, constant-time compare) + HttpOnly `saka_dash` session cookie (30 days), flag-gated `/d` routes that answer a generic 404 while `DASHBOARD_ENABLED=off` | 199A |
@@ -5757,6 +5758,36 @@ The `$` anchor is the grammar: `dashboard`, `my dashboard`, `open my dashboard`,
 **Suites run.** Baseline: test_fleet_reports, test_report_builders, test_dashboard (88). After: **test_dashboard (137 — +49)**, test_fleet_reports, test_report_builders, test_read_registry (201), test_agent_training (191), test_no_canned_replies (14), test_kb_docs (36), test_landing_static, test_doc_sync (30), `npm run health` — green. Zero behavioural assertions edited.
 
 **Phase 13 closes here.** Phase 14 owns the full dashboard (vehicles, records, compliance, reports, settings, charts, search, PDF export), Phase 15 the driver + superadmin views, Phase 16 the monthly summary PDF email and the PDF-first lean-out. Like 199A/199B: rule 58 — rules that shaped this phase: 1/39/45, 10/11/33, 13, 21, 31 (warm empty states, one next step), 50 (profile degrade + never-throw builders), 52, 55 (reused the report engine + short-link base), 56, 60 (guidance line already shipped in 13B).
+
+### 200. v1.75.0 (Phase 14A) — the vehicle pages: list + one page per vehicle, owner-scoped, in the owner's currency (2026-11-08)
+
+**Program context.** Phase 13 proved the pipeline with ONE page. Phase 14 owns the full dashboard (vehicles, records, compliance, reports, settings, charts, search, PDF export); 14A ships the surface an owner opens first — the fleet list and a page per vehicle — and nothing else. Still flag-gated: `DASHBOARD_ENABLED` stays **OFF** in `.env`/`.env.example` until the operator walk-through.
+
+**D1 — data lives in `fleetReports.js`, pages live in `dashboard.js`.** Two new exports reuse the report engine end to end: `buildVehicleDirectory({ supabase, ownerId, countryInfo, profile, now })` and `buildVehicleDetail({ supabase, ownerId, vehicleId, countryInfo, profile, now, recordLimit = 8 })`. Both call the same `loadFleetData` + `collectExpiryItems` the four PDF/WhatsApp reports use, and the detail page's records are mapped through `reportLedger.expenseToLedgerRow` / `earningToLedgerRow`, so a dashboard row and a PDF row can never disagree on date, description or amount. Month money uses the same UTC month window (`monthStartMs`) and the same timestamp precedence as the ledger. `dashboard.js` only adds `buildVehiclesIndex` / `buildVehiclePage` (injectable, never-throw wrappers) plus the renderers.
+
+**D2 — ownership is structural, not a filter.** `buildVehicleDetail` loads the OWNER-scoped dataset and looks the id up inside it; another owner's vehicle id is simply absent and answers `{ ok:false, reason:'not_found' }` (the `my_ticket` OWN-DATA pattern). The route turns `not_found` into a warm 404 page ("That vehicle is not on your fleet…"), never a 403 that would confirm existence. Pinned by `another owner's vehicle id answers not_found`.
+
+**D3 — what each page shows (and what it does not).**
+- `/d/vehicles`: one row per vehicle — plate (linked) + make/model, Active/Paused/Inactive chip, odometer in the display unit, driver name (or "No driver assigned"), this-month spend, an `N overdue` chip when anything lapsed and the soonest document's due chip. Sorted active-first, then plate.
+- `/d/vehicles/:id`: plate + status, make/model • driver • updated line, three KPI tiles (odometer, spend this month, earnings this month), every document with its due date and chip (expired first, then soonest), and the latest 8 merged ledger rows with amount + date.
+- Nav on every signed-in page: `Overview · Vehicles · Log out`; the overview gains one line — "See your vehicles →" (rule 31: one next step, no menu wall).
+- **No VIN** (rule 8: the immutable asset identifier is not needed on screen), no charts, no search, no exports, no settings — later phases.
+
+**D4 — the 13C country regression, fixed (rule 51 sibling sweep).** 13C rendered the real overview through `buildOverviewCard({ supabase, ownerId, profile })` with NO `countryInfo`, so `buildGlobalContext(null, profile)` fell back to GLOBAL/USD/en-US for every owner: a Kenyan fleet read "USD" on the live page while every WhatsApp report read KES. The routes now resolve `countryInfo` from the profile's phone number (`detectCountryFromPhone`, rule 7 phone-primary lock) and pass it to all three builders. Sibling audit of the defect class *"a builder called without country context silently defaults to GLOBAL"*: `buildOverviewCard` (fixed here), `buildVehicleDirectory` / `buildVehicleDetail` (born with the parameter, route passes it), the WhatsApp report path (`messages.js` already builds `countryInfo` from the number), the PDF path (same report builders with `countryInfo`), `upcomingExpiryItems` (no money/units), admin digests (deterministic text, no owner currency). One targeted assertion per sibling: the KE route test asserts KES on the list and the overview, the imperial test asserts miles.
+
+**D5 — routes and the session gate.** New `GET /d/vehicles` and `GET /d/vehicles/:id`, both flag-gated first (A1 generic 404 while OFF) and registered BEFORE `/d/:token` so a token can never swallow them. The repeated cookie → session → profile sequence moved into one `requireOwnerSession()` helper (GET `/d` uses it too, same 401 copy and same cookie clearing). Rule 50: a failed profile load degrades to the slim column set; a failed directory/detail renders ONE honest 503 explanation (never a `undefined` leak).
+
+**Skill sync (rule 13 + rule 60).** `SAKA_WEB_DASHBOARD_PLAYBOOK` now states the shipped scope ("also lists the owner's vehicles and opens one page per vehicle with its documents and its most recent records") and names the unshipped pages as off-limits; `DEFAULT_SAKA_CORE_PROMPT`'s WEB DASHBOARD line matches. `test_agent_training` +3 assertions (playbook vehicle pages, "have NOT shipped", core-prompt scope), 191 → 194.
+
+**Frames touched.** `src/services/fleetReports.js` (`monthTotalsFor`, `driverNameFor`, `vehicleSummary`, `buildVehicleDirectory`, `buildVehicleDetail`, `reportLedger` row-mapper import, default export), `src/services/dashboard.js` (imports, `buildVehiclesIndex`, `buildVehiclePage`, `dashboardNav`, `vehicleStatusChip`, `dueChip`, `renderVehiclesPage`, `renderVehiclePage`, overview nav + "See your vehicles" line, `main a` / `.chip.ok` CSS, default export), `src/routes/dashboard.js` (`countryForProfile`, `requireOwnerSession`, GET `/d` rewired, two new routes, imports), `src/services/flowKnowledge.js` (playbook scope), `sakaAi.js` (core-prompt scope), `test_dashboard.js` (+50 assertions, 137 → 187, two new flag-off URLs), `test_agent_training.js` (+3), `package.json` (1.75.0), `landing/data/changelog.json` (+ entry + stamp), `SAKA_FLEET_ARCHITECTURE.md` (§200 + version/history), `CHANGELOG.md`.
+
+**Suites run.** After: **test_dashboard (187 — +50)**, test_fleet_reports (42), test_report_builders (83), test_read_registry (201), test_agent_training (194 — +3), test_no_canned_replies (14 — ratchet still 4), test_kb_docs (36), test_landing_static, test_doc_sync (30), `npm run health` — green. Zero behavioural assertions edited (additions only; the two renderer currency assertions were authored as `/(KES|Ksh)/` because `en-KE` renders "Ksh", not "KES").
+
+**Recurrence autopsy (rule 51).** Defect class *"a page builder invoked without country context silently defaults to the GLOBAL region"* → siblings audited and each pinned (D4). Second class *"a route can shadow another by registration order"* → `/d/vehicles` + `/d/vehicles/:id` registered before `/d/:token`, and the flag-OFF sweep now covers both URLs so a future reorder fails loudly. Deliberately left: `renderVehiclesPage` shows the owner's full email mask on the index (same identity line the overview already used) and the paused-vehicle chip keeps the raw status word lower-cased rather than inventing a label set.
+
+**Rules shaped this work (rule 58).** 1/39/45 (consult-first), 3/4 (targeted reads, batching), 7 (phone-primary country lock — D4), 8 (VIN never rendered), 10/11 (targeted stateless suite, no rows created), 12/33 (version + history + CHANGELOG in one commit), 13 + 60 (playbook/core-prompt/guidance sync + training assertions), 31 (warm empty states, one next step, plain labels), 42 (open proposals checked — none), 50 (profile degrade, never-throw builders, honest 503s), 51/52 (sibling sweep + deep audit and before/after assertions), 54 (live suite runs), 55 (reused the report engine; zero new dependencies), 56 (existing and new accounts see the pages through the same flag), 58 (this report). No rule was edited or added.
+
+
 
 
 

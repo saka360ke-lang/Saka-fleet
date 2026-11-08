@@ -36,11 +36,16 @@ import {
   readDashboardCookie,
   isSecureRequest,
   buildOverviewCard,
+  buildVehiclesIndex,
+  buildVehiclePage,
   renderOverviewPage,
+  renderVehiclesPage,
+  renderVehiclePage,
   renderOtpPage,
   renderErrorPage
 } from './src/services/dashboard.js';
-import { upcomingExpiryItems } from './src/services/fleetReports.js';
+import { upcomingExpiryItems, buildVehicleDirectory, buildVehicleDetail } from './src/services/fleetReports.js';
+import { detectCountryFromPhone } from './src/services/globalization.js';
 import { registerDashboardRoutes } from './src/routes/dashboard.js';
 
 let passed = 0;
@@ -99,6 +104,9 @@ async function run() {
     { method: 'GET', url: '/d' },
     { method: 'GET', url: '/d/sometoken' },
     { method: 'GET', url: '/d/logout' },
+    // v1.75.0 (Phase 14A) — the vehicle pages are flag-gated too.
+    { method: 'GET', url: '/d/vehicles' },
+    { method: 'GET', url: '/d/vehicles/some-vehicle-id' },
     { method: 'POST', url: '/d/verify', payload: 'token=x&otp=123456', headers: { 'content-type': 'application/x-www-form-urlencoded' } }
   ];
   for (const request of offRequests) {
@@ -485,6 +493,152 @@ async function run() {
     'the OTP renderer carries the token, the error and the never-share warning');
   const failedCard = renderOverviewPage({ data: { ok: false }, emailMasked: 'a***a@example.com' });
   check(failedCard.includes('could not be loaded') && !failedCard.includes('undefined'), 'a failed card renders one honest explanation (no undefined leaks)');
+
+  console.log('\n--- Test 18: buildVehicleDirectory (Phase 14A) ---');
+  const nowDir = new Date();
+  const monthStamp = (day, hour = 8) => new Date(Date.UTC(nowDir.getUTCFullYear(), nowDir.getUTCMonth(), day, hour, 0, 0)).toISOString();
+  const lastMonthStamp = new Date(Date.UTC(nowDir.getUTCFullYear(), nowDir.getUTCMonth() - 1, 15, 8, 0, 0)).toISOString();
+  const KE_INFO = detectCountryFromPhone(PROFILE.phone_number);
+  const fleetSeed = () => ({
+    vehicles: [
+      { id: 'v-b', owner_id: PROFILE.id, plate_number: 'KDB 456B', make_model: 'Toyota Hiace', status: 'ACTIVE', current_mileage: 120000, assigned_driver_id: 'd-1', insurance_expiry: dayIso(5), road_license_expiry: dayIso(-2) },
+      { id: 'v-a', owner_id: PROFILE.id, plate_number: 'KDA 123A', make_model: 'Nissan Note', status: 'ACTIVE', current_mileage: 90000, permit_expiry: dayIso(20) },
+      { id: 'v-c', owner_id: PROFILE.id, plate_number: 'KDC 789C', make_model: 'Isuzu NQR', status: 'PAUSED', current_mileage: 300000 }
+    ],
+    profiles: [{ id: 'd-1', full_name: 'Brian Otieno', phone_number: '+254799999999' }],
+    reminders: [],
+    expense_logs: [
+      { id: 'e1', vehicle_id: 'v-b', amount: 4000, expense_type: 'Fuel', created_at: monthStamp(2) },
+      { id: 'e2', vehicle_id: 'v-b', amount: 1000, expense_type: 'Fuel', created_at: lastMonthStamp },
+      { id: 'e3', vehicle_id: 'v-a', amount: 2500, expense_type: 'Repair', created_at: monthStamp(3) }
+    ],
+    private_earnings: [
+      { id: 'n1', vehicle_id: 'v-b', revenue_amount: 9000, earning_type: 'Trips', logged_at: monthStamp(4, 9) }
+    ],
+    passbook_transfers: [],
+    expiry_notification_log: [],
+    vehicle_compliances: [],
+    driver_compliances: []
+  });
+  const fleetMock = createMockSupabase(fleetSeed());
+  const directory = await buildVehicleDirectory({ supabase: fleetMock.client, ownerId: PROFILE.id, countryInfo: KE_INFO, now: nowDir });
+  check(directory.ok === true && directory.vehicles.length === 3, 'the directory lists every vehicle of the owner');
+  check(directory.currency === 'KES' && directory.timeZone === 'Africa/Nairobi' && directory.distanceUnit === 'km', 'money, units and dates resolve from the phone country (rule 7)');
+  check(directory.vehicles.map((v) => v.plate).join(',') === 'KDA 123A,KDB 456B,KDC 789C', 'active vehicles lead (plate order), a paused one sorts last');
+  const rowB = directory.vehicles.find((v) => v.id === 'v-b');
+  check(rowB.monthSpend === 4000 && rowB.monthEarnings === 9000, 'this month money excludes last month (4000 spend, 9000 earnings)');
+  check(rowB.driverName === 'Brian Otieno', 'the assigned driver resolves by name');
+  check(rowB.overdueCount === 1 && rowB.dueCount === 1 && rowB.soonest.category === 'insurance', 'expired and upcoming documents are counted separately, soonest leads');
+  check(rowB.odometer === 120000 && rowB.distanceUnit === 'km', 'the odometer rides in the display unit');
+  const rowC = directory.vehicles.find((v) => v.id === 'v-c');
+  check(rowC.active === false && rowC.status === 'paused' && rowC.soonest === null, 'a paused vehicle is honest: no documents claimed');
+  const imperial = await buildVehicleDirectory({
+    supabase: createMockSupabase(fleetSeed()).client,
+    ownerId: PROFILE.id,
+    countryInfo: KE_INFO,
+    profile: { ...PROFILE, unit_system: 'imperial' },
+    now: nowDir
+  });
+  const imperialB = imperial.vehicles.find((v) => v.id === 'v-b');
+  check(imperial.distanceUnit === 'mi' && imperialB.odometer === 74565, 'an imperial profile reads miles (74565 mi), never kilometres');
+  const otherOwner = await buildVehicleDirectory({ supabase: fleetMock.client, ownerId: 'someone-else', countryInfo: KE_INFO });
+  check(otherOwner.ok === true && otherOwner.vehicles.length === 0, "another owner's directory is empty (owner-scoped)");
+  check((await buildVehicleDirectory({ supabase: null, ownerId: PROFILE.id })).ok === false, 'no database answers ok:false (never throws)');
+
+  console.log('\n--- Test 19: buildVehicleDetail (ownership + scoping) ---');
+  const detailMock = createMockSupabase(fleetSeed());
+  const detail = await buildVehicleDetail({ supabase: detailMock.client, ownerId: PROFILE.id, vehicleId: 'v-b', countryInfo: KE_INFO, now: nowDir });
+  check(detail.ok === true && detail.vehicle.plate === 'KDB 456B', 'the owner opens their own vehicle');
+  check(detail.documents.length === 2 && detail.documents[0].category === 'licensing' && detail.documents[0].daysLeft < 0 && detail.documents[1].category === 'insurance',
+    'documents are scoped to this vehicle and sorted soonest-first (expired leads)');
+  check(detail.documents.every((doc) => Boolean(doc.label)), 'every document carries a plain-language label');
+  check(detail.records.length === 3 && detail.records[0].kind === 'earning' && detail.records[0].amount === 9000, 'records merge expenses + earnings, newest first');
+  check(detail.records.every((row) => Boolean(row.description) && Number.isFinite(row.amount)), 'every record has a description and an amount');
+  check(detail.currency === 'KES', 'the vehicle page money rides the owner currency');
+  check(!('vin' in detail.vehicle), 'VIN is never rendered on the dashboard (rule 8)');
+  const unknownVehicle = await buildVehicleDetail({ supabase: detailMock.client, ownerId: PROFILE.id, vehicleId: 'nope', countryInfo: KE_INFO });
+  check(unknownVehicle.ok === false && unknownVehicle.reason === 'not_found', 'an unknown vehicle id answers not_found');
+  const foreignVehicle = await buildVehicleDetail({ supabase: detailMock.client, ownerId: 'someone-else', vehicleId: 'v-b', countryInfo: KE_INFO });
+  check(foreignVehicle.ok === false && foreignVehicle.reason === 'not_found', "another owner's vehicle id answers not_found (structural ownership)");
+  check((await buildVehicleDetail({ supabase: detailMock.client, ownerId: null, vehicleId: 'v-b' })).reason === 'not_found', 'a missing owner answers not_found');
+  const cappedDetail = await buildVehicleDetail({ supabase: createMockSupabase(fleetSeed()).client, ownerId: PROFILE.id, vehicleId: 'v-b', countryInfo: KE_INFO, now: nowDir, recordLimit: 1 });
+  check(cappedDetail.records.length === 1, 'recordLimit caps the recent-records list');
+  const quietDetail = await buildVehicleDetail({
+    supabase: createMockSupabase({
+      vehicles: [{ id: 'v-z', owner_id: PROFILE.id, plate_number: 'KDZ 000Z', make_model: 'Suzuki Alto', status: 'ACTIVE' }],
+      reminders: [], expense_logs: [], private_earnings: [], passbook_transfers: [], profiles: [], vehicle_compliances: [], driver_compliances: [], expiry_notification_log: []
+    }).client,
+    ownerId: PROFILE.id,
+    vehicleId: 'v-z',
+    countryInfo: KE_INFO,
+    now: nowDir
+  });
+  check(quietDetail.ok === true && quietDetail.documents.length === 0 && quietDetail.records.length === 0, 'a quiet vehicle renders honest empty lists');
+
+  console.log('\n--- Test 20: the vehicle page renderers ---');
+  const indexHtml = renderVehiclesPage({ data: directory, emailMasked: 'a***a@example.com' });
+  check(indexHtml.includes('Your vehicles') && indexHtml.includes('KDB 456B') && indexHtml.includes('Toyota Hiace'), 'the list renders plate + model for every vehicle');
+  check(indexHtml.includes('href="/d/vehicles/v-b"'), 'each row links to that vehicle page');
+  check(indexHtml.includes('Driver: Brian Otieno') && indexHtml.includes('1 overdue'), 'driver and overdue count render');
+  check(indexHtml.includes('href="/d"') && indexHtml.includes('href="/d/vehicles"') && indexHtml.includes('href="/d/logout"'), 'the shared nav offers overview, vehicles and logout');
+  const emptyIndex = renderVehiclesPage({ data: { ...directory, vehicles: [] }, emailMasked: 'a***a@example.com' });
+  check(emptyIndex.includes('No vehicles yet') && !emptyIndex.includes('undefined'), 'an empty fleet renders one warm next step (no undefined)');
+  const failedIndex = renderVehiclesPage({ data: { ok: false }, emailMasked: 'a***a@example.com' });
+  check(failedIndex.includes('could not be loaded') && !failedIndex.includes('undefined'), 'a failed directory renders one honest explanation');
+  const detailHtml = renderVehiclePage({ data: detail, emailMasked: 'a***a@example.com' });
+  check(detailHtml.includes('KDB 456B') && detailHtml.includes('Documents') && detailHtml.includes('Recent records'), 'the vehicle page renders identity, documents and records');
+  check(detailHtml.includes('Road licence') && detailHtml.includes('Insurance') && /expired \d+ d ago/.test(detailHtml), 'expired and upcoming documents both render with their labels');
+  check(detailHtml.includes('Fuel') && detailHtml.includes('Trips') && /(KES|Ksh)\s?9,000/.test(detailHtml), 'records and their money render in the owner currency');
+  check(detailHtml.includes('href="/d/vehicles"'), 'the vehicle page links back to the fleet list');
+  const quietHtml = renderVehiclePage({ data: quietDetail, emailMasked: 'a***a@example.com' });
+  check(quietHtml.includes('No documents on file yet') && quietHtml.includes('No records in this vehicle yet'), 'a quiet vehicle renders two warm empty states');
+  const hostile = { ...detail, vehicle: { ...detail.vehicle, plate: '<script>alert(1)</script>', makeModel: '<b>x</b>' } };
+  const hostileHtml = renderVehiclePage({ data: hostile, emailMasked: 'a***a@example.com' });
+  check(!hostileHtml.includes('<script>alert(1)</script>') && hostileHtml.includes('&lt;script&gt;'), 'plate and model are escaped (no HTML injection)');
+  const hostileIndex = renderVehiclesPage({ data: { ...directory, vehicles: [{ ...rowB, plate: '<img src=x onerror=1>' }] }, emailMasked: 'a***a@example.com' });
+  check(!hostileIndex.includes('<img src=x') && hostileIndex.includes('&lt;img'), 'the list escapes a hostile plate too');
+  const failedDetail = renderVehiclePage({ data: { ok: false }, emailMasked: 'a***a@example.com' });
+  check(failedDetail.includes('could not be loaded') && !failedDetail.includes('undefined'), 'a failed vehicle page renders one honest explanation');
+  const overviewHtml = renderOverviewPage({ data: synthetic, emailMasked: 'a***a@example.com' });
+  check(overviewHtml.includes('See your vehicles') && overviewHtml.includes('href="/d/vehicles"'), 'the overview links to the vehicle list (one next step)');
+
+  console.log('\n--- Test 21: the vehicle pages end-to-end (Fastify inject) ---');
+  process.env.DASHBOARD_ENABLED = 'on';
+  const routeMock = createMockSupabase({
+    ...fleetSeed(),
+    [DASHBOARD_SESSIONS_TABLE]: [seedRow({
+      id: 'sess-route',
+      token_hash: hashToken('route-link'),
+      session_token_hash: hashToken('route-session'),
+      verified: true,
+      session_expires_at: new Date(Date.now() + 86400000).toISOString()
+    })],
+    admin_audit_logs: [],
+    profiles: [
+      { id: PROFILE.id, phone_number: PROFILE.phone_number, email: PROFILE.email, full_name: PROFILE.full_name, country_code: 'KE' },
+      { id: 'd-1', full_name: 'Brian Otieno', phone_number: '+254799999999' }
+    ]
+  });
+  const routeApp = Fastify({ logger: false });
+  await registerDashboardRoutes(routeApp, { supabase: routeMock.client });
+  await routeApp.ready();
+  const authCookie = { cookie: 'saka_dash=route-session' };
+
+  const vehiclesPage = await routeApp.inject({ method: 'GET', url: '/d/vehicles', headers: authCookie });
+  check(vehiclesPage.statusCode === 200 && vehiclesPage.body.includes('Your vehicles'), 'GET /d/vehicles renders the fleet list for a signed-in owner');
+  check(vehiclesPage.body.includes('KDB 456B') && vehiclesPage.body.includes('href="/d/vehicles/v-b"'), 'the list carries the plates and their links');
+  check(/(KES|Ksh)/.test(vehiclesPage.body), 'the real route resolves the owner currency from the phone (KES)');
+  const vehiclesAnon = await routeApp.inject({ method: 'GET', url: '/d/vehicles' });
+  check(vehiclesAnon.statusCode === 401 && /Reply \*dashboard\*/.test(vehiclesAnon.body), '/d/vehicles without a cookie 401s with the WhatsApp instruction');
+  const ownVehicle = await routeApp.inject({ method: 'GET', url: '/d/vehicles/v-b', headers: authCookie });
+  check(ownVehicle.statusCode === 200 && ownVehicle.body.includes('KDB 456B') && ownVehicle.body.includes('Documents'), 'GET /d/vehicles/:id renders the owner vehicle page');
+  const foreignVehiclePage = await routeApp.inject({ method: 'GET', url: '/d/vehicles/v-elsewhere', headers: authCookie });
+  check(foreignVehiclePage.statusCode === 404 && /not on your fleet/.test(foreignVehiclePage.body), 'a vehicle id outside the owner fleet is a warm 404');
+  const anonVehicle = await routeApp.inject({ method: 'GET', url: '/d/vehicles/v-b' });
+  check(anonVehicle.statusCode === 401, 'the vehicle page never renders without a session');
+  const overviewPage = await routeApp.inject({ method: 'GET', url: '/d', headers: authCookie });
+  check(overviewPage.statusCode === 200 && overviewPage.body.includes('See your vehicles') && /(KES|Ksh)/.test(overviewPage.body), 'the overview links to the vehicles page and uses KES');
+  await routeApp.close();
 
   process.env.DASHBOARD_ENABLED = previousFlag;
   if (previousBase === undefined) delete process.env.PUBLIC_APP_URL;
