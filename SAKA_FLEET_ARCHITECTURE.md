@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.75.1  
+**Version:** 1.75.2  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.75.2** | Phase 14C: dashboard compliance surface — `/d/compliance` vehicle + driver board (All / Due soon / Expired, expired pinned), read-only `/d/drivers/:id` with unmasked numbers for the owner, filtered `/d/compliance.pdf` sharing one filter engine (`filterComplianceReport`); three defects caught pre-ship | 202 |
 | **1.75.1** | Phase 14B: dashboard records surface — owner-VEHICLE-scoped searchable ledger (not `queryRecordLedger`'s driver scope), filters (date range ≤366 d, type, vehicle, label, keyword), 20/page offset paging, unique-match receipt links with 5-minute signed URLs, CSV + streamed PDF exports sharing one filter engine; mock gains `.or()`/`.range()`/`.ilike()` | 201 |
 | **1.75.0** | Phase 14A: the vehicle pages — `/d/vehicles` list (status, odometer, driver, this-month spend, soonest document) and `/d/vehicles/:id` (identity KPIs, every document with due chips, last 8 merged ledger rows), owner-scoped structurally; fixes the 13C country regression so money/units resolve from the phone (KES, not USD) | 200 |
 | **1.74.2** | Phase 13C: dashboard pages — inline HTML shell (D1), OTP entry page, the overview card (KPIs, 6 upcoming expiries via `upcomingExpiryItems`, 5 recent rows), logout + error pages, cookie contract + session gates; flag remains OFF pending live verification | 199C |
@@ -5840,6 +5841,48 @@ The `$` anchor is the grammar: `dashboard`, `my dashboard`, `open my dashboard`,
 **Rules shaped this work (rule 58).** 1/39/45 (consult-first), 3/4 (targeted reads, batching), 7 (country from the phone), 10/11 (targeted suites, stateless mock), 12/33 (version + history + CHANGELOG in one commit), 13/60 (playbook + core prompt + training assertions), 21 (no new env knobs), 31 (warm empty states, plain labels), 42 (proposals checked first; the FK follow-up is minted, not implied), 50 (fail-soft scope load, honest 503/500), 51/52 (sibling sweep + three defects caught and fixed), 54 (live suite runs), 55 (report engine + ledger mappers reused; zero new dependencies), 56 (no backfill needed: every existing owner sees the surface immediately), 58 (this report). No rule was edited or added.
 
 **Operator prerequisites pending before the production flip.** (1) the Phase 14A walk-through (DASHBOARD_ENABLED=on in staging → KPIs in local currency → vehicle list → detail → logout); (2) create the `receipts` Storage bucket **as private** (it does not exist yet — live-verified 2026-11-08; `fleet-reports` is public:true). Until (2), the receipt link answers an honest 404 on every row and no image is ever stored. The code ships behind `DASHBOARD_ENABLED=off` either way.
+
+### 202. v1.75.2 (Phase 14C) — the compliance surface: vehicle + driver board, read-only driver pages, filtered PDF (2026-11-08)
+
+**Scope.** Phase 14C ships the compliance surface only: `GET /d/compliance` (the owner's vehicles AND assigned drivers with a tracking rollup and the All / Due soon / Expired filter), `GET /d/drivers/:id` (read-only driver profile + every `driver_compliances` row), and `GET /d/compliance.pdf?view=…` (the SAME view, streamed). No editing of dates, no document upload, no write path of any kind — those stay deferred. Still flag-gated: `DASHBOARD_ENABLED` remains **OFF** in `.env`/`.env.example`.
+
+**Decisions locked.**
+- **D1 — driver document numbers are UNMASKED for the owner.** The owner owns the fleet and must be able to verify a licence/PSV number; the driver's own WhatsApp Compliance Card keeps `maskNumber`. Pinned by `document numbers are unmasked for the owner (D1)`.
+- **D2 — the suite is extended, not multiplied:** all 14C coverage lives in `test_dashboard.js` (one registered suite, health stays green).
+- **D3 — nav:** `Overview · Vehicles · Records · Compliance · Log out` (Compliance sits between Records and Log out). The `.chip.bad` (red `#F85149`) chip is the only CSS addition; `.chip.due` (orange) and `.chip.ok` (green) were already there.
+
+**The engine reuse (rule 55).** The board reads through `buildComplianceReport` — the same builder the WhatsApp/PDF compliance report uses — then narrows it with ONE pure `filterComplianceReport(reportData, view)`. That function re-derives **totals AND the category matrices** (`summarizeCategory`, now exported) with the report's own bucket math, so a filtered PDF can never print a KPI that contradicts its own table. `expiryStatus` is likewise exported and reused for every chip, and the chip vocabulary is one helper (`complianceChipHtml`: expired → red, any due bucket → orange, active/lifetime → green, unknown → grey). The driver section is the one place the report cannot help: `driverCompliance` rows in the report carry no `driver_id` (only a phone), so the board queries `driver_compliances` by the owner's `assigned_driver_id` set directly — bounded, owner-scoped by construction.
+
+**The two-sources finding (recorded).** *On file* (a `driver_compliances` ledger row) and *tracked* (an item in the unified expiry collector, which is fed by driver-linked reminders) can disagree: a document saved without a number is skipped by `syncAllDriverComplianceReminders`, so it exists on file but has no reminder ladder. The driver page and the board's driver rollup report the ledger truth (`documentCount` + status chips) while the vehicle section reports the collector truth — both honest, never merged into a fake "total". The legacy `profiles.driver_license_expiry` mirror is deliberately NOT read (retired by v1.73.2; reading it would re-introduce a duplicate ladder).
+
+**Filters and ordering.** `?view=all|due|expired` (aliases `due_soon`/`soon`/`overdue`), default `all`; `due` = `0 ≤ daysLeft ≤ 30` (all three due buckets), `expired` = `< 0`. An unknown value answers **400** with one plain sentence. Sorting is ascending `daysLeft`, so expired items pin to the top of every list; a subject with no dated document says "No dates on file" (never a fake zero). Under a filtered view, subjects with no matching item are hidden (and an empty view gets a warm "Nothing expired — nicely kept." / "Nothing due in the next 30 days.").
+
+**Routes + security.** All three: flag gate first (A1 generic 404 while OFF) → `requireOwnerSession()` → country from the phone → registered **before** `/d/:token`. `GET /d/drivers/:id` resolves ownership **structurally**: the id must be an `assigned_driver_id` of one of the owner's live vehicles, otherwise `not_found` → **404** (never 403) and the 404 body carries no name, phone or number (rule 51(iv), pinned). The PDF route streams a Buffer (`complianceReportToPdf` → `buildProReportPdf`) with a dated `content-disposition`; no Storage, no email.
+
+**Rule 51 sibling sweep (defect classes).**
+| Class | Siblings audited | Result |
+|---|---|---|
+| a scope inherited from another lane | driver page re-derives `assigned_driver_id ∈ owner vehicles` (not `getDriverComplianceStatus`'s any-profile semantics); board driver ids come from the same vehicle set; receipt/record surfaces untouched | pinned: foreign driver → 404 |
+| a filter the export bypasses | `filterComplianceReport` feeds the board AND the PDF; the page's totals and the PDF KPIs read the same filtered data | pinned: `pdfDue` KPIs == filtered totals; board `reportData` == direct filter |
+| a status chip that lies | one `complianceChipHtml` for board + driver page; `expiryStatus` reused from the report engine | pinned: all six buckets (expired/due_30d/due_14d/due_7d/active/lifetime/unknown) |
+| identity leak on a miss | 404 body asserted free of name, phone and document number | pinned (rule 51 iv) |
+
+**Rule 52 deep audit — three real defects caught before shipping.**
+1. `loadOwnerVehicles()` selected `id, plate_number, make_model, status, deleted_at` — **no `assigned_driver_id`**, so the driver section would have been silently empty for every owner. Fixed by adding the column to the one scope query (the vehicle pages ignore it).
+2. The report's `driverCompliance` rows carry **no `driver_id`** (only a phone), so a board built from the report alone would have merged every driver's documents into one bucket. Fixed by querying `driver_compliances` by the owner's assigned driver ids and attributing per driver.
+3. A naive filter would have left `insuranceStatusMatrix` / `inspectionAndPermits` **stale**, so a filtered PDF would print a category matrix contradicting its own KPIs. Fixed by re-deriving the summaries from the filtered items with `summarizeCategory`.
+
+**Frames touched.** `src/services/dashboard.js` (+§8: `parseComplianceFilters`, `complianceInView`, `complianceStatusOf`, `complianceChipHtml`, `filterComplianceReport`, `complianceDriverDocument`, `soonestComplianceItem`, `buildComplianceBoard`, `buildDriverCompliancePage`, `buildCompliancePdf`, `renderCompliancePage`, `renderDriverPage`, nav + `.chip.bad` CSS, `loadOwnerVehicles` now selects `assigned_driver_id`, default export), `src/services/fleetReports.js` (`expiryStatus` + `summarizeCategory` exported, no behaviour change), `src/routes/dashboard.js` (+3 routes, imports), `src/services/flowKnowledge.js` (playbook scope), `sakaAi.js` (core prompt scope), `test_dashboard.js` (+95 assertions: 299 → 394; three new flag-off URLs), `test_agent_training.js` (+2: 196 → 198), `package.json` (1.75.2), `landing/data/changelog.json` (+ stamp), `docs/` (regenerated), `SAKA_FLEET_ARCHITECTURE.md` (§202 + version/history), `CHANGELOG.md`.
+
+**Suites run.** Baseline before edits: test_dashboard (299), test_fleet_reports (42), test_report_builders (83), `npm run health` — green. After: **test_dashboard (394 — +95)**, test_agent_training (198 — +2), test_fleet_reports (42), test_report_builders (83), test_record_answers (80 — untouched), test_entry_ledger, test_ocr_flow (129), test_read_registry, test_no_canned_replies (14 — ratchet still 4), test_kb_docs, test_landing_static, test_doc_sync, `npm run health` — green. Zero pre-existing assertions edited.
+
+**Recurrence autopsy (rule 51).** Defect class *"a scope query that omits the join key"* → the one owner-scope loader was audited and extended; every consumer now reads through it. *"A report payload that cannot attribute a subject"* → per-driver attribution queried from the ledger, never inferred from a display label. *"A filter that updates counts but not the derived matrices"* → every derived structure is re-derived inside the pure filter, pinned by a parity assertion.
+
+**Rules shaped this work (rule 58).** 1/39/45 (consult-first), 3/4 (targeted reads, batching), 7 (country from the phone), 10/11 (one stateless suite, targeted runs), 12/33 (version + history + CHANGELOG in one commit), 13/60 (playbook + core prompt + training assertions), 21 (no new env knobs), 31 (warm empty states, plain labels, one next step), 42 (open proposals re-checked — the only open one is the 14B receipt-FK proposal, unrelated), 50 (fail-soft driver lookups, honest 503/500), 51/52 (the four pin classes + three defects caught), 54 (live suite runs), 55 (report engine, transformer and chip vocabulary reused; zero new dependencies), 56 (no backfill: every existing owner sees the surface immediately), 58 (this report). No rule was edited or added.
+
+**Operator prerequisites (unchanged from 14B).** The Phase 14A/14B walk-throughs have passed in staging; the `receipts` Storage bucket exists and is private; the dashboard still ships behind `DASHBOARD_ENABLED=off` until the operator flips it.
+
+
 
 
 

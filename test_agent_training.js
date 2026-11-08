@@ -344,6 +344,9 @@ check(/Narrative pre-fills are engine-determined facts/.test(await import('./src
   // v1.75.1 (Phase 14B) — the records surface must be stated where the model reads it.
   check(SAKA_FLOW_PLAYBOOK.includes('searchable records table'), 'the playbook documents the v1.75.1 records surface');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('CSV/PDF export'), 'the core prompt states the records exports (v1.75.1)');
+  // v1.75.2 (Phase 14C) — the compliance surface must be stated too.
+  check(SAKA_FLOW_PLAYBOOK.includes('compliance board'), 'the playbook documents the v1.75.2 compliance surface');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('compliance board'), 'the core prompt states the compliance surface (v1.75.2)');
 
   console.log(`\n\u2705 ALL AGENT TRAINING TESTS PASSED (${passed} assertions).`);
   console.log('Stateless suite: no real database rows were created, so no cleanup is required.');

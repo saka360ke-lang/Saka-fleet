@@ -56,6 +56,18 @@ import {
   RECORDS_EXPORT_MAX_ROWS,
   RECEIPT_SIGNED_URL_TTL_SECONDS,
   RECORDS_CSV_COLUMNS,
+  COMPLIANCE_VIEWS,
+  COMPLIANCE_DUE_DAYS,
+  parseComplianceFilters,
+  complianceInView,
+  complianceStatusOf,
+  complianceChipHtml,
+  filterComplianceReport,
+  buildComplianceBoard,
+  buildDriverCompliancePage,
+  buildCompliancePdf,
+  renderCompliancePage,
+  renderDriverPage,
   renderOverviewPage,
   renderVehiclesPage,
   renderVehiclePage,
@@ -131,6 +143,10 @@ async function run() {
     { method: 'GET', url: '/d/records.csv' },
     { method: 'GET', url: '/d/records.pdf' },
     { method: 'GET', url: '/d/receipt/some-receipt-id' },
+    // v1.75.2 (Phase 14C) — the compliance surface is flag-gated too.
+    { method: 'GET', url: '/d/compliance' },
+    { method: 'GET', url: '/d/compliance.pdf' },
+    { method: 'GET', url: '/d/drivers/some-driver-id' },
     { method: 'POST', url: '/d/verify', payload: 'token=x&otp=123456', headers: { 'content-type': 'application/x-www-form-urlencoded' } }
   ];
   for (const request of offRequests) {
@@ -976,6 +992,242 @@ async function run() {
   const brokenPdf = await brokenApp.inject({ method: 'GET', url: '/d/records.pdf', headers: recCookie });
   check(brokenPdf.statusCode === 500, 'a failed query refuses the PDF export too');
   await brokenApp.close();
+
+  console.log('\n--- Test 31: parseComplianceFilters + the one chip vocabulary (14C) ---');
+  check(parseComplianceFilters({}).filters.view === 'all', 'no filter means All');
+  check(parseComplianceFilters({ view: 'due' }).filters.view === 'due' && parseComplianceFilters({ view: 'EXPIRED' }).filters.view === 'expired', 'due/expired parse case-insensitively');
+  check(parseComplianceFilters({ view: 'due_soon' }).filters.view === 'due', 'due_soon is an accepted alias');
+  const badView = parseComplianceFilters({ view: 'weird' });
+  check(badView.ok === false && badView.reason === 'bad_view' && /not one I know/.test(badView.error), 'an unknown filter is refused with a plain explanation');
+  check(COMPLIANCE_VIEWS.join(',') === 'all,due,expired' && COMPLIANCE_DUE_DAYS === 30, 'the view set and the 30-day window are pinned');
+  check(complianceInView(10, 'due') && complianceInView(0, 'due') && complianceInView(30, 'due') && !complianceInView(31, 'due'), 'Due Soon is exactly 0-30 days');
+  check(complianceInView(-1, 'expired') && !complianceInView(0, 'expired'), 'Expired is strictly below zero');
+  check(complianceInView(null, 'due') === false && complianceInView(null, 'all') === true, 'an undated row only appears under All');
+  check(complianceStatusOf(-2) === 'expired' && complianceStatusOf(5) === 'due_7d' && complianceStatusOf(12) === 'due_14d' && complianceStatusOf(29) === 'due_30d' && complianceStatusOf(60) === 'active' && complianceStatusOf(null) === 'unknown', 'status buckets reuse the report engine thresholds');
+  check(complianceStatusOf(null, true) === 'lifetime', 'a lifetime document is its own bucket');
+  check(complianceChipHtml({ status: 'expired', daysLeft: -3 }) === '<span class="chip bad">expired 3 d ago</span>', 'expired renders a red chip');
+  check(complianceChipHtml({ status: 'due_30d', daysLeft: 20 }).includes('chip due')
+    && complianceChipHtml({ status: 'due_14d', daysLeft: 12 }).includes('chip due')
+    && complianceChipHtml({ status: 'due_7d', daysLeft: 5 }).includes('chip due'), 'every due bucket renders orange');
+  check(complianceChipHtml({ status: 'due_7d', daysLeft: 0 }) === '<span class="chip due">today</span>', 'a document expiring today says today');
+  check(complianceChipHtml({ status: 'active', daysLeft: 60 }).includes('chip ok'), 'an active document renders green');
+  check(complianceChipHtml({ lifetime: true, status: 'lifetime', daysLeft: null }) === '<span class="chip ok">Valid for life</span>', 'a lifetime document renders green and says so');
+  check(complianceChipHtml({ status: 'unknown', daysLeft: null }) === '<span class="chip">No date</span>', 'an undated document renders a grey chip');
+  check(complianceChipHtml({ status: 'expired', daysLeft: -2 }).includes('chip bad') && !complianceChipHtml({ status: 'active', daysLeft: 40 }).includes('bad'), 'red is reserved for expired');
+
+  console.log('\n--- Test 32: filterComplianceReport (HTML/PDF parity) ---');
+  const reportFixture = {
+    generatedAt: '2026-11-08T06:00:00Z',
+    currency: 'KES',
+    timeZone: 'Africa/Nairobi',
+    expiryItems: [
+      { plate: 'KDA 123A', category: 'licensing', categoryLabel: 'Road licence', item: 'Road License', dueDate: '2026-11-05', daysLeft: -3, status: 'expired', subjectType: 'vehicle' },
+      { plate: 'KDB 456B', category: 'permit', categoryLabel: 'Permit', item: 'Permit', dueDate: '2026-11-13', daysLeft: 5, status: 'due_7d', subjectType: 'vehicle' },
+      { plate: 'KDA 123A', category: 'insurance', categoryLabel: 'Insurance', item: 'Insurance', dueDate: '2026-11-28', daysLeft: 20, status: 'due_30d', subjectType: 'vehicle' },
+      { plate: 'KDB 456B', category: 'insurance', categoryLabel: 'Insurance', item: 'Insurance', dueDate: '2027-01-07', daysLeft: 60, status: 'active', subjectType: 'vehicle' }
+    ],
+    documents: [
+      { plate: 'KDA 123A', type: 'insurance', label: 'Insurance', expiry: '2026-11-28', daysLeft: 20, status: 'due_30d' },
+      { plate: 'KDB 456B', type: 'insurance', label: 'Insurance', expiry: '2027-01-07', daysLeft: 60, status: 'active' }
+    ],
+    totals: { monitored: 4, active: 1, expiring30Days: 2, expiring7Days: 1, expired: 1 }
+  };
+  const dueViewFixture = filterComplianceReport(reportFixture, 'due');
+  check(dueViewFixture.expiryItems.length === 2 && dueViewFixture.expiryItems[0].daysLeft === 5, 'Due Soon keeps only 0-30-day items, soonest first');
+  check(dueViewFixture.totals.monitored === 2 && dueViewFixture.totals.expiring30Days === 2 && dueViewFixture.totals.expiring7Days === 1 && dueViewFixture.totals.expired === 0 && dueViewFixture.totals.active === 0, 'filtered totals are re-derived with the report bucket math');
+  check(dueViewFixture.documents.length === 1 && dueViewFixture.documents[0].daysLeft === 20, 'documents are filtered by the same predicate');
+  check(dueViewFixture.insuranceStatusMatrix.total === 1 && dueViewFixture.insuranceStatusMatrix.due30 === 1, 'the category matrix is re-derived (insurance)');
+  check(dueViewFixture.inspectionAndPermits.permits.total === 1 && dueViewFixture.driverLicenses.total === 0, 'the category matrix is re-derived (permits/licences)');
+  const expiredViewFixture = filterComplianceReport(reportFixture, 'expired');
+  check(expiredViewFixture.expiryItems.length === 1 && expiredViewFixture.overdueItems.length === 1 && expiredViewFixture.totals.expired === 1, 'Expired keeps the lapsed item and pins it');
+  const allViewFixture = filterComplianceReport(reportFixture, 'all');
+  check(allViewFixture.expiryItems.length === 4 && allViewFixture.expiryItems[0].daysLeft === -3, 'All keeps everything with expired first');
+  check(allViewFixture.totals.monitored === 4 && allViewFixture.totals.expired === 1, 'All totals match the report');
+
+  console.log('\n--- Test 33: buildComplianceBoard (vehicle + driver rollups) ---');
+  const complianceNow = new Date('2026-11-08T06:00:00Z');
+  const cDay = (days) => new Date(complianceNow.getTime() + days * 86400000).toISOString().slice(0, 10);
+  const complianceSeed = () => ({
+    vehicles: [
+      { id: 'v-a', owner_id: PROFILE.id, plate_number: 'KDA 123A', make_model: 'Nissan Note', status: 'ACTIVE', assigned_driver_id: 'd-1', insurance_expiry: cDay(20), road_license_expiry: cDay(-3) },
+      { id: 'v-b', owner_id: PROFILE.id, plate_number: 'KDB 456B', make_model: 'Toyota Hiace', status: 'ACTIVE', assigned_driver_id: 'd-2', insurance_expiry: cDay(60), permit_expiry: cDay(5) },
+      { id: 'v-x', owner_id: 'someone-else', plate_number: 'KDX 999X', status: 'ACTIVE', assigned_driver_id: 'd-x', insurance_expiry: cDay(-10) }
+    ],
+    profiles: [
+      { id: 'd-1', full_name: 'Brian Otieno', phone_number: '+254799999991' },
+      { id: 'd-2', full_name: 'Grace Wanjiru', phone_number: '+254799999992' },
+      { id: 'd-x', full_name: 'Foreign Driver', phone_number: '+254799999993' }
+    ],
+    driver_compliances: [
+      { id: 'dc1', driver_id: 'd-1', type: 'driving_licence', label: 'Driving Licence', number: 'DL123456', expiry: cDay(8) },
+      { id: 'dc2', driver_id: 'd-1', type: 'psv_badge', label: 'PSV Badge', number: 'PSV-7788', expiry: cDay(-2) },
+      { id: 'dc3', driver_id: 'd-1', type: 'medical_certificate', label: 'Medical Certificate', number: 'MED-1', lifetime: true },
+      { id: 'dc9', driver_id: 'd-x', type: 'driving_licence', label: 'Driving Licence', number: 'FX-999', expiry: cDay(-1) }
+    ],
+    reminders: [],
+    vehicle_compliances: [],
+    expiry_notification_log: [],
+    expense_logs: [],
+    private_earnings: [],
+    passbook_transfers: []
+  });
+  const compMock = createMockSupabase(complianceSeed());
+  const compBoard = await buildComplianceBoard({ supabase: compMock.client, ownerId: PROFILE.id, countryInfo: KE_INFO, now: complianceNow });
+  check(compBoard.ok && compBoard.view === 'all', 'the board builds for the All view');
+  check(compBoard.totals.monitored === 4 && compBoard.totals.expired === 1 && compBoard.totals.expiring30Days === 2, 'the board totals come from the report engine');
+  check(compBoard.vehicles.length === 2 && compBoard.vehicles[0].plate === 'KDA 123A' && compBoard.vehicles[1].plate === 'KDB 456B', 'only the owner fleet appears, expired-pinned order');
+  const vehicleRowA = compBoard.vehicles[0];
+  check(vehicleRowA.monitored === 2 && vehicleRowA.expiredCount === 1 && vehicleRowA.dueCount === 1 && vehicleRowA.soonest.daysLeft === -3, 'a vehicle rollup counts tracked/expired/due and carries its soonest');
+  check(compBoard.vehicles[1].soonest.daysLeft === 5 && compBoard.vehicles[1].expiredCount === 0, 'the second vehicle carries its own soonest');
+  check(compBoard.drivers.length === 2, 'both assigned drivers appear (the foreign driver never does)');
+  const driverRowA = compBoard.drivers.find((row) => row.id === 'd-1');
+  check(driverRowA.name === 'Brian Otieno' && driverRowA.plates.join(',') === 'KDA 123A', 'the driver row carries name + plates');
+  check(driverRowA.documentCount === 3 && driverRowA.expiredCount === 1 && driverRowA.dueCount === 1 && driverRowA.soonest.daysLeft === -2, 'the driver rollup counts documents and its soonest');
+  const driverRowB = compBoard.drivers.find((row) => row.id === 'd-2');
+  check(driverRowB.documentCount === 0 && driverRowB.soonest === null, 'a driver with no documents is honest, not invented');
+  const dueBoard = await buildComplianceBoard({ supabase: createMockSupabase(complianceSeed()).client, ownerId: PROFILE.id, countryInfo: KE_INFO, now: complianceNow, view: 'due' });
+  check(dueBoard.vehicles.length === 2 && dueBoard.totals.monitored === 2 && dueBoard.totals.expired === 0, 'Due Soon keeps only due items and their subjects');
+  const expiredBoard = await buildComplianceBoard({ supabase: createMockSupabase(complianceSeed()).client, ownerId: PROFILE.id, countryInfo: KE_INFO, now: complianceNow, view: 'expired' });
+  check(expiredBoard.vehicles.length === 1 && expiredBoard.vehicles[0].plate === 'KDA 123A', 'Expired narrows the vehicle table to the lapsed fleet');
+  check(expiredBoard.drivers.length === 1 && expiredBoard.drivers[0].id === 'd-1', 'Expired narrows the driver table too');
+  check(expiredBoard.reportData.totals.monitored === 1
+    && JSON.stringify(expiredBoard.reportData.totals) === JSON.stringify(filterComplianceReport(expiredBoard.rawReportData, 'expired').totals),
+    'the board report data equals a direct filter (one filter engine)');
+  check((await buildComplianceBoard({ supabase: null, ownerId: PROFILE.id })).ok === false, 'no database answers ok:false');
+
+  console.log('\n--- Test 34: buildDriverCompliancePage (ownership + unmasked numbers) ---');
+  const driverPageData = await buildDriverCompliancePage({ supabase: compMock.client, ownerId: PROFILE.id, driverId: 'd-1', countryInfo: KE_INFO, now: complianceNow });
+  check(driverPageData.ok && driverPageData.driver.name === 'Brian Otieno' && driverPageData.driver.phone === '+254799999991', 'the assigned driver page loads with name + phone');
+  check(driverPageData.driver.plates.join(',') === 'KDA 123A' && driverPageData.driver.vehicles[0].id === 'v-a', 'the assigned vehicle rides the page for linking');
+  check(driverPageData.documents.length === 3 && driverPageData.documents[0].status === 'expired', 'documents are soonest-first with the expired one on top');
+  check(driverPageData.documents.some((doc) => doc.number === 'DL123456'), 'document numbers are unmasked for the owner (D1)');
+  check(driverPageData.documents.some((doc) => doc.lifetime === true && doc.status === 'lifetime'), 'a lifetime document is carried as lifetime');
+  check(driverPageData.soonest.daysLeft === -2, 'the page carries its soonest document');
+  const noDocsPageData = await buildDriverCompliancePage({ supabase: compMock.client, ownerId: PROFILE.id, driverId: 'd-2', countryInfo: KE_INFO, now: complianceNow });
+  check(noDocsPageData.ok && noDocsPageData.documents.length === 0 && noDocsPageData.driver.plates.join(',') === 'KDB 456B', 'a driver with no documents still loads');
+  const foreignDriverPageData = await buildDriverCompliancePage({ supabase: compMock.client, ownerId: PROFILE.id, driverId: 'd-x', countryInfo: KE_INFO, now: complianceNow });
+  check(foreignDriverPageData.ok === false && foreignDriverPageData.reason === 'not_found', "another owner's driver is not_found (structural ownership)");
+  check((await buildDriverCompliancePage({ supabase: compMock.client, ownerId: PROFILE.id, driverId: 'nope' })).reason === 'not_found', 'an unknown driver id is not_found');
+  check((await buildDriverCompliancePage({ supabase: compMock.client, ownerId: null, driverId: 'd-1' })).reason === 'not_found', 'a missing owner is not_found');
+
+  console.log('\n--- Test 35: buildCompliancePdf (filtered Buffer + KPI parity) ---');
+  const { complianceReportToPdf } = await import('./src/services/reportDelivery.js');
+  const allCompliancePdf = await buildCompliancePdf(compBoard.reportData, { profile: PROFILE, countryInfo: KE_INFO });
+  check(Buffer.isBuffer(allCompliancePdf) && allCompliancePdf.subarray(0, 5).toString() === '%PDF-', 'the compliance PDF is a real Buffer (no Storage)');
+  check(allCompliancePdf.length > 1500, `the compliance PDF has real content (${allCompliancePdf.length} bytes)`);
+  const pdfAll = complianceReportToPdf({ ok: true, type: 'compliance', data: compBoard.reportData }, 'compliance');
+  const pdfDue = complianceReportToPdf({ ok: true, type: 'compliance', data: dueBoard.reportData }, 'compliance');
+  const kpiOf = (pdfData, label) => pdfData.kpis.find((kpi) => kpi.label === label)?.value;
+  check(kpiOf(pdfAll, 'Monitored items') === '4' && kpiOf(pdfAll, 'Expired') === '1', 'the full PDF KPIs match the board totals');
+  check(kpiOf(pdfDue, 'Monitored items') === '2' && kpiOf(pdfDue, 'Expired') === '0' && kpiOf(pdfDue, 'Due within 30 days') === '2', 'the filtered PDF KPIs match the filtered totals (rule 51 ii)');
+  check(pdfDue.tables[0].rows.length === 2, 'the filtered PDF table carries exactly the filtered items');
+  const readableCompliancePdf = await buildCompliancePdf(expiredBoard.reportData, { profile: PROFILE, countryInfo: KE_INFO, useStandardFonts: true });
+  const readableComplianceText = extractPdfText(readableCompliancePdf).text || '';
+  check(/Compliance/.test(readableComplianceText) && /EXPIRED/.test(readableComplianceText), 'the expired PDF renders its title and KPI labels');
+
+  console.log('\n--- Test 36: renderCompliancePage ---');
+  const complianceHtml = renderCompliancePage({ board: compBoard, filters: { view: 'all' }, emailMasked: 'a***a@example.com' });
+  check(complianceHtml.includes('Compliance') && complianceHtml.includes('href="/d/compliance?view=due"') && complianceHtml.includes('href="/d/compliance?view=expired"'), 'the page renders the three view links');
+  check(complianceHtml.includes('href="/d/compliance.pdf?view=all"'), 'the export link carries the current view');
+  check(complianceHtml.includes('KDA 123A') && complianceHtml.includes('KDB 456B') && complianceHtml.includes('Brian Otieno'), 'vehicle and driver rows render');
+  check(complianceHtml.includes('href="/d/drivers/d-1"') && complianceHtml.includes('href="/d/vehicles/v-a"'), 'rows link to the vehicle and driver pages');
+  check(complianceHtml.includes('chip bad') && complianceHtml.includes('chip due'), 'expired and due chips render');
+  const complianceExpiredHtml = renderCompliancePage({ board: expiredBoard, filters: { view: 'expired' }, emailMasked: 'a***a@example.com' });
+  check(complianceExpiredHtml.includes('Items in this view') && !complianceExpiredHtml.includes('KDB 456B'), 'the Expired view narrows the page and lists its items');
+  const complianceEmptyHtml = renderCompliancePage({ board: { ...compBoard, items: [], vehicles: [], drivers: [] }, filters: { view: 'expired' } });
+  check(complianceEmptyHtml.includes('No vehicles match this view') && complianceEmptyHtml.includes('Nothing expired'), 'empty states are warm and honest');
+  const complianceErrorHtml = renderCompliancePage({ board: compBoard, filters: { view: 'all' }, error: 'That filter is not one I know — choose All, Due soon or Expired.' });
+  check(complianceErrorHtml.includes('not one I know'), 'a rejected filter renders its explanation');
+  const complianceHostileHtml = renderCompliancePage({ board: { ...compBoard, vehicles: [{ ...compBoard.vehicles[0], plate: '<script>alert(1)</script>' }] }, filters: { view: 'all' } });
+  check(!complianceHostileHtml.includes('<script>alert(1)</script>') && complianceHostileHtml.includes('&lt;script&gt;'), 'plate and driver text are escaped');
+  check(renderCompliancePage({ board: { ok: false }, filters: { view: 'all' } }).includes('could not be loaded'), 'a failed board renders one honest explanation');
+
+  console.log('\n--- Test 37: renderDriverPage ---');
+  const driverHtml = renderDriverPage({ page: driverPageData, emailMasked: 'a***a@example.com' });
+  check(driverHtml.includes('Brian Otieno') && driverHtml.includes('+254799999991'), 'the driver page shows name and phone');
+  check(driverHtml.includes('DL123456') && driverHtml.includes('PSV-7788'), 'document numbers are rendered in full for the owner (D1)');
+  check(driverHtml.includes('href="/d/vehicles/v-a"') && driverHtml.includes('KDA 123A'), 'the assigned vehicle links from the page');
+  check(driverHtml.includes('Valid for life') && driverHtml.includes('chip bad'), 'lifetime and expired documents render their chips');
+  const emptyDriverHtml = renderDriverPage({ page: noDocsPageData, emailMasked: 'a***a@example.com' });
+  check(emptyDriverHtml.includes('No driver documents on file yet') && !emptyDriverHtml.includes('undefined'), 'an empty driver ledger is honest');
+  check(renderDriverPage({ page: { ok: false } }).includes('could not be loaded'), 'a failed driver page renders one explanation');
+
+  console.log('\n--- Test 38: compliance routes end-to-end (Fastify inject) ---');
+  process.env.DASHBOARD_ENABLED = 'on';
+  const routeDay = (days) => new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
+  const compRouteMock = createMockSupabase({
+    vehicles: [
+      { id: 'v-a', owner_id: PROFILE.id, plate_number: 'KDA 123A', make_model: 'Nissan Note', status: 'ACTIVE', assigned_driver_id: 'd-1', insurance_expiry: routeDay(20), road_license_expiry: routeDay(-3) },
+      { id: 'v-b', owner_id: PROFILE.id, plate_number: 'KDB 456B', make_model: 'Toyota Hiace', status: 'ACTIVE', assigned_driver_id: 'd-2', insurance_expiry: routeDay(60), permit_expiry: routeDay(5) },
+      { id: 'v-x', owner_id: 'someone-else', plate_number: 'KDX 999X', status: 'ACTIVE', assigned_driver_id: 'd-x', insurance_expiry: routeDay(-10) }
+    ],
+    profiles: [
+      { id: PROFILE.id, phone_number: PROFILE.phone_number, email: PROFILE.email, full_name: PROFILE.full_name, country_code: 'KE' },
+      { id: 'd-1', full_name: 'Brian Otieno', phone_number: '+254799999991' },
+      { id: 'd-2', full_name: 'Grace Wanjiru', phone_number: '+254799999992' },
+      { id: 'd-x', full_name: 'Foreign Driver', phone_number: '+254799999993' }
+    ],
+    driver_compliances: [
+      { id: 'dc1', driver_id: 'd-1', type: 'driving_licence', label: 'Driving Licence', number: 'DL123456', expiry: routeDay(8) },
+      { id: 'dc2', driver_id: 'd-1', type: 'psv_badge', label: 'PSV Badge', number: 'PSV-7788', expiry: routeDay(-2) },
+      { id: 'dc9', driver_id: 'd-x', type: 'driving_licence', label: 'Driving Licence', number: 'FX-999', expiry: routeDay(-1) }
+    ],
+    reminders: [],
+    vehicle_compliances: [],
+    expiry_notification_log: [],
+    expense_logs: [],
+    private_earnings: [],
+    passbook_transfers: [],
+    [DASHBOARD_SESSIONS_TABLE]: [seedRow({
+      id: 'sess-comp',
+      token_hash: hashToken('comp-link'),
+      session_token_hash: hashToken('comp-session'),
+      verified: true,
+      session_expires_at: new Date(Date.now() + 86400000).toISOString()
+    })],
+    admin_audit_logs: [],
+    error_logs: []
+  });
+  const compApp = Fastify({ logger: false });
+  await registerDashboardRoutes(compApp, { supabase: compRouteMock.client });
+  await compApp.ready();
+  const compCookie = { cookie: 'saka_dash=comp-session' };
+
+  const complianceRes = await compApp.inject({ method: 'GET', url: '/d/compliance', headers: compCookie });
+  check(complianceRes.statusCode === 200 && complianceRes.body.includes('Compliance'), 'GET /d/compliance renders the board');
+  check(complianceRes.body.includes('KDA 123A') && complianceRes.body.includes('Brian Otieno'), 'the board shows owner vehicles and assigned drivers');
+  const expiredRes = await compApp.inject({ method: 'GET', url: '/d/compliance?view=expired', headers: compCookie });
+  check(expiredRes.statusCode === 200 && expiredRes.body.includes('KDA 123A') && !expiredRes.body.includes('KDB 456B'), 'the Expired view narrows the board');
+  const dueRes = await compApp.inject({ method: 'GET', url: '/d/compliance?view=due', headers: compCookie });
+  check(dueRes.statusCode === 200 && dueRes.body.includes('Items in this view'), 'the Due Soon view lists the matching items');
+  const badComplianceRes = await compApp.inject({ method: 'GET', url: '/d/compliance?view=weird', headers: compCookie });
+  check(badComplianceRes.statusCode === 400 && /not one I know/.test(badComplianceRes.body), 'an invalid view is a 400 with a plain explanation');
+  const anonCompliance = await compApp.inject({ method: 'GET', url: '/d/compliance' });
+  check(anonCompliance.statusCode === 401, 'compliance never renders without a session');
+
+  const driverRes = await compApp.inject({ method: 'GET', url: '/d/drivers/d-1', headers: compCookie });
+  check(driverRes.statusCode === 200 && driverRes.body.includes('Brian Otieno'), 'GET /d/drivers/:id renders the assigned driver');
+  check(driverRes.body.includes('DL123456') && driverRes.body.includes('PSV-7788'), 'the owner sees document numbers in full (D1)');
+  check(driverRes.body.includes('href="/d/vehicles/v-a"'), 'the driver page links the assigned vehicle');
+  const foreignDriverRes = await compApp.inject({ method: 'GET', url: '/d/drivers/d-x', headers: compCookie });
+  check(foreignDriverRes.statusCode === 404, "another owner's driver answers 404");
+  check(!foreignDriverRes.body.includes('Foreign Driver')
+    && !foreignDriverRes.body.includes('+254799999993')
+    && !foreignDriverRes.body.includes('FX-999'), 'the 404 body leaks no name, phone or document number (rule 51 iv)');
+  const unknownDriverRes = await compApp.inject({ method: 'GET', url: '/d/drivers/does-not-exist', headers: compCookie });
+  check(unknownDriverRes.statusCode === 404, 'an unknown driver id answers 404');
+  const anonDriver = await compApp.inject({ method: 'GET', url: '/d/drivers/d-1' });
+  check(anonDriver.statusCode === 401, 'the driver page never renders without a session');
+
+  const compliancePdfRes = await compApp.inject({ method: 'GET', url: '/d/compliance.pdf', headers: compCookie });
+  check(compliancePdfRes.statusCode === 200 && String(compliancePdfRes.headers['content-type']).includes('application/pdf'), 'GET /d/compliance.pdf answers application/pdf');
+  check(compliancePdfRes.rawPayload.subarray(0, 5).toString() === '%PDF-', 'the compliance PDF is a real streamed PDF');
+  check(/attachment; filename="saka-compliance-all-\d{4}-\d{2}-\d{2}\.pdf"/.test(String(compliancePdfRes.headers['content-disposition'])), 'the PDF carries a dated download filename');
+  const expiredPdfRes = await compApp.inject({ method: 'GET', url: '/d/compliance.pdf?view=expired', headers: compCookie });
+  check(expiredPdfRes.statusCode === 200 && expiredPdfRes.rawPayload.subarray(0, 5).toString() === '%PDF-', 'the filtered PDF exports the same view');
+  const badPdfRes = await compApp.inject({ method: 'GET', url: '/d/compliance.pdf?view=weird', headers: compCookie });
+  check(badPdfRes.statusCode === 400, 'an invalid view refuses the export with a 400');
+  await compApp.close();
 
   process.env.DASHBOARD_ENABLED = previousFlag;
   if (previousBase === undefined) delete process.env.PUBLIC_APP_URL;

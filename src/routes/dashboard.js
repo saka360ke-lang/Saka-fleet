@@ -46,7 +46,13 @@ import {
   serializeRecordsCsv,
   buildRecordsPdf,
   RECORDS_PAGE_SIZE,
-  RECORDS_EXPORT_MAX_ROWS
+  RECORDS_EXPORT_MAX_ROWS,
+  parseComplianceFilters,
+  buildComplianceBoard,
+  buildDriverCompliancePage,
+  buildCompliancePdf,
+  renderCompliancePage,
+  renderDriverPage
 } from '../services/dashboard.js';
 import { detectCountryFromPhone, buildGlobalContext } from '../services/globalization.js';
 import { logSystemError, logWriteFailure } from '../services/systemErrors.js';
@@ -387,6 +393,107 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
       } catch (err) {
         await logSystemError(supabase, err, '/d/receipt/:id');
         const page = renderErrorPage(500, 'Please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    /* -------------------------------------------------------------- */
+    /* GET /d/compliance — vehicle + driver compliance (Phase 14C)     */
+    /* -------------------------------------------------------------- */
+    scope.get('/d/compliance', async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      try {
+        const session = await requireOwnerSession(request, reply, supabase);
+        if (!session) return reply;
+        const profile = await loadDashboardProfile(supabase, session.ownerId);
+        const countryInfo = countryForProfile(profile);
+        const parsed = parseComplianceFilters(request.query || {});
+        const view = parsed.ok ? parsed.filters.view : 'all';
+        const board = await buildComplianceBoard({ supabase, ownerId: session.ownerId, profile, countryInfo, view });
+        const html = renderCompliancePage({
+          board,
+          filters: { view },
+          emailMasked: maskEmail(session.email || profile?.email),
+          error: parsed.ok ? null : parsed.error
+        });
+        return sendHtml(reply, parsed.ok ? (board.ok ? 200 : 503) : 400, html);
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/compliance');
+        const page = renderErrorPage(500, 'Please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    /* -------------------------------------------------------------- */
+    /* GET /d/drivers/:id — one assigned driver (Phase 14C)            */
+    /* -------------------------------------------------------------- */
+    scope.get('/d/drivers/:id', async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      try {
+        const session = await requireOwnerSession(request, reply, supabase);
+        if (!session) return reply;
+        const profile = await loadDashboardProfile(supabase, session.ownerId);
+        const page = await buildDriverCompliancePage({
+          supabase,
+          ownerId: session.ownerId,
+          driverId: String(request.params?.id || ''),
+          profile,
+          countryInfo: countryForProfile(profile)
+        });
+        if (!page.ok && page.reason === 'not_found') {
+          // 404 (never 403) and no profile/phone/number is rendered on this path.
+          const missing = renderErrorPage(404, 'That driver is not on your fleet. Reply *dashboard* on WhatsApp if you think it should be.');
+          return sendHtml(reply, missing.status, missing.html);
+        }
+        return sendHtml(reply, page.ok ? 200 : 503, renderDriverPage({ page, emailMasked: maskEmail(session.email || profile?.email) }));
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/drivers/:id');
+        const page = renderErrorPage(500, 'Please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    /* -------------------------------------------------------------- */
+    /* GET /d/compliance.pdf — the SAME view as the page (Phase 14C)    */
+    /* -------------------------------------------------------------- */
+    scope.get('/d/compliance.pdf', async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      try {
+        const session = await requireOwnerSession(request, reply, supabase);
+        if (!session) return reply;
+        const profile = await loadDashboardProfile(supabase, session.ownerId);
+        const countryInfo = countryForProfile(profile);
+        const parsed = parseComplianceFilters(request.query || {});
+        if (!parsed.ok) {
+          const board = await buildComplianceBoard({ supabase, ownerId: session.ownerId, profile, countryInfo, view: 'all' });
+          const html = renderCompliancePage({
+            board,
+            filters: { view: 'all' },
+            emailMasked: maskEmail(session.email || profile?.email),
+            error: parsed.error
+          });
+          return sendHtml(reply, 400, html);
+        }
+        const board = await buildComplianceBoard({
+          supabase,
+          ownerId: session.ownerId,
+          profile,
+          countryInfo,
+          view: parsed.filters.view
+        });
+        if (!board.ok) {
+          await logSystemError(supabase, new Error('compliance query failed'), '/d/compliance/pdf');
+          const page = renderErrorPage(500, 'That export could not be built — please try again in a moment.');
+          return sendHtml(reply, page.status, page.html);
+        }
+        const buffer = await buildCompliancePdf(board.reportData, { profile, countryInfo });
+        const day = String(board.generatedAt || new Date().toISOString()).slice(0, 10);
+        reply.header('content-disposition', `attachment; filename="saka-compliance-${parsed.filters.view}-${day}.pdf"`);
+        reply.header('cache-control', 'no-store');
+        return reply.code(200).type('application/pdf').send(buffer);
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/compliance/pdf');
+        const page = renderErrorPage(500, 'That export could not be built — please try again in a moment.');
         return sendHtml(reply, page.status, page.html);
       }
     });

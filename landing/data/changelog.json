@@ -1,6 +1,13 @@
 {
-  "latest": "1.75.1",
+  "latest": "1.75.2",
   "entries": [
+    {
+      "version": "1.75.2",
+      "date": "2026-11-08",
+      "title": "Every document, one calm view",
+      "preview": "See what is expired, what is due in the next 30 days and who still needs to renew - for every vehicle and every driver.",
+      "summary": "Your dashboard now has a Compliance page. It lists each vehicle and each assigned driver with what Saka is tracking, the next document to fall due, and a simple colour: red for expired, orange for due, green for valid, grey for missing. Three filters do the thinking for you - All, Due soon (30 days) and Expired - and anything already lapsed stays at the top of the list. Tap a driver and you get their own page: name, phone, their vehicle, and every document they have on file with its number and expiry, in full, so you can verify a licence or a badge without hunting through chats. The PDF button exports exactly the view you are looking at, so a compliance check can be printed or shared in one step. Everything comes from the documents you already saved in WhatsApp; nothing is estimated, and only your own fleet is ever shown. The dashboard remains switched off in production until the walk-through is signed off."
+    },
     {
       "version": "1.75.1",
       "date": "2026-11-08",

@@ -32,11 +32,15 @@ import { shortLinkBase } from './linkShortener.js';
 import { sendDashboardMagicLinkEmail } from './mailer.js';
 import { logWriteFailure } from './systemErrors.js';
 import { buildFleetReport, upcomingExpiryItems, buildVehicleDirectory, buildVehicleDetail } from './fleetReports.js';
+import { buildComplianceReport, expiryStatus, summarizeCategory } from './fleetReports.js';
 import { buildGlobalContext, formatMoney, formatDate, formatNumber } from './globalization.js';
 import { expenseToLedgerRow, earningToLedgerRow, buildLedgerGroups } from './reportLedger.js';
 import { buildProReportPdf } from './pdfEngine.js';
+import { complianceReportToPdf } from './reportDelivery.js';
 import { receiptStoragePaths, RECEIPTS_BUCKET } from './receipts.js';
 import { EXPENSE_TYPES } from './expenseCatalog.js';
+import { driverComplianceLabel } from './driverComplianceCatalog.js';
+import { daysUntilDue } from './maintenanceReminders.js';
 
 export const DASHBOARD_SESSIONS_TABLE = 'dashboard_sessions';
 export const DASHBOARD_LINK_TTL_MS = 15 * 60 * 1000; // 15 minutes
@@ -730,7 +734,7 @@ export async function loadOwnerVehicles(supabase, ownerId) {
   try {
     const { data, error } = await supabase
       .from('vehicles')
-      .select('id, plate_number, make_model, status, deleted_at')
+      .select('id, plate_number, make_model, status, deleted_at, assigned_driver_id')
       .eq('owner_id', ownerId)
       .is('deleted_at', null)
       .limit(500);
@@ -1070,6 +1074,338 @@ export async function buildRecordsPdf(rows = [], filters = {}, {
 }
 
 /* ------------------------------------------------------------------ */
+/* 8. Compliance surface (Phase 14C) — board, driver page, filtered PDF */
+/* ------------------------------------------------------------------ */
+
+export const COMPLIANCE_VIEWS = Object.freeze(['all', 'due', 'expired']);
+export const COMPLIANCE_DUE_DAYS = 30;
+
+const COMPLIANCE_VIEW_ALIASES = Object.freeze({
+  all: 'all',
+  due: 'due',
+  due_soon: 'due',
+  'due-soon': 'due',
+  soon: 'due',
+  expired: 'expired',
+  overdue: 'expired'
+});
+
+/** `?view=all|due|expired` (default all). Never throws. */
+export function parseComplianceFilters(query = {}) {
+  const raw = query && typeof query === 'object' ? query : {};
+  const value = String(Array.isArray(raw.view) ? raw.view[0] : raw.view || '').trim().toLowerCase();
+  if (!value) return { ok: true, filters: { view: 'all' } };
+  const view = COMPLIANCE_VIEW_ALIASES[value];
+  if (!view) {
+    return { ok: false, reason: 'bad_view', error: 'That filter is not one I know — choose All, Due soon or Expired.' };
+  }
+  return { ok: true, filters: { view } };
+}
+
+/**
+ * The ONE view predicate — used by the filtered report (HTML + PDF) and by the
+ * driver rollup, so a chip and an export can never disagree (rule 55).
+ */
+export function complianceInView(daysLeft, view = 'all') {
+  const days = daysLeft === null || daysLeft === undefined || daysLeft === '' ? null : Number(daysLeft);
+  if (view === 'expired') return days !== null && Number.isFinite(days) && days < 0;
+  if (view === 'due') return days !== null && Number.isFinite(days) && days >= 0 && days <= COMPLIANCE_DUE_DAYS;
+  return true;
+}
+
+/** `lifetime` first, then the canonical expiryStatus buckets (fleetReports). */
+export function complianceStatusOf(daysLeft, lifetime = false) {
+  if (lifetime === true) return 'lifetime';
+  return expiryStatus(daysLeft);
+}
+
+/**
+ * D3/rule-51(iii) — the ONLY compliance chip. expired → red, any due bucket →
+ * orange, active/lifetime → green, unknown → grey.
+ */
+export function complianceChipHtml(item = {}) {
+  const status = String(item.status || '').toLowerCase();
+  const days = item.daysLeft === null || item.daysLeft === undefined || item.daysLeft === '' ? null : Number(item.daysLeft);
+  if (item.lifetime === true || status === 'lifetime') return '<span class="chip ok">Valid for life</span>';
+  if (status === 'expired' || (Number.isFinite(days) && days < 0)) {
+    const overdue = Number.isFinite(days) ? Math.abs(days) : 0;
+    return `<span class="chip bad">${escapeHtml(`expired ${overdue} d ago`)}</span>`;
+  }
+  if (Number.isFinite(days) && days === 0) return '<span class="chip due">today</span>';
+  if (Number.isFinite(days) && days > 0 && days <= COMPLIANCE_DUE_DAYS) return `<span class="chip due">${escapeHtml(`in ${days} d`)}</span>`;
+  if (status === 'active' || (Number.isFinite(days) && days > COMPLIANCE_DUE_DAYS)) return '<span class="chip ok">Valid</span>';
+  return '<span class="chip">No date</span>';
+}
+
+/**
+ * Pure view filter over the compliance report data. Re-derives the totals AND
+ * the category summaries with the report's own bucket math, so a filtered PDF
+ * can never print a KPI that contradicts its own table.
+ */
+export function filterComplianceReport(reportData = {}, view = 'all') {
+  const data = reportData && typeof reportData === 'object' ? reportData : {};
+  const items = Array.isArray(data.expiryItems) ? data.expiryItems : [];
+  const documents = Array.isArray(data.documents) ? data.documents : [];
+  const keep = (row) => complianceInView(row?.daysLeft, view);
+  const expiryItems = items.filter(keep)
+    .sort((a, b) => (Number.isFinite(Number(a.daysLeft)) ? Number(a.daysLeft) : 99999) - (Number.isFinite(Number(b.daysLeft)) ? Number(b.daysLeft) : 99999));
+  const filteredDocuments = documents.filter(keep);
+  const totals = {
+    monitored: expiryItems.length,
+    active: expiryItems.filter((item) => item.status === 'active').length,
+    expiring30Days: expiryItems.filter((item) => item.status === 'due_30d' || item.status === 'due_14d' || item.status === 'due_7d').length,
+    expiring7Days: expiryItems.filter((item) => item.status === 'due_7d').length,
+    expired: expiryItems.filter((item) => item.status === 'expired').length
+  };
+  return {
+    ...data,
+    expiryItems,
+    overdueItems: expiryItems.filter((item) => Number(item.daysLeft) < 0),
+    documents: filteredDocuments,
+    insuranceStatusMatrix: summarizeCategory(expiryItems, 'insurance'),
+    inspectionAndPermits: {
+      inspections: summarizeCategory(expiryItems, 'inspection'),
+      permits: summarizeCategory(expiryItems, 'permit'),
+      licensing: summarizeCategory(expiryItems, 'licensing')
+    },
+    driverLicenses: summarizeCategory(expiryItems, 'driver_license'),
+    totals
+  };
+}
+
+/** One driver ledger row → the dashboard's document shape (unmasked, D1). */
+function complianceDriverDocument(row = {}, now = new Date()) {
+  const expiry = row.expiry ? String(row.expiry).slice(0, 10) : null;
+  const lifetime = row.lifetime === true;
+  const daysLeft = expiry && !lifetime ? daysUntilDue(expiry, now) : null;
+  return {
+    type: row.type || null,
+    label: row.label || (row.type ? driverComplianceLabel(row.type) : 'Document'),
+    number: row.number || null,
+    expiry,
+    lifetime,
+    daysLeft,
+    status: complianceStatusOf(daysLeft, lifetime)
+  };
+}
+
+/** Most urgent row (most overdue, else nearest); null when nothing is dated. */
+function soonestComplianceItem(rows = []) {
+  const dated = (rows || []).filter((row) => Number.isFinite(Number(row.daysLeft)));
+  if (!dated.length) return null;
+  const first = [...dated].sort((a, b) => Number(a.daysLeft) - Number(b.daysLeft))[0];
+  return {
+    label: first.categoryLabel || first.label || first.item || 'Document',
+    dueDate: first.dueDate || first.expiry || null,
+    daysLeft: Number(first.daysLeft),
+    status: first.status || complianceStatusOf(Number(first.daysLeft))
+  };
+}
+
+function sortBySoonest(a, b) {
+  const aDays = a?.soonest ? Number(a.soonest.daysLeft) : 99999;
+  const bDays = b?.soonest ? Number(b.soonest.daysLeft) : 99999;
+  if (aDays !== bDays) return aDays - bDays;
+  return String(a?.plate || a?.name || '').localeCompare(String(b?.plate || b?.name || ''));
+}
+
+/**
+ * The compliance board (Phase 14C): the owner's vehicles and assigned drivers
+ * with a tracking rollup, read through the SAME compliance report engine the
+ * WhatsApp/PDF report uses, then narrowed by the current view.
+ *
+ * Vehicle items are attributed by plate (the engine's own display key); driver
+ * documents come from `driver_compliances` scoped to the owner's assigned
+ * driver ids — so nothing outside this fleet can appear.
+ */
+export async function buildComplianceBoard({
+  supabase,
+  ownerId = null,
+  countryInfo = null,
+  profile = null,
+  now = new Date(),
+  view = 'all',
+  loadReport = buildComplianceReport,
+  loadVehicles = loadOwnerVehicles
+} = {}) {
+  if (!supabase || !ownerId) return { ok: false };
+  try {
+    const ctx = buildGlobalContext(countryInfo, profile);
+    const [report, vehicles] = await Promise.all([
+      loadReport({ supabase, ownerId, countryInfo, profile, now }),
+      loadVehicles(supabase, ownerId)
+    ]);
+    if (!report?.ok) return { ok: false };
+    const raw = report.data || {};
+    const filtered = filterComplianceReport(raw, view);
+    const items = filtered.expiryItems;
+
+    const vehicleRows = (vehicles || [])
+      .filter((vehicle) => String(vehicle.status || 'ACTIVE').toUpperCase() !== 'DELETED')
+      .map((vehicle) => {
+        const scoped = items.filter((item) => item.subjectType !== 'driver' && item.plate === vehicle.plate_number);
+        return {
+          id: vehicle.id,
+          plate: vehicle.plate_number || 'Fleet vehicle',
+          makeModel: vehicle.make_model || null,
+          active: String(vehicle.status || 'ACTIVE').toUpperCase() === 'ACTIVE',
+          monitored: scoped.length,
+          expiredCount: scoped.filter((item) => Number(item.daysLeft) < 0).length,
+          dueCount: scoped.filter((item) => complianceInView(item.daysLeft, 'due')).length,
+          soonest: soonestComplianceItem(scoped)
+        };
+      })
+      .filter((row) => view === 'all' || row.monitored > 0)
+      .sort(sortBySoonest);
+
+    const driverIds = [...new Set((vehicles || []).map((vehicle) => vehicle.assigned_driver_id).filter(Boolean))];
+    let driverProfiles = [];
+    let driverDocs = [];
+    if (driverIds.length) {
+      try {
+        const { data } = await supabase.from('profiles').select('id, full_name, phone_number').in('id', driverIds).limit(driverIds.length);
+        driverProfiles = data || [];
+      } catch (err) {
+        logWriteFailure(supabase, 'dashboard.buildComplianceBoard.profiles', err);
+      }
+      try {
+        const { data } = await supabase.from('driver_compliances').select('*').in('driver_id', driverIds).limit(300);
+        driverDocs = data || [];
+      } catch (err) {
+        logWriteFailure(supabase, 'dashboard.buildComplianceBoard.driverDocs', err);
+      }
+    }
+
+    const drivers = driverIds
+      .map((driverId) => {
+        const person = driverProfiles.find((row) => row.id === driverId);
+        const allDocs = driverDocs.filter((row) => row.driver_id === driverId).map((row) => complianceDriverDocument(row, now));
+        const scoped = allDocs.filter((doc) => complianceInView(doc.daysLeft, view));
+        return {
+          id: driverId,
+          name: person?.full_name || 'Driver',
+          phone: person?.phone_number || null,
+          plates: (vehicles || []).filter((vehicle) => vehicle.assigned_driver_id === driverId).map((vehicle) => vehicle.plate_number).filter(Boolean),
+          documentCount: allDocs.length,
+          matched: scoped.length,
+          expiredCount: scoped.filter((doc) => Number(doc.daysLeft) < 0).length,
+          dueCount: scoped.filter((doc) => complianceInView(doc.daysLeft, 'due')).length,
+          soonest: soonestComplianceItem(scoped)
+        };
+      })
+      .filter((row) => view === 'all' || row.matched > 0)
+      .sort(sortBySoonest);
+
+    return {
+      ok: true,
+      view,
+      generatedAt: filtered.generatedAt || raw.generatedAt || now.toISOString(),
+      currency: filtered.currency || ctx.currency,
+      locale: ctx.locale,
+      timeZone: filtered.timeZone || ctx.timeZone,
+      totals: filtered.totals,
+      vehicles: vehicleRows,
+      drivers,
+      items,
+      reportData: filtered,
+      rawReportData: raw
+    };
+  } catch (err) {
+    logWriteFailure(supabase, 'dashboard.buildComplianceBoard', err);
+    return { ok: false };
+  }
+}
+
+/**
+ * `/d/drivers/:id` (Phase 14C) — one assigned driver + their document ledger.
+ *
+ * Ownership is STRUCTURAL (rule 51(i)): the driver must be the
+ * `assigned_driver_id` of one of the owner's live vehicles, otherwise
+ * `{ ok:false, reason:'not_found' }` — the route answers 404 and renders no
+ * profile, phone or document number on that path (rule 51(iv)).
+ * D1: numbers are UNMASKED for the owner (their fleet); the driver's own card
+ * keeps the mask.
+ */
+export async function buildDriverCompliancePage({
+  supabase,
+  ownerId = null,
+  driverId = null,
+  countryInfo = null,
+  profile = null,
+  now = new Date(),
+  loadVehicles = loadOwnerVehicles
+} = {}) {
+  if (!supabase || !ownerId || !driverId) return { ok: false, reason: 'not_found' };
+  try {
+    const vehicles = await loadVehicles(supabase, ownerId);
+    const assigned = (vehicles || []).filter((vehicle) => vehicle.assigned_driver_id === driverId);
+    if (!assigned.length) return { ok: false, reason: 'not_found' };
+
+    const { data: person, error: personError } = await supabase
+      .from('profiles')
+      .select('id, full_name, phone_number, country_code')
+      .eq('id', driverId)
+      .maybeSingle();
+    if (personError || !person) return { ok: false, reason: 'not_found' };
+
+    const { data: rows } = await supabase.from('driver_compliances').select('*').eq('driver_id', driverId).limit(100);
+    const documents = (rows || [])
+      .map((row) => complianceDriverDocument(row, now))
+      .sort((a, b) => (Number.isFinite(Number(a.daysLeft)) ? Number(a.daysLeft) : 99999) - (Number.isFinite(Number(b.daysLeft)) ? Number(b.daysLeft) : 99999));
+    const ctx = buildGlobalContext(countryInfo, profile);
+
+    return {
+      ok: true,
+      generatedAt: now.toISOString(),
+      currency: ctx.currency,
+      locale: ctx.locale,
+      timeZone: ctx.timeZone,
+      driver: {
+        id: person.id,
+        name: person.full_name || 'Driver',
+        phone: person.phone_number || null,
+        plates: assigned.map((vehicle) => vehicle.plate_number).filter(Boolean),
+        vehicles: assigned.map((vehicle) => ({ id: vehicle.id, plate: vehicle.plate_number || 'Fleet vehicle' }))
+      },
+      documents,
+      soonest: soonestComplianceItem(documents)
+    };
+  } catch (err) {
+    logWriteFailure(supabase, 'dashboard.buildDriverCompliancePage', err);
+    return { ok: false, reason: 'db_error' };
+  }
+}
+
+/**
+ * Filtered compliance PDF (Phase 14C): the SAME filtered report data the page
+ * renders goes through the existing compliance transformer, then the Apex
+ * engine — a Buffer with no Storage upload and no email.
+ */
+export async function buildCompliancePdf(reportData = {}, {
+  profile = null,
+  countryInfo = null,
+  useStandardFonts = false
+} = {}) {
+  const data = reportData && typeof reportData === 'object' ? reportData : {};
+  const report = { ok: true, type: 'compliance', data };
+  const pdfData = complianceReportToPdf(report, 'compliance');
+  return buildProReportPdf({
+    ...pdfData,
+    useStandardFonts,
+    owner: profile
+      ? {
+          name: profile.full_name || 'Fleet owner',
+          email: profile.email || '',
+          phone: profile.phone_number || '',
+          language: profile.preferred_language || 'English',
+          plan: profile.plan || null
+        }
+      : null,
+    countryInfo: countryInfo || null
+  });
+}
+
+/* ------------------------------------------------------------------ */
 /* HTML shell (shared by every dashboard page, Phase 14 reuses it)     */
 /* ------------------------------------------------------------------ */
 
@@ -1093,6 +1429,7 @@ h2 { font-size:16px; margin:22px 0 8px; }
 .chip { display:inline-block; padding:1px 8px; border-radius:999px; font-size:12px; border:1px solid var(--line); color:var(--muted); }
 .chip.due { color:var(--accent); border-color:var(--accent); }
 .chip.ok { color:#3FB950; border-color:#2E6B39; }
+.chip.bad { color:#F85149; border-color:#F85149; }
 input[type=text] { width:100%; padding:14px; font-size:22px; letter-spacing:8px; text-align:center; background:#0F0F11; color:var(--ink); border:1px solid var(--line); border-radius:10px; }
 button { width:100%; margin-top:12px; padding:14px; font-size:16px; font-weight:600; color:#0A0A0C; background:var(--accent); border:0; border-radius:10px; cursor:pointer; }
 .error { color:var(--bad); font-size:14px; margin-top:10px; }
@@ -1187,9 +1524,9 @@ function daysLabel(daysLeft) {
   return `in ${daysLeft} d`;
 }
 
-/** The four destinations every signed-in page offers (Phase 14B adds Records). */
+/** The five destinations every signed-in page offers (Phase 14C adds Compliance). */
 function dashboardNav() {
-  return '<a href="/d">Overview</a> · <a href="/d/vehicles">Vehicles</a> · <a href="/d/records">Records</a> · <a href="/d/logout">Log out</a>';
+  return '<a href="/d">Overview</a> · <a href="/d/vehicles">Vehicles</a> · <a href="/d/records">Records</a> · <a href="/d/compliance">Compliance</a> · <a href="/d/logout">Log out</a>';
 }
 
 /** Active / paused / inactive — a chip, never a raw database enum. */
@@ -1455,6 +1792,127 @@ export function renderReceiptPage({ signedUrl } = {}) {
   return { status: 302, location: signedUrl };
 }
 
+/**
+ * `/d/compliance` (Phase 14C) — the vehicle + driver compliance board. Filters
+ * live in the URL (`?view=all|due|expired`) so links are shareable and the
+ * export button can never describe a different view than the table.
+ */
+export function renderCompliancePage({ board, filters = {}, emailMasked = '', error = null }) {
+  if (!board?.ok) {
+    return renderErrorPage(503, 'Your compliance view could not be loaded just now. Please try again in a moment.').html;
+  }
+  const view = filters.view || board.view || 'all';
+  const totals = board.totals || {};
+  const when = formatDate(board.generatedAt, board.locale, { timeZone: board.timeZone });
+  const dueDate = (iso) => (iso ? formatDate(iso, board.locale, { timeZone: board.timeZone }) : '—');
+  const filterLink = (id, label) => `<a class="chip${view === id ? ' due' : ''}" href="/d/compliance?view=${id}">${escapeHtml(label)}</a>`;
+
+  const kpis = `
+  <div class="kpis card">
+    <div class="kpi"><div class="label">Monitored</div><div class="value">${Number(totals.monitored || 0)}</div></div>
+    <div class="kpi"><div class="label">Valid</div><div class="value">${Number(totals.active || 0)}</div></div>
+    <div class="kpi"><div class="label">Due in 30 days</div><div class="value">${Number(totals.expiring30Days || 0)}</div></div>
+    <div class="kpi"><div class="label">Expired</div><div class="value">${Number(totals.expired || 0)}</div></div>
+  </div>`;
+
+  const vehicles = Array.isArray(board.vehicles) ? board.vehicles : [];
+  const vehicleTable = vehicles.length
+    ? `<div class="card table-wrap"><table class="rec">
+        <thead><tr><th>Vehicle</th><th class="num">Tracked</th><th>Soonest</th><th>Status</th></tr></thead>
+        <tbody>${vehicles.map((row) => `
+          <tr>
+            <td><a href="/d/vehicles/${encodeURIComponent(row.id)}">${escapeHtml(row.plate)}</a>${row.makeModel ? `<span class="muted"> · ${escapeHtml(row.makeModel)}</span>` : ''}${row.active ? '' : ' <span class="chip">Paused</span>'}</td>
+            <td class="num">${Number(row.monitored)}</td>
+            <td>${row.soonest ? `${escapeHtml(row.soonest.label)} <span class="muted">${escapeHtml(dueDate(row.soonest.dueDate))}</span>` : '<span class="muted">No dates on file</span>'}</td>
+            <td>${row.soonest ? complianceChipHtml(row.soonest) : '<span class="chip">Not tracked</span>'}</td>
+          </tr>`).join('')}</tbody>
+      </table></div>`
+    : `<div class="card"><p class="muted">${view === 'all' ? 'No vehicles yet — register one in WhatsApp and its documents appear here.' : 'No vehicles match this view — try All.'}</p></div>`;
+
+  const drivers = Array.isArray(board.drivers) ? board.drivers : [];
+  const driverTable = drivers.length
+    ? `<div class="card table-wrap"><table class="rec">
+        <thead><tr><th>Driver</th><th>Plates</th><th class="num">Documents</th><th>Soonest</th><th>Status</th></tr></thead>
+        <tbody>${drivers.map((row) => `
+          <tr>
+            <td><a href="/d/drivers/${encodeURIComponent(row.id)}">${escapeHtml(row.name)}</a></td>
+            <td>${escapeHtml((row.plates || []).join(', ') || '—')}</td>
+            <td class="num">${Number(row.documentCount)}</td>
+            <td>${row.soonest ? `${escapeHtml(row.soonest.label)} <span class="muted">${escapeHtml(dueDate(row.soonest.dueDate))}</span>` : '<span class="muted">No documents on file</span>'}</td>
+            <td>${row.soonest ? complianceChipHtml(row.soonest) : '<span class="chip">Not tracked</span>'}</td>
+          </tr>`).join('')}</tbody>
+      </table></div>`
+    : `<div class="card"><p class="muted">${view === 'all' ? 'No assigned drivers yet — assign one in WhatsApp and their documents appear here.' : 'No drivers match this view — try All.'}</p></div>`;
+
+  const items = Array.isArray(board.items) ? board.items.slice(0, 30) : [];
+  const itemTable = view !== 'all'
+    ? (items.length
+      ? `<div class="card table-wrap"><table class="rec">
+          <thead><tr><th>Vehicle</th><th>Document</th><th>Due</th><th>Status</th></tr></thead>
+          <tbody>${items.map((item) => `
+            <tr>
+              <td>${escapeHtml(item.plate || 'Fleet')}</td>
+              <td>${escapeHtml(item.categoryLabel || item.item || item.category || 'Document')}</td>
+              <td>${escapeHtml(dueDate(item.dueDate))}</td>
+              <td>${complianceChipHtml(item)}</td>
+            </tr>`).join('')}</tbody>
+        </table></div>`
+      : `<div class="card"><p class="muted">${view === 'expired' ? 'Nothing expired — nicely kept.' : 'Nothing due in the next 30 days.'}</p></div>`)
+    : '';
+
+  const body = `
+<h1>Compliance</h1>
+<p class="muted">Signed in as ${escapeHtml(emailMasked)} • updated ${escapeHtml(when)}</p>
+${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
+<p>${filterLink('all', 'All')} ${filterLink('due', 'Due soon (30 d)')} ${filterLink('expired', 'Expired')}</p>
+${kpis}
+<h2>Vehicles</h2>
+${vehicleTable}
+<h2>Drivers</h2>
+${driverTable}
+${view !== 'all' ? `<h2>Items in this view</h2>${itemTable}` : ''}
+<p class="muted" style="font-size:13px;">Export this view: <a href="/d/compliance.pdf?view=${escapeHtml(view)}">PDF</a> · dates are engine-calculated from your saved documents.</p>`;
+  return renderPageShell('Compliance', body, { headerRight: dashboardNav() });
+}
+
+/**
+ * `/d/drivers/:id` (Phase 14C) — one assigned driver and their documents.
+ * D1: numbers are shown in full to the owner; the driver's own card masks them.
+ */
+export function renderDriverPage({ page, emailMasked = '' }) {
+  if (!page?.ok) {
+    return renderErrorPage(503, 'That driver could not be loaded just now. Please try again in a moment.').html;
+  }
+  const driver = page.driver || {};
+  const documents = Array.isArray(page.documents) ? page.documents : [];
+  const dueDate = (iso) => (iso ? formatDate(iso, page.locale, { timeZone: page.timeZone }) : '—');
+  const plateLinks = (driver.vehicles || [])
+    .map((vehicle) => `<a href="/d/vehicles/${encodeURIComponent(vehicle.id)}">${escapeHtml(vehicle.plate)}</a>`)
+    .join(', ');
+  const rows = documents.map((doc) => `
+          <tr>
+            <td>${escapeHtml(doc.label || 'Document')}</td>
+            <td>${escapeHtml(doc.lifetime ? 'Valid for life' : (doc.number || '—'))}</td>
+            <td>${escapeHtml(doc.lifetime ? '—' : dueDate(doc.expiry))}</td>
+            <td>${complianceChipHtml(doc)}</td>
+          </tr>`).join('');
+  const table = documents.length
+    ? `<div class="card table-wrap"><table class="rec">
+        <thead><tr><th>Document</th><th>Number</th><th>Expiry</th><th>Status</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>`
+    : '<div class="card"><p class="muted">No driver documents on file yet — the driver adds them in WhatsApp and they appear here.</p></div>';
+
+  const body = `
+<p class="muted"><a href="/d/compliance">← Compliance</a></p>
+<h1>${escapeHtml(driver.name || 'Driver')}</h1>
+<p class="muted">${escapeHtml(driver.phone || 'No phone on file')}${plateLinks ? ` · ${plateLinks}` : ''} · signed in as ${escapeHtml(emailMasked)}</p>
+<h2>Documents</h2>
+${table}
+<p class="muted" style="font-size:13px;">Read-only here — reply in WhatsApp with a new date to update a document.</p>`;
+  return renderPageShell(`${driver.name || 'Driver'} — compliance`, body, { headerRight: dashboardNav() });
+}
+
 export function renderLogoutPage() {
   const body = `
 <h1>You're logged out</h1>
@@ -1529,5 +1987,17 @@ export default {
   signReceiptUrl,
   serializeRecordsCsv,
   buildRecordsPdf,
-  recordsQueryString
+  recordsQueryString,
+  COMPLIANCE_VIEWS,
+  COMPLIANCE_DUE_DAYS,
+  parseComplianceFilters,
+  complianceInView,
+  complianceStatusOf,
+  complianceChipHtml,
+  filterComplianceReport,
+  buildComplianceBoard,
+  buildDriverCompliancePage,
+  buildCompliancePdf,
+  renderCompliancePage,
+  renderDriverPage
 };

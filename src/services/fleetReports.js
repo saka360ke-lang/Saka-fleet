@@ -90,7 +90,8 @@ function vehicleDisplay(vehicle, ctx) {
   return { odometer: Math.round(distance), distanceUnit: ctx.labels.distance };
 }
 
-function expiryStatus(daysLeft) {
+/** v1.75.2 — exported so the dashboard compliance surface uses the SAME buckets. */
+export function expiryStatus(daysLeft) {
   if (daysLeft === null) return 'unknown';
   if (daysLeft < 0) return 'expired';
   if (daysLeft <= 7) return 'due_7d';
@@ -423,7 +424,8 @@ function formatFleetStatusText(data, ctx) {
 /* 2. Compliance & Expiry Report                                       */
 /* ------------------------------------------------------------------ */
 
-function summarizeCategory(items, category) {
+/** v1.75.2 — exported so a filtered compliance view re-derives the SAME buckets. */
+export function summarizeCategory(items, category) {
   const rows = items.filter((item) => item.category === category);
   return {
     total: rows.length,
