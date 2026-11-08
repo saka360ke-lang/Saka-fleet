@@ -15,6 +15,8 @@ import { PROMPT_REFINEMENT_MARKER, MAX_STORED_PROMPT_REFINEMENT_CHARS } from '..
 import { normalizeFrictionPhone, markFrictionDeployed } from '../services/frictionTracker.js';
 import { isSentinelProposalsEnabled } from '../services/sentinelPolicy.js';
 import { isDeliveryBlocked } from '../services/deliveryGuard.js';
+// v1.82.0 (Phase 21) — the free-form text path is ONE shared transport now.
+import { sendWhatsAppText } from '../services/metaMessenger.js';
 import { resolveProactiveMode } from '../services/proactiveTemplates.js';
 import { logSystemError as logSystemErrorImpl } from '../services/systemErrors.js';
 // v1.72.1 (P2-6) — system_config access rides the dual-window service.
@@ -1223,33 +1225,9 @@ export async function sendProactiveWhatsApp(toPhone, text, kind = null, template
     // Fall through: the text path still delivers inside the 24-hour window.
   }
 
-  const phoneNumberId = process.env.META_PHONE_NUMBER_ID;
-  const token = process.env.META_WHATSAPP_TOKEN;
-  if (!phoneNumberId || !token || !toPhone || !text) return false;
-
-  const cleanPhone = String(toPhone).replace(/[^\d]/g, '');
-  if (!cleanPhone) return false;
-  // v1.58.23 - respect the delivery blocklist (permanent 131026-style failures).
-  if (isDeliveryBlocked(cleanPhone)) return false;
-
-  try {
-    const res = await fetch(`https://graph.facebook.com/v21.0/${phoneNumberId}/messages`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        messaging_product: 'whatsapp',
-        to: cleanPhone,
-        type: 'text',
-        text: { body: text }
-      })
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
+  // v1.82.0 (Phase 21) — the text transport lives in metaMessenger.js so the
+  // dashboard OTP sender and this worker can never drift (rule 55).
+  return sendWhatsAppText(toPhone, text);
 }
 
 /**

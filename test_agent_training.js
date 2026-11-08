@@ -339,10 +339,11 @@ check(/Narrative pre-fills are engine-determined facts/.test(await import('./src
   check(SAKA_FLOW_PLAYBOOK.includes('Point of entry'), 'the playbook documents the website point of entry');
   // v1.74.0 (Phase 13) — every known flow key stays embedded in the prompt, and
   // the dashboard's two-channel split is stated where the model reads it.
-  check(SAKA_FLOW_PLAYBOOK.includes('WEB DASHBOARD (v1.74.0'), 'the playbook documents the web dashboard flow (v1.74.0)');
-  check(/code arrives by EMAIL ONLY/.test(SAKA_FLOW_PLAYBOOK), 'the playbook states the dashboard code arrives by email only');
+  check(SAKA_FLOW_PLAYBOOK.includes('WEB DASHBOARD (v1.82.0'), 'the playbook documents the WhatsApp-native dashboard sign-in (v1.82.0)');
+  check(/STATIC sign-in link https:\/\/app\.sakafleet\.com\/d\/login/.test(SAKA_FLOW_PLAYBOOK), 'the playbook names the static sign-in link');
+  check(/EMAIL magic link is retired/.test(SAKA_FLOW_PLAYBOOK), 'the playbook retires the email magic link');
   check(SAKA_FLOW_PLAYBOOK.includes('dashboard: Reply *dashboard*'), 'the dashboard guidance line renders into the prompt (rule 60)');
-  check(DEFAULT_SAKA_CORE_PROMPT.includes('WEB DASHBOARD (v1.74.0)'), 'the core prompt carries the dashboard feature line (v1.74.0)');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('WEB DASHBOARD (v1.82.0)'), 'the core prompt carries the dashboard feature line (v1.82.0)');
   // v1.75.0 (Phase 14A) — prompt and behaviour stay in lock-step: the model must
   // know the dashboard grew a vehicle list + one page per vehicle.
   check(SAKA_FLOW_PLAYBOOK.includes('opens one page per vehicle'), 'the playbook states the v1.75.0 vehicle pages');

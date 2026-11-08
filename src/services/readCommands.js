@@ -64,9 +64,7 @@ import { searchOtherLabels, formatOtherLabelMatches } from './labelsEverywhere.j
 import { composeMessage } from './conversationEngine.js';
 import { resolveUserTimezone } from './globalization.js';
 import { isSuperadminPhone } from './superadmin.js';
-import { getEntitlements } from './subscriptions.js';
-import { isDashboardEnabled, requestDashboardAccess, maskEmail, resolveDashboardRole } from './dashboard.js';
-import { SAKA_WEB_SIGNUP_URL } from './flowKnowledge.js';
+import { isDashboardEnabled, dashboardLoginUrl, dashboardAdminLoginUrl } from './dashboard.js';
 
 /**
  * Saka Fleet — Read Command Registry (Phase 3, v1.63.3)
@@ -106,8 +104,9 @@ const DRIVER_PROFILE_RE = /^(?:(?:show|see|view|open|check|what(?:'s| is))\s+(?:
 
 // v1.74.0 — the dashboard trigger: exact phrase only ("dashboard", "my
 // dashboard", "open my dashboard", "web dashboard"); longer phrasings stay
-// with the AI.
-const DASHBOARD_RE = /^(?:(?:open|show|see|view)\s+(?:me\s+)?(?:my\s+|the\s+)?|(?:my\s+|the\s+)?)(?:web\s+|online\s+)?dashboard[.!?]*$/i;
+// with the AI. v1.82.0 (Phase 21) — the bare "records"/"my records" alias joins
+// the same static sign-in door (no existing lane claims it).
+const DASHBOARD_RE = /^(?:(?:open|show|see|view)\s+(?:me\s+)?(?:my\s+|the\s+)?|(?:my\s+|the\s+)?)(?:(?:web\s+|online\s+)?dashboard|records)[.!?]*$/i;
 // v1.76.0 (Phase 15) — the superadmin lane trigger: exact phrase only, and the
 // phone must match SUPERADMIN_PHONE inside the lane (a non-admin gets the same
 // generic A2-style line, so the admin surface is never revealed).
@@ -283,14 +282,12 @@ export const READ_COMMANDS = Object.freeze([
     }
   },
   {
-    // v1.74.0 (Phase 13B) — the web dashboard trigger. Exact-phrase only (the
-    // `$` anchor keeps "dashboard ideas", "I can't see the dashboard" and other
-    // complaints out); parks the quiz and stays out of PIN/OTP phases like the
-    // other reads. Two-channel split (D2): the chat carries the LINK, the email
-    // carries the 6-digit code — the code is NEVER repeated or accepted here.
-    // Flag off answers A2 without ever naming the dashboard (A2). The service
-    // is injectable (`ctx.dashboardRequestAccess`) so suites prove every copy
-    // branch without sending a real email; production always uses the service.
+    // v1.82.0 (Phase 21) — the dashboard trigger ships the STATIC sign-in link
+    // plus a 3-line tutorial (open -> enter WhatsApp number -> type the code I
+    // send here). No email, no database write, zero tokens. Exact-phrase only
+    // (the `$` anchor keeps "dashboard ideas", "I can't see the dashboard" and
+    // other complaints out); parks the quiz and stays out of PIN/OTP phases.
+    // Flag off answers A2 without ever naming the dashboard.
     id: 'dashboard',
     parksQuiz: true,
     skipWhenLocked: true,
@@ -304,75 +301,27 @@ export const READ_COMMANDS = Object.freeze([
       if (!isDashboardEnabled()) {
         return result("That's not something I can do yet — reply *help* to see what I can do.");
       }
-      const profile = ctx.profile;
-      if (!profile?.id || profile.email_verified !== true) {
-        return result(`I can open your dashboard once your email is verified — finish the quick sign-up at ${SAKA_WEB_SIGNUP_URL} and message me again.`);
+      // The superadmin door is exact-phrase + env identity (D2/D4). A stranger
+      // gets the generic A2 line, so the admin surface is never revealed.
+      if (hit === 'admin') {
+        if (!isSuperadminPhone(ctx.senderPhone || ctx.profile?.phone_number)) {
+          return result("That's not something I can do yet — reply *help* to see what I can do.");
+        }
+        return result(
+          '🖥️ *Admin dashboard*\n\n' +
+          `Sign in here: ${dashboardAdminLoginUrl()}\n\n` +
+          '1. Open the link and enter the admin number.\n' +
+          '2. I send a 6-digit code to that WhatsApp.\n' +
+          '3. Type the code on the page — you are in for 15 minutes.'
+        );
       }
-      try {
-        const requestAccess = typeof ctx.dashboardRequestAccess === 'function'
-          ? ctx.dashboardRequestAccess
-          : requestDashboardAccess;
-        // v1.76.0 (Phase 15) — resolve the lane: admin > owner > driver. A
-        // non-superadmin asking for the admin phrase gets the generic A2 line,
-        // so the admin surface is never revealed.
-        let role = 'owner';
-        if (hit === 'admin') {
-          if (!isSuperadminPhone(ctx.senderPhone || profile.phone_number)) {
-            return result("That's not something I can do yet — reply *help* to see what I can do.");
-          }
-          role = 'admin';
-        } else {
-          const resolveRole = typeof ctx.dashboardResolveRole === 'function'
-            ? ctx.dashboardResolveRole
-            : resolveDashboardRole;
-          const resolved = await resolveRole({ supabase: ctx.supabaseClient, profile });
-          role = resolved?.role === 'driver' ? 'driver' : 'owner';
-        }
-        const entitlements = role === 'owner'
-          ? (ctx.dashboardEntitlements || await getEntitlements({ supabase: ctx.supabaseClient, ownerId: profile.id }))
-          : null;
-        const access = await requestAccess({
-          supabase: ctx.supabaseClient,
-          ownerId: profile.id,
-          profile,
-          entitlements,
-          countryInfo: ctx.countryInfo || null,
-          role
-        });
-        if (access?.ok) {
-          const label = access.role === 'admin'
-            ? 'Admin dashboard'
-            : access.role === 'driver' ? 'Driver dashboard' : 'Dashboard';
-          return result(
-            `🖥️ *Your ${label.toLowerCase()} link is on its way*\n\n` +
-            `I emailed a private link to ${maskEmail(access.email)} — it works for 15 minutes.\n` +
-            'The 6-digit code is in that same email; I will never ask for it here.\n\n' +
-            `${access.link}\n\n` +
-            'Nothing there? Check spam, then reply *dashboard* again in a minute.'
-          );
-        }
-        switch (access?.reason) {
-          case 'cooldown':
-            return result('I just sent it — check your inbox (and spam). The link works for 15 minutes; reply *dashboard* again when it expires.');
-          case 'not_entitled':
-            return result('Your dashboard opens on a trial or a paid plan — you are on Free right now. Reply *pricing* to see the plans.');
-          case 'no_assignment':
-            return result('You need to be assigned to a vehicle to access the driver dashboard. Ask your fleet owner to assign you.');
-          case 'not_admin':
-            return result("That's not something I can do yet — reply *help* to see what I can do.");
-          case 'email_unverified':
-          case 'no_email':
-            return result(`I can open your dashboard once your email is verified — finish the quick sign-up at ${SAKA_WEB_SIGNUP_URL} and message me again.`);
-          case 'email_failed':
-            return result('I could not send the email just now — give it a minute and reply *dashboard* again.');
-          case 'flag_off':
-            return result("That's not something I can do yet — reply *help* to see what I can do.");
-          default:
-            return result('Something went wrong on my side — try again in a minute.');
-        }
-      } catch {
-        return result('Something went wrong on my side — try again in a minute.');
-      }
+      return result(
+        '🖥️ *Your dashboard*\n\n' +
+        `Sign in here: ${dashboardLoginUrl()}\n\n` +
+        '1. Open the link and enter your WhatsApp number.\n' +
+        '2. I send a 6-digit code to you here on WhatsApp.\n' +
+        '3. Type the code on the page — you are in for 15 minutes.'
+      );
     }
   },
   {

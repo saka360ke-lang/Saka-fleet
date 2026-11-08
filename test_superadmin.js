@@ -6,7 +6,8 @@ import {
   isSuperadminPhone,
   ensureSuperadminTables,
   handleSuperadminFlow,
-  handleAdminReportCommand
+  handleAdminReportCommand,
+  handleProfilesReportCommand
 } from './src/services/superadmin.js';
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
@@ -48,6 +49,45 @@ const normalUserPhone = '+254799000111';
   assert.strictEqual(report.details.total_expenses, 150, 'PRI-1: the report total sums expense_logs only (150, never 999,999 + 150)');
   assert.ok(!queried.includes('expenses'), 'PRI-1: handleAdminReportCommand does not read the legacy expenses table — no double-count');
   console.log('✅ PRI-1: superadmin report double-count fix verified (expense_logs only)');
+}
+
+// v1.82.0 (Phase 21) — the profiles report must count REGISTERED accounts and
+// name auto-provisioned shells separately. The +254734852529 ghost (no email,
+// no name) headlined `admin profiles` after the wipe never completed; this mock
+// proof pins the new definitions without touching the live database.
+{
+  const adminPhone = process.env.SUPERADMIN_PHONE || '+254712345678';
+  const today = new Date().toISOString();
+  const rows = [
+    { id: 'sa', full_name: 'Superadmin', phone_number: adminPhone, email: null, country: 'Kenya', created_at: today },
+    { id: 'ghost', full_name: null, phone_number: '+254734852529', email: null, country: 'Kenya', created_at: today },
+    { id: 'real', full_name: 'Brenda Wanjiku', phone_number: '+254710268605', email: 'brenjonjo@gmail.com', country: 'Kenya', created_at: today },
+    { id: 'driver', full_name: 'Driver Dan', phone_number: '+254700000001', email: null, country: 'Kenya', created_at: today }
+  ];
+  const mockClient = {
+    from(table) {
+      const api = {
+        select() { return api; },
+        is() { return api; },
+        order() { return api; },
+        limit() { return api; },
+        then(resolve) {
+          if (table === 'profiles') resolve({ data: rows, error: null });
+          else resolve({ data: [], count: 0, error: null });
+        }
+      };
+      return api;
+    }
+  };
+  const report = await handleProfilesReportCommand(mockClient);
+  assert.strictEqual(report.details.total_profiles, 2, 'profiles report: registered = email rows + the superadmin row (2)');
+  assert.strictEqual(report.details.unverified_shells, 1, 'profiles report: the email-less, name-less ghost is a shell (1)');
+  assert.strictEqual(report.details.named_no_email, 1, 'profiles report: a named driver without email is counted separately (1)');
+  assert.ok(report.reply.includes('Unverified Shell Profiles'), 'profiles report: the shell counter is rendered');
+  assert.ok(report.reply.includes('Brenda Wanjiku'), 'profiles report: a registered profile headlines Recent sign-ups');
+  assert.ok(!report.reply.includes('+254734852529'), 'profiles report: the ghost never appears in Recent sign-ups');
+  assert.strictEqual(report.details.signups_24h, 2, 'profiles report: 24h signups count registered profiles only');
+  console.log('✅ v1.82.0: profiles report excludes auto-provisioned shells (ghost fix)');
 }
 
 async function runSuperadminTests() {

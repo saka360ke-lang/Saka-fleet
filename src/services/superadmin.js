@@ -670,11 +670,39 @@ export async function handleCouponGenerationCommand(supabase, adminPhone, messag
   };
 }
 
+/**
+ * v1.82.0 (Phase 21) — the profiles report counts REAL accounts, never
+ * auto-provisioned shells. A WhatsApp first contact creates a profile row with
+ * no email and no name; such a row can never sign in, own a vehicle or verify
+ * anything, yet it used to headline `admin profiles` as just another signup
+ * (the +254734852529 ghost). Definitions (operator-locked):
+ *   - Registered  = `email IS NOT NULL` OR the superadmin's own row.
+ *   - Shell       = `email IS NULL AND full_name IS NULL` and not the superadmin.
+ *   - Named rows without an email (e.g. owner-created driver profiles) are
+ *     counted separately in `details.named_no_email` and stay out of the
+ *     registered total and the Recent sign-ups list.
+ */
 export async function handleProfilesReportCommand(supabase) {
-  const { count: totalProfiles } = await supabase
+  const { data: profileRows, error: profilesError } = await supabase
     .from('profiles')
-    .select('*', { count: 'exact', head: true })
-    .is('deleted_at', null);
+    .select('id, full_name, phone_number, country, created_at, email')
+    .is('deleted_at', null)
+    .order('created_at', { ascending: false })
+    .limit(1000);
+
+  if (profilesError) {
+    return {
+      reply: `📊 *Saka Fleet Profiles Report*\n\nI could not read profiles just now — try again in a minute.`,
+      details: { error: profilesError.message }
+    };
+  }
+
+  const allProfiles = Array.isArray(profileRows) ? profileRows : [];
+  const isRegistered = (p) => Boolean(p.email) || isSuperadminPhone(p.phone_number);
+  const registered = allProfiles.filter(isRegistered);
+  const shells = allProfiles.filter((p) => !isRegistered(p) && !p.full_name);
+  const namedNoEmail = allProfiles.length - registered.length - shells.length;
+  const totalProfiles = registered.length;
 
   const { data: ownersData } = await supabase
     .from('vehicles')
@@ -692,24 +720,10 @@ export async function handleProfilesReportCommand(supabase) {
   const iso24h = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
   const iso7d = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
-  const { count: signups24h } = await supabase
-    .from('profiles')
-    .select('*', { count: 'exact', head: true })
-    .gte('created_at', iso24h)
-    .is('deleted_at', null);
-
-  const { count: signups7d } = await supabase
-    .from('profiles')
-    .select('*', { count: 'exact', head: true })
-    .gte('created_at', iso7d)
-    .is('deleted_at', null);
-
-  const { data: recentList } = await supabase
-    .from('profiles')
-    .select('full_name, phone_number, country, created_at')
-    .is('deleted_at', null)
-    .order('created_at', { ascending: false })
-    .limit(5);
+  // v1.82.0 — signups are REGISTERED profiles only; shells never inflate them.
+  const signups24h = registered.filter((p) => p.created_at && p.created_at >= iso24h).length;
+  const signups7d = registered.filter((p) => p.created_at && p.created_at >= iso7d).length;
+  const recentList = registered.slice(0, 5);
 
   let recentFormatted = 'No recent signups found.';
   if (recentList && recentList.length > 0) {
@@ -720,7 +734,8 @@ export async function handleProfilesReportCommand(supabase) {
   }
 
   const reply = `📊 *Saka Fleet Profiles Report*\n\n` +
-    `• *Total Registered Profiles*: ${totalProfiles || 0}\n` +
+    `• *Total Registered Profiles*: ${totalProfiles}\n` +
+    `• *Unverified Shell Profiles*: ${shells.length}\n` +
     `• *Active Vehicle Owners*: ${uniqueOwners.size}\n` +
     `• *Assigned Active Drivers*: ${uniqueDrivers.size}\n` +
     `• *New Sign-ups (Last 24h)*: ${signups24h || 0}\n` +
@@ -730,11 +745,13 @@ export async function handleProfilesReportCommand(supabase) {
   return {
     reply,
     details: {
-      total_profiles: totalProfiles || 0,
+      total_profiles: totalProfiles,
+      unverified_shells: shells.length,
+      named_no_email: namedNoEmail,
       active_vehicle_owners: uniqueOwners.size,
       active_assigned_drivers: uniqueDrivers.size,
-      signups_24h: signups24h || 0,
-      signups_7d: signups7d || 0
+      signups_24h: signups24h,
+      signups_7d: signups7d
     }
   };
 }

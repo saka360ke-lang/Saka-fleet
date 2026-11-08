@@ -447,7 +447,7 @@ export const FLOW_GUIDANCE = Object.freeze({
   delete_account: 'Reply *delete account* and confirm with the emailed code — this cannot be undone.',
   reactivate_account: 'Reply *reactivate* and I will restore your account — data is kept while deactivated.',
   // v1.74.0 — the web dashboard trigger (Phase 13; rule 60).
-  dashboard: 'Reply *dashboard* and I will email you a private link plus a 6-digit code — the code only ever arrives by email. Assigned drivers and the superadmin ("dashboard admin") get their own lane.'
+  dashboard: 'Reply *dashboard* and I will send the sign-in link — open it, enter your number, then type the 6-digit code I send here. Drivers and the superadmin ("dashboard admin") get their own door.'
 });
 
 /** Deterministic one next step for a flow key, or null when unregistered. */
@@ -691,10 +691,10 @@ export const SAKA_WEB_ONBOARDING_PLAYBOOK = [
  * links or codes; this block stops it from inventing either.
  */
 export const SAKA_WEB_DASHBOARD_PLAYBOOK = [
-  'WEB DASHBOARD (v1.74.0 — Phase 13, flag-gated):',
-  '- "dashboard" (also "my dashboard" / "open my dashboard" / "web dashboard") emails a private link (15 minutes) AND a 6-digit code (10 minutes) to the account email address.',
-  '- The 6-digit code arrives by EMAIL ONLY: never repeat it in WhatsApp, never accept a dashboard code typed in chat, and never invent or guess a link.',
-  '- The dashboard needs a verified email plus a trial or paid plan; on Free, point the user to *pricing*.',
+  'WEB DASHBOARD (v1.82.0 — Phase 21, WhatsApp-native sign-in, flag-gated):',
+  '- "dashboard" / "records" (also "my dashboard" / "open my dashboard" / "web dashboard") replies with the STATIC sign-in link https://app.sakafleet.com/d/login plus a 3-line tutorial: open the link, enter the WhatsApp number, then type the 6-digit code I send here.',
+  '- The 6-digit code arrives in WhatsApp (10 minutes) and the session lasts 15 minutes. The EMAIL magic link is retired; never mention an emailed dashboard link or code, never repeat a code in chat, never accept a dashboard code typed in chat, and never invent or guess a link.',
+  '- An OWNER needs a live trial or paid plan (on Free, point the user to *pricing*); a DRIVER needs a live vehicle assignment; the SUPERADMIN signs in at https://app.sakafleet.com/d/admin/login only ("dashboard admin", exact phrase). The sign-in page is the gate — a number with no account is told to sign up first.',
   '- Three lanes since v1.76.0 (Phase 15): an OWNER (a live trial or paid plan), a DRIVER (a live vehicle assignment — no plan needed) and the SUPERADMIN (the admin number only). "dashboard" opens the caller\'s own lane; "dashboard admin" is superadmin-only and anyone else gets the same not-available line (never reveal that an admin surface exists).',
   '- Since v1.75.0 the dashboard lists the owner\'s vehicles and opens one page per vehicle with its documents and its most recent records; since v1.75.1 it also serves a searchable records table (date range, type, vehicle, label or keyword) with pagination and CSV/PDF export of the current filter; since v1.75.2 a compliance board (vehicles and assigned drivers, All / Due soon / Expired, PDF export of the same view) and a read-only page per assigned driver with their document numbers; since v1.75.3 a reports builder (period, vehicles, up to 8 metrics) that builds a bespoke PDF on the spot, and a settings page with the weekly-report toggle and a one-file data export; since v1.76.0 a DRIVER lane (their assigned vehicle, their own documents with real numbers, and their last 7/14 days) and a SUPERADMIN lane (a read-only owner list with masked phones and a per-owner fleet view — every visit audited); since v1.81.0 an Import page (Phase 20) that accepts a CSV of Date, Vehicle Plate, Type, Amount, Odometer, Notes, validates every row (owned plate, catalog type, positive amount, readable non-future date, no duplicate inside the file or the last few hours) with a highlighted preview, and only then bulk-saves the valid rows — importing never starts or extends a trial and never uses the report quota. Charts, saving report templates, emailing a report from the dashboard, dashboard editing or uploading of documents, changing email or units from the dashboard have NOT shipped — never promise them. Only point to a receipt when the row carries the durable receipt_id link or exactly one receipt matches; never invent a link.'
 ];

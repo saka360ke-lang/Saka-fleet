@@ -1,8 +1,12 @@
 /**
  * Saka Fleet — Dashboard routes (v1.74.0, Phase 13; + Phase 14A in v1.75.0)
  * -----------------------------------------------------------------------
- * GET  /d/:token        -> OTP entry page (magic-link landing)
- * POST /d/verify        -> OTP check -> HttpOnly session cookie -> 303 /d
+ * GET  /d/login         -> static phone-entry page (v1.82.0 WhatsApp OTP)
+ * POST /d/login         -> mint + send a WhatsApp OTP, render the code step
+ * GET  /d/admin/login   -> superadmin door (D4)
+ * POST /d/admin/login   -> admin OTP (SUPERADMIN_PHONE only)
+ * GET  /d/:token        -> OTP entry page (pre-1.82.0 links still land here)
+ * POST /d/verify        -> OTP check -> HttpOnly session cookie -> role home
  * GET  /d               -> overview (session cookie required)
  * GET  /d/vehicles      -> fleet list (v1.75.0, session required)
  * GET  /d/vehicles/:id  -> one vehicle (v1.75.0, session required, owner-scoped)
@@ -27,6 +31,9 @@ import {
   isSecureRequest,
   dashboardOtpReasonCopy,
   maskEmail,
+  maskPhone,
+  requestDashboardOtp,
+  renderLoginPage,
   renderOtpPage,
   renderOverviewPage,
   renderVehiclesPage,
@@ -108,11 +115,11 @@ function sendHtml(reply, status, html) {
 }
 
 function linkReasonCopy(reason) {
-  if (reason === 'link_expired') return 'This link has expired. Reply *dashboard* on WhatsApp and I will email a fresh one.';
-  if (reason === 'otp_expired') return 'The code for this link has expired. Reply *dashboard* on WhatsApp and I will email a fresh link and code.';
-  if (reason === 'already_used') return 'This link has already been used. Reply *dashboard* on WhatsApp for a fresh one.';
+  if (reason === 'link_expired') return 'This sign-in page has expired. Reply *dashboard* on WhatsApp and open the fresh link.';
+  if (reason === 'otp_expired') return 'The code for this sign-in has expired. Reply *dashboard* on WhatsApp and start again.';
+  if (reason === 'already_used') return 'This sign-in page has already been used. Reply *dashboard* on WhatsApp for a fresh one.';
   if (reason === 'db_error') return 'Something went wrong on our side. Please try again in a moment.';
-  return 'This link is not valid. Reply *dashboard* on WhatsApp and I will email a fresh one.';
+  return 'This sign-in page is not valid. Reply *dashboard* on WhatsApp and open the fresh link.';
 }
 
 function linkReasonStatus(reason) {
@@ -154,6 +161,16 @@ function countryForProfile(profile) {
 }
 
 /**
+ * v1.82.0 — the signed-in label. Email is nullable now (WhatsApp sign-in), so a
+ * page names the masked WhatsApp number instead of a non-existent address.
+ */
+function accountLabel(profile, session) {
+  const email = session?.email || profile?.email;
+  if (email) return maskEmail(email);
+  return profile?.phone_number ? maskPhone(profile.phone_number) : 'your account';
+}
+
+/**
  * D2 (Phase 14D) — CSRF defence-in-depth. The session cookie is HttpOnly +
  * SameSite=Strict and `/d` is never CORS-listed, so a cross-site POST cannot
  * carry the cookie at all; this Origin guard refuses the write outright when a
@@ -184,14 +201,14 @@ function isCrossOriginWrite(request) {
 async function requireRoleSession(request, reply, supabase, role = 'owner') {
   const sessionToken = readDashboardCookie(request.headers);
   if (!sessionToken) {
-    const page = renderErrorPage(401, 'Reply *dashboard* in the WhatsApp chat and I will email you a fresh link.');
+    const page = renderErrorPage(401, 'Reply *dashboard* in the WhatsApp chat and open the sign-in link.');
     sendHtml(reply, page.status, page.html);
     return null;
   }
   const session = await getSessionByToken({ supabase, sessionToken });
   if (!session.ok) {
     reply.header('set-cookie', dashboardClearCookieHeader({ secure: isSecureRequest(request) }));
-    const page = renderErrorPage(401, 'Your session has ended. Reply *dashboard* in the WhatsApp chat and I will email you a fresh link.');
+    const page = renderErrorPage(401, 'Your session has ended. Reply *dashboard* in the WhatsApp chat and sign in again.');
     sendHtml(reply, page.status, page.html);
     return null;
   }
@@ -212,7 +229,7 @@ async function requireRoleSession(request, reply, supabase, role = 'owner') {
 }
 
 
-export async function registerDashboardRoutes(fastify, { supabase } = {}) {
+export async function registerDashboardRoutes(fastify, { supabase, requestOtp = requestDashboardOtp } = {}) {
   await fastify.register(async (scope) => {
     // v1.81.0 (Phase 20) — the CSV import re-posts the file text through this
     // parser, so give it the CSV ceiling plus headroom (urlencoding overhead).
@@ -220,6 +237,51 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
     // A raw text/csv body is accepted too: the page's FileReader path and any
     // scripted upload reach the SAME engine (no multipart, no new dependency).
     scope.addContentTypeParser('text/csv', { parseAs: 'string', bodyLimit: CSV_IMPORT_MAX_BYTES + 65536 }, (_request, body, done) => done(null, String(body || '')));
+
+    /* -------------------------------------------------------------- */
+    /* The static sign-in doors (v1.82.0, Phase 21)                    */
+    /* /d/login       -> owner/driver phone entry                      */
+    /* /d/admin/login -> superadmin door (D4: never minted at /d/login)*/
+    /* -------------------------------------------------------------- */
+    const renderLoginDoor = (admin) => (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      return sendHtml(reply, 200, renderLoginPage({ admin }));
+    };
+    scope.get('/d/login', renderLoginDoor(false));
+    scope.get('/d/admin/login', renderLoginDoor(true));
+
+    /**
+     * A successful POST renders the OTP step IN PLACE (the raw flow token stays
+     * in a hidden field); a refusal re-renders the phone form with the honest
+     * reason (D3 — no account found means sign up first). Rate-limited like the
+     * verify route; cross-origin writes are refused (the SameSite=Strict cookie
+     * defence-in-depth, same as the settings/import writes).
+     */
+    const handleLoginPost = (admin) => async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      if (isCrossOriginWrite(request)) {
+        const page = renderErrorPage(400, 'Please open the sign-in page again.');
+        return sendHtml(reply, page.status, page.html);
+      }
+      const phone = String(request.body?.phone || '').trim();
+      try {
+        const result = await requestOtp({
+          supabase,
+          phone,
+          role: admin ? 'admin' : 'auto'
+        });
+        if (!result.ok) {
+          return sendHtml(reply, 200, renderLoginPage({ admin, error: dashboardOtpReasonCopy(result.reason) }));
+        }
+        return sendHtml(reply, 200, renderOtpPage({ token: result.token, destinationMasked: result.phoneMasked }));
+      } catch (err) {
+        await logSystemError(supabase, err, admin ? '/d/admin/login' : '/d/login');
+        const page = renderErrorPage(500, 'Please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    };
+    scope.post('/d/login', { config: { rateLimit: { max: 10, timeWindow: '5 minutes' } } }, handleLoginPost(false));
+    scope.post('/d/admin/login', { config: { rateLimit: { max: 10, timeWindow: '5 minutes' } } }, handleLoginPost(true));
 
     /* -------------------------------------------------------------- */
     /* GET /d — the signed-in overview (session cookie required)       */
@@ -236,7 +298,7 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
           profile,
           countryInfo: countryForProfile(profile)
         });
-        return sendHtml(reply, 200, renderOverviewPage({ data: card, emailMasked: maskEmail(session.email || profile?.email) }));
+        return sendHtml(reply, 200, renderOverviewPage({ data: card, emailMasked: accountLabel(profile, session) }));
       } catch (err) {
         await logSystemError(supabase, err, '/d');
         const page = renderErrorPage(500, 'Please try again in a moment.');
@@ -259,7 +321,7 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
           profile,
           countryInfo: countryForProfile(profile)
         });
-        return sendHtml(reply, 200, renderVehiclesPage({ data, emailMasked: maskEmail(session.email || profile?.email) }));
+        return sendHtml(reply, 200, renderVehiclesPage({ data, emailMasked: accountLabel(profile, session) }));
       } catch (err) {
         await logSystemError(supabase, err, '/d/vehicles');
         const page = renderErrorPage(500, 'Please try again in a moment.');
@@ -287,7 +349,7 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
           const page = renderErrorPage(404, 'That vehicle is not on your fleet. Reply *dashboard* on WhatsApp if you think it should be.');
           return sendHtml(reply, page.status, page.html);
         }
-        return sendHtml(reply, 200, renderVehiclePage({ data, emailMasked: maskEmail(session.email || profile?.email) }));
+        return sendHtml(reply, 200, renderVehiclePage({ data, emailMasked: accountLabel(profile, session) }));
       } catch (err) {
         await logSystemError(supabase, err, '/d/vehicles/:id');
         const page = renderErrorPage(500, 'Please try again in a moment.');
@@ -319,7 +381,7 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
           data,
           filters,
           vehicles,
-          emailMasked: maskEmail(session.email || profile?.email),
+          emailMasked: accountLabel(profile, session),
           error: parsed.ok ? null : parsed.error
         }));
       } catch (err) {
@@ -349,7 +411,7 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
             data: { ok: true, rows: [], total: 0, hasMore: false, page: 0, pageSize: RECORDS_PAGE_SIZE },
             filters,
             vehicles,
-            emailMasked: maskEmail(session.email || profile?.email),
+            emailMasked: accountLabel(profile, session),
             error: parsed.error
           });
           return sendHtml(reply, 400, page);
@@ -402,7 +464,7 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
             data: { ok: true, rows: [], total: 0, hasMore: false, page: 0, pageSize: RECORDS_PAGE_SIZE },
             filters,
             vehicles,
-            emailMasked: maskEmail(session.email || profile?.email),
+            emailMasked: accountLabel(profile, session),
             error: parsed.error
           });
           return sendHtml(reply, 400, page);
@@ -490,7 +552,7 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
         const html = renderCompliancePage({
           board,
           filters: { view },
-          emailMasked: maskEmail(session.email || profile?.email),
+          emailMasked: accountLabel(profile, session),
           error: parsed.ok ? null : parsed.error
         });
         return sendHtml(reply, parsed.ok ? (board.ok ? 200 : 503) : 400, html);
@@ -522,7 +584,7 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
           const missing = renderErrorPage(404, 'That driver is not on your fleet. Reply *dashboard* on WhatsApp if you think it should be.');
           return sendHtml(reply, missing.status, missing.html);
         }
-        return sendHtml(reply, page.ok ? 200 : 503, renderDriverPage({ page, emailMasked: maskEmail(session.email || profile?.email) }));
+        return sendHtml(reply, page.ok ? 200 : 503, renderDriverPage({ page, emailMasked: accountLabel(profile, session) }));
       } catch (err) {
         await logSystemError(supabase, err, '/d/drivers/:id');
         const page = renderErrorPage(500, 'Please try again in a moment.');
@@ -546,7 +608,7 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
           const html = renderCompliancePage({
             board,
             filters: { view: 'all' },
-            emailMasked: maskEmail(session.email || profile?.email),
+            emailMasked: accountLabel(profile, session),
             error: parsed.error
           });
           return sendHtml(reply, 400, html);
@@ -750,7 +812,7 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
         const imported = importedRaw === undefined ? null : Math.max(0, Number(importedRaw) || 0);
         return sendHtml(reply, 200, renderImportPage({
           imported,
-          emailMasked: maskEmail(session.email || profile?.email),
+          emailMasked: accountLabel(profile, session),
           currency: ctx.currency,
           locale: ctx.locale
         }));
@@ -778,7 +840,7 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
           preview: result.ok ? result.preview : null,
           csvText,
           error: result.ok ? null : result.error,
-          emailMasked: maskEmail(session.email || profile?.email),
+          emailMasked: accountLabel(profile, session),
           currency: ctx.currency,
           locale: ctx.locale
         });
@@ -804,7 +866,7 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
         if (!session) return reply;
         const profile = await loadDashboardProfile(supabase, session.ownerId);
         const ctx = buildGlobalContext(countryForProfile(profile), profile);
-        const emailMasked = maskEmail(session.email || profile?.email);
+        const emailMasked = accountLabel(profile, session);
         const body = request.body && typeof request.body === 'object' ? request.body : {};
         if (String(body.action || '') !== 'confirm') {
           return sendHtml(reply, 400, renderImportPage({ error: 'Nothing to import — nothing changed.', emailMasked, currency: ctx.currency, locale: ctx.locale }));
@@ -887,7 +949,7 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
         });
         return sendHtml(reply, data.ok ? 200 : 503, renderDriverHomePage({
           data,
-          emailMasked: maskEmail(session.email || profile?.email)
+          emailMasked: accountLabel(profile, session)
         }));
       } catch (err) {
         await logSystemError(supabase, err, '/d/driver');
@@ -1073,13 +1135,15 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
           }
           const page = renderOtpPage({
             token,
-            emailMasked: maskEmail(state.email),
+            destinationMasked: state.phoneMasked || maskEmail(state.email),
             error: dashboardOtpReasonCopy(result.reason)
           });
           return sendHtml(reply, 401, page);
         }
         reply.header('set-cookie', dashboardCookieHeader(result.sessionToken, { secure: isSecureRequest(request) }));
-        return reply.code(303).header('location', '/d').send();
+        // v1.82.0 — land each role on ITS home (an admin session on /d was 403).
+        const home = result.role === 'admin' ? '/d/admin' : result.role === 'driver' ? '/d/driver' : '/d';
+        return reply.code(303).header('location', home).send();
       } catch (err) {
         await logSystemError(supabase, err, '/d/verify');
         const page = renderErrorPage(500, 'Please try again in a moment.');
@@ -1099,7 +1163,7 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
           const page = renderErrorPage(linkReasonStatus(state.reason), linkReasonCopy(state.reason));
           return sendHtml(reply, page.status, page.html);
         }
-        return sendHtml(reply, 200, renderOtpPage({ token, emailMasked: maskEmail(state.email) }));
+        return sendHtml(reply, 200, renderOtpPage({ token, destinationMasked: state.phoneMasked || maskEmail(state.email) }));
       } catch (err) {
         await logSystemError(supabase, err, '/d/:token');
         const page = renderErrorPage(500, 'Please try again in a moment.');

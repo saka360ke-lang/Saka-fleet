@@ -1,6 +1,13 @@
 {
-  "latest": "1.81.0",
+  "latest": "1.82.0",
   "entries": [
+    {
+      "version": "1.82.0",
+      "date": "2026-11-08",
+      "title": "Sign in to your dashboard right from WhatsApp",
+      "preview": "Open your dashboard with a code sent straight to WhatsApp - no email needed.",
+      "summary": "Signing in to your dashboard is now quicker and fits how you already use Saka. Message \"dashboard\" (or \"records\") and Saka sends you a sign-in link; open it, type your WhatsApp number, and a 6-digit code arrives in your WhatsApp chat. Type the code on the page and you are in for 15 minutes - no email, no waiting, no password to remember. If you are not signed up yet, the page tells you honestly and points you to the quick sign-up. The same link works for drivers (when they are assigned to a vehicle), and there is a separate, private entrance for the Saka team. Behind the scenes, the team's internal profiles report now counts real accounts instead of empty first-contact rows, so the numbers the team sees come from real fleets only. Everything else - your records, reports, reminders and documents - is unchanged."
+    },
     {
       "version": "1.81.0",
       "date": "2026-11-08",

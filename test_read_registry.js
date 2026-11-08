@@ -519,22 +519,21 @@ check(degradedRender.rendered.reply_message.includes('The app is stuck') && degr
   'a pre-migration support_tickets table degrades to the slim shape (OPEN chip)');
 check(degradeMock.calls.length === 2, 'the degrade retries exactly once with the slim columns');
 
-// ── v1.74.0 (Phase 13B) — the dashboard lane ────────────────────────────────
+// ── v1.82.0 (Phase 21) — the dashboard lane ships the STATIC sign-in link ───
 const DASH_PROFILE = { id: 'p-dash', phone_number: '+254700000000', email: 'amina@example.com', email_verified: true, full_name: 'Amina W' };
 const dashCtx = (over = {}) => baseCtx({ profile: DASH_PROFILE, ...over });
 const previousDashFlag = process.env.DASHBOARD_ENABLED;
-async function renderDashboard(text, access, over = {}) {
-  const ctx = dashCtx({
-    dashboardEntitlements: { isTrial: true, isPaid: false },
-    dashboardRequestAccess: async (args) => ({ ...args, ...access }),
-    ...over
-  });
+async function renderDashboard(text, over = {}) {
+  const ctx = dashCtx(over);
   const lane = registry.resolveReadCommand(text, ctx);
   return { lane, rendered: lane ? await lane.render(ctx) : null };
 }
 
 for (const text of ['dashboard', 'my dashboard', 'open my dashboard', 'web dashboard']) {
   check(registry.resolveReadCommand(text, dashCtx())?.id === 'dashboard', `"${text}" -> dashboard`);
+}
+for (const text of ['records', 'my records']) {
+  check(registry.resolveReadCommand(text, dashCtx())?.id === 'dashboard', `"${text}" -> dashboard (records alias)`);
 }
 for (const text of ['dashboard ideas', "i can't see the dashboard", 'dashboard not loading for my fleet']) {
   const lane = registry.resolveReadCommand(text, dashCtx());
@@ -544,76 +543,44 @@ check(registry.resolveReadCommand('dashboard', dashCtx({ quizPhaseLocked: true }
   'a locked PIN/OTP phase keeps the dashboard lane out (skipWhenLocked)');
 const dashClaims = registry.READ_COMMANDS.filter((lane) => Boolean(lane.detect('dashboard', dashCtx()))).map((lane) => lane.id);
 check(JSON.stringify(dashClaims) === JSON.stringify(['dashboard']), `dashboard owns the phrase with no silent overlap: ${JSON.stringify(dashClaims)}`);
+const recordsClaims = registry.READ_COMMANDS.filter((lane) => Boolean(lane.detect('records', dashCtx()))).map((lane) => lane.id);
+check(recordsClaims[0] === 'dashboard' && recordsClaims.includes('ledger_turn') && recordsClaims.includes('records_query'),
+  `dashboard wins the records alias ahead of the ledger/records lanes: ${JSON.stringify(recordsClaims)}`);
+// Rule 52 — the neighbouring lanes still own THEIR turns (no hijack).
+check(registry.resolveReadCommand('my entries', dashCtx())?.id === 'ledger_turn', 'the ledger lane still owns "my entries" (no hijack)');
+check(registry.resolveReadCommand('search TSV2026', dashCtx())?.id !== 'dashboard', 'a keyword search is never hijacked by the dashboard door');
 
 process.env.DASHBOARD_ENABLED = 'off';
-const offRender = await renderDashboard('dashboard', { ok: false, reason: 'flag_off' });
+const offRender = await renderDashboard('dashboard');
 check(offRender.rendered.reply_message === "That's not something I can do yet — reply *help* to see what I can do.",
   'A2: flag OFF answers the verbatim not-available line');
 check(!/dashboard/i.test(offRender.rendered.reply_message), 'A2: the not-available line never mentions the dashboard');
 process.env.DASHBOARD_ENABLED = 'on';
 
-const okRender = await renderDashboard('dashboard', { ok: true, link: 'https://app.sakafleet.com/d/abc123', email: DASH_PROFILE.email });
-check(okRender.rendered.reply_message.includes('https://app.sakafleet.com/d/abc123'), 'an eligible request replies with the magic link');
-check(okRender.rendered.reply_message.includes('a***a@example.com'), 'the reply masks the destination address');
-check(/6-digit code is in that same email/.test(okRender.rendered.reply_message) && /never ask for it here/.test(okRender.rendered.reply_message),
-  'D2: the reply says the code is in the email and is never asked in chat');
-check(!/\d{6}/.test(okRender.rendered.reply_message.replace(/\d+\s*minutes?/g, '')), 'no 6-digit code ever appears in the WhatsApp reply');
+const okRender = await renderDashboard('dashboard');
+const okText = okRender.rendered.reply_message;
+check(okText.includes('https://app.sakafleet.com/d/login'), 'the lane replies with the STATIC sign-in link');
+check(/1\.[\s\S]*WhatsApp number/.test(okText) && /2\.[\s\S]*6-digit code/.test(okText) && /3\.[\s\S]*15 minutes/.test(okText),
+  'the 3-line tutorial teaches number -> code -> 15 minutes');
+check(!/\b\d{6}\b/.test(okText), 'no 6-digit code ever appears in the WhatsApp reply');
+check(!/email/i.test(okText), 'the reply never promises an email');
+const recordsRender = await renderDashboard('records');
+check(recordsRender.rendered.reply_message.includes('https://app.sakafleet.com/d/login'), 'the records alias ships the same door');
 
-const unverifiedRender = await renderDashboard('dashboard', { ok: false, reason: 'email_unverified' });
-check(unverifiedRender.rendered.reply_message.includes('https://sakafleet.com'), 'an unverified account is pointed at the website sign-up');
-const freeRender = await renderDashboard('dashboard', { ok: false, reason: 'not_entitled' });
-check(/trial or a paid plan/.test(freeRender.rendered.reply_message) && /pricing/.test(freeRender.rendered.reply_message),
-  'a free account gets the deterministic trial/paid + pricing line');
-const cooldownRender = await renderDashboard('dashboard', { ok: false, reason: 'cooldown' });
-check(/I just sent it/.test(cooldownRender.rendered.reply_message), 'a resend inside the cooldown answers "I just sent it"');
-const failedRender = await renderDashboard('dashboard', { ok: false, reason: 'email_failed' });
-check(/could not send the email/.test(failedRender.rendered.reply_message), 'an email failure is honest and offers one retry');
-const crashRender = await renderDashboard('dashboard', { ok: false, reason: 'db_error' }, {
-  dashboardRequestAccess: async () => { throw new Error('boom'); }
-});
-check(/Something went wrong/.test(crashRender.rendered.reply_message), 'a thrown service error degrades to one clean line (never crashes the turn)');
-// ── v1.76.0 (Phase 15) — role-aware dashboard lane ──────────────────────────
-const dashRoleCalls = [];
-const dashRoleCtx = (over = {}) => dashCtx({
-  dashboardEntitlements: { isTrial: true, isPaid: false },
-  dashboardRequestAccess: async (args) => { dashRoleCalls.push(args); return { ...args, ok: true, link: 'https://app.sakafleet.com/d/abc123', email: DASH_PROFILE.email }; },
-  ...over
-});
+// ── v1.82.0 (Phase 21, D4) — the admin door is exact-phrase + env identity ──
 const previousSuperadmin = process.env.SUPERADMIN_PHONE;
 process.env.SUPERADMIN_PHONE = DASH_PROFILE.phone_number;
 const adminLane = registry.resolveReadCommand('dashboard admin', dashCtx());
 check(adminLane?.id === 'dashboard', '"dashboard admin" is claimed by the dashboard lane');
 const dashboardLaneDef = registry.READ_COMMANDS.find((lane) => lane.id === 'dashboard');
 check(dashboardLaneDef.detect('dashboard admin') === 'admin', 'the admin phrase carries its marker');
-const adminRender = await adminLane.render(dashRoleCtx());
-check(dashRoleCalls.at(-1)?.role === 'admin', 'the admin phrase requests an admin link');
-check(adminRender.reply_message.includes('admin dashboard link'), 'the admin reply names the admin dashboard');
-const driverRender = await dashboardLaneRender('dashboard', { role: 'driver' });
-check(dashRoleCalls.at(-1)?.role === 'driver', 'a resolved driver requests a driver link');
-check(driverRender.rendered.reply_message.includes('driver dashboard link'), 'the driver reply names the driver dashboard');
-const ownerRender = await dashboardLaneRender('dashboard', { role: 'owner' });
-check(dashRoleCalls.at(-1)?.role === 'owner', 'a resolved owner requests the owner link');
-check(ownerRender.rendered.reply_message.includes('Your dashboard link is on its way'), 'the owner copy is unchanged');
+const adminRender = await adminLane.render(dashCtx());
+check(adminRender.reply_message.includes('https://app.sakafleet.com/d/admin/login'), 'the superadmin gets the admin door');
 process.env.SUPERADMIN_PHONE = '+254799999999';
-const spoofAdminLane = registry.resolveReadCommand('dashboard admin', dashCtx());
-const spoofCallsBefore = dashRoleCalls.length;
-const spoofRender = await spoofAdminLane.render(dashRoleCtx());
+const spoofRender = await registry.resolveReadCommand('dashboard admin', dashCtx()).render(dashCtx());
 check(spoofRender.reply_message === "That's not something I can do yet — reply *help* to see what I can do.", 'a non-superadmin asking for the admin phrase gets the generic line');
-check(dashRoleCalls.length === spoofCallsBefore, 'the refused admin phrase never reaches the service (no row, no email)');
 if (previousSuperadmin === undefined) delete process.env.SUPERADMIN_PHONE;
 else process.env.SUPERADMIN_PHONE = previousSuperadmin;
-const noAssignRender = await dashboardLaneRender('dashboard', { role: 'driver' }, { ok: false, reason: 'no_assignment' });
-check(noAssignRender.rendered.reply_message === 'You need to be assigned to a vehicle to access the driver dashboard. Ask your fleet owner to assign you.',
-  'D1: a withdrawn assignment answers the exact refusal copy');
-
-async function dashboardLaneRender(text, resolvedRole, access = null) {
-  const ctx = dashRoleCtx({
-    dashboardResolveRole: async () => resolvedRole,
-    ...(access ? { dashboardRequestAccess: async (args) => { dashRoleCalls.push(args); return { ...args, ...access }; } } : {})
-  });
-  const lane = registry.resolveReadCommand(text, ctx);
-  return { lane, rendered: lane ? await lane.render(ctx) : null };
-}
 if (previousDashFlag === undefined) delete process.env.DASHBOARD_ENABLED;
 else process.env.DASHBOARD_ENABLED = previousDashFlag;
 

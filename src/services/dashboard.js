@@ -5,33 +5,40 @@
  * Phase 13 ships the auth foundation + the overview page; Phase 14A adds the
  * vehicle list and one page per vehicle:
  *
- *   1. WhatsApp "dashboard"  -> requestDashboardAccess() emails ONE message
- *      carrying a magic link (15-min TTL) AND a 6-digit code (10-min TTL).
- *      The code NEVER rides WhatsApp — the two-channel split is the point.
- *   2. GET /d/<token>        -> the OTP entry page.
+ *   1. WhatsApp "dashboard"  -> a STATIC sign-in link (v1.82.0, Phase 21):
+ *      https://app.sakafleet.com/d/login. The user types their WhatsApp number.
+ *   2. POST /d/login         -> requestDashboardOtp() mints a 6-digit code and
+ *      sends it to that same WhatsApp (10-min TTL); the token stays in the form.
  *   3. POST /d/verify        -> verifyDashboardOtp() issues a raw session token
  *      that lives ONLY in an HttpOnly cookie; the database stores its sha256.
  *   4. GET /d                -> getSessionByToken() renders the overview card.
  *   5. GET /d/vehicles      -> buildVehiclesIndex() (Phase 14A fleet list).
  *   6. GET /d/vehicles/:id  -> buildVehiclePage() (owner-scoped vehicle page).
  *
- * Security contract (Phase 13, A3):
- *   - The magic-link token, the OTP and the session token are all stored as
- *     sha256 hashes. The raw values exist only in the email and the cookie.
+ * Security contract (Phase 13, A3 + Phase 21):
+ *   - The flow token, the OTP and the session token are all stored as sha256
+ *     hashes. The raw values exist only in the login form and the cookie.
  *   - OTP comparison is constant-time (crypto.timingSafeEqual), length-checked
  *     first so an invalid input can never throw through an error-path leak.
  *   - A link is single-use: verification stamps `verified`, nulls the OTP hash
  *     and issues exactly one session.
  *   - Every failure degrades to a reason code (rule 50: a missing table or a
- *     failed email never throws into the conversation).
+ *     failed WhatsApp send never throws into the conversation).
  */
 
 import crypto from 'node:crypto';
 import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
 import { shortLinkBase } from './linkShortener.js';
-import { sendDashboardMagicLinkEmail } from './mailer.js';
 import { logWriteFailure } from './systemErrors.js';
 import { isSuperadminPhone } from './superadminIdentity.js';
+// v1.82.0 (Phase 21) — WhatsApp-native sign-in: the 6-digit code travels over
+// WhatsApp (the email magic link is retired and kept only as deprecated code).
+import { sendWhatsAppText } from './metaMessenger.js';
+import { findProfileByPhone, normalizePhoneE164 } from './webOnboarding.js';
+import { getEntitlements } from './subscriptions.js';
+
+// v1.82.0 — routes and suites use the same masking helper the sign-in page uses.
+export { maskPhone };
 import { buildFleetReport, upcomingExpiryItems, buildVehicleDirectory, buildVehicleDetail } from './fleetReports.js';
 import { buildComplianceReport, expiryStatus, summarizeCategory } from './fleetReports.js';
 import { buildGlobalContext, formatMoney, formatDate, formatNumber, detectCountryFromPhone } from './globalization.js';
@@ -52,11 +59,16 @@ import { buildTyreWearRows, buildCostPerKmTrend, buildCostPerKmChart, getTyreLif
 export const DASHBOARD_SESSIONS_TABLE = 'dashboard_sessions';
 export const DASHBOARD_LINK_TTL_MS = 15 * 60 * 1000; // 15 minutes
 export const DASHBOARD_OTP_TTL_MS = 10 * 60 * 1000; // 10 minutes
-export const DASHBOARD_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+// v1.82.0 (Phase 21, D1) — STRICT 15-minute session (cookie Max-Age=900). No
+// sliding renewal: one write per sign-in, the prune sweep owns the expiry.
+export const DASHBOARD_SESSION_TTL_MS = 15 * 60 * 1000; // 15 minutes
 export const DASHBOARD_MAX_ATTEMPTS = 5;
 export const DASHBOARD_RESEND_COOLDOWN_MS = 60 * 1000; // 60 seconds
 export const DASHBOARD_COOKIE_NAME = 'saka_dash';
 export const DASHBOARD_AUDIT_ACTOR = 'DASHBOARD';
+// The two static sign-in doors (v1.82.0 — the WhatsApp lane ships these links).
+export const DASHBOARD_LOGIN_PATH = '/d/login';
+export const DASHBOARD_ADMIN_LOGIN_PATH = '/d/admin/login';
 
 /**
  * Idempotent DDL (rule 50). `token_hash` is the magic-link token; a null
@@ -166,6 +178,16 @@ export function dashboardBaseUrl() {
   return `${shortLinkBase()}/d`;
 }
 
+/** v1.82.0 — the static sign-in door shipped by the WhatsApp lane. */
+export function dashboardLoginUrl() {
+  return `${shortLinkBase()}${DASHBOARD_LOGIN_PATH}`;
+}
+
+/** v1.82.0 — the superadmin door (D4: admin sessions never mint at /d/login). */
+export function dashboardAdminLoginUrl() {
+  return `${shortLinkBase()}${DASHBOARD_ADMIN_LOGIN_PATH}`;
+}
+
 export function dashboardLinkFor(rawToken) {
   return `${dashboardBaseUrl()}/${String(rawToken || '')}`;
 }
@@ -252,49 +274,78 @@ export async function resolveDashboardRole({ supabase, profile = null } = {}) {
 }
 
 /**
- * Eligibility: a verified email plus, per role, an OWNER's live trial/paid plan,
- * a DRIVER's live assignment, or the env superadmin identity. Never throws.
+ * v1.82.0 (Phase 21) — eligibility + OTP mint over WHATSAPP. An OWNER needs a
+ * live trial/paid plan, a DRIVER a live vehicle assignment, the SUPERADMIN the
+ * env identity. The 6-digit code is sent to the number signing in (the number is
+ * the verified channel; the retired email gate no longer applies). `role:'auto'`
+ * resolves the lane server-side and REFUSES admin — the superadmin must use the
+ * admin door (D4). Returns `{ ok, token, role, phoneMasked }`; the token lives
+ * only in the web form, never in WhatsApp. Never throws.
  */
-export async function requestDashboardAccess({
+export async function requestDashboardOtp({
   supabase,
-  ownerId,
+  phone,
+  role = 'auto',
   profile = null,
   entitlements = null,
   countryInfo = null,
-  role = 'owner',
-  sendEmail = sendDashboardMagicLinkEmail,
+  sendOtp = sendWhatsAppText,
   now = new Date()
 } = {}) {
   if (!isDashboardEnabled()) return { ok: false, reason: 'flag_off' };
-  if (!supabase || !ownerId) return { ok: false, reason: 'db_error' };
-  if (!DASHBOARD_ROLES.includes(role)) return { ok: false, reason: 'bad_role' };
+  if (!supabase) return { ok: false, reason: 'db_error' };
+  if (!['auto', ...DASHBOARD_ROLES].includes(role)) return { ok: false, reason: 'bad_role' };
 
-  const email = String(profile?.email || '').trim().toLowerCase();
-  if (!email) return { ok: false, reason: 'no_email' };
-  if (profile?.email_verified !== true) return { ok: false, reason: 'email_unverified' };
-  // Phase 15 — the plan gate is an OWNER gate. A driver is an employee (D1: a
-  // live assignment is the eligibility), and an admin is the env identity.
-  if (role === 'owner' && (!entitlements || (!entitlements.isTrial && !entitlements.isPaid))) {
-    return { ok: false, reason: 'not_entitled' };
+  const normalized = normalizePhoneE164(phone);
+  if (!normalized) return { ok: false, reason: 'bad_phone' };
+
+  let resolved = profile;
+  if (!resolved?.id) {
+    resolved = await findProfileByPhone(supabase, normalized);
   }
-  if (role === 'admin' && !isSuperadminPhone(profile?.phone_number)) {
-    return { ok: false, reason: 'not_admin' };
+  if (!resolved?.id) return { ok: false, reason: 'no_account' };
+
+  const isAdmin = isSuperadminPhone(resolved.phone_number);
+  // The admin door is checked FIRST: a non-superadmin attempting it learns
+  // nothing else about the number's account state.
+  if (role === 'admin' && !isAdmin) return { ok: false, reason: 'not_admin' };
+  // Ghost guard — an auto-provisioned shell (no email, no name) can never sign
+  // in. The +254734852529 class of rows must stay invisible to auth.
+  if (!resolved.email && !resolved.full_name && !isAdmin) return { ok: false, reason: 'no_account' };
+
+  let resolvedRole = role;
+  if (role === 'auto') {
+    if (isAdmin) return { ok: false, reason: 'use_admin_login' };
+    const lane = await resolveDashboardRole({ supabase, profile: resolved });
+    resolvedRole = lane?.role === 'driver' ? 'driver' : 'owner';
   }
-  if (role === 'driver') {
-    const assignment = await hasLiveDriverAssignment(supabase, ownerId);
+  if (resolvedRole === 'admin') {
+    if (!isAdmin) return { ok: false, reason: 'not_admin' };
+  } else if (isAdmin) {
+    // D4 — /d/login never mints an admin session, even for the admin number.
+    return { ok: false, reason: 'use_admin_login' };
+  }
+
+  if (resolvedRole === 'owner') {
+    const ent = entitlements
+      || await getEntitlements({ supabase, ownerId: resolved.id, profile: resolved });
+    if (!ent || (!ent.isTrial && !ent.isPaid)) return { ok: false, reason: 'not_entitled' };
+  }
+  if (resolvedRole === 'driver') {
+    const assignment = await hasLiveDriverAssignment(supabase, resolved.id);
     if (assignment === null) return { ok: false, reason: 'db_error' };
     if (!assignment) return { ok: false, reason: 'no_assignment' };
   }
 
   try {
-    // 60-second resend cooldown (mirrors the web-onboarding resend gate). We
-    // cannot re-send the old code — only its hash exists — so the lane answers
-    // "I just sent it" and the user checks the inbox.
+    // 60-second resend cooldown (unverified rows for this owner only). The raw
+    // code cannot be re-sent — only its hash exists — so the page says "I just
+    // sent it" and the user checks WhatsApp.
     const cooldownStart = new Date(now.getTime() - DASHBOARD_RESEND_COOLDOWN_MS).toISOString();
     const { data: recent } = await supabase
       .from(DASHBOARD_SESSIONS_TABLE)
       .select('id')
-      .eq('owner_id', ownerId)
+      .eq('owner_id', resolved.id)
       .eq('verified', false)
       .gte('created_at', cooldownStart)
       .limit(1);
@@ -307,45 +358,50 @@ export async function requestDashboardAccess({
 
     const { error } = await supabase.from(DASHBOARD_SESSIONS_TABLE).insert([{
       token_hash: hashToken(rawToken),
-      owner_id: ownerId,
-      email,
+      owner_id: resolved.id,
+      email: resolved.email || null,
       otp_hash: hashToken(otp),
       attempts: 0,
       verified: false,
-      session_role: role,
+      session_role: resolvedRole,
       link_expires_at: linkExpiresAt.toISOString(),
       otp_expires_at: otpExpiresAt.toISOString()
     }]);
     if (error) {
-      logWriteFailure(supabase, 'dashboard.requestDashboardAccess.insert', error);
+      logWriteFailure(supabase, 'dashboard.requestDashboardOtp.insert', error);
       return { ok: false, reason: 'db_error' };
     }
 
-    const link = dashboardLinkFor(rawToken);
-    let emailed = false;
+    const otpMinutes = Math.max(1, Math.round(DASHBOARD_OTP_TTL_MS / 60000));
+    const text = `🔐 *Your Saka Fleet code*\n\n${otp}\n\nIt works for ${otpMinutes} minutes. `
+      + 'If you did not ask to sign in, ignore this message — never share the code with anyone.';
+    let sent = false;
     try {
-      emailed = (await sendEmail({
-        to: email,
-        link,
-        otp,
-        linkExpiresAt,
-        otpExpiresAt,
-        firstName: String(profile?.full_name || '').split(' ')[0] || '',
-        countryInfo
-      })) !== false;
-    } catch { emailed = false; }
+      sent = (await sendOtp(resolved.phone_number || normalized, text)) !== false;
+    } catch { sent = false; }
 
-    if (!emailed) {
-      // The user can never use a link they did not receive — remove the row so
-      // no orphaned live token lingers (a fresh request starts clean).
+    if (!sent) {
+      // No orphaned live token: a code the user never received cannot be used.
       await supabase.from(DASHBOARD_SESSIONS_TABLE).delete().eq('token_hash', hashToken(rawToken));
-      return { ok: false, reason: 'email_failed' };
+      return { ok: false, reason: 'otp_send_failed' };
     }
 
-    await writeAudit(supabase, 'DASHBOARD_ACCESS_REQUESTED', { ownerId, email, role, linkExpiresAt: linkExpiresAt.toISOString() });
-    return { ok: true, role, link, email, linkExpiresAt: linkExpiresAt.toISOString(), otpExpiresAt: otpExpiresAt.toISOString() };
+    await writeAudit(supabase, 'DASHBOARD_OTP_SENT', {
+      ownerId: resolved.id,
+      role: resolvedRole,
+      channel: 'whatsapp',
+      linkExpiresAt: linkExpiresAt.toISOString()
+    });
+    return {
+      ok: true,
+      token: rawToken,
+      role: resolvedRole,
+      phoneMasked: maskPhone(resolved.phone_number || normalized),
+      linkExpiresAt: linkExpiresAt.toISOString(),
+      otpExpiresAt: otpExpiresAt.toISOString()
+    };
   } catch (err) {
-    logWriteFailure(supabase, 'dashboard.requestDashboardAccess', err);
+    logWriteFailure(supabase, 'dashboard.requestDashboardOtp', err);
     return { ok: false, reason: 'db_error' };
   }
 }
@@ -359,14 +415,27 @@ export async function getLinkState({ supabase, rawToken, now = new Date() } = {}
   try {
     const { data: row, error } = await supabase
       .from(DASHBOARD_SESSIONS_TABLE)
-      .select('id, email, verified, link_expires_at, otp_expires_at')
+      .select('id, owner_id, email, verified, link_expires_at, otp_expires_at')
       .eq('token_hash', hashToken(rawToken))
       .maybeSingle();
     if (error || !row) return { ok: false, reason: 'invalid_link' };
     if (row.verified) return { ok: false, reason: 'already_used' };
     if (new Date(row.link_expires_at).getTime() <= now.getTime()) return { ok: false, reason: 'link_expired' };
     if (row.otp_expires_at && new Date(row.otp_expires_at).getTime() <= now.getTime()) return { ok: false, reason: 'otp_expired' };
-    return { ok: true, email: row.email, linkExpiresAt: row.link_expires_at, otpExpiresAt: row.otp_expires_at };
+    // v1.82.0 — the OTP page names the number the code went to. A profile read
+    // failure degrades to no mask (rule 50), never to a dead page.
+    let phoneMasked = null;
+    try {
+      if (row.owner_id) {
+        const { data: profileRow } = await supabase
+          .from('profiles')
+          .select('phone_number')
+          .eq('id', row.owner_id)
+          .maybeSingle();
+        if (profileRow?.phone_number) phoneMasked = maskPhone(profileRow.phone_number);
+      }
+    } catch { phoneMasked = null; }
+    return { ok: true, email: row.email || null, phoneMasked, linkExpiresAt: row.link_expires_at, otpExpiresAt: row.otp_expires_at };
   } catch (err) {
     logWriteFailure(supabase, 'dashboard.getLinkState', err);
     return { ok: false, reason: 'db_error' };
@@ -378,12 +447,19 @@ export async function getLinkState({ supabase, rawToken, now = new Date() } = {}
 /* ------------------------------------------------------------------ */
 
 const OTP_REASONS = {
-  invalid_link: 'This link is not valid. Reply *dashboard* on WhatsApp for a fresh one.',
-  already_used: 'This link has already been used. Reply *dashboard* on WhatsApp for a fresh one.',
-  link_expired: 'This link has expired. Reply *dashboard* on WhatsApp for a fresh one.',
-  otp_expired: 'That code has expired. Reply *dashboard* on WhatsApp for a fresh link and code.',
-  locked: 'Too many incorrect codes. Reply *dashboard* on WhatsApp for a fresh link and code.',
-  otp_mismatch: 'That code did not match. Check the 6-digit code in your email and try again.'
+  invalid_link: 'This sign-in page is no longer valid. Reply *dashboard* on WhatsApp for a fresh link.',
+  already_used: 'This sign-in page has already been used. Reply *dashboard* on WhatsApp for a fresh link.',
+  link_expired: 'This sign-in page has expired. Reply *dashboard* on WhatsApp for a fresh link.',
+  otp_expired: 'That code has expired. Reply *dashboard* on WhatsApp and start again.',
+  locked: 'Too many incorrect codes. Reply *dashboard* on WhatsApp and start again.',
+  otp_mismatch: 'That code did not match. Check the 6-digit code in your WhatsApp chat and try again.',
+  // v1.82.0 (Phase 21) — the login-door reasons (WhatsApp-native flow).
+  otp_send_failed: 'I could not send the code just now — give it a minute and try again.',
+  no_account: 'No account found for this number — sign up first at https://sakafleet.com.',
+  bad_phone: 'That number does not look right — enter it with the country code, e.g. +254 712 345 678.',
+  use_admin_login: 'That number signs in at the admin entrance.',
+  not_entitled: 'Your dashboard opens on a trial or a paid plan — reply *pricing* to see the plans.',
+  cooldown: 'I just sent a code — check your WhatsApp. Try again in a minute.'
 };
 
 export function dashboardOtpReasonCopy(reason) {
@@ -523,7 +599,7 @@ export async function pruneExpiredDashboardSessions(supabase) {
   let removed = 0;
   try {
     // Unverified rows die one day after their link expired; verified rows die
-    // with their session. A live 30-day session is never removed by the sweep.
+    // with their session. A live 15-minute session is never removed by the sweep.
     const links = await supabase
       .from(DASHBOARD_SESSIONS_TABLE)
       .delete()
@@ -2340,11 +2416,43 @@ export function renderMessagePage(title, message, { status = 400 } = {}) {
 /* Page renderers (Phase 13C) — inline HTML, no static server (D1)     */
 /* ------------------------------------------------------------------ */
 
-export function renderOtpPage({ token, emailMasked, error = null }) {
+/**
+ * v1.82.0 (Phase 21) — the STATIC sign-in door. `admin` renders the superadmin
+ * entrance (/d/admin/login); the default renders the owner/driver door
+ * (/d/login). Step 1 only asks for the WhatsApp number; a successful POST
+ * renders the OTP step (renderOtpPage) with the token in a hidden field.
+ */
+export function renderLoginPage({ error = null, admin = false } = {}) {
   const otpMinutes = Math.max(1, Math.round(DASHBOARD_OTP_TTL_MS / 60000));
+  const action = admin ? DASHBOARD_ADMIN_LOGIN_PATH : DASHBOARD_LOGIN_PATH;
+  const heading = admin ? 'Admin dashboard' : 'Your dashboard';
+  const intro = admin
+    ? 'Enter the superadmin number. I send a 6-digit code to that WhatsApp — only that number can open this page.'
+    : 'Enter your WhatsApp number — the one you use with Saka. I send a 6-digit code to that same WhatsApp.';
   const body = `
-<h1>Check your email</h1>
-<p class="muted">I emailed a 6-digit code to <strong>${escapeHtml(emailMasked)}</strong>. Enter it below to open your dashboard.</p>
+<h1>${escapeHtml(heading)}</h1>
+<p class="muted">${intro}</p>
+<div class="card">
+  <form method="POST" action="${action}" autocomplete="off">
+    <input type="tel" name="phone" inputmode="tel" placeholder="+254 712 345 678" aria-label="WhatsApp number" required>
+    ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
+    <button type="submit">Send me a code</button>
+  </form>
+  <p class="muted" style="font-size:13px;margin-top:12px;">The code works for ${otpMinutes} minutes. Never share it — Saka will never ask for it in chat.</p>
+</div>`;
+  return renderPageShell(admin ? 'Admin sign-in' : 'Sign in', body);
+}
+
+/**
+ * Step 2 — the 6-digit code entry. `destinationMasked` is the WhatsApp number
+ * the code was sent to; `emailMasked` stays accepted for pre-1.82.0 callers.
+ */
+export function renderOtpPage({ token, destinationMasked = null, emailMasked = null, error = null }) {
+  const otpMinutes = Math.max(1, Math.round(DASHBOARD_OTP_TTL_MS / 60000));
+  const destination = destinationMasked || emailMasked || 'your WhatsApp';
+  const body = `
+<h1>Check your WhatsApp</h1>
+<p class="muted">I sent a 6-digit code to <strong>${escapeHtml(destination)}</strong> on WhatsApp. Enter it below to open your dashboard.</p>
 <div class="card">
   <form method="POST" action="/d/verify" autocomplete="off">
     <input type="hidden" name="token" value="${escapeHtml(token)}">
@@ -2352,9 +2460,9 @@ export function renderOtpPage({ token, emailMasked, error = null }) {
     ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
     <button type="submit">Open my dashboard</button>
   </form>
-  <p class="muted" style="font-size:13px;margin-top:12px;">The code works for ${otpMinutes} minutes. Never share it with anyone — Saka will never ask you for it in WhatsApp.</p>
+  <p class="muted" style="font-size:13px;margin-top:12px;">The code works for ${otpMinutes} minutes. Never share it with anyone — Saka will never ask you for it in chat.</p>
 </div>`;
-  return renderPageShell('Verify your email', body);
+  return renderPageShell('Verify your WhatsApp', body);
 }
 
 const EXPIRY_LABELS = {
@@ -3255,7 +3363,7 @@ ${svg}`;
 export function renderLogoutPage() {
   const body = `
 <h1>You're logged out</h1>
-<p class="muted">This browser no longer has access. Reply <strong>dashboard</strong> on WhatsApp any time for a fresh link.</p>`;
+<p class="muted">This browser no longer has access. Reply <strong>dashboard</strong> on WhatsApp any time and I will send a fresh sign-in link.</p>`;
   return renderPageShell('Logged out', body);
 }
 
@@ -3290,7 +3398,10 @@ export default {
   dashboardBaseUrl,
   dashboardLinkFor,
   maskEmail,
-  requestDashboardAccess,
+  maskPhone,
+  requestDashboardOtp,
+  dashboardLoginUrl,
+  dashboardAdminLoginUrl,
   getLinkState,
   verifyDashboardOtp,
   dashboardOtpReasonCopy,
@@ -3306,6 +3417,7 @@ export default {
   renderMessagePage,
   escapeHtml,
   renderOtpPage,
+  renderLoginPage,
   renderOverviewPage,
   renderVehiclesPage,
   renderVehiclePage,

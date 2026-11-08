@@ -110,6 +110,8 @@ async function run() {
   const inlineTurn = await runLane(inlineMock);
   check(inlineTurn.handled === true, 'the lane answers the turn');
   check(inlineTurn.reply.includes('https://app.sakafleet.com/d/reports'), 'the reply points at the dashboard Reports page FIRST');
+  check(inlineTurn.reply.includes('https://app.sakafleet.com/d/login'), 'v1.82.0: the reply also carries the static sign-in link');
+  check(/I send a 6-digit code to you here on WhatsApp/.test(inlineTurn.reply), 'v1.82.0: the reply teaches the WhatsApp OTP step');
   check(!inlineTurn.reply.includes('/d/d/'), 'the dashboard URL is built once (never doubled)');
   check(!/Building your/.test(inlineTurn.reply), 'the "building your report" ACK is gone');
   check(/📄 \*PDF report:\*/.test(inlineTurn.reply), 'the inline PDF link is appended inside the same reply');

@@ -18,7 +18,7 @@ import { resolveTimezoneFromCountry, resolveUserTimezone } from '../../services/
 import { listReceipts, deleteReceipt } from '../../services/receipts.js';
 import { getReportQuota, recordReportUsage, checkoutForTier, getEntitlements } from '../../services/subscriptions.js';
 import { resolveAnyReportType, buildInlineReportLink, resolveInlineReportBudgetMs } from '../../services/reportDelivery.js';
-import { isDashboardEnabled, dashboardBaseUrl } from '../../services/dashboard.js';
+import { isDashboardEnabled, dashboardBaseUrl, dashboardLoginUrl } from '../../services/dashboard.js';
 import { resolveMetricIds, customMetricMenu } from '../../services/reportMetrics.js';
 import { resolveReportAccess } from '../../services/reportAccess.js';
 import { buildFleetReport } from '../../services/fleetReports.js';
@@ -362,6 +362,11 @@ export async function handleReportRequestTurn({ mergedExt, messageText, supabase
         '',
         'Open Reports and download the PDF instantly:',
         `👉 ${dashboardBaseUrl()}/reports`,
+        '',
+        '🔐 *Sign in first:* ' + dashboardLoginUrl(),
+        '1. Open the link and enter your WhatsApp number.',
+        '2. I send a 6-digit code to you here on WhatsApp.',
+        '3. Type the code on the page — you are in for 15 minutes.',
         '',
         '_Ask me anything about the numbers and I will answer right here._'
       ]

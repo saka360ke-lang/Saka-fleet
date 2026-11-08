@@ -25,7 +25,8 @@ import {
   mintOtp,
   mintToken,
   maskEmail,
-  requestDashboardAccess,
+  maskPhone,
+  requestDashboardOtp,
   getLinkState,
   verifyDashboardOtp,
   getSessionByToken,
@@ -101,6 +102,7 @@ import {
   renderVehiclesPage,
   renderVehiclePage,
   renderOtpPage,
+  renderLoginPage,
   renderErrorPage
 } from './src/services/dashboard.js';
 import { upcomingExpiryItems, buildVehicleDirectory, buildVehicleDetail } from './src/services/fleetReports.js';
@@ -189,6 +191,11 @@ async function run() {
     { method: 'GET', url: '/d/driver/compliance' },
     { method: 'GET', url: '/d/admin' },
     { method: 'GET', url: '/d/admin/owners/some-owner-id' },
+    // v1.82.0 (Phase 21) — the static sign-in doors are flag-gated too.
+    { method: 'GET', url: '/d/login' },
+    { method: 'POST', url: '/d/login', payload: 'phone=%2B254712345678', headers: { 'content-type': 'application/x-www-form-urlencoded' } },
+    { method: 'GET', url: '/d/admin/login' },
+    { method: 'POST', url: '/d/admin/login', payload: 'phone=%2B254712345678', headers: { 'content-type': 'application/x-www-form-urlencoded' } },
     // v1.80.0 (Phase 19) — analytics + the care queue are flag-gated too.
     { method: 'GET', url: '/d/analytics' },
     { method: 'GET', url: '/d/care' },
@@ -205,76 +212,88 @@ async function run() {
 
   console.log('\n--- Test 3: eligibility gates (never throws, never leaks) ---');
   process.env.DASHBOARD_ENABLED = 'on';
-  const emptyMock = createMockSupabase({ [DASHBOARD_SESSIONS_TABLE]: [], admin_audit_logs: [] });
+  const emptyMock = createMockSupabase({ [DASHBOARD_SESSIONS_TABLE]: [], admin_audit_logs: [], vehicles: [] });
   const baseRequest = {
     supabase: emptyMock.client,
-    ownerId: PROFILE.id,
+    phone: PROFILE.phone_number,
     profile: PROFILE,
     entitlements: { isTrial: true, isPaid: false },
-    sendEmail: async () => true
+    sendOtp: async () => true
   };
-  check((await requestDashboardAccess({ ...baseRequest, ownerId: null })).reason === 'db_error', 'a missing owner id is refused');
-  check((await requestDashboardAccess({ ...baseRequest, profile: { ...PROFILE, email: '' } })).reason === 'no_email', 'a profile without an email is refused');
-  check((await requestDashboardAccess({ ...baseRequest, profile: { ...PROFILE, email_verified: false } })).reason === 'email_unverified', 'an unverified email is refused');
-  check((await requestDashboardAccess({ ...baseRequest, entitlements: null })).reason === 'not_entitled', 'missing entitlements are refused');
-  check((await requestDashboardAccess({ ...baseRequest, entitlements: { isTrial: false, isPaid: false } })).reason === 'not_entitled', 'a free (or lapsed PAST_DUE) account is refused');
+  check((await requestDashboardOtp({ ...baseRequest, phone: '' })).reason === 'bad_phone', 'a missing phone is refused');
+  check((await requestDashboardOtp({ ...baseRequest, phone: '123' })).reason === 'bad_phone', 'an unreadable phone is refused');
+  check((await requestDashboardOtp({ ...baseRequest, profile: { ...PROFILE, email: null, full_name: null } })).reason === 'no_account', 'a shell profile (no email, no name) is refused — the ghost guard');
+  check((await requestDashboardOtp({ ...baseRequest, entitlements: null, profile: { ...PROFILE, email: null } })).reason === 'not_entitled', 'missing entitlements are refused');
+  check((await requestDashboardOtp({ ...baseRequest, entitlements: { isTrial: false, isPaid: false } })).reason === 'not_entitled', 'a free (or lapsed PAST_DUE) account is refused');
+  check((await requestDashboardOtp({ ...baseRequest, role: 'wizard' })).reason === 'bad_role', 'an unknown role is refused');
+  const previousAdminPhoneGate = process.env.SUPERADMIN_PHONE;
+  process.env.SUPERADMIN_PHONE = '+254700000099';
+  check((await requestDashboardOtp({ ...baseRequest, phone: '+254700000099', profile: { id: 'p-admin', phone_number: '+254700000099', full_name: 'Admin' }, role: 'auto' })).reason === 'use_admin_login', 'D4: the admin number never mints an owner session at /d/login');
+  if (previousAdminPhoneGate === undefined) delete process.env.SUPERADMIN_PHONE;
+  else process.env.SUPERADMIN_PHONE = previousAdminPhoneGate;
   check(emptyMock.state.inserts.length === 0, 'no auth row is created for a refused request');
-  const paid = await requestDashboardAccess({ ...baseRequest, entitlements: { isTrial: false, isPaid: true } });
+  const paid = await requestDashboardOtp({ ...baseRequest, entitlements: { isTrial: false, isPaid: true } });
   check(paid.ok === true, 'a paid account passes the gate');
 
-  console.log('\n--- Test 4: request mints a link + code, stores hashes only ---');
-  const mock = createMockSupabase({ [DASHBOARD_SESSIONS_TABLE]: [], admin_audit_logs: [] });
-  let emailPayload = null;
-  const access = await requestDashboardAccess({
+  console.log('\n--- Test 4: request mints a WhatsApp OTP, stores hashes only ---');
+  const mock = createMockSupabase({ [DASHBOARD_SESSIONS_TABLE]: [], admin_audit_logs: [], vehicles: [] });
+  let otpPayload = null;
+  const access = await requestDashboardOtp({
     supabase: mock.client,
-    ownerId: PROFILE.id,
+    phone: PROFILE.phone_number,
     profile: PROFILE,
     entitlements: { isTrial: true, isPaid: false },
-    sendEmail: async (payload) => { emailPayload = payload; return true; }
+    sendOtp: async (to, text) => { otpPayload = { to, text }; return true; }
   });
-  check(access.ok === true, 'a trial account receives access');
-  const rawToken = access.link.split('/').pop();
-  check(access.link.startsWith('https://app.sakafleet.test/d/'), 'the magic link rides PUBLIC_APP_URL + /d/');
-  check(emailPayload && emailPayload.to === PROFILE.email, 'the email goes to the verified address');
-  check(emailPayload && /^\d{6}$/.test(emailPayload.otp), 'the email carries a 6-digit code');
-  check(rawToken.length === 64, 'the raw token is 32 bytes of hex');
-  check(emailPayload.link === access.link, 'the emailed link is exactly the returned link');
+  check(access.ok === true && access.role === 'owner', 'a trial owner receives a code');
+  const rawToken = access.token;
+  check(rawToken.length === 64, 'the raw flow token is 32 bytes of hex');
+  check(access.phoneMasked === maskPhone(PROFILE.phone_number), 'the page names the masked WhatsApp number');
+  check(otpPayload && otpPayload.to === PROFILE.phone_number, 'the code goes to the WhatsApp number signing in');
+  const otpMatch = String(otpPayload.text).match(/\b\d{6}\b/);
+  check(Boolean(otpMatch), 'the WhatsApp message carries a 6-digit code');
+  const loginOtp = otpMatch ? otpMatch[0] : '000000';
+  check(!otpPayload.text.includes(rawToken), 'the flow token never travels over WhatsApp');
+  check(access.link === undefined, 'no emailed magic link is minted any more');
   const row = mock.db[DASHBOARD_SESSIONS_TABLE][0];
-  check(row.token_hash === hashToken(rawToken) && row.token_hash !== rawToken, 'the link token is stored as sha256 (never raw)');
-  check(row.otp_hash === hashToken(emailPayload.otp) && row.otp_hash !== emailPayload.otp, 'the OTP is stored as sha256 (never raw)');
+  check(row.token_hash === hashToken(rawToken) && row.token_hash !== rawToken, 'the flow token is stored as sha256 (never raw)');
+  check(row.otp_hash === hashToken(loginOtp) && row.otp_hash !== loginOtp, 'the OTP is stored as sha256 (never raw)');
+  check(row.session_role === 'owner', 'the minted row carries the owner role');
   const serialized = JSON.stringify(mock.db[DASHBOARD_SESSIONS_TABLE]);
-  check(!serialized.includes(rawToken) && !serialized.includes(emailPayload.otp), 'no raw token or code exists anywhere in the database rows');
+  check(!serialized.includes(rawToken) && !serialized.includes(loginOtp), 'no raw token or code exists anywhere in the database rows');
+  check(mock.db.admin_audit_logs.some((a) => a.action === 'DASHBOARD_OTP_SENT' && a.details?.channel === 'whatsapp'), 'the WhatsApp OTP send is audited');
   const linkTtl = new Date(row.link_expires_at).getTime() - new Date(row.created_at).getTime();
-  check(Math.abs(linkTtl - DASHBOARD_LINK_TTL_MS) < 5000, 'the link TTL is 15 minutes');
+  check(Math.abs(linkTtl - DASHBOARD_LINK_TTL_MS) < 5000, 'the flow window is 15 minutes');
   const otpTtl = new Date(row.otp_expires_at).getTime() - new Date(row.created_at).getTime();
   check(Math.abs(otpTtl - DASHBOARD_OTP_TTL_MS) < 5000, 'the OTP TTL is 10 minutes');
 
   console.log('\n--- Test 5: 60-second resend cooldown ---');
-  const cooldown = await requestDashboardAccess({
+  const cooldown = await requestDashboardOtp({
     supabase: mock.client,
-    ownerId: PROFILE.id,
+    phone: PROFILE.phone_number,
     profile: PROFILE,
     entitlements: { isTrial: true, isPaid: false },
-    sendEmail: async () => true
+    sendOtp: async () => true
   });
   check(cooldown.ok === false && cooldown.reason === 'cooldown', 'a second request within 60 seconds answers cooldown');
   check(mock.db[DASHBOARD_SESSIONS_TABLE].length === 1, 'the cooldown never inserts a second row');
 
-  console.log('\n--- Test 6: email failure leaves no orphaned live token ---');
-  const failMock = createMockSupabase({ [DASHBOARD_SESSIONS_TABLE]: [], admin_audit_logs: [] });
-  const failed = await requestDashboardAccess({
+  console.log('\n--- Test 6: a failed WhatsApp send leaves no orphaned live token ---');
+  const failMock = createMockSupabase({ [DASHBOARD_SESSIONS_TABLE]: [], admin_audit_logs: [], vehicles: [] });
+  const failed = await requestDashboardOtp({
     supabase: failMock.client,
-    ownerId: PROFILE.id,
+    phone: PROFILE.phone_number,
     profile: PROFILE,
     entitlements: { isTrial: true, isPaid: false },
-    sendEmail: async () => false
+    sendOtp: async () => false
   });
-  check(failed.ok === false && failed.reason === 'email_failed', 'a failed email is reported, never thrown');
-  check(failMock.db[DASHBOARD_SESSIONS_TABLE].length === 0, 'the auth row is removed when the email cannot be sent');
+  check(failed.ok === false && failed.reason === 'otp_send_failed', 'a failed WhatsApp send is reported, never thrown');
+  check(failMock.db[DASHBOARD_SESSIONS_TABLE].length === 0, 'the auth row is removed when the code cannot be sent');
 
-  console.log('\n--- Test 7: OTP verify -> single-use link -> 30-day session ---');
-  const verified = await verifyDashboardOtp({ supabase: mock.client, rawToken, otp: emailPayload.otp });
+  console.log('\n--- Test 7: OTP verify -> single-use flow -> 15-minute session ---');
+  const verified = await verifyDashboardOtp({ supabase: mock.client, rawToken, otp: loginOtp });
   check(verified.ok === true && typeof verified.sessionToken === 'string', 'the correct code issues a session token');
+  check(verified.role === 'owner', 'verify returns the session role (route redirects by it)');
   check(verified.sessionToken.length === 64, 'the session token is 32 bytes of hex');
   const verifiedRow = mock.db[DASHBOARD_SESSIONS_TABLE][0];
   check(verifiedRow.verified === true, 'the row is stamped verified');
@@ -282,18 +301,18 @@ async function run() {
   check(verifiedRow.session_token_hash === hashToken(verified.sessionToken), 'only the session token hash is stored');
   check(!JSON.stringify(verifiedRow).includes(verified.sessionToken), 'the raw session token never appears in the row');
   const sessionTtl = new Date(verifiedRow.session_expires_at).getTime() - Date.now();
-  check(Math.abs(sessionTtl - DASHBOARD_SESSION_TTL_MS) < 10000, 'the session TTL is 30 days');
+  check(Math.abs(sessionTtl - DASHBOARD_SESSION_TTL_MS) < 10000, 'the session TTL is 15 minutes');
   const lookedUp = await getSessionByToken({ supabase: mock.client, sessionToken: verified.sessionToken });
   check(lookedUp.ok === true && lookedUp.ownerId === PROFILE.id, 'the session token resolves to its owner');
   const replayLink = await getLinkState({ supabase: mock.client, rawToken });
   check(replayLink.ok === false && replayLink.reason === 'already_used', 'a used link never opens again');
-  const replayOtp = await verifyDashboardOtp({ supabase: mock.client, rawToken, otp: emailPayload.otp });
+  const replayOtp = await verifyDashboardOtp({ supabase: mock.client, rawToken, otp: loginOtp });
   check(replayOtp.ok === false && replayOtp.reason === 'already_used', 'the same link + code cannot be re-verified');
   const cleared = await clearDashboardSession({ supabase: mock.client, sessionToken: verified.sessionToken });
   check(cleared.ok === true, 'logout clears the session row');
   const afterLogout = await getSessionByToken({ supabase: mock.client, sessionToken: verified.sessionToken });
   check(afterLogout.ok === false && afterLogout.reason === 'no_session', 'the cleared session no longer resolves');
-  check(mock.db.admin_audit_logs.some((a) => a.action === 'DASHBOARD_ACCESS_REQUESTED')
+  check(mock.db.admin_audit_logs.some((a) => a.action === 'DASHBOARD_OTP_SENT')
     && mock.db.admin_audit_logs.some((a) => a.action === 'DASHBOARD_SESSION_CREATED')
     && mock.db.admin_audit_logs.some((a) => a.action === 'DASHBOARD_LOGOUT'), 'every auth step is audited');
 
@@ -348,7 +367,7 @@ async function run() {
   const cookie = dashboardCookieHeader('raw-session-token');
   check(cookie.startsWith(`${DASHBOARD_COOKIE_NAME}=raw-session-token`), 'the cookie carries the raw token');
   check(cookie.includes('Path=/d') && cookie.includes('HttpOnly') && cookie.includes('SameSite=Strict'), 'HttpOnly + SameSite=Strict + Path=/d');
-  check(cookie.includes(`Max-Age=${Math.floor(DASHBOARD_SESSION_TTL_MS / 1000)}`), 'the cookie lives 30 days');
+  check(cookie.includes('Max-Age=900'), 'the cookie lives 15 minutes (Max-Age=900)');
   check(cookie.includes('Secure'), 'the cookie is Secure on a real host');
   check(!dashboardCookieHeader('t', { secure: false }).includes('Secure'), 'localhost development stays plain');
   const clear = dashboardClearCookieHeader();
@@ -373,10 +392,10 @@ async function run() {
   check(pruned.ok === true, 'the prune sweep completes');
   const remaining = pruneMock.db[DASHBOARD_SESSIONS_TABLE].map((r) => r.id);
   check(!remaining.includes('stale-link'), 'an unverified link older than a day past expiry is removed');
-  check(!remaining.includes('dead-session'), 'a session past its 30-day window is removed');
+  check(!remaining.includes('dead-session'), 'a session past its 15-minute window is removed');
   check(remaining.includes('live-session'), 'a live session is never pruned');
 
-  console.log('\n--- Test 12: WhatsApp lane (13B) ---');
+  console.log('\n--- Test 12: WhatsApp lane (v1.82.0 static sign-in link) ---');
   const { resolveReadCommand } = await import('./src/services/readCommands.js');
   const laneProfile = { ...PROFILE };
   const laneCtx = (over = {}) => ({
@@ -388,30 +407,31 @@ async function run() {
   });
   check(resolveReadCommand('dashboard', laneCtx())?.id === 'dashboard', 'the exact phrase "dashboard" is claimed by the lane');
   check(resolveReadCommand('open my dashboard', laneCtx())?.id === 'dashboard', '"open my dashboard" is claimed too');
+  check(resolveReadCommand('records', laneCtx())?.id === 'dashboard', 'the "records" alias is claimed by the same lane');
+  check(resolveReadCommand('my records', laneCtx())?.id === 'dashboard', '"my records" is claimed too');
   process.env.DASHBOARD_ENABLED = 'off';
   const laneOff = await resolveReadCommand('dashboard', laneCtx()).render(laneCtx());
-  check(laneOff.reply_message === "That's not something I can do yet — reply *help* to see what I can do.", 'flag OFF -> the verbatim A2 line (real service path)');
+  check(laneOff.reply_message === "That's not something I can do yet — reply *help* to see what I can do.", 'flag OFF -> the verbatim A2 line');
   check(!/dashboard/i.test(laneOff.reply_message), 'the A2 line never names the dashboard');
   process.env.DASHBOARD_ENABLED = 'on';
-  const unverifiedProfile = { ...laneProfile, email_verified: false };
-  const laneUnverified = await resolveReadCommand('dashboard', laneCtx({ profile: unverifiedProfile })).render(laneCtx({ profile: unverifiedProfile }));
-  check(/finish the quick sign-up at https:\/\/sakafleet\.com/.test(laneUnverified.reply_message), 'an unverified email gets the website sign-up line (no email is sent)');
-  const freeCtx = laneCtx({ dashboardEntitlements: { isTrial: false, isPaid: false } });
-  const laneFree = await resolveReadCommand('dashboard', freeCtx).render(freeCtx);
-  check(/trial or a paid plan/.test(laneFree.reply_message) && !/app\.sakafleet/i.test(laneFree.reply_message), 'a free account gets the deterministic upgrade line and no link');
-  let capturedArgs = null;
-  const eligibleCtx = laneCtx({
-    dashboardEntitlements: { isTrial: true, isPaid: false },
-    dashboardRequestAccess: async (args) => {
-      capturedArgs = args;
-      return { ok: true, link: 'https://app.sakafleet.com/d/feedface', email: PROFILE.email };
-    }
-  });
-  const laneEligible = await resolveReadCommand('dashboard', eligibleCtx).render(eligibleCtx);
-  check(capturedArgs && capturedArgs.ownerId === PROFILE.id && capturedArgs.entitlements.isTrial === true, 'the lane passes owner + entitlements to the service');
-  check(capturedArgs.profile.email === PROFILE.email && capturedArgs.supabase === eligibleCtx.supabaseClient, 'the lane passes the profile and client through');
-  check(laneEligible.reply_message.includes('https://app.sakafleet.com/d/feedface'), 'an eligible reply carries the magic link');
-  check(/code is in that same email/.test(laneEligible.reply_message) && !/\b\d{6}\b/.test(laneEligible.reply_message.replace(/\d+\s*minutes?/gi, '')), 'the reply never contains the 6-digit code itself (D2)');
+  const laneOn = await resolveReadCommand('dashboard', laneCtx()).render(laneCtx());
+  check(laneOn.reply_message.includes('https://app.sakafleet.test/d/login'), 'the lane replies with the STATIC sign-in link');
+  check(/1\.[\s\S]*WhatsApp number/.test(laneOn.reply_message)
+    && /2\.[\s\S]*6-digit code/.test(laneOn.reply_message)
+    && /3\.[\s\S]*15 minutes/.test(laneOn.reply_message), 'the 3-line tutorial teaches number -> code -> 15 minutes');
+  check(!/\b\d{6}\b/.test(laneOn.reply_message), 'the reply never contains a 6-digit code');
+  check(!/email/i.test(laneOn.reply_message), 'the reply never promises an email');
+  const previousAdminPhoneLane = process.env.SUPERADMIN_PHONE;
+  process.env.SUPERADMIN_PHONE = PROFILE.phone_number;
+  const adminLane = resolveReadCommand('dashboard admin', laneCtx());
+  check(adminLane?.id === 'dashboard', '"dashboard admin" is claimed by the dashboard lane');
+  const adminRender = await adminLane.render(laneCtx());
+  check(adminRender.reply_message.includes('https://app.sakafleet.test/d/admin/login'), 'the superadmin gets the admin door (D4)');
+  process.env.SUPERADMIN_PHONE = '+254799999999';
+  const spoofRender = await resolveReadCommand('dashboard admin', laneCtx()).render(laneCtx());
+  check(spoofRender.reply_message === "That's not something I can do yet — reply *help* to see what I can do.", 'a stranger gets the generic line for the admin phrase');
+  if (previousAdminPhoneLane === undefined) delete process.env.SUPERADMIN_PHONE;
+  else process.env.SUPERADMIN_PHONE = previousAdminPhoneLane;
 
   console.log('\n--- Test 13: D3 upcomingExpiryItems ---');
   const dayIso = (days) => new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
@@ -469,32 +489,44 @@ async function run() {
     'an empty fleet reads as honest zeros (never invented figures)');
   check(realCard.upcoming.length === 0 && realCard.recent.length === 0, 'no expiries and no activity for an empty fleet');
 
-  console.log('\n--- Test 16: the four pages end-to-end (Fastify inject) ---');
+  console.log('\n--- Test 16: the sign-in doors end-to-end (Fastify inject) ---');
   process.env.DASHBOARD_ENABLED = 'on';
   const pageMock = createMockSupabase({
     [DASHBOARD_SESSIONS_TABLE]: [],
     admin_audit_logs: [],
     profiles: [{ id: PROFILE.id, phone_number: PROFILE.phone_number, email: PROFILE.email, full_name: PROFILE.full_name, country_code: 'KE' }],
-    vehicles: []
+    vehicles: [],
+    expense_logs: [], private_earnings: [], reminders: [], receipts: [],
+    passbook_transfers: [], vehicle_compliances: [], driver_compliances: [],
+    expiry_notification_log: [], subscriptions: [], trial_sessions: [], usage_counters: []
   });
-  let pageEmail = null;
-  const pageAccess = await requestDashboardAccess({
-    supabase: pageMock.client,
-    ownerId: PROFILE.id,
-    profile: PROFILE,
-    entitlements: { isTrial: true, isPaid: false },
-    sendEmail: async (payload) => { pageEmail = payload; return true; }
-  });
-  const pageToken = pageAccess.link.split('/').pop();
+  const pageToken = 'f'.repeat(64);
+  const pageOtp = '123456';
+  const fakeRequestOtp = async () => {
+    pageMock.db[DASHBOARD_SESSIONS_TABLE].push(seedRow({ id: 'page-row', token_hash: hashToken(pageToken), owner_id: PROFILE.id, email: PROFILE.email, otp_hash: hashToken(pageOtp), session_role: 'owner' }));
+    return { ok: true, token: pageToken, role: 'owner', phoneMasked: maskPhone(PROFILE.phone_number) };
+  };
   const app = Fastify({ logger: false });
-  await registerDashboardRoutes(app, { supabase: pageMock.client });
+  await registerDashboardRoutes(app, { supabase: pageMock.client, requestOtp: fakeRequestOtp });
   await app.ready();
 
-  const otpPage = await app.inject({ method: 'GET', url: `/d/${pageToken}` });
-  check(otpPage.statusCode === 200 && /Check your email/.test(otpPage.body), 'GET /d/<token> renders the OTP page');
-  check(otpPage.body.includes('a***a@example.com'), 'the OTP page shows the masked destination address');
-  check(otpPage.body.includes(`value="${pageToken}"`), 'the form carries the link token in a hidden field');
-  check(otpPage.body.includes('Open my dashboard') && otpPage.body.includes('10 minutes'), 'the form names the action and the code TTL');
+  const loginPage = await app.inject({ method: 'GET', url: '/d/login' });
+  check(loginPage.statusCode === 200 && /Your dashboard/.test(loginPage.body), 'GET /d/login renders the static sign-in page');
+  check(loginPage.body.includes('name="phone"') && /Send me a code/.test(loginPage.body), 'the page asks for the WhatsApp number');
+  check(!/email/i.test(loginPage.body.replace(/<style>[\s\S]*?<\/style>/g, '')), 'the sign-in page never mentions email');
+
+  const loginPost = await app.inject({
+    method: 'POST',
+    url: '/d/login',
+    payload: `phone=${encodeURIComponent(PROFILE.phone_number)}`,
+    headers: { 'content-type': 'application/x-www-form-urlencoded' }
+  });
+  check(loginPost.statusCode === 200 && /Check your WhatsApp/.test(loginPost.body), 'a successful POST renders the OTP step in place');
+  check(loginPost.body.includes(`value="${pageToken}"`) && loginPost.body.includes(maskPhone(PROFILE.phone_number)), 'the OTP form carries the token and the masked number');
+
+  const legacyOtpPage = await app.inject({ method: 'GET', url: `/d/${pageToken}` });
+  check(legacyOtpPage.statusCode === 200 && /Check your WhatsApp/.test(legacyOtpPage.body), 'GET /d/<token> still renders the OTP page for pre-1.82.0 links');
+  check(legacyOtpPage.body.includes(maskPhone(PROFILE.phone_number)), 'the legacy page names the masked WhatsApp number');
 
   const badOtp = await app.inject({
     method: 'POST',
@@ -509,14 +541,14 @@ async function run() {
   const goodOtp = await app.inject({
     method: 'POST',
     url: '/d/verify',
-    payload: `token=${pageToken}&otp=${pageEmail.otp}`,
+    payload: `token=${pageToken}&otp=${pageOtp}`,
     headers: { 'content-type': 'application/x-www-form-urlencoded' }
   });
   check(goodOtp.statusCode === 303 && goodOtp.headers.location === '/d', 'the correct code redirects 303 to /d');
   const cookieLine = String(Array.isArray(goodOtp.headers['set-cookie']) ? goodOtp.headers['set-cookie'][0] : goodOtp.headers['set-cookie'] || '');
   check(/saka_dash=[a-f0-9]{64}/.test(cookieLine), 'the session cookie carries a raw 64-hex token');
-  check(cookieLine.includes('HttpOnly') && cookieLine.includes('SameSite=Strict') && cookieLine.includes('Path=/d') && cookieLine.includes('Max-Age=2592000'),
-    'the cookie is HttpOnly, SameSite=Strict, Path=/d and lives 30 days');
+  check(cookieLine.includes('HttpOnly') && cookieLine.includes('SameSite=Strict') && cookieLine.includes('Path=/d') && cookieLine.includes('Max-Age=900'),
+    'the cookie is HttpOnly, SameSite=Strict, Path=/d and lives 15 minutes');
   check(!cookieLine.includes('Secure'), 'localhost development omits Secure');
   const sessionCookie = cookieLine.match(/saka_dash=([a-f0-9]{64})/)[1];
 
@@ -541,6 +573,44 @@ async function run() {
   const afterPageLogout = await app.inject({ method: 'GET', url: '/d', headers: { cookie: `saka_dash=${sessionCookie}` } });
   check(afterPageLogout.statusCode === 401, 'the old cookie no longer opens the dashboard');
   await app.close();
+
+  // v1.82.0 (D4) — the admin door mints an admin session and lands on /d/admin.
+  const previousAdmin = process.env.SUPERADMIN_PHONE;
+  process.env.SUPERADMIN_PHONE = '+254700000099';
+  const adminMock = createMockSupabase({
+    [DASHBOARD_SESSIONS_TABLE]: [],
+    admin_audit_logs: [],
+    profiles: [{ id: 'p-admin', phone_number: '+254700000099', email: null, full_name: 'Admin' }],
+    vehicles: []
+  });
+  const adminToken = 'e'.repeat(64);
+  const adminRequestOtp = async ({ role }) => {
+    if (role !== 'admin') return { ok: false, reason: 'bad_role' };
+    adminMock.db[DASHBOARD_SESSIONS_TABLE].push(seedRow({ id: 'admin-row', token_hash: hashToken(adminToken), owner_id: 'p-admin', email: null, otp_hash: hashToken('654321'), session_role: 'admin' }));
+    return { ok: true, token: adminToken, role: 'admin', phoneMasked: '+2547****0099' };
+  };
+  const adminApp = Fastify({ logger: false });
+  await registerDashboardRoutes(adminApp, { supabase: adminMock.client, requestOtp: adminRequestOtp });
+  await adminApp.ready();
+  const adminLoginPage = await adminApp.inject({ method: 'GET', url: '/d/admin/login' });
+  check(adminLoginPage.statusCode === 200 && /Admin dashboard/.test(adminLoginPage.body), 'GET /d/admin/login renders the admin door');
+  const adminPost = await adminApp.inject({
+    method: 'POST',
+    url: '/d/admin/login',
+    payload: 'phone=%2B254700000099',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' }
+  });
+  check(adminPost.statusCode === 200 && /Check your WhatsApp/.test(adminPost.body), 'the admin door POST renders the OTP step');
+  const adminVerified = await adminApp.inject({
+    method: 'POST',
+    url: '/d/verify',
+    payload: `token=${adminToken}&otp=654321`,
+    headers: { 'content-type': 'application/x-www-form-urlencoded' }
+  });
+  check(adminVerified.statusCode === 303 && adminVerified.headers.location === '/d/admin', 'an admin code lands on /d/admin (never /d)');
+  await adminApp.close();
+  if (previousAdmin === undefined) delete process.env.SUPERADMIN_PHONE;
+  else process.env.SUPERADMIN_PHONE = previousAdmin;
 
   console.log('\n--- Test 17: pure renderers ---');
   const synthetic = {
@@ -1722,25 +1792,31 @@ async function run() {
   check(adminRole.role === 'admin' && adminRole.isAdmin === true, 'the superadmin phone resolves to the admin lane');
   check((await resolveDashboardRole({ supabase: null, profile: { id: 'p-x' } })).role === 'owner', 'a missing client degrades to owner');
 
-  console.log('\n--- Test 47: requestDashboardAccess by role (D1) ---');
+  console.log('\n--- Test 47: requestDashboardOtp by role (D1/D4) ---');
   const captures = [];
-  const captureEmail = async (payload) => { captures.push(payload); return true; };
+  const captureOtp = async (to, text) => { captures.push({ to, text }); return true; };
   const freeEntitlements = { isTrial: false, isPaid: false };
   const driverProfile = { id: 'd-1', email: 'driver@example.com', email_verified: true, full_name: 'Brian Otieno', phone_number: '+254700000002' };
   const noAssignmentMock = createMockSupabase({ vehicles: [{ id: 'v-a', owner_id: 'p-owner', assigned_driver_id: null, status: 'ACTIVE' }], [DASHBOARD_SESSIONS_TABLE]: [], admin_audit_logs: [] });
-  const noAssignment = await requestDashboardAccess({ supabase: noAssignmentMock.client, ownerId: 'd-1', profile: driverProfile, entitlements: freeEntitlements, role: 'driver', sendEmail: captureEmail });
+  const noAssignment = await requestDashboardOtp({ supabase: noAssignmentMock.client, phone: driverProfile.phone_number, profile: driverProfile, entitlements: freeEntitlements, role: 'driver', sendOtp: captureOtp });
   check(noAssignment.ok === false && noAssignment.reason === 'no_assignment', 'a driver without a live assignment is refused (D1)');
   const assignedMock = createMockSupabase({ vehicles: [{ id: 'v-a', owner_id: 'p-owner', assigned_driver_id: 'd-1', status: 'ACTIVE' }], [DASHBOARD_SESSIONS_TABLE]: [], admin_audit_logs: [] });
-  const driverAccess = await requestDashboardAccess({ supabase: assignedMock.client, ownerId: 'd-1', profile: driverProfile, entitlements: freeEntitlements, role: 'driver', sendEmail: captureEmail });
-  check(driverAccess.ok === true && driverAccess.role === 'driver', 'an assigned driver with a Free account gets a link (the plan gate is owner-only)');
+  const driverAccess = await requestDashboardOtp({ supabase: assignedMock.client, phone: driverProfile.phone_number, profile: driverProfile, entitlements: freeEntitlements, role: 'driver', sendOtp: captureOtp });
+  check(driverAccess.ok === true && driverAccess.role === 'driver', 'an assigned driver with a Free account gets a code (the plan gate is owner-only)');
   check(assignedMock.db[DASHBOARD_SESSIONS_TABLE][0].session_role === 'driver', 'the minted row carries the driver role');
-  const nonAdminAccess = await requestDashboardAccess({ supabase: assignedMock.client, ownerId: 'p-admin', profile: { id: 'p-admin', email: 'x@example.com', email_verified: true, phone_number: '+254700000001' }, role: 'admin', sendEmail: captureEmail });
-  check(nonAdminAccess.ok === false && nonAdminAccess.reason === 'not_admin', 'a non-superadmin cannot mint an admin link');
-  const adminAccess = await requestDashboardAccess({ supabase: createMockSupabase({ vehicles: [], [DASHBOARD_SESSIONS_TABLE]: [], admin_audit_logs: [] }).client, ownerId: 'p-admin', profile: { id: 'p-admin', email: 'admin@example.com', email_verified: true, phone_number: '+254700000099' }, role: 'admin', sendEmail: captureEmail });
-  check(adminAccess.ok === true && adminAccess.role === 'admin', 'the superadmin phone mints an admin link');
-  const ownerFree = await requestDashboardAccess({ supabase: assignedMock.client, ownerId: 'p-owner', profile: { id: 'p-owner', email: 'owner@example.com', email_verified: true, phone_number: '+254700000001' }, entitlements: freeEntitlements, role: 'owner', sendEmail: captureEmail });
+  const previousAdminPhoneRole = process.env.SUPERADMIN_PHONE;
+  process.env.SUPERADMIN_PHONE = '+254700000099';
+  const nonAdminAccess = await requestDashboardOtp({ supabase: assignedMock.client, phone: '+254700000001', profile: { id: 'p-admin', phone_number: '+254700000001' }, role: 'admin', sendOtp: captureOtp });
+  check(nonAdminAccess.ok === false && nonAdminAccess.reason === 'not_admin', 'a non-superadmin cannot mint an admin session');
+  const adminAccess = await requestDashboardOtp({ supabase: createMockSupabase({ vehicles: [], [DASHBOARD_SESSIONS_TABLE]: [], admin_audit_logs: [] }).client, phone: '+254700000099', profile: { id: 'p-admin', phone_number: '+254700000099', full_name: 'Admin' }, role: 'admin', sendOtp: captureOtp });
+  check(adminAccess.ok === true && adminAccess.role === 'admin', 'the superadmin phone mints an admin session');
+  const adminOnOwnerDoor = await requestDashboardOtp({ supabase: createMockSupabase({ vehicles: [], [DASHBOARD_SESSIONS_TABLE]: [], admin_audit_logs: [] }).client, phone: '+254700000099', profile: { id: 'p-admin', phone_number: '+254700000099', full_name: 'Admin' }, role: 'auto', sendOtp: captureOtp });
+  check(adminOnOwnerDoor.ok === false && adminOnOwnerDoor.reason === 'use_admin_login', 'D4: /d/login never mints an admin session');
+  if (previousAdminPhoneRole === undefined) delete process.env.SUPERADMIN_PHONE;
+  else process.env.SUPERADMIN_PHONE = previousAdminPhoneRole;
+  const ownerFree = await requestDashboardOtp({ supabase: assignedMock.client, phone: '+254700000001', profile: { id: 'p-owner', phone_number: '+254700000001', full_name: 'Owner' }, entitlements: freeEntitlements, role: 'owner', sendOtp: captureOtp });
   check(ownerFree.ok === false && ownerFree.reason === 'not_entitled', 'the owner plan gate is unchanged');
-  check((await requestDashboardAccess({ supabase: assignedMock.client, ownerId: 'd-1', profile: driverProfile, role: 'wizard', sendEmail: captureEmail })).reason === 'bad_role', 'an unknown role is refused');
+  check((await requestDashboardOtp({ supabase: assignedMock.client, phone: driverProfile.phone_number, profile: driverProfile, role: 'wizard', sendOtp: captureOtp })).reason === 'bad_role', 'an unknown role is refused');
 
   console.log('\n--- Test 48: verifyDashboardOtp re-checks the role (rule 51 i) ---');
   // A driver token whose assignment vanished between mint and verify.
