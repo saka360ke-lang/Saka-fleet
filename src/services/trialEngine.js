@@ -7,11 +7,10 @@
  *   - one trial per owner lifetime (`profiles.trial_used_at`)
  *   - full paid-tier entitlements while TRIALING (all Tiers 0-3 AI)
  *
- * Activation ("Aha!") — strictly three events:
+ * Activation ("Aha!") — strictly ONE event (v1.77.0 audit override):
  *   1. vehicle_registered (vehicles row + passbook issued)
- *   2. expense_logged    (expense_logs insert)
- *   3. report_generated  (usage_counters write)
- * Reminders NEVER activate a trial (engagement metric only).
+ * Logging an expense or generating a report NEVER activates a trial, and
+ * reminders NEVER activate a trial (engagement metric only).
  *
  * Lifecycle nudges: T+7d activation nudge, optional T-14d midpoint,
  * T-3d value digest, T-24h urgent, T-0 expiry -> Free (PAUSED vehicles).
@@ -61,10 +60,11 @@ export const TRIAL_MIDPOINT_COUPON_PCT = clampNumber(process.env.TRIAL_MIDPOINT_
 export const TRIAL_MAX_ASSETS = clampNumber(process.env.TRIAL_MAX_ASSETS, 0, 500, 50);
 export const TRIAL_END_GRACE_DAYS = clampNumber(process.env.TRIAL_END_GRACE_DAYS, 0, 14, 7);
 
+// v1.77.0 (production-readiness audit override) — trial activation is triggered
+// by ONE event only: registering the first asset. Logging an expense or
+// generating a report never activates a trial.
 export const ACTIVATION_EVENTS = Object.freeze({
-  VEHICLE_REGISTERED: 'vehicle_registered',
-  EXPENSE_LOGGED: 'expense_logged',
-  REPORT_GENERATED: 'report_generated'
+  VEHICLE_REGISTERED: 'vehicle_registered'
 });
 
 export const ACTIVATION_EVENT_VALUES = Object.freeze(Object.values(ACTIVATION_EVENTS));
@@ -390,8 +390,8 @@ export async function issueActivationCoupon({ supabase, trial, owner = null, per
 }
 
 /**
- * Record an activation event. The FIRST of the three events activates the
- * trial and issues the activation coupon. Idempotent per event key.
+ * Record the activation event. Vehicle registration activates the trial and
+ * issues the activation coupon. Idempotent per event key.
  */
 export async function recordActivationEvent({ supabase, ownerId, event } = {}) {
   if (!supabase || !ownerId || !event) return { recorded: false, reason: 'owner/event required' };

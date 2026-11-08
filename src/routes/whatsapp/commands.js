@@ -31,7 +31,6 @@ import { isDuplicateExpense, legacyExpensesWriteEnabled } from '../../services/e
 import { normalizeFillType } from '../../services/fuelEconomy.js';
 import { applyOdometerReading, applyOperatingHours } from '../../services/maintenanceReminders.js';
 import { markUserDataChanged } from '../../services/afterWrite.js';
-import { recordActivationEvent, ACTIVATION_EVENTS } from '../../services/trialEngine.js';
 import { getTierLabel, getAnnualDiscountPercent } from '../../services/subscriptionTiers.js';
 import { shortenUrl } from '../../services/linkShortener.js';
 import { composeMessage } from '../../services/conversationEngine.js';
@@ -394,12 +393,8 @@ export async function handleReportRequestTurn({ mergedExt, messageText, supabase
     if (profileData?.id) {
       try {
         await recordReportUsage({ supabase: supabaseClient, ownerId: profileData.id });
-        // Trial activation #3: a report really was generated for this owner.
-        await recordActivationEvent({
-          supabase: supabaseClient,
-          ownerId: profileData.id,
-          event: ACTIVATION_EVENTS.REPORT_GENERATED
-        });
+        // v1.77.0 (audit override) — a generated report no longer activates a
+        // trial; vehicle registration is the ONLY activation event.
         entitlements = await getEntitlements({
           supabase: supabaseClient,
           ownerId: profileData.id,

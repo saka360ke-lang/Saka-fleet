@@ -3275,14 +3275,8 @@ async function executeFlow(state, ctx) {
         // v1.63.1 — the month-spend / relationship facts just changed.
         markUserDataChanged({ supabase: ctx.supabase, phone: ctx.formattedPhone || ctx.profile?.phone_number, ownerId: ctx.profile?.id, reason: 'quizEngine.logExpense' });
 
-        // Trial activation #2: first expense logged (no-op outside trials).
-        try {
-          await recordActivationEvent({
-            supabase: ctx.supabase,
-            ownerId: ctx.profile?.id,
-            event: ACTIVATION_EVENTS.EXPENSE_LOGGED
-          });
-        } catch { /* activation is best-effort */ }
+        // v1.77.0 (audit override) — logging an expense no longer activates a
+        // trial; vehicle registration is the ONLY activation event.
 
         // v1.72.0 (P2-3) — the legacy `expenses` mirror retires behind
         // LEGACY_EXPENSES_WRITE_ENABLED (default on = today's behaviour).

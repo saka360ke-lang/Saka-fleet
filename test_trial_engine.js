@@ -2,8 +2,9 @@
  * Saka Fleet — Trial Engine Test Suite (v1.15.0)
  * ---------------------------------------------
  * Stateless: in-memory Supabase mock + stubbed WhatsApp sender. Zero network.
- * Covers: 30-day window, 3-point activation (reminders NEVER activate),
- * once-per-owner enforcement, extension cap, lifecycle nudges, expiry -> Free.
+ * Covers: 30-day window, 1-point activation (only vehicle registration —
+ * expenses, reports and reminders NEVER activate), once-per-owner enforcement,
+ * extension cap, lifecycle nudges, expiry -> Free.
  *
  * Run: node test_trial_engine.js
  */
@@ -86,11 +87,12 @@ async function run() {
   check(TRIAL_DAYS === 30, `Trial lasts 30 days (got ${TRIAL_DAYS})`);
   check(TRIAL_MAX_TOTAL_DAYS === 45, `Cumulative trial cap = 45 days (got ${TRIAL_MAX_TOTAL_DAYS})`);
   check(TRIAL_ACTIVATION_COUPON_PCT === 20, 'Activation coupon = 20%');
-  check(ACTIVATION_EVENT_VALUES.length === 3, 'Exactly three activation events');
-  check(ACTIVATION_EVENT_VALUES.includes('vehicle_registered') && ACTIVATION_EVENT_VALUES.includes('expense_logged') && ACTIVATION_EVENT_VALUES.includes('report_generated'), 'Activation = vehicle / expense / report');
+  check(ACTIVATION_EVENT_VALUES.length === 1, 'Exactly one activation event (vehicle registration)');
+  check(ACTIVATION_EVENT_VALUES[0] === 'vehicle_registered', 'Activation = vehicle registration only');
+  check(!ACTIVATION_EVENT_VALUES.includes('expense_logged') && !ACTIVATION_EVENT_VALUES.includes('report_generated'), 'Expenses and reports are NOT activation events');
   check(!ACTIVATION_EVENT_VALUES.some((e) => /reminder/.test(e)), 'Reminders are NOT an activation event');
   const cfg = getTrialConfig();
-  check(cfg.trialDays === 30 && cfg.activationEvents.length === 3, 'Config snapshot matches the registry');
+  check(cfg.trialDays === 30 && cfg.activationEvents.length === 1, 'Config snapshot matches the registry');
 
   const start = new Date('2026-01-01T00:00:00.000Z');
   const end = computeTrialEnd(start);
@@ -192,13 +194,15 @@ async function run() {
   const duplicateEvent = await recordActivationEvent({ supabase: actMock.client, ownerId: 'p-1', event: ACTIVATION_EVENTS.VEHICLE_REGISTERED });
   check(duplicateEvent.recorded === false && duplicateEvent.duplicate === true, 'Duplicate activation events are ignored');
 
-  const secondEvent = await recordActivationEvent({ supabase: actMock.client, ownerId: 'p-1', event: ACTIVATION_EVENTS.EXPENSE_LOGGED });
-  check(secondEvent.recorded === true && secondEvent.activatedNow === false, 'Later events append without re-activating');
-  check(actMock.db.trial_sessions[0].activation_events.length === 2, 'Activation events accumulate');
+  const expenseEvent = await recordActivationEvent({ supabase: actMock.client, ownerId: 'p-1', event: 'expense_logged' });
+  check(expenseEvent.recorded === false && /unknown activation event/.test(expenseEvent.reason), 'Logging an expense never activates (1-event rule)');
+  const reportEvent = await recordActivationEvent({ supabase: actMock.client, ownerId: 'p-1', event: 'report_generated' });
+  check(reportEvent.recorded === false && /unknown activation event/.test(reportEvent.reason), 'Generating a report never activates (1-event rule)');
+  check(actMock.db.trial_sessions[0].activation_events.length === 1, 'Only the vehicle event is recorded');
   check(actMock.db.coupons.length === 1, 'No second activation coupon is issued');
 
   const noTrialMock = createMockSupabase({ profiles: [ownerProfile()], trial_sessions: [], usage_counters: [], vehicles: [] });
-  const noTrial = await recordActivationEvent({ supabase: noTrialMock.client, ownerId: 'p-1', event: ACTIVATION_EVENTS.REPORT_GENERATED });
+  const noTrial = await recordActivationEvent({ supabase: noTrialMock.client, ownerId: 'p-1', event: ACTIVATION_EVENTS.VEHICLE_REGISTERED });
   check(noTrial.recorded === false && /no active trial/.test(noTrial.reason), 'Activation is a no-op without an active trial');
 
   console.log('\n--- Test 4: extensions are capped (45 days total) ---');

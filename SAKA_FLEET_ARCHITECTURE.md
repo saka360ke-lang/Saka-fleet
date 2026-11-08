@@ -1835,7 +1835,7 @@ _End of document — v1.14.1._
 ### 39.4 Trial engine (`src/services/trialEngine.js`)
 - **30 days** (`TRIAL_DAYS`, clamped 7–90), one trial per owner lifetime (`profiles.trial_used_at`), **no card at start** — `startAccountTrial()` makes zero Paystack calls and sets `profiles.subscription_status='TRIALING'` with full paid entitlements.
 - `trial_sessions` is the funnel ledger: `ACTIVE → EXTENDED → CONVERTED | EXPIRED | CANCELLED`, with activation data and one-shot nudge timestamps.
-- **Activation ("Aha!") — strictly three events:** `vehicle_registered` (vehicle + passbook), `expense_logged`, `report_generated`. Reminders are engagement metrics only and NEVER activate.
+- **Activation ("Aha!") — strictly ONE event (v1.77.0 audit override):** `vehicle_registered` (vehicle + passbook). Logging an expense (`expense_logged`) or generating a report (`report_generated`) NEVER activates a trial, and reminders are engagement metrics only. The registry (`ACTIVATION_EVENT_VALUES`) carries exactly one event; `recordActivationEvent()` rejects any other key as `unknown activation event`.
 - On first activation: `ACTIVATE20-XXXX` coupon (20% off first cycle, 7-day TTL) is issued and delivered by the sweep (deterministic copy).
 - **Nudge lifecycle** (`runTrialLifecycleSweep`, 15-min tick in `index.js`): activation reward → T+7d nudge if still un-activated → optional T−14d midpoint (`TRIAL_CONVERSION_LADDER=on`) → T−3d value digest + fitted-plan card (counts + ≈hours saved + the fitted tier, its localized price and engine checkout link(s)) → T−24h urgent → T−0 expiry. Each stage fires exactly once.
 - **v1.71.0 — the fitted-plan card now arrives at T−3**, giving the owner a full week (T−3 → grace end) to decide. The T−3 digest stamps `trial_sessions.t3_fitted_plan` (e.g. `team_fleet`, `fleet_command+2`); T−0 opens the grace window and re-sends the full card ONLY when the fitted tier changed (assets added/removed) or no snapshot exists — otherwise the grace card is a pure urgency nudge with no tier, price or link (the T−3 payment link still works). T−3 and T−24 skip paid-live accounts and `PAST_DUE` / `CANCELED` / `CANCELLED` / `CANCELING` statuses. Migration `npm run migrate:trial-end-grace` adds `t3_fitted_plan` (idempotent; a missing column degrades to the pre-v1.71.0 digest + always-full T−0 card). See §193.
@@ -1883,7 +1883,7 @@ _End of document — v1.14.1._
 - `src/services/paystack.js` — matrix-derived view, plan/coupon checkout, subscription disable/enable/update.
 - `src/services/coupons.js` — `validateCouponForCheckout` (percent/flat/scoping) + redemption.
 - `test_subscription_billing.js` — 73 assertions (matrix, entitlements, AI clamp, quotas, coupons, webhook state machine, downgrade, add-ons) — mock Supabase, zero network.
-- `test_trial_engine.js` — 68 assertions (30-day window, 3-point activation incl. reminder negative control, once-per-lifetime, extension cap, nudge one-shot, expiry → PAUSED, funnel) — mock Supabase, zero network.
+- `test_trial_engine.js` — 116 assertions (30-day window, 1-point activation with expense/report/reminder negative controls, once-per-lifetime, extension cap, nudge one-shot, expiry → PAUSED, funnel) — mock Supabase, zero network.
 - `scripts/mockSupabase.js` — shared in-memory Supabase mock (also enforces `paystack_webhook_events.event_id` uniqueness).
 
 ### 39.10 Governance
