@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.73.1  
+**Version:** 1.73.2  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.73.2** | Phase 12A: driver compliance reminder hygiene — `syncAllDriverComplianceReminders` covers every `driver_compliances` type with per-document dedupe (PSV/PDP no longer collapse), retires the legacy profile mirror when a licence row exists, resets the ladder only on a real date change (it was resetting every 30-min sweep), and skips lifetime/number-less/past-expiry rows | 198A |
 | **1.73.1** | Phase 11 (final cleanup): the legacy onboarding lane (section 191 branch A + the registration starter, 229 source lines) extracted verbatim to `src/routes/whatsapp/onboarding.js` — store passed as an argument, ratchet extended (test_no_canned_replies), two pre-existing latent ReferenceErrors repaired; the `trial-end-downsize-choice` eval flake fixed with engine_facts (0.83/0.88 → 0.93 pass; diagnosis: the bar was 0.7, not 0.85) | 197 |
 | **1.73.0** | Phase 10: pagination on `my entries`/`receipts` (session `paginationCursor`, view-only `more` pages, 5-page cap), user-side `my ticket` status lane (OWN data only) and the `weekly report on|off` opt-in with a Monday 08:00 EAT text-only sweep (zero quota, claim-first day marker) — five design decisions + two additions documented | 196 |
 | **1.72.2** | Phase 9: deterministic trial-status aliases — a new read-registry `subscription_status` lane (ordered before `product_qa`, exact-phrase `$` anchor) routes "trial / my trial / trial status" to the engine-owned plan summary instead of the marketing trial card, with three mirrored regex anchors (`sakaAi.js`, `pending.js` wantsView, `messages.js` gate); plus one earnings-invention calibration case (`earning-invented-amount-calibration`, calibration 12 → 13) | 195 |
@@ -1131,10 +1132,10 @@ DDL is applied idempotently by `ensureVehicleTableColumns()` (`src/services/vehi
 - `applyOdometerReading()` canonicalizes input, updates the vehicle, then evaluates active distance reminders immediately.
 - `applyOperatingHours()` records hour-meter submissions and evaluates hours reminders immediately.
 - `evaluateVehicleReminders()` recomputes remaining, persists `remaining_value`, and dispatches once per tier: 75% (approaching), 25% (warning), 5% (urgent), 0% (due now), overdue. Owner + assigned driver are notified (deduped phones; `canDeliver` preserves Sentinel/superadmin boundaries).
-- `createExpiryReminder()` upserts linked compliance items by `vehicle_id`/`subject_id` + `linked_column`, keeps the canonical vehicle date column in sync, and resets the full notification ladder whenever a date changes.
+- `createExpiryReminder()` upserts linked compliance items by `vehicle_id`/`subject_id` + `linked_column`, keeps the canonical vehicle date column in sync, and resets the full notification ladder **only when the due date actually changes** (v1.73.2 — an unchanged-date re-upsert preserves the consumed `notified_*` tiers; the 30-minute driver-compliance sync no longer re-fires an alert the user already received). Returns `{ reminderId, updated, dateChanged, ladderReset, reminder }`.
 - `evaluateExpiryReminders()` computes calendar days remaining (Africa/Nairobi), selects the most urgent un-notified ladder tier, dispatches to owner + assigned driver (driver-linked items notify the driver and every owner of their assigned vehicles), writes `expiry_notification_log`, and persists `remaining_value` (days) + tier flags.
-- `syncDriverLicenseReminders()` promotes `profiles.driver_license_expiry` into driver-linked reminders before each sweep.
-- `runReminderSweep()` runs every 30 minutes (first pass 90s after boot) from `index.js` and performs all three passes (threshold → driver-licence promotion → expiry ladder), returning `{ threshold, expiry, driverRemindersSynced }`.
+- `syncAllDriverComplianceReminders()` (v1.73.2, merged from the v1.9 `syncDriverLicenseReminders` + `syncDriverComplianceReminders`) promotes EVERY `driver_compliances` row with an expiry — licence, PSV badge, PDP, CPC, operator card, medical — into a driver-linked reminder, deduped per document by `(subject_id, subject_type, category, linked_column)` (one ladder per TYPE: PSV and PDP share category `permit` and must stay separate). A synced licence row retires the legacy `profiles.driver_license_expiry` reminder (`retireLegacyDriverLicenceReminder`, `status='cancelled'`); legacy-only drivers keep their profile reminder (rule 56). Skipped at sync time: `lifetime = true`, a missing number, an invalid date, and rows already expired (D1 — existing active reminders still fire their overdue tier in `evaluateExpiryReminders`). `submitDriverCompliance()` applies the same retirement when a licence is saved.
+- `runReminderSweep()` runs every 30 minutes (first pass 90s after boot) from `index.js` and performs all three passes (threshold → driver-compliance sync → expiry ladder), returning `{ threshold, expiry, driverRemindersSynced, driverRemindersRetired, driverRemindersSkipped }`.
 - Wiring: `UPDATE_MILEAGE` and `LOG_OPERATING_HOURS` route handlers, `log_mileage` / `log_operating_hours` quiz completions, `set_reminder` quiz creation (date + threshold), vehicle registration insurance/inspection dates, and `edit_vehicle` compliance-date edits.
 
 ### 28.5 Expiry tier ladder
@@ -1147,6 +1148,8 @@ DDL is applied idempotently by `ensureVehicleTableColumns()` (`src/services/vehi
 | Overdue | < 0 | `notified_overdue` |
 
 A sweep that missed a window still sends the single most urgent applicable alert, marks all coarser tiers as consumed, and never repeats a tier.
+
+**Narrow reading (v1.73.2, D1).** The sync pass never mints a NEW reminder for an already-expired compliance row (abandoned data must not page anyone); an EXISTING active reminder is untouched by the sync and still fires its overdue tier exactly once here, so a genuinely missed window is never lost.
 
 ### 28.6 Alert copy
 Alerts are WhatsApp-ready and unit-aware, e.g. "Service Warning (KDA 123A): Oil change due soon! Remaining: 850 km. Target: 105,000 km." Imperial vehicles see miles; hour-based reminders see "operating hours". Expiry alerts name the item and countdown, e.g. "Expiry Reminder (KDA 123A): Insurance Renewal expires in 14 days (2026-11-12)." Alerts include remaining value, target/due date and current reading so no follow-up question is needed.
@@ -5598,4 +5601,30 @@ reads.js / pending.js / quiz.js / media.js / hooks.js : unchanged (5B-2 / 5B-3 e
 **G. Suites run.** test_first_message_flow (57), test_quiz_flow, test_pending_state (434), test_first_time_flow, test_greetings (110), test_web_onboarding, test_no_canned_replies (12 — 4 canned literals, ratchet held), test_reliability (Test 4 fails identically on the untouched baseline — DEEPSEEK_API_KEY absent in the test shell, pre-existing and outside `npm run health`), test_deep_audit (28), test_conv_eval (218), `npm run health` — green; `npm run eval:conv -- --exclude-calibration`: signal **23/23 (100%)**, calibration **12/12 held**, gate PASS (1 judge provider hiccup -> exit-2 warning only). NOTE: one full-run pass of test_first_message_flow flaked on a product-QA local-currency assertion; it passed in isolation and in the immediate re-run (environment/AI-composition flake, not the extraction — that turn never enters the onboarding lanes).
 
 **H. Rules shaped this work (rule 58).** 1/39/45 (consult-first), 3/4 (targeted reads + batching), 10/11 (targeted suites + cleanup), 12/33 (commit/push + version/history/CHANGELOG same commit), 13 (docs sync — flowKnowledge/sakaAi deliberately untouched: no flow, prompt or behaviour change), 31 (copy unchanged), 44 (audit-before-acting: the flake was diagnosed against live code, not applied blind), 51 (sweep + autopsy), 52 (deep audit + verbatim proof + extensive after-tests), 50 (no schema touched), 54 (every live claim verified by a real run), 58 (this report). No rule was edited or added.
+
+---
+
+### 198. v1.73.2 / v1.73.3 (Phase 12A/12C) — driver-compliance reminder hygiene + quiet eval notifications (2026-11-08)
+
+#### 198A. v1.73.2 (Phase 12A) — the ladder resets only on a real date change, one ladder per document, edge cases skipped
+
+**Why (audit first, rule 44/52).** The brief assumed only driver licences got expiry reminders; the live tree already ran `syncDriverComplianceReminders()` (v1.9.1, commit `7319980`) beside `syncDriverLicenseReminders()` inside `runReminderSweep` every 30 minutes. The audit instead found two real defects that no test covered: **(A1)** `createExpiryReminder()` rewrote every `notified_*` flag to `false` on EVERY upsert, so the 30-minute sync reset the ladder before each evaluation and the most urgent tier re-fired on every sweep — driver-linked alerts repeated every 30 minutes; **(A2)** a minimal licence is written to BOTH `driver_compliances` and `profiles.driver_license_expiry` (`driverAssignments.submitDriverCompliance`), so two parallel ladders existed for the same document.
+
+**A. Merged sync (fix A2 + real coverage).** `syncDriverLicenseReminders()` + `syncDriverComplianceReminders()` became **`syncAllDriverComplianceReminders({ supabase, limit, now })`**:
+- iterates EVERY `driver_compliances` row with an expiry (licence, PSV badge, PDP, CPC, operator card, medical — every catalog type) and upserts a driver-linked reminder per document TYPE;
+- dedupe key: **`(subject_id, subject_type, category, linked_column)`** — one ladder per document TYPE. Category alone is NOT a key: `psv_badge`, `pdp` and `operator_cert` all map to `'permit'`, and collapsing them would lose per-document expiry tracking;
+- a synced `driver_compliances:<licence type>` row supersedes the legacy `profiles.driver_license_expiry` reminder: the mirror is retired via **`retireLegacyDriverLicenceReminder()`** (`status='cancelled'`, the same retire value `deleteVehicle` uses);
+- legacy-only drivers (no compliance row) keep their profile reminder (rule 56 — existing users never lose coverage);
+- skipped at sync time: `lifetime === true`, a missing `number`, an invalid date, and rows **already expired** (D1 narrow reading; existing active reminders still fire their overdue tier in `evaluateExpiryReminders()`, so §28.5's missed-window contract is intact);
+- `runReminderSweep()` now returns `{ …, driverRemindersSynced, driverRemindersRetired, driverRemindersSkipped }`.
+
+**B. Date-change guard (fix A1).** `createExpiryReminder()` reads the stored `due_date` beside the id and compares it with the incoming date: an UNCHANGED date updates everything except the five tier flags (the ladder is preserved — no re-alert every 30 minutes); a CHANGED date (or a new/linkless row) resets the full ladder exactly as §28.4 always specified. The return gains `dateChanged` + `ladderReset` for testability. **Behaviour change (approved):** drivers stop receiving duplicate alerts every 30 minutes; the first post-deploy sweep is quieter. The same guard applies to every linked upsert (vehicle compliance edits included): re-saving an unchanged date no longer re-fires a consumed tier.
+
+**C. Sibling sweep (rule 51).** `submitDriverCompliance()` (`driverAssignments.js`) mints reminders at write time; it now calls `retireLegacyDriverLicenceReminder()` whenever the saved item's category is `driver_license`, so the profile-mirror duplicate is retired at submission, not only at the next sweep. `createThresholdReminder()` deliberately left untouched — it INSERTS a new row per reminder and never resets flags.
+
+**D. Suites run.** Baseline before edits: test_expiry_reminders (48), test_maintenance_reminders (50), test_driver_assignment_gate (54), test_user_context_cache (136), `npm run health` — green. After: **test_expiry_reminders (62 — +14 new assertions)**, test_maintenance_reminders (50), test_driver_assignment_gate (54), test_user_context_cache (136), `npm run health` — green. No behavioural assertion was edited; the only pre-existing test change is the renamed import/call.
+
+**E. Recurrence autopsy (rule 51).** Defect class *an idempotent re-upsert that mutates notification state* -> siblings audited: vehicle-linked upserts (registration / `edit_vehicle` / `vehicleCompliance`) all route through the same `createExpiryReminder` guard (fixed); `submitDriverCompliance` fixed as above; `createThresholdReminder` left with reason. Defect class *two write paths owning the same document* -> the profile mirror now defers to the canonical compliance row in BOTH the sweep and the submission lane. Rule 13: no intent/flow/copy change — `flowKnowledge.js` / `sakaAi.js` untouched; `test_agent_training` stays green.
+
+**F. Rules shaped this work (rule 58).** 1/39/45 (consult-first), 8 (VIN untouched), 10/11 (targeted stateless suites), 12/33 (version + history + CHANGELOG + generated docs in the same commit), 13 (docs sync; prompt files untouched by design — no flow/copy change), 44 (the brief's premise corrected against the live tree), 50 (no schema change), 51 (sibling sweep + autopsy), 52 (before/after assertions; +14 new), 56 (legacy-only drivers keep coverage), 58 (this report). No rule was edited or added.
 

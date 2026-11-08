@@ -16,7 +16,7 @@
 import crypto from 'crypto';
 import { resolveUserTimezone, resolvePhoneCountryLock } from './globalization.js';
 import { sendDriverAssignmentOtp } from './mailer.js';
-import { buildExpirySpecFromDate, createExpiryReminder, daysUntilDue } from './maintenanceReminders.js';
+import { buildExpirySpecFromDate, createExpiryReminder, daysUntilDue, retireLegacyDriverLicenceReminder } from './maintenanceReminders.js';
 import { notifyDriverUnassigned } from './followups.js';
 import { SYSTEM_TIMEZONE } from './dateParser.js';
 import { complianceCategory, getComplianceCatalog } from './complianceCatalog.js';
@@ -642,6 +642,13 @@ export async function submitDriverCompliance({
       linkedColumn: `driver_compliances:${item.type}`,
       timeZone
     });
+  }
+
+  // v1.73.2 (12A) — one ladder per licence: a canonical driver_compliances
+  // licence row supersedes the legacy profiles.driver_license_expiry mirror,
+  // so the mirrored reminder is retired the moment the licence is refreshed.
+  if (complianceCategory(item.type) === 'driver_license') {
+    await retireLegacyDriverLicenceReminder({ supabase, driverId, now });
   }
 
   // v1.63.1 — the driver's compliance facts (profile mirror + reminder) changed.

@@ -19,7 +19,7 @@ import {
   detectExpiryCategory,
   createExpiryReminder,
   evaluateExpiryReminders,
-  syncDriverLicenseReminders,
+  syncAllDriverComplianceReminders,
   runReminderSweep
 } from './src/services/maintenanceReminders.js';
 import { resolveUserTimezone, resolveTimezoneFromCountry } from './src/services/globalization.js';
@@ -241,7 +241,7 @@ async function run() {
       { id: 'p2', phone_number: '+254700000002', is_active: true, driver_license_expiry: addDays('2026-10-29', 20) }
     ]
   });
-  const syncRes = await syncDriverLicenseReminders({ supabase: driverMock.client });
+  const syncRes = await syncAllDriverComplianceReminders({ supabase: driverMock.client, now });
   check(syncRes.ok && syncRes.synced === 1, 'Driver licence expiry is promoted to a first-class reminder');
   check(driverMock.tables.reminders.length === 1
     && driverMock.tables.reminders[0].subject_type === 'driver'
@@ -269,6 +269,102 @@ async function run() {
   check(combined.ok && combined.expiry.evaluated === 1, 'Combined sweep evaluates expiry reminders even with no threshold reminders');
   check(combined.alerts === 1 && combined.expiry.alerts === 1, 'Combined sweep reports the expiry alert');
   check(combined.threshold.vehiclesChecked === 0, 'No threshold reminders means no threshold vehicle pass');
+  check(combined.driverRemindersSynced === 0 && combined.driverRemindersRetired === 0 && combined.driverRemindersSkipped === 0,
+    'A driver with no compliance rows contributes no sync counters');
+
+  console.log('\n--- Test 6: all driver compliance reminders (v1.73.2, 12A) ---');
+  const complianceMock = createMockSupabase({
+    reminders: [],
+    driver_compliances: [
+      { id: 'dc1', driver_id: 'p2', type: 'driver_license', label: 'Driving Licence', number: 'DL-1', expiry: addDays('2026-10-29', 20) },
+      { id: 'dc2', driver_id: 'p2', type: 'psv_badge', label: 'PSV Badge', number: 'PSV-1', expiry: addDays('2026-10-29', 40) },
+      { id: 'dc3', driver_id: 'p2', type: 'pdp', label: 'PDP', number: 'PDP-1', expiry: addDays('2026-10-29', 60) },
+      { id: 'dc4', driver_id: 'p2', type: 'cpc', label: 'CPC', number: 'CPC-1', expiry: addDays('2026-10-29', 90), lifetime: true },
+      { id: 'dc5', driver_id: 'p2', type: 'operator_cert', label: 'Operator Card', number: null, expiry: addDays('2026-10-29', 30) },
+      { id: 'dc6', driver_id: 'p2', type: 'medical_cert', label: 'Medical', number: 'MED-1', expiry: addDays('2026-10-29', -5) }
+    ],
+    profiles: [{ id: 'p2', phone_number: '+254700000002', is_active: true, driver_license_expiry: addDays('2026-10-29', 20) }],
+    vehicles: [{ id: 'v1', plate_number: 'KDA 123A', owner_id: 'p1', owner_phone: '+254700000001', assigned_driver_id: 'p2' }]
+  });
+  const allSync = await syncAllDriverComplianceReminders({ supabase: complianceMock.client, now });
+  check(allSync.ok && allSync.synced === 3, 'Every usable compliance row gets its own reminder (licence, PSV badge, PDP)');
+  check(allSync.skipped === 2, 'Rows without a number and already-expired rows are skipped at sync time');
+  check(allSync.deactivated === 0, 'The first sync has no legacy mirror to retire');
+  check(complianceMock.tables.reminders.length === 3, 'Lifetime rows never mint a reminder (and never duplicate an existing one)');
+  const linkedColumns = complianceMock.tables.reminders.map((row) => row.linked_column).sort();
+  check(JSON.stringify(linkedColumns) === JSON.stringify([
+    'driver_compliances:driver_license',
+    'driver_compliances:pdp',
+    'driver_compliances:psv_badge'
+  ]), 'Reminders are deduped per document type — PSV and PDP stay separate despite sharing category permit');
+
+  const licenceReminder = complianceMock.tables.reminders.find((row) => row.linked_column === 'driver_compliances:driver_license');
+  licenceReminder.notified_30d = true;
+  await syncAllDriverComplianceReminders({ supabase: complianceMock.client, now });
+  check(complianceMock.tables.reminders.find((row) => row.id === licenceReminder.id).notified_30d === true,
+    'An unchanged expiry keeps its consumed ladder tier (no duplicate alert every 30 minutes)');
+  check(complianceMock.tables.reminders.length === 3, 'Re-syncing never duplicates a reminder');
+
+  const mirrorMock = createMockSupabase({
+    reminders: [expiryRow({
+      id: 'legacy-lic',
+      linked_column: 'profiles.driver_license_expiry',
+      subject_type: 'driver',
+      subject_id: 'p2',
+      category: 'driver_license',
+      due_date: addDays('2026-10-29', 100)
+    })],
+    driver_compliances: [
+      { id: 'dc1', driver_id: 'p2', type: 'driver_license', label: 'Driving Licence', number: 'DL-1', expiry: addDays('2026-10-29', 20) }
+    ],
+    profiles: [{ id: 'p2', phone_number: '+254700000002', is_active: true, driver_license_expiry: addDays('2026-10-29', 100) }]
+  });
+  const mirrorSync = await syncAllDriverComplianceReminders({ supabase: mirrorMock.client, now });
+  check(mirrorSync.ok && mirrorSync.synced === 1 && mirrorSync.deactivated === 1,
+    'A licence compliance row retires the legacy profile mirror (one ladder per licence)');
+  check(mirrorMock.tables.reminders.find((row) => row.id === 'legacy-lic').status === 'cancelled',
+    'The profile-linked duplicate is cancelled, never deleted');
+
+  console.log('\n--- Test 7: ladder resets only when the expiry date changes ---');
+  const guardMock = createMockSupabase({
+    reminders: [expiryRow({
+      id: 'guard-1',
+      linked_column: 'vehicles.insurance_expiry',
+      vehicle_id: 'v1',
+      subject_type: 'vehicle',
+      subject_id: 'v1',
+      category: 'insurance',
+      due_date: '2026-11-12',
+      notified_30d: true
+    })],
+    vehicles: [{ id: 'v1', plate_number: 'KDA 123A', owner_id: 'p1', owner_phone: '+254700000001' }],
+    profiles: [{ id: 'p1', phone_number: '+254700000001' }]
+  });
+  const sameDate = await createExpiryReminder({
+    supabase: guardMock.client,
+    vehicle: guardMock.tables.vehicles[0],
+    profileId: 'p1',
+    category: 'insurance',
+    spec: buildExpirySpecFromDate('2026-11-12', { timeZone: 'Africa/Nairobi' }),
+    linkedColumn: 'vehicles.insurance_expiry',
+    timeZone: 'Africa/Nairobi'
+  });
+  check(sameDate.ok && sameDate.updated === true && sameDate.ladderReset === false,
+    'Re-saving the same expiry does not reset the ladder');
+  check(guardMock.tables.reminders[0].notified_30d === true,
+    'The consumed 30-day tier survives an unchanged-date upsert');
+  const changedDate = await createExpiryReminder({
+    supabase: guardMock.client,
+    vehicle: guardMock.tables.vehicles[0],
+    profileId: 'p1',
+    category: 'insurance',
+    spec: buildExpirySpecFromDate('2026-12-20', { timeZone: 'Africa/Nairobi' }),
+    linkedColumn: 'vehicles.insurance_expiry',
+    timeZone: 'Africa/Nairobi'
+  });
+  check(changedDate.ok && changedDate.ladderReset === true, 'A changed expiry resets the whole ladder');
+  check(guardMock.tables.reminders[0].notified_30d === false && guardMock.tables.reminders[0].due_date === '2026-12-20',
+    'A changed expiry clears every consumed tier and stores the new date');
 
   console.log(`\n\u2705 ALL EXPIRY REMINDER TESTS PASSED (${passed} assertions).`);
   console.log('Stateless suite: no real database rows were created, so no cleanup is required.');

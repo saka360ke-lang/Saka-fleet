@@ -1,6 +1,13 @@
 {
-  "latest": "1.73.1",
+  "latest": "1.73.2",
   "entries": [
+    {
+      "version": "1.73.2",
+      "date": "2026-11-08",
+      "title": "Every driver document, one reminder each",
+      "preview": "PSV badges, PDPs, CPCs, operator cards and medicals now get their own expiry reminders - and duplicate alerts are gone.",
+      "summary": "Your driver documents are now fully covered: every licence, PSV badge, PDP, CPC, operator card and medical certificate with an expiry date gets its own reminder with the familiar 30-day, 14-day, 7-day, 24-hour and overdue steps. Each document keeps its own countdown, so a PSV badge and a PDP can never hide each other. The release also fixes a noisy bug found in a deep audit: the background sync re-saved reminders every 30 minutes with their notification marks wiped, so the same alert could fire repeatedly. Now only a real expiry-date change resets the countdown - a renewed document alerts once per step, a lifetime document needs no reminder, and nothing expired is ever revived into a new alert. Nothing you see changes, except fewer duplicate reminders."
+    },
     {
       "version": "1.73.1",
       "date": "2026-11-07",

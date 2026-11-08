@@ -344,11 +344,22 @@ export async function createThresholdReminder({ supabase, vehicle, profileId = n
 }
 
 /**
+ * Strip the ladder flags from an upsert so an UNCHANGED due date keeps its
+ * already-consumed tiers (v1.73.2, 12A — §28.4 reset-on-change contract).
+ */
+function expiryRowWithoutTierFlags(row = {}) {
+  const { notified_30d, notified_14d, notified_7d, notified_24h, notified_overdue, ...rest } = row;
+  return rest;
+}
+
+/**
  * Create (or refresh) a first-class date-based expiry reminder.
  *
  * Linked items (insurance / inspection / driver licence) are upserted by their
  * canonical column so a vehicle never accumulates duplicate expiry rows, and
- * every date change RESETS the notification ladder.
+ * every date CHANGE resets the notification ladder. Re-upserting the same date
+ * (the driver-compliance sync runs every 30 minutes) preserves the consumed
+ * tier flags instead of re-firing an alert the user already received.
  */
 export async function createExpiryReminder({
   supabase,
@@ -401,10 +412,11 @@ export async function createExpiryReminder({
   };
 
   let existingId = null;
+  let existingDueDate = null;
   if (linkedColumn) {
     let query = supabase
       .from('reminders')
-      .select('id')
+      .select('id, due_date')
       .eq('status', 'active')
       .eq('linked_column', linkedColumn)
       .limit(1);
@@ -413,12 +425,23 @@ export async function createExpiryReminder({
     const { data } = await query;
     const found = Array.isArray(data) ? data[0] : data;
     existingId = found?.id || null;
+    existingDueDate = found?.due_date ? String(found.due_date).slice(0, 10) : null;
   }
 
+  // v1.73.2 (12A) — §28.4 contract: ONLY a changed due date resets the
+  // 30d/14d/7d/24h/overdue ladder. The driver-compliance sync re-upserts the
+  // same linked row every 30 minutes; resetting the tier flags on an unchanged
+  // date made the same tier re-fire on every sweep (duplicate alerts). An
+  // unchanged date now keeps its consumed-tier flags; a real date change still
+  // resets the whole ladder exactly as before.
+  const dateChanged = !existingId || !existingDueDate || existingDueDate !== dueDate;
+  const ladderReset = Boolean(existingId) && dateChanged;
+
   if (existingId) {
-    let { error } = await supabase.from('reminders').update(row).eq('id', existingId);
+    const updateRow = dateChanged ? row : expiryRowWithoutTierFlags(row);
+    let { error } = await supabase.from('reminders').update(updateRow).eq('id', existingId);
     if (error && /column|schema|does not exist/i.test(error.message || '')) {
-      const { label: _dropped, ...legacy } = row;
+      const { label: _dropped, ...legacy } = updateRow;
       ({ error } = await supabase.from('reminders').update(legacy).eq('id', existingId));
     }
     if (error) return { ok: false, error: error.message };
@@ -445,7 +468,14 @@ export async function createExpiryReminder({
 
   // v1.63.1 — a created/refreshed expiry changes the user's expiry facts.
   markUserDataChanged({ supabase, ownerId: vehicle?.owner_id || profileId || null, reason: 'reminders.createExpiry' });
-  return { ok: true, reminderId: existingId, updated: Boolean(existingId), reminder: { ...row, id: existingId } };
+  return {
+    ok: true,
+    reminderId: existingId,
+    updated: Boolean(existingId),
+    dateChanged,
+    ladderReset,
+    reminder: { ...row, id: existingId }
+  };
 }
 
 function buildAlertText({ vehicle, reminder, tier, remainingRatio, currentDisplay, targetDisplay, remainingDisplay, unitLabel }) {
@@ -739,21 +769,112 @@ export async function evaluateExpiryReminders({ supabase, sendFn = null, canDeli
 }
 
 /**
- * Promote profiles.driver_license_expiry into first-class driver-linked
- * reminders so the universal expiry engine notifies both the driver and the
- * owners of every vehicle assigned to them.
+ * Retire the legacy `profiles.driver_license_expiry` reminder for one driver
+ * (v1.73.2, 12A — D2). Once a canonical `driver_compliances` licence row owns
+ * the ladder, the profile-mirror reminder is a duplicate and must stop firing.
+ * Idempotent, never throws.
  */
-export async function syncDriverLicenseReminders({ supabase, limit = 500 } = {}) {
-  if (!supabase) return { ok: false, synced: 0, error: 'Database unavailable.' };
-  const { data: profiles, error } = await supabase.from('profiles').select('*').limit(limit);
-  if (error) return { ok: false, synced: 0, error: error.message };
+export async function retireLegacyDriverLicenceReminder({ supabase, driverId, now = new Date() } = {}) {
+  if (!supabase || !driverId) return { ok: false, retired: 0 };
+  try {
+    const { data } = await supabase
+      .from('reminders')
+      .select('id')
+      .eq('status', 'active')
+      .eq('linked_column', 'profiles.driver_license_expiry')
+      .eq('subject_type', 'driver')
+      .eq('subject_id', driverId);
+    const rows = Array.isArray(data) ? data : (data ? [data] : []);
+    let retired = 0;
+    for (const row of rows) {
+      if (!row?.id) continue;
+      const { error } = await supabase
+        .from('reminders')
+        .update({ status: 'cancelled', updated_at: new Date(now).toISOString() })
+        .eq('id', row.id);
+      if (!error) retired += 1;
+    }
+    return { ok: true, retired };
+  } catch (err) {
+    return { ok: false, retired: 0, error: err?.message || 'retire_failed' };
+  }
+}
 
-  const drivers = (profiles || []).filter((p) => p && p.driver_license_expiry && p.is_active !== false && !p.deleted_at);
+/**
+ * Promote EVERY driver compliance row with an expiry into a first-class
+ * driver-linked reminder (licences, PSV badges, PDP, CPC, operator cards,
+ * medicals — every catalog type), and keep the legacy
+ * `profiles.driver_license_expiry` mirror alive only for drivers who have no
+ * driver_compliances licence row.
+ *
+ * v1.73.2 (12A) — merged from syncDriverLicenseReminders() +
+ * syncDriverComplianceReminders() and hardened:
+ *  - dedupe key: (subject_id, subject_type, category, linked_column) — one
+ *    reminder per document TYPE, never one per category (psv_badge / pdp /
+ *    operator_cert all map to category 'permit' and must stay separate rows);
+ *  - a synced `driver_compliances:<licence type>` row supersedes (cancels) the
+ *    legacy `profiles.driver_license_expiry` reminder — one ladder per licence;
+ *  - legacy-only drivers (no compliance row) keep their profile reminder
+ *    (rule 56 — existing users must never lose coverage);
+ *  - lifetime rows need no reminder; rows without a number are skipped; rows
+ *    already EXPIRED are never promoted into a NEW reminder (narrow reading of
+ *    §28.5 — existing active reminders still fire their own overdue tier in
+ *    evaluateExpiryReminders()).
+ */
+export async function syncAllDriverComplianceReminders({ supabase, limit = 500, now = new Date() } = {}) {
+  if (!supabase) return { ok: false, synced: 0, deactivated: 0, skipped: 0, error: 'Database unavailable.' };
+  const { data, error } = await supabase.from('driver_compliances').select('*').limit(limit);
+  if (error) return { ok: false, synced: 0, deactivated: 0, skipped: 0, error: error.message };
+
+  const items = (data || []).filter((row) => row && row.driver_id && row.expiry && row.lifetime !== true);
   let synced = 0;
+  let deactivated = 0;
+  let skipped = 0;
+  const licenceDriverIds = new Set();
+  for (const item of items) {
+    // A document with no number is not a usable compliance record — no ladder.
+    if (!String(item.number || '').trim()) { skipped += 1; continue; }
+    const timeZone = item.time_zone || SYSTEM_TIMEZONE;
+    const dueDate = String(item.expiry).slice(0, 10);
+    const spec = buildExpirySpecFromDate(dueDate, { timeZone });
+    if (!spec.ok) { skipped += 1; continue; }
+    // D1 — never mint a NEW reminder for an already-past row.
+    if (daysUntilDue(dueDate, now) < 0) { skipped += 1; continue; }
+    const category = complianceCategory(item.type);
+    const res = await createExpiryReminder({
+      supabase,
+      profileId: item.driver_id,
+      subjectType: 'driver',
+      subjectId: item.driver_id,
+      reminderType: item.label || item.type,
+      category,
+      spec,
+      linkedColumn: `driver_compliances:${item.type}`,
+      timeZone
+    });
+    if (res.ok) {
+      synced += 1;
+      // Only a licence row that actually owns a live reminder may retire the
+      // profile mirror. If it was skipped (past/lifetime/no number) the legacy
+      // column stays the driver's only source and keeps its reminder.
+      if (category === 'driver_license') licenceDriverIds.add(item.driver_id);
+    }
+  }
+
+  // Legacy profile mirror (v1.9 behaviour, kept for rule 56).
+  const { data: profiles, error: profileError } = await supabase.from('profiles').select('*').limit(limit);
+  const drivers = (profiles || []).filter((p) => p && p.driver_license_expiry && p.is_active !== false && !p.deleted_at);
   for (const driver of drivers) {
+    if (licenceDriverIds.has(driver.id)) {
+      const retired = await retireLegacyDriverLicenceReminder({ supabase, driverId: driver.id, now });
+      deactivated += retired.retired || 0;
+      continue;
+    }
     const timeZone = driver.timezone || SYSTEM_TIMEZONE;
-    const spec = buildExpirySpecFromDate(String(driver.driver_license_expiry).slice(0, 10), { timeZone });
-    if (!spec.ok) continue;
+    const dueDate = String(driver.driver_license_expiry).slice(0, 10);
+    const spec = buildExpirySpecFromDate(dueDate, { timeZone });
+    if (!spec.ok) { skipped += 1; continue; }
+    if (daysUntilDue(dueDate, now) < 0) { skipped += 1; continue; }
     const res = await createExpiryReminder({
       supabase,
       profileId: driver.id,
@@ -767,7 +888,10 @@ export async function syncDriverLicenseReminders({ supabase, limit = 500 } = {})
     });
     if (res.ok) synced += 1;
   }
-  return { ok: true, synced };
+  if (profileError) {
+    return { ok: true, synced, deactivated, skipped, warning: profileError.message };
+  }
+  return { ok: true, synced, deactivated, skipped };
 }
 
 /**
@@ -880,11 +1004,9 @@ export async function runReminderSweep({ supabase, sendFn = null, canDeliver = n
     }
   }
 
-  let driverSync = { synced: 0 };
+  let driverSync = { synced: 0, deactivated: 0, skipped: 0 };
   try {
-    const legacySync = await syncDriverLicenseReminders({ supabase });
-    const complianceSync = await syncDriverComplianceReminders({ supabase });
-    driverSync = { synced: (legacySync.synced || 0) + (complianceSync.synced || 0) };
+    driverSync = await syncAllDriverComplianceReminders({ supabase, now });
   } catch (syncErr) {
     console.warn('[maintenanceReminders] Driver compliance sync skipped:', syncErr.message);
   }
@@ -922,39 +1044,10 @@ export async function runReminderSweep({ supabase, sendFn = null, canDeliver = n
       dispatched: expiry.dispatched || 0,
       overdue: expiry.overdue || 0
     },
-    driverRemindersSynced: driverSync.synced || 0
+    driverRemindersSynced: driverSync.synced || 0,
+    driverRemindersRetired: driverSync.deactivated || 0,
+    driverRemindersSkipped: driverSync.skipped || 0
   };
-}
-
-/**
- * Promote driver_compliances (minimal + additional items with an expiry) into
- * first-class driver-linked reminders. Lifetime items need no reminder.
- */
-export async function syncDriverComplianceReminders({ supabase, limit = 500 } = {}) {
-  if (!supabase) return { ok: false, synced: 0, error: 'Database unavailable.' };
-  const { data, error } = await supabase.from('driver_compliances').select('*').limit(limit);
-  if (error) return { ok: false, synced: 0, error: error.message };
-
-  const items = (data || []).filter((row) => row && row.driver_id && row.expiry && row.lifetime !== true);
-  let synced = 0;
-  for (const item of items) {
-    const timeZone = item.time_zone || SYSTEM_TIMEZONE;
-    const spec = buildExpirySpecFromDate(String(item.expiry).slice(0, 10), { timeZone });
-    if (!spec.ok) continue;
-    const res = await createExpiryReminder({
-      supabase,
-      profileId: item.driver_id,
-      subjectType: 'driver',
-      subjectId: item.driver_id,
-      reminderType: item.label || item.type,
-      category: complianceCategory(item.type),
-      spec,
-      linkedColumn: `driver_compliances:${item.type}`,
-      timeZone
-    });
-    if (res.ok) synced += 1;
-  }
-  return { ok: true, synced };
 }
 
 export default {
@@ -974,8 +1067,8 @@ export default {
   categoryForReminderType,
   createExpiryReminder,
   evaluateExpiryReminders,
-  syncDriverLicenseReminders,
-  syncDriverComplianceReminders,
+  syncAllDriverComplianceReminders,
+  retireLegacyDriverLicenceReminder,
   reminderDueDate,
   daysUntilDue,
   EXPIRY_CATEGORIES,
