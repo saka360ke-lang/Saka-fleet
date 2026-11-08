@@ -252,7 +252,7 @@ CREATE TABLE IF NOT EXISTS public.weekly_feature_proposals (
 );
 
 -- 2.14 dashboard_sessions (v1.74.0 — Phase 13 magic-link + email-OTP sessions;
--- sha256 hashes only, never raw tokens)
+-- sha256 hashes only, never raw tokens; v1.76.0 adds the session role)
 CREATE TABLE IF NOT EXISTS public.dashboard_sessions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   token_hash text UNIQUE NOT NULL,
@@ -265,8 +265,11 @@ CREATE TABLE IF NOT EXISTS public.dashboard_sessions (
   link_expires_at timestamp with time zone NOT NULL,
   otp_expires_at timestamp with time zone,
   session_expires_at timestamp with time zone,
+  session_role text NOT NULL DEFAULT 'owner',
   created_at timestamp with time zone NOT NULL DEFAULT now()
 );
+
+ALTER TABLE public.dashboard_sessions ADD COLUMN IF NOT EXISTS session_role text NOT NULL DEFAULT 'owner';
 
 CREATE INDEX IF NOT EXISTS idx_dashboard_sessions_owner ON public.dashboard_sessions (owner_id);
 CREATE INDEX IF NOT EXISTS idx_dashboard_sessions_link_expires ON public.dashboard_sessions (link_expires_at DESC);

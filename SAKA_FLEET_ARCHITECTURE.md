@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.75.3  
+**Version:** 1.76.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.76.0** | Phase 15: dashboard role lanes — `dashboard_sessions.session_role` (`owner` \| `driver` \| `admin`, additive + migration), role-aware gate (`requireRoleSession`; `/d/admin` = **404** to non-admins, `/d/driver` = 403 to owners), driver lane (assigned vehicle, own documents unmasked, own daybook), superadmin lane (owner list with masked phones + per-owner fleet, **every view audited** `ADMIN_DASHBOARD_VIEW`), `dashboard admin` WhatsApp phrase (superadmin-only, generic refusal otherwise), `superadminIdentity.js` single-source env check | 204 |
 | **1.75.3** | Phase 14D (Owner Dashboard complete): reports builder (`last_30_days` + a `bounds` override on `buildCustomReport`, up to 8 metrics, GET-generated PDF), settings page (one writable preference — the SAME `profiles.weekly_report_opt_in` column — plus a 6-section single-CSV data export with `# section`, `[CAP]` and `[ERROR]` rows); CSRF = SameSite=Strict + no `/d` CORS + Origin guard | 203 |
 | **1.75.2** | Phase 14C: dashboard compliance surface — `/d/compliance` vehicle + driver board (All / Due soon / Expired, expired pinned), read-only `/d/drivers/:id` with unmasked numbers for the owner, filtered `/d/compliance.pdf` sharing one filter engine (`filterComplianceReport`); three defects caught pre-ship | 202 |
 | **1.75.1** | Phase 14B: dashboard records surface — owner-VEHICLE-scoped searchable ledger (not `queryRecordLedger`'s driver scope), filters (date range ≤366 d, type, vehicle, label, keyword), 20/page offset paging, unique-match receipt links with 5-minute signed URLs, CSV + streamed PDF exports sharing one filter engine; mock gains `.or()`/`.range()`/`.ilike()` | 201 |
@@ -5915,7 +5916,48 @@ The `$` anchor is the grammar: `dashboard`, `my dashboard`, `open my dashboard`,
 
 **Rules shaped this work (rule 58).** 1/39/45, 3/4, 7 (country from the phone), 10/11 (one stateless suite, targeted runs), 12/33 (version + history + CHANGELOG in one commit), 13/60 (playbook + core prompt + training assertions), 21 (no new env knobs), 23/24 (plan label via the tier registry; no re-declared limits), 31 (warm, plain copy; one next step), 42 (proposal re-checked — PROP-2026-11-08-01 remains the only open one, unrelated), 50 (fail-soft settings read, honest write failure, `[ERROR]` export rows), 51/52 (the five pin classes + the audit findings), 54 (live suite runs), 55 (report engine, tier labels and the 14B CSV escaping reused; zero new dependencies), 56 (no backfill; the settings page reflects the column every existing account already has), 58 (this report). No rule was edited or added.
 
-**Phase 14 complete.** The Owner Dashboard now covers overview, vehicles, records, compliance, reports and settings — every page flag-gated and owner-vehicle-scoped. **Phase 15 (driver + superadmin views) is next.** Operator prerequisites unchanged: `receipts` bucket private (done), 14A/14B walk-throughs passed, `DASHBOARD_ENABLED` still off until the production flip.
+### 204. v1.76.0 (Phase 15) — driver + superadmin dashboard lanes (2026-11-08)
+
+**Scope.** The dashboard stops being owner-only: `dashboard_sessions.session_role` (`owner` | `driver` | `admin`) decides which lane a session may open, `/d/:token` verification re-checks the role claim, `dashboard` in WhatsApp resolves the caller's lane and `dashboard admin` is the superadmin phrase. Additive only — the owner dashboard, every Phase 14 route and the flag behaviour are unchanged. `DASHBOARD_ENABLED` still gates every surface (all five new URLs answer the generic 404 while off).
+
+**Decisions locked.**
+- **D1 — driver eligibility is a live assignment at mint time.** `requestDashboardAccess({ role: 'driver' })` skips the plan gate (a driver is an employee, not a payer) and requires at least one live `vehicles.assigned_driver_id` row; nothing found answers `no_assignment` with exactly *"You need to be assigned to a vehicle to access the driver dashboard. Ask your fleet owner to assign you."* The same check runs again at verify, so a withdrawn assignment kills an already-minted token.
+- **D2 — admin isolation is a 404.** `/d/admin*` answers **404** to any non-admin session (owner or driver), so the surface's existence is never confirmed; the owner lane answers **403** to driver/admin sessions and the driver lane answers **403** to everyone else. Refused attempts write no audit row (nothing was viewed). Anonymous requests are 401 before any role check.
+- **D3 — the driver sees their OWN numbers.** `buildDriverComplianceCard({ mask: false })` is used only by the driver's own pages (home + compliance); the WhatsApp card, reports and the owner's driver page keep the mask (the owner page already shows unmasked numbers by Phase 14C's D1).
+
+**Schema (additive, rule 56).** `dashboard_sessions.session_role text NOT NULL DEFAULT 'owner'` — old rows default to the owner lane with no backfill, and `getSessionByToken` normalises anything unknown to `owner`. `DASHBOARD_SQL` adds it with `ADD COLUMN IF NOT EXISTS` (so a pre-1.76.0 table is upgraded by the existing boot ensure), `scripts/provision_staging_schema.js` carries it in the CREATE + ALTER, and `npm run migrate:dashboard-role` (`scripts/run_dashboard_role_migration.js`) applies it idempotently.
+
+**Identity single-sourcing (rule 55).** The env superadmin check moved to `src/services/superadminIdentity.js` (`isSuperadminPhone`, `isSuperadminEmail`, zero dependencies); `superadmin.js` re-exports both so every existing importer is untouched, and the dashboard imports the neutral module instead of pulling the Sentinel worker graph.
+
+**Role resolution (one rule, owner-first).** `resolveDashboardRole()` mirrors `resolveReportAccess`: `admin > owner > driver`, proven by a single `vehicles` read over `owner_id` OR `assigned_driver_id` (live rows only). A dual-role profile lands in the OWNER lane, exactly like the WhatsApp `dashboard` lane. It never throws and degrades to `owner` on a database error.
+
+**Driver lane.** `buildDriverHome` (assigned vehicle + own compliance summary + last 7 days), `buildDriverDaybookPageData` (the full `buildDriverDaybook` engine, 14 days) and `buildDriverSelfCompliancePage` (own documents, unmasked). Every input is `driverId = session.ownerId` — never a vehicle id — so cross-driver reads are structurally impossible; the daybook keeps its existing `driver_id` + own-vehicle-ids filter. Renderers: `renderDriverHomePage`, `renderDriverDaybookPage`, `renderDriverSelfCompliancePage`, driver nav `Overview · Daybook · Compliance · Log out`, no owner-only links.
+
+**Superadmin lane.** `buildAdminOwnersList` lists every profile with ≥1 live vehicle (counts + active counts, phones masked, name/visible-digit search, deterministic sort) and `buildAdminFleetView` reuses `buildOverviewCard` + `buildVehiclesIndex` + `buildComplianceBoard` against the target owner id — read-only, no write path in the module. Every `/d/admin*` GET writes `ADMIN_DASHBOARD_VIEW` to `admin_audit_logs` via `logAdminAudit` (page `owners` with the search, or `fleet` with `ownerViewed` + `found`), including a not-found view.
+
+**WhatsApp lane.** `DASHBOARD_ADMIN_RE` (`dashboard admin` / `open my dashboard admin`) is checked first and carries the marker `'admin'`; a non-superadmin gets the verbatim A2 line without the service being called (no row, no email, no hint). Otherwise `resolveDashboardRole` picks `driver` vs `owner`, the request passes `role`, and the reply names the lane (`Your dashboard link…` / `driver dashboard` / `admin dashboard`). `no_assignment` → the D1 copy; `not_admin` → the A2 line.
+
+**Rule 51 sibling sweep.**
+| Class | Siblings audited | Result |
+|---|---|---|
+| i — a role claim trusted without a second check | mint AND verify both re-check (admin phone, driver assignment) | pinned: revoked assignment → `no_assignment`; non-superadmin row → `not_admin`; nothing stamped |
+| ii — a scope inherited from another lane | driver pages read `driverId = session.ownerId`; admin pages read the TARGET owner id | pinned: own documents only; foreign driver's `FX-999` absent |
+| iii — a cross-tenant read without audit | both `/d/admin` routes (list + fleet, including not-found) | pinned: `ADMIN_DASHBOARD_VIEW` rows with `page`, `ownerViewed`, `found` |
+| iv — surface existence leaked via error | `/d/admin*` → 404; refused attempts audited by nobody | pinned: owner/driver 404, body never says "owners" |
+| v — session role drift | unknown role → `owner`; legacy rows → `owner`; admin never enters the owner lane | pinned: legacy session = owner lane, 403 on driver pages, `db_reset_scope` pins the schema |
+
+**Rule 52 deep audit — findings.** (1) `buildDriverComplianceCard` had no mask switch — the additive `mask = true` parameter keeps every existing caller masked. (2) `requestDashboardAccess` gated on entitlements for every caller; the gate is now owner-only, which is what makes a Free-plan driver possible without weakening the owner paywall (pinned both ways). (3) `resolveDashboardRole` returns early on a stubbed client (`typeof supabase.from !== 'function'`) instead of throwing — fixtures stay quiet and a real DB error still degrades to `owner`. (4) `requireOwnerSession` was renamed to `requireRoleSession(role)` and all 15 owner call sites pass `'owner'` explicitly, so a future lane can never inherit the owner gate by accident.
+
+**Frames touched.** `src/services/dashboard.js` (`DASHBOARD_SQL` + `DASHBOARD_ROLES`, `session_role` in mint/verify/session, `resolveDashboardRole`, `hasLiveDriverAssignment`, driver + admin builders §10, five renderers, navs), `src/routes/dashboard.js` (`requireRoleSession`, 15 owner call sites, 5 new routes, `logAdminAudit`), `src/services/driverReports.js` (`mask` parameter), `src/services/readCommands.js` (admin phrase + role resolution + `no_assignment`), `src/services/superadminIdentity.js` (new), `src/services/superadmin.js` (re-export), `src/services/flowKnowledge.js`, `scripts/provision_staging_schema.js`, `scripts/run_dashboard_role_migration.js` (new), `package.json` (1.76.0 + `migrate:dashboard-role`), `test_dashboard.js` (+85: 504 → 589), `test_read_registry.js` (+11: 201 → 212), `test_db_reset_scope.js` (+4: 90 → 94), `landing/data/changelog.json`, `docs/`, this file, `CHANGELOG.md`.
+
+**Suites run.** Baseline: test_dashboard (504), test_read_registry (201), test_db_reset_scope (90), test_agent_training (200) — green. After: **test_dashboard (589)**, **test_read_registry (212)**, **test_db_reset_scope (94)**, test_agent_training (200), test_doc_sync, `npm run health` — green. Zero pre-existing assertions edited.
+
+**Recurrence autopsy (rule 51).** *Defect class "two surfaces resolve a role differently"* → one resolver (`resolveDashboardRole`) feeds the WhatsApp lane and its owner-first order matches `resolveReportAccess`; *"a token minted under one role reused under another"* → the role is stamped at mint AND re-checked at verify; *"a cross-tenant page reachable by URL"* → the admin lane 404s non-admins and audits every accepted view.
+
+**Rules shaped this work (rule 58).** 1/39/45, 3/4, 7 (country from the phone via `detectCountryFromPhone`), 8 (no VIN/plate changes), 10/11 (stateless suites, targeted runs), 12/33, 13/60 (playbook + core prompt + training assertions), 18 (no autonomous path touched; one additive column, no other DDL), 31 (warm plain copy, one next step), 42 (PROP-2026-11-08-01 remains the only open proposal, unrelated), 50 (slim profile fallback in the admin fleet view, fail-soft audit), 51/52 (five pin classes + findings), 54 (real suite runs), 55 (reused the overview/vehicles/compliance/daybook/compliance-card engines; extracted one identity module instead of duplicating it), 56 (defaults keep existing sessions and rows working), 58 (this report). **No rule was edited or added.** Phase 15 is complete; Phase 16 is next.
+
+
+
 
 
 

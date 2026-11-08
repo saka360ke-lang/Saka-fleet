@@ -1,7 +1,7 @@
 {
   "name": "sakafleet-backend",
   "type": "module",
-  "version": "1.75.3",
+  "version": "1.76.0",
   "description": "Saka Fleet Backend",
   "main": "index.js",
   "scripts": {
@@ -82,7 +82,8 @@
     "migrate:user-context": "node scripts/run_user_context_migration.js",
     "migrate:system-config-keys": "node scripts/run_system_config_keys_migration.js",
     "migrate:weekly-report-optin": "node scripts/run_weekly_report_optin_migration.js",
-    "migrate:dashboard": "node scripts/run_dashboard_migration.js"
+    "migrate:dashboard": "node scripts/run_dashboard_migration.js",
+    "migrate:dashboard-role": "node scripts/run_dashboard_role_migration.js"
   },
   "dependencies": {
     "@fastify/formbody": "^9.0.1",

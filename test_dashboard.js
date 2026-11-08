@@ -79,6 +79,18 @@ import {
   serializeAllDataCsv,
   renderReportsPage,
   renderSettingsPage,
+  DASHBOARD_ROLES,
+  resolveDashboardRole,
+  buildDriverHome,
+  buildDriverDaybookPageData,
+  buildDriverSelfCompliancePage,
+  buildAdminOwnersList,
+  buildAdminFleetView,
+  renderDriverHomePage,
+  renderDriverDaybookPage,
+  renderDriverSelfCompliancePage,
+  renderAdminOwnersPage,
+  renderAdminFleetPage,
   renderOverviewPage,
   renderVehiclesPage,
   renderVehiclePage,
@@ -165,6 +177,12 @@ async function run() {
     { method: 'GET', url: '/d/settings' },
     { method: 'POST', url: '/d/settings', payload: 'action=save_weekly&weekly_report=on', headers: { 'content-type': 'application/x-www-form-urlencoded' } },
     { method: 'GET', url: '/d/export.csv' },
+    // v1.76.0 (Phase 15) — the driver + admin lanes are flag-gated too.
+    { method: 'GET', url: '/d/driver' },
+    { method: 'GET', url: '/d/driver/daybook' },
+    { method: 'GET', url: '/d/driver/compliance' },
+    { method: 'GET', url: '/d/admin' },
+    { method: 'GET', url: '/d/admin/owners/some-owner-id' },
     { method: 'POST', url: '/d/verify', payload: 'token=x&otp=123456', headers: { 'content-type': 'application/x-www-form-urlencoded' } }
   ];
   for (const request of offRequests) {
@@ -1234,8 +1252,8 @@ async function run() {
     && !foreignDriverRes.body.includes('FX-999'), 'the 404 body leaks no name, phone or document number (rule 51 iv)');
   const unknownDriverRes = await compApp.inject({ method: 'GET', url: '/d/drivers/does-not-exist', headers: compCookie });
   check(unknownDriverRes.statusCode === 404, 'an unknown driver id answers 404');
-  const anonDriver = await compApp.inject({ method: 'GET', url: '/d/drivers/d-1' });
-  check(anonDriver.statusCode === 401, 'the driver page never renders without a session');
+  const laneAnonDriver = await compApp.inject({ method: 'GET', url: '/d/drivers/d-1' });
+  check(laneAnonDriver.statusCode === 401, 'the driver page never renders without a session');
 
   const compliancePdfRes = await compApp.inject({ method: 'GET', url: '/d/compliance.pdf', headers: compCookie });
   check(compliancePdfRes.statusCode === 200 && String(compliancePdfRes.headers['content-type']).includes('application/pdf'), 'GET /d/compliance.pdf answers application/pdf');
@@ -1504,6 +1522,258 @@ async function run() {
   check(anonExport.statusCode === 401, 'the export never renders without a session');
   await setApp.close();
 
+  console.log('\n--- Test 46: role schema + resolveDashboardRole (Phase 15) ---');
+  check(DASHBOARD_SQL.includes('session_role text NOT NULL DEFAULT') && DASHBOARD_SQL.includes("DEFAULT 'owner'"), 'the session table carries a role with an owner default');
+  check(DASHBOARD_ROLES.join(',') === 'owner,driver,admin', 'the three lanes are pinned');
+  const roleMock = (vehicles) => createMockSupabase({ vehicles, profiles: [] });
+  const ownerRole = await resolveDashboardRole({
+    supabase: roleMock([{ id: 'v-a', owner_id: 'p-owner', assigned_driver_id: 'd-1', status: 'ACTIVE' }]).client,
+    profile: { id: 'p-owner', phone_number: '+254700000001' }
+  });
+  check(ownerRole.role === 'owner' && ownerRole.isOwner === true && ownerRole.isDriver === false, 'an owner resolves to the owner lane');
+  const driverRole = await resolveDashboardRole({
+    supabase: roleMock([{ id: 'v-a', owner_id: 'p-owner', assigned_driver_id: 'd-1', status: 'ACTIVE' }]).client,
+    profile: { id: 'd-1', phone_number: '+254700000002' }
+  });
+  check(driverRole.role === 'driver' && driverRole.isDriver === true && driverRole.isOwner === false, 'an assigned driver resolves to the driver lane');
+  const dualRole = await resolveDashboardRole({
+    supabase: roleMock([{ id: 'v-a', owner_id: 'p-both', assigned_driver_id: 'p-both', status: 'ACTIVE' }]).client,
+    profile: { id: 'p-both', phone_number: '+254700000003' }
+  });
+  check(dualRole.role === 'owner' && dualRole.isOwner === true && dualRole.isDriver === true, 'a dual-role profile lands in the owner lane (owner-first, like the WhatsApp lane)');
+  const previousSuperadminPhone = process.env.SUPERADMIN_PHONE;
+  process.env.SUPERADMIN_PHONE = '+254700000099';
+  const adminRole = await resolveDashboardRole({ supabase: roleMock([]).client, profile: { id: 'p-admin', phone_number: '+254700000099' } });
+  check(adminRole.role === 'admin' && adminRole.isAdmin === true, 'the superadmin phone resolves to the admin lane');
+  check((await resolveDashboardRole({ supabase: null, profile: { id: 'p-x' } })).role === 'owner', 'a missing client degrades to owner');
+
+  console.log('\n--- Test 47: requestDashboardAccess by role (D1) ---');
+  const captures = [];
+  const captureEmail = async (payload) => { captures.push(payload); return true; };
+  const freeEntitlements = { isTrial: false, isPaid: false };
+  const driverProfile = { id: 'd-1', email: 'driver@example.com', email_verified: true, full_name: 'Brian Otieno', phone_number: '+254700000002' };
+  const noAssignmentMock = createMockSupabase({ vehicles: [{ id: 'v-a', owner_id: 'p-owner', assigned_driver_id: null, status: 'ACTIVE' }], [DASHBOARD_SESSIONS_TABLE]: [], admin_audit_logs: [] });
+  const noAssignment = await requestDashboardAccess({ supabase: noAssignmentMock.client, ownerId: 'd-1', profile: driverProfile, entitlements: freeEntitlements, role: 'driver', sendEmail: captureEmail });
+  check(noAssignment.ok === false && noAssignment.reason === 'no_assignment', 'a driver without a live assignment is refused (D1)');
+  const assignedMock = createMockSupabase({ vehicles: [{ id: 'v-a', owner_id: 'p-owner', assigned_driver_id: 'd-1', status: 'ACTIVE' }], [DASHBOARD_SESSIONS_TABLE]: [], admin_audit_logs: [] });
+  const driverAccess = await requestDashboardAccess({ supabase: assignedMock.client, ownerId: 'd-1', profile: driverProfile, entitlements: freeEntitlements, role: 'driver', sendEmail: captureEmail });
+  check(driverAccess.ok === true && driverAccess.role === 'driver', 'an assigned driver with a Free account gets a link (the plan gate is owner-only)');
+  check(assignedMock.db[DASHBOARD_SESSIONS_TABLE][0].session_role === 'driver', 'the minted row carries the driver role');
+  const nonAdminAccess = await requestDashboardAccess({ supabase: assignedMock.client, ownerId: 'p-admin', profile: { id: 'p-admin', email: 'x@example.com', email_verified: true, phone_number: '+254700000001' }, role: 'admin', sendEmail: captureEmail });
+  check(nonAdminAccess.ok === false && nonAdminAccess.reason === 'not_admin', 'a non-superadmin cannot mint an admin link');
+  const adminAccess = await requestDashboardAccess({ supabase: createMockSupabase({ vehicles: [], [DASHBOARD_SESSIONS_TABLE]: [], admin_audit_logs: [] }).client, ownerId: 'p-admin', profile: { id: 'p-admin', email: 'admin@example.com', email_verified: true, phone_number: '+254700000099' }, role: 'admin', sendEmail: captureEmail });
+  check(adminAccess.ok === true && adminAccess.role === 'admin', 'the superadmin phone mints an admin link');
+  const ownerFree = await requestDashboardAccess({ supabase: assignedMock.client, ownerId: 'p-owner', profile: { id: 'p-owner', email: 'owner@example.com', email_verified: true, phone_number: '+254700000001' }, entitlements: freeEntitlements, role: 'owner', sendEmail: captureEmail });
+  check(ownerFree.ok === false && ownerFree.reason === 'not_entitled', 'the owner plan gate is unchanged');
+  check((await requestDashboardAccess({ supabase: assignedMock.client, ownerId: 'd-1', profile: driverProfile, role: 'wizard', sendEmail: captureEmail })).reason === 'bad_role', 'an unknown role is refused');
+
+  console.log('\n--- Test 48: verifyDashboardOtp re-checks the role (rule 51 i) ---');
+  // A driver token whose assignment vanished between mint and verify.
+  const revokedMock = createMockSupabase({
+    vehicles: [{ id: 'v-a', owner_id: 'p-owner', assigned_driver_id: null, status: 'ACTIVE' }],
+    profiles: [{ id: 'd-1', phone_number: '+254700000002' }],
+    [DASHBOARD_SESSIONS_TABLE]: [seedRow({ id: 'sess-driver', owner_id: 'd-1', session_role: 'driver', otp_hash: hashToken('123456') })],
+    admin_audit_logs: []
+  });
+  const revoked = await verifyDashboardOtp({ supabase: revokedMock.client, rawToken: 'seed-token', otp: '123456' });
+  check(revoked.ok === false && revoked.reason === 'no_assignment', 'a driver whose assignment was withdrawn cannot verify');
+  check(revokedMock.db[DASHBOARD_SESSIONS_TABLE][0].verified === false, 'a refused verify stamps nothing');
+  // An admin token whose number is no longer the superadmin.
+  const adminRevokedMock = createMockSupabase({
+    vehicles: [],
+    profiles: [{ id: 'p-admin', phone_number: '+254700000001' }],
+    [DASHBOARD_SESSIONS_TABLE]: [seedRow({ id: 'sess-admin', owner_id: 'p-admin', session_role: 'admin', otp_hash: hashToken('123456') })],
+    admin_audit_logs: []
+  });
+  const adminRevoked = await verifyDashboardOtp({ supabase: adminRevokedMock.client, rawToken: 'seed-token', otp: '123456' });
+  check(adminRevoked.ok === false && adminRevoked.reason === 'not_admin', 'an admin token is re-checked against SUPERADMIN_PHONE');
+  // A legacy owner row (no session_role) keeps working and lands as owner.
+  const legacyMock = createMockSupabase({
+    vehicles: [],
+    profiles: [{ id: 'p-owner', phone_number: '+254700000001' }],
+    [DASHBOARD_SESSIONS_TABLE]: [seedRow({ id: 'sess-legacy', owner_id: 'p-owner', otp_hash: hashToken('123456') })],
+    admin_audit_logs: []
+  });
+  const legacyVerify = await verifyDashboardOtp({ supabase: legacyMock.client, rawToken: 'seed-token', otp: '123456' });
+  check(legacyVerify.ok === true && legacyVerify.role === 'owner', 'a pre-1.76.0 row verifies as owner (rule 56)');
+  const legacySession = await getSessionByToken({ supabase: legacyMock.client, sessionToken: legacyVerify.sessionToken });
+  check(legacySession.ok === true && legacySession.role === 'owner', 'getSessionByToken returns the role (legacy → owner)');
+  const driverVerifyMock = createMockSupabase({
+    vehicles: [{ id: 'v-a', owner_id: 'p-owner', assigned_driver_id: 'd-1', status: 'ACTIVE' }],
+    profiles: [{ id: 'd-1', phone_number: '+254700000002' }],
+    [DASHBOARD_SESSIONS_TABLE]: [seedRow({ id: 'sess-driver-ok', owner_id: 'd-1', session_role: 'driver', otp_hash: hashToken('123456') })],
+    admin_audit_logs: []
+  });
+  const driverVerify = await verifyDashboardOtp({ supabase: driverVerifyMock.client, rawToken: 'seed-token', otp: '123456' });
+  check(driverVerify.ok === true && driverVerify.role === 'driver', 'an assigned driver verifies into the driver lane');
+  const driverSession = await getSessionByToken({ supabase: driverVerifyMock.client, sessionToken: driverVerify.sessionToken });
+  check(driverSession.ok === true && driverSession.role === 'driver', 'the driver session carries its role');
+  if (previousSuperadminPhone === undefined) delete process.env.SUPERADMIN_PHONE;
+  else process.env.SUPERADMIN_PHONE = previousSuperadminPhone;
+
+  console.log('\n--- Test 49: driver builders (own scope, unmasked docs) ---');
+  const laneNow = new Date('2026-11-08T10:00:00.000Z');
+  const laneSeed = () => ({
+    vehicles: [
+      { id: 'v-a', owner_id: PROFILE.id, plate_number: 'KDA 123A', make_model: 'Nissan Note', status: 'ACTIVE', assigned_driver_id: 'd-1' },
+      { id: 'v-b', owner_id: 'other-owner', plate_number: 'KDB 456B', make_model: 'Toyota Hiace', status: 'ACTIVE', assigned_driver_id: 'd-2' }
+    ],
+    profiles: [
+      { id: 'd-1', full_name: 'Brian Otieno', phone_number: '+254799999991' },
+      { id: 'd-2', full_name: 'Grace Wanjiru', phone_number: '+254799999992' }
+    ],
+    driver_compliances: [
+      { id: 'dc1', driver_id: 'd-1', type: 'driving_licence', label: 'Driving Licence', number: 'DL123456', expiry: '2026-11-16' },
+      { id: 'dc2', driver_id: 'd-1', type: 'psv_badge', label: 'PSV Badge', number: 'PSV-7788', expiry: '2026-11-06' },
+      { id: 'dc9', driver_id: 'd-2', type: 'driving_licence', label: 'Driving Licence', number: 'FX-999', expiry: '2026-11-07' }
+    ],
+    expense_logs: [
+      { id: 'e1', driver_id: 'd-1', vehicle_id: 'v-a', expense_type: 'fuel', amount: 3000, fuel_liters: 30, odometer_reading: 50000, created_at: '2026-11-07T08:00:00.000Z' },
+      { id: 'e2', driver_id: 'd-2', vehicle_id: 'v-b', expense_type: 'fuel', amount: 7000, fuel_liters: 50, odometer_reading: 90000, created_at: '2026-11-07T09:00:00.000Z' },
+      { id: 'e3', driver_id: 'd-1', vehicle_id: 'v-a', expense_type: 'service', amount: 1200, odometer_reading: 50120, created_at: '2026-11-08T07:00:00.000Z' }
+    ],
+    private_earnings: [
+      { id: 'p1', driver_id: 'd-1', vehicle_id: 'v-a', amount: 4500, created_at: '2026-11-07T18:00:00.000Z' }
+    ],
+    reminders: [], vehicle_compliances: [], expiry_notification_log: [], passbook_transfers: []
+  });
+  const laneMock = createMockSupabase(laneSeed());
+  const driverHome = await buildDriverHome({ supabase: laneMock.client, driverId: 'd-1', countryInfo: KE_INFO, now: laneNow });
+  check(driverHome.ok === true && driverHome.vehicle.plate === 'KDA 123A' && driverHome.vehicle.status === 'ACTIVE', 'the driver home carries the assigned vehicle');
+  check(driverHome.compliance.documents.length === 2 && driverHome.compliance.documents.some((doc) => doc.number === 'DL123456'), 'the compliance summary is scoped to THIS driver and unmasked (D3)');
+  check(!driverHome.compliance.documents.some((doc) => doc.number === 'FX-999'), "another driver's document never appears");
+  check(driverHome.week.kpis.length >= 3, 'the week strip carries engine KPIs');
+  check((await buildDriverHome({ supabase: null, driverId: 'd-1' })).ok === false, 'no database answers ok:false');
+  const daybookPage = await buildDriverDaybookPageData({ supabase: laneMock.client, driverId: 'd-1', countryInfo: KE_INFO, now: laneNow });
+  check(daybookPage.ok === true, 'the driver daybook page builds');
+  const daybookJson = JSON.stringify(daybookPage.data);
+  check(daybookJson.includes('KDA 123A') && !daybookJson.includes('KDB 456B'), "the daybook carries only the driver's own vehicle");
+  check((await buildDriverDaybookPageData({ supabase: createMockSupabase({ vehicles: [] }).client, now: laneNow })).ok === false, 'a daybook page without a driver identity refuses honestly');
+  const selfPage = await buildDriverSelfCompliancePage({ supabase: laneMock.client, driverId: 'd-1', countryInfo: KE_INFO, now: laneNow });
+  check(selfPage.ok === true && selfPage.vehicle.plate === 'KDA 123A', 'the compliance page carries the vehicle header');
+  check(selfPage.documents.length === 2, 'own documents load on the private page');
+  check(selfPage.documents.some((doc) => doc.number === 'PSV-7788'), 'the PSV badge number is shown unmasked on the private page');
+
+  console.log('\n--- Test 50: admin builders (owner list + fleet view) ---');
+  const adminSeed = () => ({
+    ...laneSeed(),
+    profiles: [
+      ...laneSeed().profiles,
+      { id: PROFILE.id, full_name: 'Amina Wanjiku', phone_number: '+254712345678', email: 'amina@example.com', country: 'KE', country_code: 'KE' },
+      { id: 'other-owner', full_name: 'John Kamau', phone_number: '+254733333333', email: 'john@example.com', country: 'KE', country_code: 'KE' },
+      { id: 'idle-owner', full_name: 'Idle Owner', phone_number: '+254744444444', email: 'idle@example.com', country: 'KE', country_code: 'KE' }
+    ],
+    vehicles: [
+      { id: 'v-a', owner_id: PROFILE.id, plate_number: 'KDA 123A', make_model: 'Nissan Note', status: 'ACTIVE', assigned_driver_id: 'd-1' },
+      { id: 'v-b', owner_id: 'other-owner', plate_number: 'KDB 456B', make_model: 'Toyota Hiace', status: 'ACTIVE', assigned_driver_id: 'd-2' },
+      { id: 'v-c', owner_id: 'other-owner', plate_number: 'KDC 789C', make_model: 'Mazda Demio', status: 'PAUSED', assigned_driver_id: null }
+    ]
+  });
+  const ownersList = await buildAdminOwnersList({ supabase: createMockSupabase(adminSeed()).client });
+  check(ownersList.ok === true && ownersList.owners.length === 2, 'only owners with a live vehicle are listed (an idle profile never is)');
+  check(ownersList.totalOwners === 2, 'the total counts the resulting owners');
+  const kamau = ownersList.owners.find((owner) => owner.id === 'other-owner');
+  check(kamau.vehicleCount === 2 && kamau.activeCount === 1, 'vehicle + active counts are engine facts');
+  check(ownersList.owners.every((owner) => !owner.phoneMasked.includes('3333333')), 'phones are masked in the list');
+  check(ownersList.owners[0].name === 'Amina Wanjiku', 'equal active counts sort by name (deterministic order)');
+  const searched = await buildAdminOwnersList({ supabase: createMockSupabase(adminSeed()).client, search: 'amina' });
+  check(searched.owners.length === 1 && searched.owners[0].id === PROFILE.id, 'search narrows by name');
+  check((await buildAdminOwnersList({ supabase: createMockSupabase(adminSeed()).client, search: 'zzz-nobody' })).owners.length === 0, 'a no-match search is empty, never padded');
+  const fleet = await buildAdminFleetView({ supabase: createMockSupabase(adminSeed()).client, ownerId: 'other-owner', now: laneNow });
+  check(fleet.ok === true && fleet.owner.name === 'John Kamau' && fleet.owner.phoneMasked.includes('•'), 'the fleet view loads the target owner with a masked phone');
+  check(fleet.directory?.vehicles?.length === 2, "the fleet view lists that owner's vehicles only");
+  check((await buildAdminFleetView({ supabase: createMockSupabase(adminSeed()).client, ownerId: 'nobody' })).reason === 'not_found', 'an unknown owner id is not_found');
+  check((await buildAdminFleetView({ supabase: createMockSupabase(adminSeed()).client, ownerId: null })).reason === 'not_found', 'a missing owner id is not_found');
+
+  console.log('\n--- Test 51: driver + admin renderers ---');
+  const driverHomeHtml = renderDriverHomePage({ data: driverHome, emailMasked: 'b•••@example.com' });
+  check(driverHomeHtml.includes('KDA 123A') && driverHomeHtml.includes('DL123456'), 'the driver home renders the vehicle and unmasked licence');
+  check(driverHomeHtml.includes('/d/driver/daybook') && driverHomeHtml.includes('/d/driver/compliance') && driverHomeHtml.includes('Log out'), 'the driver nav links its own pages');
+  check(!driverHomeHtml.includes('/d/vehicles') && !driverHomeHtml.includes('/d/settings'), 'the driver page never links owner-only routes');
+  const daybookHtml = renderDriverDaybookPage({ page: daybookPage });
+  check(daybookHtml.includes('KDA 123A') && !daybookHtml.includes('KDB 456B'), 'the daybook page renders own rows only');
+  const selfHtml = renderDriverSelfCompliancePage({ page: selfPage });
+  check(selfHtml.includes('PSV-7788') && selfHtml.includes('Driving Licence'), 'the private compliance page renders unmasked numbers');
+  check(renderDriverHomePage({ data: { ok: false } }).includes('could not be loaded'), 'a failed load renders the honest 503 page');
+  const adminOwnersHtml = renderAdminOwnersPage({ data: ownersList, search: '' });
+  check(adminOwnersHtml.includes('/d/admin/owners/other-owner') && adminOwnersHtml.includes('John Kamau'), 'the owners page links each fleet');
+  check(adminOwnersHtml.includes('Owners') && adminOwnersHtml.includes('Log out'), 'the admin nav is its own');
+  const adminFleetHtml = renderAdminFleetPage({ fleet });
+  check(adminFleetHtml.includes('KDB 456B') && adminFleetHtml.includes('John Kamau'), 'the fleet page renders the target fleet');
+  check(adminFleetHtml.includes('← Owners') && !adminFleetHtml.includes('/d/admin/logout'), 'the fleet page links back to the list');
+  const hostileOwners = renderAdminOwnersPage({ data: { ok: true, totalOwners: 1, owners: [{ id: 'x', name: '<script>alert(1)</script>', phoneMasked: '•••', country: 'KE', vehicleCount: 1, activeCount: 1 }] }, search: '' });
+  check(!hostileOwners.includes('<script>alert(1)</script>'), 'owner names are escaped');
+
+  console.log('\n--- Test 52: role-gated routes (D2 isolation + D1 scope) ---');
+  process.env.DASHBOARD_ENABLED = 'on';
+  const sessionExpiry = new Date(Date.now() + 86400000).toISOString();
+  const gateSeed = () => ({
+    ...adminSeed(),
+    profiles: [
+      ...adminSeed().profiles,
+      { id: 'p-admin', full_name: 'Super Admin', phone_number: '+254700000099', email: 'admin@example.com', country: 'KE', country_code: 'KE' }
+    ],
+    reminders: [],
+    vehicle_compliances: [],
+    expiry_notification_log: [],
+    passbook_transfers: [],
+    [DASHBOARD_SESSIONS_TABLE]: [
+      seedRow({ id: 'sess-owner', owner_id: PROFILE.id, email: PROFILE.email, session_token_hash: hashToken('owner-sess'), verified: true, session_expires_at: sessionExpiry, session_role: 'owner' }),
+      seedRow({ id: 'sess-driver', owner_id: 'd-1', email: 'driver@example.com', session_token_hash: hashToken('driver-sess'), verified: true, session_expires_at: sessionExpiry, session_role: 'driver' }),
+      seedRow({ id: 'sess-admin', owner_id: 'p-admin', email: 'admin@example.com', session_token_hash: hashToken('admin-sess'), verified: true, session_expires_at: sessionExpiry, session_role: 'admin' }),
+      seedRow({ id: 'sess-legacy', owner_id: PROFILE.id, email: PROFILE.email, session_token_hash: hashToken('legacy-sess'), verified: true, session_expires_at: sessionExpiry })
+    ],
+    admin_audit_logs: []
+  });
+  const gateMock = createMockSupabase(gateSeed());
+  const gateApp = Fastify({ logger: false });
+  await registerDashboardRoutes(gateApp, { supabase: gateMock.client });
+  await gateApp.ready();
+  const ownerCookie = 'saka_dash=owner-sess';
+  const driverCookie = 'saka_dash=driver-sess';
+  const adminCookie = 'saka_dash=admin-sess';
+  const legacyCookie = 'saka_dash=legacy-sess';
+  const gateNoCookieDriver = await gateApp.inject({ method: 'GET', url: '/d/driver' });
+  check(gateNoCookieDriver.statusCode === 401, 'a driver page without a cookie is 401');
+  const gateNoCookieAdmin = await gateApp.inject({ method: 'GET', url: '/d/admin' });
+  check(gateNoCookieAdmin.statusCode === 401, 'an admin page without a cookie is 401');
+  const driverHomeRes = await gateApp.inject({ method: 'GET', url: '/d/driver', headers: { cookie: driverCookie } });
+  check(driverHomeRes.statusCode === 200 && driverHomeRes.body.includes('KDA 123A'), 'a driver session opens its own home');
+  check(driverHomeRes.body.includes('DL123456') && !driverHomeRes.body.includes('FX-999'), 'the driver home shows own documents only (D3)');
+  const driverDaybookRes = await gateApp.inject({ method: 'GET', url: '/d/driver/daybook', headers: { cookie: driverCookie } });
+  check(driverDaybookRes.statusCode === 200 && driverDaybookRes.body.includes('KDA 123A'), 'a driver session opens its own daybook');
+  const driverComplianceRes = await gateApp.inject({ method: 'GET', url: '/d/driver/compliance', headers: { cookie: driverCookie } });
+  check(driverComplianceRes.statusCode === 200 && driverComplianceRes.body.includes('PSV-7788'), 'a driver session opens its own compliance page, unmasked');
+  const driverOnOwner = await gateApp.inject({ method: 'GET', url: '/d/vehicles', headers: { cookie: driverCookie } });
+  check(driverOnOwner.statusCode === 403 && /driver/i.test(driverOnOwner.body), 'a driver on an owner page is 403');
+  const ownerOnDriver = await gateApp.inject({ method: 'GET', url: '/d/driver', headers: { cookie: ownerCookie } });
+  check(ownerOnDriver.statusCode === 403, 'an owner on a driver page is 403');
+  const driverOnAdmin = await gateApp.inject({ method: 'GET', url: '/d/admin', headers: { cookie: driverCookie } });
+  check(driverOnAdmin.statusCode === 404, 'a driver on the admin surface is 404 (D2)');
+  const ownerOnAdmin = await gateApp.inject({ method: 'GET', url: '/d/admin', headers: { cookie: ownerCookie } });
+  check(ownerOnAdmin.statusCode === 404 && !/owners/i.test(ownerOnAdmin.body), "an owner on the admin surface is 404 and never sees 'owners'");
+  check(gateMock.db.admin_audit_logs.length === 0, 'refused admin attempts write no audit row (nothing was viewed)');
+  const legacyOnOwner = await gateApp.inject({ method: 'GET', url: '/d/vehicles', headers: { cookie: legacyCookie } });
+  check(legacyOnOwner.statusCode === 200, 'a pre-1.76.0 session keeps the owner lane (rule 56)');
+  const legacyOnDriver = await gateApp.inject({ method: 'GET', url: '/d/driver', headers: { cookie: legacyCookie } });
+  check(legacyOnDriver.statusCode === 403, 'a legacy session never drifts into the driver lane');
+
+  const adminOwnersRes = await gateApp.inject({ method: 'GET', url: '/d/admin', headers: { cookie: adminCookie } });
+  check(adminOwnersRes.statusCode === 200 && adminOwnersRes.body.includes('/d/admin/owners/other-owner'), 'an admin session opens the owner list');
+  check(adminOwnersRes.body.includes('John Kamau') && !adminOwnersRes.body.includes('+254733333333'), 'the list names owners with masked phones');
+  const ownersAudit = gateMock.db.admin_audit_logs.filter((row) => row.action === 'ADMIN_DASHBOARD_VIEW' && row.details?.page === 'owners');
+  check(ownersAudit.length === 1 && ownersAudit[0].admin_phone === '+254700000099', 'the owners view wrote one audit row with the admin phone');
+  const adminFleetRes = await gateApp.inject({ method: 'GET', url: '/d/admin/owners/other-owner', headers: { cookie: adminCookie } });
+  check(adminFleetRes.statusCode === 200 && adminFleetRes.body.includes('KDB 456B'), 'an admin session opens a target fleet');
+  const fleetAudit = gateMock.db.admin_audit_logs.filter((row) => row.action === 'ADMIN_DASHBOARD_VIEW' && row.details?.page === 'fleet');
+  check(fleetAudit.length === 1 && fleetAudit[0].details.ownerViewed === 'other-owner' && fleetAudit[0].details.found === true, 'the fleet view audited WHICH owner was viewed');
+  const missingFleet = await gateApp.inject({ method: 'GET', url: '/d/admin/owners/nobody-here', headers: { cookie: adminCookie } });
+  check(missingFleet.statusCode === 404, 'an unknown owner id renders 404');
+  const missingAudit = gateMock.db.admin_audit_logs.filter((row) => row.details?.ownerViewed === 'nobody-here');
+  check(missingAudit.length === 1 && missingAudit[0].details.found === false, 'even a not-found view is audited (found:false)');
+  const adminOnOwner = await gateApp.inject({ method: 'GET', url: '/d', headers: { cookie: adminCookie } });
+  check(adminOnOwner.statusCode === 403, 'an admin session never enters the owner lane');
+  await gateApp.close();
   process.env.DASHBOARD_ENABLED = previousFlag;
   if (previousBase === undefined) delete process.env.PUBLIC_APP_URL;
   else process.env.PUBLIC_APP_URL = previousBase;

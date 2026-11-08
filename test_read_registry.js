@@ -572,6 +572,48 @@ const crashRender = await renderDashboard('dashboard', { ok: false, reason: 'db_
   dashboardRequestAccess: async () => { throw new Error('boom'); }
 });
 check(/Something went wrong/.test(crashRender.rendered.reply_message), 'a thrown service error degrades to one clean line (never crashes the turn)');
+// ── v1.76.0 (Phase 15) — role-aware dashboard lane ──────────────────────────
+const dashRoleCalls = [];
+const dashRoleCtx = (over = {}) => dashCtx({
+  dashboardEntitlements: { isTrial: true, isPaid: false },
+  dashboardRequestAccess: async (args) => { dashRoleCalls.push(args); return { ...args, ok: true, link: 'https://app.sakafleet.com/d/abc123', email: DASH_PROFILE.email }; },
+  ...over
+});
+const previousSuperadmin = process.env.SUPERADMIN_PHONE;
+process.env.SUPERADMIN_PHONE = DASH_PROFILE.phone_number;
+const adminLane = registry.resolveReadCommand('dashboard admin', dashCtx());
+check(adminLane?.id === 'dashboard', '"dashboard admin" is claimed by the dashboard lane');
+const dashboardLaneDef = registry.READ_COMMANDS.find((lane) => lane.id === 'dashboard');
+check(dashboardLaneDef.detect('dashboard admin') === 'admin', 'the admin phrase carries its marker');
+const adminRender = await adminLane.render(dashRoleCtx());
+check(dashRoleCalls.at(-1)?.role === 'admin', 'the admin phrase requests an admin link');
+check(adminRender.reply_message.includes('admin dashboard link'), 'the admin reply names the admin dashboard');
+const driverRender = await dashboardLaneRender('dashboard', { role: 'driver' });
+check(dashRoleCalls.at(-1)?.role === 'driver', 'a resolved driver requests a driver link');
+check(driverRender.rendered.reply_message.includes('driver dashboard link'), 'the driver reply names the driver dashboard');
+const ownerRender = await dashboardLaneRender('dashboard', { role: 'owner' });
+check(dashRoleCalls.at(-1)?.role === 'owner', 'a resolved owner requests the owner link');
+check(ownerRender.rendered.reply_message.includes('Your dashboard link is on its way'), 'the owner copy is unchanged');
+process.env.SUPERADMIN_PHONE = '+254799999999';
+const spoofAdminLane = registry.resolveReadCommand('dashboard admin', dashCtx());
+const spoofCallsBefore = dashRoleCalls.length;
+const spoofRender = await spoofAdminLane.render(dashRoleCtx());
+check(spoofRender.reply_message === "That's not something I can do yet — reply *help* to see what I can do.", 'a non-superadmin asking for the admin phrase gets the generic line');
+check(dashRoleCalls.length === spoofCallsBefore, 'the refused admin phrase never reaches the service (no row, no email)');
+if (previousSuperadmin === undefined) delete process.env.SUPERADMIN_PHONE;
+else process.env.SUPERADMIN_PHONE = previousSuperadmin;
+const noAssignRender = await dashboardLaneRender('dashboard', { role: 'driver' }, { ok: false, reason: 'no_assignment' });
+check(noAssignRender.rendered.reply_message === 'You need to be assigned to a vehicle to access the driver dashboard. Ask your fleet owner to assign you.',
+  'D1: a withdrawn assignment answers the exact refusal copy');
+
+async function dashboardLaneRender(text, resolvedRole, access = null) {
+  const ctx = dashRoleCtx({
+    dashboardResolveRole: async () => resolvedRole,
+    ...(access ? { dashboardRequestAccess: async (args) => { dashRoleCalls.push(args); return { ...args, ...access }; } } : {})
+  });
+  const lane = registry.resolveReadCommand(text, ctx);
+  return { lane, rendered: lane ? await lane.render(ctx) : null };
+}
 if (previousDashFlag === undefined) delete process.env.DASHBOARD_ENABLED;
 else process.env.DASHBOARD_ENABLED = previousDashFlag;
 

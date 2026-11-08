@@ -65,7 +65,7 @@ import { composeMessage } from './conversationEngine.js';
 import { resolveUserTimezone } from './globalization.js';
 import { isSuperadminPhone } from './superadmin.js';
 import { getEntitlements } from './subscriptions.js';
-import { isDashboardEnabled, requestDashboardAccess, maskEmail } from './dashboard.js';
+import { isDashboardEnabled, requestDashboardAccess, maskEmail, resolveDashboardRole } from './dashboard.js';
 import { SAKA_WEB_SIGNUP_URL } from './flowKnowledge.js';
 
 /**
@@ -108,6 +108,10 @@ const DRIVER_PROFILE_RE = /^(?:(?:show|see|view|open|check|what(?:'s| is))\s+(?:
 // dashboard", "open my dashboard", "web dashboard"); longer phrasings stay
 // with the AI.
 const DASHBOARD_RE = /^(?:(?:open|show|see|view)\s+(?:me\s+)?(?:my\s+|the\s+)?|(?:my\s+|the\s+)?)(?:web\s+|online\s+)?dashboard[.!?]*$/i;
+// v1.76.0 (Phase 15) — the superadmin lane trigger: exact phrase only, and the
+// phone must match SUPERADMIN_PHONE inside the lane (a non-admin gets the same
+// generic A2-style line, so the admin surface is never revealed).
+const DASHBOARD_ADMIN_RE = /^(?:(?:open|show|see|view)\s+(?:me\s+)?(?:my\s+|the\s+)?|(?:my\s+|the\s+)?)(?:web\s+|online\s+)?dashboard\s+admin[.!?]*$/i;
 
 function result(reply, intent = 'GENERAL_CHAT') {
   return { intent, extracted_data: {}, reply_message: reply };
@@ -290,7 +294,12 @@ export const READ_COMMANDS = Object.freeze([
     id: 'dashboard',
     parksQuiz: true,
     skipWhenLocked: true,
-    detect: (text) => DASHBOARD_RE.test(String(text || '').trim()) ? true : null,
+    detect: (text) => {
+      const clean = String(text || '').trim();
+      // v1.76.0 — the admin phrase is checked first and carries its marker.
+      if (DASHBOARD_ADMIN_RE.test(clean)) return 'admin';
+      return DASHBOARD_RE.test(clean) ? 'owner' : null;
+    },
     render: async (hit, ctx = {}) => {
       if (!isDashboardEnabled()) {
         return result("That's not something I can do yet — reply *help* to see what I can do.");
@@ -303,18 +312,39 @@ export const READ_COMMANDS = Object.freeze([
         const requestAccess = typeof ctx.dashboardRequestAccess === 'function'
           ? ctx.dashboardRequestAccess
           : requestDashboardAccess;
-        const entitlements = ctx.dashboardEntitlements
-          || await getEntitlements({ supabase: ctx.supabaseClient, ownerId: profile.id });
+        // v1.76.0 (Phase 15) — resolve the lane: admin > owner > driver. A
+        // non-superadmin asking for the admin phrase gets the generic A2 line,
+        // so the admin surface is never revealed.
+        let role = 'owner';
+        if (hit === 'admin') {
+          if (!isSuperadminPhone(ctx.senderPhone || profile.phone_number)) {
+            return result("That's not something I can do yet — reply *help* to see what I can do.");
+          }
+          role = 'admin';
+        } else {
+          const resolveRole = typeof ctx.dashboardResolveRole === 'function'
+            ? ctx.dashboardResolveRole
+            : resolveDashboardRole;
+          const resolved = await resolveRole({ supabase: ctx.supabaseClient, profile });
+          role = resolved?.role === 'driver' ? 'driver' : 'owner';
+        }
+        const entitlements = role === 'owner'
+          ? (ctx.dashboardEntitlements || await getEntitlements({ supabase: ctx.supabaseClient, ownerId: profile.id }))
+          : null;
         const access = await requestAccess({
           supabase: ctx.supabaseClient,
           ownerId: profile.id,
           profile,
           entitlements,
-          countryInfo: ctx.countryInfo || null
+          countryInfo: ctx.countryInfo || null,
+          role
         });
         if (access?.ok) {
+          const label = access.role === 'admin'
+            ? 'Admin dashboard'
+            : access.role === 'driver' ? 'Driver dashboard' : 'Dashboard';
           return result(
-            '🖥️ *Your dashboard link is on its way*\n\n' +
+            `🖥️ *Your ${label.toLowerCase()} link is on its way*\n\n` +
             `I emailed a private link to ${maskEmail(access.email)} — it works for 15 minutes.\n` +
             'The 6-digit code is in that same email; I will never ask for it here.\n\n' +
             `${access.link}\n\n` +
@@ -326,6 +356,10 @@ export const READ_COMMANDS = Object.freeze([
             return result('I just sent it — check your inbox (and spam). The link works for 15 minutes; reply *dashboard* again when it expires.');
           case 'not_entitled':
             return result('Your dashboard opens on a trial or a paid plan — you are on Free right now. Reply *pricing* to see the plans.');
+          case 'no_assignment':
+            return result('You need to be assigned to a vehicle to access the driver dashboard. Ask your fleet owner to assign you.');
+          case 'not_admin':
+            return result("That's not something I can do yet — reply *help* to see what I can do.");
           case 'email_unverified':
           case 'no_email':
             return result(`I can open your dashboard once your email is verified — finish the quick sign-up at ${SAKA_WEB_SIGNUP_URL} and message me again.`);

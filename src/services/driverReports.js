@@ -290,7 +290,10 @@ export async function buildDriverComplianceCard({
   supabase,
   driverId,
   now = new Date(),
-  countryInfo = null
+  countryInfo = null,
+  // v1.76.0 (Phase 15, D3) — the driver's OWN dashboard shows real numbers;
+  // every other surface (WhatsApp card, reports) keeps the mask.
+  mask = true
 } = {}) {
   if (!supabase || !driverId) return { ok: false, type: 'driver_compliance_card', error: 'Missing driver context' };
   const locale = localeOf(countryInfo);
@@ -304,7 +307,7 @@ export async function buildDriverComplianceCard({
     const left = row.lifetime ? null : daysLeft(row.expiry, now);
     return {
       label: row.label || (row.type ? driverComplianceLabel(row.type) : 'Compliance'),
-      number: maskNumber(row.number),
+      number: mask ? maskNumber(row.number) : (row.number || '—'),
       expiry: row.lifetime ? 'Valid for life' : (row.expiry ? formatDate(row.expiry, locale) : 'Not set'),
       status: row.lifetime ? 'valid' : statusFromDays(left),
       daysLeft: left

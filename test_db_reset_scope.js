@@ -84,6 +84,21 @@ function run() {
     'targeted cascade deletes dashboard_sessions by owner_id (v1.74.0)'
   );
 
+  console.log('--- Test 7: dashboard session role is part of the provisioned schema (v1.76.0) ---');
+  const provisionSource = fs.readFileSync(path.join(here, 'scripts', 'provision_staging_schema.js'), 'utf8');
+  const dashboardSource = fs.readFileSync(path.join(here, 'src', 'services', 'dashboard.js'), 'utf8');
+  const migrationSource = fs.readFileSync(path.join(here, 'scripts', 'run_dashboard_role_migration.js'), 'utf8');
+  for (const [name, source] of [['provisioning', provisionSource], ['boot DDL', dashboardSource], ['migration', migrationSource]]) {
+    assert(
+      source.includes('session_role text NOT NULL DEFAULT'),
+      `${name} carries session_role with an owner default (existing rows never need a backfill)`
+    );
+  }
+  assert(
+    dashboardSource.includes('ADD COLUMN IF NOT EXISTS session_role'),
+    'the boot DDL adds the role idempotently to a table created before v1.76.0'
+  );
+
   console.log(`\n🎉 ${passed} reset-scope assertions passed.`);
 }
 

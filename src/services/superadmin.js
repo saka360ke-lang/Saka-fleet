@@ -58,19 +58,12 @@ import {
 } from './aiModelRegistry.js';
 import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
 import { wipeProfileForSignup } from './profileWipe.js';
+import { isSuperadminPhone, isSuperadminEmail } from './superadminIdentity.js';
 import crypto from 'crypto';
 
-export function isSuperadminPhone(senderPhone) {
-  const superadminPhone = process.env.SUPERADMIN_PHONE;
-  if (!superadminPhone || !senderPhone) return false;
-  const clean = (p) => p.toString().replace(/[^\d]/g, '');
-  return clean(senderPhone) === clean(superadminPhone);
-}
-export function isSuperadminEmail(email) {
-  const superadminEmail = process.env.SUPERADMIN_EMAIL;
-  if (!superadminEmail || !email) return false;
-  return email.trim().toLowerCase() === superadminEmail.trim().toLowerCase();
-}
+// v1.76.0 — the env identity check lives in superadminIdentity.js (a neutral
+// module) so the dashboard can reuse it without pulling this worker's graph.
+export { isSuperadminPhone, isSuperadminEmail };
 
 
 export async function logAdminAudit(supabase, adminPhone, action, details = {}) {

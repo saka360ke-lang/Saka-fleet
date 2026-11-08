@@ -31,9 +31,11 @@ import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
 import { shortLinkBase } from './linkShortener.js';
 import { sendDashboardMagicLinkEmail } from './mailer.js';
 import { logWriteFailure } from './systemErrors.js';
+import { isSuperadminPhone } from './superadminIdentity.js';
 import { buildFleetReport, upcomingExpiryItems, buildVehicleDirectory, buildVehicleDetail } from './fleetReports.js';
 import { buildComplianceReport, expiryStatus, summarizeCategory } from './fleetReports.js';
-import { buildGlobalContext, formatMoney, formatDate, formatNumber } from './globalization.js';
+import { buildGlobalContext, formatMoney, formatDate, formatNumber, detectCountryFromPhone } from './globalization.js';
+import { buildDriverComplianceCard, buildDriverDaybook } from './driverReports.js';
 import { expenseToLedgerRow, earningToLedgerRow, buildLedgerGroups } from './reportLedger.js';
 import { buildProReportPdf } from './pdfEngine.js';
 import { complianceReportToPdf } from './reportDelivery.js';
@@ -74,10 +76,16 @@ CREATE TABLE IF NOT EXISTS public.${DASHBOARD_SESSIONS_TABLE} (
     session_expires_at timestamp with time zone,
     created_at timestamp with time zone NOT NULL DEFAULT now()
 );
+-- v1.76.0 (Phase 15) — one additive column carries the session's role. Old rows
+-- default to 'owner', so nothing existing needs a backfill (rule 56).
+ALTER TABLE public.${DASHBOARD_SESSIONS_TABLE} ADD COLUMN IF NOT EXISTS session_role text NOT NULL DEFAULT 'owner';
 CREATE INDEX IF NOT EXISTS idx_dashboard_sessions_owner ON public.${DASHBOARD_SESSIONS_TABLE} (owner_id);
 CREATE INDEX IF NOT EXISTS idx_dashboard_sessions_link_expires ON public.${DASHBOARD_SESSIONS_TABLE} (link_expires_at DESC);
 ALTER TABLE public.${DASHBOARD_SESSIONS_TABLE} ENABLE ROW LEVEL SECURITY;
 `;
+
+/** The three dashboard lanes (Phase 15). One session belongs to exactly one. */
+export const DASHBOARD_ROLES = Object.freeze(['owner', 'driver', 'admin']);
 
 let tableReady = false;
 
@@ -189,10 +197,60 @@ async function writeAudit(supabase, action, details = {}) {
 /* 1. Request access (WhatsApp lane calls this)                        */
 /* ------------------------------------------------------------------ */
 
+/** A live assignment is the driver's eligibility (D1). null = database error. */
+async function hasLiveDriverAssignment(supabase, driverId) {
+  if (!supabase || typeof supabase.from !== 'function' || !driverId) return false;
+  try {
+    const { data, error } = await supabase
+      .from('vehicles')
+      .select('id')
+      .eq('assigned_driver_id', driverId)
+      .is('deleted_at', null)
+      .limit(1);
+    if (error) return null;
+    return Array.isArray(data) && data.length > 0;
+  } catch (err) {
+    logWriteFailure(supabase, 'dashboard.hasLiveDriverAssignment', err);
+    return null;
+  }
+}
+
 /**
- * Eligibility: a verified email + a live trial or paid plan. The welcome trial
- * counts (isTrial covers ACTIVE/EXTENDED/GRACE), so a trial user never meets a
- * paywall in Phase 13. Never throws.
+ * Phase 15 — which dashboard lane is this caller? `admin > owner > driver`,
+ * mirroring `resolveReportAccess`, so a dual-role profile lands in the OWNER
+ * lane. Never throws; a database failure degrades to the owner lane (which is
+ * still gated by its own plan check).
+ */
+export async function resolveDashboardRole({ supabase, profile = null } = {}) {
+  const isAdmin = isSuperadminPhone(profile?.phone_number);
+  if (!supabase || typeof supabase.from !== 'function' || !profile?.id) {
+    return { role: isAdmin ? 'admin' : 'owner', isOwner: false, isDriver: false, isAdmin };
+  }
+  try {
+    const { data, error } = await supabase
+      .from('vehicles')
+      .select('id, owner_id, assigned_driver_id')
+      .or(`owner_id.eq.${profile.id},assigned_driver_id.eq.${profile.id}`)
+      .is('deleted_at', null)
+      .limit(50);
+    if (error) {
+      logWriteFailure(supabase, 'dashboard.resolveDashboardRole', error);
+      return { role: isAdmin ? 'admin' : 'owner', isOwner: false, isDriver: false, isAdmin, dbError: true };
+    }
+    const rows = data || [];
+    const isOwner = rows.some((vehicle) => vehicle.owner_id === profile.id);
+    const isDriver = rows.some((vehicle) => vehicle.assigned_driver_id === profile.id);
+    const role = isAdmin ? 'admin' : (isOwner ? 'owner' : (isDriver ? 'driver' : 'owner'));
+    return { role, isOwner, isDriver, isAdmin };
+  } catch (err) {
+    logWriteFailure(supabase, 'dashboard.resolveDashboardRole', err);
+    return { role: isAdmin ? 'admin' : 'owner', isOwner: false, isDriver: false, isAdmin, dbError: true };
+  }
+}
+
+/**
+ * Eligibility: a verified email plus, per role, an OWNER's live trial/paid plan,
+ * a DRIVER's live assignment, or the env superadmin identity. Never throws.
  */
 export async function requestDashboardAccess({
   supabase,
@@ -200,17 +258,29 @@ export async function requestDashboardAccess({
   profile = null,
   entitlements = null,
   countryInfo = null,
+  role = 'owner',
   sendEmail = sendDashboardMagicLinkEmail,
   now = new Date()
 } = {}) {
   if (!isDashboardEnabled()) return { ok: false, reason: 'flag_off' };
   if (!supabase || !ownerId) return { ok: false, reason: 'db_error' };
+  if (!DASHBOARD_ROLES.includes(role)) return { ok: false, reason: 'bad_role' };
 
   const email = String(profile?.email || '').trim().toLowerCase();
   if (!email) return { ok: false, reason: 'no_email' };
   if (profile?.email_verified !== true) return { ok: false, reason: 'email_unverified' };
-  if (!entitlements || (!entitlements.isTrial && !entitlements.isPaid)) {
+  // Phase 15 — the plan gate is an OWNER gate. A driver is an employee (D1: a
+  // live assignment is the eligibility), and an admin is the env identity.
+  if (role === 'owner' && (!entitlements || (!entitlements.isTrial && !entitlements.isPaid))) {
     return { ok: false, reason: 'not_entitled' };
+  }
+  if (role === 'admin' && !isSuperadminPhone(profile?.phone_number)) {
+    return { ok: false, reason: 'not_admin' };
+  }
+  if (role === 'driver') {
+    const assignment = await hasLiveDriverAssignment(supabase, ownerId);
+    if (assignment === null) return { ok: false, reason: 'db_error' };
+    if (!assignment) return { ok: false, reason: 'no_assignment' };
   }
 
   try {
@@ -239,6 +309,7 @@ export async function requestDashboardAccess({
       otp_hash: hashToken(otp),
       attempts: 0,
       verified: false,
+      session_role: role,
       link_expires_at: linkExpiresAt.toISOString(),
       otp_expires_at: otpExpiresAt.toISOString()
     }]);
@@ -268,8 +339,8 @@ export async function requestDashboardAccess({
       return { ok: false, reason: 'email_failed' };
     }
 
-    await writeAudit(supabase, 'DASHBOARD_ACCESS_REQUESTED', { ownerId, email, linkExpiresAt: linkExpiresAt.toISOString() });
-    return { ok: true, link, email, linkExpiresAt: linkExpiresAt.toISOString(), otpExpiresAt: otpExpiresAt.toISOString() };
+    await writeAudit(supabase, 'DASHBOARD_ACCESS_REQUESTED', { ownerId, email, role, linkExpiresAt: linkExpiresAt.toISOString() });
+    return { ok: true, role, link, email, linkExpiresAt: linkExpiresAt.toISOString(), otpExpiresAt: otpExpiresAt.toISOString() };
   } catch (err) {
     logWriteFailure(supabase, 'dashboard.requestDashboardAccess', err);
     return { ok: false, reason: 'db_error' };
@@ -349,6 +420,27 @@ export async function verifyDashboardOtp({ supabase, rawToken, otp, now = new Da
       return { ok: false, reason: 'otp_mismatch' };
     }
 
+    // v1.76.0 (Phase 15) — re-check the role claim at verify time: a token
+    // minted as admin/driver is only honoured while the identity/assignment
+    // still holds. Nothing is stamped until both checks pass.
+    const sessionRole = DASHBOARD_ROLES.includes(row.session_role) ? row.session_role : 'owner';
+    if (sessionRole === 'admin' || sessionRole === 'driver') {
+      const { data: profileRow } = await supabase
+        .from('profiles')
+        .select('id, phone_number')
+        .eq('id', row.owner_id)
+        .maybeSingle();
+      if (!profileRow) return { ok: false, reason: 'db_error' };
+      if (sessionRole === 'admin' && !isSuperadminPhone(profileRow.phone_number)) {
+        return { ok: false, reason: 'not_admin' };
+      }
+      if (sessionRole === 'driver') {
+        const assignment = await hasLiveDriverAssignment(supabase, row.owner_id);
+        if (assignment === null) return { ok: false, reason: 'db_error' };
+        if (!assignment) return { ok: false, reason: 'no_assignment' };
+      }
+    }
+
     // Single-use: stamp verified, burn the OTP hash, mint the session token.
     const sessionToken = mintToken(32);
     const sessionExpiresAt = new Date(now.getTime() + DASHBOARD_SESSION_TTL_MS);
@@ -364,8 +456,8 @@ export async function verifyDashboardOtp({ supabase, rawToken, otp, now = new Da
       return { ok: false, reason: 'db_error' };
     }
 
-    await writeAudit(supabase, 'DASHBOARD_SESSION_CREATED', { ownerId: row.owner_id, sessionExpiresAt: sessionExpiresAt.toISOString() });
-    return { ok: true, sessionToken, ownerId: row.owner_id, email: row.email, sessionExpiresAt: sessionExpiresAt.toISOString() };
+    await writeAudit(supabase, 'DASHBOARD_SESSION_CREATED', { ownerId: row.owner_id, role: sessionRole, sessionExpiresAt: sessionExpiresAt.toISOString() });
+    return { ok: true, sessionToken, ownerId: row.owner_id, email: row.email, role: sessionRole, sessionExpiresAt: sessionExpiresAt.toISOString() };
   } catch (err) {
     logWriteFailure(supabase, 'dashboard.verifyDashboardOtp', err);
     return { ok: false, reason: 'db_error' };
@@ -389,7 +481,9 @@ export async function getSessionByToken({ supabase, sessionToken, now = new Date
     if (!row.session_expires_at || new Date(row.session_expires_at).getTime() <= now.getTime()) {
       return { ok: false, reason: 'session_expired' };
     }
-    return { ok: true, ownerId: row.owner_id, email: row.email, session: row, sessionExpiresAt: row.session_expires_at };
+    // Old rows (pre-1.76.0) have no session_role → the owner lane (rule 56).
+    const role = DASHBOARD_ROLES.includes(row.session_role) ? row.session_role : 'owner';
+    return { ok: true, ownerId: row.owner_id, email: row.email, role, session: row, sessionExpiresAt: row.session_expires_at };
   } catch (err) {
     logWriteFailure(supabase, 'dashboard.getSessionByToken', err);
     return { ok: false, reason: 'db_error' };
@@ -1729,6 +1823,229 @@ export async function serializeAllDataCsv({ supabase, ownerId = null, currency =
 }
 
 /* ------------------------------------------------------------------ */
+/* 10. Driver + superadmin views (Phase 15)                            */
+/* ------------------------------------------------------------------ */
+
+/** The caller's assigned live vehicle (or null). Driver lane only. */
+async function loadAssignedVehicle(supabase, driverId) {
+  if (!supabase || !driverId) return null;
+  try {
+    const { data, error } = await supabase
+      .from('vehicles')
+      .select('id, plate_number, make_model, status')
+      .eq('assigned_driver_id', driverId)
+      .is('deleted_at', null)
+      .limit(1);
+    if (error) return null;
+    return (data || [])[0] || null;
+  } catch (err) {
+    logWriteFailure(supabase, 'dashboard.loadAssignedVehicle', err);
+    return null;
+  }
+}
+
+/**
+ * `/d/driver` (Phase 15) — the driver's own home: the assigned vehicle, the
+ * compliance summary of their OWN documents (unmasked, D3) and their last
+ * seven days. Every input is scoped by `driverId` = the session's profile id.
+ */
+export async function buildDriverHome({
+  supabase,
+  driverId = null,
+  countryInfo = null,
+  profile = null,
+  now = new Date()
+} = {}) {
+  if (!supabase || !driverId) return { ok: false };
+  try {
+    const ctx = buildGlobalContext(countryInfo, profile);
+    const [vehicle, card, daybook] = await Promise.all([
+      loadAssignedVehicle(supabase, driverId),
+      buildDriverComplianceCard({ supabase, driverId, countryInfo, now, mask: false }),
+      buildDriverDaybook({ supabase, driverId, days: 7, countryInfo, profile, now })
+    ]);
+    return {
+      ok: true,
+      generatedAt: now.toISOString(),
+      currency: ctx.currency,
+      locale: ctx.locale,
+      timeZone: ctx.timeZone,
+      vehicle: vehicle
+        ? {
+            id: vehicle.id,
+            plate: vehicle.plate_number || 'Assigned vehicle',
+            makeModel: vehicle.make_model || null,
+            status: String(vehicle.status || 'ACTIVE').toUpperCase()
+          }
+        : null,
+      compliance: card?.ok
+        ? { kpis: card.data.kpis || [], documents: card.data.tables?.[0]?.rows || [] }
+        : { kpis: [], documents: [] },
+      week: daybook?.ok
+        ? { kpis: daybook.data.kpis || [], ledger: daybook.data.ledgers?.[0] || null }
+        : { kpis: [], ledger: null }
+    };
+  } catch (err) {
+    logWriteFailure(supabase, 'dashboard.buildDriverHome', err);
+    return { ok: false };
+  }
+}
+
+/** `/d/driver/daybook` — the full daybook (charts + ledger), driver-scoped. */
+export async function buildDriverDaybookPageData({
+  supabase,
+  driverId = null,
+  days = 14,
+  countryInfo = null,
+  profile = null,
+  now = new Date()
+} = {}) {
+  if (!supabase || !driverId) return { ok: false };
+  const report = await buildDriverDaybook({ supabase, driverId, days, countryInfo, profile, now });
+  if (!report?.ok) return { ok: false, error: report?.error || 'That daybook could not be loaded.' };
+  const ctx = buildGlobalContext(countryInfo, profile);
+  return {
+    ok: true,
+    data: report.data,
+    currency: ctx.currency,
+    locale: ctx.locale,
+    timeZone: ctx.timeZone
+  };
+}
+
+/** `/d/driver/compliance` — their own documents, UNMASKED (D3). */
+export async function buildDriverSelfCompliancePage({
+  supabase,
+  driverId = null,
+  countryInfo = null,
+  profile = null,
+  now = new Date()
+} = {}) {
+  if (!supabase || !driverId) return { ok: false };
+  const card = await buildDriverComplianceCard({ supabase, driverId, countryInfo, now, mask: false });
+  if (!card?.ok) return { ok: false, error: card?.error || 'Your documents could not be loaded.' };
+  const ctx = buildGlobalContext(countryInfo, profile);
+  const vehicle = await loadAssignedVehicle(supabase, driverId);
+  return {
+    ok: true,
+    generatedAt: now.toISOString(),
+    currency: ctx.currency,
+    locale: ctx.locale,
+    timeZone: ctx.timeZone,
+    vehicle: vehicle ? { id: vehicle.id, plate: vehicle.plate_number || 'Assigned vehicle' } : null,
+    kpis: card.data.kpis || [],
+    documents: card.data.tables?.[0]?.rows || []
+  };
+}
+
+/**
+ * `/d/admin` (Phase 15) — every owner with at least one live vehicle, read-only.
+ * Phones are masked; the search covers the name and the visible digits.
+ */
+export async function buildAdminOwnersList({ supabase, search = '', limit = 50 } = {}) {
+  if (!supabase) return { ok: false };
+  try {
+    const { data: vehicleRows, error: vehicleError } = await supabase
+      .from('vehicles')
+      .select('id, owner_id, status, deleted_at')
+      .is('deleted_at', null)
+      .limit(2000);
+    if (vehicleError) {
+      logWriteFailure(supabase, 'dashboard.buildAdminOwnersList.vehicles', vehicleError);
+      return { ok: false };
+    }
+    const byOwner = new Map();
+    for (const row of vehicleRows || []) {
+      if (!row.owner_id) continue;
+      const entry = byOwner.get(row.owner_id) || { vehicleCount: 0, activeCount: 0 };
+      entry.vehicleCount += 1;
+      if (String(row.status || 'ACTIVE').toUpperCase() === 'ACTIVE') entry.activeCount += 1;
+      byOwner.set(row.owner_id, entry);
+    }
+    const ownerIds = [...byOwner.keys()];
+    let profiles = [];
+    if (ownerIds.length) {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('id, full_name, phone_number, country, created_at')
+        .in('id', ownerIds)
+        .limit(2000);
+      if (error) {
+        logWriteFailure(supabase, 'dashboard.buildAdminOwnersList.profiles', error);
+        return { ok: false };
+      }
+      profiles = data || [];
+    }
+    const term = String(search || '').trim().toLowerCase();
+    const owners = profiles
+      .map((person) => {
+        const fleet = byOwner.get(person.id) || { vehicleCount: 0, activeCount: 0 };
+        return {
+          id: person.id,
+          name: person.full_name || 'Unnamed owner',
+          phoneMasked: maskPhone(person.phone_number),
+          country: person.country || '—',
+          vehicleCount: fleet.vehicleCount,
+          activeCount: fleet.activeCount,
+          createdAt: person.created_at || null
+        };
+      })
+      .filter((row) => (!term
+        ? true
+        : row.name.toLowerCase().includes(term) || row.phoneMasked.toLowerCase().includes(term)))
+      .sort((a, b) => (b.activeCount - a.activeCount) || String(a.name).localeCompare(String(b.name)))
+      .slice(0, Math.max(1, Math.min(200, Number(limit) || 50)));
+    return { ok: true, generatedAt: new Date().toISOString(), owners, totalOwners: profiles.length };
+  } catch (err) {
+    logWriteFailure(supabase, 'dashboard.buildAdminOwnersList', err);
+    return { ok: false };
+  }
+}
+
+/**
+ * `/d/admin/owners/:id` (Phase 15) — one owner's fleet, read through the same
+ * owner builders (read-only; no write path anywhere in this module).
+ */
+export async function buildAdminFleetView({ supabase, ownerId = null, now = new Date() } = {}) {
+  if (!supabase || !ownerId) return { ok: false, reason: 'not_found' };
+  try {
+    const full = 'id, full_name, phone_number, email, country, country_code, preferred_language, unit_system';
+    let { data: owner, error } = await supabase.from('profiles').select(full).eq('id', ownerId).maybeSingle();
+    if (error) {
+      ({ data: owner, error } = await supabase
+        .from('profiles')
+        .select('id, full_name, phone_number, country_code')
+        .eq('id', ownerId)
+        .maybeSingle());
+    }
+    if (error || !owner) return { ok: false, reason: 'not_found' };
+    const countryInfo = owner.phone_number ? detectCountryFromPhone(owner.phone_number) : null;
+    const [card, directory, compliance] = await Promise.all([
+      buildOverviewCard({ supabase, ownerId, profile: owner, countryInfo, now }),
+      buildVehiclesIndex({ supabase, ownerId, profile: owner, countryInfo, now }),
+      buildComplianceBoard({ supabase, ownerId, profile: owner, countryInfo, now, view: 'all' })
+    ]);
+    return {
+      ok: true,
+      generatedAt: now.toISOString(),
+      owner: {
+        id: owner.id,
+        name: owner.full_name || 'Unnamed owner',
+        phoneMasked: maskPhone(owner.phone_number),
+        emailMasked: maskEmail(owner.email),
+        country: owner.country || countryInfo?.country || '—'
+      },
+      card: card?.ok ? card : null,
+      directory: directory?.ok ? directory : null,
+      compliance: compliance?.ok ? compliance : null
+    };
+  } catch (err) {
+    logWriteFailure(supabase, 'dashboard.buildAdminFleetView', err);
+    return { ok: false, reason: 'db_error' };
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* HTML shell (shared by every dashboard page, Phase 14 reuses it)     */
 /* ------------------------------------------------------------------ */
 
@@ -2341,6 +2658,189 @@ ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
   return renderPageShell('Settings', body, { headerRight: dashboardNav() });
 }
 
+/** Phase 15 navs — one per lane, never mixed. */
+function driverNav() {
+  return '<a href="/d/driver">Overview</a> · <a href="/d/driver/daybook">Daybook</a> · <a href="/d/driver/compliance">Compliance</a> · <a href="/d/logout">Log out</a>';
+}
+
+function adminNav() {
+  return '<a href="/d/admin">Owners</a> · <a href="/d/logout">Log out</a>';
+}
+
+function kpiStripHtml(kpis = []) {
+  const rows = (kpis || []).slice(0, 6);
+  if (!rows.length) return '';
+  return `<div class="kpis card">${rows.map((kpi) => `
+    <div class="kpi"><div class="label">${escapeHtml(kpi.label || '')}</div><div class="value">${escapeHtml(kpi.value ?? '—')}</div>${kpi.hint ? `<div class="muted" style="font-size:12px;">${escapeHtml(kpi.hint)}</div>` : ''}</div>`).join('')}
+  </div>`;
+}
+
+function ledgerRowsHtml(ledger, locale, timeZone, limit = 12) {
+  const groups = Array.isArray(ledger?.groups) ? ledger.groups : [];
+  const rows = groups.flatMap((group) => group.rows || []).slice(0, limit);
+  if (!rows.length) return '';
+  return `<div class="card table-wrap"><table class="rec">
+      <thead><tr><th>Date</th><th>Kind</th><th>Description</th><th class="num">Amount</th></tr></thead>
+      <tbody>${rows.map((row) => `
+        <tr>
+          <td>${escapeHtml(String(row.date || row.at || ''))}</td>
+          <td><span class="chip">${escapeHtml(row.kindLabel || row.kind || '')}</span></td>
+          <td>${escapeHtml(row.description || '')}</td>
+          <td class="num">${escapeHtml(formatMoney(row.amount, ledger.currency || 'USD', locale))}</td>
+        </tr>`).join('')}</tbody>
+    </table></div>`;
+}
+
+/** `/d/driver` (Phase 15) — assigned vehicle, own compliance, last 7 days. */
+export function renderDriverHomePage({ data, emailMasked = '' }) {
+  if (!data?.ok) {
+    return renderErrorPage(503, 'Your driver dashboard could not be loaded just now. Please try again in a moment.').html;
+  }
+  const vehicleCard = data.vehicle
+    ? `<div class="card">
+        <h2 style="margin-top:0;">Your vehicle</h2>
+        <p><strong>${escapeHtml(data.vehicle.plate)}</strong>${data.vehicle.makeModel ? `<span class="muted"> · ${escapeHtml(data.vehicle.makeModel)}</span>` : ''}
+        <span class="chip${data.vehicle.status === 'ACTIVE' ? ' ok' : ''}">${escapeHtml(data.vehicle.status === 'ACTIVE' ? 'Active' : data.vehicle.status)}</span></p>
+      </div>`
+    : '<div class="card"><p class="muted">No vehicle assigned yet — ask your fleet owner to assign one and it appears here.</p></div>';
+
+  const documents = data.compliance.documents || [];
+  const docRows = documents.slice(0, 6).map((doc) => `
+        <tr>
+          <td>${escapeHtml(doc.label || 'Document')}</td>
+          <td>${escapeHtml(doc.number || '—')}</td>
+          <td>${escapeHtml(doc.expiry || '—')}</td>
+          <td>${complianceChipHtml({ status: doc.status, daysLeft: doc.daysLeft })}</td>
+        </tr>`).join('');
+
+  const body = `
+<h1>Your driver dashboard</h1>
+<p class="muted">Signed in as ${escapeHtml(emailMasked)} · your own records only</p>
+${vehicleCard}
+<h2>My compliance</h2>
+${kpiStripHtml(data.compliance.kpis)}
+${documents.length ? `<div class="card table-wrap"><table class="rec">
+    <thead><tr><th>Document</th><th>Number</th><th>Expiry</th><th>Status</th></tr></thead>
+    <tbody>${docRows}</tbody></table></div>` : '<div class="card"><p class="muted">No documents on file yet — reply *driver profile* in WhatsApp to add your licence.</p></div>'}
+<p class="muted" style="font-size:13px;"><a href="/d/driver/compliance">See all my documents →</a></p>
+<h2>This week</h2>
+${kpiStripHtml(data.week.kpis)}
+${ledgerRowsHtml(data.week.ledger, data.locale, data.timeZone, 6)}
+<p class="muted" style="font-size:13px;"><a href="/d/driver/daybook">Open my daybook →</a></p>`;
+  return renderPageShell('Your driver dashboard', body, { headerRight: driverNav() });
+}
+
+/** `/d/driver/daybook` (Phase 15) — own activity, ledger table. */
+export function renderDriverDaybookPage({ page }) {
+  if (!page?.ok || !page.data) {
+    return renderErrorPage(503, 'Your daybook could not be loaded just now. Please try again in a moment.').html;
+  }
+  const report = page.data;
+  const body = `
+<h1>${escapeHtml(report.title || 'My daybook')}</h1>
+<p class="muted">${escapeHtml(report.subtitle || '')}</p>
+${kpiStripHtml(report.kpis)}
+<h2>Your activity ledger</h2>
+${ledgerRowsHtml(report.ledgers?.[0], page.locale, page.timeZone, 40) || '<div class="card"><p class="muted">Nothing logged in this window yet — log fuel or an earning in WhatsApp and it appears here.</p></div>'}`;
+  return renderPageShell('My daybook', body, { headerRight: driverNav() });
+}
+
+/** `/d/driver/compliance` (Phase 15) — own documents, numbers UNMASKED (D3). */
+export function renderDriverSelfCompliancePage({ page }) {
+  if (!page?.ok) {
+    return renderErrorPage(503, 'Your documents could not be loaded just now. Please try again in a moment.').html;
+  }
+  const documents = Array.isArray(page.documents) ? page.documents : [];
+  const rows = documents.map((doc) => `
+        <tr>
+          <td>${escapeHtml(doc.label || 'Document')}</td>
+          <td>${escapeHtml(doc.number || '—')}</td>
+          <td>${escapeHtml(doc.expiry || '—')}</td>
+          <td>${complianceChipHtml({ status: doc.status, daysLeft: doc.daysLeft })}</td>
+        </tr>`).join('');
+  const table = documents.length
+    ? `<div class="card table-wrap"><table class="rec">
+        <thead><tr><th>Document</th><th>Number</th><th>Expiry</th><th>Status</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>`
+    : '<div class="card"><p class="muted">No documents on file yet — reply *driver profile* in WhatsApp to add your licence.</p></div>';
+  const body = `
+<p class="muted"><a href="/d/driver">← Overview</a></p>
+<h1>My compliance</h1>
+<p class="muted">${page.vehicle ? `Assigned vehicle: ${escapeHtml(page.vehicle.plate)}` : 'No vehicle assigned yet'} · your own documents</p>
+${kpiStripHtml(page.kpis)}
+<h2>My documents</h2>
+${table}
+<p class="muted" style="font-size:13px;">Read-only here — reply in WhatsApp with a new date to update a document.</p>`;
+  return renderPageShell('My compliance', body, { headerRight: driverNav() });
+}
+
+/** `/d/admin` (Phase 15) — the cross-tenant owner list, read-only. */
+export function renderAdminOwnersPage({ data, search = '' }) {
+  if (!data?.ok) {
+    return renderErrorPage(503, 'The owner list could not be loaded just now. Please try again in a moment.').html;
+  }
+  const owners = Array.isArray(data.owners) ? data.owners : [];
+  const rows = owners.map((owner) => `
+        <tr>
+          <td><a href="/d/admin/owners/${encodeURIComponent(owner.id)}">${escapeHtml(owner.name)}</a></td>
+          <td>${escapeHtml(owner.phoneMasked)}</td>
+          <td>${escapeHtml(owner.country)}</td>
+          <td class="num">${Number(owner.vehicleCount)}</td>
+          <td class="num">${Number(owner.activeCount)}</td>
+        </tr>`).join('');
+  const table = owners.length
+    ? `<div class="card table-wrap"><table class="rec">
+        <thead><tr><th>Owner</th><th>Phone</th><th>Country</th><th class="num">Vehicles</th><th class="num">Active</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>`
+    : `<div class="card"><p class="muted">${search ? 'No owner matches that search.' : 'No owner has a vehicle on file yet.'}</p></div>`;
+  const body = `
+<h1>Owners</h1>
+<p class="muted">${Number(data.totalOwners || 0)} owner${Number(data.totalOwners || 0) === 1 ? '' : 's'} with a fleet · read-only · every visit is audited</p>
+<form method="GET" action="/d/admin" class="filters card">
+  <label>Search by name or visible digits<input type="text" name="q" maxlength="40" value="${escapeHtml(search)}"></label>
+  <div class="filters-actions"><button type="submit">Search</button><a href="/d/admin">Clear</a></div>
+</form>
+${table}`;
+  return renderPageShell('Owners', body, { headerRight: adminNav() });
+}
+
+/** `/d/admin/owners/:id` (Phase 15) — one owner's fleet, read-only + audited. */
+export function renderAdminFleetPage({ fleet }) {
+  if (!fleet?.ok) {
+    return renderErrorPage(503, 'That fleet could not be loaded just now. Please try again in a moment.').html;
+  }
+  const owner = fleet.owner || {};
+  const vehicles = fleet.directory?.vehicles || [];
+  const vehicleRows = vehicles.map((vehicle) => `
+        <tr>
+          <td>${escapeHtml(vehicle.plate)}${vehicle.makeModel ? `<span class="muted"> · ${escapeHtml(vehicle.makeModel)}</span>` : ''}</td>
+          <td><span class="chip${vehicle.active ? ' ok' : ''}">${escapeHtml(vehicle.active ? 'Active' : String(vehicle.status || 'Inactive'))}</span></td>
+          <td>${escapeHtml(vehicle.driverName || 'No driver')}</td>
+          <td class="num">${escapeHtml(`${formatNumber(vehicle.odometer, fleet.card?.locale || 'en-US')} ${vehicle.distanceUnit || ''}`.trim())}</td>
+          <td>${vehicle.soonest ? `${escapeHtml(vehicle.soonest.label)} ${complianceChipHtml(vehicle.soonest)}` : '<span class="muted">—</span>'}</td>
+        </tr>`).join('');
+  const vehicleTable = vehicles.length
+    ? `<div class="card table-wrap"><table class="rec">
+        <thead><tr><th>Vehicle</th><th>Status</th><th>Driver</th><th class="num">Odometer</th><th>Soonest</th></tr></thead>
+        <tbody>${vehicleRows}</tbody></table></div>`
+    : '<div class="card"><p class="muted">This owner has no live vehicles.</p></div>';
+  const totals = fleet.compliance?.totals || null;
+  const body = `
+<p class="muted"><a href="/d/admin">← Owners</a></p>
+<h1>${escapeHtml(owner.name || 'Owner')}</h1>
+<p class="muted">${escapeHtml(owner.phoneMasked || '—')} · ${escapeHtml(owner.emailMasked || '—')} · ${escapeHtml(owner.country || '—')} · read-only</p>
+${fleet.card ? kpiStripHtml([
+    { label: 'Spend', value: fleet.card.kpis?.spend ?? 0, hint: 'all time' },
+    { label: 'Earnings', value: fleet.card.kpis?.earnings ?? 0, hint: 'all time' },
+    { label: 'Active vehicles', value: `${fleet.card.kpis?.activeVehicles ?? 0} of ${fleet.card.kpis?.totalVehicles ?? 0}`, hint: 'in service' }
+  ].map((kpi) => (typeof kpi.value === 'number' ? { ...kpi, value: formatMoney(kpi.value, fleet.card.currency, fleet.card.locale) } : kpi))) : ''}
+<h2>Vehicles</h2>
+${vehicleTable}
+<h2>Compliance</h2>
+<div class="card"><p class="muted">Monitored ${Number(totals?.monitored || 0)} · due in 30 days ${Number(totals?.expiring30Days || 0)} · expired ${Number(totals?.expired || 0)}</p></div>`;
+  return renderPageShell(`${owner.name || 'Owner'} — fleet`, body, { headerRight: adminNav() });
+}
+
 export function renderLogoutPage() {
   const body = `
 <h1>You're logged out</h1>
@@ -2438,5 +2938,17 @@ export default {
   saveSettings,
   serializeAllDataCsv,
   renderReportsPage,
-  renderSettingsPage
+  renderSettingsPage,
+  DASHBOARD_ROLES,
+  resolveDashboardRole,
+  buildDriverHome,
+  buildDriverDaybookPageData,
+  buildDriverSelfCompliancePage,
+  buildAdminOwnersList,
+  buildAdminFleetView,
+  renderDriverHomePage,
+  renderDriverDaybookPage,
+  renderDriverSelfCompliancePage,
+  renderAdminOwnersPage,
+  renderAdminFleetPage
 };

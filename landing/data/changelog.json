@@ -1,6 +1,13 @@
 {
-  "latest": "1.75.3",
+  "latest": "1.76.0",
   "entries": [
+    {
+      "version": "1.76.0",
+      "date": "2026-11-08",
+      "title": "A dashboard for everyone on the fleet",
+      "preview": "Drivers get their own page, and the right people can see every fleet at a glance - safely.",
+      "summary": "The dashboard now has three doors. Owners keep the full toolkit they just received. Drivers, once you assign them to a vehicle, can reply dashboard in WhatsApp and get a private link to their own page: the vehicle they drive, their own licence, PSV badge and medical documents with the real numbers, and their last week of fuel, spend and earnings - and nothing belonging to anyone else. If a driver is no longer assigned, their link simply stops working; the message tells them to ask you for an assignment. The superadmin (and only the superadmin) can reply dashboard admin to see every owner with a fleet, with phone numbers masked, and open any one fleet read-only - and every single visit is recorded in the audit log, so cross-fleet access is never invisible. Owner pages, driver pages and admin pages are strictly separated: a driver who tries an owner page is politely turned away, and anyone who is not the superadmin simply sees that the admin page does not exist. The dashboard stays switched off in production until the walk-through is signed off. Nothing about your records has changed - this is the same engine, with the right view for each person."
+    },
     {
       "version": "1.75.3",
       "date": "2026-11-08",

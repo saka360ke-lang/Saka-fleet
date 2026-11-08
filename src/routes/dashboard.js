@@ -59,8 +59,20 @@ import {
   saveSettings,
   serializeAllDataCsv,
   renderReportsPage,
-  renderSettingsPage
+  renderSettingsPage,
+  DASHBOARD_ROLES,
+  buildDriverHome,
+  buildDriverDaybookPageData,
+  buildDriverSelfCompliancePage,
+  buildAdminOwnersList,
+  buildAdminFleetView,
+  renderDriverHomePage,
+  renderDriverDaybookPage,
+  renderDriverSelfCompliancePage,
+  renderAdminOwnersPage,
+  renderAdminFleetPage
 } from '../services/dashboard.js';
+import { logAdminAudit } from '../services/superadmin.js';
 import { detectCountryFromPhone, buildGlobalContext } from '../services/globalization.js';
 import { buildProReportPdf } from '../services/pdfEngine.js';
 import { logSystemError, logWriteFailure } from '../services/systemErrors.js';
@@ -143,11 +155,17 @@ function isCrossOriginWrite(request) {
 }
 
 /**
- * The one session gate every signed-in page shares. Sends the 401 page (and
- * clears a dead cookie) itself and returns null, so a caller can simply
- * `if (!session) return reply;`.
+ * The one session gate every signed-in page shares (Phase 15: role-aware).
+ * Sends the 401 page (and clears a dead cookie) itself and returns null, so a
+ * caller can simply `if (!session) return reply;`.
+ *
+ * Isolation rules (D2): a session may only open ITS OWN lane.
+ * - `owner` pages refuse driver/admin sessions with a warm 403;
+ * - `driver` pages refuse anyone else with a 403;
+ * - `admin` pages answer **404** to non-admins (the surface's existence is
+ *   never confirmed — the A1 philosophy).
  */
-async function requireOwnerSession(request, reply, supabase) {
+async function requireRoleSession(request, reply, supabase, role = 'owner') {
   const sessionToken = readDashboardCookie(request.headers);
   if (!sessionToken) {
     const page = renderErrorPage(401, 'Reply *dashboard* in the WhatsApp chat and I will email you a fresh link.');
@@ -161,7 +179,20 @@ async function requireOwnerSession(request, reply, supabase) {
     sendHtml(reply, page.status, page.html);
     return null;
   }
-  return session;
+  const actualRole = DASHBOARD_ROLES.includes(session.role) ? session.role : 'owner';
+  if (actualRole === role) return { ...session, role: actualRole };
+
+  if (role === 'admin') {
+    const page = renderErrorPage(404, 'That page does not exist.');
+    sendHtml(reply, page.status, page.html);
+    return null;
+  }
+  const copy = role === 'driver'
+    ? 'That area is for drivers — open your own driver dashboard from WhatsApp.'
+    : `That area is for fleet owners${actualRole === 'admin' ? '' : ' — you are signed in as a driver'}.`;
+  const page = renderErrorPage(403, copy);
+  sendHtml(reply, page.status, page.html);
+  return null;
 }
 
 
@@ -175,7 +206,7 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
     scope.get('/d', async (request, reply) => {
       if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
       try {
-        const session = await requireOwnerSession(request, reply, supabase);
+        const session = await requireRoleSession(request, reply, supabase, 'owner');
         if (!session) return reply;
         const profile = await loadDashboardProfile(supabase, session.ownerId);
         const card = await buildOverviewCard({
@@ -198,7 +229,7 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
     scope.get('/d/vehicles', async (request, reply) => {
       if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
       try {
-        const session = await requireOwnerSession(request, reply, supabase);
+        const session = await requireRoleSession(request, reply, supabase, 'owner');
         if (!session) return reply;
         const profile = await loadDashboardProfile(supabase, session.ownerId);
         const data = await buildVehiclesIndex({
@@ -221,7 +252,7 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
     scope.get('/d/vehicles/:id', async (request, reply) => {
       if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
       try {
-        const session = await requireOwnerSession(request, reply, supabase);
+        const session = await requireRoleSession(request, reply, supabase, 'owner');
         if (!session) return reply;
         const profile = await loadDashboardProfile(supabase, session.ownerId);
         const data = await buildVehiclePage({
@@ -249,7 +280,7 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
     scope.get('/d/records', async (request, reply) => {
       if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
       try {
-        const session = await requireOwnerSession(request, reply, supabase);
+        const session = await requireRoleSession(request, reply, supabase, 'owner');
         if (!session) return reply;
         const profile = await loadDashboardProfile(supabase, session.ownerId);
         const countryInfo = countryForProfile(profile);
@@ -283,7 +314,7 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
     scope.get('/d/records.csv', async (request, reply) => {
       if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
       try {
-        const session = await requireOwnerSession(request, reply, supabase);
+        const session = await requireRoleSession(request, reply, supabase, 'owner');
         if (!session) return reply;
         const profile = await loadDashboardProfile(supabase, session.ownerId);
         const countryInfo = countryForProfile(profile);
@@ -337,7 +368,7 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
     scope.get('/d/records.pdf', async (request, reply) => {
       if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
       try {
-        const session = await requireOwnerSession(request, reply, supabase);
+        const session = await requireRoleSession(request, reply, supabase, 'owner');
         if (!session) return reply;
         const profile = await loadDashboardProfile(supabase, session.ownerId);
         const countryInfo = countryForProfile(profile);
@@ -397,7 +428,7 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
         return sendHtml(reply, page.status, page.html);
       };
       try {
-        const session = await requireOwnerSession(request, reply, supabase);
+        const session = await requireRoleSession(request, reply, supabase, 'owner');
         if (!session) return reply;
         const receiptId = String(request.params?.id || '');
         if (!receiptId) return answerNotFound();
@@ -428,7 +459,7 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
     scope.get('/d/compliance', async (request, reply) => {
       if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
       try {
-        const session = await requireOwnerSession(request, reply, supabase);
+        const session = await requireRoleSession(request, reply, supabase, 'owner');
         if (!session) return reply;
         const profile = await loadDashboardProfile(supabase, session.ownerId);
         const countryInfo = countryForProfile(profile);
@@ -455,7 +486,7 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
     scope.get('/d/drivers/:id', async (request, reply) => {
       if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
       try {
-        const session = await requireOwnerSession(request, reply, supabase);
+        const session = await requireRoleSession(request, reply, supabase, 'owner');
         if (!session) return reply;
         const profile = await loadDashboardProfile(supabase, session.ownerId);
         const page = await buildDriverCompliancePage({
@@ -484,7 +515,7 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
     scope.get('/d/compliance.pdf', async (request, reply) => {
       if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
       try {
-        const session = await requireOwnerSession(request, reply, supabase);
+        const session = await requireRoleSession(request, reply, supabase, 'owner');
         if (!session) return reply;
         const profile = await loadDashboardProfile(supabase, session.ownerId);
         const countryInfo = countryForProfile(profile);
@@ -529,7 +560,7 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
     scope.get('/d/reports', async (request, reply) => {
       if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
       try {
-        const session = await requireOwnerSession(request, reply, supabase);
+        const session = await requireRoleSession(request, reply, supabase, 'owner');
         if (!session) return reply;
         const vehicles = await loadOwnerVehicles(supabase, session.ownerId);
         const vehicleIds = vehicles.map((vehicle) => vehicle.id);
@@ -553,7 +584,7 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
     scope.get('/d/reports.pdf', async (request, reply) => {
       if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
       try {
-        const session = await requireOwnerSession(request, reply, supabase);
+        const session = await requireRoleSession(request, reply, supabase, 'owner');
         if (!session) return reply;
         const profile = await loadDashboardProfile(supabase, session.ownerId);
         const countryInfo = countryForProfile(profile);
@@ -594,7 +625,7 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
     scope.get('/d/settings', async (request, reply) => {
       if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
       try {
-        const session = await requireOwnerSession(request, reply, supabase);
+        const session = await requireRoleSession(request, reply, supabase, 'owner');
         if (!session) return reply;
         const profile = await loadDashboardProfile(supabase, session.ownerId);
         const settings = await buildSettingsPage({
@@ -625,7 +656,7 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
         return sendHtml(reply, 403, page.html);
       }
       try {
-        const session = await requireOwnerSession(request, reply, supabase);
+        const session = await requireRoleSession(request, reply, supabase, 'owner');
         if (!session) return reply;
         const profile = await loadDashboardProfile(supabase, session.ownerId);
         const body = request.body && typeof request.body === 'object' ? request.body : {};
@@ -653,7 +684,7 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
     scope.get('/d/export.csv', async (request, reply) => {
       if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
       try {
-        const session = await requireOwnerSession(request, reply, supabase);
+        const session = await requireRoleSession(request, reply, supabase, 'owner');
         if (!session) return reply;
         const profile = await loadDashboardProfile(supabase, session.ownerId);
         const ctx = buildGlobalContext(countryForProfile(profile), profile);
@@ -665,6 +696,130 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
       } catch (err) {
         await logSystemError(supabase, err, '/d/export/csv');
         const page = renderErrorPage(500, 'That export could not be built — please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    /* -------------------------------------------------------------- */
+    /* GET /d/driver — the driver's own home (Phase 15)                */
+    /* -------------------------------------------------------------- */
+    scope.get('/d/driver', async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      try {
+        const session = await requireRoleSession(request, reply, supabase, 'driver');
+        if (!session) return reply;
+        const profile = await loadDashboardProfile(supabase, session.ownerId);
+        const data = await buildDriverHome({
+          supabase,
+          driverId: session.ownerId,
+          profile,
+          countryInfo: countryForProfile(profile)
+        });
+        return sendHtml(reply, data.ok ? 200 : 503, renderDriverHomePage({
+          data,
+          emailMasked: maskEmail(session.email || profile?.email)
+        }));
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/driver');
+        const page = renderErrorPage(500, 'Please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    /* -------------------------------------------------------------- */
+    /* GET /d/driver/daybook — own activity (Phase 15)                 */
+    /* -------------------------------------------------------------- */
+    scope.get('/d/driver/daybook', async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      try {
+        const session = await requireRoleSession(request, reply, supabase, 'driver');
+        if (!session) return reply;
+        const profile = await loadDashboardProfile(supabase, session.ownerId);
+        const pageData = await buildDriverDaybookPageData({
+          supabase,
+          driverId: session.ownerId,
+          profile,
+          countryInfo: countryForProfile(profile)
+        });
+        return sendHtml(reply, pageData.ok ? 200 : 503, renderDriverDaybookPage({ page: pageData }));
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/driver/daybook');
+        const page = renderErrorPage(500, 'Please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    /* -------------------------------------------------------------- */
+    /* GET /d/driver/compliance — own documents, unmasked (D3)         */
+    /* -------------------------------------------------------------- */
+    scope.get('/d/driver/compliance', async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      try {
+        const session = await requireRoleSession(request, reply, supabase, 'driver');
+        if (!session) return reply;
+        const profile = await loadDashboardProfile(supabase, session.ownerId);
+        const pageData = await buildDriverSelfCompliancePage({
+          supabase,
+          driverId: session.ownerId,
+          profile,
+          countryInfo: countryForProfile(profile)
+        });
+        return sendHtml(reply, pageData.ok ? 200 : 503, renderDriverSelfCompliancePage({ page: pageData }));
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/driver/compliance');
+        const page = renderErrorPage(500, 'Please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    /* -------------------------------------------------------------- */
+    /* GET /d/admin — cross-tenant owner list (Phase 15, audited)      */
+    /* -------------------------------------------------------------- */
+    scope.get('/d/admin', async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      try {
+        const session = await requireRoleSession(request, reply, supabase, 'admin');
+        if (!session) return reply;
+        const profile = await loadDashboardProfile(supabase, session.ownerId);
+        const search = String(request.query?.q || '').slice(0, 40);
+        const data = await buildAdminOwnersList({ supabase, search });
+        // Rule 51(iii) — EVERY admin view is audited (fail-soft inside).
+        await logAdminAudit(supabase, profile?.phone_number || session.email || 'DASHBOARD_ADMIN', 'ADMIN_DASHBOARD_VIEW', {
+          page: 'owners',
+          params: { q: search || null }
+        });
+        return sendHtml(reply, data.ok ? 200 : 503, renderAdminOwnersPage({ data, search }));
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/admin');
+        const page = renderErrorPage(500, 'Please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    /* -------------------------------------------------------------- */
+    /* GET /d/admin/owners/:id — one fleet, read-only (audited)        */
+    /* -------------------------------------------------------------- */
+    scope.get('/d/admin/owners/:id', async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      try {
+        const session = await requireRoleSession(request, reply, supabase, 'admin');
+        if (!session) return reply;
+        const profile = await loadDashboardProfile(supabase, session.ownerId);
+        const ownerId = String(request.params?.id || '');
+        const fleet = await buildAdminFleetView({ supabase, ownerId });
+        await logAdminAudit(supabase, profile?.phone_number || session.email || 'DASHBOARD_ADMIN', 'ADMIN_DASHBOARD_VIEW', {
+          page: 'fleet',
+          ownerViewed: ownerId,
+          found: fleet.ok === true
+        });
+        if (!fleet.ok && fleet.reason === 'not_found') {
+          const missing = renderErrorPage(404, 'That owner does not exist.');
+          return sendHtml(reply, missing.status, missing.html);
+        }
+        return sendHtml(reply, fleet.ok ? 200 : 503, renderAdminFleetPage({ fleet }));
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/admin/owners/:id');
+        const page = renderErrorPage(500, 'Please try again in a moment.');
         return sendHtml(reply, page.status, page.html);
       }
     });
