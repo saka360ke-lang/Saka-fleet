@@ -471,6 +471,13 @@ async function run() {
   check(!/ackSent: session\.slowAckSent/.test(whatsappSource), 'no bare session reference remains in the latency call');
   check(/logSystemError\(supabaseClient, err, '\/webhook\/whatsapp'\)/.test(whatsappSource), 'the original error is persisted to error_logs');
 
+  // v1.73.4 — Phase 12B: a template button/list tap resolves BEFORE the media
+  // envelope, and an unrecognised interactive shape is diagnosed in error_logs.
+  const interactiveCallAt = whatsappSource.indexOf('parseInteractiveReply(messageObj)');
+  const mediaEnvelopeAt = whatsappSource.indexOf('resolveMediaEnvelope(messageObj)');
+  check(interactiveCallAt > 0 && mediaEnvelopeAt > interactiveCallAt, 'a template button tap resolves before the media envelope (v1.73.4)');
+  check(whatsappSource.includes("'/webhook/whatsapp/interactive'"), 'an unrecognised interactive shape is logged to error_logs (v1.73.4)');
+
   global.fetch = realFetch;
   delete process.env.GCP_VISION_API_KEY;
   console.log(`\n🎉 ALL OCR FLOW TESTS PASSED (${passed} assertions).`);

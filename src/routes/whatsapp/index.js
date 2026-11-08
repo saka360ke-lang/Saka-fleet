@@ -25,4 +25,6 @@ export * from './conversation.js';
 export * from './support.js';
 // v1.73.1 — Phase 11: the legacy onboarding lane extracted from the processor (section 197).
 export * from './onboarding.js';
+// v1.73.4 — Phase 12B: inbound template buttons / list selections (section 198B).
+export * from './interactive.js';
 

@@ -132,7 +132,9 @@ const STATLESS_SUITES = [
   // v1.62.0 — DeepSeek off-peak schedule: windows, CLI gates, discount accounting.
   'test_deepseek_schedule.js',
   // v1.64.0 — unified session.pending: registry, resolver, truth table, shim.
-  'test_pending_state.js'
+  'test_pending_state.js',
+  // v1.73.4 — inbound template buttons/lists: shapes, D1 registry, A1 diagnostic.
+  'test_interactive_reply.js'
 ];
 
 const WORKFLOW_DIR = '.github/workflows';

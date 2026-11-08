@@ -1,6 +1,13 @@
 {
-  "latest": "1.73.3",
+  "latest": "1.73.4",
   "entries": [
+    {
+      "version": "1.73.4",
+      "date": "2026-11-08",
+      "title": "Template buttons, handled",
+      "preview": "Tap a quick-reply button on a reminder or plan message and Saka treats it as your typed reply.",
+      "summary": "A defensive, behind-the-scenes release. Some of Saka's proactive templates may in future arrive with quick-reply buttons (like \"Reminders\" or \"Subscription\"). If you tap one, Saka now treats it as the typed reply you would otherwise send - the same reminders list, plan summary or help menu opens, and quick-edit buttons keep their existing safety locks. A button we do not recognise falls back to its own title, and any shape Saka cannot read is recorded for the team to diagnose instead of being guessed at. Nothing changes for normal typed chats, photos or voice notes."
+    },
     {
       "version": "1.73.3",
       "date": "2026-11-08",

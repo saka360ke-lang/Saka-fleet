@@ -200,3 +200,37 @@ knob name is reported (names only, never values).
 - Knob set but Meta rejects the template send -> the text path still tries
   (it only delivers inside the window, exactly like today).
 - Rollback: unset the knob(s). No schema, no migration, no flag needed.
+------------------------------------------------------------
+5. Quick-reply button payload registry (v1.73.4, section 198B)
+------------------------------------------------------------
+
+Buttons are not yet registered on the templates; this registry is the
+contract for when they are. The code mirrors it in
+`BUTTON_PAYLOAD_PHRASES` (src/routes/whatsapp/interactive.js) and
+resolves a tap to the typed phrase the user would otherwise send, so the
+live grammar handles it - no new intents, no prompt changes.
+
+| payload_id   | typed phrase | what the user gets                            |
+|--------------|--------------|-----------------------------------------------|
+| remind_me    | reminders    | the due-list (identical to typing "reminders")|
+| reminders    | reminders    | idempotent - a payload equal to the operator  |
+| subscription | subscription | the plan summary                              |
+| keep_all     | keep all     | keep-everything / downsize flow               |
+| help         | help         | the help menu                                 |
+
+Rules:
+- A payload id registered on the WABA MUST match a table row to receive
+  its phrase; any unregistered payload falls back to the button's own
+  title text, so Saka can always answer what the user just tapped.
+- D1 (locked): remind_me maps to "reminders" (the LIST), never "remind
+  me" (which starts the set_reminder quiz) - the reminder template body
+  promises "Reply reminders to see what is coming up".
+- Meta payload shapes handled: interactive.button_reply {id,title},
+  interactive.list_reply {id,title,description} and the legacy
+  button {text,payload}. Anything else (product, nfm_reply, ...) is
+  logged under /webhook/whatsapp/interactive for diagnosis - never
+  guessed.
+- A quick-reply title is user-visible copy: keep it identical to the
+  typed phrase (for example a title of "Reminders" for remind_me) so the
+  tap and the typed message read the same.
+

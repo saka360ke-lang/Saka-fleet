@@ -111,6 +111,8 @@ import {
   queueReportFollowUp,
   recordTurnLatency
 } from './hooks.js';
+// v1.73.4 — Phase 12B: inbound template button / list taps (leaf, services-only imports).
+import { parseInteractiveReply } from './interactive.js';
 // v1.68.0 — Phase 5B-3 module split: reads + pending + quiz (turn-owners separated).
 import { dispatchReadTurn } from './reads.js';
 import {
@@ -199,6 +201,26 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
   try {
     const senderPhone = messageObj.from;
 
+    // v1.73.4 — Phase 12B: a template quick-reply / list selection is NOT media.
+    // Resolve it BEFORE the media envelope so the tap becomes the typed text the
+    // user would otherwise have sent; the live grammar does the rest (no new
+    // intents, rule 13). Voice notes and images never carry an interactive object,
+    // so these lanes cannot be hijacked (proven in test_interactive_reply).
+    const interactiveReply = parseInteractiveReply(messageObj);
+    // A1 (rule 50) — defensive diagnostics: an interactive/button shape we do not
+    // recognise is logged ONCE per shape/phone per ERROR_ROLLUP_HOURS window (the
+    // error_logs rollup dedupes turns). The stack carries ONLY the interactive and
+    // button sub-objects — never the message body, media ids, phone or timestamps.
+    if (!interactiveReply && (messageObj?.interactive || messageObj?.button)) {
+      const diag = new Error('Unrecognized WhatsApp interactive reply '
+        + `(type=${messageObj?.interactive?.type || 'button'})`);
+      diag.stack = JSON.stringify({
+        interactive: messageObj?.interactive || null,
+        button: messageObj?.button || null
+      }).slice(0, 4000);
+      logSystemError(supabaseClient, diag, '/webhook/whatsapp/interactive', { phone: senderPhone }).catch(() => {});
+    }
+
     // --- MEDIA / OCR INGESTION (parallel with durable session hydration) ------
     // WhatsApp photos and documents carry no `.text`. Download them from Meta,
     // OCR with Google Cloud Vision, and treat the extracted text as the turn.
@@ -268,7 +290,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
     const {
       ocrText,
       ocrError,
-      messageText,
+      messageText: mediaTurnText,
       ocrCountry,
       ocrKind,
       ocrLowConfidence,
@@ -286,6 +308,12 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
       supabaseClient,
       messageObj
     });
+
+    // v1.73.4 — Phase 12B: a resolved button/list tap becomes the turn's text.
+    // A button tap carries no media, so this override is the only seam; the media
+    // lane stays untouched and every downstream lane (quiz, pending, reads, AI)
+    // sees exactly what the user would have typed.
+    const messageText = interactiveReply ? interactiveReply.text : mediaTurnText;
 
     if (snapshot) {
       if (snapshot.session && !chatSessions.has(senderPhone)) chatSessions.set(senderPhone, snapshot.session);

@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.73.3  
+**Version:** 1.73.4  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.73.4** | Phase 12B: template button replies — new leaf `src/routes/whatsapp/interactive.js` (`parseInteractiveReply`) turns Meta `button_reply` / `list_reply` / legacy `button` taps into the typed operator BEFORE the media envelope, a frozen D1 payload registry (`remind_me`→`reminders`), quick-edit id resolution with the VIN lock intact, and an A1-safe diagnostic (`/webhook/whatsapp/interactive`, interactive/button sub-objects only; one row per shape/phone per 24-h rollup) | 198B |
 | **1.73.3** | Phase 12C: quiet eval notifications — the immediate both-channel judge-error alert is gone (throttle + `CONV_EVAL_ALERT_COOLDOWN_HOURS` retired), judge errors persist as bounded `CONV_EVAL_JUDGE_ERROR` audit rows and render as their own digest section, the 15-min retry floor is kept, and a delayed digest now pings once instead of staying silent | 198C |
 | **1.73.2** | Phase 12A: driver compliance reminder hygiene — `syncAllDriverComplianceReminders` covers every `driver_compliances` type with per-document dedupe (PSV/PDP no longer collapse), retires the legacy profile mirror when a licence row exists, resets the ladder only on a real date change (it was resetting every 30-min sweep), and skips lifetime/number-less/past-expiry rows | 198A |
 | **1.73.1** | Phase 11 (final cleanup): the legacy onboarding lane (section 191 branch A + the registration starter, 229 source lines) extracted verbatim to `src/routes/whatsapp/onboarding.js` — store passed as an argument, ratchet extended (test_no_canned_replies), two pre-existing latent ReferenceErrors repaired; the `trial-end-downsize-choice` eval flake fixed with engine_facts (0.83/0.88 → 0.93 pass; diagnosis: the bar was 0.7, not 0.85) | 197 |
@@ -5605,7 +5606,7 @@ reads.js / pending.js / quiz.js / media.js / hooks.js : unchanged (5B-2 / 5B-3 e
 
 ---
 
-### 198. v1.73.2 / v1.73.3 (Phase 12A/12C) — driver-compliance reminder hygiene + quiet eval notifications (2026-11-08)
+### 198. v1.73.2 / v1.73.3 / v1.73.4 (Phase 12A/12C/12B) — driver-compliance reminder hygiene + quiet eval notifications + template button replies (2026-11-08)
 
 #### 198A. v1.73.2 (Phase 12A) — the ladder resets only on a real date change, one ladder per document, edge cases skipped
 
@@ -5646,4 +5647,31 @@ reads.js / pending.js / quiz.js / media.js / hooks.js : unchanged (5B-2 / 5B-3 e
 **E. Recurrence autopsy (rule 51).** Defect class *quality-signal noise delivered through an interruption channel* -> siblings audited: per-heal notice (already silent, v1.61.12), per-tick failure digest (already removed, §172 marked superseded), judge-error alert (removed here), daily call alert (deliberately kept, D4). Defect class *a digest section built from a count with no persisted evidence* -> errored runs now have audit evidence; the digest cap (10 lines + "…and N more") mirrors the v1.61.8 contract. Rule 13: no intent/flow/copy change — `flowKnowledge.js` / `sakaAi.js` untouched; `test_agent_training` stays green.
 
 **F. Rules shaped this work (rule 58).** 1/39/45 (consult-first), 10/11 (targeted suites), 12/33 (version + history + CHANGELOG + generated docs same commit), 13 (docs sync; prompts untouched), 21 (env-template parity: the retired knob left registry AND template together), 44 (audit-before-acting: the brief's "per-tick digests also fire" was already stale), 50 (no schema change), 51 (sibling sweep), 52 (before/after assertions), 58 (this report). No rule was edited or added.
+
+#### 198B. v1.73.4 (Phase 12B) — template button replies: defensive plumbing + interactive diagnostics
+
+**Operator request.** Ship Phase 12B without waiting for confirmation that the Meta templates actually carry quick-reply buttons: if a user tapped a button, handle it; if the payload is unrecognised, log the raw shape to `error_logs` so it can be debugged. Two decisions were locked before execution — **D1**: `remind_me` maps to `reminders` (the due LIST the template body promises), never `remind me` (which starts the set_reminder quiz); **A1**: the diagnostic must capture ONLY the `interactive`/`button` sub-objects — never the full `messageObj` (no message body, media ids, phone or timestamps in the captured shape).
+
+**Audit first (rule 44/52).** `button_reply` / `list_reply` returned ZERO hits in `src/` — the only interactive code was the v1.51.10 sender-side builder (`src/services/interactiveReply.js`, preview-only, never wired to the wire). A button tap therefore reached the processor as a message with no `text.body` and no media: `resolveMediaEnvelope` was inert, the voice-note lane could not fire, and an empty turn fell through to the generic help menu (the same deliberate degradation the v1.61.14 autopsy documented for sticker/reaction/location). `finalizeMediaOcr` (media.js L138) is the ONLY reader of `messageObj.text?.body`, so it was the single text-injection seam. **Meta shapes were verified live against the official Cloud API webhook reference (rule 54):** `interactive.type='button_reply'` → `button_reply {id,title}`; `interactive.type='list_reply'` → `list_reply {id,title,description}`; also `interactive.type='product'`; legacy button-template replies → `message.button {text,payload}`.
+
+**A. New leaf module `src/routes/whatsapp/interactive.js`.** Pure, stateless, services-only imports (`resolveQuickEditButtonId` from the v1.51.10 builder), never sends, never throws, exported through the barrel (section 189 leaf contract). `parseInteractiveReply(messageObj)` → `{ text, payload, intent } | null`:
+- `button_reply` → title as text, id as payload; `list_reply` → row title/id; legacy `button` → text/payload.
+- **`BUTTON_PAYLOAD_PHRASES`** (frozen, mirrored in `docs/TEMPLATES.md` §5): `remind_me`→`reminders`, `reminders`→`reminders`, `subscription`, `keep_all`→`keep all`, `help`. The registered phrase wins over the title (D1); an unregistered payload falls back to the button's own title, so Saka can always answer what was tapped.
+- Quick-edit ids resolve through the existing resolver → the live operator (`my entries`, `edit vehicle`, …) with `intent='quick_edit'`; locked ids (`*:vin`, `entry_date`) return null there and fall through to the title — **the VIN can never be produced or resolved (rule 8)**.
+- Unknown shapes (`product`, `nfm_reply`, missing reply object, empty id+title) → `null`; the processor diagnoses them instead of guessing.
+
+**B. Wiring — `messages.js`, three edits, media lane untouched.** `parseInteractiveReply(messageObj)` runs right after `senderPhone` and BEFORE `resolveMediaEnvelope` (a button tap is not media; voice notes and images never carry an interactive object, so neither lane can be hijacked). **A1 diagnostic:** when an `interactive`/`button` object exists but the parse returns null, ONE `logSystemError(supabaseClient, diag, '/webhook/whatsapp/interactive', { phone })` fires; the message `Unrecognized WhatsApp interactive reply (type=…)` is stable so `ERROR_ROLLUP_HOURS` (24 h) folds repeats into one row per shape/phone incident — never per turn — and `diag.stack` carries `JSON.stringify({ interactive, button }).slice(0, 4000)`: ONLY those two sub-objects, no body, no media ids, no phone, no timestamps (pinned by test). **Text injection:** the `finalizeMediaOcr` destructure now aliases `messageText: mediaTurnText`, then `const messageText = interactiveReply ? interactiveReply.text : mediaTurnText`; every downstream lane (admin gates, quiz, pending, reads, AI turn) sees exactly what the user would have typed.
+
+**C. Prompt files deliberately untouched (rule 13).** No new intent and no new flow: the resolved text reuses the LIVE grammar (`reminders`, `subscription`, `keep all`, `help`, the quick-edit operators), so `flowKnowledge.js`, `sakaAi.js` and the `conversationEngine.js` composer are unchanged and `test_agent_training` stays green. No env knob, no schema/DDL, no migration — `error_logs` already exists (rule 50).
+
+**D. Frames touched.** `src/routes/whatsapp/interactive.js` (new), `src/routes/whatsapp/messages.js` (import + parse/diagnostic block + text-injection seam), `src/routes/whatsapp/index.js` (barrel +1 export), `test_interactive_reply.js` (new stateless suite), `test_no_canned_replies.js` (11th scan file + 2 leaf-boundary pins), `test_ocr_flow.js` (+2 source pins), `scripts/health_audit.js` (stateless suite registered), `docs/TEMPLATES.md` (§5 registry), `package.json` (1.73.4), `landing/data/changelog.json` (+ stamped assets), `docs/` (generated), this file (§198B + version/history), `CHANGELOG.md`.
+
+**E. Suites run.** Baseline: test_ocr_flow (127), test_no_canned_replies (12 — 4 canned literals, ratchet held), test_conv_eval (236), test_doc_sync (30), test_agent_training (187), `npm run health` — green. After: **test_interactive_reply (new, 48 assertions — every fixture below)**, test_ocr_flow (129 — +2), test_no_canned_replies (14 — +2 leaf pins, ratchet still 4), test_conv_eval (236), test_doc_sync, test_agent_training (187), `npm run health` — green. Zero behavioural assertions edited.
+
+**F. Recurrence autopsy (rule 51).** Defect class *an unhandled inbound message type degrades silently* -> siblings audited: voice notes (deterministic lane since v1.61.15, untouched), sticker / reaction / location (still the generic menu — deliberately left, no data lane), `interactive.type='product'` / `nfm_reply` (now `null` + diagnostic, deliberately not guessed), legacy `button` (handled here). Defect class *diagnostics that could capture user content* -> the stack captures only the interactive/button sub-objects; the sender phone is passed only as rollup context; pinned by source-grep assertions in `test_interactive_reply.js`.
+
+**G. Rules shaped this work (rule 58).** 1/39/45 (consult-first), 8 (VIN + entry date locked), 10/11/12/33 (targeted suites; version + history + CHANGELOG + generated docs same commit), 13 (docs sync; prompts deliberately untouched — no new intent), 31 (copy unchanged), 44 (audit before acting), 50 (no schema change), 51 (sibling sweep + autopsy), 52 (deep audit + before/after assertions), 54 (Meta shapes verified live), 55 (evolved the existing resolver + `error_logs`), 56 (existing turns unaffected), 58 (this report). No rule was edited or added.
+
+**Operator confirmation pending.** Once the operator confirms the actual Meta button payloads on the WABA, update `BUTTON_PAYLOAD_PHRASES` and `docs/TEMPLATES.md` §5 together (the doc is the approval contract, the code mirrors it). Until then, unregistered payloads fall back to the button title.
+
 

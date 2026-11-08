@@ -40,7 +40,9 @@ const SOURCE_FILES = [
   // v1.73.1 — Phase 11: the legacy onboarding lane moved out of the processor
   // into its own leaf module; the ratchet follows the code so a literal can
   // never escape it (§191 F1 defect class).
-  'src/routes/whatsapp/onboarding.js'
+  'src/routes/whatsapp/onboarding.js',
+  // v1.73.4 — Phase 12B: the inbound interactive lane is a leaf too (section 198B).
+  'src/routes/whatsapp/interactive.js'
 ];
 const DIRECT_REPLY_PATTERNS = [
   /customReply\s*=\s*'([^'\n]{25,})'/g,
@@ -112,6 +114,15 @@ const onboardingLeaf = fs.readFileSync('src/routes/whatsapp/onboarding.js', 'utf
 assert(!onboardingLeaf.includes('sendWhatsAppReply(') && !/from\s+['"]\.\/messages\.js['"]/.test(onboardingLeaf), 'onboarding.js carries lane replies as data and never sends or imports messages.js');
 passed += 1;
 assert(onboardingLeaf.includes("import { checkIsConversationalFeedback } from './helpers.js';") && onboardingLeaf.includes("import { formatUsdInLocalCurrency } from '../../services/paystack.js';"), 'onboarding.js imports its helpers (pre-existing latent ReferenceErrors repaired)');
+passed += 1;
+
+// v1.73.4 — Phase 12B: the inbound interactive lane (section 198B) is a leaf that
+// returns data only: it never sends, never owns the processor reply vars and never
+// imports messages.js — the same boundary media.js carries (section 189).
+const interactiveLeaf = fs.readFileSync('src/routes/whatsapp/interactive.js', 'utf8');
+assert(!interactiveLeaf.includes('sendWhatsAppReply(') && !/(?:customReply|finalReply)\s*=/.test(interactiveLeaf), 'interactive.js returns data and never sends or owns the processor reply vars');
+passed += 1;
+assert(!/from\s+['"]\.\/messages\.js['"]/.test(interactiveLeaf) && /from\s+['"]\.\.\/\.\.\/services\//.test(interactiveLeaf), 'interactive.js imports services only and never the processor');
 passed += 1;
 
 console.log(`\n🎉 ${passed} no-canned-replies assertions passed — ${currentCount} canned literals remain (ratchet ≤ 4; every new literal must be composed).`);
