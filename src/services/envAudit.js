@@ -88,8 +88,12 @@ export const ENV_SECTIONS = Object.freeze([
       'META_TPL_FLEET_AUTO_AUDIT'
     ]
   },
-  { section: 'EMAIL', keys: ['RESEND_API_KEY', 'EMAIL_INBOUND_SECRET', 'EMAIL_INBOUND_SIGNING_SECRET', 'CUSTOMER_CARE_PHONE', 'CUSTOMER_CARE_NAME', 'CARE_THREAD_WINDOW_HOURS', 'CARE_TICKET_MAX_OPEN'] },
+  { section: 'EMAIL', keys: ['RESEND_API_KEY', 'EMAIL_INBOUND_SECRET', 'EMAIL_INBOUND_SIGNING_SECRET', 'CUSTOMER_CARE_PHONE', 'CUSTOMER_CARE_NAME', 'CARE_THREAD_WINDOW_HOURS', 'CARE_TICKET_MAX_OPEN',
+    // v1.80.0 — Phase 19: Amina (autonomous care agent). CARE_AI_ENABLED is OFF by default.
+    'CARE_AI_ENABLED', 'CARE_ESCALATION_EMAIL', 'CARE_AI_CONFIDENCE_FLOOR'] },
   { section: 'OBSERVABILITY', keys: ['ERROR_ROLLUP_HOURS'] },
+  // v1.80.0 — Phase 19: the /d/analytics tyre-wear assumptions (engine-owned).
+  { section: 'ANALYTICS', keys: ['TYRE_LIFESPAN_KM', 'TYRE_REPLACE_SOON_KM'] },
   {
     section: 'OCR & VISION',
     keys: [

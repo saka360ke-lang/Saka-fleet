@@ -1,6 +1,13 @@
 {
-  "latest": "1.79.0",
+  "latest": "1.80.0",
   "entries": [
+    {
+      "version": "1.80.0",
+      "date": "2026-11-08",
+      "title": "Support that investigates before it replies",
+      "preview": "Support emails are investigated by Amina before she answers - plus tyre wear and cost-per-km on your dashboard.",
+      "summary": "Two improvements this release. First, support email gets a real investigator: Amina reads your message, checks your account, your vehicles, any recent errors and what you were last doing in WhatsApp, then either answers you directly or hands your case to a human with everything she found already written down. She never discusses money, refunds or account changes on her own - those go straight to a person, as before. Second, the dashboard has a new Analytics page: it shows how much life is left on your tyres (based on the odometer you logged at your last tyre change) and how your cost per kilometre has moved over the last six months. Both pages are read-only, calculated by the same engine as your reports, and your records are unchanged."
+    },
     {
       "version": "1.79.0",
       "date": "2026-11-08",

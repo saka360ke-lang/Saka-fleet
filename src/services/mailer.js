@@ -581,6 +581,32 @@ export async function sendCareReplyEmail({ to, subject, text } = {}) {
     }
 }
 
+/**
+ * v1.80.0 (Phase 19) — Amina's escalation forward to the HUMAN care inbox.
+ * The subject carries the `[SFC-…]` routing tag, so the human's reply lands on
+ * the same ticket and teaches the learning loop. Never throws.
+ */
+export async function sendCareEscalationEmail({ to, subject, text } = {}) {
+    const target = String(to || process.env.CARE_ESCALATION_EMAIL || 'support@sakafleet.com').trim();
+    try {
+        const { data, error } = await getResendClient().emails.send({
+            from: 'Saka Care <support@reports.sakafleet.com>',
+            to: [target],
+            reply_to: 'support@reports.sakafleet.com',
+            subject: subject || 'Saka care escalation',
+            text: String(text || '')
+        });
+        if (error) {
+            console.error('[Resend Care Escalation Error]:', error);
+            return false;
+        }
+        return Boolean(data);
+    } catch (err) {
+        console.error('[Resend Care Escalation Exception]:', err.message);
+        return false;
+    }
+}
+
 export async function sendTrialExtensionReminderEmail({ targetEmail, ownerName, plateNumber, vin, couponCode, trialEndDate }) {
     try {
         const { data, error } = await getResendClient().emails.send({

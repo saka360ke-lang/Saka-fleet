@@ -2,6 +2,8 @@
 import assert from 'assert';
 import crypto from 'node:crypto';
 import { verifyResendSignature, parseInboundEmail, handleInboundEmail, htmlToPlainText, SUPPORT_INBOX } from './src/services/inboundEmail.js';
+import { normalizeThreadKey } from './src/services/careConsole.js';
+import { createMockSupabase } from './scripts/mockSupabase.js';
 
 let passed = 0;
 function check(cond, label) { assert.ok(cond, label); passed += 1; console.log('  ok ' + label); }
@@ -76,6 +78,83 @@ check(dbLong.__db.support_tickets.length === 1 && dbLong.__db.support_tickets[0]
 
 const ignored = await handleInboundEmail(mock(), { payload: { type: 'email.sent', data: {} }, headers: {}, rawBody: '{}', secret: null, skipFetch: true });
 check(ignored.ok === true && ignored.ignored === 'email.sent', 'non-inbound events are ignored');
+
+console.log('--- Amina hook (v1.80.0) ---');
+check(ok.ai && ok.ai.action === 'disabled', 'with CARE_AI_ENABLED off the hook is a no-op (the human path is byte-identical)');
+const aiMock = createMockSupabase({ support_tickets: [], support_ticket_messages: [], admin_audit_logs: [] });
+let aiTicketPayload = null;
+let aiNotified = 0;
+const aiHandled = await handleInboundEmail(aiMock.client, {
+  payload: JSON.parse(RAW),
+  headers: { 'svix-id': ID, 'svix-timestamp': TS, 'svix-signature': SIG },
+  rawBody: RAW,
+  secret: SECRET,
+  skipFetch: true,
+  notify: async () => { aiNotified += 1; return true; },
+  notifyPhone: '+254700000000',
+  processEmail: async (_client, payload) => { aiTicketPayload = payload; return { handled: true, action: 'resolved' }; }
+});
+check(aiHandled.ai && aiHandled.ai.action === 'resolved', 'the AI result rides the handler result');
+check(aiHandled.notified === false || aiNotified === 0, 'a resolved ticket does not double-ping the care worker');
+check(aiTicketPayload && aiTicketPayload.ticketId && aiTicketPayload.fromEmail === 'customer@example.com',
+  'Amina receives the ticket id + sender');
+check(aiTicketPayload && aiTicketPayload.category === 'vehicle' && aiTicketPayload.created === true,
+  'Amina receives the classification + created flag');
+
+console.log('--- human reply routing ([SFC-]) ---');
+const SFC_RAW = JSON.stringify({ type: 'email.received', data: { email_id: 'e20', from: 'support@sakafleet.com', to: ['support@reports.sakafleet.com'], subject: '[SFC-abc12345] Re: Help with my truck' } });
+const SFC_TS = String(Math.floor(Date.now() / 1000));
+const SFC_SIG = 'v1,' + crypto.createHmac('sha256', key).update('msg_sfc.' + SFC_TS + '.' + SFC_RAW).digest('base64');
+const sfcMock = createMockSupabase({ support_tickets: [] });
+let routedPayload = null;
+const internal = await handleInboundEmail(sfcMock.client, {
+  payload: JSON.parse(SFC_RAW),
+  headers: { 'svix-id': 'msg_sfc', 'svix-timestamp': SFC_TS, 'svix-signature': SFC_SIG },
+  rawBody: SFC_RAW,
+  secret: SECRET,
+  skipFetch: true,
+  routeInternalReply: async (_client, payload) => { routedPayload = payload; return { ok: true, ticketId: 't-sfc', learned: true }; }
+});
+check(internal.internalReply === true && internal.ticketId === 't-sfc' && internal.learned === true,
+  'a tagged human reply lands on the existing ticket and teaches Amina');
+check(routedPayload && routedPayload.subject.indexOf('[SFC-abc12345]') === 0, 'the router receives the tagged subject');
+check(sfcMock.db.support_tickets.length === 0, 'a human reply never opens a duplicate ticket');
+const untaggedInternal = await handleInboundEmail(sfcMock.client, {
+  payload: { type: 'email.received', data: { email_id: 'e21', from: 'support@sakafleet.com', to: ['support@reports.sakafleet.com'], subject: 'Just checking in' } },
+  headers: {}, rawBody: '{}', secret: null, skipFetch: true
+});
+check(untaggedInternal.ignored === 'internal-sender-no-tag', 'internal mail without a tag never becomes a ticket');
+
+console.log('--- reopen semantics (v1.80.0) ---');
+const reopenMock = createMockSupabase({
+  support_tickets: [{
+    id: 't-resolved',
+    whatsapp_number: 'customer@example.com',
+    sender_email: 'customer@example.com',
+    issue_category: 'vehicle',
+    message_body: 'Help with my truck',
+    subject: 'Help with my truck',
+    status: 'RESOLVED',
+    priority: 'medium',
+    source: 'email',
+    thread_key: normalizeThreadKey({ senderEmail: 'customer@example.com', subject: 'Help with my truck' }),
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  }],
+  support_ticket_messages: [],
+  admin_audit_logs: []
+});
+const reopened = await handleInboundEmail(reopenMock.client, {
+  payload: JSON.parse(RAW),
+  headers: { 'svix-id': ID, 'svix-timestamp': TS, 'svix-signature': SIG },
+  rawBody: RAW,
+  secret: SECRET,
+  skipFetch: true,
+  processEmail: async () => ({ handled: false, action: 'disabled' })
+});
+check(reopened.reopened === true && reopened.ticketId === 't-resolved', 'a follow-up on a RESOLVED ticket reopens the SAME ticket');
+check(reopenMock.db.support_tickets.length === 1, 'no duplicate ticket is created on the follow-up');
+check(String(reopenMock.db.support_tickets[0].status) === 'OPEN', 'the reopened ticket returns to OPEN for triage');
 
 console.log('');
 console.log(passed + ' inbound-email assertions passed.');

@@ -4,6 +4,7 @@ WhatsApp-native fleet operating system: vehicles, expenses, reminders, driver &
 vehicle compliance, reports, subscriptions and an autonomous Sentinel supervisor.
 
 **Release v1.33.0.** Recent highlights:
+- **Amina, the autonomous care agent** (v1.80.0): support email is investigated before it is answered — profile, vehicles, recent errors and recent chat — then resolved by email or escalated to `support@sakafleet.com` with a named investigation and an `[SFC-…]` tag; human replies teach her (`care_learnings`). `CARE_AI_ENABLED` is **off** by default. The dashboard adds `/d/analytics` (tyre wear + six-month cost-per-km) and the superadmin gets `/d/care`.
 - **Editable ledger** (v1.33.0): `my entries` → `edit 2` / `delete 2` (literal `DELETE`) → before/after diff, with a 30-minute `restore` replayed from the `admin_audit_logs` snapshot. VIN, plate and entry date stay locked.
 - **Legible reports** (v1.32.4): paint-scoped alpha, one y per KPI row, single-line ledger/table cells and a cover band that fills the page.
 - **Verified short links** (v1.32.4): `/r/__saka_probe__` + `verifyShortLinkRoute()` gate every branded link; unknown codes get an honest 404.

@@ -45,6 +45,7 @@ import { receiptStoragePaths, RECEIPTS_BUCKET } from './receipts.js';
 import { EXPENSE_TYPES } from './expenseCatalog.js';
 import { driverComplianceLabel } from './driverComplianceCatalog.js';
 import { daysUntilDue } from './maintenanceReminders.js';
+import { buildTyreWearRows, buildCostPerKmTrend, buildCostPerKmChart, getTyreLifespanKm } from './vehicleAnalytics.js';
 
 export const DASHBOARD_SESSIONS_TABLE = 'dashboard_sessions';
 export const DASHBOARD_LINK_TTL_MS = 15 * 60 * 1000; // 15 minutes
@@ -2061,6 +2062,143 @@ export async function buildAdminFleetView({ supabase, ownerId = null, now = new 
 }
 
 /* ------------------------------------------------------------------ */
+/* 10. Care queue (Phase 19) — the superadmin's escalated-ticket view  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Amina's hand-off queue for `/d/care`: every ESCALATED ticket with its full
+ * thread (the investigation log lives in direction='internal', channel='ai'
+ * messages), her best draft, plus the newest lessons the learning loop stored.
+ *
+ * Deliberately queried here rather than through `careConsole.js`: the console
+ * imports the Sentinel worker graph, and the dashboard must never do that
+ * (the Phase 15 superadminIdentity precedent). Read-only, never throws.
+ */
+export async function buildCareQueue({ supabase, limit = 50 } = {}) {
+  if (!supabase) return { ok: false };
+  try {
+    const max = Math.min(Math.max(Number(limit) || 50, 1), 100);
+    const { data, error } = await supabase
+      .from('support_tickets')
+      .select('*')
+      .in('status', ['ESCALATED', 'OPEN', 'IN_PROGRESS'])
+      .order('updated_at', { ascending: false })
+      .limit(max);
+    if (error) {
+      logWriteFailure(supabase, 'dashboard.buildCareQueue.tickets', error);
+      return { ok: false };
+    }
+    const tickets = data || [];
+    const ids = tickets.map((ticket) => ticket.id).filter(Boolean);
+    let messages = [];
+    if (ids.length) {
+      try {
+        const res = await supabase
+          .from('support_ticket_messages')
+          .select('*')
+          .in('ticket_id', ids)
+          .order('created_at', { ascending: true })
+          .limit(500);
+        messages = (res && res.data) || [];
+      } catch (err) {
+        logWriteFailure(supabase, 'dashboard.buildCareQueue.messages', err);
+      }
+    }
+    let learnings = [];
+    try {
+      const res = await supabase
+        .from('care_learnings')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(10);
+      learnings = (res && res.data) || [];
+    } catch (err) {
+      logWriteFailure(supabase, 'dashboard.buildCareQueue.learnings', err);
+    }
+    const withThreads = tickets.map((ticket) => {
+      const thread = messages.filter((message) => String(message.ticket_id) === String(ticket.id));
+      return {
+        ...ticket,
+        thread,
+        investigation: thread.filter((message) => message.direction === 'internal' && message.channel === 'ai')
+      };
+    });
+    const statusOf = (ticket) => String(ticket.status || 'OPEN').toUpperCase();
+    return {
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      tickets: withThreads,
+      escalated: withThreads.filter((ticket) => statusOf(ticket) === 'ESCALATED'),
+      counts: {
+        escalated: withThreads.filter((ticket) => statusOf(ticket) === 'ESCALATED').length,
+        open: withThreads.filter((ticket) => statusOf(ticket) === 'OPEN').length,
+        inProgress: withThreads.filter((ticket) => statusOf(ticket) === 'IN_PROGRESS').length
+      },
+      learnings
+    };
+  } catch (err) {
+    logWriteFailure(supabase, 'dashboard.buildCareQueue', err);
+    return { ok: false };
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* 11. Analytics page (Phase 19) — tyre wear + cost-per-km trend       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Page model for `/d/analytics`: the owner's live vehicles, their latest Tyres
+ * expense (odometer clock) and six monthly spend ÷ distance buckets. Reads the
+ * SAME `distanceInWindow` engine as every report (rule 55). Never throws.
+ */
+export async function buildAnalyticsPage({
+  supabase,
+  ownerId = null,
+  profile = null,
+  countryInfo = null,
+  now = new Date(),
+  loadVehicles = loadOwnerVehicles
+} = {}) {
+  if (!supabase || !ownerId) return { ok: false };
+  try {
+    const ctx = buildGlobalContext(countryInfo, profile);
+    const vehicles = await loadVehicles(supabase, ownerId);
+    const ids = (vehicles || []).map((vehicle) => vehicle.id).filter(Boolean);
+    let expenses = [];
+    if (ids.length) {
+      try {
+        const { data, error } = await supabase
+          .from('expense_logs')
+          .select('*')
+          .in('vehicle_id', ids)
+          .limit(2000);
+        if (!error) expenses = data || [];
+      } catch (err) {
+        logWriteFailure(supabase, 'dashboard.buildAnalyticsPage.expenses', err);
+      }
+    }
+    const tyres = buildTyreWearRows({ vehicles, expenses, unitSystem: ctx.unitSystem });
+    const trend = buildCostPerKmTrend({ expenses, now, months: 6, unitSystem: ctx.unitSystem });
+    return {
+      ok: true,
+      generatedAt: now.toISOString(),
+      currency: ctx.currency,
+      locale: ctx.locale,
+      timeZone: ctx.timeZone,
+      distanceUnit: ctx.labels.distance,
+      vehicleCount: ids.length,
+      tyreLifespan: getTyreLifespanKm(),
+      tyres,
+      trend,
+      chart: buildCostPerKmChart(trend)
+    };
+  } catch (err) {
+    logWriteFailure(supabase, 'dashboard.buildAnalyticsPage', err);
+    return { ok: false };
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* HTML shell (shared by every dashboard page, Phase 14 reuses it)     */
 /* ------------------------------------------------------------------ */
 
@@ -2109,6 +2247,18 @@ table.rec tr:last-child td { border-bottom:0; }
 .metrics { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:12px; }
 .metric-group { border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin:0; }
 .metric-group legend { color:var(--muted); font-size:12px; padding:0 6px; }
+/* Phase 19 — analytics progress bars + inline SVG trend + care blocks. */
+.progress { height:10px; background:#1E1E22; border-radius:999px; overflow:hidden; margin:10px 0 4px; }
+.progress span { display:block; height:100%; background:var(--accent); border-radius:999px; }
+.progress.low span { background:#F85149; }
+svg.trend { width:100%; height:auto; display:block; }
+svg.trend line.grid { stroke:#2A2A30; stroke-width:1; }
+svg.trend polyline.line { fill:none; stroke:var(--accent); stroke-width:2.5; stroke-linejoin:round; stroke-linecap:round; }
+svg.trend circle.dot { fill:var(--accent); }
+svg.trend text.xlabel { fill:var(--muted); font-size:11px; }
+blockquote { margin:10px 0; padding:10px 14px; border-left:3px solid var(--accent); background:#0F0F11; border-radius:6px; color:var(--ink); white-space:pre-wrap; }
+code { background:#0F0F11; border:1px solid var(--line); border-radius:6px; padding:1px 6px; font-size:12px; }
+ul.invest li { font-size:13px; color:var(--ink); }
 `;
 
 export function escapeHtml(value) {
@@ -2184,9 +2334,9 @@ function daysLabel(daysLeft) {
   return `in ${daysLeft} d`;
 }
 
-/** The seven destinations every signed-in page offers (Phase 14D adds two). */
+/** The eight destinations every signed-in page offers (Phase 19 adds Analytics). */
 function dashboardNav() {
-  return '<a href="/d">Overview</a> · <a href="/d/vehicles">Vehicles</a> · <a href="/d/records">Records</a> · <a href="/d/compliance">Compliance</a> · <a href="/d/reports">Reports</a> · <a href="/d/settings">Settings</a> · <a href="/d/logout">Log out</a>';
+  return '<a href="/d">Overview</a> · <a href="/d/vehicles">Vehicles</a> · <a href="/d/records">Records</a> · <a href="/d/compliance">Compliance</a> · <a href="/d/analytics">Analytics</a> · <a href="/d/reports">Reports</a> · <a href="/d/settings">Settings</a> · <a href="/d/logout">Log out</a>';
 }
 
 /** Active / paused / inactive — a chip, never a raw database enum. */
@@ -2689,7 +2839,7 @@ function driverNav() {
 }
 
 function adminNav() {
-  return '<a href="/d/admin">Owners</a> · <a href="/d/logout">Log out</a>';
+  return '<a href="/d/admin">Owners</a> · <a href="/d/care">Care</a> · <a href="/d/logout">Log out</a>';
 }
 
 function kpiStripHtml(kpis = []) {
@@ -2866,6 +3016,116 @@ ${vehicleTable}
   return renderPageShell(`${owner.name || 'Owner'} — fleet`, body, { headerRight: adminNav() });
 }
 
+/** `/d/care` (Phase 19) — Amina's escalated queue + investigation + lessons. */
+export function renderCareQueuePage({ data } = {}) {
+  if (!data?.ok) {
+    return renderErrorPage(503, 'The care queue could not be loaded just now. Please try again in a moment.').html;
+  }
+  const counts = data.counts || {};
+  const kpis = kpiStripHtml([
+    { label: 'Escalated', value: Number(counts.escalated || 0), hint: 'waiting for a human' },
+    { label: 'Open', value: Number(counts.open || 0), hint: 'not yet escalated' },
+    { label: 'In progress', value: Number(counts.inProgress || 0), hint: 'a human is on it' },
+    { label: 'Lessons', value: (data.learnings || []).length, hint: 'learned from human replies' }
+  ]);
+  const ticketCards = (data.escalated || []).map((ticket) => {
+    const investigation = (ticket.investigation || []).slice(-10);
+    const steps = investigation.length
+      ? `<ul class="plain invest">${investigation.map((message) => `<li>🔎 ${escapeHtml(String(message.message_body || '').slice(0, 300))}</li>`).join('')}</ul>`
+      : '<p class="muted">No investigation steps were recorded (the engine pre-gate sent this straight to a human).</p>';
+    const draft = ticket.ai_draft
+      ? `<h3>🤖 Amina\'s draft (not sent)</h3><blockquote>${escapeHtml(String(ticket.ai_draft).slice(0, 1200))}</blockquote>`
+      : '<p class="muted">No draft was prepared.</p>';
+    return `<div class="card">
+      <p><strong>${escapeHtml(ticket.subject || ticket.message_body || 'Support ticket')}</strong>
+      <span class="chip bad">ESCALATED</span><span class="chip">${escapeHtml(ticket.issue_category || 'other')}</span></p>
+      <p class="muted">${escapeHtml(ticket.sender_email || ticket.whatsapp_number || 'unknown sender')} · ticket ${escapeHtml(String(ticket.id || '').slice(0, 8))}</p>
+      <h3>🔎 Investigation log</h3>
+      ${steps}
+      ${draft}
+      <p class="muted" style="font-size:13px;">Reply from the console: <code>care reply ${escapeHtml(String(ticket.id || '').slice(0, 8))} &lt;text&gt;</code></p>
+    </div>`;
+  }).join('');
+  const escalations = (data.escalated || []).length
+    ? ticketCards
+    : '<div class="card"><p class="muted">No escalated tickets — Amina is handling the inbox. 🎉</p></div>';
+  const lessons = (data.learnings || []).length
+    ? `<div class="card"><ul class="plain">${(data.learnings || []).slice(0, 10).map((row) => `<li>💡 ${escapeHtml(String(row.lesson || ''))}${row.trigger_context ? `<span class="muted"> · ${escapeHtml(String(row.trigger_context).slice(0, 120))}</span>` : ''}</li>`).join('')}</ul></div>`
+    : '<div class="card"><p class="muted">No lessons learned yet — every human reply to an escalation teaches Amina one rule.</p></div>';
+  const body = `
+<h1>Care queue</h1>
+<p class="muted">Amina triages support email first; anything she cannot resolve lands here. Read-only · every visit is audited.</p>
+${kpis}
+<h2>Escalated tickets</h2>
+${escalations}
+<h2>Lessons learned</h2>
+${lessons}`;
+  return renderPageShell('Care queue', body, { headerRight: adminNav() });
+}
+
+/** `/d/analytics` (Phase 19) — tyre wear + six-month cost-per-km trend (SVG). */
+export function renderAnalyticsPage({ data } = {}) {
+  if (!data?.ok) {
+    return renderErrorPage(503, 'Your analytics could not be loaded just now. Please try again in a moment.').html;
+  }
+  const unit = data.distanceUnit || data.trend?.months?.[0]?.distanceUnit || 'km';
+  const locale = data.locale || 'en-US';
+  const kpis = kpiStripHtml([
+    { label: 'Spend (6 months)', value: formatMoney(data.trend?.totalSpend || 0, data.currency, locale), hint: 'all expense types' },
+    { label: `Distance (6 months)`, value: `${formatNumber(data.trend?.totalDistance || 0, locale)} ${unit}`, hint: 'logged odometer movement' },
+    { label: `Average cost / ${unit}`, value: data.trend?.averageCostPerKm !== null && data.trend?.averageCostPerKm !== undefined ? formatMoney(data.trend.averageCostPerKm, data.currency, locale) : '—', hint: 'spend ÷ distance' },
+    { label: `Peak cost / ${unit}`, value: data.trend?.peakCostPerKm !== null && data.trend?.peakCostPerKm !== undefined ? formatMoney(data.trend.peakCostPerKm, data.currency, locale) : '—', hint: 'highest month' }
+  ]);
+
+  const tyres = data.tyres || [];
+  const tyreCards = tyres.length
+    ? tyres.map((row) => {
+        if (row.status === 'no_data') {
+          return `<div class="card">
+            <p><strong>${escapeHtml(row.plate)}</strong>${row.makeModel ? `<span class="muted"> · ${escapeHtml(row.makeModel)}</span>` : ''} <span class="chip">No tyre data</span></p>
+            <p class="muted">Log a Tyres expense with the odometer reading in WhatsApp and the wear clock starts.</p>
+          </div>`;
+        }
+        const pct = Math.max(0, Math.min(100, Number(row.remainingPct) || 0));
+        const low = row.replaceSoon || pct <= 20;
+        return `<div class="card">
+          <p><strong>${escapeHtml(row.plate)}</strong>${row.makeModel ? `<span class="muted"> · ${escapeHtml(row.makeModel)}</span>` : ''}
+          ${row.replaceSoon ? '<span class="chip bad">Replace soon</span>' : '<span class="chip ok">OK</span>'}</p>
+          <p>${formatNumber(row.kmSince || 0, locale)} ${escapeHtml(unit)} since the last tyre change · ~${pct}% life remaining
+          <span class="muted">(assuming ${formatNumber(row.lifespan || 0, locale)} ${escapeHtml(unit)} lifespan)</span></p>
+          <div class="progress${low ? ' low' : ''}"><span style="width:${pct}%"></span></div>
+          ${row.note ? `<p class="muted" style="font-size:13px;">${escapeHtml(row.note)}</p>` : ''}
+        </div>`;
+      }).join('')
+    : '<div class="card"><p class="muted">No live vehicles yet — register your first vehicle in WhatsApp and its tyre clock appears here.</p></div>';
+
+  const chart = data.chart || { points: [], polyline: '', width: 640, height: 200, padding: 34, maxValue: 0 };
+  const months = data.trend?.months || [];
+  const gridY = [0, 1, 2, 3].map((i) => chart.padding + ((chart.height - chart.padding * 2) * i) / 3);
+  const svg = chart.points.length
+    ? `<div class="card"><svg class="trend" viewBox="0 0 ${chart.width} ${chart.height}" role="img" aria-label="Cost per ${escapeHtml(unit)} over the last six months">
+        ${gridY.map((y) => `<line x1="${chart.padding}" y1="${y}" x2="${chart.width - chart.padding}" y2="${y}" class="grid"/>`).join('')}
+        <polyline points="${chart.polyline}" class="line"/>
+        ${chart.points.map((point) => `<circle cx="${point.x}" cy="${point.y}" r="4" class="dot"><title>${escapeHtml(point.month.label)}: ${formatMoney(point.value, data.currency, locale)}/${escapeHtml(unit)} · spend ${formatMoney(point.month.spend, data.currency, locale)} · ${formatNumber(point.month.distance || 0, locale)} ${escapeHtml(unit)}</title></circle>`).join('')}
+        ${months.map((month, index) => {
+          const x = chart.padding + (months.length > 1 ? ((chart.width - chart.padding * 2) * index) / (months.length - 1) : 0);
+          return `<text x="${x}" y="${chart.height - 10}" text-anchor="middle" class="xlabel">${escapeHtml(month.label)}</text>`;
+        }).join('')}
+      </svg>
+      <p class="muted" style="font-size:13px;">${formatNumber(data.trend?.totalSpend || 0, locale) ? formatMoney(data.trend?.totalSpend || 0, data.currency, locale) : formatMoney(0, data.currency, locale)} spent over ${formatNumber(data.trend?.totalDistance || 0, locale)} ${escapeHtml(unit)} in six months. A month with no odometer movement shows no point.</p></div>`
+    : '<div class="card"><p class="muted">No distance recorded in the last six months yet — log two odometer readings in a month and the trend appears here.</p></div>';
+
+  const body = `
+<h1>Analytics</h1>
+<p class="muted">Tyre wear and cost per ${escapeHtml(unit)} · read-only, engine-calculated</p>
+${kpis}
+<h2>Tyre wear</h2>
+${tyreCards}
+<h2>Cost per ${escapeHtml(unit)} trend</h2>
+${svg}`;
+  return renderPageShell('Analytics', body, { headerRight: dashboardNav() });
+}
+
 export function renderLogoutPage() {
   const body = `
 <h1>You're logged out</h1>
@@ -2930,6 +3190,11 @@ export default {
   buildOverviewCard,
   buildVehiclesIndex,
   buildVehiclePage,
+  // v1.80.0 (Phase 19) — Amina's care queue + the owner analytics page.
+  buildCareQueue,
+  renderCareQueuePage,
+  buildAnalyticsPage,
+  renderAnalyticsPage,
   parseRecordsFilters,
   cleanRecordsTerm,
   nairobiDateOf,

@@ -38,6 +38,18 @@ This guide is the whole job. If a command is not in here, it is not yours to run
 - **Email:** a customer writes to **support@reports.sakafleet.com** -> the signature is verified, the message is classified (bug / billing / feature / driver / vehicle / logging / other + priority) and threaded into their open ticket. Replies to the same email thread join the same ticket (`CARE_THREAD_WINDOW_HOURS`, default 7 days).
 - Every new or updated ticket pings you on WhatsApp with the sender, subject, category and priority.
 
+## 3b. Amina — the autonomous care agent (v1.80.0)
+
+When `CARE_AI_ENABLED=on`, **Amina** triages every inbound email BEFORE it reaches you:
+
+- She **investigates**: the customer's profile and vehicles, the last errors that mention them, the last WhatsApp messages they exchanged with Saka and the local billing mirror (up to 3 tool rounds). She never guesses when a tool can tell her.
+- She **answers** only when her confidence clears `CARE_AI_CONFIDENCE_FLOOR` (default 0.7) — the reply goes out by email and the ticket becomes **RESOLVED**.
+- She **escalates** everything else — and money, refunds, duplicate charges, Paystack disputes, legal/account actions and high-priority mail go straight to you with **zero** AI time. The forward arrives at `CARE_ESCALATION_EMAIL` (default **support@sakafleet.com**) with a subject like `[SFC-ab12cd34] Re: …` and a body that says exactly what she checked and where she is stuck, plus her unsent draft.
+- **Reply to that email and KEEP the `[SFC-…]` tag in the subject.** Your answer lands on the same ticket as an internal note, puts it IN_PROGRESS, assigns it to you, and teaches Amina one reusable rule (the newest 10 rules are read before her next investigation). Personal data, prices and refund promises are stripped/refused from lessons.
+- **Ticket statuses:** 🔵 OPEN · 🟡 IN_PROGRESS · 🚨 **ESCALATED** (yours — Amina never re-answers it) · 🟢 RESOLVED · ⚪ CLOSED. `care inbox escalated`, `care read <id>` (shows Amina's draft) and the superadmin page **`/d/care`** (investigation log + drafts + lessons) are your lanes.
+- A customer follow-up on a RESOLVED ticket **reopens the same ticket** — it never becomes a duplicate.
+- Amina can never change a ledger entry, a VIN, a plan, a price or a refund. If an escalation needs money or data, it stays yours.
+
 ## 4. Your shift routine
 
 1. `care stats` - get your bearings.

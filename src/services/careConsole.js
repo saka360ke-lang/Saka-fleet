@@ -26,6 +26,9 @@ export const CARE_AUDIT_TABLE = 'admin_audit_logs';
 export const CARE_STATUS = Object.freeze({
   OPEN: 'OPEN',
   IN_PROGRESS: 'IN_PROGRESS',
+  // v1.80.0 (Phase 19) — Amina escalates to a human; the ticket keeps its own
+  // status so the console and /d/care can filter it precisely.
+  ESCALATED: 'ESCALATED',
   RESOLVED: 'RESOLVED',
   CLOSED: 'CLOSED'
 });
@@ -141,6 +144,11 @@ export async function appendTicketMessage(supabase, { ticketId, direction = 'in'
 }
 
 /** The open ticket for this email thread inside the window, or null. */
+/**
+ * The ticket for this email thread inside the window, or null. v1.80.0 — a
+ * RESOLVED/CLOSED ticket is found too, so a follow-up REOPENS it instead of
+ * opening a duplicate; an ESCALATED ticket is found so the human keeps it.
+ */
 export async function findOpenTicketByThread(supabase, threadKey, windowHours = CARE_THREAD_WINDOW_HOURS) {
   if (!supabase || !threadKey) return null;
   try {
@@ -149,7 +157,7 @@ export async function findOpenTicketByThread(supabase, threadKey, windowHours = 
       .from(CARE_TICKETS_TABLE)
       .select('*')
       .eq('thread_key', threadKey)
-      .in('status', [CARE_STATUS.OPEN, CARE_STATUS.IN_PROGRESS])
+      .in('status', [CARE_STATUS.OPEN, CARE_STATUS.IN_PROGRESS, CARE_STATUS.ESCALATED, CARE_STATUS.RESOLVED, CARE_STATUS.CLOSED])
       .gte('updated_at', cutoff)
       .order('updated_at', { ascending: false })
       .limit(1);
@@ -174,13 +182,22 @@ export async function openOrAppendEmailTicket(supabase, { fromEmail, subject, te
   const existing = await findOpenTicketByThread(supabase, threadKey);
   if (existing) {
     await appendTicketMessage(supabase, { ticketId: existing.id, direction: 'in', channel: 'email', body: bodyText });
+    // v1.80.0 — reopen semantics + human ownership:
+    //  · RESOLVED/CLOSED follow-ups reopen the SAME ticket (never a duplicate);
+    //  · an ESCALATED ticket stays escalated — Amina must not answer for a human.
+    const previousStatus = String(existing.status || CARE_STATUS.OPEN).toUpperCase();
+    const reopened = previousStatus === CARE_STATUS.RESOLVED || previousStatus === CARE_STATUS.CLOSED;
+    const humanOwned = previousStatus === CARE_STATUS.ESCALATED;
     const bump = { updated_at: nowIso() };
+    if (reopened) bump.status = CARE_STATUS.OPEN;
     if (priority === CARE_PRIORITY.HIGH && existing.priority !== CARE_PRIORITY.HIGH) bump.priority = CARE_PRIORITY.HIGH;
     try { await supabase.from(CARE_TICKETS_TABLE).update(bump).eq('id', existing.id); } catch (bumpErr) { logWriteFailure(supabase, 'careConsole.priorityBump', bumpErr); }
     return {
       ok: true,
       ticketId: existing.id,
       created: false,
+      reopened,
+      humanOwned,
       category: existing.issue_category || category,
       priority: bump.priority || existing.priority || priority,
       threadKey
@@ -262,8 +279,9 @@ export async function listCareTickets(supabase, { filter = 'open', limit = 10 } 
   const max = Math.min(Math.max(Number(limit) || 10, 1), 20);
   try {
     let query = supabase.from(CARE_TICKETS_TABLE).select('*');
-    if (filter === 'high') query = query.eq('priority', CARE_PRIORITY.HIGH).in('status', [CARE_STATUS.OPEN, CARE_STATUS.IN_PROGRESS]);
-    else if (filter === 'open') query = query.in('status', [CARE_STATUS.OPEN, CARE_STATUS.IN_PROGRESS]);
+    if (filter === 'high') query = query.eq('priority', CARE_PRIORITY.HIGH).in('status', [CARE_STATUS.OPEN, CARE_STATUS.IN_PROGRESS, CARE_STATUS.ESCALATED]);
+    else if (filter === 'escalated') query = query.eq('status', CARE_STATUS.ESCALATED);
+    else if (filter === 'open') query = query.in('status', [CARE_STATUS.OPEN, CARE_STATUS.IN_PROGRESS, CARE_STATUS.ESCALATED]);
     query = query.order('updated_at', { ascending: false }).limit(max);
     const { data, error } = await query;
     if (error) throw new Error(error.message);
@@ -278,10 +296,10 @@ export async function listCareTickets(supabase, { filter = 'open', limit = 10 } 
   }
 }
 
-/** Whitelisted ticket updates only (status, priority, assignment, note). */
+/** Whitelisted ticket updates only (status, priority, assignment, note, AI draft). */
 export async function updateCareTicket(supabase, id, patch = {}) {
   const allowed = {};
-  for (const key of ['status', 'priority', 'assigned_to', 'internal_note', 'updated_at']) {
+  for (const key of ['status', 'priority', 'assigned_to', 'internal_note', 'ai_draft', 'updated_at']) {
     if (patch[key] !== undefined) allowed[key] = patch[key];
   }
   if (!Object.keys(allowed).length) return { ok: false, error: 'nothing-to-update' };
@@ -299,11 +317,12 @@ export async function updateCareTicket(supabase, id, patch = {}) {
 /** Deterministic inbox counters (zero tokens). */
 export async function careStats(supabase) {
   const rows = await listCareTickets(supabase, { filter: 'all', limit: Math.min(CARE_TICKET_MAX_OPEN, 200) });
-  const out = { total: rows.length, open: 0, inProgress: 0, high: 0, resolved: 0, closed: 0 };
+  const out = { total: rows.length, open: 0, inProgress: 0, escalated: 0, high: 0, resolved: 0, closed: 0 };
   for (const row of rows) {
     const status = String(row.status || CARE_STATUS.OPEN).toUpperCase();
     if (status === CARE_STATUS.OPEN) out.open += 1;
     else if (status === CARE_STATUS.IN_PROGRESS) out.inProgress += 1;
+    else if (status === CARE_STATUS.ESCALATED) out.escalated += 1;
     else if (status === CARE_STATUS.RESOLVED) out.resolved += 1;
     else if (status === CARE_STATUS.CLOSED) out.closed += 1;
     if (String(row.priority || '').toLowerCase() === CARE_PRIORITY.HIGH) out.high += 1;
@@ -311,7 +330,7 @@ export async function careStats(supabase) {
   return out;
 }
 
-const STATUS_CHIP = { OPEN: '🔵', IN_PROGRESS: '🟡', RESOLVED: '🟢', CLOSED: '⚪' };
+const STATUS_CHIP = { OPEN: '🔵', IN_PROGRESS: '🟡', ESCALATED: '🚨', RESOLVED: '🟢', CLOSED: '⚪' };
 const PRIORITY_CHIP = { high: '❗', medium: '', low: '' };
 
 function statusChip(status) {
@@ -346,6 +365,7 @@ export function formatCareHelp() {
     '*Inbox*\n' +
     '• `care inbox` — open tickets\n' +
     '• `care inbox high` — high priority only\n' +
+    '• `care inbox escalated` — Amina escalated these to you\n' +
     '• `care inbox all` — everything\n\n' +
     '*One ticket*\n' +
     '• `care read <id>`\n' +
@@ -387,7 +407,9 @@ export function formatCareTicket(ticket) {
     return who + ' (' + (m.channel || 'email') + ', ' + ageOf(m.created_at) + '): ' + clip(m.message_body, 260);
   });
   const note = ticket.internal_note ? '\n\n📝 *Note:* ' + clip(ticket.internal_note, 300) : '';
-  return '*Ticket `' + shortId(ticket.id) + '`*\n' + header + '\n' + meta + note +
+  // v1.80.0 — the human sees Amina's best draft even when she escalated.
+  const draft = ticket.ai_draft ? '\n\n🤖 *Amina draft:* ' + clip(ticket.ai_draft, 400) : '';
+  return '*Ticket `' + shortId(ticket.id) + '`*\n' + header + '\n' + meta + note + draft +
     '\n\n*Thread*\n' + (thread.length ? thread.join('\n') : '_No messages yet._') +
     '\n\n_care reply ' + shortId(ticket.id) + ' <text> · care escalate ' + shortId(ticket.id) + ' · care close ' + shortId(ticket.id) + '_';
 }
@@ -396,6 +418,7 @@ export function formatCareStats(stats = {}) {
   return '🩺 *Care stats*\n\n' +
     '🔵 open: ' + (stats.open || 0) + '\n' +
     '🟡 in progress: ' + (stats.inProgress || 0) + '\n' +
+    '🚨 escalated: ' + (stats.escalated || 0) + '\n' +
     '❗ high priority: ' + (stats.high || 0) + '\n' +
     '🟢 resolved: ' + (stats.resolved || 0) + '\n' +
     '⚪ closed: ' + (stats.closed || 0) + '\n\n_' + (stats.total || 0) + ' tickets in the recent window._';
@@ -424,7 +447,7 @@ export async function handleCareCommand(supabase, { phone, text, sendWhatsApp = 
     case 'help':
       return { reply: formatCareHelp() };
     case 'inbox': {
-      const filter = /^high$/i.test(arg) ? 'high' : (/^all$/i.test(arg) ? 'all' : 'open');
+      const filter = /^high$/i.test(arg) ? 'high' : (/^all$/i.test(arg) ? 'all' : (/^escalated$/i.test(arg) ? 'escalated' : 'open'));
       return { reply: formatCareInbox(await listCareTickets(supabase, { filter, limit: 10 }), filter) };
     }
     case 'stats':

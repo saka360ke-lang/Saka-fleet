@@ -137,6 +137,11 @@ const STATLESS_SUITES = [
   'test_interactive_reply.js',
   // v1.79.0 — Phase 18: voice notes → Speech-to-Text (payload, languages, guards).
   'test_stt_service.js',
+  // v1.80.0 — Phase 19: Amina (pre-gate, investigation loop, resolve/escalate)
+  // + her learning loop + the analytics math (tyre wear, cost per km).
+  'test_care_ai.js',
+  'test_care_learning.js',
+  'test_vehicle_analytics.js',
   // v1.74.0 — Phase 13 dashboard foundation: flag gate, hashed tokens, TTLs,
   // attempts cap, single-use links, 30-day sessions, cookie contract.
   'test_dashboard.js',

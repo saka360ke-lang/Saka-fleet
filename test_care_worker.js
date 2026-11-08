@@ -181,6 +181,43 @@ const actions = replyMock.__db.admin_audit_logs.map((a) => a.action);
 check(actions.indexOf('CARE_TICKET_REPLIED') !== -1, 'replies are audited');
 check(replyMock.__db.admin_audit_logs.length > 0 && replyMock.__db.admin_audit_logs.every((a) => a.admin_phone), 'every audit row names the actor');
 
+console.log('--- Amina escalation lifecycle (v1.80.0) ---');
+const aminaEscMock = makeMock({
+  tickets: [
+    { id: T1, whatsapp_number: 'esc@example.com', sender_email: 'esc@example.com', issue_category: 'logging', message_body: 'Fuel log stuck', subject: 'Fuel log stuck', status: 'ESCALATED', priority: 'high', source: 'email', thread_key: 'k-esc', assigned_to: null, internal_note: 'Amina investigated (2 steps) and escalated: pre-gate: billing', ai_draft: 'Sorry about that — we are checking.', created_at: iso(), updated_at: iso() }
+  ],
+  messages: [],
+  audits: []
+});
+const aminaEscInbox = await handleCareCommand(aminaEscMock, { phone: worker, text: 'care inbox' });
+check(aminaEscInbox.reply.indexOf('Fuel log stuck') !== -1, 'the default inbox includes ESCALATED tickets (never silently dropped)');
+const aminaEscFilter = await handleCareCommand(aminaEscMock, { phone: worker, text: 'care inbox escalated' });
+check(aminaEscFilter.reply.indexOf('Fuel log stuck') !== -1 && aminaEscFilter.reply.indexOf('Care inbox') !== -1, 'care inbox escalated filters precisely');
+const aminaEscStats = await handleCareCommand(aminaEscMock, { phone: worker, text: 'care stats' });
+check(aminaEscStats.reply.indexOf('escalated: 1') !== -1, 'care stats counts escalated tickets');
+const aminaEscRead = await handleCareCommand(aminaEscMock, { phone: worker, text: 'care read 11111111' });
+check(aminaEscRead.reply.indexOf('Amina draft') !== -1, 'care read shows the draft Amina left behind');
+check(aminaEscRead.reply.indexOf('ESCALATED') !== -1, 'care read names the escalated status');
+
+console.log('--- reopen semantics + human ownership (v1.80.0) ---');
+const reopenResolvedMock = makeMock({
+  tickets: [
+    { id: T1, whatsapp_number: 'back@example.com', sender_email: 'back@example.com', issue_category: 'logging', message_body: 'Fuel log', subject: 'Fuel log', status: 'RESOLVED', priority: 'medium', source: 'email', thread_key: normalizeThreadKey({ senderEmail: 'back@example.com', subject: 'Fuel log' }), created_at: iso(), updated_at: iso() }
+  ]
+});
+const reopenFollowUp = await openOrAppendEmailTicket(reopenResolvedMock, { fromEmail: 'back@example.com', subject: 'Re: Fuel log', text: 'It happened again today' });
+check(reopenFollowUp.created === false && reopenFollowUp.reopened === true && reopenFollowUp.ticketId === T1, 'a follow-up reopens the RESOLVED ticket (no duplicate)');
+check(reopenResolvedMock.__db.support_tickets[0].status === 'OPEN', 'the reopened ticket is OPEN again');
+check(reopenResolvedMock.__db.support_tickets.length === 1 && reopenResolvedMock.__db.support_ticket_messages.length === 1, 'one ticket, one new inbound message');
+const humanOwnedMock = makeMock({
+  tickets: [
+    { id: T2, whatsapp_number: 'human@example.com', sender_email: 'human@example.com', issue_category: 'billing', message_body: 'Charged twice', subject: 'Charged twice', status: 'ESCALATED', priority: 'high', source: 'email', thread_key: normalizeThreadKey({ senderEmail: 'human@example.com', subject: 'Charged twice' }), created_at: iso(), updated_at: iso() }
+  ]
+});
+const humanOwnedFollowUp = await openOrAppendEmailTicket(humanOwnedMock, { fromEmail: 'human@example.com', subject: 'Re: Charged twice', text: 'Any update?' });
+check(humanOwnedFollowUp.humanOwned === true && humanOwnedFollowUp.reopened === false, 'a follow-up on an ESCALATED ticket stays human-owned');
+check(humanOwnedMock.__db.support_tickets[0].status === 'ESCALATED', 'Amina never takes back an escalated ticket');
+
 console.log('');
 console.log((fail === 0 ? 'ALL CARE CONSOLE TESTS PASSED' : 'CARE CONSOLE TESTS FAILED') + ' (' + pass + ' assertions).');
 process.exit(fail === 0 ? 0 : 1);

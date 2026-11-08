@@ -302,6 +302,13 @@ export const AI_PURPOSES = Object.freeze({
   // v1.61.0 — global synthetic scenario generator (manual CLI; regional
   // shorthand/currency variety needs the reasoning tier's latitude).
   conversation_synth: { tier: AI_TIERS.REASONING, jsonMode: true, maxTokens: 2000, temperature: 0.75 },
+  // v1.80.0 (Phase 19) — Amina, the autonomous care agent. Background system
+  // purposes (the inbound-email webhook triggers them), so they stay on the
+  // DeepSeek leg exactly like sentinel_diagnosis (rules 20-22). The model only
+  // PICKS a tool or DRAFTS text; every fact and every write is engine-owned.
+  care_triage: { tier: AI_TIERS.ROUTER, jsonMode: true, maxTokens: 700, temperature: 0.2 },
+  care_investigation: { tier: AI_TIERS.ROUTER, jsonMode: true, maxTokens: 700, temperature: 0.2 },
+  care_learning: { tier: AI_TIERS.ROUTER, jsonMode: true, maxTokens: 500, temperature: 0.1 },
   default: { tier: AI_TIERS.ROUTER }
 });
 

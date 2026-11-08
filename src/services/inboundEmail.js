@@ -4,6 +4,8 @@ import crypto from 'node:crypto';
 /** v1.58.17 - the one inbox that opens care tickets (Resend inbound domain). */
 export const SUPPORT_INBOX = 'support@reports.sakafleet.com';
 import { openOrAppendEmailTicket } from './careConsole.js';
+import { processCareEmail } from './careAi.js';
+import { routeCareInternalReply, isCareInternalSender, extractCareTicketTag } from './careLearning.js';
 import { logWriteFailure } from './systemErrors.js';
 
 function headerOf(headers, name) {
@@ -90,7 +92,7 @@ export function htmlToPlainText(html = '') {
     .slice(0, 4000);
 }
 
-export async function handleInboundEmail(supabase, { payload = {}, headers = {}, rawBody = '', secret = null, notify = null, notifyPhone = null, skipFetch = false } = {}) {
+export async function handleInboundEmail(supabase, { payload = {}, headers = {}, rawBody = '', secret = null, notify = null, notifyPhone = null, skipFetch = false, processEmail = null, routeInternalReply = null } = {}) {
   const verify = verifyResendSignature({ headers, rawBody, secret });
   if (!verify.ok) return { ok: false, rejected: true, reason: verify.reason };
   const email = parseInboundEmail(payload);
@@ -117,10 +119,32 @@ export async function handleInboundEmail(supabase, { payload = {}, headers = {},
   const bodyText = (body && body.text && String(body.text).trim())
     ? String(body.text).trim()
     : (body && body.html ? htmlToPlainText(body.html) : '');
+  // v1.80.0 (Phase 19) — a HUMAN reply to an escalation carries `[SFC-<id>]` in
+  // its subject and comes from the sakafleet.com care inbox. It lands on the
+  // SAME ticket as an internal message + a lesson; it never opens a ticket and
+  // never wakes Amina (rules 51 duplicate-ticket sweep).
+  if (isCareInternalSender(email.fromEmail)) {
+    const tag = extractCareTicketTag(email.subject);
+    if (!tag) return { ok: true, ignored: 'internal-sender-no-tag', fromEmail: email.fromEmail };
+    const router = typeof routeInternalReply === 'function' ? routeInternalReply : routeCareInternalReply;
+    const routed = await router(supabase, { subject: email.subject, text: bodyText || email.subject, fromEmail: email.fromEmail })
+      .catch((err) => { logWriteFailure(supabase, 'inboundEmail.routeInternalReply', err); return null; });
+    return {
+      ok: Boolean(routed && routed.ok),
+      internalReply: true,
+      tag,
+      ticketId: routed ? routed.ticketId : null,
+      learned: Boolean(routed && routed.learned),
+      email,
+      textBody: bodyText || null
+    };
+  }
   let ticketId = null;
   let careCategory = null;
   let carePriority = null;
   let careCreated = null;
+  let careReopened = false;
+  let careHumanOwned = false;
   if (supabase) {
     // v1.58.18 - classify + thread every email into a tracked care ticket.
     const outcome = await openOrAppendEmailTicket(supabase, {
@@ -133,6 +157,8 @@ export async function handleInboundEmail(supabase, { payload = {}, headers = {},
       careCategory = outcome.category || null;
       carePriority = outcome.priority || null;
       careCreated = outcome.created;
+      careReopened = Boolean(outcome.reopened);
+      careHumanOwned = Boolean(outcome.humanOwned);
     }
     // Never lose the failure silently: a body-less ticket says why.
     if (ticketId && !bodyText) {
@@ -143,15 +169,40 @@ export async function handleInboundEmail(supabase, { payload = {}, headers = {},
       } catch (noteErr) { logWriteFailure(supabase, 'inboundEmail.internalNote', noteErr); }
     }
   }
+  // v1.80.0 (Phase 19) — Amina triages the ticket. Injectable for the suites;
+  // the default module is a no-op until CARE_AI_ENABLED=on (rule 46 pattern).
+  let ai = null;
+  if (supabase && ticketId) {
+    const runner = typeof processEmail === 'function' ? processEmail : processCareEmail;
+    try {
+      ai = await runner(supabase, {
+        ticketId,
+        fromEmail: email.fromEmail,
+        subject: email.subject,
+        text: bodyText || email.subject,
+        created: careCreated,
+        reopened: careReopened,
+        humanOwned: careHumanOwned,
+        category: careCategory,
+        priority: carePriority
+      });
+    } catch (err) {
+      logWriteFailure(supabase, 'inboundEmail.processCareEmail', err);
+      ai = { handled: false, action: 'error' };
+    }
+  }
   let notified = false;
-  if (typeof notify === 'function' && notifyPhone) {
+  // A resolved or escalated ticket already reached the right human (Amina's
+  // reply / the superadmin alert), so the generic care ping is not repeated.
+  const aiHandled = Boolean(ai && (ai.action === 'resolved' || ai.action === 'escalated'));
+  if (!aiHandled && typeof notify === 'function' && notifyPhone) {
     const snippet = String(bodyText || '').slice(0, 900);
     const label = careCreated === false ? ' (update)' : '';
     const meta = [careCategory, carePriority].filter(Boolean).join(' · ');
     const text = '[Support email' + label + ']\n\nFrom: ' + email.fromEmail + '\nSubject: ' + email.subject + (meta ? '\n' + meta : '') + (snippet ? '\n\n' + snippet : '') + '\n\n_Tend it: care reply <id> — or reply from support@reports.sakafleet.com._';
     try { notified = (await notify(notifyPhone, text)) !== false; } catch { notified = false; }
   }
-  return { ok: true, email, textBody: bodyText || null, ticketId, notified, verified: Boolean(verify.verified), category: careCategory, priority: carePriority, threadUpdate: careCreated === false };
+  return { ok: true, email, textBody: bodyText || null, ticketId, notified, ai, verified: Boolean(verify.verified), category: careCategory, priority: carePriority, threadUpdate: careCreated === false, reopened: careReopened, humanOwned: careHumanOwned };
 }
 
 export default { verifyResendSignature, parseInboundEmail, fetchInboundEmailBody, handleInboundEmail };/** List recent inbound support emails (stored as support_tickets category=email). */

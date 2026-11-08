@@ -70,7 +70,12 @@ import {
   renderDriverDaybookPage,
   renderDriverSelfCompliancePage,
   renderAdminOwnersPage,
-  renderAdminFleetPage
+  renderAdminFleetPage,
+  // v1.80.0 (Phase 19) — Amina's care queue + the analytics page.
+  buildCareQueue,
+  renderCareQueuePage,
+  buildAnalyticsPage,
+  renderAnalyticsPage
 } from '../services/dashboard.js';
 import { logAdminAudit } from '../services/superadmin.js';
 import { detectCountryFromPhone, buildGlobalContext } from '../services/globalization.js';
@@ -824,6 +829,52 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
         return sendHtml(reply, fleet.ok ? 200 : 503, renderAdminFleetPage({ fleet }));
       } catch (err) {
         await logSystemError(supabase, err, '/d/admin/owners/:id');
+        const page = renderErrorPage(500, 'Please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    /* -------------------------------------------------------------- */
+    /* GET /d/analytics — tyre wear + cost-per-km trend (Phase 19)     */
+    /* -------------------------------------------------------------- */
+    scope.get('/d/analytics', async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      try {
+        const session = await requireRoleSession(request, reply, supabase, 'owner');
+        if (!session) return reply;
+        const profile = await loadDashboardProfile(supabase, session.ownerId);
+        const data = await buildAnalyticsPage({
+          supabase,
+          ownerId: session.ownerId,
+          profile,
+          countryInfo: countryForProfile(profile)
+        });
+        return sendHtml(reply, data.ok ? 200 : 503, renderAnalyticsPage({ data }));
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/analytics');
+        const page = renderErrorPage(500, 'Please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    /* -------------------------------------------------------------- */
+    /* GET /d/care — Amina's escalated queue (Phase 19, admin, audited) */
+    /* -------------------------------------------------------------- */
+    scope.get('/d/care', async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      try {
+        const session = await requireRoleSession(request, reply, supabase, 'admin');
+        if (!session) return reply;
+        const profile = await loadDashboardProfile(supabase, session.ownerId);
+        const data = await buildCareQueue({ supabase });
+        // Rule 51(iii) — EVERY admin view is audited (fail-soft inside).
+        await logAdminAudit(supabase, profile?.phone_number || session.email || 'DASHBOARD_ADMIN', 'ADMIN_DASHBOARD_VIEW', {
+          page: 'care',
+          escalated: data.ok ? data.counts?.escalated ?? null : null
+        });
+        return sendHtml(reply, data.ok ? 200 : 503, renderCareQueuePage({ data }));
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/care');
         const page = renderErrorPage(500, 'Please try again in a moment.');
         return sendHtml(reply, page.status, page.html);
       }

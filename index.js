@@ -1259,8 +1259,14 @@ fastify.post('/webhook/email/inbound', async (request, reply) => {
     .catch((err) => ({ ok: false, reason: err.message }));
   if (result.rejected) return reply.status(401).send({ success: false, result });
   const email = result.email || {};
-  const relay = await handleInboundSupportEmail(supabase, { fromEmail: email.fromEmail, subject: email.subject, text: result.textBody || email.subject || null, sendWhatsApp: sendMetaWhatsAppMessage })
-    .catch(() => ({ ok: false }));
+  // v1.80.0 (Phase 19) — when Amina handled the mail (resolved or escalated) or
+  // it was a human's internal reply, the legacy self-relay is skipped: the
+  // customer already got the right answer, and nobody receives their own text.
+  const handledByCareTeam = Boolean(result.ai && result.ai.handled) || result.internalReply === true;
+  const relay = handledByCareTeam
+    ? { ok: true, skipped: result.internalReply ? 'internal-reply' : 'ai-handled' }
+    : await handleInboundSupportEmail(supabase, { fromEmail: email.fromEmail, subject: email.subject, text: result.textBody || email.subject || null, sendWhatsApp: sendMetaWhatsAppMessage })
+      .catch(() => ({ ok: false }));
   return { success: true, result, relay };
 });
 

@@ -64,7 +64,7 @@ function toNumber(value) {
   return Number.isFinite(num) ? num : 0;
 }
 
-function monthStartMs(now) {
+export function monthStartMs(now) {
   return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
 }
 
@@ -271,13 +271,16 @@ function collectExpiryItems({ vehicles, reminders }, now, ctx) {
 /* 1. Fleet Status Report                                              */
 /* ------------------------------------------------------------------ */
 
-/** Distance covered this month, derived from odometer readings on expense logs. */
-function distanceThisMonth(expenses, now) {
-  const start = monthStartMs(now);
+/**
+ * Distance covered in a window, derived from odometer readings on expense logs.
+ * v1.80.0 — exported as `distanceInWindow` so the dashboard analytics trend and
+ * the reports share ONE formula (never drift). Per vehicle: max − min reading.
+ */
+export function distanceInWindow(expenses, { from = -Infinity, to = Infinity } = {}) {
   const byVehicle = new Map();
   for (const expense of expenses || []) {
     const ts = new Date(expense.created_at || expense.logged_at || 0).getTime();
-    if (!Number.isFinite(ts) || ts < start) continue;
+    if (!Number.isFinite(ts) || ts < from || ts >= to) continue;
     const odo = Number(expense.odometer_reading ?? expense.odometer);
     if (!Number.isFinite(odo) || odo <= 0) continue;
     const list = byVehicle.get(expense.vehicle_id) || [];
@@ -289,6 +292,11 @@ function distanceThisMonth(expenses, now) {
     if (readings.length >= 2) km += Math.max(...readings) - Math.min(...readings);
   }
   return km;
+}
+
+/** Distance covered this month, derived from odometer readings on expense logs. */
+function distanceThisMonth(expenses, now) {
+  return distanceInWindow(expenses, { from: monthStartMs(now) });
 }
 
 export async function buildFleetStatusReport({ supabase, ownerId = null, driverId = null, vehicleId = null, countryInfo = null, profile = null, now = new Date() } = {}) {

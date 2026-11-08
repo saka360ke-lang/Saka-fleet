@@ -91,6 +91,11 @@ import {
   renderDriverSelfCompliancePage,
   renderAdminOwnersPage,
   renderAdminFleetPage,
+  // v1.80.0 (Phase 19) — Amina's care queue + the analytics page.
+  buildCareQueue,
+  renderCareQueuePage,
+  buildAnalyticsPage,
+  renderAnalyticsPage,
   renderOverviewPage,
   renderVehiclesPage,
   renderVehiclePage,
@@ -183,6 +188,9 @@ async function run() {
     { method: 'GET', url: '/d/driver/compliance' },
     { method: 'GET', url: '/d/admin' },
     { method: 'GET', url: '/d/admin/owners/some-owner-id' },
+    // v1.80.0 (Phase 19) — analytics + the care queue are flag-gated too.
+    { method: 'GET', url: '/d/analytics' },
+    { method: 'GET', url: '/d/care' },
     { method: 'POST', url: '/d/verify', payload: 'token=x&otp=123456', headers: { 'content-type': 'application/x-www-form-urlencoded' } }
   ];
   for (const request of offRequests) {
@@ -1745,6 +1753,81 @@ async function run() {
   const hostileOwners = renderAdminOwnersPage({ data: { ok: true, totalOwners: 1, owners: [{ id: 'x', name: '<script>alert(1)</script>', phoneMasked: '•••', country: 'KE', vehicleCount: 1, activeCount: 1 }] }, search: '' });
   check(!hostileOwners.includes('<script>alert(1)</script>'), 'owner names are escaped');
 
+  console.log('\n--- Test 51: analytics (tyre wear + cost-per-km) ---');
+  const phase19Now = new Date('2026-11-08T06:00:00Z');
+  const analyticsSeed = () => ({
+    vehicles: [{
+      id: 'v-an', owner_id: PROFILE.id, plate_number: 'KAS 628T', make_model: 'Toyota Land Cruiser',
+      status: 'ACTIVE', current_mileage: 120000, deleted_at: null
+    }],
+    expense_logs: [
+      { id: 'ax1', vehicle_id: 'v-an', expense_type: 'Tyres', amount: 40000, odometer_reading: 95000, created_at: '2026-09-01T00:00:00Z' },
+      { id: 'ax2', vehicle_id: 'v-an', expense_type: 'Fuel', amount: 4000, odometer_reading: 100000, created_at: '2026-10-02T00:00:00Z' },
+      { id: 'ax3', vehicle_id: 'v-an', expense_type: 'Fuel', amount: 1000, odometer_reading: 101000, created_at: '2026-10-20T00:00:00Z' },
+      { id: 'ax4', vehicle_id: 'v-an', expense_type: 'Fuel', amount: 5000, odometer_reading: 102000, created_at: '2026-11-02T00:00:00Z' },
+      { id: 'ax5', vehicle_id: 'v-an', expense_type: 'Fuel', amount: 1000, odometer_reading: 103000, created_at: '2026-11-06T00:00:00Z' }
+    ]
+  });
+  const analytics = await buildAnalyticsPage({
+    supabase: createMockSupabase(analyticsSeed()).client,
+    ownerId: PROFILE.id,
+    profile: PROFILE,
+    countryInfo: KE_INFO,
+    now: phase19Now
+  });
+  check(analytics.ok === true && analytics.vehicleCount === 1, 'the analytics page loads the owner fleet');
+  check(analytics.tyres.length === 1 && analytics.tyres[0].kmSince === 25000 && analytics.tyres[0].remainingPct === 50,
+    '25,000 km since the last tyre change = 50% life remaining (the spec example)');
+  check(analytics.tyres[0].replaceSoon === false, '25,000 km does not flag Replace Soon');
+  check(analytics.trend.months.length === 6 && analytics.trend.months[5].key === '2026-11', 'the trend ends in the current month');
+  check(analytics.trend.months[5].spend === 6000 && analytics.trend.months[5].distance === 1000 && analytics.trend.months[5].costPerKm === 6,
+    'November: 6,000 ÷ 1,000 km = 6.00 per km');
+  check(analytics.chart.points.length === 2 && analytics.chart.maxValue === 6, 'the SVG chart prices the two moving months');
+  check((await buildAnalyticsPage({ supabase: null, ownerId: PROFILE.id })).ok === false, 'no database answers ok:false (honest 503)');
+  const analyticsHtml = renderAnalyticsPage({ data: analytics });
+  check(analyticsHtml.includes('Analytics') && analyticsHtml.includes('KAS 628T'), 'the page names the vehicle');
+  check(analyticsHtml.includes('25,000 km since the last tyre change') && analyticsHtml.includes('~50% life remaining'),
+    'the tyre card states the distance and the estimate');
+  check(analyticsHtml.includes('progress') && analyticsHtml.includes('width:50%'), 'the progress bar is 50% wide');
+  check(analyticsHtml.includes('<svg') && analyticsHtml.includes('<polyline') && analyticsHtml.includes('class="dot"'),
+    'the six-month chart is a server-rendered inline SVG (D4)');
+  check(analyticsHtml.includes('href="/d/analytics"'), 'the shared nav carries Analytics');
+  check(analyticsHtml.includes('Ksh') || analyticsHtml.includes('KES'), 'money renders in the owner currency');
+  check(renderAnalyticsPage({ data: { ok: false } }).includes('could not be loaded'), 'a failed analytics load renders one honest explanation');
+  const hostileAnalytics = renderAnalyticsPage({ data: { ...analytics, tyres: [{ ...analytics.tyres[0], plate: '<script>alert(1)</script>' }] } });
+  check(!hostileAnalytics.includes('<script>alert(1)</script>'), 'analytics plate names are escaped');
+
+  console.log('\n--- Test 51b: the care queue (Amina\'s hand-offs) ---');
+  const careStamp = phase19Now.toISOString();
+  const careSeed = () => ({
+    support_tickets: [
+      { id: 't-esc-1', subject: 'Fuel log stuck', sender_email: 'jane@example.com', issue_category: 'logging', status: 'ESCALATED', priority: 'high', ai_draft: 'We are checking this now.', internal_note: 'Amina investigated and escalated', created_at: careStamp, updated_at: careStamp },
+      { id: 't-open-1', subject: 'How do I add a driver?', sender_email: 'sam@example.com', issue_category: 'driver', status: 'OPEN', priority: 'medium', ai_draft: null, created_at: careStamp, updated_at: careStamp }
+    ],
+    support_ticket_messages: [
+      { id: 'cm1', ticket_id: 't-esc-1', direction: 'in', channel: 'email', message_body: 'Fuel log stuck', created_at: careStamp },
+      { id: 'cm2', ticket_id: 't-esc-1', direction: 'internal', channel: 'ai', message_body: 'Amina checked get_recent_errors → 2 matching errors', created_at: careStamp }
+    ],
+    care_learnings: [{ id: 'cl1', trigger_context: 'missing receipt', lesson: 'Ask the customer to re-upload the receipt image.', created_at: careStamp }]
+  });
+  const careQueue = await buildCareQueue({ supabase: createMockSupabase(careSeed()).client });
+  check(careQueue.ok === true && careQueue.escalated.length === 1 && careQueue.counts.escalated === 1 && careQueue.counts.open === 1,
+    'the queue counts escalated and open tickets');
+  check(careQueue.escalated[0].investigation.length === 1 && /get_recent_errors/.test(careQueue.escalated[0].investigation[0].message_body),
+    'the investigation log rides the ticket');
+  check(careQueue.escalated[0].ai_draft === 'We are checking this now.', "Amina's draft is exposed to the human");
+  check(careQueue.learnings.length === 1, 'the newest lessons are listed');
+  check((await buildCareQueue({ supabase: null })).ok === false, 'no database answers ok:false');
+  const careHtml = renderCareQueuePage({ data: careQueue });
+  check(careHtml.includes('Care queue') && careHtml.includes('Fuel log stuck'), 'the queue page lists the escalated ticket');
+  check(careHtml.includes('Investigation log') && careHtml.includes('get_recent_errors'), 'the investigation log is rendered');
+  check(careHtml.includes('Amina&#39;s draft') || careHtml.includes("Amina's draft"), 'the draft section is rendered');
+  check(careHtml.includes('Ask the customer to re-upload'), 'the learned lesson is visible');
+  check(careHtml.includes('href="/d/care"') && careHtml.includes('Owners'), 'the admin nav carries Care');
+  check(renderCareQueuePage({ data: { ok: false } }).includes('could not be loaded'), 'a failed care load renders one honest explanation');
+  const hostileCare = renderCareQueuePage({ data: { ...careQueue, escalated: [{ ...careQueue.escalated[0], subject: '<script>alert(1)</script>' }] } });
+  check(!hostileCare.includes('<script>alert(1)</script>'), 'care subject lines are escaped');
+
   console.log('\n--- Test 52: role-gated routes (D2 isolation + D1 scope) ---');
   process.env.DASHBOARD_ENABLED = 'on';
   const sessionExpiry = new Date(Date.now() + 86400000).toISOString();
@@ -1763,6 +1846,16 @@ async function run() {
       seedRow({ id: 'sess-driver', owner_id: 'd-1', email: 'driver@example.com', session_token_hash: hashToken('driver-sess'), verified: true, session_expires_at: sessionExpiry, session_role: 'driver' }),
       seedRow({ id: 'sess-admin', owner_id: 'p-admin', email: 'admin@example.com', session_token_hash: hashToken('admin-sess'), verified: true, session_expires_at: sessionExpiry, session_role: 'admin' }),
       seedRow({ id: 'sess-legacy', owner_id: PROFILE.id, email: PROFILE.email, session_token_hash: hashToken('legacy-sess'), verified: true, session_expires_at: sessionExpiry })
+    ],
+    // v1.80.0 (Phase 19) — the /d/care queue renders from these.
+    support_tickets: [
+      { id: 'gate-esc-1', subject: 'Fuel log stuck', sender_email: 'jane@example.com', issue_category: 'logging', status: 'ESCALATED', priority: 'high', ai_draft: 'We are checking this now.', internal_note: 'Amina escalated', created_at: phase19Now.toISOString(), updated_at: phase19Now.toISOString() }
+    ],
+    support_ticket_messages: [
+      { id: 'gate-cm1', ticket_id: 'gate-esc-1', direction: 'internal', channel: 'ai', message_body: 'Amina checked get_recent_errors → 1 matching error', created_at: phase19Now.toISOString() }
+    ],
+    care_learnings: [
+      { id: 'gate-cl1', trigger_context: 'missing receipt', lesson: 'Ask for a re-upload.', created_at: phase19Now.toISOString() }
     ],
     admin_audit_logs: []
   });
@@ -1812,6 +1905,30 @@ async function run() {
   check(missingFleet.statusCode === 404, 'an unknown owner id renders 404');
   const missingAudit = gateMock.db.admin_audit_logs.filter((row) => row.details?.ownerViewed === 'nobody-here');
   check(missingAudit.length === 1 && missingAudit[0].details.found === false, 'even a not-found view is audited (found:false)');
+
+  console.log('\n--- Test 52b: Phase 19 routes (/d/analytics owner, /d/care admin) ---');
+  const analyticsNoCookie = await gateApp.inject({ method: 'GET', url: '/d/analytics' });
+  check(analyticsNoCookie.statusCode === 401, 'analytics without a cookie is 401');
+  const analyticsOwnerRes = await gateApp.inject({ method: 'GET', url: '/d/analytics', headers: { cookie: ownerCookie } });
+  check(analyticsOwnerRes.statusCode === 200 && analyticsOwnerRes.body.includes('Analytics'), 'an owner session opens analytics');
+  check(analyticsOwnerRes.body.includes('Tyre wear') && analyticsOwnerRes.body.includes('Cost per'), 'the page carries both analytics features');
+  const analyticsDriverRes = await gateApp.inject({ method: 'GET', url: '/d/analytics', headers: { cookie: driverCookie } });
+  check(analyticsDriverRes.statusCode === 403, 'a driver on analytics is 403');
+  const analyticsAdminRes = await gateApp.inject({ method: 'GET', url: '/d/analytics', headers: { cookie: adminCookie } });
+  check(analyticsAdminRes.statusCode === 403, 'an admin session never enters the owner analytics lane');
+  const careNoCookie = await gateApp.inject({ method: 'GET', url: '/d/care' });
+  check(careNoCookie.statusCode === 401, 'the care queue without a cookie is 401');
+  const careOwnerRes = await gateApp.inject({ method: 'GET', url: '/d/care', headers: { cookie: ownerCookie } });
+  check(careOwnerRes.statusCode === 404 && !/care queue/i.test(careOwnerRes.body), "an owner on the care surface is 404 (never sees 'Care queue')");
+  const careDriverRes = await gateApp.inject({ method: 'GET', url: '/d/care', headers: { cookie: driverCookie } });
+  check(careDriverRes.statusCode === 404, 'a driver on the care surface is 404');
+  const careAdminRes = await gateApp.inject({ method: 'GET', url: '/d/care', headers: { cookie: adminCookie } });
+  check(careAdminRes.statusCode === 200 && careAdminRes.body.includes('Fuel log stuck'), 'an admin session opens the escalated queue');
+  check(careAdminRes.body.includes('Investigation log') && careAdminRes.body.includes('Ask for a re-upload'),
+    'the investigation log + lessons render for the admin');
+  const careAudit = gateMock.db.admin_audit_logs.filter((row) => row.action === 'ADMIN_DASHBOARD_VIEW' && row.details?.page === 'care');
+  check(careAudit.length === 1 && careAudit[0].details.escalated === 1, 'the care view is audited with its escalated count');
+
   const adminOnOwner = await gateApp.inject({ method: 'GET', url: '/d', headers: { cookie: adminCookie } });
   check(adminOnOwner.statusCode === 403, 'an admin session never enters the owner lane');
   await gateApp.close();
