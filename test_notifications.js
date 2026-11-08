@@ -52,13 +52,18 @@ const fakeSupabase = (stored) => {
 };
 const firstDb = fakeSupabase(null);
 const sent = [];
-const firstAnnounce = await announceRevisionLive({ supabase: firstDb, revision: 'rev-1', version: '1.25.7', send: async (text) => sent.push(text), logger: { log() {}, warn() {} } });
+const sentVars = [];
+const firstAnnounce = await announceRevisionLive({ supabase: firstDb, revision: 'rev-1', version: '1.25.7', send: async (text, templateVars) => { sent.push(text); sentVars.push(templateVars); }, logger: { log() {}, warn() {} } });
 check(firstAnnounce.sent === true && sent.length === 1, 'a new revision announces exactly once');
+check(firstAnnounce.templateVars?.version === 'v1.25.7' && firstAnnounce.templateVars?.commit === 'rev-1', 'the announcement returns version + commit/revision for the deploy_live template (v1.78.1)');
+check(sentVars[0]?.version === 'v1.25.7' && sentVars[0]?.commit === 'rev-1', 'the injected send receives the template variables as its second argument');
 const repeat = await announceRevisionLive({ supabase: firstDb, revision: 'rev-1', version: '1.25.7', send: async (text) => sent.push(text), logger: { log() {}, warn() {} } });
 check(repeat.sent === false && repeat.reason === 'already announced' && sent.length === 1, 'restarting the same revision stays silent');
 const noRevision = await announceRevisionLive({ supabase: fakeSupabase(null), revision: null, send: async () => { throw new Error('should not send'); } });
 check(noRevision.sent === false, 'missing revision never announces');
-check(PROACTIVE_TEMPLATE_KINDS.deploy_live.env === 'META_TPL_DEPLOY_LIVE' && PROACTIVE_TEMPLATE_KINDS.deploy_live.audience === 'superadmin' && PROACTIVE_TEMPLATE_KINDS.deploy_live.variables.length === 0, 'the LIVE announcement owns the deploy_live template slot (static body)');
+const unknownVersion = await announceRevisionLive({ supabase: fakeSupabase(null), revision: 'rev-2', version: 'unknown', send: async () => {}, logger: { log() {}, warn() {} } });
+check(unknownVersion.sent === true && unknownVersion.templateVars.version === '' && unknownVersion.templateVars.commit === 'rev-2', 'an unknown version degrades to an empty variable so the sender falls back to text (rule 50)');
+check(PROACTIVE_TEMPLATE_KINDS.deploy_live.env === 'META_TPL_DEPLOY_LIVE' && PROACTIVE_TEMPLATE_KINDS.deploy_live.audience === 'superadmin' && PROACTIVE_TEMPLATE_KINDS.deploy_live.variables.join(',') === 'version,commit', 'the LIVE announcement owns the deploy_live template slot (version + commit variables)');
 
 console.log('--- Test 2: remediation watchdog in plain English ---');
 const blocked = formatRemediationBlockedReply({ minutes: 583 });

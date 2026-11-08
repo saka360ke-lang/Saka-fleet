@@ -100,9 +100,12 @@ Each entry: kind | env knob | audience | recommended category | variables
    env: META_TPL_DEPLOY_LIVE
    audience: superadmin - internal operations, superadmin recipient only
    category: Utility
-   variables: none (static body)
-   body: Saka update is LIVE. The new revision is now answering WhatsApp
-         conversations.
+   variables: {{1}} = version (for example v1.78.1)
+              {{2}} = commit / Cloud Run revision (for example saka-fleet-00188-abc)
+   body: 🚀 Saka is LIVE!
+         {{1}}
+         {{2}}
+         The new revision is now answering WhatsApp conversations.
 
 10. eval_digest_ping
     env: META_TPL_EVAL_DIGEST_PING
@@ -208,9 +211,12 @@ Activation steps (operator, once):
      name:      saka_deploy_live
      category:  Utility
      language:  English (en)
-     variables: none (static body - leave the body exactly as written)
-     body:      Saka update is LIVE. The new revision is now answering
-                WhatsApp conversations.
+     variables: {{1}} = version (v1.78.1), {{2}} = commit/revision - the boot
+                announcement fills both (v1.78.1)
+     body:      🚀 Saka is LIVE!
+                {{1}}
+                {{2}}
+                The new revision is now answering WhatsApp conversations.
 2. Submit for review and wait for APPROVED. Nothing else changes while it is
    pending: the knob stays unset and the alert keeps its free-form fallback.
 3. Set the knob on Cloud Run (creates one new revision; the next boot
@@ -220,6 +226,11 @@ Activation steps (operator, once):
    - both green. The next deployed revision emits the LIVE alert through the
    approved template even outside the 24-hour window.
 5. Rollback: unset the knob. No schema, no migration, no flag.
+
+v1.78.1 note: the approved body now takes TWO variables. If the live
+template still has the old static body, Meta rejects the two-parameter send
+and the alert degrades to the free-form text (never a broken message) -
+edit the template to the body above and re-submit for approval.
 
 
 ------------------------------------------------------------

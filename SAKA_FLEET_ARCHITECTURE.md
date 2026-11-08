@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.78.0  
+**Version:** 1.78.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.78.1** | Phase 17.5 hotfix: `deploy_live` Meta template now carries `{{1}}` version + `{{2}}` commit/revision (boot alert passes `templateVars`; an unknown version degrades to free-form text) | 207 |
 | **1.78.0** | Phase 17: **conversational superadmin** (`processAdminMessage` two-call agent — `admin_tool_call` JSON router + engine tools `get_system_health` / `get_ai_usage` / `get_open_proposals` + `admin_synthesis`; `ADMIN_AI_AGENT` / `ADMIN_AI_TOOL` audits; static commands still win with zero tokens) + **deploy-live runbook** (`saka_deploy_live` template slot, Cloud Run knob verified absent live) + **legacy profile backfill** (`npm run reconcile:profiles`: NULL-only `timezone` / `currency` / `locale` from REGIONS, audited `PROFILE_CONTEXT_RECONCILED`, idempotent) | 206 |
 | **1.77.0** | Phase 16: opt-in **monthly PDF summary** (`profiles.monthly_report_opt_in`, `runMonthlyReportsSweep` 1st @ 08:00 EAT claim-first, previous Nairobi month via `buildCustomReport`+`bounds`, `renderReportPdfBuffer` → `sendMonthlyReportEmail` attachment; no quota, no activation) + **dashboard-first reports** (async `fleet_report` job, `followUpAckText`, `runFleetReport`, `resolveReportPdfLinkDelayMs` removed; instant `/d/reports` reply with an inline PDF under `REPORT_INLINE_BUILD_MS` 4000); `monthly report on|off` WhatsApp toggle; settings monthly toggle (`action=save_monthly`) | 205 |
 | **1.76.0** | Phase 15: dashboard role lanes — `dashboard_sessions.session_role` (`owner` \| `driver` \| `admin`, additive + migration), role-aware gate (`requireRoleSession`; `/d/admin` = **404** to non-admins, `/d/driver` = 403 to owners), driver lane (assigned vehicle, own documents unmasked, own daybook), superadmin lane (owner list with masked phones + per-owner fleet, **every view audited** `ADMIN_DASHBOARD_VIEW`), `dashboard admin` WhatsApp phrase (superadmin-only, generic refusal otherwise), `superadminIdentity.js` single-source env check | 204 |
@@ -2744,7 +2745,7 @@ Stateless suite (in `npm run health`) that fails when:
 ## 68. v1.25.7 - Deploy Telegraph, Field-Work Sync & Rules Gate
 ### 68.1 Two notifications, every deploy path
 - **Building:** `deploy_notify.yml` (push to main) sends `Saka update building - v<version> - <hash>` with a plain-English headline and the promise of a second message (`scripts/notify_git_push.js`).
-- **LIVE:** the app itself announces the revision at boot — `announceRevisionLive()` (`src/services/deployLiveAlert.js`) compares `K_REVISION` with `system_config.last_deployed_revision`; on change it upserts the key and sends `🚀 Saka is LIVE - v<version> · <revision>` exactly once. This works for local pushes, **cline.bot pipelines** and manual console deploys, and survives restarts without repeating.
+- **LIVE:** the app itself announces the revision at boot — `announceRevisionLive()` (`src/services/deployLiveAlert.js`) compares `K_REVISION` with `system_config.last_deployed_revision`; on change it upserts the key and sends `🚀 Saka is LIVE - v<version> · <revision>` exactly once. This works for local pushes, **cline.bot pipelines** and manual console deploys, and survives restarts without repeating. Since v1.78.1 the approved `deploy_live` Meta template carries the same identity as two body variables (`{{1}}` = `v<version>`, `{{2}}` = commit/revision); the free-form text itself is unchanged.
 - GitHub does not chain-trigger workflows for pushes made with the Actions `GITHUB_TOKEN`; cline.bot's merges therefore may skip the "building" alert, which is why the in-app LIVE alert is the guaranteed channel.
 
 ### 68.2 Field-work protocol (remote fixes)
@@ -6034,4 +6035,21 @@ Degrades: no tool → the existing clarify; tool failure → its deterministic r
 **Recurrence autopsy (rule 51).** *Class "model asked to answer instead of fetch"* → the router prompt forbids answering, the synthesis prompt forbids invented numbers, and the registry/prompt/executor triple is pinned (adding a tool without wiring fails the suite). *Class "a backfill that overwrites good data"* → NULL-only patches pinned against stored custom timezones, user country choices and the two never-touch columns. *Class "an audit that records post-write values"* → the before-snapshot moved ahead of the write (found by the mock run, rule 52) and pinned.
 
 **Rules shaped this work (rule 58).** 1/39/45, 3/4, 7 (country from the phone; REGIONS is the single source), 8 (no VIN/plate/identity changes), 10/11 (targeted suites, cleanup), 12/33, 13/14 (agent boundaries untouched: Saka/Sentinel roles unchanged; the admin surface is engine-side), 20 (both new purposes ride `aiClient`), 28 (numbers are engine-owned), 42 (open proposals reconciled: PROP-2026-11-08-01 remains the only open one, unrelated), 50 (degrades on drift), 51/52 (audit classes + before/after assertions), 54 (live Cloud Run env + live schema verified; Meta template status and GH Actions history could NOT be checked — no Meta/gh CLI access, stated), 55 (reused `handleAiStatsCommand`, `handleAdminRemediationsList`, `collectHealthFacts` and the `reconcile:country` precedent; no fresh build), 56 (the backfill reaches existing rows), 58 (this report). **No rule was edited or added.**
+
+
+### 207. v1.78.1 (Phase 17.5 hotfix) — deploy_live template carries version + commit/revision (2026-11-08)
+
+**Why.** Phase 18 (Voice Notes) stayed on hold for this hotfix. The operator updated the approved `saka_deploy_live` template in Meta to a two-variable body — `🚀 Saka is LIVE!`, then `{{1}}`, then `{{2}}`, then "The new revision is now answering WhatsApp conversations." — but the registry still declared `deploy_live` as a static body (`variables: []`), so the template could never carry the release identity the free-form text already shows.
+
+**Change (one seam, no new machinery).** `PROACTIVE_TEMPLATE_KINDS.deploy_live.variables = ['version', 'commit']` (`src/services/proactiveTemplates.js`). `announceRevisionLive()` builds `templateVars = { version: 'v<version>', commit: <revision> }`, passes it as the SECOND argument to the injected `send(text, templateVars)` and returns it in the result object (`src/services/deployLiveAlert.js`). The `index.js` boot hook forwards it: `send: (text, templateVars) => sendMetaWhatsAppMessage(SUPERADMIN_PHONE, text, 'deploy_live', templateVars)`. Version still comes from `readReleaseVersion()` (the architecture file, D2); the commit is `K_REVISION || COMMIT_SHA || RENDER_GIT_COMMIT`, the same value that dedupes `deploy.last_deployed_revision`.
+
+**Degrade (rule 50).** An `unknown` version (architecture-file read failed) passes `''`, so `templateVariablesForKind` returns null and `resolveProactiveMode` falls back to `{ mode: 'text' }` — the template never fires with a broken parameter. Knob unset = byte-identical free-form text (unchanged). A live template whose approved placeholder count still differs also fails the Meta send and falls through to the text path.
+
+**Frames touched.** `src/services/proactiveTemplates.js`, `src/services/deployLiveAlert.js`, `index.js` (boot send seam only), `test_proactive_templates.js` (52 assertions, +5), `test_notifications.js` (22, +3), `docs/TEMPLATES.md` (§9 body + §3.1 runbook), `landing/data/changelog.json` (+ stamped asset URLs), `package.json` (1.78.1), this file, `CHANGELOG.md`.
+
+**Suites run.** `test_proactive_templates.js` (52), `test_notifications.js` (22), `test_doc_sync.js`, `npm run health` — green.
+
+**Recurrence autopsy (rule 51).** Defect class *"a registry slot declared static while the approved Meta body gained placeholders"* → all 12 sibling kinds re-audited against `docs/TEMPLATES.md`: none besides `deploy_live` changed, `eval_digest_ping` and `care_escalation` stay static and remain pinned, and any future placeholder drift degrades to text through `templateVariablesForKind` → null (two new route assertions pin it).
+
+**Rules shaped this work (rule 58).** 1/39/45 (rules + architecture read first), 3/4 (targeted reads, batched calls), 11 (two targeted suites), 12/33 (version/architecture/changelog in the same commit, `fix(v1.78.1): …`), 13 (all docs synced; no intent/flow changed so `flowKnowledge`/core prompt are untouched — templates are transport, not conversation), 32 (tree verified level with `origin/main` before work), 42 (open proposals reconciled: `PROP-2026-11-08-01` only, unrelated), 50 (unknown version degrades), 51/52 (sibling sweep + before/after assertions), 54 (suites + health actually run), 55 (evolved the existing alert seam; no fresh build), 58 (this report). **No rule was edited or added.**
 

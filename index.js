@@ -1401,7 +1401,7 @@ const start = async () => {
       await announceRevisionLive({
         supabase,
         revision: currentRevision,
-        send: (text) => sendMetaWhatsAppMessage(process.env.SUPERADMIN_PHONE, text, 'deploy_live')
+        send: (text, templateVars) => sendMetaWhatsAppMessage(process.env.SUPERADMIN_PHONE, text, 'deploy_live', templateVars)
       });
     }
   } catch (err) {

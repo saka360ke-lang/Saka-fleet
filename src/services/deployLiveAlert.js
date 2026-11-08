@@ -33,7 +33,9 @@ export function buildDeployLiveText({ version = 'unknown', revision = null, now 
 
 /**
  * Announce one revision exactly once. Never throws; returns a status object.
- * `send` is injected so the behaviour is unit-testable without WhatsApp.
+ * `send(text, templateVars)` is injected so the behaviour is unit-testable
+ * without WhatsApp; templateVars feeds the approved deploy_live template
+ * ({{1}} version, {{2}} commit/revision) and degrades safely (rule 50).
  */
 export async function announceRevisionLive({ supabase, revision, version = readReleaseVersion(), send = null, logger = console, now = new Date() } = {}) {
   try {
@@ -50,9 +52,15 @@ export async function announceRevisionLive({ supabase, revision, version = readR
       logger.warn('[deployLiveAlert] revision marker not persisted:', markerWrite.error);
     }
     const text = buildDeployLiveText({ version, revision, now });
-    if (typeof send === 'function') await send(text);
+    // v1.78.1 (Phase 17.5) - the approved deploy_live template carries two body
+    // variables: {{1}} the release version, {{2}} the commit/revision. An
+    // 'unknown' version (architecture-file read failed) passes '' so
+    // resolveProactiveMode degrades to the free-form text above (rule 50)
+    // instead of firing a template with a broken variable.
+    const templateVars = { version: version && version !== 'unknown' ? `v${version}` : '', commit: revision };
+    if (typeof send === 'function') await send(text, templateVars);
     if (logger?.log) logger.log(`[deployLiveAlert] LIVE announcement sent for revision ${revision}.`);
-    return { sent: true, text };
+    return { sent: true, text, templateVars };
   } catch (err) {
     if (logger?.warn) logger.warn('[deployLiveAlert] announcement skipped:', err?.message || err);
     return { sent: false, reason: 'error' };

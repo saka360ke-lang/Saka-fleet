@@ -1,6 +1,13 @@
 {
-  "latest": "1.78.0",
+  "latest": "1.78.1",
   "entries": [
+    {
+      "version": "1.78.1",
+      "date": "2026-11-08",
+      "title": "Clearer release notices",
+      "preview": "Behind the scenes: every release announcement now names the exact version and revision.",
+      "summary": "A small behind-the-scenes improvement. When a new version of Saka goes live, the internal notification now carries the exact version number and the Cloud Run revision id, so the team can confirm at a glance which build is serving your conversations. Nothing changed in how you use Saka: your records, reports and reminders behave exactly as before."
+    },
     {
       "version": "1.78.0",
       "date": "2026-11-08",

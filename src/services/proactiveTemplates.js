@@ -69,9 +69,11 @@ export const PROACTIVE_TEMPLATE_KINDS = Object.freeze({
   },
   deploy_live: {
     env: 'META_TPL_DEPLOY_LIVE',
-    variables: [],
+    // v1.78.1 (Phase 17.5) - the approved body carries {{1}} version and
+    // {{2}} commit/revision; a blank variable degrades to free-form text.
+    variables: ['version', 'commit'],
     audience: 'superadmin',
-    note: 'One-per-revision Saka is LIVE announcement (static body).'
+    note: 'One-per-revision Saka is LIVE announcement (version + commit/revision).'
   },
   eval_digest_ping: {
     env: 'META_TPL_EVAL_DIGEST_PING',

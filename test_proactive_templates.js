@@ -44,7 +44,8 @@ console.log('--- 2. variable contracts ---');
 check(PROACTIVE_TEMPLATE_KINDS.service_reminder.variables.join(',') === 'plate', 'service_reminder takes the plate');
 check(PROACTIVE_TEMPLATE_KINDS.expiry_reminder.variables.join(',') === 'item,due', 'expiry_reminder takes item + due');
 check(PROACTIVE_TEMPLATE_KINDS.dunning.variables.join(',') === 'tier,days', 'dunning takes tier + days');
-check(PROACTIVE_TEMPLATE_KINDS.deploy_live.variables.length === 0 && PROACTIVE_TEMPLATE_KINDS.eval_digest_ping.variables.length === 0 && PROACTIVE_TEMPLATE_KINDS.care_escalation.variables.length === 0, 'superadmin and care pings use static bodies');
+check(PROACTIVE_TEMPLATE_KINDS.deploy_live.variables.join(',') === 'version,commit', 'deploy_live takes the version + commit/revision (v1.78.1)');
+check(PROACTIVE_TEMPLATE_KINDS.eval_digest_ping.variables.length === 0 && PROACTIVE_TEMPLATE_KINDS.care_escalation.variables.length === 0, 'eval digest and care pings keep static bodies');
 
 console.log('--- 3. template name resolution ---');
 check(templateNameForKind('service_reminder') === null, 'unset knob resolves to no template');
@@ -60,7 +61,9 @@ check(JSON.stringify(templateVariablesForKind('dunning', { tier: 'Solo Pro', day
 check(templateVariablesForKind('dunning', { tier: 'Solo Pro' }) === null, 'a missing variable degrades to null');
 check(templateVariablesForKind('dunning', { tier: 'Solo Pro', days: '   ' }) === null, 'a blank variable degrades to null');
 check(JSON.stringify(templateVariablesForKind('service_reminder', { plate: 'KDA 123A', extra: 'ignored' })) === JSON.stringify([{ type: 'text', text: 'KDA 123A' }]), 'extra keys never leak into the body');
-check(JSON.stringify(templateVariablesForKind('deploy_live')) === '[]', 'static kinds need no variables');
+check(templateVariablesForKind('deploy_live') === null, 'deploy_live without version + commit degrades to null');
+check(JSON.stringify(templateVariablesForKind('deploy_live', { version: 'v1.78.1', commit: 'saka-fleet-00188-abc', extra: 'ignored' })) === JSON.stringify([{ type: 'text', text: 'v1.78.1' }, { type: 'text', text: 'saka-fleet-00188-abc' }]), 'deploy_live variables are ordered version then commit');
+check(templateVariablesForKind('deploy_live', { version: 'v1.78.1', commit: '   ' }) === null, 'a blank commit degrades deploy_live to null');
 check(templateVariablesForKind('not_a_kind', {}) === null, 'unknown kinds have no variable contract');
 
 console.log('--- 5. routing decisions ---');
@@ -72,8 +75,10 @@ check(routed.mode === 'template' && routed.templateName === 'saka_service_remind
 check(resolveProactiveMode({ kind: 'service_reminder', templateVars: {} }).mode === 'text', 'missing variables fall back to text');
 check(resolveProactiveMode({ kind: 'unknown_kind' }).mode === 'text', 'unknown kinds fall back to text');
 process.env.META_TPL_DEPLOY_LIVE = 'saka_deploy_live';
-const staticMode = resolveProactiveMode({ kind: 'deploy_live' });
-check(staticMode.mode === 'template' && Array.isArray(staticMode.variables) && staticMode.variables.length === 0, 'a static kind routes with an empty parameter list');
+const liveMode = resolveProactiveMode({ kind: 'deploy_live', templateVars: { version: 'v1.78.1', commit: 'saka-fleet-00188-abc' } });
+check(liveMode.mode === 'template' && liveMode.templateName === 'saka_deploy_live' && liveMode.variables.map((v) => v.text).join('|') === 'v1.78.1|saka-fleet-00188-abc', 'a configured deploy_live knob routes version + commit in order (v1.78.1)');
+check(resolveProactiveMode({ kind: 'deploy_live' }).mode === 'text', 'the LIVE alert falls back to text when version + commit are missing (rule 50)');
+check(resolveProactiveMode({ kind: 'deploy_live', templateVars: { version: '', commit: 'saka-fleet-00188-abc' } }).mode === 'text', 'an unknown version (empty string) falls back to text');
 delete process.env.META_TPL_DEPLOY_LIVE;
 delete process.env.META_TPL_SERVICE_REMINDER;
 check(resolveProactiveMode({ kind: 'service_reminder', templateVars: { plate: 'X' } }).mode === 'text', 'removing the knob restores text mode');
@@ -96,7 +101,7 @@ check(evalSrc.includes("'eval_digest_ping'"), 'the eval digest passes eval_diges
 const careSrc = fs.readFileSync('./src/services/customerCare.js', 'utf8');
 check(careSrc.includes("'care_escalation'"), 'customer care passes care_escalation');
 const indexSrc = fs.readFileSync('./index.js', 'utf8');
-check(indexSrc.includes("'deploy_live'") && indexSrc.includes('sendWhatsAppTemplateMessage'), 'the LIVE announcement passes deploy_live through the template sender');
+check(indexSrc.includes("'deploy_live', templateVars") && indexSrc.includes('sendWhatsAppTemplateMessage'), 'the LIVE announcement passes deploy_live + templateVars through the template sender');
 check(KINDS.every((kind) => PROACTIVE_TEMPLATE_ENV_KEYS.includes(PROACTIVE_TEMPLATE_KINDS[kind].env)), 'every kind is reachable through the registry env contract');
 
 console.log('--- 8. Phase-1 completion kinds (v1.63.1, 2B) ---');
