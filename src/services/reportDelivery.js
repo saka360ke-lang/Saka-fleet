@@ -637,16 +637,99 @@ export async function buildReportForLane({
   return { ...report, type: reportType, access };
 }
 
+/**
+ * v1.77.0 (Phase 16) — inline report budget.
+ * The WhatsApp report lane builds the PDF inside the turn ONLY while this
+ * budget lasts (default 4 s, clamped 0–8 s). 0 turns the inline path off
+ * entirely (dashboard-link-only replies). Replaces the retired
+ * `REPORT_PDF_LINK_DELAY_MS` knob (the async follow-up that needed it is gone).
+ */
+export function resolveInlineReportBudgetMs(env = process.env) {
+  const raw = Number(env?.REPORT_INLINE_BUILD_MS);
+  if (Number.isFinite(raw) && raw >= 0) return Math.min(raw, 8000);
+  return 4000;
+}
+
+/**
+ * Render a built report into the branded PDF Buffer — NO Storage write, NO
+ * email, NO link. One renderer shared by `deliverReportPdf` (vehicle summary +
+ * explicit asks), the inline WhatsApp path and the monthly email sweep (rule
+ * 55: extract, never duplicate). Returns null when there is nothing to render.
+ */
+export async function renderReportPdfBuffer(report, people = {}) {
+  if (!report?.data) return null;
+  return await buildProReportPdf({
+    ...report.data,
+    reportType: report.type,
+    owner: people.owner || null,
+    drivers: people.drivers || []
+  });
+}
+
+/**
+ * Inline WhatsApp PDF: build → render → upload → shorten, racing a budget.
+ * Never throws. On a budget miss the reply simply carries no PDF link (the
+ * dashboard is the primary surface), and nothing is emailed.
+ */
+export async function buildInlineReportLink({
+  supabase,
+  reportType = 'fleet',
+  ownerId = null,
+  driverId = null,
+  plate = null,
+  profile = null,
+  countryInfo = null,
+  metricIds = [],
+  range = 'this_month',
+  plateLabel = 'Fleet',
+  budgetMs = resolveInlineReportBudgetMs()
+} = {}) {
+  if (!supabase || !(Number(budgetMs) > 0)) return { ok: false, reason: 'budget-off' };
+  const work = (async () => {
+    const report = await buildReportForLane({
+      supabase,
+      reportType,
+      ownerId,
+      driverId,
+      plate,
+      profile,
+      countryInfo,
+      metricIds,
+      range
+    });
+    if (!report?.ok) return { ok: false, reason: 'build-failed' };
+    const people = await loadReportPeople({
+      supabase,
+      ownerId,
+      driverId,
+      vehicleIds: report.access?.vehicleIds || []
+    });
+    const pdfBuffer = await renderReportPdfBuffer(report, people);
+    if (!pdfBuffer) return { ok: false, reason: 'render-failed' };
+    let url = null;
+    try {
+      url = await uploadReportToSupabase(supabase, pdfBuffer, `Saka_${report.type || 'report'}_${plateLabel}`.replace(/\s+/g, '_'));
+      if (url) url = await shortenUrl(supabase, url);
+    } catch {
+      url = null;
+    }
+    return url ? { ok: true, url, type: report.type, bytes: pdfBuffer.length } : { ok: false, reason: 'upload-failed' };
+  })().catch(() => ({ ok: false, reason: 'build-error' }));
+  let timer = null;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve({ ok: false, reason: 'budget-exceeded' }), Number(budgetMs));
+    if (typeof timer.unref === 'function') timer.unref();
+  });
+  const raced = await Promise.race([work, timeout]);
+  if (timer && raced.reason !== 'budget-exceeded') clearTimeout(timer);
+  return raced;
+}
+
 /** Render, upload and email the branded PDF (best effort, never throws). */
 export async function deliverReportPdf({ supabase, report, people = {}, ownerEmail = null, plateLabel = 'Fleet' } = {}) {
   if (!supabase || !report?.data) return { ok: false, error: 'No report data' };
   try {
-    const pdfBuffer = await buildProReportPdf({
-      ...report.data,
-      reportType: report.type,
-      owner: people.owner || null,
-      drivers: people.drivers || []
-    });
+    const pdfBuffer = await renderReportPdfBuffer(report, people);
     let url = null;
     let uploadError = null;
     try {
@@ -678,6 +761,9 @@ export default {
   loadReportPeople,
   buildReportForLane,
   deliverReportPdf,
+  renderReportPdfBuffer,
+  buildInlineReportLink,
+  resolveInlineReportBudgetMs,
   complianceReportToPdf
 };
 

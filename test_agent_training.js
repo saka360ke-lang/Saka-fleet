@@ -84,6 +84,13 @@ const editEntryBehavior = SAKA_INTENT_PLAYBOOK.find((row) => row.intent === 'EDI
 check(Boolean(editEntryBehavior) && editEntryBehavior.behavior.includes('v1.73.0 pagination'), 'EDIT_ENTRY playbook documents pagination');
 const reportBehavior = SAKA_INTENT_PLAYBOOK.find((row) => row.intent === 'REQUEST_REPORT');
 check(Boolean(reportBehavior) && reportBehavior.behavior.includes('weekly report on|off'), 'REQUEST_REPORT playbook documents the weekly toggle');
+// v1.77.0 (Phase 16) — the report lane is dashboard-first and the monthly PDF
+// summary is documented where the model reads it.
+check(Boolean(reportBehavior) && reportBehavior.behavior.includes('dashboard Reports link'), 'REQUEST_REPORT playbook documents the dashboard-first answer');
+check(Boolean(reportBehavior) && reportBehavior.behavior.includes('monthly report on|off'), 'REQUEST_REPORT playbook documents the monthly PDF toggle');
+check(SAKA_FLOW_PLAYBOOK.includes('REPORT DELIVERY (v1.77.0'), 'the playbook carries the report-delivery section (v1.77.0)');
+check(/only report email/.test(SAKA_FLOW_PLAYBOOK), 'the playbook states the monthly summary is the only report email');
+check(DEFAULT_SAKA_CORE_PROMPT.includes('REPORT DELIVERY (v1.77.0)'), 'the core prompt carries the report-delivery line (v1.77.0)');
 const supportFlow = SAKA_QUIZ_FLOWS.find((flow) => flow.key === 'contact_support');
 check(Boolean(supportFlow) && supportFlow.rules.includes('my ticket'), 'contact_support flow documents the own-ticket read');
 check(DEFAULT_SAKA_CORE_PROMPT.includes('NARRATIVE INTAKE (v1.34.0'), 'Core prompt teaches narrative intake');

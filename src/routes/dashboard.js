@@ -660,12 +660,17 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
         if (!session) return reply;
         const profile = await loadDashboardProfile(supabase, session.ownerId);
         const body = request.body && typeof request.body === 'object' ? request.body : {};
-        if (String(body.action || '') !== 'save_weekly') {
+        const action = String(body.action || '');
+        if (action !== 'save_weekly' && action !== 'save_monthly') {
           const settings = await buildSettingsPage({ supabase, ownerId: session.ownerId, profile, countryInfo: countryForProfile(profile), sessionExpiresAt: session.sessionExpiresAt });
           return sendHtml(reply, 400, renderSettingsPage({ settings, error: 'Nothing to save — nothing changed.' }));
         }
-        const weeklyReportOn = String(body.weekly_report || '').toLowerCase() === 'on';
-        const result = await saveSettings({ supabase, ownerId: session.ownerId, weeklyReportOn });
+        // Each toggle writes ONLY its own column (a stray POST can never flip the
+        // other preference).
+        const patch = action === 'save_weekly'
+          ? { weeklyReportOn: String(body.weekly_report || '').toLowerCase() === 'on' }
+          : { monthlyReportOn: String(body.monthly_report || '').toLowerCase() === 'on' };
+        const result = await saveSettings({ supabase, ownerId: session.ownerId, ...patch });
         if (!result.ok) {
           const settings = await buildSettingsPage({ supabase, ownerId: session.ownerId, profile, countryInfo: countryForProfile(profile), sessionExpiresAt: session.sessionExpiresAt });
           return sendHtml(reply, 200, renderSettingsPage({ settings, error: result.error }));

@@ -9,16 +9,16 @@
  * BOUNDARY CONTRACT (section 191): commands.js is a leaf route module. It may import from
  * src/services/* and from ./helpers.js (the zero-cycle leaf exception documented since 5B-2), but
  * NEVER from ./messages.js. State in, data out: the processor performs every send, every
- * chatSessions.set and every `return { status }`. `sendWhatsApp` and `queueReportFollowUp` are
- * passed in by the processor (the pending.js pattern) so this module imports no other route
- * module than the helpers leaf.
+ * chatSessions.set and every `return { status }` (the pending.js pattern), so this module imports
+ * no other route module than the helpers leaf.
  */
 
 import { resolveCountryInput } from '../../services/countryBucket.js';
 import { resolveTimezoneFromCountry, resolveUserTimezone } from '../../services/globalization.js';
 import { listReceipts, deleteReceipt } from '../../services/receipts.js';
-import { getReportQuota, checkoutForTier, getEntitlements } from '../../services/subscriptions.js';
-import { resolveAnyReportType, buildReportForLane } from '../../services/reportDelivery.js';
+import { getReportQuota, recordReportUsage, checkoutForTier, getEntitlements } from '../../services/subscriptions.js';
+import { resolveAnyReportType, buildInlineReportLink, resolveInlineReportBudgetMs } from '../../services/reportDelivery.js';
+import { isDashboardEnabled, dashboardBaseUrl } from '../../services/dashboard.js';
 import { resolveMetricIds, customMetricMenu } from '../../services/reportMetrics.js';
 import { resolveReportAccess } from '../../services/reportAccess.js';
 import { buildFleetReport } from '../../services/fleetReports.js';
@@ -35,7 +35,6 @@ import { recordActivationEvent, ACTIVATION_EVENTS } from '../../services/trialEn
 import { getTierLabel, getAnnualDiscountPercent } from '../../services/subscriptionTiers.js';
 import { shortenUrl } from '../../services/linkShortener.js';
 import { composeMessage } from '../../services/conversationEngine.js';
-import { followUpAckText } from '../../services/followups.js';
 import { isVehicleSummaryCommand } from '../../services/readCommands.js';
 import { getDriverComplianceStatus } from '../../services/driverAssignments.js';
 import { isLegacyWelcomeCopy } from '../../services/greetings.js';
@@ -181,6 +180,73 @@ export async function resolveWeeklyReportToggle({ messageText, profileData, supa
 }
 
 /* ------------------------------------------------------------------ */
+/* 1c. monthly PDF summary toggle (v1.77.0, Phase 16)                  */
+/* "monthly report on|off" flips profiles.monthly_report_opt_in; a bare */
+/* "monthly report" is a deterministic state read so the phrase can     */
+/* NEVER be misclassified as a report request.                          */
+/* ------------------------------------------------------------------ */
+
+export const MONTHLY_REPORT_TOGGLE_RE = /^monthly\s+reports?\s+(on|off|enable|disable|yes|no)$/i;
+export const MONTHLY_REPORT_STATUS_RE = /^monthly\s+reports?$/i;
+
+const MONTHLY_REPORT_ON_COPY = '🗓️ *Monthly PDF summary on*\n\nOn the 1st of every month at 8:00 AM I\'ll email your fleet\'s month as a PDF — it never uses your report quota.\n\nReply *monthly report off* to stop it.';
+const MONTHLY_REPORT_OFF_COPY = '🗓️ *Monthly PDF summary off*\n\nNo more monthly emails. Reply *monthly report on* whenever you want them back.';
+
+export function parseMonthlyReportToggle({ messageText }) {
+  const text = String(messageText || '').trim();
+  const toggle = MONTHLY_REPORT_TOGGLE_RE.exec(text);
+  if (toggle) {
+    const word = toggle[1].toLowerCase();
+    return { action: ['on', 'enable', 'yes'].includes(word) ? 'on' : 'off' };
+  }
+  if (MONTHLY_REPORT_STATUS_RE.test(text)) return { action: 'status' };
+  return null;
+}
+
+export async function resolveMonthlyReportToggle({ messageText, profileData, supabaseClient }) {
+  const command = parseMonthlyReportToggle({ messageText });
+  if (!command || !profileData?.id) return null;
+  const base = { intent: 'GENERAL_CHAT', extracted_data: {} };
+  if (command.action === 'status') {
+    let enabled = null;
+    try {
+      const { data, error } = await supabaseClient
+        .from('profiles')
+        .select('monthly_report_opt_in')
+        .eq('id', profileData.id)
+        .limit(1);
+      if (!error) enabled = Boolean((data || [])[0]?.monthly_report_opt_in);
+    } catch { enabled = null; }
+    if (enabled === null) {
+      return {
+        ...base,
+        reply_message: '🗓️ *Monthly PDF summary*\n\nI could not read that setting just now. Reply *monthly report on* or *monthly report off* and I\'ll set it.'
+      };
+    }
+    return {
+      ...base,
+      reply_message: enabled
+        ? '🗓️ *Monthly PDF summary is ON*\n\nOn the 1st of every month you get your fleet\'s month as a PDF by email — it never uses your report quota.\n\nReply *monthly report off* to stop it.'
+        : '🗓️ *Monthly PDF summary is OFF*\n\nReply *monthly report on* and on the 1st of every month I\'ll email your fleet\'s month as a PDF.'
+    };
+  }
+  const enabled = command.action === 'on';
+  let saved = false;
+  try {
+    const { error } = await supabaseClient
+      .from('profiles')
+      .update({ monthly_report_opt_in: enabled })
+      .eq('id', profileData.id);
+    saved = !error;
+  } catch { saved = false; }
+  if (!saved) {
+    // Rule 50 — an un-migrated column (or a DB hiccup) never fakes success.
+    return { ...base, reply_message: '⚠️ I could not save that setting just now — nothing changed. Please try again in a moment.' };
+  }
+  return { ...base, reply_message: enabled ? MONTHLY_REPORT_ON_COPY : MONTHLY_REPORT_OFF_COPY };
+}
+
+/* ------------------------------------------------------------------ */
 /* 2. receipt delete (write lane, rule 37)                             */
 /* ------------------------------------------------------------------ */
 
@@ -253,92 +319,82 @@ export async function renderPassbookSnapshot({ supabaseClient, existingVehicles,
   return { handled, reply };
 }
 /* ------------------------------------------------------------------ */
-/* 4. report request lane (quota + queue + build)                      */
+/* 4. report request lane (v1.77.0, Phase 16 — dashboard-first)        */
 /* ------------------------------------------------------------------ */
 
-export async function handleReportRequestTurn({ mergedExt, messageText, supabaseClient, profileData, senderPhone, existingVehicles, targetVeh, entitlements, countryInfo, targetLang, queueReportFollowUp }) {
-  let reply;
-  const quota = await getReportQuota({
-    supabase: supabaseClient,
-    ownerId: profileData?.id,
-    profile: profileData
-  });
-  if (!quota.canGenerate) {
-    const upgrade = await checkoutForTier({
-      supabase: supabaseClient,
-      owner: {
-        id: profileData?.id,
-        phone_number: senderPhone,
-        email: profileData?.email
-      },
-      targetTierKey: entitlements?.nextTierKey || 'solo_pro',
-      interval: entitlements?.billingInterval || 'annual',
-      currency: countryInfo?.currency || 'USD'
-    });
-    reply = `📊 *Monthly Report Limit Reached*\n\nThe Free plan includes *${quota.limit} report per month* and you have used it (resets monthly).\n\nUnlock unlimited reports, full AI and compliance tracking with *${getTierLabel(entitlements?.nextTierKey || 'solo_pro')}*:\n👉 ${await shortenUrl(supabaseClient, upgrade.ok ? upgrade.checkoutUrl : 'https://sakafleet.com/pricing')}\n\n💡 Annual billing saves *${getAnnualDiscountPercent(entitlements?.nextTierKey || 'solo_pro')}%* — reply *"upgrade annual"* to see it.`;
-  } else {
+/**
+ * The WhatsApp report lane answers INSTANTLY. The dashboard Reports page is the
+ * primary surface (every PDF downloads there, quota-free by design); while
+ * `REPORT_INLINE_BUILD_MS` lasts, one PDF is also built, uploaded and linked in
+ * the same reply. Quota usage and the trial's REPORT_GENERATED activation are
+ * recorded ONLY when that inline PDF really exists. The retired path (instant
+ * ACK → background job → follow-up link → on-demand email) is gone.
+ */
+export async function handleReportRequestTurn({ mergedExt, messageText, supabaseClient, profileData, senderPhone, existingVehicles, targetVeh, entitlements, countryInfo, targetLang }) {
   const reportType = resolveAnyReportType(mergedExt.report_type || messageText, 'fleet');
   const metricIds = resolveMetricIds(messageText);
   const dateRange = /last\s*(?:3|three)\s*months?/i.test(messageText)
     ? 'last_3_months'
     : /(this\s*year|yearly|annual|year\s*review)/i.test(messageText) ? 'this_year' : 'this_month';
-  // v1.16.0 — slow-report lane: ACK instantly (zero AI tokens),
-  // build in the background, deliver the result as a follow-up while
-  // the user keeps chatting.
-  const queued = (reportType === 'custom' && metricIds.length === 0) ? false : await queueReportFollowUp({
-    supabase: supabaseClient,
-    phone: senderPhone,
-    payload: {
-      ownerId: existingVehicles.some((v) => v.owner_id === profileData?.id) ? profileData?.id : null,
-      driverId: existingVehicles.some((v) => v.assigned_driver_id === profileData?.id) ? profileData?.id : null,
-      profileId: profileData?.id || null,
-      reportType,
-      metricIds,
-      range: dateRange,
-      roles: profileData?.roles || [],
-      plate: targetVeh?.plate_number || null,
-      countryCode: countryInfo?.country_code || null,
-      locale: countryInfo?.locale || 'en-US',
-      currency: countryInfo?.currency || 'USD',
-      country: countryInfo?.country || null,
-      language: targetLang,
-      unitSystem: profileData?.unit_system || 'metric',
-      timeZone: resolveUserTimezone({ countryInfo, profile: profileData }),
-      phone: senderPhone,
-      email: profileData?.email || null
-    }
-  });
-  if (queued) {
-    reply = followUpAckText(reportType);
-  } else if (reportType === 'custom' && metricIds.length === 0) {
+
+  // Bespoke with no metrics named → the menu (no build, no quota, unchanged).
+  if (reportType === 'custom' && metricIds.length === 0) {
     const access = resolveReportAccess({
       reportType: 'custom',
       profile: profileData,
       vehicles: existingVehicles,
       roles: profileData?.roles || []
     });
-    reply = `📊 *Bespoke report — pick your metrics*\n\nAvailable: ${customMetricMenu(access)}\n\n` +
-      'Reply, for example:\n_"custom report: fuel economy, total spend and distance for last 3 months"_\n\n' +
-      'You can also ask for "fuel economy report", "driver daybook", "vehicle health" or "compliance card".';
-  } else {
-    const laneReport = await buildReportForLane({
-      supabase: supabaseClient,
-      reportType,
-      ownerId: existingVehicles.some((v) => v.owner_id === profileData?.id) ? profileData?.id : null,
-      driverId: existingVehicles.some((v) => v.assigned_driver_id === profileData?.id) ? profileData?.id : null,
-      plate: targetVeh?.plate_number || null,
-      profile: profileData,
-      countryInfo,
-      metricIds,
-      range: dateRange
-    });
-    reply = laneReport.ok
-      ? laneReport.text
-      : (laneReport.text || `📊 *Fleet Reports & Summary*\n\nYou have ${existingVehicles.length} active vehicle(s).\n\nAsk for *fleet status*, *compliance report*, *maintenance report* or *financial report*.`);
-    if (profileData?.id && laneReport?.ok) {
+    return {
+      handled: true,
+      entitlements,
+      reply: `📊 *Bespoke report — pick your metrics*\n\nAvailable: ${customMetricMenu(access)}\n\n` +
+        'Reply, for example:\n_"custom report: fuel economy, total spend and distance for last 3 months"_\n\n' +
+        'You can also ask for "fuel economy report", "driver daybook", "vehicle health" or "compliance card".'
+    };
+  }
+
+  const ownerId = existingVehicles.some((v) => v.owner_id === profileData?.id) ? profileData?.id : null;
+  const driverId = existingVehicles.some((v) => v.assigned_driver_id === profileData?.id) ? profileData?.id : null;
+  const dashboardReady = isDashboardEnabled();
+  const lines = dashboardReady
+    ? [
+        '📊 *Your report is ready on your dashboard*',
+        '',
+        'Open Reports and download the PDF instantly:',
+        `👉 ${dashboardBaseUrl()}/reports`,
+        '',
+        '_Ask me anything about the numbers and I will answer right here._'
+      ]
+    : ['📊 *Let me put your report together*'];
+
+  // D2 — inline fast PDF while the budget lasts. Never emails.
+  let inline = { ok: false, reason: 'budget-off' };
+  const budgetMs = resolveInlineReportBudgetMs();
+  if (budgetMs > 0 && profileData?.id) {
+    const quota = await getReportQuota({ supabase: supabaseClient, ownerId: profileData.id, profile: profileData });
+    if (quota?.canGenerate) {
+      inline = await buildInlineReportLink({
+        supabase: supabaseClient,
+        reportType,
+        ownerId,
+        driverId,
+        plate: targetVeh?.plate_number || null,
+        profile: profileData,
+        countryInfo,
+        metricIds,
+        range: dateRange,
+        plateLabel: targetVeh?.plate_number || 'Fleet',
+        budgetMs
+      });
+    }
+  }
+  if (inline?.ok && inline.url) {
+    lines.push('', `📄 *PDF report:* ${inline.url}`);
+    if (profileData?.id) {
       try {
         await recordReportUsage({ supabase: supabaseClient, ownerId: profileData.id });
-        // Trial activation #3: first fleet report generated.
+        // Trial activation #3: a report really was generated for this owner.
         await recordActivationEvent({
           supabase: supabaseClient,
           ownerId: profileData.id,
@@ -352,9 +408,11 @@ export async function handleReportRequestTurn({ mergedExt, messageText, supabase
         });
       } catch { /* quota/activation are best-effort */ }
     }
+  } else if (!dashboardReady) {
+    // No dashboard and no PDF: one honest next step, never silence.
+    lines.push('', 'I could not build the PDF just now — reply *report* and I will try again.');
   }
-  }
-  return { handled: true, reply, entitlements };
+  return { handled: true, reply: lines.join('\n'), entitlements };
 }
 
 /* ------------------------------------------------------------------ */

@@ -1365,6 +1365,36 @@ async function run() {
   check((await saveSettings({ supabase: settingsMock.client, ownerId: PROFILE.id, weeklyReportOn: null })).ok === false, 'a non-boolean value is refused');
   check((await saveSettings({ supabase: settingsMock.client, ownerId: null, weeklyReportOn: true })).ok === false, 'a missing owner is refused');
 
+  console.log('\n--- Test 42b: monthly PDF summary preference (v1.77.0) ---');
+  const monthlyMock = createMockSupabase({
+    profiles: [{ id: PROFILE.id, monthly_report_opt_in: true, weekly_report_opt_in: false, subscription_tier: 'solo_pro' }]
+  });
+  const monthlyRead = await buildSettingsPage({ supabase: monthlyMock.client, ownerId: PROFILE.id, profile: { ...PROFILE }, countryInfo: KE_INFO });
+  check(monthlyRead.monthlyReportOn === true && monthlyRead.monthlyReportKnown === true, 'the monthly preference is read from profiles.monthly_report_opt_in');
+  const monthlySaved = await saveSettings({ supabase: monthlyMock.client, ownerId: PROFILE.id, monthlyReportOn: false });
+  check(monthlySaved.ok && monthlySaved.monthlyReportOn === false, 'saving the monthly toggle succeeds');
+  check(monthlyMock.db.profiles[0].monthly_report_opt_in === false && monthlyMock.db.profiles[0].weekly_report_opt_in === false, 'the monthly save never touches the weekly column');
+  check(monthlyMock.state.updates.at(-1).patch.monthly_report_opt_in === false
+    && monthlyMock.state.updates.at(-1).patch.weekly_report_opt_in === undefined,
+    'the update patch names ONLY the monthly column');
+  const bothSaved = await saveSettings({ supabase: monthlyMock.client, ownerId: PROFILE.id, weeklyReportOn: true, monthlyReportOn: true });
+  check(bothSaved.ok && monthlyMock.db.profiles[0].weekly_report_opt_in === true && monthlyMock.db.profiles[0].monthly_report_opt_in === true, 'both preferences can be written together');
+  const missingColumnClient = {
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          maybeSingle: async () => ({ data: null, error: { message: 'column "monthly_report_opt_in" does not exist' } })
+        })
+      })
+    })
+  };
+  const degradedSettings = await buildSettingsPage({ supabase: missingColumnClient, ownerId: PROFILE.id, profile: { ...PROFILE }, countryInfo: KE_INFO });
+  check(degradedSettings.ok === true && degradedSettings.monthlyReportKnown === false && degradedSettings.weeklyReportKnown === false,
+    'an un-migrated column degrades honestly (rule 50)');
+  const monthlyHtml = renderSettingsPage({ settings: monthlyRead });
+  check(monthlyHtml.includes('Monthly PDF summary') && monthlyHtml.includes('value="save_monthly"'), 'the settings page renders the monthly toggle with its own marker');
+  check(monthlyHtml.includes('value="save_weekly"'), 'the weekly toggle keeps its own marker');
+
   console.log('\n--- Test 43: serializeAllDataCsv (sections, [CAP], escaping, scope) ---');
   const exportSeed = () => ({
     vehicles: [
@@ -1513,6 +1543,17 @@ async function run() {
   check(noActionRes.statusCode === 400 && /Nothing to save/.test(noActionRes.body), 'a POST without the action marker saves nothing');
   const anonPost = await setApp.inject({ method: 'POST', url: '/d/settings', headers: { host: 'app.sakafleet.test', origin: 'https://app.sakafleet.test', ...postForm }, payload: 'action=save_weekly&weekly_report=on' });
   check(anonPost.statusCode === 401, 'a same-origin POST without a session 401s');
+
+  const monthlySaveRes = await setApp.inject({ method: 'POST', url: '/d/settings', headers: { ...sameOrigin, ...postForm }, payload: 'action=save_monthly&monthly_report=on' });
+  check(monthlySaveRes.statusCode === 303, 'the monthly toggle saves with its own action marker');
+  check(settingsRouteMock.db.profiles.find((row) => row.id === PROFILE.id).monthly_report_opt_in === true, 'the monthly write lands on profiles.monthly_report_opt_in');
+  check(settingsRouteMock.db.profiles.find((row) => row.id === PROFILE.id).weekly_report_opt_in === true, 'the monthly save never flips the weekly preference');
+  const weeklyFlipRes = await setApp.inject({ method: 'POST', url: '/d/settings', headers: { ...sameOrigin, ...postForm }, payload: 'action=save_weekly&weekly_report=off' });
+  check(weeklyFlipRes.statusCode === 303 && settingsRouteMock.db.profiles.find((row) => row.id === PROFILE.id).monthly_report_opt_in === true,
+    'the weekly save never flips the monthly preference');
+  const settingsMonthlyPage = await setApp.inject({ method: 'GET', url: '/d/settings', headers: setCookie });
+  check(settingsMonthlyPage.body.includes('Monthly PDF summary') && settingsMonthlyPage.body.includes('value="save_monthly"'),
+    'GET /d/settings renders the monthly PDF summary toggle');
 
   const exportRes = await setApp.inject({ method: 'GET', url: '/d/export.csv', headers: setCookie });
   check(exportRes.statusCode === 200 && /text\/csv/.test(String(exportRes.headers['content-type'])), 'GET /d/export.csv answers text/csv');

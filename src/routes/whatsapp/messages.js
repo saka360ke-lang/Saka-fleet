@@ -108,7 +108,6 @@ import {
   hydrateTurnSession,
   loadUserFactsContext,
   loadReengagementContext,
-  queueReportFollowUp,
   recordTurnLatency
 } from './hooks.js';
 // v1.73.4 — Phase 12B: inbound template button / list taps (leaf, services-only imports).
@@ -137,6 +136,7 @@ import { arbitrateQuizTurn, finalizeQuizOutcome, renderRoleActions } from './qui
 import {
   resolveCountryCommand,
   resolveWeeklyReportToggle,
+  resolveMonthlyReportToggle,
   parseReceiptDeleteCommand,
   parseVehicleSummaryCommand,
   handleReceiptDeleteTurn,
@@ -711,6 +711,9 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         // A bare "weekly report" is answered as a state read so the phrase can
         // never be misclassified as a report request (quota hijack).
         const weeklyReportToggleResult = await resolveWeeklyReportToggle({ messageText, profileData, supabaseClient });
+        // v1.77.0 (Phase 16) — deterministic monthly PDF summary toggle/state
+        // (same write lane pattern; self-gates on the phrase).
+        const monthlyReportToggleResult = await resolveMonthlyReportToggle({ messageText, profileData, supabaseClient });
 
         // v1.24.0 - perceived speed: long free-form paragraphs get an instant ack
         // while this turn parses and records in the background.
@@ -785,6 +788,9 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         } else if (weeklyReportToggleResult) {
           // v1.73.0 (Phase 10, P3-4) — deterministic weekly-report toggle/state.
           aiResult = weeklyReportToggleResult;
+        } else if (monthlyReportToggleResult) {
+          // v1.77.0 (Phase 16) — deterministic monthly PDF summary toggle/state.
+          aiResult = monthlyReportToggleResult;
         } else {
           // Phase 3 — the Read Command Registry owns every deterministic read.
           // A matched lane returns its complete aiResult here; nothing below
@@ -1573,7 +1579,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             }
             else if (activeIntent === 'REQUEST_REPORT') {
               // v1.69.0 — Phase 5B-4: the report-request lane lives in ./commands.js.
-              const reportTurn = await handleReportRequestTurn({ mergedExt, messageText, supabaseClient, profileData, senderPhone, existingVehicles, targetVeh, entitlements, countryInfo, targetLang, queueReportFollowUp });
+              const reportTurn = await handleReportRequestTurn({ mergedExt, messageText, supabaseClient, profileData, senderPhone, existingVehicles, targetVeh, entitlements, countryInfo, targetLang });
               customReply = reportTurn.reply;
               if (reportTurn.entitlements) entitlements = reportTurn.entitlements;
             }

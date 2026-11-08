@@ -269,6 +269,12 @@ async function run() {
   const indexSrc = fs.readFileSync('./index.js', 'utf8');
   check(indexSrc.includes('runWeeklyReportsSweep') && /setInterval\(runWeeklyReportSweep, 30 \* 60 \* 1000\)/.test(indexSrc),
     'index.js runs the sweep on a 30-minute gated tick');
+  // v1.77.0 (Phase 16) — the monthly sweep rides its OWN 30-minute tick; the
+  // weekly gate is untouched by its arrival.
+  check(indexSrc.includes('runMonthlyReportsSweep') && /setInterval\(runMonthlyReportSweep, 30 \* 60 \* 1000\)/.test(indexSrc),
+    'the monthly PDF sweep has its own 30-minute gated tick (Phase 16)');
+  check(isWeeklyReportWindow(new Date('2026-12-01T08:02:00+03:00')).inWindow === false,
+    'the 1st of a month is NEVER a weekly window (the two sweeps cannot collide)');
   const messagesSrc = fs.readFileSync('./src/routes/whatsapp/messages.js', 'utf8');
   check(messagesSrc.includes('resolveWeeklyReportToggle') && messagesSrc.indexOf('weeklyReportToggleResult') < messagesSrc.indexOf('await dispatchReadTurn('),
     'the toggle lane runs BEFORE the read dispatch and the AI turn (quota-hijack guard)');

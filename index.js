@@ -14,6 +14,7 @@ import { handleWhatsAppWebhook as handleWhatsAppWebhookRoute, handleWhatsAppWebh
 import { verifyPaystackSignature } from './src/services/paystack.js';
 import { runReminderSweep } from './src/services/maintenanceReminders.js';
 import { runWeeklyReportsSweep } from './src/workers/weeklyReports.js';
+import { runMonthlyReportsSweep } from './src/workers/monthlyReports.js';
 import { ensureComplianceCatalog, reviewComplianceCatalog, COMPLIANCE_CATALOG_VERSION } from './src/services/complianceCatalog.js';
 import { expireStaleAssignments } from './src/services/driverAssignments.js';
 import {
@@ -339,6 +340,25 @@ async function runWeeklyReportSweep() {
 }
 setTimeout(runWeeklyReportSweep, 5 * 60 * 1000); // First check after boot
 setInterval(runWeeklyReportSweep, 30 * 60 * 1000); // Every 30 minutes (gated inside)
+
+// Worker (Phase 16, v1.77.0): monthly PDF summary sweep — 1st of the month at
+// 08:00 EAT. The 30-minute tick is a cheap gate check; the worker only runs in
+// the 1st/08:00–08:05 window and dedupes on the Nairobi day marker in
+// system_config (claim-first; an un-migrated opt-in column releases the mark).
+async function runMonthlyReportSweep() {
+  try {
+    const result = await runMonthlyReportsSweep({ supabase });
+    if (result?.sent) {
+      console.log(`[MonthlyReports] emailed ${result.sent} monthly summary(ies) for ${result.monthLabel} (${result.skippedEmpty} empty garage(s), ${result.skippedNoEmail} without email, ${result.failed} failed).`);
+    } else if (result?.reason === 'column-missing') {
+      console.warn('[MonthlyReports] profiles.monthly_report_opt_in is missing — run npm run migrate:monthly-reports.');
+    }
+  } catch (err) {
+    console.error('[Worker] Monthly report sweep failed:', err.message);
+  }
+}
+setTimeout(runMonthlyReportSweep, 6 * 60 * 1000); // First check after boot
+setInterval(runMonthlyReportSweep, 30 * 60 * 1000); // Every 30 minutes (gated inside)
 
 // Worker: expire driver assignment requests the driver never accepted (48h).
 async function runDriverAssignmentExpiry() {

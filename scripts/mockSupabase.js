@@ -236,7 +236,25 @@ export function createMockSupabase(seed = {}, options = {}) {
     return api;
   }
 
-  return { client: { from }, db, state };
+  // v1.77.0 (Phase 16) — Storage surface for the inline report PDF lane.
+  // Uploads never touch the network; the URL is deterministic so tests can pin
+  // it. `state.uploads` records every object for assertions.
+  const storageState = state.uploads = state.uploads || [];
+  const storage = {
+    from(bucket) {
+      return {
+        upload: async (path) => {
+          storageState.push({ bucket, path });
+          return { data: { path }, error: null };
+        },
+        getPublicUrl: (path) => ({ data: { publicUrl: `https://mock.storage/${bucket}/${path}` } }),
+        createSignedUrl: async (path) => ({ data: { signedUrl: `https://mock.storage/${bucket}/${path}?signed=1` } })
+      };
+    },
+    createBucket: async () => ({ data: {}, error: null })
+  };
+
+  return { client: { from, storage }, db, state };
 }
 
 export default { createMockSupabase };

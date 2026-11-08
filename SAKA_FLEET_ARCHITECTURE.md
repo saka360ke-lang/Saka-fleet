@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.76.0  
+**Version:** 1.77.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.77.0** | Phase 16: opt-in **monthly PDF summary** (`profiles.monthly_report_opt_in`, `runMonthlyReportsSweep` 1st @ 08:00 EAT claim-first, previous Nairobi month via `buildCustomReport`+`bounds`, `renderReportPdfBuffer` → `sendMonthlyReportEmail` attachment; no quota, no activation) + **dashboard-first reports** (async `fleet_report` job, `followUpAckText`, `runFleetReport`, `resolveReportPdfLinkDelayMs` removed; instant `/d/reports` reply with an inline PDF under `REPORT_INLINE_BUILD_MS` 4000); `monthly report on|off` WhatsApp toggle; settings monthly toggle (`action=save_monthly`) | 205 |
 | **1.76.0** | Phase 15: dashboard role lanes — `dashboard_sessions.session_role` (`owner` \| `driver` \| `admin`, additive + migration), role-aware gate (`requireRoleSession`; `/d/admin` = **404** to non-admins, `/d/driver` = 403 to owners), driver lane (assigned vehicle, own documents unmasked, own daybook), superadmin lane (owner list with masked phones + per-owner fleet, **every view audited** `ADMIN_DASHBOARD_VIEW`), `dashboard admin` WhatsApp phrase (superadmin-only, generic refusal otherwise), `superadminIdentity.js` single-source env check | 204 |
 | **1.75.3** | Phase 14D (Owner Dashboard complete): reports builder (`last_30_days` + a `bounds` override on `buildCustomReport`, up to 8 metrics, GET-generated PDF), settings page (one writable preference — the SAME `profiles.weekly_report_opt_in` column — plus a 6-section single-CSV data export with `# section`, `[CAP]` and `[ERROR]` rows); CSRF = SameSite=Strict + no `/d` CORS + Origin guard | 203 |
 | **1.75.2** | Phase 14C: dashboard compliance surface — `/d/compliance` vehicle + driver board (All / Due soon / Expired, expired pinned), read-only `/d/drivers/:id` with unmasked numbers for the owner, filtered `/d/compliance.pdf` sharing one filter engine (`filterComplianceReport`); three defects caught pre-ship | 202 |
@@ -4536,8 +4537,9 @@ quiz engine:
 - New in `src/services/chatHistory.js`: `CHAT_REENGAGE_MAX_MESSAGES` (6, clamped 2-12), `CHAT_REENGAGE_MAX_AGE_DAYS` (14, clamped 1-60), `CHAT_REENGAGE_MAX_CHARS` (900, clamped 200-2000), `sanitizeReengagementLine()` (standalone six-digit codes become `[code]`, 180 chars/line) and `getReengagementContext()` — reads the last few `chat_history` rows of any age up to the window and returns a labelled **`EARLIER CONVERSATION (context only — from {date}; the user is returning now…)`** block, or `''` (zero prompt cost), never throwing.
 - `whatsapp.js` computes it **only when the fresh `dbHistory` is empty** and passes `reengagementContext` through the existing options channel; `processSakaMessage` (sakaAi.js) appends it to the system instruction right after WORKING MEMORY — **labelled context, never live turns**, so Saka can pick up where the conversation stopped without pretending old messages just arrived. Rule 40 gained one additive sentence.
 
-**PDF link propagation delay (10 s).**
-- `resolveReportPdfLinkDelayMs(env)` in `followups.js` (`REPORT_PDF_LINK_DELAY_MS`, default 10000, clamped 0-30000). `runFleetReport` now waits that long **only when the follow-up message carries a `📄 PDF report:` link** — the "building your report…" ACK, the report build and the email delivery are untouched, and tests can set 0.
+**Inline report PDF budget (v1.77.0).**
+- `resolveInlineReportBudgetMs(env)` in `reportDelivery.js` (`REPORT_INLINE_BUILD_MS`, default 4000, clamped 0-8000; 0 = dashboard link only). The WhatsApp report lane races `buildInlineReportLink()` (build → render → upload → shorten) against this budget and appends `📄 PDF report:` only when it wins — nothing is emailed and nothing is recorded on a miss. **Replaces the retired `REPORT_PDF_LINK_DELAY_MS`** (the async follow-up that needed a propagation delay no longer exists).
+- Monthly sweep: no new timing knob. The gate is `isMonthlyReportWindow()` (Nairobi day-of-month 1, 08:00–08:05) on the same 30-minute worker tick as the weekly sweep, deduped by the `monthlyreports.last_sent_date` marker.
 
 **Warm signup copy.** "Deploy Your Fleet" (corporate/military, off-voice) is gone: the ghost CTA now reads **"Start with your car"** and the signup modal title **"🚀 Meet your car's new friend"**. The landing suite asserts the new copy AND the absence of the old phrase.
 
@@ -5956,6 +5958,20 @@ The `$` anchor is the grammar: `dashboard`, `my dashboard`, `open my dashboard`,
 
 **Rules shaped this work (rule 58).** 1/39/45, 3/4, 7 (country from the phone via `detectCountryFromPhone`), 8 (no VIN/plate changes), 10/11 (stateless suites, targeted runs), 12/33, 13/60 (playbook + core prompt + training assertions), 18 (no autonomous path touched; one additive column, no other DDL), 31 (warm plain copy, one next step), 42 (PROP-2026-11-08-01 remains the only open proposal, unrelated), 50 (slim profile fallback in the admin fleet view, fail-soft audit), 51/52 (five pin classes + findings), 54 (real suite runs), 55 (reused the overview/vehicles/compliance/daybook/compliance-card engines; extracted one identity module instead of duplicating it), 56 (defaults keep existing sessions and rows working), 58 (this report). **No rule was edited or added.** Phase 15 is complete; Phase 16 is next.
 
+### 205. v1.77.0 (Phase 16) — monthly PDF summary + dashboard-first reports (2026-11-08)
+
+**Scope.** Two goals, one release: (1) an opt-in MONTHLY PDF summary emailed on the 1st of each month at 08:00 EAT; (2) the legacy WhatsApp PDF path leaned out — the "building your report…" ACK, the background `fleet_report` job and the on-demand report email are gone, replaced by an instant dashboard-first reply with an optional inline PDF.
+
+**Decisions locked.**
+- **D1 — the async report flow is retired.** `handleReportRequestTurn` answers instantly; `followUpAckText`, `queueReportFollowUp`, `runFleetReport`, `resolveReportPdfLinkDelayMs`, the `FLEET_REPORT` kind and its recovery copy are deleted. The follow-up LANE survives for `driver_unassigned` only (the table, the worker tick and `migrate:followups` are untouched).
+- **D2 — inline fast PDF under a budget.** `REPORT_INLINE_BUILD_MS` (default 4000, clamped 0–8000; 0 = dashboard link only) races `buildInlineReportLink()` (build → render → upload → shorten). On success the reply carries `📄 *PDF report:* <link>` and quota + `REPORT_GENERATED` activation are recorded; on a miss the dashboard link is the complete answer and nothing is recorded. The retired knob was `REPORT_PDF_LINK_DELAY_MS`.
+- **D3 — vehicle summary keeps its email.** `deliverReportPdf` is unchanged in behaviour (it now calls the extracted `renderReportPdfBuffer`), and `vehicleSummary`'s explicit "vehicle summary pdf" ask still emails.
+- **D4 — the monthly gate.** `isMonthlyReportWindow()` = Nairobi day-of-month 1, 08:00–08:05, claim-first marker `monthlyreports.last_sent_date` (new `CONFIG_KEY_MONTHLY_REPORTS_LAST_SENT`, owner `monthlyReports`, not boot-critical). `runMonthlyReportsSweep()` batches 200 opted-in owners, requires an email and ≥1 ACTIVE vehicle, builds the previous Nairobi calendar month (`buildCustomReport` + `bounds`), renders a Buffer (`renderReportPdfBuffer`) and emails it. **No WhatsApp message, no quota, no activation** (weekly precedent, rule 26).
+- **D5 — the opt-in column.** `profiles.monthly_report_opt_in boolean NOT NULL DEFAULT false` — migration `npm run migrate:monthly-reports` (idempotent `ADD COLUMN IF NOT EXISTS`) + the staging schema CREATE/ALTER. The dashboard Settings page gained a **Monthly PDF summary** toggle with its own `action=save_monthly` marker (each toggle writes ONLY its own column); rule 50 degrades honestly when the column is missing.
+- **D6 — WhatsApp symmetry.** `monthly report on|off` + a bare `monthly report` state read mirror the weekly toggle (a pre-read write lane, zero tokens, anchored so a report request is never swallowed).
+- **D7 — the email.** `sendMonthlyReportEmail()` in `mailer.js` — Resend attachment (native Buffer), `reports@reports.sakafleet.com`, filename `saka-monthly-<Month_Year>.pdf`, warm plain copy, never throws (`false` = honest failure).
+
+**The monthly period is engine-owned.** `previousMonthBounds(now)` derives the previous Nairobi calendar month with `+03:00` ISO bounds and a fixed English label, then `buildCustomReport` runs with `bounds` (the Phase 14D override) and the six financial metrics (`total_spend, earnings, net_profit, fuel_spend, fuel_litres, distance`). The rendered PDF is re-titled `Monthly Financial Summary` with the month as `periodLabel` — the dashboard can never drift from the email because both ride the same engine.
 
 
 
@@ -5969,5 +5985,27 @@ The `$` anchor is the grammar: `dashboard`, `my dashboard`, `open my dashboard`,
 
 
 
+
+
+
+
+**Rule 51 sibling sweep.**
+| Class | Siblings audited | Result |
+|---|---|---|
+| i — a phrase claimed by a report-request lane | `monthly report on|off` and bare `monthly report` are anchored BEFORE the intent; "send me the monthly report pdf" never matches | pinned |
+| ii — a dead surface after a feature retires | `pending_followups` rows of the retired kind are failed honestly, never sent; the driver-unassigned lane still delivers | pinned |
+| iii — a budget that silently drops the PDF | a budget miss answers the dashboard link and records NOTHING (no phantom quota, no phantom activation) | pinned |
+| iv — a schema column nobody migrated | the sweep returns `column-missing`, RELEASES the marker (no month burned) and logs the exact `npm run migrate` line | pinned |
+| v — a double-send window | claim-first marker + replay no-op + per-owner fail-soft | pinned (replay + event order) |
+
+**Rule 52 deep audit — findings.** (1) `dashboardBaseUrl()` already ends in `/d`, so the lane builds `${dashboardBaseUrl()}/reports` (the first draft produced `/d/d/reports`; the new suite pins it). (2) `recordReportUsage` was referenced by the new lane but no longer imported — the pinned quota assertion caught it before ship. (3) The brief asked for the column in `DASHBOARD_SQL`; that DDL owns `dashboard_sessions`, so the profiles column lives in the profiles migration + provisioning (documented correction). (4) `reset-db.js` needed no change (`profiles` is already in the wipe scope); `test_db_reset_scope` now pins all three schema carriers instead.
+
+**Frames touched.** `src/workers/monthlyReports.js` (new: window, previous-month bounds, sweep), `src/services/systemConfigKeys.js` (+key), `index.js` (+tick, +import), `src/services/reportDelivery.js` (`renderReportPdfBuffer`, `resolveInlineReportBudgetMs`, `buildInlineReportLink`; `deliverReportPdf` reuses the renderer), `src/services/mailer.js` (`sendMonthlyReportEmail`), `src/services/followups.js` (lean-out), `src/routes/whatsapp/hooks.js` (−H10), `src/routes/whatsapp/commands.js` (dashboard-first lane + inline budget + monthly toggle + the `recordReportUsage` import fix), `src/routes/whatsapp/messages.js` (drop the argument, wire the monthly toggle), `src/services/envAudit.js` + `.env.example` (knob swap), `src/services/dashboard.js` (settings monthly read/write, renderer, `saveSettings` patch), `src/routes/dashboard.js` (POST action marker), `src/services/flowKnowledge.js` (`SAKA_REPORT_DELIVERY_PLAYBOOK`, REQUEST_REPORT behavior), `sakaAi.js` (core prompt), `scripts/provision_staging_schema.js`, `scripts/run_monthly_reports_migration.js` (new), `scripts/mockSupabase.js` (Storage surface), `package.json` (1.77.0 + `migrate:monthly-reports`), `test_monthly_reports.js` (new, 43), `test_report_lane.js` (new, 32), `test_dashboard.js` (+13: 589 → 602), `test_followups.js` (15 → 20), `test_weekly_reports.js` (+3), `test_system_config_keys.js` (+2: 38 → 40), `test_db_reset_scope.js` (+4: 94 → 98), `test_agent_training.js` (+5: 200 → 205), `landing/data/changelog.json`, `docs/`, this file, `CHANGELOG.md`.
+
+**Suites run.** Baseline: test_weekly_reports, test_followups, test_report_builders (83), test_fleet_reports (42), test_dashboard (589), test_agent_training (200), test_system_config_keys (38), test_db_reset_scope (94), test_read_registry (212) — all green. After: **test_monthly_reports (43)**, **test_report_lane (32)**, **test_dashboard (602)**, **test_followups (20)**, **test_weekly_reports (+3)**, **test_system_config_keys (40)**, **test_db_reset_scope (98)**, **test_agent_training (205)**, test_report_builders (83 — unchanged), test_fleet_reports (42 — unchanged), test_read_registry (212 — unchanged), test_doc_sync, `npm run health` — green.
+
+**Recurrence autopsy (rule 51).** *Defect class "a knob that outlives its feature"* → the retired `REPORT_PDF_LINK_DELAY_MS` is removed from code, env audit and `.env.example` in the same commit; *"a lane that references a helper it no longer imports"* → the new lane suite pins quota recording, which caught exactly that; *"a scheduled sweep that burns its marker on a schema it cannot read"* → `column-missing` releases the claim.
+
+**Rules shaped this work (rule 58).** 1/39/45, 3/4, 7 (Nairobi month + local currency), 10/11 (stateless suites, targeted runs), 12/33, 13/60 (playbook + core prompt + training assertions), 21 (one knob swapped, `.env.example` canonical order kept), 23/24 (entitlements → quota untouched), 26 (a scheduled summary never records quota/activation), 31 (warm plain copy, one next step), 42 (PROP-2026-11-08-01 is the only open proposal, unrelated), 50 (column-missing release, honest settings degrade), 51/52 (five pin classes + findings), 54 (real suite runs), 55 (one renderer, one engine, one email path reused), 56 (existing accounts default OFF and keep working), 58 (this report). **No rule was edited or added.** Phase 16 — and the whole dashboard programme — is complete.
 
 

@@ -99,6 +99,21 @@ function run() {
     'the boot DDL adds the role idempotently to a table created before v1.76.0'
   );
 
+  console.log('--- Test 8: the monthly report opt-in is a schema carrier (v1.77.0) ---');
+  const monthlyMigrationSource = fs.readFileSync(path.join(here, 'scripts', 'run_monthly_reports_migration.js'), 'utf8');
+  assert(
+    /monthly_report_opt_in boolean NOT NULL DEFAULT false/.test(provisionSource),
+    'the provisioning schema carries profiles.monthly_report_opt_in (default false = opt-in)'
+  );
+  assert(
+    provisionSource.includes('ADD COLUMN IF NOT EXISTS monthly_report_opt_in'),
+    'the provisioning schema upgrades a pre-1.77.0 profiles table in place'
+  );
+  assert(
+    /ADD COLUMN IF NOT EXISTS monthly_report_opt_in boolean NOT NULL DEFAULT false/.test(monthlyMigrationSource),
+    'npm run migrate:monthly-reports is additive and idempotent'
+  );
+
   console.log(`\n🎉 ${passed} reset-scope assertions passed.`);
 }
 

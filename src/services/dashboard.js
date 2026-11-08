@@ -1628,10 +1628,10 @@ export async function buildDashboardCustomReport({
 }
 
 /**
- * `/d/settings` (Phase 14D) — the owner's preferences. Only
- * `weekly_report_opt_in` is editable here (the SAME column the WhatsApp
- * `weekly report on|off` lane and the Monday worker use — one source of truth).
- * Everything else is shown read-only; email/units stay in WhatsApp by design.
+ * `/d/settings` (Phase 14D; v1.77.0 adds the monthly opt-in) — the owner's
+ * preferences. `weekly_report_opt_in` and `monthly_report_opt_in` are editable
+ * here (the SAME columns the WhatsApp toggles and the sweeps use — one source of
+ * truth). Everything else is shown read-only; email/units stay in WhatsApp.
  */
 export async function buildSettingsPage({
   supabase,
@@ -1644,29 +1644,37 @@ export async function buildSettingsPage({
   const ctx = buildGlobalContext(countryInfo, profile);
   let weeklyReportOn = false;
   let weeklyReportKnown = true;
+  let monthlyReportOn = false;
+  let monthlyReportKnown = true;
   let planLabel = 'Free';
   try {
     const { data, error } = await supabase
       .from('profiles')
-      .select('weekly_report_opt_in, subscription_tier, subscription_status')
+      .select('weekly_report_opt_in, monthly_report_opt_in, subscription_tier, subscription_status')
       .eq('id', ownerId)
       .maybeSingle();
     if (error) {
       // Rule 50 — an un-migrated column never fakes a preference.
+      const monthlyMissing = /monthly_report_opt_in/i.test(error.message || '');
       weeklyReportKnown = false;
+      monthlyReportKnown = !monthlyMissing;
       logWriteFailure(supabase, 'dashboard.buildSettingsPage', error);
     } else if (data) {
       weeklyReportOn = data.weekly_report_opt_in === true;
+      monthlyReportOn = data.monthly_report_opt_in === true;
       planLabel = getTierLabel(data.subscription_tier || 'free');
     }
   } catch (err) {
     weeklyReportKnown = false;
+    monthlyReportKnown = false;
     logWriteFailure(supabase, 'dashboard.buildSettingsPage', err);
   }
   return {
     ok: true,
     weeklyReportOn,
     weeklyReportKnown,
+    monthlyReportOn,
+    monthlyReportKnown,
     planLabel,
     emailMasked: maskEmail(profile?.email),
     phoneMasked: maskPhone(profile?.phone_number),
@@ -1680,17 +1688,24 @@ export async function buildSettingsPage({
   };
 }
 
-/** The ONE writable preference. A failed write never claims success (rule 50). */
-export async function saveSettings({ supabase, ownerId = null, weeklyReportOn = null } = {}) {
+/**
+ * The writable preferences. A failed write never claims success (rule 50).
+ * Each toggle saves INDEPENDENTLY: a stray or partial POST can never silently
+ * flip the other one.
+ */
+export async function saveSettings({ supabase, ownerId = null, weeklyReportOn = null, monthlyReportOn = null } = {}) {
   if (!supabase || !ownerId) return { ok: false, error: 'Your session is not valid — reply *dashboard* on WhatsApp for a fresh link.' };
-  if (typeof weeklyReportOn !== 'boolean') return { ok: false, error: 'Nothing to save — nothing changed.' };
+  const patch = {};
+  if (typeof weeklyReportOn === 'boolean') patch.weekly_report_opt_in = weeklyReportOn;
+  if (typeof monthlyReportOn === 'boolean') patch.monthly_report_opt_in = monthlyReportOn;
+  if (Object.keys(patch).length === 0) return { ok: false, error: 'Nothing to save — nothing changed.' };
   try {
-    const { error } = await supabase.from('profiles').update({ weekly_report_opt_in: weeklyReportOn }).eq('id', ownerId);
+    const { error } = await supabase.from('profiles').update(patch).eq('id', ownerId);
     if (error) {
       logWriteFailure(supabase, 'dashboard.saveSettings', error);
       return { ok: false, error: 'I could not save that setting — nothing changed. Please try again.' };
     }
-    return { ok: true, weeklyReportOn };
+    return { ok: true, weeklyReportOn, monthlyReportOn };
   } catch (err) {
     logWriteFailure(supabase, 'dashboard.saveSettings', err);
     return { ok: false, error: 'I could not save that setting — nothing changed. Please try again.' };
@@ -2635,7 +2650,17 @@ ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
     <input type="hidden" name="action" value="save_weekly">
     <p class="muted" style="font-size:13px;">It never uses your monthly report quota.</p>
     ${settings.weeklyReportKnown === false ? '<p class="muted" style="font-size:13px;">I could not read this setting just now — saving will still work.</p>' : ''}
-    <p><button type="submit">Save preferences</button></p>
+    <p><button type="submit">Save weekly report</button></p>
+  </form>
+</div>
+<h2>Monthly PDF summary</h2>
+<div class="card">
+  <form method="POST" action="/d/settings">
+    <label class="check"><input type="checkbox" name="monthly_report" value="on"${settings.monthlyReportOn ? ' checked' : ''}> <span>Email me my fleet's month as a PDF on the 1st of every month at 8:00 AM</span></label>
+    <input type="hidden" name="action" value="save_monthly">
+    <p class="muted" style="font-size:13px;">One email with the branded PDF attached — it never uses your monthly report quota, and it is separate from the Monday summary.</p>
+    ${settings.monthlyReportKnown === false ? '<p class="muted" style="font-size:13px;">I could not read this setting just now — saving will still work.</p>' : ''}
+    <p><button type="submit">Save monthly summary</button></p>
   </form>
 </div>
 <h2>Your data</h2>

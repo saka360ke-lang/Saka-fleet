@@ -9,8 +9,10 @@
  */
 
 import assert from 'assert';
+import fs from 'node:fs';
 import { createMockSupabase } from './scripts/mockSupabase.js';
-import { notifyDriverUnassigned, processPendingFollowUps, resolveReportPdfLinkDelayMs, FOLLOWUP_KINDS } from './src/services/followups.js';
+import { notifyDriverUnassigned, processPendingFollowUps, FOLLOWUP_KINDS } from './src/services/followups.js';
+import * as followupsModule from './src/services/followups.js';
 import { unassignDriverFromVehicle, deleteVehicle } from './src/services/vehicles.js';
 
 let passed = 0;
@@ -71,10 +73,23 @@ async function run() {
   await processPendingFollowUps({ supabase: complianceMock.client, sendFn: async (_phone, text) => { complianceText.push(text); } });
   check(/three times/i.test(complianceText[0] || ''), 'Compliance notice explains the three-strike rule');
 
-  console.log('\n--- Test 6: PDF link propagation delay knob (v1.59.4) ---');
-  check(resolveReportPdfLinkDelayMs({}) === 10000, 'the PDF link delay defaults to 10 seconds');
-  check(resolveReportPdfLinkDelayMs({ REPORT_PDF_LINK_DELAY_MS: '0' }) === 0, 'the knob can disable the delay (tests)');
-  check(resolveReportPdfLinkDelayMs({ REPORT_PDF_LINK_DELAY_MS: '99999' }) === 30000, 'the delay is clamped to 30 seconds');
+  console.log('\n--- Test 6: the retired fleet-report job (v1.77.0, Phase 16) ---');
+  check(Object.keys(FOLLOWUP_KINDS).join(',') === 'DRIVER_UNASSIGNED', 'the lane carries ONLY the driver-unassigned kind (FLEET_REPORT retired)');
+  check(followupsModule.runFleetReport === undefined && followupsModule.followUpAckText === undefined
+    && followupsModule.resolveReportPdfLinkDelayMs === undefined,
+    'the async report helpers are gone from the module surface');
+  const staleMock = createMockSupabase({
+    pending_followups: [{ id: 'stale-1', phone: '+254700000013', kind: 'fleet_report', payload: {}, status: 'pending', scheduled_for: new Date(Date.now() - 60000).toISOString(), created_at: new Date().toISOString() }]
+  });
+  const staleSends = [];
+  const stale = await processPendingFollowUps({ supabase: staleMock.client, sendFn: async (phone, text) => { staleSends.push(text); } });
+  check(stale.sent === 0 && stale.failed === 1 && staleSends.length === 0, 'a stale pre-deploy report row is failed honestly, never sent');
+  check(/unknown or empty follow-up/.test(staleMock.db.pending_followups[0]?.error || ''), 'the failure reason names the retired kind');
+  const source = fs.readFileSync('./src/services/followups.js', 'utf8');
+  const commandsSource = fs.readFileSync('./src/routes/whatsapp/commands.js', 'utf8');
+  check(!/Building your/.test(source) && !/followUpAckText/.test(commandsSource), 'the "building your report" copy is gone from both the lane and the service');
+  check(!/queueReportFollowUp|fleet_report/.test(commandsSource), 'the WhatsApp lane never queues a report job again');
+  check(commandsSource.includes('dashboardBaseUrl()}/reports'), 'the report lane points at the dashboard Reports page first');
 
   console.log(`\n🎉 ${passed} follow-up/unassignment assertions passed.`);
 }

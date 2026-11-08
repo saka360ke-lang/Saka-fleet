@@ -41,6 +41,58 @@ export async function sendReportByEmail(targetEmail, plateNumber, pdfBuffer) {
     }
 }
 
+/**
+ * Saka Fleet — Monthly PDF summary email (v1.77.0, Phase 16).
+ * One warm, plain-language email with the branded report attached. The Buffer
+ * comes from `renderReportPdfBuffer` (no Storage, no link). Never throws:
+ * `false` lets the sweep count an honest failure instead of dying.
+ */
+export async function sendMonthlyReportEmail({
+    to,
+    firstName = '',
+    monthLabel = '',
+    countryInfo = null,
+    pdfBuffer = null,
+    plateLabel = 'Fleet'
+} = {}) {
+    if (!to || !pdfBuffer) return false;
+    const name = String(firstName || '').trim();
+    const label = String(monthLabel || '').trim();
+    const safeLabel = label.replace(/[^\w\s-]/g, '').replace(/\s+/g, '_') || 'summary';
+    try {
+        const { data, error } = await getResendClient().emails.send({
+            from: 'Saka Assistant <reports@reports.sakafleet.com>',
+            to: [to],
+            subject: label ? `Your Saka monthly summary — ${label}` : 'Your Saka monthly summary',
+            html: `
+                <div style="font-family: Arial, sans-serif; color: #333; max-width: 560px; margin: auto;">
+                    <h2 style="color: #0f172a;">Your monthly fleet summary${label ? ` — ${label}` : ''}</h2>
+                    <p>${name ? `Hello ${name},` : 'Hello,'}</p>
+                    <p>Here is your fleet's month on one page: spend, earnings, net, fuel, distance and where the money went — attached as a PDF.</p>
+                    <p>Want it for a different period, or a deeper cut? Open your dashboard's Reports page, or just ask me here in WhatsApp.</p>
+                    <p style="font-size: 12px; color: #64748b;">You receive this because the monthly PDF summary is switched on. Reply <strong>monthly report off</strong> in WhatsApp to stop it — your weekly summary setting is separate.</p>
+                    <p>Best regards,<br><strong>Saka Assistant</strong></p>
+                </div>
+            `,
+            attachments: [
+                {
+                    filename: `saka-monthly-${safeLabel}.pdf`,
+                    content: pdfBuffer
+                }
+            ]
+        });
+        if (error) {
+            console.error('[Resend monthly] API error:', error.message || error);
+            return false;
+        }
+        console.log(`[Resend monthly] Summary dispatched to ${to}. ID: ${data?.id || 'n/a'}`);
+        return true;
+    } catch (err) {
+        console.error('[Resend monthly] Exception:', err.message);
+        return false;
+    }
+}
+
 export async function sendMfaEmail(targetEmail, code) {
     try {
         const { data, error } = await getResendClient().emails.send({

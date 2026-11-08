@@ -1,6 +1,13 @@
 {
-  "latest": "1.76.0",
+  "latest": "1.77.0",
   "entries": [
+    {
+      "version": "1.77.0",
+      "date": "2026-11-08",
+      "title": "Your month, in your inbox",
+      "preview": "Switch on a monthly PDF summary - and every report in chat now opens instantly on your dashboard.",
+      "summary": "Two things changed, both about getting your numbers faster. First: a Monthly PDF summary you can switch on (in the dashboard Settings page, or by replying monthly report on in WhatsApp). On the 1st of every month at 8:00 AM you get one email with your fleet's month as a branded PDF attached - spend, earnings, net, fuel, distance and where the money went, covering the month that just ended. It never uses your monthly report quota, and it is completely separate from the Monday text summary, so you can have either, both or neither. Second: asking for a report in chat is now instant. Instead of waiting while the report is built in the background, Saka answers immediately with the link to your dashboard Reports page, where every PDF downloads on the spot - and when the file builds quickly enough, the PDF link comes in that same reply. Nothing is emailed on demand any more, so your inbox only ever carries the monthly summary you asked for (plus the vehicle summary PDF when you explicitly request it). Your weekly Monday summary is unchanged. The dashboard remains switched off in production until the walk-through is signed off."
+    },
     {
       "version": "1.76.0",
       "date": "2026-11-08",

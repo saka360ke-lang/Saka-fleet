@@ -84,7 +84,7 @@ console.log('=== SAKA FLEET - SYSTEM_CONFIG KEY REGISTRY (P2-6) ===');
 console.log('--- Test 1: registry integrity ---');
 {
   const entries = Object.entries(SYSTEM_CONFIG_KEYS);
-  check(entries.length === 10, `the registry carries the 10 fixed keys (found ${entries.length})`);
+  check(entries.length === 11, `the registry carries the 11 fixed keys (found ${entries.length})`);
   const legacyKeys = entries.map(([, descriptor]) => descriptor.legacyKey).filter((key) => key !== null);
   check(new Set(legacyKeys).size === legacyKeys.length, 'every legacy key is unique');
   check(entries.every(([key]) => key.includes('.') && /^[a-z]+(\.[a-z0-9_]+)+$/.test(key)), 'every namespaced key is domain.namespaced');
@@ -93,6 +93,8 @@ console.log('--- Test 1: registry integrity ---');
   check(SYSTEM_CONFIG_KEYS[CONFIG_KEY_SAKA_CORE_PROMPT]?.bootCritical === true && SYSTEM_CONFIG_KEYS[CONFIG_KEY_DEPLOY_LAST_REVISION]?.bootCritical === true, 'the two boot-critical keys are flagged (prompt + deploy revision)');
   check(SYSTEM_CONFIG_KEYS['remediation.digest_frequency']?.default === 'twice_daily', 'the digest cadence keeps its engine default');
   check(SYSTEM_CONFIG_KEYS[CONFIG_KEY_WEEKLY_REPORTS_LAST_SENT]?.owner === 'weeklyReports' && SYSTEM_CONFIG_KEYS[CONFIG_KEY_WEEKLY_REPORTS_LAST_SENT]?.legacyKey === null, 'the weekly-reports day marker is registered (v1.73.0, new key with no legacy name)');
+  check(SYSTEM_CONFIG_KEYS['monthlyreports.last_sent_date']?.owner === 'monthlyReports' && SYSTEM_CONFIG_KEYS['monthlyreports.last_sent_date']?.legacyKey === null, 'the monthly-reports day marker is registered (v1.77.0, new key with no legacy name)');
+  check(process.env.CONFIG_KEY_MONTHLY_REPORTS_LAST_SENT === undefined && SYSTEM_CONFIG_KEYS['monthlyreports.last_sent_date']?.bootCritical === false, 'the monthly marker is not boot-critical (a sweep marker never blocks boot)');
   check(SYSTEM_CONFIG_KEY_MODES.join(',') === 'dual,new', 'the two transition modes are dual and new');
 }
 

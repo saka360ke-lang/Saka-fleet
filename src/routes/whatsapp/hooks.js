@@ -3,8 +3,9 @@
  * -----------------------------------------------------------------------------------
  * The wrap-around machinery every answered turn uses: durable session snapshot
  * load/persist, pending-state hydration, transcript + chat-history persistence, the
- * user-context cache read, re-engagement context, the follow-up queue enqueue and the
- * turn-latency telemetry write (turn_latency_logs).
+ * user-context cache read, re-engagement context and the turn-latency telemetry
+ * write (turn_latency_logs). The report follow-up queue (H10) was retired in
+ * v1.77.0 with the async report flow.
  *
  * BOUNDARY CONTRACT (section 189): media.js and hooks.js are leaf route modules that may
  * import from src/services/* and src/workers/sentinel.js (a logging dependency that
@@ -20,7 +21,6 @@ import { getUserContextCache, formatUserFactsBlock } from '../../services/userCo
 import { loadSessionSnapshot, persistSessionSnapshot } from '../../services/sessionStore.js';
 import { hydrateSessionPending } from '../../services/pendingState.js';
 import { logTurnLatency } from '../../services/turnLatency.js';
-import { enqueueFollowUp, FOLLOWUP_KINDS } from '../../services/followups.js';
 
 /**
  * H1 - durable session snapshot persist (fail-soft, never throws). The processor reads
@@ -124,19 +124,6 @@ export function loadReengagementContext({ supabaseClient, senderPhone, hasFreshH
   return hasFreshHistory ? Promise.resolve(null) : getReengagementContext(supabaseClient, senderPhone);
 }
 
-/**
- * H10 - report follow-up queue (v1.16.0 slow-report lane): ACK instantly, build the
- * report in the background and deliver it as a follow-up while the user keeps chatting.
- * The payload is assembled by the processor and passed in whole.
- */
-export async function queueReportFollowUp({ supabase, phone, payload }) {
-  return await enqueueFollowUp({
-    supabase,
-    phone,
-    kind: FOLLOWUP_KINDS.FLEET_REPORT,
-    payload
-  });
-}
 
 /**
  * H11+H12 - user-perceived reply latency (v1.24.1): one row per answered turn with the

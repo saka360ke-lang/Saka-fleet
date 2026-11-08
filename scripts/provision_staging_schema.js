@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   timezone text,
   timezone_confirmed_at timestamp with time zone,
   weekly_report_opt_in boolean NOT NULL DEFAULT false,
+  monthly_report_opt_in boolean NOT NULL DEFAULT false,
   is_active boolean DEFAULT true,
   deleted_at timestamp with time zone,
   created_at timestamp with time zone DEFAULT now(),
@@ -270,6 +271,9 @@ CREATE TABLE IF NOT EXISTS public.dashboard_sessions (
 );
 
 ALTER TABLE public.dashboard_sessions ADD COLUMN IF NOT EXISTS session_role text NOT NULL DEFAULT 'owner';
+-- v1.77.0 (Phase 16) — the monthly PDF summary opt-in. A profiles table created
+-- before this release has no column yet; the ALTER upgrades it in place.
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS monthly_report_opt_in boolean NOT NULL DEFAULT false;
 
 CREATE INDEX IF NOT EXISTS idx_dashboard_sessions_owner ON public.dashboard_sessions (owner_id);
 CREATE INDEX IF NOT EXISTS idx_dashboard_sessions_link_expires ON public.dashboard_sessions (link_expires_at DESC);
