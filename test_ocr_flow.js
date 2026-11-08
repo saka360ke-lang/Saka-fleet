@@ -249,6 +249,59 @@ async function run() {
     ocrCountry: { country_code: 'KE' }
   });
   check(logbookVault.receiptPrefill === null, 'a logbook never carries a receipt prefill (receipts only)');
+  check(logbookVault.documentPrefill === null, 'without downloaded bytes no document prefill is minted (best-effort)');
+
+  // v1.84.0 (Phase 23) — a compliance document keeps its ORIGINAL file.
+  const docInserts = [];
+  const docUploads = [];
+  const docClient = {
+    from(table) {
+      const builder = {
+        select: () => builder,
+        eq: () => builder,
+        gte: () => builder,
+        order: () => builder,
+        limit: async () => ({ data: [], error: null }),
+        maybeSingle: async () => ({ data: null, error: null }),
+        insert: (rows) => {
+          docInserts.push({ table, rows });
+          return { error: null, select: () => ({ maybeSingle: async () => ({ data: { id: 'doc-1', ...rows[0] }, error: null }) }) };
+        },
+        delete: () => builder
+      };
+      return builder;
+    },
+    storage: { from: (bucket) => ({ upload: async (path) => { docUploads.push({ bucket, path }); return { error: null }; } }) }
+  };
+  const documentVault = await resolveReceiptVault({
+    ...vaultArgs,
+    supabaseClient: docClient,
+    entitlements: { receiptVaultStorage: true },
+    ocrResult: { buffer: Buffer.from('%PDF-1.7 logbook'), mimeType: 'application/pdf' },
+    mediaObj: { id: 'media-doc-1', filename: 'logbook.pdf' },
+    ocrKind: 'logbook',
+    ocrText: 'VIN JTE777A1234567890 REG NO KDA 123A',
+    ocrTextSha: 'sha-doc',
+    messageText: 'Logbook',
+    ocrCountry: { country_code: 'KE' }
+  });
+  check(documentVault.documentPrefill?.document_id === 'doc-1', 'a logbook PDF returns { document_id } for the compliance link');
+  check(documentVault.documentPrefill?.document_type === 'logbook', 'the prefill carries the stored document type');
+  check(docInserts.some((entry) => entry.table === 'vehicle_documents'), 'the original file is vaulted as a vehicle document');
+  check(docUploads.some((u) => u.bucket === 'documents' && /^11111111-1111-1111-1111-111111111111\/.+\.pdf$/.test(u.path)), 'the PDF lands under documents/<vehicle_id>/<uuid>.pdf');
+  const driverLicenceVault = await resolveReceiptVault({
+    ...vaultArgs,
+    supabaseClient: docClient,
+    entitlements: { receiptVaultStorage: true },
+    ocrResult: { buffer: Buffer.from('DL'), mimeType: 'image/jpeg' },
+    mediaObj: { id: 'media-doc-2' },
+    ocrKind: 'drivers_licence',
+    ocrText: 'DRIVING LICENCE DL 123456',
+    ocrTextSha: 'sha-doc-2',
+    messageText: 'Licence',
+    ocrCountry: { country_code: 'KE' }
+  });
+  check(driverLicenceVault.documentPrefill === null, 'driver licences stay out of the vehicle vault (§40.2)');
 
   console.log('\n--- Test 7: document classification ---');
   check(classifyOcrDocument('SHELL KAREN\nPUMP 4\nDIESEL 40.5 L\nTOTAL KES 5,500') === 'receipt_fuel', 'Fuel receipts are classified');

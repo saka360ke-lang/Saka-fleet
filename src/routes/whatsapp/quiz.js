@@ -132,6 +132,9 @@ export async function arbitrateQuizTurn({
   // v1.81.0 (Phase 20) — the vaulted receipt id ({ receipt_id }) carried through
   // the engine-only prefill seam (never user text, never AI output).
   receiptPrefill = null,
+  // v1.84.0 (Phase 23) — the vaulted DOCUMENT id ({ document_id }) rides the
+  // same seam so a registration quiz can link its stored certificate.
+  documentPrefill = null,
   forcedNarrativeFlow = null,
   receiptQuizStart = null,
   narrativeSuppressQuiz = false,
@@ -206,12 +209,14 @@ export async function arbitrateQuizTurn({
   } else if (logbookPrefill && !session.quiz && !hasVehicleRegistered) {
     // v1.51.11 — a logbook upload starts registration prefilled with the
     // fields read from the certificate, then confirms the rest.
+    // v1.84.0 (Phase 23) — the vaulted document id rides the same engine-only
+    // prefill so the compliance seeds can link the stored file.
     quizTurn = await handleQuizTurn({
       session,
       messageText: '',
       aiExtracted: {},
       startFlow: 'vehicle_registration',
-      prefill: logbookPrefill,
+      prefill: { ...(logbookPrefill || {}), ...(documentPrefill || {}) },
       ctx: quizCtx
     });
   } else if (receiptPrefill && !session.quiz && receiptQuizStart === 'log_expense' && !forcedNarrativeFlow) {

@@ -60,7 +60,14 @@ export function createMockSupabase(seed = {}, options = {}) {
   function parseOrCondition(fragment) {
     const match = String(fragment || '').trim().match(/^([A-Za-z0-9_]+)\.([a-z]+)\.(.*)$/);
     if (!match) return null;
-    return [match[2], match[1], match[3]];
+    let value = match[3];
+    // v1.84.0 (Phase 23) — PostgREST `col.in.(a,b)` groups (profile wipe uses
+    // them) carry a parenthesised list; parse it into an array like the live API.
+    if (match[2] === 'in') {
+      const inner = String(value).trim().replace(/^\(/, '').replace(/\)$/, '');
+      value = inner ? inner.split(',').map((entry) => entry.trim()) : [];
+    }
+    return [match[2], match[1], value];
   }
 
   function from(table) {
@@ -239,7 +246,10 @@ export function createMockSupabase(seed = {}, options = {}) {
   // v1.77.0 (Phase 16) — Storage surface for the inline report PDF lane.
   // Uploads never touch the network; the URL is deterministic so tests can pin
   // it. `state.uploads` records every object for assertions.
+  // v1.84.0 (Phase 23) — `remove` records deletions in `state.removals` so the
+  // document vault / wipe suites can prove the object left the bucket.
   const storageState = state.uploads = state.uploads || [];
+  const removalState = state.removals = state.removals || [];
   const storage = {
     from(bucket) {
       return {
@@ -248,7 +258,11 @@ export function createMockSupabase(seed = {}, options = {}) {
           return { data: { path }, error: null };
         },
         getPublicUrl: (path) => ({ data: { publicUrl: `https://mock.storage/${bucket}/${path}` } }),
-        createSignedUrl: async (path) => ({ data: { signedUrl: `https://mock.storage/${bucket}/${path}?signed=1` } })
+        createSignedUrl: async (path) => ({ data: { signedUrl: `https://mock.storage/${bucket}/${path}?signed=1` } }),
+        remove: async (paths) => {
+          for (const path of paths || []) removalState.push({ bucket, path });
+          return { data: paths || [], error: null };
+        }
       };
     },
     createBucket: async () => ({ data: {}, error: null })

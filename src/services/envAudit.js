@@ -112,6 +112,9 @@ export const ENV_SECTIONS = Object.freeze([
       'RECEIPT_RETENTION_DAYS',
       'OCR_AI_EXTRACTION',
       'RECEIPTS_BUCKET',
+      // v1.84.0 — Phase 23: the private vehicle-document vault.
+      'DOCUMENTS_BUCKET',
+      'DOCUMENT_LINK_WINDOW_HOURS',
       // v1.79.0 — Phase 18: voice-note Speech-to-Text (same GCP project as Vision).
       'STT_ENABLED',
       'GCP_SPEECH_API_KEY',

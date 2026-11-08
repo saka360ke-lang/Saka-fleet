@@ -58,6 +58,8 @@ async function run() {
   check(m1.deleted.includes('private_earnings'), 'wipe deletes private_earnings');
   check(m1.deleted.includes('chat_sessions'), 'wipe deletes chat_sessions');
   check(m1.deleted.includes('vin_registry'), 'wipe deletes vin_registry (clean slate)');
+  // v1.84.0 (Phase 23) — stored compliance documents are wiped with the account.
+  check(m1.deleted.includes('vehicle_documents'), 'wipe deletes vehicle_documents (stored certificates)');
   const ctCall = m1.deleteCalls.find((c) => c.table === 'chat_transcripts');
   check(ctCall && ctCall.vals.includes('254734852529'), 'wipe matches the bare 254... phone form');
   check((await wipeProfileForSignup(m1.client, '123')).ok === false, 'short phone is rejected');

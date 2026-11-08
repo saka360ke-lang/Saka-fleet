@@ -20,6 +20,7 @@ import {
   SAKA_BOUNDARY_RULES,
   SAKA_TONE_COMPASS,
   buildFlowPlaybook,
+  guidanceForFlow,
   getKnownFlowKeys
 } from './src/services/flowKnowledge.js';
 import { getFlowDefinition, startQuiz } from './src/services/quizEngine.js';
@@ -80,6 +81,11 @@ check(DEFAULT_SAKA_CORE_PROMPT.includes('DETERMINISTIC COMMANDS (v1.73.0'), 'Cor
 check(DEFAULT_SAKA_CORE_PROMPT.includes('"my ticket"') && DEFAULT_SAKA_CORE_PROMPT.includes('Read-only'), 'Core prompt teaches the own-ticket status read (read-only)');
 check(DEFAULT_SAKA_CORE_PROMPT.includes('"weekly report on"') && DEFAULT_SAKA_CORE_PROMPT.includes('never uses the report quota'), 'Core prompt teaches the weekly-report toggle (no quota)');
 check(DEFAULT_SAKA_CORE_PROMPT.includes('Pagination (v1.73.0)') && DEFAULT_SAKA_CORE_PROMPT.includes('VIEW-ONLY'), 'Core prompt teaches view-only pagination');
+// v1.84.0 (Phase 23) — the stored document vault: prompt + playbook + guidance.
+check(DEFAULT_SAKA_CORE_PROMPT.includes('STORED DOCUMENTS (v1.84.0'), 'Core prompt teaches the stored document vault');
+check(DEFAULT_SAKA_CORE_PROMPT.includes('delete document N'), 'Core prompt names the document delete command');
+check(DEFAULT_SAKA_CORE_PROMPT.includes('document_vault:'), 'The document-vault stuck-guidance line renders into the core prompt (rule 60)');
+check(Boolean(guidanceForFlow('document_vault')), 'flowKnowledge registers a stuck-guidance line for the document vault');
 const editEntryBehavior = SAKA_INTENT_PLAYBOOK.find((row) => row.intent === 'EDIT_ENTRY');
 check(Boolean(editEntryBehavior) && editEntryBehavior.behavior.includes('v1.73.0 pagination'), 'EDIT_ENTRY playbook documents pagination');
 const reportBehavior = SAKA_INTENT_PLAYBOOK.find((row) => row.intent === 'REQUEST_REPORT');

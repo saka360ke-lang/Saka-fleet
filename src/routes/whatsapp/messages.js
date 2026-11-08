@@ -134,6 +134,8 @@ import {
   persistCapturedCompliance
 } from './pending.js';
 import { arbitrateQuizTurn, finalizeQuizOutcome, renderRoleActions } from './quiz.js';
+// v1.84.0 (Phase 23) — a vaulted compliance document links to the row it proved.
+import { linkSavedComplianceDocument } from '../../services/vehicleDocuments.js';
 // v1.69.0 — Phase 5B-4: the final leaf modules (commands + admin + conversation + support).
 import {
   resolveCountryCommand,
@@ -142,6 +144,9 @@ import {
   parseReceiptDeleteCommand,
   parseVehicleSummaryCommand,
   handleReceiptDeleteTurn,
+  // v1.84.0 (Phase 23) — the stored-document delete lane (mirrors receipts).
+  parseDocumentDeleteCommand,
+  handleDocumentDeleteTurn,
   renderPassbookSnapshot,
   handleUnassignDriverTurn,
   handleViewProfileTurn,
@@ -687,7 +692,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         const countryLearningsLine = await getCountryLearningsLine({ supabase: supabaseClient, countryCode: bucketCountryCode }).catch(() => "");
         if (countryLearningsLine) jurisdictionContext = jurisdictionContext + "\n" + countryLearningsLine;
 
-        const { duplicateReceipt, logbookPrefill, receiptPrefill } = await resolveReceiptVault({
+        const { duplicateReceipt, logbookPrefill, receiptPrefill, documentPrefill } = await resolveReceiptVault({
           supabaseClient,
           mediaObj,
           ocrPaused,
@@ -706,6 +711,19 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           messageText,
           ocrCountry
         });
+
+        // v1.84.0 (Phase 23) — a vaulted compliance document (logbook/insurance/
+        // inspection/road licence) is remembered for this turn so the compliance
+        // row that is saved afterwards links back to the exact file. Session
+        // MEMORY only (30-minute TTL helper), never a new conversation step.
+        if (documentPrefill?.document_id) {
+          session.pendingVehicleDocument = {
+            document_id: documentPrefill.document_id,
+            document_type: documentPrefill.document_type || 'other',
+            vehicle_id: currentActiveVehicle?.id || existingVehicles[0]?.id || null,
+            at: new Date().toISOString()
+          };
+        }
 
         // Pass message through DeepSeek Intent Classifier (sakaAi.js) with Active Fleet Context
         const activeVehicleContext = hasVehicleRegistered ? {
@@ -731,6 +749,8 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         // v1.58.15 — deterministic receipt delete stays a WRITE lane (rule 37).
         // v1.69.0 — Phase 5B-4: the parse lives in ./commands.js.
         const receiptDeleteCommand = parseReceiptDeleteCommand({ commandText });
+        // v1.84.0 (Phase 23) — the stored-document delete lane (same write-lane shape).
+        const documentDeleteCommand = parseDocumentDeleteCommand({ commandText });
 
 
 
@@ -839,6 +859,9 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           } else if (receiptDeleteCommand) {
             // v1.69.0 — Phase 5B-4: the receipt-delete write lane lives in ./commands.js.
             aiResult = await handleReceiptDeleteTurn({ supabaseClient, profileData, existingVehicles, receiptDeleteCommand, senderPhone });
+          } else if (documentDeleteCommand) {
+            // v1.84.0 (Phase 23) — the stored-document delete lane lives in ./commands.js.
+            aiResult = await handleDocumentDeleteTurn({ supabaseClient, profileData, existingVehicles, documentDeleteCommand, senderPhone });
           } else {
             // v1.69.0 — Phase 5B-4: the AI turn (fast-quiz regex or provider call) lives in ./conversation.js.
             aiResult = await runSakaAiTurn({
@@ -1074,6 +1097,15 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
                   timeZone: vehicleTimeZone
                 });
                 if (result.ok) {
+                  // v1.84.0 (Phase 23) — link the stored certificate to the row
+                  // it proved (the prefill id wins; newest matching file is the
+                  // deterministic fallback). A link can never fail the save.
+                  await linkSavedComplianceDocument({
+                    supabase: supabaseClient,
+                    vehicleId: targetVehicle.id,
+                    complianceType: entry.item.type,
+                    documentId: session.pendingVehicleDocument?.document_id || null
+                  });
                   const expiryLabel = entry.parsed.lifetime ? 'valid for life' : entry.parsed.expiry;
                   // v1.32.2 — show days-left so a misread date is visible instantly.
                   const days = Number(entry.parsed.daysLeft);
@@ -1375,6 +1407,9 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           // v1.81.0 — the vaulted receipt id rides the engine-only prefill seam
           // into the log_expense quiz (durable receipt→expense link).
           receiptPrefill,
+          // v1.84.0 (Phase 23) — the vaulted DOCUMENT id rides the same seam so
+          // the compliance save can link the stored file to its ledger row.
+          documentPrefill,
           forcedNarrativeFlow,
           receiptQuizStart,
           narrativeSuppressQuiz,

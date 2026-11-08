@@ -1,5 +1,7 @@
 import { extractDatePhrase, diffCalendarDays, SYSTEM_TIMEZONE } from './dateParser.js';
 import { resolveVehicleComplianceCatalog, submitVehicleCompliance } from './vehicleCompliance.js';
+// v1.84.0 (Phase 23) — a corrected compliance row re-links its stored document.
+import { linkSavedComplianceDocument } from './vehicleDocuments.js';
 
 /**
  * Saka Fleet — Deterministic compliance & reminder answers (v1.32.2)
@@ -484,6 +486,9 @@ export async function applyComplianceCorrection({
   locale = 'en-US',
   timeZone = SYSTEM_TIMEZONE,
   ownerId = null,
+  // v1.84.0 (Phase 23) — the vaulted document id (when the correction follows
+  // a photo). The deterministic vehicle+type match is the fallback.
+  documentId = null,
   now = new Date()
 } = {}) {
   if (!supabase || !vehicle?.id) return { ok: false, error: 'vehicle required' };
@@ -525,6 +530,13 @@ export async function applyComplianceCorrection({
     now
   });
   if (!saved?.ok) return { ok: false, error: saved?.error || 'save failed' };
+  // v1.84.0 (Phase 23) — the corrected row keeps its proof document linked.
+  await linkSavedComplianceDocument({
+    supabase,
+    vehicleId: vehicle.id,
+    complianceType: kind,
+    documentId
+  });
   return {
     ok: true,
     kind,

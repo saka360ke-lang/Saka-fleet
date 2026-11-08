@@ -10,6 +10,8 @@
  */
 
 import { RECEIPTS_BUCKET, receiptStoragePaths } from './receipts.js';
+// v1.84.0 (Phase 23) — the stored compliance documents must leave no PII behind.
+import { DOCUMENTS_BUCKET } from './vehicleDocuments.js';
 
 export async function wipeProfileForSignup(supabase, rawPhone) {
   if (!supabase || !rawPhone) return { ok: false, reason: 'missing phone or client' };
@@ -82,6 +84,25 @@ export async function wipeProfileForSignup(supabase, rawPhone) {
       }
     }
   } catch { /* best effort */ }
+
+  // v1.84.0 (Phase 23) — stored compliance documents (rows + bucket objects).
+  try {
+    const documentOr = [];
+    if (profileIds.length) documentOr.push('uploaded_by.in.(' + profileIds.join(',') + ')');
+    if (vehicleIds.length) documentOr.push('vehicle_id.in.(' + vehicleIds.join(',') + ')');
+    if (documentOr.length) {
+      const { data: documentRows } = await supabase.from('vehicle_documents').select('storage_path').or(documentOr.join(','));
+      const documentPaths = [...new Set((documentRows || []).map((row) => row.storage_path).filter(Boolean))];
+      if (documentPaths.length) {
+        const { error: documentStorageError } = await supabase.storage.from(DOCUMENTS_BUCKET).remove(documentPaths);
+        if (!documentStorageError) counts.document_storage_objects = documentPaths.length;
+      }
+    }
+  } catch (docWipeErr) {
+    console.warn('[profileWipe] document vault skipped:', docWipeErr?.message || docWipeErr);
+  }
+  await del('vehicle_documents', 'vehicle_id', vehicleIds);
+  await del('vehicle_documents', 'uploaded_by', profileIds);
 
   await del('receipts', 'vehicle_id', vehicleIds);
   await del('driver_assignments', 'vehicle_id', vehicleIds);

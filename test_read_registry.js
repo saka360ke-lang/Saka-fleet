@@ -35,6 +35,9 @@ const SUMMARY_RE = /(?:(?:send|email|resend|share|mail)\b[\s\S]{0,40}(?:registra
 const UPLOAD_MENU_RE = /^(?:upload|send|share|scan)\s+(?:a\s+)?(?:document|doc|documents|photo|file|files)s?$|^what\s+(?:documents?|files?)\s+(?:can|may|do)\s+(?:i|you)\s+(?:send|upload|accept)\b|^(?:documents?|docs?)\s+(?:list|supported)$/i;
 const VEHICLES_RE = /^(?:(?:list|show|view)\s+)?(?:my\s+)?(?:cars|vehicles|fleet)$|^(?:vehicle|car)\s+list$|^manage\s+(?:my\s+)?(?:vehicles?|cars?)$/i;
 const RECEIPT_DELETE_RE = /^(?:delete|remove)\s+receipts?\s+([1-5])(?:\s+(DELETE))?$/i;
+// v1.84.0 (Phase 23) — the stored-document vault lanes (list + delete).
+const DOCUMENT_DELETE_RE = /^(?:delete|remove)\s+documents?\s+([1-5])(?:\s+(DELETE))?$/i;
+const DOCUMENTS_LIST_RE = /^(?:(?:my|our|vehicle|stored|compliance)\s+)?documents?$|^document\s+vault$/i;
 const MY_RULES_RE = /^(?:my\s+rules?|country\s+rules?|what\s+(?:are\s+)?my\s+rules?|compliance\s+rules?)$/i;
 const REQUIRED_DOCS_RE = /^(?:required\s+(?:documents?|docs?)|what\s+documents?\s+do\s+i\s+need|my\s+document\s+requirements?)$/i;
 const EXAMPLE_COMPLIANCE_RE = /^(?:example\s+(?:compliance|document|submission)|give\s+me\s+an\s+example|example\s+text)$/i;
@@ -120,7 +123,9 @@ function oldResolve(text, ctx = {}) {
   if (recordQuestion.ok && ctx.supabaseClient && ctx.profile?.id) return 'records_query'; // 2108
 
   if (RECEIPT_DELETE_RE.test(t)) return 'receipt_delete';                      // 2179 (write, stays inline)
+  if (DOCUMENT_DELETE_RE.test(t)) return 'document_delete';                    // v1.84.0 (write, stays inline)
   if (oldReceiptsCommand(raw)) return 'receipts_list';                         // 2203
+  if (DOCUMENTS_LIST_RE.test(t)) return 'documents_list';                      // v1.84.0 (stored files)
   if (ctx.fastQuizTurn) return 'quiz_turn';                                    // 2215
   return null;                                                                 // 2218 (AI)
 }
@@ -191,6 +196,8 @@ const FIXTURES = [
   { text: 'what did I log yesterday?', ctx: baseCtx(), expected: 'records_query' },
   { text: 'that record cannot be right', ctx: baseCtx({ session: { lastRecordQuery: { at: new Date('2026-11-06T08:55:00+03:00').getTime(), spec: { kind: 'total', earning: false, expenseTypes: ['fuel'], range: null, vehiclePlate: null, keyword: null, text: 'how much did I spend on fuel last week?' } } } }), expected: 'records_query' },
   { text: 'receipts', ctx: baseCtx(), expected: 'receipts_list' },
+  // v1.84.0 (Phase 23) — the stored document vault (list lane + inline delete).
+  { text: 'documents', ctx: baseCtx(), expected: 'documents_list' },
 
   // v1.73.0 (Phase 10, P3-1 / A1) — a CURSORLESS "more"/"next" must never be
   // claimed by the registry; it falls through to the AI exactly as before.
@@ -200,6 +207,7 @@ const FIXTURES = [
   // Kept-inline branches — the registry must never claim them
   { text: 'my country', ctx: baseCtx(), expected: 'country_command' },
   { text: 'delete receipt 2', ctx: baseCtx(), expected: 'receipt_delete' },
+  { text: 'delete document 2', ctx: baseCtx(), expected: 'document_delete' },
   { text: 'help', ctx: baseCtx({ ocrPaused: true }), expected: 'ocr_paused' },
 
   // Live-failure corpus (never hijacked — §152 defect class)
@@ -263,7 +271,7 @@ function check(cond, msg) { assert(cond, msg); passed += 1; console.log(`  ✅ $
 console.log('=== SAKA FLEET — READ COMMAND REGISTRY EQUIVALENCE (v1.63.3) ===\n');
 
 console.log('--- Test 1: every fixture resolves to the OLD chain id ---');
-const KEPT_INLINE = new Set(['ocr_paused', 'country_command', 'receipt_delete', 'quiz_turn']);
+const KEPT_INLINE = new Set(['ocr_paused', 'country_command', 'receipt_delete', 'document_delete', 'quiz_turn']);
 // ocrPaused is a ROUTE guard that runs before the registry; it is proven by the
 // route-order assertion below, not by the lane differential.
 const differentialFixtures = FIXTURES.filter((fixture) => !fixture.ctx.ocrPaused);
@@ -584,5 +592,18 @@ else process.env.SUPERADMIN_PHONE = previousSuperadmin;
 if (previousDashFlag === undefined) delete process.env.DASHBOARD_ENABLED;
 else process.env.DASHBOARD_ENABLED = previousDashFlag;
 
+// ── v1.84.0 (Phase 23) — the stored document vault lanes ────────────────────
+console.log('\n--- Test 8: v1.84.0 documents_list lane (Phase 23) ---');
+for (const text of ['documents', 'my documents', 'vehicle documents', 'stored documents', 'document vault']) {
+  check(registry.resolveReadCommand(text, baseCtx())?.id === 'documents_list', `"${text}" -> documents_list`);
+}
+for (const text of ['documents list', 'required documents', 'list all documents with expiry date', 'what documents can I send?']) {
+  const lane = registry.resolveReadCommand(text, baseCtx());
+  check(lane?.id !== 'documents_list', `"${text}" keeps its own lane (${lane?.id || 'AI'})`);
+}
+check(registry.resolveReadCommand('documents', baseCtx({ quizPhaseLocked: true })) === null, 'a locked PIN/OTP phase keeps documents_list out');
+check(registry.resolveReadCommand('documents', baseCtx({ session: { pendingComplianceCapture: { label: 'Insurance' } } })) === null, 'a pending compliance capture owns the turn (no documents_list hijack)');
+const documentsLaneDef = registry.READ_COMMANDS.find((lane) => lane.id === 'documents_list');
+check(Boolean(documentsLaneDef) && documentsLaneDef.detect('documents') !== null, 'the documents_list lane is registered in the ordered registry');
 
 console.log(`\n🎉 ${passed} read-registry equivalence assertions passed.`);

@@ -49,6 +49,8 @@ import { complianceReportToPdf } from './reportDelivery.js';
 import { buildCustomReport, dateRangeBounds, CUSTOM_METRICS, CUSTOM_METRIC_CATEGORIES, metricsForAccess } from './reportMetrics.js';
 import { getTierLabel } from './subscriptionTiers.js';
 import { receiptStoragePaths, RECEIPTS_BUCKET } from './receipts.js';
+// v1.84.0 (Phase 23) — the vehicle document vault (stored originals).
+import { listVehicleDocuments, DOCUMENTS_BUCKET, documentTypeLabel } from './vehicleDocuments.js';
 // v1.83.0 (Phase 22) — subscription + transfer pages: engine data only.
 import { getTierLocalPrice } from './paystack.js';
 import { recordLabeledReading } from './labelsEverywhere.js';
@@ -754,12 +756,22 @@ export async function buildVehiclePage({
   profile = null,
   countryInfo = null,
   now = new Date(),
-  loadDetail = buildVehicleDetail
+  loadDetail = buildVehicleDetail,
+  loadDocuments = listVehicleDocuments
 } = {}) {
   if (!supabase || !ownerId || !vehicleId) return { ok: false, reason: 'not_found' };
   try {
     const result = await loadDetail({ supabase, ownerId, vehicleId, countryInfo, profile, now });
-    if (result?.ok) return result;
+    if (result?.ok) {
+      // v1.84.0 (Phase 23) — the stored ORIGINALS (logbook, insurance,
+      // inspection, road licence). Best-effort: a missing table never hides the
+      // vehicle page (rule 50), it just shows the empty state.
+      let storedDocuments = [];
+      try {
+        storedDocuments = await loadDocuments({ supabase, vehicleId, limit: 24 });
+      } catch { storedDocuments = []; }
+      return { ...result, storedDocuments };
+    }
     return { ok: false, reason: result?.reason === 'not_found' ? 'not_found' : 'db_error' };
   } catch (err) {
     logWriteFailure(supabase, 'dashboard.buildVehiclePage', err);
@@ -1181,6 +1193,25 @@ export async function signReceiptUrl(supabase, receipt = {}, { ttlSeconds = RECE
   }
 }
 
+/**
+ * v1.84.0 (Phase 23) — the document vault's short-lived link. The object path is
+ * stored explicitly (`vehicle_documents.storage_path`), so signing never has to
+ * guess an extension; a Free-tier row (no file) answers an honest miss.
+ */
+export async function signDocumentUrl(supabase, document = {}, { ttlSeconds = RECEIPT_SIGNED_URL_TTL_SECONDS } = {}) {
+  if (!supabase || !document?.storage_path) return { ok: false, reason: 'no_file' };
+  try {
+    const storage = supabase.storage?.from?.(DOCUMENTS_BUCKET);
+    if (!storage?.createSignedUrl) return { ok: false, reason: 'no_storage' };
+    const { data, error } = await storage.createSignedUrl(String(document.storage_path), ttlSeconds);
+    if (error || !data?.signedUrl) return { ok: false, reason: 'sign_failed' };
+    return { ok: true, url: data.signedUrl, ttlSeconds };
+  } catch (err) {
+    logWriteFailure(supabase, 'dashboard.signDocumentUrl', err);
+    return { ok: false, reason: 'sign_failed' };
+  }
+}
+
 export const RECORDS_CSV_COLUMNS = Object.freeze([
   'Date', 'Kind', 'Plate', 'Type', 'Description', 'Odometer', 'Unit Cost', 'Amount', 'Currency', 'Label'
 ]);
@@ -1469,6 +1500,22 @@ export async function buildComplianceBoard({
       })
       .filter((row) => view === 'all' || row.monitored > 0)
       .sort(sortBySoonest);
+
+    // v1.84.0 (Phase 23) — ONE count query feeds the "Files" column. A missing
+    // table (un-migrated deployment) simply shows zero (rule 50).
+    const documentCounts = new Map();
+    try {
+      const countIds = vehicleRows.map((row) => row.id).filter(Boolean);
+      if (countIds.length) {
+        const { data } = await supabase.from('vehicle_documents').select('vehicle_id').in('vehicle_id', countIds).limit(500);
+        for (const doc of data || []) {
+          documentCounts.set(doc.vehicle_id, (documentCounts.get(doc.vehicle_id) || 0) + 1);
+        }
+      }
+    } catch (err) {
+      logWriteFailure(supabase, 'dashboard.buildComplianceBoard.documents', err);
+    }
+    for (const row of vehicleRows) row.docCount = documentCounts.get(row.id) || 0;
 
     const driverIds = [...new Set((vehicles || []).map((vehicle) => vehicle.assigned_driver_id).filter(Boolean))];
     let driverProfiles = [];
@@ -2322,6 +2369,8 @@ export async function buildAnalyticsPage({
  * Fonts + logo are served by GET /d/assets/:file (strict allowlist) with an
  * immutable cache, so a release bumps this string and browsers refetch.
  */
+// v1.84.0 (Phase 23) shipped no CSS/asset change, so the cache-bust stamp stays
+// at the release that last changed the assets (pinned by test_dashboard Test 53).
 export const DASHBOARD_ASSET_VERSION = '1.83.0';
 
 export const DASHBOARD_CSS = `
@@ -2696,6 +2745,29 @@ export function renderVehiclePage({ data, emailMasked }) {
     </ul>`
     : '<p class="muted">No records in this vehicle yet — log fuel, a repair or an earning in WhatsApp.</p>';
 
+  // v1.84.0 (Phase 23) — the stored ORIGINALS (private bucket, signed per view).
+  const storedFiles = Array.isArray(data.storedDocuments) ? data.storedDocuments : [];
+  const storedFileList = storedFiles.length
+    ? `<ul class="plain">${storedFiles.map((doc) => {
+      const label = escapeHtml(documentTypeLabel(doc.document_type));
+      const when = escapeHtml(formatDate(doc.uploaded_at, data.locale, { timeZone: data.timeZone }));
+      const name = doc.original_filename ? `<span class="muted"> · ${escapeHtml(doc.original_filename)}</span>` : '';
+      const view = doc.storage_path
+        ? `<a href="/d/documents/${encodeURIComponent(doc.id)}">View</a>`
+        : '<span class="muted">parsed only (Free plan keeps the figures, not the file)</span>';
+      return `
+      <li>📄 ${label}${name}
+        <span class="chip">${when}</span>
+        ${view}
+        <form method="post" action="/d/documents/${encodeURIComponent(doc.id)}/delete" style="display:inline;"
+          onsubmit="return confirm('Delete this stored file? Your compliance dates and reminders stay saved.');">
+          <button type="submit" class="chip" style="cursor:pointer;">Delete</button>
+        </form>
+      </li>`;
+    }).join('')}
+    </ul>`
+    : '<p class="muted">No stored files yet — send a logbook, insurance or inspection photo/PDF in WhatsApp and the original is kept here.</p>';
+
   const subtitle = [
     vehicle.makeModel || null,
     vehicle.driverName ? `Driver: ${vehicle.driverName}` : 'No driver assigned',
@@ -2709,6 +2781,8 @@ export function renderVehiclePage({ data, emailMasked }) {
 ${identity}
 <h2>Documents</h2>
 <div class="card">${documentList}</div>
+<h2>Stored files</h2>
+<div class="card">${storedFileList}</div>
 <h2>Recent records</h2>
 <div class="card">${recordList}</div>
 <p class="muted" style="font-size:13px;">Your PDF reports are still one message away in WhatsApp.</p>`;
@@ -2937,11 +3011,12 @@ export function renderCompliancePage({ board, filters = {}, emailMasked = '', er
   const vehicles = Array.isArray(board.vehicles) ? board.vehicles : [];
   const vehicleTable = vehicles.length
     ? `<div class="card table-wrap"><table class="rec">
-        <thead><tr><th>Vehicle</th><th class="num">Tracked</th><th>Soonest</th><th>Status</th></tr></thead>
+        <thead><tr><th>Vehicle</th><th class="num">Tracked</th><th class="num">Files</th><th>Soonest</th><th>Status</th></tr></thead>
         <tbody>${vehicles.map((row) => `
           <tr>
             <td><a href="/d/vehicles/${encodeURIComponent(row.id)}">${escapeHtml(row.plate)}</a>${row.makeModel ? `<span class="muted"> · ${escapeHtml(row.makeModel)}</span>` : ''}${row.active ? '' : ' <span class="chip">Paused</span>'}</td>
             <td class="num">${Number(row.monitored)}</td>
+            <td class="num">${row.docCount ? `<a href="/d/vehicles/${encodeURIComponent(row.id)}">${Number(row.docCount)}</a>` : '—'}</td>
             <td>${row.soonest ? `${escapeHtml(row.soonest.label)} <span class="muted">${escapeHtml(dueDate(row.soonest.dueDate))}</span>` : '<span class="muted">No dates on file</span>'}</td>
             <td>${row.soonest ? complianceChipHtml(row.soonest) : '<span class="chip">Not tracked</span>'}</td>
           </tr>`).join('')}</tbody>
@@ -3967,6 +4042,7 @@ export default {
   matchReceiptForExpense,
   attachReceiptMatches,
   signReceiptUrl,
+  signDocumentUrl,
   serializeRecordsCsv,
   buildRecordsPdf,
   recordsQueryString,

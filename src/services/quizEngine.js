@@ -24,6 +24,8 @@ import { isDuplicateExpense, legacyExpensesWriteEnabled } from './expenseGuard.j
 import { sanitizeEntryLabel } from './entryLabels.js';
 // v1.59.7 — labels on every entry: standalone odometer readings get a ledger row.
 import { recordLabeledReading } from './labelsEverywhere.js';
+// v1.84.0 (Phase 23) — registration seeds link the vaulted certificate they used.
+import { linkSavedComplianceDocument } from './vehicleDocuments.js';
 import { logSystemError, logWriteFailure } from './systemErrors.js';
 import { markUserDataChanged } from './afterWrite.js';
 import { shortenUrl } from './linkShortener.js';
@@ -4064,7 +4066,7 @@ async function persistVehicleRegistration(state, ctx) {
       if (!seed.expiry) continue;
       const item = vehicleCatalog.items.find((entry) => entry.type === seed.type);
       if (!item) continue;
-      await submitVehicleCompliance({
+      const seeded = await submitVehicleCompliance({
         supabase: ctx.supabase,
         vehicle: { id: savedVehicle.id, plate_number: plateNumber },
         item,
@@ -4074,6 +4076,16 @@ async function persistVehicleRegistration(state, ctx) {
         ownerId: ctx.profile.id,
         timeZone: registrationTimeZone
       });
+      // v1.84.0 (Phase 23) — when the registration quiz was prefilled by a
+      // vaulted certificate, the seeded row links to that stored file.
+      if (seeded?.ok) {
+        await linkSavedComplianceDocument({
+          supabase: ctx.supabase,
+          vehicleId: savedVehicle.id,
+          complianceType: seed.type,
+          documentId: a.document_id || null
+        });
+      }
     }
   }
 

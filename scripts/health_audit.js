@@ -18,6 +18,9 @@ const STATLESS_SUITES = [
   // v1.63.0 - proactive template registry (11 kinds, env-gated, byte-identical fallback).
   'test_proactive_templates.js',
   'test_vehicle_compliance.js',
+  // v1.84.0 — Phase 23: the private vehicle-document vault (upload, dedupe,
+  // Free file-less rows, list, delete, signed links, wipe carriers).
+  'test_vehicle_documents.js',
   'test_driver_profile_onboarding.js',
   'test_dunning_reengagement.js',
   'test_followups.js',

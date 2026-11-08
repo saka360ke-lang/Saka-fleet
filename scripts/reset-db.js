@@ -59,6 +59,8 @@ export const RESET_TABLES = [
   'expenses',
   'expense_logs',
   'receipts',
+  // v1.84.0 (Phase 23) — stored compliance documents (vehicle-scoped).
+  'vehicle_documents',
   'driver_compliances',
   'driver_assignments',
   'expiry_notification_log',
@@ -201,6 +203,8 @@ export async function executeDatabaseReset({ targetPhone = null, verbose = true,
         DELETE FROM public.reminders WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}')));
         DELETE FROM public.expense_logs WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}')));
     DELETE FROM public.receipts WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}')) OR driver_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}'));
+        -- v1.84.0 (Phase 23) — stored compliance documents for this phone.
+        DELETE FROM public.vehicle_documents WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_phone IN ('${cleanPhone}', '${altPhone}') OR owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}'))) OR uploaded_by IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}'));
         DELETE FROM public.private_earnings WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}')));
         DELETE FROM public.passbook_transfers WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}')));
         DELETE FROM public.pending_owner_notifications WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}')));
@@ -237,6 +241,7 @@ export async function executeDatabaseReset({ targetPhone = null, verbose = true,
           public.expenses,
           public.expense_logs,
           public.receipts,
+          public.vehicle_documents,
           public.driver_compliances,
           public.driver_assignments,
           public.expiry_notification_log,

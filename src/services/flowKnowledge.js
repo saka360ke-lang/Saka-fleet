@@ -450,7 +450,9 @@ export const FLOW_GUIDANCE = Object.freeze({
   dashboard: 'Reply *dashboard* and I will send the sign-in link — open it, enter your number, then type the 6-digit code I send here. Drivers and the superadmin ("dashboard admin") get their own door.',
   // v1.83.0 (Phase 22) — the two new owner pages (rule 60).
   dashboard_transfer: 'On your dashboard open Transfer, enter the buyer\'s number and email, then type the 6-digit release PIN I email you — the buyer accepts on WhatsApp.',
-  dashboard_subscription: 'On your dashboard open Subscription to see your plan, slots and billing history — reply *subscription* here to change plans in chat.'
+  dashboard_subscription: 'On your dashboard open Subscription to see your plan, slots and billing history — reply *subscription* here to change plans in chat.',
+  // v1.84.0 (Phase 23) — the stored document vault (rule 60).
+  document_vault: 'Reply *documents* to see the files I keep, or open your dashboard and press View — then *delete document N* + DELETE removes a file (the compliance dates stay saved).'
 });
 
 /** Deterministic one next step for a flow key, or null when unregistered. */

@@ -120,6 +120,8 @@ export async function cleanupTestData({
     }
   } catch { /* driver tables may not exist on legacy deployments */ }
   summary.expiry_notification_log = await deleteIn(client, 'expiry_notification_log', 'vehicle_id', vehicleIdList, verbose);
+  // v1.84.0 (Phase 23) — stored compliance documents (row; test buckets are fake).
+  summary.vehicle_documents = await deleteIn(client, 'vehicle_documents', 'vehicle_id', vehicleIdList, verbose);
   summary.reminders = await deleteIn(client, 'reminders', 'vehicle_id', vehicleIdList, verbose);
   summary.passbook_transfers = await deleteIn(client, 'passbook_transfers', 'vehicle_id', vehicleIdList, verbose);
   summary.pending_owner_notifications = await deleteIn(client, 'pending_owner_notifications', 'vehicle_id', vehicleIdList, verbose);
@@ -134,6 +136,8 @@ export async function cleanupTestData({
         await client.from('vehicles').update({ assigned_driver_id: null }).in('assigned_driver_id', profileIds);
         summary.receipts_owner = await deleteIn(client, 'receipts', 'owner_id', profileIds, verbose);
         summary.receipts_driver = await deleteIn(client, 'receipts', 'driver_id', profileIds, verbose);
+        // v1.84.0 (Phase 23) — vaulted compliance documents keyed by uploader.
+        summary.vehicle_documents_uploader = await deleteIn(client, 'vehicle_documents', 'uploaded_by', profileIds, verbose);
       }
     }
   } catch {}

@@ -55,6 +55,8 @@ import { getTierLabel, getAnnualDiscountPercent } from '../../services/subscript
 import { shortenUrl } from '../../services/linkShortener.js';
 import { resolveBundledCatalog } from '../../services/complianceCatalog.js';
 import { resolveVehicleComplianceCatalog, submitVehicleCompliance } from '../../services/vehicleCompliance.js';
+// v1.84.0 (Phase 23) — link a vaulted certificate to the compliance row it proved.
+import { linkSavedComplianceDocument } from '../../services/vehicleDocuments.js';
 import {
   catalogCandidates,
   pickComplianceContextVehicle,
@@ -476,7 +478,9 @@ export async function handleComplianceCaptureTurn({ session, messageText, supaba
         isMinimal: pendingScope === 'driver' && !context.isSelfProfile && pendingItem.type === pendingCatalog.minimal?.type,
         countryCode: countryInfo?.country_code || 'GLOBAL',
         assetType: pendingAssetType,
-        timeZone
+        timeZone,
+        // v1.84.0 (Phase 23) — a photo vaulted this turn links to the saved row.
+        documentId: pending?.document_id || session.pendingVehicleDocument?.document_id || null
       });
       session.pendingComplianceCapture = null;
       reply = saved.ok
@@ -516,7 +520,9 @@ export async function persistCapturedCompliance({
   isMinimal = false,
   countryCode = 'GLOBAL',
   assetType = null,
-  timeZone = null
+  timeZone = null,
+  // v1.84.0 (Phase 23) — the vaulted document id carried from the media turn.
+  documentId = null
 } = {}) {
   if (!supabaseClient || !profileData?.id || !item?.type || !parsed?.ok) {
     return { ok: false, error: 'I need the document number and expiry first.' };
@@ -534,7 +540,16 @@ export async function persistCapturedCompliance({
         ownerId: profileData.id,
         timeZone
       });
-      return result?.ok ? { ok: true } : { ok: false, error: result?.error || 'That could not be saved yet.' };
+      if (!result?.ok) return { ok: false, error: result?.error || 'That could not be saved yet.' };
+      // v1.84.0 (Phase 23) — the stored certificate links to the row it proved
+      // (explicit prefill id wins; the newest matching file is the fallback).
+      await linkSavedComplianceDocument({
+        supabase: supabaseClient,
+        vehicleId: vehicle.id,
+        complianceType: item.type,
+        documentId
+      });
+      return { ok: true };
     }
 
     const result = await submitDriverCompliance({

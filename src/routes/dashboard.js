@@ -57,6 +57,7 @@ import {
   loadOwnerVehicles,
   attachReceiptMatches,
   signReceiptUrl,
+  signDocumentUrl,
   serializeRecordsCsv,
   buildRecordsPdf,
   RECORDS_PAGE_SIZE,
@@ -100,6 +101,9 @@ import {
   renderSubscriptionPage,
   dashboardBaseUrl
 } from '../services/dashboard.js';
+// v1.84.0 (Phase 23) — deleting one stored document reuses the vault service
+// (ownership check + bucket remove + VEHICLE_DOCUMENT_DELETED audit).
+import { deleteVehicleDocument } from '../services/vehicleDocuments.js';
 import { logAdminAudit } from '../services/superadmin.js';
 // v1.83.0 (Phase 22) — the transfer machine (reused verbatim) + the billing
 // engine + the WhatsApp sender the buyer notification needs.
@@ -617,6 +621,76 @@ export async function registerDashboardRoutes(fastify, {
         return reply.code(page.status).header('location', page.location).send();
       } catch (err) {
         await logSystemError(supabase, err, '/d/receipt/:id');
+        const page = renderErrorPage(500, 'Please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    /* -------------------------------------------------------------- */
+    /* GET /d/documents/:id — a stored document (Phase 23)             */
+    /* -------------------------------------------------------------- */
+    scope.get('/d/documents/:id', { config: { rateLimit: { max: 60, timeWindow: '5 minutes' } } }, async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      const answerNotFound = () => {
+        const page = renderErrorPage(404, 'That document is not available.');
+        return sendHtml(reply, page.status, page.html);
+      };
+      try {
+        const session = await requireRoleSession(request, reply, supabase, 'owner');
+        if (!session) return reply;
+        const documentId = String(request.params?.id || '');
+        if (!documentId) return answerNotFound();
+        const { data: document, error } = await supabase.from('vehicle_documents').select('*').eq('id', documentId).maybeSingle();
+        if (error || !document) return answerNotFound();
+        // OWN DATA only: the document's vehicle must be on the owner's fleet.
+        // A miss answers 404, never 403 — existence is never confirmed.
+        const vehicles = await loadOwnerVehicles(supabase, session.ownerId);
+        const onFleet = Boolean(document.vehicle_id) && vehicles.some((vehicle) => vehicle.id === document.vehicle_id);
+        if (!onFleet) return answerNotFound();
+        const signed = await signDocumentUrl(supabase, document);
+        if (!signed.ok) return answerNotFound();
+        const page = renderReceiptPage({ signedUrl: signed.url });
+        reply.header('cache-control', 'no-store');
+        return reply.code(page.status).header('location', page.location).send();
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/documents/:id');
+        const page = renderErrorPage(500, 'Please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    /* -------------------------------------------------------------- */
+    /* POST /d/documents/:id/delete — delete one stored file (Phase 23) */
+    /* -------------------------------------------------------------- */
+    scope.post('/d/documents/:id/delete', { config: { rateLimit: { max: 20, timeWindow: '5 minutes' } } }, async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      // Same defence-in-depth as /d/settings: no cross-site write, ever.
+      if (isCrossOriginWrite(request)) {
+        const denied = renderErrorPage(403, 'That request came from another site — nothing was deleted.');
+        return sendHtml(reply, 403, denied.html);
+      }
+      try {
+        const session = await requireRoleSession(request, reply, supabase, 'owner');
+        if (!session) return reply;
+        const documentId = String(request.params?.id || '');
+        const vehicles = await loadOwnerVehicles(supabase, session.ownerId);
+        const vehicleIds = vehicles.map((vehicle) => vehicle.id);
+        const del = await deleteVehicleDocument({
+          supabase,
+          documentId,
+          ownerId: session.ownerId,
+          vehicleIds,
+          senderPhone: 'DASHBOARD'
+        });
+        if (!del.ok) {
+          const missing = del.error === 'not-found' || del.error === 'forbidden';
+          const failed = renderErrorPage(missing ? 404 : 400, 'That document could not be deleted (it may already be gone).');
+          return sendHtml(reply, failed.status, failed.html);
+        }
+        const back = del.document?.vehicle_id ? `/d/vehicles/${encodeURIComponent(del.document.vehicle_id)}` : '/d/vehicles';
+        return reply.code(303).header('location', back).send();
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/documents/:id/delete');
         const page = renderErrorPage(500, 'Please try again in a moment.');
         return sendHtml(reply, page.status, page.html);
       }

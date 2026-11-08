@@ -42,6 +42,11 @@ import {
 } from '../../services/receipts.js';
 import { recordOcrRequest, buildOcrTextSha } from '../../services/ocrTelemetry.js';
 import { extractEntryLabel } from '../../services/entryLabels.js';
+import {
+  vaultVehicleDocument,
+  documentTypeForFamily,
+  isVaultableDocumentFamily
+} from '../../services/vehicleDocuments.js';
 
 // M2 (verbatim from messages.js v1.66.0) - the deterministic voice-note line and the
 // durable transcript marker. The processor sends the reply and owns the status literal.
@@ -464,6 +469,49 @@ export async function resolveReceiptVault({
     } catch { /* the receipt vault is best-effort */ }
   }
 
+  // v1.84.0 (Phase 23) — a compliance document (logbook, insurance, inspection,
+  // road licence) keeps its ORIGINAL file in the private `documents` bucket and
+  // a vehicle_documents row. Receipt families are never duplicated here and
+  // driver licences stay out of scope (vehicle-only ledger, §40.2). Best-effort
+  // by design: the vault can never fail the turn.
+  let documentPrefill = null;
+  if (mediaObj?.id && supabaseClient && !ocrPaused && ocrResult?.buffer && isVaultableDocumentFamily(ocrKind)) {
+    try {
+      const targetVehicle = currentActiveVehicle
+        || existingVehicles.find((vehicle) => vehicle.owner_id === profileData?.id)
+        || existingVehicles[0]
+        || null;
+      if (targetVehicle?.id) {
+        const parsedData = {
+          ...(receiptHints && typeof receiptHints === 'object' ? receiptHints : {}),
+          family: ocrKind || null
+        };
+        const vaulted = await vaultVehicleDocument({
+          supabase: supabaseClient,
+          vehicleId: targetVehicle.id,
+          profileId: profileData?.id || null,
+          buffer: ocrResult.buffer,
+          mediaId: mediaObj.id,
+          mimeType: ocrResult.mimeType || 'image/jpeg',
+          originalFilename: mediaObj?.filename || null,
+          parsedData,
+          documentType: documentTypeForFamily(ocrKind),
+          entitlements
+        });
+        if (vaulted?.ok && vaulted.document?.id) {
+          // Engine-only prefill: the id rides the quiz/capture seam so the
+          // compliance row saved later links back to this exact file.
+          documentPrefill = {
+            document_id: vaulted.document.id,
+            document_type: vaulted.document.document_type || documentTypeForFamily(ocrKind) || 'other'
+          };
+        }
+      }
+    } catch (vaultErr) {
+      console.warn('[OCR] document vault skipped:', vaultErr?.message || vaultErr);
+    }
+  }
+
   // v1.51.11 — a registration certificate (logbook) is a registration
   // document, never a receipt. Extract the vehicle fields so the
   // registration quiz can be prefilled and confirmed.
@@ -479,6 +527,6 @@ export async function resolveReceiptVault({
     } catch { /* best-effort */ }
   }
 
-  return { duplicateReceipt, logbookPrefill, receiptPrefill };
+  return { duplicateReceipt, logbookPrefill, receiptPrefill, documentPrefill };
 }
 

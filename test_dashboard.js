@@ -2422,6 +2422,87 @@ async function run() {
   check(addonNotEligible.statusCode === 400 && /Fleet Command add-on/.test(addonNotEligible.body), 'add-ons are refused outside Fleet Command');
   await p22App.close();
 
+  console.log('\n--- Test 39: Phase 23 — the stored document vault on the dashboard ---');
+  process.env.DASHBOARD_ENABLED = 'on';
+  const p23Docs = [
+    { id: 'doc-own', vehicle_id: 'v-a', document_type: 'insurance', storage_path: 'v-a/own.pdf', original_filename: 'cover.pdf', media_id: 'm-own', uploaded_by: PROFILE.id, uploaded_at: new Date().toISOString() },
+    { id: 'doc-free', vehicle_id: 'v-a', document_type: 'logbook', storage_path: null, original_filename: null, media_id: 'm-free', uploaded_by: PROFILE.id, uploaded_at: new Date().toISOString() },
+    { id: 'doc-foreign', vehicle_id: 'v-x', document_type: 'insurance', storage_path: 'v-x/x.pdf', media_id: 'm-x', uploaded_by: 'someone-else', uploaded_at: new Date().toISOString() }
+  ];
+  const docPageData = await buildVehiclePage({
+    supabase: createMockSupabase(recordsSeed()).client,
+    ownerId: PROFILE.id,
+    vehicleId: 'v-a',
+    countryInfo: KE_INFO,
+    loadDetail: async () => detail,
+    loadDocuments: async () => p23Docs.filter((doc) => doc.vehicle_id === 'v-a')
+  });
+  check(docPageData.ok === true && docPageData.storedDocuments.length === 2, 'buildVehiclePage attaches the stored documents (additive, never hides the page)');
+  const docPageHtml = renderVehiclePage({ data: { ...detail, vehicle: { ...detail.vehicle, plate: 'KDA 123A' }, storedDocuments: p23Docs }, emailMasked: 'a***a@example.com' });
+  check(docPageHtml.includes('Stored files') && docPageHtml.includes('Insurance certificate'), 'the vehicle page renders the Stored files section');
+  check(docPageHtml.includes('href="/d/documents/doc-own"') && docPageHtml.includes('action="/d/documents/doc-own/delete"'), 'each file links to its signed view and a delete form');
+  check(docPageHtml.includes('parsed only (Free plan keeps the figures, not the file)'), 'a file-less Free row is labelled honestly');
+  check(docPageHtml.includes('confirm('), 'the dashboard delete asks for confirmation');
+  const docBoard = await buildComplianceBoard({
+    supabase: createMockSupabase({ vehicle_documents: p23Docs }).client,
+    ownerId: PROFILE.id,
+    countryInfo: KE_INFO,
+    loadReport: async () => ({ ok: true, data: { generatedAt: new Date().toISOString(), currency: 'KES', timeZone: 'Africa/Nairobi', totals: { monitored: 1, active: 1, expiring30Days: 0, expired: 0 }, expiryItems: [{ subjectType: 'vehicle', plate: 'KDA 123A', categoryLabel: 'Insurance', daysLeft: 40 }] } }),
+    loadVehicles: async () => [{ id: 'v-a', owner_id: PROFILE.id, plate_number: 'KDA 123A', status: 'ACTIVE' }]
+  });
+  check(docBoard.ok === true && docBoard.vehicles[0].docCount === 2, 'the compliance board counts stored files per vehicle');
+  const docBoardHtml = renderCompliancePage({ board: docBoard, filters: { view: 'all' }, emailMasked: 'a***a@example.com' });
+  check(docBoardHtml.includes('<th class="num">Files</th>') && docBoardHtml.includes('>2</a>'), 'the compliance page renders the Files column with the count link');
+
+  const p23Mock = createMockSupabase({
+    ...recordsSeed(),
+    [DASHBOARD_SESSIONS_TABLE]: [seedRow({ id: 'sess-p23', token_hash: hashToken('p23-link'), session_token_hash: hashToken('p23-session'), verified: true, session_expires_at: new Date(Date.now() + 86400000).toISOString() })],
+    vehicle_documents: p23Docs.map((doc) => ({ ...doc })),
+    admin_audit_logs: [],
+    error_logs: [],
+    profiles: [{ id: PROFILE.id, phone_number: PROFILE.phone_number, email: PROFILE.email, full_name: PROFILE.full_name, country_code: 'KE' }]
+  });
+  const p23Signed = [];
+  p23Mock.client.storage = {
+    from: (bucket) => ({
+      createSignedUrl: async (path, ttl) => {
+        p23Signed.push({ bucket, path, ttl });
+        return { data: { signedUrl: `https://storage.test/${bucket}/${path}?signed=1` }, error: null };
+      },
+      remove: async (paths) => ({ data: paths, error: null })
+    })
+  };
+  const p23App = Fastify({ logger: false });
+  await registerDashboardRoutes(p23App, { supabase: p23Mock.client });
+  await p23App.ready();
+  const p23Cookie = { cookie: 'saka_dash=p23-session' };
+
+  const docAnon = await p23App.inject({ method: 'GET', url: '/d/documents/doc-own' });
+  check(docAnon.statusCode === 401, 'the document route needs a session');
+  const docOwn = await p23App.inject({ method: 'GET', url: '/d/documents/doc-own', headers: p23Cookie });
+  check(docOwn.statusCode === 302 && /signed=1/.test(String(docOwn.headers.location)), 'the owner document redirects to a signed URL');
+  check(p23Signed.at(-1)?.bucket === 'documents' && p23Signed.at(-1)?.path === 'v-a/own.pdf' && p23Signed.at(-1)?.ttl === 300, 'the signed URL is minted from storage_path with a 300-second TTL');
+  const docFree = await p23App.inject({ method: 'GET', url: '/d/documents/doc-free', headers: p23Cookie });
+  check(docFree.statusCode === 404, 'a Free row with no file answers an honest 404');
+  const signedBeforeForeign = p23Signed.length;
+  const docForeign = await p23App.inject({ method: 'GET', url: '/d/documents/doc-foreign', headers: p23Cookie });
+  check(docForeign.statusCode === 404 && p23Signed.length === signedBeforeForeign, "another owner's document answers 404 and never mints a link");
+  const docMissing = await p23App.inject({ method: 'GET', url: '/d/documents/nope', headers: p23Cookie });
+  check(docMissing.statusCode === 404, 'an unknown document id answers 404');
+
+  const crossOriginDelete = await p23App.inject({ method: 'POST', url: '/d/documents/doc-own/delete', headers: { ...p23Cookie, origin: 'https://evil.example', host: 'localhost:80' }, payload: '' });
+  check(crossOriginDelete.statusCode === 403, 'a cross-origin delete is refused (nothing changed)');
+  check(p23Mock.db.vehicle_documents.some((doc) => doc.id === 'doc-own'), 'the refused delete left the row intact');
+  const foreignDelete = await p23App.inject({ method: 'POST', url: '/d/documents/doc-foreign/delete', headers: p23Cookie, payload: '' });
+  check(foreignDelete.statusCode === 404, "another owner's document cannot be deleted through the dashboard");
+  const ownDelete = await p23App.inject({ method: 'POST', url: '/d/documents/doc-own/delete', headers: p23Cookie, payload: '' });
+  check(ownDelete.statusCode === 303 && String(ownDelete.headers.location) === '/d/vehicles/v-a', 'the owner delete redirects back to the vehicle page');
+  check(!p23Mock.db.vehicle_documents.some((doc) => doc.id === 'doc-own'), 'the deleted document row is gone');
+  check((p23Mock.db.admin_audit_logs || []).some((row) => row.action === 'VEHICLE_DOCUMENT_DELETED' && row.details?.document_id === 'doc-own'), 'the dashboard delete is audited VEHICLE_DOCUMENT_DELETED');
+  const anonDelete = await p23App.inject({ method: 'POST', url: '/d/documents/doc-free/delete', payload: '' });
+  check(anonDelete.statusCode === 401, 'the delete route never acts without a session');
+  await p23App.close();
+
   process.env.DASHBOARD_ENABLED = previousFlag;
   if (previousBase === undefined) delete process.env.PUBLIC_APP_URL;
   else process.env.PUBLIC_APP_URL = previousBase;

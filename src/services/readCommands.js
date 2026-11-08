@@ -11,6 +11,8 @@ import {
 } from './countryBucket.js';
 import { DOCUMENT_SUPPORT_MENU } from './documentLens.js';
 import { listReceipts, formatReceiptsReply, pageReceipts, RECEIPT_PAGE_SIZE, RECEIPT_MAX_OFFSET } from './receipts.js';
+// v1.84.0 (Phase 23) — the stored-document vault list lane.
+import { listVehicleDocuments, formatVehicleDocumentsReply } from './vehicleDocuments.js';
 import {
   resolveLedgerTurn,
   resolveLedgerVehicleScope,
@@ -923,6 +925,30 @@ export const READ_COMMANDS = Object.freeze([
         receipts,
         vehicles: ctx.vehicles || [],
         fallbackCurrency: ctx.countryInfo?.currency || null,
+        hasMore
+      }));
+    }
+  },
+  {
+    // v1.84.0 (Phase 23) — "documents" / "my documents": the stored ORIGINALS
+    // (logbook, insurance, inspection, road licence) kept in the private
+    // `documents` bucket. Zero tokens, owner-scoped, and never during a locked
+    // PIN/OTP phase or while a pending compliance capture owns the turn.
+    id: 'documents_list',
+    parksQuiz: false,
+    skipWhenLocked: true,
+    skipWhenPendingCapture: true,
+    detect: (text) => /^(?:(?:my|our|vehicle|stored|compliance)\s+)?documents?$|^document\s+vault$/i.test(String(text || '').trim()),
+    render: async (hit, ctx = {}) => {
+      const ownedVehicles = (ctx.vehicles || []).filter((v) => v.owner_id === ctx.profile?.id);
+      const rows = await listVehicleDocuments(ctx.supabaseClient, {
+        vehicleIds: ownedVehicles.map((v) => v.id),
+        limit: 6
+      });
+      const hasMore = rows.length > 5;
+      return result(formatVehicleDocumentsReply({
+        documents: hasMore ? rows.slice(0, 5) : rows,
+        vehicles: ctx.vehicles || [],
         hasMore
       }));
     }

@@ -65,6 +65,8 @@ import {
   SHORT_LINK_PROBE_TAG
 } from './src/services/linkShortener.js';
 import { ensureReceiptsTable, pruneOldReceipts } from './src/services/receipts.js';
+// v1.84.0 (Phase 23) — the vehicle document vault (boot ensure next to receipts).
+import { ensureVehicleDocumentsTable } from './src/services/vehicleDocuments.js';
 import { ensureOcrRequestsTable, pruneOcrTelemetry } from './src/services/ocrTelemetry.js';
 import { ensureChatSessionsTable } from './src/services/sessionStore.js';
 import { registerDashboardRoutes } from './src/routes/dashboard.js';
@@ -1383,6 +1385,8 @@ const start = async () => {
     }).catch(() => {});
     await ensureOcrRequestsTable(supabase);
     await ensureReceiptsTable(supabase);
+    // v1.84.0 (Phase 23) — the stored compliance-document table.
+    await ensureVehicleDocumentsTable(supabase);
     await ensureComplianceCatalog({ supabase });
     await ensureChatSessionsTable(supabase);
     await ensureFeatureNoticeSchema(supabase);

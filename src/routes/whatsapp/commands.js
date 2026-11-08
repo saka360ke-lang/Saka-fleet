@@ -16,6 +16,8 @@
 import { resolveCountryInput } from '../../services/countryBucket.js';
 import { resolveTimezoneFromCountry, resolveUserTimezone } from '../../services/globalization.js';
 import { listReceipts, deleteReceipt } from '../../services/receipts.js';
+// v1.84.0 (Phase 23) — the stored-document vault (list + delete lanes).
+import { listVehicleDocuments, deleteVehicleDocument, formatVehicleDocumentsReply } from '../../services/vehicleDocuments.js';
 import { getReportQuota, recordReportUsage, checkoutForTier, getEntitlements } from '../../services/subscriptions.js';
 import { resolveAnyReportType, buildInlineReportLink, resolveInlineReportBudgetMs } from '../../services/reportDelivery.js';
 import { isDashboardEnabled, dashboardBaseUrl, dashboardLoginUrl } from '../../services/dashboard.js';
@@ -278,6 +280,53 @@ export async function handleReceiptDeleteTurn({ supabaseClient, profileData, exi
       aiResult = { intent: 'GENERAL_CHAT', extracted_data: {}, reply_message: 'Receipt ' + receiptDeleteCommand.index + ' deleted, along with its photo. Your expense entry is still in the ledger - use *my entries* to edit or delete it.' };
     } else {
       aiResult = { intent: 'GENERAL_CHAT', extracted_data: {}, reply_message: 'I could not delete that receipt (' + (del.error || 'unknown') + '). It may already be gone.' };
+    }
+  }
+  return aiResult;
+}
+
+/* ------------------------------------------------------------------ */
+/* 2b. stored document delete (write lane, Phase 23)                   */
+/* ------------------------------------------------------------------ */
+
+export function parseDocumentDeleteCommand({ commandText }) {
+  const documentDeleteMatch = String(commandText || '').match(/^(?:delete|remove)\s+documents?\s+([1-5])(?:\s+(DELETE))?$/i);
+  const documentDeleteCommand = documentDeleteMatch
+    ? { index: Number(documentDeleteMatch[1]), confirmed: Boolean(documentDeleteMatch[2]) }
+    : null;
+  return documentDeleteCommand;
+}
+
+export async function handleDocumentDeleteTurn({ supabaseClient, profileData, existingVehicles, documentDeleteCommand, senderPhone }) {
+  let aiResult;
+  const ownedVehicleIds = (existingVehicles || [])
+    .filter((v) => v.owner_id === profileData?.id)
+    .map((v) => v.id)
+    .filter(Boolean);
+  const rows = await listVehicleDocuments(supabaseClient, { vehicleIds: ownedVehicleIds, limit: 5 });
+  const target = rows[documentDeleteCommand.index - 1];
+  if (!target) {
+    aiResult = { intent: 'GENERAL_CHAT', extracted_data: {}, reply_message: 'I could not find document ' + documentDeleteCommand.index + '. Type *documents* to see the numbered list.' };
+  } else if (!documentDeleteCommand.confirmed) {
+    const showDocuments = formatVehicleDocumentsReply({ documents: rows, vehicles: existingVehicles });
+    aiResult = {
+      intent: 'GENERAL_CHAT',
+      extracted_data: {},
+      reply_message: 'Delete document ' + documentDeleteCommand.index + '?\n\n' + showDocuments
+        + '\n\nReply *delete document ' + documentDeleteCommand.index + ' DELETE* to confirm. The compliance dates stay saved.'
+    };
+  } else {
+    const del = await deleteVehicleDocument({
+      supabase: supabaseClient,
+      documentId: target.id,
+      ownerId: profileData?.id || null,
+      vehicleIds: ownedVehicleIds,
+      senderPhone
+    });
+    if (del.ok) {
+      aiResult = { intent: 'GENERAL_CHAT', extracted_data: {}, reply_message: 'Document ' + documentDeleteCommand.index + ' deleted, along with its stored file. Your compliance dates and reminders stay as they are.' };
+    } else {
+      aiResult = { intent: 'GENERAL_CHAT', extracted_data: {}, reply_message: 'I could not delete that document (' + (del.error || 'unknown') + '). It may already be gone.' };
     }
   }
   return aiResult;

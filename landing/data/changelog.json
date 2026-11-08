@@ -1,6 +1,13 @@
 {
-  "latest": "1.83.0",
+  "latest": "1.84.0",
   "entries": [
+    {
+      "version": "1.84.0",
+      "date": "2026-11-08",
+      "title": "Your logbook, insurance and inspection files stay on file",
+      "preview": "Send a logbook, insurance or inspection photo - Saka keeps the original. View or download it from your dashboard.",
+      "summary": "Until now Saka read your documents, saved the dates and then let the photo go. That changes now. Send a photo or PDF of your logbook, insurance certificate, inspection certificate or road licence and Saka reads it exactly as before - and keeps the original file for you. Open the vehicle page on your dashboard and you will find a new Stored files section: every certificate with the date you sent it, a View button that opens a private, short-lived link, and a Delete button if you ever want the file gone (your dates and reminders stay exactly where they are). The compliance page now shows how many files are on record for each vehicle. In WhatsApp, reply documents to see your stored files numbered, and delete document 2 DELETE to remove one - same careful confirm step as receipts. Paid plans and the welcome trial keep the original file; the free plan keeps the figures it read but not the file itself, and the page tells you so honestly. Each stored file is also linked to the insurance, inspection or licence it proves, so you always know where a date came from."
+    },
     {
       "version": "1.83.0",
       "date": "2026-11-08",
