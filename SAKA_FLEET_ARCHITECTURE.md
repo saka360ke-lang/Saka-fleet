@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.73.2  
+**Version:** 1.73.3  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.73.3** | Phase 12C: quiet eval notifications — the immediate both-channel judge-error alert is gone (throttle + `CONV_EVAL_ALERT_COOLDOWN_HOURS` retired), judge errors persist as bounded `CONV_EVAL_JUDGE_ERROR` audit rows and render as their own digest section, the 15-min retry floor is kept, and a delayed digest now pings once instead of staying silent | 198C |
 | **1.73.2** | Phase 12A: driver compliance reminder hygiene — `syncAllDriverComplianceReminders` covers every `driver_compliances` type with per-document dedupe (PSV/PDP no longer collapse), retires the legacy profile mirror when a licence row exists, resets the ladder only on a real date change (it was resetting every 30-min sweep), and skips lifetime/number-less/past-expiry rows | 198A |
 | **1.73.1** | Phase 11 (final cleanup): the legacy onboarding lane (section 191 branch A + the registration starter, 229 source lines) extracted verbatim to `src/routes/whatsapp/onboarding.js` — store passed as an argument, ratchet extended (test_no_canned_replies), two pre-existing latent ReferenceErrors repaired; the `trial-end-downsize-choice` eval flake fixed with engine_facts (0.83/0.88 → 0.93 pass; diagnosis: the bar was 0.7, not 0.85) | 197 |
 | **1.73.0** | Phase 10: pagination on `my entries`/`receipts` (session `paginationCursor`, view-only `more` pages, 5-page cap), user-side `my ticket` status lane (OWN data only) and the `weekly report on|off` opt-in with a Monday 08:00 EAT text-only sweep (zero quota, claim-first day marker) — five design decisions + two additions documented | 196 |
@@ -4643,7 +4644,7 @@ quiz engine:
 
 **Notifications + tracking (the operator-facing ask).**
 - `conversation_eval_runs` (migration `npm run migrate:conv-eval`, idempotent) records run id, case id, source, transcript hash (no message bodies), judge provider/model, criteria JSON, aggregate, threshold, friction log link, patch id, before/after scores and status (`passed|failed|healed|proposed|error`). It is telemetry: wiped with the operational slate, never preserved.
-- Every heal/proposal is audited (`CONV_EVAL_HEALED` / `CONV_EVAL_PROPOSED` / `CONV_EVAL_ERROR`). **Notification policy (v1.61.12, operator request):** heals NEVER ping — one detailed **email every `CONV_EVAL_DIGEST_HOURS` (6h)** (`sendEvalDigest()`: cases judged, pass/fail/error, each heal with before → after + rule, proposals, refusals with reasons, cases needing code at 3+ refusals, weakest criterion) is dispatched, and **ONE WhatsApp ping** announces that the email went out. Judge-error alerts remain immediate (both channels) and throttled by `CONV_EVAL_ALERT_COOLDOWN_HOURS`. The dispatch is idempotent across instances (`system_config.last_eval_digest_at`) and audited as `CONV_EVAL_DIGEST_SENT`.
+- Every heal/proposal is audited (`CONV_EVAL_HEALED` / `CONV_EVAL_PROPOSED` / `CONV_EVAL_ERROR`). **Notification policy (v1.61.12, operator request):** heals NEVER ping — one detailed **email every `CONV_EVAL_DIGEST_HOURS` (6h)** (`sendEvalDigest()`: cases judged, pass/fail/error, each heal with before → after + rule, proposals, refusals with reasons, cases needing code at 3+ refusals, weakest criterion) is dispatched, and **ONE WhatsApp ping** announces that the email went out. **v1.73.3 — judge errors are batched into the 6-hourly digest; no immediate alerts:** each errored case writes one bounded `CONV_EVAL_JUDGE_ERROR` audit row and the digest renders its own Judge-errors section. The 15-minute retry floor is preserved, and a delayed digest pings once (free-form) instead of staying silent. The dispatch is idempotent across instances (`system_config.last_eval_digest_at`) and audited as `CONV_EVAL_DIGEST_SENT`.
 - Superadmin console (deterministic, zero tokens for digests): `admin eval` (24 h), `admin eval last 48h`, `admin eval run` (corpus, capped), `admin eval heal <case-id>`; audited `ADMIN_CONV_EVAL`.
 
 **Entry points.** `npm run eval:conv [--live] [--heal] [--json] [--fail-on-failures]`, `npm run eval:export` (DeepEval JSONL), an overlap-guarded 6-hourly tick in `index.js`, and the superadmin commands. All kill switches default OFF (`CONV_EVAL_ENABLED`, `CONV_EVAL_HEAL_ENABLED`); boot only detects the tracking table and warns (rule 50).
@@ -4832,10 +4833,10 @@ The recommended gate is `npm run eval:conv --exclude-calibration` with 100% pass
 
 **What live traffic proved.** On revision `00308` (v1.61.7) the channel policy worked exactly as designed: the 14:06 tick produced **4 successful heals with zero emails** and **6 failed heals with 6 emails** (`[Resend Admin Notification]` log lines at 14:06:26/35/46/51/54/58 map 1:1 to the `CONV_EVAL_ERROR` audit rows). Correct policy, wrong cost: six failures per tick is ~24 emails/hour (~576/day) against the Resend quota that rule 4 protects.
 
-**Fix.** Failures are now **batched per tick**:
-- `healFailedCase` still announces each failure on WhatsApp immediately (`announceFailure`, no email flag) so the operator sees it in the same channel as the success notices.
-- New `notifyHealFailureDigest(failures, { notify })` (`src/services/convEvalHealer.js`) builds ONE deterministic body: header with the count, up to **10** case lines (`case — reason (before → after)`), "…and N more" beyond that, and the intervention commands. It calls the notifier **once** with `{ email: true }`.
-- The worker calls it once after the heal loop and returns `failure_alert: { count, notified }` in the tick summary; a clean tick sends nothing (`count: 0`, no call).
+**Fix.** Failures are now **batched per tick** — **SUPERSEDED (v1.61.12 → v1.73.3): this section is history only.** The per-tick failure digest (`notifyHealFailureDigest`) no longer exists in the tree: v1.61.12 removed every per-tick/per-heal notification, and v1.73.3 removed the last immediate path (judge errors). Everything now lands in the exhaustive 6-hourly digest: heals, proposals, heal refusals (with reasons) and judge errors (with the per-case reason). No code described below is live.
+- (historical) `healFailedCase` announced each failure on WhatsApp immediately.
+- (historical) `notifyHealFailureDigest(failures, { notify })` built ONE body per tick with up to 10 case lines.
+- (historical) The worker called it once after the heal loop (`failure_alert` in the tick summary).
 
 **Resulting contract.**
 
@@ -4922,7 +4923,7 @@ Usage: `npm run eval:apply-heals` (dry run, 48 h) · `-- --hours=72` · `-- --wr
 
 **C. Machinery confirm loop (live 2026-11-05, judge-proven).** Bare `Retry` at the confirm gate was written into `make_model`, corrupting the draft and failing every save. `isYes` now accepts `retry|try again|submit|done|send it|go ahead|save it`, and a **bare word at the confirm gate can never be an AI-extracted field value** — the card is re-shown with "nothing changed". Vehicle + machinery + every flow share the same guard (rule 51).
 
-**D. Eval notifications → ONE 6-hour digest.** Per-heal/per-tick notifications are gone (`healFailedCase` returns `notified { whatsapp:false, email:false }`; the worker sends no failure alert). New `src/services/evalDigest.js`: `buildEvalDigest()` / `formatEvalDigestEmail()` / `formatEvalDigestPing()` / `sendEvalDigest()`. Every `CONV_EVAL_DIGEST_HOURS` (default 6, 0 = off) the loop emails one detailed summary to `SUPERADMIN_EMAIL` and sends ONE WhatsApp ping announcing it; the dispatch is idempotent (`system_config.last_eval_digest_at`), audited (`CONV_EVAL_DIGEST_SENT`), skips quiet windows, and logs `[ConversationEval] digest sent …` / `digest skipped: <reason>`. Judge errors stay immediate.
+**D. Eval notifications → ONE 6-hour digest.** Per-heal/per-tick notifications are gone (`healFailedCase` returns `notified { whatsapp:false, email:false }`; the worker sends no failure alert). New `src/services/evalDigest.js`: `buildEvalDigest()` / `formatEvalDigestEmail()` / `formatEvalDigestPing()` / `sendEvalDigest()`. Every `CONV_EVAL_DIGEST_HOURS` (default 6, 0 = off) the loop emails one detailed summary to `SUPERADMIN_EMAIL` and sends ONE WhatsApp ping announcing it; the dispatch is idempotent (`system_config.last_eval_digest_at`), audited (`CONV_EVAL_DIGEST_SENT`), skips quiet windows, and logs `[ConversationEval] digest sent …` / `digest skipped: <reason>`. Judge errors stayed immediate **until v1.73.3, which moved them into this digest too (bounded `CONV_EVAL_JUDGE_ERROR` audit rows + a separate Judge-errors section); the 15-minute retry floor and the new delay ping keep the email path safe.**
 
 **E. CLI telemetry + generator ids.** `run_conv_eval.js` and `generate_synthetic_cases.js` install `installAiUsageSink` (rules 20/21; both asserted in `test_conv_eval`). The generator gained `--edge-index=N` and now folds the filename suffix into case ids — two batches in the same second previously produced duplicate ids and were silently dropped.
 
@@ -5627,4 +5628,22 @@ reads.js / pending.js / quiz.js / media.js / hooks.js : unchanged (5B-2 / 5B-3 e
 **E. Recurrence autopsy (rule 51).** Defect class *an idempotent re-upsert that mutates notification state* -> siblings audited: vehicle-linked upserts (registration / `edit_vehicle` / `vehicleCompliance`) all route through the same `createExpiryReminder` guard (fixed); `submitDriverCompliance` fixed as above; `createThresholdReminder` left with reason. Defect class *two write paths owning the same document* -> the profile mirror now defers to the canonical compliance row in BOTH the sweep and the submission lane. Rule 13: no intent/flow/copy change — `flowKnowledge.js` / `sakaAi.js` untouched; `test_agent_training` stays green.
 
 **F. Rules shaped this work (rule 58).** 1/39/45 (consult-first), 8 (VIN untouched), 10/11 (targeted stateless suites), 12/33 (version + history + CHANGELOG + generated docs in the same commit), 13 (docs sync; prompt files untouched by design — no flow/copy change), 44 (the brief's premise corrected against the live tree), 50 (no schema change), 51 (sibling sweep + autopsy), 52 (before/after assertions; +14 new), 56 (legacy-only drivers keep coverage), 58 (this report). No rule was edited or added.
+
+#### 198C. v1.73.3 (Phase 12C) — quiet eval notifications: judge errors land in the exhaustive digest, and the digest never goes silent
+
+**Operator request.** No immediate alert for judge errors; every error, heal, proposal and failure lands in the next 6-hourly digest, and the digest becomes exhaustive.
+
+**Audit first (rule 44).** The v1.61.8 per-tick failure digest (`notifyHealFailureDigest`) was already dead (removed in v1.61.12) and `healFailedCase` already returns `notified { whatsapp:false, email:false }`; only ONE immediate path remained — the throttled both-channel judge-error alert in `src/workers/convEval.js` (in-memory `lastErrorAlertAt`, `CONV_EVAL_ALERT_COOLDOWN_HOURS`, up to one alert per instance per window). Judge errors were also invisible to the digest beyond a count: errored run rows store no error text and no audit row was written.
+
+**A. The immediate alert is gone.** `lastErrorAlertAt`, `resetConvEvalAlertThrottle()` and the both-channel judge-error alert block were deleted; `notified` stays `{ whatsapp:false, email:false }`. The retired `CONV_EVAL_ALERT_COOLDOWN_HOURS` knob was removed from `getConvEvalConfig()`, the env registry and `.env.example` (grep-proven single consumer).
+
+**B. Judge errors become digest evidence.** New pure `buildJudgeErrorAuditRows(results, { phone, limit = 10 })` (exported from the worker) turns every errored result into ONE bounded `admin_audit_logs` row: `action='CONV_EVAL_JUDGE_ERROR'`, `details { case_id, reason ≤ 200 chars }`. The tick writes up to 10 rows (best-effort, never throws). `buildEvalDigest()` reads them into `judgeErrors` (max 10) + `judgeErrorCount`, rendered by `formatEvalDigestEmail()` as its OWN section — separate from the heal-refusal section so judge noise can never pollute the 3+-refusal code-fix candidates. `sendEvalDigest()` includes the new action in its audit read.
+
+**C. The digest never goes silent (D3).** The v1.61.13 retry floor is KEPT (only a SENT email consumes the 6-hour window; a failure stamps `eval.digest_attempt_at` and retries after 15 minutes). New: a failed email now sends ONE free-form WhatsApp ping — `⏳ Digest email delayed — retrying in 15 min … Judge errors and case details will land in the next successful digest.` — returned as `retryPinged`; the success ping remains the `eval_digest_ping` template. The daily call-budget heads-up is KEPT (D4 — spend telemetry, not an error; WhatsApp only, once per Nairobi day).
+
+**D. Suites run.** Baseline: test_conv_eval (218), test_eval_spend (23), test_proactive_templates (47), test_env_audit (44), `npm run health` — green. After: **test_conv_eval (236 — +18 new assertions)**, test_eval_spend (23), test_proactive_templates (47), test_env_audit (44), `npm run health` — green. No behavioural assertion was edited: the existing failed-email test gained a capturing ping stub (additions only).
+
+**E. Recurrence autopsy (rule 51).** Defect class *quality-signal noise delivered through an interruption channel* -> siblings audited: per-heal notice (already silent, v1.61.12), per-tick failure digest (already removed, §172 marked superseded), judge-error alert (removed here), daily call alert (deliberately kept, D4). Defect class *a digest section built from a count with no persisted evidence* -> errored runs now have audit evidence; the digest cap (10 lines + "…and N more") mirrors the v1.61.8 contract. Rule 13: no intent/flow/copy change — `flowKnowledge.js` / `sakaAi.js` untouched; `test_agent_training` stays green.
+
+**F. Rules shaped this work (rule 58).** 1/39/45 (consult-first), 10/11 (targeted suites), 12/33 (version + history + CHANGELOG + generated docs same commit), 13 (docs sync; prompts untouched), 21 (env-template parity: the retired knob left registry AND template together), 44 (audit-before-acting: the brief's "per-tick digests also fire" was already stale), 50 (no schema change), 51 (sibling sweep), 52 (before/after assertions), 58 (this report). No rule was edited or added.
 

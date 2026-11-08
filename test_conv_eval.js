@@ -37,7 +37,8 @@ import {
   validateCase
 } from './src/services/convEvalCases.js';
 import { sanitizeHealPatch, formatHealNotice, isCalibrationCase, enforceActiveRuleCap, healFailedCase, HEAL_PATCH_MAX_CHARS } from './src/services/convEvalHealer.js';
-import { buildEvalDigest, formatEvalDigestEmail, formatEvalDigestPing, sendEvalDigest, EVAL_DIGEST_CONFIG_KEY, EVAL_DIGEST_ATTEMPT_KEY } from './src/services/evalDigest.js';
+import { buildEvalDigest, formatEvalDigestEmail, formatEvalDigestPing, formatEvalRetryPing, sendEvalDigest, EVAL_DIGEST_CONFIG_KEY, EVAL_DIGEST_ATTEMPT_KEY } from './src/services/evalDigest.js';
+import { buildJudgeErrorAuditRows } from './src/workers/convEval.js';
 import { formatBatchFailures, handleConvEvalCommand } from './src/services/convEvalConsole.js';
 import { healsFromAuditRows, selectCorpusUpdates, applyCorpusUpdates } from './src/services/convEvalCorpusSync.js';
 import { FLOW_GUIDANCE, guidanceForFlow, SAKA_QUIZ_FLOWS, buildToneCompassBlock } from './src/services/flowKnowledge.js';
@@ -302,7 +303,8 @@ const digestAudits = [
   { action: 'CONV_EVAL_PROPOSED', details: { case_id: 'x', proposal_code: 'PROP-2026-11-05-01' } },
   { action: 'CONV_EVAL_ERROR', details: { case_id: 'loop', stage: 'ab_gate', reason: 'no_improvement' } },
   { action: 'CONV_EVAL_ERROR', details: { case_id: 'loop', stage: 'ab_gate', reason: 'no_improvement' } },
-  { action: 'CONV_EVAL_ERROR', details: { case_id: 'loop', stage: 'ab_gate', reason: 'no_improvement' } }
+  { action: 'CONV_EVAL_ERROR', details: { case_id: 'loop', stage: 'ab_gate', reason: 'no_improvement' } },
+  { action: 'CONV_EVAL_JUDGE_ERROR', details: { case_id: 'timeout-case', reason: 'judge timeout' } }
 ];
 const evalDigest = buildEvalDigest(digestRuns, digestAudits, { hours: 6 });
 check(evalDigest.total === 4 && evalDigest.passed === 2 && evalDigest.failed === 1 && evalDigest.errored === 1, 'the digest counts passed/failed/errored', evalDigest);
@@ -310,12 +312,41 @@ check(evalDigest.healedCount === 1 && evalDigest.healed[0].caseId === 'c' && eva
 check(evalDigest.proposals.length === 1 && evalDigest.proposals[0].code === 'PROP-2026-11-05-01', 'the digest lists drafted proposals');
 check(evalDigest.refusals[0].caseId === 'loop' && evalDigest.refusals[0].count === 3, 'the digest groups refusals per case');
 check(evalDigest.deterministicCandidates.includes('loop'), '3+ refusals flag a deterministic-lane candidate');
+check(evalDigest.judgeErrorCount === 1 && evalDigest.judgeErrors[0].caseId === 'timeout-case', 'the digest carries judge errors separately from heal refusals', evalDigest.judgeErrors);
 check(evalDigest.weakestCriterion === 'loop_avoidance' && evalDigest.weakestAverage === 0.55, 'the weakest criterion is averaged across the window', evalDigest.weakestCriterion);
 const digestEmail = formatEvalDigestEmail(evalDigest);
 check(/Conversation eval — last 6 hours/.test(digestEmail) && /Healed: 1/.test(digestEmail), 'the email body carries the window and the heal count');
 check(/Needs a code fix/.test(digestEmail) && digestEmail.includes('loop'), 'the email flags cases that need code');
+check(digestEmail.includes('Judge errors (could not be scored): 1') && digestEmail.includes('timeout-case: judge timeout'), 'the email renders the Judge errors section');
+check(digestEmail.indexOf('Judge errors') < digestEmail.indexOf('Heals that could not ship'), 'judge errors stay a separate section from refusals');
+const cappedJudgeErrors = buildEvalDigest([], Array.from({ length: 12 }, (_, index) => ({
+  action: 'CONV_EVAL_JUDGE_ERROR',
+  details: { case_id: `je${index}`, reason: 'judge timeout' }
+})), { hours: 6 });
+check(cappedJudgeErrors.judgeErrors.length === 10 && cappedJudgeErrors.judgeErrorCount === 12, 'judge errors are capped at ten lines with a total count');
+check(formatEvalDigestEmail(cappedJudgeErrors).includes('…and 2 more'), 'the email says how many judge errors were withheld');
 const digestPing = formatEvalDigestPing(evalDigest);
 check(/summary emailed/.test(digestPing) && digestPing.includes('Healed: 1'), 'the WhatsApp ping announces the email and its headline counts');
+
+// v1.73.3 (12C) — judge errors are audited, never announced immediately.
+console.log('\n--- Test 11d: quiet judge errors (v1.73.3) ---');
+const judgeAuditRows = buildJudgeErrorAuditRows([
+  { caseId: 'c1', judged: { ok: false, error: 'judge timeout' } },
+  { caseId: 'c2', judged: { ok: true, passed: true } },
+  { caseId: 'c3', judged: { ok: false, error: 'provider 500' } }
+], { phone: '+254700000000' });
+check(judgeAuditRows.length === 2 && judgeAuditRows[0].action === 'CONV_EVAL_JUDGE_ERROR' && judgeAuditRows[0].details.reason === 'judge timeout', 'judge errors become bounded CONV_EVAL_JUDGE_ERROR audit rows');
+check(judgeAuditRows[1].details.case_id === 'c3' && judgeAuditRows[0].admin_phone === '+254700000000', 'each audit row names the case, the reason and the operator');
+check(buildJudgeErrorAuditRows(Array.from({ length: 14 }, (_, index) => ({ caseId: `c${index}`, judged: { ok: false, error: 'x' } }))).length === 10, 'judge-error audit rows are capped at ten per tick');
+check(/Digest email delayed — retrying in 15 min/.test(formatEvalRetryPing()), 'the retry ping copy is deterministic and names the delay');
+const workerSource = fs.readFileSync('./src/workers/convEval.js', 'utf8');
+check(!workerSource.includes('lastErrorAlertAt') && !workerSource.includes('resetConvEvalAlertThrottle'), 'the in-memory judge-error alert throttle is gone');
+check(!workerSource.includes('*Conversation eval — judge errors*'), 'the immediate judge-error alert copy is gone');
+check(workerSource.includes('CONV_EVAL_JUDGE_ERROR') && workerSource.includes('buildJudgeErrorAuditRows(summary.results'), 'judge errors are audited for the digest instead of announced');
+check((workerSource.match(/notifySuperadminConvEval\(/g) || []).length === 1, 'the worker keeps exactly one notify call (the daily call-budget heads-up)');
+check(!workerSource.includes('alertCooldownHours'), 'the retired alert cooldown has no consumer in the worker');
+const convEvalSource = fs.readFileSync('./src/services/convEval.js', 'utf8');
+check(!convEvalSource.includes('CONV_EVAL_ALERT_COOLDOWN_HOURS'), 'the retired alert cooldown is gone from the eval config');
 
 // sendEvalDigest: not due, no activity, and a real send (one email + one ping).
 function digestMock(state) {
@@ -352,9 +383,13 @@ const recentState = { configRows: [{ key: EVAL_DIGEST_CONFIG_KEY, value: '2026-1
 const recentSent = await sendEvalDigest({ supabase: digestMock(recentState), hours: 6, now: digestNow, email: async () => true, whatsapp: async () => true });
 check(recentSent.sent === false && recentSent.reason === 'not_due', 'an already-sent window never double-sends');
 const failedState = { configRows: [], runs: digestRuns, audits: [], upserts: [] };
-const failedSent = await sendEvalDigest({ supabase: digestMock(failedState), hours: 6, now: digestNow, email: async () => false, whatsapp: async () => true });
+const failedPingArgs = [];
+const failedSent = await sendEvalDigest({ supabase: digestMock(failedState), hours: 6, now: digestNow, email: async () => false, whatsapp: async (...args) => { failedPingArgs.push(args); return true; } });
 check(failedSent.sent === false && failedSent.reason === 'email_failed', 'a failed email is reported honestly (quota outage)', failedSent.reason);
 check(failedSent.pinged === false, 'no WhatsApp ping when the email did not send');
+check(failedSent.retryPinged === true, 'a delayed digest pings the superadmin instead of staying silent');
+check(failedPingArgs.length === 1 && failedPingArgs[0][2] === null && /Digest email delayed/.test(failedPingArgs[0][1]), 'the delay ping is free-form with the retry copy');
+check(failedPingArgs.length === 1 && /retrying in 15 min/i.test(failedPingArgs[0][1]) && /next successful digest/i.test(failedPingArgs[0][1]), 'the delay ping names the retry floor and where the details will land');
 check(failedState.upserts.length === 1 && failedState.upserts[0].key === EVAL_DIGEST_ATTEMPT_KEY, 'a failed attempt records only the attempt time (window NOT consumed)');
 const retryState = { configRows: [{ key: EVAL_DIGEST_ATTEMPT_KEY, value: '2026-11-05T17:55:00Z' }], runs: digestRuns, audits: [], upserts: [] };
 const retryWait = await sendEvalDigest({ supabase: digestMock(retryState), hours: 6, now: digestNow, email: async () => true, whatsapp: async () => true });

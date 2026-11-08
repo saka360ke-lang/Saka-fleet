@@ -67,6 +67,16 @@ export function buildEvalDigest(runs = [], audits = [], { hours = EVAL_DIGEST_DE
   // Three or more refusals for the same case = a prompt hint cannot fix it.
   const deterministicCandidates = refusals.filter((entry) => entry.count >= 3).map((entry) => entry.caseId);
 
+  // v1.73.3 (12C) — judge errors (cases that could not be scored at all) are a
+  // SEPARATE section from heal refusals: one bounded row per errored case,
+  // written by the worker as `CONV_EVAL_JUDGE_ERROR`, capped at 10 for the body.
+  const judgeErrorRows = auditRows.filter((row) => row && row.action === 'CONV_EVAL_JUDGE_ERROR');
+  const judgeErrorCount = judgeErrorRows.length;
+  const judgeErrors = judgeErrorRows.slice(0, 10).map((row) => ({
+    caseId: row.details?.case_id || 'unknown',
+    reason: String(row.details?.reason || 'judge_error').slice(0, 200)
+  }));
+
   // Weakest criterion across the judged window (criteria JSON stores {score,reason}).
   const totals = {};
   for (const row of judged) {
@@ -116,6 +126,8 @@ export function buildEvalDigest(runs = [], audits = [], { hours = EVAL_DIGEST_DE
     healed,
     proposals,
     refusals,
+    judgeErrors,
+    judgeErrorCount,
     deterministicCandidates,
     weakestCriterion,
     weakestAverage: weakestAverage === null ? null : Math.round(weakestAverage * 100) / 100,
@@ -151,6 +163,14 @@ export function formatEvalDigestEmail(digest = {}) {
     lines.push(`• ${proposal.code || 'pending'} — ${proposal.caseId || 'unknown'}`);
   }
   lines.push('');
+  lines.push(`Judge errors (could not be scored): ${digest.judgeErrorCount || 0}`);
+  for (const error of digest.judgeErrors || []) {
+    lines.push(`• ${error.caseId}: ${error.reason}`);
+  }
+  if ((digest.judgeErrorCount || 0) > (digest.judgeErrors || []).length) {
+    lines.push(`• …and ${(digest.judgeErrorCount || 0) - (digest.judgeErrors || []).length} more`);
+  }
+  lines.push('');
   lines.push(`Heals that could not ship: ${(digest.refusals || []).length}`);
   for (const refusal of digest.refusals || []) {
     lines.push(`• ${refusal.caseId}: ${refusal.count}× ${refusal.reasons.join(', ')}`);
@@ -177,6 +197,21 @@ export function formatEvalDigestPing(digest = {}) {
       : '• Nothing needs code review',
     '',
     '_Details are in your inbox — `admin eval` shows the live picture._'
+  ].join('\n');
+}
+
+/**
+ * v1.73.3 (12C) — the ONLY eval failure ping. A digest email that could not be
+ * sent is retried after `EVAL_DIGEST_RETRY_MINUTES`; this line tells the
+ * superadmin it is delayed, never silent. Free-form text (no template kind).
+ */
+export function formatEvalRetryPing() {
+  return [
+    '⏳ *Digest email delayed — retrying in 15 min*',
+    '',
+    'Judge errors and case details will land in the next successful digest.',
+    '',
+    '_`admin eval` shows the live picture in the meantime._'
   ].join('\n');
 }
 
@@ -233,7 +268,7 @@ export async function sendEvalDigest({
     const { data: audits } = await supabase
       .from('admin_audit_logs')
       .select('action,details,created_at')
-      .in('action', ['CONV_EVAL_HEALED', 'CONV_EVAL_PROPOSED', 'CONV_EVAL_ERROR'])
+      .in('action', ['CONV_EVAL_HEALED', 'CONV_EVAL_PROPOSED', 'CONV_EVAL_ERROR', 'CONV_EVAL_JUDGE_ERROR'])
       .gte('created_at', since)
       .limit(1000);
 
@@ -260,9 +295,14 @@ export async function sendEvalDigest({
 
     const phone = process.env.SUPERADMIN_PHONE;
     let pinged = false;
-    // The ping announces a SENT email; a failed email never pings.
+    let retryPinged = false;
+    // The ping announces a SENT email; a failed email never sends that ping.
     if (emailSent && phone) {
       try { pinged = await whatsapp(phone, formatEvalDigestPing(digest), 'eval_digest_ping'); } catch { pinged = false; }
+    } else if (!emailSent && phone) {
+      // v1.73.3 (12C) — a delayed digest must never be silent: one free-form
+      // line says it is retrying; the 15-minute floor still protects the window.
+      try { retryPinged = await whatsapp(phone, formatEvalRetryPing(), null); } catch { retryPinged = false; }
     }
 
     try {
@@ -289,6 +329,7 @@ export async function sendEvalDigest({
       digest,
       emailed: emailSent,
       pinged,
+      retryPinged,
       retryMinutes: EVAL_DIGEST_RETRY_MINUTES
     };
   } catch (err) {
@@ -297,5 +338,5 @@ export async function sendEvalDigest({
   }
 }
 
-export default { EVAL_DIGEST_CONFIG_KEY, EVAL_DIGEST_ATTEMPT_KEY, EVAL_DIGEST_RETRY_MINUTES, EVAL_DIGEST_DEFAULT_HOURS, buildEvalDigest, formatEvalDigestEmail, formatEvalDigestPing, sendEvalDigest };
+export default { EVAL_DIGEST_CONFIG_KEY, EVAL_DIGEST_ATTEMPT_KEY, EVAL_DIGEST_RETRY_MINUTES, EVAL_DIGEST_DEFAULT_HOURS, buildEvalDigest, formatEvalDigestEmail, formatEvalDigestPing, formatEvalRetryPing, sendEvalDigest };
 

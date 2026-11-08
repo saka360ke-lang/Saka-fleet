@@ -149,7 +149,6 @@ export function getConvEvalConfig(env = process.env) {
     evalDailyCallAlert,
     digestHours,
     dedupeHours: boundedNumber(read('CONV_EVAL_DEDUPE_HOURS'), 1, 0.25, 168),
-    alertCooldownHours: boundedNumber(read('CONV_EVAL_ALERT_COOLDOWN_HOURS'), 1, 0, 48),
     judgeProvider: String(read('CONV_EVAL_JUDGE_PROVIDER') || 'deepseek').trim().toLowerCase(),
     judgeModel: String(read('CONV_EVAL_JUDGE_MODEL') || '').trim()
   };

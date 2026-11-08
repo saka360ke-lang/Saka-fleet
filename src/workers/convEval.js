@@ -28,15 +28,29 @@ import { readConfig, writeConfig } from '../services/systemConfigService.js';
  *   3. Judges every case on the single AI hub, persists rows, and — only when
  *      `CONV_EVAL_HEAL_ENABLED=on` — heals up to `CONV_EVAL_MAX_PATCHES_PER_RUN`
  *      failures with the bounded heal loop.
- *   4. Alerts the superadmin (WhatsApp + email) when healing/proposals happened
- *      or when the judge itself is failing, with a cooldown so a provider outage
- *      cannot spam the operator.
+ *   4. Never alerts immediately (v1.73.3): heals, proposals, heal failures and
+ *      judge errors are audited and rendered in ONE exhaustive 6-hourly digest.
  */
 
-let lastErrorAlertAt = 0;
-
-export function resetConvEvalAlertThrottle() {
-  lastErrorAlertAt = 0;
+/**
+ * v1.73.3 (12C) — bounded audit rows for judge errors. One row per errored
+ * case (max 10) so the exhaustive 6-hourly digest can name the case and the
+ * reason without any immediate alert. Pure; never throws.
+ */
+export function buildJudgeErrorAuditRows(results = [], { phone = 'system', limit = 10 } = {}) {
+  const list = Array.isArray(results) ? results : [];
+  return list
+    .filter((result) => result && result.judged && result.judged.ok === false)
+    .slice(0, limit)
+    .map((result) => ({
+      admin_phone: phone,
+      action: 'CONV_EVAL_JUDGE_ERROR',
+      details: {
+        case_id: result.caseId || 'unknown',
+        reason: String(result.judged?.error || 'judge_error').slice(0, 200)
+      },
+      created_at: new Date().toISOString()
+    }));
 }
 
 /** Nairobi calendar day key (YYYY-MM-DD) for the soft eval call alert. */
@@ -184,28 +198,24 @@ export async function runConvEvalTick(supabase, { force = false, persist = true 
     }
   }
 
-  // 3. No per-tick failure alert any more (v1.61.12): failures are audited and
-  // land in the 6-hourly `sendEvalDigest()` email. Judge errors below stay
-  // immediate — a tick where nothing could be scored is an outage, not news.
+  // 3. No per-tick failure alert (v1.61.12): failures are audited and land in
+  // the 6-hourly `sendEvalDigest()` email.
   const failureDigest = { count: 0 };
 
-  // 4. One throttled alert when the judge itself is unhealthy.
-  let alerted = { whatsapp: false, email: false };
-  if (summary.errored > 0 && Date.now() - lastErrorAlertAt >= cfg.alertCooldownHours * 60 * 60 * 1000) {
-    lastErrorAlertAt = Date.now();
-    alerted = await notifySuperadminConvEval(
-      [
-        '⚠️ *Conversation eval — judge errors*',
-        '',
-        `• Cases: ${summary.total} · ⚠️ ${summary.errored} could not be scored`,
-        '• First error: ' + String(summary.results.find((result) => !result.judged.ok)?.judged?.error || 'unknown').slice(0, 160),
-        '',
-        '_Nothing was healed. Check the provider keys/breaker and `admin ai-stats`._'
-      ].join('\n'),
-      'Conversation eval: judge errors',
-      // v1.61.7 — judge errors mean nothing could be healed: this one is emailed too.
-      { email: true }
-    );
+  // 4. v1.73.3 (12C) — judge errors are NEVER announced immediately. Each
+  // errored case writes ONE bounded audit row; the exhaustive 6-hourly digest
+  // renders the "Judge errors" section. A tick where nothing could be scored
+  // no longer interrupts the operator on WhatsApp or email.
+  const alerted = { whatsapp: false, email: false };
+  if (summary.errored > 0 && supabase && persist) {
+    try {
+      const rows = buildJudgeErrorAuditRows(summary.results, {
+        phone: process.env.SUPERADMIN_PHONE || 'system'
+      });
+      if (rows.length) await supabase.from('admin_audit_logs').insert(rows);
+    } catch (auditErr) {
+      console.warn('[ConversationEval] judge-error audit skipped:', auditErr?.message || 'unknown');
+    }
   }
 
   // 5. v1.61.15 — soft daily call alert (alert-only; evals NEVER hard-stop —

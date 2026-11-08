@@ -1,6 +1,13 @@
 {
-  "latest": "1.73.2",
+  "latest": "1.73.3",
   "entries": [
+    {
+      "version": "1.73.3",
+      "date": "2026-11-08",
+      "title": "Quieter quality reports, nothing missed",
+      "preview": "Saka's quality checks now land in one six-hourly summary instead of interrupting - and a delayed summary says so.",
+      "summary": "A behind-the-scenes reliability release for the team that tunes Saka's conversation quality. Judge hiccups (a moment where an answer could not be scored) no longer trigger instant alerts; each one is recorded with its case and reason and lands in the six-hourly quality summary, which also lists every heal, proposal and failed heal - so nothing is lost and nothing interrupts. If the summary email cannot go out, the team now gets one short WhatsApp note saying it will retry in 15 minutes. Nothing you see in chat changes."
+    },
     {
       "version": "1.73.2",
       "date": "2026-11-08",
