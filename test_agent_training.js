@@ -357,6 +357,10 @@ check(/Narrative pre-fills are engine-determined facts/.test(await import('./src
   // v1.75.3 (Phase 14D) — the reports builder + settings surface.
   check(SAKA_FLOW_PLAYBOOK.includes('reports builder'), 'the playbook documents the v1.75.3 reports builder');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('reports builder'), 'the core prompt states the reports builder (v1.75.3)');
+  // v1.81.0 (Phase 20) — the durable receipt link + the CSV Import page.
+  check(SAKA_FLOW_PLAYBOOK.includes('expense_logs.receipt_id'), 'the playbook documents the durable receipt→expense link (v1.81.0)');
+  check(SAKA_FLOW_PLAYBOOK.includes('Import page'), 'the playbook documents the CSV Import page (v1.81.0)');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('CSV expense Import page'), 'the core prompt states the Import page scope (v1.81.0)');
 
   console.log(`\n\u2705 ALL AGENT TRAINING TESTS PASSED (${passed} assertions).`);
   console.log('Stateless suite: no real database rows were created, so no cleanup is required.');

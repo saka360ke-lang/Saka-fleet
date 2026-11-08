@@ -391,6 +391,10 @@ export async function finalizeMediaOcr({
  * OCR_DUPLICATE_WINDOW_HOURS window), the paid-tier vault upload, the receipt row, and
  * the logbook prefill for the registration quiz. Best-effort by design: the vault can
  * never fail the turn. Returns data; the processor owns every reply built from it.
+ *
+ * v1.81.0 (Phase 20, PROP-2026-11-08-01) — a freshly vaulted receipt also returns
+ * `receiptPrefill = { receipt_id }`, carried into the log_expense quiz through the
+ * engine-only `prefill` seam so the confirmed expense writes the durable link.
  */
 export async function resolveReceiptVault({
   supabaseClient,
@@ -412,6 +416,7 @@ export async function resolveReceiptVault({
   ocrCountry
 }) {
   let duplicateReceipt = null;
+  let receiptPrefill = null;
   if (mediaObj?.id && supabaseClient && !ocrPaused && (ocrKind === 'receipt_fuel' || ocrKind === 'receipt_general')) {
     try {
       // v1.32.1 — a re-uploaded document gets a NEW WhatsApp media id, so
@@ -428,7 +433,7 @@ export async function resolveReceiptVault({
         const imageUrl = vaultAllowed && ocrResult?.buffer
           ? await uploadReceiptImage(supabaseClient, ocrResult.buffer, mediaObj.id, ocrResult.mimeType)
           : null;
-        await recordReceipt(supabaseClient, {
+        const recorded = await recordReceipt(supabaseClient, {
           mediaId: mediaObj.id,
           ownerId: existingVehicles.some((v) => v.owner_id === profileData?.id) ? profileData?.id : null,
           driverId: existingVehicles.some((v) => v.assigned_driver_id === profileData?.id) ? profileData?.id : null,
@@ -450,6 +455,11 @@ export async function resolveReceiptVault({
           label: extractEntryLabel(messageText),
           error: ocrError
         });
+        // v1.81.0 — the vaulted row's id becomes the durable expense link,
+        // injected by the engine (never user text, never AI output).
+        if (recorded?.ok && recorded.receipt?.id) {
+          receiptPrefill = { receipt_id: recorded.receipt.id };
+        }
       }
     } catch { /* the receipt vault is best-effort */ }
   }
@@ -469,6 +479,6 @@ export async function resolveReceiptVault({
     } catch { /* best-effort */ }
   }
 
-  return { duplicateReceipt, logbookPrefill };
+  return { duplicateReceipt, logbookPrefill, receiptPrefill };
 }
 

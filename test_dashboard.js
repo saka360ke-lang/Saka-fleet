@@ -39,6 +39,7 @@ import {
   buildVehiclesIndex,
   buildVehiclePage,
   renderRecordsPage,
+  renderImportPage,
   renderReceiptPage,
   parseRecordsFilters,
   cleanRecordsTerm,
@@ -867,6 +868,37 @@ async function run() {
   check(attachedById.e2.receiptStatus === 'ambiguous' && attachedById.e2.receiptId === null, 'an ambiguous row carries no receipt id');
   check(attachedById.e3.receiptStatus === 'none' && attachedById.n1.receiptStatus === 'none', 'no match and earnings never carry a receipt link');
 
+  // v1.81.0 (Phase 20, PROP-2026-11-08-01) — the durable link wins when present;
+  // legacy rows still fall back to the unique heuristic (D1).
+  const linkedSeed = {
+    ...recordsSeed(),
+    receipts: [
+      ...receiptsSeed.receipts,
+      { id: 'r4', media_id: 'm4b', vehicle_id: 'v-a', owner_id: PROFILE.id, amount: 4500, image_url: null, created_at: recDay(7, 11) }
+    ],
+    expense_logs: [
+      { id: 'e-linked', vehicle_id: 'v-a', driver_id: PROFILE.id, expense_type: 'Fuel', amount: 5000, receipt_id: 'r1', notes: 'durable', created_at: recDay(7) },
+      { id: 'e-legacy', vehicle_id: 'v-a', driver_id: PROFILE.id, expense_type: 'Fuel', amount: 4500, notes: 'heuristic', created_at: recDay(7) }
+    ]
+  };
+  const linkedMock = createMockSupabase(linkedSeed);
+  const linkedRecords = await queryOwnerRecords({
+    supabase: linkedMock.client,
+    ownerId: PROFILE.id,
+    vehicleIds: ['v-a'],
+    vehicles: ownerVehicles,
+    countryInfo: KE_INFO,
+    filters: { from: '2026-11-01', to: '2026-11-08' }
+  });
+  const linkedAttached = await attachReceiptMatches({ supabase: linkedMock.client, rows: linkedRecords.rows });
+  const linkedRow = linkedAttached.find((row) => row.id === 'e-linked');
+  const legacyRow = linkedAttached.find((row) => row.id === 'e-legacy');
+  check(linkedRow?.receiptStatus === 'linked' && linkedRow?.receiptId === 'r1', 'a row with expense_logs.receipt_id links exactly (never a guess)');
+  check(legacyRow?.receiptStatus === 'unique' && legacyRow?.receiptId === 'r4', 'a legacy row without the FK keeps the unique-match fallback (D1)');
+  const oneLinkedMock = createMockSupabase(linkedSeed);
+  const oneLinked = await attachReceiptMatches({ supabase: oneLinkedMock.client, rows: [linkedRow] });
+  check(oneLinked[0].receiptStatus === 'linked' && oneLinkedMock.state.calls === 1, 'a linked page costs ONE receipts query (the heuristic never runs)');
+
   const signedCalls = [];
   const signClient = {
     storage: {
@@ -942,6 +974,35 @@ async function run() {
   const redirectPage = renderReceiptPage({ signedUrl: 'https://storage.test/x?token=t' });
   check(redirectPage.status === 302 && redirectPage.location === 'https://storage.test/x?token=t', 'the receipt renderer answers a 302 to the signed URL');
   check(renderReceiptPage({}).status === 404, 'no URL means a 404, never a broken redirect');
+
+  // v1.81.0 (Phase 20) — the linked row renders View; the nav offers Import;
+  // the import page renders the engine copy for invalid rows.
+  const linkedHtml = renderRecordsPage({
+    data: { ok: true, total: 1, rows: [linkedRow], hasMore: false, page: 0, pageSize: RECORDS_PAGE_SIZE },
+    filters: defaults.filters
+  });
+  check(linkedHtml.includes('href="/d/receipt/r1"'), 'the records table renders View for a linked receipt');
+  check(linkedHtml.includes('href="/d/import"'), 'the nav offers Import on every signed-in page');
+  const importHtml = renderImportPage({ emailMasked: 'a***@x.com', currency: 'KES', locale: 'en-KE' });
+  check(importHtml.includes('action="/d/import"') && importHtml.includes('type="file"') && importHtml.includes('FileReader'), 'the import page carries a file picker with the FileReader path');
+  check(importHtml.includes('Date, Vehicle Plate, Type, Amount, Odometer, Notes'), 'the page states the exact CSV columns');
+  const importPreviewHtml = renderImportPage({
+    preview: {
+      counts: { total: 2, valid: 1, invalid: 1 },
+      rows: [
+        { line: 2, dateKey: '2026-11-01', plate: 'KDA 123A', expenseType: 'Fuel', amount: 5000, odometer: 100500, notes: 'Shell', errors: [] },
+        { line: 3, dateKey: null, plate: 'KDX 999X', expenseType: null, amount: null, odometer: null, notes: null, errors: ['unknown_plate'] }
+      ]
+    },
+    csvText: 'raw,csv',
+    emailMasked: 'a***@x.com',
+    currency: 'KES',
+    locale: 'en-KE'
+  });
+  check(importPreviewHtml.includes('class="row-error"') && importPreviewHtml.includes('not in your fleet'), 'invalid rows are highlighted with warm engine copy');
+  check(importPreviewHtml.includes('Import 1 expense'), 'the confirm button names the exact valid count');
+  check(importPreviewHtml.includes('name="action" value="confirm"'), 'the confirm form carries its action marker');
+  check(importPreviewHtml.includes('name="csv" hidden'), 'the confirm re-posts the exact text for server-side re-validation');
 
   console.log('\n--- Test 29: records routes end-to-end (Fastify inject) ---');
   process.env.DASHBOARD_ENABLED = 'on';
@@ -1036,6 +1097,71 @@ async function run() {
   const brokenPdf = await brokenApp.inject({ method: 'GET', url: '/d/records.pdf', headers: recCookie });
   check(brokenPdf.statusCode === 500, 'a failed query refuses the PDF export too');
   await brokenApp.close();
+
+  console.log('\n--- Test 30b: CSV import two-phase flow (Fastify inject, v1.81.0) ---');
+  const impMock = createMockSupabase({
+    vehicles: [
+      { id: 'v-a', owner_id: PROFILE.id, plate_number: 'KDA 123A', make_model: 'Nissan Note', status: 'ACTIVE', current_mileage: 100000 },
+      { id: 'v-b', owner_id: PROFILE.id, plate_number: 'KDB 456B', make_model: 'Toyota Hiace', status: 'ACTIVE', current_mileage: 200000 }
+    ],
+    expense_logs: [],
+    receipts: [],
+    admin_audit_logs: [],
+    error_logs: [],
+    user_context_cache: [],
+    [DASHBOARD_SESSIONS_TABLE]: [seedRow({
+      id: 'sess-imp',
+      token_hash: hashToken('imp-link'),
+      session_token_hash: hashToken('imp-session'),
+      verified: true,
+      session_expires_at: new Date(Date.now() + 86400000).toISOString()
+    })],
+    profiles: [{ id: PROFILE.id, phone_number: PROFILE.phone_number, email: PROFILE.email, full_name: PROFILE.full_name, country_code: 'KE' }]
+  });
+  const impApp = Fastify({ logger: false });
+  await registerDashboardRoutes(impApp, { supabase: impMock.client });
+  await impApp.ready();
+  const impHeaders = { cookie: 'saka_dash=imp-session', 'content-type': 'application/x-www-form-urlencoded' };
+  const goodCsv = 'Date,Vehicle Plate,Type,Amount,Odometer,Notes\n2026-11-01,KDA 123A,diesel,5000,100500,Shell\n2026-11-02,KDX 999X,Fuel,1000,,Ghost\n';
+
+  const importForm = await impApp.inject({ method: 'GET', url: '/d/import', headers: { cookie: 'saka_dash=imp-session' } });
+  check(importForm.statusCode === 200 && importForm.body.includes('Import expenses'), 'GET /d/import renders the upload form for a signed-in owner');
+  const anonImport = await impApp.inject({ method: 'GET', url: '/d/import' });
+  check(anonImport.statusCode === 401, 'the import page never renders without a session');
+
+  const previewRes = await impApp.inject({ method: 'POST', url: '/d/import', payload: new URLSearchParams({ csv: goodCsv }).toString(), headers: impHeaders });
+  check(previewRes.statusCode === 200 && previewRes.body.includes('Preview'), 'Phase A renders the preview (no write happens yet)');
+  check(previewRes.body.includes('1 of 2 rows ready') || previewRes.body.includes('1 of 2 row ready'), 'the preview counts the valid rows exactly');
+  check(previewRes.body.includes('class="row-error"') && previewRes.body.includes('not in your fleet'), 'the unknown plate is highlighted and explained');
+  check(impMock.db.expense_logs.length === 0, 'a preview never writes a row');
+
+  const rawPreview = await impApp.inject({ method: 'POST', url: '/d/import', payload: goodCsv, headers: { cookie: 'saka_dash=imp-session', 'content-type': 'text/csv' } });
+  check(rawPreview.statusCode === 200 && rawPreview.body.includes('Preview'), 'a raw text/csv body reaches the same engine (no multipart)');
+
+  const confirmRes = await impApp.inject({ method: 'POST', url: '/d/import/confirm', payload: new URLSearchParams({ action: 'confirm', csv: goodCsv }).toString(), headers: impHeaders });
+  check(confirmRes.statusCode === 303 && confirmRes.headers.location === '/d/import?imported=1', 'Phase B re-validates and inserts exactly ONE row, then redirects');
+  const importedRows = impMock.db.expense_logs;
+  check(importedRows.length === 1 && importedRows[0].notes === 'Shell', 'only the valid row is written');
+  check(importedRows[0].driver_id === PROFILE.id && importedRows[0].expense_type === 'Fuel' && importedRows[0].amount === 5000, 'the imported row is the owner-shaped Fuel expense');
+  check(!importedRows.some((row) => row.notes === 'Ghost'), 'the invalid row is never written');
+  check(impMock.db.admin_audit_logs.some((row) => row.action === 'CSV_IMPORT'), 'the import is audited as CSV_IMPORT');
+  const afterImport = await impApp.inject({ method: 'GET', url: '/d/import?imported=1', headers: { cookie: 'saka_dash=imp-session' } });
+  check(afterImport.body.includes('1 expense imported'), 'the redirect lands on an honest confirmation');
+
+  const crossOrigin = await impApp.inject({
+    method: 'POST',
+    url: '/d/import/confirm',
+    payload: new URLSearchParams({ action: 'confirm', csv: goodCsv }).toString(),
+    headers: { ...impHeaders, host: 'app.sakafleet.test', origin: 'https://evil.test' }
+  });
+  check(crossOrigin.statusCode === 403 && impMock.db.expense_logs.length === 1, 'a cross-origin confirm is refused before any write');
+  const noMarker = await impApp.inject({ method: 'POST', url: '/d/import/confirm', payload: new URLSearchParams({ csv: goodCsv }).toString(), headers: impHeaders });
+  check(noMarker.statusCode === 400 && impMock.db.expense_logs.length === 1, 'a confirm without its action marker writes nothing');
+  const badOnly = 'Date,Vehicle Plate,Type,Amount,Odometer,Notes\n2026-11-02,KDX 999X,Fuel,1000,,Ghost\n';
+  const badConfirm = await impApp.inject({ method: 'POST', url: '/d/import/confirm', payload: new URLSearchParams({ action: 'confirm', csv: badOnly }).toString(), headers: impHeaders });
+  check(badConfirm.statusCode === 400 && /No rows are ready/.test(badConfirm.body), 'a file with zero valid rows is refused (never an empty claim)');
+  check(impMock.db.expense_logs.length === 1, 'refused confirms never write');
+  await impApp.close();
 
   console.log('\n--- Test 31: parseComplianceFilters + the one chip vocabulary (14C) ---');
   check(parseComplianceFilters({}).filters.view === 'all', 'no filter means All');

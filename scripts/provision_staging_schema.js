@@ -143,6 +143,30 @@ CREATE TABLE IF NOT EXISTS public.expenses (
   created_at timestamp with time zone DEFAULT now()
 );
 
+-- v1.81.0 — the receipt vault must exist before expense_logs references it.
+CREATE TABLE IF NOT EXISTS public.receipts (
+  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+  media_id text UNIQUE,
+  owner_id uuid,
+  driver_id uuid,
+  vehicle_id uuid,
+  document_kind text,
+  status text DEFAULT 'read',
+  confidence numeric,
+  currency text,
+  amount numeric,
+  fuel_liters numeric,
+  odometer integer,
+  vendor text,
+  image_url text,
+  text_sha text,
+  error text,
+  created_at timestamp with time zone DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_receipts_owner ON public.receipts(owner_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_receipts_driver ON public.receipts(driver_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_receipts_text_sha ON public.receipts(text_sha);
+
 CREATE TABLE IF NOT EXISTS public.expense_logs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   vehicle_id uuid REFERENCES public.vehicles(id) ON DELETE CASCADE,
@@ -155,10 +179,14 @@ CREATE TABLE IF NOT EXISTS public.expense_logs (
   fuel_liters numeric DEFAULT 0,
   fill_type text,
   odometer_reading integer,
+  -- v1.81.0 — the durable receipt link (PROP-2026-11-08-01). SET NULL keeps
+  -- the ledger row when a user deletes the receipt (rule 48).
+  receipt_id uuid REFERENCES public.receipts(id) ON DELETE SET NULL,
   notes text,
   logged_at timestamp with time zone DEFAULT now(),
   created_at timestamp with time zone DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS idx_expense_logs_receipt ON public.expense_logs(receipt_id);
 
 CREATE TABLE IF NOT EXISTS public.private_earnings (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -292,7 +320,7 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO service_role
 
 const EXPECTED_TABLES = [
   'profiles', 'vehicles', 'vin_registry', 'passbook_transfers', 'reminders',
-  'expenses', 'expense_logs', 'private_earnings', 'pending_owner_notifications',
+  'expenses', 'expense_logs', 'private_earnings', 'receipts', 'pending_owner_notifications',
   'processed_webhooks', 'exchange_rates_cache', 'support_tickets',
   'weekly_feature_proposals', 'chat_history', 'chat_sessions', 'chat_transcripts',
   'chat_friction_logs', 'conversation_analytics', 'error_logs', 'system_config',

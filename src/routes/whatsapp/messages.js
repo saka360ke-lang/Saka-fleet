@@ -687,7 +687,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         const countryLearningsLine = await getCountryLearningsLine({ supabase: supabaseClient, countryCode: bucketCountryCode }).catch(() => "");
         if (countryLearningsLine) jurisdictionContext = jurisdictionContext + "\n" + countryLearningsLine;
 
-        const { duplicateReceipt, logbookPrefill } = await resolveReceiptVault({
+        const { duplicateReceipt, logbookPrefill, receiptPrefill } = await resolveReceiptVault({
           supabaseClient,
           mediaObj,
           ocrPaused,
@@ -1372,6 +1372,9 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           narrativeExt,
           quizCtx,
           logbookPrefill,
+          // v1.81.0 — the vaulted receipt id rides the engine-only prefill seam
+          // into the log_expense quiz (durable receipt→expense link).
+          receiptPrefill,
           forcedNarrativeFlow,
           receiptQuizStart,
           narrativeSuppressQuiz,

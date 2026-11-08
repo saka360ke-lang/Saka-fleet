@@ -129,6 +129,9 @@ export async function arbitrateQuizTurn({
   narrativeExt,
   quizCtx,
   logbookPrefill = null,
+  // v1.81.0 (Phase 20) — the vaulted receipt id ({ receipt_id }) carried through
+  // the engine-only prefill seam (never user text, never AI output).
+  receiptPrefill = null,
   forcedNarrativeFlow = null,
   receiptQuizStart = null,
   narrativeSuppressQuiz = false,
@@ -209,6 +212,19 @@ export async function arbitrateQuizTurn({
       aiExtracted: {},
       startFlow: 'vehicle_registration',
       prefill: logbookPrefill,
+      ctx: quizCtx
+    });
+  } else if (receiptPrefill && !session.quiz && receiptQuizStart === 'log_expense' && !forcedNarrativeFlow) {
+    // v1.81.0 (Phase 20, PROP-2026-11-08-01) — a freshly vaulted receipt starts
+    // the expense quiz with its durable link already banked in the draft. The
+    // link rides `prefill` (engine data only); the user never sees a new
+    // question and AI output can never inject the field.
+    quizTurn = await handleQuizTurn({
+      session,
+      messageText,
+      aiExtracted: narrativeExt,
+      startFlow: receiptQuizStart,
+      prefill: receiptPrefill,
       ctx: quizCtx
     });
   } else {

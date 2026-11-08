@@ -2190,6 +2190,36 @@ function detectRegistrationCorrection(text, def) {
   return null;
 }
 
+/**
+ * v1.81.0 (Phase 20, PROP-2026-11-08-01) — the durable receipt→expense link.
+ * The id is ENGINE-injected (the log_expense quiz prefill carries it), but it is
+ * still verified before it is written: a receipt may only link to an expense it
+ * belongs to (same acting profile, or the expense's own vehicle). Never throws
+ * (rule 50) — an unreadable receipt answers null, never a refused save.
+ */
+const RECEIPT_LINK_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export async function resolveReceiptLink(ctx = {}, { receiptId = null, vehicleId = null } = {}) {
+  const id = String(receiptId || '').trim();
+  if (!RECEIPT_LINK_UUID_RE.test(id)) return null;
+  const supabase = ctx.supabase;
+  if (!supabase) return null;
+  try {
+    const { data, error } = await supabase
+      .from('receipts')
+      .select('id, owner_id, driver_id, vehicle_id')
+      .eq('id', id)
+      .maybeSingle();
+    if (error || !data) return null;
+    const profileId = ctx.profile?.id || null;
+    const ownsByProfile = Boolean(profileId) && (data.owner_id === profileId || data.driver_id === profileId);
+    const ownsByVehicle = Boolean(vehicleId) && data.vehicle_id === vehicleId;
+    return ownsByProfile || ownsByVehicle ? data.id : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function handleQuizTurn({
   session,
   messageText = '',
@@ -3240,6 +3270,12 @@ async function executeFlow(state, ctx) {
             completed: true
           };
         }
+        // v1.81.0 (Phase 20) — the durable receipt link rides the draft from the
+        // OCR turn; it is verified (profile/vehicle ownership) before it lands.
+        const linkedReceiptId = await resolveReceiptLink(ctx, {
+          receiptId: a.receipt_id || null,
+          vehicleId: vehicle.id
+        });
         const expenseRow = {
           vehicle_id: vehicle.id,
           driver_id: ctx.profile?.id,
@@ -3248,6 +3284,8 @@ async function executeFlow(state, ctx) {
           fuel_liters: a.fuel_liters || 0,
           fill_type: normalizeFillType(a.fill_type),
           odometer_reading: a.odometer_reading,
+          // v1.81.0 — durable receipt link (null when absent or unverified).
+          receipt_id: linkedReceiptId,
           // v1.59.0 — the optional label is searchable and never invented.
           label: sanitizeEntryLabel(a.label || state.narrativeExtras?.label) || null,
           notes: [
@@ -3261,6 +3299,12 @@ async function executeFlow(state, ctx) {
         if (logErr && /label/i.test(logErr.message || '')) {
           // Rule 50 — an un-migrated optional column never blocks a save.
           const { label, ...legacyRow } = expenseRow;
+          ({ error: logErr } = await ctx.supabase.from('expense_logs').insert([legacyRow]));
+        }
+        if (logErr && /receipt|column|schema|does not exist/i.test(logErr.message || '')) {
+          // Rule 50 (v1.81.0) — the receipt link is optional too: an un-migrated
+          // `receipt_id` column still saves the expense (link stays null).
+          const { label: _dropLabel, receipt_id: _dropReceipt, ...legacyRow } = expenseRow;
           ({ error: logErr } = await ctx.supabase.from('expense_logs').insert([legacyRow]));
         }
         if (logErr) {
@@ -4179,6 +4223,7 @@ export default {
   shouldPauseQuizForChat,
   isPlateLike,
   looksLikeReportRequest,
+  resolveReceiptLink,
   QUIZ_MAX_AGE_MINUTES,
   QUIZ_FLOW_KEYS
 };

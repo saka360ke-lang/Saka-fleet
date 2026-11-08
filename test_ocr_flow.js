@@ -26,6 +26,8 @@ import {
   deleteReceipt
 } from './src/services/receipts.js';
 import { handleQuizTurn } from './src/services/quizEngine.js';
+// v1.81.0 (Phase 20) — the vault returns the durable receipt link for the quiz.
+import { resolveReceiptVault } from './src/routes/whatsapp/media.js';
 
 /**
  * Targeted suite: OCR pipeline (Meta media → Vision → receipt hints → quiz).
@@ -187,6 +189,66 @@ async function run() {
   assert(session.quiz.answers.amount === 5500, 'OCR total prefilled the amount');
   assert(session.quiz.answers.fuel_liters === 40.5, 'OCR volume prefilled the fuel litres');
   assert(session.quiz.answers.odometer_reading === 366800, 'OCR odometer prefilled the reading');
+
+  console.log('\n--- Test 6b: the vaulted receipt id rides the quiz prefill (v1.81.0) ---');
+  const VAULT_RECEIPT_ID = '33333333-3333-3333-3333-333333333333';
+  const vaultInserts = [];
+  const vaultClient = {
+    from(table) {
+      const builder = {
+        select: () => builder,
+        eq: () => builder,
+        gte: () => builder,
+        order: () => builder,
+        limit: async () => ({ data: [], error: null }),
+        maybeSingle: async () => ({ data: null, error: null }),
+        insert: (rows) => {
+          vaultInserts.push({ table, rows });
+          return {
+            error: null,
+            select: () => ({ maybeSingle: async () => ({ data: { id: VAULT_RECEIPT_ID, ...rows[0] }, error: null }) })
+          };
+        },
+        delete: () => builder
+      };
+      return builder;
+    },
+    storage: { from: () => ({ upload: async () => ({ error: { message: 'no bucket' } }) }) }
+  };
+  const vaultArgs = {
+    supabaseClient: vaultClient,
+    ocrPaused: false,
+    ocrText: 'SHELL KAREN TOTAL KES 5,500',
+    ocrLowConfidence: false,
+    ocrResult: null,
+    ocrError: null,
+    receiptHints: { amount: 5500, currency: 'KES' },
+    countryInfo: { currency: 'KES' },
+    entitlements: { receiptVaultStorage: false },
+    profileData: { id: vehicle.owner_id },
+    existingVehicles: [vehicle],
+    currentActiveVehicle: vehicle
+  };
+  const receiptVault = await resolveReceiptVault({
+    ...vaultArgs,
+    mediaObj: { id: 'media-1' },
+    ocrKind: 'receipt_fuel',
+    ocrTextSha: 'sha-1',
+    messageText: 'Receipt photo',
+    ocrCountry: { country_code: 'KE' }
+  });
+  check(vaultInserts.some((entry) => entry.table === 'receipts'), 'the receipt row is still vaulted as evidence');
+  check(receiptVault.receiptPrefill?.receipt_id === VAULT_RECEIPT_ID, 'a freshly vaulted receipt returns { receipt_id } for the quiz');
+  const logbookVault = await resolveReceiptVault({
+    ...vaultArgs,
+    mediaObj: { id: 'media-2' },
+    ocrKind: 'logbook',
+    ocrText: 'VIN JTE777A1234567890',
+    ocrTextSha: 'sha-2',
+    messageText: 'Logbook photo',
+    ocrCountry: { country_code: 'KE' }
+  });
+  check(logbookVault.receiptPrefill === null, 'a logbook never carries a receipt prefill (receipts only)');
 
   console.log('\n--- Test 7: document classification ---');
   check(classifyOcrDocument('SHELL KAREN\nPUMP 4\nDIESEL 40.5 L\nTOTAL KES 5,500') === 'receipt_fuel', 'Fuel receipts are classified');

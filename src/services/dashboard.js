@@ -43,6 +43,8 @@ import { buildCustomReport, dateRangeBounds, CUSTOM_METRICS, CUSTOM_METRIC_CATEG
 import { getTierLabel } from './subscriptionTiers.js';
 import { receiptStoragePaths, RECEIPTS_BUCKET } from './receipts.js';
 import { EXPENSE_TYPES } from './expenseCatalog.js';
+// v1.81.0 (Phase 20) — CSV bulk import: the preview renders the engine's copy.
+import { CSV_IMPORT_ERROR_COPY, CSV_IMPORT_MAX_ROWS } from './csvImport.js';
 import { driverComplianceLabel } from './driverComplianceCatalog.js';
 import { daysUntilDue } from './maintenanceReminders.js';
 import { buildTyreWearRows, buildCostPerKmTrend, buildCostPerKmChart, getTyreLifespanKm } from './vehicleAnalytics.js';
@@ -1023,11 +1025,45 @@ export async function matchReceiptForExpense({ supabase, vehicleId = null, amoun
   }
 }
 
-/** Attach a receipt status to every expense row of one page (shared cache). */
+/**
+ * Attach a receipt status to every expense row of one page.
+ * v1.81.0 (Phase 20, PROP-2026-11-08-01) — the durable `expense_logs.receipt_id`
+ * link wins whenever present (ONE `.in('id', …)` query per page, never a guess).
+ * Rows written before the backfill keep the unique-match heuristic unchanged;
+ * after `npm run backfill:receipt-links` the fallback is effectively idle.
+ * A linked id whose receipt row vanished degrades to the heuristic, never a lie.
+ */
 export async function attachReceiptMatches({ supabase, rows = [] } = {}) {
+  const list = Array.isArray(rows) ? rows : [];
+  const linkedIds = [...new Set(list
+    .filter((row) => row.kind === 'expense' && row.raw?.receipt_id)
+    .map((row) => row.raw.receipt_id))];
+  const linkedById = new Map();
+  if (supabase && linkedIds.length) {
+    try {
+      const { data, error } = await supabase
+        .from('receipts')
+        .select('id, vehicle_id, amount, image_url, media_id, vendor, created_at')
+        .in('id', linkedIds);
+      if (error) {
+        logWriteFailure(supabase, 'dashboard.attachReceiptMatches', error);
+      } else {
+        for (const receipt of data || []) linkedById.set(receipt.id, receipt);
+      }
+    } catch (err) {
+      logWriteFailure(supabase, 'dashboard.attachReceiptMatches', err);
+    }
+  }
   const cache = new Map();
   const out = [];
-  for (const row of rows || []) {
+  for (const row of list) {
+    const linked = row.kind === 'expense' && row.raw?.receipt_id
+      ? linkedById.get(row.raw.receipt_id) || null
+      : null;
+    if (linked) {
+      out.push({ ...row, receiptStatus: 'linked', receiptId: linked.id });
+      continue;
+    }
     if (row.kind !== 'expense' || !row.vehicleId || !row.at) {
       out.push({ ...row, receiptStatus: 'none', receiptId: null });
       continue;
@@ -2259,6 +2295,9 @@ svg.trend text.xlabel { fill:var(--muted); font-size:11px; }
 blockquote { margin:10px 0; padding:10px 14px; border-left:3px solid var(--accent); background:#0F0F11; border-radius:6px; color:var(--ink); white-space:pre-wrap; }
 code { background:#0F0F11; border:1px solid var(--line); border-radius:6px; padding:1px 6px; font-size:12px; }
 ul.invest li { font-size:13px; color:var(--ink); }
+/* v1.81.0 (Phase 20) — CSV import preview: invalid rows are highlighted, never hidden. */
+table.rec tr.row-error td { background:#2A1416; }
+.import-help { font-size:13px; color:var(--muted); }
 `;
 
 export function escapeHtml(value) {
@@ -2334,9 +2373,9 @@ function daysLabel(daysLeft) {
   return `in ${daysLeft} d`;
 }
 
-/** The eight destinations every signed-in page offers (Phase 19 adds Analytics). */
+/** The nine destinations every signed-in page offers (Phase 20 adds Import). */
 function dashboardNav() {
-  return '<a href="/d">Overview</a> · <a href="/d/vehicles">Vehicles</a> · <a href="/d/records">Records</a> · <a href="/d/compliance">Compliance</a> · <a href="/d/analytics">Analytics</a> · <a href="/d/reports">Reports</a> · <a href="/d/settings">Settings</a> · <a href="/d/logout">Log out</a>';
+  return '<a href="/d">Overview</a> · <a href="/d/vehicles">Vehicles</a> · <a href="/d/records">Records</a> · <a href="/d/import">Import</a> · <a href="/d/compliance">Compliance</a> · <a href="/d/analytics">Analytics</a> · <a href="/d/reports">Reports</a> · <a href="/d/settings">Settings</a> · <a href="/d/logout">Log out</a>';
 }
 
 /** Active / paused / inactive — a chip, never a raw database enum. */
@@ -2548,7 +2587,7 @@ export function renderRecordsPage({ data, filters = {}, vehicles = [], emailMask
 </form>`;
 
   const tableRows = rows.map((row) => {
-    const receipt = row.receiptStatus === 'unique'
+    const receipt = (row.receiptStatus === 'unique' || row.receiptStatus === 'linked')
       ? `<a href="/d/receipt/${encodeURIComponent(row.receiptId)}">View</a>`
       : row.receiptStatus === 'ambiguous'
         ? '<span class="muted">Multiple match</span>'
@@ -2594,6 +2633,93 @@ ${rows.length ? `<p class="muted" style="font-size:13px;">Page ${page + 1}${data
 ${pager.length ? `<p class="muted">${pager.join(' · ')}</p>` : ''}
 ${exports}`;
   return renderPageShell('Records', body, { headerRight: dashboardNav() });
+}
+
+/**
+ * `/d/import` (v1.81.0, Phase 20) — CSV bulk import: upload → preview → confirm.
+ * Phase A sends the CSV text (file via FileReader, or pasted) and the server
+ * renders this same page with a per-row preview; Phase B re-validates the EXACT
+ * text before one chunked insert. Highlighted rows are never written, and a
+ * preview can only be produced by the engine — the browser never decides.
+ */
+export function renderImportPage({
+  preview = null,
+  csvText = '',
+  imported = null,
+  error = null,
+  emailMasked = '',
+  currency = 'USD',
+  locale = 'en-US'
+} = {}) {
+  const money = (value) => formatMoney(value, currency, locale);
+  const rows = preview?.rows || [];
+  const counts = preview?.counts || { total: 0, valid: 0, invalid: 0 };
+  const importedLine = imported === null || imported === undefined
+    ? ''
+    : `<p class="muted">✅ ${Number(imported)} expense${Number(imported) === 1 ? '' : 's'} imported. <a href="/d/records">Open Records</a></p>`;
+  const tableRows = rows.map((row) => `
+      <tr class="${row.errors?.length ? 'row-error' : ''}">
+        <td>${row.line}</td>
+        <td>${escapeHtml(row.dateKey || '—')}</td>
+        <td>${escapeHtml(row.plate || '—')}</td>
+        <td>${escapeHtml(row.expenseType || '—')}</td>
+        <td class="num">${row.amount ? escapeHtml(money(row.amount)) : '—'}</td>
+        <td>${row.odometer ?? '—'}</td>
+        <td>${escapeHtml(row.notes || '—')}</td>
+        <td>${row.errors?.length
+          ? `<span class="chip bad">Fix</span> ${row.errors.map((code) => escapeHtml(CSV_IMPORT_ERROR_COPY[code] || code)).join(' ')}`
+          : '<span class="chip ok">Ready</span>'}</td>
+      </tr>`).join('');
+  const previewBlock = preview ? `
+    <h2>Preview</h2>
+    <p class="muted">${counts.valid} of ${counts.total} row${counts.total === 1 ? '' : 's'} ready${counts.invalid ? ` · ${counts.invalid} highlighted` : ''}.</p>
+    <div class="card table-wrap">
+      <table class="rec">
+        <thead><tr><th>Line</th><th>Date</th><th>Vehicle</th><th>Type</th><th class="num">Amount</th><th>Odometer</th><th>Notes</th><th>Status</th></tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+    </div>
+    ${counts.valid > 0 ? `
+    <form method="POST" action="/d/import/confirm">
+      <input type="hidden" name="action" value="confirm">
+      <textarea name="csv" hidden>${escapeHtml(csvText)}</textarea>
+      <button type="submit">Import ${counts.valid} expense${counts.valid === 1 ? '' : 's'}</button>
+    </form>
+    <p class="import-help">Highlighted rows are never written — fix them and upload the file again.</p>` : '<p class="muted">Nothing to import yet — fix the highlighted rows and upload again.</p>'}
+  ` : '';
+  const body = `
+<h1>Import expenses</h1>
+<p class="muted">Upload a CSV with these columns: <code>Date, Vehicle Plate, Type, Amount, Odometer, Notes</code> · signed in as ${escapeHtml(emailMasked)}</p>
+${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
+${importedLine}
+<div class="card">
+  <form id="import-form" method="POST" action="/d/import">
+    <label class="import-help" for="import-file">CSV file (up to ${CSV_IMPORT_MAX_ROWS} rows)</label>
+    <input type="file" id="import-file" accept=".csv,text/csv">
+    <label class="import-help" for="import-text">…or paste the rows here</label>
+    <textarea id="import-text" name="csv" rows="6" placeholder="Date,Vehicle Plate,Type,Amount,Odometer,Notes"></textarea>
+    <button type="submit">Preview import</button>
+  </form>
+</div>
+${previewBlock}
+<script>
+(function () {
+  var form = document.getElementById('import-form');
+  var fileInput = document.getElementById('import-file');
+  var textarea = document.getElementById('import-text');
+  if (!form || !fileInput || !textarea) return;
+  form.addEventListener('submit', function (event) {
+    var file = fileInput.files && fileInput.files[0];
+    if (!file) return;
+    event.preventDefault();
+    var reader = new FileReader();
+    reader.onload = function () { textarea.value = String(reader.result || ''); form.submit(); };
+    reader.onerror = function () { form.submit(); };
+    reader.readAsText(file);
+  });
+})();
+</script>`;
+  return renderPageShell('Import expenses', body, { headerRight: dashboardNav() });
 }
 
 /** `/d/receipt/:id` answers with a short-lived redirect to the stored image. */

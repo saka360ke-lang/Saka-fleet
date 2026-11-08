@@ -1,6 +1,13 @@
 {
-  "latest": "1.80.0",
+  "latest": "1.81.0",
   "entries": [
+    {
+      "version": "1.81.0",
+      "date": "2026-11-08",
+      "title": "Bring your history in, and receipts that stay attached",
+      "preview": "Import old expenses from a CSV file on your dashboard - and every receipt photo now stays linked to its expense.",
+      "summary": "Two practical additions. First, your dashboard has a new Import page: upload (or paste) a CSV with Date, Vehicle Plate, Type, Amount, Odometer and Notes, and Saka checks every row - the plate must be one of your vehicles, the type must be a real expense type, the amount must be positive, the date must be readable and not in the future, and rows that repeat each other or something you logged in the last few hours are flagged - then shows you a preview with problem rows highlighted. Nothing is saved until you confirm, and only the clean rows are saved. Importing historical expenses never starts or extends a trial and never uses your report allowance. Second, a receipt photo you send now stays permanently attached to the expense it created: the Records page shows the receipt for exactly the right row instead of guessing from the vehicle, date and amount. Older receipts still find their expense the old way, and the team can backfill them safely."
+    },
     {
       "version": "1.80.0",
       "date": "2026-11-08",

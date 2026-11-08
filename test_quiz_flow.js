@@ -588,8 +588,52 @@ async function run() {
   const expenseRow = cardInserted.find((entry) => entry.table === 'expense_logs')?.rows?.[0] || null;
   assert(Boolean(expenseRow), 'a narrative-saved expense row is written');
   assert(String(expenseRow.created_at || '').startsWith('2026-10-31'), 'the retro date lands in created_at (1-save path)');
+  // v1.81.0 — no receipt context means an explicit null link, never a guess.
+  assert(expenseRow.receipt_id === null, 'an expense without a receipt writes receipt_id = null');
   // v1.72.0 (P2-3) — the legacy mirror still writes by default.
   assert(cardInserted.some((entry) => entry.table === 'expenses'), 'the legacy expenses mirror is written while the flag is on (default)');
+
+  // v1.81.0 (Phase 20, PROP-2026-11-08-01) — the durable receipt link rides the
+  // engine-only prefill seam. It is verified against the receipts table before
+  // it is written; a missing/foreign id never links and never blocks the save.
+  const RECEIPT_ID = '22222222-2222-2222-2222-222222222222';
+  const receiptQuizCtx = (receiptRow) => {
+    const inserted = [];
+    const supabase = {
+      from(table) {
+        const builder = {
+          eq: () => builder, gte: () => builder, lte: () => builder, gt: () => builder,
+          in: () => builder, order: () => builder, limit: () => builder,
+          select: () => builder, update: () => builder, delete: () => builder,
+          insert: async (rows) => { inserted.push({ table, rows }); return { error: null, data: rows }; },
+          maybeSingle: async () => (table === 'receipts' ? { data: receiptRow, error: null } : { data: null, error: null }),
+          single: async () => ({ data: null, error: null })
+        };
+        return builder;
+      }
+    };
+    return { ctx: { ...cardCtx, supabase }, inserted };
+  };
+  const receiptExtracted = { expense_type: 'Fuel', amount: 5500, fuel_liters: 40, fill_type: 'full', odometer_reading: 360100, notes: 'Shell Karen' };
+  const linked = receiptQuizCtx({ id: RECEIPT_ID, owner_id: vehicle.owner_id, driver_id: null, vehicle_id: 'another-vehicle' });
+  const linkedSession = {};
+  await handleQuizTurn({ session: linkedSession, messageText: 'Receipt photo', aiExtracted: receiptExtracted, startFlow: 'log_expense', prefill: { receipt_id: RECEIPT_ID }, ctx: linked.ctx });
+  const linkedSave = await handleQuizTurn({ session: linkedSession, messageText: 'yes', ctx: linked.ctx });
+  assert(linkedSave.completed === true, 'a receipt-prefilled draft confirms');
+  const linkedRow = linked.inserted.find((entry) => entry.table === 'expense_logs')?.rows?.[0] || null;
+  assert(linkedRow?.receipt_id === RECEIPT_ID, 'the vaulted receipt id lands in expense_logs.receipt_id (owner-verified)');
+
+  const foreign = receiptQuizCtx({ id: RECEIPT_ID, owner_id: 'someone-else', driver_id: null, vehicle_id: 'v-foreign' });
+  const foreignSession = {};
+  await handleQuizTurn({ session: foreignSession, messageText: 'Receipt photo', aiExtracted: receiptExtracted, startFlow: 'log_expense', prefill: { receipt_id: RECEIPT_ID }, ctx: foreign.ctx });
+  await handleQuizTurn({ session: foreignSession, messageText: 'yes', ctx: foreign.ctx });
+  const foreignRow = foreign.inserted.find((entry) => entry.table === 'expense_logs')?.rows?.[0] || null;
+  assert(foreignRow && foreignRow.receipt_id === null, "another profile's receipt never links (sibling sweep class i)");
+
+  const receiptRestartSession = {};
+  await handleQuizTurn({ session: receiptRestartSession, messageText: 'Receipt photo', aiExtracted: receiptExtracted, startFlow: 'log_expense', prefill: { receipt_id: RECEIPT_ID }, ctx: linked.ctx });
+  await handleQuizTurn({ session: receiptRestartSession, messageText: 'restart', ctx: linked.ctx });
+  assert(receiptRestartSession.quiz && receiptRestartSession.quiz.answers.receipt_id === undefined, 'a restart drops the stale link (a fresh draft never reuses it)');
 
   // v1.72.0 (P2-3) — LEGACY_EXPENSES_WRITE_ENABLED=false stops the mirror and
   // never blocks the canonical expense_logs write.

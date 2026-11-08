@@ -60,6 +60,8 @@ import {
   serializeAllDataCsv,
   renderReportsPage,
   renderSettingsPage,
+  // v1.81.0 (Phase 20) — CSV bulk import page.
+  renderImportPage,
   DASHBOARD_ROLES,
   buildDriverHome,
   buildDriverDaybookPageData,
@@ -78,6 +80,15 @@ import {
   renderAnalyticsPage
 } from '../services/dashboard.js';
 import { logAdminAudit } from '../services/superadmin.js';
+// v1.81.0 (Phase 20) — CSV bulk import engine (parser + validator + writes).
+import {
+  parseCsv,
+  validateImportRows,
+  summarizeImport,
+  loadRecentExpensesForImport,
+  bulkInsertImportRows,
+  CSV_IMPORT_MAX_BYTES
+} from '../services/csvImport.js';
 import { detectCountryFromPhone, buildGlobalContext } from '../services/globalization.js';
 import { buildProReportPdf } from '../services/pdfEngine.js';
 import { logSystemError, logWriteFailure } from '../services/systemErrors.js';
@@ -203,7 +214,12 @@ async function requireRoleSession(request, reply, supabase, role = 'owner') {
 
 export async function registerDashboardRoutes(fastify, { supabase } = {}) {
   await fastify.register(async (scope) => {
-    await scope.register(formbody);
+    // v1.81.0 (Phase 20) — the CSV import re-posts the file text through this
+    // parser, so give it the CSV ceiling plus headroom (urlencoding overhead).
+    await scope.register(formbody, { bodyLimit: CSV_IMPORT_MAX_BYTES + 65536 });
+    // A raw text/csv body is accepted too: the page's FileReader path and any
+    // scripted upload reach the SAME engine (no multipart, no new dependency).
+    scope.addContentTypeParser('text/csv', { parseAs: 'string', bodyLimit: CSV_IMPORT_MAX_BYTES + 65536 }, (_request, body, done) => done(null, String(body || '')));
 
     /* -------------------------------------------------------------- */
     /* GET /d — the signed-in overview (session cookie required)       */
@@ -683,6 +699,150 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
         return reply.code(303).header('location', '/d/settings?saved=1').send();
       } catch (err) {
         await logSystemError(supabase, err, '/d/settings');
+        const page = renderErrorPage(500, 'Please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    /* -------------------------------------------------------------- */
+    /* GET /d/import — CSV bulk import form (Phase 20)                 */
+    /* -------------------------------------------------------------- */
+
+    /** Extract the CSV text from either a text/csv body or a `csv` form field. */
+    const readImportCsv = (request) => {
+      const body = request.body;
+      if (typeof body === 'string') return body;
+      if (body && typeof body === 'object' && typeof body.csv === 'string') return body.csv;
+      return '';
+    };
+
+    /**
+     * Phase A of the two-phase import: parse + validate with ONE vehicle read
+     * and ONE dedupe read. The confirm step re-runs this exact function, so a
+     * tampered hidden field can never smuggle a row past validation.
+     */
+    const runImportPreview = async ({ ownerId, profile, csvText }) => {
+      const parsed = parseCsv(csvText);
+      if (!parsed.ok) return { ok: false, status: 400, error: parsed.error };
+      const vehicles = await loadOwnerVehicles(supabase, ownerId);
+      if (!vehicles.length) {
+        return { ok: false, status: 409, error: 'No active vehicles yet — register one in WhatsApp first, then import.' };
+      }
+      const recent = await loadRecentExpensesForImport(supabase, { vehicleIds: vehicles.map((vehicle) => vehicle.id) });
+      const validation = validateImportRows({
+        rows: parsed.rows,
+        vehicles,
+        countryCode: countryForProfile(profile)?.country_code || 'GLOBAL',
+        recentExpenses: recent.rows,
+        now: new Date()
+      });
+      return { ok: true, validation, preview: summarizeImport(validation), csvText, vehicles };
+    };
+
+    scope.get('/d/import', async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      try {
+        const session = await requireRoleSession(request, reply, supabase, 'owner');
+        if (!session) return reply;
+        const profile = await loadDashboardProfile(supabase, session.ownerId);
+        const ctx = buildGlobalContext(countryForProfile(profile), profile);
+        const importedRaw = request.query?.imported;
+        const imported = importedRaw === undefined ? null : Math.max(0, Number(importedRaw) || 0);
+        return sendHtml(reply, 200, renderImportPage({
+          imported,
+          emailMasked: maskEmail(session.email || profile?.email),
+          currency: ctx.currency,
+          locale: ctx.locale
+        }));
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/import');
+        const page = renderErrorPage(500, 'Please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    scope.post('/d/import', { config: { rateLimit: { max: 10, timeWindow: '5 minutes' } } }, async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      if (isCrossOriginWrite(request)) {
+        const page = renderErrorPage(403, 'That request came from another site — nothing was imported. Open Import from your dashboard and try again.');
+        return sendHtml(reply, 403, page.html);
+      }
+      try {
+        const session = await requireRoleSession(request, reply, supabase, 'owner');
+        if (!session) return reply;
+        const profile = await loadDashboardProfile(supabase, session.ownerId);
+        const ctx = buildGlobalContext(countryForProfile(profile), profile);
+        const csvText = readImportCsv(request);
+        const result = await runImportPreview({ ownerId: session.ownerId, profile, csvText });
+        const page = renderImportPage({
+          preview: result.ok ? result.preview : null,
+          csvText,
+          error: result.ok ? null : result.error,
+          emailMasked: maskEmail(session.email || profile?.email),
+          currency: ctx.currency,
+          locale: ctx.locale
+        });
+        return sendHtml(reply, result.ok ? 200 : (result.status || 400), page);
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/import');
+        const page = renderErrorPage(500, 'Please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    /* -------------------------------------------------------------- */
+    /* POST /d/import/confirm — re-validate then ONE chunked insert      */
+    /* -------------------------------------------------------------- */
+    scope.post('/d/import/confirm', { config: { rateLimit: { max: 10, timeWindow: '5 minutes' } } }, async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      if (isCrossOriginWrite(request)) {
+        const page = renderErrorPage(403, 'That request came from another site — nothing was imported. Open Import from your dashboard and try again.');
+        return sendHtml(reply, 403, page.html);
+      }
+      try {
+        const session = await requireRoleSession(request, reply, supabase, 'owner');
+        if (!session) return reply;
+        const profile = await loadDashboardProfile(supabase, session.ownerId);
+        const ctx = buildGlobalContext(countryForProfile(profile), profile);
+        const emailMasked = maskEmail(session.email || profile?.email);
+        const body = request.body && typeof request.body === 'object' ? request.body : {};
+        if (String(body.action || '') !== 'confirm') {
+          return sendHtml(reply, 400, renderImportPage({ error: 'Nothing to import — nothing changed.', emailMasked, currency: ctx.currency, locale: ctx.locale }));
+        }
+        const csvText = readImportCsv(request);
+        const result = await runImportPreview({ ownerId: session.ownerId, profile, csvText });
+        if (!result.ok) {
+          return sendHtml(reply, result.status || 400, renderImportPage({ csvText, error: result.error, emailMasked, currency: ctx.currency, locale: ctx.locale }));
+        }
+        if (!result.preview.counts.valid) {
+          return sendHtml(reply, 400, renderImportPage({
+            preview: result.preview,
+            csvText,
+            error: 'No rows are ready to import — fix the highlighted rows first.',
+            emailMasked,
+            currency: ctx.currency,
+            locale: ctx.locale
+          }));
+        }
+        const insert = await bulkInsertImportRows({
+          supabase,
+          ownerId: session.ownerId,
+          validRows: result.validation.valid,
+          vehicles: result.vehicles
+        });
+        if (!insert.ok) {
+          return sendHtml(reply, 502, renderImportPage({
+            preview: result.preview,
+            csvText,
+            error: insert.error,
+            emailMasked,
+            currency: ctx.currency,
+            locale: ctx.locale
+          }));
+        }
+        return reply.code(303).header('location', `/d/import?imported=${insert.inserted}`).send();
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/import/confirm');
         const page = renderErrorPage(500, 'Please try again in a moment.');
         return sendHtml(reply, page.status, page.html);
       }
