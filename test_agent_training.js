@@ -347,6 +347,9 @@ check(/Narrative pre-fills are engine-determined facts/.test(await import('./src
   // v1.75.2 (Phase 14C) — the compliance surface must be stated too.
   check(SAKA_FLOW_PLAYBOOK.includes('compliance board'), 'the playbook documents the v1.75.2 compliance surface');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('compliance board'), 'the core prompt states the compliance surface (v1.75.2)');
+  // v1.75.3 (Phase 14D) — the reports builder + settings surface.
+  check(SAKA_FLOW_PLAYBOOK.includes('reports builder'), 'the playbook documents the v1.75.3 reports builder');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('reports builder'), 'the core prompt states the reports builder (v1.75.3)');
 
   console.log(`\n\u2705 ALL AGENT TRAINING TESTS PASSED (${passed} assertions).`);
   console.log('Stateless suite: no real database rows were created, so no cleanup is required.');

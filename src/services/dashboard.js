@@ -37,6 +37,8 @@ import { buildGlobalContext, formatMoney, formatDate, formatNumber } from './glo
 import { expenseToLedgerRow, earningToLedgerRow, buildLedgerGroups } from './reportLedger.js';
 import { buildProReportPdf } from './pdfEngine.js';
 import { complianceReportToPdf } from './reportDelivery.js';
+import { buildCustomReport, dateRangeBounds, CUSTOM_METRICS, CUSTOM_METRIC_CATEGORIES, metricsForAccess } from './reportMetrics.js';
+import { getTierLabel } from './subscriptionTiers.js';
 import { receiptStoragePaths, RECEIPTS_BUCKET } from './receipts.js';
 import { EXPENSE_TYPES } from './expenseCatalog.js';
 import { driverComplianceLabel } from './driverComplianceCatalog.js';
@@ -1406,6 +1408,327 @@ export async function buildCompliancePdf(reportData = {}, {
 }
 
 /* ------------------------------------------------------------------ */
+/* 9. Reports builder + settings (Phase 14D)                           */
+/* ------------------------------------------------------------------ */
+
+export const REPORT_RANGES = Object.freeze(['this_month', 'last_30_days', 'this_year', 'custom']);
+export const REPORT_MAX_METRICS = 8;
+export const EXPORT_SECTION_CAP = 2000;
+
+const REPORT_RANGE_ALIASES = Object.freeze({
+  this_month: 'this_month',
+  month: 'this_month',
+  last_30_days: 'last_30_days',
+  'last-30-days': 'last_30_days',
+  last_30: 'last_30_days',
+  this_year: 'this_year',
+  year: 'this_year',
+  custom: 'custom'
+});
+
+function pickList(value) {
+  if (Array.isArray(value)) return value.map((entry) => String(entry || '').trim()).filter(Boolean);
+  return String(value || '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function maskPhone(phone) {
+  const raw = String(phone || '').replace(/\s+/g, '');
+  if (!raw) return '—';
+  if (raw.length <= 4) return '•••';
+  return `${'•'.repeat(Math.max(0, raw.length - 4))}${raw.slice(-4)}`;
+}
+
+/**
+ * Validate a reports-builder submission into ONE spec that feeds both the form
+ * state and the PDF (rule 51(ii) — the export can never describe something the
+ * form did not select). Never throws.
+ */
+export function parseReportSpec(query = {}, { vehicleIds = [], now = new Date() } = {}) {
+  const raw = query && typeof query === 'object' ? query : {};
+  const rangeValue = String(Array.isArray(raw.range) ? raw.range[0] : raw.range || '').trim().toLowerCase();
+  const range = rangeValue ? REPORT_RANGE_ALIASES[rangeValue] : 'this_month';
+  if (!range) return { ok: false, reason: 'bad_range', error: 'That date range is not one I know — pick a preset or Custom.' };
+
+  const requestedVehicles = [...new Set(pickList(raw.vehicles ?? raw.vehicle))];
+  const unknownVehicle = requestedVehicles.find((vehicleId) => !vehicleIds.includes(vehicleId));
+  if (unknownVehicle) return { ok: false, reason: 'unknown_vehicle', error: 'That vehicle is not on your fleet.' };
+
+  const requestedMetrics = [...new Set(pickList(raw.metrics ?? raw.metric))];
+  const knownMetrics = new Set(CUSTOM_METRICS.map((metric) => metric.id));
+  const unknownMetric = requestedMetrics.find((metricId) => !knownMetrics.has(metricId));
+  if (unknownMetric) return { ok: false, reason: 'unknown_metric', error: `"${unknownMetric}" is not a metric I can report on.` };
+  if (requestedMetrics.length > REPORT_MAX_METRICS) {
+    return { ok: false, reason: 'too_many_metrics', error: `Pick up to ${REPORT_MAX_METRICS} metrics — that is all one report can show clearly.` };
+  }
+  const metricIds = requestedMetrics.length
+    ? requestedMetrics
+    : metricsForAccess({ lane: 'owner' }).map((metric) => metric.id).slice(0, 5);
+
+  let from;
+  let to;
+  let label;
+  if (range === 'custom') {
+    const fromRaw = String(Array.isArray(raw.from) ? raw.from[0] : raw.from || '').trim();
+    const toRaw = String(Array.isArray(raw.to) ? raw.to[0] : raw.to || '').trim();
+    if (!ISO_DATE_RE.test(fromRaw) || Number.isNaN(new Date(`${fromRaw}T00:00:00Z`).getTime())) {
+      return { ok: false, reason: 'bad_from', error: 'That start date does not look right — use YYYY-MM-DD.' };
+    }
+    if (!ISO_DATE_RE.test(toRaw) || Number.isNaN(new Date(`${toRaw}T00:00:00Z`).getTime())) {
+      return { ok: false, reason: 'bad_to', error: 'That end date does not look right — use YYYY-MM-DD.' };
+    }
+    if (fromRaw > toRaw) return { ok: false, reason: 'bad_range_dates', error: 'The start date is after the end date — swap them and try again.' };
+    if (daysBetweenIso(fromRaw, toRaw) + 1 > RECORDS_MAX_RANGE_DAYS) {
+      return { ok: false, reason: 'range_too_wide', error: `That range is wider than ${RECORDS_MAX_RANGE_DAYS} days — pick a shorter window.` };
+    }
+    from = nairobiDayStartIso(fromRaw);
+    // Inclusive end: buildCustomReport compares with `.lte('created_at', to)`.
+    to = `${toRaw}T23:59:59.999${NAIROBI_OFFSET}`;
+    label = `${fromRaw} – ${toRaw}`;
+  } else {
+    const bounds = dateRangeBounds(range, now);
+    from = bounds.from;
+    to = bounds.to;
+    label = bounds.label;
+  }
+
+  return { ok: true, spec: { range, from, to, label, vehicleIds: requestedVehicles, metricIds } };
+}
+
+/**
+ * The dashboard's report builder (Phase 14D): the SAME `buildCustomReport`
+ * engine the WhatsApp custom-report lane uses, with the owner lane and the
+ * resolved window passed through. Dashboards reports never touch
+ * `usage_counters` — the builder has no quota path at all.
+ */
+export async function buildDashboardCustomReport({
+  supabase,
+  ownerId = null,
+  spec = {},
+  countryInfo = null,
+  profile = null,
+  now = new Date()
+} = {}) {
+  if (!supabase || !ownerId) return { ok: false, error: 'Database unavailable.' };
+  try {
+    const report = await buildCustomReport({
+      supabase,
+      ownerId,
+      vehicleIds: spec.vehicleIds || [],
+      metricIds: spec.metricIds || [],
+      range: spec.range || 'this_month',
+      bounds: { from: spec.from, to: spec.to, label: spec.label },
+      countryInfo,
+      profile,
+      access: { lane: 'owner' },
+      now
+    });
+    if (!report?.ok) return { ok: false, error: report?.error || 'That report could not be built.' };
+    return { ok: true, data: report.data, text: report.text };
+  } catch (err) {
+    logWriteFailure(supabase, 'dashboard.buildDashboardCustomReport', err);
+    return { ok: false, error: 'That report could not be built.' };
+  }
+}
+
+/**
+ * `/d/settings` (Phase 14D) — the owner's preferences. Only
+ * `weekly_report_opt_in` is editable here (the SAME column the WhatsApp
+ * `weekly report on|off` lane and the Monday worker use — one source of truth).
+ * Everything else is shown read-only; email/units stay in WhatsApp by design.
+ */
+export async function buildSettingsPage({
+  supabase,
+  ownerId = null,
+  countryInfo = null,
+  profile = null,
+  sessionExpiresAt = null
+} = {}) {
+  if (!supabase || !ownerId) return { ok: false };
+  const ctx = buildGlobalContext(countryInfo, profile);
+  let weeklyReportOn = false;
+  let weeklyReportKnown = true;
+  let planLabel = 'Free';
+  try {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('weekly_report_opt_in, subscription_tier, subscription_status')
+      .eq('id', ownerId)
+      .maybeSingle();
+    if (error) {
+      // Rule 50 — an un-migrated column never fakes a preference.
+      weeklyReportKnown = false;
+      logWriteFailure(supabase, 'dashboard.buildSettingsPage', error);
+    } else if (data) {
+      weeklyReportOn = data.weekly_report_opt_in === true;
+      planLabel = getTierLabel(data.subscription_tier || 'free');
+    }
+  } catch (err) {
+    weeklyReportKnown = false;
+    logWriteFailure(supabase, 'dashboard.buildSettingsPage', err);
+  }
+  return {
+    ok: true,
+    weeklyReportOn,
+    weeklyReportKnown,
+    planLabel,
+    emailMasked: maskEmail(profile?.email),
+    phoneMasked: maskPhone(profile?.phone_number),
+    language: profile?.preferred_language || 'English',
+    unitSystem: String(profile?.unit_system || '').toLowerCase() === 'imperial' ? 'Imperial (miles)' : 'Metric (km)',
+    countryLabel: profile?.country || ctx.country || '—',
+    currency: ctx.currency,
+    locale: ctx.locale,
+    timeZone: ctx.timeZone,
+    sessionExpiresAt: sessionExpiresAt || null
+  };
+}
+
+/** The ONE writable preference. A failed write never claims success (rule 50). */
+export async function saveSettings({ supabase, ownerId = null, weeklyReportOn = null } = {}) {
+  if (!supabase || !ownerId) return { ok: false, error: 'Your session is not valid — reply *dashboard* on WhatsApp for a fresh link.' };
+  if (typeof weeklyReportOn !== 'boolean') return { ok: false, error: 'Nothing to save — nothing changed.' };
+  try {
+    const { error } = await supabase.from('profiles').update({ weekly_report_opt_in: weeklyReportOn }).eq('id', ownerId);
+    if (error) {
+      logWriteFailure(supabase, 'dashboard.saveSettings', error);
+      return { ok: false, error: 'I could not save that setting — nothing changed. Please try again.' };
+    }
+    return { ok: true, weeklyReportOn };
+  } catch (err) {
+    logWriteFailure(supabase, 'dashboard.saveSettings', err);
+    return { ok: false, error: 'I could not save that setting — nothing changed. Please try again.' };
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Data export (Phase 14D) — ONE CSV, record_type first, # section rows */
+/* ------------------------------------------------------------------ */
+
+export const EXPORT_COLUMNS = Object.freeze({
+  expenses: ['record_type', 'id', 'date', 'vehicle_id', 'plate', 'expense_type', 'amount', 'currency', 'fuel_liters', 'fill_type', 'odometer_reading', 'label', 'notes'],
+  earnings: ['record_type', 'id', 'date', 'vehicle_id', 'plate', 'earning_type', 'amount', 'currency', 'label', 'notes'],
+  reminders: ['record_type', 'id', 'vehicle_id', 'plate', 'subject_type', 'category', 'reminder_type', 'due_date', 'status', 'notes'],
+  vehicle_compliances: ['record_type', 'id', 'vehicle_id', 'plate', 'type', 'label', 'number', 'expiry', 'lifetime'],
+  driver_compliances: ['record_type', 'id', 'driver_id', 'type', 'label', 'number', 'expiry', 'lifetime'],
+  receipts: ['record_type', 'id', 'date', 'vehicle_id', 'plate', 'document_kind', 'status', 'vendor', 'amount', 'currency', 'media_id']
+});
+
+async function exportFetch(supabase, table, { vehicleIds = [], driverIds = [], order = 'created_at' } = {}) {
+  const cap = EXPORT_SECTION_CAP;
+  const limit = cap + 1;
+  try {
+    if (table === 'driver_compliances') {
+      if (!driverIds.length) return { rows: [], truncated: false };
+      const { data, error } = await supabase.from(table).select('*').in('driver_id', driverIds).order(order, { ascending: false }).limit(limit);
+      if (error) return { rows: [], truncated: false, error: error.message };
+      return { rows: (data || []).slice(0, cap), truncated: (data || []).length > cap };
+    }
+    if (!vehicleIds.length) return { rows: [], truncated: false };
+    const { data, error } = await supabase.from(table).select('*').in('vehicle_id', vehicleIds).order(order, { ascending: false }).limit(limit);
+    if (error) return { rows: [], truncated: false, error: error.message };
+    return { rows: (data || []).slice(0, cap), truncated: (data || []).length > cap };
+  } catch (err) {
+    return { rows: [], truncated: false, error: err.message };
+  }
+}
+
+/**
+ * "Download all data" (Phase 14D, D3 + A1 + A2): ONE CSV, `record_type` as the
+ * first column, a `# section` comment row before each block, a `[CAP]` row when
+ * a table hit the 2000-row limit, and an `[ERROR]` row when a table could not be
+ * read (never a silent empty section). Owner-fleet scoped by construction.
+ */
+export async function serializeAllDataCsv({ supabase, ownerId = null, currency = 'USD' } = {}) {
+  const lines = [];
+  if (!supabase || !ownerId) {
+    lines.push('# export');
+    lines.push(csvCell('[ERROR] No account context.'));
+    return `\uFEFF${lines.join('\r\n')}\r\n`;
+  }
+  const vehicles = await loadOwnerVehicles(supabase, ownerId);
+  const vehicleIds = (vehicles || []).map((vehicle) => vehicle.id).filter(Boolean);
+  const driverIds = [...new Set((vehicles || []).map((vehicle) => vehicle.assigned_driver_id).filter(Boolean))];
+  const plateOf = (vehicleId) => (vehicles || []).find((vehicle) => vehicle.id === vehicleId)?.plate_number || '';
+
+  const pushSection = (name, rows, { truncated = false, error = null } = {}) => {
+    lines.push(`# ${name}`);
+    if (error) {
+      lines.push(csvCell(`[ERROR] Could not read ${name} just now.`));
+      return;
+    }
+    lines.push(EXPORT_COLUMNS[name].join(','));
+    for (const row of rows) lines.push(row.map((value) => csvCell(value)).join(','));
+    if (truncated) {
+      lines.push(csvCell(`[CAP] Reached ${EXPORT_SECTION_CAP}-row limit for ${name}. Older rows may exist in your account.`));
+    }
+  };
+
+  const expenses = await exportFetch(supabase, 'expense_logs', { vehicleIds });
+  pushSection('expenses', expenses.rows.map((row) => [
+    'expense', row.id, row.created_at || row.logged_at || '', row.vehicle_id || '', plateOf(row.vehicle_id),
+    row.expense_type || '', row.amount ?? '', row.currency || currency, row.fuel_liters ?? '', row.fill_type || '',
+    row.odometer_reading ?? '', row.label || '', row.notes || ''
+  ]), expenses);
+
+  const earnings = await exportFetch(supabase, 'private_earnings', { vehicleIds, order: 'logged_at' });
+  pushSection('earnings', earnings.rows.map((row) => [
+    'earning', row.id, row.logged_at || row.created_at || '', row.vehicle_id || '', plateOf(row.vehicle_id),
+    row.earning_type || '', row.revenue_amount ?? row.amount ?? '', row.currency || currency, row.label || '', row.notes || ''
+  ]), earnings);
+
+  const reminders = await exportFetch(supabase, 'reminders', { vehicleIds, order: 'due_date' });
+  pushSection('reminders', reminders.rows.map((row) => [
+    'reminder', row.id, row.vehicle_id || '', plateOf(row.vehicle_id), row.subject_type || 'vehicle',
+    row.category || '', row.reminder_type || '', row.due_date || '', row.status || '', row.notes || ''
+  ]), reminders);
+
+  const vehicleDocs = await exportFetch(supabase, 'vehicle_compliances', { vehicleIds });
+  pushSection('vehicle_compliances', vehicleDocs.rows.map((row) => [
+    'vehicle_compliance', row.id, row.vehicle_id || '', plateOf(row.vehicle_id), row.type || '',
+    row.label || '', row.number || '', row.expiry ? String(row.expiry).slice(0, 10) : '', row.lifetime === true
+  ]), vehicleDocs);
+
+  const driverDocs = await exportFetch(supabase, 'driver_compliances', { driverIds });
+  pushSection('driver_compliances', driverDocs.rows.map((row) => [
+    'driver_compliance', row.id, row.driver_id || '', row.type || '', row.label || '', row.number || '',
+    row.expiry ? String(row.expiry).slice(0, 10) : '', row.lifetime === true
+  ]), driverDocs);
+
+  // Receipts: fleet receipts (vehicle scope) + the owner's own scans, deduped.
+  let receiptRows = [];
+  let receiptsTruncated = false;
+  let receiptsError = null;
+  try {
+    const byVehicle = vehicleIds.length
+      ? await supabase.from('receipts').select('*').in('vehicle_id', vehicleIds).order('created_at', { ascending: false }).limit(EXPORT_SECTION_CAP + 1)
+      : { data: [], error: null };
+    const byOwner = await supabase.from('receipts').select('*').eq('owner_id', ownerId).order('created_at', { ascending: false }).limit(EXPORT_SECTION_CAP + 1);
+    if (byVehicle.error || byOwner.error) {
+      receiptsError = (byVehicle.error || byOwner.error).message;
+    } else {
+      const seen = new Map();
+      for (const row of [...(byVehicle.data || []), ...(byOwner.data || [])]) {
+        if (row?.id && !seen.has(row.id)) seen.set(row.id, row);
+      }
+      const merged = [...seen.values()].sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+      receiptsTruncated = merged.length > EXPORT_SECTION_CAP;
+      receiptRows = merged.slice(0, EXPORT_SECTION_CAP);
+    }
+  } catch (err) {
+    receiptsError = err.message;
+  }
+  pushSection('receipts', receiptRows.map((row) => [
+    'receipt', row.id, row.created_at || '', row.vehicle_id || '', plateOf(row.vehicle_id), row.document_kind || '',
+    row.status || '', row.vendor || '', row.amount ?? '', row.currency || currency, row.media_id || ''
+  ]), { truncated: receiptsTruncated, error: receiptsError });
+
+  return `\uFEFF${lines.join('\r\n')}\r\n`;
+}
+
+/* ------------------------------------------------------------------ */
 /* HTML shell (shared by every dashboard page, Phase 14 reuses it)     */
 /* ------------------------------------------------------------------ */
 
@@ -1448,7 +1771,12 @@ table.rec { width:100%; border-collapse:collapse; font-size:13px; }
 table.rec th { text-align:left; color:var(--muted); font-weight:600; font-size:12px; padding:10px 12px; border-bottom:1px solid var(--line); white-space:nowrap; }
 table.rec td { padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
 table.rec tr:last-child td { border-bottom:0; }
-table.rec td.num, table.rec th.num { text-align:right; white-space:nowrap; }
+/* Phase 14D — report builder + settings form controls. */
+.radio, .check { display:flex; align-items:center; gap:8px; padding:6px 0; font-size:14px; }
+.radio input, .check input { width:auto; margin:0; }
+.metrics { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:12px; }
+.metric-group { border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin:0; }
+.metric-group legend { color:var(--muted); font-size:12px; padding:0 6px; }
 `;
 
 export function escapeHtml(value) {
@@ -1524,9 +1852,9 @@ function daysLabel(daysLeft) {
   return `in ${daysLeft} d`;
 }
 
-/** The five destinations every signed-in page offers (Phase 14C adds Compliance). */
+/** The seven destinations every signed-in page offers (Phase 14D adds two). */
 function dashboardNav() {
-  return '<a href="/d">Overview</a> · <a href="/d/vehicles">Vehicles</a> · <a href="/d/records">Records</a> · <a href="/d/compliance">Compliance</a> · <a href="/d/logout">Log out</a>';
+  return '<a href="/d">Overview</a> · <a href="/d/vehicles">Vehicles</a> · <a href="/d/records">Records</a> · <a href="/d/compliance">Compliance</a> · <a href="/d/reports">Reports</a> · <a href="/d/settings">Settings</a> · <a href="/d/logout">Log out</a>';
 }
 
 /** Active / paused / inactive — a chip, never a raw database enum. */
@@ -1913,6 +2241,106 @@ ${table}
   return renderPageShell(`${driver.name || 'Driver'} — compliance`, body, { headerRight: dashboardNav() });
 }
 
+/**
+ * `/d/reports` (Phase 14D) — the reports builder form. A GET form to
+ * `/d/reports.pdf`: the selection lives in the URL, so the result is
+ * shareable, reloadable and back-button safe (the 14B/14C convention).
+ */
+export function renderReportsPage({ vehicles = [], metricsByCategory = null, spec = {}, error = null } = {}) {
+  const range = spec.range || 'this_month';
+  const selectedMetrics = new Set(spec.metricIds || []);
+  const selectedVehicles = new Set(spec.vehicleIds || []);
+  const fromDay = String(spec.from || '').slice(0, 10);
+  const toDay = String(spec.to || '').slice(0, 10);
+  const groups = metricsByCategory || CUSTOM_METRIC_CATEGORIES.map((category) => ({
+    category,
+    metrics: CUSTOM_METRICS.filter((metric) => metric.category === category)
+  }));
+  const rangeOption = (value, label) => `
+      <label class="radio"><input type="radio" name="range" value="${value}"${range === value ? ' checked' : ''}> <span>${escapeHtml(label)}</span></label>`;
+  const vehicleBoxes = (vehicles || []).map((vehicle) => `
+      <label class="check"><input type="checkbox" name="vehicles" value="${escapeHtml(vehicle.id)}"${selectedVehicles.has(vehicle.id) ? ' checked' : ''}> <span>${escapeHtml(vehicle.plate_number || 'Fleet vehicle')}${vehicle.make_model ? `<span class="muted"> · ${escapeHtml(vehicle.make_model)}</span>` : ''}</span></label>`).join('');
+  const metricBoxes = groups.map((group) => `
+      <fieldset class="metric-group">
+        <legend>${escapeHtml(group.category)}</legend>
+        ${group.metrics.map((metric) => `<label class="check"><input type="checkbox" name="metrics" value="${escapeHtml(metric.id)}"${selectedMetrics.has(metric.id) ? ' checked' : ''}> <span>${escapeHtml(metric.label)}</span></label>`).join('')}
+      </fieldset>`).join('');
+
+  const body = `
+<h1>Build a report</h1>
+<p class="muted">Pick a period, the vehicles and the numbers you want — the PDF downloads straight away. It never uses your monthly report quota.</p>
+${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
+<form method="GET" action="/d/reports.pdf">
+  <h2>Period</h2>
+  <div class="card">
+    ${rangeOption('this_month', 'This month')}
+    ${rangeOption('last_30_days', 'Last 30 days')}
+    ${rangeOption('this_year', 'This year')}
+    ${rangeOption('custom', 'Custom range')}
+    <div class="filters" style="margin-top:10px;">
+      <label>From<input type="date" name="from" value="${escapeHtml(fromDay)}"></label>
+      <label>To<input type="date" name="to" value="${escapeHtml(toDay)}"></label>
+    </div>
+    <p class="muted" style="font-size:13px;">The two dates are used when you pick Custom range.</p>
+  </div>
+  <h2>Vehicles</h2>
+  <div class="card">
+    ${vehicleBoxes || '<p class="muted">No vehicles yet — your report covers the fleet once you add one.</p>'}
+    <p class="muted" style="font-size:13px;">Leave every box unticked to report across the whole fleet.</p>
+  </div>
+  <h2>Metrics</h2>
+  <div class="card metrics">${metricBoxes}</div>
+  <p><button type="submit">Build my PDF</button></p>
+</form>`;
+  return renderPageShell('Build a report', body, { headerRight: dashboardNav() });
+}
+
+/**
+ * `/d/settings` (Phase 14D) — one editable preference (weekly report), the data
+ * export, the plan pointer and read-only account facts.
+ */
+export function renderSettingsPage({ settings, saved = false, error = null } = {}) {
+  if (!settings?.ok) {
+    return renderErrorPage(503, 'Your settings could not be loaded just now. Please try again in a moment.').html;
+  }
+  const when = settings.sessionExpiresAt
+    ? formatDate(settings.sessionExpiresAt, settings.locale, { timeZone: settings.timeZone })
+    : null;
+  const body = `
+<h1>Settings</h1>
+<p class="muted">Signed in as ${escapeHtml(settings.emailMasked)} · ${escapeHtml(settings.phoneMasked)}</p>
+${saved ? '<p><span class="chip ok">Saved</span></p>' : ''}
+${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
+<h2>Weekly report</h2>
+<div class="card">
+  <form method="POST" action="/d/settings">
+    <label class="check"><input type="checkbox" name="weekly_report" value="on"${settings.weeklyReportOn ? ' checked' : ''}> <span>Send me a one-message fleet summary every Monday at 8:00 AM</span></label>
+    <input type="hidden" name="action" value="save_weekly">
+    <p class="muted" style="font-size:13px;">It never uses your monthly report quota.</p>
+    ${settings.weeklyReportKnown === false ? '<p class="muted" style="font-size:13px;">I could not read this setting just now — saving will still work.</p>' : ''}
+    <p><button type="submit">Save preferences</button></p>
+  </form>
+</div>
+<h2>Your data</h2>
+<div class="card">
+  <p><a href="/d/export.csv">Download all my data (CSV)</a></p>
+  <p class="muted" style="font-size:13px;">Expenses, earnings, reminders, vehicle and driver documents, and receipt records in one file.</p>
+</div>
+<h2>Your plan</h2>
+<div class="card">
+  <p><strong>${escapeHtml(settings.planLabel)}</strong></p>
+  <p class="muted" style="font-size:13px;">To upgrade, downgrade or change payment, reply <strong>subscription</strong> in WhatsApp — checkout stays in chat.</p>
+</div>
+<h2>Account</h2>
+<div class="card">
+  <p>Email: ${escapeHtml(settings.emailMasked)} <span class="muted">(change it in WhatsApp)</span></p>
+  <p>Phone: ${escapeHtml(settings.phoneMasked)} · Language: ${escapeHtml(settings.language)} · Units: ${escapeHtml(settings.unitSystem)} · Country: ${escapeHtml(settings.countryLabel)}</p>
+  ${when ? `<p class="muted" style="font-size:13px;">This browser stays signed in until ${escapeHtml(when)}.</p>` : ''}
+  <p><a href="/d/logout">Log out of this browser</a></p>
+</div>`;
+  return renderPageShell('Settings', body, { headerRight: dashboardNav() });
+}
+
 export function renderLogoutPage() {
   const body = `
 <h1>You're logged out</h1>
@@ -1999,5 +2427,16 @@ export default {
   buildDriverCompliancePage,
   buildCompliancePdf,
   renderCompliancePage,
-  renderDriverPage
+  renderDriverPage,
+  REPORT_RANGES,
+  REPORT_MAX_METRICS,
+  EXPORT_SECTION_CAP,
+  EXPORT_COLUMNS,
+  parseReportSpec,
+  buildDashboardCustomReport,
+  buildSettingsPage,
+  saveSettings,
+  serializeAllDataCsv,
+  renderReportsPage,
+  renderSettingsPage
 };

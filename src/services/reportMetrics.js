@@ -82,10 +82,18 @@ export function customMetricMenu(access = {}) {
 export function dateRangeBounds(range, now = new Date()) {
   const end = new Date(now);
   const start = new Date(now);
+  // v1.75.3 (Phase 14D, D1) — `last_30_days` is additive; every pre-existing
+  // range keeps its exact semantics, so the WhatsApp lane is untouched.
   if (range === 'last_3_months') start.setUTCMonth(start.getUTCMonth() - 3);
+  else if (range === 'last_30_days') start.setUTCDate(start.getUTCDate() - 30);
   else if (range === 'this_year') start.setUTCMonth(0, 1);
   else start.setUTCDate(1);
-  return { from: start.toISOString(), to: end.toISOString(), label: range === 'last_3_months' ? 'Last 3 months' : range === 'this_year' ? 'This year' : 'This month' };
+  const label = range === 'last_3_months'
+    ? 'Last 3 months'
+    : range === 'last_30_days'
+      ? 'Last 30 days'
+      : range === 'this_year' ? 'This year' : 'This month';
+  return { from: start.toISOString(), to: end.toISOString(), label };
 }
 
 export function money(value, currency, locale) {
@@ -114,6 +122,10 @@ export async function buildCustomReport({
   vehicleIds = [],
   metricIds = [],
   range = 'this_month',
+  // v1.75.3 (Phase 14D, D1) — optional explicit window { from, to, label }.
+  // Additive: when absent the range presets behave exactly as before, so the
+  // WhatsApp lane (which never passes it) is untouched.
+  bounds: boundsOverride = null,
   countryInfo = null,
   profile = null,
   access = {},
@@ -122,7 +134,9 @@ export async function buildCustomReport({
   if (!supabase) return { ok: false, error: 'Database unavailable' };
   const currency = countryInfo?.currency || profile?.currency || 'USD';
   const locale = countryInfo?.locale || 'en-US';
-  const bounds = dateRangeBounds(range, now);
+  const bounds = boundsOverride && boundsOverride.from && boundsOverride.to
+    ? { from: String(boundsOverride.from), to: String(boundsOverride.to), label: String(boundsOverride.label || range) }
+    : dateRangeBounds(range, now);
   const allowed = metricsForAccess(access).map((metric) => metric.id);
   const selected = (metricIds.length ? metricIds : allowed).filter((id) => allowed.includes(id));
   if (!selected.length) return { ok: false, error: 'No metrics available for this account' };

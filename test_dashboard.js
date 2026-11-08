@@ -68,6 +68,17 @@ import {
   buildCompliancePdf,
   renderCompliancePage,
   renderDriverPage,
+  REPORT_RANGES,
+  REPORT_MAX_METRICS,
+  EXPORT_SECTION_CAP,
+  EXPORT_COLUMNS,
+  parseReportSpec,
+  buildDashboardCustomReport,
+  buildSettingsPage,
+  saveSettings,
+  serializeAllDataCsv,
+  renderReportsPage,
+  renderSettingsPage,
   renderOverviewPage,
   renderVehiclesPage,
   renderVehiclePage,
@@ -75,6 +86,7 @@ import {
   renderErrorPage
 } from './src/services/dashboard.js';
 import { upcomingExpiryItems, buildVehicleDirectory, buildVehicleDetail } from './src/services/fleetReports.js';
+import { dateRangeBounds, CUSTOM_METRICS } from './src/services/reportMetrics.js';
 import { detectCountryFromPhone } from './src/services/globalization.js';
 import { extractPdfText } from './src/services/pdfTextExtractor.js';
 import { registerDashboardRoutes } from './src/routes/dashboard.js';
@@ -147,6 +159,12 @@ async function run() {
     { method: 'GET', url: '/d/compliance' },
     { method: 'GET', url: '/d/compliance.pdf' },
     { method: 'GET', url: '/d/drivers/some-driver-id' },
+    // v1.75.3 (Phase 14D) — reports + settings + export are flag-gated too.
+    { method: 'GET', url: '/d/reports' },
+    { method: 'GET', url: '/d/reports.pdf' },
+    { method: 'GET', url: '/d/settings' },
+    { method: 'POST', url: '/d/settings', payload: 'action=save_weekly&weekly_report=on', headers: { 'content-type': 'application/x-www-form-urlencoded' } },
+    { method: 'GET', url: '/d/export.csv' },
     { method: 'POST', url: '/d/verify', payload: 'token=x&otp=123456', headers: { 'content-type': 'application/x-www-form-urlencoded' } }
   ];
   for (const request of offRequests) {
@@ -846,7 +864,7 @@ async function run() {
 
   console.log('\n--- Test 26: serializeRecordsCsv ---');
   const csvRows = [
-    { at: '2026-11-07T06:00:00.000Z', kind: 'expense', vehicle: 'KDA 123A', typeLabel: 'Fuel', description: 'Fuel - 40 L - Shell, "Karen"', odometer: 100500, unitCost: 125.5, amount: 5000, label: 'karen run' },
+    { at: '2026-11-07T06:00:00Z', kind: 'expense', vehicle: 'KDA 123A', typeLabel: 'Fuel', description: 'Fuel - 40 L - Shell, "Karen"', odometer: 100500, unitCost: 125.5, amount: 5000, label: 'karen run' },
     { at: '2026-11-08T05:00:00.000Z', kind: 'earning', vehicle: 'KDA 123A', typeLabel: 'Trips', description: 'Trips', odometer: null, unitCost: null, amount: 12000, label: null }
   ];
   const csv = serializeRecordsCsv(csvRows, { currency: 'KES' });
@@ -1228,6 +1246,263 @@ async function run() {
   const badPdfRes = await compApp.inject({ method: 'GET', url: '/d/compliance.pdf?view=weird', headers: compCookie });
   check(badPdfRes.statusCode === 400, 'an invalid view refuses the export with a 400');
   await compApp.close();
+
+  console.log('\n--- Test 39: D1 — last_30_days + the bounds override are additive ---');
+  const reportNow = new Date('2026-11-08T06:00:00Z');
+  const last30 = dateRangeBounds('last_30_days', reportNow);
+  check(last30.label === 'Last 30 days' && Math.round((new Date(last30.to) - new Date(last30.from)) / 86400000) === 30, 'last_30_days is a 30-day window with its own label');
+  check(dateRangeBounds('this_month', reportNow).label === 'This month'
+    && dateRangeBounds('this_year', reportNow).label === 'This year'
+    && dateRangeBounds('last_3_months', reportNow).label === 'Last 3 months', 'every pre-existing range keeps its exact label (WhatsApp untouched)');
+  check(dateRangeBounds('this_month', reportNow).from.slice(0, 10) === '2026-11-01', 'this_month still starts on the 1st');
+
+  console.log('\n--- Test 40: parseReportSpec (validation + owner scope) ---');
+  const specVehicles = ['v-a', 'v-b'];
+  const defaultSpec = parseReportSpec({}, { vehicleIds: specVehicles, now: reportNow });
+  check(defaultSpec.ok && defaultSpec.spec.range === 'this_month' && defaultSpec.spec.vehicleIds.length === 0, 'the default spec is This month across the whole fleet');
+  check(defaultSpec.spec.metricIds.length === 5, 'with no metrics ticked the spec carries the five default owner metrics');
+  check(REPORT_RANGES.join(',') === 'this_month,last_30_days,this_year,custom' && REPORT_MAX_METRICS === 8, 'the range set and the 8-metric cap are pinned');
+  const last30Spec = parseReportSpec({ range: 'last_30_days' }, { vehicleIds: specVehicles, now: reportNow });
+  check(last30Spec.ok && last30Spec.spec.label === 'Last 30 days', 'the Last 30 days preset resolves');
+  const customSpec = parseReportSpec({ range: 'custom', from: '2026-10-01', to: '2026-10-31' }, { vehicleIds: specVehicles, now: reportNow });
+  check(customSpec.ok && customSpec.spec.from === '2026-10-01T00:00:00+03:00' && customSpec.spec.to === '2026-10-31T23:59:59.999+03:00', 'a custom range becomes inclusive Nairobi day bounds');
+  check(customSpec.spec.label === '2026-10-01 – 2026-10-31', 'the custom label names both dates');
+  check(parseReportSpec({ range: 'custom', from: 'nope', to: '2026-10-31' }, { vehicleIds: specVehicles }).reason === 'bad_from', 'a malformed start date is refused');
+  check(parseReportSpec({ range: 'custom', from: '2026-10-01', to: 'nope' }, { vehicleIds: specVehicles }).reason === 'bad_to', 'a malformed end date is refused');
+  check(parseReportSpec({ range: 'custom', from: '2026-10-31', to: '2026-10-01' }, { vehicleIds: specVehicles }).reason === 'bad_range_dates', 'a reversed custom range is refused');
+  check(parseReportSpec({ range: 'custom', from: '2024-01-01', to: '2026-10-01' }, { vehicleIds: specVehicles }).reason === 'range_too_wide', 'a custom range wider than 366 days is refused');
+  check(parseReportSpec({ range: 'weird' }, { vehicleIds: specVehicles }).reason === 'bad_range', 'an unknown range is refused');
+  check(parseReportSpec({ vehicles: 'v-foreign' }, { vehicleIds: specVehicles }).reason === 'unknown_vehicle', "another owner's vehicle id is refused");
+  check(parseReportSpec({ vehicles: ['v-a', 'v-b'] }, { vehicleIds: specVehicles }).spec.vehicleIds.join(',') === 'v-a,v-b', 'checked vehicle boxes (array query values) are accepted');
+  check(parseReportSpec({ metrics: 'not_a_metric' }, { vehicleIds: specVehicles }).reason === 'unknown_metric', 'an unknown metric id is refused');
+  const nineMetrics = CUSTOM_METRICS.slice(0, 9).map((metric) => metric.id).join(',');
+  check(parseReportSpec({ metrics: nineMetrics }, { vehicleIds: specVehicles }).reason === 'too_many_metrics', 'more than 8 metrics is refused');
+  const eightMetrics = CUSTOM_METRICS.slice(0, 8).map((metric) => metric.id).join(',');
+  check(parseReportSpec({ metrics: eightMetrics }, { vehicleIds: specVehicles }).spec.metricIds.length === 8, 'exactly 8 metrics passes');
+  const chosenSpec = parseReportSpec({ metrics: ['earnings', 'total_spend'], vehicles: 'v-a', range: 'this_year' }, { vehicleIds: specVehicles, now: reportNow });
+  check(chosenSpec.ok && chosenSpec.spec.metricIds.join(',') === 'earnings,total_spend' && chosenSpec.spec.vehicleIds.join(',') === 'v-a', 'an explicit selection is preserved exactly');
+
+  console.log('\n--- Test 41: buildDashboardCustomReport (same engine, owner lane) ---');
+  const rDay = (days) => new Date(reportNow.getTime() + days * 86400000).toISOString();
+  const reportSeed = () => ({
+    vehicles: [
+      { id: 'v-a', owner_id: PROFILE.id, plate_number: 'KDA 123A', status: 'ACTIVE' },
+      { id: 'v-b', owner_id: PROFILE.id, plate_number: 'KDB 456B', status: 'ACTIVE' },
+      { id: 'v-x', owner_id: 'someone-else', plate_number: 'KDX 999X', status: 'ACTIVE' }
+    ],
+    expense_logs: [
+      { id: 'e1', vehicle_id: 'v-a', driver_id: PROFILE.id, expense_type: 'Fuel', amount: 5000, fuel_liters: 40, created_at: rDay(-2) },
+      { id: 'e2', vehicle_id: 'v-b', driver_id: 'd-1', expense_type: 'Repairs', amount: 3000, created_at: rDay(-3) },
+      { id: 'e3', vehicle_id: 'v-a', driver_id: PROFILE.id, expense_type: 'Fuel', amount: 1000, created_at: rDay(-40) },
+      { id: 'e4', vehicle_id: 'v-x', driver_id: 'stranger', expense_type: 'Fuel', amount: 9999, created_at: rDay(-2) }
+    ],
+    private_earnings: [
+      { id: 'n1', vehicle_id: 'v-a', driver_id: PROFILE.id, revenue_amount: 12000, earning_type: 'Trips', logged_at: rDay(-2), created_at: rDay(-2) }
+    ],
+    reminders: [],
+    vehicle_compliances: [],
+    driver_compliances: [],
+    expiry_notification_log: [],
+    passbook_transfers: []
+  });
+  const reportMock = createMockSupabase(reportSeed());
+  const fleetSpec = parseReportSpec({ range: 'last_30_days', metrics: 'total_spend,earnings' }, { vehicleIds: ['v-a', 'v-b'], now: reportNow }).spec;
+  const customReport = await buildDashboardCustomReport({ supabase: reportMock.client, ownerId: PROFILE.id, spec: fleetSpec, countryInfo: KE_INFO, profile: PROFILE, now: reportNow });
+  check(customReport.ok && customReport.data && Array.isArray(customReport.data.kpis), 'the builder returns Apex report data');
+  check(customReport.data.periodLabel === 'Last 30 days' && customReport.data.title === 'Bespoke Report', 'the window label and title come through');
+  const kpiLabels = customReport.data.kpis.map((kpi) => kpi.label);
+  check(kpiLabels.includes('Total spend') && kpiLabels.includes('Earnings'), 'the selected metrics become the KPIs');
+  check(/8,000/.test(customReport.data.kpis.find((kpi) => kpi.label === 'Total spend').value), 'total spend covers the fleet and excludes the out-of-window row (8000)');
+  check(/12,000/.test(customReport.data.kpis.find((kpi) => kpi.label === 'Earnings').value), 'the owner lane sees earnings');
+  const narrowSpec = parseReportSpec({ range: 'custom', from: rDay(-4).slice(0, 10), to: rDay(-3).slice(0, 10), metrics: 'total_spend' }, { vehicleIds: ['v-a', 'v-b'], now: reportNow }).spec;
+  const narrowReport = await buildDashboardCustomReport({ supabase: createMockSupabase(reportSeed()).client, ownerId: PROFILE.id, spec: narrowSpec, countryInfo: KE_INFO, profile: PROFILE, now: reportNow });
+  check(narrowReport.ok && /3,000/.test(narrowReport.data.kpis.find((kpi) => kpi.label === 'Total spend').value), 'the explicit bounds win over the preset window');
+  check(narrowReport.data.periodLabel === narrowSpec.label, 'the report label matches the custom window');
+  const scopedReport = await buildDashboardCustomReport({ supabase: reportMock.client, ownerId: PROFILE.id, spec: { ...fleetSpec, vehicleIds: ['v-b'] }, countryInfo: KE_INFO, profile: PROFILE, now: reportNow });
+  check(/3,000/.test(scopedReport.data.kpis.find((kpi) => kpi.label === 'Total spend').value), 'a ticked vehicle narrows the report');
+  check((await buildDashboardCustomReport({ supabase: null, ownerId: PROFILE.id, spec: fleetSpec })).ok === false, 'no database answers ok:false');
+
+  console.log('\n--- Test 42: settings (one writable preference, same column) ---');
+  const settingsMock = createMockSupabase({
+    profiles: [{ id: PROFILE.id, email: 'amina@example.com', phone_number: '+254712345678', full_name: 'Amina W', country: 'Kenya', country_code: 'KE', preferred_language: 'English', unit_system: 'metric', weekly_report_opt_in: true, subscription_tier: 'solo_pro', subscription_status: 'ACTIVE' }]
+  });
+  const settingsData = await buildSettingsPage({
+    supabase: settingsMock.client,
+    ownerId: PROFILE.id,
+    profile: { ...PROFILE, email: 'amina@example.com', phone_number: '+254712345678', country: 'Kenya', preferred_language: 'English', unit_system: 'metric' },
+    countryInfo: KE_INFO,
+    sessionExpiresAt: rDay(20)
+  });
+  check(settingsData.ok && settingsData.weeklyReportOn === true && settingsData.weeklyReportKnown === true, 'the weekly-report preference is read as saved');
+  check(Boolean(settingsData.planLabel) && settingsData.planLabel !== 'Free', 'the plan label comes from the tier registry');
+  check(settingsData.emailMasked === 'a***a@example.com' && settingsData.phoneMasked.endsWith('5678') && !settingsData.phoneMasked.includes('712345'), 'email and phone are masked, never printed in full');
+  check(settingsData.language === 'English' && settingsData.unitSystem === 'Metric (km)' && settingsData.countryLabel === 'Kenya', 'language, units and country are shown');
+  check(settingsData.currency === 'KES' && settingsData.sessionExpiresAt === rDay(20), 'currency and the session expiry ride the page');
+  const savedOff = await saveSettings({ supabase: settingsMock.client, ownerId: PROFILE.id, weeklyReportOn: false });
+  check(savedOff.ok && settingsMock.db.profiles[0].weekly_report_opt_in === false, 'saving writes the SAME profiles.weekly_report_opt_in column');
+  check(settingsMock.state.updates.at(-1).patch.weekly_report_opt_in === false, 'the update patch names the weekly-report column (dual-write safe)');
+  const failingSettingsClient = { from: () => ({ update: () => ({ eq: async () => ({ error: { message: 'boom' } }) }) }) };
+  const failedSave = await saveSettings({ supabase: failingSettingsClient, ownerId: PROFILE.id, weeklyReportOn: true });
+  check(failedSave.ok === false && /nothing changed/.test(failedSave.error), 'a failed write says nothing changed, never Saved');
+  check((await saveSettings({ supabase: settingsMock.client, ownerId: PROFILE.id, weeklyReportOn: null })).ok === false, 'a non-boolean value is refused');
+  check((await saveSettings({ supabase: settingsMock.client, ownerId: null, weeklyReportOn: true })).ok === false, 'a missing owner is refused');
+
+  console.log('\n--- Test 43: serializeAllDataCsv (sections, [CAP], escaping, scope) ---');
+  const exportSeed = () => ({
+    vehicles: [
+      { id: 'v-a', owner_id: PROFILE.id, plate_number: 'KDA 123A', status: 'ACTIVE', assigned_driver_id: 'd-1' },
+      { id: 'v-x', owner_id: 'someone-else', plate_number: 'KDX 999X', status: 'ACTIVE', assigned_driver_id: 'd-x' }
+    ],
+    expense_logs: [
+      { id: 'e1', vehicle_id: 'v-a', driver_id: PROFILE.id, expense_type: 'Fuel', amount: 5000, currency: 'KES', label: 'karen run', notes: 'Shell, "Karen"', created_at: '2026-11-07T06:00:00Z' },
+      { id: 'e9', vehicle_id: 'v-x', driver_id: 'stranger', expense_type: 'Fuel', amount: 9999, created_at: '2026-11-07T06:00:00Z' }
+    ],
+    private_earnings: [{ id: 'n1', vehicle_id: 'v-a', driver_id: PROFILE.id, revenue_amount: 12000, currency: 'KES', earning_type: 'Trips', logged_at: '2026-11-07T07:00:00Z' }],
+    reminders: [
+      { id: 'r1', vehicle_id: 'v-a', subject_type: 'vehicle', category: 'insurance', reminder_type: 'Insurance', due_date: '2026-12-01', status: 'active' },
+      { id: 'r2', vehicle_id: null, subject_type: 'driver', subject_id: 'd-1', category: 'driver_license', reminder_type: 'Licence', due_date: '2027-01-01', status: 'active' }
+    ],
+    vehicle_compliances: [{ id: 'vc1', vehicle_id: 'v-a', type: 'insurance', label: 'Insurance', number: 'POL-1', expiry: '2026-12-01', lifetime: false }],
+    driver_compliances: [
+      { id: 'dc1', driver_id: 'd-1', type: 'driving_licence', label: 'Driving Licence', number: 'DL123456', expiry: '2027-05-15' },
+      { id: 'dc9', driver_id: 'd-x', type: 'driving_licence', label: 'Other', number: 'FX-999', expiry: '2027-05-15' }
+    ],
+    receipts: [
+      { id: 'rc1', media_id: 'm1', vehicle_id: 'v-a', owner_id: PROFILE.id, document_kind: 'fuel_receipt', status: 'read', vendor: 'Shell', amount: 5000, currency: 'KES', created_at: '2026-11-07T06:00:00Z' },
+      { id: 'rc2', media_id: 'm2', vehicle_id: null, owner_id: PROFILE.id, document_kind: 'insurance', status: 'read', vendor: 'Bima', amount: 22000, currency: 'KES', created_at: '2026-11-06T06:00:00Z' },
+      { id: 'rc9', media_id: 'm9', vehicle_id: 'v-x', owner_id: 'someone-else', document_kind: 'fuel_receipt', status: 'read', vendor: 'Foreign', amount: 9999, created_at: '2026-11-07T06:00:00Z' }
+    ],
+    expiry_notification_log: [],
+    passbook_transfers: []
+  });
+  const exportCsv = await serializeAllDataCsv({ supabase: createMockSupabase(exportSeed()).client, ownerId: PROFILE.id, currency: 'KES' });
+  check(exportCsv.charCodeAt(0) === 0xFEFF, 'the export starts with a UTF-8 BOM');
+  const sectionOrder = ['# expenses', '# earnings', '# reminders', '# vehicle_compliances', '# driver_compliances', '# receipts'].map((marker) => exportCsv.indexOf(marker));
+  check(sectionOrder.every((index) => index >= 0), 'all six # section rows are present');
+  check(sectionOrder.every((index, i) => i === 0 || index > sectionOrder[i - 1]), 'the sections appear in a stable order');
+  check(EXPORT_COLUMNS.expenses[0] === 'record_type' && EXPORT_COLUMNS.driver_compliances[0] === 'record_type', 'record_type is the first column of every section');
+  check(exportCsv.includes('expense,e1,2026-11-07T06:00:00Z,v-a,KDA 123A,Fuel,5000,KES'), 'the expense row carries record_type, ids, plate and amount');
+  check(exportCsv.includes('"Shell, ""Karen"""'), 'commas and quotes are escaped (RFC 4180)');
+  check(exportCsv.includes('earning,n1,2026-11-07T07:00:00Z,v-a,KDA 123A,Trips,12000'), 'the earning row uses revenue_amount');
+  check(exportCsv.includes('reminder,r1,v-a,KDA 123A,vehicle,insurance,Insurance,2026-12-01'), 'vehicle reminders are exported');
+  check(!exportCsv.includes('driver_license,Licence'), 'a driver-linked reminder without a vehicle is not in the vehicle section');
+  check(exportCsv.includes('vehicle_compliance,vc1,v-a,KDA 123A,insurance,Insurance,POL-1,2026-12-01'), 'vehicle documents export with their number');
+  check(exportCsv.includes('driver_compliance,dc1,d-1') && !exportCsv.includes('FX-999'), "only the owner's assigned driver documents export");
+  check(!exportCsv.includes('9999'), "another owner's expense never reaches the export");
+  check(exportCsv.includes('receipt,rc1,2026-11-07T06:00:00Z,v-a,KDA 123A,fuel_receipt,read,Shell,5000,KES,m1'), 'receipt metadata exports (never an image url)');
+  check(exportCsv.includes('receipt,rc2,2026-11-06T06:00:00Z,,,insurance,read,Bima,22000'), "the owner's own vehicle-less scan still exports");
+  check(!exportCsv.includes('Foreign'), "another owner's receipt never reaches the export");
+
+  const cappedSeed = { ...exportSeed(), expense_logs: Array.from({ length: EXPORT_SECTION_CAP + 1 }, (_, i) => ({ id: `c${i}`, vehicle_id: 'v-a', expense_type: 'Fuel', amount: i + 1, created_at: '2026-11-07T06:00:00Z' })) };
+  const cappedCsv = await serializeAllDataCsv({ supabase: createMockSupabase(cappedSeed).client, ownerId: PROFILE.id, currency: 'KES' });
+  check(cappedCsv.includes(`[CAP] Reached ${EXPORT_SECTION_CAP}-row limit for expenses. Older rows may exist in your account.`), 'the 2000-row cap appends its [CAP] row (A1)');
+  const cappedExpenseRows = cappedCsv.split('# expenses')[1].split('# earnings')[0].split('\r\n').filter((line) => line.startsWith('expense,'));
+  check(cappedExpenseRows.length === EXPORT_SECTION_CAP, 'exactly the cap number of expense rows is written');
+
+  const brokenExportClient = {
+    from: (table) => {
+      if (table === 'expense_logs') {
+        return { select: () => ({ in: () => ({ order: () => ({ limit: async () => ({ data: null, error: { message: 'boom' } }) }) }) }) };
+      }
+      return createMockSupabase(exportSeed()).client.from(table);
+    }
+  };
+  const brokenExportCsv = await serializeAllDataCsv({ supabase: brokenExportClient, ownerId: PROFILE.id, currency: 'KES' });
+  check(brokenExportCsv.includes('[ERROR] Could not read expenses just now.'), 'a failed table renders an [ERROR] row, never a silent empty section');
+  check((await serializeAllDataCsv({ supabase: null, ownerId: null })).includes('[ERROR] No account context.'), 'no account context is reported honestly');
+
+  console.log('\n--- Test 44: the reports + settings renderers ---');
+  const reportsHtml = renderReportsPage({ vehicles: ownerVehicles, spec: { range: 'last_30_days', metricIds: ['earnings', 'total_spend'], vehicleIds: ['v-a'] } });
+  check(reportsHtml.includes('method="GET" action="/d/reports.pdf"'), 'the builder form is a GET back to the PDF route');
+  check(reportsHtml.includes('value="this_month"') && reportsHtml.includes('value="last_30_days" checked') && reportsHtml.includes('value="this_year"') && reportsHtml.includes('value="custom"'), 'all four ranges render with the current one checked');
+  check(reportsHtml.includes('name="from"') && reportsHtml.includes('name="to"'), 'the custom date inputs render');
+  check(reportsHtml.includes('name="vehicles" value="v-a" checked'), 'a ticked vehicle renders checked');
+  check(reportsHtml.includes('name="metrics" value="earnings" checked') && reportsHtml.includes('name="metrics" value="fuel_spend"'), 'metrics render as checkboxes with the selection kept');
+  check(reportsHtml.includes('<legend>Financial</legend>') && reportsHtml.includes('<legend>Fuel</legend>'), 'metric checkboxes are grouped by category');
+  check(reportsHtml.includes('Build my PDF'), 'the submit button renders');
+  check(renderReportsPage({ vehicles: ownerVehicles, spec: {}, error: 'That vehicle is not on your fleet.' }).includes('not on your fleet'), 'a rejected spec renders its explanation');
+  check(renderReportsPage({ spec: {} }).includes('No vehicles yet'), 'an empty fleet renders an honest hint');
+
+  const settingsHtml = renderSettingsPage({ settings: settingsData, saved: true });
+  check(settingsHtml.includes('method="POST" action="/d/settings"') && settingsHtml.includes('name="action" value="save_weekly"'), 'the preferences form posts with its action marker');
+  check(settingsHtml.includes('name="weekly_report" value="on" checked'), 'the weekly toggle reflects the saved state');
+  check(settingsHtml.includes('<span class="chip ok">Saved</span>'), 'a successful save shows the Saved chip');
+  check(settingsHtml.includes('href="/d/export.csv"') && settingsHtml.includes('Download all my data'), 'the data export link renders');
+  check(settingsHtml.includes('href="/d/logout"'), 'the logout link renders');
+  check(settingsHtml.includes(settingsData.planLabel) && settingsHtml.includes(settingsData.emailMasked) && !settingsHtml.includes('amina@example.com'), 'the plan and the MASKED email render (never the raw address)');
+  const settingsErrorHtml = renderSettingsPage({ settings: settingsData, error: 'I could not save that setting — nothing changed. Please try again.' });
+  check(settingsErrorHtml.includes('nothing changed') && !settingsErrorHtml.includes('Saved'), 'a failed save renders the error and no Saved chip');
+  const hostileSettingsHtml = renderSettingsPage({ settings: { ...settingsData, planLabel: '<script>alert(1)</script>' } });
+  check(!hostileSettingsHtml.includes('<script>alert(1)</script>') && hostileSettingsHtml.includes('&lt;script&gt;'), 'user-visible text is escaped');
+  check(renderSettingsPage({ settings: { ok: false } }).includes('could not be loaded'), 'a failed settings load renders one explanation');
+
+  console.log('\n--- Test 45: reports + settings + export routes (Fastify inject) ---');
+  process.env.DASHBOARD_ENABLED = 'on';
+  const settingsRouteMock = createMockSupabase({
+    ...reportSeed(),
+    profiles: [{ id: PROFILE.id, phone_number: PROFILE.phone_number, email: PROFILE.email, full_name: PROFILE.full_name, country: 'Kenya', country_code: 'KE', preferred_language: 'English', unit_system: 'metric', weekly_report_opt_in: false, subscription_tier: 'solo_pro', subscription_status: 'ACTIVE' }],
+    [DASHBOARD_SESSIONS_TABLE]: [seedRow({
+      id: 'sess-set',
+      token_hash: hashToken('set-link'),
+      session_token_hash: hashToken('set-session'),
+      verified: true,
+      session_expires_at: new Date(Date.now() + 86400000).toISOString()
+    })],
+    admin_audit_logs: [],
+    error_logs: []
+  });
+  const setApp = Fastify({ logger: false });
+  await registerDashboardRoutes(setApp, { supabase: settingsRouteMock.client });
+  await setApp.ready();
+  const setCookie = { cookie: 'saka_dash=set-session' };
+  const postForm = { 'content-type': 'application/x-www-form-urlencoded' };
+  const sameOrigin = { ...setCookie, host: 'app.sakafleet.test', origin: 'https://app.sakafleet.test' };
+
+  const reportsRes = await setApp.inject({ method: 'GET', url: '/d/reports', headers: setCookie });
+  check(reportsRes.statusCode === 200 && reportsRes.body.includes('Build a report'), 'GET /d/reports renders the builder');
+  check(reportsRes.body.includes('action="/d/reports.pdf"') && reportsRes.body.includes('Total spend'), 'the form targets the PDF route and lists the metrics');
+  const badReportsRes = await setApp.inject({ method: 'GET', url: '/d/reports?range=weird', headers: setCookie });
+  check(badReportsRes.statusCode === 400 && /not one I know/.test(badReportsRes.body), 'an invalid range is a 400 on the form');
+  const anonReports = await setApp.inject({ method: 'GET', url: '/d/reports' });
+  check(anonReports.statusCode === 401, 'the builder never renders without a session');
+
+  const reportPdfRes = await setApp.inject({ method: 'GET', url: '/d/reports.pdf?range=this_month&metrics=total_spend,earnings&vehicles=v-a', headers: setCookie });
+  check(reportPdfRes.statusCode === 200 && String(reportPdfRes.headers['content-type']).includes('application/pdf'), 'GET /d/reports.pdf answers application/pdf');
+  check(reportPdfRes.rawPayload.subarray(0, 5).toString() === '%PDF-', 'the built report is a real PDF');
+  check(/attachment; filename="saka-report-this_month-\d{4}-\d{2}-\d{2}\.pdf"/.test(String(reportPdfRes.headers['content-disposition'])), 'the PDF carries a dated filename naming the range');
+  const foreignVehicleReport = await setApp.inject({ method: 'GET', url: '/d/reports.pdf?vehicles=v-x', headers: setCookie });
+  check(foreignVehicleReport.statusCode === 400 && /not on your fleet/.test(foreignVehicleReport.body), "another owner's vehicle id is refused (rule 51 i)");
+  const customReportRes = await setApp.inject({ method: 'GET', url: '/d/reports.pdf?range=custom&from=2026-11-01&to=2026-11-07&metrics=total_spend', headers: setCookie });
+  check(customReportRes.statusCode === 200 && customReportRes.rawPayload.subarray(0, 5).toString() === '%PDF-', 'a custom range builds its own PDF');
+  const badCustomRes = await setApp.inject({ method: 'GET', url: '/d/reports.pdf?range=custom&from=nope&to=2026-11-07', headers: setCookie });
+  check(badCustomRes.statusCode === 400, 'a malformed custom range refuses with a 400');
+
+  const settingsRes = await setApp.inject({ method: 'GET', url: '/d/settings', headers: setCookie });
+  check(settingsRes.statusCode === 200 && settingsRes.body.includes('Settings'), 'GET /d/settings renders');
+  check(settingsRes.body.includes('href="/d/export.csv"') && settingsRes.body.includes('href="/d/logout"'), 'settings links the export and logout');
+  const savedRes = await setApp.inject({ method: 'GET', url: '/d/settings?saved=1', headers: setCookie });
+  check(savedRes.body.includes('Saved'), 'the saved banner renders after the redirect');
+  const anonSettings = await setApp.inject({ method: 'GET', url: '/d/settings' });
+  check(anonSettings.statusCode === 401, 'settings never render without a session');
+
+  const saveRes = await setApp.inject({ method: 'POST', url: '/d/settings', headers: { ...sameOrigin, ...postForm }, payload: 'action=save_weekly&weekly_report=on' });
+  check(saveRes.statusCode === 303 && String(saveRes.headers.location) === '/d/settings?saved=1', 'a same-origin save redirects with the saved flag');
+  check(settingsRouteMock.db.profiles.find((row) => row.id === PROFILE.id).weekly_report_opt_in === true, 'the dashboard write is the SAME column the weekly worker reads (D5)');
+  const crossOriginRes = await setApp.inject({ method: 'POST', url: '/d/settings', headers: { cookie: 'saka_dash=set-session', host: 'app.sakafleet.test', origin: 'https://evil.example', ...postForm }, payload: 'action=save_weekly' });
+  check(crossOriginRes.statusCode === 403 && /another site/.test(crossOriginRes.body), 'a cross-origin POST is refused with 403 (D2 / rule 51 iv)');
+  check(settingsRouteMock.db.profiles.find((row) => row.id === PROFILE.id).weekly_report_opt_in === true, 'the refused cross-origin write changed nothing');
+  const noActionRes = await setApp.inject({ method: 'POST', url: '/d/settings', headers: { ...sameOrigin, ...postForm }, payload: 'weekly_report=on' });
+  check(noActionRes.statusCode === 400 && /Nothing to save/.test(noActionRes.body), 'a POST without the action marker saves nothing');
+  const anonPost = await setApp.inject({ method: 'POST', url: '/d/settings', headers: { host: 'app.sakafleet.test', origin: 'https://app.sakafleet.test', ...postForm }, payload: 'action=save_weekly&weekly_report=on' });
+  check(anonPost.statusCode === 401, 'a same-origin POST without a session 401s');
+
+  const exportRes = await setApp.inject({ method: 'GET', url: '/d/export.csv', headers: setCookie });
+  check(exportRes.statusCode === 200 && /text\/csv/.test(String(exportRes.headers['content-type'])), 'GET /d/export.csv answers text/csv');
+  check(/attachment; filename="saka-export-\d{4}-\d{2}-\d{2}\.csv"/.test(String(exportRes.headers['content-disposition'])), 'the export carries a dated filename');
+  check(exportRes.body.charCodeAt(0) === 0xFEFF && exportRes.body.includes('# expenses') && exportRes.body.includes('# receipts'), 'the export holds the sectioned data');
+  const anonExport = await setApp.inject({ method: 'GET', url: '/d/export.csv' });
+  check(anonExport.statusCode === 401, 'the export never renders without a session');
+  await setApp.close();
 
   process.env.DASHBOARD_ENABLED = previousFlag;
   if (previousBase === undefined) delete process.env.PUBLIC_APP_URL;

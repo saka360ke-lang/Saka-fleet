@@ -52,9 +52,17 @@ import {
   buildDriverCompliancePage,
   buildCompliancePdf,
   renderCompliancePage,
-  renderDriverPage
+  renderDriverPage,
+  parseReportSpec,
+  buildDashboardCustomReport,
+  buildSettingsPage,
+  saveSettings,
+  serializeAllDataCsv,
+  renderReportsPage,
+  renderSettingsPage
 } from '../services/dashboard.js';
 import { detectCountryFromPhone, buildGlobalContext } from '../services/globalization.js';
+import { buildProReportPdf } from '../services/pdfEngine.js';
 import { logSystemError, logWriteFailure } from '../services/systemErrors.js';
 
 /** A1 — identical to Fastify's own "route not found" payload. */
@@ -88,7 +96,7 @@ function linkReasonStatus(reason) {
 /** Rule 50 — optional profile context degrades to the slim set. */
 async function loadDashboardProfile(supabase, ownerId) {
   if (!supabase || !ownerId) return null;
-  const full = 'id, phone_number, email, full_name, country, country_code, preferred_language, currency, locale';
+  const full = 'id, phone_number, email, full_name, country, country_code, preferred_language, currency, locale, unit_system';
   const slim = 'id, phone_number, email, full_name, country_code';
   try {
     let { data, error } = await supabase.from('profiles').select(full).eq('id', ownerId).maybeSingle();
@@ -115,6 +123,23 @@ async function loadDashboardProfile(supabase, ownerId) {
 function countryForProfile(profile) {
   const phone = profile?.phone_number;
   return phone ? detectCountryFromPhone(phone) : null;
+}
+
+/**
+ * D2 (Phase 14D) — CSRF defence-in-depth. The session cookie is HttpOnly +
+ * SameSite=Strict and `/d` is never CORS-listed, so a cross-site POST cannot
+ * carry the cookie at all; this Origin guard refuses the write outright when a
+ * browser tells us it came from another host. A missing Origin (older browsers)
+ * falls back to the SameSite=Strict guarantee.
+ */
+function isCrossOriginWrite(request) {
+  const origin = request.headers?.origin;
+  if (!origin) return false;
+  try {
+    return new URL(String(origin)).host !== String(request.headers?.host || '');
+  } catch {
+    return true;
+  }
 }
 
 /**
@@ -493,6 +518,152 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
         return reply.code(200).type('application/pdf').send(buffer);
       } catch (err) {
         await logSystemError(supabase, err, '/d/compliance/pdf');
+        const page = renderErrorPage(500, 'That export could not be built — please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    /* -------------------------------------------------------------- */
+    /* GET /d/reports — the reports builder (Phase 14D)                */
+    /* -------------------------------------------------------------- */
+    scope.get('/d/reports', async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      try {
+        const session = await requireOwnerSession(request, reply, supabase);
+        if (!session) return reply;
+        const vehicles = await loadOwnerVehicles(supabase, session.ownerId);
+        const vehicleIds = vehicles.map((vehicle) => vehicle.id);
+        const parsed = parseReportSpec(request.query || {}, { vehicleIds });
+        const spec = parsed.ok ? parsed.spec : parseReportSpec({}, { vehicleIds }).spec;
+        return sendHtml(reply, parsed.ok ? 200 : 400, renderReportsPage({
+          vehicles,
+          spec,
+          error: parsed.ok ? null : parsed.error
+        }));
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/reports');
+        const page = renderErrorPage(500, 'Please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    /* -------------------------------------------------------------- */
+    /* GET /d/reports.pdf — the SAME spec as the form (Phase 14D)      */
+    /* -------------------------------------------------------------- */
+    scope.get('/d/reports.pdf', async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      try {
+        const session = await requireOwnerSession(request, reply, supabase);
+        if (!session) return reply;
+        const profile = await loadDashboardProfile(supabase, session.ownerId);
+        const countryInfo = countryForProfile(profile);
+        const vehicles = await loadOwnerVehicles(supabase, session.ownerId);
+        const vehicleIds = vehicles.map((vehicle) => vehicle.id);
+        const parsed = parseReportSpec(request.query || {}, { vehicleIds });
+        if (!parsed.ok) {
+          const spec = parseReportSpec({}, { vehicleIds }).spec;
+          return sendHtml(reply, 400, renderReportsPage({ vehicles, spec, error: parsed.error }));
+        }
+        const report = await buildDashboardCustomReport({
+          supabase,
+          ownerId: session.ownerId,
+          spec: parsed.spec,
+          countryInfo,
+          profile
+        });
+        if (!report.ok) {
+          await logSystemError(supabase, new Error(report.error || 'custom report failed'), '/d/reports/pdf');
+          const page = renderErrorPage(500, 'That report could not be built — please try again in a moment.');
+          return sendHtml(reply, page.status, page.html);
+        }
+        const buffer = await buildProReportPdf(report.data);
+        const day = new Date().toISOString().slice(0, 10);
+        reply.header('content-disposition', `attachment; filename="saka-report-${parsed.spec.range}-${day}.pdf"`);
+        reply.header('cache-control', 'no-store');
+        return reply.code(200).type('application/pdf').send(buffer);
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/reports/pdf');
+        const page = renderErrorPage(500, 'That report could not be built — please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    /* -------------------------------------------------------------- */
+    /* GET /d/settings — preferences + data export (Phase 14D)         */
+    /* -------------------------------------------------------------- */
+    scope.get('/d/settings', async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      try {
+        const session = await requireOwnerSession(request, reply, supabase);
+        if (!session) return reply;
+        const profile = await loadDashboardProfile(supabase, session.ownerId);
+        const settings = await buildSettingsPage({
+          supabase,
+          ownerId: session.ownerId,
+          profile,
+          countryInfo: countryForProfile(profile),
+          sessionExpiresAt: session.sessionExpiresAt
+        });
+        const saved = String(request.query?.saved || '') === '1';
+        return sendHtml(reply, settings.ok ? 200 : 503, renderSettingsPage({ settings, saved }));
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/settings');
+        const page = renderErrorPage(500, 'Please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    /* -------------------------------------------------------------- */
+    /* POST /d/settings — ONE writable preference (Phase 14D, D2)      */
+    /* -------------------------------------------------------------- */
+    scope.post('/d/settings', async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      // D2: refuse a cross-origin write BEFORE anything else (defence in depth
+      // on top of the HttpOnly + SameSite=Strict cookie and no /d CORS).
+      if (isCrossOriginWrite(request)) {
+        const page = renderErrorPage(403, 'That request came from another site — nothing was changed. Open Settings from your dashboard and try again.');
+        return sendHtml(reply, 403, page.html);
+      }
+      try {
+        const session = await requireOwnerSession(request, reply, supabase);
+        if (!session) return reply;
+        const profile = await loadDashboardProfile(supabase, session.ownerId);
+        const body = request.body && typeof request.body === 'object' ? request.body : {};
+        if (String(body.action || '') !== 'save_weekly') {
+          const settings = await buildSettingsPage({ supabase, ownerId: session.ownerId, profile, countryInfo: countryForProfile(profile), sessionExpiresAt: session.sessionExpiresAt });
+          return sendHtml(reply, 400, renderSettingsPage({ settings, error: 'Nothing to save — nothing changed.' }));
+        }
+        const weeklyReportOn = String(body.weekly_report || '').toLowerCase() === 'on';
+        const result = await saveSettings({ supabase, ownerId: session.ownerId, weeklyReportOn });
+        if (!result.ok) {
+          const settings = await buildSettingsPage({ supabase, ownerId: session.ownerId, profile, countryInfo: countryForProfile(profile), sessionExpiresAt: session.sessionExpiresAt });
+          return sendHtml(reply, 200, renderSettingsPage({ settings, error: result.error }));
+        }
+        return reply.code(303).header('location', '/d/settings?saved=1').send();
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/settings');
+        const page = renderErrorPage(500, 'Please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    /* -------------------------------------------------------------- */
+    /* GET /d/export.csv — every record in one CSV (Phase 14D, D3)     */
+    /* -------------------------------------------------------------- */
+    scope.get('/d/export.csv', async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      try {
+        const session = await requireOwnerSession(request, reply, supabase);
+        if (!session) return reply;
+        const profile = await loadDashboardProfile(supabase, session.ownerId);
+        const ctx = buildGlobalContext(countryForProfile(profile), profile);
+        const csv = await serializeAllDataCsv({ supabase, ownerId: session.ownerId, currency: ctx.currency });
+        const day = new Date().toISOString().slice(0, 10);
+        reply.header('content-disposition', `attachment; filename="saka-export-${day}.csv"`);
+        reply.header('cache-control', 'no-store');
+        return reply.code(200).type('text/csv; charset=utf-8').send(csv);
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/export/csv');
         const page = renderErrorPage(500, 'That export could not be built — please try again in a moment.');
         return sendHtml(reply, page.status, page.html);
       }

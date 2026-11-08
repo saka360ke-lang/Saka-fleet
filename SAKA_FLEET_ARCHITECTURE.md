@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.75.2  
+**Version:** 1.75.3  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.75.3** | Phase 14D (Owner Dashboard complete): reports builder (`last_30_days` + a `bounds` override on `buildCustomReport`, up to 8 metrics, GET-generated PDF), settings page (one writable preference — the SAME `profiles.weekly_report_opt_in` column — plus a 6-section single-CSV data export with `# section`, `[CAP]` and `[ERROR]` rows); CSRF = SameSite=Strict + no `/d` CORS + Origin guard | 203 |
 | **1.75.2** | Phase 14C: dashboard compliance surface — `/d/compliance` vehicle + driver board (All / Due soon / Expired, expired pinned), read-only `/d/drivers/:id` with unmasked numbers for the owner, filtered `/d/compliance.pdf` sharing one filter engine (`filterComplianceReport`); three defects caught pre-ship | 202 |
 | **1.75.1** | Phase 14B: dashboard records surface — owner-VEHICLE-scoped searchable ledger (not `queryRecordLedger`'s driver scope), filters (date range ≤366 d, type, vehicle, label, keyword), 20/page offset paging, unique-match receipt links with 5-minute signed URLs, CSV + streamed PDF exports sharing one filter engine; mock gains `.or()`/`.range()`/`.ilike()` | 201 |
 | **1.75.0** | Phase 14A: the vehicle pages — `/d/vehicles` list (status, odometer, driver, this-month spend, soonest document) and `/d/vehicles/:id` (identity KPIs, every document with due chips, last 8 merged ledger rows), owner-scoped structurally; fixes the 13C country regression so money/units resolve from the phone (KES, not USD) | 200 |
@@ -5881,6 +5882,42 @@ The `$` anchor is the grammar: `dashboard`, `my dashboard`, `open my dashboard`,
 **Rules shaped this work (rule 58).** 1/39/45 (consult-first), 3/4 (targeted reads, batching), 7 (country from the phone), 10/11 (one stateless suite, targeted runs), 12/33 (version + history + CHANGELOG in one commit), 13/60 (playbook + core prompt + training assertions), 21 (no new env knobs), 31 (warm empty states, plain labels, one next step), 42 (open proposals re-checked — the only open one is the 14B receipt-FK proposal, unrelated), 50 (fail-soft driver lookups, honest 503/500), 51/52 (the four pin classes + three defects caught), 54 (live suite runs), 55 (report engine, transformer and chip vocabulary reused; zero new dependencies), 56 (no backfill: every existing owner sees the surface immediately), 58 (this report). No rule was edited or added.
 
 **Operator prerequisites (unchanged from 14B).** The Phase 14A/14B walk-throughs have passed in staging; the `receipts` Storage bucket exists and is private; the dashboard still ships behind `DASHBOARD_ENABLED=off` until the operator flips it.
+
+### 203. v1.75.3 (Phase 14D) — reports builder + settings + data export; the Owner Dashboard is complete (2026-11-08)
+
+**Scope.** The final owner-dashboard sub-phase: `GET /d/reports` (builder form) → `GET /d/reports.pdf` (bespoke PDF), `GET /d/settings` + `POST /d/settings` (one writable preference), `GET /d/export.csv` (every record in one file). No report templates, no emailing a report from the dashboard, no email/unit changes from the dashboard (WhatsApp owns those), no charts, no driver/superadmin views. Flag-gated as always: `DASHBOARD_ENABLED` stays **OFF** until the operator flips it.
+
+**Decisions locked.**
+- **D1 — date ranges are additive.** `dateRangeBounds()` gained `last_30_days` and `buildCustomReport()` gained an optional `bounds = { from, to, label }` override (the public key stays `bounds`; the local binding is `boundsOverride`). When absent, every pre-existing preset behaves exactly as before — the WhatsApp lane passes no `bounds`, so its behaviour is unchanged (`test_report_metrics` 25 + `test_report_builders` 83 stayed green with zero edits; `test_fleet_reports` 42 green).
+- **D2 — CSRF is tokenless by design.** The session cookie is HttpOnly + `SameSite=Strict`; CORS is registered only for `/api/onboard*`, `/healthz` and `/api/health`, never `/d`. On top of that, `POST /d/settings` refuses a write whose `Origin` is present and not the request host (**403**, checked before the session gate). A missing Origin (older browsers) falls back to the SameSite guarantee. No new dependency.
+- **D3 — one CSV, six sections, `record_type` first.** No ZIP (no archiver dependency exists; adding one would break the zero-dep preference). `serializeAllDataCsv()` streams expenses, earnings, reminders, vehicle documents, driver documents and receipt metadata (never image URLs), each preceded by a `# section` comment row (A2), with a `[CAP]` row when a table hits the 2,000-row limit (A1) and an `[ERROR]` row when a table cannot be read (never a silent empty section).
+
+**The builder reuses the engine (rule 55).** `buildDashboardCustomReport()` is a thin wrapper over `buildCustomReport()` with `access: { lane: 'owner' }` and the resolved window — the same engine the WhatsApp custom-report lane uses, so metrics, charts, ledger and PDF layout are identical by construction. `parseReportSpec()` validates one spec (range, ≤366-day custom window, owner-only vehicle ids, ≤8 metric ids from `CUSTOM_METRICS`, five owner-metric defaults when none are ticked) and that spec feeds BOTH the form state and the PDF — the export can never describe something the form did not select. **Dashboard reports are quota-free by construction:** `buildCustomReport()` has no `usage_counters` path at all (the WhatsApp lane remains the only quota caller).
+
+**The one writable preference.** `profiles.weekly_report_opt_in` — the SAME column the WhatsApp `weekly report on|off` lane writes and the Monday 08:00 EAT worker reads. Last-write-wins across surfaces; no shadow copy. A failed update renders "nothing changed" and never the Saved chip. The form posts an explicit `action=save_weekly` marker, so a stray POST can never silently unsubscribe an owner. Everything else on the page is read-only: masked email/phone, language, units, country, currency, plan label (`getTierLabel`) and the session expiry.
+
+**Rule 51 sibling sweep (defect classes).**
+| Class | Siblings audited | Result |
+|---|---|---|
+| a scope inherited from another lane | `parseReportSpec` validates vehicle ids against the owner's live set; metrics against the registry | pinned: foreign vehicle → 400 |
+| a filter the export bypasses | one spec feeds the form and the PDF route | pinned: custom-range PDF + 400 on a malformed one |
+| a settings write that fakes success | `saveSettings` returns an error and the page renders it, never Saved | pinned |
+| CSRF | SameSite=Strict + no `/d` CORS + Origin guard | pinned: cross-origin POST → 403, row unchanged |
+| dual-write divergence | the dashboard writes the same `weekly_report_opt_in` column the worker reads | pinned: row updated + patch names the column |
+
+**Rule 52 deep audit — findings.** (1) The brief placed `dateRangeBounds`/`buildCustomReport` in `fleetReports.js`; they live in `reportMetrics.js` — the extensions landed there, nothing was duplicated. (2) `buildCustomReport` scopes by `vehicleIds` with a fallback that includes everything when the resolved list is empty, so an unvalidated foreign id would widen the scope — which is exactly why `parseReportSpec` is the only feeder (validated, pinned). (3) The unchecked-checkbox POST would have written `false` on any stray form submission, so the `action=save_weekly` marker was added and pinned.
+
+**Frames touched.** `src/services/reportMetrics.js` (`dateRangeBounds` + `last_30_days`, `buildCustomReport` `bounds` override), `src/services/dashboard.js` (+§9: `parseReportSpec`, `buildDashboardCustomReport`, `buildSettingsPage`, `saveSettings`, `serializeAllDataCsv`, `EXPORT_COLUMNS`, `exportFetch`, `renderReportsPage`, `renderSettingsPage`, nav + form CSS, `loadDashboardProfile` select gains `unit_system`), `src/routes/dashboard.js` (+5 routes, `isCrossOriginWrite`, `buildProReportPdf` import), `src/services/flowKnowledge.js`, `sakaAi.js`, `test_dashboard.js` (+110 assertions: 394 → 504; five new flag-off URLs), `test_agent_training.js` (+2: 198 → 200), `package.json` (1.75.3), `landing/data/changelog.json` (+ stamp), `docs/` (regenerated), `SAKA_FLEET_ARCHITECTURE.md` (§203 + version/history), `CHANGELOG.md`.
+
+**Suites run.** Baseline before edits: test_dashboard (394), test_fleet_reports (42), test_report_builders (83), test_agent_training (198), `npm run health` — green. After: **test_dashboard (504 — +110)**, test_agent_training (200 — +2), test_fleet_reports (42 — unchanged, D1 additive), test_report_metrics (25 — unchanged), test_report_builders (83), test_record_answers (80), test_entry_ledger, test_ocr_flow (129), test_read_registry, test_no_canned_replies (14 — ratchet still 4), test_kb_docs, test_landing_static, test_doc_sync, `npm run health` — green. Zero pre-existing assertions edited.
+
+**Recurrence autopsy (rule 51).** Defect class *"a preset engine extended for a second caller"* → the override is additive and the WhatsApp lane's own suites prove it unchanged; *"a boolean form field that means two different things"* (absent vs explicitly false) → an explicit action marker separates "unchecked" from "not a save"; *"a download that silently omits a table"* → `[ERROR]` and `[CAP]` rows make every export honest.
+
+**Rules shaped this work (rule 58).** 1/39/45, 3/4, 7 (country from the phone), 10/11 (one stateless suite, targeted runs), 12/33 (version + history + CHANGELOG in one commit), 13/60 (playbook + core prompt + training assertions), 21 (no new env knobs), 23/24 (plan label via the tier registry; no re-declared limits), 31 (warm, plain copy; one next step), 42 (proposal re-checked — PROP-2026-11-08-01 remains the only open one, unrelated), 50 (fail-soft settings read, honest write failure, `[ERROR]` export rows), 51/52 (the five pin classes + the audit findings), 54 (live suite runs), 55 (report engine, tier labels and the 14B CSV escaping reused; zero new dependencies), 56 (no backfill; the settings page reflects the column every existing account already has), 58 (this report). No rule was edited or added.
+
+**Phase 14 complete.** The Owner Dashboard now covers overview, vehicles, records, compliance, reports and settings — every page flag-gated and owner-vehicle-scoped. **Phase 15 (driver + superadmin views) is next.** Operator prerequisites unchanged: `receipts` bucket private (done), 14A/14B walk-throughs passed, `DASHBOARD_ENABLED` still off until the production flip.
+
+
 
 
 

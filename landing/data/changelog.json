@@ -1,6 +1,13 @@
 {
-  "latest": "1.75.2",
+  "latest": "1.75.3",
   "entries": [
+    {
+      "version": "1.75.3",
+      "date": "2026-11-08",
+      "title": "Your own reports, your own copy of everything",
+      "preview": "Build the exact report you want, switch the Monday summary on or off, and download every record in one file.",
+      "summary": "The dashboard is finished. There is now a Reports page where you pick the period - this month, the last 30 days, this year or your own dates - tick the vehicles you care about and choose up to eight numbers, then the PDF downloads straight away, built by the same engine behind your WhatsApp reports. There is also a Settings page: switch the Monday morning summary on or off with one tap (the same switch WhatsApp uses, so they always agree), and download every record you have - expenses, earnings, reminders, vehicle documents, driver documents and receipt records - in a single file that opens cleanly in Excel, with each section clearly labelled. Your plan sits there too, with a pointer to reply subscription in chat when you want to change it. Reports built here never use your monthly report quota, and only your own fleet is ever included. The dashboard stays switched off in production until the walk-through is signed off - when it opens, this is the complete owner toolkit: overview, vehicles, records, compliance, reports and settings."
+    },
     {
       "version": "1.75.2",
       "date": "2026-11-08",
