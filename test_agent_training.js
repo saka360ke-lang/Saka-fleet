@@ -341,6 +341,9 @@ check(/Narrative pre-fills are engine-determined facts/.test(await import('./src
   check(SAKA_FLOW_PLAYBOOK.includes('opens one page per vehicle'), 'the playbook states the v1.75.0 vehicle pages');
   check(SAKA_FLOW_PLAYBOOK.includes('have NOT shipped'), 'the playbook keeps the unshipped dashboard pages off-limits');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('the vehicle list and one vehicle'), 'the core prompt states the shipped dashboard scope (v1.75.0)');
+  // v1.75.1 (Phase 14B) — the records surface must be stated where the model reads it.
+  check(SAKA_FLOW_PLAYBOOK.includes('searchable records table'), 'the playbook documents the v1.75.1 records surface');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('CSV/PDF export'), 'the core prompt states the records exports (v1.75.1)');
 
   console.log(`\n\u2705 ALL AGENT TRAINING TESTS PASSED (${passed} assertions).`);
   console.log('Stateless suite: no real database rows were created, so no cleanup is required.');

@@ -38,6 +38,24 @@ import {
   buildOverviewCard,
   buildVehiclesIndex,
   buildVehiclePage,
+  renderRecordsPage,
+  renderReceiptPage,
+  parseRecordsFilters,
+  cleanRecordsTerm,
+  nairobiDateOf,
+  loadOwnerVehicles,
+  queryOwnerRecords,
+  matchReceiptForExpense,
+  attachReceiptMatches,
+  signReceiptUrl,
+  serializeRecordsCsv,
+  buildRecordsPdf,
+  recordsQueryString,
+  RECORDS_PAGE_SIZE,
+  RECORDS_MAX_RANGE_DAYS,
+  RECORDS_EXPORT_MAX_ROWS,
+  RECEIPT_SIGNED_URL_TTL_SECONDS,
+  RECORDS_CSV_COLUMNS,
   renderOverviewPage,
   renderVehiclesPage,
   renderVehiclePage,
@@ -46,6 +64,7 @@ import {
 } from './src/services/dashboard.js';
 import { upcomingExpiryItems, buildVehicleDirectory, buildVehicleDetail } from './src/services/fleetReports.js';
 import { detectCountryFromPhone } from './src/services/globalization.js';
+import { extractPdfText } from './src/services/pdfTextExtractor.js';
 import { registerDashboardRoutes } from './src/routes/dashboard.js';
 
 let passed = 0;
@@ -107,6 +126,11 @@ async function run() {
     // v1.75.0 (Phase 14A) — the vehicle pages are flag-gated too.
     { method: 'GET', url: '/d/vehicles' },
     { method: 'GET', url: '/d/vehicles/some-vehicle-id' },
+    // v1.75.1 (Phase 14B) — the records surface is flag-gated too.
+    { method: 'GET', url: '/d/records' },
+    { method: 'GET', url: '/d/records.csv' },
+    { method: 'GET', url: '/d/records.pdf' },
+    { method: 'GET', url: '/d/receipt/some-receipt-id' },
     { method: 'POST', url: '/d/verify', payload: 'token=x&otp=123456', headers: { 'content-type': 'application/x-www-form-urlencoded' } }
   ];
   for (const request of offRequests) {
@@ -639,6 +663,317 @@ async function run() {
   const overviewPage = await routeApp.inject({ method: 'GET', url: '/d', headers: authCookie });
   check(overviewPage.statusCode === 200 && overviewPage.body.includes('See your vehicles') && /(KES|Ksh)/.test(overviewPage.body), 'the overview links to the vehicles page and uses KES');
   await routeApp.close();
+
+  console.log('\n--- Test 22: mock .or() / .range() / .ilike() (D4) ---');
+  const opMock = createMockSupabase({
+    expense_logs: [
+      { id: 'x1', label: 'karen run', notes: null, created_at: '2026-11-01T08:00:00Z' },
+      { id: 'x2', label: null, notes: 'KAREN school drop', created_at: '2026-11-02T08:00:00Z' },
+      { id: 'x3', label: 'fuel', notes: 'town', created_at: '2026-11-03T08:00:00Z' }
+    ]
+  });
+  const orResult = await opMock.client.from('expense_logs').select('*').or('label.ilike.%karen%,notes.ilike.%karen%').order('created_at', { ascending: false });
+  check(orResult.data.length === 2 && orResult.data.map((row) => row.id).join(',') === 'x2,x1', '.or() matches either column, case-insensitively');
+  const rangeResult = await opMock.client.from('expense_logs').select('*').order('created_at', { ascending: true }).range(1, 2);
+  check(rangeResult.data.length === 2 && rangeResult.data[0].id === 'x2' && rangeResult.data[1].id === 'x3', '.range(1, 2) is an inclusive offset window');
+  const ilikeResult = await opMock.client.from('expense_logs').select('*').ilike('label', '%REN%');
+  check(ilikeResult.data.length === 1 && ilikeResult.data[0].id === 'x1', '.ilike() is a case-insensitive contains match');
+  const andOrResult = await opMock.client.from('expense_logs').select('*').eq('id', 'x2').or('label.ilike.%karen%,notes.ilike.%karen%');
+  check(andOrResult.data.length === 1, '.or() composes with AND filters');
+
+  console.log('\n--- Test 23: parseRecordsFilters (validation + defaults) ---');
+  const filterIds = ['v-a', 'v-b'];
+  const recordsNow = new Date('2026-11-08T06:00:00Z'); // Nairobi 09:00 → 2026-11-08
+  const defaults = parseRecordsFilters({}, { vehicleIds: filterIds, now: recordsNow });
+  check(defaults.ok && defaults.filters.to === '2026-11-08' && defaults.filters.from === '2026-10-10', 'default window is the last 30 Nairobi days (inclusive)');
+  check(defaults.filters.types.length === 0 && defaults.filters.vehicleId === null && defaults.filters.page === 0 && defaults.filters.pageSize === RECORDS_PAGE_SIZE,
+    'defaults: all types, all vehicles, page 0, 20 per page');
+  const full = parseRecordsFilters({ from: '2026-09-01', to: '2026-09-30', type: 'Fuel,Repairs', vehicle: 'v-b', label: 'karen', keyword: 'shell', page: '3' }, { vehicleIds: filterIds, now: recordsNow });
+  check(full.ok && full.filters.from === '2026-09-01' && full.filters.to === '2026-09-30', 'an explicit date range is accepted');
+  check(full.filters.types.join(',') === 'Fuel,Repairs' && full.filters.vehicleId === 'v-b', 'type (comma list) and vehicle filters are parsed');
+  check(full.filters.label === 'karen' && full.filters.keyword === 'shell' && full.filters.page === 3, 'label, keyword and page are parsed');
+  check(parseRecordsFilters({ from: 'not-a-date' }, { vehicleIds: filterIds }).reason === 'bad_from', 'a malformed start date is refused');
+  check(parseRecordsFilters({ to: '2026-13-45' }, { vehicleIds: filterIds }).reason === 'bad_to', 'an impossible end date is refused');
+  check(parseRecordsFilters({ from: '2026-11-02', to: '2026-11-01' }, { vehicleIds: filterIds }).reason === 'bad_range', 'a reversed range is refused');
+  check(parseRecordsFilters({ from: '2024-01-01', to: '2026-11-01' }, { vehicleIds: filterIds }).reason === 'range_too_wide', `a range wider than ${RECORDS_MAX_RANGE_DAYS} days is refused`);
+  check(parseRecordsFilters({ vehicle: 'v-other' }, { vehicleIds: filterIds }).reason === 'unknown_vehicle', "another owner's vehicle id is refused");
+  check(parseRecordsFilters({ label: 'x'.repeat(41) }, { vehicleIds: filterIds }).reason === 'label_too_long', 'labels over 40 characters are refused');
+  check(parseRecordsFilters({ keyword: 'x'.repeat(41) }, { vehicleIds: filterIds }).reason === 'keyword_too_long', 'search terms over 40 characters are refused');
+  check(parseRecordsFilters({ page: '999' }, { vehicleIds: filterIds }).reason === 'page_too_far', 'a page beyond the cap is refused');
+  check(parseRecordsFilters({ type: Array.from({ length: 13 }, (_, i) => `T${i}`).join(',') }, { vehicleIds: filterIds }).reason === 'too_many_types', 'more than 12 types is refused');
+  const hostileFilters = parseRecordsFilters({ label: '%karen%,notes.ilike.boom', keyword: 'a%%,(b)' }, { vehicleIds: filterIds });
+  check(hostileFilters.ok && !hostileFilters.filters.label.includes('%') && !hostileFilters.filters.label.includes(',') && !hostileFilters.filters.keyword.includes('%'),
+    'wildcard/operator characters are stripped from search terms');
+  check(cleanRecordsTerm('  karen   run  ') === 'karen run', 'search terms are whitespace-normalised');
+  check(nairobiDateOf('2026-11-08T21:30:00Z') === '2026-11-09', 'the Nairobi calendar day (not UTC) decides the date (rule 36)');
+
+  console.log('\n--- Test 24: queryOwnerRecords — owner-vehicle scope (FIX-1) ---');
+  const recDay = (d, hour = 9) => new Date(`2026-11-${String(d).padStart(2, '0')}T${String(hour).padStart(2, '0')}:00:00+03:00`).toISOString();
+  const recordsSeed = () => ({
+    vehicles: [
+      { id: 'v-a', owner_id: PROFILE.id, plate_number: 'KDA 123A', make_model: 'Nissan Note', status: 'ACTIVE' },
+      { id: 'v-b', owner_id: PROFILE.id, plate_number: 'KDB 456B', make_model: 'Toyota Hiace', status: 'ACTIVE' },
+      { id: 'v-x', owner_id: 'someone-else', plate_number: 'KDX 999X', status: 'ACTIVE' }
+    ],
+    expense_logs: [
+      { id: 'e1', vehicle_id: 'v-a', driver_id: PROFILE.id, expense_type: 'Fuel', amount: 5000, fuel_liters: 40, odometer_reading: 100500, notes: 'Shell Karen', label: 'karen run', created_at: recDay(7) },
+      { id: 'e2', vehicle_id: 'v-b', driver_id: 'd-1', expense_type: 'Repairs', amount: 3000, notes: 'Brake pads', created_at: recDay(6) },
+      { id: 'e3', vehicle_id: 'v-a', driver_id: PROFILE.id, expense_type: 'Fuel', amount: 4500, notes: 'town', created_at: recDay(1) },
+      { id: 'e4', vehicle_id: 'v-x', driver_id: 'stranger', expense_type: 'Fuel', amount: 9999, notes: 'not mine', created_at: recDay(7) }
+    ],
+    private_earnings: [
+      { id: 'n1', vehicle_id: 'v-a', driver_id: PROFILE.id, revenue_amount: 12000, earning_type: 'Trips', notes: 'Uber week', logged_at: recDay(8, 8) }
+    ]
+  });
+  const recMock = createMockSupabase(recordsSeed());
+  const ownerVehicles = await loadOwnerVehicles(recMock.client, PROFILE.id);
+  check(ownerVehicles.length === 2 && !ownerVehicles.some((v) => v.id === 'v-x'), "loadOwnerVehicles returns only the owner's live vehicles");
+  const recCtx = { supabase: recMock.client, ownerId: PROFILE.id, vehicleIds: ownerVehicles.map((v) => v.id), vehicles: ownerVehicles, countryInfo: KE_INFO, filters: { from: '2026-10-10', to: '2026-11-08' } };
+  const allRecords = await queryOwnerRecords(recCtx);
+  check(allRecords.ok && allRecords.total === 4, 'the owner record set merges expenses + earnings (4 rows, other owners excluded)');
+  check(allRecords.rows.map((r) => r.id).join(',') === 'n1,e1,e2,e3', 'rows are newest-first across both tables');
+  check(allRecords.rows.some((r) => r.id === 'e2' && r.raw.driver_id === 'd-1'), 'FIX-1: a driver-logged row is visible to the owner (vehicle scope, not driver_id scope)');
+  check(allRecords.rows.find((r) => r.id === 'e1')?.vehicle === 'KDA 123A', 'the plate is mapped from the owner vehicle list');
+  check(!allRecords.rows.some((r) => r.id === 'e4'), "another owner's vehicle never contributes a row");
+  const fuelOnly = await queryOwnerRecords({ ...recCtx, filters: { from: '2026-10-10', to: '2026-11-08', types: ['Fuel'] } });
+  check(fuelOnly.ok && fuelOnly.rows.length === 2 && fuelOnly.rows.every((r) => r.raw.expense_type === 'Fuel'), 'a type filter keeps matching expenses and drops earnings');
+  const vanOnly = await queryOwnerRecords({ ...recCtx, filters: { from: '2026-10-10', to: '2026-11-08', vehicleId: 'v-b' } });
+  check(vanOnly.rows.length === 1 && vanOnly.rows[0].id === 'e2', 'the vehicle filter narrows to one vehicle');
+  const keywordHit = await queryOwnerRecords({ ...recCtx, filters: { from: '2026-10-10', to: '2026-11-08', keyword: 'karen' } });
+  check(keywordHit.rows.length === 1 && keywordHit.rows[0].id === 'e1', 'keyword search matches label/notes case-insensitively');
+  const labelHit = await queryOwnerRecords({ ...recCtx, filters: { from: '2026-10-10', to: '2026-11-08', label: 'karen' } });
+  check(labelHit.rows.length === 1 && labelHit.rows[0].id === 'e1', 'the label filter matches only the label column');
+  const oneDay = await queryOwnerRecords({ ...recCtx, filters: { from: '2026-11-06', to: '2026-11-06' } });
+  check(oneDay.rows.length === 1 && oneDay.rows[0].id === 'e2', 'the date range uses inclusive Nairobi calendar days');
+
+  const pagedSeed = () => ({
+    vehicles: [{ id: 'v-a', owner_id: PROFILE.id, plate_number: 'KDA 123A', status: 'ACTIVE' }],
+    expense_logs: Array.from({ length: 25 }, (_, i) => ({
+      id: `p${i}`,
+      vehicle_id: 'v-a',
+      driver_id: PROFILE.id,
+      expense_type: 'Fuel',
+      amount: 1000 + i,
+      created_at: new Date(Date.UTC(2026, 10, 5, 0, i, 0)).toISOString()
+    })),
+    private_earnings: []
+  });
+  const pagedMock = createMockSupabase(pagedSeed());
+  const pagedCtx = {
+    supabase: pagedMock.client,
+    ownerId: PROFILE.id,
+    vehicleIds: ['v-a'],
+    vehicles: [{ id: 'v-a', plate_number: 'KDA 123A' }],
+    countryInfo: KE_INFO,
+    filters: { from: '2026-10-10', to: '2026-11-08', page: 0 }
+  };
+  const recordsPage0 = await queryOwnerRecords(pagedCtx);
+  check(recordsPage0.rows.length === RECORDS_PAGE_SIZE && recordsPage0.hasMore === true && recordsPage0.total === 25, 'page 0 returns 20 rows, hasMore, and the exact total');
+  const recordsPage1 = await queryOwnerRecords({ ...pagedCtx, filters: { ...pagedCtx.filters, page: 1 } });
+  check(recordsPage1.rows.length === 5 && recordsPage1.hasMore === false, 'the last page returns the remaining 5 rows and stops');
+  const recordsPage9 = await queryOwnerRecords({ ...pagedCtx, filters: { ...pagedCtx.filters, page: 9 } });
+  check(recordsPage9.rows.length === 0 && recordsPage9.hasMore === false, 'a page beyond the end is empty, never an error');
+  const exportAll = await queryOwnerRecords({ ...pagedCtx, pageSize: RECORDS_EXPORT_MAX_ROWS, offset: 0 });
+  check(exportAll.rows.length === 25 && exportAll.truncated === false, 'an export fetches the whole filtered set (no page cap)');
+  const noVehicles = await queryOwnerRecords({ ...pagedCtx, vehicleIds: [] });
+  check(noVehicles.ok === true && noVehicles.rows.length === 0, 'an owner with no vehicles gets an honest empty set');
+
+  console.log('\n--- Test 25: receipt matching (D2) + signed URLs (D1) ---');
+  const receiptsSeed = {
+    receipts: [
+      { id: 'r1', media_id: 'm1', vehicle_id: 'v-a', owner_id: PROFILE.id, amount: 5000, image_url: 'https://x.supabase.co/storage/v1/object/public/receipts/m1.jpg', created_at: recDay(7, 10) },
+      { id: 'r2', media_id: 'm2', vehicle_id: 'v-b', owner_id: PROFILE.id, amount: 3000, image_url: null, created_at: recDay(6, 10) },
+      { id: 'r3', media_id: 'm3', vehicle_id: 'v-b', owner_id: PROFILE.id, amount: 3000, image_url: null, created_at: recDay(6, 11) },
+      { id: 'r-nofile', media_id: null, vehicle_id: 'v-a', owner_id: PROFILE.id, amount: 777, image_url: null, created_at: recDay(2, 10) },
+      { id: 'r-foreign', media_id: 'm4', vehicle_id: 'v-x', owner_id: 'someone-else', amount: 5000, image_url: null, created_at: recDay(7, 10) }
+    ]
+  };
+  const matchMock = createMockSupabase({ ...recordsSeed(), ...receiptsSeed });
+  const uniqueMatch = await matchReceiptForExpense({ supabase: matchMock.client, vehicleId: 'v-a', amount: 5000, day: '2026-11-07' });
+  check(uniqueMatch.status === 'unique' && uniqueMatch.receipt?.id === 'r1', 'exactly one same-day same-amount receipt links the row');
+  const ambiguousMatch = await matchReceiptForExpense({ supabase: matchMock.client, vehicleId: 'v-b', amount: 3000, day: '2026-11-06' });
+  check(ambiguousMatch.status === 'ambiguous' && ambiguousMatch.receipt === null && ambiguousMatch.count === 2, 'two candidates are ambiguous — never a guess');
+  const noMatch = await matchReceiptForExpense({ supabase: matchMock.client, vehicleId: 'v-a', amount: 4500, day: '2026-11-01' });
+  check(noMatch.status === 'none' && noMatch.receipt === null, 'no candidate means no link');
+  const dayMiss = await matchReceiptForExpense({ supabase: matchMock.client, vehicleId: 'v-a', amount: 5000, day: '2026-11-06' });
+  check(dayMiss.status === 'none', 'the same amount on another day never matches');
+  const matchCache = new Map();
+  await matchReceiptForExpense({ supabase: matchMock.client, vehicleId: 'v-a', amount: 5000, day: '2026-11-07', cache: matchCache });
+  await matchReceiptForExpense({ supabase: matchMock.client, vehicleId: 'v-a', amount: 5000, day: '2026-11-07', cache: matchCache });
+  check(matchCache.size === 1, 'the page cache dedupes receipt lookups');
+  const attached = await attachReceiptMatches({ supabase: matchMock.client, rows: allRecords.rows });
+  const attachedById = Object.fromEntries(attached.map((row) => [row.id, row]));
+  check(attachedById.e1.receiptStatus === 'unique' && attachedById.e1.receiptId === 'r1', 'the page attaches a View link only for a unique match');
+  check(attachedById.e2.receiptStatus === 'ambiguous' && attachedById.e2.receiptId === null, 'an ambiguous row carries no receipt id');
+  check(attachedById.e3.receiptStatus === 'none' && attachedById.n1.receiptStatus === 'none', 'no match and earnings never carry a receipt link');
+
+  const signedCalls = [];
+  const signClient = {
+    storage: {
+      from: (bucket) => ({
+        createSignedUrl: async (path, ttl) => {
+          signedCalls.push({ bucket, path, ttl });
+          return { data: { signedUrl: `https://storage.test/${bucket}/${path}?token=t` }, error: null };
+        }
+      })
+    }
+  };
+  const signed = await signReceiptUrl(signClient, { id: 'r1', media_id: 'm1', image_url: 'https://x.supabase.co/storage/v1/object/public/receipts/m1.jpg' });
+  check(signed.ok && signed.url.includes('token=t') && signed.ttlSeconds === RECEIPT_SIGNED_URL_TTL_SECONDS, 'the signed URL is minted with a 300-second TTL');
+  check(signedCalls[0].ttl === 300 && signedCalls[0].path === 'm1.jpg' && signedCalls[0].bucket === 'receipts', 'the object path comes from the media id (survives a private bucket)');
+  const noImage = await signReceiptUrl(signClient, { id: 'r-nofile', media_id: null, image_url: null });
+  check(noImage.ok === false && noImage.reason === 'no_image', 'a receipt with no stored image never yields a URL');
+  const noStorage = await signReceiptUrl({}, { media_id: 'm1' });
+  check(noStorage.ok === false && noStorage.reason === 'no_storage', 'a client without storage degrades honestly');
+
+  console.log('\n--- Test 26: serializeRecordsCsv ---');
+  const csvRows = [
+    { at: '2026-11-07T06:00:00.000Z', kind: 'expense', vehicle: 'KDA 123A', typeLabel: 'Fuel', description: 'Fuel - 40 L - Shell, "Karen"', odometer: 100500, unitCost: 125.5, amount: 5000, label: 'karen run' },
+    { at: '2026-11-08T05:00:00.000Z', kind: 'earning', vehicle: 'KDA 123A', typeLabel: 'Trips', description: 'Trips', odometer: null, unitCost: null, amount: 12000, label: null }
+  ];
+  const csv = serializeRecordsCsv(csvRows, { currency: 'KES' });
+  const csvLines = csv.split('\r\n').filter(Boolean);
+  check(csv.charCodeAt(0) === 0xFEFF, 'the CSV starts with a UTF-8 BOM (Excel-safe)');
+  check(csvLines[0].replace(/^\uFEFF/, '') === RECORDS_CSV_COLUMNS.join(','), 'the header row is the documented column set');
+  check(csvLines.length === 3, 'one header + one line per record');
+  check(csvLines[1].includes('"Fuel - 40 L - Shell, ""Karen"""'), 'commas and quotes are escaped (RFC 4180)');
+  check(csvLines[1].includes('2026-11-07T06:00:00.000Z') && csvLines[1].includes(',125.50,5000,KES,karen run'), 'dates are ISO-8601 and money keeps the owner currency');
+  check(csvLines[2].includes(',earning,'), 'earnings carry their kind');
+
+  console.log('\n--- Test 27: buildRecordsPdf (Buffer, no Storage) ---');
+  const pdfBuffer = await buildRecordsPdf(attached, { from: '2026-10-10', to: '2026-11-08' }, { profile: PROFILE, countryInfo: KE_INFO, vehicles: ownerVehicles });
+  check(Buffer.isBuffer(pdfBuffer) && pdfBuffer.subarray(0, 5).toString() === '%PDF-', 'the records PDF is a real PDF buffer (no Storage, no email)');
+  check(pdfBuffer.length > 1500, `the PDF has real content (${pdfBuffer.length} bytes)`);
+  const readablePdf = await buildRecordsPdf(attached, { from: '2026-10-10', to: '2026-11-08' }, { profile: PROFILE, countryInfo: KE_INFO, vehicles: ownerVehicles, useStandardFonts: true });
+  const pdfText = extractPdfText(readablePdf).text || '';
+  check(/Records & Ledger/.test(pdfText) && /TOTAL SPEND/.test(pdfText), 'the PDF carries the title and the KPI labels');
+  check(/(Ksh|KES)/.test(pdfText), 'the PDF money is in the owner currency');
+  check(pdfText.includes('KDA 123A'), 'the filtered rows appear in the ledger');
+  const truncatedPdf = await buildRecordsPdf(attached, { from: '2026-10-10', to: '2026-11-08' }, { profile: PROFILE, countryInfo: KE_INFO, vehicles: ownerVehicles, truncated: true, useStandardFonts: true });
+  check(/narrow the dates/.test(extractPdfText(truncatedPdf).text || ''), 'a capped export says so in the PDF footnote');
+
+  console.log('\n--- Test 28: renderRecordsPage + query string ---');
+  const renderFilters = parseRecordsFilters(
+    { from: '2026-10-10', to: '2026-11-08', type: 'Fuel', vehicle: 'v-a', label: 'karen', keyword: 'shell', page: '1' },
+    { vehicleIds: ['v-a', 'v-b'] }
+  ).filters;
+  const pageData = { ok: true, rows: attached, total: 4, hasMore: true, page: 1, pageSize: 20, currency: 'KES', locale: 'en-KE', timeZone: 'Africa/Nairobi' };
+  const recordsHtml = renderRecordsPage({ data: pageData, filters: renderFilters, vehicles: ownerVehicles, emailMasked: 'a***a@example.com' });
+  check(recordsHtml.includes('Records') && recordsHtml.includes('action="/d/records"'), 'the records page renders its filter form');
+  check(recordsHtml.includes('value="Fuel" selected'), 'the type filter is pre-selected from the URL');
+  check(recordsHtml.includes('value="v-a" selected'), 'the vehicle filter is pre-selected from the URL');
+  check(recordsHtml.includes('KDA 123A') && recordsHtml.includes('Brake pads'), 'the rows render with plate and description');
+  check(recordsHtml.includes('href="/d/receipt/r1"'), 'a unique match renders a receipt link');
+  check(recordsHtml.includes('Multiple match') && recordsHtml.includes('—'), 'ambiguous and empty matches render honestly');
+  check(recordsHtml.includes('← Newer') && recordsHtml.includes('Older →'), 'pagination offers both directions when both exist');
+  check(recordsHtml.includes('/d/records.csv?') && recordsHtml.includes('/d/records.pdf?'), 'the page links both exports');
+  const exportQuery = recordsQueryString(renderFilters, { page: 0 });
+  check(exportQuery.includes('type=Fuel') && exportQuery.includes('vehicle=v-a') && !exportQuery.includes('page='), 'export links carry the filter and never a page');
+  const emptyRecordsHtml = renderRecordsPage({ data: { ...pageData, rows: [], total: 0, hasMore: false, page: 0 }, filters: defaults.filters, vehicles: ownerVehicles, emailMasked: 'a***a@example.com' });
+  check(emptyRecordsHtml.includes('Nothing in these filters') && !emptyRecordsHtml.includes('undefined'), 'an empty filter renders a warm next step');
+  const erroredRecordsHtml = renderRecordsPage({ data: { ...pageData, rows: [], total: 0, hasMore: false, page: 0 }, filters: defaults.filters, vehicles: ownerVehicles, error: 'That start date does not look right — use YYYY-MM-DD.' });
+  check(erroredRecordsHtml.includes('does not look right'), 'a rejected filter renders its explanation above the form');
+  const xssRecordsHtml = renderRecordsPage({ data: { ...pageData, rows: [{ ...attached[1], description: '<script>alert(1)</script>' }] }, filters: defaults.filters, vehicles: ownerVehicles });
+  check(!xssRecordsHtml.includes('<script>alert(1)</script>') && xssRecordsHtml.includes('&lt;script&gt;'), 'row text is escaped');
+  const failedRecordsHtml = renderRecordsPage({ data: { ok: false }, filters: defaults.filters });
+  check(failedRecordsHtml.includes('could not be loaded') && !failedRecordsHtml.includes('undefined'), 'a failed query renders one honest explanation');
+  const redirectPage = renderReceiptPage({ signedUrl: 'https://storage.test/x?token=t' });
+  check(redirectPage.status === 302 && redirectPage.location === 'https://storage.test/x?token=t', 'the receipt renderer answers a 302 to the signed URL');
+  check(renderReceiptPage({}).status === 404, 'no URL means a 404, never a broken redirect');
+
+  console.log('\n--- Test 29: records routes end-to-end (Fastify inject) ---');
+  process.env.DASHBOARD_ENABLED = 'on';
+  const recRouteMock = createMockSupabase({
+    ...recordsSeed(),
+    ...receiptsSeed,
+    [DASHBOARD_SESSIONS_TABLE]: [seedRow({
+      id: 'sess-rec',
+      token_hash: hashToken('rec-link'),
+      session_token_hash: hashToken('rec-session'),
+      verified: true,
+      session_expires_at: new Date(Date.now() + 86400000).toISOString()
+    })],
+    admin_audit_logs: [],
+    error_logs: [],
+    profiles: [{ id: PROFILE.id, phone_number: PROFILE.phone_number, email: PROFILE.email, full_name: PROFILE.full_name, country_code: 'KE' }]
+  });
+  const recSigned = [];
+  recRouteMock.client.storage = {
+    from: () => ({
+      createSignedUrl: async (path, ttl) => {
+        recSigned.push({ path, ttl });
+        return { data: { signedUrl: `https://storage.test/receipts/${path}?token=t` }, error: null };
+      }
+    })
+  };
+  const recApp = Fastify({ logger: false });
+  await registerDashboardRoutes(recApp, { supabase: recRouteMock.client });
+  await recApp.ready();
+  const recCookie = { cookie: 'saka_dash=rec-session' };
+
+  const recordsRes = await recApp.inject({ method: 'GET', url: '/d/records?from=2026-10-10&to=2026-11-08', headers: recCookie });
+  check(recordsRes.statusCode === 200 && recordsRes.body.includes('Records'), 'GET /d/records renders the table for a signed-in owner');
+  check(recordsRes.body.includes('KDA 123A') && recordsRes.body.includes('Brake pads'), 'the table carries owner rows, including a driver-logged one');
+  check(recordsRes.body.includes('href="/d/receipt/r1"') && recordsRes.body.includes('Multiple match'), 'receipt links honour uniqueness on the page');
+  const fuelRes = await recApp.inject({ method: 'GET', url: '/d/records?from=2026-10-10&to=2026-11-08&type=Fuel', headers: recCookie });
+  check(fuelRes.statusCode === 200 && !fuelRes.body.includes('Brake pads'), 'the type filter is applied by the route');
+  const badFilterRes = await recApp.inject({ method: 'GET', url: '/d/records?from=nope', headers: recCookie });
+  check(badFilterRes.statusCode === 200 && /does not look right/.test(badFilterRes.body), 'an invalid filter renders the explanation instead of failing');
+  const anonRecords = await recApp.inject({ method: 'GET', url: '/d/records' });
+  check(anonRecords.statusCode === 401, 'records never render without a session');
+
+  const csvRes = await recApp.inject({ method: 'GET', url: '/d/records.csv?from=2026-10-10&to=2026-11-08', headers: recCookie });
+  check(csvRes.statusCode === 200 && /text\/csv/.test(String(csvRes.headers['content-type'])), 'GET /d/records.csv answers text/csv');
+  check(/attachment; filename="saka-records-2026-10-10-to-2026-11-08.csv"/.test(String(csvRes.headers['content-disposition'])), 'the CSV carries a dated download filename');
+  check(csvRes.body.charCodeAt(0) === 0xFEFF && csvRes.body.includes('KDA 123A') && csvRes.body.includes('Brake pads'), 'the CSV holds the filtered rows');
+  const csvFuel = await recApp.inject({ method: 'GET', url: '/d/records.csv?from=2026-10-10&to=2026-11-08&type=Fuel', headers: recCookie });
+  check(!csvFuel.body.includes('Brake pads'), 'CSV export obeys the same filter (no bypass)');
+  const csvBad = await recApp.inject({ method: 'GET', url: '/d/records.csv?from=nope', headers: recCookie });
+  check(csvBad.statusCode === 400, 'an invalid filter refuses the export with a 400');
+
+  const pdfRes = await recApp.inject({ method: 'GET', url: '/d/records.pdf?from=2026-10-10&to=2026-11-08', headers: recCookie });
+  check(pdfRes.statusCode === 200 && String(pdfRes.headers['content-type']).includes('application/pdf'), 'GET /d/records.pdf answers application/pdf');
+  check(pdfRes.rawPayload.subarray(0, 5).toString() === '%PDF-', 'the PDF export streams a real PDF (no Storage upload)');
+  check(/attachment; filename="saka-records-2026-10-10-to-2026-11-08.pdf"/.test(String(pdfRes.headers['content-disposition'])), 'the PDF carries a dated download filename');
+  const pdfFuel = await recApp.inject({ method: 'GET', url: '/d/records.pdf?from=2026-10-10&to=2026-11-08&type=Fuel', headers: recCookie });
+  check(pdfFuel.statusCode === 200 && pdfFuel.rawPayload.subarray(0, 5).toString() === '%PDF-', 'the PDF route accepts the same filter spec');
+  const pdfBad = await recApp.inject({ method: 'GET', url: '/d/records.pdf?from=nope', headers: recCookie });
+  check(pdfBad.statusCode === 400, 'an invalid filter refuses the PDF export with a 400 (same filter engine)');
+
+  const ownReceipt = await recApp.inject({ method: 'GET', url: '/d/receipt/r1', headers: recCookie });
+  check(ownReceipt.statusCode === 302 && /token=t/.test(String(ownReceipt.headers.location)), 'the owner receipt redirects to a signed URL');
+  check(recSigned.at(-1)?.ttl === 300 && recSigned.at(-1)?.path === 'm1.jpg', 'the signed URL is minted per request with a 300-second TTL');
+  const foreignReceipt = await recApp.inject({ method: 'GET', url: '/d/receipt/r-foreign', headers: recCookie });
+  check(foreignReceipt.statusCode === 404 && !/r-foreign/.test(foreignReceipt.body), "another owner's receipt answers 404 (never confirms existence)");
+  const noImageReceipt = await recApp.inject({ method: 'GET', url: '/d/receipt/r-nofile', headers: recCookie });
+  check(noImageReceipt.statusCode === 404, 'a receipt with no stored image answers 404');
+  const unknownReceipt = await recApp.inject({ method: 'GET', url: '/d/receipt/nope', headers: recCookie });
+  check(unknownReceipt.statusCode === 404, 'an unknown receipt id answers 404');
+  const anonReceipt = await recApp.inject({ method: 'GET', url: '/d/receipt/r1' });
+  check(anonReceipt.statusCode === 401, 'the receipt route never signs without a session');
+  const signedBefore = recSigned.length;
+  await recApp.inject({ method: 'GET', url: '/d/receipt/r-foreign', headers: recCookie });
+  check(recSigned.length === signedBefore, 'no signed URL is ever minted for a foreign receipt');
+  await recApp.close();
+
+  console.log('\n--- Test 30: failed export can never masquerade as an empty file (rule 51 iii) ---');
+  const brokenClient = {
+    from: (table) => {
+      if (table === 'expense_logs') throw new Error('boom: records query exploded');
+      return recRouteMock.client.from(table);
+    }
+  };
+  const brokenApp = Fastify({ logger: false });
+  await registerDashboardRoutes(brokenApp, { supabase: brokenClient });
+  await brokenApp.ready();
+  const brokenCsv = await brokenApp.inject({ method: 'GET', url: '/d/records.csv', headers: recCookie });
+  check(brokenCsv.statusCode === 500 && /could not be built/.test(brokenCsv.body), 'a failed query refuses the export instead of writing an empty file');
+  const loggedCsvError = recRouteMock.db.error_logs.find((row) => row.route === '/d/records/csv');
+  check(Boolean(loggedCsvError) && /records query failed/.test(String(loggedCsvError?.error_message || '')), 'the failure is logged under the CSV route');
+  check(!/karen run|Brake pads|5000/.test(String(loggedCsvError?.error_message || '')), 'the error log carries no label, note or amount (rule 51 iii)');
+  const brokenPdf = await brokenApp.inject({ method: 'GET', url: '/d/records.pdf', headers: recCookie });
+  check(brokenPdf.statusCode === 500, 'a failed query refuses the PDF export too');
+  await brokenApp.close();
 
   process.env.DASHBOARD_ENABLED = previousFlag;
   if (previousBase === undefined) delete process.env.PUBLIC_APP_URL;

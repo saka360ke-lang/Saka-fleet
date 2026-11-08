@@ -22,24 +22,53 @@ export function createMockSupabase(seed = {}, options = {}) {
     return db[table];
   };
 
-  const matches = (row, filters) => filters.every(([op, col, value]) => {
+  const matches = (row, filters) => filters.every(([op, col, value]) => matchOne(row, op, col, value));
+
+  /**
+   * v1.75.1 (Phase 14B) — one condition evaluator, shared by AND filters and
+   * PostgREST-style `.or()` groups. `ilike` is a case-insensitive wildcard match
+   * (`%` = any run of characters), which is what the records keyword search
+   * sends (`label.ilike.%karen%`).
+   */
+  function matchOne(row, op, col, value) {
     const current = row[col];
     if (op === 'eq') return current === value;
     if (op === 'neq') return current !== value;
     if (op === 'in') return Array.isArray(value) && value.includes(current);
     if (op === 'is') return value === null ? (current === null || current === undefined) : current === value;
     if (op === 'like') return String(current ?? '').startsWith(String(value ?? '').replace(/%/g, ''));
+    if (op === 'ilike') return ilikeMatch(current, value);
     if (op === 'gte') return new Date(current).getTime() >= new Date(value).getTime();
     if (op === 'lte') return new Date(current).getTime() <= new Date(value).getTime();
     if (op === 'lt') return new Date(current).getTime() < new Date(value).getTime();
     if (op === 'gt') return new Date(current).getTime() > new Date(value).getTime();
     return true;
-  });
+  }
+
+  function ilikeMatch(current, pattern) {
+    const text = String(current ?? '');
+    const source = String(pattern ?? '');
+    const escaped = source.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/%/g, '.*').replace(/_/g, '.');
+    try {
+      return new RegExp(`^${escaped}$`, 'i').test(text);
+    } catch {
+      return text.toLowerCase().includes(source.replace(/%/g, '').toLowerCase());
+    }
+  }
+
+  /** `col.op.value` → [op, col, value]; null when the fragment is not a condition. */
+  function parseOrCondition(fragment) {
+    const match = String(fragment || '').trim().match(/^([A-Za-z0-9_]+)\.([a-z]+)\.(.*)$/);
+    if (!match) return null;
+    return [match[2], match[1], match[3]];
+  }
 
   function from(table) {
     const query = {
       action: 'select',
       filters: [],
+      orGroups: [],
+      rangeSpec: null,
       orderBy: null,
       max: null,
       head: false,
@@ -83,6 +112,26 @@ export function createMockSupabase(seed = {}, options = {}) {
       lte(column, value) { query.filters.push(['lte', column, value]); return api; },
       lt(column, value) { query.filters.push(['lt', column, value]); return api; },
       gt(column, value) { query.filters.push(['gt', column, value]); return api; },
+      // v1.75.1 (Phase 14B) — records surface needs the same three operators the
+      // live PostgREST calls use: case-insensitive search, OR groups and offset
+      // pagination. Purely additive; every existing suite keeps its behaviour.
+      ilike(column, pattern) { query.filters.push(['ilike', column, pattern]); return api; },
+      or(expr) {
+        // PostgREST semantics: the comma list is a DISJUNCTION (a OR b), so each
+        // condition becomes its own group; two `.or()` calls are ANDed together.
+        const conditions = String(expr || '')
+          .split(',')
+          .map(parseOrCondition)
+          .filter(Boolean);
+        for (const condition of conditions) query.orGroups.push([condition]);
+        return api;
+      },
+      range(from, to) {
+        const start = Math.max(0, Number(from) || 0);
+        const end = Number.isFinite(Number(to)) ? Number(to) : start;
+        query.rangeSpec = { from: start, to: end };
+        return api;
+      },
       order(column, options = {}) {
         query.orderBy = { column, ascending: options.ascending !== false };
         return api;
@@ -124,6 +173,11 @@ export function createMockSupabase(seed = {}, options = {}) {
       }
 
       let selected = rows.filter((row) => matches(row, query.filters));
+      if (query.orGroups.length) {
+        selected = selected.filter((row) => query.orGroups.some(
+          (group) => group.every(([op, col, value]) => matchOne(row, op, col, value))
+        ));
+      }
 
       if (query.action === 'update') {
         // v1.71.0 — optional rejection hook (e.g. simulate an un-migrated
@@ -169,6 +223,7 @@ export function createMockSupabase(seed = {}, options = {}) {
         });
       }
       if (query.max) selected = selected.slice(0, query.max);
+      if (query.rangeSpec) selected = selected.slice(query.rangeSpec.from, query.rangeSpec.to + 1);
 
       if (query.head || query.counting) {
         return { data: null, error: null, count: selected.length };

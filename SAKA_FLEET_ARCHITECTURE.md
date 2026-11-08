@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.75.0  
+**Version:** 1.75.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.75.1** | Phase 14B: dashboard records surface — owner-VEHICLE-scoped searchable ledger (not `queryRecordLedger`'s driver scope), filters (date range ≤366 d, type, vehicle, label, keyword), 20/page offset paging, unique-match receipt links with 5-minute signed URLs, CSV + streamed PDF exports sharing one filter engine; mock gains `.or()`/`.range()`/`.ilike()` | 201 |
 | **1.75.0** | Phase 14A: the vehicle pages — `/d/vehicles` list (status, odometer, driver, this-month spend, soonest document) and `/d/vehicles/:id` (identity KPIs, every document with due chips, last 8 merged ledger rows), owner-scoped structurally; fixes the 13C country regression so money/units resolve from the phone (KES, not USD) | 200 |
 | **1.74.2** | Phase 13C: dashboard pages — inline HTML shell (D1), OTP entry page, the overview card (KPIs, 6 upcoming expiries via `upcomingExpiryItems`, 5 recent rows), logout + error pages, cookie contract + session gates; flag remains OFF pending live verification | 199C |
 | **1.74.1** | Phase 13B: dashboard WhatsApp lane — exact-phrase `dashboard` read lane (parks the quiz, locked-phase safe), one email carrying the link + code, the code NEVER in WhatsApp, deterministic refusals (unverified → website, free → pricing, cooldown, email failure, crash-safe) | 199B |
@@ -5786,6 +5787,60 @@ The `$` anchor is the grammar: `dashboard`, `my dashboard`, `open my dashboard`,
 **Recurrence autopsy (rule 51).** Defect class *"a page builder invoked without country context silently defaults to the GLOBAL region"* → siblings audited and each pinned (D4). Second class *"a route can shadow another by registration order"* → `/d/vehicles` + `/d/vehicles/:id` registered before `/d/:token`, and the flag-OFF sweep now covers both URLs so a future reorder fails loudly. Deliberately left: `renderVehiclesPage` shows the owner's full email mask on the index (same identity line the overview already used) and the paused-vehicle chip keeps the raw status word lower-cased rather than inventing a label set.
 
 **Rules shaped this work (rule 58).** 1/39/45 (consult-first), 3/4 (targeted reads, batching), 7 (phone-primary country lock — D4), 8 (VIN never rendered), 10/11 (targeted stateless suite, no rows created), 12/33 (version + history + CHANGELOG in one commit), 13 + 60 (playbook/core-prompt/guidance sync + training assertions), 31 (warm empty states, one next step, plain labels), 42 (open proposals checked — none), 50 (profile degrade, never-throw builders, honest 503s), 51/52 (sibling sweep + deep audit and before/after assertions), 54 (live suite runs), 55 (reused the report engine; zero new dependencies), 56 (existing and new accounts see the pages through the same flag), 58 (this report). No rule was edited or added.
+
+### 201. v1.75.1 (Phase 14B) — the records surface: owner-vehicle scope, filters, pagination, CSV/PDF exports, receipt links (2026-11-08)
+
+**Scope.** Phase 14B ships the records surface only: `GET /d/records` (filterable table, 20 rows/page), `GET /d/records.csv` and `GET /d/records.pdf` (the SAME filtered set), and `GET /d/receipt/:id` (a 5-minute signed link). Compliance, the reports builder, settings, charts and every driver/superadmin view stay in 14C–16. Still flag-gated: `DASHBOARD_ENABLED` remains **OFF** in `.env`/`.env.example`.
+
+**FIX-1 — the records query is OWNER-VEHICLE scoped, never `queryRecordLedger`.** `recordQuery.js` filters `driver_id = ownerId`, which is correct for the per-caller WhatsApp lane but would show a fleet owner only the rows they personally typed (~10% of a real fleet's ledger). `queryOwnerRecords()` therefore scopes `vehicle_id IN (the owner's live vehicles)` and merges `expense_logs` + `private_earnings` through the canonical mappers (`expenseToLedgerRow` / `earningToLedgerRow`). `recordQuery.js` is **untouched** (pinned by `test_record_answers` staying green with zero edits) and the proof is a driver-logged row (`driver_id='d-1'`) appearing in the owner's set. `loadOwnerVehicles()` is the one owner-scope source (`owner_id` + `deleted_at IS NULL`, bounded 500, fail-soft).
+
+**The filter set (verbatim URL params).** `?from=YYYY-MM-DD&to=YYYY-MM-DD&type=Fuel,Repairs&vehicle=<id>&label=karen&keyword=shell&page=N`.
+- **Dates:** Nairobi calendar days, inclusive; default = the last **30** days; range capped at **366** days; `from > to` refused.
+- **Type:** comma-split expense types (≤12); when present the set is expenses only (earnings carry no expense type).
+- **Vehicle:** must be one of the owner's vehicles (an unknown id is refused, never silently widened).
+- **Label / keyword:** ≤40 chars, whitespace-normalised, `% , ( ) *` stripped (PostgREST-safe); label → `label.ilike`, keyword → `.or(label.ilike,notes.ilike)` (OR, not AND).
+- **Page:** 0-based, cap 250.
+- `parseRecordsFilters()` is the ONLY filter parser; the table, the CSV and the PDF all call it (no export can bypass the table's filter). Export links carry the filter and never the page.
+
+**Two-table paging (why `.range` per table is not enough).** Each table is fetched up to `offset + pageSize + 1` rows via `.range(0, n-1)`, the normalized rows are merged newest-first and the merged list is sliced — paging each table independently with `.range(offset, …)` would produce wrong pages because the tables interleave by date (the `listLedgerEntries` precedent). Totals come from two `count: 'exact', head: true` queries with the same filters.
+
+**Business-date columns differ (found during the build).** Expenses are filed by `created_at`; earnings by `logged_at` (the same precedence `reportLedger` uses, because `private_earnings.logged_at` is the business date and `created_at` is insertion time). A single `created_at` filter silently dropped backdated earnings — pinned by a seed whose earning carries only `logged_at`.
+
+**D2 — receipt links are unique-match only.** There is NO foreign key between `receipts` and `expense_logs` in either direction (audited in the 14B map: `receipt_id` exists only as an audit-log detail key). `matchReceiptForExpense()` therefore accepts a link only when **exactly one** receipt shares the vehicle, the Nairobi calendar day and the amount; two or more candidates answer `ambiguous` (the row says “Multiple match”, no link), zero answers none. A page shares one cache, so lookups collapse to one query per vehicle+day+amount. The durable FK (`expense_logs.receipt_id` + backfill) is minted as a tracked follow-up proposal **PROP-2026-11-08-01** (`PENDING_APPROVAL`, risk `medium`, audited `REMEDIATION_PROPOSAL_CREATED`) — it is **not** part of 14B because it needs a schema change.
+
+**D1 — signed receipt URLs, 300 s, per request.** `GET /d/receipt/:id` → session → receipt row → **owner-vehicle scope OR `receipts.owner_id = owner`** → `signReceiptUrl()` → `302` to `createSignedUrl(path, 300)`. A miss answers **404, never 403** (existence is never confirmed), and no signed URL is ever minted for a foreign row. The object path comes from `receiptStoragePaths()` (media id first), so signing survives once the bucket is private. **Operator prerequisite: the `receipts` Storage bucket must be flipped to PRIVATE in the Supabase console — a signed URL on a public bucket adds no protection.** Existing internal consumers (`profileWipe`, delete/prune, path derivation) are unaffected because they derive from `media_id`, not from the stored public URL. Free-tier receipts (`image_url = null`, no media id) answer an honest 404.
+
+**D3 — vendor is NOT a 14B filter.** Vendor lives only on `receipts`, never on `expense_logs`/`private_earnings`, so a records-table vendor filter would need the same heuristic join. Deferred to a receipts view (Phase 15+). Label + keyword search covers the “find that entry” need today.
+
+**D4 — test double extensions.** `scripts/mockSupabase.js` gains `.or()` (comma list = DISJUNCTION, multiple calls ANDed), `.range(from, to)` (inclusive end, like PostgREST) and `.ilike()` (case-insensitive `%` wildcard), all routed through one `matchOne()` evaluator shared with the AND filters. Purely additive: the whole pre-existing suite set stayed green before any new assertion was added.
+
+**Exports.** `serializeRecordsCsv()` is the repo's only CSV serializer: UTF-8 BOM (Excel-safe), CRLF, RFC-4180 quoting, ISO-8601 dates (canonical storage), columns `Date,Kind,Plate,Type,Description,Odometer,Unit Cost,Amount,Currency,Label`. `buildRecordsPdf()` reuses `buildLedgerGroups` + `buildProReportPdf` and returns a **Buffer** — no Storage upload and no email; the route streams it with a dated `content-disposition`. A capped export (2,000 rows) says “Showing the newest N records — narrow the dates” instead of pretending to be complete. `useStandardFonts` is a suite-only passthrough (the branded fonts are subset-encoded, so drawn text is only readable in QA mode — the same contract `test_pdf_engine` uses).
+
+**Security.** Every route: flag gate first (`A1` generic 404 while OFF) → `requireOwnerSession()` → owner-vehicle scope → country from the phone. The receipt route additionally carries a `60 / 5 min` rate limit. **Rule 51(iii):** a failed export can never look like an empty file — `{ ok:false }` answers a 500 explanation and logs the route (`/d/records/csv`, `/d/records/pdf`) with **no row, note, label or amount** in `error_logs`, pinned by test.
+
+**Rule 51 sibling sweep (defect classes).**
+| Class | Siblings audited | Result |
+|---|---|---|
+| a query that filters by type but not by owner | `queryOwnerRecords` (vehicle scope), `matchReceiptForExpense` (same vehicle as the row), receipt route (owner fleet or owner id), CSV/PDF (same `parseRecordsFilters`) | pinned per surface |
+| a signed URL that leaks scope | TTL fixed at 300 s, minted per request only after the scope check, no pre-generation | pinned (ttl + no call for a foreign row) |
+| a failed query that looks like success | table (503 vs 200), CSV export (500, not an empty file), PDF export (500) | pinned |
+| a date filter on the wrong column | expenses `created_at`, earnings `logged_at` | pinned (backdated-earning seed) |
+
+**Rule 52 deep audit — three real defects caught by the new tests before shipping.**
+1. `Number(null) === 0` made the export `offset` always win, so `page` was ignored and every page returned page 0 (caught by the page-1 assertion). Fixed with an explicit `hasOffset` check.
+2. `.or('a,b')` was first implemented as one AND-group; PostgREST treats the comma list as a disjunction (caught by the two-column keyword assertion). Fixed to one group per condition.
+3. The earnings date filter used `created_at`, silently dropping rows whose business date is `logged_at` (caught by the merge-count assertion). Fixed with `recordTimeColumn()`.
+
+**Frames touched.** `src/services/dashboard.js` (+§7: constants, `nairobiDateOf`, `parseRecordsFilters`, `cleanRecordsTerm`, `loadOwnerVehicles`, `queryOwnerRecords`, `matchReceiptForExpense`, `attachReceiptMatches`, `signReceiptUrl`, `serializeRecordsCsv`, `buildRecordsPdf`, `renderRecordsPage`, `renderReceiptPage`, `recordsQueryString`, nav + records CSS, default export), `src/routes/dashboard.js` (+4 routes, imports), `src/services/flowKnowledge.js` (playbook scope: records table + exports + unique-match rule), `sakaAi.js` (core prompt scope), `scripts/mockSupabase.js` (`.or`/`.range`/`.ilike` + `matchOne`), `test_dashboard.js` (+111 assertions: 187 → 298; four new flag-off URLs), `test_agent_training.js` (+2: 194 → 196), `package.json` (1.75.1), `landing/data/changelog.json` (+ stamp), `docs/` (regenerated), `SAKA_FLEET_ARCHITECTURE.md` (§201 + version/history), `CHANGELOG.md`.
+
+**Suites run.** Baseline before edits: test_dashboard (187), test_record_answers (80), test_entry_ledger, test_fleet_reports (42), test_report_builders (83), test_ocr_flow (129), `npm run health` — green. After: **test_dashboard (298 — +111)**, test_agent_training (196 — +2), test_record_answers (80 — unchanged, `queryRecordLedger` untouched), test_entry_ledger, test_fleet_reports (42), test_report_builders (83), test_ocr_flow (129), test_read_registry, test_no_canned_replies (14 — ratchet still 4), test_kb_docs, test_landing_static, test_doc_sync, `npm run health` — green. Zero pre-existing assertions edited.
+
+**Recurrence autopsy (rule 51).** Defect class *“a scope inherited from another lane”* → every new surface re-derives the owner-vehicle scope instead of reusing the caller-scoped query (FIX-1, receipt route, CSV/PDF); *“a failed read rendered as a legitimate empty result”* → exports refuse with 500 + a route-only log; *“a date filter on the insertion timestamp”* → business-date columns pinned per table.
+
+**Rules shaped this work (rule 58).** 1/39/45 (consult-first), 3/4 (targeted reads, batching), 7 (country from the phone), 10/11 (targeted suites, stateless mock), 12/33 (version + history + CHANGELOG in one commit), 13/60 (playbook + core prompt + training assertions), 21 (no new env knobs), 31 (warm empty states, plain labels), 42 (proposals checked first; the FK follow-up is minted, not implied), 50 (fail-soft scope load, honest 503/500), 51/52 (sibling sweep + three defects caught and fixed), 54 (live suite runs), 55 (report engine + ledger mappers reused; zero new dependencies), 56 (no backfill needed: every existing owner sees the surface immediately), 58 (this report). No rule was edited or added.
+
+**Operator prerequisites pending before the production flip.** (1) the Phase 14A walk-through (DASHBOARD_ENABLED=on in staging → KPIs in local currency → vehicle list → detail → logout); (2) the `receipts` bucket flipped to **private** (D1). The code ships behind `DASHBOARD_ENABLED=off` either way.
+
 
 
 

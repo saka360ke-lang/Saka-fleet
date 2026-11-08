@@ -1,6 +1,6 @@
 # Saka Fleet — Training Snapshot (generated)
 
-Generated from code at version **1.75.0** — do not edit by hand. Run `npm run docs:gen`.
+Generated from code at version **1.75.1** — do not edit by hand. Run `npm run docs:gen`.
 
 - Prompt schema: `SAKA-PROMPT-SCHEMA:2026.13.0` (version 2026.13.0)
 - Intents trained: **42**
@@ -136,7 +136,7 @@ WEB DASHBOARD (v1.74.0 — Phase 13, flag-gated):
 - "dashboard" (also "my dashboard" / "open my dashboard" / "web dashboard") emails a private link (15 minutes) AND a 6-digit code (10 minutes) to the account email address.
 - The 6-digit code arrives by EMAIL ONLY: never repeat it in WhatsApp, never accept a dashboard code typed in chat, and never invent or guess a link.
 - The dashboard needs a verified email plus a trial or paid plan; on Free, point the user to *pricing*.
-- Since v1.75.0 the dashboard also lists the owner's vehicles and opens one page per vehicle with its documents and its most recent records. Charts, exports, settings, search and driver/superadmin views have NOT shipped — never promise them.
+- Since v1.75.0 the dashboard lists the owner's vehicles and opens one page per vehicle with its documents and its most recent records; since v1.75.1 it also serves a searchable records table (date range, type, vehicle, label or keyword) with pagination and CSV/PDF export of the current filter. Charts, settings, the compliance page and driver/superadmin views have NOT shipped — never promise them. Only point to a receipt when exactly one matches; never invent a link.
 BOUNDARIES:
 - VIN and passbook QR token are permanent and immutable — never offer to change them.
 - Ledger edits (v1.33.0) only touch amount, expense type, litres, fill type, odometer and notes for the row the user picked by number; VIN, plate, vehicle, user and the entry date are locked, and every edit/delete is audited (LEDGER_ENTRY_UPDATED / LEDGER_ENTRY_DELETED / LEDGER_ENTRY_RESTORED). Deletion needs the explicit word DELETE and can be undone for 30 minutes.
@@ -483,7 +483,7 @@ WEB DASHBOARD (v1.74.0 — Phase 13, flag-gated):
 - "dashboard" (also "my dashboard" / "open my dashboard" / "web dashboard") emails a private link (15 minutes) AND a 6-digit code (10 minutes) to the account email address.
 - The 6-digit code arrives by EMAIL ONLY: never repeat it in WhatsApp, never accept a dashboard code typed in chat, and never invent or guess a link.
 - The dashboard needs a verified email plus a trial or paid plan; on Free, point the user to *pricing*.
-- Since v1.75.0 the dashboard also lists the owner's vehicles and opens one page per vehicle with its documents and its most recent records. Charts, exports, settings, search and driver/superadmin views have NOT shipped — never promise them.
+- Since v1.75.0 the dashboard lists the owner's vehicles and opens one page per vehicle with its documents and its most recent records; since v1.75.1 it also serves a searchable records table (date range, type, vehicle, label or keyword) with pagination and CSV/PDF export of the current filter. Charts, settings, the compliance page and driver/superadmin views have NOT shipped — never promise them. Only point to a receipt when exactly one matches; never invent a link.
 BOUNDARIES:
 - VIN and passbook QR token are permanent and immutable — never offer to change them.
 - Ledger edits (v1.33.0) only touch amount, expense type, litres, fill type, odometer and notes for the row the user picked by number; VIN, plate, vehicle, user and the entry date are locked, and every edit/delete is audited (LEDGER_ENTRY_UPDATED / LEDGER_ENTRY_DELETED / LEDGER_ENTRY_RESTORED). Deletion needs the explicit word DELETE and can be undone for 30 minutes.
@@ -751,7 +751,7 @@ AGENT ROLES & BEHAVIORAL DIRECTIVES:
    - When a photo could not be read, apologise ONCE, never claim anything was saved, and offer ONE fallback (type the value or send a clearer photo). Never repeat the identical question verbatim.
 
     - WEB SIGNUPS (v1.49.2): signup and email verification happen on the website (sakafleet.com) ONLY — never invite a user to reply with a code in WhatsApp. The SYSTEM sends the first welcome message after web verification — if the user mentions receiving it, confirm it warmly, never duplicate it. A visitor who already has a verified account is never re-onboarded: point them to their existing fleet in one warm line. Never invent or echo a code; never nag more than once per conversation.
-    - WEB DASHBOARD (v1.74.0): *dashboard* emails a private link AND a 6-digit code to the account email; the code arrives by EMAIL ONLY — never repeat it or accept it in WhatsApp, never invent dashboard links, and never promise dashboard pages beyond the overview, the vehicle list and one vehicle's documents and recent records (v1.75.0).
+    - WEB DASHBOARD (v1.74.0): *dashboard* emails a private link AND a 6-digit code to the account email; the code arrives by EMAIL ONLY — never repeat it or accept it in WhatsApp, never invent dashboard links, and never promise dashboard pages beyond the overview, the vehicle list and one vehicle's documents and recent records, and the searchable records table with CSV/PDF export (v1.75.1).
 
 6b. NATURAL CONVERSATION FIRST (v1.24.0):
    - Prefer natural conversation over questionnaires: extract every value the user gives inside paragraphs, and never walk them through rigid field-by-field questions unless something is genuinely missing.

@@ -31,13 +31,24 @@ import {
   renderOverviewPage,
   renderVehiclesPage,
   renderVehiclePage,
+  renderRecordsPage,
+  renderReceiptPage,
   renderLogoutPage,
   renderErrorPage,
   buildOverviewCard,
   buildVehiclesIndex,
-  buildVehiclePage
+  buildVehiclePage,
+  parseRecordsFilters,
+  queryOwnerRecords,
+  loadOwnerVehicles,
+  attachReceiptMatches,
+  signReceiptUrl,
+  serializeRecordsCsv,
+  buildRecordsPdf,
+  RECORDS_PAGE_SIZE,
+  RECORDS_EXPORT_MAX_ROWS
 } from '../services/dashboard.js';
-import { detectCountryFromPhone } from '../services/globalization.js';
+import { detectCountryFromPhone, buildGlobalContext } from '../services/globalization.js';
 import { logSystemError, logWriteFailure } from '../services/systemErrors.js';
 
 /** A1 — identical to Fastify's own "route not found" payload. */
@@ -196,6 +207,185 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
         return sendHtml(reply, 200, renderVehiclePage({ data, emailMasked: maskEmail(session.email || profile?.email) }));
       } catch (err) {
         await logSystemError(supabase, err, '/d/vehicles/:id');
+        const page = renderErrorPage(500, 'Please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    /* -------------------------------------------------------------- */
+    /* GET /d/records — the filterable ledger (Phase 14B)              */
+    /* -------------------------------------------------------------- */
+    scope.get('/d/records', async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      try {
+        const session = await requireOwnerSession(request, reply, supabase);
+        if (!session) return reply;
+        const profile = await loadDashboardProfile(supabase, session.ownerId);
+        const countryInfo = countryForProfile(profile);
+        const vehicles = await loadOwnerVehicles(supabase, session.ownerId);
+        const vehicleIds = vehicles.map((vehicle) => vehicle.id);
+        const ctx = buildGlobalContext(countryInfo, profile);
+        const parsed = parseRecordsFilters(request.query || {}, { vehicleIds });
+        const filters = parsed.ok ? parsed.filters : parseRecordsFilters({}, { vehicleIds }).filters;
+        const result = parsed.ok
+          ? await queryOwnerRecords({ supabase, ownerId: session.ownerId, vehicleIds, vehicles, filters, countryInfo, profile })
+          : { ok: true, rows: [], total: 0, hasMore: false, page: 0, pageSize: RECORDS_PAGE_SIZE };
+        const rows = parsed.ok ? await attachReceiptMatches({ supabase, rows: result.rows }) : [];
+        const data = { ...result, rows, currency: ctx.currency, locale: ctx.locale, timeZone: ctx.timeZone };
+        return sendHtml(reply, data.ok ? 200 : 503, renderRecordsPage({
+          data,
+          filters,
+          vehicles,
+          emailMasked: maskEmail(session.email || profile?.email),
+          error: parsed.ok ? null : parsed.error
+        }));
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/records');
+        const page = renderErrorPage(500, 'Please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    /* -------------------------------------------------------------- */
+    /* GET /d/records.csv — the SAME filter as the table (no bypass)   */
+    /* -------------------------------------------------------------- */
+    scope.get('/d/records.csv', async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      try {
+        const session = await requireOwnerSession(request, reply, supabase);
+        if (!session) return reply;
+        const profile = await loadDashboardProfile(supabase, session.ownerId);
+        const countryInfo = countryForProfile(profile);
+        const vehicles = await loadOwnerVehicles(supabase, session.ownerId);
+        const vehicleIds = vehicles.map((vehicle) => vehicle.id);
+        const ctx = buildGlobalContext(countryInfo, profile);
+        const parsed = parseRecordsFilters(request.query || {}, { vehicleIds });
+        if (!parsed.ok) {
+          const filters = parseRecordsFilters({}, { vehicleIds }).filters;
+          const page = renderRecordsPage({
+            data: { ok: true, rows: [], total: 0, hasMore: false, page: 0, pageSize: RECORDS_PAGE_SIZE },
+            filters,
+            vehicles,
+            emailMasked: maskEmail(session.email || profile?.email),
+            error: parsed.error
+          });
+          return sendHtml(reply, 400, page);
+        }
+        const result = await queryOwnerRecords({
+          supabase,
+          ownerId: session.ownerId,
+          vehicleIds,
+          vehicles,
+          filters: parsed.filters,
+          countryInfo,
+          profile,
+          pageSize: RECORDS_EXPORT_MAX_ROWS,
+          offset: 0
+        });
+        if (!result.ok) {
+          // A failed query must never look like an empty export (rule 50 honesty).
+          await logSystemError(supabase, new Error('records query failed'), '/d/records/csv');
+          const page = renderErrorPage(500, 'That export could not be built — please try again in a moment.');
+          return sendHtml(reply, page.status, page.html);
+        }
+        const csv = serializeRecordsCsv(result.rows, { currency: ctx.currency });
+        reply.header('content-disposition', `attachment; filename="saka-records-${parsed.filters.from}-to-${parsed.filters.to}.csv"`);
+        reply.header('cache-control', 'no-store');
+        return reply.code(200).type('text/csv; charset=utf-8').send(csv);
+      } catch (err) {
+        // Rule 51(iii): the route name is logged, never a row, note, label or amount.
+        await logSystemError(supabase, err, '/d/records/csv');
+        const page = renderErrorPage(500, 'That export could not be built — please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    /* -------------------------------------------------------------- */
+    /* GET /d/records.pdf — the SAME filter, streamed (no Storage)      */
+    /* -------------------------------------------------------------- */
+    scope.get('/d/records.pdf', async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      try {
+        const session = await requireOwnerSession(request, reply, supabase);
+        if (!session) return reply;
+        const profile = await loadDashboardProfile(supabase, session.ownerId);
+        const countryInfo = countryForProfile(profile);
+        const vehicles = await loadOwnerVehicles(supabase, session.ownerId);
+        const vehicleIds = vehicles.map((vehicle) => vehicle.id);
+        const parsed = parseRecordsFilters(request.query || {}, { vehicleIds });
+        if (!parsed.ok) {
+          const filters = parseRecordsFilters({}, { vehicleIds }).filters;
+          const page = renderRecordsPage({
+            data: { ok: true, rows: [], total: 0, hasMore: false, page: 0, pageSize: RECORDS_PAGE_SIZE },
+            filters,
+            vehicles,
+            emailMasked: maskEmail(session.email || profile?.email),
+            error: parsed.error
+          });
+          return sendHtml(reply, 400, page);
+        }
+        const result = await queryOwnerRecords({
+          supabase,
+          ownerId: session.ownerId,
+          vehicleIds,
+          vehicles,
+          filters: parsed.filters,
+          countryInfo,
+          profile,
+          pageSize: RECORDS_EXPORT_MAX_ROWS,
+          offset: 0
+        });
+        if (!result.ok) {
+          await logSystemError(supabase, new Error('records query failed'), '/d/records/pdf');
+          const page = renderErrorPage(500, 'That export could not be built — please try again in a moment.');
+          return sendHtml(reply, page.status, page.html);
+        }
+        const buffer = await buildRecordsPdf(result.rows, parsed.filters, {
+          profile,
+          countryInfo,
+          vehicles,
+          truncated: result.truncated
+        });
+        reply.header('content-disposition', `attachment; filename="saka-records-${parsed.filters.from}-to-${parsed.filters.to}.pdf"`);
+        reply.header('cache-control', 'no-store');
+        return reply.code(200).type('application/pdf').send(buffer);
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/records/pdf');
+        const page = renderErrorPage(500, 'That export could not be built — please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    /* -------------------------------------------------------------- */
+    /* GET /d/receipt/:id — a 5-minute signed link (Phase 14B)          */
+    /* -------------------------------------------------------------- */
+    scope.get('/d/receipt/:id', { config: { rateLimit: { max: 60, timeWindow: '5 minutes' } } }, async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      const answerNotFound = () => {
+        const page = renderErrorPage(404, 'That receipt is not available.');
+        return sendHtml(reply, page.status, page.html);
+      };
+      try {
+        const session = await requireOwnerSession(request, reply, supabase);
+        if (!session) return reply;
+        const receiptId = String(request.params?.id || '');
+        if (!receiptId) return answerNotFound();
+        const { data: receipt, error } = await supabase.from('receipts').select('*').eq('id', receiptId).maybeSingle();
+        if (error || !receipt) return answerNotFound();
+        // OWN DATA only: the receipt's vehicle must be on the owner's fleet (or
+        // the owner scanned it). A miss answers 404, never 403 — existence is
+        // never confirmed (same pattern as the vehicle page).
+        const vehicles = await loadOwnerVehicles(supabase, session.ownerId);
+        const onFleet = Boolean(receipt.vehicle_id) && vehicles.some((vehicle) => vehicle.id === receipt.vehicle_id);
+        const mine = onFleet || (Boolean(receipt.owner_id) && receipt.owner_id === session.ownerId);
+        if (!mine) return answerNotFound();
+        const signed = await signReceiptUrl(supabase, receipt);
+        if (!signed.ok) return answerNotFound();
+        const page = renderReceiptPage({ signedUrl: signed.url });
+        reply.header('cache-control', 'no-store');
+        return reply.code(page.status).header('location', page.location).send();
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/receipt/:id');
         const page = renderErrorPage(500, 'Please try again in a moment.');
         return sendHtml(reply, page.status, page.html);
       }

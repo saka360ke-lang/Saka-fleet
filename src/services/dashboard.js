@@ -33,6 +33,10 @@ import { sendDashboardMagicLinkEmail } from './mailer.js';
 import { logWriteFailure } from './systemErrors.js';
 import { buildFleetReport, upcomingExpiryItems, buildVehicleDirectory, buildVehicleDetail } from './fleetReports.js';
 import { buildGlobalContext, formatMoney, formatDate, formatNumber } from './globalization.js';
+import { expenseToLedgerRow, earningToLedgerRow, buildLedgerGroups } from './reportLedger.js';
+import { buildProReportPdf } from './pdfEngine.js';
+import { receiptStoragePaths, RECEIPTS_BUCKET } from './receipts.js';
+import { EXPENSE_TYPES } from './expenseCatalog.js';
 
 export const DASHBOARD_SESSIONS_TABLE = 'dashboard_sessions';
 export const DASHBOARD_LINK_TTL_MS = 15 * 60 * 1000; // 15 minutes
@@ -582,6 +586,490 @@ export async function buildVehiclePage({
 }
 
 /* ------------------------------------------------------------------ */
+/* 7. Records surface (Phase 14B) — filters, owner-scoped query,       */
+/*    receipt matching, CSV + PDF exports                             */
+/* ------------------------------------------------------------------ */
+
+export const RECORDS_PAGE_SIZE = 20;
+export const RECORDS_MAX_PAGE = 250;
+export const RECORDS_MAX_RANGE_DAYS = 366;
+export const RECORDS_DEFAULT_DAYS = 30;
+export const RECORDS_MAX_TYPES = 12;
+export const RECORDS_MAX_QUERY_CHARS = 40;
+export const RECORDS_EXPORT_MAX_ROWS = 2000;
+export const RECEIPT_SIGNED_URL_TTL_SECONDS = 300;
+
+const NAIROBI_OFFSET = '+03:00';
+
+/** Today's calendar date in Africa/Nairobi (rule 36 — canonical day). */
+export function nairobiDateOf(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value);
+  const safe = Number.isNaN(date.getTime()) ? new Date() : date;
+  try {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Nairobi' }).format(safe);
+  } catch {
+    return safe.toISOString().slice(0, 10);
+  }
+}
+
+function addDaysIso(isoDate, days) {
+  const base = new Date(`${isoDate}T00:00:00Z`);
+  if (Number.isNaN(base.getTime())) return isoDate;
+  base.setUTCDate(base.getUTCDate() + Number(days || 0));
+  return base.toISOString().slice(0, 10);
+}
+
+function nairobiDayStartIso(isoDate) {
+  return `${isoDate}T00:00:00${NAIROBI_OFFSET}`;
+}
+
+function nairobiNextDayStartIso(isoDate) {
+  return new Date(`${addDaysIso(isoDate, 1)}T00:00:00${NAIROBI_OFFSET}`).toISOString();
+}
+
+function daysBetweenIso(from, to) {
+  const a = new Date(`${from}T00:00:00Z`).getTime();
+  const b = new Date(`${to}T00:00:00Z`).getTime();
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return 0;
+  return Math.round((b - a) / 86400000);
+}
+
+/** Search terms never carry wildcard/operator characters (PostgREST-safe). */
+export function cleanRecordsTerm(value, max = RECORDS_MAX_QUERY_CHARS) {
+  return String(value ?? '')
+    .replace(/[%,()*]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, max + 1);
+}
+
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Validate an HTTP query object into the ONE filter spec behind the records
+ * table, its CSV export and its PDF export (rule 55 — no way to bypass the
+ * filter engine). Defaults: last 30 Nairobi days, all types, every owner
+ * vehicle, page 0, 20 rows per page. Never throws.
+ */
+export function parseRecordsFilters(query = {}, { vehicleIds = [], now = new Date() } = {}) {
+  const raw = query && typeof query === 'object' ? query : {};
+  const pick = (value) => (Array.isArray(value) ? value[0] : value);
+
+  const toRaw = String(pick(raw.to) || '').trim();
+  let to = nairobiDateOf(now);
+  if (toRaw) {
+    if (!ISO_DATE_RE.test(toRaw) || Number.isNaN(new Date(`${toRaw}T00:00:00Z`).getTime())) {
+      return { ok: false, reason: 'bad_to', error: 'That end date does not look right — use YYYY-MM-DD.' };
+    }
+    to = toRaw;
+  }
+
+  const fromRaw = String(pick(raw.from) || '').trim();
+  let from = addDaysIso(to, -(RECORDS_DEFAULT_DAYS - 1));
+  if (fromRaw) {
+    if (!ISO_DATE_RE.test(fromRaw) || Number.isNaN(new Date(`${fromRaw}T00:00:00Z`).getTime())) {
+      return { ok: false, reason: 'bad_from', error: 'That start date does not look right — use YYYY-MM-DD.' };
+    }
+    from = fromRaw;
+  }
+
+  if (from > to) return { ok: false, reason: 'bad_range', error: 'The start date is after the end date — swap them and try again.' };
+  if (daysBetweenIso(from, to) + 1 > RECORDS_MAX_RANGE_DAYS) {
+    return { ok: false, reason: 'range_too_wide', error: `That range is wider than ${RECORDS_MAX_RANGE_DAYS} days — pick a shorter window.` };
+  }
+
+  const typeRaw = pick(raw.type) ?? pick(raw.types);
+  const types = String(typeRaw || '')
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (types.length > RECORDS_MAX_TYPES) {
+    return { ok: false, reason: 'too_many_types', error: `That is too many types at once — pick up to ${RECORDS_MAX_TYPES}.` };
+  }
+
+  const vehicleRaw = String(pick(raw.vehicle) || '').trim();
+  let vehicleId = null;
+  if (vehicleRaw) {
+    if (!vehicleIds.includes(vehicleRaw)) return { ok: false, reason: 'unknown_vehicle', error: 'That vehicle is not on your fleet.' };
+    vehicleId = vehicleRaw;
+  }
+
+  const rawLabel = String(pick(raw.label) || '').trim();
+  if (rawLabel.length > RECORDS_MAX_QUERY_CHARS) {
+    return { ok: false, reason: 'label_too_long', error: `Labels are up to ${RECORDS_MAX_QUERY_CHARS} characters — shorten that one.` };
+  }
+  const rawKeyword = String(pick(raw.keyword) ?? pick(raw.q) ?? '').trim();
+  if (rawKeyword.length > RECORDS_MAX_QUERY_CHARS) {
+    return { ok: false, reason: 'keyword_too_long', error: `Search terms are up to ${RECORDS_MAX_QUERY_CHARS} characters — shorten that one.` };
+  }
+
+  const pageRaw = Number(pick(raw.page));
+  const page = Number.isFinite(pageRaw) && pageRaw > 0 ? Math.floor(pageRaw) : 0;
+  if (page > RECORDS_MAX_PAGE) {
+    return { ok: false, reason: 'page_too_far', error: 'That page is too far back — narrow the dates or search instead.' };
+  }
+
+  return {
+    ok: true,
+    filters: {
+      from,
+      to,
+      types: [...new Set(types)],
+      vehicleId,
+      label: cleanRecordsTerm(rawLabel),
+      keyword: cleanRecordsTerm(rawKeyword),
+      page,
+      pageSize: RECORDS_PAGE_SIZE
+    }
+  };
+}
+
+/** The owner's live vehicles (id + plate), bounded and fail-soft (rule 50). */
+export async function loadOwnerVehicles(supabase, ownerId) {
+  if (!supabase || !ownerId) return [];
+  try {
+    const { data, error } = await supabase
+      .from('vehicles')
+      .select('id, plate_number, make_model, status, deleted_at')
+      .eq('owner_id', ownerId)
+      .is('deleted_at', null)
+      .limit(500);
+    if (error) {
+      logWriteFailure(supabase, 'dashboard.loadOwnerVehicles', error);
+      return [];
+    }
+    return data || [];
+  } catch (err) {
+    logWriteFailure(supabase, 'dashboard.loadOwnerVehicles', err);
+    return [];
+  }
+}
+
+/** The table's business date: expenses are filed by created_at, earnings by logged_at. */
+function recordTimeColumn(table) {
+  return table === 'expense_logs' ? 'created_at' : 'logged_at';
+}
+
+function applyRecordFilters(query, { table, filters = {}, vehicleIds = [] }) {
+  const timeColumn = recordTimeColumn(table);
+  let scoped = query
+    .gte(timeColumn, nairobiDayStartIso(filters.from))
+    .lt(timeColumn, nairobiNextDayStartIso(filters.to));
+  if (filters.vehicleId) scoped = scoped.eq('vehicle_id', filters.vehicleId);
+  else scoped = scoped.in('vehicle_id', vehicleIds);
+  if (table === 'expense_logs' && filters.types?.length) scoped = scoped.in('expense_type', filters.types);
+  if (filters.label) scoped = scoped.ilike('label', `%${filters.label}%`);
+  if (filters.keyword) scoped = scoped.or(`label.ilike.%${filters.keyword}%,notes.ilike.%${filters.keyword}%`);
+  return scoped;
+}
+
+/**
+ * v1.75.1 (Phase 14B, FIX-1) — the OWNER's records, scoped by VEHICLE.
+ *
+ * `queryRecordLedger()` (recordQuery.js) filters `driver_id = ownerId`, i.e. it
+ * only sees rows the owner personally logged — correct for the per-caller
+ * WhatsApp lane, wrong for a fleet owner. This query scopes
+ * `vehicle_id IN (owned vehicles)` so owner-logged AND driver-logged rows both
+ * appear, and merges the two tables through the canonical ledger row mappers.
+ * `recordQuery.js` is deliberately untouched.
+ *
+ * Pagination: each table is fetched up to `offset + pageSize + 1` rows (via
+ * `.range`, D4) and the merged list is sliced — paging each table independently
+ * would produce wrong pages because the tables interleave by date (the
+ * `listLedgerEntries` precedent).
+ */
+export async function queryOwnerRecords({
+  supabase,
+  ownerId = null,
+  vehicleIds = [],
+  vehicles = [],
+  filters = {},
+  countryInfo = null,
+  profile = null,
+  pageSize = RECORDS_PAGE_SIZE,
+  offset = null
+} = {}) {
+  const empty = { ok: false, rows: [], total: 0, hasMore: false, page: 0, pageSize: RECORDS_PAGE_SIZE, truncated: false };
+  if (!supabase) return empty;
+  const ids = (vehicleIds || []).filter(Boolean);
+  if (!ownerId || ids.length === 0) return { ...empty, ok: true };
+
+  // A type filter only ever names expense types, so earnings leave the set.
+  const includeEarnings = !(filters.types?.length > 0);
+  const size = Math.max(1, Math.min(RECORDS_EXPORT_MAX_ROWS, Number(pageSize) || RECORDS_PAGE_SIZE));
+  // `Number(null) === 0` would silently pin every page to offset 0 — the export
+  // offset must be an explicit, finite number to override the page.
+  const hasOffset = offset !== null && offset !== undefined && Number.isFinite(Number(offset));
+  const start = hasOffset
+    ? Math.max(0, Number(offset))
+    : Math.max(0, Number(filters.page) || 0) * RECORDS_PAGE_SIZE;
+  const perTable = start + size + 1;
+  const ctx = buildGlobalContext(countryInfo, profile);
+  const plateOf = (vehicleId) => (vehicles || []).find((vehicle) => vehicle.id === vehicleId)?.plate_number || null;
+
+  try {
+    const expenseQuery = applyRecordFilters(
+      supabase.from('expense_logs').select('*'),
+      { table: 'expense_logs', filters, vehicleIds: ids }
+    ).order('created_at', { ascending: false }).range(0, perTable - 1);
+
+    const earningQuery = includeEarnings
+      ? applyRecordFilters(
+          supabase.from('private_earnings').select('*'),
+          { table: 'private_earnings', filters, vehicleIds: ids }
+        ).order('logged_at', { ascending: false }).range(0, perTable - 1)
+      : null;
+
+    const [expenseResult, earningResult] = await Promise.all([
+      expenseQuery,
+      earningQuery || Promise.resolve({ data: [], error: null })
+    ]);
+    if (expenseResult.error || earningResult.error) {
+      logWriteFailure(supabase, 'dashboard.queryOwnerRecords', expenseResult.error || earningResult.error);
+      return { ...empty, page: Math.floor(start / RECORDS_PAGE_SIZE), pageSize: size };
+    }
+
+    const counts = await Promise.all([
+      applyRecordFilters(
+        supabase.from('expense_logs').select('id', { count: 'exact', head: true }),
+        { table: 'expense_logs', filters, vehicleIds: ids }
+      ),
+      includeEarnings
+        ? applyRecordFilters(
+            supabase.from('private_earnings').select('id', { count: 'exact', head: true }),
+            { table: 'private_earnings', filters, vehicleIds: ids }
+          )
+        : Promise.resolve({ count: 0 })
+    ]);
+    const total = Number(counts[0]?.count || 0) + Number(counts[1]?.count || 0);
+
+    const normalize = (raw, kind) => {
+      const base = kind === 'earning'
+        ? earningToLedgerRow(raw, { ctx, vehiclePlate: plateOf(raw.vehicle_id) })
+        : expenseToLedgerRow(raw, { ctx, vehiclePlate: plateOf(raw.vehicle_id) });
+      return {
+        ...base,
+        id: raw.id,
+        sourceId: raw.id,
+        kind,
+        vehicleId: raw.vehicle_id || null,
+        typeLabel: kind === 'earning' ? (raw.earning_type || 'Earning') : (raw.expense_type || 'Expense'),
+        notes: raw.notes || null,
+        label: raw.label || null,
+        raw
+      };
+    };
+
+    const merged = [
+      ...(expenseResult.data || []).map((row) => normalize(row, 'expense')),
+      ...(earningResult.data || []).map((row) => normalize(row, 'earning'))
+    ].filter((row) => row.at).sort((a, b) => new Date(b.at) - new Date(a.at));
+
+    const rows = merged.slice(start, start + size);
+    return {
+      ok: true,
+      rows,
+      total,
+      hasMore: merged.length > start + size,
+      page: Math.floor(start / RECORDS_PAGE_SIZE),
+      pageSize: size,
+      truncated: size >= RECORDS_EXPORT_MAX_ROWS && merged.length > start + size
+    };
+  } catch (err) {
+    logWriteFailure(supabase, 'dashboard.queryOwnerRecords', err);
+    return { ...empty, page: Math.floor(start / RECORDS_PAGE_SIZE), pageSize: size };
+  }
+}
+
+/**
+ * D2 — heuristic receipt matching (Phase 14B). A receipt has no FK to the
+ * expense that came from the same photo, so the only honest match is: same
+ * vehicle + same Nairobi calendar day + equal amount, and it must be UNIQUE.
+ * Two or more candidates answer `ambiguous` (the page says so, never guesses).
+ * `cache` (a Map) dedupes the query per vehicle+day+amount across a page.
+ */
+export async function matchReceiptForExpense({ supabase, vehicleId = null, amount = null, day = null, cache = null } = {}) {
+  const none = { status: 'none', receipt: null, count: 0 };
+  if (!supabase || !vehicleId || !day) return none;
+  const numeric = Number(amount);
+  if (!Number.isFinite(numeric)) return none;
+  const key = `${vehicleId}|${day}|${numeric}`;
+  if (cache && cache.has(key)) return cache.get(key);
+  try {
+    const { data, error } = await supabase
+      .from('receipts')
+      .select('id, vehicle_id, amount, image_url, media_id, vendor, created_at')
+      .eq('vehicle_id', vehicleId)
+      .eq('amount', numeric)
+      .gte('created_at', nairobiDayStartIso(day))
+      .lt('created_at', nairobiNextDayStartIso(day))
+      .limit(10);
+    if (error) {
+      logWriteFailure(supabase, 'dashboard.matchReceiptForExpense', error);
+      return none;
+    }
+    const matches = data || [];
+    const result = matches.length === 1
+      ? { status: 'unique', receipt: matches[0], count: 1 }
+      : matches.length > 1
+        ? { status: 'ambiguous', receipt: null, count: matches.length }
+        : none;
+    if (cache) cache.set(key, result);
+    return result;
+  } catch (err) {
+    logWriteFailure(supabase, 'dashboard.matchReceiptForExpense', err);
+    return none;
+  }
+}
+
+/** Attach a receipt status to every expense row of one page (shared cache). */
+export async function attachReceiptMatches({ supabase, rows = [] } = {}) {
+  const cache = new Map();
+  const out = [];
+  for (const row of rows || []) {
+    if (row.kind !== 'expense' || !row.vehicleId || !row.at) {
+      out.push({ ...row, receiptStatus: 'none', receiptId: null });
+      continue;
+    }
+    const match = await matchReceiptForExpense({
+      supabase,
+      vehicleId: row.vehicleId,
+      amount: row.amount,
+      day: nairobiDateOf(row.at),
+      cache
+    });
+    out.push({ ...row, receiptStatus: match.status, receiptId: match.receipt?.id || null });
+  }
+  return out;
+}
+
+/**
+ * D1 — a short-lived storage link, minted per request and scoped to a row the
+ * caller already proved they own. 300 s by contract; the object path comes from
+ * `receiptStoragePaths()` (media_id first), so a signed URL never depends on the
+ * stored public URL — which stops working once the bucket is private.
+ */
+export async function signReceiptUrl(supabase, receipt = {}, { ttlSeconds = RECEIPT_SIGNED_URL_TTL_SECONDS } = {}) {
+  if (!supabase || !receipt) return { ok: false, reason: 'not_found' };
+  const paths = receiptStoragePaths(receipt);
+  if (!paths.length) return { ok: false, reason: 'no_image' };
+  try {
+    const storage = supabase.storage?.from?.(RECEIPTS_BUCKET);
+    if (!storage?.createSignedUrl) return { ok: false, reason: 'no_storage' };
+    const { data, error } = await storage.createSignedUrl(paths[0], ttlSeconds);
+    if (error || !data?.signedUrl) return { ok: false, reason: 'sign_failed' };
+    return { ok: true, url: data.signedUrl, ttlSeconds };
+  } catch (err) {
+    logWriteFailure(supabase, 'dashboard.signReceiptUrl', err);
+    return { ok: false, reason: 'sign_failed' };
+  }
+}
+
+export const RECORDS_CSV_COLUMNS = Object.freeze([
+  'Date', 'Kind', 'Plate', 'Type', 'Description', 'Odometer', 'Unit Cost', 'Amount', 'Currency', 'Label'
+]);
+
+function csvCell(value) {
+  const text = value === null || value === undefined ? '' : String(value);
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function csvNumber(value) {
+  if (value === null || value === undefined || value === '') return '';
+  const num = Number(value);
+  if (!Number.isFinite(num)) return '';
+  return Number.isInteger(num) ? String(num) : num.toFixed(2);
+}
+
+/**
+ * CSV export of the filtered set (Phase 14B). The only serializer in the repo,
+ * so it stays pure and dependency-free: BOM (Excel-safe), CRLF rows, RFC-4180
+ * quoting, ISO-8601 dates (canonical storage, rule 36) and the owner currency.
+ */
+export function serializeRecordsCsv(rows = [], { currency = 'USD' } = {}) {
+  const lines = [RECORDS_CSV_COLUMNS.join(',')];
+  for (const row of rows || []) {
+    lines.push([
+      csvCell(row.at ? new Date(row.at).toISOString() : ''),
+      csvCell(row.kind === 'earning' ? 'earning' : 'expense'),
+      csvCell(row.vehicle || ''),
+      csvCell(row.typeLabel || ''),
+      csvCell(row.description || ''),
+      csvCell(csvNumber(row.odometer)),
+      csvCell(csvNumber(row.unitCost)),
+      csvCell(csvNumber(row.amount)),
+      csvCell(currency),
+      csvCell(row.label || '')
+    ].join(','));
+  }
+  return `\uFEFF${lines.join('\r\n')}\r\n`;
+}
+
+/**
+ * PDF export of the filtered set: the SAME merged rows the table shows, fed
+ * through the canonical ledger builder and the Apex engine. Returns a Buffer —
+ * no Storage upload and no email (the route streams it, D-export).
+ */
+export async function buildRecordsPdf(rows = [], filters = {}, {
+  profile = null,
+  countryInfo = null,
+  vehicles = [],
+  truncated = false,
+  useStandardFonts = false
+} = {}) {
+  const ctx = buildGlobalContext(countryInfo, profile);
+  const list = rows || [];
+  const expenses = list.filter((row) => row.kind !== 'earning').map((row) => row.raw).filter(Boolean);
+  const earnings = list.filter((row) => row.kind === 'earning').map((row) => row.raw).filter(Boolean);
+  const period = `${filters.from || ''} – ${filters.to || ''}`.trim();
+  const ledger = buildLedgerGroups({
+    expenses,
+    earnings,
+    vehicles,
+    ctx,
+    includeEarnings: true,
+    includeVehicle: vehicles.length > 1,
+    title: 'Records',
+    subtitle: period || null,
+    footnote: truncated
+      ? `Showing the newest ${list.length} records — narrow the dates for a complete export.`
+      : `All ${list.length} record(s) in this filter are shown — nothing hidden.`
+  });
+  const money = (value) => formatMoney(value, ctx.currency, ctx.locale);
+  const spend = ledger.totals.expenseTotal;
+  const earned = ledger.totals.earningTotal;
+  const net = ledger.totals.net;
+  return buildProReportPdf({
+    title: 'Records & Ledger',
+    subtitle: `${period} · ${list.length} record(s)`,
+    reportType: 'financial',
+    periodLabel: period || 'Selected period',
+    // Same fonts as every report (branded); suites opt into standard fonts to
+    // read the drawn text back, exactly like test_pdf_engine.
+    useStandardFonts,
+    generatedAt: new Date().toLocaleString('en-GB', { timeZone: ctx.timeZone }),
+    owner: profile
+      ? {
+          name: profile.full_name || 'Fleet owner',
+          email: profile.email || '',
+          phone: profile.phone_number || '',
+          language: profile.preferred_language || 'English',
+          plan: profile.plan || null
+        }
+      : null,
+    drivers: [],
+    kpis: [
+      { label: 'Total spend', value: money(spend), hint: 'in this filter', tone: 'negative' },
+      { label: 'Earnings', value: money(earned), hint: earned > 0 ? 'in this filter' : 'none recorded', ...(earned > 0 ? { tone: 'positive' } : {}) },
+      { label: 'Net', value: money(net), hint: 'earnings - spend', ...(net > 0 ? { tone: 'positive' } : (net < 0 ? { tone: 'negative' } : {})) },
+      { label: 'Records', value: String(list.length), hint: truncated ? 'newest shown' : 'all in this filter' }
+    ],
+    ledgers: [ledger],
+    notes: ['Figures are engine-calculated from your own ledger — nothing is estimated.']
+  });
+}
+
+/* ------------------------------------------------------------------ */
 /* HTML shell (shared by every dashboard page, Phase 14 reuses it)     */
 /* ------------------------------------------------------------------ */
 
@@ -611,6 +1099,19 @@ button { width:100%; margin-top:12px; padding:14px; font-size:16px; font-weight:
 ul.plain { list-style:none; margin:0; padding:0; }
 ul.plain li { padding:10px 0; border-bottom:1px solid var(--line); }
 ul.plain li:last-child { border-bottom:0; }
+/* Phase 14B — the records filters + table. Placed after the OTP input rule so a
+   filter text box is a normal box, never the giant one-time-code field. */
+.filters { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:12px; align-items:end; }
+.filters label { color:var(--muted); font-size:13px; display:flex; flex-direction:column; gap:4px; }
+.filters input, .filters select { width:100%; padding:9px 10px; font-size:14px; letter-spacing:normal; text-align:left; background:#0F0F11; color:var(--ink); border:1px solid var(--line); border-radius:8px; }
+.filters button { width:auto; margin-top:0; padding:10px 16px; font-size:14px; }
+.filters-actions { display:flex; align-items:center; gap:12px; }
+.table-wrap { overflow-x:auto; padding:0; }
+table.rec { width:100%; border-collapse:collapse; font-size:13px; }
+table.rec th { text-align:left; color:var(--muted); font-weight:600; font-size:12px; padding:10px 12px; border-bottom:1px solid var(--line); white-space:nowrap; }
+table.rec td { padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
+table.rec tr:last-child td { border-bottom:0; }
+table.rec td.num, table.rec th.num { text-align:right; white-space:nowrap; }
 `;
 
 export function escapeHtml(value) {
@@ -686,9 +1187,9 @@ function daysLabel(daysLeft) {
   return `in ${daysLeft} d`;
 }
 
-/** The three destinations every signed-in page offers (Phase 14A). */
+/** The four destinations every signed-in page offers (Phase 14B adds Records). */
 function dashboardNav() {
-  return '<a href="/d">Overview</a> · <a href="/d/vehicles">Vehicles</a> · <a href="/d/logout">Log out</a>';
+  return '<a href="/d">Overview</a> · <a href="/d/vehicles">Vehicles</a> · <a href="/d/records">Records</a> · <a href="/d/logout">Log out</a>';
 }
 
 /** Active / paused / inactive — a chip, never a raw database enum. */
@@ -845,6 +1346,115 @@ ${identity}
   return renderPageShell(`${vehicle.plate} — your vehicle`, body, { headerRight: dashboardNav() });
 }
 
+/** Serialise the filter spec back into a shareable query string. */
+export function recordsQueryString(filters = {}, overrides = {}) {
+  const merged = { ...filters, ...overrides };
+  const params = new URLSearchParams();
+  if (merged.from) params.set('from', merged.from);
+  if (merged.to) params.set('to', merged.to);
+  if (merged.types?.length) params.set('type', merged.types.join(','));
+  if (merged.vehicleId) params.set('vehicle', merged.vehicleId);
+  if (merged.label) params.set('label', merged.label);
+  if (merged.keyword) params.set('keyword', merged.keyword);
+  if (merged.page) params.set('page', String(merged.page));
+  return params.toString();
+}
+
+/**
+ * `/d/records` (Phase 14B) — the filterable ledger table. Every filter lives in
+ * the URL (shareable, back-button safe) and is re-sent by the pagination and
+ * export links, so the table, the CSV and the PDF can never diverge.
+ */
+export function renderRecordsPage({ data, filters = {}, vehicles = [], emailMasked = '', error = null }) {
+  if (!data?.ok) {
+    return renderErrorPage(503, 'Your records could not be loaded just now. Please try again in a moment.').html;
+  }
+  const money = (value) => formatMoney(value, data.currency || 'USD', data.locale);
+  const rows = Array.isArray(data.rows) ? data.rows : [];
+  const total = Number(data.total || 0);
+  const page = Number(data.page || 0);
+  const pageSize = Number(data.pageSize || RECORDS_PAGE_SIZE);
+  const firstRow = rows.length ? page * RECORDS_PAGE_SIZE + 1 : 0;
+  const lastRow = rows.length ? page * RECORDS_PAGE_SIZE + rows.length : 0;
+
+  const typeOptions = EXPENSE_TYPES.map((type) => type.value)
+    .filter((value, index, list) => value && list.indexOf(value) === index)
+    .map((value) => `<option value="${escapeHtml(value)}"${filters.types?.includes(value) ? ' selected' : ''}>${escapeHtml(value)}</option>`)
+    .join('');
+  const vehicleOptions = (vehicles || [])
+    .map((vehicle) => `<option value="${escapeHtml(vehicle.id)}"${filters.vehicleId === vehicle.id ? ' selected' : ''}>${escapeHtml(vehicle.plate_number || 'Fleet vehicle')}</option>`)
+    .join('');
+
+  const form = `
+<form method="GET" action="/d/records" class="filters card">
+  ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
+  <label>From<input type="date" name="from" value="${escapeHtml(filters.from || '')}"></label>
+  <label>To<input type="date" name="to" value="${escapeHtml(filters.to || '')}"></label>
+  <label>Type<select name="type"><option value="">All types</option>${typeOptions}</select></label>
+  <label>Vehicle<select name="vehicle"><option value="">All vehicles</option>${vehicleOptions}</select></label>
+  <label>Label<input type="text" name="label" maxlength="${RECORDS_MAX_QUERY_CHARS}" value="${escapeHtml(filters.label || '')}" placeholder="karen run"></label>
+  <label>Search<input type="text" name="keyword" maxlength="${RECORDS_MAX_QUERY_CHARS}" value="${escapeHtml(filters.keyword || '')}" placeholder="notes or vendor"></label>
+  <div class="filters-actions">
+    <button type="submit">Apply filters</button>
+    <a href="/d/records">Clear</a>
+  </div>
+</form>`;
+
+  const tableRows = rows.map((row) => {
+    const receipt = row.receiptStatus === 'unique'
+      ? `<a href="/d/receipt/${encodeURIComponent(row.receiptId)}">View</a>`
+      : row.receiptStatus === 'ambiguous'
+        ? '<span class="muted">Multiple match</span>'
+        : '<span class="muted">—</span>';
+    return `
+      <tr>
+        <td>${escapeHtml(formatDate(row.at, data.locale, { timeZone: data.timeZone }))}</td>
+        <td><span class="chip">${escapeHtml(row.kindLabel || row.kind || '')}</span></td>
+        <td>${escapeHtml(row.vehicle || '—')}</td>
+        <td>${escapeHtml(row.description || '')}</td>
+        <td class="num">${escapeHtml(money(row.amount))}</td>
+        <td>${receipt}</td>
+      </tr>`;
+  }).join('');
+
+  const table = rows.length
+    ? `<div class="card table-wrap">
+        <table class="rec">
+          <thead><tr><th>Date</th><th>Kind</th><th>Vehicle</th><th>Description</th><th class="num">Amount</th><th>Receipt</th></tr></thead>
+          <tbody>${tableRows}</tbody>
+        </table>
+      </div>`
+    : '<div class="card"><p class="muted">Nothing in these filters — widen the dates or clear the search.</p></div>';
+
+  const base = recordsQueryString(filters, { page: 0 });
+  const exports = `
+<p class="muted" style="font-size:13px;">
+  Export this filter:
+  <a href="/d/records.csv?${escapeHtml(base)}">CSV</a> ·
+  <a href="/d/records.pdf?${escapeHtml(base)}">PDF</a>
+</p>`;
+
+  const pager = [];
+  if (page > 0) pager.push(`<a href="/d/records?${escapeHtml(recordsQueryString(filters, { page: page - 1 }))}">← Newer</a>`);
+  if (data.hasMore) pager.push(`<a href="/d/records?${escapeHtml(recordsQueryString(filters, { page: page + 1 }))}">Older →</a>`);
+
+  const body = `
+<h1>Records</h1>
+<p class="muted">${total} record${total === 1 ? '' : 's'} · signed in as ${escapeHtml(emailMasked)} · ${rows.length ? `showing ${firstRow}–${lastRow}` : 'nothing to show'}</p>
+${form}
+${table}
+${rows.length ? `<p class="muted" style="font-size:13px;">Page ${page + 1}${data.hasMore ? '' : ' (last page)'} · ${pageSize} per page</p>` : ''}
+${pager.length ? `<p class="muted">${pager.join(' · ')}</p>` : ''}
+${exports}`;
+  return renderPageShell('Records', body, { headerRight: dashboardNav() });
+}
+
+/** `/d/receipt/:id` answers with a short-lived redirect to the stored image. */
+export function renderReceiptPage({ signedUrl } = {}) {
+  if (!signedUrl) return renderErrorPage(404, 'That receipt has no stored image.');
+  return { status: 302, location: signedUrl };
+}
+
 export function renderLogoutPage() {
   const body = `
 <h1>You're logged out</h1>
@@ -902,9 +1512,22 @@ export default {
   renderOverviewPage,
   renderVehiclesPage,
   renderVehiclePage,
+  renderRecordsPage,
+  renderReceiptPage,
   renderLogoutPage,
   renderErrorPage,
   buildOverviewCard,
   buildVehiclesIndex,
-  buildVehiclePage
+  buildVehiclePage,
+  parseRecordsFilters,
+  cleanRecordsTerm,
+  nairobiDateOf,
+  loadOwnerVehicles,
+  queryOwnerRecords,
+  matchReceiptForExpense,
+  attachReceiptMatches,
+  signReceiptUrl,
+  serializeRecordsCsv,
+  buildRecordsPdf,
+  recordsQueryString
 };

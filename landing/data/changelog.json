@@ -1,6 +1,13 @@
 {
-  "latest": "1.75.0",
+  "latest": "1.75.1",
   "entries": [
+    {
+      "version": "1.75.1",
+      "date": "2026-11-08",
+      "title": "Every record, searchable and exportable",
+      "preview": "Search and filter your whole ledger by date, type, vehicle or label - then download exactly what you see as CSV or PDF.",
+      "summary": "Your dashboard now has a Records page: every fuel stop, repair and earning across your fleet, newest first, twenty at a time. Narrow it by date range, expense type, vehicle, label or a keyword from the notes; the page keeps your filters in the link so you can share or revisit the same view, and the arrows move you through older entries. When a photo receipt belongs to a row - one clear match and no ambiguity - a View link opens the image through a private five-minute link. The CSV download opens neatly in Excel, and the PDF is the same professional ledger you already know, built from exactly the filter you chose. Only your own fleet is ever included. The dashboard remains switched off in production while we finish the walk-through."
+    },
     {
       "version": "1.75.0",
       "date": "2026-11-08",
