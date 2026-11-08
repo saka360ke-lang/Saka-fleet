@@ -17,12 +17,20 @@
 import { detectCountryFromPhone } from './helpers.js';
 import {
   ocrWhatsAppMedia,
+  downloadWhatsAppMedia,
   extractDocumentHints,
   isOcrEnabled,
   isOcrAckFirstEnabled,
   buildMediaAckText,
   classifyOcrDocument
 } from '../../services/ocrService.js';
+import {
+  transcribeAudioBuffer,
+  isSttEnabled,
+  estimateAudioDurationSeconds,
+  isAudioWithinDurationLimit,
+  STT_MAX_DURATION_SECONDS
+} from '../../services/sttService.js';
 import { parseDocumentFields } from '../../services/documentLens.js';
 import { semanticOcrTopUp } from '../../services/ocrSemantic.js';
 import {
@@ -39,6 +47,17 @@ import { extractEntryLabel } from '../../services/entryLabels.js';
 // durable transcript marker. The processor sends the reply and owns the status literal.
 export const VOICE_NOTE_REPLY = '🎙️ I can\'t listen to voice notes yet — type it in and I\'ll take it from there.';
 export const VOICE_NOTE_USER_TEXT = '[voice note]';
+
+// v1.79.0 — Phase 18: voice notes are transcribed, not turned away. The listening
+// ack is data (the processor sends it); VOICE_NOTE_REPLY above stays the honest
+// degradation whenever Speech-to-Text is paused, unreachable or hears nothing.
+export const VOICE_LISTENING_ACK = '🎙️ Listening to your voice note — one moment…';
+
+/** The listening ack, or null when STT is paused (the processor performs the send). */
+export function prepareVoiceAck({ audioObj } = {}) {
+  if (!audioObj?.id) return null;
+  return isSttEnabled() ? VOICE_LISTENING_ACK : null;
+}
 
 // M3 (verbatim from messages.js v1.66.0) - the unverified-media gate line. The processor
 // performs the send and owns the `unverified_gated_media` status literal.
@@ -110,6 +129,124 @@ export function startMediaOcr({ mediaObj, mediaMimeType }) {
       }).catch((err) => ({ text: '', error: err?.message || 'ocr_failed' }))
     : Promise.resolve({ text: '', error: null });
   return { ocrPromise, startedAt };
+}
+
+/**
+ * M15 (v1.79.0, Phase 18) - the voice-note transcription lane. Downloads the audio
+ * from Meta, guards the 5 MB size (downloadWhatsAppMedia) and the estimated
+ * duration (STT_MAX_DURATION_SECONDS, the sync Speech-to-Text cap), transcribes
+ * with the country-resolved language pair, and writes ONE ocr_requests telemetry
+ * row (provider='google_speech', document_kind='voice_note' - no DDL).
+ * Never throws: every failure returns { text: null, error } so the processor can
+ * keep the deterministic v1.61.15 fallback line. Returns data only; the processor
+ * owns every send and the session.
+ */
+export async function startAudioTranscription({
+  audioObj,
+  formattedPhoneForSession,
+  senderPhone,
+  supabaseClient
+}) {
+  const startedAt = Date.now();
+  const countryInfo = detectCountryFromPhone(formattedPhoneForSession);
+  const countryCode = countryInfo?.country_code || 'GLOBAL';
+
+  if (!audioObj?.id) {
+    return { text: null, error: 'Missing audio id', status: 'failed', countryCode, latencyMs: 0 };
+  }
+
+  if (!isSttEnabled()) {
+    return {
+      text: null,
+      error: 'STT paused by configuration',
+      status: 'paused',
+      paused: true,
+      countryCode,
+      latencyMs: Date.now() - startedAt
+    };
+  }
+
+  try {
+    const download = await downloadWhatsAppMedia(audioObj.id, process.env.META_WHATSAPP_TOKEN);
+    const mimeType = download.mimeType || audioObj.mime_type || null;
+
+    if (!download.buffer) {
+      const downloadError = download.error || 'Audio download failed';
+      await recordOcrRequest(supabaseClient, {
+        mediaId: audioObj.id,
+        phone: senderPhone,
+        countryCode,
+        mimeType,
+        provider: 'google_speech',
+        documentKind: 'voice_note',
+        status: 'failed',
+        latencyMs: Date.now() - startedAt,
+        error: downloadError
+      }).catch(() => {});
+      return { text: null, error: downloadError, status: 'failed', mimeType, countryCode, latencyMs: Date.now() - startedAt };
+    }
+
+    const durationSeconds = estimateAudioDurationSeconds(download.buffer.length);
+    if (!isAudioWithinDurationLimit(download.buffer.length)) {
+      const tooLong = `Voice note too long (~${durationSeconds}s; the sync Speech-to-Text cap is ${STT_MAX_DURATION_SECONDS}s)`;
+      await recordOcrRequest(supabaseClient, {
+        mediaId: audioObj.id,
+        phone: senderPhone,
+        countryCode,
+        mimeType,
+        provider: 'google_speech',
+        documentKind: 'voice_note',
+        status: 'too_long',
+        latencyMs: Date.now() - startedAt,
+        error: tooLong
+      }).catch(() => {});
+      return { text: null, error: tooLong, status: 'too_long', mimeType, durationSeconds, countryCode, latencyMs: Date.now() - startedAt };
+    }
+
+    const stt = await transcribeAudioBuffer({ buffer: download.buffer, countryCode, mimeType });
+    const text = String(stt?.text || '').trim();
+    const confidence = Number.isFinite(Number(stt?.confidence)) ? Number(stt.confidence) : null;
+    const status = text
+      ? (confidence !== null && confidence > 0 && confidence < OCR_CONFIRM_THRESHOLD ? 'low_confidence' : 'read')
+      : (stt?.skipped ? 'paused' : 'failed');
+
+    await recordOcrRequest(supabaseClient, {
+      mediaId: audioObj.id,
+      phone: senderPhone,
+      countryCode,
+      mimeType,
+      provider: 'google_speech',
+      documentKind: 'voice_note',
+      status,
+      confidence,
+      attempts: stt?.attempts ?? null,
+      latencyMs: Date.now() - startedAt,
+      error: stt?.error || null
+    }).catch(() => {});
+
+    return {
+      text: text || null,
+      confidence,
+      languageCode: stt?.languageCode || null,
+      error: stt?.error || null,
+      attempts: stt?.attempts ?? null,
+      status,
+      paused: Boolean(stt?.skipped),
+      mimeType,
+      durationSeconds,
+      countryCode,
+      latencyMs: Date.now() - startedAt
+    };
+  } catch (err) {
+    return {
+      text: null,
+      error: `Voice transcription error: ${err.message}`,
+      status: 'failed',
+      mimeType: audioObj.mime_type || null,
+      countryCode,
+      latencyMs: Date.now() - startedAt
+    };
+  }
 }
 
 /**

@@ -1,6 +1,13 @@
 {
-  "latest": "1.78.1",
+  "latest": "1.79.0",
   "entries": [
+    {
+      "version": "1.79.0",
+      "date": "2026-11-08",
+      "title": "Talk to Saka: voice notes now work",
+      "preview": "Send a voice note and Saka understands it - log fuel, ask a question or answer a quiz by speaking.",
+      "summary": "You can now send a voice note instead of typing. Saka listens, turns your words into a normal message, and handles it exactly as if you had typed it: log a fuel stop while you are at the pump, ask about your week, or answer a quiz question out loud. Notes up to about a minute work best, and Kenyan numbers understand both Swahili and English (English elsewhere). If a note cannot be heard - too long, or the line was unclear - Saka says so honestly and asks you to type it instead, and nothing is ever saved from a note it could not understand. Your records, reports and reminders are unchanged: this release simply adds an easier way to talk to Saka."
+    },
     {
       "version": "1.78.1",
       "date": "2026-11-08",

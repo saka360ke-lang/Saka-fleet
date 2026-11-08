@@ -94,7 +94,9 @@ import {
   resolveMediaEnvelope,
   resolveMediaGate,
   prepareMediaAck,
+  prepareVoiceAck,
   startMediaOcr,
+  startAudioTranscription,
   finalizeMediaOcr,
   resolveReceiptVault
 } from './media.js';
@@ -226,22 +228,27 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
     // OCR with Google Cloud Vision, and treat the extracted text as the turn.
     // v1.67.0 — Phase 5B-2: the intake lane lives in ./media.js (state in, data out).
     const envelope = resolveMediaEnvelope(messageObj);
-    const { mediaObj, mediaCaption, mediaMimeType } = envelope;
+    const { mediaObj, mediaCaption, mediaMimeType, audioObj } = envelope;
 
-    // v1.61.15 — voice notes carry no text and no OCR path. Answer them
-    // deterministically (zero tokens, zero menu wall) instead of letting an
-    // empty turn fall through to the generic help menu. The transcript keeps a
-    // durable marker so eval/digest can see these turns.
+    // v1.79.0 — Phase 18: voice notes are transcribed (Google Cloud Speech-to-Text)
+    // and the transcript becomes the turn text, exactly where a typed message goes.
+    // An unverified number is gated BEFORE any download/STT spend (D2 — the same
+    // fail-closed gate image/document media has used since v1.51.6).
     if (envelope.isVoiceNote) {
-      const voiceReply = VOICE_NOTE_REPLY;
-      try {
-        await logTurnPairSequential(supabaseClient, senderPhone, 'user', VOICE_NOTE_USER_TEXT);
-        await sendWhatsAppReply(senderPhone, voiceReply);
-        await logTurnPairSequential(supabaseClient, senderPhone, 'assistant', voiceReply);
-      } catch (err) {
-        console.warn('[VoiceNote] fallback reply failed:', err?.message || 'unknown');
+      const voiceGate = await resolveMediaGate({
+        supabaseClient,
+        formattedPhoneForSession,
+        isSuperadmin: isSuperadminPhone(senderPhone)
+      });
+      if (voiceGate) {
+        const verifyReply = voiceGate.replyText;
+        try {
+          await logTurnPairSequential(supabaseClient, senderPhone, 'user', VOICE_NOTE_USER_TEXT);
+          await sendWhatsAppReply(senderPhone, verifyReply);
+          await logTurnPairSequential(supabaseClient, senderPhone, 'assistant', verifyReply);
+        } catch { /* best-effort */ }
+        return { status: 'unverified_gated_media' };
       }
-      return { status: 'voice_note_fallback' };
     }
 
     // v1.51.6 — an unverified number never gets the OCR ack or runs Vision:
@@ -268,12 +275,15 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
     // while the document is downloaded and read. The parsed result arrives as
     // the follow-up message.
     const { ocrPaused, ackText: mediaAckText } = prepareMediaAck({ mediaObj, mediaMimeType });
-    if (mediaAckText) {
+    // v1.79.0 — a voice note answers instantly with a deterministic listening ack
+    // (the text is data from media.js; the processor performs every send).
+    const voiceAckText = envelope.isVoiceNote ? prepareVoiceAck({ audioObj }) : null;
+    const ackText = mediaAckText || voiceAckText;
+    if (ackText) {
       try {
-        const ack = mediaAckText;
-        await sendWhatsAppReply(senderPhone, ack);
+        await sendWhatsAppReply(senderPhone, ackText);
         if (supabaseClient) {
-          await logTurnPairSequential(supabaseClient, senderPhone, 'assistant', ack);
+          await logTurnPairSequential(supabaseClient, senderPhone, 'assistant', ackText);
         }
       } catch { /* the ack is best-effort; the turn still proceeds */ }
     }
@@ -282,11 +292,17 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
     // together so media turns do not pay two serial round trips.
     const { ocrPromise, startedAt: ocrStartedAt } = startMediaOcr({ mediaObj, mediaMimeType });
 
+    // v1.79.0 — the STT lane (Meta download + Speech-to-Text) overlaps hydration
+    // exactly like OCR does, so a voice turn pays one round trip, not two.
+    const transcriptionPromise = envelope.isVoiceNote
+      ? startAudioTranscription({ audioObj, formattedPhoneForSession, senderPhone, supabaseClient })
+      : Promise.resolve(null);
+
     // Durable session hydration — restores quiz/onboarding/OTP state from
     // Supabase so any Cloud Run instance can continue the conversation.
     const hydrationPromise = loadTurnSnapshot(supabaseClient, formattedPhoneForSession);
 
-    const [ocrResult, snapshot] = await Promise.all([ocrPromise, hydrationPromise]);
+    const [ocrResult, snapshot, voiceResult] = await Promise.all([ocrPromise, hydrationPromise, transcriptionPromise]);
     const {
       ocrText,
       ocrError,
@@ -309,11 +325,32 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
       messageObj
     });
 
+    // v1.79.0 — a transcribed voice note becomes the turn text (the same seam a
+    // typed message uses). A voice note that cannot be transcribed keeps the
+    // deterministic v1.61.15 fallback: zero tokens, zero menu wall, and the durable
+    // [voice note] marker so eval/digest still see the turn. The failure reason is
+    // logged once per rollup window (rule 50 — a refused read is never silent).
+    const voiceTranscript = envelope.isVoiceNote ? String(voiceResult?.text || '').trim() : '';
+    if (envelope.isVoiceNote && !voiceTranscript) {
+      const diag = new Error(`Voice note transcription failed: ${voiceResult?.error || 'no transcript'}`);
+      diag.stack = `voice_status=${voiceResult?.status || 'failed'}; attempts=${voiceResult?.attempts ?? 'n/a'}; bytes_duration=${voiceResult?.durationSeconds ?? 'n/a'}s`;
+      logSystemError(supabaseClient, diag, '/webhook/whatsapp/voice', { phone: senderPhone }).catch(() => {});
+      const voiceReply = VOICE_NOTE_REPLY;
+      try {
+        await logTurnPairSequential(supabaseClient, senderPhone, 'user', VOICE_NOTE_USER_TEXT);
+        await sendWhatsAppReply(senderPhone, voiceReply);
+        await logTurnPairSequential(supabaseClient, senderPhone, 'assistant', voiceReply);
+      } catch (err) {
+        console.warn('[VoiceNote] fallback reply failed:', err?.message || 'unknown');
+      }
+      return { status: 'voice_note_fallback' };
+    }
+
     // v1.73.4 — Phase 12B: a resolved button/list tap becomes the turn's text.
     // A button tap carries no media, so this override is the only seam; the media
     // lane stays untouched and every downstream lane (quiz, pending, reads, AI)
     // sees exactly what the user would have typed.
-    const messageText = interactiveReply ? interactiveReply.text : mediaTurnText;
+    const messageText = voiceTranscript || (interactiveReply ? interactiveReply.text : mediaTurnText);
 
     if (snapshot) {
       if (snapshot.session && !chatSessions.has(senderPhone)) chatSessions.set(senderPhone, snapshot.session);
@@ -719,7 +756,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         // while this turn parses and records in the background.
         const instantAckEnabled = !/^(?:off|false|0)$/i.test(String(process.env.INSTANT_ACK_ENABLED || 'on'));
         const instantAckChars = Number(process.env.INSTANT_ACK_CHARS || 180);
-        if (instantAckEnabled && !mediaObj && !session.quiz && !countryCommandResult && !weeklyReportToggleResult
+        if (instantAckEnabled && !mediaObj && !envelope.isVoiceNote && !session.quiz && !countryCommandResult && !weeklyReportToggleResult
           && String(messageText || '').trim().length >= instantAckChars) {
           try {
             await sendWhatsAppReply(senderPhone, '📖 Got it - reading that now.');
@@ -732,7 +769,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         // provider times out. v1.25.1 — 8s threshold, rotating copy and a 60s
         // anti-spam floor so it never feels like a metronome.
         const slowAckMs = resolveSlowAckMs(process.env);
-        if (instantAckEnabled && !session.instantAckSent && !mediaObj && !session.quiz
+        if (instantAckEnabled && !session.instantAckSent && !mediaObj && !envelope.isVoiceNote && !session.quiz
           && !countryCommandResult && !weeklyReportToggleResult && slowAckMs > 0) {
           slowAckTimer = setTimeout(async () => {
             if (!shouldSendSlowAck({ turnFinalized, now: Date.now(), lastAckAt: session.lastSlowAckAt || 0 })) return;

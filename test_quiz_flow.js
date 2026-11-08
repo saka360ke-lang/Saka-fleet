@@ -352,6 +352,29 @@ async function run() {
     'a mistyped help still pauses the quiz'
   );
 
+  console.log('\n--- Test 4d: a voice-note transcript answers an active quiz (v1.79.0) ---');
+  const voiceCtx = baseCtx({ vehicles: [vehicle] });
+  const voiceSession = {};
+  await handleQuizTurn({ session: voiceSession, messageText: 'log fuel', startFlow: 'log_expense', ctx: voiceCtx });
+  // Phase 18 injects the Speech-to-Text transcript at the typed-text seam, so an
+  // active quiz must parse it exactly like a typed answer (no special lane).
+  const voiceTurn = await handleQuizTurn({
+    session: voiceSession,
+    messageText: '5500 for 40 litres at 366900 km, full tank',
+    ctx: voiceCtx
+  });
+  assert(voiceTurn.handled === true, 'a transcribed voice note is handled by the active quiz');
+  assert(
+    voiceSession.quiz.answers.amount === 5500
+      && voiceSession.quiz.answers.fuel_liters === 40
+      && voiceSession.quiz.answers.odometer_reading === 366900
+      && voiceSession.quiz.answers.fill_type === 'Full tank',
+    'spoken values land through the same parsers as typed answers'
+  );
+  await handleQuizTurn({ session: voiceSession, messageText: 'skip', ctx: voiceCtx });
+  assert(voiceSession.quiz.phase === 'confirm', 'the voice answer reaches the confirmation gate without a second ask');
+  await handleQuizTurn({ session: voiceSession, messageText: 'cancel', ctx: voiceCtx });
+
   console.log('\n--- Test 5: navigation freedom ---');
   const cancelTurn = await handleQuizTurn({ session: expenseSession, messageText: 'cancel', ctx: expenseCtx });
   assert(cancelTurn.handled && !expenseSession.quiz, 'Cancel clears the active quiz');

@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.78.1  
+**Version:** 1.79.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.79.0** | Phase 18: **voice notes** — Meta audio downloaded + transcribed with Google Cloud Speech-to-Text v1 (`src/services/sttService.js`; REST `speech:recognize`, base64 `audio.content`, OGG_OPUS, country-resolved `sw-KE`/`en-KE` for Kenya vs `en-US`/`sw-KE` elsewhere; 55 s / 5 MB guards, timeout-only retry); the transcript rides the existing `messageText` seam so quizzes, reads, ledger writes and AI turns work by voice; unverified numbers gated BEFORE STT spend; `ocr_requests` telemetry (`provider='google_speech'`); failed reads keep the deterministic `voice_note_fallback` | 208 |
 | **1.78.1** | Phase 17.5 hotfix: `deploy_live` Meta template now carries `{{1}}` version + `{{2}}` commit/revision (boot alert passes `templateVars`; an unknown version degrades to free-form text) | 207 |
 | **1.78.0** | Phase 17: **conversational superadmin** (`processAdminMessage` two-call agent — `admin_tool_call` JSON router + engine tools `get_system_health` / `get_ai_usage` / `get_open_proposals` + `admin_synthesis`; `ADMIN_AI_AGENT` / `ADMIN_AI_TOOL` audits; static commands still win with zero tokens) + **deploy-live runbook** (`saka_deploy_live` template slot, Cloud Run knob verified absent live) + **legacy profile backfill** (`npm run reconcile:profiles`: NULL-only `timezone` / `currency` / `locale` from REGIONS, audited `PROFILE_CONTEXT_RECONCILED`, idempotent) | 206 |
 | **1.77.0** | Phase 16: opt-in **monthly PDF summary** (`profiles.monthly_report_opt_in`, `runMonthlyReportsSweep` 1st @ 08:00 EAT claim-first, previous Nairobi month via `buildCustomReport`+`bounds`, `renderReportPdfBuffer` → `sendMonthlyReportEmail` attachment; no quota, no activation) + **dashboard-first reports** (async `fleet_report` job, `followUpAckText`, `runFleetReport`, `resolveReportPdfLinkDelayMs` removed; instant `/d/reports` reply with an inline PDF under `REPORT_INLINE_BUILD_MS` 4000); `monthly report on|off` WhatsApp toggle; settings monthly toggle (`action=save_monthly`) | 205 |
@@ -1038,6 +1039,7 @@ Saka Fleet serves a **global audience**. Every feature, quiz flow and AI prompt 
 - Vision timeouts are retried once (idempotent annotate); HTTP/credential errors are never retried. A blank 200 response returns the explicit reason `No text detected in the document`, so `receipts.error` is never empty.
 - After two unreadable photos on the same quiz step, the route appends the deterministic `OCR_UNREADABLE_NOTE` typed-or-skip escape (v1.19.2) — the identical question is never repeated a third time.
 - OCR failures are warnings only; no database write occurs.
+- **Voice notes (v1.79.0)** are transcribed by `sttService.js` (Google Cloud Speech-to-Text) and injected as the turn text — see §208.
 - Media messages flow through the same per-phone queue, dedupe and durable session store as text.
 - Test coverage: `test_ocr_flow.js` (45 stateless assertions — Meta download, Vision parsing + timeout retry, blank-read reason, size/type guards, document classification, rich hints, receipt vault, quiz prefill).
 
@@ -6052,4 +6054,43 @@ Degrades: no tool → the existing clarify; tool failure → its deterministic r
 **Recurrence autopsy (rule 51).** Defect class *"a registry slot declared static while the approved Meta body gained placeholders"* → all 12 sibling kinds re-audited against `docs/TEMPLATES.md`: none besides `deploy_live` changed, `eval_digest_ping` and `care_escalation` stay static and remain pinned, and any future placeholder drift degrades to text through `templateVariablesForKind` → null (two new route assertions pin it).
 
 **Rules shaped this work (rule 58).** 1/39/45 (rules + architecture read first), 3/4 (targeted reads, batched calls), 11 (two targeted suites), 12/33 (version/architecture/changelog in the same commit, `fix(v1.78.1): …`), 13 (all docs synced; no intent/flow changed so `flowKnowledge`/core prompt are untouched — templates are transport, not conversation), 32 (tree verified level with `origin/main` before work), 42 (open proposals reconciled: `PROP-2026-11-08-01` only, unrelated), 50 (unknown version degrades), 51/52 (sibling sweep + before/after assertions), 54 (suites + health actually run), 55 (evolved the existing alert seam; no fresh build), 58 (this report). **No rule was edited or added.**
+
+
+### 208. v1.79.0 (Phase 18) — voice notes: Speech-to-Text, injected as typed text (2026-11-08)
+
+**Why.** Since v1.61.15 a WhatsApp voice note got one deterministic line — *"🎙️ I can't listen to voice notes yet — type it in…"* — because `resolveMediaEnvelope` treated audio as `isVoiceNote` and returned before the pipeline. That protected the turn from an empty `messageText`, but it turned away the most natural input on WhatsApp: a driver speaking a fuel stop. Phase 18 transcribes the audio and injects the transcript where a typed message goes, so **every** existing lane works by voice with zero new intents.
+
+**Verified against the live tree and Google's docs (rule 54).** Sync `speech:recognize` is limited by Google to **60 seconds / 10 MB** (cloud.google.com/speech-to-text/docs/sync-recognize), so the "2 minutes" plan was corrected to a **55 s** cap — longer notes keep the deterministic fallback instead of a 400. Audio payload is base64 in `audio.content`; WhatsApp voice notes are OGG/OPUS.
+
+**A. `src/services/sttService.js` (new, 208 lines).** `transcribeAudioBuffer({ buffer, countryCode, mimeType, apiKey })` posts to `GCP_SPEECH_ENDPOINT` (default `https://speech.googleapis.com/v1/speech:recognize`) with `?key=` (the same `GCP_VISION_API_KEY` project key, or `GCP_SPEECH_API_KEY`). Body: `config { encoding (OGG_OPUS for ogg, MP3, FLAC, WEBM_OPUS, LINEAR16, AMR…; omitted when unknown so the API auto-detects), languageCode, alternativeLanguageCodes, enableAutomaticPunctuation: true }`, `audio { content: <base64> }`. Multi-result transcripts are joined with a space; `confidence` (first finite) and the detected `languageCode` come back. Never throws; timeouts retry once (`STT_MAX_ATTEMPTS`), HTTP/credential errors never retry, an empty result returns the explicit `No speech detected in the voice note`, a paused switch returns `skipped: true` with no network call. Helpers: `resolveSpeechLanguage` (**KE → sw-KE + en-KE/en-US; everyone else → en-US + sw-KE** — D3), `resolveSpeechEncoding`, `estimateAudioDurationSeconds(bytes, bitrate)` and `isAudioWithinDurationLimit` (16 kbps opus estimate).
+
+**B. `media.js` (leaf contract intact).** `VOICE_LISTENING_ACK` (*"🎙️ Listening to your voice note — one moment…"*, D5 — data only, the processor sends), `prepareVoiceAck` (null while STT is paused) and `startAudioTranscription` (M15): reuses `downloadWhatsAppMedia` (same 5 MB cap, `User-Agent: curl/8.0.0`, never throws), rejects notes over the estimated duration, calls the STT service, and writes exactly ONE `ocr_requests` row — `provider='google_speech'`, `document_kind='voice_note'`, status `read | low_confidence | failed | paused | too_long`, attempts + latency + error (D4; no DDL, the table already exists). Returns data; media.js still never sends.
+
+**C. Processor wiring (`messages.js`, four seams, zero new lanes).** (1) `resolveMediaEnvelope` already exposed `audioObj`; the v1.61.15 early-return is replaced by the **unverified gate first** (`resolveMediaGate`, D2 — fail-closed, no download/STT spend for a non-user), status `unverified_gated_media`. (2) The deterministic **listening ack** sends before the work starts (same post-ACK pattern as OCR, v1.22.0). (3) `startAudioTranscription` runs inside the SAME `Promise.all` as `startMediaOcr` + `loadTurnSnapshot`, so a voice turn pays one round trip. (4) The transcript joins the existing seam: `const messageText = voiceTranscript || (interactiveReply ? interactiveReply.text : mediaTurnText)` — every downstream lane (admin gates, clear-chat, pending lanes, quiz, reads, AI) sees exactly what the user would have typed. **A voice answer to a quiz works by construction** (`handleQuizTurn({ messageText })` parses it like typed text; proven in `test_quiz_flow` Test 4d), and the instant/slow acks are suppressed on voice turns so the user never gets two progress lines.
+
+**D. Degrade + privacy (rule 50).** Any failure — paused switch, missing key, oversize, over-duration, HTTP/timeout, silence — sends the SAME `VOICE_NOTE_REPLY` line with the SAME `voice_note_fallback` status and the `[voice note]` transcript marker (byte-identical to v1.61.15) and logs ONE rolled-up `logSystemError` under `/webhook/whatsapp/voice` carrying only the failure reason/status/attempts — never user content. Audio bytes are never stored; only the `ocr_requests` metadata row survives.
+
+**E. Knobs (envAudit `OCR & VISION` + `.env.example`).**
+
+| Env var | Purpose | Default |
+| :--- | :--- | :--- |
+| `STT_ENABLED` | Voice-note transcription kill switch (`off\|false\|0` pauses → fallback line) | `on` |
+| `GCP_SPEECH_API_KEY` | Dedicated Speech key (optional; falls back to `GCP_VISION_API_KEY`) | — |
+| `GCP_SPEECH_ENDPOINT` | Override the Speech endpoint | `https://speech.googleapis.com/v1/speech:recognize` |
+| `STT_TIMEOUT_MS` | Speech request budget | `25000` |
+| `STT_MAX_ATTEMPTS` | Attempts; abort/timeout retried, HTTP errors never | `2` (clamped 1–3) |
+| `STT_MAX_DURATION_SECONDS` | Sync-API duration cap (Google caps at 60 s) | `55` (clamped 5–60) |
+| `STT_ESTIMATED_BITRATE` | Opus bitrate for the size→duration estimate | `16000` |
+
+**Operator prerequisite.** Enable **Cloud Speech-to-Text API** in the same GCP project as Vision and allow it on `GCP_VISION_API_KEY`'s API restrictions (or set `GCP_SPEECH_API_KEY`). Documented in `README.md` and `.env.example`. Until then every voice note degrades honestly to the fallback line — no crash, no dead turn.
+
+**Rule 13 statement.** No new intent and no new flow: the transcript reuses the LIVE grammar, so `flowKnowledge.js`, `sakaAi.js` and the `conversationEngine.js` composer are unchanged and `test_agent_training` stays green untouched.
+
+**Frames touched.** `src/services/sttService.js` (new, 208), `src/routes/whatsapp/media.js` (imports, `VOICE_LISTENING_ACK`, `prepareVoiceAck`, `startAudioTranscription` — 337 → 484 lines), `src/routes/whatsapp/messages.js` (voice gate, combined ack, 3-way `Promise.all`, transcript/fallback seam, ack-suppression guards), `src/services/envAudit.js` (+7 keys, +1 secret), `.env.example` (+STT block), `README.md` (operator note), `scripts/health_audit.js` (+1 stateless suite), `test_stt_service.js` (new, 26 assertions), `test_quiz_flow.js` (+3), `test_env_audit.js` (+15), `test_no_canned_replies.js` (+1), `package.json` (1.79.0), `landing/data/changelog.json` (+ stamped assets), `docs/` (regenerated), this file, `CHANGELOG.md`.
+
+**Suites run.** `test_stt_service` (new, 26), `test_quiz_flow` (160 — +3), `test_env_audit` (59 — +15), `test_no_canned_replies` (15 — ratchet still 4), `test_ocr_flow` (129), `test_interactive_reply` (48), `test_conv_eval` (236), `npm run health` — green.
+
+**Recurrence autopsy (rule 51).** Defect class *"an inbound message type degraded to a canned line and was never reclaimed"* → siblings audited: stickers/reactions/location (deliberately left — no data lane, pinned), interactive button/list taps (already resolved since v1.73.4), audio-with-caption (`text.body` present → still a text turn), document/photo media (unchanged OCR lane, re-proven). Defect class *"a provider call that could spend money before authentication"* → the voice gate now runs before download/STT, matching the image gate. Defect class *"two progress acks on one slow turn"* → instant + slow acks explicitly excluded for voice turns.
+
+**Rules shaped this work (rule 58).** 1/39/45 (rules + architecture read first), 3/4 (targeted reads, batched calls), 7 (language pair from the phone), 10/11 (stateless suites, targeted run), 12/33 (version + architecture + CHANGELOG same commit, `v1.79.0: …`), 13/31 (warm copy, one next step; no intent/flow change), 21 (env registry + template order), 32 (synced before work), 42 (open proposal reconciled: `PROP-2026-11-08-01` only, unrelated), 50 (every failure degrades + logs), 51/52 (sibling sweep + before/after assertions), 54 (Google limits verified; suites/health actually run), 55 (reused `downloadWhatsAppMedia`, `resolveMediaGate`, the `messageText` seam and `ocr_requests`; zero new deps), 56 (existing users get the same lane — no schema, no backfill needed), 58 (this report). **No rule was edited or added.**
 

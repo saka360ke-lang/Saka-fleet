@@ -83,6 +83,13 @@ function run() {
   check(registryDrift.length === 0, `No template knob is unregistered${registryDrift.length ? ` — extra: ${registryDrift.join(', ')}` : ''}`);
   check(parseEnvKeys(fs.readFileSync('.env.example', 'utf8')).length === templateKeys.length, 'Template parsing is deterministic');
 
+  console.log('\n--- Test 2b: voice-note STT knobs (v1.79.0) ---');
+  for (const key of ['STT_ENABLED', 'GCP_SPEECH_API_KEY', 'GCP_SPEECH_ENDPOINT', 'STT_TIMEOUT_MS', 'STT_MAX_ATTEMPTS', 'STT_MAX_DURATION_SECONDS', 'STT_ESTIMATED_BITRATE']) {
+    check(REGISTERED_ENV_KEYS.includes(key), `the voice STT knob ${key} is registered`);
+    check(templateKeys.includes(key), `${key} is documented in .env.example`);
+  }
+  check(SECRET_ENV.includes('GCP_SPEECH_API_KEY'), 'the speech key is treated as a secret (never printed)');
+
   console.log('\n--- Test 3: canonical section order ---');
   const sections = ENV_SECTIONS.map((entry) => entry.section);
   check(new Set(sections).size === sections.length, 'Section names are unique');

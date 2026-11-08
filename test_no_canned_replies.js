@@ -125,5 +125,12 @@ passed += 1;
 assert(!/from\s+['"]\.\/messages\.js['"]/.test(interactiveLeaf) && /from\s+['"]\.\.\/\.\.\/services\//.test(interactiveLeaf), 'interactive.js imports services only and never the processor');
 passed += 1;
 
+// v1.79.0 — Phase 18: the voice-note transcription lane lives in the same leaf.
+// The listening ack is DATA (an exported constant), the transcription returns
+// data, and the processor keeps every send plus the deterministic fallback.
+const voiceLeaf = fs.readFileSync('src/routes/whatsapp/media.js', 'utf8');
+assert(voiceLeaf.includes('VOICE_LISTENING_ACK') && voiceLeaf.includes('startAudioTranscription'), 'media.js carries the voice-note listening ack + transcription lane as data');
+passed += 1;
+
 console.log(`\n🎉 ${passed} no-canned-replies assertions passed — ${currentCount} canned literals remain (ratchet ≤ 4; every new literal must be composed).`);
 

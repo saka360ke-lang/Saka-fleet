@@ -107,7 +107,15 @@ export const ENV_SECTIONS = Object.freeze([
       'OCR_TELEMETRY_RETENTION_DAYS',
       'RECEIPT_RETENTION_DAYS',
       'OCR_AI_EXTRACTION',
-      'RECEIPTS_BUCKET'
+      'RECEIPTS_BUCKET',
+      // v1.79.0 — Phase 18: voice-note Speech-to-Text (same GCP project as Vision).
+      'STT_ENABLED',
+      'GCP_SPEECH_API_KEY',
+      'GCP_SPEECH_ENDPOINT',
+      'STT_TIMEOUT_MS',
+      'STT_MAX_ATTEMPTS',
+      'STT_MAX_DURATION_SECONDS',
+      'STT_ESTIMATED_BITRATE'
     ]
   },
   { section: 'KNOWLEDGEBASE', keys: ['KB_MAX_SOURCE_BYTES', 'KB_FETCH_TIMEOUT_MS', 'FEATURE_NOTICE_VERSION'] },
@@ -338,6 +346,7 @@ export const SECRET_ENV = Object.freeze([
   'META_VERIFY_TOKEN',
   'RESEND_API_KEY',
   'GCP_VISION_API_KEY',
+  'GCP_SPEECH_API_KEY',
   'DEEPSEEK_API_KEY',
   'ANTHROPIC_API_KEY',
   'OPENAI_API_KEY',

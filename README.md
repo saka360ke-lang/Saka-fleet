@@ -155,6 +155,12 @@ operation line).
   3-step recovery ladder (30 min / 24 h / coupon T-2d), and expired plans get
   soft D+7 and D+30 benefit nudges around the D+15 winback — always capped and
   always stopped by a renewal.
+- **Voice notes, understood (v1.79.0):** WhatsApp voice notes are transcribed with
+  Google Cloud Speech-to-Text and processed exactly like typed messages — log a
+  fuel stop, ask a question or answer a quiz by speaking (≤55 s / 5 MB). Operator:
+  enable **Cloud Speech-to-Text API** in the GCP console and allow it on
+  `GCP_VISION_API_KEY` (or set `GCP_SPEECH_API_KEY`); `STT_ENABLED=off` pauses
+  transcription and answers with the typed-it-in line.
 - **Every asset measures what it really has (v1.28.9):** one registry
   (`assetMetrics.js`) covers all eight asset kinds — cars/motorcycles/trucks/buses
   use the odometer, litres and km/L (or kWh and km/kWh when electric), while
