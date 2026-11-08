@@ -438,26 +438,33 @@ export async function sendDriverAssignmentOtp(targetEmail, code, { plate = 'your
 
 
 
-export async function sendPassbookWelcomeEmail({ targetEmail, plateNumber, makeModel, yom, vin, token, fuelType, mileage }) {
+export async function sendPassbookWelcomeEmail({
+    targetEmail, plateNumber, makeModel, yom, vin, token, fuelType, mileage,
+    // v1.85.0 (Phase 24) — identity + meter follow the asset kind (rule 7).
+    identityLabel = 'VIN (Chassis)', identityValue = vin,
+    meterLabel = 'Initial Mileage', meterValue = mileage, meterUnit = 'km'
+}) {
     try {
+        const identity = identityValue || vin || null;
+        const subjectIdentity = identity ? ` (${identity})` : '';
         const { data, error } = await getResendClient().emails.send({
             from: 'Saka Fleet <reports@reports.sakafleet.com>',
             to: [targetEmail],
-            subject: `Vehicle Passbook Issued - ${plateNumber} (VIN: ${vin})`,
+            subject: `Asset Passbook Issued - ${plateNumber}${subjectIdentity}`,
             html: `
                 <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #1e293b; max-width: 580px; margin: auto; border: 1px solid #e2e8f0; padding: 28px; border-radius: 12px; background: #ffffff;">
                     <div style="border-bottom: 2px solid #0284c7; padding-bottom: 12px; margin-bottom: 20px;">
-                        <h2 style="color: #0f172a; margin: 0;">Official Vehicle Passbook</h2>
+                        <h2 style="color: #0f172a; margin: 0;">Official Asset Passbook</h2>
                         <p style="color: #64748b; margin: 4px 0 0 0; font-size: 14px;">Saka Fleet Intelligent Asset Record</p>
                     </div>
-                    <p>Congratulations! Your vehicle asset record has been verified and permanently issued on Saka Fleet.</p>
+                    <p>Congratulations! Your asset record has been verified and permanently issued on Saka Fleet.</p>
                     <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 18px; margin: 20px 0;">
                         <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
                             <tr><td style="padding: 6px 0; color: #64748b;">Registration Plate:</td><td style="padding: 6px 0; font-weight: bold; color: #0f172a;">${plateNumber}</td></tr>
                             <tr><td style="padding: 6px 0; color: #64748b;">Make & Model:</td><td style="padding: 6px 0; font-weight: bold; color: #0f172a;">${makeModel} (${yom})</td></tr>
                             <tr><td style="padding: 6px 0; color: #64748b;">Fuel Type:</td><td style="padding: 6px 0; font-weight: bold; color: #0f172a;">${fuelType}</td></tr>
-                            <tr><td style="padding: 6px 0; color: #64748b;">Initial Mileage:</td><td style="padding: 6px 0; font-weight: bold; color: #0f172a;">${Number(mileage).toLocaleString()} km</td></tr>
-                            <tr><td style="padding: 6px 0; color: #64748b;">VIN (Chassis):</td><td style="padding: 6px 0; font-weight: bold; color: #0284c7; font-family: monospace;">${vin}</td></tr>
+                            <tr><td style="padding: 6px 0; color: #64748b;">${meterLabel}:</td><td style="padding: 6px 0; font-weight: bold; color: #0f172a;">${Number(meterValue).toLocaleString()} ${meterUnit}</td></tr>
+                            ${identity ? `<tr><td style="padding: 6px 0; color: #64748b;">${identityLabel}:</td><td style="padding: 6px 0; font-weight: bold; color: #0284c7; font-family: monospace;">${identity}</td></tr>` : ''}
                         </table>
                     </div>
                     <div style="background-color: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 8px; padding: 16px; margin: 20px 0; text-align: center;">
@@ -467,7 +474,7 @@ export async function sendPassbookWelcomeEmail({ targetEmail, plateNumber, makeM
                         </div>
                     </div>
                     <p style="font-size: 13px; color: #475569;">
-                        🔒 <strong>VIN Immutability Notice:</strong> This passbook is permanently locked to VIN <code>${vin}</code>. All maintenance logs, fuel statements, and compliance audits will accrue to this digital asset ledger.
+                        🔒 <strong>${identity ? `${identityLabel.split(' ')[0]} Immutability Notice` : 'Asset Identity Notice'}:</strong> This passbook is permanently locked to ${identity ? `<code>${identity}</code>` : 'this asset'}. All maintenance logs, fuel statements, and compliance audits will accrue to this digital asset ledger.
                     </p>
                     <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;">
                     <p style="font-size: 12px; color: #94a3b8; margin: 0;">Saka Fleet Operating System • Verified Asset Passbook Service</p>

@@ -56,6 +56,7 @@ export const COUNTRY_TIMEZONES = Object.freeze({
   AE: 'Asia/Dubai',
   SA: 'Asia/Riyadh',
   QA: 'Asia/Qatar',
+  BE: 'Europe/Brussels',
   IN: 'Asia/Kolkata',
   PK: 'Asia/Karachi',
   BD: 'Asia/Dhaka',
@@ -108,9 +109,33 @@ export const REGIONS = Object.freeze([
   { prefix: '+31', country: 'Netherlands', country_code: 'NL', plate_example: 'AB-12-CD', default_units: 'metric', currency: 'EUR', default_language: 'Dutch', locale: 'nl-NL' },
   { prefix: '+91', country: 'India', country_code: 'IN', plate_example: 'MH 12 AB 1234', default_units: 'metric', currency: 'INR', default_language: 'English', locale: 'en-IN' },
   { prefix: '+971', country: 'United Arab Emirates', country_code: 'AE', plate_example: 'A 12345', default_units: 'metric', currency: 'AED', default_language: 'English', locale: 'en-AE' },
+  { prefix: '+32', country: 'Belgium', country_code: 'BE', plate_example: '1-ABC-123', default_units: 'metric', currency: 'EUR', default_language: 'Dutch', locale: 'nl-BE' },
   { prefix: '+55', country: 'Brazil', country_code: 'BR', plate_example: 'ABC1D23', default_units: 'metric', currency: 'BRL', default_language: 'Portuguese', locale: 'pt-BR' },
   { prefix: '+52', country: 'Mexico', country_code: 'MX', plate_example: 'ABC-123-D', default_units: 'metric', currency: 'MXN', default_language: 'Spanish', locale: 'es-MX' }
 ]);
+
+/**
+ * v1.85.0 (Phase 24) — countries Saka serves that cannot be detected from an
+ * E.164 prefix. Canada shares +1 with the USA, so it is reachable ONLY through
+ * an explicit country choice (rule 7: an explicit choice is stamped
+ * country_source='user' and always wins; the +1 default stays US).
+ */
+export const EXTRA_REGIONS = Object.freeze([
+  { country: 'Canada', country_code: 'CA', plate_example: 'ABCD 123', default_units: 'metric', currency: 'CAD', default_language: 'English', locale: 'en-CA' }
+]);
+
+/**
+ * Region facts for a country code — REGIONS first, then the prefix-less extras,
+ * then GLOBAL. Used wherever a stored `profiles.country_code` must win over
+ * phone detection (an explicit country choice).
+ */
+export function regionForCountryCode(countryCode = 'GLOBAL') {
+  const code = String(countryCode || '').toUpperCase();
+  if (!code || code === 'GLOBAL') return REGION_FALLBACK;
+  return REGIONS.find((region) => region.country_code === code)
+    || EXTRA_REGIONS.find((region) => region.country_code === code)
+    || REGION_FALLBACK;
+}
 
 export function normalizePhone(phone) {
   if (!phone) return '';
@@ -299,6 +324,8 @@ export default {
   resolveUnitSystem,
   resolvePhoneCountryLock,
   resolveTimezoneFromCountry,
-  resolveUserTimezone
+  resolveUserTimezone,
+  regionForCountryCode,
+  EXTRA_REGIONS
 };
 

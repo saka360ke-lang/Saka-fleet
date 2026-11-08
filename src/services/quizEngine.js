@@ -90,7 +90,7 @@ import {
 import { grantLaunchAwardForTrial, formatLaunchAwardLine, getLaunchAwardConfig } from './launchAwards.js';
 import { normalizeTierKey, getTierLabel } from './subscriptionTiers.js';
 import { parseFlexibleDate } from './dateParser.js';
-import { normalizeAssetKind, requiresPlate, requiresVin, meterForAssetKind, assetTypeForKind, legacyAssetType } from './countryBucket.js';
+import { normalizeAssetKind, requiresPlate, requiresVin, meterForAssetKind, assetTypeForKind, legacyAssetType, assetDisplayName } from './countryBucket.js';
 import { prepareRoutingText } from './textNormalizer.js';
 import {
   parseThresholdSpec,
@@ -773,17 +773,9 @@ export function getFlowDefinition(flowKey, ctx) {
             parse: (text) => parsePhone(text),
             validate: (value) => (value ? { ok: true } : { ok: false, message: 'Please send the driver phone in international format.' })
           }),
-          field('odometer_at_assignment', 'Odometer at handover', 'current reading when the driver takes over', {
-            aliases: ['odometer', 'odometer_at_assignment', 'current_mileage', 'mileage'],
-            parse: (text, c) => parseOdometer(text, c),
-            validate: (value, c) => {
-              const selected = (c.vehicles || []).find((v) => v.id === c.answers?.vehicle_id);
-              const last = Number(selected?.current_mileage || selected?.odometer_reading || 0);
-              if (!Number.isFinite(value) || value < 0) return { ok: false, message: 'Please send the handover odometer as a number.' };
-              if (last > 0 && value < last) return { ok: false, message: `Handover reading cannot be below the last recorded ${last}.` };
-              return { ok: true };
-            }
-          })
+          // v1.85.0 (Phase 24) — odometer for road assets, engine hours for
+          // hours-led assets (a generator/boat never records a handover mileage).
+          ...handoverMeterFields({ mode: 'assignment', ctx })
         ]
       };
 
@@ -793,17 +785,7 @@ export function getFlowDefinition(flowKey, ctx) {
         label,
         fields: [
           vehicleField(ctx),
-          field('odometer_at_release', 'Odometer at handback', 'current reading when the driver returns the vehicle', {
-            aliases: ['odometer', 'odometer_at_release', 'current_mileage', 'mileage'],
-            parse: (text, c) => parseOdometer(text, c),
-            validate: (value, c) => {
-              const selected = (c.vehicles || []).find((v) => v.id === c.answers?.vehicle_id);
-              const last = Number(selected?.current_mileage || selected?.odometer_reading || 0);
-              if (!Number.isFinite(value) || value < 0) return { ok: false, message: 'Please send the handback odometer as a number.' };
-              if (last > 0 && value < last) return { ok: false, message: `Handback reading cannot be below the last recorded ${last}.` };
-              return { ok: true };
-            }
-          })
+          ...handoverMeterFields({ mode: 'release', ctx })
         ]
       };
 
@@ -1845,6 +1827,53 @@ async function askOtp(state, ctx, note = null) {
 }
 
 /**
+ * v1.85.0 (Phase 24) — a handover reading follows the ASSET'S meter: road assets
+ * record the odometer, hours-led assets record engine hours (never mileage).
+ */
+function handoverMeterFields({ mode, ctx }) {
+  const isAssignment = mode === 'assignment';
+  const odometerKey = isAssignment ? 'odometer_at_assignment' : 'odometer_at_release';
+  const hoursKey = isAssignment ? 'hours_at_assignment' : 'hours_at_release';
+  const kindOf = (answers) => {
+    const vehicles = ctx?.vehicles || [];
+    const vehicle = vehicles.find((v) => v.id === answers?.vehicle_id) || vehicles[0] || null;
+    return vehicle?.asset_kind || vehicle?.asset_type || vehicle?.vehicle_type || 'vehicle';
+  };
+  const hoursLed = (answers) => isHoursLedKind(kindOf(answers));
+  return [
+    field(odometerKey, isAssignment ? 'Odometer at handover' : 'Odometer at handback', 'current reading when the driver takes over', {
+      aliases: ['odometer', odometerKey, 'current_mileage', 'mileage'],
+      when: (answers) => !hoursLed(answers),
+      parse: (text, c) => parseOdometer(text, c),
+      validate: (value, c) => {
+        const selected = (c.vehicles || []).find((v) => v.id === c.answers?.vehicle_id);
+        const last = Number(selected?.current_mileage || selected?.odometer_reading || 0);
+        if (!Number.isFinite(value) || value < 0) return { ok: false, message: 'Please send the handover odometer as a number.' };
+        if (last > 0 && value < last) return { ok: false, message: `Handover reading cannot be below the last recorded ${last}.` };
+        return { ok: true };
+      }
+    }),
+    field(hoursKey, isAssignment ? 'Engine hours at handover' : 'Engine hours at handback', 'current engine-hours reading (e.g. 1240)', {
+      aliases: ['hours', 'engine_hours', 'operating_hours', hoursKey],
+      when: (answers) => hoursLed(answers),
+      parse: (text) => {
+        const match = String(text || '').match(/\d+(?:\.\d+)?/);
+        if (!match) return null;
+        const value = Number(match[0]);
+        return Number.isFinite(value) && value >= 0 ? Math.round(value * 10) / 10 : null;
+      },
+      validate: (value, c) => {
+        const selected = (c.vehicles || []).find((v) => v.id === c.answers?.vehicle_id);
+        const last = Number(selected?.operating_hours || selected?.current_engine_hours || 0);
+        if (!Number.isFinite(value) || value < 0) return { ok: false, message: 'Please send the engine hours as a number.' };
+        if (last > 0 && value < last) return { ok: false, message: `Handover hours cannot be below the last recorded ${last} h.` };
+        return { ok: true };
+      }
+    })
+  ];
+}
+
+/**
  * Owner confirmed the assignment summary → create the pending assignment,
  * email the 6-digit OTP and switch to the assignment_otp security phase.
  */
@@ -1870,6 +1899,7 @@ async function startAssignmentOtp(state, def, ctx) {
     vehicle,
     driverPhone: a.driver_phone,
     handoverOdometer: a.odometer_at_assignment,
+    handoverHours: a.hours_at_assignment,
     countryInfo: ctx.countryInfo,
     sendWhatsApp: ctx.sendWhatsApp
   });
@@ -1932,6 +1962,7 @@ async function handleAssignmentOtp(state, clean, ctx) {
       vehicle,
       driverPhone: a.driver_phone,
       handoverOdometer: a.odometer_at_assignment,
+      handoverHours: a.hours_at_assignment,
       countryInfo: ctx.countryInfo,
       sendWhatsApp: ctx.sendWhatsApp
     });
@@ -3056,32 +3087,57 @@ async function executeFlow(state, ctx) {
 
       case 'unassign_driver': {
         if (!vehicle) return { handled: true, reply: await fail('Vehicle not found.'), flow: state.flow, active: true };
-        const previous = vehicle.metadata?.odometer_at_assignment
-          ?? vehicle.current_mileage
-          ?? vehicle.odometer_reading
-          ?? null;
+        // v1.85.0 (Phase 24) — the handback reading follows the asset's meter:
+        // hours-led assets record engine hours and NEVER touch current_mileage.
+        const hoursLedAsset = isHoursLedKind(vehicle.asset_kind || vehicle.asset_type || 'vehicle');
+        const previous = hoursLedAsset
+          ? (vehicle.metadata?.hours_at_assignment ?? vehicle.operating_hours ?? vehicle.current_engine_hours ?? null)
+          : (vehicle.metadata?.odometer_at_assignment
+            ?? vehicle.current_mileage
+            ?? vehicle.odometer_reading
+            ?? null);
         const released = await unassignDriverFromVehicle({ vehicleId: vehicle.id, supabase: ctx.supabase });
         if (released && released.success === false) {
           return { handled: true, reply: await fail(released.error), flow: state.flow, active: true };
         }
+        const handbackHours = Number(a.hours_at_release);
+        const handbackOdometer = Number(a.odometer_at_release);
         const metadata = {
           ...(vehicle.metadata || {}),
-          odometer_at_release: a.odometer_at_release,
+          ...(hoursLedAsset
+            ? (Number.isFinite(handbackHours) ? { hours_at_release: handbackHours } : {})
+            : (Number.isFinite(handbackOdometer) ? { odometer_at_release: handbackOdometer } : {})),
           released_at: new Date().toISOString(),
           last_driver_phone: vehicle.metadata?.assigned_driver_phone || null
         };
-        await ctx.supabase.from('vehicles').update({
-          current_mileage: a.odometer_at_release,
-          odometer_reading: a.odometer_at_release,
-          metadata,
-          updated_at: new Date().toISOString()
-        }).eq('id', vehicle.id);
+        const patch = { metadata, updated_at: new Date().toISOString() };
+        if (hoursLedAsset) {
+          if (Number.isFinite(handbackHours) && handbackHours > 0) {
+            patch.operating_hours = handbackHours;
+            patch.hours_updated_at = new Date().toISOString();
+          }
+        } else if (Number.isFinite(handbackOdometer)) {
+          patch.current_mileage = handbackOdometer;
+          patch.odometer_reading = handbackOdometer;
+        }
+        await ctx.supabase.from('vehicles').update(patch).eq('id', vehicle.id);
 
         const reply = await ok({
-          vehicle: vehicle.plate_number,
-          handbackOdometer: a.odometer_at_release,
-          distanceDriven: previous !== null ? Math.max(0, a.odometer_at_release - previous) : undefined,
-          status: 'Vehicle is now available for a new driver.'
+          vehicle: assetDisplayName(vehicle),
+          ...(hoursLedAsset
+            ? {
+              handbackHours: Number.isFinite(handbackHours) ? handbackHours : undefined,
+              hoursWorked: previous !== null && Number.isFinite(handbackHours)
+                ? Math.max(0, Math.round((handbackHours - Number(previous)) * 10) / 10)
+                : undefined
+            }
+            : {
+              handbackOdometer: Number.isFinite(handbackOdometer) ? handbackOdometer : undefined,
+              distanceDriven: previous !== null && Number.isFinite(handbackOdometer)
+                ? Math.max(0, handbackOdometer - previous)
+                : undefined
+            }),
+          status: 'This asset is now available for a new driver.'
         });
         return { handled: true, reply, flow: state.flow, completed: true };
       }
@@ -3592,6 +3648,9 @@ async function executeFlow(state, ctx) {
         await ctx.supabase.from('chat_history').delete().eq('user_phone', ctx.senderPhone);
         await ctx.supabase.from('chat_transcripts').delete().eq('phone_number', ctx.senderPhone);
         await ctx.supabase.from('processed_webhooks').delete().eq('phone_number', ctx.senderPhone);
+        // v1.85.0 (Phase 24) — the durable session snapshot goes too, so no
+        // stale quiz/OTP state can survive a closed account (rule 37 sibling).
+        await ctx.supabase.from('chat_sessions').delete().eq('phone_number', ctx.senderPhone);
 
         const reply = await ok({
           status: 'Account soft-deleted, vehicles released and sessions cleared.',

@@ -3,6 +3,28 @@ import { sendEmailOtp, sendTransferReleasePinEmail, sendPassbookWelcomeEmail } f
 import { getEffectiveExchangeRate } from './paystack.js';
 import { findVehicleByCandidate } from './vehicles.js';
 import { evaluateVehicleCapacity, invalidateEntitlements } from './subscriptions.js';
+import { detectCountryFromPhone } from './globalization.js';
+import { assetDisplayName } from './countryBucket.js';
+import { isHoursLedKind } from './expenseCatalog.js';
+
+/**
+ * v1.85.0 (Phase 24) — the asset's identity line for every transfer message.
+ * Road assets carry a VIN; equipment/generators/vessels carry a serial instead
+ * (rule 7 / §53.1) — a transfer never prints "VIN: N/A".
+ */
+export function transferIdentity(vehicle = {}, vin = null) {
+  const value = vin || vehicle?.vin || null;
+  if (value) return { label: 'VIN', value };
+  if (vehicle?.serial_number) return { label: 'Serial', value: vehicle.serial_number };
+  return null;
+}
+
+/** "Plate: KDA 123A · VIN: ..." (or Serial) — or just the plate for equipment. */
+function identityText(vehicle = {}, vin = null) {
+  const plate = assetDisplayName(vehicle);
+  const identity = transferIdentity(vehicle, vin);
+  return identity ? `${plate} · ${identity.label}: ${identity.value}` : plate;
+}
 
 /**
  * Step 1: Initiate passbook transfer by current owner
@@ -212,12 +234,14 @@ export async function verifyOwnerReleaseOtpAndNotifyBuyer({ transferId, provided
     const buyerPhone = transfer.to_owner_phone;
     const sellerName = transfer.profiles?.full_name || 'Fleet Owner';
     const sellerPhone = transfer.profiles?.phone_number || '';
-    const plate = transfer.vehicles?.plate_number || 'Vehicle';
+    const plate = assetDisplayName(transfer.vehicles || {}) || 'Vehicle';
     const makeModel = transfer.vehicles?.make_model || 'Vehicle';
-    const vin = transfer.vin || transfer.vehicles?.vin || 'N/A';
+    const identity = transferIdentity(transfer.vehicles || {}, transfer.vin || transfer.vehicles?.vin);
+    const vin = identity?.value || null;
+    const identityLine = identity ? ` (${identity.label}: ${identity.value})` : '';
 
     if (buyerPhone && sendWhatsAppFn) {
-      const buyerMsg = `🚗 *Saka Fleet Passbook Transfer Request*\n\nHello! *${sellerName}* (${sellerPhone}) has initiated a passbook transfer for *${makeModel}* (Plate: *${plate}*, VIN: \`${vin}\`).\n\nReply *"ACCEPT"* to claim ownership of this vehicle passbook.\n_(Or reply "DECLINE" to reject)_`;
+      const buyerMsg = `🚗 *Saka Fleet Passbook Transfer Request*\n\nHello! *${sellerName}* (${sellerPhone}) has initiated a passbook transfer for *${makeModel}* (${plate}${identityLine}).\n\nReply *"ACCEPT"* to claim ownership of this vehicle passbook.\n_(Or reply "DECLINE" to reject)_`;
       await sendWhatsAppFn(buyerPhone, buyerMsg);
     }
 
@@ -232,6 +256,19 @@ export async function verifyOwnerReleaseOtpAndNotifyBuyer({ transferId, provided
     console.error('[Transfers] Error in Step 3:', err);
     return { success: false, error: err.message };
   }
+}
+
+/**
+ * v1.85.0 (Phase 24) — the transfer fee in the BUYER's currency. Pure so the
+ * suites can prove a Nigerian buyer is never quoted KES; the live path supplies
+ * the cached FX rate.
+ */
+export function formatTransferFeeLine({ currency = 'USD', rate = 1, locale = 'en-US' } = {}) {
+  const cur = String(currency || 'USD').toUpperCase();
+  if (cur === 'USD') return { currency: 'USD', amount: 3, localPriceStr: 'USD 3.00', localFigure: '' };
+  const localAmount = Math.round(3.0 * Number(rate || 1));
+  const localPriceStr = `${cur} ${localAmount.toLocaleString(locale || 'en-US')}`;
+  return { currency: cur, amount: localAmount, localPriceStr, localFigure: ` (~${localPriceStr})` };
 }
 
 /**
@@ -256,22 +293,33 @@ export async function handleBuyerAcceptance({ buyerPhone, supabase, sendWhatsApp
       return null;
     }
 
-    const plate = transfer.vehicles?.plate_number || 'Vehicle';
-    const vin = transfer.vin || transfer.vehicles?.vin || 'N/A';
+    const plate = assetDisplayName(transfer.vehicles || {}) || 'Vehicle';
+    const identity = transferIdentity(transfer.vehicles || {}, transfer.vin || transfer.vehicles?.vin);
+    const vin = identity?.value || null;
+    const identityLine = identity ? ` (${identity.label}: ${identity.value})` : '';
 
     if (!transfer.is_free_transfer && !transfer.transfer_fee_paid) {
-      const rate = await getEffectiveExchangeRate(supabase, 'KES');
-      const localKES = Math.round(3.0 * rate);
+      // v1.85.0 (Phase 24) — the fee quote follows the BUYER'S country (rule 7):
+      // a Nigerian buyer sees NGN, a Kenyan buyer sees KES — never a hardcoded KES.
+      const buyerRegion = detectCountryFromPhone(cleanPhone);
+      const feeCurrency = buyerRegion?.currency || 'USD';
+      const feeLine = formatTransferFeeLine({
+        currency: feeCurrency,
+        rate: feeCurrency === 'USD' ? 1 : await getEffectiveExchangeRate(supabase, feeCurrency),
+        locale: buyerRegion?.locale || 'en-US'
+      });
+      const localPriceStr = feeLine.localPriceStr;
+      const localFigure = feeLine.localFigure;
 
       return {
         status: 'PAYMENT_REQUIRED',
         transferId: transfer.id,
         isFreeTransfer: false,
         feeAmount: 3.0,
-        localPriceStr: `KES ${localKES.toLocaleString()}`,
+        localPriceStr,
         plateNumber: plate,
         vin,
-        replyMessage: `💳 *Passbook Transfer Fee Required*\n\nThis vehicle (*${plate}*) has already utilized its 1 free transfer for this calendar year.\n\nA flat transfer fee of *USD 3.00* (~KES ${localKES}) is required before completing the passbook handover.\n\n👉 *Pay Transfer Fee securely:* https://sakafleet.com/pay-transfer?id=${transfer.id}\n\nOnce payment is confirmed, reply *"PAID"* to finalize!`
+        replyMessage: `💳 *Passbook Transfer Fee Required*\n\nThis asset (*${plate}*) has already utilized its 1 free transfer for this calendar year.\n\nA flat transfer fee of *USD 3.00*${localFigure} is required before completing the passbook handover.\n\n👉 *Pay Transfer Fee securely:* https://sakafleet.com/pay-transfer?id=${transfer.id}\n\nOnce payment is confirmed, reply *"PAID"* to finalize!`
       };
     }
 
@@ -294,7 +342,7 @@ export async function handleBuyerAcceptance({ buyerPhone, supabase, sendWhatsApp
       buyerEmail: transfer.to_owner_email,
       plateNumber: plate,
       vin,
-      replyMessage: `📧 *Step 5 of 5: Buyer Email Verification*\n\nWe sent a 6-digit verification code to your email (*${transfer.to_owner_email}*).\n\nPlease reply with the 6-digit code to finalize claiming *${plate}* (VIN: \`${vin}\`) and receive your official digital passbook!`
+      replyMessage: `📧 *Step 5 of 5: Buyer Email Verification*\n\nWe sent a 6-digit verification code to your email (*${transfer.to_owner_email}*).\n\nPlease reply with the 6-digit code to finalize claiming *${plate}*${identityLine} and receive your official digital passbook!`
     };
   } catch (err) {
     console.error('[Transfers] Error in Step 4:', err);
@@ -423,27 +471,36 @@ export async function completePassbookTransfer({ buyerPhone, providedOtp, supaba
     invalidateEntitlements(transfer.from_owner_id);
 
     if (transfer.to_owner_email) {
+      // v1.85.0 (Phase 24) — the welcome email speaks the asset's own meter and
+      // identity: engine hours for hours-led assets, serial when no VIN exists.
+      const welcomeIdentity = transferIdentity(oldVeh || {}, transfer.vin);
+      const hoursLedAsset = isHoursLedKind(oldVeh?.asset_kind || oldVeh?.asset_type || 'vehicle');
       await sendPassbookWelcomeEmail({
         targetEmail: transfer.to_owner_email,
-        plateNumber: oldVeh?.plate_number || 'Vehicle',
-        makeModel: oldVeh?.make_model || 'Vehicle',
+        plateNumber: assetDisplayName(oldVeh || {}) || 'Asset',
+        makeModel: oldVeh?.make_model || 'Asset',
         yom: oldVeh?.yom || oldVeh?.year_of_manufacture || 2020,
-        vin: transfer.vin,
+        vin: welcomeIdentity?.value || null,
+        identityLabel: welcomeIdentity ? `${welcomeIdentity.label} (${welcomeIdentity.label === 'VIN' ? 'Chassis' : 'Machine'})` : null,
+        identityValue: welcomeIdentity?.value || null,
         token: newToken,
         fuelType: oldVeh?.fuel_type || 'Petrol',
-        mileage: oldVeh?.current_mileage || 0
+        mileage: oldVeh?.current_mileage || 0,
+        meterLabel: hoursLedAsset ? 'Initial Engine Hours' : 'Initial Mileage',
+        meterValue: hoursLedAsset ? (oldVeh?.operating_hours || 0) : (oldVeh?.current_mileage || 0),
+        meterUnit: hoursLedAsset ? 'h' : 'km'
       }).catch(err => console.warn('Could not send passbook email:', err.message));
     }
 
     const sellerPhone = transfer.seller?.phone_number;
     if (sellerPhone && sendWhatsAppFn) {
-      const sellerMsg = `✅ *Passbook Transfer Complete!*\n\nOwnership of *${oldVeh?.plate_number}* (VIN: \`${transfer.vin}\`) has been successfully transferred to *${buyerProfile.full_name || cleanPhone}*.\n\nThe vehicle has been unlinked from your fleet roster.`;
+      const sellerMsg = `✅ *Passbook Transfer Complete!*\n\nOwnership of *${identityText(oldVeh || {}, transfer.vin)}* has been successfully transferred to *${buyerProfile.full_name || cleanPhone}*.\n\nThe asset has been unlinked from your fleet roster.`;
       await sendWhatsAppFn(sellerPhone, sellerMsg);
     }
 
     return {
       success: true,
-      plateNumber: oldVeh?.plate_number || 'Vehicle',
+      plateNumber: assetDisplayName(oldVeh || {}) || 'Asset',
       vin: transfer.vin,
       newToken,
       buyerEmail: transfer.to_owner_email,

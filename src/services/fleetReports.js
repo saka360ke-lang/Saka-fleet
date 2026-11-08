@@ -25,6 +25,7 @@ import {
 import { detectExpiryCategory, reminderDueDate, daysUntilDue } from './maintenanceReminders.js';
 import { buildLedgerGroups, expenseToLedgerRow, earningToLedgerRow } from './reportLedger.js';
 import { EXPENSE_CATEGORY_KEYS, expenseCategoryLabel, expenseCategoryOf } from './expenseCatalog.js';
+import { primaryMeterForAssetKind } from './assetMetrics.js';
 
 export const REPORT_TYPES = Object.freeze({
   fleet: { label: 'Fleet Status Report', aliases: ['fleet', 'status', 'overview', 'executive', 'rollup', 'summary'] },
@@ -84,10 +85,35 @@ function expenseCategory(expenseType) {
   return expenseCategoryOf(expenseType);
 }
 
+/**
+ * v1.85.0 (Phase 24) — the meter follows the ASSET KIND (rule 7, §53.1):
+ * road kinds read the odometer (km/mi), heavy equipment, machinery, generators
+ * and watercraft read ENGINE HOURS. The label travels with the value so no
+ * surface can hardcode "Odometer" on an hours-led asset again.
+ */
 function vehicleDisplay(vehicle, ctx) {
+  const kind = vehicle.asset_kind || vehicle.asset_type || vehicle.vehicle_type || 'vehicle';
+  if (primaryMeterForAssetKind(kind) === 'hours') {
+    const hours = toNumber(vehicle.operating_hours ?? vehicle.current_engine_hours);
+    return {
+      odometer: null,
+      distanceUnit: ctx.labels.distance,
+      meterLabel: 'Engine hours',
+      meterId: 'engine_hours',
+      meterValue: Math.round(hours * 10) / 10,
+      meterUnit: 'h'
+    };
+  }
   const value = toNumber(vehicle.current_mileage ?? vehicle.odometer_reading);
   const distance = ctx.unitSystem === 'imperial' ? kmToUserDistance(value, 'imperial') : value;
-  return { odometer: Math.round(distance), distanceUnit: ctx.labels.distance };
+  return {
+    odometer: Math.round(distance),
+    distanceUnit: ctx.labels.distance,
+    meterLabel: 'Odometer',
+    meterId: 'distance',
+    meterValue: Math.round(distance),
+    meterUnit: ctx.labels.distance
+  };
 }
 
 /** v1.75.2 — exported so the dashboard compliance surface uses the SAME buckets. */
@@ -967,6 +993,11 @@ function vehicleSummary(vehicle, dataset, ctx, now) {
     active: isActiveVehicle(vehicle),
     odometer: display.odometer,
     distanceUnit: display.distanceUnit,
+    // v1.85.0 — the kind-aware meter (label + value + unit) every surface renders.
+    meterLabel: display.meterLabel,
+    meterId: display.meterId,
+    meterValue: display.meterValue,
+    meterUnit: display.meterUnit,
     driverName: driverNameFor(vehicle, dataset.profiles),
     monthSpend: money.spend,
     monthEarnings: money.earnings

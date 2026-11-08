@@ -175,6 +175,20 @@ check(Boolean(vehicleUpdate) && vehicleUpdate.patch.current_mileage === 100500, 
 const audit = insertMock.state.inserts.find((entry) => entry.table === 'admin_audit_logs');
 check(Boolean(audit) && audit.rows[0].action === 'CSV_IMPORT', 'the import is audited as CSV_IMPORT');
 
+console.log('\n--- Test 9b: hours-led fleet imports ENGINE HOURS (v1.85.0) ---');
+const genVehicles = [{ id: 'v-gen', plate_number: null, make_model: 'Cummins 60kVA', asset_kind: 'generator', operating_hours: 1240, status: 'ACTIVE', current_mileage: null }];
+const genMock = createMockSupabase({ vehicles: [{ ...genVehicles[0] }], admin_audit_logs: [] });
+const genRows = [
+  { line: 2, plate: 'Cummins 60kVA', vehicleId: 'v-gen', expenseType: 'Fuel', amount: 8000, odometer: 1300, notes: 'site tank', dateKey: '2026-11-01', createdAt: asIso('2026-11-01') }
+];
+const genRun = await bulkInsertImportRows({ supabase: genMock.client, ownerId: 'owner-1', validRows: genRows, vehicles: genVehicles, now: NOW });
+check(genRun.ok && genRun.inserted === 1, 'the hours-led import inserts the row');
+const genInsert = genMock.state.inserts.find((entry) => entry.table === 'expense_logs');
+const genRow = genInsert.rows[0];
+check(genRow.odometer_reading === null && /Engine hours: 1300 h/.test(genRow.notes), 'the reading lands in the notes as engine hours, never the odometer');
+const genUpdate = genMock.state.updates.find((entry) => entry.table === 'vehicles');
+check(Boolean(genUpdate) && genUpdate.patch.operating_hours === 1300 && genUpdate.patch.current_mileage === undefined, 'the asset advances its hour meter, never mileage');
+
 console.log('\n--- Test 10: kill switch + honest failures ---');
 process.env.LEGACY_EXPENSES_WRITE_ENABLED = 'false';
 const offMock = createMockSupabase({ vehicles: [{ ...vehicles[0], status: 'ACTIVE' }], admin_audit_logs: [] });

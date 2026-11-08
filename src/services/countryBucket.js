@@ -11,7 +11,7 @@
  * carries its authority, source and verified date.
  */
 
-import { REGIONS, detectCountryFromPhone } from './globalization.js';
+import { REGIONS, EXTRA_REGIONS, detectCountryFromPhone, regionForCountryCode } from './globalization.js';
 
 export const COUNTRY_KB_VERSION = '2026.10.1';
 export const KB_VERIFIED_AT = '2026-10-30';
@@ -169,17 +169,22 @@ export const COUNTRY_KB = Object.freeze({
     authority: 'Local transport authority',
     sources: [],
     rules: [
+      // v1.85.0 (Phase 24) — road-legal rules are scoped to ROAD kinds; a boat,
+      // generator or excavator is never told to pass a roadworthiness test.
       rule('vehicle_insurance', 'vehicle_compliance', 'Vehicle insurance', 'Third-party or equivalent cover is required in most jurisdictions.', {
-        example: 'Insurance ABC-123 expires 2027-05-15', renewal: 'annual', lawReference: 'Local insurance act'
+        example: 'Insurance ABC-123 expires 2027-05-15', renewal: 'annual', lawReference: 'Local insurance act', assetKinds: ['vehicle', 'motorcycle', 'truck', 'bus']
       }),
       rule('vehicle_inspection', 'vehicle_compliance', 'Roadworthiness inspection', 'Periodic inspection may be required before renewal.', {
-        example: 'Inspection expires 2027-03-15', renewal: 'annual', lawReference: 'Local traffic act'
+        example: 'Inspection expires 2027-03-15', renewal: 'annual', lawReference: 'Local traffic act', assetKinds: ['vehicle', 'motorcycle', 'truck', 'bus']
+      }),
+      rule('equipment_insurance', 'vehicle_compliance', 'Equipment insurance', 'Machinery, generator and vessel cover is often required by the site, marina or lender — keep the expiry here so a lapse never stops work.', {
+        required: false, example: 'Equipment insurance expires 2027-05-15', renewal: 'annual', assetKinds: ['heavy_equipment', 'machinery', 'generator', 'watercraft']
       }),
       rule('driver_licence', 'driver_compliance', 'Driving licence', 'A valid licence for the class of vehicle you drive.', {
         example: 'Licence DL-123456 expires 2028-01-31', renewal: 'per licence', lawReference: 'Local traffic act'
       }),
       rule('carry_documents', 'traffic_law', 'Carry your documents', 'Keep your licence and insurance available for checks.', {
-        required: false, example: 'Log insurance expires 2027-05-15'
+        required: false, example: 'Log insurance expires 2027-05-15', assetKinds: ['vehicle', 'motorcycle', 'truck', 'bus']
       })
     ]
   },
@@ -192,10 +197,13 @@ export const COUNTRY_KB = Object.freeze({
     ],
     rules: [
       rule('vehicle_insurance', 'vehicle_compliance', 'Motor insurance', 'At least third-party cover under the Insurance Act.', {
-        example: 'Insurance ABC-123 expires 2027-05-15', renewal: 'annual', lawReference: 'Insurance (Motor Vehicles Third Party Risks) Act'
+        example: 'Insurance ABC-123 expires 2027-05-15', renewal: 'annual', lawReference: 'Insurance (Motor Vehicles Third Party Risks) Act', assetKinds: ['vehicle', 'motorcycle', 'truck', 'bus']
       }),
       rule('vehicle_inspection', 'vehicle_compliance', 'NTSA inspection', 'Roadworthiness inspection for public service and older vehicles.', {
-        example: 'Inspection expires 2027-03-15', renewal: 'annual', lawReference: 'Traffic Act (Cap 403)'
+        example: 'Inspection expires 2027-03-15', renewal: 'annual', lawReference: 'Traffic Act (Cap 403)', assetKinds: ['vehicle', 'motorcycle', 'truck', 'bus']
+      }),
+      rule('equipment_insurance', 'vehicle_compliance', 'Equipment insurance', 'Plant, generator and vessel cover is usually required by the site, marina or lender — track the expiry here.', {
+        required: false, example: 'Equipment insurance expires 2027-05-15', renewal: 'annual', assetKinds: ['heavy_equipment', 'machinery', 'generator', 'watercraft']
       }),
       rule('road_service_licence', 'vehicle_compliance', 'Road Service Licence (PSL)', 'Required for public service and commercial vehicles.', {
         example: 'Road service licence RSL-5544 expires 2027-06-30', renewal: 'annual', assetKinds: ['bus', 'truck', 'vehicle'], lawReference: 'Traffic Act (Cap 403)'
@@ -360,7 +368,7 @@ export const COUNTRY_KB = Object.freeze({
 });
 
 
-/** Resolve a user-typed country name/code (e.g. "Kenya", "ke", "+254"). */
+/** Resolve a user-typed country name/code (e.g. "Kenya", "ke", "Canada", "+254"). */
 export function resolveCountryInput(input = '') {
   const raw = String(input || '').trim();
   if (!raw) return null;
@@ -371,8 +379,23 @@ export function resolveCountryInput(input = '') {
   if (byName) return byName;
   const partial = REGIONS.find((region) => region.country.toLowerCase().startsWith(raw.toLowerCase()));
   if (partial) return partial;
+  // v1.85.0 (Phase 24) — countries without a unique E.164 prefix (Canada, +1).
+  // Only an explicit choice reaches here; the phone default stays US.
+  const byExtraCode = EXTRA_REGIONS.find((region) => region.country_code === upper);
+  if (byExtraCode) return byExtraCode;
+  const byExtraName = EXTRA_REGIONS.find((region) => region.country.toLowerCase() === raw.toLowerCase()
+    || region.country.toLowerCase().startsWith(raw.toLowerCase()));
+  if (byExtraName) return byExtraName;
   if (/^\+\d+/.test(raw)) return detectCountryFromPhone(raw);
   return null;
+}
+
+/**
+ * v1.85.0 — the region facts for a country code, REGIONS-then-extras. Exported
+ * so every surface that resolves a PROFILE's country (not its phone) agrees.
+ */
+export function countryFactsFor(countryCode = 'GLOBAL') {
+  return regionForCountryCode(countryCode);
 }
 
 function ruleMatchesAsset(ruleEntry, assetKind) {
@@ -529,6 +552,7 @@ export default {
   meterForAssetKind,
   assetDisplayName,
   resolveCountryInput,
+  countryFactsFor,
   getCountryBucket,
   loadCountryBucket,
   buildJurisdictionContext,

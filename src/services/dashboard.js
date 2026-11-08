@@ -54,12 +54,21 @@ import { listVehicleDocuments, DOCUMENTS_BUCKET, documentTypeLabel } from './veh
 // v1.83.0 (Phase 22) — subscription + transfer pages: engine data only.
 import { getTierLocalPrice } from './paystack.js';
 import { recordLabeledReading } from './labelsEverywhere.js';
-import { EXPENSE_TYPES } from './expenseCatalog.js';
+import { EXPENSE_TYPES, isHoursLedKind } from './expenseCatalog.js';
 // v1.81.0 (Phase 20) — CSV bulk import: the preview renders the engine's copy.
 import { CSV_IMPORT_ERROR_COPY, CSV_IMPORT_MAX_ROWS } from './csvImport.js';
 import { driverComplianceLabel } from './driverComplianceCatalog.js';
 import { daysUntilDue } from './maintenanceReminders.js';
-import { buildTyreWearRows, buildCostPerKmTrend, buildCostPerKmChart, getTyreLifespanKm } from './vehicleAnalytics.js';
+import {
+  buildTyreWearRows,
+  buildCostPerKmTrend,
+  buildCostPerHourTrend,
+  buildServiceIntervalRows,
+  buildCostPerKmChart,
+  parseHoursFromNotes,
+  isHoursLedVehicle,
+  getTyreLifespanKm
+} from './vehicleAnalytics.js';
 
 export const DASHBOARD_SESSIONS_TABLE = 'dashboard_sessions';
 export const DASHBOARD_LINK_TTL_MS = 15 * 60 * 1000; // 15 minutes
@@ -1216,6 +1225,38 @@ export const RECORDS_CSV_COLUMNS = Object.freeze([
   'Date', 'Kind', 'Plate', 'Type', 'Description', 'Odometer', 'Unit Cost', 'Amount', 'Currency', 'Label'
 ]);
 
+/**
+ * v1.85.0 (Phase 24) — the reading column's label follows the fleet's meter:
+ * 'Engine hours' for an hours-led fleet, 'Odometer' for road assets and a
+ * neutral 'Reading' for a mixed fleet (one column can only carry one label).
+ */
+export function recordsMeterLabel(vehicles = []) {
+  const list = (vehicles || []).filter(Boolean);
+  if (!list.length) return 'Reading';
+  const hours = list.filter((vehicle) => isHoursLedVehicle(vehicle)).length;
+  if (hours === 0) return 'Odometer';
+  if (hours === list.length) return 'Engine hours';
+  return 'Reading';
+}
+
+/**
+ * v1.85.0 — attach each row's meter value: the odometer for road assets, the
+ * engine-hours reading parsed from the entry notes for hours-led assets.
+ */
+export function attachMeterReadings(rows = [], vehicles = []) {
+  const byId = new Map((vehicles || []).map((vehicle) => [String(vehicle.id), vehicle]));
+  const meterLabel = recordsMeterLabel(vehicles);
+  const out = (rows || []).map((row) => {
+    const vehicle = byId.get(String(row.vehicleId || ''));
+    const hoursLed = vehicle ? isHoursLedVehicle(vehicle) : false;
+    const meter = hoursLed
+      ? parseHoursFromNotes(row.raw?.notes ?? row.notes ?? null)
+      : (row.odometer ?? null);
+    return { ...row, meter, meterLabel, meterIsHours: hoursLed };
+  });
+  return { rows: out, meterLabel };
+}
+
 function csvCell(value) {
   const text = value === null || value === undefined ? '' : String(value);
   return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
@@ -1233,8 +1274,10 @@ function csvNumber(value) {
  * so it stays pure and dependency-free: BOM (Excel-safe), CRLF rows, RFC-4180
  * quoting, ISO-8601 dates (canonical storage, rule 36) and the owner currency.
  */
-export function serializeRecordsCsv(rows = [], { currency = 'USD' } = {}) {
-  const lines = [RECORDS_CSV_COLUMNS.join(',')];
+export function serializeRecordsCsv(rows = [], { currency = 'USD', meterLabel = null } = {}) {
+  // v1.85.0 (Phase 24) — the reading column is labelled for the fleet's meter.
+  const header = RECORDS_CSV_COLUMNS.map((column) => (column === 'Odometer' && meterLabel ? meterLabel : column));
+  const lines = [header.join(',')];
   for (const row of rows || []) {
     lines.push([
       csvCell(row.at ? new Date(row.at).toISOString() : ''),
@@ -1242,7 +1285,7 @@ export function serializeRecordsCsv(rows = [], { currency = 'USD' } = {}) {
       csvCell(row.vehicle || ''),
       csvCell(row.typeLabel || ''),
       csvCell(row.description || ''),
-      csvCell(csvNumber(row.odometer)),
+      csvCell(csvNumber(row.meter ?? row.odometer)),
       csvCell(csvNumber(row.unitCost)),
       csvCell(csvNumber(row.amount)),
       csvCell(currency),
@@ -2309,9 +2352,12 @@ export async function buildCareQueue({ supabase, limit = 50 } = {}) {
 /* ------------------------------------------------------------------ */
 
 /**
- * Page model for `/d/analytics`: the owner's live vehicles, their latest Tyres
- * expense (odometer clock) and six monthly spend ÷ distance buckets. Reads the
- * SAME `distanceInWindow` engine as every report (rule 55). Never throws.
+ * Page model for `/d/analytics` (v1.85.0, Phase 24 — kind-aware):
+ *   - tyre wear + cost-per-km for ROAD assets (vehicle/motorcycle/truck/bus);
+ *   - service intervals + cost-per-operating-hour for HOURS-LED assets
+ *     (heavy equipment, machinery, generators, watercraft).
+ * A generator-only fleet never sees a tyre card or a cost-per-km, and a
+ * road-only fleet never sees hours blocks. Never throws.
  */
 export async function buildAnalyticsPage({
   supabase,
@@ -2319,13 +2365,16 @@ export async function buildAnalyticsPage({
   profile = null,
   countryInfo = null,
   now = new Date(),
-  loadVehicles = loadOwnerVehicles
+  loadVehicles = loadOwnerVehicles,
+  loadReminders = null
 } = {}) {
   if (!supabase || !ownerId) return { ok: false };
   try {
     const ctx = buildGlobalContext(countryInfo, profile);
     const vehicles = await loadVehicles(supabase, ownerId);
     const ids = (vehicles || []).map((vehicle) => vehicle.id).filter(Boolean);
+    const roadVehicles = (vehicles || []).filter((vehicle) => !isHoursLedVehicle(vehicle));
+    const hoursVehicles = (vehicles || []).filter((vehicle) => isHoursLedVehicle(vehicle));
     let expenses = [];
     if (ids.length) {
       try {
@@ -2339,8 +2388,32 @@ export async function buildAnalyticsPage({
         logWriteFailure(supabase, 'dashboard.buildAnalyticsPage.expenses', err);
       }
     }
-    const tyres = buildTyreWearRows({ vehicles, expenses, unitSystem: ctx.unitSystem });
-    const trend = buildCostPerKmTrend({ expenses, now, months: 6, unitSystem: ctx.unitSystem });
+    // Service-interval cards need active hours reminders (best-effort, rule 50).
+    let reminders = [];
+    if (hoursVehicles.length) {
+      try {
+        if (typeof loadReminders === 'function') {
+          reminders = await loadReminders();
+        } else {
+          const hoursIds = hoursVehicles.map((vehicle) => vehicle.id).filter(Boolean);
+          const { data, error } = await supabase
+            .from('reminders')
+            .select('id, vehicle_id, reminder_type, threshold_unit, target_value, last_service_value, remaining_value, status')
+            .in('vehicle_id', hoursIds)
+            .eq('status', 'active')
+            .limit(200);
+          if (!error) reminders = data || [];
+        }
+      } catch (err) {
+        logWriteFailure(supabase, 'dashboard.buildAnalyticsPage.reminders', err);
+      }
+    }
+    const hasRoad = roadVehicles.length > 0;
+    const hasHours = hoursVehicles.length > 0;
+    const tyres = hasRoad ? buildTyreWearRows({ vehicles: roadVehicles, expenses, unitSystem: ctx.unitSystem }) : [];
+    const trend = hasRoad ? buildCostPerKmTrend({ expenses, now, months: 6, unitSystem: ctx.unitSystem }) : null;
+    const hoursTrend = hasHours ? buildCostPerHourTrend({ vehicles: hoursVehicles, expenses, now, months: 6 }) : null;
+    const serviceIntervals = hasHours ? buildServiceIntervalRows({ vehicles: hoursVehicles, reminders }) : [];
     return {
       ok: true,
       generatedAt: now.toISOString(),
@@ -2349,10 +2422,17 @@ export async function buildAnalyticsPage({
       timeZone: ctx.timeZone,
       distanceUnit: ctx.labels.distance,
       vehicleCount: ids.length,
+      roadCount: roadVehicles.length,
+      hoursCount: hoursVehicles.length,
+      hasRoad,
+      hasHours,
       tyreLifespan: getTyreLifespanKm(),
       tyres,
       trend,
-      chart: buildCostPerKmChart(trend)
+      chart: trend ? buildCostPerKmChart(trend) : null,
+      hoursTrend,
+      hoursChart: hoursTrend ? buildCostPerKmChart(hoursTrend, { valueKey: 'costPerHour' }) : null,
+      serviceIntervals
     };
   } catch (err) {
     logWriteFailure(supabase, 'dashboard.buildAnalyticsPage', err);
@@ -2371,7 +2451,7 @@ export async function buildAnalyticsPage({
  */
 // v1.84.0 (Phase 23) shipped no CSS/asset change, so the cache-bust stamp stays
 // at the release that last changed the assets (pinned by test_dashboard Test 53).
-export const DASHBOARD_ASSET_VERSION = '1.83.0';
+export const DASHBOARD_ASSET_VERSION = '1.85.0';
 
 export const DASHBOARD_CSS = `
 @font-face { font-family:'Sora'; font-style:normal; font-weight:600; font-display:swap; src:url('/d/assets/Sora-600.woff2?v=${DASHBOARD_ASSET_VERSION}') format('woff2'); }
@@ -2683,8 +2763,10 @@ export function renderVehiclesPage({ data, emailMasked }) {
   const vehicles = Array.isArray(data.vehicles) ? data.vehicles : [];
   const rows = vehicles.length
     ? `<ul class="plain">${vehicles.map((vehicle) => {
+        // v1.85.0 (Phase 24) — the meter label follows the asset kind.
+        const meterFact = `${vehicle.meterLabel || 'Odometer'} ${formatNumber(vehicle.meterValue ?? vehicle.odometer ?? 0, data.locale)} ${vehicle.meterUnit || vehicle.distanceUnit || ''}`.trim();
         const facts = [
-          `${formatNumber(vehicle.odometer, data.locale)} ${vehicle.distanceUnit}`,
+          meterFact,
           vehicle.driverName ? `Driver: ${vehicle.driverName}` : 'No driver assigned',
           `${money(vehicle.monthSpend)} this month`
         ];
@@ -2725,7 +2807,7 @@ export function renderVehiclePage({ data, emailMasked }) {
 
   const identity = `
   <div class="kpis card">
-    <div class="kpi"><div class="label">Odometer</div><div class="value">${escapeHtml(`${formatNumber(vehicle.odometer, data.locale)} ${vehicle.distanceUnit}`)}</div></div>
+    <div class="kpi"><div class="label">${escapeHtml(vehicle.meterLabel || 'Odometer')}</div><div class="value">${escapeHtml(`${formatNumber(vehicle.meterValue ?? vehicle.odometer ?? 0, data.locale)} ${vehicle.meterUnit || vehicle.distanceUnit || ''}`.trim())}</div></div>
     <div class="kpi"><div class="label">Spend this month</div><div class="value">${escapeHtml(money(vehicle.monthSpend))}</div></div>
     <div class="kpi"><div class="label">Earnings this month</div><div class="value">${escapeHtml(money(vehicle.monthEarnings))}</div></div>
   </div>`;
@@ -2906,7 +2988,9 @@ export function renderImportPage({
   error = null,
   emailMasked = '',
   currency = 'USD',
-  locale = 'en-US'
+  locale = 'en-US',
+  // v1.85.0 (Phase 24) — hours-led fleets import ENGINE HOURS, not mileage.
+  readingLabel = 'Odometer'
 } = {}) {
   const money = (value) => formatMoney(value, currency, locale);
   const rows = preview?.rows || [];
@@ -2932,7 +3016,7 @@ export function renderImportPage({
     <p class="muted">${counts.valid} of ${counts.total} row${counts.total === 1 ? '' : 's'} ready${counts.invalid ? ` · ${counts.invalid} highlighted` : ''}.</p>
     <div class="card table-wrap">
       <table class="rec">
-        <thead><tr><th>Line</th><th>Date</th><th>Vehicle</th><th>Type</th><th class="num">Amount</th><th>Odometer</th><th>Notes</th><th>Status</th></tr></thead>
+        <thead><tr><th>Line</th><th>Date</th><th>Vehicle</th><th>Type</th><th class="num">Amount</th><th>${escapeHtml(readingLabel)}</th><th>Notes</th><th>Status</th></tr></thead>
         <tbody>${tableRows}</tbody>
       </table>
     </div>
@@ -2946,7 +3030,7 @@ export function renderImportPage({
   ` : '';
   const body = `
 <h1>Import expenses</h1>
-<p class="muted">Upload a CSV with these columns: <code>Date, Vehicle Plate, Type, Amount, Odometer, Notes</code> · signed in as ${escapeHtml(emailMasked)}</p>
+<p class="muted">Upload a CSV with these columns: <code>Date, Vehicle Plate, Type, Amount, ${escapeHtml(readingLabel)}, Notes</code> · signed in as ${escapeHtml(emailMasked)}</p>
 ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
 ${importedLine}
 <div class="card">
@@ -2954,7 +3038,7 @@ ${importedLine}
     <label class="import-help" for="import-file">CSV file (up to ${CSV_IMPORT_MAX_ROWS} rows)</label>
     <input type="file" id="import-file" accept=".csv,text/csv">
     <label class="import-help" for="import-text">…or paste the rows here</label>
-    <textarea id="import-text" name="csv" rows="6" placeholder="Date,Vehicle Plate,Type,Amount,Odometer,Notes"></textarea>
+    <textarea id="import-text" name="csv" rows="6" placeholder="Date,Vehicle Plate,Type,Amount,${escapeHtml(readingLabel)},Notes"></textarea>
     <button type="submit">Preview import</button>
   </form>
 </div>
@@ -3362,7 +3446,7 @@ export function renderTransferPage({ data, emailMasked = '', error = null, notic
         <label>Vehicle<select name="vehicle_id" required>${vehicleOptions}</select></label>
         <label>Buyer's WhatsApp number<input type="tel" name="buyer_phone" inputmode="tel" placeholder="+254 712 345 678" required></label>
         <label>Buyer's email<input type="email" name="buyer_email" placeholder="buyer@example.com" required></label>
-        <label>Handover odometer (optional)<input type="number" name="odometer" inputmode="numeric" min="0" step="1" placeholder="e.g. 50350"></label>
+        <label>Handover reading (odometer or engine hours, optional)<input type="number" name="odometer" inputmode="numeric" min="0" step="any" placeholder="e.g. 50350"></label>
         <button type="submit">Start handover</button>
       </form>`
     : `<div class="notice warn"><strong>Add an email first.</strong> The release PIN is sent to your email, so I cannot start a handover here without one. Reply <em>change my email</em> on WhatsApp to add it (or open Settings to review your account), then come back — you can always start a handover in WhatsApp with <em>transfer</em>.</div>
@@ -3887,21 +3971,36 @@ ${lessons}`;
   return renderPageShell('Care queue', body, { headerRight: adminNav() });
 }
 
-/** `/d/analytics` (Phase 19) — tyre wear + six-month cost-per-km trend (SVG). */
+/** `/d/analytics` (Phase 19; kind-aware v1.85.0) — road tyres + cost/km, hours service intervals + cost/hour. */
 export function renderAnalyticsPage({ data } = {}) {
   if (!data?.ok) {
     return renderErrorPage(503, 'Your analytics could not be loaded just now. Please try again in a moment.').html;
   }
   const unit = data.distanceUnit || data.trend?.months?.[0]?.distanceUnit || 'km';
   const locale = data.locale || 'en-US';
-  const kpis = kpiStripHtml([
-    { label: 'Spend (6 months)', value: formatMoney(data.trend?.totalSpend || 0, data.currency, locale), hint: 'all expense types' },
-    { label: `Distance (6 months)`, value: `${formatNumber(data.trend?.totalDistance || 0, locale)} ${unit}`, hint: 'logged odometer movement' },
-    { label: `Average cost / ${unit}`, value: data.trend?.averageCostPerKm !== null && data.trend?.averageCostPerKm !== undefined ? formatMoney(data.trend.averageCostPerKm, data.currency, locale) : '—', hint: 'spend ÷ distance' },
-    { label: `Peak cost / ${unit}`, value: data.trend?.peakCostPerKm !== null && data.trend?.peakCostPerKm !== undefined ? formatMoney(data.trend.peakCostPerKm, data.currency, locale) : '—', hint: 'highest month' }
-  ]);
+  // Old callers may predate the flags; treat a present trend as road work.
+  const hasRoad = data.hasRoad !== undefined ? Boolean(data.hasRoad) : Boolean(data.trend);
+  const hasHours = Boolean(data.hasHours);
 
-  const tyres = data.tyres || [];
+  const kpiParts = [
+    { label: 'Spend (6 months)', value: formatMoney(data.trend?.totalSpend ?? data.hoursTrend?.totalSpend ?? 0, data.currency, locale), hint: 'all expense types' }
+  ];
+  if (hasRoad) {
+    kpiParts.push(
+      { label: 'Distance (6 months)', value: `${formatNumber(data.trend?.totalDistance || 0, locale)} ${unit}`, hint: 'logged odometer movement' },
+      { label: `Average cost / ${unit}`, value: data.trend?.averageCostPerKm !== null && data.trend?.averageCostPerKm !== undefined ? formatMoney(data.trend.averageCostPerKm, data.currency, locale) : '—', hint: 'spend ÷ distance' },
+      { label: `Peak cost / ${unit}`, value: data.trend?.peakCostPerKm !== null && data.trend?.peakCostPerKm !== undefined ? formatMoney(data.trend.peakCostPerKm, data.currency, locale) : '—', hint: 'highest month' }
+    );
+  }
+  if (hasHours) {
+    kpiParts.push(
+      { label: 'Hours (6 months)', value: `${formatNumber(data.hoursTrend?.totalHours || 0, locale)} h`, hint: 'logged engine hours' },
+      { label: 'Average cost / h', value: data.hoursTrend?.averageCostPerHour !== null && data.hoursTrend?.averageCostPerHour !== undefined ? formatMoney(data.hoursTrend.averageCostPerHour, data.currency, locale) : '—', hint: 'spend ÷ engine hours' }
+    );
+  }
+  const kpis = kpiStripHtml(kpiParts);
+
+  const tyres = Array.isArray(data.tyres) ? data.tyres : [];
   const tyreCards = tyres.length
     ? tyres.map((row) => {
         if (row.status === 'no_data') {
@@ -3921,32 +4020,68 @@ export function renderAnalyticsPage({ data } = {}) {
           ${row.note ? `<p class="muted" style="font-size:13px;">${escapeHtml(row.note)}</p>` : ''}
         </div>`;
       }).join('')
-    : '<div class="card"><p class="muted">No live vehicles yet — register your first vehicle in WhatsApp and its tyre clock appears here.</p></div>';
+    : '<div class="card"><p class="muted">No live road assets — tyre wear tracks cars, motorcycles, trucks and buses. Hours-led service intervals appear below.</p></div>';
 
-  const chart = data.chart || { points: [], polyline: '', width: 640, height: 200, padding: 34, maxValue: 0 };
-  const months = data.trend?.months || [];
-  const gridY = [0, 1, 2, 3].map((i) => chart.padding + ((chart.height - chart.padding * 2) * i) / 3);
-  const svg = chart.points.length
-    ? `<div class="card"><svg class="trend" viewBox="0 0 ${chart.width} ${chart.height}" role="img" aria-label="Cost per ${escapeHtml(unit)} over the last six months">
+  const trendSvg = (chartData, trendData, valueUnit, monthValueKey) => {
+    const chart = chartData || { points: [], polyline: '', width: 640, height: 200, padding: 34, maxValue: 0 };
+    const months = trendData?.months || [];
+    const gridY = [0, 1, 2, 3].map((i) => chart.padding + ((chart.height - chart.padding * 2) * i) / 3);
+    if (!chart.points.length) {
+      return valueUnit === 'h'
+        ? '<div class="card"><p class="muted">No engine hours recorded in the last six months yet — log two readings in a month and the trend appears here.</p></div>'
+        : '<div class="card"><p class="muted">No distance recorded in the last six months yet — log two odometer readings in a month and the trend appears here.</p></div>';
+    }
+    const totalMoved = months.reduce((sum, month) => sum + (Number(month[monthValueKey]) || 0), 0);
+    return `<div class="card"><svg class="trend" viewBox="0 0 ${chart.width} ${chart.height}" role="img" aria-label="Cost per ${escapeHtml(valueUnit)} over the last six months">
         ${gridY.map((y) => `<line x1="${chart.padding}" y1="${y}" x2="${chart.width - chart.padding}" y2="${y}" class="grid"/>`).join('')}
         <polyline points="${chart.polyline}" class="line"/>
-        ${chart.points.map((point) => `<circle cx="${point.x}" cy="${point.y}" r="4" class="dot"><title>${escapeHtml(point.month.label)}: ${formatMoney(point.value, data.currency, locale)}/${escapeHtml(unit)} · spend ${formatMoney(point.month.spend, data.currency, locale)} · ${formatNumber(point.month.distance || 0, locale)} ${escapeHtml(unit)}</title></circle>`).join('')}
+        ${chart.points.map((point) => `<circle cx="${point.x}" cy="${point.y}" r="4" class="dot"><title>${escapeHtml(point.month.label)}: ${formatMoney(point.value, data.currency, locale)}/${escapeHtml(valueUnit)} · spend ${formatMoney(point.month.spend, data.currency, locale)} · ${formatNumber(point.month[monthValueKey] || 0, locale)} ${escapeHtml(valueUnit)}</title></circle>`).join('')}
         ${months.map((month, index) => {
           const x = chart.padding + (months.length > 1 ? ((chart.width - chart.padding * 2) * index) / (months.length - 1) : 0);
           return `<text x="${x}" y="${chart.height - 10}" text-anchor="middle" class="xlabel">${escapeHtml(month.label)}</text>`;
         }).join('')}
       </svg>
-      <p class="muted" style="font-size:13px;">${formatNumber(data.trend?.totalSpend || 0, locale) ? formatMoney(data.trend?.totalSpend || 0, data.currency, locale) : formatMoney(0, data.currency, locale)} spent over ${formatNumber(data.trend?.totalDistance || 0, locale)} ${escapeHtml(unit)} in six months. A month with no odometer movement shows no point.</p></div>`
-    : '<div class="card"><p class="muted">No distance recorded in the last six months yet — log two odometer readings in a month and the trend appears here.</p></div>';
+      <p class="muted" style="font-size:13px;">${formatMoney(trendData?.totalSpend || 0, data.currency, locale)} spent over ${formatNumber(totalMoved, locale)} ${escapeHtml(valueUnit)} in six months. A month with no movement shows no point.</p></div>`;
+  };
+
+  const intervals = Array.isArray(data.serviceIntervals) ? data.serviceIntervals : [];
+  const intervalCards = intervals.length
+    ? intervals.map((row) => {
+        const pct = row.percentRemaining === null || row.percentRemaining === undefined
+          ? null
+          : Math.max(0, Math.min(100, Number(row.percentRemaining)));
+        return `<div class="card">
+          <p><strong>${escapeHtml(row.plate)}</strong>${row.makeModel ? `<span class="muted"> · ${escapeHtml(row.makeModel)}</span>` : ''}
+          ${row.status === 'overdue' ? '<span class="chip bad">Overdue</span>' : '<span class="chip ok">Active</span>'}</p>
+          <p>${escapeHtml(row.label)}: ${formatNumber(row.currentHours || 0, locale)} h now${row.target !== null ? ` · target ${formatNumber(row.target, locale)} h` : ''}${row.remaining !== null ? ` · ${formatNumber(Math.max(0, row.remaining), locale)} h left` : ''}</p>
+          ${pct !== null ? `<div class="progress${pct <= 20 ? ' low' : ''}"><span style="width:${pct}%"></span></div>` : ''}
+        </div>`;
+      }).join('')
+    : '<div class="card"><p class="muted">No hours-based service reminders yet — set one in WhatsApp (e.g. <em>generator service in 250 hours</em>) and it appears here.</p></div>';
+
+  const roadBlock = hasRoad
+    ? `<h2>Tyre wear</h2>
+${tyreCards}
+<h2>Cost per ${escapeHtml(unit)} trend</h2>
+${trendSvg(data.chart, data.trend, unit, 'distance')}`
+    : '';
+  const hoursBlock = hasHours
+    ? `<h2>Service intervals</h2>
+${intervalCards}
+<h2>Cost per operating hour trend</h2>
+${trendSvg(data.hoursChart, data.hoursTrend, 'h', 'hours')}`
+    : '';
+  const emptyBlock = !hasRoad && !hasHours
+    ? '<div class="card"><p class="muted">No live assets yet — register your first vehicle or machine in WhatsApp and its analytics appear here.</p></div>'
+    : '';
 
   const body = `
 <h1>Analytics</h1>
-<p class="muted">Tyre wear and cost per ${escapeHtml(unit)} · read-only, engine-calculated</p>
+<p class="muted">Tyres &amp; cost per ${escapeHtml(unit)} for road assets · service intervals &amp; cost per hour for machines · read-only, engine-calculated</p>
 ${kpis}
-<h2>Tyre wear</h2>
-${tyreCards}
-<h2>Cost per ${escapeHtml(unit)} trend</h2>
-${svg}`;
+${roadBlock}
+${hoursBlock}
+${emptyBlock}`;
   return renderPageShell('Analytics', body, { headerRight: dashboardNav() });
 }
 

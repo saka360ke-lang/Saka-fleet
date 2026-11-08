@@ -39,7 +39,10 @@ export const FALLBACK_EXCHANGE_RATES = {
   AUD: 1.50,
   INR: 84.0,
   AED: 3.67,
-  BRL: 5.6
+  BRL: 5.6,
+  // v1.85.0 (Phase 24) — Canada (+1, explicit choice only) has a seed rate; the
+  // live open.er-api fetch still owns every currency refresh.
+  CAD: 1.38
 };
 
 /**

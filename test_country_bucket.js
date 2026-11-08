@@ -18,7 +18,7 @@ import {
   formatRequiredDocumentsReply,
   formatExampleComplianceReply
 } from './src/services/countryBucket.js';
-import { resolvePhoneCountryLock } from './src/services/globalization.js';
+import { resolvePhoneCountryLock, detectCountryFromPhone, regionForCountryCode, COUNTRY_TIMEZONES } from './src/services/globalization.js';
 import { getFlowDefinition } from './src/services/quizEngine.js';
 
 /**
@@ -161,7 +161,33 @@ async function run() {
   check(hoursField.when({ asset_kind: 'vehicle' }) === false, 'cars never see the hour-meter question');
   check(fields.find((f) => f.key === 'asset_kind').choices.includes('generator'), 'the asset-kind menu offers generators');
 
-  console.log(`\n🎉 ALL COUNTRY BUCKET TESTS PASSED (${passed} assertions).`);
+  console.log('\n--- Phase 24 (v1.85.0): Canada, Belgium and the equipment exemption ---');
+const canada = resolveCountryInput('Canada');
+check(Boolean(canada) && canada.country_code === 'CA' && canada.currency === 'CAD' && canada.locale === 'en-CA',
+  'the explicit "Canada" choice resolves CAD / en-CA');
+const canadaCode = resolveCountryInput('ca');
+check(Boolean(canadaCode) && canadaCode.country_code === 'CA', 'the CA code resolves through the extra-region table');
+const belgium = resolveCountryInput('Belgium');
+check(Boolean(belgium) && belgium.country_code === 'BE' && belgium.currency === 'EUR' && belgium.locale === 'nl-BE',
+  'Belgium resolves EUR / nl-BE');
+const bePhone = detectCountryFromPhone('+32470123456');
+check(bePhone.country_code === 'BE' && bePhone.currency === 'EUR', '+32 numbers resolve Belgium from the phone');
+const usPhone = detectCountryFromPhone('+14155550123');
+check(usPhone.country_code === 'US', 'the +1 default stays the United States (Canada needs the explicit choice)');
+check(COUNTRY_TIMEZONES.BE === 'Europe/Brussels' && COUNTRY_TIMEZONES.CA === 'America/Toronto',
+  'CA and BE carry their IANA timezones');
+check(regionForCountryCode('CA').currency === 'CAD' && regionForCountryCode('BE').currency === 'EUR',
+  'regionForCountryCode supplies CAD and EUR facts for stored profiles');
+const keGenerator = getCountryBucket({ countryCode: 'KE', assetKind: 'generator' });
+const generatorKeys = keGenerator.rules.map((entry) => entry.key);
+check(!generatorKeys.includes('vehicle_inspection') && !generatorKeys.includes('vehicle_insurance'),
+  'a Kenyan generator is NEVER shown NTSA road rules');
+check(generatorKeys.includes('equipment_insurance'), 'a generator gets the lighter equipment-insurance hint instead');
+const keCar = getCountryBucket({ countryCode: 'KE', assetKind: 'vehicle' });
+check(keCar.rules.some((entry) => entry.key === 'vehicle_inspection') && keCar.rules.some((entry) => entry.key === 'equipment_insurance') === false,
+  'road assets keep NTSA inspection and never the equipment hint');
+
+console.log(`\n🎉 ALL COUNTRY BUCKET TESTS PASSED (${passed} assertions).`);
   console.log('Stateless suite: bundled knowledgebase only, so no cleanup is required.');
 }
 

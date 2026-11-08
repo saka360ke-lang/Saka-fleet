@@ -20,7 +20,7 @@
  */
 
 import { parseFlexibleDate, getNairobiParts } from './dateParser.js';
-import { resolveExpenseType } from './expenseCatalog.js';
+import { resolveExpenseType, isHoursLedKind } from './expenseCatalog.js';
 import { isSameExpenseCandidate, legacyExpensesWriteEnabled } from './expenseGuard.js';
 import { markUserDataChanged } from './afterWrite.js';
 import { logWriteFailure } from './systemErrors.js';
@@ -331,17 +331,30 @@ export async function bulkInsertImportRows({
   const rows = (validRows || []).filter((row) => row.vehicleId && row.expenseType && Number(row.amount) > 0);
   if (!rows.length) return { ok: true, inserted: 0 };
 
-  const payload = rows.map((row) => ({
-    vehicle_id: row.vehicleId,
-    driver_id: ownerId,
-    expense_type: row.expenseType,
-    amount: row.amount,
-    fuel_liters: 0,
-    fill_type: null,
-    odometer_reading: row.odometer ?? null,
-    notes: row.notes || null,
-    ...(row.createdAt ? { created_at: row.createdAt } : {})
-  }));
+  // v1.85.0 (Phase 24) — an hours-led asset imports ENGINE HOURS: the reading
+  // rides the entry notes (canonical, no DDL) and the odometer stays null.
+  const hoursLedIds = new Set((vehicles || [])
+    .filter((vehicle) => isHoursLedKind(vehicle.asset_kind || vehicle.asset_type || 'vehicle'))
+    .map((vehicle) => String(vehicle.id)));
+  const isHoursLedRow = (row) => hoursLedIds.has(String(row.vehicleId));
+
+  const payload = rows.map((row) => {
+    const hoursLed = isHoursLedRow(row);
+    const baseNotes = row.notes || null;
+    return {
+      vehicle_id: row.vehicleId,
+      driver_id: ownerId,
+      expense_type: row.expenseType,
+      amount: row.amount,
+      fuel_liters: 0,
+      fill_type: null,
+      odometer_reading: hoursLed ? null : (row.odometer ?? null),
+      notes: hoursLed && row.odometer
+        ? [`Engine hours: ${row.odometer} h`, baseNotes].filter(Boolean).join(' · ')
+        : baseNotes,
+      ...(row.createdAt ? { created_at: row.createdAt } : {})
+    };
+  });
 
   let inserted = 0;
   for (let index = 0; index < payload.length; index += CSV_IMPORT_CHUNK) {
@@ -367,7 +380,7 @@ export async function bulkInsertImportRows({
       expense_type: row.expenseType,
       amount: row.amount,
       liters: 0,
-      odometer_reading: row.odometer ?? null,
+      odometer_reading: isHoursLedRow(row) ? null : (row.odometer ?? null),
       ...(row.createdAt ? { created_at: row.createdAt } : {})
     }));
     try {
@@ -388,7 +401,22 @@ export async function bulkInsertImportRows({
   }
   for (const [vehicleId, reading] of highest) {
     const vehicle = (vehicles || []).find((entry) => entry.id === vehicleId) || null;
-    if (!vehicle || reading <= Number(vehicle.current_mileage || 0)) continue;
+    if (!vehicle) continue;
+    // Hours-led assets advance their ENGINE HOURS meter, never the odometer.
+    if (isHoursLedRow({ vehicleId })) {
+      if (reading <= Number(vehicle.operating_hours || vehicle.current_engine_hours || 0)) continue;
+      try {
+        await supabase.from('vehicles').update({
+          operating_hours: reading,
+          hours_updated_at: new Date(now).toISOString(),
+          updated_at: new Date(now).toISOString()
+        }).eq('id', vehicleId);
+      } catch (hoursErr) {
+        logWriteFailure(supabase, 'csvImport.hours', hoursErr, { vehicle_id: vehicleId });
+      }
+      continue;
+    }
+    if (reading <= Number(vehicle.current_mileage || 0)) continue;
     try {
       await supabase.from('vehicles').update({
         current_mileage: reading,

@@ -98,6 +98,9 @@ import {
   renderCareQueuePage,
   buildAnalyticsPage,
   renderAnalyticsPage,
+  // v1.85.0 (Phase 24) — kind-aware record meters + CSV labels.
+  attachMeterReadings,
+  recordsMeterLabel,
   renderOverviewPage,
   renderVehiclesPage,
   renderVehiclePage,
@@ -2157,10 +2160,10 @@ async function run() {
   await gateApp.close();
 
   console.log('\n--- Test 53: Phase 22 — branding (fonts, logo, lime glow, assets route) ---');
-  check(DASHBOARD_ASSET_VERSION === '1.83.0', 'the asset stamp ships with this release (cache-bust)');
+  check(DASHBOARD_ASSET_VERSION === '1.85.0', 'the asset stamp ships with this release (cache-bust)');
   check(DASHBOARD_CSS.includes("@font-face { font-family:'Sora'; font-style:normal; font-weight:600") && DASHBOARD_CSS.includes("@font-face { font-family:'Sora'; font-style:normal; font-weight:700"), 'Sora 600/700 are self-hosted via @font-face');
   check(DASHBOARD_CSS.includes("@font-face { font-family:'Manrope'") && DASHBOARD_CSS.includes('Manrope-700.woff2'), 'Manrope 400/500/700 are self-hosted too');
-  check(DASHBOARD_CSS.includes("url('/d/assets/Sora-600.woff2?v=1.83.0')"), 'font URLs ride the allowlisted asset route, version-stamped');
+  check(DASHBOARD_CSS.includes("url('/d/assets/Sora-600.woff2?v=1.85.0')"), 'font URLs ride the allowlisted asset route, version-stamped');
   check(DASHBOARD_CSS.includes('--accent:#B8EF5C') && DASHBOARD_CSS.includes('--accent-dark:#65A30D'), 'the orange accent is retired for lime with a text-safe dark lime');
   check(DASHBOARD_CSS.includes('--glow:0 0 0 1px var(--accent-line)'), 'one glow token powers the green outline');
   check(/input:focus[^{]*\{[^}]*box-shadow:var\(--glow\)/.test(DASHBOARD_CSS), 'focused inputs carry the glowing green ring');
@@ -2170,7 +2173,7 @@ async function run() {
   check(DASHBOARD_CSS.includes('prefers-reduced-motion'), 'reduced-motion users get no animation');
   check(DASHBOARD_CSS.includes('font-family:var(--font-body)') && DASHBOARD_CSS.includes('font-family:var(--font-display)'), 'body = Manrope, headings = Sora');
   const shellHtml = renderPageShell('Overview', '<p>hi</p>', { headerRight: '<a href="/d/x">X</a>' });
-  check(shellHtml.includes('/d/assets/logo-lockup.png?v=1.83.0') && shellHtml.includes('width="177" height="18"'), 'the header renders the real brand lockup at its intrinsic ratio');
+  check(shellHtml.includes('/d/assets/logo-lockup.png?v=1.85.0') && shellHtml.includes('width="177" height="18"'), 'the header renders the real brand lockup at its intrinsic ratio');
   check(shellHtml.includes('alt="Saka Fleet"') && shellHtml.includes('class="nav"'), 'the logo is labelled and the nav slot is preserved');
   check(shellHtml.includes('theme-color" content="#0A0A0C"') && shellHtml.includes('/d/assets/favicon.svg'), 'the shell carries the brand theme colour and favicon');
   check(shellHtml.includes('noindex'), 'dashboard pages stay noindex');
@@ -2502,6 +2505,50 @@ async function run() {
   const anonDelete = await p23App.inject({ method: 'POST', url: '/d/documents/doc-free/delete', payload: '' });
   check(anonDelete.statusCode === 401, 'the delete route never acts without a session');
   await p23App.close();
+
+  console.log('\n--- Test 70: kind-aware dashboard (v1.85.0) ---');
+  const genVehicle = { id: 'v-gen', owner_id: PROFILE.id, plate_number: null, make_model: 'Cummins 60kVA', asset_kind: 'generator', operating_hours: 1240, current_mileage: null, status: 'ACTIVE', deleted_at: null };
+  const roadVehicle = { id: 'v-road', owner_id: PROFILE.id, plate_number: 'KAS 628T', make_model: 'Toyota Land Cruiser', asset_kind: 'vehicle', current_mileage: 120000, odometer_reading: 120000, status: 'ACTIVE', deleted_at: null };
+  const kindNow = new Date('2026-11-08T06:00:00Z');
+  const kindExpenses = [
+    { id: 'kx1', vehicle_id: 'v-road', expense_type: 'Fuel', amount: 6000, odometer_reading: 100000, created_at: '2026-11-02T00:00:00Z' },
+    { id: 'kx2', vehicle_id: 'v-road', expense_type: 'Fuel', amount: 4000, odometer_reading: 101000, created_at: '2026-11-06T00:00:00Z' },
+    { id: 'kx3', vehicle_id: 'v-gen', expense_type: 'Fuel', amount: 6000, notes: 'Engine hours: 100 h', created_at: '2026-11-02T00:00:00Z' },
+    { id: 'kx4', vehicle_id: 'v-gen', expense_type: 'Fuel', amount: 9000, notes: 'Engine hours: 140 h', created_at: '2026-11-06T00:00:00Z' }
+  ];
+  const kindPage = await buildAnalyticsPage({
+    supabase: createMockSupabase({ vehicles: [genVehicle, roadVehicle], expense_logs: kindExpenses }).client,
+    ownerId: PROFILE.id, profile: PROFILE, countryInfo: KE_INFO, now: kindNow
+  });
+  check(kindPage.ok === true && kindPage.hasRoad === true && kindPage.hasHours === true, 'a mixed fleet flags both road and hours analytics');
+  check(kindPage.tyres.length === 1 && kindPage.tyres[0].plate === 'KAS 628T', 'tyre wear covers ONLY the road asset');
+  check(kindPage.hoursTrend && kindPage.hoursTrend.months.find((month) => month.key === '2026-11').costPerHour === 375, 'the generator gets cost per operating hour (15,000 ÷ 40 h)');
+  const genIntervals = await buildAnalyticsPage({
+    supabase: createMockSupabase({ vehicles: [genVehicle], expense_logs: kindExpenses.filter((row) => row.vehicle_id === 'v-gen') }).client,
+    ownerId: PROFILE.id, profile: PROFILE, countryInfo: KE_INFO, now: kindNow,
+    loadReminders: async () => [{ id: 'r-k', vehicle_id: 'v-gen', reminder_type: 'Generator service', threshold_unit: 'hours', target_value: 1500, last_service_value: 1000, remaining_value: 260, status: 'active' }]
+  });
+  check(genIntervals.hasRoad === false && genIntervals.tyres.length === 0, 'a generator-only fleet NEVER sees tyre cards');
+  check(genIntervals.trend === null && genIntervals.chart === null, 'a generator-only fleet never builds cost per km');
+  check(genIntervals.serviceIntervals.length === 1 && genIntervals.serviceIntervals[0].currentHours === 1240, 'hours-led service intervals ride the page model');
+  const genHtml = renderAnalyticsPage({ data: genIntervals });
+  check(!genHtml.includes('Tyre wear') && genHtml.includes('Service intervals') && genHtml.includes('Cost per operating hour trend'), 'the page renders hours blocks and hides tyre wear');
+  const roadOnlyHtml = renderAnalyticsPage({ data: { ...genIntervals, hasHours: false, hasRoad: true, tyres: [], trend: { months: [], totalSpend: 0, totalDistance: 0, averageCostPerKm: null, peakCostPerKm: null }, chart: null, serviceIntervals: [], hoursTrend: null, hoursChart: null } });
+  check(roadOnlyHtml.includes('Tyre wear') && !roadOnlyHtml.includes('Service intervals'), 'a road-only fleet renders tyres and hides service intervals');
+  const metered = attachMeterReadings([
+    { vehicleId: 'v-road', odometer: 120000, kind: 'expense', at: '2026-11-06T00:00:00Z' },
+    { vehicleId: 'v-gen', odometer: null, raw: { notes: 'Engine hours: 140 h' }, kind: 'expense', at: '2026-11-06T00:00:00Z' }
+  ], [roadVehicle, genVehicle]);
+  check(metered.meterLabel === 'Reading' && metered.rows[0].meter === 120000 && metered.rows[1].meter === 140, 'row meters follow each asset (odometer vs engine hours)');
+  check(recordsMeterLabel([genVehicle]) === 'Engine hours' && recordsMeterLabel([roadVehicle]) === 'Odometer' && recordsMeterLabel([]) === 'Reading', 'the meter label resolves for hours / road / empty fleets');
+  const genCsv = serializeRecordsCsv(metered.rows, { currency: 'KES', meterLabel: 'Engine hours' });
+  check(genCsv.split('\r\n')[0].includes('Engine hours'), 'the records CSV header follows the fleet meter');
+  check(renderImportPage({ readingLabel: 'Engine hours', preview: { rows: [], counts: { total: 0, valid: 0, invalid: 0 } } }).includes('<th>Engine hours</th>'), 'the import preview is labelled for an hours-led fleet');
+  const genListHtml = renderVehiclesPage({ data: { ok: true, generatedAt: kindNow.toISOString(), currency: 'KES', locale: 'en-KE', timeZone: 'Africa/Nairobi', distanceUnit: 'km', vehicles: [{ id: 'v-gen', plate: 'Cummins 60kVA', meterLabel: 'Engine hours', meterValue: 1240, meterUnit: 'h', monthSpend: 0, driverName: null, status: 'active', active: true }] }, emailMasked: 'a***a@example.com' });
+  check(genListHtml.includes('Engine hours 1,240 h') && !genListHtml.includes('Odometer'), 'the vehicles list renders the kind-aware meter');
+  const genPageHtml = renderVehiclePage({ data: { ok: true, generatedAt: kindNow.toISOString(), currency: 'KES', locale: 'en-KE', timeZone: 'Africa/Nairobi', vehicle: { meterLabel: 'Engine hours', meterValue: 1240, meterUnit: 'h', monthSpend: 0, monthEarnings: 0 }, documents: [], records: [] }, emailMasked: 'a***a@example.com' });
+  check(genPageHtml.includes('Engine hours') && !genPageHtml.includes('>Odometer<'), 'the vehicle page KPI label follows the kind');
+  check(DASHBOARD_ASSET_VERSION === '1.85.0', 'the asset cache-bust stamp is 1.85.0');
 
   process.env.DASHBOARD_ENABLED = previousFlag;
   if (previousBase === undefined) delete process.env.PUBLIC_APP_URL;

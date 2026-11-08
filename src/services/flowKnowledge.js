@@ -94,10 +94,10 @@ export const SAKA_QUIZ_FLOWS = [
     key: 'assign_driver',
     label: 'Assign driver',
     trigger: 'assign driver, add driver, driver phone',
-    fields: 'vehicle → driver phone → handover odometer → confirm → owner email OTP',
-    extracted: ['plate_number', 'driver_phone', 'odometer'],
-    writes: 'driver_assignments (PENDING_OWNER_OTP → PENDING_DRIVER_ACCEPTANCE); vehicles.assigned_driver_id only after the driver replies ACCEPT',
-    rules: 'owner-only; 6-digit OTP emailed to the owner (10 min, 3 attempts); strict 1-to-1 incl. pending reservations; driver must reply ACCEPT; a non-compliant driver cannot manage the vehicle'
+    fields: 'vehicle → driver phone → handover reading (odometer, or engine hours for hours-led assets) → confirm → owner email OTP',
+    extracted: ['plate_number', 'driver_phone', 'odometer', 'operating_hours'],
+    writes: 'driver_assignments (PENDING_OWNER_OTP → PENDING_DRIVER_ACCEPTANCE); hours-led handovers store metadata.hours_at_assignment, never a mileage; vehicles.assigned_driver_id only after the driver replies ACCEPT',
+    rules: 'owner-only; 6-digit OTP emailed to the owner (10 min, 3 attempts); strict 1-to-1 incl. pending reservations; driver must reply ACCEPT; a non-compliant driver cannot manage the vehicle; the handover meter follows the asset kind (v1.85.0)'
   },
   {
     key: 'driver_onboarding',
@@ -112,10 +112,10 @@ export const SAKA_QUIZ_FLOWS = [
     key: 'unassign_driver',
     label: 'Unassign driver',
     trigger: 'unassign/remove driver, driver left',
-    fields: 'vehicle → handback odometer → confirm',
-    extracted: ['plate_number', 'odometer'],
-    writes: 'vehicles.driver_id = null + metadata.odometer_at_release',
-    rules: 'owner-only; handback odometer enables distance-driven audit'
+    fields: 'vehicle → handback reading (odometer, or engine hours for hours-led assets) → confirm',
+    extracted: ['plate_number', 'odometer', 'operating_hours'],
+    writes: 'vehicles.driver_id = null + metadata.odometer_at_release (road) or metadata.hours_at_release + vehicles.operating_hours (hours-led)',
+    rules: 'owner-only; the handback reading enables a distance-driven or hours-worked audit and never writes mileage onto an hours-led asset (v1.85.0)'
   },
   {
     key: 'transfer_seller',
@@ -701,8 +701,9 @@ export const SAKA_WEB_DASHBOARD_PLAYBOOK = [
   '- The 6-digit code arrives in WhatsApp (10 minutes) and the session lasts 15 minutes. The EMAIL magic link is retired; never mention an emailed dashboard link or code, never repeat a code in chat, never accept a dashboard code typed in chat, and never invent or guess a link.',
   '- An OWNER needs a live trial or paid plan (on Free, point the user to *pricing*); a DRIVER needs a live vehicle assignment; the SUPERADMIN signs in at https://app.sakafleet.com/d/admin/login only ("dashboard admin", exact phrase). The sign-in page is the gate — a number with no account is told to sign up first.',
   '- Three lanes since v1.76.0 (Phase 15): an OWNER (a live trial or paid plan), a DRIVER (a live vehicle assignment — no plan needed) and the SUPERADMIN (the admin number only). "dashboard" opens the caller\'s own lane; "dashboard admin" is superadmin-only and anyone else gets the same not-available line (never reveal that an admin surface exists).',
-  '- PASSBOOK TRANSFER page (v1.83.0, owner only): the OWNER does steps 1-3 on the web — pick a vehicle, enter the buyer\'s WhatsApp number, email and an optional handover odometer, then type the 6-digit RELEASE PIN I email to the owner. The PIN is never shown on the page or repeated in chat. The BUYER still replies ACCEPT on WhatsApp and then enters the 6-digit code I email them; the handover completes only after BOTH consents. A phone-only account is told to add an email first (reply *change my email*). The first handover per vehicle per year is free; later ones carry the engine fee at the buyer\'s payment step. Never promise a transfer, a free fee or a completed handover the engine has not confirmed.',
+  '- PASSBOOK TRANSFER page (v1.83.0, owner only): the OWNER does steps 1-3 on the web — pick a vehicle, enter the buyer\'s WhatsApp number, email and an optional handover reading (odometer, or engine hours for machines), then type the 6-digit RELEASE PIN I email to the owner. The PIN is never shown on the page or repeated in chat. The BUYER still replies ACCEPT on WhatsApp and then enters the 6-digit code I email them; the handover completes only after BOTH consents. A phone-only account is told to add an email first (reply *change my email*). The first handover per vehicle per year is free; later ones carry the engine fee in the buyer\'s currency at the buyer\'s payment step. Never promise a transfer, a free fee or a completed handover the engine has not confirmed.',
   '- SUBSCRIPTION page (v1.83.0, owner only): shows the plan, status, trial end, vehicle slots, extra add-on slots and the owner-scoped billing history (read-only). Upgrades and Fleet Command add-ons are engine checkout buttons that open Paystack and return to the page; the dashboard NEVER invents a price, discount or payment outcome — the Paystack webhook confirms payments in the background. "Add a vehicle" opens WhatsApp with "add car" prefilled: registration always happens in the WhatsApp quiz, and the plan gate still checks the slot. Card changes, refunds and cancellations are never done on the dashboard — reply *subscription* or *cancel my subscription* in chat.',
+  '- Since v1.85.0 the dashboard speaks each asset\'s own meter: vehicles, motorcycles, trucks and buses show the odometer with tyre wear and cost per km; heavy equipment, machinery, generators and watercraft show ENGINE HOURS with service intervals and cost per operating hour, and the records/import reading column is labelled for the fleet\'s meter. Canada (+1, set explicitly with "country Canada") and Belgium (+32) are served with their own currency, locale and timezone.',
   '- Since v1.75.0 the dashboard lists the owner\'s vehicles and opens one page per vehicle with its documents and its most recent records; since v1.75.1 it also serves a searchable records table (date range, type, vehicle, label or keyword) with pagination and CSV/PDF export of the current filter; since v1.75.2 a compliance board (vehicles and assigned drivers, All / Due soon / Expired, PDF export of the same view) and a read-only page per assigned driver with their document numbers; since v1.75.3 a reports builder (period, vehicles, up to 8 metrics) that builds a bespoke PDF on the spot, and a settings page with the weekly-report toggle and a one-file data export; since v1.76.0 a DRIVER lane (their assigned vehicle, their own documents with real numbers, and their last 7/14 days) and a SUPERADMIN lane (a read-only owner list with masked phones and a per-owner fleet view — every visit audited); since v1.81.0 an Import page (Phase 20) that accepts a CSV of Date, Vehicle Plate, Type, Amount, Odometer, Notes, validates every row (owned plate, catalog type, positive amount, readable non-future date, no duplicate inside the file or the last few hours) with a highlighted preview, and only then bulk-saves the valid rows — importing never starts or extends a trial and never uses the report quota. Charts, saving report templates, emailing a report from the dashboard, dashboard editing or uploading of documents, changing email or units from the dashboard, and any card/refund action have NOT shipped — never promise them. Only point to a receipt when the row carries the durable receipt_id link or exactly one receipt matches; never invent a link.'
 ];
 

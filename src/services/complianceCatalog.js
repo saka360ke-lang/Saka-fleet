@@ -133,8 +133,9 @@ export const COUNTRY_COMPLIANCE_CATALOG = Object.freeze({
 /** Category used by the universal reminder engine for a compliance type. */
 export function complianceCategory(type) {
   const clean = String(type || '').toLowerCase();
-  if (['driver_license', 'driver_licence', 'cdl', 'commercial_dl', 'hrt_licence', 'driver_cpc'].includes(clean)) return 'driver_license';
-  if (['psv_badge', 'pdp', 'hackney_permit', 'heavy_vehicle_permit', 'operator_cert', 'plant_card', 'white_card'].includes(clean)) return 'permit';
+  // v1.85.0 (Phase 24) — commercial licences are licences; the rest are permits.
+  if (['driver_license', 'driver_licence', 'cdl', 'commercial_dl', 'hrt_licence', 'driver_cpc', 'commercial_licence'].includes(clean)) return 'driver_license';
+  if (['psv_badge', 'pdp', 'hackney_permit', 'heavy_vehicle_permit', 'operator_cert', 'plant_card', 'white_card', 'driver_card', 'operator_card'].includes(clean)) return 'permit';
   return 'other';
 }
 

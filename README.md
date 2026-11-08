@@ -225,6 +225,12 @@ ask you to double-check before saving; nothing is ever written without your YES.
 - Bundled knowledgebase ships for Kenya, Tanzania, Uganda, Rwanda, Nigeria,
   South Africa, the UK, US, Canada, UAE, India, Australia and Belgium, with a
   global fallback and superadmin overrides in `country_kb`.
+- **Canada and Belgium (v1.85.0).** Belgium resolves straight from a +32 number
+  (EUR, nl-BE, Europe/Brussels, Belgian vehicle catalog). Canada shares the +1
+  prefix with the USA, so the phone default stays US — a Canadian owner sets it
+  explicitly once (`country Canada`) and every dashboard page, price, PDF and
+  reminder follows CAD / en-CA / America/Toronto from then on. The stored
+  `profiles.country_code` always wins over phone detection.
 - Official-source updates: `npm run kb:ingest` fetches allow-listed government
   sources into **draft** rules (never live), `npm run kb:ingest -- --review`
   lists them, and superadmin `admin kb approve <id>` publishes a verified rule.

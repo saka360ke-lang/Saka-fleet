@@ -14,13 +14,24 @@ import {
   setBuyerDetailsAndSendReleaseOtp,
   verifyOwnerReleaseOtpAndNotifyBuyer,
   handleBuyerAcceptance,
-  completePassbookTransfer
+  completePassbookTransfer,
+  formatTransferFeeLine
 } from './src/services/transfers.js';
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 
 async function runTests() {
   console.log('=== STARTING NEW SAKA FLEET CORE FEATURES TEST SUITE ===\n');
+
+  // Phase 24 (v1.85.0) — the passbook transfer fee follows the BUYER's currency.
+  const ngnFee = formatTransferFeeLine({ currency: 'NGN', rate: 1500, locale: 'en-NG' });
+  const kesFee = formatTransferFeeLine({ currency: 'KES', rate: 130, locale: 'en-KE' });
+  const usdFee = formatTransferFeeLine({ currency: 'USD' });
+  if (!/^NGN /.test(ngnFee.localPriceStr) || /KES/.test(ngnFee.localPriceStr)) throw new Error('A NGN buyer must be quoted NGN, never KES');
+  if (!/^KES /.test(kesFee.localPriceStr) || usdFee.localFigure !== '' || usdFee.localPriceStr !== 'USD 3.00') {
+    throw new Error('Local buyers get their own currency; USD buyers get a clean USD 3.00');
+  }
+  console.log('✅ Transfer fee follows the buyer currency (v1.85.0)');
 
   const testOwnerPhone = '+254711998877';
   const testBuyerPhone = '+254722334455';

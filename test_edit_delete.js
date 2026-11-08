@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 dotenv.config();
 import crypto from 'crypto';
+import fs from 'node:fs';
 import { createClient } from '@supabase/supabase-js';
 import { classifyIntentWithRegex, extractVehicleAttributes } from './sakaAi.js';
 import {
@@ -34,6 +35,17 @@ async function runTests() {
   assert(editAttrs.plate_number === 'KDA 123A', 'Edit target plate not extracted');
   assert(editAttrs.color === 'White', 'Edit color value not extracted');
   console.log('✅ New edit/delete intents classified correctly and edit attributes extracted.');
+
+  // 1b. delete_account clears the durable session snapshot (v1.85.0 source-pin)
+  console.log('\n--- Test 1b: delete_account clears chat_sessions (v1.85.0) ---');
+  const quizSource = fs.readFileSync('./src/services/quizEngine.js', 'utf8');
+  const deleteCaseIndex = quizSource.indexOf("case 'delete_account'");
+  const sessionsClearIndex = quizSource.indexOf("from('chat_sessions').delete()");
+  assert(deleteCaseIndex > -1 && sessionsClearIndex > deleteCaseIndex,
+    'delete_account must clear chat_sessions (no stale quiz/OTP state survives)');
+  assert(/from\('chat_sessions'\)\.delete\(\)\.eq\('phone_number'/.test(quizSource),
+    'the chat_sessions clear is keyed by phone_number');
+  console.log('✅ delete_account clears chat_sessions (source-pinned).');
 
   // 2. VIN immutability at the sanitizer level
   console.log('\n--- Test 2: VIN + passbook token sanitization ---');

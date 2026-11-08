@@ -17,7 +17,7 @@
   ],
   "exchangeRates": {
     "USD": 1.0, "KES": 130.0, "NGN": 1500.0, "ZAR": 18.5, "GBP": 0.77, "EUR": 0.92,
-    "TZS": 2600.0, "UGX": 3700.0, "RWF": 1350.0, "AUD": 1.5, "INR": 84.0, "AED": 3.67, "BRL": 5.6
+    "TZS": 2600.0, "UGX": 3700.0, "RWF": 1350.0, "AUD": 1.5, "INR": 84.0, "AED": 3.67, "BRL": 5.6, "CAD": 1.38
   },
   "ratesUpdatedAt": "2026-11-02",
   "countries": {
@@ -164,6 +164,25 @@
         "additional": []
       },
       "lingo": ["Rijbewijs"]
+    },
+    "BE": {
+      "code": "BE", "name": "Belgium", "calling": "+32", "currency": "EUR",
+      "plateExample": "1-ABC-123", "units": "metric", "locale": "nl-BE",
+      "compliance": {
+        "minimal": "Driving licence (Belgium)",
+        "additional": []
+      },
+      "lingo": ["SPF Mobilité", "technical inspection"]
+    },
+    "CA": {
+      "code": "CA", "name": "Canada", "calling": "+1", "currency": "CAD",
+      "plateExample": "ABCD 123", "units": "metric", "locale": "en-CA",
+      "compliance": {
+        "minimal": "Driver's licence",
+        "additional": ["Commercial driver licence", "Heavy equipment operator certificate"]
+      },
+      "lingo": ["Service Ontario", "commercial driver licence"],
+      "note": "Shares +1 with the USA — set your country explicitly in WhatsApp (\"country Canada\") so prices and rules follow Canada."
     },
     "BR": {
       "code": "BR", "name": "Brazil", "calling": "+55", "currency": "BRL",

@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { COUNTRY_COMPLIANCE_CATALOG } from './src/services/complianceCatalog.js';
-import { REGIONS } from './src/services/globalization.js';
+import { REGIONS, EXTRA_REGIONS } from './src/services/globalization.js';
 import { getTierPriceUSD, getAddonPriceUSD } from './src/services/subscriptionTiers.js';
 
 const LANDING = path.join(path.dirname(fileURLToPath(import.meta.url)), 'landing');
@@ -195,7 +195,7 @@ check(css.includes('line-clamp') && /width: min\(430px/.test(css), 'the cookie b
 console.log('\n--- Test 10: country dataset mirrors the live catalogs (v1.41.0) ---');
 const countriesJson = JSON.parse(fs.readFileSync(path.join(LANDING, 'data/countries.json'), 'utf8'));
 check(countriesJson.global && countriesJson.countries, 'the dataset carries a GLOBAL fallback and a country map');
-const regionByCode = new Map(REGIONS.map((r) => [r.country_code, r]));
+const regionByCode = new Map([...REGIONS, ...EXTRA_REGIONS].map((r) => [r.country_code, r]));
 for (const [code, entry] of Object.entries(countriesJson.countries)) {
   const bucket = COUNTRY_COMPLIANCE_CATALOG[code];
   check(Boolean(bucket), `${code} exists in the backend compliance catalog`);
@@ -204,7 +204,7 @@ for (const [code, entry] of Object.entries(countriesJson.countries)) {
   check(JSON.stringify(entry.compliance.additional) === JSON.stringify(extraLabels), `${code} additional compliances match the catalog`);
   const region = regionByCode.get(code);
   check(Boolean(region), `${code} exists in the REGIONS registry`);
-  check(entry.name === region.country && entry.currency === region.currency && entry.plateExample === region.plate_example && entry.units === region.default_units && entry.calling === region.prefix, `${code} country facts match the REGIONS registry`);
+  check(entry.name === region.country && entry.currency === region.currency && entry.plateExample === region.plate_example && entry.units === region.default_units && (!region.prefix || entry.calling === region.prefix), `${code} country facts match the REGIONS registry`);
   check(Array.isArray(entry.lingo), `${code} carries a lingo list`);
 }
 check(indexHtml.includes('id="localeFlag"'), 'the hero carries the country flag chip');

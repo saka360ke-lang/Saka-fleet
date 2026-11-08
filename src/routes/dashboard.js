@@ -93,6 +93,9 @@ import {
   renderCareQueuePage,
   buildAnalyticsPage,
   renderAnalyticsPage,
+  // v1.85.0 (Phase 24) — kind-aware record meters (Odometer vs Engine hours).
+  attachMeterReadings,
+  recordsMeterLabel,
   // v1.83.0 (Phase 22) — passbook transfer + subscription pages.
   buildTransferPage,
   renderTransferPage,
@@ -124,7 +127,9 @@ import {
   bulkInsertImportRows,
   CSV_IMPORT_MAX_BYTES
 } from '../services/csvImport.js';
-import { detectCountryFromPhone, buildGlobalContext } from '../services/globalization.js';
+import { detectCountryFromPhone, buildGlobalContext, regionForCountryCode } from '../services/globalization.js';
+import { isHoursLedKind } from '../services/expenseCatalog.js';
+import { applyOperatingHours } from '../services/maintenanceReminders.js';
 import { buildProReportPdf } from '../services/pdfEngine.js';
 import { logSystemError, logWriteFailure } from '../services/systemErrors.js';
 
@@ -207,6 +212,14 @@ async function loadDashboardProfile(supabase, ownerId) {
  * silently fell back to USD/en-US for every owner).
  */
 function countryForProfile(profile) {
+  // v1.85.0 (Phase 24) — an explicit country choice (profiles.country_code,
+  // country_source='user' or the phone lock) always wins over phone detection;
+  // Canada (+1, no unique prefix) is only reachable this way.
+  const storedCode = String(profile?.country_code || '').toUpperCase();
+  if (storedCode && storedCode !== 'GLOBAL') {
+    const region = regionForCountryCode(storedCode);
+    if (region && region.country_code === storedCode) return region;
+  }
   const phone = profile?.phone_number;
   return phone ? detectCountryFromPhone(phone) : null;
 }
@@ -523,7 +536,8 @@ export async function registerDashboardRoutes(fastify, {
           const page = renderErrorPage(500, 'That export could not be built — please try again in a moment.');
           return sendHtml(reply, page.status, page.html);
         }
-        const csv = serializeRecordsCsv(result.rows, { currency: ctx.currency });
+        const metered = attachMeterReadings(result.rows, vehicles);
+        const csv = serializeRecordsCsv(metered.rows, { currency: ctx.currency, meterLabel: metered.meterLabel });
         reply.header('content-disposition', `attachment; filename="saka-records-${parsed.filters.from}-to-${parsed.filters.to}.csv"`);
         reply.header('cache-control', 'no-store');
         return reply.code(200).type('text/csv; charset=utf-8').send(csv);
@@ -968,13 +982,15 @@ export async function registerDashboardRoutes(fastify, {
         if (!session) return reply;
         const profile = await loadDashboardProfile(supabase, session.ownerId);
         const ctx = buildGlobalContext(countryForProfile(profile), profile);
+        const importVehicles = await loadOwnerVehicles(supabase, session.ownerId).catch(() => []);
         const importedRaw = request.query?.imported;
         const imported = importedRaw === undefined ? null : Math.max(0, Number(importedRaw) || 0);
         return sendHtml(reply, 200, renderImportPage({
           imported,
           emailMasked: accountLabel(profile, session),
           currency: ctx.currency,
-          locale: ctx.locale
+          locale: ctx.locale,
+          readingLabel: recordsMeterLabel(importVehicles)
         }));
       } catch (err) {
         await logSystemError(supabase, err, '/d/import');
@@ -1002,7 +1018,8 @@ export async function registerDashboardRoutes(fastify, {
           error: result.ok ? null : result.error,
           emailMasked: accountLabel(profile, session),
           currency: ctx.currency,
-          locale: ctx.locale
+          locale: ctx.locale,
+          readingLabel: recordsMeterLabel(result.ok ? result.vehicles : [])
         });
         return sendHtml(reply, result.ok ? 200 : (result.status || 400), page);
       } catch (err) {
@@ -1028,13 +1045,15 @@ export async function registerDashboardRoutes(fastify, {
         const ctx = buildGlobalContext(countryForProfile(profile), profile);
         const emailMasked = accountLabel(profile, session);
         const body = request.body && typeof request.body === 'object' ? request.body : {};
+        const confirmVehicles = await loadOwnerVehicles(supabase, session.ownerId).catch(() => []);
+        const confirmReadingLabel = recordsMeterLabel(confirmVehicles);
         if (String(body.action || '') !== 'confirm') {
-          return sendHtml(reply, 400, renderImportPage({ error: 'Nothing to import — nothing changed.', emailMasked, currency: ctx.currency, locale: ctx.locale }));
+          return sendHtml(reply, 400, renderImportPage({ error: 'Nothing to import — nothing changed.', emailMasked, currency: ctx.currency, locale: ctx.locale, readingLabel: confirmReadingLabel }));
         }
         const csvText = readImportCsv(request);
         const result = await runImportPreview({ ownerId: session.ownerId, profile, csvText });
         if (!result.ok) {
-          return sendHtml(reply, result.status || 400, renderImportPage({ csvText, error: result.error, emailMasked, currency: ctx.currency, locale: ctx.locale }));
+          return sendHtml(reply, result.status || 400, renderImportPage({ csvText, error: result.error, emailMasked, currency: ctx.currency, locale: ctx.locale, readingLabel: confirmReadingLabel }));
         }
         if (!result.preview.counts.valid) {
           return sendHtml(reply, 400, renderImportPage({
@@ -1043,7 +1062,8 @@ export async function registerDashboardRoutes(fastify, {
             error: 'No rows are ready to import — fix the highlighted rows first.',
             emailMasked,
             currency: ctx.currency,
-            locale: ctx.locale
+            locale: ctx.locale,
+            readingLabel: confirmReadingLabel
           }));
         }
         const insert = await bulkInsertImportRows({
@@ -1391,16 +1411,21 @@ export async function registerDashboardRoutes(fastify, {
             error: details.error || 'The release PIN could not be sent just now.'
           });
         }
-        // Optional handover odometer: a real reading in the ledger, never a
-        // blocker for the transfer itself.
-        const odometer = Number(String(body.odometer || '').replace(/[^0-9.]/g, ''));
-        if (Number.isFinite(odometer) && odometer > 0 && odometer <= 10000000) {
-          await recordLabeledReading(supabase, {
-            vehicleId: vehicle.id,
-            profileId: session.ownerId,
-            reading: odometer,
-            label: 'handover'
-          }).catch(() => null);
+        // Optional handover reading: a real ledger entry for road assets, the
+        // engine-hours meter for hours-led assets (v1.85.0, never a mileage).
+        const reading = Number(String(body.odometer || '').replace(/[^0-9.]/g, ''));
+        if (Number.isFinite(reading) && reading > 0 && reading <= 10000000) {
+          const hoursLed = isHoursLedKind(vehicle.asset_kind || vehicle.asset_type || 'vehicle');
+          if (hoursLed) {
+            await applyOperatingHours({ supabase, vehicle, hours: reading }).catch(() => null);
+          } else {
+            await recordLabeledReading(supabase, {
+              vehicleId: vehicle.id,
+              profileId: session.ownerId,
+              reading,
+              label: 'handover'
+            }).catch(() => null);
+          }
         }
         return reply.code(303).header('location', `/d/transfer?started=1&pin=${encodeURIComponent(initiated.transferId)}`).send();
       } catch (err) {

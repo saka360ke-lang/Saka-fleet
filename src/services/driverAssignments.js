@@ -103,6 +103,7 @@ export async function createDriverAssignment({
   vehicle,
   driverPhone,
   handoverOdometer = null,
+  handoverHours = null,
   countryInfo = null,
   sendOtpFn = sendDriverAssignmentOtp,
   sendWhatsApp = null,
@@ -203,13 +204,22 @@ export async function createDriverAssignment({
   const otp = generateOtp();
   const expiresAt = new Date(now.getTime() + OTP_TTL_MS).toISOString();
   const isoNow = new Date(now).toISOString();
+  // v1.85.0 (Phase 24) — hours-led handovers record ENGINE HOURS, never a
+  // made-up odometer: the odometer column stays null and the reading lands on
+  // the asset's metadata (`hours_at_assignment`).
+  const hoursReading = Number(handoverHours);
+  const hasHoursReading = handoverHours !== null && handoverHours !== undefined && handoverHours !== ''
+    && Number.isFinite(hoursReading) && hoursReading >= 0;
+  const odometerReading = hasHoursReading
+    ? null
+    : (handoverOdometer !== null && handoverOdometer !== undefined ? Number(handoverOdometer) : null);
   const row = {
     id: crypto.randomUUID(),
     vehicle_id: vehicle.id,
     owner_id: ownerId,
     driver_id: driver.id,
     driver_phone: cleanPhone,
-    handover_odometer: handoverOdometer !== null && handoverOdometer !== undefined ? Number(handoverOdometer) : null,
+    handover_odometer: odometerReading,
     owner_otp: otp,
     owner_otp_expires_at: expiresAt,
     owner_otp_attempts: 0,
@@ -220,6 +230,20 @@ export async function createDriverAssignment({
 
   const { error } = await supabase.from('driver_assignments').insert([row]);
   if (error) return { ok: false, error: error.message };
+
+  if (hasHoursReading) {
+    try {
+      const metadata = {
+        ...(vehicle.metadata || {}),
+        hours_at_assignment: hoursReading,
+        hours_assigned_at: isoNow
+      };
+      await supabase.from('vehicles').update({ metadata, updated_at: isoNow }).eq('id', vehicle.id);
+    } catch (metaErr) {
+      // Rule 50 — a metadata write never blocks the assignment itself.
+      console.warn('[driverAssignments] hours_at_assignment metadata skipped:', metaErr?.message || metaErr);
+    }
+  }
 
   try {
     await sendOtpFn(ownerEmail, otp, { plate: vehicleLabel(vehicle), driverPhone: cleanPhone });

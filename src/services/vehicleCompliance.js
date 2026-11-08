@@ -24,7 +24,7 @@ import { createExpiryReminder, buildExpirySpecFromDate, daysUntilDue } from './m
 import { SYSTEM_TIMEZONE } from './dateParser.js';
 import { markUserDataChanged } from './afterWrite.js';
 
-export const VEHICLE_COMPLIANCE_CATALOG_VERSION = '2026.17.0';
+export const VEHICLE_COMPLIANCE_CATALOG_VERSION = '2026.18.0';
 
 function vItem(type, label, aliases = [], { lifetimeAllowed = false, assetTypes = null } = {}) {
   return Object.freeze({ type, label, aliases, lifetimeAllowed, assetTypes });
@@ -159,6 +159,15 @@ export const VEHICLE_COMPLIANCE_CATALOG = Object.freeze({
       vItem('insurance', 'Verzekering', ['insurance', 'verzekering', 'insured', 'policy']),
       vItem('apk', 'APK inspection', ['apk', 'inspection']),
       vItem('mrb', 'Wegenbelasting (MRB)', ['mrb', 'wegenbelasting', 'road tax'])
+    ]
+  },
+  // v1.85.0 (Phase 24) — Belgium now resolves from +32 (and the explicit choice),
+  // so its vehicle catalog must exist too.
+  BE: {
+    items: [
+      vItem('insurance', 'Verzekering / Assurance', ['insurance', 'verzekering', 'assurance', 'insured', 'policy']),
+      vItem('controle_technique', 'Contrôle technique / Keuring', ['controle technique', 'keuring', 'inspection']),
+      vItem('verkeersbelasting', 'Verkeersbelasting (road tax)', ['verkeersbelasting', 'road tax', 'traffic tax'])
     ]
   },
   BR: {

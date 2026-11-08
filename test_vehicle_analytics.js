@@ -8,7 +8,11 @@ import assert from 'assert';
 import {
   buildTyreWearRows,
   buildCostPerKmTrend,
+  buildCostPerHourTrend,
+  buildServiceIntervalRows,
   buildCostPerKmChart,
+  parseHoursFromNotes,
+  hoursInWindow,
   getTyreLifespanKm,
   getTyreReplaceSoonKm,
   isTyreExpenseType
@@ -131,6 +135,37 @@ check(getTyreLifespanKm() === 40000 && getTyreReplaceSoonKm() === 40000, 'a 40,0
 const tuned = buildTyreWearRows({ vehicles: [vehicle()], expenses: [tyre(95000)] });
 check(tuned[0].remainingPct === 38 && tuned[0].replaceSoon === false, '25,000 of 40,000 km = ~38% remaining (Replace Soon only at 40,000)');
 if (PREV_LIFESPAN === undefined) delete process.env.TYRE_LIFESPAN_KM; else process.env.TYRE_LIFESPAN_KM = PREV_LIFESPAN;
+
+console.log('\n--- Test 10: hours-led assets (v1.85.0) ---');
+const generator = { id: 'g1', plate_number: 'GEN-1', make_model: 'Cummins 60kVA', status: 'ACTIVE', asset_kind: 'generator', operating_hours: 1240 };
+const genTyres = buildTyreWearRows({
+  vehicles: [generator],
+  expenses: [{ id: 't1', vehicle_id: 'g1', expense_type: 'Tyres', odometer_reading: 900, created_at: '2026-09-01T00:00:00Z' }]
+});
+check(genTyres.length === 0, 'a generator NEVER appears in tyre wear');
+check(parseHoursFromNotes('Engine hours: 120 h') === 120 && parseHoursFromNotes('fuel top-up') === null,
+  'engine hours parse from the entry notes (and nothing else does)');
+const hoursExpenses = [
+  { id: 'h1', vehicle_id: 'g1', expense_type: 'Fuel', amount: 6000, notes: 'Engine hours: 100 h', created_at: '2026-11-02T08:00:00Z' },
+  { id: 'h2', vehicle_id: 'g1', expense_type: 'Fuel', amount: 9000, notes: 'Engine hours: 140 h', created_at: '2026-11-07T08:00:00Z' }
+];
+check(hoursInWindow(hoursExpenses, { from: Date.UTC(2026, 10, 1), to: Date.UTC(2026, 11, 1) }) === 40,
+  'hoursInWindow = 40 h (max − min, the distanceInWindow twin)');
+const hoursTrend = buildCostPerHourTrend({ vehicles: [generator], expenses: hoursExpenses, now: NOW });
+const novHours = hoursTrend.months.find((bucket) => bucket.key === '2026-11');
+check(novHours.spend === 15000 && novHours.hours === 40 && novHours.costPerHour === 375,
+  'November: 15,000 ÷ 40 h = 375 per operating hour');
+check(hoursTrend.totalHours === 40 && hoursTrend.averageCostPerHour === 375, 'the hours totals and average ride the result');
+const hoursChart = buildCostPerKmChart(hoursTrend, { valueKey: 'costPerHour' });
+check(hoursChart.points.length === 1 && hoursChart.maxValue === 375, 'the chart reads costPerHour when asked');
+const intervals = buildServiceIntervalRows({
+  vehicles: [generator],
+  reminders: [{ id: 'r1', vehicle_id: 'g1', reminder_type: 'Generator service', threshold_unit: 'hours', target_value: 1500, last_service_value: 1000, remaining_value: 260, status: 'active' }]
+});
+check(intervals.length === 1 && intervals[0].currentHours === 1240 && intervals[0].remaining === 260 && intervals[0].percentRemaining === 52,
+  'service intervals carry live hours, target and remaining');
+check(buildServiceIntervalRows({ vehicles: [generator], reminders: [{ id: 'r2', vehicle_id: 'g1', threshold_unit: 'distance', target_value: 5000 }] }).length === 0,
+  'distance reminders never become hours intervals');
 
 console.log('\n🎉 ' + passed + ' vehicle-analytics assertions passed.');
 console.log('Stateless suite: pure math only; nothing was written to the database.');

@@ -178,4 +178,14 @@ check(registryNow.includes('detectAllDocumentsExpiryRead') && registryNow.includ
 check(routeNow.includes('isUnreadableMediaNote(messageText)') && routeNow.includes('isPhotoIntent(messageText)'), 'the photo/unreadable lanes are wired into the capture branch');
 check(routeNow.includes('extractFromPastedDocument') && routeNow.includes('detectDocumentTypeCorrection'), 'paste + type-correction handling is wired');
 
+console.log('\n--- Phase 24 (v1.85.0): country-correct professional items ---');
+const gbChoices = driverComplianceChoices({ countryCode: 'GB' }).map((choice) => choice.value);
+const usChoices = driverComplianceChoices({ countryCode: 'US' }).map((choice) => choice.value);
+const caChoices = driverComplianceChoices({ countryCode: 'CA' }).map((choice) => choice.value);
+const beChoices = driverComplianceChoices({ countryCode: 'BE' }).map((choice) => choice.value);
+check(gbChoices.includes('cpc') && gbChoices.includes('driver_card'), 'GB offers the CPC + driver qualification card');
+check(usChoices.includes('commercial_licence') && !usChoices.includes('psv_badge'), 'US offers the commercial licence (CDL)');
+check(caChoices.includes('commercial_licence'), 'CA offers the commercial licence');
+check(beChoices.includes('driver_card') && !beChoices.includes('operator_card'), 'BE offers the EU driver card, not an operator card');
+
 console.log(`\n🎉 ${passed} driver-document lane assertions passed.`);

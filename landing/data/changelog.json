@@ -1,6 +1,13 @@
 {
-  "latest": "1.84.0",
+  "latest": "1.85.0",
   "entries": [
+    {
+      "version": "1.85.0",
+      "date": "2026-11-08",
+      "title": "Every machine speaks its own language",
+      "preview": "Generators, excavators and boats now show engine hours and cost per hour - not an odometer they do not have.",
+      "summary": "Saka has always logged whatever you run. This release makes the whole product speak each asset's own language. Your dashboard now shows the right meter everywhere: cars, motorcycles, trucks and buses show the odometer with tyre wear and cost per kilometre, while generators, machinery, heavy equipment and boats show engine hours with service intervals and cost per operating hour. Handing a machine to an operator asks for engine hours at handover, never a made-up mileage. The records view and CSV import follow the fleet too: an hours-based fleet imports and exports engine hours, and the readings stay in your notes exactly as Saka writes them in chat. Two more countries are properly supported: Belgian numbers (+32) get euros, Dutch-Belgian formatting and Belgian rules, and Canadian owners can set Canada once (country Canada) to get Canadian dollars, Canadian dates and provincial rules - it needs that one explicit choice because Canada shares the +1 prefix with the US. Drivers in the UK, US, Canada, the UAE, India and Australia now see their real professional documents (Driver CPC, CDL, heavy vehicle permits, HR licences and white cards) instead of a generic card. Passbook handovers quote their fee in the buyer's own currency, and machines hand over by serial number. Everything you already logged stays exactly as it was."
+    },
     {
       "version": "1.84.0",
       "date": "2026-11-08",

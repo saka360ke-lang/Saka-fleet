@@ -120,7 +120,7 @@ check(normalizeEarningType('something unknown') === null, 'Unknown earnings stay
 check(earningTypeMenu().includes('Cargo & freight'), 'Earning menu copy is available for prompts');
 
 console.log('\n--- Test 5: global vehicle compliance catalogs ---');
-check(VEHICLE_COMPLIANCE_CATALOG_VERSION === '2026.17.0', 'Compliance catalog version bumped');
+check(VEHICLE_COMPLIANCE_CATALOG_VERSION === '2026.18.0', 'Compliance catalog version bumped');
 for (const region of REGIONS) {
   check(Boolean(VEHICLE_COMPLIANCE_CATALOG[region.country_code]), `Compliance catalog exists for ${region.country_code}`);
 }
@@ -141,7 +141,7 @@ check(resolveDriverComplianceType('medical certificate') === 'medical_certificat
 const keDriverChoices = driverComplianceChoices({ countryCode: 'KE' }).map((choice) => choice.value);
 const globalDriverChoices = driverComplianceChoices({ countryCode: 'US' }).map((choice) => choice.value);
 check(keDriverChoices.includes('driving_licence') && keDriverChoices.includes('psv_badge'), 'Kenya driver menu includes licence + PSV badge');
-check(globalDriverChoices.includes('operator_card') && !globalDriverChoices.includes('psv_badge'), 'Non-EA driver menu includes the operator card');
+check(globalDriverChoices.includes('commercial_licence') && !globalDriverChoices.includes('psv_badge'), 'North America driver menu includes the commercial licence (CDL) — v1.85.0');
 
 console.log('\n--- Test 7: vehicle attribute expansion ---');
 const hilux = extractVehicleAttributes('Toyota Hilux double cab, navy, bullbar, tow bar, dashcam');

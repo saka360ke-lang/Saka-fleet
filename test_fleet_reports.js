@@ -15,6 +15,7 @@
 import assert from 'assert';
 import {
   buildFleetReport,
+  buildVehicleDirectory,
   resolveReportType,
   REPORT_TYPES
 } from './src/services/fleetReports.js';
@@ -188,6 +189,22 @@ async function run() {
   });
   check(imperialFinancial.data.currency === 'USD' && imperialFinancial.data.efficiency.distanceUnit === 'mi', 'US owners receive USD and miles');
   check(imperialFinancial.data.efficiency.distance === 932, 'Month distance is converted to miles');
+
+  console.log('\n--- Test 7: kind-aware meter (v1.85.0) ---');
+  const kindMock = createMockSupabase({
+    vehicles: [
+      { id: 'v-gen', owner_id: 'p1', plate_number: null, make_model: 'Cummins 60kVA', asset_kind: 'generator', operating_hours: 1240, status: 'ACTIVE', deleted_at: null },
+      { id: 'v-car', owner_id: 'p1', plate_number: 'KDA 123A', make_model: 'Toyota Fielder', asset_kind: 'vehicle', current_mileage: 120000, odometer_reading: 120000, status: 'ACTIVE', deleted_at: null }
+    ]
+  });
+  const directory = await buildVehicleDirectory({ supabase: kindMock.client, ownerId: 'p1', countryInfo, profile });
+  const genRow = directory.vehicles.find((row) => row.id === 'v-gen');
+  const carRow = directory.vehicles.find((row) => row.id === 'v-car');
+  check(directory.ok === true && directory.vehicles.length === 2, 'the kind-aware directory builds both assets');
+  check(genRow.meterLabel === 'Engine hours' && genRow.meterValue === 1240 && genRow.meterUnit === 'h', 'a generator carries ENGINE HOURS (label + value + unit)');
+  check(genRow.odometer === null && genRow.meterId === 'engine_hours', 'a generator NEVER carries an odometer');
+  check(carRow.meterLabel === 'Odometer' && carRow.meterValue === 120000 && carRow.meterUnit === 'km', 'a car keeps the odometer in the owner unit');
+  check(directory.vehicles.every((row) => typeof row.meterLabel === 'string' && row.meterLabel.length > 0), 'every row carries a meter label for the renderers');
 
   console.log(`\n\u2705 ALL FLEET REPORT TESTS PASSED (${passed} assertions).`);
   console.log('Stateless suite: no real database rows were created, so no cleanup is required.');
