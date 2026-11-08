@@ -20,6 +20,7 @@
  */
 
 import { parseComplianceItem } from './complianceCatalog.js';
+import { complianceAssetMatches } from './countryBucket.js';
 import { createExpiryReminder, buildExpirySpecFromDate, daysUntilDue } from './maintenanceReminders.js';
 import { SYSTEM_TIMEZONE } from './dateParser.js';
 import { markUserDataChanged } from './afterWrite.js';
@@ -339,15 +340,18 @@ function normalizeAssetType(assetType) {
  * Sync resolver for the vehicle catalog (bundled defaults + asset filtering).
  * v1.58.25 — `includeAll: true` skips the asset-type menu filter so an explicit
  * mention ("add insurance") always resolves, even on a differently-typed asset.
+ *
+ * v1.86.0 (Phase 25) — `assetKind` (vehicles.asset_kind) joins the filter through
+ * the ONE bridge in countryBucket.complianceAssetMatches. A truck stores
+ * asset_type='ICE', which used to hide the KE speed-limiter certificate even
+ * though the catalog scopes it to TRUCK/HGV.
  */
-export function resolveVehicleComplianceCatalog({ countryCode = 'GLOBAL', assetType = null, includeAll = false } = {}) {
+export function resolveVehicleComplianceCatalog({ countryCode = 'GLOBAL', assetType = null, assetKind = null, includeAll = false } = {}) {
   const code = String(countryCode || 'GLOBAL').toUpperCase();
   const entry = VEHICLE_COMPLIANCE_CATALOG[code] || VEHICLE_COMPLIANCE_CATALOG.DEFAULT;
-  const normalizedAsset = normalizeAssetType(assetType);
   const items = (entry.items || []).filter((item) => {
     if (includeAll) return true;
-    if (!item.assetTypes || item.assetTypes.length === 0) return true;
-    return Boolean(normalizedAsset) && item.assetTypes.includes(normalizedAsset);
+    return complianceAssetMatches(item.assetTypes, { assetKind, assetType });
   });
   return {
     countryCode: code,
@@ -371,6 +375,7 @@ export function vehicleComplianceCategory(type) {
 export function parseVehicleComplianceParagraph(text, {
   countryCode = 'GLOBAL',
   assetType = null,
+  assetKind = null,
   locale = 'en-US',
   timeZone = SYSTEM_TIMEZONE,
   now = new Date()
@@ -378,7 +383,7 @@ export function parseVehicleComplianceParagraph(text, {
   const clean = String(text || '').trim();
   if (!clean) return [];
   const lower = clean.toLowerCase();
-  const catalog = resolveVehicleComplianceCatalog({ countryCode, assetType });
+  const catalog = resolveVehicleComplianceCatalog({ countryCode, assetType, assetKind });
 
   const matches = [];
   for (const item of catalog.items) {
@@ -500,10 +505,14 @@ export async function getVehicleComplianceStatus({
   vehicle,
   countryCode = 'GLOBAL',
   assetType = null,
+  assetKind = null,
   now = new Date()
 } = {}) {
   if (!supabase || !vehicle?.id) return { ok: false, items: [], missing: [] };
-  const catalog = resolveVehicleComplianceCatalog({ countryCode, assetType });
+  // v1.86.0 — the kind is the canonical identity; the vehicle row carries it.
+  const resolvedAssetType = assetType || vehicle.asset_type || vehicle.metadata?.asset_type || null;
+  const resolvedAssetKind = assetKind || vehicle.asset_kind || null;
+  const catalog = resolveVehicleComplianceCatalog({ countryCode, assetType: resolvedAssetType, assetKind: resolvedAssetKind });
   const { data } = await supabase.from('vehicle_compliances').select('*').eq('vehicle_id', vehicle.id).limit(100);
   const records = Array.isArray(data) ? data : [];
 

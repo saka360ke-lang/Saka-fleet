@@ -150,7 +150,6 @@ const BANNED_VISIBLE = [
   ['Supabase', /Supabase/],
   ['Paystack', /Paystack/],
   ['Google Fonts', /fonts\.googleapis|fonts\.gstatic/],
-  ['app.sakafleet.com (visible)', /app\.sakafleet\.com/],
   ['"Registered in Kenya"', /Registered in Kenya/],
   ['ODPC', /ODPC/]
 ];
@@ -160,9 +159,29 @@ for (const file of walk(LANDING)) {
   if (/robots\.txt$/.test(file)) continue;
   visibleText += fs.readFileSync(file, 'utf8') + '\n';
 }
+// v1.86.0 (Phase 25) — the app host is allowed ONLY as the two approved doors
+// (Log In in the header, King in the footer): they are customer-facing links,
+// not an infrastructure leak. Any other visible mention still fails.
+const APPROVED_DOORS = [
+  'https://app.sakafleet.com/d/login',
+  'https://app.sakafleet.com/d/admin/login'
+];
+let doorFreeText = visibleText;
+for (const door of APPROVED_DOORS) doorFreeText = doorFreeText.split(door).join('');
+check(doorFreeText.includes('app.sakafleet.com') === false, 'No "app.sakafleet.com (visible)" appears outside the two approved doors');
 for (const [label, pattern] of BANNED_VISIBLE) {
-  check(!pattern.test(visibleText), `No "${label}" appears in visible site content`);
+  check(!pattern.test(doorFreeText), `No "${label}" appears in visible site content`);
 }
+// v1.86.0 (Phase 25) — the Log In button + the quiet King footer door.
+check(indexHtml.includes('class="btn btn-ghost nav-login" href="https://app.sakafleet.com/d/login" rel="noopener"'), 'the header carries a Log In link to the dashboard door');
+check(/nav-login[\s\S]{0,200}data-open-onboard/.test(indexHtml), 'Log In sits next to Get Started Free');
+check(indexHtml.includes('class="foot-king" href="https://app.sakafleet.com/d/admin/login" rel="noopener"'), 'the footer carries the quiet King (superadmin) door');
+check(indexHtml.indexOf('foot-king') > indexHtml.indexOf('<footer>'), 'the King link lives inside the footer only');
+check(!/nav-login[^>]*target="_blank"/.test(indexHtml) && !/foot-king[^>]*target="_blank"/.test(indexHtml), 'both doors stay in the same tab (a phone user never loses the site)');
+const phase25Css = fs.readFileSync(path.join(LANDING, 'assets/css/styles.css'), 'utf8');
+check(phase25Css.includes('.foot-king') && phase25Css.includes('.nav-cta .btn-ghost.nav-login'), 'both doors are styled (King subtle, Log In visible at every width)');
+const phase25Nav = fs.readFileSync(path.join(LANDING, 'assets/js/nav.js'), 'utf8');
+check(phase25Nav.includes('.nav-login') && phase25Nav.includes('nav-menu-login'), 'the mobile drawer carries the Log In link too');
 const privacyText = fs.readFileSync(path.join(LANDING, 'privacy.html'), 'utf8');
 check(!/Supabase|Google Cloud|Resend API|Meta's|Paystack/.test(privacyText), 'The privacy policy names no infrastructure vendors');
 const llmsText = fs.readFileSync(path.join(LANDING, 'llms.txt'), 'utf8');

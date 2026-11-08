@@ -39,9 +39,9 @@ import { getEntitlements, evaluateVehicleCapacity } from './subscriptions.js';
 
 // v1.82.0 — routes and suites use the same masking helper the sign-in page uses.
 export { maskPhone };
-import { buildFleetReport, upcomingExpiryItems, buildVehicleDirectory, buildVehicleDetail } from './fleetReports.js';
+import { buildFleetReport, upcomingExpiryItems, buildVehicleDirectory, buildVehicleDetail, ledgerMeterFor } from './fleetReports.js';
 import { buildComplianceReport, expiryStatus, summarizeCategory } from './fleetReports.js';
-import { buildGlobalContext, formatMoney, formatDate, formatNumber, detectCountryFromPhone } from './globalization.js';
+import { buildGlobalContext, formatMoney, formatDate, formatNumber, detectCountryFromPhone, REGIONS, EXTRA_REGIONS, COUNTRY_TIMEZONES } from './globalization.js';
 import { buildDriverComplianceCard, buildDriverDaybook } from './driverReports.js';
 import { expenseToLedgerRow, earningToLedgerRow, buildLedgerGroups } from './reportLedger.js';
 import { buildProReportPdf } from './pdfEngine.js';
@@ -765,6 +765,7 @@ export async function buildVehiclePage({
   profile = null,
   countryInfo = null,
   now = new Date(),
+  includeReplacedDocuments = false,
   loadDetail = buildVehicleDetail,
   loadDocuments = listVehicleDocuments
 } = {}) {
@@ -775,11 +776,27 @@ export async function buildVehiclePage({
       // v1.84.0 (Phase 23) — the stored ORIGINALS (logbook, insurance,
       // inspection, road licence). Best-effort: a missing table never hides the
       // vehicle page (rule 50), it just shows the empty state.
+      // v1.86.0 (Phase 25) — a renewal supersedes the previous file: the page
+      // shows the CURRENT files and offers "Show replaced (N)" for the history.
       let storedDocuments = [];
+      let supersededDocuments = [];
       try {
         storedDocuments = await loadDocuments({ supabase, vehicleId, limit: 24 });
+        // The history count always rides the page (the toggle names it); the
+        // replaced rows themselves are only listed when asked.
+        const all = await loadDocuments({ supabase, vehicleId, limit: 40, currentOnly: false });
+        supersededDocuments = all.filter((row) => Boolean(row.superseded_at));
       } catch { storedDocuments = []; }
-      return { ...result, storedDocuments };
+      // The count is always computed (the toggle names it); the list only
+      // includes the history rows when asked.
+      const replacedCount = supersededDocuments.length;
+      return {
+        ...result,
+        storedDocuments,
+        replacedCount,
+        showReplaced: includeReplacedDocuments === true,
+        replacedDocuments: includeReplacedDocuments ? supersededDocuments : []
+      };
     }
     return { ok: false, reason: result?.reason === 'not_found' ? 'not_found' : 'db_error' };
   } catch (err) {
@@ -1546,11 +1563,23 @@ export async function buildComplianceBoard({
 
     // v1.84.0 (Phase 23) — ONE count query feeds the "Files" column. A missing
     // table (un-migrated deployment) simply shows zero (rule 50).
+    // v1.86.0 (Phase 25) — the column counts CURRENT files only: a renewed
+    // certificate supersedes the previous one (it stays in the history).
     const documentCounts = new Map();
     try {
       const countIds = vehicleRows.map((row) => row.id).filter(Boolean);
       if (countIds.length) {
-        const { data } = await supabase.from('vehicle_documents').select('vehicle_id').in('vehicle_id', countIds).limit(500);
+        const readCurrent = () => supabase
+          .from('vehicle_documents')
+          .select('vehicle_id')
+          .in('vehicle_id', countIds)
+          .is('superseded_at', null)
+          .limit(500);
+        let { data, error } = await readCurrent();
+        if (error && /superseded_at|column .* does not exist|schema cache/i.test(error.message || '')) {
+          // Rule 50: an un-migrated table still counts every stored row.
+          ({ data } = await supabase.from('vehicle_documents').select('vehicle_id').in('vehicle_id', countIds).limit(500));
+        }
         for (const doc of data || []) {
           documentCounts.set(doc.vehicle_id, (documentCounts.get(doc.vehicle_id) || 0) + 1);
         }
@@ -2451,7 +2480,7 @@ export async function buildAnalyticsPage({
  */
 // v1.84.0 (Phase 23) shipped no CSS/asset change, so the cache-bust stamp stays
 // at the release that last changed the assets (pinned by test_dashboard Test 53).
-export const DASHBOARD_ASSET_VERSION = '1.85.0';
+export const DASHBOARD_ASSET_VERSION = '1.86.0';
 
 export const DASHBOARD_CSS = `
 @font-face { font-family:'Sora'; font-style:normal; font-weight:600; font-display:swap; src:url('/d/assets/Sora-600.woff2?v=${DASHBOARD_ASSET_VERSION}') format('woff2'); }
@@ -2460,18 +2489,22 @@ export const DASHBOARD_CSS = `
 @font-face { font-family:'Manrope'; font-style:normal; font-weight:500; font-display:swap; src:url('/d/assets/Manrope-500.woff2?v=${DASHBOARD_ASSET_VERSION}') format('woff2'); }
 @font-face { font-family:'Manrope'; font-style:normal; font-weight:700; font-display:swap; src:url('/d/assets/Manrope-700.woff2?v=${DASHBOARD_ASSET_VERSION}') format('woff2'); }
 :root { color-scheme: dark; --ink:#E8E9EB; --muted:#9EA0A6; --card:#141416; --line:#26262B;
-  --accent:#B8EF5C; --accent-dark:#65A30D; --accent-soft:rgba(184,239,92,.10); --accent-line:rgba(184,239,92,.34); --bad:#F85149;
+  --page-max:1040px; --accent:#B8EF5C; --accent-dark:#65A30D; --accent-soft:rgba(184,239,92,.10); --accent-line:rgba(184,239,92,.34); --bad:#F85149;
   --font-display:'Sora','Segoe UI',system-ui,sans-serif; --font-body:'Manrope','Segoe UI',system-ui,-apple-system,sans-serif;
   --glow:0 0 0 1px var(--accent-line), 0 0 18px rgba(184,239,92,.16); }
 * { box-sizing: border-box; }
 body { margin:0; font-family:var(--font-body); background:#0A0A0C; background-image:radial-gradient(1100px 420px at 50% -180px, rgba(184,239,92,.07), transparent 70%); color:var(--ink); line-height:1.5; -webkit-font-smoothing:antialiased; }
-header.bar { display:flex; align-items:center; justify-content:space-between; gap:10px 16px; padding:14px 20px; border-bottom:1px solid var(--line); background:rgba(10,10,12,.86); position:sticky; top:0; z-index:10; backdrop-filter:blur(8px); }
+img, svg { max-width:100%; height:auto; }
+header.bar { border-bottom:1px solid var(--line); background:rgba(10,10,12,.86); position:sticky; top:0; z-index:10; backdrop-filter:blur(8px); }
+/* v1.86.0 (Phase 25) — ONE centered container for the brand + nav, so the header
+   sits over the same column as the page content on every screen width. */
+header.bar .bar-inner { display:flex; align-items:center; justify-content:space-between; gap:10px 16px; padding:14px 20px; max-width:var(--page-max); margin:0 auto; width:100%; }
 header.bar .brand { display:inline-flex; align-items:center; gap:8px; font-family:var(--font-display); font-weight:700; letter-spacing:.4px; }
 header.bar .brand img { height:18px; width:auto; display:block; }
 header.bar .nav { display:inline-flex; flex-wrap:wrap; align-items:center; gap:4px 6px; }
 header.bar a { color:var(--muted); text-decoration:none; font-size:14px; }
 header.bar a:hover, header.bar a:focus-visible { color:var(--ink); }
-main { max-width:960px; margin:0 auto; padding:20px 16px 48px; }
+main { max-width:var(--page-max); margin:0 auto; padding:20px 16px 48px; }
 h1, h2, h3 { font-family:var(--font-display); letter-spacing:-.01em; }
 h1 { font-size:23px; margin:8px 0 4px; }
 p.muted { color:var(--muted); }
@@ -2480,7 +2513,8 @@ main a:hover { text-decoration:underline; }
 .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; margin:14px 0; transition:border-color .15s ease, box-shadow .15s ease; }
 .card:hover, .card:focus-within { border-color:var(--accent-line); box-shadow:0 0 0 1px var(--accent-soft), 0 10px 30px rgba(0,0,0,.25); }
 h2 { font-size:16px; margin:22px 0 8px; }
-.kpis { display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:12px; }
+.kpis { display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:12px; justify-content:center; }
+.kpi { text-align:center; }
 .kpi .label { color:var(--muted); font-size:13px; }
 .kpi .value { font-size:20px; font-weight:700; margin-top:2px; word-break:break-word; }
 .chip { display:inline-block; padding:1px 8px; border-radius:999px; font-size:12px; border:1px solid var(--line); color:var(--muted); }
@@ -2505,7 +2539,10 @@ ul.plain li:last-child { border-bottom:0; }
 .filters input, .filters select { width:100%; padding:9px 10px; font-size:14px; letter-spacing:normal; text-align:left; background:#0F0F11; color:var(--ink); border:1px solid var(--line); border-radius:8px; }
 .filters button { width:auto; margin-top:0; padding:10px 16px; font-size:14px; }
 .filters-actions { display:flex; align-items:center; gap:12px; }
-.table-wrap { overflow-x:auto; padding:0; }
+/* v1.86.0 — a wide table scrolls inside its card and fades at the right edge,
+   so a phone never bleeds a column off the screen. */
+.table-wrap { overflow-x:auto; padding:0; scrollbar-width:thin; -webkit-overflow-scrolling:touch;
+  background:linear-gradient(to left, var(--card) 0, rgba(20,20,22,0) 18px) right / 18px 100% no-repeat; }
 table.rec { width:100%; border-collapse:collapse; font-size:13px; }
 table.rec th { text-align:left; color:var(--muted); font-weight:600; font-size:12px; padding:10px 12px; border-bottom:1px solid var(--line); white-space:nowrap; }
 table.rec td { padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
@@ -2554,13 +2591,20 @@ ol.steps li { position:relative; padding:8px 0 8px 34px; border-bottom:1px solid
 ol.steps li:last-child { border-bottom:0; }
 ol.steps li::before { counter-increment:step; content:counter(step); position:absolute; left:0; top:7px; width:22px; height:22px; border-radius:999px; border:1px solid var(--accent-line); color:var(--accent); font-size:12px; font-weight:700; display:flex; align-items:center; justify-content:center; }
 /* v1.83.0 — phone-first: 44px+ tap targets, 16px controls (no iOS zoom), a
-   wrapping header and single-column KPIs on narrow screens. */
+   wrapping header and single-column KPIs on narrow screens.
+   v1.86.0 (Phase 25) — the nav becomes ONE horizontal swipe strip (a wrapped
+   11-link menu pushed the content down a whole screen), titles center, and the
+   header inner keeps the page column. */
 @media (max-width: 640px) {
-  header.bar { flex-wrap:wrap; padding:12px 14px; }
-  header.bar .nav { flex:1 1 100%; }
+  header.bar .bar-inner { flex-wrap:wrap; padding:12px 14px; }
+  header.bar .nav { flex:1 1 100%; flex-wrap:nowrap; overflow-x:auto; -webkit-overflow-scrolling:touch;
+    scrollbar-width:none; padding-bottom:2px; }
+  header.bar .nav::-webkit-scrollbar { display:none; }
+  header.bar .nav a { white-space:nowrap; }
   header.bar .brand img { height:16px; }
   main { padding:16px 12px 40px; }
-  h1 { font-size:20px; }
+  h1, h2 { font-size:20px; text-align:center; }
+  p.muted { text-align:center; }
   .kpis { grid-template-columns:1fr 1fr; }
   button, .btn { min-height:48px; }
   .filters button, .row-actions button, .inline-form button { min-height:44px; }
@@ -2598,7 +2642,7 @@ export function renderPageShell(title, body, { headerRight = '', headerLeft = 'S
 <style>${DASHBOARD_CSS}</style>
 </head>
 <body>
-<header class="bar"><a class="brand" href="/d"><img src="${asset('logo-lockup.png')}" alt="${escapeHtml(headerLeft)}" width="177" height="18" decoding="async"></a><span class="nav">${headerRight}</span></header>
+<header class="bar"><div class="bar-inner"><a class="brand" href="/d"><img src="${asset('logo-lockup.png')}" alt="${escapeHtml(headerLeft)}" width="177" height="18" decoding="async"></a><span class="nav">${headerRight}</span></div></header>
 <main>
 ${body}
 </main>
@@ -2618,29 +2662,122 @@ export function renderMessagePage(title, message, { status = 400 } = {}) {
 /* ------------------------------------------------------------------ */
 
 /**
+ * v1.86.0 (Phase 25) — the sign-in page's default calling code, generated from
+ * the SAME registries the rest of the product uses (rule 7: the country, not a
+ * hardcoded +254). The browser reports an IANA timezone, so we invert
+ * COUNTRY_TIMEZONES (country -> zone) into zone -> country -> prefix
+ * (REGIONS/EXTRA_REGIONS). Multi-zone countries get their real browser zones as
+ * aliases; the page ALSO falls back to the locale region, then to +254.
+ *
+ * Pure + exported so a suite can pin drift against the landing dataset.
+ */
+export function buildLoginPrefixMap() {
+  const prefixFor = (countryCode) => {
+    const region = REGIONS.find((entry) => entry.country_code === countryCode)
+      || EXTRA_REGIONS.find((entry) => entry.country_code === countryCode);
+    if (region?.prefix) return region.prefix;
+    // Canada shares +1 with the US and has no unique prefix (rule 7 explicit
+    // choice); the browser still reports a Canadian zone.
+    if (countryCode === 'CA') return '+1';
+    return null;
+  };
+  const map = {};
+  for (const [countryCode, zone] of Object.entries(COUNTRY_TIMEZONES)) {
+    if (!zone) continue;
+    const prefix = prefixFor(countryCode);
+    if (prefix) map[zone] = prefix;
+  }
+  // Browser-only aliases: the zones a real device actually reports for the
+  // multi-zone markets Saka serves (COUNTRY_TIMEZONES keeps one canonical zone).
+  const aliases = {
+    'America/Chicago': '+1', 'America/Denver': '+1', 'America/Phoenix': '+1',
+    'America/Los_Angeles': '+1', 'America/Anchorage': '+1', 'Pacific/Honolulu': '+1',
+    'America/Detroit': '+1',
+    'America/Vancouver': '+1', 'America/Edmonton': '+1', 'America/Winnipeg': '+1',
+    'America/Halifax': '+1', 'America/St_Johns': '+1',
+    'Australia/Melbourne': '+61', 'Australia/Brisbane': '+61', 'Australia/Perth': '+61',
+    'Australia/Adelaide': '+61', 'Australia/Hobart': '+61', 'Australia/Darwin': '+61',
+    'Europe/Dublin': '+353', 'Europe/Lisbon': '+351', 'Europe/Zurich': '+41',
+    'Europe/Stockholm': '+46', 'Europe/Warsaw': '+48', 'Europe/Istanbul': '+90',
+    'Asia/Riyadh': '+966', 'Asia/Qatar': '+974', 'Asia/Karachi': '+92',
+    'Asia/Dhaka': '+880', 'Asia/Shanghai': '+86', 'Asia/Tokyo': '+81',
+    'Asia/Seoul': '+82', 'Asia/Singapore': '+65', 'Asia/Kuala_Lumpur': '+60',
+    'Asia/Jakarta': '+62', 'Asia/Bangkok': '+66', 'Asia/Manila': '+63',
+    'Pacific/Auckland': '+64', 'Africa/Accra': '+233', 'Africa/Cairo': '+20',
+    'America/Mexico_City': '+52', 'America/Sao_Paulo': '+55',
+    'America/Argentina/Buenos_Aires': '+54'
+  };
+  for (const [zone, prefix] of Object.entries(aliases)) {
+    if (!map[zone]) map[zone] = prefix;
+  }
+  return map;
+}
+
+/** Locale region (en-KE -> KE) -> prefix, used when the timezone is unknown. */
+export function buildLoginLocalePrefixMap() {
+  const map = {};
+  for (const region of REGIONS) {
+    if (region.country_code && region.prefix) map[region.country_code] = region.prefix;
+  }
+  map.CA = '+1';
+  return map;
+}
+
+/**
  * v1.82.0 (Phase 21) — the STATIC sign-in door. `admin` renders the superadmin
  * entrance (/d/admin/login); the default renders the owner/driver door
  * (/d/login). Step 1 only asks for the WhatsApp number; a successful POST
  * renders the OTP step (renderOtpPage) with the token in a hidden field.
+ *
+ * v1.86.0 (Phase 25) — the number comes pre-filled with the visitor's country
+ * code (browser timezone -> the same REGIONS registry the product uses; the
+ * value is a suggestion the user can overwrite) and a `notice` banner carries
+ * the logged-out confirmation.
  */
-export function renderLoginPage({ error = null, admin = false } = {}) {
+export function renderLoginPage({ error = null, admin = false, notice = null } = {}) {
   const otpMinutes = Math.max(1, Math.round(DASHBOARD_OTP_TTL_MS / 60000));
   const action = admin ? DASHBOARD_ADMIN_LOGIN_PATH : DASHBOARD_LOGIN_PATH;
   const heading = admin ? 'Admin dashboard' : 'Your dashboard';
   const intro = admin
     ? 'Enter the superadmin number. I send a 6-digit code to that WhatsApp — only that number can open this page.'
     : 'Enter your WhatsApp number — the one you use with Saka. I send a 6-digit code to that same WhatsApp.';
+  const prefixJson = JSON.stringify(buildLoginPrefixMap()).replace(/</g, '\\u003c');
+  const localeJson = JSON.stringify(buildLoginLocalePrefixMap()).replace(/</g, '\\u003c');
   const body = `
 <h1>${escapeHtml(heading)}</h1>
 <p class="muted">${intro}</p>
+${notice ? `<div class="notice" role="status">${escapeHtml(notice)}</div>` : ''}
 <div class="card">
   <form method="POST" action="${action}" autocomplete="off">
-    <input type="tel" name="phone" inputmode="tel" placeholder="+254 712 345 678" aria-label="WhatsApp number" required>
+    <input id="loginPhone" type="tel" name="phone" inputmode="tel" autocomplete="tel" placeholder="+254 712 345 678" aria-label="WhatsApp number" aria-describedby="loginPhoneHint" required>
+    <p class="muted-small" id="loginPhoneHint">I filled your country code — change it if it is not yours.</p>
     ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
     <button type="submit">Send me a code</button>
   </form>
   <p class="muted" style="font-size:13px;margin-top:12px;">The code works for ${otpMinutes} minutes. Never share it — Saka will never ask for it in chat.</p>
-</div>`;
+</div>
+<script>
+(function () {
+  var prefixes = ${prefixJson};
+  var localePrefixes = ${localeJson};
+  var input = document.getElementById('loginPhone');
+  if (!input || input.value) return;
+  var prefix = null;
+  try {
+    var tz = (Intl.DateTimeFormat().resolvedOptions().timeZone) || '';
+    prefix = prefixes[tz] || null;
+  } catch (e) { prefix = null; }
+  if (!prefix) {
+    try {
+      var region = String(navigator.language || '').toUpperCase().split('-')[1];
+      prefix = /^[A-Z]{2}$/.test(region || '') ? (localePrefixes[region] || null) : null;
+    } catch (e) { prefix = null; }
+  }
+  if (!prefix) return;
+  input.value = prefix + ' ';
+  if (input.setSelectionRange) input.setSelectionRange(input.value.length, input.value.length);
+})();
+</script>`;
   return renderPageShell(admin ? 'Admin sign-in' : 'Sign in', body);
 }
 
@@ -2850,6 +2987,35 @@ export function renderVehiclePage({ data, emailMasked }) {
     </ul>`
     : '<p class="muted">No stored files yet — send a logbook, insurance or inspection photo/PDF in WhatsApp and the original is kept here.</p>';
 
+  // v1.86.0 (Phase 25) — a renewal REPLACES the previous file of the same type.
+  // The current list stays clean; the replaced history is one tap away and the
+  // old files are never destroyed (rule 48).
+  const replacedFiles = Array.isArray(data.replacedDocuments) ? data.replacedDocuments : [];
+  const replacedCount = Number(data.replacedCount || replacedFiles.length || 0);
+  const vehicleIdParam = encodeURIComponent(vehicle.id || '');
+  const replacedToggle = replacedCount > 0
+    ? (data.showReplaced
+      ? `<p class="muted-small"><a href="/d/vehicles/${vehicleIdParam}">Hide replaced files</a> · ${replacedCount} earlier file${replacedCount === 1 ? '' : 's'} kept on record</p>`
+      : `<p class="muted-small"><a href="/d/vehicles/${vehicleIdParam}?docs=all">Show replaced (${replacedCount})</a> · renewing a document supersedes the previous one and keeps it on record</p>`)
+    : '';
+  const replacedList = (data.showReplaced && replacedFiles.length)
+    ? `<h2>Replaced files</h2>
+<div class="card"><ul class="plain">${replacedFiles.map((doc) => {
+      const label = escapeHtml(documentTypeLabel(doc.document_type));
+      const when = escapeHtml(formatDate(doc.uploaded_at, data.locale, { timeZone: data.timeZone }));
+      const view = doc.storage_path
+        ? `<a href="/d/documents/${encodeURIComponent(doc.id)}">View</a>`
+        : '<span class="muted">parsed only (Free plan)</span>';
+      return `
+      <li>📄 ${label}
+        <span class="chip">replaced</span>
+        <span class="chip">${when}</span>
+        ${view}
+      </li>`;
+    }).join('')}</ul>
+  <p class="muted-small">Kept as evidence — a replaced certificate can still be shown to a buyer or an officer.</p></div>`
+    : '';
+
   const subtitle = [
     vehicle.makeModel || null,
     vehicle.driverName ? `Driver: ${vehicle.driverName}` : 'No driver assigned',
@@ -2864,7 +3030,8 @@ ${identity}
 <h2>Documents</h2>
 <div class="card">${documentList}</div>
 <h2>Stored files</h2>
-<div class="card">${storedFileList}</div>
+<div class="card">${storedFileList}${replacedToggle}</div>
+${replacedList}
 <h2>Recent records</h2>
 <div class="card">${recordList}</div>
 <p class="muted" style="font-size:13px;">Your PDF reports are still one message away in WhatsApp.</p>`;
@@ -3409,11 +3576,16 @@ export async function buildTransferPage({ supabase, ownerId, profile, countryInf
       timeZone: ctx.timeZone,
       ownerEmailMasked: ownerEmail ? maskEmail(ownerEmail) : null,
       ownerEmailAvailable: Boolean(ownerEmail),
+      // v1.86.0 (Phase 25) — the handover reading follows the fleet's meter:
+      // one machine -> "Engine hours", one road asset -> "Odometer", a mixed
+      // garage -> the honest "Handover reading".
+      handoverMeter: ledgerMeterFor(vehicles),
       vehicles: vehicles.map((vehicle) => ({
         id: vehicle.id,
         plate: vehicle.plate_number || 'Vehicle',
         makeModel: vehicle.make_model || null,
-        status: vehicle.status || null
+        status: vehicle.status || null,
+        meterId: ledgerMeterFor([vehicle]).meterId
       })),
       transfers
     };
@@ -3441,14 +3613,37 @@ export function renderTransferPage({ data, emailMasked = '', error = null, notic
     ? vehicles.map((vehicle) => `<option value="${escapeHtml(vehicle.id)}">${escapeHtml(vehicle.plate)}${vehicle.makeModel ? ` — ${escapeHtml(vehicle.makeModel)}` : ''}</option>`).join('')
     : '';
 
+  // v1.86.0 (Phase 25) — the handover reading is named after the ASSET (a
+  // generator asks for engine hours; a garage of both asks neutrally), and the
+  // label follows the vehicle the owner picks in the form.
+  const meterId = data.handoverMeter?.meterId || data.handoverMeter?.id || 'mixed';
+  const readingLabel = meterId === 'engine_hours'
+    ? 'Engine hours at handover (optional)'
+    : meterId === 'distance'
+      ? 'Odometer at handover (optional)'
+      : 'Handover reading (odometer or engine hours, optional)';
+  const meterMap = JSON.stringify(Object.fromEntries((vehicles || []).map((vehicle) => [String(vehicle.id), vehicle.meterId || 'mixed']))).replace(/</g, '\\u003c');
+
   const startForm = data.ownerEmailAvailable
     ? `<form method="POST" action="/d/transfer/start" class="inline-form">
-        <label>Vehicle<select name="vehicle_id" required>${vehicleOptions}</select></label>
+        <label>Vehicle<select name="vehicle_id" id="transferVehicle" required>${vehicleOptions}</select></label>
         <label>Buyer's WhatsApp number<input type="tel" name="buyer_phone" inputmode="tel" placeholder="+254 712 345 678" required></label>
         <label>Buyer's email<input type="email" name="buyer_email" placeholder="buyer@example.com" required></label>
-        <label>Handover reading (odometer or engine hours, optional)<input type="number" name="odometer" inputmode="numeric" min="0" step="any" placeholder="e.g. 50350"></label>
+        <label><span id="handoverReadingLabel">${escapeHtml(readingLabel)}</span><input type="number" name="odometer" inputmode="numeric" min="0" step="any" placeholder="e.g. 50350"></label>
         <button type="submit">Start handover</button>
-      </form>`
+      </form>
+      <script>
+      (function () {
+        var meters = ${meterMap};
+        var picker = document.getElementById('transferVehicle');
+        var label = document.getElementById('handoverReadingLabel');
+        if (!picker || !label) return;
+        var names = { engine_hours: 'Engine hours at handover (optional)', distance: 'Odometer at handover (optional)', mixed: 'Handover reading (odometer or engine hours, optional)' };
+        function sync() { label.textContent = names[meters[picker.value]] || names.mixed; }
+        picker.addEventListener('change', sync);
+        sync();
+      })();
+      </script>`
     : `<div class="notice warn"><strong>Add an email first.</strong> The release PIN is sent to your email, so I cannot start a handover here without one. Reply <em>change my email</em> on WhatsApp to add it (or open Settings to review your account), then come back — you can always start a handover in WhatsApp with <em>transfer</em>.</div>
       <p><a class="btn" href="${sakaWhatsAppLink('transfer')}" rel="noopener" target="_blank">Start in WhatsApp instead</a></p>`;
 
@@ -3747,7 +3942,7 @@ function driverNav() {
 }
 
 function adminNav() {
-  return '<a href="/d/admin">Owners</a> · <a href="/d/care">Care</a> · <a href="/d/logout">Log out</a>';
+  return '<a href="/d/admin/command">Command</a> · <a href="/d/admin">Owners</a> · <a href="/d/care">Care</a> · <a href="/d/logout">Log out</a>';
 }
 
 function kpiStripHtml(kpis = []) {
@@ -3887,24 +4082,140 @@ ${table}`;
   return renderPageShell('Owners', body, { headerRight: adminNav() });
 }
 
+/**
+ * `/d/admin/command` (v1.86.0, Phase 25) — the business command center.
+ * Revenue/churn, user health, support and AI cost from ONE engine builder
+ * (src/services/commandCenter.js). Read-only; every figure is a count or a
+ * list-price estimate, never a bill.
+ */
+export function renderAdminCommandPage({ data } = {}) {
+  if (!data?.ok) {
+    return renderErrorPage(503, 'The command center could not be loaded just now. Please try again in a moment.').html;
+  }
+  const rev = data.revenue;
+  const health = data.userHealth;
+  const support = data.support;
+  const ai = data.ai;
+  const money = (value) => (value === null || value === undefined ? '—' : `$${Number(value).toFixed(2)}`);
+
+  const revenueKpis = rev
+    ? kpiStripHtml([
+      { label: 'Active paid', value: String(rev.activePaid), hint: `last ${data.windowDays || 30} days` },
+      { label: 'Est. MRR', value: `${money(rev.mrrUsd)}/mo`, hint: 'list prices, not billing' },
+      { label: 'Trials ending ≤3d', value: String(rev.trialsExpiring3d), hint: 'reach out now' },
+      { label: 'Past due', value: String(rev.pastDue), hint: 'payment failed' }
+    ])
+    : '<div class="card"><p class="muted">Revenue could not be loaded just now.</p></div>';
+
+  const planRows = rev && Object.keys(rev.byTier || {}).length
+    ? Object.entries(rev.byTier).map(([tier, count]) => `<li>${escapeHtml(getTierLabel(tier))} <span class="chip">${Number(count)}</span></li>`).join('')
+    : '<li class="muted">No paid plan is active yet.</li>';
+
+  const revenueDetail = rev
+    ? `<div class="card"><h2 style="margin-top:0;">Revenue &amp; churn</h2>
+        <ul class="plain">${planRows}</ul>
+        <p class="muted-small">Canceling ${rev.canceling} · churned ${rev.churned30d} in ${data.windowDays || 30} days · decision window ${rev.inGrace}</p></div>`
+    : '';
+
+  const healthDetail = health
+    ? `<div class="card"><h2 style="margin-top:0;">User health</h2>
+        <ul class="plain">
+          <li>Registered <span class="chip">${health.registered}</span></li>
+          <li>Shell profiles (no email) <span class="chip${health.shells ? ' bad' : ''}">${health.shells}</span></li>
+          <li>Email unverified <span class="chip">${health.emailUnverified}</span></li>
+          <li>Registered with 0 assets <span class="chip">${health.activeWithZeroAssets ?? '—'}</span></li>
+          <li>Trials expired, not upgraded <span class="chip">${health.expiredTrialsNotConverted30d ?? '—'}</span></li>
+        </ul>
+        <p class="muted-small">${health.totalProfiles} profile row${health.totalProfiles === 1 ? '' : 's'} on file.</p></div>`
+    : '<div class="card"><p class="muted">User health could not be loaded just now.</p></div>';
+
+  const atRisk = [
+    ...(rev?.pastDueList || []).map((row) => ({ name: row.name, phone: row.phoneMasked, signal: 'Past due', plan: getTierLabel(row.tier), detail: 'payment failed' })),
+    ...(rev?.trialsExpiringList || []).map((row) => ({ name: row.name, phone: row.phoneMasked, signal: 'Trial ending', plan: getTierLabel(row.tier), detail: row.daysLeft === null ? '—' : `${row.daysLeft} d left` }))
+  ];
+  const atRiskTable = atRisk.length
+    ? `<div class="card table-wrap"><table class="rec">
+        <thead><tr><th>Account</th><th>Signal</th><th>Plan</th><th>Detail</th></tr></thead>
+        <tbody>${atRisk.map((row) => `
+          <tr>
+            <td>${escapeHtml(row.name)}${row.phone ? `<span class="muted"> · ${escapeHtml(row.phone)}</span>` : ''}</td>
+            <td><span class="chip ${row.signal === 'Past due' ? 'bad' : 'due'}">${escapeHtml(row.signal)}</span></td>
+            <td>${escapeHtml(row.plan)}</td>
+            <td>${escapeHtml(row.detail)}</td>
+          </tr>`).join('')}</tbody></table></div>`
+    : '<div class="card"><p class="muted">Nothing needs attention on revenue today — no past-due accounts and no trial ending in the next 3 days.</p></div>';
+
+  const aiCard = ai
+    ? `<div class="card"><h2 style="margin-top:0;">AI cost</h2>
+        <ul class="plain">
+          <li>24 h ${money(ai.cost24hUsd)} · 7 d ${money(ai.cost7dUsd)} <span class="muted-small">(approx list prices)</span></li>
+          <li>Off-peak saved ${money(ai.saved7dUsd)}</li>
+          <li>Per AI-active account ~${money(ai.costPerActiveUserUsd)} (${ai.attributedOwners ?? 0} accounts)</li>
+          <li>System (unattributed) ${money(ai.unattributedUsd)}</li>
+        </ul>
+        ${(ai.topPurposes || []).length ? `<p class="muted-small">Top purposes: ${ai.topPurposes.map((row) => `${escapeHtml(row.purpose)} ${money(row.costUsd)}`).join(' · ')}</p>` : ''}</div>`
+    : '<div class="card"><p class="muted">AI telemetry could not be loaded just now.</p></div>';
+
+  const supportCard = support
+    ? `<div class="card"><h2 style="margin-top:0;">Support desk</h2>
+        <ul class="plain">
+          <li>Open <span class="chip${support.open ? ' due' : ''}">${support.open}</span> · in progress <span class="chip">${support.inProgress}</span> · escalated <span class="chip${support.escalated ? ' bad' : ''}">${support.escalated}</span></li>
+          ${support.oldestOpenHours !== null ? `<li>Oldest waiting ${support.oldestOpenHours} h</li>` : ''}
+        </ul>
+        ${(support.escalatedList || []).length ? `<p class="muted-small">Escalated: ${support.escalatedList.map((row) => escapeHtml(row.subject)).join(' · ')}</p>` : ''}
+        <p><a class="btn" href="/d/care">Open the care queue</a></p></div>`
+    : '<div class="card"><p class="muted">Support counts could not be loaded just now.</p></div>';
+
+  const alertsCard = (data.alerts || []).length
+    ? `<div class="notice warn"><strong>Needs you</strong><ul class="plain">${data.alerts.map((alert) => `<li>${escapeHtml(alert.text)}</li>`).join('')}</ul></div>`
+    : '<div class="notice">Nothing urgent right now — no past-due accounts, no trial ending within 3 days and no escalated ticket.</div>';
+
+  const generated = formatDate(data.generatedAt, 'en-GB', { timeZone: 'Africa/Nairobi' });
+  const body = `
+<h1>Command center</h1>
+<p class="muted">Revenue, user health, support and AI spend · ${escapeHtml(generated)} EAT · read-only · every visit is audited</p>
+${alertsCard}
+${revenueKpis}
+<div class="page-grid">
+  ${revenueDetail}
+  ${healthDetail}
+  ${aiCard}
+  ${supportCard}
+</div>
+<h2>At-risk accounts</h2>
+${atRiskTable}
+<p class="muted-small">Money is an estimate from the tier matrix (list prices) and AI telemetry — never an invoice. Phones are masked; owner pages are one click away in <a href="/d/admin">Owners</a>.</p>`;
+  return renderPageShell('Command center', body, { headerRight: adminNav() });
+}
+
 /** `/d/admin/owners/:id` (Phase 15) — one owner's fleet, read-only + audited. */
+
+
 export function renderAdminFleetPage({ fleet }) {
   if (!fleet?.ok) {
     return renderErrorPage(503, 'That fleet could not be loaded just now. Please try again in a moment.').html;
   }
   const owner = fleet.owner || {};
   const vehicles = fleet.directory?.vehicles || [];
-  const vehicleRows = vehicles.map((vehicle) => `
+  const locale = fleet.card?.locale || 'en-US';
+  // v1.86.0 (Phase 25) — the admin fleet table speaks the asset's meter too.
+  const meterLabels = [...new Set(vehicles.map((vehicle) => vehicle.meterLabel || 'Odometer'))];
+  const meterHeading = meterLabels.length <= 1 ? (meterLabels[0] || 'Odometer') : 'Reading';
+  const vehicleRows = vehicles.map((vehicle) => {
+    const meterValue = vehicle.meterValue ?? vehicle.odometer;
+    const meterUnit = vehicle.meterUnit || vehicle.distanceUnit || '';
+    return `
         <tr>
           <td>${escapeHtml(vehicle.plate)}${vehicle.makeModel ? `<span class="muted"> · ${escapeHtml(vehicle.makeModel)}</span>` : ''}</td>
           <td><span class="chip${vehicle.active ? ' ok' : ''}">${escapeHtml(vehicle.active ? 'Active' : String(vehicle.status || 'Inactive'))}</span></td>
           <td>${escapeHtml(vehicle.driverName || 'No driver')}</td>
-          <td class="num">${escapeHtml(`${formatNumber(vehicle.odometer, fleet.card?.locale || 'en-US')} ${vehicle.distanceUnit || ''}`.trim())}</td>
+          <td class="num">${meterValue === null || meterValue === undefined ? '—' : escapeHtml(`${formatNumber(meterValue, locale)} ${meterUnit}`.trim())}</td>
           <td>${vehicle.soonest ? `${escapeHtml(vehicle.soonest.label)} ${complianceChipHtml(vehicle.soonest)}` : '<span class="muted">—</span>'}</td>
-        </tr>`).join('');
+        </tr>`;
+  }).join('');
   const vehicleTable = vehicles.length
     ? `<div class="card table-wrap"><table class="rec">
-        <thead><tr><th>Vehicle</th><th>Status</th><th>Driver</th><th class="num">Odometer</th><th>Soonest</th></tr></thead>
+        <thead><tr><th>Vehicle</th><th>Status</th><th>Driver</th><th class="num">${escapeHtml(meterHeading)}</th><th>Soonest</th></tr></thead>
         <tbody>${vehicleRows}</tbody></table></div>`
     : '<div class="card"><p class="muted">This owner has no live vehicles.</p></div>';
   const totals = fleet.compliance?.totals || null;
@@ -4143,6 +4454,8 @@ export default {
   escapeHtml,
   renderOtpPage,
   renderLoginPage,
+  buildLoginPrefixMap,
+  buildLoginLocalePrefixMap,
   renderOverviewPage,
   renderVehiclesPage,
   renderVehiclePage,
@@ -4215,5 +4528,6 @@ export default {
   renderDriverDaybookPage,
   renderDriverSelfCompliancePage,
   renderAdminOwnersPage,
+  renderAdminCommandPage,
   renderAdminFleetPage
 };

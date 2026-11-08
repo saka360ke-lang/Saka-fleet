@@ -38,6 +38,8 @@ import { auditEnv, formatEnvDigest, parseEnvKeys, envTemplateKeys } from './envA
 import { listFrictionLog, formatFrictionReply, markFrictionDeployed, FRICTION_CLEARED_AFTER_HOURS } from './frictionTracker.js';
 import { listInboundEmails, getInboundEmail, formatInboxReply, formatInboundEmailReply } from './inboundEmail.js';
 import { getFeatureRolloutStatus, FEATURE_NOTICE_VERSION } from './featureNotice.js';
+// v1.86.0 (Phase 25) — the business command center (engine counts, zero tokens).
+import { buildCommandCenterMetrics, formatCommandCenterDigest } from './commandCenter.js';
 import { handleConvEvalCommand } from './convEvalConsole.js';
 import {
   listKbDrafts,
@@ -170,6 +172,13 @@ const ADMIN_DIRECTIVE_RE = /^\s*(admin\b|adminrules?\b|check\s+health\b|health\s
 export async function parseSuperadminCommand(messageText) {
   const text = messageText ? messageText.trim() : '';
   const lower = text.toLowerCase();
+
+  // v1.86.0 (Phase 25) — the business command center (deterministic, zero
+  // tokens). Checked BEFORE the help alias: "admin command" (singular) is the
+  // digest, "admin commands" (plural) stays the command list.
+  if (/^\s*admin\s+(?:command|bi|business|kpi)\s*$/i.test(text)) {
+    return { intent: 'ADMIN_COMMAND_CENTER' };
+  }
 
   // v1.24.2 — help aliases are deterministic. A "superadmin commands" message
   // used to fall through to the conversational AI chain and could wait minutes
@@ -1194,6 +1203,48 @@ export async function maybeSendAiBudgetAlert(providedSupabase, { now = new Date(
   };
 }
 
+/**
+ * v1.86.0 (Phase 25) — the business command center digest (deterministic, zero
+ * tokens). ONE builder feeds this, the 08:00 briefing and /d/admin/command.
+ */
+export async function handleAdminCommandCenter(supabase) {
+  const metrics = await buildCommandCenterMetrics({ supabase });
+  const reply = formatCommandCenterDigest(metrics);
+  return {
+    reply,
+    metrics,
+    details: {
+      ok: metrics.ok === true,
+      active_paid: metrics.revenue?.activePaid ?? null,
+      mrr_usd: metrics.revenue?.mrrUsd ?? null,
+      trials_expiring_3d: metrics.revenue?.trialsExpiring3d ?? null,
+      past_due: metrics.revenue?.pastDue ?? null,
+      churned_30d: metrics.revenue?.churned30d ?? null,
+      registered: metrics.userHealth?.registered ?? null,
+      shells: metrics.userHealth?.shells ?? null,
+      ai_cost_24h_usd: metrics.ai?.cost24hUsd ?? null,
+      ai_cost_per_active_user_usd: metrics.ai?.costPerActiveUserUsd ?? null,
+      escalated_tickets: metrics.support?.escalated ?? null,
+      alerts: (metrics.alerts || []).map((alert) => alert.code)
+    }
+  };
+}
+
+/**
+ * The morning briefing's command-center block. Mondays carry the FULL digest;
+ * every other day carries the 4-line pulse (D3: no second scheduler).
+ */
+export async function buildBriefingPulse(supabase, { now = new Date() } = {}) {
+  const metrics = await buildCommandCenterMetrics({ supabase, now });
+  const weekday = new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Nairobi', weekday: 'short' }).format(now);
+  const isMonday = weekday === 'Mon';
+  return {
+    metrics,
+    isMonday,
+    block: formatCommandCenterDigest(metrics, { full: isMonday })
+  };
+}
+
 export async function handleAdminReportCommand(supabase) {
   // 1. Vehicle counts and mileage
   const { data: vehList } = await supabase
@@ -1229,15 +1280,38 @@ export async function handleAdminReportCommand(supabase) {
   // v1.72.0 (PRI-1, live bug) — the total previously summed BOTH `expenses`
   // (the legacy mirror) AND `expense_logs`, so every dual-written expense was
   // counted twice. `expense_logs` is the canonical ledger; read it only.
+  //
+  // v1.86.0 (Phase 25, money bug) — the digest hardcoded KES while summing
+  // ledgers written in many currencies. Every figure is now grouped BY CURRENCY
+  // (a currency column that does not exist degrades to the owner's own currency
+  // label, never a guessed exchange rate).
   const { data: expLogs } = await supabase
     .from('expense_logs')
-    .select('amount');
-  const totalExpenses = expLogs ? expLogs.reduce((s, e) => s + (Number(e.amount) || 0), 0) : 0;
-
+    .select('amount, currency');
   const { data: earnings } = await supabase
     .from('private_earnings')
-    .select('revenue_amount');
-  const totalEarnings = earnings ? earnings.reduce((s, e) => s + (Number(e.revenue_amount) || 0), 0) : 0;
+    .select('revenue_amount, currency');
+
+  const sumsByCurrency = (rows, key) => {
+    const totals = {};
+    for (const row of rows || []) {
+      const currency = String(row?.currency || 'USD').toUpperCase();
+      totals[currency] = (totals[currency] || 0) + (Number(row?.[key]) || 0);
+    }
+    return totals;
+  };
+  const expensesByCurrency = sumsByCurrency(expLogs, 'amount');
+  const earningsByCurrency = sumsByCurrency(earnings, 'revenue_amount');
+  const currencies = [...new Set([...Object.keys(expensesByCurrency), ...Object.keys(earningsByCurrency)])].sort();
+  const totalExpenses = Object.values(expensesByCurrency).reduce((sum, value) => sum + value, 0);
+  const totalEarnings = Object.values(earningsByCurrency).reduce((sum, value) => sum + value, 0);
+  const currencyLines = currencies.length
+    ? currencies.slice(0, 4).map((currency) => {
+      const spent = expensesByCurrency[currency] || 0;
+      const earned = earningsByCurrency[currency] || 0;
+      return `• ${currency}: earned ${earned.toFixed(2)} · spent ${spent.toFixed(2)} · net ${(earned - spent).toFixed(2)}`;
+    }).join('\n')
+    : '• No ledger activity yet';
 
   // 4. Sentinel telemetry & system health
   const { count: unresolvedErrors } = await supabase
@@ -1256,17 +1330,13 @@ export async function handleAdminReportCommand(supabase) {
     .select('*', { count: 'exact', head: true })
     .gte('detected_at', iso24h);
 
-  const netEarnings = totalEarnings - totalExpenses;
-
   const reply = `📊 *Saka Fleet Executive Digest & System Report*\n\n` +
     `🚗 *Fleet Overview:*\n` +
     `• Total Vehicles: ${totalVehicles} (${activeVehicles} active)\n` +
     `• Registered Profiles: ${totalProfiles || 0} (${uniqueOwners} owners, ${uniqueDrivers} drivers)\n` +
     `• Total Fleet Mileage: ${totalMileage.toLocaleString()} km\n\n` +
-    `💰 *Financial Telemetry:*\n` +
-    `• Total Earnings: KES ${totalEarnings.toFixed(2)}\n` +
-    `• Total Expenses: KES ${totalExpenses.toFixed(2)}\n` +
-    `• Net Fleet Profit: KES ${netEarnings.toFixed(2)}\n\n` +
+    `💰 *Financial Telemetry (by currency):*\n` +
+    `${currencyLines}\n\n` +
     `🛡️ *Autonomous Sentinel & System Health:*\n` +
     `• Active Sentinel Micro-Rules: ${activeRulesCount || 0}\n` +
     `• Friction Events (Last 24h): ${friction24h || 0}\n` +
@@ -1282,6 +1352,7 @@ export async function handleAdminReportCommand(supabase) {
       total_profiles: totalProfiles,
       total_earnings: totalEarnings,
       total_expenses: totalExpenses,
+      currencies,
       active_rules: activeRulesCount,
       unresolved_errors: unresolvedErrors
     }
@@ -2113,10 +2184,14 @@ export async function sendMorningExecutiveBriefing(supabase) {
   try {
     const reportRes = await handleAdminReportCommand(supabase);
     const alertsRes = await handleAdminAlertsCommand(supabase);
+    // v1.86.0 (Phase 25, D3) — the command center rides the SAME briefing:
+    // Mondays carry the FULL digest, every other day the 4-line pulse.
+    const pulse = await buildBriefingPulse(supabase).catch(() => null);
 
     const briefingMsg = `🌅 *Saka Fleet 8:00 AM Executive Morning Briefing*\n\n` +
       reportRes.reply.replace('📊 *Saka Fleet Executive Digest & System Report*\n\n', '') +
       `\n\n━━━━━━━━━━━━━━━━━━━━\n` +
+      (pulse?.block ? `${pulse.block}\n\n━━━━━━━━━━━━━━━━━━━━\n` : '') +
       alertsRes.reply;
 
     const phoneNumberId = process.env.META_PHONE_NUMBER_ID;
@@ -2139,7 +2214,8 @@ export async function sendMorningExecutiveBriefing(supabase) {
     }
 
     await logAdminAudit(supabase, superadminPhone, 'SCHEDULED_MORNING_BRIEFING', {
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      weekly: pulse?.isMonday === true
     });
 
     return briefingMsg;
@@ -2265,6 +2341,7 @@ export const ADMIN_COMMAND_REGISTRY = Object.freeze([
   ] },
   { group: 'Snapshots', items: [
     { cmd: 'admin report', desc: 'full system snapshot (users, vehicles, health)', ex: ['admin report'] },
+    { cmd: 'admin command', desc: 'business command center (revenue, churn, support, AI cost)', ex: ['admin command', 'admin bi'] },
     { cmd: 'admin alerts', desc: 'recent alerts + unresolved errors', ex: ['admin alerts'] },
     { cmd: 'admin audit <query>', desc: 'search the admin audit log', ex: ['admin audit wipe'] },
     { cmd: 'check health', desc: 'live health check', ex: ['check health'] },
@@ -2957,6 +3034,15 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText, o
     return {
       isSuperadmin: true,
       reply: trialRes.reply
+    };
+  }
+
+  if (parsedCommand.intent === 'ADMIN_COMMAND_CENTER') {
+    const centerRes = await handleAdminCommandCenter(supabase);
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_COMMAND_CENTER', centerRes.details);
+    return {
+      isSuperadmin: true,
+      reply: centerRes.reply
     };
   }
 

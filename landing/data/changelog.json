@@ -1,6 +1,13 @@
 {
-  "latest": "1.85.0",
+  "latest": "1.86.0",
   "entries": [
+    {
+      "version": "1.86.0",
+      "date": "2026-11-08",
+      "title": "The command center, and a handover that speaks the machine",
+      "preview": "Revenue, churn, support and AI spend in one command center - and handovers that say Operator, Captain or Rider.",
+      "summary": "This release is about the things you only notice when they are wrong. First, compliance: a truck or a bus in Kenya now gets its PSV badge tracked properly. Until now Saka stored every road asset under one vehicle class internally, so trucks and buses quietly missed the PSV requirement - that is fixed, and a commercial truck is recognised as a PSV under the Traffic Act. Second, reports: a generator or a boat no longer shows an 'Odometer' column. PDFs, the vehicle snapshot and the admin fleet table now use each asset's own meter - Odometer for cars, Engine hours for machines and boats, and 'Reading' when a garage has both. Third, signing in: the login page fills in your country code based on where you are, an already-signed-in visitor goes straight to their dashboard, and logging out brings you back to the sign-in page with a friendly note instead of a dead end. Fourth, documents: when you upload a renewed insurance certificate or logbook, it replaces the previous one instead of piling up - the old file is kept in a 'Show replaced' history so you can still show it to a buyer or an officer. Fifth, handovers now use the right word for the machine: a car has a Driver, a boda a Rider, a generator or excavator an Operator and a boat a Captain, and the reading asked for is engine hours where that is what the machine measures. For the operator there is a new command center: a dashboard page and an 'admin command' message that show active paid accounts, estimated monthly revenue (list prices, never an invoice), trials ending within three days, past-due and churned accounts, accounts with no assets, open and escalated support tickets, and AI spend per active account with the off-peak savings - plus the same numbers in the 8am briefing, in full on Mondays. The website also gained a Log In button in the header and a quiet King link in the footer for the operator's own door."
+    },
     {
       "version": "1.85.0",
       "date": "2026-11-08",

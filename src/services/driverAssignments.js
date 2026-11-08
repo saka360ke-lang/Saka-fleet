@@ -370,6 +370,7 @@ export async function getDriverComplianceStatus({
   driverPhone = null,
   countryCode = null,
   assetType = null,
+  assetKind = null,
   now = new Date()
 } = {}) {
   if (!supabase) return { ok: false, emailVerified: false, canManage: false, missingRequired: ['profile'] };
@@ -387,6 +388,9 @@ export async function getDriverComplianceStatus({
     supabase,
     countryCode: countryCode || profile.country_code || 'GLOBAL',
     assetType,
+    // v1.86.0 (Phase 25) — a truck stores asset_type='ICE'; the KIND is what
+    // resolves the PSV-class requirements (KE badge, speed limiter, CDL, PDP…).
+    assetKind,
     now
   });
 
@@ -741,6 +745,7 @@ export async function handleDriverResponse({
     driverId: row.driver_id,
     countryCode: countryInfo?.country_code || vehicle.country_code,
     assetType,
+    assetKind: vehicle.asset_kind || null,
     now
   });
 
@@ -831,6 +836,7 @@ export async function canManageVehicle({ supabase, profile, vehicle, now = new D
     driverId: profile.id,
     countryCode: profile.country_code,
     assetType: vehicle.asset_type || vehicle.metadata?.asset_type || null,
+    assetKind: vehicle.asset_kind || null,
     now
   });
 

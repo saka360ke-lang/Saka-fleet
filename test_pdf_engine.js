@@ -11,8 +11,9 @@
  */
 
 import assert from 'assert';
+import fs from 'node:fs';
 import PDFDocument from 'pdfkit';
-import { buildProReportPdf, pdfSafeText, getReportAccent, SAKA_PDF_THEME, SAKA_PDF_GEOMETRY, registerReportFonts, computeKpiGrid } from './src/services/pdfEngine.js';
+import { buildProReportPdf, pdfSafeText, getReportAccent, SAKA_PDF_THEME, SAKA_PDF_GEOMETRY, registerReportFonts, computeKpiGrid, buildLedgerColumns } from './src/services/pdfEngine.js';
 import { extractPdfText, analyzeAlphaUsage, readExtGStates } from './src/services/pdfTextExtractor.js';
 import { complianceReportToPdf, fleetReportToPdf } from './src/services/reportDelivery.js';
 
@@ -359,6 +360,58 @@ async function run() {
   check(getReportAccent('unknown-type') === '#65A30D', 'an unknown report type falls back to the lime accent');
   check(SAKA_PDF_GEOMETRY.margin === 48 && Math.round(SAKA_PDF_GEOMETRY.contentWidth) === 499, 'A4 keeps the 48 pt mobile-friendly margins (499 pt of content)');
   check(SAKA_PDF_GEOMETRY.pageHeight === 841.89 && SAKA_PDF_GEOMETRY.pageWidth === 595.28, 'the page stays A4 (no bleed on a phone screen)');
+  // v1.86.0 (Phase 25) — centering proof: the two equal margins + the content
+  // width must add up to the page width, exactly.
+  check(Math.abs(SAKA_PDF_GEOMETRY.margin * 2 + SAKA_PDF_GEOMETRY.contentWidth - SAKA_PDF_GEOMETRY.pageWidth) < 0.001, 'the content column is perfectly centered (margin x2 + content = page)');
+
+  console.log('\n--- v1.86.0: the ledger speaks the asset meter ---');
+  const roadColumns = buildLedgerColumns({ showVehicle: false, meterLabel: 'Odometer' });
+  const hoursColumns = buildLedgerColumns({ showVehicle: false, meterLabel: 'Engine hours' });
+  const mixedColumns = buildLedgerColumns({ showVehicle: true, meterLabel: 'Reading' });
+  check(roadColumns.find((column) => column.key === 'odometer').label === 'Odometer', 'a road ledger keeps the Odometer column');
+  check(hoursColumns.find((column) => column.key === 'odometer').label === 'Engine hours', 'an hours ledger prints Engine hours');
+  check(mixedColumns.find((column) => column.key === 'odometer').label === 'Reading', 'a mixed fleet prints Reading');
+  check(buildLedgerColumns({}).find((column) => column.key === 'odometer').label === 'Odometer', 'the label defaults safely to Odometer');
+  check(buildLedgerColumns({ meterLabel: null }).find((column) => column.key === 'odometer').label === 'Odometer', 'a null label never blanks the header');
+  check(hoursColumns.length === roadColumns.length && mixedColumns.length === roadColumns.length + 1, 'the meter swap never changes the column count');
+
+  const hoursTextCalls = [];
+  const originalLeader = PDFDocument.prototype.text;
+  PDFDocument.prototype.text = function captureText(value, x, y, options) {
+    hoursTextCalls.push({ value: Array.isArray(value) ? value.join('') : String(value ?? ''), options: options || {} });
+    return originalLeader.call(this, value, x, y, options);
+  };
+  try {
+    await buildProReportPdf({
+      title: 'Generator report',
+      subtitle: 'Engine hours, not distance',
+      reportType: 'fleet',
+      useStandardFonts: true,
+      kpis: [{ label: 'Operating hours', value: '1,240 h' }],
+      ledgers: [{
+        title: 'Generator activity ledger',
+        currency: 'KES',
+        meterLabel: 'Engine hours',
+        rows: [
+          { at: '2026-10-21', date: '21 Oct 2026', kind: 'service', kindLabel: 'SERVICE', description: 'Oil and filter service', odometer: 1240, unitCost: null, amount: 8500 }
+        ]
+      }]
+    });
+  } finally {
+    PDFDocument.prototype.text = originalLeader;
+  }
+  const headers = hoursTextCalls.map((call) => call.value.toUpperCase());
+  check(headers.includes('ENGINE HOURS'), 'the rendered ledger header is ENGINE HOURS');
+  check(!headers.includes('ODOMETER'), 'a machine ledger never renders an ODOMETER header');
+  const floorCells = hoursTextCalls.filter((call) => Number(call.options?.height) > 0);
+  check(floorCells.length > 0, 'ledger cells carry explicit heights (no overlap)');
+
+  // The 8 pt type floor is a contract: no ledger cell may shrink below it.
+  const pdfSource = fs.readFileSync('src/services/pdfEngine.js', 'utf8');
+  const ledgerBodySizes = [...pdfSource.matchAll(/fontSize\((7\.\d+|8(?:\.\d+)?)\)/g)].map((match) => Number(match[1]));
+  check(ledgerBodySizes.every((size) => size >= 7), 'no ledger type size is below 7 pt anywhere');
+  check(pdfSource.includes('fontSize(8.2)') && pdfSource.includes('const rowH = 23'), 'ledger body is 8.2 pt with 23 pt rows (phone-legible)');
+  check(pdfSource.includes('const valueSize = valueText.length > 12 ? 13.5 : 15'), 'long KPI figures shrink one step instead of clipping');
 
   const registeredFonts = [];
   const fontStub = { registerFont(name, file) { registeredFonts.push({ name, file }); } };

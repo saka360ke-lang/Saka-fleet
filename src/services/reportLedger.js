@@ -102,7 +102,13 @@ export function earningToLedgerRow(row = {}, { ctx = {}, vehiclePlate = null } =
 
 /**
  * Build the Apex ledger payload:
- * { title, currency, showVehicle, groups[], totals{scanned,shown,expenseTotal,earningTotal,net} }
+ * { title, currency, showVehicle, meterLabel, meterId, groups[],
+ *   totals{scanned,shown,expenseTotal,earningTotal,net} }
+ *
+ * v1.86.0 (Phase 25) — `meterLabel` is the reading column's name for THIS
+ * ledger (Odometer / Engine hours / Reading). It is supplied by the report
+ * builder from the asset metric registry, so a machine ledger can never print
+ * "Odometer" again. Defaults to the road label for legacy callers.
  */
 export function buildLedgerGroups({
   expenses = [],
@@ -113,7 +119,9 @@ export function buildLedgerGroups({
   includeVehicle = false,
   title = 'Itemized activity & ledger',
   subtitle = null,
-  footnote = null
+  footnote = null,
+  meterLabel = 'Odometer',
+  meterId = 'distance'
 } = {}) {
   const plateFor = (vehicleId) => vehicles.find((vehicle) => vehicle.id === vehicleId)?.plate_number || null;
   const rows = [];
@@ -148,6 +156,8 @@ export function buildLedgerGroups({
     subtitle,
     currency: ctx.currency || 'USD',
     showVehicle: includeVehicle === true,
+    meterLabel: String(meterLabel || 'Odometer'),
+    meterId: String(meterId || 'distance'),
     groups: groups.map((group) => ({
       ...group,
       expenseTotal: Math.round(group.expenseTotal * 100) / 100,

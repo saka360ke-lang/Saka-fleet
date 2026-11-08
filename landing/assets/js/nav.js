@@ -48,6 +48,19 @@
   cta.className = 'btn btn-primary nav-menu-cta';
   cta.href = '/#pricing';
   cta.textContent = 'Get Started Free';
+  // v1.86.0 (Phase 25) — the drawer carries the sign-in link too (an existing
+  // owner on a phone never has to dismiss the menu to reach it).
+  var loginSource = header.querySelector('.nav-login');
+  if (loginSource) {
+    var loginLink = document.createElement('a');
+    loginLink.className = 'nav-menu-login';
+    loginLink.href = loginSource.getAttribute('href') || 'https://app.sakafleet.com/d/login';
+    loginLink.rel = 'noopener';
+    loginLink.textContent = 'Log In';
+    loginLink.style.setProperty('--i', String(index));
+    inner.appendChild(loginLink);
+    index += 1;
+  }
   cta.style.setProperty('--i', String(index));
   inner.appendChild(cta);
   menu.appendChild(inner);

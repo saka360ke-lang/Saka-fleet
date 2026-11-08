@@ -15,7 +15,8 @@
  * GET  /d               -> overview (session cookie required)
  * GET  /d/vehicles      -> fleet list (v1.75.0, session required)
  * GET  /d/vehicles/:id  -> one vehicle (v1.75.0, session required, owner-scoped)
- * GET  /d/logout        -> clears the session + cookie
+ * GET  /d/admin/command -> the business command center (v1.86.0, admin only)
+ * GET  /d/logout        -> clears the session + cookie, then 303 to the door
  *
  * A1: while DASHBOARD_ENABLED is off every route answers exactly like an
  * unregistered Fastify route (generic 404 JSON) — the dashboard's existence is
@@ -23,6 +24,7 @@
  * encapsulated scope, so the rest of the app keeps its JSON/text parsers.
  */
 
+import { buildCommandCenterMetrics } from '../services/commandCenter.js';
 import formbody from '@fastify/formbody';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -42,6 +44,8 @@ import {
   requestDashboardOtp,
   renderLoginPage,
   renderOtpPage,
+  DASHBOARD_LOGIN_PATH,
+  DASHBOARD_ADMIN_LOGIN_PATH,
   renderOverviewPage,
   renderVehiclesPage,
   renderVehiclePage,
@@ -87,6 +91,7 @@ import {
   renderDriverDaybookPage,
   renderDriverSelfCompliancePage,
   renderAdminOwnersPage,
+  renderAdminCommandPage,
   renderAdminFleetPage,
   // v1.80.0 (Phase 19) — Amina's care queue + the analytics page.
   buildCareQueue,
@@ -346,9 +351,42 @@ export async function registerDashboardRoutes(fastify, {
     /* /d/login       -> owner/driver phone entry                      */
     /* /d/admin/login -> superadmin door (D4: never minted at /d/login)*/
     /* -------------------------------------------------------------- */
-    const renderLoginDoor = (admin) => (request, reply) => {
+
+    /**
+     * The role's home page — one place, so /d/verify, /d/login and /d/logout agree.
+     * v1.86.0 (Phase 25).
+     */
+    const dashboardHomeFor = (role) => {
+      if (role === 'admin') return '/d/admin';
+      if (role === 'driver') return '/d/driver';
+      return '/d';
+    };
+
+    /**
+     * v1.86.0 (Phase 25) — a visitor who already holds a live session is sent to
+     * their home instead of being shown a sign-in form (a bookmark never lies).
+     * A dead cookie is cleared first (same contract as /d).
+     */
+    const redirectSignedInVisitor = async (request, reply) => {
+      const sessionToken = readDashboardCookie(request.headers);
+      if (!sessionToken) return false;
+      const session = await getSessionByToken({ supabase, sessionToken });
+      if (!session.ok) {
+        reply.header('set-cookie', dashboardClearCookieHeader({ secure: isSecureRequest(request) }));
+        return false;
+      }
+      const role = DASHBOARD_ROLES.includes(session.role) ? session.role : 'owner';
+      reply.code(303).header('location', dashboardHomeFor(role)).send();
+      return true;
+    };
+
+    const renderLoginDoor = (admin) => async (request, reply) => {
       if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
-      return sendHtml(reply, 200, renderLoginPage({ admin }));
+      if (await redirectSignedInVisitor(request, reply)) return reply;
+      const notice = String(request.query?.logged_out || '') === '1'
+        ? 'You have been logged out. Sign in again with your WhatsApp number — it takes one code.'
+        : null;
+      return sendHtml(reply, 200, renderLoginPage({ admin, notice }));
     };
     scope.get('/d/login', renderLoginDoor(false));
     scope.get('/d/admin/login', renderLoginDoor(true));
@@ -446,7 +484,9 @@ export async function registerDashboardRoutes(fastify, {
           ownerId: session.ownerId,
           vehicleId: String(request.params?.id || ''),
           profile,
-          countryInfo: countryForProfile(profile)
+          countryInfo: countryForProfile(profile),
+          // v1.86.0 (Phase 25) — `?docs=all` reveals the replaced-file history.
+          includeReplacedDocuments: String(request.query?.docs || '') === 'all'
         });
         if (!data.ok && data.reason === 'not_found') {
           const page = renderErrorPage(404, 'That vehicle is not on your fleet. Reply *dashboard* on WhatsApp if you think it should be.');
@@ -1209,6 +1249,28 @@ export async function registerDashboardRoutes(fastify, {
     });
 
     /* -------------------------------------------------------------- */
+    /* GET /d/admin/command — the business command center (v1.86.0)    */
+    /* -------------------------------------------------------------- */
+    scope.get('/d/admin/command', async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      try {
+        const session = await requireRoleSession(request, reply, supabase, 'admin');
+        if (!session) return reply;
+        const profile = await loadDashboardProfile(supabase, session.ownerId);
+        const metrics = await buildCommandCenterMetrics({ supabase });
+        await logAdminAudit(supabase, profile?.phone_number || session.email || 'DASHBOARD_ADMIN', 'ADMIN_DASHBOARD_VIEW', {
+          page: 'command',
+          found: metrics.ok === true
+        });
+        return sendHtml(reply, metrics.ok ? 200 : 503, renderAdminCommandPage({ data: metrics }));
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/admin/command');
+        const page = renderErrorPage(500, 'Please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    /* -------------------------------------------------------------- */
     /* GET /d/admin/owners/:id — one fleet, read-only (audited)        */
     /* -------------------------------------------------------------- */
     scope.get('/d/admin/owners/:id', async (request, reply) => {
@@ -1691,19 +1753,27 @@ export async function registerDashboardRoutes(fastify, {
     });
 
     /* -------------------------------------------------------------- */
-    /* GET /d/logout — clear the session then the cookie               */
+    /* GET /d/logout — clear the session, then land on the sign-in door */
+    /* v1.86.0 (Phase 25): 303 -> /d/login?logged_out=1 (banner), or    */
+    /* the admin door when an admin session was cleared.                */
     /* -------------------------------------------------------------- */
     scope.get('/d/logout', async (request, reply) => {
       if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
       const secure = isSecureRequest(request);
+      let wasAdmin = false;
       try {
         const sessionToken = readDashboardCookie(request.headers);
-        if (sessionToken) await clearDashboardSession({ supabase, sessionToken });
+        if (sessionToken) {
+          const session = await getSessionByToken({ supabase, sessionToken });
+          wasAdmin = session.ok && session.role === 'admin';
+          await clearDashboardSession({ supabase, sessionToken });
+        }
       } catch (err) {
         await logSystemError(supabase, err, '/d/logout');
       }
       reply.header('set-cookie', dashboardClearCookieHeader({ secure }));
-      return sendHtml(reply, 200, renderLogoutPage());
+      const target = wasAdmin ? `${DASHBOARD_ADMIN_LOGIN_PATH}?logged_out=1` : `${DASHBOARD_LOGIN_PATH}?logged_out=1`;
+      return reply.code(303).header('location', target).send();
     });
 
     /* -------------------------------------------------------------- */

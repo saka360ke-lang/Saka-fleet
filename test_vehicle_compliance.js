@@ -57,6 +57,16 @@ async function run() {
   const keIce = resolveVehicleComplianceCatalog({ countryCode: 'KE', assetType: 'ICE' });
   check(!keIce.items.map((i) => i.type).includes('speed_limiter'), 'Speed limiter is filtered out for a non-PSV asset');
 
+  // v1.86.0 (Phase 25) — the kind bridge: a real truck row stores asset_type
+  // 'ICE', so the KIND must resolve the PSV-class vehicle requirements.
+  const keTruckKind = resolveVehicleComplianceCatalog({ countryCode: 'KE', assetKind: 'truck', assetType: 'ICE' });
+  check(keTruckKind.items.map((i) => i.type).includes('speed_limiter'), 'KE truck (asset_kind=truck) carries the speed limiter');
+  check(keTruckKind.items.map((i) => i.type).includes('road_service_licence'), 'KE truck keeps the road service licence');
+  const keCarKind = resolveVehicleComplianceCatalog({ countryCode: 'KE', assetKind: 'vehicle', assetType: 'ICE' });
+  check(!keCarKind.items.map((i) => i.type).includes('speed_limiter'), 'KE car never carries the speed limiter (no leak)');
+  const keGeneratorKind = resolveVehicleComplianceCatalog({ countryCode: 'KE', assetKind: 'generator' });
+  check(!keGeneratorKind.items.map((i) => i.type).includes('speed_limiter'), 'a generator never carries a speed limiter');
+
   const driverCatalog = resolveBundledCatalog({ countryCode: 'KE', assetType: 'BUS' });
   check(driverCatalog.minimal.type === 'driver_license', 'Driver catalog minimal item is the driver licence');
   check(!keBusTypes.includes('driver_license'), 'Vehicle catalog never contains driver licences');

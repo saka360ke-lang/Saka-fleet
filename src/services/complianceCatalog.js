@@ -16,8 +16,9 @@
  */
 
 import { extractDatePhrase, zonedDateTimeToUtcIso, diffCalendarDays, SYSTEM_TIMEZONE } from './dateParser.js';
+import { complianceAssetMatches } from './countryBucket.js';
 
-export const COMPLIANCE_CATALOG_VERSION = '2026.10.1';
+export const COMPLIANCE_CATALOG_VERSION = '2026.10.2';
 export const CATALOG_REVIEW_DAYS = 180;
 export const DEFAULT_CATALOG_COUNTRY = 'DEFAULT';
 
@@ -50,7 +51,12 @@ export const COUNTRY_COMPLIANCE_CATALOG = Object.freeze({
   KE: {
     minimal: item('driver_license', 'Driver licence (NTSA)', { aliases: DRIVER_LICENSE_ALIASES }),
     additional: [
-      item('psv_badge', 'PSV badge', { aliases: ['psv badge', 'psv'], assetTypes: ['PSV', 'BUS', 'MATATU', 'MINIBUS'] })
+      // v1.86.0 (Phase 25) — TRAFFIC ACT Cap 403 defines a public service
+      // vehicle as one carrying passengers OR GOODS for hire or reward, so a
+      // commercial truck belongs to the PSV class in Kenya. Before this the
+      // token list only knew PSV/BUS/MATATU/MINIBUS, so a truck registered as
+      // asset_kind='truck' could never be offered (or gated on) this badge.
+      item('psv_badge', 'PSV badge', { aliases: ['psv badge', 'psv'], assetTypes: ['PSV', 'BUS', 'MATATU', 'MINIBUS', 'TRUCK', 'HGV'] })
     ]
   },
   TZ: {
@@ -140,22 +146,26 @@ export function complianceCategory(type) {
 }
 
 /**
- * Resolve the bundled catalog for a country + asset type (sync, no I/O).
+ * Resolve the bundled catalog for a country + asset identity (sync, no I/O).
  *
  * v1.58.25 — `includeAll: true` returns every optional item for the country
  * regardless of the asset-type menu filter. Explicit user mentions ("add my PSV
  * badge") must always resolve, even when the vehicle was registered as a VAN
  * while the owner actually runs it as a PSV (live 2026-11-04 loop: the badge was
  * filtered out and the request fell through to the generic menu).
+ *
+ * v1.86.0 (Phase 25) — `assetKind` is the canonical identity
+ * (`vehicles.asset_kind`); `assetType` stays supported for legacy callers. Both
+ * feed the ONE compatibility bridge (`countryBucket.complianceAssetMatches`), so
+ * a truck/bus resolves the PSV-class requirements even though its
+ * `asset_type` column stores only ICE/EV/HYBRID.
  */
-export function resolveBundledCatalog({ countryCode = 'GLOBAL', assetType = null, includeAll = false } = {}) {
+export function resolveBundledCatalog({ countryCode = 'GLOBAL', assetType = null, assetKind = null, includeAll = false } = {}) {
   const code = String(countryCode || 'GLOBAL').toUpperCase();
   const entry = COUNTRY_COMPLIANCE_CATALOG[code] || COUNTRY_COMPLIANCE_CATALOG[DEFAULT_CATALOG_COUNTRY];
-  const normalizedAsset = normalizeAssetType(assetType);
   const additional = (entry.additional || []).filter((it) => {
     if (includeAll) return true;
-    if (!it.assetTypes || it.assetTypes.length === 0) return true;
-    return Boolean(normalizedAsset) && it.assetTypes.includes(normalizedAsset);
+    return complianceAssetMatches(it.assetTypes, { assetKind, assetType });
   });
   return {
     countryCode: code,
@@ -178,18 +188,13 @@ function normalizeCatalogItem(raw, fallback = null) {
   };
 }
 
-function resolveCatalogRow(row, { countryCode, assetType }) {
-  const fallback = resolveBundledCatalog({ countryCode, assetType });
+function resolveCatalogRow(row, { countryCode, assetType, assetKind = null }) {
+  const fallback = resolveBundledCatalog({ countryCode, assetType, assetKind });
   const minimal = normalizeCatalogItem(row?.minimal, fallback.minimal) || fallback.minimal;
   const rawAdditional = Array.isArray(row?.additional) ? row.additional : fallback.additional;
-  const normalizedAsset = normalizeAssetType(assetType);
   const additional = rawAdditional
     .map((it) => normalizeCatalogItem(it))
-    .filter((it) => {
-      if (!it) return false;
-      if (!it.assetTypes || it.assetTypes.length === 0) return true;
-      return Boolean(normalizedAsset) && it.assetTypes.includes(normalizedAsset);
-    });
+    .filter((it) => Boolean(it) && complianceAssetMatches(it.assetTypes, { assetKind, assetType }));
   return {
     countryCode: String(countryCode || 'GLOBAL').toUpperCase(),
     minimal,
@@ -218,14 +223,15 @@ export function clearComplianceCatalogCache() {
 
 /**
  * Resolve the live catalog: active DB override effective today, else bundled.
+ * v1.86.0 — `assetKind` joins `assetType` in the cache key + the resolver call.
  */
-export async function getComplianceCatalog({ supabase = null, countryCode = 'GLOBAL', assetType = null, now = new Date() } = {}) {
+export async function getComplianceCatalog({ supabase = null, countryCode = 'GLOBAL', assetType = null, assetKind = null, now = new Date() } = {}) {
   const code = String(countryCode || 'GLOBAL').toUpperCase();
-  const cacheKey = `${code}:${normalizeAssetType(assetType)}`;
+  const cacheKey = `${code}:${String(assetKind || '').toLowerCase()}:${normalizeAssetType(assetType)}`;
   const cached = catalogCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.value;
 
-  let resolved = resolveBundledCatalog({ countryCode: code, assetType });
+  let resolved = resolveBundledCatalog({ countryCode: code, assetType, assetKind });
   if (supabase) {
     try {
       const { data } = await supabase
@@ -235,7 +241,7 @@ export async function getComplianceCatalog({ supabase = null, countryCode = 'GLO
         .limit(1);
       const row = Array.isArray(data) ? data[0] : data;
       if (row && isCatalogRowEffective(row, now)) {
-        resolved = resolveCatalogRow(row, { countryCode: code, assetType });
+        resolved = resolveCatalogRow(row, { countryCode: code, assetType, assetKind });
       }
     } catch {
       // Fall back to bundled defaults when the table is unavailable.

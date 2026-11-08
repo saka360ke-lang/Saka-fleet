@@ -48,7 +48,29 @@ const normalUserPhone = '+254799000111';
   const report = await handleAdminReportCommand(mockClient);
   assert.strictEqual(report.details.total_expenses, 150, 'PRI-1: the report total sums expense_logs only (150, never 999,999 + 150)');
   assert.ok(!queried.includes('expenses'), 'PRI-1: handleAdminReportCommand does not read the legacy expenses table — no double-count');
+  // v1.86.0 (Phase 25) — the financial block is per currency, never a hardcoded KES.
+  assert.ok(!/\bKES\b/.test(report.reply), 'money fix: the digest no longer prints KES over multi-currency ledgers');
+  assert.ok(report.reply.includes('USD'), 'money fix: a row without a currency column reads as USD (honest default), not KES');
+  assert.ok(report.reply.includes('Financial Telemetry (by currency)'), 'money fix: the block names its grouping');
   console.log('✅ PRI-1: superadmin report double-count fix verified (expense_logs only)');
+}
+
+// v1.86.0 (Phase 25) — the command center intent + help listing (pure, offline).
+{
+  const { parseSuperadminCommand, formatAdminHelpReply } = await import('./src/services/superadmin.js');
+  const command = await parseSuperadminCommand('admin command');
+  const bi = await parseSuperadminCommand('admin bi');
+  const business = await parseSuperadminCommand('admin business');
+  const kpi = await parseSuperadminCommand('admin kpi');
+  assert.strictEqual(command.intent, 'ADMIN_COMMAND_CENTER', 'admin command parses to the command center');
+  assert.strictEqual(bi.intent, 'ADMIN_COMMAND_CENTER', 'admin bi is an alias');
+  assert.strictEqual(business.intent, 'ADMIN_COMMAND_CENTER', 'admin business is an alias');
+  assert.strictEqual(kpi.intent, 'ADMIN_COMMAND_CENTER', 'admin kpi is an alias');
+  const commands = await parseSuperadminCommand('admin commands');
+  assert.strictEqual(commands.intent, 'ADMIN_HELP', 'admin commands (plural) stays the help list');
+  const help = formatAdminHelpReply();
+  assert.ok(help.includes('admin command'), 'the help list advertises the command center');
+  console.log('✅ v1.86.0: command center intent + help listing verified');
 }
 
 // v1.82.0 (Phase 21) — the profiles report must count REGISTERED accounts and

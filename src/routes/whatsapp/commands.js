@@ -504,7 +504,8 @@ export async function handleViewProfileTurn({ profileData, existingVehicles, sen
         supabase: supabaseClient,
         driverId: profileData.id,
         countryCode: countryInfo?.country_code,
-        assetType: assigned.asset_type || assigned.metadata?.asset_type || null
+        assetType: assigned.asset_type || assigned.metadata?.asset_type || null,
+        assetKind: assigned.asset_kind || null
       });
       const min = st.minimal;
       complianceLine = `${min.label}: ${min.status}${min.lifetime ? ' (valid for life)' : min.expiry ? ` (expires ${min.expiry})` : ''}`;

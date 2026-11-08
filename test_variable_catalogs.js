@@ -31,6 +31,7 @@ import {
   resolveDriverComplianceType
 } from './src/services/driverComplianceCatalog.js';
 import { VEHICLE_COMPLIANCE_CATALOG, resolveVehicleComplianceCatalog, VEHICLE_COMPLIANCE_CATALOG_VERSION } from './src/services/vehicleCompliance.js';
+import { COMPLIANCE_CATALOG_VERSION, resolveBundledCatalog, COUNTRY_COMPLIANCE_CATALOG } from './src/services/complianceCatalog.js';
 import { REGIONS } from './src/services/globalization.js';
 import { getFlowDefinition } from './src/services/quizEngine.js';
 import { extractVehicleAttributes } from './sakaAi.js';
@@ -121,6 +122,12 @@ check(earningTypeMenu().includes('Cargo & freight'), 'Earning menu copy is avail
 
 console.log('\n--- Test 5: global vehicle compliance catalogs ---');
 check(VEHICLE_COMPLIANCE_CATALOG_VERSION === '2026.18.0', 'Compliance catalog version bumped');
+// v1.86.0 (Phase 25) — the KE PSV badge now carries TRUCK/HGV (Traffic Act
+// Cap 403: a PSV carries passengers OR goods for hire or reward).
+check(COMPLIANCE_CATALOG_VERSION === '2026.10.2', 'Driver compliance catalog version bumped for the PSV truck scoping');
+const keBadgeItem = (COUNTRY_COMPLIANCE_CATALOG.KE.additional || []).find((item) => item.type === 'psv_badge');
+check(keBadgeItem.assetTypes.includes('TRUCK') && keBadgeItem.assetTypes.includes('HGV'), 'KE PSV badge scopes trucks + HGVs');
+check(resolveBundledCatalog({ countryCode: 'KE', assetKind: 'truck' }).additional.some((item) => item.type === 'psv_badge'), 'KE truck resolves the PSV badge');
 for (const region of REGIONS) {
   check(Boolean(VEHICLE_COMPLIANCE_CATALOG[region.country_code]), `Compliance catalog exists for ${region.country_code}`);
 }

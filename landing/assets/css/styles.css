@@ -9,23 +9,23 @@
 
 @font-face {
   font-family: 'Sora'; font-style: normal; font-weight: 600; font-display: swap;
-  src: url('/assets/fonts/Sora-600.woff2?v=1.85.0') format('woff2');
+  src: url('/assets/fonts/Sora-600.woff2?v=1.86.0') format('woff2');
 }
 @font-face {
   font-family: 'Sora'; font-style: normal; font-weight: 700; font-display: swap;
-  src: url('/assets/fonts/Sora-700.woff2?v=1.85.0') format('woff2');
+  src: url('/assets/fonts/Sora-700.woff2?v=1.86.0') format('woff2');
 }
 @font-face {
   font-family: 'Manrope'; font-style: normal; font-weight: 400; font-display: swap;
-  src: url('/assets/fonts/Manrope-400.woff2?v=1.85.0') format('woff2');
+  src: url('/assets/fonts/Manrope-400.woff2?v=1.86.0') format('woff2');
 }
 @font-face {
   font-family: 'Manrope'; font-style: normal; font-weight: 500; font-display: swap;
-  src: url('/assets/fonts/Manrope-500.woff2?v=1.85.0') format('woff2');
+  src: url('/assets/fonts/Manrope-500.woff2?v=1.86.0') format('woff2');
 }
 @font-face {
   font-family: 'Manrope'; font-style: normal; font-weight: 700; font-display: swap;
-  src: url('/assets/fonts/Manrope-700.woff2?v=1.85.0') format('woff2');
+  src: url('/assets/fonts/Manrope-700.woff2?v=1.86.0') format('woff2');
 }
 
 :root {
@@ -206,6 +206,9 @@ body.nav-open .nav-menu { display: block; }
 @media (max-width: 960px) {
   .nav-links { display: none; }
   .nav-cta .btn-ghost { display: none; }
+  /* v1.86.0 (Phase 25) — the sign-in link stays visible on every screen: an
+     existing owner must never hunt for it, and the drawer carries it too. */
+  .nav-cta .btn-ghost.nav-login { display: inline-flex; }
   .nav-burger { display: inline-flex; }
 }
 
@@ -394,6 +397,10 @@ footer { border-top: 1px solid var(--line); padding: 56px 0 40px; margin-top: 40
 .foot-grid h4 { font-size: .95rem; margin-bottom: 12px; color: var(--text); }
 .foot-grid a, .foot-grid p { display: block; color: var(--muted); font-size: .9rem; margin-bottom: 8px; }
 .foot-bottom { border-top: 1px solid var(--line); padding-top: 22px; color: var(--muted); font-size: .85rem; display: flex; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+/* v1.86.0 (Phase 25) — the quiet superadmin door ("King"). Deliberately subtle:
+   it is a bookmark for the operator, never a promotion for visitors. */
+.foot-king { color: var(--muted); opacity: .5; font-size: .8rem; letter-spacing: .06em; text-transform: uppercase; text-decoration: none; }
+.foot-king:hover, .foot-king:focus-visible { color: var(--accent); opacity: 1; text-decoration: underline; }
 
 /* Modal */
 .modal-backdrop { position: fixed; inset: 0; z-index: 100; background: rgba(5, 5, 6, .82); backdrop-filter: blur(6px); display: none; align-items: center; justify-content: center; padding: 20px; }

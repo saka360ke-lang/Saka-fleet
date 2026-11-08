@@ -4,6 +4,7 @@ import fs from 'fs';
 import {
   DOCUMENTS_BUCKET,
   VEHICLE_DOCUMENTS_SQL,
+  VEHICLE_DOCUMENTS_SUPERSEDE_SQL,
   documentTypeForFamily,
   isVaultableDocumentFamily,
   complianceTypeForDocumentType,
@@ -12,6 +13,8 @@ import {
   documentTypeLabel,
   vaultVehicleDocument,
   listVehicleDocuments,
+  supersedePreviousDocuments,
+  countSupersededDocuments,
   deleteVehicleDocument,
   linkSavedComplianceDocument,
   findPendingDocument,
@@ -166,6 +169,68 @@ check(listReply.includes('Insurance certificate') && listReply.includes('KDA 123
 check(listReply.includes('delete document N'), 'the footer teaches the delete command');
 check(listReply.includes('parsed only (Free plan)'), 'a file-less Free row is labelled honestly');
 
+console.log('--- Test 9b: renewal SUPERSEDES the previous file (v1.86.0) ---');
+check(/ADD COLUMN IF NOT EXISTS superseded_at/.test(VEHICLE_DOCUMENTS_SUPERSEDE_SQL), 'the migration adds superseded_at idempotently');
+check(/ADD COLUMN IF NOT EXISTS superseded_by/.test(VEHICLE_DOCUMENTS_SUPERSEDE_SQL), 'the migration adds superseded_by idempotently');
+check(/idx_vehicle_documents_current/.test(VEHICLE_DOCUMENTS_SUPERSEDE_SQL), 'a partial index keeps the current-file lookup fast');
+const renewalMock = createMockSupabase({ vehicle_documents: [] });
+await vaultVehicleDocument({
+  supabase: renewalMock.client,
+  vehicleId: 'v1',
+  profileId: 'p1',
+  buffer: Buffer.from('%PDF-1 old insurance'),
+  mediaId: 'm-201',
+  mimeType: 'application/pdf',
+  documentType: 'insurance',
+  entitlements: { receiptVaultStorage: true }
+});
+const firstInsurance = renewalMock.db.vehicle_documents[0];
+const second = await vaultVehicleDocument({
+  supabase: renewalMock.client,
+  vehicleId: 'v1',
+  profileId: 'p1',
+  buffer: Buffer.from('%PDF-1 new insurance'),
+  mediaId: 'm-202',
+  mimeType: 'application/pdf',
+  documentType: 'insurance',
+  entitlements: { receiptVaultStorage: true }
+});
+check(second.ok === true && second.replaced === 1, 'a same-type re-upload reports ONE replaced file');
+const currentInsurance = renewalMock.db.vehicle_documents.find((row) => row.id === second.document.id);
+const oldInsurance = renewalMock.db.vehicle_documents.find((row) => row.id === firstInsurance.id);
+check(Boolean(oldInsurance.superseded_at) && oldInsurance.superseded_by === second.document.id, 'the old row is marked superseded by the new one');
+check(oldInsurance.storage_path === firstInsurance.storage_path, 'the old FILE is kept (rule 48 — evidence)');
+check(currentInsurance.superseded_at === undefined || currentInsurance.superseded_at === null, 'the new row stays current');
+const currentList = await listVehicleDocuments(renewalMock.client, { vehicleId: 'v1' });
+check(currentList.length === 1 && currentList[0].id === second.document.id, 'the default list shows CURRENT files only');
+const historyList = await listVehicleDocuments(renewalMock.client, { vehicleId: 'v1', currentOnly: false });
+check(historyList.length === 2, 'currentOnly:false returns the whole history');
+await vaultVehicleDocument({
+  supabase: renewalMock.client,
+  vehicleId: 'v1',
+  profileId: 'p1',
+  buffer: Buffer.from('%PDF-1 inspection'),
+  mediaId: 'm-203',
+  mimeType: 'application/pdf',
+  documentType: 'inspection',
+  entitlements: { receiptVaultStorage: true }
+});
+check(renewalMock.db.vehicle_documents.filter((row) => row.superseded_at).length === 1, 'a DIFFERENT document type never supersedes anything');
+const counts = await countSupersededDocuments(renewalMock.client, { vehicleIds: ['v1'] });
+check(counts['v1|insurance'] === 1 && !counts['v1|inspection'], 'the replaced-count map is per vehicle + type');
+const noticeReply = formatVehicleDocumentsReply({
+  documents: currentList,
+  vehicles: [{ id: 'v1', plate_number: 'KDA 123A' }],
+  replacedCounts: counts
+});
+check(noticeReply.includes('replaces 1 earlier file'), 'the WhatsApp list says what the renewal replaced');
+const emptyMock = createMockSupabase({ vehicle_documents: [] });
+const noPrevious = await supersedePreviousDocuments({ supabase: emptyMock.client, vehicleId: 'v1', documentType: 'insurance', newId: 'd2' });
+check(noPrevious.ok === true && noPrevious.replaced === 0, 'a first-ever document supersedes nothing');
+const legacyMock = createMockSupabase({ vehicle_documents: [{ id: 'd1', vehicle_id: 'v1', document_type: 'insurance', uploaded_at: NOW, storage_path: 'v1/x.pdf' }] });
+const degradedProbe = await supersedePreviousDocuments({ supabase: legacyMock.client, vehicleId: 'v1', documentType: 'inspection', newId: 'd2' });
+check(degradedProbe.ok === true && degradedProbe.replaced === 0, 'another document TYPE is never superseded');
+
 console.log('--- Test 10: account wipe removes rows AND stored files ---');
 const wipeMock = createMockSupabase({
   profiles: [{ id: 'p1', phone_number: '+254700000000' }],
@@ -187,7 +252,7 @@ check(cleanupSource.includes("'vehicle_documents', 'vehicle_id'") && cleanupSour
 const indexSource = fs.readFileSync('index.js', 'utf8');
 check(indexSource.includes('ensureVehicleDocumentsTable'), 'the boot ensure is wired in index.js');
 const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-check(pkg.version === '1.85.0', 'package.json is 1.85.0');
+check(pkg.version === '1.86.0', 'package.json is 1.86.0');
 check(Boolean(pkg.scripts['migrate:vehicle-documents']), 'npm run migrate:vehicle-documents exists');
 const migrationSource = fs.readFileSync('scripts/run_vehicle_documents_migration.js', 'utf8');
 check(migrationSource.includes('VEHICLE_DOCUMENTS_SQL'), 'the migration applies the shared DDL');

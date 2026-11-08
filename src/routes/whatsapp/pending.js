@@ -408,9 +408,10 @@ export async function handleComplianceCaptureTurn({ session, messageText, supaba
   const pendingScope = pending.scope === 'vehicle' ? 'vehicle' : 'driver';
   const context = pickComplianceContextVehicle({ vehicles: existingVehicles, profileId: profileData?.id });
   const pendingAssetType = context.vehicle?.asset_type || context.vehicle?.metadata?.asset_type || null;
+  const pendingAssetKind = context.vehicle?.asset_kind || null;
   const pendingCatalog = pendingScope === 'vehicle'
-    ? resolveVehicleComplianceCatalog({ countryCode: countryInfo?.country_code || 'GLOBAL', assetType: pendingAssetType, includeAll: true })
-    : resolveBundledCatalog({ countryCode: countryInfo?.country_code || 'GLOBAL', assetType: pendingAssetType, includeAll: true });
+    ? resolveVehicleComplianceCatalog({ countryCode: countryInfo?.country_code || 'GLOBAL', assetType: pendingAssetType, assetKind: pendingAssetKind, includeAll: true })
+    : resolveBundledCatalog({ countryCode: countryInfo?.country_code || 'GLOBAL', assetType: pendingAssetType, assetKind: pendingAssetKind, includeAll: true });
   const pendingItem = catalogCandidates(pendingCatalog).find((entry) => entry.type === pending.type) || null;
   if (isComplianceCaptureCancel(messageText)) {
     session.pendingComplianceCapture = null;
@@ -567,7 +568,7 @@ export async function persistCapturedCompliance({
     }
     if (isMinimal && !isSelfProfile && vehicle?.id) {
       try {
-        const status = await getDriverComplianceStatus({ supabase: supabaseClient, driverId: profileData.id, assetType });
+        const status = await getDriverComplianceStatus({ supabase: supabaseClient, driverId: profileData.id, assetType, assetKind: vehicle?.asset_kind || null });
         const assignment = await getActiveAssignment({ supabase: supabaseClient, driverId: profileData.id, vehicleId: vehicle.id });
         if (status.canManage && assignment) {
           await notifyOwnerComplianceCleared({ supabase: supabaseClient, assignment, status });

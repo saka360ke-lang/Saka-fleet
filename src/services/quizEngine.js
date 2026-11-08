@@ -90,7 +90,7 @@ import {
 import { grantLaunchAwardForTrial, formatLaunchAwardLine, getLaunchAwardConfig } from './launchAwards.js';
 import { normalizeTierKey, getTierLabel } from './subscriptionTiers.js';
 import { parseFlexibleDate } from './dateParser.js';
-import { normalizeAssetKind, requiresPlate, requiresVin, meterForAssetKind, assetTypeForKind, legacyAssetType, assetDisplayName } from './countryBucket.js';
+import { normalizeAssetKind, requiresPlate, requiresVin, meterForAssetKind, assetTypeForKind, legacyAssetType, assetDisplayName, assetRolePossessive, assetRoleLabel } from './countryBucket.js';
 import { prepareRoutingText } from './textNormalizer.js';
 import {
   parseThresholdSpec,
@@ -270,6 +270,13 @@ function field(key, label, hint, options = {}) {
     key,
     label,
     hint,
+    /**
+     * v1.86.0 (Phase 25) — an optional dynamic label: `labelFor(answers, ctx)`
+     * resolves the wording from the SELECTED asset (the assign flow asks for the
+     * "Operator's WhatsApp number" on a generator, the "Captain's" on a boat).
+     * Falls back to `label`, so every existing field is unchanged.
+     */
+    labelFor: typeof options.labelFor === 'function' ? options.labelFor : null,
     required: options.required !== false,
     optional: options.optional === true,
     group: options.group || null,
@@ -692,7 +699,10 @@ function driverOnboardingFields(ctx) {
   const assigned = (ctx.vehicles || []).find((v) => v.assigned_driver_id === profile.id)
     || (ctx.activeVehicle?.assigned_driver_id === profile.id ? ctx.activeVehicle : null);
   const assetType = assigned?.asset_type || assigned?.metadata?.asset_type || null;
-  const catalog = resolveBundledCatalog({ countryCode: ctx.countryInfo?.country_code, assetType });
+  // v1.86.0 (Phase 25) — the KIND is the canonical identity; it resolves the
+  // PSV-class requirements (a truck/bus stores asset_type='ICE').
+  const assetKind = assigned?.asset_kind || null;
+  const catalog = resolveBundledCatalog({ countryCode: ctx.countryInfo?.country_code, assetType, assetKind });
   const fields = [];
 
   if (!profile.full_name || /^(Fleet Driver|WhatsApp User)$/i.test(String(profile.full_name))) {
@@ -768,8 +778,13 @@ export function getFlowDefinition(flowKey, ctx) {
         label,
         fields: [
           vehicleField(ctx),
+          // v1.86.0 (Phase 25) — the person taking over is named by the asset:
+          // Driver (car/truck/bus), Rider (boda), Operator (machine/generator),
+          // Captain (boat). The KEY stays `driver_phone` (extraction + the
+          // assignment engine depend on it) — only the wording follows the asset.
           field('driver_phone', "Driver's WhatsApp number", 'international format, e.g. +254712345678', {
             aliases: ['driver_phone', 'phone'],
+            labelFor: (answers, c) => `${assetRolePossessive(handoverKind(answers, c))} WhatsApp number`,
             parse: (text) => parsePhone(text),
             validate: (value) => (value ? { ok: true } : { ok: false, message: 'Please send the driver phone in international format.' })
           }),
@@ -1191,6 +1206,34 @@ function nextField(def, answers) {
   return activeFields(def, answers).find((f) => !(f.key in answers) || answers[f.key] === undefined) || null;
 }
 
+/**
+ * v1.86.0 (Phase 25) — ONE resolver for a field's display label: a `labelFor`
+ * hook may name the role from the selected asset, otherwise the static label.
+ * Used by the question renderer and the confirmation summary so the two can
+ * never disagree.
+ */
+function fieldLabelFor(field, answers, ctx) {
+  if (!field) return '';
+  if (typeof field.labelFor === 'function') {
+    try {
+      const resolved = field.labelFor(answers, ctx);
+      if (resolved && String(resolved).trim()) return String(resolved).trim();
+    } catch {
+      // The static label is always safe — nothing to log (a label can never
+      // block a turn), and rule 50 is satisfied by the fallback below.
+      return field.label;
+    }
+  }
+  return field.label;
+}
+
+/** The handover asset's kind for the CURRENT selection (assign/unassign flows). */
+function handoverKind(answers, ctx) {
+  const vehicles = ctx?.vehicles || [];
+  const vehicle = vehicles.find((v) => v.id === answers?.vehicle_id) || vehicles[0] || null;
+  return vehicle?.asset_kind || vehicle?.asset_type || vehicle?.vehicle_type || 'vehicle';
+}
+
 function collectedLabels(def, answers) {
   return activeFields(def, answers)
     .filter((f) => f.key in answers && answers[f.key] !== null && answers[f.key] !== undefined)
@@ -1201,7 +1244,7 @@ function buildSummaryRows(def, answers, ctx) {
   return activeFields(def, answers)
     .filter((f) => f.key in answers && answers[f.key] !== null && answers[f.key] !== undefined)
     .map((f) => ({
-      label: f.label,
+      label: fieldLabelFor(f, answers, ctx),
       value: f.summary(answers[f.key], ctx, answers)
     }));
 }
@@ -1664,7 +1707,7 @@ async function askCurrent(state, ctx, note = null) {
   const upcoming = activeFields(def, state.answers).filter((f) => !(f.key in state.answers) || answersValueMissing(state.answers, f));
   const reply = await renderQuizQuestion({
     flowLabel: def.label,
-    fieldLabel: field.label,
+    fieldLabel: fieldLabelFor(field, state.answers, ctx),
     hint,
     answers: state.answers,
     collectedLabels: rows.map((r) => `${r.label}: ${r.value}`),
@@ -1834,14 +1877,12 @@ function handoverMeterFields({ mode, ctx }) {
   const isAssignment = mode === 'assignment';
   const odometerKey = isAssignment ? 'odometer_at_assignment' : 'odometer_at_release';
   const hoursKey = isAssignment ? 'hours_at_assignment' : 'hours_at_release';
-  const kindOf = (answers) => {
-    const vehicles = ctx?.vehicles || [];
-    const vehicle = vehicles.find((v) => v.id === answers?.vehicle_id) || vehicles[0] || null;
-    return vehicle?.asset_kind || vehicle?.asset_type || vehicle?.vehicle_type || 'vehicle';
-  };
-  const hoursLed = (answers) => isHoursLedKind(kindOf(answers));
+  // v1.86.0 (Phase 25) — the same resolver the label hook uses, so the role and
+  // the meter always describe the SAME asset.
+  const hoursLed = (answers) => isHoursLedKind(handoverKind(answers, ctx));
+  const roleOf = (answers) => assetRoleLabel(handoverKind(answers, ctx));
   return [
-    field(odometerKey, isAssignment ? 'Odometer at handover' : 'Odometer at handback', 'current reading when the driver takes over', {
+    field(odometerKey, isAssignment ? 'Odometer at handover' : 'Odometer at handback', 'current reading when the handover happens', {
       aliases: ['odometer', odometerKey, 'current_mileage', 'mileage'],
       when: (answers) => !hoursLed(answers),
       parse: (text, c) => parseOdometer(text, c),
@@ -1856,6 +1897,7 @@ function handoverMeterFields({ mode, ctx }) {
     field(hoursKey, isAssignment ? 'Engine hours at handover' : 'Engine hours at handback', 'current engine-hours reading (e.g. 1240)', {
       aliases: ['hours', 'engine_hours', 'operating_hours', hoursKey],
       when: (answers) => hoursLed(answers),
+      labelFor: (answers) => `${isAssignment ? 'Engine hours at handover' : 'Engine hours at handback'}`,
       parse: (text) => {
         const match = String(text || '').match(/\d+(?:\.\d+)?/);
         if (!match) return null;
@@ -1865,7 +1907,7 @@ function handoverMeterFields({ mode, ctx }) {
       validate: (value, c) => {
         const selected = (c.vehicles || []).find((v) => v.id === c.answers?.vehicle_id);
         const last = Number(selected?.operating_hours || selected?.current_engine_hours || 0);
-        if (!Number.isFinite(value) || value < 0) return { ok: false, message: 'Please send the engine hours as a number.' };
+        if (!Number.isFinite(value) || value < 0) return { ok: false, message: `Please send the engine hours as a number for the ${roleOf(c.answers || {}).toLowerCase()}.` };
         if (last > 0 && value < last) return { ok: false, message: `Handover hours cannot be below the last recorded ${last} h.` };
         return { ok: true };
       }
@@ -3781,6 +3823,7 @@ async function executeFlow(state, ctx) {
         const assigned = (ctx.vehicles || []).find((v) => v.assigned_driver_id === ctx.profile.id)
           || (ctx.activeVehicle?.assigned_driver_id === ctx.profile.id ? ctx.activeVehicle : null);
         const assetType = assigned?.asset_type || assigned?.metadata?.asset_type || null;
+        const assetKind = assigned?.asset_kind || null;
         const countryCode = ctx.countryInfo?.country_code || ctx.profile.country_code || 'GLOBAL';
         const timeZone = resolveUserTimezone({ countryInfo: ctx.countryInfo, profile: ctx.profile });
 
@@ -3797,7 +3840,7 @@ async function executeFlow(state, ctx) {
           if (error) return { handled: true, reply: await fail(error.message), flow: state.flow, active: true };
         }
 
-        const catalog = await getComplianceCatalog({ supabase: ctx.supabase, countryCode, assetType });
+        const catalog = await getComplianceCatalog({ supabase: ctx.supabase, countryCode, assetType, assetKind });
         const minimal = catalog.minimal;
         const parsedMinimal = a.minimal_compliance;
         // v1.16.0 — an OWNER building their own profile may skip the licence
@@ -3845,7 +3888,7 @@ async function executeFlow(state, ctx) {
           if (submitted.ok) collected.push(item.label);
         }
 
-        const status = await getDriverComplianceStatus({ supabase: ctx.supabase, driverId: ctx.profile.id, countryCode, assetType });
+        const status = await getDriverComplianceStatus({ supabase: ctx.supabase, driverId: ctx.profile.id, countryCode, assetType, assetKind });
         // v1.16.0 — owner driver-profile bookkeeping (best-effort flag update).
         try {
           const completed = Boolean(status.canManage);
@@ -4116,7 +4159,7 @@ async function persistVehicleRegistration(state, ctx) {
     // ledger + linked expiry reminder through one engine.
     const registrationTimeZone = resolveUserTimezone({ countryInfo: ctx.countryInfo, profile: ctx.profile });
     const countryCode = ctx.countryInfo?.country_code || ctx.profile.country_code || 'GLOBAL';
-    const vehicleCatalog = resolveVehicleComplianceCatalog({ countryCode, assetType });
+    const vehicleCatalog = resolveVehicleComplianceCatalog({ countryCode, assetType, assetKind });
     const seeds = [
       { type: 'insurance', expiry: a.insurance_expiry, number: a.insurance_policy || null },
       { type: 'inspection', expiry: a.inspection_expiry, number: null }

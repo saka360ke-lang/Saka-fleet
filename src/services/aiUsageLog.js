@@ -404,6 +404,84 @@ function finalizeUsageBucket(bucket) {
 }
 
 /**
+ * v1.86.0 (Phase 25) — per-OWNER AI spend for the command center.
+ *
+ * Same reader/pricer as `getAiUsageSummary` (one code path, one price table),
+ * grouped by `ai_usage_logs.owner_id`. Rows with a NULL owner (background
+ * purposes: evals, sentinel ticks, ocr telemetry) are counted SEPARATELY as
+ * `unattributedUsd` — a per-user figure must never be inflated by system work.
+ * Fail-soft: a query failure returns `{ ok:false }` with zeros (never throws).
+ */
+export async function getAiUsageByOwner(providedSupabase, hours = 168, { limit = 10 } = {}) {
+  const requestedHours = Number(hours);
+  const windowHours = Math.min(
+    AI_USAGE_MAX_WINDOW_HOURS,
+    Math.max(1, Math.round(Number.isFinite(requestedHours) && requestedHours > 0 ? requestedHours : 168))
+  );
+  const topLimit = Math.max(1, Math.min(50, Number(limit) || 10));
+  const since = new Date(Date.now() - windowHours * 60 * 60 * 1000).toISOString();
+  const base = {
+    ok: true,
+    hours: windowHours,
+    since,
+    requests: 0,
+    attributedUsd: 0,
+    unattributedUsd: 0,
+    attributedOwners: 0,
+    top: [],
+    error: null
+  };
+  try {
+    const supabase = getSupabase(providedSupabase);
+    if (!supabase) return { ...base, ok: false, error: 'no database' };
+    const byOwner = new Map();
+    let unattributed = newUsageBucket();
+    let fetched = 0;
+    let exhausted = false;
+    while (fetched < AI_USAGE_LOG_MAX_ROWS) {
+      const pageSize = Math.min(AI_USAGE_PAGE_SIZE, AI_USAGE_LOG_MAX_ROWS - fetched);
+      const { data, error } = await supabase
+        .from(AI_USAGE_TABLE)
+        .select('id,owner_id,tier,provider,model,purpose,prompt_tokens,completion_tokens,created_at')
+        .gte('created_at', since)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .range(fetched, fetched + pageSize - 1);
+      if (error) throw new Error(error.message || 'telemetry query failed');
+      const rows = Array.isArray(data) ? data : [];
+      for (const row of rows) {
+        if (!row.owner_id) {
+          addUsageRow(unattributed, row);
+          continue;
+        }
+        const key = String(row.owner_id);
+        if (!byOwner.has(key)) byOwner.set(key, newUsageBucket());
+        addUsageRow(byOwner.get(key), row);
+      }
+      fetched += rows.length;
+      if (rows.length < pageSize) { exhausted = true; break; }
+    }
+    const owners = [...byOwner.entries()].map(([ownerId, bucket]) => {
+      const total = finalizeUsageBucket(bucket);
+      return { ownerId, requests: total.requests, costUsd: total.approxCostUsd || 0, tokens: total.totalTokens };
+    });
+    const attributedUsd = owners.reduce((sum, row) => sum + Number(row.costUsd || 0), 0);
+    const unattributedTotal = finalizeUsageBucket(unattributed);
+    return {
+      ...base,
+      requests: fetched,
+      attributedUsd: Number(attributedUsd.toFixed(6)),
+      unattributedUsd: Number((unattributedTotal.approxCostUsd || 0).toFixed(6)),
+      attributedOwners: owners.length,
+      top: owners.sort((a, b) => b.costUsd - a.costUsd).slice(0, topLimit),
+      truncated: !exhausted
+    };
+  } catch (err) {
+    return { ...base, ok: false, error: err.message || 'telemetry query failed' };
+  }
+}
+
+/**
  * Aggregate ai_usage_logs for the Superadmin telemetry digest (v1.13.0).
  *
  * Fail-soft by contract: a transport/query failure returns `{ ok: false,
@@ -539,6 +617,7 @@ export default {
   trimAiUsageLogs,
   isAiUsageLoggingEnabled,
   getAiUsageSummary,
+  getAiUsageByOwner,
   estimateAiUsageCostUsd,
   getAiUsageCostBreakdownUsd,
   computeAiBudgetStatus,

@@ -89,6 +89,93 @@ export function meterForAssetKind(kind) {
 }
 
 /**
+ * v1.86.0 (Phase 25) — the ASSET KIND -> COMPLIANCE TOKEN bridge.
+ *
+ * Why this exists: both compliance resolvers (`complianceCatalog.resolveBundledCatalog`
+ * and `vehicleCompliance.resolveVehicleComplianceCatalog`) filter their catalog by a
+ * legacy token (`PSV` / `BUS` / `MATATU` / `TRUCK` / `HGV` / `EXCAVATOR` …), but every
+ * road asset is stored with `vehicles.asset_type` = ICE/EV/HYBRID (see
+ * `assetTypeForKind`). The canonical identity lives in `vehicles.asset_kind`. Passing
+ * only `asset_type` therefore hid the PSV badge, the speed-limiter certificate and
+ * every other kind-scoped requirement on trucks and buses (live audit v1.86.0).
+ *
+ * ONE registry: a kind resolves to the token set the catalogs speak. Cars are
+ * deliberately NOT PSV-class (a private car is never asked for a PSV badge).
+ */
+export const COMPLIANCE_ASSET_TOKENS = Object.freeze({
+  vehicle: ['VAN', 'CAR', 'SUV', 'SALOON', 'SEDAN', 'AUTO', 'ICE', 'EV', 'HYBRID', 'TAXI'],
+  motorcycle: ['MOTORCYCLE', 'MOTORBIKE', 'BIKE', 'BODA', 'TUK_TUK', 'SCOOTER', 'ICE', 'EV'],
+  truck: ['TRUCK', 'LORRY', 'HGV', 'TANKER', 'TRAILER', 'PICKUP', 'PICK_UP', 'ICE', 'EV', 'HYBRID'],
+  bus: ['BUS', 'MINIBUS', 'MATATU', 'COACH', 'DALADALA', 'PSV', 'ICE', 'EV', 'HYBRID'],
+  heavy_equipment: ['EXCAVATOR', 'HEAVY_EQUIPMENT', 'HEAVY_MACHINERY', 'PLANT', 'FORKLIFT', 'DOZER', 'GRADER', 'CRANE', 'HGV'],
+  machinery: ['MACHINERY', 'HEAVY_MACHINERY', 'PLANT', 'EXCAVATOR', 'HEAVY_EQUIPMENT', 'TRACTOR', 'MOWER'],
+  generator: ['GENERATOR', 'GENSET', 'MACHINERY', 'PLANT'],
+  watercraft: ['WATERCRAFT', 'BOAT', 'VESSEL', 'MARINE', 'SHIP', 'FERRY']
+});
+
+function normalizeToken(value) {
+  return String(value || '').toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+}
+
+/**
+ * The token set a single asset speaks: its KIND tokens plus the literal
+ * `asset_type` value (so legacy rows that stored `PSV`/`EXCAVATOR` directly keep
+ * matching exactly as before).
+ */
+export function complianceAssetTokens({ assetKind = null, assetType = null } = {}) {
+  const tokens = new Set();
+  if (assetKind) {
+    const kind = normalizeAssetKind(assetKind);
+    for (const token of COMPLIANCE_ASSET_TOKENS[kind] || []) tokens.add(token);
+  }
+  const literal = normalizeToken(assetType);
+  if (literal) tokens.add(literal);
+  return tokens;
+}
+
+/**
+ * Does a catalog item (which lists legacy `assetTypes`) apply to this asset?
+ * No list = applies everywhere (unchanged contract).
+ */
+export function complianceAssetMatches(itemAssetTypes, { assetKind = null, assetType = null } = {}) {
+  const list = Array.isArray(itemAssetTypes) ? itemAssetTypes : null;
+  if (!list || list.length === 0) return true;
+  const tokens = complianceAssetTokens({ assetKind, assetType });
+  if (tokens.size === 0) return false;
+  return list.some((entry) => tokens.has(normalizeToken(entry)));
+}
+
+/**
+ * v1.86.0 (Phase 25) — WHO takes the asset over. The handover vocabulary follows
+ * the machine: a car has a driver, a boda has a rider, a generator/ excavator has
+ * an operator and a boat has a captain. Used by the WhatsApp quiz, the completion
+ * copy and the /d/transfer handover field.
+ */
+export const ASSET_ROLES = Object.freeze({
+  vehicle: { singular: 'Driver', plural: 'Drivers' },
+  motorcycle: { singular: 'Rider', plural: 'Riders' },
+  truck: { singular: 'Driver', plural: 'Drivers' },
+  bus: { singular: 'Driver', plural: 'Drivers' },
+  heavy_equipment: { singular: 'Operator', plural: 'Operators' },
+  machinery: { singular: 'Operator', plural: 'Operators' },
+  generator: { singular: 'Operator', plural: 'Operators' },
+  watercraft: { singular: 'Captain', plural: 'Captains' }
+});
+
+export function assetRoleLabel(kind) {
+  return ASSET_ROLES[normalizeAssetKind(kind)]?.singular || 'Driver';
+}
+
+export function assetRolePlural(kind) {
+  return ASSET_ROLES[normalizeAssetKind(kind)]?.plural || 'Drivers';
+}
+
+/** "Driver's" / "Operator's" / "Captain's" — never a gendered form. */
+export function assetRolePossessive(kind) {
+  return `${assetRoleLabel(kind)}'s`;
+}
+
+/**
  * v1.61.17 — ONE canonical `vehicles.asset_type` vocabulary for every write path.
  * Root cause of the live 2026-11-06 lawn-mower loop: quizEngine wrote
  * `assetKind.toUpperCase()` ('MACHINERY'), while the live DB carried an orphaned
@@ -550,6 +637,13 @@ export default {
   requiresPlate,
   requiresVin,
   meterForAssetKind,
+  COMPLIANCE_ASSET_TOKENS,
+  complianceAssetTokens,
+  complianceAssetMatches,
+  ASSET_ROLES,
+  assetRoleLabel,
+  assetRolePlural,
+  assetRolePossessive,
   assetDisplayName,
   resolveCountryInput,
   countryFactsFor,

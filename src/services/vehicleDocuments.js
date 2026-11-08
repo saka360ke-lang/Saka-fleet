@@ -99,6 +99,20 @@ export const VEHICLE_DOCUMENTS_SQL = `
     END $$;
 `;
 
+/**
+ * v1.86.0 (Phase 25) — document renewal supersedes the previous file of the SAME
+ * document_type instead of piling a new row on top. The superseded row + its
+ * stored object are KEPT (rule 48: documents are evidence), only hidden from the
+ * current list. Idempotent; a table created later still gets the columns.
+ */
+export const VEHICLE_DOCUMENTS_SUPERSEDE_SQL = `
+    ALTER TABLE public.vehicle_documents ADD COLUMN IF NOT EXISTS superseded_at timestamp with time zone;
+    ALTER TABLE public.vehicle_documents ADD COLUMN IF NOT EXISTS superseded_by uuid;
+    CREATE INDEX IF NOT EXISTS idx_vehicle_documents_current
+        ON public.vehicle_documents(vehicle_id, document_type, uploaded_at DESC)
+        WHERE superseded_at IS NULL;
+`;
+
 function getClient(providedSupabase) {
   return providedSupabase || null;
 }
@@ -143,13 +157,39 @@ export async function ensureVehicleDocumentsTable(providedSupabase) {
   const supabase = getClient(providedSupabase);
   if (!supabase) return { ok: false, status: 'no-client' };
   const { error } = await supabase.from(VEHICLE_DOCUMENTS_TABLE).select('id').limit(1);
-  if (!error) return { ok: true, status: 'exists' };
+  if (!error) {
+    // v1.86.0 (Phase 25) — the supersede columns ride the same boot ensure.
+    const columns = await ensureSupersedeColumns(supabase);
+    return { ok: true, status: 'exists', supersede: columns.status };
+  }
   if (!/could not find the table|does not exist|schema cache/i.test(error.message || '')) {
     return { ok: false, status: 'error', error: error.message };
   }
   if (!hasSqlAccess()) return { ok: false, status: 'missing-transport' };
   try {
-    const result = await runSql(VEHICLE_DOCUMENTS_SQL, { label: 'ensureVehicleDocumentsTable' });
+    const result = await runSql(`${VEHICLE_DOCUMENTS_SQL}\n${VEHICLE_DOCUMENTS_SUPERSEDE_SQL}`, { label: 'ensureVehicleDocumentsTable' });
+    return { ok: result.ok, status: result.ok ? 'created' : 'error', error: result.error || null, supersede: result.ok ? 'created' : 'error' };
+  } catch (err) {
+    return { ok: false, status: 'error', error: err.message };
+  }
+}
+
+/**
+ * v1.86.0 (Phase 25) — add superseded_at/superseded_by when the table exists but
+ * predates the renewal fix. Never throws: without a SQL transport the read and
+ * write paths degrade on their own (rule 50).
+ */
+export async function ensureSupersedeColumns(providedSupabase) {
+  const supabase = getClient(providedSupabase);
+  if (!supabase) return { ok: false, status: 'no-client' };
+  const probe = await supabase.from(VEHICLE_DOCUMENTS_TABLE).select('superseded_at').limit(1);
+  if (!probe.error) return { ok: true, status: 'exists' };
+  if (!/superseded_at|column .* does not exist|schema cache/i.test(probe.error.message || '')) {
+    return { ok: false, status: 'error', error: probe.error.message };
+  }
+  if (!hasSqlAccess()) return { ok: false, status: 'missing-transport' };
+  try {
+    const result = await runSql(VEHICLE_DOCUMENTS_SUPERSEDE_SQL, { label: 'ensureSupersedeColumns' });
     return { ok: result.ok, status: result.ok ? 'created' : 'error', error: result.error || null };
   } catch (err) {
     return { ok: false, status: 'error', error: err.message };
@@ -232,26 +272,98 @@ export async function vaultVehicleDocument({
       return { ok: false, error: error.message };
     }
     markUserDataChanged({ supabase, ownerId: profileId || null, reason: 'vehicleDocuments.vault' });
-    return { ok: true, duplicate: false, document: data || row, stored: Boolean(storagePath) };
+    // v1.86.0 (Phase 25) — a renewal REPLACES the previous file of the same type
+    // (the old row + object stay on file as evidence; rule 48).
+    const superseded = await supersedePreviousDocuments({
+      supabase,
+      vehicleId,
+      documentType: row.document_type,
+      newId: (data || row)?.id || null
+    });
+    return {
+      ok: true,
+      duplicate: false,
+      document: data || row,
+      stored: Boolean(storagePath),
+      replaced: superseded.replaced || 0,
+      supersedeDegraded: superseded.degraded === true
+    };
   } catch (err) {
     return { ok: false, error: err.message };
   }
 }
 
-/** Newest-first stored documents, scoped by vehicle (or a vehicle-id list). Never throws. */
-export async function listVehicleDocuments(providedSupabase, { vehicleId = null, vehicleIds = [], limit = 20 } = {}) {
+/**
+ * Newest-first stored documents, scoped by vehicle (or a vehicle-id list).
+ * Never throws.
+ *
+ * v1.86.0 (Phase 25) — defaults to the CURRENT files only (a renewed insurance
+ * certificate replaces the previous one). `currentOnly:false` returns the whole
+ * history (dashboard "Show replaced"). On an un-migrated table the column is
+ * missing, so the query retries WITHOUT the filter (rule 50) instead of
+ * returning nothing.
+ */
+export async function listVehicleDocuments(providedSupabase, { vehicleId = null, vehicleIds = [], limit = 20, currentOnly = true } = {}) {
   const supabase = getClient(providedSupabase);
   if (!supabase) return [];
   const ids = (vehicleIds || []).filter(Boolean);
   if (!vehicleId && !ids.length) return [];
   const cap = Math.max(1, Math.min(100, Number(limit) || 20));
-  try {
+  const run = async (withCurrentFilter) => {
     let query = supabase.from(VEHICLE_DOCUMENTS_TABLE).select('*').order('uploaded_at', { ascending: false }).limit(cap);
     query = vehicleId ? query.eq('vehicle_id', String(vehicleId)) : query.in('vehicle_id', ids);
-    const { data, error } = await query;
-    return error ? [] : (data || []);
+    if (withCurrentFilter && currentOnly !== false) query = query.is('superseded_at', null);
+    return query;
+  };
+  try {
+    const { data, error } = await run(true);
+    if (!error) return data || [];
+    if (!/superseded_at|column .* does not exist|schema cache/i.test(error.message || '')) return [];
+    const retry = await run(false);
+    return retry.error ? [] : (retry.data || []);
   } catch {
     return [];
+  }
+}
+
+/**
+ * v1.86.0 (Phase 25) — mark every OTHER current document of the same vehicle +
+ * document_type as superseded by `newId` (and drop its compliance link, so the
+ * current file is unambiguous). The row and its stored object stay (rule 48).
+ * Never throws; on an un-migrated schema it reports `degraded` and the upload
+ * keeps today's behaviour.
+ */
+export async function supersedePreviousDocuments({
+  supabase: providedSupabase,
+  vehicleId = null,
+  documentType = null,
+  newId = null,
+  now = new Date()
+} = {}) {
+  const supabase = getClient(providedSupabase);
+  if (!supabase || !vehicleId || !documentType || !newId) return { ok: false, replaced: 0, degraded: false };
+  try {
+    const { data, error } = await supabase
+      .from(VEHICLE_DOCUMENTS_TABLE)
+      .select('id')
+      .eq('vehicle_id', String(vehicleId))
+      .eq('document_type', String(documentType))
+      .is('superseded_at', null)
+      .neq('id', String(newId))
+      .limit(20);
+    if (error) {
+      return { ok: false, replaced: 0, degraded: /superseded_at|column .* does not exist|schema cache/i.test(error.message || '') };
+    }
+    const ids = (data || []).map((row) => row.id);
+    if (!ids.length) return { ok: true, replaced: 0, degraded: false };
+    const { error: updateError } = await supabase
+      .from(VEHICLE_DOCUMENTS_TABLE)
+      .update({ superseded_at: new Date(now).toISOString(), superseded_by: String(newId), compliance_id: null })
+      .in('id', ids);
+    if (updateError) return { ok: false, replaced: 0, degraded: false, error: updateError.message };
+    return { ok: true, replaced: ids.length, replacedIds: ids, degraded: false };
+  } catch (err) {
+    return { ok: false, replaced: 0, degraded: false, error: err.message };
   }
 }
 
@@ -323,6 +435,7 @@ export async function linkDocumentToCompliance({ supabase: providedSupabase, doc
 /**
  * The newest UNLINKED document for a vehicle that can prove this compliance
  * type (deterministic: newest first inside DOCUMENT_LINK_WINDOW_HOURS).
+ * v1.86.0 — a superseded (replaced) file can never prove the current document.
  */
 export async function findPendingDocument({
   supabase: providedSupabase,
@@ -335,14 +448,25 @@ export async function findPendingDocument({
   try {
     const hours = Math.max(1, Math.min(168, Number(windowHours) || DOCUMENT_LINK_WINDOW_HOURS));
     const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
-    const { data } = await supabase
-      .from(VEHICLE_DOCUMENTS_TABLE)
-      .select('id,vehicle_id,document_type,compliance_id,uploaded_at')
-      .eq('vehicle_id', String(vehicleId))
-      .gte('uploaded_at', cutoff)
-      .order('uploaded_at', { ascending: false })
-      .limit(20);
-    return (data || []).find((row) => !row.compliance_id && complianceTypeForDocumentType(row.document_type) === complianceType) || null;
+    const read = async (withSupersede) => {
+      const columns = withSupersede
+        ? 'id,vehicle_id,document_type,compliance_id,uploaded_at,superseded_at'
+        : 'id,vehicle_id,document_type,compliance_id,uploaded_at';
+      return supabase
+        .from(VEHICLE_DOCUMENTS_TABLE)
+        .select(columns)
+        .eq('vehicle_id', String(vehicleId))
+        .gte('uploaded_at', cutoff)
+        .order('uploaded_at', { ascending: false })
+        .limit(20);
+    };
+    let { data, error } = await read(true);
+    if (error && /superseded_at|column .* does not exist|schema cache/i.test(error.message || '')) {
+      ({ data } = await read(false));
+      error = null;
+    }
+    if (error) return null;
+    return (data || []).find((row) => !row.compliance_id && !row.superseded_at && complianceTypeForDocumentType(row.document_type) === complianceType) || null;
   } catch {
     return null;
   }
@@ -392,8 +516,12 @@ function formatWhen(value) {
   return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
-/** Deterministic "documents" reply (zero tokens), mirroring the receipts list. */
-export function formatVehicleDocumentsReply({ documents = [], vehicles = [], hasMore = false } = {}) {
+/**
+ * Deterministic "documents" reply (zero tokens), mirroring the receipts list.
+ * v1.86.0 (Phase 25) — when a renewal replaced an earlier file of the same
+ * document type, the row says so (the old certificate is kept in the history).
+ */
+export function formatVehicleDocumentsReply({ documents = [], vehicles = [], hasMore = false, replacedCounts = null } = {}) {
   if (!Array.isArray(documents) || documents.length === 0) {
     return '📄 No stored documents yet.\n\n'
       + 'Send a photo or PDF of your logbook, insurance certificate, inspection certificate or road licence and I will read it AND keep the original file for you.';
@@ -403,12 +531,44 @@ export function formatVehicleDocumentsReply({ documents = [], vehicles = [], has
     const label = documentTypeLabel(doc.document_type);
     const bits = [vehicle?.plate_number || null, formatWhen(doc.uploaded_at)].filter(Boolean);
     const fileNote = doc.storage_path ? '' : ' · parsed only (Free plan)';
-    return `• 📄 *${label}* — ${bits.join(' · ')}${fileNote}`;
+    const key = `${doc.vehicle_id}|${doc.document_type}`;
+    const replaced = replacedCounts && Number(replacedCounts[key]) > 0
+      ? ` · replaces ${Number(replacedCounts[key])} earlier file${Number(replacedCounts[key]) === 1 ? '' : 's'}`
+      : '';
+    return `• 📄 *${label}* — ${bits.join(' · ')}${fileNote}${replaced}`;
   });
   const footer = 'Open or download them from your dashboard — reply *dashboard*. '
     + 'Delete one: *delete document N* (1 = newest; add DELETE to confirm) — the compliance dates stay saved.'
     + (hasMore ? '\n\nThat is the newest 5 — older files stay stored and appear on the dashboard.' : '');
   return `📄 *Your stored documents*\n\n${lines.join('\n')}\n\n${footer}`;
+}
+
+/**
+ * v1.86.0 (Phase 25) — how many REPLACED files sit behind each current one
+ * (`vehicleId|document_type` -> count). Best-effort: an un-migrated table or a
+ * read error returns an empty map (the list simply omits the note).
+ */
+export async function countSupersededDocuments(providedSupabase, { vehicleIds = [] } = {}) {
+  const supabase = getClient(providedSupabase);
+  const ids = (vehicleIds || []).filter(Boolean);
+  if (!supabase || !ids.length) return {};
+  try {
+    const { data, error } = await supabase
+      .from(VEHICLE_DOCUMENTS_TABLE)
+      .select('vehicle_id,document_type')
+      .in('vehicle_id', ids)
+      .not('superseded_at', 'is', null)
+      .limit(200);
+    if (error) return {};
+    const counts = {};
+    for (const row of data || []) {
+      const key = `${row.vehicle_id}|${row.document_type}`;
+      counts[key] = (counts[key] || 0) + 1;
+    }
+    return counts;
+  } catch {
+    return {};
+  }
 }
 
 export default {
@@ -420,6 +580,7 @@ export default {
   DOCUMENT_TYPE_LABELS,
   DOCUMENT_LINK_WINDOW_HOURS,
   VEHICLE_DOCUMENTS_SQL,
+  VEHICLE_DOCUMENTS_SUPERSEDE_SQL,
   documentTypeForFamily,
   isVaultableDocumentFamily,
   complianceTypeForDocumentType,
@@ -427,9 +588,12 @@ export default {
   documentStorageExtension,
   documentStoragePath,
   ensureVehicleDocumentsTable,
+  ensureSupersedeColumns,
   findVehicleDocumentByMediaId,
   vaultVehicleDocument,
   listVehicleDocuments,
+  supersedePreviousDocuments,
+  countSupersededDocuments,
   deleteVehicleDocument,
   linkDocumentToCompliance,
   findPendingDocument,

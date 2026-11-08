@@ -35,6 +35,28 @@ const countryInfo = {
   default_units: 'metric', currency: 'KES', default_language: 'English', locale: 'en-KE'
 };
 
+/** v1.86.0 (Phase 25) — the handover wording follows the asset. */
+function handoverCtx(assetKind, plate = 'KDA 123A') {
+  return {
+    vehicles: [{ id: 'v-1', plate_number: plate, asset_kind: assetKind, asset_type: 'ICE' }],
+    activeVehicle: { id: 'v-1', plate_number: plate, asset_kind: assetKind, asset_type: 'ICE' }
+  };
+}
+
+function handoverLabelFor(assetKind) {
+  const flow = getFlowDefinition('assign_driver', { ...baseCtx(), ...handoverCtx(assetKind) });
+  const phoneField = flow.fields.find((f) => f.key === 'driver_phone');
+  return phoneField.labelFor ? phoneField.labelFor({}, { ...baseCtx(), ...handoverCtx(assetKind) }) : phoneField.label;
+}
+
+function activeHandoverKeys(assetKind) {
+  const ctx = { ...baseCtx(), ...handoverCtx(assetKind) };
+  const flow = getFlowDefinition('assign_driver', ctx);
+  return flow.fields
+    .filter((f) => !f.when || f.when({ vehicle_id: 'v-1' }, ctx))
+    .map((f) => f.key);
+}
+
 function baseCtx(overrides = {}) {
   return {
     supabase: null,
@@ -74,6 +96,21 @@ async function run() {
   assert(detectQuizStart({ intent: 'REGISTER_VEHICLE', messageText: 'register', hasVehicleRegistered: false }) === 'vehicle_registration', 'Registration intent starts registration quiz');
   assert(detectQuizStart({ intent: 'GENERAL_CHAT', messageText: 'I have another car', hasVehicleRegistered: true, isRegisterCommand: true }) === 'vehicle_registration', 'an existing owner adding another car starts registration (v1.56.0)');
   assert(detectQuizStart({ intent: 'ASSIGN_DRIVER', messageText: 'assign driver', hasVehicleRegistered: true }) === 'assign_driver', 'Assign-driver intent maps to its quiz');
+
+  // v1.86.0 (Phase 25) — creative handover vocabulary per asset kind.
+  assert(handoverLabelFor('vehicle') === "Driver's WhatsApp number", 'a car asks for the Driver');
+  assert(handoverLabelFor('truck') === "Driver's WhatsApp number" && handoverLabelFor('bus') === "Driver's WhatsApp number", 'truck + bus keep the Driver');
+  assert(handoverLabelFor('motorcycle') === "Rider's WhatsApp number", 'a boda asks for the Rider');
+  assert(handoverLabelFor('generator') === "Operator's WhatsApp number", 'a generator asks for the Operator');
+  assert(handoverLabelFor('machinery') === "Operator's WhatsApp number" && handoverLabelFor('heavy_equipment') === "Operator's WhatsApp number", 'plant + heavy equipment ask for the Operator');
+  assert(handoverLabelFor('watercraft') === "Captain's WhatsApp number", 'a boat asks for the Captain');
+  assert(handoverLabelFor(null) === "Driver's WhatsApp number", 'a missing kind falls back to Driver (never a blank label)');
+  const assignFields = getFlowDefinition('assign_driver', { ...baseCtx(), ...handoverCtx('generator') });
+  assert(assignFields.fields.some((f) => f.key === 'driver_phone'), 'the extraction key stays driver_phone (nothing downstream moves)');
+  assert(activeHandoverKeys('generator').includes('hours_at_assignment') && !activeHandoverKeys('generator').includes('odometer_at_assignment'), 'a generator handover asks engine hours, never an odometer');
+  assert(activeHandoverKeys('vehicle').includes('odometer_at_assignment') && !activeHandoverKeys('vehicle').includes('hours_at_assignment'), 'a car handover asks the odometer (no regression)');
+  const unassignGenerator = getFlowDefinition('unassign_driver', { ...baseCtx(), ...handoverCtx('watercraft') });
+  assert(unassignGenerator.fields.some((f) => f.key === 'hours_at_release'), 'a boat handback asks engine hours');
   assert(detectQuizStart({ intent: 'GENERAL_CHAT', messageText: 'what can I do', hasVehicleRegistered: true }) === null, 'General chat does not start a quiz');
   assert(detectQuizStart({ intent: 'VIEW_PROFILE', messageText: 'my profile details', hasVehicleRegistered: true }) === null, 'Viewing a profile never starts a quiz');
   assert(

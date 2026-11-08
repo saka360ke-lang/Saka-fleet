@@ -94,10 +94,10 @@ export const SAKA_QUIZ_FLOWS = [
     key: 'assign_driver',
     label: 'Assign driver',
     trigger: 'assign driver, add driver, driver phone',
-    fields: 'vehicle → driver phone → handover reading (odometer, or engine hours for hours-led assets) → confirm → owner email OTP',
+    fields: 'vehicle → the person taking over (Driver / Rider / Operator / Captain, named by the asset) phone → handover reading (odometer, or engine hours for hours-led assets) → confirm → owner email OTP',
     extracted: ['plate_number', 'driver_phone', 'odometer', 'operating_hours'],
     writes: 'driver_assignments (PENDING_OWNER_OTP → PENDING_DRIVER_ACCEPTANCE); hours-led handovers store metadata.hours_at_assignment, never a mileage; vehicles.assigned_driver_id only after the driver replies ACCEPT',
-    rules: 'owner-only; 6-digit OTP emailed to the owner (10 min, 3 attempts); strict 1-to-1 incl. pending reservations; driver must reply ACCEPT; a non-compliant driver cannot manage the vehicle; the handover meter follows the asset kind (v1.85.0)'
+    rules: 'owner-only; 6-digit OTP emailed to the owner (10 min, 3 attempts); strict 1-to-1 incl. pending reservations; driver must reply ACCEPT; a non-compliant driver cannot manage the vehicle; the handover meter follows the asset kind (v1.85.0); v1.86.0 — the ROLE follows the asset too (car/truck/bus = Driver, motorcycle = Rider, machinery/equipment/generator = Operator, boat = Captain): use the asset\'s own word in the question, never "driver" for a generator or a boat. The compliance gate resolves by asset KIND, so a Kenya truck or bus (stored asset_type ICE) is offered and gated on the PSV badge.'
   },
   {
     key: 'driver_onboarding',
@@ -115,7 +115,7 @@ export const SAKA_QUIZ_FLOWS = [
     fields: 'vehicle → handback reading (odometer, or engine hours for hours-led assets) → confirm',
     extracted: ['plate_number', 'odometer', 'operating_hours'],
     writes: 'vehicles.driver_id = null + metadata.odometer_at_release (road) or metadata.hours_at_release + vehicles.operating_hours (hours-led)',
-    rules: 'owner-only; the handback reading enables a distance-driven or hours-worked audit and never writes mileage onto an hours-led asset (v1.85.0)'
+    rules: 'owner-only; the handback reading enables a distance-driven or hours-worked audit and never writes mileage onto an hours-led asset (v1.85.0); the person leaving is named by the asset (Driver / Rider / Operator / Captain) — v1.86.0'
   },
   {
     key: 'transfer_seller',

@@ -415,11 +415,23 @@ export function fleetReportToPdf(report, reportType) {
       kpis.push({ label: 'Fuel logged', value: `${fuelLitres.toLocaleString('en-US')} L`, hint: 'in scope' });
     }
     if (!data.overview) {
-      kpis.push({
-        label: `Distance (${distanceUnit})`,
-        value: String(distance),
-        hint: distance > 0 ? 'this month' : 'no odometer movement logged this month'
-      });
+      // v1.86.0 (Phase 25) — an hours-led scope reports operating hours, never a
+      // made-up distance. `data.assignmentMeter` is set by the report builders.
+      const meterId = data.meter?.id || null;
+      if (meterId === 'engine_hours') {
+        const hours = Number(data.health?.operatingHours ?? data.efficiency?.operatingHours ?? 0);
+        kpis.push({
+          label: 'Operating hours',
+          value: `${hours.toLocaleString('en-US')} h`,
+          hint: hours > 0 ? 'logged this month' : 'no engine hours logged this month'
+        });
+      } else {
+        kpis.push({
+          label: `${data.meter?.label || 'Distance'}${meterId === 'mixed' ? '' : ` (${distanceUnit})`}`,
+          value: String(distance),
+          hint: distance > 0 ? 'this month' : 'nothing logged this month'
+        });
+      }
     }
   }
   if (data.health) {
@@ -465,7 +477,14 @@ export function fleetReportToPdf(report, reportType) {
       { label: 'Asset kind', value: single.asset_kind ? String(single.asset_kind).replace(/_/g, ' ') : '—' },
       { label: 'Fuel type', value: single.fuel_type || '—' }
     ];
-    if (Number(single.odometer) > 0) rows.push({ label: 'Odometer', value: `${Number(single.odometer).toLocaleString('en-US')} km` });
+    // v1.86.0 (Phase 25) — the snapshot follows the asset's meter: a generator
+    // prints "Engine hours 1,240 h", never "Odometer 0 km".
+    const meterLabel = single.meterLabel || data.meter?.label || 'Odometer';
+    const meterValue = single.meterValue ?? single.odometer;
+    if (Number(meterValue) > 0) {
+      const unit = single.meterUnit || (meterLabel === 'Engine hours' ? 'h' : 'km');
+      rows.push({ label: meterLabel, value: `${Number(meterValue).toLocaleString('en-US')} ${unit}` });
+    }
     if (counts) rows.push({ label: 'Records in scope', value: String((counts.expenses || 0) + (counts.earnings || 0)) });
     if (ledgers[0]?.totals) rows.push({ label: 'Ledger rows shown', value: String(ledgers[0].totals.shown) });
     sections.push({ title: 'Vehicle snapshot', rows });

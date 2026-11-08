@@ -116,6 +116,28 @@ function vehicleDisplay(vehicle, ctx) {
   };
 }
 
+/**
+ * v1.86.0 (Phase 25) — the LEDGER's reading column for a scope of assets.
+ * One asset -> that asset's meter; a homogeneous fleet -> its meter;
+ * a mixed fleet -> the honest neutral word "Reading" (never a wrong odometer).
+ * Pure: reads the kind registry only, so it needs no formatting context.
+ */
+export function ledgerMeterFor(vehicles = []) {
+  const list = Array.isArray(vehicles) ? vehicles : [];
+  const isHours = (vehicle) => primaryMeterForAssetKind(vehicle?.asset_kind || vehicle?.asset_type || vehicle?.vehicle_type || 'vehicle') === 'hours';
+  const total = list.length;
+  const hoursCount = list.filter(isHours).length;
+  if (total === 1) {
+    return hoursCount === 1
+      ? { meterLabel: 'Engine hours', meterId: 'engine_hours' }
+      : { meterLabel: 'Odometer', meterId: 'distance' };
+  }
+  if (total > 0 && hoursCount === total) return { meterLabel: 'Engine hours', meterId: 'engine_hours' };
+  if (total > 0 && hoursCount === 0) return { meterLabel: 'Odometer', meterId: 'distance' };
+  if (total > 0) return { meterLabel: 'Reading', meterId: 'mixed' };
+  return { meterLabel: 'Odometer', meterId: 'distance' };
+}
+
 /** v1.75.2 — exported so the dashboard compliance surface uses the SAME buckets. */
 export function expiryStatus(daysLeft) {
   if (daysLeft === null) return 'unknown';
@@ -366,6 +388,7 @@ export async function buildFleetStatusReport({ supabase, ownerId = null, driverI
   }
   const fleetTotalExpenses = Math.round(Object.values(fleetExpenseTotals).reduce((sum, value) => sum + value, 0) * 100) / 100;
   const fleetTotalEarnings = Math.round((earnings || []).reduce((sum, row) => sum + toNumber(row.revenue_amount ?? row.amount), 0) * 100) / 100;
+  const fleetMeter = ledgerMeterFor(vehicles);
   const ledger = buildLedgerGroups({
     expenses,
     earnings,
@@ -374,7 +397,9 @@ export async function buildFleetStatusReport({ supabase, ownerId = null, driverI
     includeEarnings: true,
     includeVehicle: vehicles.length > 1,
     title: 'Fleet activity ledger',
-    subtitle: 'Every transaction across the fleet, grouped by month'
+    subtitle: 'Every transaction across the fleet, grouped by month',
+    meterLabel: fleetMeter.meterLabel,
+    meterId: fleetMeter.meterId
   });
 
   const data = {
@@ -383,6 +408,10 @@ export async function buildFleetStatusReport({ supabase, ownerId = null, driverI
     timeZone: ctx.timeZone,
     scope: ownerId ? 'owner' : 'fleet',
     currency: ctx.currency,
+    // v1.86.0 — the ledger/PDF reading label for this scope (Odometer /
+    // Engine hours / Reading). Every downstream surface reads it from here.
+    meter: { label: fleetMeter.meterLabel, id: fleetMeter.meterId },
+    assignmentMeter: fleetMeter.meterId === 'engine_hours' ? 'hours' : (fleetMeter.meterId === 'distance' ? 'distance' : 'mixed'),
     financial: {
       expenses: {
         ...Object.fromEntries(Object.entries(fleetExpenseTotals).map(([key, value]) => [key, Math.round(value * 100) / 100])),
@@ -823,6 +852,7 @@ export async function buildFinancialReport({ supabase, ownerId = null, driverId 
     .filter((row) => expenseCategory(row.expense_type) === 'fuel')
     .reduce((sum, row) => sum + toNumber(row.fuel_liters ?? row.liters ?? row.fuel_litres), 0);
 
+  const financialMeter = ledgerMeterFor(vehicles);
   const ledger = buildLedgerGroups({
     expenses,
     earnings,
@@ -833,7 +863,9 @@ export async function buildFinancialReport({ supabase, ownerId = null, driverId 
     title: vehicles.length === 1
       ? `Transaction ledger - ${vehicles[0].plate_number || 'vehicle'}`
       : 'Fleet financial ledger',
-    subtitle: 'Every transaction behind these totals'
+    subtitle: 'Every transaction behind these totals',
+    meterLabel: financialMeter.meterLabel,
+    meterId: financialMeter.meterId
   });
 
   const data = {
@@ -843,6 +875,8 @@ export async function buildFinancialReport({ supabase, ownerId = null, driverId 
     currency: ctx.currency,
     locale: ctx.locale,
     ledger,
+    meter: { label: financialMeter.meterLabel, id: financialMeter.meterId },
+    assignmentMeter: financialMeter.meterId === 'engine_hours' ? 'hours' : (financialMeter.meterId === 'distance' ? 'distance' : 'mixed'),
     counts: {
       expenses: (expenses || []).length,
       earnings: (earnings || []).length

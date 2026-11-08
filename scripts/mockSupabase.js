@@ -36,6 +36,8 @@ export function createMockSupabase(seed = {}, options = {}) {
     if (op === 'neq') return current !== value;
     if (op === 'in') return Array.isArray(value) && value.includes(current);
     if (op === 'is') return value === null ? (current === null || current === undefined) : current === value;
+    // v1.86.0 (Phase 25) — `.not(col, 'is', null)` (the "replaced files" count).
+    if (op === 'not_is') return value === null ? (current !== null && current !== undefined) : current !== value;
     if (op === 'like') return String(current ?? '').startsWith(String(value ?? '').replace(/%/g, ''));
     if (op === 'ilike') return ilikeMatch(current, value);
     if (op === 'gte') return new Date(current).getTime() >= new Date(value).getTime();
@@ -114,6 +116,8 @@ export function createMockSupabase(seed = {}, options = {}) {
       neq(column, value) { query.filters.push(['neq', column, value]); return api; },
       in(column, value) { query.filters.push(['in', column, value]); return api; },
       is(column, value) { query.filters.push(['is', column, value]); return api; },
+      // v1.86.0 (Phase 25) — PostgREST `.not(column, 'is', null)` support.
+      not(column, op, value) { query.filters.push([op === 'is' ? 'not_is' : op, column, value]); return api; },
       like(column, pattern) { query.filters.push(['like', column, pattern]); return api; },
       gte(column, value) { query.filters.push(['gte', column, value]); return api; },
       lte(column, value) { query.filters.push(['lte', column, value]); return api; },

@@ -1,7 +1,7 @@
 {
   "name": "sakafleet-backend",
   "type": "module",
-  "version": "1.85.0",
+  "version": "1.86.0",
   "description": "Saka Fleet Backend",
   "main": "index.js",
   "scripts": {
@@ -26,6 +26,7 @@
     "migrate:driver-profile": "node scripts/run_driver_profile_migration.js",
     "migrate:vehicle-compliance": "node scripts/run_vehicle_compliance_migration.js",
     "migrate:vehicle-documents": "node scripts/run_vehicle_documents_migration.js",
+    "migrate:document-replacement": "node scripts/run_vehicle_documents_migration.js",
     "migrate:followups": "node scripts/run_followups_migration.js",
     "migrate:recovery": "node scripts/run_recovery_migration.js",
     "migrate:reminder-due-date": "node scripts/run_reminder_due_date_migration.js",

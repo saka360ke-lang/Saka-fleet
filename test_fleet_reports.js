@@ -16,6 +16,7 @@ import assert from 'assert';
 import {
   buildFleetReport,
   buildVehicleDirectory,
+  ledgerMeterFor,
   resolveReportType,
   REPORT_TYPES
 } from './src/services/fleetReports.js';
@@ -205,6 +206,34 @@ async function run() {
   check(genRow.odometer === null && genRow.meterId === 'engine_hours', 'a generator NEVER carries an odometer');
   check(carRow.meterLabel === 'Odometer' && carRow.meterValue === 120000 && carRow.meterUnit === 'km', 'a car keeps the odometer in the owner unit');
   check(directory.vehicles.every((row) => typeof row.meterLabel === 'string' && row.meterLabel.length > 0), 'every row carries a meter label for the renderers');
+
+  console.log('\n--- Test 8: the LEDGER speaks the meter (v1.86.0) ---');
+  check(ledgerMeterFor([{ asset_kind: 'vehicle' }], countryInfo).meterLabel === 'Odometer', 'one car -> Odometer ledger column');
+  check(ledgerMeterFor([{ asset_kind: 'generator' }], countryInfo).meterLabel === 'Engine hours', 'one generator -> Engine hours ledger column');
+  check(ledgerMeterFor([{ asset_kind: 'generator' }, { asset_kind: 'machinery' }], countryInfo).meterLabel === 'Engine hours', 'an all-hours fleet -> Engine hours');
+  check(ledgerMeterFor([{ asset_kind: 'vehicle' }, { asset_kind: 'truck' }], countryInfo).meterLabel === 'Odometer', 'an all-road fleet -> Odometer');
+  check(ledgerMeterFor([{ asset_kind: 'vehicle' }, { asset_kind: 'generator' }], countryInfo).meterLabel === 'Reading', 'a mixed fleet -> the honest word Reading');
+  check(ledgerMeterFor([], countryInfo).meterLabel === 'Odometer', 'an empty scope defaults to Odometer');
+  check(ledgerMeterFor([{ asset_kind: 'generator' }], countryInfo).meterId === 'engine_hours', 'the meter id travels with the label');
+  const generatorFinancial = await buildFleetReport({
+    supabase: createMockSupabase({ vehicles: [kindMock.tables.vehicles[0]], expense_logs: [], private_earnings: [] }).client,
+    ownerId: 'p1',
+    countryInfo,
+    profile,
+    type: 'financial',
+    now
+  });
+  check(generatorFinancial.data.ledger.meterLabel === 'Engine hours', 'the built financial ledger carries Engine hours');
+  check(generatorFinancial.data.meter.id === 'engine_hours' && generatorFinancial.data.assignmentMeter === 'hours', 'the report payload carries the meter for the PDF KPIs');
+  const mixedFinancial = await buildFleetReport({
+    supabase: kindMock.client,
+    ownerId: 'p1',
+    countryInfo,
+    profile,
+    type: 'financial',
+    now
+  });
+  check(mixedFinancial.data.ledger.meterLabel === 'Reading', 'a mixed garage builds a Reading ledger');
 
   console.log(`\n\u2705 ALL FLEET REPORT TESTS PASSED (${passed} assertions).`);
   console.log('Stateless suite: no real database rows were created, so no cleanup is required.');

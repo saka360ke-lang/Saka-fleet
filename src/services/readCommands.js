@@ -12,7 +12,7 @@ import {
 import { DOCUMENT_SUPPORT_MENU } from './documentLens.js';
 import { listReceipts, formatReceiptsReply, pageReceipts, RECEIPT_PAGE_SIZE, RECEIPT_MAX_OFFSET } from './receipts.js';
 // v1.84.0 (Phase 23) — the stored-document vault list lane.
-import { listVehicleDocuments, formatVehicleDocumentsReply } from './vehicleDocuments.js';
+import { listVehicleDocuments, countSupersededDocuments, formatVehicleDocumentsReply } from './vehicleDocuments.js';
 import {
   resolveLedgerTurn,
   resolveLedgerVehicleScope,
@@ -946,10 +946,15 @@ export const READ_COMMANDS = Object.freeze([
         limit: 6
       });
       const hasMore = rows.length > 5;
+      // v1.86.0 (Phase 25) — a renewed certificate says what it replaced.
+      const replacedCounts = await countSupersededDocuments(ctx.supabaseClient, {
+        vehicleIds: ownedVehicles.map((v) => v.id)
+      });
       return result(formatVehicleDocumentsReply({
         documents: hasMore ? rows.slice(0, 5) : rows,
         vehicles: ctx.vehicles || [],
-        hasMore
+        hasMore,
+        replacedCounts
       }));
     }
   },

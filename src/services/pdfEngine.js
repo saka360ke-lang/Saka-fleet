@@ -307,8 +307,12 @@ function kpiCard(doc, fonts, { x, y, w, h, label, value, hint, accent, tone = nu
   doc.rect(x, y, 3.2, h).fill(accent);
   doc.fillColor(SAKA_PDF_THEME.muted).font(fonts.body).fontSize(7.6)
     .text(String(label || '').toUpperCase(), x + 14, y + 11, { width: w - 22, characterSpacing: 0.6, ellipsis: true, lineBreak: false, height: 12 });
-  doc.fillColor(tone ? toneColor(tone) : SAKA_PDF_THEME.ink).font(fonts.bold).fontSize(15)
-    .text(String(value ?? '—'), x + 14, y + 24, { width: w - 22, ellipsis: true, lineBreak: false, height: 20 });
+  // v1.86.0 (Phase 25) — a long figure (KES 1,234,567) shrinks one step instead
+  // of being silently ellipsised: the number must always be readable on a phone.
+  const valueText = String(value ?? '—');
+  const valueSize = valueText.length > 12 ? 13.5 : 15;
+  doc.fillColor(tone ? toneColor(tone) : SAKA_PDF_THEME.ink).font(fonts.bold).fontSize(valueSize)
+    .text(valueText, x + 14, y + 24, { width: w - 22, ellipsis: true, lineBreak: false, height: 20 });
   if (hint) {
     doc.fillColor(SAKA_PDF_THEME.muted).font(fonts.body).fontSize(7.2)
       .text(String(hint), x + 14, y + h - 17, { width: w - 22, ellipsis: true, lineBreak: false, height: 12 });
@@ -896,6 +900,18 @@ const LEDGER_COLUMNS_WITH_VEHICLE = Object.freeze([
   { key: 'amount', label: 'Total', width: 0.95, align: 'right' }
 ]);
 
+/**
+ * v1.86.0 (Phase 25) — the ledger's reading column takes its NAME from the
+ * ledger payload (`reportLedger.buildLedgerGroups` -> fleetReports). A machine
+ * ledger prints "Engine hours"; a mixed fleet prints "Reading"; only a road
+ * ledger prints "Odometer". Exported so the label is provable without rendering.
+ */
+export function buildLedgerColumns({ showVehicle = false, meterLabel = 'Odometer' } = {}) {
+  const label = pdfSafeText(meterLabel) || 'Odometer';
+  const base = showVehicle ? LEDGER_COLUMNS_WITH_VEHICLE : LEDGER_COLUMNS;
+  return base.map((column) => (column.key === 'odometer' ? { ...column, label } : { ...column }));
+}
+
 function monthLabelFromKey(key) {
   const date = new Date(`${key}-01T12:00:00Z`);
   if (Number.isNaN(date.getTime())) return 'Activity';
@@ -927,14 +943,16 @@ function drawLedger(doc, fonts, ledger, accent) {
   const groups = ledgerGroups(ledger);
   if (!groups.length) return;
   const currency = ledger.currency || null;
-  const columns = ledger.showVehicle ? LEDGER_COLUMNS_WITH_VEHICLE : LEDGER_COLUMNS;
+  const columns = buildLedgerColumns({ showVehicle: ledger.showVehicle, meterLabel: ledger.meterLabel });
   const title = ledger.title || 'Itemized activity & ledger';
   const totalWeight = columns.reduce((sum, column) => sum + column.width, 0);
   const widths = columns.map((column) => (column.width / totalWeight) * CONTENT_WIDTH);
   // v1.32.4 — 21 pt rows (was 19) with single-line cells: descriptions were
   // wrapping into a second line and printing over the following row.
-  const headerH = 21;
-  const rowH = 21;
+  // v1.86.0 (Phase 25) — 23 pt rows and a 8pt type floor: a report is read on a
+  // phone at 100% zoom, so no cell may print below 8pt.
+  const headerH = 23;
+  const rowH = 23;
 
   sectionTitle(doc, fonts, title, accent, ledger.subtitle || null);
 
@@ -943,13 +961,13 @@ function drawLedger(doc, fonts, ledger, accent) {
     doc.rect(PAGE_MARGIN, y, CONTENT_WIDTH, headerH).fill(SAKA_PDF_THEME.ink);
     let x = PAGE_MARGIN;
     columns.forEach((column, index) => {
-      doc.fillColor(SAKA_PDF_THEME.white).font(fonts.bold).fontSize(7.4)
-        .text(pdfSafeText(column.label).toUpperCase(), x + 5, y + 6.8, {
+      doc.fillColor(SAKA_PDF_THEME.white).font(fonts.bold).fontSize(8)
+        .text(pdfSafeText(column.label).toUpperCase(), x + 5, y + 7.4, {
           width: widths[index] - 10,
           align: column.align === 'right' ? 'right' : 'left',
           ellipsis: true,
           lineBreak: false,
-          height: headerH - 9
+          height: headerH - 10
         });
       x += widths[index];
     });
@@ -1007,27 +1025,27 @@ function drawLedger(doc, fonts, ledger, accent) {
             maxWidth: width - 8
           });
         } else if (column.key === 'date') {
-          doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.body).fontSize(7.6)
-            .text(pdfSafeText(row.date ?? '—'), x + 5, y + 6.4, cellText);
+          doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.body).fontSize(8.2)
+            .text(pdfSafeText(row.date ?? '—'), x + 5, y + 7.2, cellText);
         } else if (column.key === 'vehicle') {
-          doc.fillColor(SAKA_PDF_THEME.ink).font(fonts.bold).fontSize(7.4)
-            .text(pdfSafeText(row.vehicle ?? '—'), x + 5, y + 6.4, cellText);
+          doc.fillColor(SAKA_PDF_THEME.ink).font(fonts.bold).fontSize(8.2)
+            .text(pdfSafeText(row.vehicle ?? '—'), x + 5, y + 7.2, cellText);
         } else if (column.key === 'description') {
-          doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.body).fontSize(7.6)
-            .text(pdfSafeText(row.description ?? '—'), x + 5, y + 6.4, cellText);
+          doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.body).fontSize(8.2)
+            .text(pdfSafeText(row.description ?? '—'), x + 5, y + 7.2, cellText);
         } else if (column.key === 'odometer') {
-          doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.mono).fontSize(7.2)
-            .text(numberCell(row.odometer), x + 4, y + 6.6, { ...cellText, align: 'right' });
+          doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.mono).fontSize(8)
+            .text(numberCell(row.odometer), x + 4, y + 7.4, { ...cellText, align: 'right' });
         } else if (column.key === 'unitCost') {
-          doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.mono).fontSize(7.2)
-            .text(moneyCell(row.unitCost, row.unitCurrency || currency), x + 4, y + 6.6, { ...cellText, align: 'right' });
+          doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.mono).fontSize(8)
+            .text(moneyCell(row.unitCost, row.unitCurrency || currency), x + 4, y + 7.4, { ...cellText, align: 'right' });
         } else if (column.key === 'amount') {
           const earning = /earning|revenue|income/i.test(String(row.kind || ''));
-          doc.fillColor(earning ? SAKA_PDF_THEME.positive : SAKA_PDF_THEME.ink).font(fonts.mono).fontSize(7.4)
-            .text(moneyCell(row.amount, row.currency || currency), x + 4, y + 6.4, { ...cellText, align: 'right' });
+          doc.fillColor(earning ? SAKA_PDF_THEME.positive : SAKA_PDF_THEME.ink).font(fonts.mono).fontSize(8.2)
+            .text(moneyCell(row.amount, row.currency || currency), x + 4, y + 7.2, { ...cellText, align: 'right' });
         } else {
-          doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.body).fontSize(7.6)
-            .text(pdfSafeText(row[column.key] ?? '—'), x + 5, y + 6.4, cellText);
+          doc.fillColor(SAKA_PDF_THEME.slate).font(fonts.body).fontSize(8.2)
+            .text(pdfSafeText(row[column.key] ?? '—'), x + 5, y + 7.2, cellText);
         }
         x += width;
       });
@@ -1202,6 +1220,7 @@ export default {
   getReportAccent,
   registerReportFonts,
   computeKpiGrid,
+  buildLedgerColumns,
   buildProReportPdf
 };
 

@@ -495,7 +495,9 @@ export async function applyComplianceCorrection({
   const extracted = extractDatePhrase(String(text || ''), { countryCode, locale, now });
   if (!extracted?.ok || !extracted.localDate) return { ok: false, error: 'no date found' };
   const assetType = vehicle.asset_type || vehicle.metadata?.asset_type || null;
-  const catalog = resolveVehicleComplianceCatalog({ countryCode, assetType });
+  // v1.86.0 (Phase 25) — the kind is the canonical identity (a truck stores ICE).
+  const assetKind = vehicle.asset_kind || null;
+  const catalog = resolveVehicleComplianceCatalog({ countryCode, assetType, assetKind });
   const item = (catalog.items || []).find((entry) => entry.type === kind);
   if (!item) return { ok: false, error: 'unknown compliance item' };
   let number = null;

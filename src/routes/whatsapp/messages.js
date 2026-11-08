@@ -1145,7 +1145,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             || (ownedVehicles.length === 1 ? ownedVehicles[0] : null);
           if (targetVehicle) {
             const assetType = targetVehicle.asset_type || targetVehicle.metadata?.asset_type || null;
-            const catalog = resolveVehicleComplianceCatalog({ countryCode: countryInfo?.country_code, assetType, includeAll: true });
+            const catalog = resolveVehicleComplianceCatalog({ countryCode: countryInfo?.country_code, assetType, assetKind: targetVehicle.asset_kind || null, includeAll: true });
             const addRequest = detectComplianceAddRequest(messageText, { catalog, scope: 'vehicle' });
             if (addRequest?.item) {
               isSpecialFlowHandled = true;
@@ -1175,7 +1175,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           const context = pickComplianceContextVehicle({ vehicles: existingVehicles, profileId: profileData.id });
           if (context.vehicle) {
             const assetType = context.vehicle.asset_type || context.vehicle.metadata?.asset_type || null;
-            const catalog = resolveBundledCatalog({ countryCode: countryInfo?.country_code, assetType, includeAll: true });
+            const catalog = resolveBundledCatalog({ countryCode: countryInfo?.country_code, assetType, assetKind: context.vehicle.asset_kind || null, includeAll: true });
             const item = findMentionedComplianceItem(messageText, catalog);
             const addRequest = detectComplianceAddRequest(messageText, { catalog, scope: 'driver' });
             if (item && (addRequest || /\d/.test(messageText))) {

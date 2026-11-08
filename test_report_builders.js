@@ -370,9 +370,35 @@ async function run() {
   check(singlePdf.kpis.find((k) => k.label === 'Earnings')?.tone === undefined, 'Zero earnings are neutral, never emerald');
   check(singlePdf.kpis.find((k) => k.label === 'Net')?.tone === 'negative', 'A negative net stays coral');
   check(singlePdf.kpis.find((k) => k.label === 'Transactions')?.value === '3', 'Transactions KPI counts records in scope');
-  check(singlePdf.kpis.find((k) => k.label === 'Distance (km)')?.hint === 'no odometer movement logged this month', 'Zero distance explains itself');
+  // v1.86.0 (Phase 25) — the hint is now meter-neutral ("nothing logged") because
+  // an hours-led scope reports Operating hours instead of a distance at all.
+  check(singlePdf.kpis.find((k) => k.label === 'Distance (km)')?.hint === 'nothing logged this month', 'Zero distance explains itself');
   check(singlePdf.tables.length === 0, 'The redundant one-row per-vehicle table is removed');
   check(singlePdf.sections.some((s) => s.title === 'Vehicle snapshot'), 'Vehicle snapshot panel replaces it');
+
+  console.log('\n--- v1.86.0: hours-led PDF (Engine hours, never Odometer) ---');
+  const generatorFinancialPdf = fleetReportToPdf({
+    type: 'financial',
+    text: 'Engine hours report',
+    data: {
+      type: 'financial',
+      currency: 'KES',
+      meter: { label: 'Engine hours', id: 'engine_hours' },
+      assignmentMeter: 'hours',
+      vehicles: [{ plate: 'GEN-01', make_model: 'Cummins 60kVA', asset_kind: 'generator', meterLabel: 'Engine hours', meterValue: 1240, meterUnit: 'h' }],
+      expenses: { total: 8500 },
+      earnings: { total: 0 },
+      net: { total: -8500 },
+      health: { operatingHours: 1240 },
+      ledger: { title: 'Generator ledger', currency: 'KES', meterLabel: 'Engine hours', groups: [], totals: { shown: 0, expenseTotal: 8500, earningTotal: 0 } }
+    }
+  }, 'financial');
+  check(generatorFinancialPdf.kpis.some((k) => k.label === 'Operating hours'), 'an hours-led report shows OPERATING HOURS, not a distance');
+  check(!generatorFinancialPdf.kpis.some((k) => k.label.startsWith('Distance')), 'an hours-led report never prints a Distance KPI');
+  const generatorSnapshot = generatorFinancialPdf.sections.find((s) => s.title === 'Vehicle snapshot');
+  check(generatorSnapshot?.rows.some((row) => row.label === 'Engine hours' && row.value === '1,240 h'), 'the snapshot prints Engine hours 1,240 h');
+  check(!generatorSnapshot?.rows.some((row) => row.label === 'Odometer'), 'the snapshot never prints Odometer for a generator');
+  check(singlePdf.kpis.some((k) => k.label === 'Distance (km)'), 'a road scope keeps the Distance KPI (no regression)');
   check(singlePdf.callouts.every((c) => c.title !== 'Cost efficiency'), 'No cost-efficiency callout when cost metrics are null');
   check(singlePdf.callouts.every((c) => !/—/.test(c.body || '')), 'No dash-only callout bodies');
   check(singlePdf.callouts.some((c) => /Financial health/.test(c.title)), 'Financial-health callout survives');

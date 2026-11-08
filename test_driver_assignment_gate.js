@@ -151,6 +151,25 @@ async function run() {
   check(resolveBundledCatalog({ countryCode: 'BE' }).minimal.lifetimeAllowed === true, 'Belgium allows a lifetime licence');
   check(resolveBundledCatalog({ countryCode: 'ZZ' }).minimal.type === 'driver_license', 'Unknown economies fall back to the driver licence');
 
+  // v1.86.0 (Phase 25) — the asset_kind bridge: a real truck/bus row stores
+  // asset_type='ICE', so only the KIND can resolve the PSV-class requirements.
+  const keTruckKind = resolveBundledCatalog({ countryCode: 'KE', assetKind: 'truck', assetType: 'ICE' });
+  check(keTruckKind.additional.some((item) => item.type === 'psv_badge'), 'KE truck (asset_kind=truck, asset_type=ICE) is offered the PSV badge');
+  const keBusKind = resolveBundledCatalog({ countryCode: 'KE', assetKind: 'bus', assetType: 'ICE' });
+  check(keBusKind.additional.some((item) => item.type === 'psv_badge'), 'KE bus (asset_kind=bus, asset_type=ICE) is offered the PSV badge');
+  const keCarKind = resolveBundledCatalog({ countryCode: 'KE', assetKind: 'vehicle', assetType: 'ICE' });
+  check(keCarKind.additional.length === 0, 'KE car (asset_kind=vehicle) is NEVER asked for a PSV badge');
+  const keBodaKind = resolveBundledCatalog({ countryCode: 'KE', assetKind: 'motorcycle', assetType: 'ICE' });
+  check(keBodaKind.additional.length === 0, 'KE motorcycle (asset_kind=motorcycle) is never PSV-class');
+  const zaTruckKind = resolveBundledCatalog({ countryCode: 'ZA', assetKind: 'truck', assetType: 'ICE' });
+  check(zaTruckKind.additional.some((item) => item.type === 'pdp'), 'ZA truck resolves the PDP through its kind');
+  const gbTruckKind = resolveBundledCatalog({ countryCode: 'GB', assetKind: 'truck', assetType: 'ICE' });
+  check(gbTruckKind.additional.some((item) => item.type === 'driver_cpc'), 'GB truck resolves the Driver CPC through its kind');
+  const gbPlantKind = resolveBundledCatalog({ countryCode: 'GB', assetKind: 'machinery', assetType: 'MACHINERY' });
+  check(gbPlantKind.additional.some((item) => item.type === 'plant_card') && !gbPlantKind.additional.some((item) => item.type === 'driver_cpc'), 'GB plant resolves the plant card and never the CPC (no leak)');
+  check(keTruckKind.additional.some((item) => item.type === 'psv_badge') && resolveBundledCatalog({ countryCode: 'KE', assetKind: 'truck' }).additional.length > 0, 'the kind alone is enough (asset_type may be missing)');
+  check(resolveBundledCatalog({ countryCode: 'KE', assetKind: 'truck', includeAll: true }).additional.length === resolveBundledCatalog({ countryCode: 'KE', includeAll: true }).additional.length, 'includeAll still returns every item regardless of kind');
+
   console.log('\n--- Test 2: natural compliance parsing ---');
   const valid = parseComplianceItem('DL-1234567 expires 15 Dec 2028', { countryCode: 'KE', now });
   check(valid?.number === 'DL-1234567' && valid.expiry === '2028-12-15', 'Licence number and expiry are extracted');

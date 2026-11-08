@@ -10,6 +10,13 @@ import {
   requiresVin,
   meterForAssetKind,
   assetDisplayName,
+  COMPLIANCE_ASSET_TOKENS,
+  complianceAssetTokens,
+  complianceAssetMatches,
+  ASSET_ROLES,
+  assetRoleLabel,
+  assetRolePlural,
+  assetRolePossessive,
   resolveCountryInput,
   getCountryBucket,
   loadCountryBucket,
@@ -61,6 +68,24 @@ async function run() {
   check(assetDisplayName({ plate_number: 'KDA 123A' }) === 'KDA 123A', 'plate is the display name for road assets');
   check(assetDisplayName({ make_model: 'Honda 5.5kVA', serial_number: 'EK-8831', asset_kind: 'generator' }) === 'Honda 5.5kVA (SN EK-8831)', 'serial becomes the display name for equipment');
   check(Object.keys(ASSET_KINDS).length === 8, 'eight asset kinds are registered');
+
+  console.log('\n--- Test 1b: compliance tokens + handover roles (v1.86.0) ---');
+  const kinds = Object.keys(ASSET_KINDS);
+  check(kinds.every((kind) => Array.isArray(COMPLIANCE_ASSET_TOKENS[kind]) && COMPLIANCE_ASSET_TOKENS[kind].length > 0), 'every asset kind carries a compliance token set');
+  check(kinds.every((kind) => Object.prototype.hasOwnProperty.call(ASSET_ROLES, kind)), 'every asset kind carries a handover role');
+  check(complianceAssetMatches(['PSV', 'BUS'], { assetKind: 'bus', assetType: 'ICE' }) === true, 'a bus resolves the PSV token through its kind');
+  check(complianceAssetMatches(['TRUCK', 'HGV'], { assetKind: 'truck', assetType: 'ICE' }) === true, 'a truck resolves the TRUCK/HGV tokens through its kind');
+  check(complianceAssetMatches(['PSV', 'BUS', 'TRUCK'], { assetKind: 'vehicle', assetType: 'ICE' }) === false, 'a car never matches a PSV/TRUCK token');
+  check(complianceAssetMatches(['EXCAVATOR'], { assetKind: 'machinery' }) === true, 'plant resolves an excavator-scoped item');
+  check(complianceAssetMatches(null, { assetKind: 'generator' }) === true, 'an unscoped item applies to every kind');
+  check(complianceAssetMatches(['PSV'], {}) === false, 'a scoped item never matches an unknown asset');
+  check(complianceAssetTokens({ assetKind: 'truck', assetType: 'HGV' }).has('HGV') && complianceAssetTokens({ assetKind: 'truck' }).has('TRUCK'), 'kind tokens and the literal asset_type both count');
+  check(assetRoleLabel('vehicle') === 'Driver' && assetRoleLabel('truck') === 'Driver' && assetRoleLabel('bus') === 'Driver', 'road assets keep a Driver');
+  check(assetRoleLabel('motorcycle') === 'Rider', 'a boda has a Rider');
+  check(assetRoleLabel('generator') === 'Operator' && assetRoleLabel('machinery') === 'Operator' && assetRoleLabel('heavy_equipment') === 'Operator', 'machines have an Operator');
+  check(assetRoleLabel('watercraft') === 'Captain', 'a boat has a Captain');
+  check(assetRolePlural('motorcycle') === 'Riders' && assetRolePlural('watercraft') === 'Captains', 'plural roles follow the kind');
+  check(assetRolePossessive('generator') === "Operator's" && assetRolePossessive(null) === "Driver's", 'possessive roles are safe by default');
 
   console.log('\n--- Test 2: country resolution ---');
   check(resolveCountryInput('Kenya')?.country_code === 'KE', 'country names resolve');

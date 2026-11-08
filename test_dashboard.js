@@ -106,6 +106,8 @@ import {
   renderVehiclePage,
   renderOtpPage,
   renderLoginPage,
+  buildLoginPrefixMap,
+  buildLoginLocalePrefixMap,
   renderErrorPage,
   // v1.83.0 (Phase 22) — branding, transfer + subscription surfaces.
   DASHBOARD_CSS,
@@ -204,6 +206,7 @@ async function run() {
     { method: 'GET', url: '/d/driver/daybook' },
     { method: 'GET', url: '/d/driver/compliance' },
     { method: 'GET', url: '/d/admin' },
+    { method: 'GET', url: '/d/admin/command' },
     { method: 'GET', url: '/d/admin/owners/some-owner-id' },
     // v1.82.0 (Phase 21) — the static sign-in doors are flag-gated too.
     { method: 'GET', url: '/d/login' },
@@ -539,6 +542,17 @@ async function run() {
   check(loginPage.body.includes('name="phone"') && /Send me a code/.test(loginPage.body), 'the page asks for the WhatsApp number');
   check(!/email/i.test(loginPage.body.replace(/<style>[\s\S]*?<\/style>/g, '')), 'the sign-in page never mentions email');
 
+  console.log('\n--- v1.86.0: sign-in prefix comes from the registry, not +254 ---');
+  const prefixMap = buildLoginPrefixMap();
+  check(prefixMap['Africa/Nairobi'] === '+254' && prefixMap['Europe/London'] === '+44' && prefixMap['Europe/Brussels'] === '+32', 'the prefix map follows the REGIONS registry');
+  check(prefixMap['America/Chicago'] === '+1' && prefixMap['Australia/Perth'] === '+61' && prefixMap['America/Toronto'] === '+1', 'multi-zone countries resolve their browser zones');
+  check(prefixMap['Asia/Kolkata'] === '+91' && prefixMap['Asia/Dubai'] === '+971' && prefixMap['America/Sao_Paulo'] === '+55', 'every launch market resolves');
+  check(Object.values(prefixMap).every((value) => /^\+\d{1,4}$/.test(value)), 'every mapped value is a real calling code');
+  check(buildLoginLocalePrefixMap().KE === '+254' && buildLoginLocalePrefixMap().CA === '+1', 'the locale fallback map is complete');
+  check(loginPage.body.includes('id="loginPhone"') && loginPage.body.includes('I filled your country code'), 'the phone field is auto-fill ready with an honest hint');
+  check(loginPage.body.includes('var prefixes =') && loginPage.body.includes('"+254"'), 'the page carries the registry-derived prefix map');
+  check(!/name="phone"[^>]*value="/.test(loginPage.body), 'the prefix is filled by the browser, never hardcoded server-side');
+
   const loginPost = await app.inject({
     method: 'POST',
     url: '/d/login',
@@ -590,8 +604,17 @@ async function run() {
   check(badCookie.statusCode === 401, 'GET /d with an unknown cookie 401s');
   check(String(badCookie.headers['set-cookie'] || '').includes('Max-Age=0'), 'an invalid session cookie is cleared');
 
+  const signedInDoor = await app.inject({ method: 'GET', url: '/d/login', headers: { cookie: `saka_dash=${sessionCookie}` } });
+  check(signedInDoor.statusCode === 303 && String(signedInDoor.headers.location || '') === '/d', 'a signed-in owner opening /d/login is sent to /d');
+  const signedInAdminDoor = await app.inject({ method: 'GET', url: '/d/admin/login', headers: { cookie: `saka_dash=${sessionCookie}` } });
+  check(signedInAdminDoor.statusCode === 303 && String(signedInAdminDoor.headers.location || '') === '/d', 'an owner opening /d/admin/login lands on their OWN home (never a form or a 403)');
   const logout = await app.inject({ method: 'GET', url: '/d/logout', headers: { cookie: `saka_dash=${sessionCookie}` } });
-  check(logout.statusCode === 200 && /logged out/i.test(logout.body), 'GET /d/logout renders the logged-out page');
+  // v1.86.0 (Phase 25) — D4 behaviour change: logout now 303s to the sign-in
+  // door carrying the banner flag (it used to render a dead-end 200 page).
+  check(logout.statusCode === 303, 'GET /d/logout answers 303 (was a 200 dead-end page)');
+  check(String(logout.headers.location || '') === '/d/login?logged_out=1', 'logout lands on the sign-in door with logged_out=1');
+  const loggedOutDoor = await app.inject({ method: 'GET', url: '/d/login?logged_out=1' });
+  check(loggedOutDoor.statusCode === 200 && /You have been logged out/i.test(loggedOutDoor.body), 'the sign-in door shows the logged-out banner');
   check(String(logout.headers['set-cookie'] || '').includes('Max-Age=0'), 'logout clears the cookie');
   check(pageMock.db[DASHBOARD_SESSIONS_TABLE].length === 0, 'logout deletes the session row');
   const afterPageLogout = await app.inject({ method: 'GET', url: '/d', headers: { cookie: `saka_dash=${sessionCookie}` } });
@@ -2132,6 +2155,18 @@ async function run() {
   const missingAudit = gateMock.db.admin_audit_logs.filter((row) => row.details?.ownerViewed === 'nobody-here');
   check(missingAudit.length === 1 && missingAudit[0].details.found === false, 'even a not-found view is audited (found:false)');
 
+  // v1.86.0 (Phase 25) — /d/admin/command: admin-only, audited, renders the BI.
+  const commandNoCookie = await gateApp.inject({ method: 'GET', url: '/d/admin/command' });
+  check(commandNoCookie.statusCode === 401, 'the command center needs a session');
+  const commandOwner = await gateApp.inject({ method: 'GET', url: '/d/admin/command', headers: { cookie: ownerCookie } });
+  check(commandOwner.statusCode === 404, 'an owner never discovers the command center (404, same as /d/admin)');
+  const commandAdmin = await gateApp.inject({ method: 'GET', url: '/d/admin/command', headers: { cookie: adminCookie } });
+  check(commandAdmin.statusCode === 200 && /Command center/.test(commandAdmin.body), 'an admin session opens the command center');
+  check(commandAdmin.body.includes('Est. MRR') && commandAdmin.body.includes('At-risk accounts'), 'the page carries the revenue KPI and the at-risk table');
+  check(commandAdmin.body.includes('/d/admin/command') && commandAdmin.body.includes('Care'), 'the admin nav leads with Command');
+  const commandAudit = gateMock.db.admin_audit_logs.filter((row) => row.action === 'ADMIN_DASHBOARD_VIEW' && row.details?.page === 'command');
+  check(commandAudit.length === 1 && commandAudit[0].admin_phone === '+254700000099', 'the command view wrote one audit row');
+
   console.log('\n--- Test 52b: Phase 19 routes (/d/analytics owner, /d/care admin) ---');
   const analyticsNoCookie = await gateApp.inject({ method: 'GET', url: '/d/analytics' });
   check(analyticsNoCookie.statusCode === 401, 'analytics without a cookie is 401');
@@ -2160,10 +2195,10 @@ async function run() {
   await gateApp.close();
 
   console.log('\n--- Test 53: Phase 22 — branding (fonts, logo, lime glow, assets route) ---');
-  check(DASHBOARD_ASSET_VERSION === '1.85.0', 'the asset stamp ships with this release (cache-bust)');
+  check(DASHBOARD_ASSET_VERSION === '1.86.0', 'the asset stamp ships with this release (cache-bust)');
   check(DASHBOARD_CSS.includes("@font-face { font-family:'Sora'; font-style:normal; font-weight:600") && DASHBOARD_CSS.includes("@font-face { font-family:'Sora'; font-style:normal; font-weight:700"), 'Sora 600/700 are self-hosted via @font-face');
   check(DASHBOARD_CSS.includes("@font-face { font-family:'Manrope'") && DASHBOARD_CSS.includes('Manrope-700.woff2'), 'Manrope 400/500/700 are self-hosted too');
-  check(DASHBOARD_CSS.includes("url('/d/assets/Sora-600.woff2?v=1.85.0')"), 'font URLs ride the allowlisted asset route, version-stamped');
+  check(DASHBOARD_CSS.includes(`url('/d/assets/Sora-600.woff2?v=${DASHBOARD_ASSET_VERSION}')`), 'font URLs ride the allowlisted asset route, version-stamped');
   check(DASHBOARD_CSS.includes('--accent:#B8EF5C') && DASHBOARD_CSS.includes('--accent-dark:#65A30D'), 'the orange accent is retired for lime with a text-safe dark lime');
   check(DASHBOARD_CSS.includes('--glow:0 0 0 1px var(--accent-line)'), 'one glow token powers the green outline');
   check(/input:focus[^{]*\{[^}]*box-shadow:var\(--glow\)/.test(DASHBOARD_CSS), 'focused inputs carry the glowing green ring');
@@ -2173,7 +2208,7 @@ async function run() {
   check(DASHBOARD_CSS.includes('prefers-reduced-motion'), 'reduced-motion users get no animation');
   check(DASHBOARD_CSS.includes('font-family:var(--font-body)') && DASHBOARD_CSS.includes('font-family:var(--font-display)'), 'body = Manrope, headings = Sora');
   const shellHtml = renderPageShell('Overview', '<p>hi</p>', { headerRight: '<a href="/d/x">X</a>' });
-  check(shellHtml.includes('/d/assets/logo-lockup.png?v=1.85.0') && shellHtml.includes('width="177" height="18"'), 'the header renders the real brand lockup at its intrinsic ratio');
+  check(shellHtml.includes(`/d/assets/logo-lockup.png?v=${DASHBOARD_ASSET_VERSION}`) && shellHtml.includes('width="177" height="18"'), 'the header renders the real brand lockup at its intrinsic ratio');
   check(shellHtml.includes('alt="Saka Fleet"') && shellHtml.includes('class="nav"'), 'the logo is labelled and the nav slot is preserved');
   check(shellHtml.includes('theme-color" content="#0A0A0C"') && shellHtml.includes('/d/assets/favicon.svg'), 'the shell carries the brand theme colour and favicon');
   check(shellHtml.includes('noindex'), 'dashboard pages stay noindex');
@@ -2281,6 +2316,26 @@ async function run() {
   check(transferDriver.statusCode === 403, 'a driver never enters the owner transfer page');
   const transferPage = await p22App.inject({ method: 'GET', url: '/d/transfer', headers: p22OwnerCookie });
   check(transferPage.statusCode === 200 && transferPage.body.includes('Passbook transfer'), 'an owner session opens the transfer page');
+  // v1.86.0 (Phase 25) — the handover reading follows the fleet's meter.
+  const transferReadingsFor = (meterId) => renderTransferPage({
+    data: {
+      ok: true,
+      generatedAt: new Date('2026-11-08T09:00:00Z').toISOString(),
+      locale: 'en-KE',
+      timeZone: 'Africa/Nairobi',
+      currency: 'KES',
+      ownerEmailAvailable: true,
+      ownerEmailMasked: 'a***a@example.com',
+      handoverMeter: { meterId, meterLabel: meterId === 'engine_hours' ? 'Engine hours' : meterId === 'distance' ? 'Odometer' : 'Reading' },
+      vehicles: [{ id: 'v-1', plate: 'KDA 123A', makeModel: 'Toyota', meterId }],
+      transfers: []
+    }
+  });
+  check(transferReadingsFor('distance').includes('Odometer at handover'), 'a road fleet asks the odometer at handover');
+  check(transferReadingsFor('engine_hours').includes('Engine hours at handover') && !transferReadingsFor('engine_hours').includes('>Odometer at handover<'), 'an hours-led fleet asks engine hours (never an odometer)');
+  check(transferReadingsFor('mixed').includes('Handover reading (odometer or engine hours, optional)'), 'a mixed garage asks the honest handover reading');
+  check(transferReadingsFor('distance').includes('var meters = {"v-1":"distance"}'), 'the label follows the vehicle picker (inline meter map)');
+  check(transferReadingsFor('engine_hours').includes('id="transferVehicle"') && transferReadingsFor('engine_hours').includes("picker.addEventListener('change', sync)"), 'the page re-labels when another vehicle is chosen');
   check(transferPage.body.includes('KDA 123A') && transferPage.body.includes('KDB 456B'), 'the vehicle picker lists the owner fleet');
   check(transferPage.body.includes('Waiting for the buyer&#39;s ACCEPT on WhatsApp') && transferPage.body.includes('Cancel transfer'), 'the in-flight handover shows its honest status and a cancel action');
   check(transferPage.body.includes(maskPhone('+254799000222')) && !transferPage.body.includes('+254799000222'), 'the buyer phone is masked, never shown raw');
@@ -2548,7 +2603,54 @@ async function run() {
   check(genListHtml.includes('Engine hours 1,240 h') && !genListHtml.includes('Odometer'), 'the vehicles list renders the kind-aware meter');
   const genPageHtml = renderVehiclePage({ data: { ok: true, generatedAt: kindNow.toISOString(), currency: 'KES', locale: 'en-KE', timeZone: 'Africa/Nairobi', vehicle: { meterLabel: 'Engine hours', meterValue: 1240, meterUnit: 'h', monthSpend: 0, monthEarnings: 0 }, documents: [], records: [] }, emailMasked: 'a***a@example.com' });
   check(genPageHtml.includes('Engine hours') && !genPageHtml.includes('>Odometer<'), 'the vehicle page KPI label follows the kind');
-  check(DASHBOARD_ASSET_VERSION === '1.85.0', 'the asset cache-bust stamp is 1.85.0');
+  // v1.86.0 (Phase 25) — a renewal supersedes the old file; the page offers the history.
+  const replacedPageHtml = renderVehiclePage({
+    data: {
+      ok: true,
+      generatedAt: kindNow.toISOString(),
+      currency: 'KES',
+      locale: 'en-KE',
+      timeZone: 'Africa/Nairobi',
+      vehicle: { id: 'v-1', meterLabel: 'Odometer', meterValue: 120000, meterUnit: 'km', monthSpend: 0, monthEarnings: 0 },
+      documents: [],
+      records: [],
+      storedDocuments: [{ id: 'd-new', document_type: 'insurance', storage_path: 'v-1/new.pdf', uploaded_at: '2026-11-01T00:00:00Z' }],
+      replacedCount: 2,
+      showReplaced: false,
+      replacedDocuments: []
+    },
+    emailMasked: 'a***a@example.com'
+  });
+  check(replacedPageHtml.includes('Show replaced (2)') && replacedPageHtml.includes('/d/vehicles/v-1?docs=all'), 'the vehicle page offers the replaced-file history');
+  check(!replacedPageHtml.includes('<h2>Replaced files</h2>'), 'the history stays hidden until asked');
+  const historyPageHtml = renderVehiclePage({
+    data: {
+      ok: true,
+      generatedAt: kindNow.toISOString(),
+      currency: 'KES',
+      locale: 'en-KE',
+      timeZone: 'Africa/Nairobi',
+      vehicle: { id: 'v-1', meterLabel: 'Odometer', meterValue: 120000, meterUnit: 'km', monthSpend: 0, monthEarnings: 0 },
+      documents: [],
+      records: [],
+      storedDocuments: [{ id: 'd-new', document_type: 'insurance', storage_path: 'v-1/new.pdf', uploaded_at: '2026-11-01T00:00:00Z' }],
+      replacedCount: 2,
+      showReplaced: true,
+      replacedDocuments: [{ id: 'd-old', document_type: 'insurance', storage_path: 'v-1/old.pdf', uploaded_at: '2026-05-01T00:00:00Z' }]
+    },
+    emailMasked: 'a***a@example.com'
+  });
+  check(historyPageHtml.includes('<h2>Replaced files</h2>') && historyPageHtml.includes('replaced'), 'every replaced file is listed with its own chip');
+  check(historyPageHtml.includes('Hide replaced files') && historyPageHtml.includes('/d/vehicles/v-1"'), 'the toggle goes back to the current list');
+  check(DASHBOARD_ASSET_VERSION === '1.86.0', 'the asset cache-bust stamp is 1.86.0');
+  // v1.86.0 (Phase 25) — centered/responsive contract.
+  check(DASHBOARD_CSS.includes('--page-max:1040px') && DASHBOARD_CSS.includes('max-width:var(--page-max); margin:0 auto'), 'one centered page column for the header and the content');
+  check(DASHBOARD_CSS.includes('header.bar .bar-inner') && genPageHtml.includes('<div class="bar-inner">'), 'the header shares that column (bar-inner)');
+  check(DASHBOARD_CSS.includes('justify-content:center') && DASHBOARD_CSS.includes('.kpi { text-align:center; }'), 'KPI cards are centered');
+  check(DASHBOARD_CSS.includes('overflow-x:auto') && DASHBOARD_CSS.includes('linear-gradient(to left'), 'wide tables scroll inside the card with a soft fade');
+  check(DASHBOARD_CSS.includes('flex-wrap:nowrap; overflow-x:auto'), 'the mobile nav is one horizontal swipe strip');
+  check(DASHBOARD_CSS.includes('img, svg { max-width:100%; height:auto; }'), 'no image can overflow a phone width');
+  check(!/#0EA5E9/i.test(DASHBOARD_CSS), 'no stray teal brand colour survived the standardization');
 
   process.env.DASHBOARD_ENABLED = previousFlag;
   if (previousBase === undefined) delete process.env.PUBLIC_APP_URL;
