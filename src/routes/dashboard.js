@@ -5,6 +5,11 @@
  * POST /d/login         -> mint + send a WhatsApp OTP, render the code step
  * GET  /d/admin/login   -> superadmin door (D4)
  * POST /d/admin/login   -> admin OTP (SUPERADMIN_PHONE only)
+ * GET  /d/assets/:file  -> allowlisted fonts/logo (v1.83.0, immutable cache)
+ * GET  /d/transfer      -> passbook handover (v1.83.0, owner)
+ * POST /d/transfer/start|verify|cancel -> steps 1-3 of the transfers.js machine
+ * GET  /d/subscription  -> plan, capacity, add-ons, payment history (v1.83.0)
+ * POST /d/subscription/checkout|addon -> engine checkout -> Paystack
  * GET  /d/:token        -> OTP entry page (pre-1.82.0 links still land here)
  * POST /d/verify        -> OTP check -> HttpOnly session cookie -> role home
  * GET  /d               -> overview (session cookie required)
@@ -19,6 +24,8 @@
  */
 
 import formbody from '@fastify/formbody';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   isDashboardEnabled,
   getLinkState,
@@ -84,9 +91,26 @@ import {
   buildCareQueue,
   renderCareQueuePage,
   buildAnalyticsPage,
-  renderAnalyticsPage
+  renderAnalyticsPage,
+  // v1.83.0 (Phase 22) — passbook transfer + subscription pages.
+  buildTransferPage,
+  renderTransferPage,
+  TRANSFER_OPEN_STATUSES,
+  buildSubscriptionPage,
+  renderSubscriptionPage,
+  dashboardBaseUrl
 } from '../services/dashboard.js';
 import { logAdminAudit } from '../services/superadmin.js';
+// v1.83.0 (Phase 22) — the transfer machine (reused verbatim) + the billing
+// engine + the WhatsApp sender the buyer notification needs.
+import {
+  initiatePassbookTransfer,
+  setBuyerDetailsAndSendReleaseOtp,
+  verifyOwnerReleaseOtpAndNotifyBuyer
+} from '../services/transfers.js';
+import { checkoutForTier, checkoutForAddon, getEntitlements } from '../services/subscriptions.js';
+import { recordLabeledReading } from '../services/labelsEverywhere.js';
+import { sendWhatsAppText } from '../services/metaMessenger.js';
 // v1.81.0 (Phase 20) — CSV bulk import engine (parser + validator + writes).
 import {
   parseCsv,
@@ -110,8 +134,31 @@ function answerAsNotFound(request, reply) {
   });
 }
 
+/**
+ * v1.83.0 (Phase 22) — the dashboard's static assets (D1: no static server, no
+ * new dependency). A STRICT filename allowlist is the only path input: the
+ * filesystem path is built from this table, never from the request, so
+ * traversal is impossible by construction. Served immutable; the shell stamps
+ * every URL with DASHBOARD_ASSET_VERSION.
+ */
+const DASHBOARD_ASSET_ALLOWLIST = Object.freeze({
+  'Sora-600.woff2': { file: path.join('landing', 'assets', 'fonts', 'Sora-600.woff2'), type: 'font/woff2' },
+  'Sora-700.woff2': { file: path.join('landing', 'assets', 'fonts', 'Sora-700.woff2'), type: 'font/woff2' },
+  'Manrope-400.woff2': { file: path.join('landing', 'assets', 'fonts', 'Manrope-400.woff2'), type: 'font/woff2' },
+  'Manrope-500.woff2': { file: path.join('landing', 'assets', 'fonts', 'Manrope-500.woff2'), type: 'font/woff2' },
+  'Manrope-700.woff2': { file: path.join('landing', 'assets', 'fonts', 'Manrope-700.woff2'), type: 'font/woff2' },
+  'logo-lockup.png': { file: path.join('landing', 'assets', 'img', 'logo-lockup.png'), type: 'image/png' },
+  'favicon.svg': { file: path.join('landing', 'assets', 'img', 'favicon.svg'), type: 'image/svg+xml' },
+  'favicon-32.png': { file: path.join('landing', 'assets', 'img', 'favicon-32.png'), type: 'image/png' }
+});
+
 function sendHtml(reply, status, html) {
   return reply.code(status).type('text/html; charset=utf-8').send(html);
+}
+
+/** v1.83.0 — form bodies are objects (fastify formbody); never assume one. */
+function formBody(request) {
+  return request.body && typeof request.body === 'object' ? request.body : {};
 }
 
 function linkReasonCopy(reason) {
@@ -229,7 +276,20 @@ async function requireRoleSession(request, reply, supabase, role = 'owner') {
 }
 
 
-export async function registerDashboardRoutes(fastify, { supabase, requestOtp = requestDashboardOtp } = {}) {
+/**
+ * v1.83.0 (Phase 22) — `transferNotifier` and `checkoutEngine` are injectable
+ * seams so suites stay offline: production uses the real email/WhatsApp senders
+ * and the real billing engine; a test passes fakes with the same contract.
+ */
+export async function registerDashboardRoutes(fastify, {
+  supabase,
+  requestOtp = requestDashboardOtp,
+  transferNotifier = {
+    sendReleaseOtp: setBuyerDetailsAndSendReleaseOtp,
+    verifyReleaseOtp: verifyOwnerReleaseOtpAndNotifyBuyer
+  },
+  checkoutEngine = { tier: checkoutForTier, addon: checkoutForAddon }
+} = {}) {
   await fastify.register(async (scope) => {
     // v1.81.0 (Phase 20) — the CSV import re-posts the file text through this
     // parser, so give it the CSV ceiling plus headroom (urlencoding overhead).
@@ -237,6 +297,32 @@ export async function registerDashboardRoutes(fastify, { supabase, requestOtp = 
     // A raw text/csv body is accepted too: the page's FileReader path and any
     // scripted upload reach the SAME engine (no multipart, no new dependency).
     scope.addContentTypeParser('text/csv', { parseAs: 'string', bodyLimit: CSV_IMPORT_MAX_BYTES + 65536 }, (_request, body, done) => done(null, String(body || '')));
+
+    /* -------------------------------------------------------------- */
+    /* GET /d/assets/:file — self-hosted fonts + brand (v1.83.0)        */
+    /* Allowlisted filenames only; immutable cache; flag-gated 404.     */
+    /* -------------------------------------------------------------- */
+    scope.get('/d/assets/:file', { config: { rateLimit: { max: 240, timeWindow: '5 minutes' } } }, async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      const wanted = String(request.params?.file || '');
+      const asset = DASHBOARD_ASSET_ALLOWLIST[wanted];
+      if (!asset) {
+        const page = renderErrorPage(404, 'That file is not available.');
+        return sendHtml(reply, page.status, page.html);
+      }
+      try {
+        const buffer = await fs.promises.readFile(path.join(process.cwd(), asset.file));
+        return reply
+          .code(200)
+          .type(asset.type)
+          .header('cache-control', 'public, max-age=31536000, immutable')
+          .header('x-content-type-options', 'nosniff')
+          .send(buffer);
+      } catch {
+        const page = renderErrorPage(404, 'That file is not available.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
 
     /* -------------------------------------------------------------- */
     /* The static sign-in doors (v1.82.0, Phase 21)                    */
@@ -1097,6 +1183,409 @@ export async function registerDashboardRoutes(fastify, { supabase, requestOtp = 
         return sendHtml(reply, data.ok ? 200 : 503, renderCareQueuePage({ data }));
       } catch (err) {
         await logSystemError(supabase, err, '/d/care');
+        const page = renderErrorPage(500, 'Please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    /* -------------------------------------------------------------- */
+    /* Phase 22 (v1.83.0) — passbook transfer (owner, steps 1-3)       */
+    /* The buyer's ACCEPT + email code stay on WhatsApp (steps 4-5).   */
+    /* -------------------------------------------------------------- */
+    const renderTransferReply = async (reply, { session, profile, status = 200, error = null, notice = null, pinTransfer = null }) => {
+      const data = await buildTransferPage({
+        supabase,
+        ownerId: session.ownerId,
+        profile,
+        countryInfo: countryForProfile(profile)
+      });
+      if (!data.ok) {
+        const page = renderErrorPage(503, 'Your transfer page could not be loaded just now. Please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+      return sendHtml(reply, status, renderTransferPage({
+        data,
+        emailMasked: accountLabel(profile, session),
+        error,
+        notice,
+        pinTransfer
+      }));
+    };
+
+    scope.get('/d/transfer', async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      try {
+        const session = await requireRoleSession(request, reply, supabase, 'owner');
+        if (!session) return reply;
+        const profile = await loadDashboardProfile(supabase, session.ownerId);
+        const data = await buildTransferPage({
+          supabase,
+          ownerId: session.ownerId,
+          profile,
+          countryInfo: countryForProfile(profile)
+        });
+        if (!data.ok) {
+          const page = renderErrorPage(503, 'Your transfer page could not be loaded just now. Please try again in a moment.');
+          return sendHtml(reply, page.status, page.html);
+        }
+        const query = request.query || {};
+        const notice = String(query.verified || '') === '1'
+          ? 'Release authorised — the buyer was messaged on WhatsApp. The handover completes when they reply ACCEPT and enter the 6-digit code I email them.'
+          : String(query.cancelled || '') === '1'
+            ? 'Transfer cancelled — nothing moved.'
+            : String(query.started || '') === '1'
+              ? 'Release PIN sent — check your email and enter it below to authorise the handover.'
+              : null;
+        const pinId = String(query.pin || '');
+        const pinRow = pinId
+          ? (data.transfers || []).find((row) => row.id === pinId && row.status === 'PENDING_OWNER_RELEASE_OTP')
+          : null;
+        return sendHtml(reply, 200, renderTransferPage({
+          data,
+          emailMasked: accountLabel(profile, session),
+          notice,
+          pinTransfer: pinRow ? { id: pinRow.id, plate: pinRow.plate } : null
+        }));
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/transfer');
+        const page = renderErrorPage(500, 'Please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    scope.post('/d/transfer/start', { config: { rateLimit: { max: 10, timeWindow: '5 minutes' } } }, async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      if (isCrossOriginWrite(request)) {
+        const page = renderErrorPage(400, 'Please open the transfer page again.');
+        return sendHtml(reply, page.status, page.html);
+      }
+      try {
+        const session = await requireRoleSession(request, reply, supabase, 'owner');
+        if (!session) return reply;
+        const profile = await loadDashboardProfile(supabase, session.ownerId);
+        const body = formBody(request);
+        if (!profile?.phone_number) {
+          return renderTransferReply(reply, { session, profile, status: 400, error: 'Your account needs its WhatsApp number before a handover can start — reply *dashboard* in chat and sign in again.' });
+        }
+        const vehicles = await loadOwnerVehicles(supabase, session.ownerId);
+        const vehicle = vehicles.find((row) => row.id === String(body.vehicle_id || ''));
+        if (!vehicle) {
+          return renderTransferReply(reply, { session, profile, status: 400, error: 'Pick one of your live vehicles to hand over.' });
+        }
+        const buyerPhone = String(body.buyer_phone || '').trim();
+        const buyerEmail = String(body.buyer_email || '').trim();
+        if (!/^\+?[0-9\s().-]{9,20}$/.test(buyerPhone)) {
+          return renderTransferReply(reply, { session, profile, status: 400, error: "That buyer number looks incomplete — include the country code (e.g. +254 712 345 678)." });
+        }
+        if (!/^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(buyerEmail)) {
+          return renderTransferReply(reply, { session, profile, status: 400, error: 'That buyer email does not look complete — check it and try again.' });
+        }
+        // The release PIN is EMAILED by the machine — never start a handover
+        // that cannot deliver it (rule 50 honesty).
+        const gate = await buildTransferPage({ supabase, ownerId: session.ownerId, profile, countryInfo: countryForProfile(profile) });
+        if (!gate.ok) {
+          const page = renderErrorPage(503, 'Please try again in a moment.');
+          return sendHtml(reply, page.status, page.html);
+        }
+        if (!gate.ownerEmailAvailable) {
+          return renderTransferReply(reply, {
+            session, profile, status: 400,
+            error: 'Add an email first — the release PIN is emailed to you. Reply *change my email* on WhatsApp, then come back.'
+          });
+        }
+        const initiated = await initiatePassbookTransfer({
+          fromPhone: profile.phone_number,
+          vehicleCandidate: vehicle.plate_number,
+          supabase
+        });
+        if (!initiated.success) {
+          return renderTransferReply(reply, {
+            session, profile, status: initiated.isExistingPending ? 409 : 400,
+            error: initiated.error || 'That handover could not start just now.'
+          });
+        }
+        const details = await transferNotifier.sendReleaseOtp({
+          transferId: initiated.transferId,
+          buyerPhone,
+          buyerEmail,
+          supabase
+        });
+        if (!details.success) {
+          return renderTransferReply(reply, {
+            session, profile, status: 400,
+            pinTransfer: { id: initiated.transferId, plate: vehicle.plate_number },
+            error: details.error || 'The release PIN could not be sent just now.'
+          });
+        }
+        // Optional handover odometer: a real reading in the ledger, never a
+        // blocker for the transfer itself.
+        const odometer = Number(String(body.odometer || '').replace(/[^0-9.]/g, ''));
+        if (Number.isFinite(odometer) && odometer > 0 && odometer <= 10000000) {
+          await recordLabeledReading(supabase, {
+            vehicleId: vehicle.id,
+            profileId: session.ownerId,
+            reading: odometer,
+            label: 'handover'
+          }).catch(() => null);
+        }
+        return reply.code(303).header('location', `/d/transfer?started=1&pin=${encodeURIComponent(initiated.transferId)}`).send();
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/transfer/start');
+        const page = renderErrorPage(500, 'Please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    scope.post('/d/transfer/verify', { config: { rateLimit: { max: 10, timeWindow: '5 minutes' } } }, async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      if (isCrossOriginWrite(request)) {
+        const page = renderErrorPage(400, 'Please open the transfer page again.');
+        return sendHtml(reply, page.status, page.html);
+      }
+      try {
+        const session = await requireRoleSession(request, reply, supabase, 'owner');
+        if (!session) return reply;
+        const profile = await loadDashboardProfile(supabase, session.ownerId);
+        const body = formBody(request);
+        const transferId = String(body.transfer_id || '');
+        const otp = String(body.otp || '').trim();
+        if (!transferId) {
+          return renderTransferReply(reply, { session, profile, status: 400, error: 'Open the transfer page and start a handover first.' });
+        }
+        // Ownership first: a transfer that is not this owner's answers 404 —
+        // its existence is never confirmed (same pattern as the vehicle page).
+        let transferRow = null;
+        try {
+          const { data } = await supabase
+            .from('passbook_transfers')
+            .select('id, from_owner_id, status, vehicle_id')
+            .eq('id', transferId)
+            .maybeSingle();
+          transferRow = data || null;
+        } catch { transferRow = null; }
+        if (!transferRow || transferRow.from_owner_id !== session.ownerId) {
+          const page = renderErrorPage(404, 'That handover does not exist.');
+          return sendHtml(reply, page.status, page.html);
+        }
+        const plate = (await loadOwnerVehicles(supabase, session.ownerId))
+          .find((row) => row.id === transferRow.vehicle_id)?.plate_number || 'your vehicle';
+        if (!/^\d{6}$/.test(otp)) {
+          return renderTransferReply(reply, {
+            session, profile, status: 400,
+            pinTransfer: { id: transferId, plate },
+            error: 'Enter the 6-digit release PIN from your email.'
+          });
+        }
+        const result = await transferNotifier.verifyReleaseOtp({
+          transferId,
+          providedOtp: otp,
+          supabase,
+          sendWhatsAppFn: sendWhatsAppText
+        });
+        if (!result.success) {
+          return renderTransferReply(reply, {
+            session, profile, status: 400,
+            pinTransfer: { id: transferId, plate },
+            error: result.error || 'That release PIN did not match. Check your latest email and try again.'
+          });
+        }
+        return reply.code(303).header('location', '/d/transfer?verified=1').send();
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/transfer/verify');
+        const page = renderErrorPage(500, 'Please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    scope.post('/d/transfer/cancel', { config: { rateLimit: { max: 20, timeWindow: '5 minutes' } } }, async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      if (isCrossOriginWrite(request)) {
+        const page = renderErrorPage(400, 'Please open the transfer page again.');
+        return sendHtml(reply, page.status, page.html);
+      }
+      try {
+        const session = await requireRoleSession(request, reply, supabase, 'owner');
+        if (!session) return reply;
+        const body = formBody(request);
+        const transferId = String(body.transfer_id || '');
+        let transferRow = null;
+        try {
+          const { data } = await supabase
+            .from('passbook_transfers')
+            .select('id, from_owner_id, status')
+            .eq('id', transferId)
+            .maybeSingle();
+          transferRow = data || null;
+        } catch { transferRow = null; }
+        if (!transferRow || transferRow.from_owner_id !== session.ownerId) {
+          const page = renderErrorPage(404, 'That handover does not exist.');
+          return sendHtml(reply, page.status, page.html);
+        }
+        if (TRANSFER_OPEN_STATUSES.includes(transferRow.status)) {
+          await supabase
+            .from('passbook_transfers')
+            .update({ status: 'CANCELLED', updated_at: new Date().toISOString() })
+            .eq('id', transferId);
+        }
+        return reply.code(303).header('location', '/d/transfer?cancelled=1').send();
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/transfer/cancel');
+        const page = renderErrorPage(500, 'Please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    /* -------------------------------------------------------------- */
+    /* Phase 22 (v1.83.0) — subscription page + engine checkouts        */
+    /* -------------------------------------------------------------- */
+    const renderSubscriptionReply = async (reply, { session, profile, status = 200, error = null, notice = null }) => {
+      const data = await buildSubscriptionPage({
+        supabase,
+        ownerId: session.ownerId,
+        profile,
+        countryInfo: countryForProfile(profile)
+      });
+      if (!data.ok) {
+        const page = renderErrorPage(503, 'Your subscription could not be loaded just now. Please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+      return sendHtml(reply, status, renderSubscriptionPage({
+        data,
+        emailMasked: accountLabel(profile, session),
+        error,
+        notice
+      }));
+    };
+
+    scope.get('/d/subscription', async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      try {
+        const session = await requireRoleSession(request, reply, supabase, 'owner');
+        if (!session) return reply;
+        const profile = await loadDashboardProfile(supabase, session.ownerId);
+        const data = await buildSubscriptionPage({
+          supabase,
+          ownerId: session.ownerId,
+          profile,
+          countryInfo: countryForProfile(profile)
+        });
+        if (!data.ok) {
+          const page = renderErrorPage(503, 'Your subscription could not be loaded just now. Please try again in a moment.');
+          return sendHtml(reply, page.status, page.html);
+        }
+        // Paystack appends reference + trxref to the callback URL. We NEVER
+        // claim the payment landed — the webhook owns that truth (rule 28).
+        const query = request.query || {};
+        const reference = String(query.reference || query.trxref || query.ref || '').trim().slice(0, 64);
+        const notice = reference
+          ? `We're back from checkout (reference ${reference}). Paystack confirms payments in the background — this page reflects your plan the moment it updates.`
+          : null;
+        return sendHtml(reply, 200, renderSubscriptionPage({
+          data,
+          emailMasked: accountLabel(profile, session),
+          notice
+        }));
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/subscription');
+        const page = renderErrorPage(500, 'Please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    scope.post('/d/subscription/checkout', { config: { rateLimit: { max: 10, timeWindow: '5 minutes' } } }, async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      if (isCrossOriginWrite(request)) {
+        const page = renderErrorPage(400, 'Please open the subscription page again.');
+        return sendHtml(reply, page.status, page.html);
+      }
+      try {
+        const session = await requireRoleSession(request, reply, supabase, 'owner');
+        if (!session) return reply;
+        const profile = await loadDashboardProfile(supabase, session.ownerId);
+        const body = formBody(request);
+        const tier = String(body.tier || '').trim().toLowerCase().slice(0, 40);
+        const interval = String(body.interval || 'monthly').toLowerCase() === 'annual' ? 'annual' : 'monthly';
+        if (!tier) {
+          return renderSubscriptionReply(reply, { session, profile, status: 400, error: 'Pick a plan to upgrade to.' });
+        }
+        const countryInfo = countryForProfile(profile);
+        const currency = buildGlobalContext(countryInfo, profile).currency;
+        const result = await checkoutEngine.tier({
+          supabase,
+          owner: {
+            id: session.ownerId,
+            phone_number: profile?.phone_number || null,
+            email: profile?.email || null
+          },
+          targetTierKey: tier,
+          interval,
+          currency,
+          callbackUrl: `${dashboardBaseUrl()}/subscription`
+        });
+        if (!result?.ok || !result.checkoutUrl) {
+          return renderSubscriptionReply(reply, {
+            session, profile, status: 400,
+            error: result?.error || 'That plan could not be opened just now — reply *subscription* in WhatsApp and I will send a link.'
+          });
+        }
+        // The engine returns a Paystack URL; anything else is refused outright
+        // (never an open redirect).
+        if (!/^https:\/\//i.test(String(result.checkoutUrl))) {
+          return renderSubscriptionReply(reply, { session, profile, status: 502, error: 'The payment page could not be opened — please try again in a moment.' });
+        }
+        return reply.code(303).header('location', result.checkoutUrl).send();
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/subscription/checkout');
+        const page = renderErrorPage(500, 'Please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    scope.post('/d/subscription/addon', { config: { rateLimit: { max: 10, timeWindow: '5 minutes' } } }, async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      if (isCrossOriginWrite(request)) {
+        const page = renderErrorPage(400, 'Please open the subscription page again.');
+        return sendHtml(reply, page.status, page.html);
+      }
+      try {
+        const session = await requireRoleSession(request, reply, supabase, 'owner');
+        if (!session) return reply;
+        const profile = await loadDashboardProfile(supabase, session.ownerId);
+        const body = formBody(request);
+        const quantity = Math.min(10, Math.max(1, Math.floor(Number(body.quantity) || 1)));
+        const ent = await getEntitlements({ supabase, ownerId: session.ownerId, profile });
+        if (!ent.addonEligible) {
+          return renderSubscriptionReply(reply, {
+            session, profile, status: 400,
+            error: 'Extra vehicle slots are a Fleet Command add-on — upgrade to Fleet Command first.'
+          });
+        }
+        const countryInfo = countryForProfile(profile);
+        const currency = buildGlobalContext(countryInfo, profile).currency;
+        const result = await checkoutEngine.addon({
+          supabase,
+          owner: {
+            id: session.ownerId,
+            phone_number: profile?.phone_number || null,
+            email: profile?.email || null
+          },
+          addonQuantity: quantity,
+          interval: ent.billingInterval || 'monthly',
+          currency,
+          callbackUrl: `${dashboardBaseUrl()}/subscription`
+        });
+        if (!result?.ok || !result.checkoutUrl) {
+          return renderSubscriptionReply(reply, {
+            session, profile, status: 400,
+            error: result?.error || 'Those slots could not be opened just now — reply *add-on* in WhatsApp and I will send a link.'
+          });
+        }
+        if (!/^https:\/\//i.test(String(result.checkoutUrl))) {
+          return renderSubscriptionReply(reply, { session, profile, status: 502, error: 'The payment page could not be opened — please try again in a moment.' });
+        }
+        return reply.code(303).header('location', result.checkoutUrl).send();
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/subscription/addon');
         const page = renderErrorPage(500, 'Please try again in a moment.');
         return sendHtml(reply, page.status, page.html);
       }

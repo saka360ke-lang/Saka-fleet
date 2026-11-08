@@ -19,7 +19,7 @@ import {
   listPaidTierKeys,
   getPlanCode
 } from './src/services/subscriptionTiers.js';
-import { SUBSCRIPTION_TIERS } from './src/services/paystack.js';
+import { SUBSCRIPTION_TIERS, initializePaystackCheckout } from './src/services/paystack.js';
 import {
   getEntitlements,
   evaluateVehicleCapacity,
@@ -507,6 +507,54 @@ check(invDeleted(invResume), 'resumeSubscription invalidates the cache');
 const invKeep = spyMock({ vehicles: [{ id: 'v-1', owner_id: 'p-1', status: 'ACTIVE', updated_at: future(1) }] });
 await selectVehiclesToKeep({ supabase: invKeep.client, ownerId: 'p-1', keepVehicleIds: ['v-1'] });
 check(invDeleted(invKeep), 'selectVehiclesToKeep invalidates the cache');
+
+// v1.83.0 (Phase 22) — the dashboard checkout threads an explicit callback URL;
+// every existing caller (chat, dunning, trial nudges) keeps the env default.
+const p22PreviousKey = process.env.PAYSTACK_SECRET_KEY;
+const p22PreviousCallback = process.env.PAYSTACK_CALLBACK_URL;
+process.env.PAYSTACK_SECRET_KEY = 'sk_test_p22';
+process.env.PAYSTACK_CALLBACK_URL = 'https://sakafleet.com/payment-success';
+const p22FetchPayloads = [];
+const p22RealFetch = globalThis.fetch;
+globalThis.fetch = async (url, options) => {
+  if (String(url).includes('api.paystack.co/transaction/initialize')) {
+    p22FetchPayloads.push(JSON.parse(options.body));
+    return {
+      ok: true,
+      json: async () => ({ status: true, data: { authorization_url: 'https://checkout.paystack.com/p22', access_code: 'ac', reference: 'ref' } })
+    };
+  }
+  throw new Error(`unexpected fetch ${url}`);
+};
+try {
+  const p22DefaultCheckout = await initializePaystackCheckout({
+    supabase: null,
+    userPhone: '+19405550123',
+    targetTierKey: 'growth',
+    billingInterval: 'monthly',
+    userEmail: 'a@example.com',
+    userId: 'p-1',
+    currency: 'USD'
+  });
+  check(p22DefaultCheckout.checkoutUrl === 'https://checkout.paystack.com/p22', 'the checkout still returns the Paystack URL');
+  check(p22FetchPayloads[0].callback_url === 'https://sakafleet.com/payment-success', 'omitting callbackUrl keeps the env default (existing callers unchanged)');
+  await initializePaystackCheckout({
+    supabase: null,
+    userPhone: '+19405550123',
+    targetTierKey: 'growth',
+    billingInterval: 'monthly',
+    userEmail: 'a@example.com',
+    userId: 'p-1',
+    currency: 'USD',
+    callbackUrl: 'https://app.sakafleet.com/d/subscription'
+  });
+  check(p22FetchPayloads[1].callback_url === 'https://app.sakafleet.com/d/subscription', 'an explicit callbackUrl is threaded through verbatim');
+  check(p22FetchPayloads[1].metadata.user_id === 'p-1' && p22FetchPayloads[1].metadata.target_tier === 'growth', 'the billing metadata contract is untouched');
+} finally {
+  globalThis.fetch = p22RealFetch;
+  if (p22PreviousKey === undefined) delete process.env.PAYSTACK_SECRET_KEY; else process.env.PAYSTACK_SECRET_KEY = p22PreviousKey;
+  if (p22PreviousCallback === undefined) delete process.env.PAYSTACK_CALLBACK_URL; else process.env.PAYSTACK_CALLBACK_URL = p22PreviousCallback;
+}
 
 run()
   .then((count) => console.log(`\n✅ PART 1 OK (${count} assertions).`))

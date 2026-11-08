@@ -210,6 +210,11 @@ export async function getTierLocalPrice(supabase, tierKey, currency = 'USD', int
  *  - `couponCode` / `addonQuantity` → metadata for the webhook state machine
  *  - `metadata`      → merged into Paystack metadata (owner id, phone, trial flag…)
  *
+ * v1.83.0 (Phase 22) — `callbackUrl` lets the web dashboard return to
+ * /d/subscription after checkout. Optional and backward-compatible: omitted
+ * callers (chat, dunning, trial nudges) keep PAYSTACK_CALLBACK_URL exactly as
+ * before.
+ *
  * When no plan code is configured the checkout degrades to the legacy one-time
  * transaction (the webhook still activates the tier via `charge.success`).
  */
@@ -225,7 +230,8 @@ export async function initializePaystackCheckout({
   amountUSDOverride = null,
   couponCode = null,
   addonQuantity = null,
-  metadata = {}
+  metadata = {},
+  callbackUrl = null
 }) {
   const secretKey = process.env.PAYSTACK_SECRET_KEY;
   if (!secretKey) {
@@ -265,7 +271,7 @@ export async function initializePaystackCheckout({
       addon_quantity: addonQuantity || null,
       recurring: Boolean(planCode)
     },
-    callback_url: process.env.PAYSTACK_CALLBACK_URL || 'https://sakafleet.com/payment-success'
+    callback_url: callbackUrl || process.env.PAYSTACK_CALLBACK_URL || 'https://sakafleet.com/payment-success'
   };
 
   if (planCode) payload.plan = planCode;

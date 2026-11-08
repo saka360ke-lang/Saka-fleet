@@ -12,7 +12,7 @@
 
 import assert from 'assert';
 import PDFDocument from 'pdfkit';
-import { buildProReportPdf, pdfSafeText, getReportAccent, SAKA_PDF_THEME, computeKpiGrid } from './src/services/pdfEngine.js';
+import { buildProReportPdf, pdfSafeText, getReportAccent, SAKA_PDF_THEME, SAKA_PDF_GEOMETRY, registerReportFonts, computeKpiGrid } from './src/services/pdfEngine.js';
 import { extractPdfText, analyzeAlphaUsage, readExtGStates } from './src/services/pdfTextExtractor.js';
 import { complianceReportToPdf, fleetReportToPdf } from './src/services/reportDelivery.js';
 
@@ -350,6 +350,23 @@ async function run() {
   leakingDoc.end();
   await leakedDone;
   check(analyzeAlphaUsage(Buffer.concat(leakedChunks)).totals.lowAlphaTextOps === 1, 'The guard DOES catch a page-scoped alpha leak (regression sensor works)');
+
+  console.log('\n--- Test 13: v1.83.0 — premium font resolution + lime brand ---');
+  check(SAKA_PDF_THEME.brand === '#65A30D', 'the PDF brand accent is the text-safe lime (#65A30D)');
+  check(SAKA_PDF_THEME.lime === '#B8EF5C', 'the decorative lime is carried separately (#B8EF5C)');
+  check(SAKA_PDF_THEME.accents.fleet === '#65A30D' && SAKA_PDF_THEME.accents.default === '#65A30D', 'the default/fleet accents follow the brand');
+  check(!Object.values(SAKA_PDF_THEME.accents).includes('#0EA5E9'), 'the old teal is no longer any default accent');
+  check(getReportAccent('unknown-type') === '#65A30D', 'an unknown report type falls back to the lime accent');
+  check(SAKA_PDF_GEOMETRY.margin === 48 && Math.round(SAKA_PDF_GEOMETRY.contentWidth) === 499, 'A4 keeps the 48 pt mobile-friendly margins (499 pt of content)');
+  check(SAKA_PDF_GEOMETRY.pageHeight === 841.89 && SAKA_PDF_GEOMETRY.pageWidth === 595.28, 'the page stays A4 (no bleed on a phone screen)');
+
+  const registeredFonts = [];
+  const fontStub = { registerFont(name, file) { registeredFonts.push({ name, file }); } };
+  const resolvedFonts = registerReportFonts(fontStub);
+  check(resolvedFonts.body === 'saka-body' && resolvedFonts.mono === 'saka-mono', 'Manrope body + JetBrains Mono load from assets/fonts');
+  check(!registeredFonts.some((font) => /\.woff2$/i.test(font.file)), 'no WOFF2 is ever registered (fontkit subsetting is unsafe mid-build)');
+  check(['saka-display', 'saka-display-premium'].includes(resolvedFonts.display), 'display resolves to the vendored face (Sora TTF when present, otherwise Barlow)');
+  check(resolvedFonts.bold === resolvedFonts.display, 'bold follows the display face');
 
   console.log(`\n🎉 ${passed} PDF engine assertions passed.`);
 }

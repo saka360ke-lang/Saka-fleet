@@ -35,7 +35,7 @@ import { isSuperadminPhone } from './superadminIdentity.js';
 // WhatsApp (the email magic link is retired and kept only as deprecated code).
 import { sendWhatsAppText } from './metaMessenger.js';
 import { findProfileByPhone, normalizePhoneE164 } from './webOnboarding.js';
-import { getEntitlements } from './subscriptions.js';
+import { getEntitlements, evaluateVehicleCapacity } from './subscriptions.js';
 
 // v1.82.0 — routes and suites use the same masking helper the sign-in page uses.
 export { maskPhone };
@@ -49,6 +49,9 @@ import { complianceReportToPdf } from './reportDelivery.js';
 import { buildCustomReport, dateRangeBounds, CUSTOM_METRICS, CUSTOM_METRIC_CATEGORIES, metricsForAccess } from './reportMetrics.js';
 import { getTierLabel } from './subscriptionTiers.js';
 import { receiptStoragePaths, RECEIPTS_BUCKET } from './receipts.js';
+// v1.83.0 (Phase 22) — subscription + transfer pages: engine data only.
+import { getTierLocalPrice } from './paystack.js';
+import { recordLabeledReading } from './labelsEverywhere.js';
 import { EXPENSE_TYPES } from './expenseCatalog.js';
 // v1.81.0 (Phase 20) — CSV bulk import: the preview renders the engine's copy.
 import { CSV_IMPORT_ERROR_COPY, CSV_IMPORT_MAX_ROWS } from './csvImport.js';
@@ -2314,29 +2317,54 @@ export async function buildAnalyticsPage({
 /* HTML shell (shared by every dashboard page, Phase 14 reuses it)     */
 /* ------------------------------------------------------------------ */
 
+/**
+ * v1.83.0 (Phase 22) — one cache-busting stamp for every dashboard asset URL.
+ * Fonts + logo are served by GET /d/assets/:file (strict allowlist) with an
+ * immutable cache, so a release bumps this string and browsers refetch.
+ */
+export const DASHBOARD_ASSET_VERSION = '1.83.0';
+
 export const DASHBOARD_CSS = `
-:root { color-scheme: dark; --ink:#E8E9EB; --muted:#9AA0A6; --card:#141416; --line:#26262B; --accent:#FF7A00; --bad:#F85149; }
+@font-face { font-family:'Sora'; font-style:normal; font-weight:600; font-display:swap; src:url('/d/assets/Sora-600.woff2?v=${DASHBOARD_ASSET_VERSION}') format('woff2'); }
+@font-face { font-family:'Sora'; font-style:normal; font-weight:700; font-display:swap; src:url('/d/assets/Sora-700.woff2?v=${DASHBOARD_ASSET_VERSION}') format('woff2'); }
+@font-face { font-family:'Manrope'; font-style:normal; font-weight:400; font-display:swap; src:url('/d/assets/Manrope-400.woff2?v=${DASHBOARD_ASSET_VERSION}') format('woff2'); }
+@font-face { font-family:'Manrope'; font-style:normal; font-weight:500; font-display:swap; src:url('/d/assets/Manrope-500.woff2?v=${DASHBOARD_ASSET_VERSION}') format('woff2'); }
+@font-face { font-family:'Manrope'; font-style:normal; font-weight:700; font-display:swap; src:url('/d/assets/Manrope-700.woff2?v=${DASHBOARD_ASSET_VERSION}') format('woff2'); }
+:root { color-scheme: dark; --ink:#E8E9EB; --muted:#9EA0A6; --card:#141416; --line:#26262B;
+  --accent:#B8EF5C; --accent-dark:#65A30D; --accent-soft:rgba(184,239,92,.10); --accent-line:rgba(184,239,92,.34); --bad:#F85149;
+  --font-display:'Sora','Segoe UI',system-ui,sans-serif; --font-body:'Manrope','Segoe UI',system-ui,-apple-system,sans-serif;
+  --glow:0 0 0 1px var(--accent-line), 0 0 18px rgba(184,239,92,.16); }
 * { box-sizing: border-box; }
-body { margin:0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background:#0A0A0C; color:var(--ink); line-height:1.5; }
-header.bar { display:flex; align-items:center; justify-content:space-between; padding:16px 20px; border-bottom:1px solid var(--line); }
-header.bar .brand { font-weight:700; letter-spacing:.4px; }
+body { margin:0; font-family:var(--font-body); background:#0A0A0C; background-image:radial-gradient(1100px 420px at 50% -180px, rgba(184,239,92,.07), transparent 70%); color:var(--ink); line-height:1.5; -webkit-font-smoothing:antialiased; }
+header.bar { display:flex; align-items:center; justify-content:space-between; gap:10px 16px; padding:14px 20px; border-bottom:1px solid var(--line); background:rgba(10,10,12,.86); position:sticky; top:0; z-index:10; backdrop-filter:blur(8px); }
+header.bar .brand { display:inline-flex; align-items:center; gap:8px; font-family:var(--font-display); font-weight:700; letter-spacing:.4px; }
+header.bar .brand img { height:18px; width:auto; display:block; }
+header.bar .nav { display:inline-flex; flex-wrap:wrap; align-items:center; gap:4px 6px; }
 header.bar a { color:var(--muted); text-decoration:none; font-size:14px; }
+header.bar a:hover, header.bar a:focus-visible { color:var(--ink); }
 main { max-width:960px; margin:0 auto; padding:20px 16px 48px; }
-h1 { font-size:22px; margin:8px 0 4px; }
+h1, h2, h3 { font-family:var(--font-display); letter-spacing:-.01em; }
+h1 { font-size:23px; margin:8px 0 4px; }
 p.muted { color:var(--muted); }
 main a { color:var(--accent); text-decoration:none; }
 main a:hover { text-decoration:underline; }
-.card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; margin:14px 0; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; margin:14px 0; transition:border-color .15s ease, box-shadow .15s ease; }
+.card:hover, .card:focus-within { border-color:var(--accent-line); box-shadow:0 0 0 1px var(--accent-soft), 0 10px 30px rgba(0,0,0,.25); }
 h2 { font-size:16px; margin:22px 0 8px; }
 .kpis { display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:12px; }
 .kpi .label { color:var(--muted); font-size:13px; }
 .kpi .value { font-size:20px; font-weight:700; margin-top:2px; word-break:break-word; }
 .chip { display:inline-block; padding:1px 8px; border-radius:999px; font-size:12px; border:1px solid var(--line); color:var(--muted); }
 .chip.due { color:var(--accent); border-color:var(--accent); }
-.chip.ok { color:#3FB950; border-color:#2E6B39; }
+.chip.ok { color:var(--accent); border-color:var(--accent-line); }
 .chip.bad { color:#F85149; border-color:#F85149; }
+input[type=text], input[type=tel], input[type=email], input[type=number], input[type=date], select, textarea { width:100%; padding:11px 12px; font-size:16px; font-family:var(--font-body); background:#0F0F11; color:var(--ink); border:1px solid var(--line); border-radius:10px; }
+input:focus, select:focus, textarea:focus { outline:none; border-color:var(--accent-line); box-shadow:var(--glow); }
 input[type=text] { width:100%; padding:14px; font-size:22px; letter-spacing:8px; text-align:center; background:#0F0F11; color:var(--ink); border:1px solid var(--line); border-radius:10px; }
-button { width:100%; margin-top:12px; padding:14px; font-size:16px; font-weight:600; color:#0A0A0C; background:var(--accent); border:0; border-radius:10px; cursor:pointer; }
+button, .btn { width:100%; margin-top:12px; padding:13px 16px; font-size:16px; font-weight:700; font-family:var(--font-body); color:#0A0A0C; background:linear-gradient(180deg,#C9F57E,#B8EF5C); border:1px solid rgba(184,239,92,.55); border-radius:10px; cursor:pointer; min-height:46px; text-align:center; display:inline-block; text-decoration:none; transition:box-shadow .15s ease, transform .06s ease; }
+button:hover, button:focus-visible, .btn:hover, .btn:focus-visible { box-shadow:var(--glow); }
+button:active, .btn:active { transform:translateY(1px); }
+button.linkish { background:transparent; color:var(--accent); border:1px solid var(--accent-line); }
 .error { color:var(--bad); font-size:14px; margin-top:10px; }
 ul.plain { list-style:none; margin:0; padding:0; }
 ul.plain li { padding:10px 0; border-bottom:1px solid var(--line); }
@@ -2374,6 +2402,44 @@ ul.invest li { font-size:13px; color:var(--ink); }
 /* v1.81.0 (Phase 20) — CSV import preview: invalid rows are highlighted, never hidden. */
 table.rec tr.row-error td { background:#2A1416; }
 .import-help { font-size:13px; color:var(--muted); }
+/* v1.83.0 (Phase 22) — passbook transfer + subscription surfaces. */
+.page-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:14px; }
+.page-grid .card { margin:0; }
+.plan-badge { display:inline-flex; align-items:center; gap:8px; font-family:var(--font-display); font-size:19px; font-weight:700; }
+.stack { display:flex; flex-direction:column; gap:10px; }
+.notice { border:1px solid var(--accent-line); background:var(--accent-soft); border-radius:10px; padding:12px 14px; margin:12px 0; }
+.notice.warn { border-color:#5A4A1F; background:rgba(217,180,92,.10); }
+.inline-form { display:flex; flex-wrap:wrap; gap:12px; align-items:end; }
+.inline-form label { color:var(--muted); font-size:13px; display:flex; flex-direction:column; gap:4px; flex:1 1 170px; }
+.inline-form label input, .inline-form label select { letter-spacing:normal; font-size:16px; text-align:left; padding:11px 12px; }
+.inline-form button { width:auto; flex:0 0 auto; }
+.row-actions { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+.row-actions form { display:inline; margin:0; }
+.row-actions button { width:auto; margin-top:0; padding:9px 14px; font-size:14px; min-height:40px; }
+.muted-small { color:var(--muted); font-size:13px; }
+.usage-bar { height:10px; background:#1E1E22; border-radius:999px; overflow:hidden; margin:10px 0 4px; }
+.usage-bar span { display:block; height:100%; background:var(--accent); border-radius:999px; }
+.usage-bar.full span { background:var(--bad); }
+ol.steps { counter-reset:step; list-style:none; margin:0; padding:0; }
+ol.steps li { position:relative; padding:8px 0 8px 34px; border-bottom:1px solid var(--line); font-size:14px; }
+ol.steps li:last-child { border-bottom:0; }
+ol.steps li::before { counter-increment:step; content:counter(step); position:absolute; left:0; top:7px; width:22px; height:22px; border-radius:999px; border:1px solid var(--accent-line); color:var(--accent); font-size:12px; font-weight:700; display:flex; align-items:center; justify-content:center; }
+/* v1.83.0 — phone-first: 44px+ tap targets, 16px controls (no iOS zoom), a
+   wrapping header and single-column KPIs on narrow screens. */
+@media (max-width: 640px) {
+  header.bar { flex-wrap:wrap; padding:12px 14px; }
+  header.bar .nav { flex:1 1 100%; }
+  header.bar .brand img { height:16px; }
+  main { padding:16px 12px 40px; }
+  h1 { font-size:20px; }
+  .kpis { grid-template-columns:1fr 1fr; }
+  button, .btn { min-height:48px; }
+  .filters button, .row-actions button, .inline-form button { min-height:44px; }
+  .filters input, .filters select, .inline-form label input, .inline-form label select { font-size:16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { transition:none !important; animation:none !important; scroll-behavior:auto !important; }
+}
 `;
 
 export function escapeHtml(value) {
@@ -2387,17 +2453,23 @@ export function escapeHtml(value) {
 
 /** One shell for every dashboard page (D1 — Phase 14 reuses the CSS). */
 export function renderPageShell(title, body, { headerRight = '', headerLeft = 'Saka Fleet' } = {}) {
+  // v1.83.0 (Phase 22) — the brand lockup + self-hosted fonts ride the same
+  // allowlisted asset route (immutable cache, version-stamped).
+  const asset = (name) => `/d/assets/${name}?v=${DASHBOARD_ASSET_VERSION}`;
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0A0A0C">
 <meta name="robots" content="noindex, nofollow">
 <title>${escapeHtml(title)}</title>
+<link rel="icon" type="image/svg+xml" href="${asset('favicon.svg')}">
+<link rel="icon" type="image/png" sizes="32x32" href="${asset('favicon-32.png')}">
 <style>${DASHBOARD_CSS}</style>
 </head>
 <body>
-<header class="bar"><span class="brand">🐾 ${escapeHtml(headerLeft)}</span><span>${headerRight}</span></header>
+<header class="bar"><a class="brand" href="/d"><img src="${asset('logo-lockup.png')}" alt="${escapeHtml(headerLeft)}" width="177" height="18" decoding="async"></a><span class="nav">${headerRight}</span></header>
 <main>
 ${body}
 </main>
@@ -2481,9 +2553,12 @@ function daysLabel(daysLeft) {
   return `in ${daysLeft} d`;
 }
 
-/** The nine destinations every signed-in page offers (Phase 20 adds Import). */
+/**
+ * Every destination a signed-in owner page offers. Phase 20 added Import;
+ * v1.83.0 (Phase 22) adds Transfer + Subscription.
+ */
 function dashboardNav() {
-  return '<a href="/d">Overview</a> · <a href="/d/vehicles">Vehicles</a> · <a href="/d/records">Records</a> · <a href="/d/import">Import</a> · <a href="/d/compliance">Compliance</a> · <a href="/d/analytics">Analytics</a> · <a href="/d/reports">Reports</a> · <a href="/d/settings">Settings</a> · <a href="/d/logout">Log out</a>';
+  return '<a href="/d">Overview</a> · <a href="/d/vehicles">Vehicles</a> · <a href="/d/transfer">Transfer</a> · <a href="/d/subscription">Subscription</a> · <a href="/d/records">Records</a> · <a href="/d/import">Import</a> · <a href="/d/compliance">Compliance</a> · <a href="/d/analytics">Analytics</a> · <a href="/d/reports">Reports</a> · <a href="/d/settings">Settings</a> · <a href="/d/logout">Log out</a>';
 }
 
 /** Active / paused / inactive — a chip, never a raw database enum. */
@@ -3067,6 +3142,446 @@ ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
   return renderPageShell('Settings', body, { headerRight: dashboardNav() });
 }
 
+/* ------------------------------------------------------------------ */
+/* Phase 22 (v1.83.0) — passbook transfer (owner web, steps 1-3)       */
+/* ------------------------------------------------------------------ */
+
+/** The verified Saka business number (identical to every landing wa.me link). */
+export const SAKA_WHATSAPP_NUMBER = '19404407252';
+
+/** Deep link that opens WhatsApp with a prefilled intent (never a guess). */
+export function sakaWhatsAppLink(text = 'Hi Saka') {
+  return `https://wa.me/${SAKA_WHATSAPP_NUMBER}?text=${encodeURIComponent(text)}`;
+}
+
+/** The transfer machine's in-flight statuses (transfers.js, locked shape). */
+export const TRANSFER_OPEN_STATUSES = Object.freeze([
+  'PENDING_TARGET_DETAILS',
+  'PENDING_OWNER_RELEASE_OTP',
+  'PENDING_BUYER_ACCEPTANCE',
+  'PENDING_BUYER_OTP',
+  'PENDING_BUYER_UPGRADE'
+]);
+
+/** Plain-language status copy (rule 31 — a chip, never a raw enum). */
+const TRANSFER_STATUS_COPY = Object.freeze({
+  PENDING_TARGET_DETAILS: 'Waiting for the buyer details',
+  PENDING_OWNER_RELEASE_OTP: 'Waiting for your release PIN',
+  PENDING_BUYER_ACCEPTANCE: "Waiting for the buyer's ACCEPT on WhatsApp",
+  PENDING_BUYER_OTP: "Waiting for the buyer's email code",
+  PENDING_BUYER_UPGRADE: 'The buyer needs more garage space first',
+  COMPLETED: 'Completed',
+  CANCELLED: 'Cancelled',
+  DECLINED: 'Declined'
+});
+
+/**
+ * The owner's transfers for their own vehicles (read-only, rule 50 degrade).
+ * NEVER selects the OTP columns — the release/buyer PINs never touch a page.
+ */
+export async function loadOwnerTransfers({ supabase, vehicles = [], limit = 12 } = {}) {
+  const vehicleIds = (vehicles || []).map((vehicle) => vehicle.id).filter(Boolean);
+  if (!supabase || !vehicleIds.length) return [];
+  try {
+    const { data, error } = await supabase
+      .from('passbook_transfers')
+      .select('id, vehicle_id, status, to_owner_phone, to_owner_email, is_free_transfer, fee_amount, fee_currency, initiated_at, completed_at, created_at')
+      .in('vehicle_id', vehicleIds)
+      .order('initiated_at', { ascending: false })
+      .limit(limit);
+    if (error) {
+      logWriteFailure(supabase, 'dashboard.loadOwnerTransfers', error);
+      return [];
+    }
+    const plates = new Map((vehicles || []).map((vehicle) => [vehicle.id, vehicle.plate_number || 'Vehicle']));
+    return (data || []).map((row) => ({
+      id: row.id,
+      vehicleId: row.vehicle_id,
+      plate: plates.get(row.vehicle_id) || 'Vehicle',
+      status: row.status || 'PENDING_TARGET_DETAILS',
+      statusLabel: TRANSFER_STATUS_COPY[row.status] || String(row.status || '').replace(/_/g, ' ').toLowerCase(),
+      open: TRANSFER_OPEN_STATUSES.includes(row.status),
+      buyerMasked: row.to_owner_phone ? maskPhone(row.to_owner_phone) : null,
+      buyerEmailMasked: row.to_owner_email ? maskEmail(row.to_owner_email) : null,
+      isFreeTransfer: row.is_free_transfer !== false,
+      feeAmount: row.fee_amount === null || row.fee_amount === undefined ? null : Number(row.fee_amount),
+      feeCurrency: row.fee_currency || 'USD',
+      initiatedAt: row.initiated_at || row.created_at || null,
+      completedAt: row.completed_at || null
+    }));
+  } catch (err) {
+    logWriteFailure(supabase, 'dashboard.loadOwnerTransfers', err);
+    return [];
+  }
+}
+
+/**
+ * Data for `/d/transfer`: the owner's live vehicles, their transfers and
+ * whether a release PIN can actually reach them (the PIN is EMAILED by
+ * transfers.js; a phone-only account is told that honestly).
+ */
+export async function buildTransferPage({ supabase, ownerId, profile, countryInfo }) {
+  if (!supabase || !ownerId) return { ok: false };
+  const ctx = buildGlobalContext(countryInfo, profile);
+  try {
+    const vehicles = await loadOwnerVehicles(supabase, ownerId);
+    const transfers = await loadOwnerTransfers({ supabase, vehicles });
+    let ownerEmail = profile?.email || null;
+    if (!ownerEmail && vehicles.length) {
+      // The transfer service falls back to vehicles.owner_email; mirror it
+      // without assuming the optional column exists (rule 50).
+      try {
+        const { data } = await supabase
+          .from('vehicles')
+          .select('owner_email')
+          .eq('owner_id', ownerId)
+          .limit(5);
+        ownerEmail = (data || []).map((row) => row.owner_email).find(Boolean) || null;
+      } catch (err) {
+        // Rule 50 honesty: a failed optional probe is logged, never swallowed.
+        logWriteFailure(supabase, 'dashboard.buildTransferPage.emailProbe', err);
+      }
+    }
+    return {
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      currency: ctx.currency,
+      locale: ctx.locale,
+      timeZone: ctx.timeZone,
+      ownerEmailMasked: ownerEmail ? maskEmail(ownerEmail) : null,
+      ownerEmailAvailable: Boolean(ownerEmail),
+      vehicles: vehicles.map((vehicle) => ({
+        id: vehicle.id,
+        plate: vehicle.plate_number || 'Vehicle',
+        makeModel: vehicle.make_model || null,
+        status: vehicle.status || null
+      })),
+      transfers
+    };
+  } catch (err) {
+    logWriteFailure(supabase, 'dashboard.buildTransferPage', err);
+    return { ok: false };
+  }
+}
+
+/**
+ * `/d/transfer` — the owner's steps 1-3 of the SAME transfers.js machine:
+ * pick vehicle + buyer, enter the emailed release PIN, buyer finishes on
+ * WhatsApp. `pinTransfer` renders the PIN box for one transfer.
+ */
+export function renderTransferPage({ data, emailMasked = '', error = null, notice = null, pinTransfer = null }) {
+  if (!data?.ok) {
+    return renderErrorPage(503, 'Your transfer page could not be loaded just now. Please try again in a moment.').html;
+  }
+  const when = formatDate(data.generatedAt, data.locale, { timeZone: data.timeZone });
+  const vehicles = data.vehicles || [];
+  const open = (data.transfers || []).filter((transfer) => transfer.open);
+  const recent = (data.transfers || []).filter((transfer) => !transfer.open).slice(0, 6);
+
+  const vehicleOptions = vehicles.length
+    ? vehicles.map((vehicle) => `<option value="${escapeHtml(vehicle.id)}">${escapeHtml(vehicle.plate)}${vehicle.makeModel ? ` — ${escapeHtml(vehicle.makeModel)}` : ''}</option>`).join('')
+    : '';
+
+  const startForm = data.ownerEmailAvailable
+    ? `<form method="POST" action="/d/transfer/start" class="inline-form">
+        <label>Vehicle<select name="vehicle_id" required>${vehicleOptions}</select></label>
+        <label>Buyer's WhatsApp number<input type="tel" name="buyer_phone" inputmode="tel" placeholder="+254 712 345 678" required></label>
+        <label>Buyer's email<input type="email" name="buyer_email" placeholder="buyer@example.com" required></label>
+        <label>Handover odometer (optional)<input type="number" name="odometer" inputmode="numeric" min="0" step="1" placeholder="e.g. 50350"></label>
+        <button type="submit">Start handover</button>
+      </form>`
+    : `<div class="notice warn"><strong>Add an email first.</strong> The release PIN is sent to your email, so I cannot start a handover here without one. Reply <em>change my email</em> on WhatsApp to add it (or open Settings to review your account), then come back — you can always start a handover in WhatsApp with <em>transfer</em>.</div>
+      <p><a class="btn" href="${sakaWhatsAppLink('transfer')}" rel="noopener" target="_blank">Start in WhatsApp instead</a></p>`;
+
+  const emptyVehicles = vehicles.length ? '' : '<div class="notice warn">No live vehicles yet — register one in WhatsApp first and it appears here.</div>';
+
+  const pinCard = pinTransfer
+    ? `<h2>Enter your release PIN</h2>
+      <div class="card">
+        <p class="muted">I emailed a 6-digit release PIN for <strong>${escapeHtml(pinTransfer.plate)}</strong>. Enter it below to authorise releasing the passbook.</p>
+        <form method="POST" action="/d/transfer/verify" class="stack">
+          <input type="hidden" name="transfer_id" value="${escapeHtml(pinTransfer.id)}">
+          <input type="text" name="otp" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="000000" aria-label="6-digit release PIN" required>
+          <button type="submit">Authorise the handover</button>
+        </form>
+        <p class="muted-small">The PIN works for 10 minutes. Saka never asks for it in chat.</p>
+      </div>`
+    : '';
+
+  const openList = open.length
+    ? `<ul class="plain">${open.map((transfer) => `
+      <li>
+        <strong>${escapeHtml(transfer.plate)}</strong> · <span class="chip due">${escapeHtml(transfer.statusLabel)}</span>
+        ${transfer.buyerMasked ? `<div class="muted-small">Buyer: ${escapeHtml(transfer.buyerMasked)}${transfer.buyerEmailMasked ? ` · ${escapeHtml(transfer.buyerEmailMasked)}` : ''}</div>` : ''}
+        ${transfer.initiatedAt ? `<div class="muted-small">Started ${escapeHtml(formatDate(transfer.initiatedAt, data.locale, { timeZone: data.timeZone }))}</div>` : ''}
+        ${!transfer.isFreeTransfer && transfer.feeAmount !== null ? `<div class="muted-small">Fee: ${escapeHtml(`${transfer.feeCurrency} ${transfer.feeAmount.toFixed(2)}`)} — the buyer pays at their payment step.</div>` : '<div class="muted-small">Free handover (first this year for this vehicle).</div>'}
+        <div class="row-actions" style="margin-top:8px;">
+          <form method="POST" action="/d/transfer/cancel">
+            <input type="hidden" name="transfer_id" value="${escapeHtml(transfer.id)}">
+            <button type="submit" class="linkish">Cancel transfer</button>
+          </form>
+        </div>
+      </li>`).join('')}</ul>`
+    : '<p class="muted">No handover in flight — the whole history stays with the vehicle either way.</p>';
+
+  const recentList = recent.length
+    ? `<ul class="plain">${recent.map((transfer) => `
+      <li><strong>${escapeHtml(transfer.plate)}</strong> · <span class="chip${transfer.status === 'COMPLETED' ? ' ok' : ''}">${escapeHtml(transfer.statusLabel)}</span>
+        <span class="muted-small">${escapeHtml(formatDate(transfer.completedAt || transfer.initiatedAt, data.locale, { timeZone: data.timeZone }))}</span></li>`).join('')}</ul>`
+    : '<p class="muted">No finished handovers yet.</p>';
+
+  const body = `
+<h1>Passbook transfer</h1>
+<p class="muted">Signed in as ${escapeHtml(emailMasked)} · updated ${escapeHtml(when)}</p>
+${notice ? `<div class="notice">${escapeHtml(notice)}</div>` : ''}
+${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
+${emptyVehicles}
+<h2>How a handover works</h2>
+<div class="card">
+  <ol class="steps">
+    <li>Pick the vehicle and enter the buyer's WhatsApp number and email here.</li>
+    <li>I email you a 6-digit release PIN — enter it on this page to authorise.</li>
+    <li>I message the buyer on WhatsApp: they reply <strong>ACCEPT</strong> to claim.</li>
+    <li>They enter the 6-digit code I email them, and the handover completes.</li>
+    <li>The passbook and its whole service history move with the vehicle.</li>
+  </ol>
+  <p class="muted-small">Nothing moves until you authorise AND the buyer accepts. The VIN and passbook token stay permanent.</p>
+</div>
+${pinCard}
+${vehicles.length && data.ownerEmailAvailable ? '<h2>Start a handover</h2>' : ''}
+${vehicles.length ? `<div class="card">${startForm}</div>` : ''}
+<h2>In flight</h2>
+<div class="card">${openList}</div>
+<h2>Recent handovers</h2>
+<div class="card">${recentList}</div>
+<p class="muted-small">Your first handover for each vehicle each year is free; later ones carry the engine fee at the buyer's payment step. Handovers can also be started entirely in WhatsApp with <em>transfer</em>.</p>`;
+  return renderPageShell('Passbook transfer', body, { headerRight: dashboardNav() });
+}
+
+/* ------------------------------------------------------------------ */
+/* Phase 22 (v1.83.0) — subscription page (plan, capacity, payments)   */
+/* ------------------------------------------------------------------ */
+
+const SUBSCRIPTION_STATUS_COPY = Object.freeze({
+  ACTIVE: 'Active',
+  TRIAL: 'On trial',
+  TRIALING: 'On welcome trial',
+  CANCELING: 'Cancels at period end',
+  PAST_DUE: 'Payment due — grace window',
+  EXPIRED: 'Expired',
+  FREE: 'Free'
+});
+
+const INVOICE_EVENT_COPY = Object.freeze({
+  'invoice.create': 'Invoice issued',
+  'invoice.update': 'Invoice updated',
+  'invoice.payment_failed': 'Payment failed',
+  'charge.success': 'Payment received'
+});
+
+/**
+ * Recent billing history: the owner-scoped `subscriptions` ledger PLUS any
+ * invoice events that carry this owner in their metadata. Read-only and
+ * fail-soft (rule 50) — a missing table or JSON path degrades to fewer rows,
+ * never an invented payment.
+ */
+export async function loadPaymentHistory({ supabase, ownerId, limit = 6 } = {}) {
+  if (!supabase || !ownerId) return [];
+  const rows = [];
+  try {
+    const { data } = await supabase
+      .from('subscriptions')
+      .select('owner_id, tier, interval, status, plan_code, paystack_subscription_code, current_period_end, created_at, updated_at')
+      .eq('owner_id', ownerId)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    for (const row of data || []) {
+      rows.push({
+        kind: 'plan',
+        at: row.created_at || row.updated_at || null,
+        label: `${getTierLabel(row.tier)} · ${row.interval === 'annual' ? 'Annual' : 'Monthly'}`,
+        status: String(row.status || '').toUpperCase() || null,
+        reference: row.paystack_subscription_code || row.plan_code || null,
+        amountLabel: null
+      });
+    }
+  } catch (err) {
+    logWriteFailure(supabase, 'dashboard.loadPaymentHistory', err);
+  }
+  // Invoice-level detail is OPTIONAL: the JSON-path filter is best-effort and
+  // every row is re-checked against the owner before it can render.
+  try {
+    const { data } = await supabase
+      .from('paystack_webhook_events')
+      .select('event_type, processed_at, payload')
+      .eq('payload->metadata->>user_id', ownerId)
+      .in('event_type', ['invoice.create', 'invoice.update', 'invoice.payment_failed', 'charge.success'])
+      .order('processed_at', { ascending: false })
+      .limit(limit);
+    for (const event of data || []) {
+      const metadata = event.payload?.metadata || {};
+      if (metadata.user_id !== ownerId) continue;
+      const amount = Number(event.payload?.data?.amount);
+      rows.push({
+        kind: 'payment',
+        at: event.processed_at || null,
+        label: INVOICE_EVENT_COPY[event.event_type] || 'Payment',
+        status: String(event.payload?.data?.status || '').toUpperCase() || null,
+        reference: event.payload?.data?.reference || null,
+        amountLabel: Number.isFinite(amount)
+          ? `${event.payload?.data?.currency || 'USD'} ${(amount / 100).toFixed(2)}`
+          : null
+      });
+    }
+  } catch (err) {
+    // The invoice leg is optional (rule 50) but a failure is still logged.
+    logWriteFailure(supabase, 'dashboard.loadPaymentHistory.invoices', err);
+  }
+  return rows
+    .sort((a, b) => new Date(b.at || 0).getTime() - new Date(a.at || 0).getTime())
+    .slice(0, limit);
+}
+
+/**
+ * Data for `/d/subscription`: entitlements + capacity are the ONLY truth
+ * (rules 23/24/28); prices come from the billing engine in the owner's
+ * currency. Never throws.
+ */
+export async function buildSubscriptionPage({ supabase, ownerId, profile, countryInfo }) {
+  if (!supabase || !ownerId) return { ok: false };
+  const ctx = buildGlobalContext(countryInfo, profile);
+  try {
+    const entitlements = await getEntitlements({ supabase, ownerId, profile });
+    const capacity = await evaluateVehicleCapacity({ supabase, ownerId, profile, additionalVehicles: 1 });
+    let nextTier = null;
+    const targetTierKey = entitlements.nextTierKey;
+    if (targetTierKey) {
+      const [monthly, annual] = await Promise.all([
+        getTierLocalPrice(supabase, targetTierKey, ctx.currency, 'monthly'),
+        getTierLocalPrice(supabase, targetTierKey, ctx.currency, 'annual')
+      ]);
+      nextTier = { tierKey: targetTierKey, label: getTierLabel(targetTierKey), monthly, annual };
+    }
+    const history = await loadPaymentHistory({ supabase, ownerId });
+    return {
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      currency: ctx.currency,
+      locale: ctx.locale,
+      timeZone: ctx.timeZone,
+      entitlements,
+      capacity,
+      nextTier,
+      addon: entitlements.addonEligible && capacity.addonPriceUSD > 0
+        ? { unitUSD: Number(capacity.addonPriceUSD), maxSlots: 10 }
+        : null,
+      history
+    };
+  } catch (err) {
+    logWriteFailure(supabase, 'dashboard.buildSubscriptionPage', err);
+    return { ok: false };
+  }
+}
+
+/**
+ * `/d/subscription` — plan, trial, capacity, upgrades/add-ons and billing
+ * history. Engine-owned figures only; a checkout is a POST that redirects to
+ * the engine's Paystack URL (no price is ever assembled in HTML).
+ */
+export function renderSubscriptionPage({ data, emailMasked = '', error = null, notice = null }) {
+  if (!data?.ok) {
+    return renderErrorPage(503, 'Your subscription could not be loaded just now. Please try again in a moment.').html;
+  }
+  const ent = data.entitlements || {};
+  const cap = data.capacity || {};
+  const when = formatDate(data.generatedAt, data.locale, { timeZone: data.timeZone });
+  const statusKey = String(ent.status || 'ACTIVE').toUpperCase();
+  const statusLabel = SUBSCRIPTION_STATUS_COPY[statusKey] || statusKey;
+  const statusClass = ['ACTIVE', 'TRIAL', 'TRIALING'].includes(statusKey) ? ' ok' : ['CANCELING', 'PAST_DUE'].includes(statusKey) ? ' due' : '';
+  const capacityLabel = Number.isFinite(cap.capacity) ? String(cap.capacity) : 'unlimited';
+  const usedPct = Number.isFinite(cap.capacity) && cap.capacity > 0
+    ? Math.min(100, Math.round((Number(cap.currentCount || 0) / cap.capacity) * 100))
+    : 0;
+  const canAdd = cap.allowed === true;
+  const trialLine = ent.isTrial
+    ? `<p class="muted-small">${ent.trialPhase === 'GRACE' ? 'Decision window' : 'Welcome trial'} — ${Number(ent.trialDaysLeft || 0)} day(s) left${ent.trialEndsAt ? ` · ends ${escapeHtml(formatDate(ent.trialEndsAt, data.locale, { timeZone: data.timeZone }))}` : ''}</p>`
+    : '';
+  const renewalLine = ent.currentPeriodEnd
+    ? `<p class="muted-small">Current period ends ${escapeHtml(formatDate(ent.currentPeriodEnd, data.locale, { timeZone: data.timeZone }))}${ent.cancelAtPeriodEnd ? ' — the plan cancels then' : ''}.</p>`
+    : '';
+  const reportsLine = Number.isFinite(ent.reportsPerMonth)
+    ? `Reports this month: ${Number(ent.reportsUsedThisMonth || 0)} of ${ent.reportsPerMonth}`
+    : 'Reports: unlimited';
+  const addonLine = ent.addonEligible
+    ? `<li>Extra vehicle slots: <strong>${Number(ent.addonQuantity || 0)}</strong> (Fleet Command add-ons)</li>`
+    : '';
+
+  const next = data.nextTier;
+  const upgradeForm = next
+    ? `<form method="POST" action="/d/subscription/checkout" class="stack">
+        <input type="hidden" name="tier" value="${escapeHtml(next.tierKey)}">
+        <div class="row-actions">
+          <button type="submit" name="interval" value="monthly">Upgrade to ${escapeHtml(next.label)} — ${escapeHtml(next.monthly?.formattedPrice || '')}/month</button>
+          <button type="submit" name="interval" value="annual">Annual — ${escapeHtml(next.annual?.formattedPrice || '')}/year</button>
+        </div>
+        <p class="muted-small">Prices come from the billing engine in ${escapeHtml(data.currency)}; taxes may apply. Nothing charges until you finish Paystack checkout.</p>
+      </form>`
+    : '';
+  const addonForm = data.addon
+    ? `<form method="POST" action="/d/subscription/addon" class="inline-form">
+        <label>Extra vehicle slots<input type="number" name="quantity" min="1" max="${Number(data.addon.maxSlots || 10)}" step="1" value="1" required></label>
+        <button type="submit">Add slots</button>
+      </form>
+      <p class="muted-small">USD ${Number(data.addon.unitUSD || 0).toFixed(2)} per extra vehicle per month, added to your Fleet Command plan. The engine confirms the charge before slots appear.</p>`
+    : '';
+
+  const addVehicleCard = canAdd
+    ? `<p><a class="btn" href="${sakaWhatsAppLink('add car')}" rel="noopener" target="_blank">Add a vehicle on WhatsApp</a></p>
+      <p class="muted-small">Registration happens in WhatsApp — I ask for the plate, model and odometer one step at a time, and the plan gate checks the slot before saving.</p>`
+    : `<div class="notice warn">Your ${escapeHtml(ent.tierName || 'current')} plan is full at ${Number(cap.currentCount || 0)} of ${escapeHtml(capacityLabel)} vehicle(s). Upgrade for more slots, or add extra vehicles if your plan allows them.</div>
+      ${upgradeForm}
+      ${addonForm}`;
+
+  const historyRows = (data.history || []).length
+    ? (data.history || []).map((row) => `
+      <tr>
+        <td>${row.at ? escapeHtml(formatDate(row.at, data.locale, { timeZone: data.timeZone })) : '—'}</td>
+        <td>${escapeHtml(row.label || 'Payment')}</td>
+        <td>${row.status ? `<span class="chip${['SUCCESS', 'ACTIVE', 'PAID'].includes(row.status) ? ' ok' : row.status === 'FAILED' ? ' bad' : ''}">${escapeHtml(row.status)}</span>` : '—'}</td>
+        <td>${escapeHtml(row.amountLabel || row.reference || '—')}</td>
+      </tr>`).join('')
+    : '';
+
+  const body = `
+<h1>Subscription</h1>
+<p class="muted">Signed in as ${escapeHtml(emailMasked)} · updated ${escapeHtml(when)}</p>
+${notice ? `<div class="notice">${escapeHtml(notice)}</div>` : ''}
+${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
+<h2>Your plan</h2>
+<div class="card">
+  <div class="plan-badge">${escapeHtml(ent.tierName || 'Free')} <span class="chip${statusClass}">${escapeHtml(statusLabel)}</span></div>
+  <p class="muted-small">Billed ${escapeHtml(ent.billingInterval === 'annual' ? 'annually' : 'monthly')}${ent.isPaid ? '' : ' · no active paid plan'}</p>
+  ${trialLine}
+  ${renewalLine}
+  <p style="margin:12px 0 0;">Vehicles: <strong>${Number(cap.currentCount || 0)}</strong> of <strong>${escapeHtml(capacityLabel)}</strong></p>
+  <div class="usage-bar${usedPct >= 100 ? ' full' : ''}" role="img" aria-label="Vehicle slots used"><span style="width:${usedPct}%"></span></div>
+  <ul class="plain" style="margin-top:10px;">
+    <li>${escapeHtml(reportsLine)}</li>
+    ${addonLine}
+  </ul>
+</div>
+<h2>Add a vehicle</h2>
+<div class="card">${addVehicleCard}</div>
+<h2>Billing history</h2>
+<div class="card table-wrap">
+  ${historyRows
+    ? `<table class="rec"><thead><tr><th>Date</th><th>What</th><th>Status</th><th>Reference / amount</th></tr></thead><tbody>${historyRows}</tbody></table>`
+    : '<p class="muted">No payments yet — your billing history appears here after the first checkout.</p>'}
+</div>
+<p class="muted-small">Paystack confirms payments in the background — this page shows your plan the moment it updates. Saka never invents a price, a discount or a payment outcome. Prefer chat? Reply <em>subscription</em> in WhatsApp to change plans there.</p>`;
+  return renderPageShell('Subscription', body, { headerRight: dashboardNav() });
+}
+
 /** Phase 15 navs — one per lane, never mixed. */
 function driverNav() {
   return '<a href="/d/driver">Overview</a> · <a href="/d/driver/daybook">Daybook</a> · <a href="/d/driver/compliance">Compliance</a> · <a href="/d/logout">Log out</a>';
@@ -3433,6 +3948,17 @@ export default {
   renderCareQueuePage,
   buildAnalyticsPage,
   renderAnalyticsPage,
+  // v1.83.0 (Phase 22) — branding assets, passbook transfer + subscription.
+  DASHBOARD_ASSET_VERSION,
+  SAKA_WHATSAPP_NUMBER,
+  sakaWhatsAppLink,
+  TRANSFER_OPEN_STATUSES,
+  loadOwnerTransfers,
+  buildTransferPage,
+  renderTransferPage,
+  loadPaymentHistory,
+  buildSubscriptionPage,
+  renderSubscriptionPage,
   parseRecordsFilters,
   cleanRecordsTerm,
   nairobiDateOf,

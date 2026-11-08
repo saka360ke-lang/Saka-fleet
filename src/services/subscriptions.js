@@ -434,7 +434,8 @@ export async function checkoutForTier({
   currency = 'USD',
   couponCode = null,
   addonQuantity = null,
-  metadata = {}
+  metadata = {},
+  callbackUrl = null
 } = {}) {
   const tierKey = normalizeTierKey(targetTierKey);
   if (tierKey === 'free') return { ok: false, error: 'Free tier needs no checkout.' };
@@ -471,6 +472,7 @@ export async function checkoutForTier({
       amountUSDOverride: coupon ? payableUSD : null,
       couponCode: coupon?.valid ? coupon.code : null,
       addonQuantity,
+      callbackUrl,
       metadata: {
         ...metadata,
         coupon_code: coupon?.valid ? coupon.code : null,
@@ -519,7 +521,8 @@ export async function checkoutForAddon({
   owner = {},
   addonQuantity,
   interval = 'monthly',
-  currency = 'USD'
+  currency = 'USD',
+  callbackUrl = null
 } = {}) {
   const quantity = Math.max(1, Math.floor(Number(addonQuantity) || 1));
   const unitUSD = getAddonPriceUSD('fleet_command', interval);
@@ -534,6 +537,7 @@ export async function checkoutForAddon({
       userId: owner.id,
       currency,
       amountUSDOverride: amountUSD,
+      callbackUrl,
       metadata: {
         type: 'fleet_addon',
         addon_quantity: quantity,

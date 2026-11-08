@@ -103,8 +103,19 @@ import {
   renderVehiclePage,
   renderOtpPage,
   renderLoginPage,
-  renderErrorPage
+  renderErrorPage,
+  // v1.83.0 (Phase 22) — branding, transfer + subscription surfaces.
+  DASHBOARD_CSS,
+  DASHBOARD_ASSET_VERSION,
+  SAKA_WHATSAPP_NUMBER,
+  sakaWhatsAppLink,
+  renderPageShell,
+  buildTransferPage,
+  renderTransferPage,
+  buildSubscriptionPage,
+  renderSubscriptionPage
 } from './src/services/dashboard.js';
+import { SAKA_PDF_THEME } from './src/services/pdfEngine.js';
 import { upcomingExpiryItems, buildVehicleDirectory, buildVehicleDetail } from './src/services/fleetReports.js';
 import { dateRangeBounds, CUSTOM_METRICS } from './src/services/reportMetrics.js';
 import { detectCountryFromPhone } from './src/services/globalization.js';
@@ -199,6 +210,16 @@ async function run() {
     // v1.80.0 (Phase 19) — analytics + the care queue are flag-gated too.
     { method: 'GET', url: '/d/analytics' },
     { method: 'GET', url: '/d/care' },
+    // v1.83.0 (Phase 22) — assets, transfer + subscription are flag-gated too.
+    { method: 'GET', url: '/d/assets/Sora-600.woff2' },
+    { method: 'GET', url: '/d/assets/logo-lockup.png' },
+    { method: 'GET', url: '/d/transfer' },
+    { method: 'POST', url: '/d/transfer/start', payload: 'vehicle_id=v1', headers: { 'content-type': 'application/x-www-form-urlencoded' } },
+    { method: 'POST', url: '/d/transfer/verify', payload: 'transfer_id=t1&otp=123456', headers: { 'content-type': 'application/x-www-form-urlencoded' } },
+    { method: 'POST', url: '/d/transfer/cancel', payload: 'transfer_id=t1', headers: { 'content-type': 'application/x-www-form-urlencoded' } },
+    { method: 'GET', url: '/d/subscription' },
+    { method: 'POST', url: '/d/subscription/checkout', payload: 'tier=growth&interval=monthly', headers: { 'content-type': 'application/x-www-form-urlencoded' } },
+    { method: 'POST', url: '/d/subscription/addon', payload: 'quantity=1', headers: { 'content-type': 'application/x-www-form-urlencoded' } },
     { method: 'POST', url: '/d/verify', payload: 'token=x&otp=123456', headers: { 'content-type': 'application/x-www-form-urlencoded' } }
   ];
   for (const request of offRequests) {
@@ -2134,6 +2155,273 @@ async function run() {
   const adminOnOwner = await gateApp.inject({ method: 'GET', url: '/d', headers: { cookie: adminCookie } });
   check(adminOnOwner.statusCode === 403, 'an admin session never enters the owner lane');
   await gateApp.close();
+
+  console.log('\n--- Test 53: Phase 22 — branding (fonts, logo, lime glow, assets route) ---');
+  check(DASHBOARD_ASSET_VERSION === '1.83.0', 'the asset stamp ships with this release (cache-bust)');
+  check(DASHBOARD_CSS.includes("@font-face { font-family:'Sora'; font-style:normal; font-weight:600") && DASHBOARD_CSS.includes("@font-face { font-family:'Sora'; font-style:normal; font-weight:700"), 'Sora 600/700 are self-hosted via @font-face');
+  check(DASHBOARD_CSS.includes("@font-face { font-family:'Manrope'") && DASHBOARD_CSS.includes('Manrope-700.woff2'), 'Manrope 400/500/700 are self-hosted too');
+  check(DASHBOARD_CSS.includes("url('/d/assets/Sora-600.woff2?v=1.83.0')"), 'font URLs ride the allowlisted asset route, version-stamped');
+  check(DASHBOARD_CSS.includes('--accent:#B8EF5C') && DASHBOARD_CSS.includes('--accent-dark:#65A30D'), 'the orange accent is retired for lime with a text-safe dark lime');
+  check(DASHBOARD_CSS.includes('--glow:0 0 0 1px var(--accent-line)'), 'one glow token powers the green outline');
+  check(/input:focus[^{]*\{[^}]*box-shadow:var\(--glow\)/.test(DASHBOARD_CSS), 'focused inputs carry the glowing green ring');
+  check(/\.card:hover, \.card:focus-within[^{]*\{[^}]*box-shadow/.test(DASHBOARD_CSS), 'active cards take the same glow');
+  check(/button:hover, button:focus-visible[^{]*\{[^}]*box-shadow:var\(--glow\)/.test(DASHBOARD_CSS), 'buttons glow on hover/focus');
+  check(DASHBOARD_CSS.includes('@media (max-width: 640px)') && DASHBOARD_CSS.includes('min-height:48px'), 'the phone breakpoint enlarges tap targets');
+  check(DASHBOARD_CSS.includes('prefers-reduced-motion'), 'reduced-motion users get no animation');
+  check(DASHBOARD_CSS.includes('font-family:var(--font-body)') && DASHBOARD_CSS.includes('font-family:var(--font-display)'), 'body = Manrope, headings = Sora');
+  const shellHtml = renderPageShell('Overview', '<p>hi</p>', { headerRight: '<a href="/d/x">X</a>' });
+  check(shellHtml.includes('/d/assets/logo-lockup.png?v=1.83.0') && shellHtml.includes('width="177" height="18"'), 'the header renders the real brand lockup at its intrinsic ratio');
+  check(shellHtml.includes('alt="Saka Fleet"') && shellHtml.includes('class="nav"'), 'the logo is labelled and the nav slot is preserved');
+  check(shellHtml.includes('theme-color" content="#0A0A0C"') && shellHtml.includes('/d/assets/favicon.svg'), 'the shell carries the brand theme colour and favicon');
+  check(shellHtml.includes('noindex'), 'dashboard pages stay noindex');
+  check(SAKA_PDF_THEME.brand === '#65A30D' && SAKA_PDF_THEME.lime === '#B8EF5C', 'PDF brand is the text-safe lime; the decorative lime stays separate');
+  check(sakaWhatsAppLink('add car') === 'https://wa.me/19404407252?text=add%20car', 'the wa.me deep link uses the verified business number');
+
+  const assetMock = createMockSupabase({ [DASHBOARD_SESSIONS_TABLE]: [], admin_audit_logs: [] });
+  const assetApp = Fastify({ logger: false });
+  await registerDashboardRoutes(assetApp, { supabase: assetMock.client });
+  await assetApp.ready();
+  const fontRes = await assetApp.inject({ method: 'GET', url: '/d/assets/Sora-600.woff2' });
+  check(fontRes.statusCode === 200 && String(fontRes.headers['content-type']).includes('font/woff2'), 'GET /d/assets/Sora-600.woff2 answers the real woff2');
+  check(String(fontRes.headers['cache-control']).includes('immutable') && fontRes.headers['x-content-type-options'] === 'nosniff', 'fonts are cached immutably with nosniff');
+  check(fontRes.rawPayload.length > 1000 && fontRes.rawPayload.subarray(0, 4).toString() === 'wOF2', 'the served font is a real WOFF2 payload');
+  const logoRes = await assetApp.inject({ method: 'GET', url: '/d/assets/logo-lockup.png' });
+  check(logoRes.statusCode === 200 && String(logoRes.headers['content-type']).includes('image/png') && logoRes.rawPayload.subarray(1, 4).toString() === 'PNG', 'the brand lockup serves as image/png');
+  const unknownAsset = await assetApp.inject({ method: 'GET', url: '/d/assets/secrets.env' });
+  check(unknownAsset.statusCode === 404, 'a filename outside the allowlist is 404');
+  const traversalAsset = await assetApp.inject({ method: 'GET', url: '/d/assets/..%2F..%2Fpackage.json' });
+  check(traversalAsset.statusCode === 404, 'traversal is impossible by construction (not on the allowlist)');
+  const faviconRes = await assetApp.inject({ method: 'GET', url: '/d/assets/favicon.svg' });
+  check(faviconRes.statusCode === 200 && String(faviconRes.headers['content-type']).includes('image/svg+xml'), 'the SVG favicon is allowlisted too');
+  await assetApp.close();
+
+  console.log('\n--- Test 54: Phase 22 — /d/transfer (owner steps 1-3, buyer stays on WhatsApp) ---');
+  const dayMs = 24 * 60 * 60 * 1000;
+  const p22OwnerProfile = {
+    id: 'p22-owner',
+    // v1.83.0 — a +1 number keeps the suite OFFLINE: buildGlobalContext derives
+    // the currency from the phone's country (rule 7), and USD needs no FX fetch.
+    phone_number: '+19405550123',
+    email: 'p22@example.com',
+    full_name: 'Phase Owner',
+    subscription_tier: 'growth',
+    subscription_status: 'ACTIVE',
+    subscription_period_end: new Date(Date.now() + 20 * dayMs).toISOString(),
+    currency: 'USD',
+    country_code: 'US',
+    unit_system: 'imperial'
+  };
+  const p22Seed = () => ({
+    [DASHBOARD_SESSIONS_TABLE]: [
+      { id: 'sess-p22-owner', token_hash: hashToken('p22-token'), session_token_hash: hashToken('p22-session'), owner_id: 'p22-owner', email: 'p22@example.com', verified: true, session_expires_at: new Date(Date.now() + dayMs).toISOString(), session_role: 'owner', attempts: 0 },
+      { id: 'sess-p22-driver', token_hash: hashToken('p22-dtoken'), session_token_hash: hashToken('p22-driver-session'), owner_id: 'p22-driver', verified: true, session_expires_at: new Date(Date.now() + dayMs).toISOString(), session_role: 'driver', attempts: 0 }
+    ],
+    profiles: [
+      p22OwnerProfile,
+      { id: 'p22-driver', phone_number: '+254722000999', full_name: 'Phase Driver' }
+    ],
+    vehicles: [
+      { id: 'v-p22-1', owner_id: 'p22-owner', plate_number: 'KDA 123A', make_model: 'Toyota Hiace', status: 'ACTIVE', deleted_at: null, assigned_driver_id: null },
+      { id: 'v-p22-2', owner_id: 'p22-owner', plate_number: 'KDB 456B', make_model: 'Isuzu NQR', status: 'ACTIVE', deleted_at: null, assigned_driver_id: null }
+    ],
+    passbook_transfers: [
+      { id: 'tr-open', vehicle_id: 'v-p22-1', vin: 'VINP220001', from_owner_id: 'p22-owner', status: 'PENDING_BUYER_ACCEPTANCE', to_owner_phone: '+254799000222', to_owner_email: 'buyer@example.com', is_free_transfer: true, fee_amount: 0, fee_currency: 'USD', initiated_at: new Date(Date.now() - dayMs).toISOString() },
+      { id: 'tr-done', vehicle_id: 'v-p22-2', vin: 'VINP220002', from_owner_id: 'p22-owner', status: 'COMPLETED', to_owner_phone: '+254798000333', is_free_transfer: true, initiated_at: new Date(Date.now() - 3 * dayMs).toISOString(), completed_at: new Date(Date.now() - 2 * dayMs).toISOString() },
+      { id: 'tr-foreign', vehicle_id: 'v-someone-else', vin: 'VINP220003', from_owner_id: 'someone-else', status: 'PENDING_BUYER_ACCEPTANCE', is_free_transfer: true, initiated_at: new Date(Date.now() - dayMs).toISOString() }
+    ],
+    subscriptions: [
+      { id: 'sub-p22', owner_id: 'p22-owner', tier: 'growth', interval: 'monthly', status: 'ACTIVE', plan_code: 'PLAN_GROWTH_M', paystack_subscription_code: 'SUB_P22', created_at: new Date(Date.now() - 10 * dayMs).toISOString() }
+    ],
+    paystack_webhook_events: [],
+    admin_audit_logs: []
+  });
+  const p22Mock = createMockSupabase(p22Seed());
+  const p22Calls = { send: [], verify: [], tier: [], addon: [] };
+  let p22BadCheckout = false;
+  const p22Notifier = {
+    async sendReleaseOtp({ transferId, buyerPhone, buyerEmail }) {
+      p22Calls.send.push({ transferId, buyerPhone, buyerEmail });
+      await p22Mock.client.from('passbook_transfers')
+        .update({ status: 'PENDING_OWNER_RELEASE_OTP', to_owner_phone: buyerPhone, to_owner_email: buyerEmail })
+        .eq('id', transferId);
+      return { success: true, buyerPhone, buyerEmail, ownerEmail: 'p22@example.com' };
+    },
+    async verifyReleaseOtp({ transferId, providedOtp, sendWhatsAppFn }) {
+      p22Calls.verify.push({ transferId, providedOtp, hasSender: typeof sendWhatsAppFn === 'function' });
+      if (providedOtp !== '424242') return { success: false, error: 'Invalid 6-digit release PIN. Please check your email and try again.' };
+      await p22Mock.client.from('passbook_transfers').update({ status: 'PENDING_BUYER_ACCEPTANCE' }).eq('id', transferId);
+      return { success: true, buyerPhone: '+254799000222', plateNumber: 'KDA 123A' };
+    }
+  };
+  const p22Checkout = {
+    async tier(args) {
+      p22Calls.tier.push(args);
+      return p22BadCheckout
+        ? { ok: true, checkoutUrl: 'http://insecure.example/pay' }
+        : { ok: true, checkoutUrl: 'https://checkout.paystack.com/p22-tier', reference: 'ref-p22' };
+    },
+    async addon(args) {
+      p22Calls.addon.push(args);
+      return { ok: true, checkoutUrl: 'https://checkout.paystack.com/p22-addon', amountUSD: 3.99, quantity: args.addonQuantity };
+    }
+  };
+  const p22App = Fastify({ logger: false });
+  await registerDashboardRoutes(p22App, { supabase: p22Mock.client, transferNotifier: p22Notifier, checkoutEngine: p22Checkout });
+  await p22App.ready();
+  const p22OwnerCookie = { cookie: 'saka_dash=p22-session' };
+  const p22DriverCookie = { cookie: 'saka_dash=p22-driver-session' };
+  const p22Form = { 'content-type': 'application/x-www-form-urlencoded' };
+
+  const transferNoCookie = await p22App.inject({ method: 'GET', url: '/d/transfer' });
+  check(transferNoCookie.statusCode === 401, 'the transfer page needs a session');
+  const transferDriver = await p22App.inject({ method: 'GET', url: '/d/transfer', headers: p22DriverCookie });
+  check(transferDriver.statusCode === 403, 'a driver never enters the owner transfer page');
+  const transferPage = await p22App.inject({ method: 'GET', url: '/d/transfer', headers: p22OwnerCookie });
+  check(transferPage.statusCode === 200 && transferPage.body.includes('Passbook transfer'), 'an owner session opens the transfer page');
+  check(transferPage.body.includes('KDA 123A') && transferPage.body.includes('KDB 456B'), 'the vehicle picker lists the owner fleet');
+  check(transferPage.body.includes('Waiting for the buyer&#39;s ACCEPT on WhatsApp') && transferPage.body.includes('Cancel transfer'), 'the in-flight handover shows its honest status and a cancel action');
+  check(transferPage.body.includes(maskPhone('+254799000222')) && !transferPage.body.includes('+254799000222'), 'the buyer phone is masked, never shown raw');
+  check(!transferPage.body.includes('release_otp') && !transferPage.body.includes('buyer_otp'), 'no OTP column ever reaches the page');
+  check(transferPage.body.includes('How a handover works') && transferPage.body.includes('ACCEPT'), 'the page teaches the full 5-step machine');
+  check(transferPage.body.includes('href="/d/subscription"') && transferPage.body.includes('href="/d/transfer"'), 'the nav carries the new Transfer + Subscription destinations');
+
+  const startBadPhone = await p22App.inject({ method: 'POST', url: '/d/transfer/start', headers: { ...p22OwnerCookie, ...p22Form }, payload: 'vehicle_id=v-p22-1&buyer_phone=12&buyer_email=buyer%40example.com' });
+  check(startBadPhone.statusCode === 400 && /incomplete/.test(startBadPhone.body), 'an incomplete buyer number is refused warmly');
+  const startForeignVehicle = await p22App.inject({ method: 'POST', url: '/d/transfer/start', headers: { ...p22OwnerCookie, ...p22Form }, payload: 'vehicle_id=v-someone-else&buyer_phone=%2B254799000222&buyer_email=buyer%40example.com' });
+  check(startForeignVehicle.statusCode === 400 && /Pick one of your live vehicles/.test(startForeignVehicle.body), "another owner's vehicle can never start a handover");
+  const startCrossOrigin = await p22App.inject({ method: 'POST', url: '/d/transfer/start', headers: { ...p22OwnerCookie, ...p22Form, origin: 'https://evil.example' }, payload: 'vehicle_id=v-p22-1&buyer_phone=%2B254799000222&buyer_email=buyer%40example.com' });
+  check(startCrossOrigin.statusCode === 400 && /open the transfer page again/.test(startCrossOrigin.body), 'a cross-origin start is refused (CSRF defence in depth)');
+
+  const startOk = await p22App.inject({ method: 'POST', url: '/d/transfer/start', headers: { ...p22OwnerCookie, ...p22Form }, payload: 'vehicle_id=v-p22-2&buyer_phone=%2B254799000222&buyer_email=buyer%40example.com&odometer=50350' });
+  const startedLocation = String(startOk.headers.location || '');
+  const startedId = decodeURIComponent((startedLocation.match(/pin=([^&]+)/) || [])[1] || '');
+  check(startOk.statusCode === 303 && startedLocation.includes('/d/transfer?started=1&pin='), 'a valid start redirects with the transfer id');
+  check(p22Calls.send.length === 1 && p22Calls.send[0].buyerPhone === '+254799000222' && p22Calls.send[0].buyerEmail === 'buyer@example.com', 'the machine received the buyer phone + email verbatim');
+  const startedRow = (p22Mock.db.passbook_transfers || []).find((row) => row.id === startedId);
+  check(Boolean(startedRow) && startedRow.from_owner_id === 'p22-owner' && startedRow.status === 'PENDING_OWNER_RELEASE_OTP', 'the transfer row belongs to the owner and awaits the release PIN');
+  check((p22Mock.db.odometer_readings || []).some((row) => row.vehicle_id === 'v-p22-2' && Number(row.reading) === 50350 && row.label === 'handover'), 'the optional handover odometer lands in the ledger');
+
+  const pinPage = await p22App.inject({ method: 'GET', url: startedLocation, headers: p22OwnerCookie });
+  check(pinPage.statusCode === 200 && pinPage.body.includes('Enter your release PIN'), 'the PIN box renders for the transfer awaiting a release PIN');
+  const verifyBadShape = await p22App.inject({ method: 'POST', url: '/d/transfer/verify', headers: { ...p22OwnerCookie, ...p22Form }, payload: `transfer_id=${encodeURIComponent(startedId)}&otp=abc` });
+  check(verifyBadShape.statusCode === 400 && /6-digit release PIN/.test(verifyBadShape.body), 'a non 6-digit PIN is refused before any lookup');
+  const verifyWrong = await p22App.inject({ method: 'POST', url: '/d/transfer/verify', headers: { ...p22OwnerCookie, ...p22Form }, payload: `transfer_id=${encodeURIComponent(startedId)}&otp=111111` });
+  check(verifyWrong.statusCode === 400 && /Invalid 6-digit release PIN/.test(verifyWrong.body), 'a wrong release PIN re-renders the PIN box with the engine copy');
+  const verifyForeign = await p22App.inject({ method: 'POST', url: '/d/transfer/verify', headers: { ...p22OwnerCookie, ...p22Form }, payload: 'transfer_id=tr-foreign&otp=424242' });
+  check(verifyForeign.statusCode === 404, "another owner's transfer answers 404 (existence never confirmed)");
+  const verifyOk = await p22App.inject({ method: 'POST', url: '/d/transfer/verify', headers: { ...p22OwnerCookie, ...p22Form }, payload: `transfer_id=${encodeURIComponent(startedId)}&otp=424242` });
+  check(verifyOk.statusCode === 303 && String(verifyOk.headers.location).includes('verified=1'), 'the correct PIN authorises the release');
+  check(p22Calls.verify.length === 2 && p22Calls.verify[1].hasSender === true, 'the WhatsApp sender is handed to the machine (buyer notification)');
+  check((p22Mock.db.passbook_transfers || []).find((row) => row.id === startedId).status === 'PENDING_BUYER_ACCEPTANCE', 'the transfer moved to the buyer-acceptance step');
+
+  const verifyPage = await p22App.inject({ method: 'GET', url: '/d/transfer?verified=1', headers: p22OwnerCookie });
+  check(verifyPage.statusCode === 200 && /Release authorised/.test(verifyPage.body), 'the verified redirect explains the buyer handshake');
+  const cancelForeign = await p22App.inject({ method: 'POST', url: '/d/transfer/cancel', headers: { ...p22OwnerCookie, ...p22Form }, payload: 'transfer_id=tr-foreign' });
+  check(cancelForeign.statusCode === 404, "another owner's transfer can never be cancelled");
+  const cancelOk = await p22App.inject({ method: 'POST', url: '/d/transfer/cancel', headers: { ...p22OwnerCookie, ...p22Form }, payload: 'transfer_id=tr-open' });
+  check(cancelOk.statusCode === 303 && String(cancelOk.headers.location).includes('cancelled=1'), 'cancel redirects with the notice');
+  check((p22Mock.db.passbook_transfers || []).find((row) => row.id === 'tr-open').status === 'CANCELLED', 'the cancel is a status transition, never a delete');
+  check((p22Mock.db.passbook_transfers || []).find((row) => row.id === 'tr-done').status === 'COMPLETED', 'a completed handover is never touched');
+
+  // Phone-only owner (no email anywhere): the release PIN cannot be delivered.
+  const noEmailMock = createMockSupabase({
+    ...p22Seed(),
+    profiles: [{ ...p22OwnerProfile, email: null }]
+  });
+  const noEmailApp = Fastify({ logger: false });
+  await registerDashboardRoutes(noEmailApp, { supabase: noEmailMock.client, transferNotifier: p22Notifier, checkoutEngine: p22Checkout });
+  await noEmailApp.ready();
+  const noEmailPage = await noEmailApp.inject({ method: 'GET', url: '/d/transfer', headers: p22OwnerCookie });
+  check(noEmailPage.statusCode === 200 && noEmailPage.body.includes('Add an email first'), 'a phone-only owner is told to add an email first');
+  check(!noEmailPage.body.includes('Start a handover'), 'the start form is withheld when the PIN cannot be delivered');
+  const noEmailStart = await noEmailApp.inject({ method: 'POST', url: '/d/transfer/start', headers: { ...p22OwnerCookie, ...p22Form }, payload: 'vehicle_id=v-p22-1&buyer_phone=%2B254799000222&buyer_email=buyer%40example.com' });
+  check(noEmailStart.statusCode === 400 && /Add an email first/.test(noEmailStart.body), 'the server refuses the start too (never a stranded transfer)');
+  await noEmailApp.close();
+
+  console.log('\n--- Test 55: Phase 22 — /d/subscription (plan, capacity, checkouts, history) ---');
+  const subNoCookie = await p22App.inject({ method: 'GET', url: '/d/subscription' });
+  check(subNoCookie.statusCode === 401, 'the subscription page needs a session');
+  const subDriver = await p22App.inject({ method: 'GET', url: '/d/subscription', headers: p22DriverCookie });
+  check(subDriver.statusCode === 403, 'a driver never enters the owner subscription page');
+  const subPage = await p22App.inject({ method: 'GET', url: '/d/subscription', headers: p22OwnerCookie });
+  check(subPage.statusCode === 200 && subPage.body.includes('Your plan'), 'an owner session opens the subscription page');
+  check(subPage.body.includes('Growth Fleet') && subPage.body.includes('Active') && subPage.body.includes('Billed monthly'), 'the plan card names the tier, status and interval');
+  check(subPage.body.includes('Vehicles:') && subPage.body.includes('of <strong>5</strong>'), 'the capacity line shows used of entitled slots');
+  check(subPage.body.includes('Add a vehicle on WhatsApp') && subPage.body.includes('https://wa.me/19404407252?text=add%20car'), 'the Add Vehicle button is the wa.me deep link (quiz engine owns registration)');
+  check(subPage.body.includes('Growth Fleet · Monthly') && subPage.body.includes('SUB_P22'), 'the billing history reads the owner-scoped subscriptions ledger');
+  check(subPage.body.includes('Paystack confirms payments in the background'), 'the page never claims a payment outcome (rule 28)');
+  const subReturn = await p22App.inject({ method: 'GET', url: '/d/subscription?reference=ref-123', headers: p22OwnerCookie });
+  check(subReturn.statusCode === 200 && subReturn.body.includes('reference ref-123') && subReturn.body.includes('We&#39;re back from checkout'), 'returning from checkout shows the reference, not a fake success');
+  const subXss = await p22App.inject({ method: 'GET', url: '/d/subscription?reference=%3Cscript%3Ealert(1)%3C%2Fscript%3E', headers: p22OwnerCookie });
+  check(!subXss.body.includes('<script>alert') && subXss.body.includes('&lt;script&gt;'), 'the checkout reference is escaped');
+
+  const checkoutNoTier = await p22App.inject({ method: 'POST', url: '/d/subscription/checkout', headers: { ...p22OwnerCookie, ...p22Form }, payload: 'interval=monthly' });
+  check(checkoutNoTier.statusCode === 400 && /Pick a plan/.test(checkoutNoTier.body), 'a checkout without a plan is refused');
+  const checkoutOk = await p22App.inject({ method: 'POST', url: '/d/subscription/checkout', headers: { ...p22OwnerCookie, ...p22Form }, payload: 'tier=team_fleet&interval=annual' });
+  check(checkoutOk.statusCode === 303 && String(checkoutOk.headers.location) === 'https://checkout.paystack.com/p22-tier', 'the engine checkout URL is followed (303)');
+  check(p22Calls.tier.length === 1 && p22Calls.tier[0].targetTierKey === 'team_fleet' && p22Calls.tier[0].interval === 'annual', 'the engine receives the chosen tier + interval verbatim');
+  check(p22Calls.tier[0].callbackUrl === 'https://app.sakafleet.test/d/subscription', 'the callback returns to /d/subscription (PUBLIC_APP_URL base)');
+  check(p22Calls.tier[0].currency === 'USD' && p22Calls.tier[0].owner.id === 'p22-owner', "the checkout carries the owner's currency + id");
+  const checkoutCrossOrigin = await p22App.inject({ method: 'POST', url: '/d/subscription/checkout', headers: { ...p22OwnerCookie, ...p22Form, origin: 'https://evil.example' }, payload: 'tier=team_fleet' });
+  check(checkoutCrossOrigin.statusCode === 400 && /open the subscription page again/.test(checkoutCrossOrigin.body), 'a cross-origin checkout is refused');
+  p22BadCheckout = true;
+  const checkoutInsecure = await p22App.inject({ method: 'POST', url: '/d/subscription/checkout', headers: { ...p22OwnerCookie, ...p22Form }, payload: 'tier=team_fleet' });
+  check(checkoutInsecure.statusCode === 502 && /payment page could not be opened/.test(checkoutInsecure.body), 'a non-HTTPS checkout URL is refused (no open redirect)');
+  p22BadCheckout = false;
+
+  // At capacity: the Add Vehicle link becomes the upgrade prompt (engine prices).
+  const freeOwner = { ...p22OwnerProfile, id: 'p22-free', subscription_tier: 'free', subscription_status: 'ACTIVE', subscription_period_end: null };
+  const freeMock = createMockSupabase({
+    ...p22Seed(),
+    [DASHBOARD_SESSIONS_TABLE]: [
+      { id: 'sess-p22-free', token_hash: hashToken('p22-free-token'), session_token_hash: hashToken('p22-free-session'), owner_id: 'p22-free', email: 'p22@example.com', verified: true, session_expires_at: new Date(Date.now() + dayMs).toISOString(), session_role: 'owner', attempts: 0 }
+    ],
+    profiles: [freeOwner],
+    vehicles: [{ id: 'v-free-1', owner_id: 'p22-free', plate_number: 'KCF 111A', status: 'ACTIVE', deleted_at: null }],
+    passbook_transfers: [],
+    subscriptions: []
+  });
+  const freeApp = Fastify({ logger: false });
+  await registerDashboardRoutes(freeApp, { supabase: freeMock.client, transferNotifier: p22Notifier, checkoutEngine: p22Checkout });
+  await freeApp.ready();
+  const freeCookie = { cookie: 'saka_dash=p22-free-session' };
+  const freePage = await freeApp.inject({ method: 'GET', url: '/d/subscription', headers: freeCookie });
+  check(freePage.statusCode === 200 && freePage.body.includes('Free') && freePage.body.includes('of <strong>1</strong>'), 'a Free owner sees the Free plan and its single slot');
+  check(freePage.body.includes('plan is full at 1 of 1 vehicle(s)') && !freePage.body.includes('Add a vehicle on WhatsApp'), 'at capacity the Add Vehicle link is replaced by the upgrade prompt');
+  check(freePage.body.includes('Upgrade to Solo Pro') && freePage.body.includes('/d/subscription/checkout'), 'the upgrade form names the next tier with its engine price');
+  const freeCheckout = await freeApp.inject({ method: 'POST', url: '/d/subscription/checkout', headers: { ...freeCookie, ...p22Form }, payload: 'tier=solo_pro&interval=monthly' });
+  check(freeCheckout.statusCode === 303, 'a Free owner can start the next-tier checkout');
+  await freeApp.close();
+
+  // Fleet Command at capacity: add-on slots are sold from the same page.
+  const fleetOwner = { ...p22OwnerProfile, id: 'p22-fleet', subscription_tier: 'fleet_command', subscription_status: 'ACTIVE', addon_quantity: 0 };
+  const p22FleetMock = createMockSupabase({
+    ...p22Seed(),
+    [DASHBOARD_SESSIONS_TABLE]: [
+      { id: 'sess-p22-fleet', token_hash: hashToken('p22-fleet-token'), session_token_hash: hashToken('p22-fleet-session'), owner_id: 'p22-fleet', email: 'p22@example.com', verified: true, session_expires_at: new Date(Date.now() + dayMs).toISOString(), session_role: 'owner', attempts: 0 }
+    ],
+    profiles: [fleetOwner],
+    vehicles: [1, 2, 3, 4, 5].map((n) => ({ id: `v-fleet-${n}`, owner_id: 'p22-fleet', plate_number: `KCF 00${n}A`, status: 'ACTIVE', deleted_at: null })),
+    passbook_transfers: [],
+    subscriptions: []
+  });
+  const fleetApp = Fastify({ logger: false });
+  await registerDashboardRoutes(fleetApp, { supabase: p22FleetMock.client, transferNotifier: p22Notifier, checkoutEngine: p22Checkout });
+  await fleetApp.ready();
+  const fleetCookie = { cookie: 'saka_dash=p22-fleet-session' };
+  const fleetPage = await fleetApp.inject({ method: 'GET', url: '/d/subscription', headers: fleetCookie });
+  check(fleetPage.statusCode === 200 && fleetPage.body.includes('Fleet Command') && fleetPage.body.includes('plan is full at 5 of 5 vehicle(s)'), 'Fleet Command at capacity is named honestly');
+  check(fleetPage.body.includes('Extra vehicle slots') && fleetPage.body.includes('USD 3.99'), 'the add-on card prices extra slots from the engine');
+  const addonCallsBefore = p22Calls.addon.length;
+  const addonOk = await fleetApp.inject({ method: 'POST', url: '/d/subscription/addon', headers: { ...fleetCookie, ...p22Form }, payload: 'quantity=2' });
+  check(addonOk.statusCode === 303 && String(addonOk.headers.location) === 'https://checkout.paystack.com/p22-addon', 'the add-on checkout is followed (303)');
+  check(p22Calls.addon.length === addonCallsBefore + 1 && p22Calls.addon[addonCallsBefore].addonQuantity === 2 && p22Calls.addon[addonCallsBefore].callbackUrl.endsWith('/d/subscription'), 'the engine receives the slot quantity and the dashboard callback');
+  await fleetApp.close();
+
+  const addonNotEligible = await p22App.inject({ method: 'POST', url: '/d/subscription/addon', headers: { ...p22OwnerCookie, ...p22Form }, payload: 'quantity=1' });
+  check(addonNotEligible.statusCode === 400 && /Fleet Command add-on/.test(addonNotEligible.body), 'add-ons are refused outside Fleet Command');
+  await p22App.close();
+
   process.env.DASHBOARD_ENABLED = previousFlag;
   if (previousBase === undefined) delete process.env.PUBLIC_APP_URL;
   else process.env.PUBLIC_APP_URL = previousBase;

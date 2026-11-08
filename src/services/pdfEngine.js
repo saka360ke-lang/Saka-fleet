@@ -22,13 +22,18 @@ export const SAKA_PDF_THEME = Object.freeze({
   line: '#E2E8F0',       // hairlines & card borders
   panel: '#F8FAFC',      // neutral card containers
   white: '#FFFFFF',
-  brand: '#0EA5E9',      // Vibrant Tech Teal — brand accent
+  // v1.83.0 (Phase 22) — the PDF wears the dashboard's lime brand. #65A30D is
+  // the TEXT-SAFE shade (AA on white); #B8EF5C is decorative only (fills,
+  // tints) and never carries body text. Tech Teal #0EA5E9 retires as the
+  // default accent.
+  brand: '#65A30D',      // text-safe lime — brand accent
+  lime: '#B8EF5C',       // decorative lime (fills/tints only)
   positive: '#10B981',   // Emerald — earnings, healthy balances
   negative: '#EF4444',   // Coral — expenses, net losses
   warn: '#F59E0B',       // Warm Amber — expiring / attention
   accents: Object.freeze({
-    fleet: '#0EA5E9',
-    financial: '#0EA5E9',
+    fleet: '#65A30D',
+    financial: '#65A30D',
     compliance: '#F59E0B',
     maintenance: '#10B981',
     fuel_economy: '#8B5CF6',
@@ -38,13 +43,13 @@ export const SAKA_PDF_THEME = Object.freeze({
     driver_scorecard: '#6366F1',
     year_review: '#EC4899',
     eco_footprint: '#22C55E',
-    vehicle_deep_dive: '#2563EB',
-    owner_portfolio: '#0EA5E9',
+    vehicle_deep_dive: '#65A30D',
+    owner_portfolio: '#65A30D',
     driver_performance: '#6366F1',
     custom: '#6366F1',
-    default: '#0EA5E9'
+    default: '#65A30D'
   }),
-  status: Object.freeze({ good: '#10B981', warn: '#F59E0B', bad: '#EF4444', info: '#0EA5E9' })
+  status: Object.freeze({ good: '#10B981', warn: '#F59E0B', bad: '#EF4444', info: '#65A30D' })
 });
 
 export function getReportAccent(reportType = 'fleet') {
@@ -94,7 +99,26 @@ const PAGE_WIDTH = 595.28;
 const PAGE_HEIGHT = 841.89;
 const CONTENT_WIDTH = PAGE_WIDTH - PAGE_MARGIN * 2;
 
+/**
+ * v1.83.0 (Phase 22) — the layout contract is exported so a suite can pin it:
+ * A4 with the 48 pt mobile-friendly margins that keep every line inside the
+ * printable area.
+ */
+export const SAKA_PDF_GEOMETRY = Object.freeze({
+  pageWidth: PAGE_WIDTH,
+  pageHeight: PAGE_HEIGHT,
+  margin: PAGE_MARGIN,
+  contentWidth: CONTENT_WIDTH
+});
+
 const FONT_DIR = path.join(process.cwd(), 'assets', 'fonts');
+// v1.83.0 (Phase 22) — D2, revised by the live audit: Sora is the dashboard's
+// display face, but fontkit's WOFF2 subsetting throws mid-build ("Offset is
+// outside the bounds of the DataView") on a second document in the same
+// process, so PDFs NEVER load woff2. The attempt is restricted to a vendored
+// TTF/OTF drop; with none present today the vendored Barlow SemiBold remains
+// the display face (guaranteed fallback, never throws).
+const PREMIUM_DISPLAY_FILES = ['Sora-600.ttf', 'Sora-SemiBold.ttf', 'Sora-600.otf'];
 const FONT_FILES = {
   body: 'Manrope-Regular.ttf',
   display: 'Barlow-SemiBold.ttf',
@@ -104,7 +128,23 @@ const FONT_FILES = {
 /** Register vendored fonts with a Helvetica fallback (never throws). */
 export function registerReportFonts(doc) {
   const fonts = { body: 'Helvetica', bold: 'Helvetica-Bold', display: 'Helvetica-Bold', mono: 'Courier' };
+  // 1. Premium display: a vendored Sora TTF/OTF beats Barlow when present.
+  for (const file of PREMIUM_DISPLAY_FILES) {
+    const target = path.join(FONT_DIR, file);
+    try {
+      if (fs.existsSync(target)) {
+        doc.registerFont('saka-display-premium', target);
+        fonts.display = 'saka-display-premium';
+        break;
+      }
+    } catch (err) {
+      // Never silent: a broken premium font is reported, then Barlow wins.
+      console.warn('[pdfEngine] premium display font skipped:', err.message);
+    }
+  }
+  // 2. Vendored body + mono; Barlow only when Sora did not register.
   for (const [role, file] of Object.entries(FONT_FILES)) {
+    if (role === 'display' && fonts.display === 'saka-display-premium') continue;
     const target = path.join(FONT_DIR, file);
     try {
       if (fs.existsSync(target)) {
@@ -751,7 +791,7 @@ function drawSegmentedBar(doc, fonts, chart, accent) {
     doc.y += 24;
     return;
   }
-  const palette = ['#0EA5E9', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#14B8A6', '#6366F1', '#64748B'];
+  const palette = ['#65A30D', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#14B8A6', '#6366F1', '#64748B'];
   const barY = doc.y;
   const barH = 18;
   doc.save();

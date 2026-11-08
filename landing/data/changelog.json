@@ -1,6 +1,13 @@
 {
-  "latest": "1.82.0",
+  "latest": "1.83.0",
   "entries": [
+    {
+      "version": "1.83.0",
+      "date": "2026-11-08",
+      "title": "Sharper dashboard, transfers and your plan in one place",
+      "preview": "The dashboard now wears the Saka look, and you can hand over a passbook and manage your plan without leaving it.",
+      "summary": "Your dashboard has grown up. It now wears the same Saka brand as the website - the real logo, the premium type and a calm green glow - and it feels right on a phone, with bigger buttons and readable forms. Two new pages do real work. Passbook transfer lets you hand a vehicle to a buyer from the dashboard: pick the car, enter the buyer's WhatsApp number, email and the handover mileage, then type the 6-digit release PIN Saka emails you. The buyer still accepts on WhatsApp and enters their own emailed code, so nothing moves without both of you. If your account has no email yet, the page tells you honestly and points you to the one-line fix. Subscription shows your plan, status, trial end, vehicle slots and billing history, and lets you upgrade or add extra Fleet Command slots through the same secure Paystack checkout - Saka never invents a price or a payment outcome. The Add Vehicle button opens WhatsApp with 'add car' ready to send, because registration still happens in chat where Saka can guide you step by step. Your PDF reports also pick up the new look, with the same clear margins whether you read them on a laptop or a phone."
+    },
     {
       "version": "1.82.0",
       "date": "2026-11-08",
