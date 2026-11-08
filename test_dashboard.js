@@ -34,8 +34,13 @@ import {
   dashboardCookieHeader,
   dashboardClearCookieHeader,
   readDashboardCookie,
-  isSecureRequest
+  isSecureRequest,
+  buildOverviewCard,
+  renderOverviewPage,
+  renderOtpPage,
+  renderErrorPage
 } from './src/services/dashboard.js';
+import { upcomingExpiryItems } from './src/services/fleetReports.js';
 import { registerDashboardRoutes } from './src/routes/dashboard.js';
 
 let passed = 0;
@@ -315,7 +320,171 @@ async function run() {
   check(laneEligible.reply_message.includes('https://app.sakafleet.com/d/feedface'), 'an eligible reply carries the magic link');
   check(/code is in that same email/.test(laneEligible.reply_message) && !/\b\d{6}\b/.test(laneEligible.reply_message.replace(/\d+\s*minutes?/gi, '')), 'the reply never contains the 6-digit code itself (D2)');
 
-  /* __NEXT__ */
+  console.log('\n--- Test 13: D3 upcomingExpiryItems ---');
+  const dayIso = (days) => new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
+  const expiryMock = createMockSupabase({
+    vehicles: [
+      { id: 'v1', owner_id: PROFILE.id, plate_number: 'KDA 123A', status: 'ACTIVE', insurance_expiry: dayIso(5), inspection_expiry: dayIso(40), road_license_expiry: dayIso(-3) },
+      { id: 'v2', owner_id: PROFILE.id, plate_number: 'KDB 456B', status: 'ACTIVE', permit_expiry: dayIso(2) }
+    ],
+    reminders: []
+  });
+  const upcoming = await upcomingExpiryItems(expiryMock.client, PROFILE.id, 6);
+  check(Array.isArray(upcoming) && upcoming.length >= 2, 'upcoming expiries are returned from vehicle columns');
+  check(upcoming.every((item) => item.daysLeft >= 0), 'expired items are excluded from the upcoming strip');
+  check(upcoming.every((item, index) => index === 0 || upcoming[index - 1].daysLeft <= item.daysLeft), 'items are sorted soonest-first');
+  check(upcoming[0].plate === 'KDB 456B' && upcoming[0].category === 'permit', 'the soonest item leads (permit in ~2 days)');
+  check(!upcoming.some((item) => item.category === 'licensing'), 'the expired road licence never appears');
+  check(Object.keys(upcoming[0]).sort().join(',') === 'category,daysLeft,dueDate,plate,status', 'the shape is exactly { plate, category, dueDate, daysLeft, status }');
+  const capped = await upcomingExpiryItems(expiryMock.client, PROFILE.id, 1);
+  check(capped.length === 1, 'the limit caps the strip');
+  check((await upcomingExpiryItems(expiryMock.client, 'someone-else', 6)).length === 0, 'another owner sees none of these items');
+
+  console.log('\n--- Test 14: buildOverviewCard shaping ---');
+  const fakeReport = {
+    ok: true,
+    data: {
+      generatedAt: '2026-11-08T06:00:00Z',
+      currency: 'KES',
+      timeZone: 'Africa/Nairobi',
+      financial: { expenses: { total: 500 }, earnings: 1500, net: 1000 },
+      overview: { activeVehicles: 2, totalVehicles: 4 },
+      recentActivity: Array.from({ length: 8 }, (_, i) => ({ type: 'expense_logged', label: `row ${i}`, at: '2026-11-08T00:00:00Z' }))
+    }
+  };
+  const fakeUpcoming = Array.from({ length: 8 }, (_, i) => ({ plate: 'X', category: 'insurance', dueDate: dayIso(i + 1), daysLeft: i + 1, status: 'active' }));
+  const card = await buildOverviewCard({
+    supabase: {},
+    ownerId: 'p1',
+    buildReport: async () => fakeReport,
+    loadUpcoming: async () => fakeUpcoming
+  });
+  check(card.ok === true, 'the overview card builds');
+  check(card.kpis.spend === 500 && card.kpis.earnings === 1500 && card.kpis.net === 1000 && card.kpis.activeVehicles === 2 && card.kpis.totalVehicles === 4,
+    'KPIs map from the fleet report (spend, earnings, net, active vehicles)');
+  check(card.upcoming.length === 6, 'at most six upcoming expiries are carried');
+  check(card.recent.length === 5, 'at most five recent activities are carried');
+  check(card.currency === 'KES' && card.timeZone === 'Africa/Nairobi', 'currency and timezone ride the report');
+  check((await buildOverviewCard({ supabase: {}, ownerId: 'p1', buildReport: async () => ({ ok: false }), loadUpcoming: async () => [] })).ok === false,
+    'a failed fleet report fails the card honestly');
+
+  console.log('\n--- Test 15: buildOverviewCard against the real builder (empty fleet) ---');
+  const emptyFleet = createMockSupabase({ vehicles: [], profiles: [], reminders: [], expense_logs: [], private_earnings: [], passbook_transfers: [], expiry_notification_log: [], vehicle_compliances: [], driver_compliances: [], admin_audit_logs: [] });
+  const realCard = await buildOverviewCard({ supabase: emptyFleet.client, ownerId: PROFILE.id, profile: PROFILE });
+  check(realCard.ok === true, 'the real fleet builder produces a card for an empty fleet');
+  check(realCard.kpis.spend === 0 && realCard.kpis.earnings === 0 && realCard.kpis.net === 0 && realCard.kpis.activeVehicles === 0,
+    'an empty fleet reads as honest zeros (never invented figures)');
+  check(realCard.upcoming.length === 0 && realCard.recent.length === 0, 'no expiries and no activity for an empty fleet');
+
+  console.log('\n--- Test 16: the four pages end-to-end (Fastify inject) ---');
+  process.env.DASHBOARD_ENABLED = 'on';
+  const pageMock = createMockSupabase({
+    [DASHBOARD_SESSIONS_TABLE]: [],
+    admin_audit_logs: [],
+    profiles: [{ id: PROFILE.id, phone_number: PROFILE.phone_number, email: PROFILE.email, full_name: PROFILE.full_name, country_code: 'KE' }],
+    vehicles: []
+  });
+  let pageEmail = null;
+  const pageAccess = await requestDashboardAccess({
+    supabase: pageMock.client,
+    ownerId: PROFILE.id,
+    profile: PROFILE,
+    entitlements: { isTrial: true, isPaid: false },
+    sendEmail: async (payload) => { pageEmail = payload; return true; }
+  });
+  const pageToken = pageAccess.link.split('/').pop();
+  const app = Fastify({ logger: false });
+  await registerDashboardRoutes(app, { supabase: pageMock.client });
+  await app.ready();
+
+  const otpPage = await app.inject({ method: 'GET', url: `/d/${pageToken}` });
+  check(otpPage.statusCode === 200 && /Check your email/.test(otpPage.body), 'GET /d/<token> renders the OTP page');
+  check(otpPage.body.includes('a***a@example.com'), 'the OTP page shows the masked destination address');
+  check(otpPage.body.includes(`value="${pageToken}"`), 'the form carries the link token in a hidden field');
+  check(otpPage.body.includes('Open my dashboard') && otpPage.body.includes('10 minutes'), 'the form names the action and the code TTL');
+
+  const badOtp = await app.inject({
+    method: 'POST',
+    url: '/d/verify',
+    payload: `token=${pageToken}&otp=000000`,
+    headers: { 'content-type': 'application/x-www-form-urlencoded' }
+  });
+  check(badOtp.statusCode === 401 && /did not match/.test(badOtp.body), 'a wrong code re-renders the OTP page with an error');
+  check(pageMock.db[DASHBOARD_SESSIONS_TABLE][0].attempts === 1, 'a wrong code increments the attempt counter');
+  check(!/saka_dash=[a-f0-9]{64}/.test(String(badOtp.headers['set-cookie'] || '')), 'a wrong code never issues a cookie');
+
+  const goodOtp = await app.inject({
+    method: 'POST',
+    url: '/d/verify',
+    payload: `token=${pageToken}&otp=${pageEmail.otp}`,
+    headers: { 'content-type': 'application/x-www-form-urlencoded' }
+  });
+  check(goodOtp.statusCode === 303 && goodOtp.headers.location === '/d', 'the correct code redirects 303 to /d');
+  const cookieLine = String(Array.isArray(goodOtp.headers['set-cookie']) ? goodOtp.headers['set-cookie'][0] : goodOtp.headers['set-cookie'] || '');
+  check(/saka_dash=[a-f0-9]{64}/.test(cookieLine), 'the session cookie carries a raw 64-hex token');
+  check(cookieLine.includes('HttpOnly') && cookieLine.includes('SameSite=Strict') && cookieLine.includes('Path=/d') && cookieLine.includes('Max-Age=2592000'),
+    'the cookie is HttpOnly, SameSite=Strict, Path=/d and lives 30 days');
+  check(!cookieLine.includes('Secure'), 'localhost development omits Secure');
+  const sessionCookie = cookieLine.match(/saka_dash=([a-f0-9]{64})/)[1];
+
+  const overview = await app.inject({ method: 'GET', url: '/d', headers: { cookie: `saka_dash=${sessionCookie}` } });
+  check(overview.statusCode === 200, 'GET /d with a valid cookie renders the overview');
+  check(/Your fleet at a glance/.test(overview.body), 'the overview title renders');
+  check(overview.body.includes('Spend') && overview.body.includes('Earnings') && overview.body.includes('Net') && overview.body.includes('Active vehicles'),
+    'the KPI labels render (spend, earnings, net, active vehicles)');
+  check(overview.body.includes('Coming up') && overview.body.includes('Recent activity'), 'the upcoming + recent sections render');
+  check(overview.body.includes('href="/d/logout"') && /a\*\*\*a@example\.com/.test(overview.body), 'the page carries the logout link and the masked identity');
+
+  const noCookie = await app.inject({ method: 'GET', url: '/d' });
+  check(noCookie.statusCode === 401 && /Reply \*dashboard\*/.test(noCookie.body), 'GET /d without a cookie 401s with the WhatsApp instruction');
+  const badCookie = await app.inject({ method: 'GET', url: '/d', headers: { cookie: 'saka_dash=deadbeef' } });
+  check(badCookie.statusCode === 401, 'GET /d with an unknown cookie 401s');
+  check(String(badCookie.headers['set-cookie'] || '').includes('Max-Age=0'), 'an invalid session cookie is cleared');
+
+  const logout = await app.inject({ method: 'GET', url: '/d/logout', headers: { cookie: `saka_dash=${sessionCookie}` } });
+  check(logout.statusCode === 200 && /logged out/i.test(logout.body), 'GET /d/logout renders the logged-out page');
+  check(String(logout.headers['set-cookie'] || '').includes('Max-Age=0'), 'logout clears the cookie');
+  check(pageMock.db[DASHBOARD_SESSIONS_TABLE].length === 0, 'logout deletes the session row');
+  const afterPageLogout = await app.inject({ method: 'GET', url: '/d', headers: { cookie: `saka_dash=${sessionCookie}` } });
+  check(afterPageLogout.statusCode === 401, 'the old cookie no longer opens the dashboard');
+  await app.close();
+
+  console.log('\n--- Test 17: pure renderers ---');
+  const synthetic = {
+    ok: true,
+    generatedAt: '2026-11-08T06:00:00Z',
+    currency: 'KES',
+    locale: 'en-KE',
+    timeZone: 'Africa/Nairobi',
+    kpis: { spend: 1200.5, earnings: 3000, net: 1799.5, activeVehicles: 2, totalVehicles: 3 },
+    upcoming: [
+      { plate: 'KDA 123A', category: 'insurance', dueDate: '2026-11-10', daysLeft: 2, status: 'due_7d' },
+      { plate: 'KDB 456B', category: 'inspection', dueDate: '2026-11-25', daysLeft: 17, status: 'due_30d' }
+    ],
+    recent: [
+      { type: 'expense_logged', label: 'KDA 123A fuel KES 5,500', at: '2026-11-08T05:00:00Z' },
+      { type: 'vehicle_registered', label: 'KDB 456B registered', at: '2026-11-07T05:00:00Z' }
+    ]
+  };
+  const html = renderOverviewPage({ data: synthetic, emailMasked: 'a***a@example.com' });
+  check(html.includes('Your fleet at a glance') && html.includes('a***a@example.com'), 'the overview renders its title and identity');
+  check(html.includes('KES') && /1,?200/.test(html), 'money renders in the owner currency');
+  check(html.includes('KDA 123A') && html.includes('in 2 d') && html.includes('in 17 d'), 'upcoming expiries render with day chips');
+  check(html.includes('KDA 123A fuel KES 5,500') && html.includes('KDB 456B registered'), 'recent activities render');
+  check(html.includes('class="chip due"'), 'expiries inside 7 days carry the due chip');
+  const emptyHtml = renderOverviewPage({
+    data: { ...synthetic, upcoming: [], recent: [] },
+    emailMasked: 'a***a@example.com'
+  });
+  check(emptyHtml.includes('Nothing due in the coming weeks') && emptyHtml.includes('No activity yet'),
+    'empty sections show a warm, honest empty state (never a bare zero)');
+  const errorPage = renderErrorPage(410, 'This link has expired.');
+  check(errorPage.status === 410 && errorPage.html.includes('Link expired') && errorPage.html.includes('This link has expired.'), 'the error renderer maps 410 to a plain explanation');
+  const renderedOtp = renderOtpPage({ token: 'abc123', emailMasked: 'a***a@example.com', error: 'That code did not match.' });
+  check(renderedOtp.includes('value="abc123"') && renderedOtp.includes('That code did not match.') && renderedOtp.includes('Never share it'),
+    'the OTP renderer carries the token, the error and the never-share warning');
+  const failedCard = renderOverviewPage({ data: { ok: false }, emailMasked: 'a***a@example.com' });
+  check(failedCard.includes('could not be loaded') && !failedCard.includes('undefined'), 'a failed card renders one honest explanation (no undefined leaks)');
 
   process.env.DASHBOARD_ENABLED = previousFlag;
   if (previousBase === undefined) delete process.env.PUBLIC_APP_URL;

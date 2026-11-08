@@ -878,6 +878,36 @@ function formatFinancialText(data, ctx) {
 }
 
 
+/**
+ * v1.74.2 (Phase 13C, D3) — the six soonest UPCOMING expiries for the dashboard
+ * overview card. Reuses the same dataset + unified expiry collector as the four
+ * reports; filters to daysLeft >= 0 (already-expired items belong on the
+ * compliance page, not a "coming up" strip) and sorts soonest-first.
+ * Returns [{ plate, category, dueDate, daysLeft, status }]. Never throws.
+ */
+export async function upcomingExpiryItems(supabase, ownerId, limit = 6) {
+  if (!supabase || !ownerId) return [];
+  try {
+    const dataset = await loadFleetData({ supabase, ownerId });
+    const items = collectExpiryItems(dataset, new Date());
+    const max = Math.max(1, Math.min(50, Number(limit) || 6));
+    return items
+      .filter((item) => item.daysLeft !== null && item.daysLeft >= 0)
+      .sort((a, b) => a.daysLeft - b.daysLeft)
+      .slice(0, max)
+      .map((item) => ({
+        plate: item.plate,
+        category: item.category,
+        dueDate: item.dueDate,
+        daysLeft: item.daysLeft,
+        status: item.status
+      }));
+  } catch (err) {
+    console.warn('[fleetReports] upcomingExpiryItems failed:', err.message);
+    return [];
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* Dispatcher                                                          */
 /* ------------------------------------------------------------------ */
@@ -912,6 +942,7 @@ export default {
   buildFleetStatusReport,
   buildComplianceReport,
   buildMaintenanceReport,
-  buildFinancialReport
+  buildFinancialReport,
+  upcomingExpiryItems
 };
 

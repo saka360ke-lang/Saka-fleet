@@ -25,12 +25,13 @@ import {
   isSecureRequest,
   dashboardOtpReasonCopy,
   maskEmail,
-  renderPageShell,
-  renderMessagePage,
-  escapeHtml,
-  DASHBOARD_OTP_TTL_MS
+  renderOtpPage,
+  renderOverviewPage,
+  renderLogoutPage,
+  renderErrorPage,
+  buildOverviewCard
 } from '../services/dashboard.js';
-import { logSystemError } from '../services/systemErrors.js';
+import { logSystemError, logWriteFailure } from '../services/systemErrors.js';
 
 /** A1 — identical to Fastify's own "route not found" payload. */
 function answerAsNotFound(request, reply) {
@@ -60,40 +61,27 @@ function linkReasonStatus(reason) {
   return 410;
 }
 
-export function renderOtpPage({ token, emailMasked, error = null }) {
-  const otpMinutes = Math.max(1, Math.round(DASHBOARD_OTP_TTL_MS / 60000));
-  const body = `
-<h1>Check your email</h1>
-<p class="muted">I emailed a 6-digit code to <strong>${escapeHtml(emailMasked)}</strong>. Enter it below to open your dashboard.</p>
-<div class="card">
-  <form method="POST" action="/d/verify" autocomplete="off">
-    <input type="hidden" name="token" value="${escapeHtml(token)}">
-    <input type="text" name="otp" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="000000" aria-label="6-digit code" required>
-    ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
-    <button type="submit">Open my dashboard</button>
-  </form>
-  <p class="muted" style="font-size:13px;margin-top:12px;">The code works for ${otpMinutes} minutes. Never share it with anyone — Saka will never ask you for it in WhatsApp.</p>
-</div>`;
-  return renderPageShell('Verify your email', body);
+/** Rule 50 — optional profile context degrades to the slim set. */
+async function loadDashboardProfile(supabase, ownerId) {
+  if (!supabase || !ownerId) return null;
+  const full = 'id, phone_number, email, full_name, country, country_code, preferred_language, currency, locale';
+  const slim = 'id, phone_number, email, full_name, country_code';
+  try {
+    let { data, error } = await supabase.from('profiles').select(full).eq('id', ownerId).maybeSingle();
+    if (error) {
+      ({ data, error } = await supabase.from('profiles').select(slim).eq('id', ownerId).maybeSingle());
+    }
+    return error ? null : data || null;
+  } catch (err) {
+    logWriteFailure(supabase, 'dashboard.loadProfile', err);
+    return null;
+  }
 }
 
-/** 13A placeholder — Phase 13C replaces this with the overview card. */
-export function renderSignedInPage({ emailMasked }) {
-  const body = `
-<h1>You're in</h1>
-<p class="muted">Signed in as ${escapeHtml(emailMasked)}.</p>
-<div class="card"><p class="muted">Your overview is almost ready.</p></div>`;
-  return renderPageShell('Dashboard', body, {
-    headerRight: '<a href="/d/logout">Log out</a>'
-  });
-}
+// Page renderers live in src/services/dashboard.js (D1 shared shell) and are
+// imported above: renderOtpPage / renderOverviewPage / renderLogoutPage /
+// renderErrorPage.
 
-export function renderLogoutPage() {
-  const body = `
-<h1>You're logged out</h1>
-<p class="muted">This browser no longer has access. Reply <strong>dashboard</strong> on WhatsApp any time for a fresh link.</p>`;
-  return renderPageShell('Logged out', body);
-}
 
 export async function registerDashboardRoutes(fastify, { supabase } = {}) {
   await fastify.register(async (scope) => {
@@ -107,27 +95,21 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
       try {
         const sessionToken = readDashboardCookie(request.headers);
         if (!sessionToken) {
-          const page = renderMessagePage(
-            'Open your dashboard from WhatsApp',
-            'Reply *dashboard* in the WhatsApp chat and I will email you a fresh link.',
-            { status: 401 }
-          );
+          const page = renderErrorPage(401, 'Reply *dashboard* in the WhatsApp chat and I will email you a fresh link.');
           return sendHtml(reply, page.status, page.html);
         }
         const session = await getSessionByToken({ supabase, sessionToken });
         if (!session.ok) {
           reply.header('set-cookie', dashboardClearCookieHeader({ secure: isSecureRequest(request) }));
-          const page = renderMessagePage(
-            'Open your dashboard from WhatsApp',
-            'Your session has ended. Reply *dashboard* in the WhatsApp chat and I will email you a fresh link.',
-            { status: 401 }
-          );
+          const page = renderErrorPage(401, 'Your session has ended. Reply *dashboard* in the WhatsApp chat and I will email you a fresh link.');
           return sendHtml(reply, page.status, page.html);
         }
-        return sendHtml(reply, 200, renderSignedInPage({ emailMasked: maskEmail(session.email) }));
+        const profile = await loadDashboardProfile(supabase, session.ownerId);
+        const card = await buildOverviewCard({ supabase, ownerId: session.ownerId, profile });
+        return sendHtml(reply, 200, renderOverviewPage({ data: card, emailMasked: maskEmail(session.email || profile?.email) }));
       } catch (err) {
         await logSystemError(supabase, err, '/d');
-        const page = renderMessagePage('Something went wrong', 'Please try again in a moment.', { status: 500 });
+        const page = renderErrorPage(500, 'Please try again in a moment.');
         return sendHtml(reply, page.status, page.html);
       }
     });
@@ -160,7 +142,7 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
         if (!result.ok) {
           const state = await getLinkState({ supabase, rawToken: token });
           if (!state.ok) {
-            const page = renderMessagePage('Link not available', linkReasonCopy(state.reason), { status: linkReasonStatus(state.reason) });
+            const page = renderErrorPage(linkReasonStatus(state.reason), linkReasonCopy(state.reason));
             return sendHtml(reply, page.status, page.html);
           }
           const page = renderOtpPage({
@@ -174,7 +156,7 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
         return reply.code(303).header('location', '/d').send();
       } catch (err) {
         await logSystemError(supabase, err, '/d/verify');
-        const page = renderMessagePage('Something went wrong', 'Please try again in a moment.', { status: 500 });
+        const page = renderErrorPage(500, 'Please try again in a moment.');
         return sendHtml(reply, page.status, page.html);
       }
     });
@@ -188,13 +170,13 @@ export async function registerDashboardRoutes(fastify, { supabase } = {}) {
       try {
         const state = await getLinkState({ supabase, rawToken: token });
         if (!state.ok) {
-          const page = renderMessagePage('Link not available', linkReasonCopy(state.reason), { status: linkReasonStatus(state.reason) });
+          const page = renderErrorPage(linkReasonStatus(state.reason), linkReasonCopy(state.reason));
           return sendHtml(reply, page.status, page.html);
         }
         return sendHtml(reply, 200, renderOtpPage({ token, emailMasked: maskEmail(state.email) }));
       } catch (err) {
         await logSystemError(supabase, err, '/d/:token');
-        const page = renderMessagePage('Something went wrong', 'Please try again in a moment.', { status: 500 });
+        const page = renderErrorPage(500, 'Please try again in a moment.');
         return sendHtml(reply, page.status, page.html);
       }
     });

@@ -1,6 +1,13 @@
 {
-  "latest": "1.74.1",
+  "latest": "1.74.2",
   "entries": [
+    {
+      "version": "1.74.2",
+      "date": "2026-11-08",
+      "title": "Your dashboard, built",
+      "preview": "The page is ready: your spending, earnings, what is coming up and your latest activity, in one private place.",
+      "summary": "The dashboard's one page is finished. Open the link Saka emails you, enter the 6-digit code from that same email, and you land on a private overview: what you have spent and earned, your net, how many vehicles are active, the six documents coming due soonest and your five most recent entries. It is a quiet, readable page made for a phone screen. The dashboard is switched off in production for one final walk-through and will open to everyone in the next phase; your PDF reports stay exactly where they are, one message away in WhatsApp."
+    },
     {
       "version": "1.74.1",
       "date": "2026-11-08",

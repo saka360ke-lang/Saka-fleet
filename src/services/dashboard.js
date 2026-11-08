@@ -28,6 +28,8 @@ import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
 import { shortLinkBase } from './linkShortener.js';
 import { sendDashboardMagicLinkEmail } from './mailer.js';
 import { logWriteFailure } from './systemErrors.js';
+import { buildFleetReport, upcomingExpiryItems } from './fleetReports.js';
+import { buildGlobalContext, formatMoney, formatDate } from './globalization.js';
 
 export const DASHBOARD_SESSIONS_TABLE = 'dashboard_sessions';
 export const DASHBOARD_LINK_TTL_MS = 15 * 60 * 1000; // 15 minutes
@@ -478,6 +480,54 @@ export function isSecureRequest(request) {
 }
 
 /* ------------------------------------------------------------------ */
+/* 5. Overview card (Phase 13C) — the one page Phase 13 renders        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * KPIs + six upcoming expiries + five recent activities. Reuses the fleet
+ * status builder (the same data the WhatsApp report uses) and the D3 expiry
+ * helper. Both dependencies are injectable so suites prove the shaping without
+ * a database; production always uses the real builders.
+ */
+export async function buildOverviewCard({
+  supabase,
+  ownerId,
+  profile = null,
+  countryInfo = null,
+  now = new Date(),
+  buildReport = buildFleetReport,
+  loadUpcoming = upcomingExpiryItems
+} = {}) {
+  if (!supabase || !ownerId) return { ok: false };
+  try {
+    const ctx = buildGlobalContext(countryInfo, profile);
+    const report = await buildReport({ supabase, type: 'fleet', ownerId, countryInfo, profile, now });
+    if (!report?.ok) return { ok: false };
+    const data = report.data || {};
+    const upcoming = await loadUpcoming(supabase, ownerId, 6);
+    return {
+      ok: true,
+      generatedAt: data.generatedAt || now.toISOString(),
+      currency: data.currency || ctx.currency,
+      locale: ctx.locale,
+      timeZone: data.timeZone || ctx.timeZone,
+      kpis: {
+        spend: Number(data.financial?.expenses?.total || 0),
+        earnings: Number(data.financial?.earnings || 0),
+        net: Number(data.financial?.net || 0),
+        activeVehicles: Number(data.overview?.activeVehicles || 0),
+        totalVehicles: Number(data.overview?.totalVehicles || 0)
+      },
+      upcoming: Array.isArray(upcoming) ? upcoming.slice(0, 6) : [],
+      recent: Array.isArray(data.recentActivity) ? data.recentActivity.slice(0, 5) : []
+    };
+  } catch (err) {
+    logWriteFailure(supabase, 'dashboard.buildOverviewCard', err);
+    return { ok: false };
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* HTML shell (shared by every dashboard page, Phase 14 reuses it)     */
 /* ------------------------------------------------------------------ */
 
@@ -492,6 +542,12 @@ main { max-width:960px; margin:0 auto; padding:20px 16px 48px; }
 h1 { font-size:22px; margin:8px 0 4px; }
 p.muted { color:var(--muted); }
 .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; margin:14px 0; }
+h2 { font-size:16px; margin:22px 0 8px; }
+.kpis { display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:12px; }
+.kpi .label { color:var(--muted); font-size:13px; }
+.kpi .value { font-size:20px; font-weight:700; margin-top:2px; word-break:break-word; }
+.chip { display:inline-block; padding:1px 8px; border-radius:999px; font-size:12px; border:1px solid var(--line); color:var(--muted); }
+.chip.due { color:var(--accent); border-color:var(--accent); }
 input[type=text] { width:100%; padding:14px; font-size:22px; letter-spacing:8px; text-align:center; background:#0F0F11; color:var(--ink); border:1px solid var(--line); border-radius:10px; }
 button { width:100%; margin-top:12px; padding:14px; font-size:16px; font-weight:600; color:#0A0A0C; background:var(--accent); border:0; border-radius:10px; cursor:pointer; }
 .error { color:var(--bad); font-size:14px; margin-top:10px; }
@@ -536,6 +592,109 @@ export function renderMessagePage(title, message, { status = 400 } = {}) {
   };
 }
 
+/* ------------------------------------------------------------------ */
+/* Page renderers (Phase 13C) — inline HTML, no static server (D1)     */
+/* ------------------------------------------------------------------ */
+
+export function renderOtpPage({ token, emailMasked, error = null }) {
+  const otpMinutes = Math.max(1, Math.round(DASHBOARD_OTP_TTL_MS / 60000));
+  const body = `
+<h1>Check your email</h1>
+<p class="muted">I emailed a 6-digit code to <strong>${escapeHtml(emailMasked)}</strong>. Enter it below to open your dashboard.</p>
+<div class="card">
+  <form method="POST" action="/d/verify" autocomplete="off">
+    <input type="hidden" name="token" value="${escapeHtml(token)}">
+    <input type="text" name="otp" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="000000" aria-label="6-digit code" required>
+    ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
+    <button type="submit">Open my dashboard</button>
+  </form>
+  <p class="muted" style="font-size:13px;margin-top:12px;">The code works for ${otpMinutes} minutes. Never share it with anyone — Saka will never ask you for it in WhatsApp.</p>
+</div>`;
+  return renderPageShell('Verify your email', body);
+}
+
+const EXPIRY_LABELS = {
+  insurance: 'Insurance',
+  inspection: 'Inspection',
+  licensing: 'Road licence',
+  permit: 'Permit',
+  driver_license: 'Driver licence',
+  maintenance: 'Maintenance',
+  deadline: 'Deadline',
+  other: 'Document'
+};
+
+function daysLabel(daysLeft) {
+  if (daysLeft === 0) return 'today';
+  return `in ${daysLeft} d`;
+}
+
+/** The one Phase 13 page: KPIs, six upcoming expiries, five recent rows. */
+export function renderOverviewPage({ data, emailMasked }) {
+  if (!data?.ok) {
+    return renderErrorPage(503, 'Your overview could not be loaded just now. Please try again in a moment.').html;
+  }
+  const money = (value) => formatMoney(value, data.currency, data.locale);
+  const when = formatDate(data.generatedAt, data.locale, { timeZone: data.timeZone });
+  const kpis = `
+  <div class="kpis card">
+    <div class="kpi"><div class="label">Spend</div><div class="value">${escapeHtml(money(data.kpis.spend))}</div></div>
+    <div class="kpi"><div class="label">Earnings</div><div class="value">${escapeHtml(money(data.kpis.earnings))}</div></div>
+    <div class="kpi"><div class="label">Net</div><div class="value">${escapeHtml(money(data.kpis.net))}</div></div>
+    <div class="kpi"><div class="label">Active vehicles</div><div class="value">${data.kpis.activeVehicles} of ${data.kpis.totalVehicles}</div></div>
+  </div>`;
+
+  const upcoming = data.upcoming.length
+    ? `<ul class="plain">${data.upcoming.map((item) => `
+      <li>${escapeHtml(item.plate)} • ${escapeHtml(EXPIRY_LABELS[item.category] || item.category)} • ${escapeHtml(formatDate(item.dueDate, data.locale, { timeZone: data.timeZone }))}
+        <span class="chip${item.daysLeft <= 7 ? ' due' : ''}">${escapeHtml(daysLabel(item.daysLeft))}</span></li>`).join('')}
+    </ul>`
+    : '<p class="muted">Nothing due in the coming weeks — nicely kept.</p>';
+
+  const recent = data.recent.length
+    ? `<ul class="plain">${data.recent.map((item) => `
+      <li>${escapeHtml(item.label)} <span class="chip">${escapeHtml(formatDate(item.at, data.locale, { timeZone: data.timeZone }))}</span></li>`).join('')}
+    </ul>`
+    : '<p class="muted">No activity yet — log your first entry in WhatsApp and it appears here.</p>';
+
+  const body = `
+<h1>Your fleet at a glance</h1>
+<p class="muted">Signed in as ${escapeHtml(emailMasked)} • updated ${escapeHtml(when)}</p>
+${kpis}
+<h2>Coming up</h2>
+<div class="card">${upcoming}</div>
+<h2>Recent activity</h2>
+<div class="card">${recent}</div>
+<p class="muted" style="font-size:13px;">Your PDF reports are still one message away in WhatsApp.</p>`;
+  return renderPageShell('Your dashboard', body, {
+    headerRight: '<a href="/d/logout">Log out</a>'
+  });
+}
+
+export function renderLogoutPage() {
+  const body = `
+<h1>You're logged out</h1>
+<p class="muted">This browser no longer has access. Reply <strong>dashboard</strong> on WhatsApp any time for a fresh link.</p>`;
+  return renderPageShell('Logged out', body);
+}
+
+const ERROR_TITLES = {
+  400: 'Link not available',
+  401: 'Open your dashboard from WhatsApp',
+  404: 'Not found',
+  410: 'Link expired',
+  500: 'Something went wrong',
+  503: 'Please try again shortly'
+};
+
+export function renderErrorPage(status = 400, message = 'Please try again.') {
+  const title = ERROR_TITLES[status] || 'Link not available';
+  return {
+    status,
+    html: renderPageShell(title, `<h1>${escapeHtml(title)}</h1><p class="muted">${escapeHtml(message)}</p>`)
+  };
+}
+
 export default {
   DASHBOARD_SESSIONS_TABLE,
   DASHBOARD_SQL,
@@ -564,5 +723,10 @@ export default {
   isSecureRequest,
   renderPageShell,
   renderMessagePage,
-  escapeHtml
+  escapeHtml,
+  renderOtpPage,
+  renderOverviewPage,
+  renderLogoutPage,
+  renderErrorPage,
+  buildOverviewCard
 };

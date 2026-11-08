@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.74.1  
+**Version:** 1.74.2  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.74.2** | Phase 13C: dashboard pages — inline HTML shell (D1), OTP entry page, the overview card (KPIs, 6 upcoming expiries via `upcomingExpiryItems`, 5 recent rows), logout + error pages, cookie contract + session gates; flag remains OFF pending live verification | 199C |
 | **1.74.1** | Phase 13B: dashboard WhatsApp lane — exact-phrase `dashboard` read lane (parks the quiz, locked-phase safe), one email carrying the link + code, the code NEVER in WhatsApp, deterministic refusals (unverified → website, free → pricing, cooldown, email failure, crash-safe) | 199B |
 | **1.74.0** | Phase 13A: dashboard foundation — `dashboard_sessions` (sha256-only tokens), magic link (15 min) + email OTP (10 min, constant-time compare) + HttpOnly `saka_dash` session cookie (30 days), flag-gated `/d` routes that answer a generic 404 while `DASHBOARD_ENABLED=off` | 199A |
 | **1.73.4** | Phase 12B: template button replies — new leaf `src/routes/whatsapp/interactive.js` (`parseInteractiveReply`) turns Meta `button_reply` / `list_reply` / legacy `button` taps into the typed operator BEFORE the media envelope, a frozen D1 payload registry (`remind_me`→`reminders`), quick-edit id resolution with the VIN lock intact, and an A1-safe diagnostic (`/webhook/whatsapp/interactive`, interactive/button sub-objects only; one row per shape/phone per 24-h rollup) | 198B |
@@ -5730,6 +5731,33 @@ The `$` anchor is the grammar: `dashboard`, `my dashboard`, `open my dashboard`,
 **Frames touched.** `src/services/readCommands.js` (imports + DASHBOARD_RE + lane + header order), `src/services/flowKnowledge.js` (guidance line + playbook block + export + buildFlowPlaybook), `sakaAi.js` (core-prompt line), `test_read_registry.js` (+20 dashboard-lane assertions), `test_dashboard.js` (+10 lane-integration assertions), `test_agent_training.js` (+4), `docs/` (generated), `package.json` (1.74.1), `landing/data/changelog.json` (+ stamp), this file (§199B + version/history), `CHANGELOG.md`.
 
 **Suites run.** After: **test_dashboard (88 — +10)**, **test_read_registry (201 — +20)**, test_agent_training (191 — +4), test_no_canned_replies (14 — ratchet still 4), test_kb_docs (36), test_landing_static, test_doc_sync (30), `npm run health` — green. Zero behavioural assertions edited.
+
+#### 199C. v1.74.2 (Phase 13C) — the four pages, the overview card and D3
+
+**D1 — inline HTML, shared shell.** `src/services/dashboard.js` owns `DASHBOARD_CSS`, `renderPageShell(title, body, { headerRight })` (dark Saka palette, `noindex`, viewport-safe) and every page renderer; `src/routes/dashboard.js` is now only flag gate → service call → `text/html` response. No static server, no CDN, no new dependency. `theme` code is escaped through `escapeHtml` everywhere a user value or a phone/plate/date is interpolated.
+
+**The four renderers.**
+- `renderOtpPage({ token, emailMasked, error })` — masked destination, hidden token field, `pattern="[0-9]{6}"` input, error slot, "code works for 10 minutes / never share it, Saka will never ask in WhatsApp".
+- `renderOverviewPage({ data, emailMasked })` — `Your fleet at a glance`, `updated <Nairobi date>`, the KPI grid (**Spend / Earnings / Net / Active vehicles N of M**), **Coming up** (six cards max: plate • category • date • `in N d` chip, `due` styling inside 7 days), **Recent activity** (five rows with date chips), the logout link and the footer line "Your PDF reports are still one message away in WhatsApp". Empty sections render warm honest states ("Nothing due in the coming weeks — nicely kept." / "No activity yet — log your first entry in WhatsApp…"), never a bare zero.
+- `renderLogoutPage()` — confirms the browser lost access and teaches the way back (*dashboard*).
+- `renderErrorPage(status, message)` — 400/401/404/410/500/503 titles; a failed card renders ONE honest explanation (no `undefined` leak, pinned).
+
+**D3 — `upcomingExpiryItems(supabase, ownerId, limit = 6)`** exported from `fleetReports.js`: reuses `loadFleetData` + the unified `collectExpiryItems` (reminders take precedence, canonical vehicle columns fill gaps), filters `daysLeft >= 0`, sorts soonest-first, caps at the limit (1–50), returns exactly `{ plate, category, dueDate, daysLeft, status }`. Never throws (returns `[]`).
+
+**`buildOverviewCard({ supabase, ownerId, profile, countryInfo })`** — calls `buildFleetReport({ type: 'fleet' })` + `upcomingExpiryItems` and shapes `{ ok, generatedAt, currency, locale, timeZone, kpis: { spend, earnings, net, activeVehicles, totalVehicles }, upcoming (≤6), recent (≤5) }`. Money is always the owner currency from `buildGlobalContext` (no hard-coded KES). Both builders are injectable for suites; production uses the real ones. A failed report returns `{ ok:false }` and the page answers a 503 explanation.
+
+**Routes (final).** `GET /d/:token` → OTP page (or 400/410 error page for invalid/expired/used links). `POST /d/verify` → 303 `/d` + cookie, or 401 re-render with reason copy, or an error page when the link itself died. `GET /d` → cookie → session → slim-degrading profile load (rule 50) → overview card → page; **no cookie/invalid cookie → 401 page with the WhatsApp instruction** (a redirect to `/d/<new token>` is impossible: tokens are only minted from an eligible WhatsApp turn — redirecting to a token that does not exist would be a lie). An invalid cookie is also cleared. `GET /d/logout` → delete the session row + `Max-Age=0` cookie + logged-out page.
+
+**Cookie contract (verbatim).** `saka_dash=<raw token>; Path=/d; HttpOnly; SameSite=Strict; Max-Age=2592000; Secure` — `Secure` is appended on every real host and omitted only for `localhost`/`127.0.0.1` development.
+
+**Flag state.** `DASHBOARD_ENABLED` stays **OFF** in `.env.example` and `.env`; the operator flips it in Cloud Run only after the live walk-through (WhatsApp trigger → email → code → overview → logout). While off, all four routes remain a byte-identical generic 404 and the lane answers A2.
+
+**Frames touched.** `src/services/dashboard.js` (overview card + 4 renderers + CSS), `src/routes/dashboard.js` (page wiring, profile degrade, logout), `src/services/fleetReports.js` (`upcomingExpiryItems` + default export), `test_dashboard.js` (+49: D3 shape/sort/filter/limit, card shaping, real-builder zeros, Fastify end-to-end pages incl. cookie attributes + 401/404 paths + logout row deletion, pure renderers), `package.json` (1.74.2), `landing/data/changelog.json` (+ stamp), this file (§199C + version/history), `CHANGELOG.md`.
+
+**Suites run.** Baseline: test_fleet_reports, test_report_builders, test_dashboard (88). After: **test_dashboard (137 — +49)**, test_fleet_reports, test_report_builders, test_read_registry (201), test_agent_training (191), test_no_canned_replies (14), test_kb_docs (36), test_landing_static, test_doc_sync (30), `npm run health` — green. Zero behavioural assertions edited.
+
+**Phase 13 closes here.** Phase 14 owns the full dashboard (vehicles, records, compliance, reports, settings, charts, search, PDF export), Phase 15 the driver + superadmin views, Phase 16 the monthly summary PDF email and the PDF-first lean-out. Like 199A/199B: rule 58 — rules that shaped this phase: 1/39/45, 10/11/33, 13, 21, 31 (warm empty states, one next step), 50 (profile degrade + never-throw builders), 52, 55 (reused the report engine + short-link base), 56, 60 (guidance line already shipped in 13B).
+
 
 
 
