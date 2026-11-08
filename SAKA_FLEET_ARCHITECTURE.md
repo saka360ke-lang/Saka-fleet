@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.73.4  
+**Version:** 1.74.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.74.0** | Phase 13A: dashboard foundation — `dashboard_sessions` (sha256-only tokens), magic link (15 min) + email OTP (10 min, constant-time compare) + HttpOnly `saka_dash` session cookie (30 days), flag-gated `/d` routes that answer a generic 404 while `DASHBOARD_ENABLED=off` | 199A |
 | **1.73.4** | Phase 12B: template button replies — new leaf `src/routes/whatsapp/interactive.js` (`parseInteractiveReply`) turns Meta `button_reply` / `list_reply` / legacy `button` taps into the typed operator BEFORE the media envelope, a frozen D1 payload registry (`remind_me`→`reminders`), quick-edit id resolution with the VIN lock intact, and an A1-safe diagnostic (`/webhook/whatsapp/interactive`, interactive/button sub-objects only; one row per shape/phone per 24-h rollup) | 198B |
 | **1.73.3** | Phase 12C: quiet eval notifications — the immediate both-channel judge-error alert is gone (throttle + `CONV_EVAL_ALERT_COOLDOWN_HOURS` retired), judge errors persist as bounded `CONV_EVAL_JUDGE_ERROR` audit rows and render as their own digest section, the 15-min retry floor is kept, and a delayed digest now pings once instead of staying silent | 198C |
 | **1.73.2** | Phase 12A: driver compliance reminder hygiene — `syncAllDriverComplianceReminders` covers every `driver_compliances` type with per-document dedupe (PSV/PDP no longer collapse), retires the legacy profile mirror when a licence row exists, resets the ladder only on a real date change (it was resetting every 30-min sweep), and skips lifetime/number-less/past-expiry rows | 198A |
@@ -5673,5 +5674,39 @@ reads.js / pending.js / quiz.js / media.js / hooks.js : unchanged (5B-2 / 5B-3 e
 **G. Rules shaped this work (rule 58).** 1/39/45 (consult-first), 8 (VIN + entry date locked), 10/11/12/33 (targeted suites; version + history + CHANGELOG + generated docs same commit), 13 (docs sync; prompts deliberately untouched — no new intent), 31 (copy unchanged), 44 (audit before acting), 50 (no schema change), 51 (sibling sweep + autopsy), 52 (deep audit + before/after assertions), 54 (Meta shapes verified live), 55 (evolved the existing resolver + `error_logs`), 56 (existing turns unaffected), 58 (this report). No rule was edited or added.
 
 **Operator confirmation pending.** Once the operator confirms the actual Meta button payloads on the WABA, update `BUTTON_PAYLOAD_PHRASES` and `docs/TEMPLATES.md` §5 together (the doc is the approval contract, the code mirrors it). Until then, unregistered payloads fall back to the button title.
+
+---
+
+### 199. v1.74.0 / v1.74.1 / v1.74.2 (Phase 13A/13B/13C) — the web dashboard foundation: auth + WhatsApp lane + overview card (2026-11-08)
+
+**Program context.** The dashboard program (Phases 13–16) replaces the PDF-only report model with a web dashboard as the PRIMARY data surface, keeping the PDF as an export. Phase 13 ships the auth foundation and ONE page — the overview card — proving the entire trigger → link → OTP → session → render pipeline end to end. No vehicle detail, records, compliance, reports, settings, driver or superadmin views, no charts, no search, no PDF export from the dashboard (those are Phases 14–16).
+
+#### 199A. v1.74.0 (Phase 13A) — magic link + email OTP + hashed HttpOnly session behind `DASHBOARD_ENABLED`
+
+**Why this shape (rule 52 audit).** The repo had NO session/cookie infrastructure, NO authenticated route, and NO static file server. Everything needed an existing sibling pattern: `web_onboard_otps` (token-keyed OTP rows), `chat_sessions` (idempotent boot-ensured DDL + prune), `linkShortener` (`PUBLIC_APP_URL` base + flag read), `mailer.js` (Resend), `shortLinkNotFoundHtml` (inline HTML responses), and the `/api/onboard/check` per-route rate limit. The audit chose to evolve those (rule 55) rather than add any dependency: the dashboard is plain HTML/CSS from `renderPageShell()` and a scoped `@fastify/formbody` parser inside the dashboard plugin (the package was already a dependency but unregistered).
+
+**Security contract (A3 — locked in 13A).**
+- **sha256 at rest for everything secret**: the magic-link token, the 6-digit OTP and the 30-day session token exist raw ONLY in the email / the cookie. The row stores `token_hash`, `otp_hash` and `session_token_hash` (all `UNIQUE`; the session column is null until verification). `hashToken()` is `createHash('sha256')`.
+- **OTP comparison is constant-time**: `safeCompareHex()` compares the stored hash against `hashToken(input)` with `crypto.timingSafeEqual`, after an explicit empty/length check (timingSafeEqual throws on a length mismatch — the guard keeps the failure path signal-free). Codes come from `crypto.randomInt` (never Math.random).
+- **Single-use link, single session**: a successful verify stamps `verified`, burns `otp_hash` (set null), writes one `session_token_hash` and never re-opens the link (`getLinkState`/`verifyDashboardOtp` both refuse with `already_used`).
+- **Attempts cap 5**: each wrong code increments `attempts`; the 5th wrong answer returns `locked`, audits `DASHBOARD_OTP_LOCKED`, and the correct code is refused afterwards too.
+- **60-second resend cooldown** (mirrors the web-onboarding resend gate): a fresh request within the window answers `cooldown` and inserts nothing (the raw code cannot be re-sent — only its hash exists).
+- **Email failure leaves no orphaned live token**: the row is deleted when Resend returns false, so a user can never hold a link they did not receive.
+
+**Schema (`public.dashboard_sessions`, `npm run migrate:dashboard`, idempotent + boot ensure).** `id uuid PK`, `token_hash text UNIQUE NOT NULL`, `session_token_hash text UNIQUE`, `owner_id uuid NOT NULL` (no FK — wipe order stays simple, matching `chat_sessions`), `email text`, `otp_hash text`, `attempts int NOT NULL DEFAULT 0`, `verified boolean NOT NULL DEFAULT false`, `link_expires_at` (15 min), `otp_expires_at` (10 min), `session_expires_at` (30 days), `created_at`. RLS enabled; indexes on `owner_id` and `link_expires_at`. Wiped by the slate reset (`RESET_TABLES` + the global TRUNCATE + the targeted-phone cascade by `owner_id`), staging DDL added to `provision_staging_schema.js`, and `test_db_reset_scope` pins all three.
+
+**Service API (`src/services/dashboard.js`).** `isDashboardEnabled()` (`DASHBOARD_ENABLED` ∈ on|true|1, read at call time), `ensureDashboardTable`, `requestDashboardAccess({ supabase, ownerId, profile, entitlements, sendEmail })` → `{ ok, link?, reason? }` (eligibility: `email_verified` AND `entitlements.isTrial || entitlements.isPaid`; reason codes `flag_off | db_error | no_email | email_unverified | not_entitled | cooldown | email_failed`), `getLinkState`, `verifyDashboardOtp` → `{ ok, sessionToken, ownerId }` (reason codes `invalid_link | already_used | link_expired | otp_expired | locked | otp_mismatch | db_error`), `getSessionByToken`, `clearDashboardSession`, `pruneExpiredDashboardSessions` (unverified rows die 1 day past link expiry; verified rows die with their session — a live 30-day session is NEVER swept), plus the cookie contract and renderers. Every path returns a reason instead of throwing (rule 50).
+
+**Routes (`src/routes/dashboard.js`, registered from index.js with one call).** `GET /d`, `GET /d/:token`, `POST /d/verify` (per-route rate limit 10 / 5 min), `GET /d/logout`. The form parser is registered inside the module's own encapsulated Fastify scope, so the rest of the app keeps its JSON/text parsers. **A1:** while `DASHBOARD_ENABLED` is off every route answers Fastify's own 404 payload (`Route GET:/d not found`, `statusCode 404`) — byte-identical to an unregistered route, so the dashboard's existence is never revealed. **Cookie contract:** `saka_dash=<raw token>; Path=/d; HttpOnly; SameSite=Strict; Max-Age=2592000; Secure` (`Secure` omitted only on localhost). Boot: `ensureDashboardTable`; housekeeping: prune at boot + every 15 minutes.
+
+**Email (D2).** `sendDashboardMagicLinkEmail()` sends ONE email carrying BOTH the magic link and the 6-digit code (never-throw, returns false). **The code NEVER travels over WhatsApp** — the chat carries the link, the inbox carries the code; a leaked chat transcript can never open a dashboard.
+
+**Files.** `src/services/dashboard.js` (new), `src/routes/dashboard.js` (new), `scripts/run_dashboard_migration.js` (new), `test_dashboard.js` (new, stateless — in-memory mock only), `index.js` (import + register + boot ensure + prune interval), `src/services/mailer.js` (`sendDashboardMagicLinkEmail`), `src/services/envAudit.js` (SERVER + `DASHBOARD_ENABLED`), `.env.example` + `.env`, `scripts/provision_staging_schema.js`, `scripts/reset-db.js`, `test_db_reset_scope.js`, `scripts/health_audit.js` (suite registered), `package.json` (1.74.0 + `migrate:dashboard`), this file, `CHANGELOG.md`.
+
+**Suites run.** Baseline: test_db_reset_scope (88), test_env_audit (44), test_read_registry (181), test_agent_training (187), test_doc_sync (30), `npm run health` — green. After: **test_dashboard (new, 78 assertions: flag 404s, eligibility, hashed storage, TTLs, cooldown, email-failure cleanup, single-use link, 30-day session, attempts cap, timing-safe compare, cookie contract, prune safety)**, test_db_reset_scope (90 — +2), test_env_audit (44), test_read_registry (181), test_agent_training (187), test_doc_sync (30), `npm run health` — green. Zero behavioural assertions edited (additions only). Migration applied live: `public.dashboard_sessions` created cleanly.
+
+**Rules shaped this work (rule 58).** 1/39/45 (consult-first), 10/11/33 (targeted suites, version + history + CHANGELOG same commit), 13 (docs sync; no intent/flow change in 13A), 21 (env registry + `DASHBOARD_ENABLED` in SERVER + `.env.example` parity), 32 (origin synced first), 42 (open proposals checked — none), 50 (table missing / email failed both degrade to reasons, never throw), 52 (deep audit + before/after assertions), 54 (live migration + health verified), 55 (evolved existing patterns; zero new dependencies), 56 (wipe scope + staging DDL so old and new environments both work), 58 (this report). No rule was edited or added.
+
+
 
 

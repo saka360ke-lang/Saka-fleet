@@ -44,6 +44,7 @@ export const RESET_TABLES = [
   'short_links',
   'ocr_requests',
   'web_onboard_otps',
+  'dashboard_sessions',
 
   'turn_latency_logs',
   'chat_history',
@@ -186,6 +187,7 @@ export async function executeDatabaseReset({ targetPhone = null, verbose = true,
         DELETE FROM public.chat_sessions WHERE phone_number IN ('${cleanPhone}', '${altPhone}');
         DELETE FROM public.superadmin_sessions WHERE phone_number IN ('${cleanPhone}', '${altPhone}');
         DELETE FROM public.web_onboard_otps WHERE phone IN ('${cleanPhone}', '${altPhone}');
+        DELETE FROM public.dashboard_sessions WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}'));
         DELETE FROM public.coupons WHERE assigned_to_phone IN ('${cleanPhone}', '${altPhone}');
         DELETE FROM public.expiry_notification_log WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_phone IN ('${cleanPhone}', '${altPhone}'));
         DELETE FROM public.reminders WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_phone IN ('${cleanPhone}', '${altPhone}'));
@@ -222,6 +224,7 @@ export async function executeDatabaseReset({ targetPhone = null, verbose = true,
           public.short_links,
           public.ocr_requests,
           public.web_onboard_otps,
+          public.dashboard_sessions,
           public.chat_history,
           public.chat_transcripts,
           public.chat_friction_logs,

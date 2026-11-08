@@ -134,7 +134,10 @@ const STATLESS_SUITES = [
   // v1.64.0 — unified session.pending: registry, resolver, truth table, shim.
   'test_pending_state.js',
   // v1.73.4 — inbound template buttons/lists: shapes, D1 registry, A1 diagnostic.
-  'test_interactive_reply.js'
+  'test_interactive_reply.js',
+  // v1.74.0 — Phase 13 dashboard foundation: flag gate, hashed tokens, TTLs,
+  // attempts cap, single-use links, 30-day sessions, cookie contract.
+  'test_dashboard.js'
 ];
 
 const WORKFLOW_DIR = '.github/workflows';

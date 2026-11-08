@@ -1,6 +1,13 @@
 {
-  "latest": "1.73.4",
+  "latest": "1.74.0",
   "entries": [
+    {
+      "version": "1.74.0",
+      "date": "2026-11-08",
+      "title": "Groundwork for your dashboard",
+      "preview": "We are building a web dashboard where your fleet's numbers will live. This release lays the secure foundation behind it.",
+      "summary": "A behind-the-scenes release. Saka's reports are growing a permanent home on the web: a private dashboard page you will open from a link Saka emails you, protected by a 6-digit code that only ever arrives in your inbox - never in WhatsApp. This release builds the secure sign-in plumbing (short-lived links, hashed codes, private sessions) and the shared page styling the full dashboard will use. Nothing changes in your WhatsApp chats yet, and the dashboard stays switched off until the next phases are ready."
+    },
     {
       "version": "1.73.4",
       "date": "2026-11-08",

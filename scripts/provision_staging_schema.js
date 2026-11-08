@@ -250,6 +250,26 @@ CREATE TABLE IF NOT EXISTS public.weekly_feature_proposals (
   status text DEFAULT 'proposed',
   created_at timestamp with time zone DEFAULT now()
 );
+
+-- 2.14 dashboard_sessions (v1.74.0 — Phase 13 magic-link + email-OTP sessions;
+-- sha256 hashes only, never raw tokens)
+CREATE TABLE IF NOT EXISTS public.dashboard_sessions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  token_hash text UNIQUE NOT NULL,
+  session_token_hash text UNIQUE,
+  owner_id uuid NOT NULL,
+  email text,
+  otp_hash text,
+  attempts integer NOT NULL DEFAULT 0,
+  verified boolean NOT NULL DEFAULT false,
+  link_expires_at timestamp with time zone NOT NULL,
+  otp_expires_at timestamp with time zone,
+  session_expires_at timestamp with time zone,
+  created_at timestamp with time zone NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_dashboard_sessions_owner ON public.dashboard_sessions (owner_id);
+CREATE INDEX IF NOT EXISTS idx_dashboard_sessions_link_expires ON public.dashboard_sessions (link_expires_at DESC);
 `;
 
 // PostgREST connects as service_role/anon/authenticated; without these grants
@@ -270,7 +290,7 @@ const EXPECTED_TABLES = [
   'weekly_feature_proposals', 'chat_history', 'chat_sessions', 'chat_transcripts',
   'chat_friction_logs', 'conversation_analytics', 'error_logs', 'system_config',
   'saka_dynamic_rules', 'superadmin_sessions', 'coupons', 'admin_audit_logs',
-  'expiry_notification_log',
+  'expiry_notification_log', 'dashboard_sessions',
   'sentinel_audit_runs', 'remediation_proposals', 'ai_usage_logs',
   'subscriptions', 'paystack_webhook_events', 'usage_counters', 'trial_sessions'
 ];

@@ -66,6 +66,8 @@ import {
 import { ensureReceiptsTable, pruneOldReceipts } from './src/services/receipts.js';
 import { ensureOcrRequestsTable, pruneOcrTelemetry } from './src/services/ocrTelemetry.js';
 import { ensureChatSessionsTable } from './src/services/sessionStore.js';
+import { registerDashboardRoutes } from './src/routes/dashboard.js';
+import { ensureDashboardTable, pruneExpiredDashboardSessions } from './src/services/dashboard.js';
 import {
   sanitizeOnboardPayload,
   createWebOnboardSession,
@@ -715,6 +717,14 @@ setInterval(() => {
   pruneExpiredWebOnboardOtps(supabase).catch((err) => console.warn('[WebOnboard] prune sweep failed:', err.message));
 }, 15 * 60 * 1000);
 
+// v1.74.0 — Phase 13 dashboard. Routes answer a generic 404 while
+// DASHBOARD_ENABLED is off (A1). The sweep removes dead links one day after
+// they expire and sessions past their 30-day window.
+await registerDashboardRoutes(fastify, { supabase });
+setInterval(() => {
+  pruneExpiredDashboardSessions(supabase).catch((err) => console.warn('[Dashboard] prune sweep failed:', err.message));
+}, 15 * 60 * 1000);
+
 // v1.58.15 - daily document + telemetry retention sweeps.
 setInterval(() => {
   pruneOldReceipts(supabase).catch((err) => console.warn('[Receipts] retention sweep failed:', err.message));
@@ -1352,8 +1362,10 @@ const start = async () => {
     await ensureFeatureNoticeSchema(supabase);
     await ensureContactNudgeSchema(supabase);
     await ensureWebOnboardOtpTable(supabase);
+    await ensureDashboardTable(supabase);
     await ensureLaunchAwardTable(supabase);
     pruneExpiredWebOnboardOtps(supabase).catch(() => {});
+    pruneExpiredDashboardSessions(supabase).catch(() => {});
 
     logWebhookEnvParity();
 

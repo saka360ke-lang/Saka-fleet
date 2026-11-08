@@ -38,7 +38,7 @@ function run() {
     'profiles', 'vehicles', 'vin_registry', 'chat_sessions', 'superadmin_sessions',
     'ai_usage_logs', 'support_tickets', 'exchange_rates_cache', 'admin_audit_logs',
     'trial_sessions', 'subscriptions', 'usage_counters', 'paystack_webhook_events',
-    'receipts'
+    'receipts', 'dashboard_sessions'
   ]) {
     assert(RESET_TABLES.includes(table), `${table} is in the wipe scope`);
   }
@@ -78,6 +78,10 @@ function run() {
   assert(
     scriptSource.includes("DELETE FROM public.web_onboard_otps WHERE phone IN"),
     'targeted cascade deletes web_onboard_otps by phone'
+  );
+  assert(
+    scriptSource.includes('DELETE FROM public.dashboard_sessions WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN'),
+    'targeted cascade deletes dashboard_sessions by owner_id (v1.74.0)'
   );
 
   console.log(`\n🎉 ${passed} reset-scope assertions passed.`);

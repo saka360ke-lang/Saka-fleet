@@ -292,6 +292,60 @@ export async function sendEmailOtp(targetEmail, code) {
 }
 
 /**
+ * v1.74.0 — dashboard magic link + 6-digit code in ONE email (D2). The code
+ * NEVER travels over WhatsApp: the chat carries the link, the inbox carries the
+ * code, so a leaked chat transcript can never open a dashboard. Follows the
+ * never-throw mailer style (returns false; the caller degrades).
+ */
+export async function sendDashboardMagicLinkEmail({
+    to,
+    link,
+    otp,
+    linkExpiresAt = null,
+    otpExpiresAt = null,
+    firstName = ''
+} = {}) {
+    if (!to || !link || !otp || !process.env.RESEND_API_KEY) return false;
+    try {
+        const greeting = firstName ? `Hi ${firstName},` : 'Hello,';
+        const linkMinutes = linkExpiresAt
+            ? Math.max(1, Math.round((new Date(linkExpiresAt).getTime() - Date.now()) / 60000))
+            : 15;
+        const otpMinutes = otpExpiresAt
+            ? Math.max(1, Math.round((new Date(otpExpiresAt).getTime() - Date.now()) / 60000))
+            : 10;
+        const html = '<div style="font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, Helvetica, Arial, sans-serif; color: #1e293b; max-width: 520px; margin: auto; border: 1px solid #e2e8f0; padding: 24px; border-radius: 12px; background: #ffffff;">' +
+            '<h2 style="color: #0f172a; margin-top: 0;">Your Saka Fleet dashboard</h2>' +
+            '<p>' + greeting + ' you asked for your dashboard. Open the link below, then enter the 6-digit code from this email.</p>' +
+            '<p style="margin: 24px 0;"><a href="' + link + '" style="display: inline-block; background: #FF7A00; color: #0A0A0C; font-weight: 700; text-decoration: none; padding: 14px 22px; border-radius: 10px;">Open my dashboard</a></p>' +
+            '<p style="font-size: 13px; color: #64748b; margin-bottom: 6px;">If the button does not work, copy this link:</p>' +
+            '<p style="font-size: 13px; word-break: break-all; color: #0284c7; margin-top: 0;">' + link + '</p>' +
+            '<div style="background-color: #f0f9ff; border: 1px solid #bae6fd; padding: 16px; font-size: 32px; font-weight: bold; letter-spacing: 8px; text-align: center; border-radius: 8px; color: #0284c7; margin: 24px 0;">' +
+            otp +
+            '</div>' +
+            '<p style="font-size: 13px; color: #64748b;">The link works for ' + linkMinutes + ' minutes and the code for ' + otpMinutes + ' minutes. If you did not ask for this, ignore this email — nothing changes.</p>' +
+            '<p style="font-size: 13px; color: #991b1b; font-weight: bold;">Saka will never ask you for this code on WhatsApp. Never share it with anyone.</p>' +
+            '<hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;">' +
+            '<p style="font-size: 12px; color: #94a3b8; margin: 0;">Saka Fleet Security Verification Service</p>' +
+            '</div>';
+        const { error } = await getResendClient().emails.send({
+            from: 'Saka Security <security@reports.sakafleet.com>',
+            to: [to],
+            subject: 'Your Saka Fleet dashboard link',
+            html
+        });
+        if (error) {
+            console.error('[Resend Dashboard Link Error]:', error);
+            return false;
+        }
+        return true;
+    } catch (err) {
+        console.error('[Resend Dashboard Link Exception]:', err.message);
+        return false;
+    }
+}
+
+/**
  * Owner-side driver-assignment verification code. Sent by email (never by
  * WhatsApp) so the code never appears in chat logs.
  */
