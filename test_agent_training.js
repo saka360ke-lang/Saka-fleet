@@ -330,6 +330,12 @@ check(/Narrative pre-fills are engine-determined facts/.test(await import('./src
   check(DEFAULT_SAKA_CORE_PROMPT.includes('https://sakafleet.com'), 'the core prompt points new users to the website signup (v1.49.0)');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('vehicle_registration quiz only proceeds once the profile is email-verified'), 'the core prompt gates WhatsApp registration on email verification (v1.49.0)');
   check(SAKA_FLOW_PLAYBOOK.includes('Point of entry'), 'the playbook documents the website point of entry');
+  // v1.74.0 (Phase 13) — every known flow key stays embedded in the prompt, and
+  // the dashboard's two-channel split is stated where the model reads it.
+  check(SAKA_FLOW_PLAYBOOK.includes('WEB DASHBOARD (v1.74.0'), 'the playbook documents the web dashboard flow (v1.74.0)');
+  check(/code arrives by EMAIL ONLY/.test(SAKA_FLOW_PLAYBOOK), 'the playbook states the dashboard code arrives by email only');
+  check(SAKA_FLOW_PLAYBOOK.includes('dashboard: Reply *dashboard*'), 'the dashboard guidance line renders into the prompt (rule 60)');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('WEB DASHBOARD (v1.74.0)'), 'the core prompt carries the dashboard feature line (v1.74.0)');
 
   console.log(`\n\u2705 ALL AGENT TRAINING TESTS PASSED (${passed} assertions).`);
   console.log('Stateless suite: no real database rows were created, so no cleanup is required.');

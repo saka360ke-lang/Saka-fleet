@@ -278,12 +278,49 @@ async function run() {
   check(!remaining.includes('dead-session'), 'a session past its 30-day window is removed');
   check(remaining.includes('live-session'), 'a live session is never pruned');
 
+  console.log('\n--- Test 12: WhatsApp lane (13B) ---');
+  const { resolveReadCommand } = await import('./src/services/readCommands.js');
+  const laneProfile = { ...PROFILE };
+  const laneCtx = (over = {}) => ({
+    profile: laneProfile,
+    supabaseClient: {},
+    countryInfo: null,
+    quizPhaseLocked: false,
+    ...over
+  });
+  check(resolveReadCommand('dashboard', laneCtx())?.id === 'dashboard', 'the exact phrase "dashboard" is claimed by the lane');
+  check(resolveReadCommand('open my dashboard', laneCtx())?.id === 'dashboard', '"open my dashboard" is claimed too');
+  process.env.DASHBOARD_ENABLED = 'off';
+  const laneOff = await resolveReadCommand('dashboard', laneCtx()).render(laneCtx());
+  check(laneOff.reply_message === "That's not something I can do yet — reply *help* to see what I can do.", 'flag OFF -> the verbatim A2 line (real service path)');
+  check(!/dashboard/i.test(laneOff.reply_message), 'the A2 line never names the dashboard');
+  process.env.DASHBOARD_ENABLED = 'on';
+  const unverifiedProfile = { ...laneProfile, email_verified: false };
+  const laneUnverified = await resolveReadCommand('dashboard', laneCtx({ profile: unverifiedProfile })).render(laneCtx({ profile: unverifiedProfile }));
+  check(/finish the quick sign-up at https:\/\/sakafleet\.com/.test(laneUnverified.reply_message), 'an unverified email gets the website sign-up line (no email is sent)');
+  const freeCtx = laneCtx({ dashboardEntitlements: { isTrial: false, isPaid: false } });
+  const laneFree = await resolveReadCommand('dashboard', freeCtx).render(freeCtx);
+  check(/trial or a paid plan/.test(laneFree.reply_message) && !/app\.sakafleet/i.test(laneFree.reply_message), 'a free account gets the deterministic upgrade line and no link');
+  let capturedArgs = null;
+  const eligibleCtx = laneCtx({
+    dashboardEntitlements: { isTrial: true, isPaid: false },
+    dashboardRequestAccess: async (args) => {
+      capturedArgs = args;
+      return { ok: true, link: 'https://app.sakafleet.com/d/feedface', email: PROFILE.email };
+    }
+  });
+  const laneEligible = await resolveReadCommand('dashboard', eligibleCtx).render(eligibleCtx);
+  check(capturedArgs && capturedArgs.ownerId === PROFILE.id && capturedArgs.entitlements.isTrial === true, 'the lane passes owner + entitlements to the service');
+  check(capturedArgs.profile.email === PROFILE.email && capturedArgs.supabase === eligibleCtx.supabaseClient, 'the lane passes the profile and client through');
+  check(laneEligible.reply_message.includes('https://app.sakafleet.com/d/feedface'), 'an eligible reply carries the magic link');
+  check(/code is in that same email/.test(laneEligible.reply_message) && !/\b\d{6}\b/.test(laneEligible.reply_message.replace(/\d+\s*minutes?/gi, '')), 'the reply never contains the 6-digit code itself (D2)');
+
   /* __NEXT__ */
 
   process.env.DASHBOARD_ENABLED = previousFlag;
   if (previousBase === undefined) delete process.env.PUBLIC_APP_URL;
   else process.env.PUBLIC_APP_URL = previousBase;
-  console.log(`\n🎉 ${passed} dashboard foundation assertions passed.`);
+  console.log(`\n🎉 ${passed} dashboard assertions passed.`);
   console.log('Stateless suite: in-memory mock only; nothing was written to the database.');
 }
 

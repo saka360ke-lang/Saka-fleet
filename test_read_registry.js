@@ -519,4 +519,61 @@ check(degradedRender.rendered.reply_message.includes('The app is stuck') && degr
   'a pre-migration support_tickets table degrades to the slim shape (OPEN chip)');
 check(degradeMock.calls.length === 2, 'the degrade retries exactly once with the slim columns');
 
+// ── v1.74.0 (Phase 13B) — the dashboard lane ────────────────────────────────
+const DASH_PROFILE = { id: 'p-dash', phone_number: '+254700000000', email: 'amina@example.com', email_verified: true, full_name: 'Amina W' };
+const dashCtx = (over = {}) => baseCtx({ profile: DASH_PROFILE, ...over });
+const previousDashFlag = process.env.DASHBOARD_ENABLED;
+async function renderDashboard(text, access, over = {}) {
+  const ctx = dashCtx({
+    dashboardEntitlements: { isTrial: true, isPaid: false },
+    dashboardRequestAccess: async (args) => ({ ...args, ...access }),
+    ...over
+  });
+  const lane = registry.resolveReadCommand(text, ctx);
+  return { lane, rendered: lane ? await lane.render(ctx) : null };
+}
+
+for (const text of ['dashboard', 'my dashboard', 'open my dashboard', 'web dashboard']) {
+  check(registry.resolveReadCommand(text, dashCtx())?.id === 'dashboard', `"${text}" -> dashboard`);
+}
+for (const text of ['dashboard ideas', "i can't see the dashboard", 'dashboard not loading for my fleet']) {
+  const lane = registry.resolveReadCommand(text, dashCtx());
+  check(!lane || lane.id !== 'dashboard', `"${text}" is never claimed by dashboard (exact $ anchor)`);
+}
+check(registry.resolveReadCommand('dashboard', dashCtx({ quizPhaseLocked: true }))?.id !== 'dashboard',
+  'a locked PIN/OTP phase keeps the dashboard lane out (skipWhenLocked)');
+const dashClaims = registry.READ_COMMANDS.filter((lane) => Boolean(lane.detect('dashboard', dashCtx()))).map((lane) => lane.id);
+check(JSON.stringify(dashClaims) === JSON.stringify(['dashboard']), `dashboard owns the phrase with no silent overlap: ${JSON.stringify(dashClaims)}`);
+
+process.env.DASHBOARD_ENABLED = 'off';
+const offRender = await renderDashboard('dashboard', { ok: false, reason: 'flag_off' });
+check(offRender.rendered.reply_message === "That's not something I can do yet — reply *help* to see what I can do.",
+  'A2: flag OFF answers the verbatim not-available line');
+check(!/dashboard/i.test(offRender.rendered.reply_message), 'A2: the not-available line never mentions the dashboard');
+process.env.DASHBOARD_ENABLED = 'on';
+
+const okRender = await renderDashboard('dashboard', { ok: true, link: 'https://app.sakafleet.com/d/abc123', email: DASH_PROFILE.email });
+check(okRender.rendered.reply_message.includes('https://app.sakafleet.com/d/abc123'), 'an eligible request replies with the magic link');
+check(okRender.rendered.reply_message.includes('a***a@example.com'), 'the reply masks the destination address');
+check(/6-digit code is in that same email/.test(okRender.rendered.reply_message) && /never ask for it here/.test(okRender.rendered.reply_message),
+  'D2: the reply says the code is in the email and is never asked in chat');
+check(!/\d{6}/.test(okRender.rendered.reply_message.replace(/\d+\s*minutes?/g, '')), 'no 6-digit code ever appears in the WhatsApp reply');
+
+const unverifiedRender = await renderDashboard('dashboard', { ok: false, reason: 'email_unverified' });
+check(unverifiedRender.rendered.reply_message.includes('https://sakafleet.com'), 'an unverified account is pointed at the website sign-up');
+const freeRender = await renderDashboard('dashboard', { ok: false, reason: 'not_entitled' });
+check(/trial or a paid plan/.test(freeRender.rendered.reply_message) && /pricing/.test(freeRender.rendered.reply_message),
+  'a free account gets the deterministic trial/paid + pricing line');
+const cooldownRender = await renderDashboard('dashboard', { ok: false, reason: 'cooldown' });
+check(/I just sent it/.test(cooldownRender.rendered.reply_message), 'a resend inside the cooldown answers "I just sent it"');
+const failedRender = await renderDashboard('dashboard', { ok: false, reason: 'email_failed' });
+check(/could not send the email/.test(failedRender.rendered.reply_message), 'an email failure is honest and offers one retry');
+const crashRender = await renderDashboard('dashboard', { ok: false, reason: 'db_error' }, {
+  dashboardRequestAccess: async () => { throw new Error('boom'); }
+});
+check(/Something went wrong/.test(crashRender.rendered.reply_message), 'a thrown service error degrades to one clean line (never crashes the turn)');
+if (previousDashFlag === undefined) delete process.env.DASHBOARD_ENABLED;
+else process.env.DASHBOARD_ENABLED = previousDashFlag;
+
+
 console.log(`\n🎉 ${passed} read-registry equivalence assertions passed.`);

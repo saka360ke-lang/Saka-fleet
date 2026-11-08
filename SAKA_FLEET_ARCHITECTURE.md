@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.74.0  
+**Version:** 1.74.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.74.1** | Phase 13B: dashboard WhatsApp lane — exact-phrase `dashboard` read lane (parks the quiz, locked-phase safe), one email carrying the link + code, the code NEVER in WhatsApp, deterministic refusals (unverified → website, free → pricing, cooldown, email failure, crash-safe) | 199B |
 | **1.74.0** | Phase 13A: dashboard foundation — `dashboard_sessions` (sha256-only tokens), magic link (15 min) + email OTP (10 min, constant-time compare) + HttpOnly `saka_dash` session cookie (30 days), flag-gated `/d` routes that answer a generic 404 while `DASHBOARD_ENABLED=off` | 199A |
 | **1.73.4** | Phase 12B: template button replies — new leaf `src/routes/whatsapp/interactive.js` (`parseInteractiveReply`) turns Meta `button_reply` / `list_reply` / legacy `button` taps into the typed operator BEFORE the media envelope, a frozen D1 payload registry (`remind_me`→`reminders`), quick-edit id resolution with the VIN lock intact, and an A1-safe diagnostic (`/webhook/whatsapp/interactive`, interactive/button sub-objects only; one row per shape/phone per 24-h rollup) | 198B |
 | **1.73.3** | Phase 12C: quiet eval notifications — the immediate both-channel judge-error alert is gone (throttle + `CONV_EVAL_ALERT_COOLDOWN_HOURS` retired), judge errors persist as bounded `CONV_EVAL_JUDGE_ERROR` audit rows and render as their own digest section, the 15-min retry floor is kept, and a delayed digest now pings once instead of staying silent | 198C |
@@ -5706,6 +5707,30 @@ reads.js / pending.js / quiz.js / media.js / hooks.js : unchanged (5B-2 / 5B-3 e
 **Suites run.** Baseline: test_db_reset_scope (88), test_env_audit (44), test_read_registry (181), test_agent_training (187), test_doc_sync (30), `npm run health` — green. After: **test_dashboard (new, 78 assertions: flag 404s, eligibility, hashed storage, TTLs, cooldown, email-failure cleanup, single-use link, 30-day session, attempts cap, timing-safe compare, cookie contract, prune safety)**, test_db_reset_scope (90 — +2), test_env_audit (44), test_read_registry (181), test_agent_training (187), test_doc_sync (30), `npm run health` — green. Zero behavioural assertions edited (additions only). Migration applied live: `public.dashboard_sessions` created cleanly.
 
 **Rules shaped this work (rule 58).** 1/39/45 (consult-first), 10/11/33 (targeted suites, version + history + CHANGELOG same commit), 13 (docs sync; no intent/flow change in 13A), 21 (env registry + `DASHBOARD_ENABLED` in SERVER + `.env.example` parity), 32 (origin synced first), 42 (open proposals checked — none), 50 (table missing / email failed both degrade to reasons, never throw), 52 (deep audit + before/after assertions), 54 (live migration + health verified), 55 (evolved existing patterns; zero new dependencies), 56 (wipe scope + staging DDL so old and new environments both work), 58 (this report). No rule was edited or added.
+
+#### 199B. v1.74.1 (Phase 13B) — the WhatsApp lane: one trigger, one email, the code never in chat
+
+**The lane (locked).** `READ_COMMANDS` gains one entry, `id: 'dashboard'`, placed AFTER `my_ticket` and BEFORE `product_qa` (the user-state read family). Detector (verbatim):
+
+```js
+const DASHBOARD_RE = /^(?:(?:open|show|see|view)\s+(?:me\s+)?(?:my\s+|the\s+)?|(?:my\s+|the\s+)?)(?:web\s+|online\s+)?dashboard[.!?]*$/i;
+```
+
+The `$` anchor is the grammar: `dashboard`, `my dashboard`, `open my dashboard`, `show me the dashboard`, `web dashboard` are claimed; `dashboard ideas`, `i can't see the dashboard`, `dashboard not loading for my fleet` fall through to the AI (pinned by negative fixtures). `parksQuiz: true` (it IS a read) and `skipWhenLocked: true` (a PIN/OTP phase always outranks it).
+
+**The three reply paths (deterministic, zero AI tokens).**
+1. **Flag OFF (A2):** verbatim `That's not something I can do yet — reply *help* to see what I can do.` — the dashboard is never named, and no token row, no email and no DB write happens.
+2. **Flag ON and eligible** (`email_verified` AND `entitlements.isTrial || isPaid`): the service mints the row and emails the link+code, and the chat replies with the LINK only: `🖥️ Your dashboard link is on its way … I emailed a private link to a***a@example.com — it works for 15 minutes. The 6-digit code is in that same email; I will never ask for it here. <link> …`. **D2 is enforced by construction and pinned by tests:** no 6-digit sequence may appear in the WhatsApp reply (after stripping the "N minutes" phrasing) and the model playbook forbids repeating or accepting a dashboard code in chat.
+3. **Flag ON, not eligible:** `email_unverified`/`no_email` → the website sign-up line (`https://sakafleet.com`); `not_entitled` → `Your dashboard opens on a trial or a paid plan — you are on Free right now. Reply *pricing* to see the plans.`; `cooldown` → `I just sent it — check your inbox (and spam)…`; `email_failed` → one honest retry line; `db_error`/any thrown error → `Something went wrong on my side — try again in a minute.` (the lane catches everything, rule 50 — a dashboard request can never crash a turn).
+
+**Test transport (no real email in suites).** The lane reads `ctx.dashboardRequestAccess` / `ctx.dashboardEntitlements` when present (mirrors the `buildReport = buildFleetReport` injection pattern); production never sets them, so every copy branch is provable offline while the real service path stays exercised by the foundation suite.
+
+**Flow/prompt sync (rule 13 + rule 60).** `flowKnowledge.js`: `FLOW_GUIDANCE.dashboard` (one stuck-guidance line) + new `SAKA_WEB_DASHBOARD_PLAYBOOK` (link/code TTLs, code by email only, trial-or-paid gate, overview-only scope) injected by `buildFlowPlaybook()`; `sakaAi.js` `DEFAULT_SAKA_CORE_PROMPT` gains one `WEB DASHBOARD (v1.74.0)` line beside WEB SIGNUPS. `test_agent_training` +4 assertions (playbook block, email-only rule, guidance line rendered, core-prompt line).
+
+**Frames touched.** `src/services/readCommands.js` (imports + DASHBOARD_RE + lane + header order), `src/services/flowKnowledge.js` (guidance line + playbook block + export + buildFlowPlaybook), `sakaAi.js` (core-prompt line), `test_read_registry.js` (+20 dashboard-lane assertions), `test_dashboard.js` (+10 lane-integration assertions), `test_agent_training.js` (+4), `docs/` (generated), `package.json` (1.74.1), `landing/data/changelog.json` (+ stamp), this file (§199B + version/history), `CHANGELOG.md`.
+
+**Suites run.** After: **test_dashboard (88 — +10)**, **test_read_registry (201 — +20)**, test_agent_training (191 — +4), test_no_canned_replies (14 — ratchet still 4), test_kb_docs (36), test_landing_static, test_doc_sync (30), `npm run health` — green. Zero behavioural assertions edited.
+
 
 
 

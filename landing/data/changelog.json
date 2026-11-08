@@ -1,6 +1,13 @@
 {
-  "latest": "1.74.0",
+  "latest": "1.74.1",
   "entries": [
+    {
+      "version": "1.74.1",
+      "date": "2026-11-08",
+      "title": "One word opens your dashboard",
+      "preview": "Reply *dashboard* and Saka emails you a private link plus a 6-digit code - the code never appears in WhatsApp.",
+      "summary": "The dashboard's front door is live behind the scenes. Reply *dashboard* in WhatsApp and Saka emails you a private link that works for 15 minutes, together with a 6-digit code. The link opens a page where you enter that code; it only ever arrives by email, and Saka will never ask you for it in the chat. If you are still on the Free plan the request politely points you to the plans instead. The page itself is being finished in the next release - if you ask today, Saka will simply say the dashboard is not ready yet."
+    },
     {
       "version": "1.74.0",
       "date": "2026-11-08",

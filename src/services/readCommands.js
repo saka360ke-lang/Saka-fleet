@@ -64,6 +64,9 @@ import { searchOtherLabels, formatOtherLabelMatches } from './labelsEverywhere.j
 import { composeMessage } from './conversationEngine.js';
 import { resolveUserTimezone } from './globalization.js';
 import { isSuperadminPhone } from './superadmin.js';
+import { getEntitlements } from './subscriptions.js';
+import { isDashboardEnabled, requestDashboardAccess, maskEmail } from './dashboard.js';
+import { SAKA_WEB_SIGNUP_URL } from './flowKnowledge.js';
 
 /**
  * Saka Fleet — Read Command Registry (Phase 3, v1.63.3)
@@ -73,7 +76,7 @@ import { isSuperadminPhone } from './superadmin.js';
  *
  * The order below is the OLD DISPATCH PRECEDENCE, verbatim (plus the v1.72.2
  * `subscription_status` lane placed ahead of product QA and the v1.73.0
- * `my_ticket` lane beside it, and the v1.73.0 `pagination_more` lane LAST):
+ * `my_ticket` lane beside it, the v1.74.0 `dashboard` lane beside that, and the v1.73.0 `pagination_more` lane LAST):
  *   help → subscription status → my ticket → product QA → country knowledge →
  *   vehicle summary → upload menu → empty garage → compliance family (all docs /
  *   number search → driver docs → correction → expiry → status → maintenance →
@@ -100,6 +103,11 @@ const MY_RULES_RE = /^(?:my\s+rules?|country\s+rules?|what\s+(?:are\s+)?my\s+rul
 const REQUIRED_DOCS_RE = /^(?:required\s+(?:documents?|docs?)|what\s+documents?\s+do\s+i\s+need|my\s+document\s+requirements?)$/i;
 const EXAMPLE_COMPLIANCE_RE = /^(?:example\s+(?:compliance|document|submission)|give\s+me\s+an\s+example|example\s+text)$/i;
 const DRIVER_PROFILE_RE = /^(?:(?:show|see|view|open|check|what(?:'s| is))\s+(?:me\s+)?(?:my\s+)?(?:own\s+)?(?:personal\s+)?driver(?:'s|’s|s)?\s+(?:profile|licen[cs]e|record|card|compliance)|(?:my|our|personal|own)\s+driver(?:'s|’s|s)?\s+(?:profile|licen[cs]e|record|card|compliance)|(?:my\s+)?personal\s+compliance)\b/i;
+
+// v1.74.0 — the dashboard trigger: exact phrase only ("dashboard", "my
+// dashboard", "open my dashboard", "web dashboard"); longer phrasings stay
+// with the AI.
+const DASHBOARD_RE = /^(?:(?:open|show|see|view)\s+(?:me\s+)?(?:my\s+|the\s+)?|(?:my\s+|the\s+)?)(?:web\s+|online\s+)?dashboard[.!?]*$/i;
 
 function result(reply, intent = 'GENERAL_CHAT') {
   return { intent, extracted_data: {}, reply_message: reply };
@@ -268,6 +276,69 @@ export const READ_COMMANDS = Object.freeze([
     render: async (hit, ctx = {}) => {
       const tickets = await listUserTickets(ctx.supabaseClient, { phone: ctx.senderPhone });
       return result(formatUserTicketsReply({ tickets }));
+    }
+  },
+  {
+    // v1.74.0 (Phase 13B) — the web dashboard trigger. Exact-phrase only (the
+    // `$` anchor keeps "dashboard ideas", "I can't see the dashboard" and other
+    // complaints out); parks the quiz and stays out of PIN/OTP phases like the
+    // other reads. Two-channel split (D2): the chat carries the LINK, the email
+    // carries the 6-digit code — the code is NEVER repeated or accepted here.
+    // Flag off answers A2 without ever naming the dashboard (A2). The service
+    // is injectable (`ctx.dashboardRequestAccess`) so suites prove every copy
+    // branch without sending a real email; production always uses the service.
+    id: 'dashboard',
+    parksQuiz: true,
+    skipWhenLocked: true,
+    detect: (text) => DASHBOARD_RE.test(String(text || '').trim()) ? true : null,
+    render: async (hit, ctx = {}) => {
+      if (!isDashboardEnabled()) {
+        return result("That's not something I can do yet — reply *help* to see what I can do.");
+      }
+      const profile = ctx.profile;
+      if (!profile?.id || profile.email_verified !== true) {
+        return result(`I can open your dashboard once your email is verified — finish the quick sign-up at ${SAKA_WEB_SIGNUP_URL} and message me again.`);
+      }
+      try {
+        const requestAccess = typeof ctx.dashboardRequestAccess === 'function'
+          ? ctx.dashboardRequestAccess
+          : requestDashboardAccess;
+        const entitlements = ctx.dashboardEntitlements
+          || await getEntitlements({ supabase: ctx.supabaseClient, ownerId: profile.id });
+        const access = await requestAccess({
+          supabase: ctx.supabaseClient,
+          ownerId: profile.id,
+          profile,
+          entitlements,
+          countryInfo: ctx.countryInfo || null
+        });
+        if (access?.ok) {
+          return result(
+            '🖥️ *Your dashboard link is on its way*\n\n' +
+            `I emailed a private link to ${maskEmail(access.email)} — it works for 15 minutes.\n` +
+            'The 6-digit code is in that same email; I will never ask for it here.\n\n' +
+            `${access.link}\n\n` +
+            'Nothing there? Check spam, then reply *dashboard* again in a minute.'
+          );
+        }
+        switch (access?.reason) {
+          case 'cooldown':
+            return result('I just sent it — check your inbox (and spam). The link works for 15 minutes; reply *dashboard* again when it expires.');
+          case 'not_entitled':
+            return result('Your dashboard opens on a trial or a paid plan — you are on Free right now. Reply *pricing* to see the plans.');
+          case 'email_unverified':
+          case 'no_email':
+            return result(`I can open your dashboard once your email is verified — finish the quick sign-up at ${SAKA_WEB_SIGNUP_URL} and message me again.`);
+          case 'email_failed':
+            return result('I could not send the email just now — give it a minute and reply *dashboard* again.');
+          case 'flag_off':
+            return result("That's not something I can do yet — reply *help* to see what I can do.");
+          default:
+            return result('Something went wrong on my side — try again in a minute.');
+        }
+      } catch {
+        return result('Something went wrong on my side — try again in a minute.');
+      }
     }
   },
   {

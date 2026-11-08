@@ -445,7 +445,9 @@ export const FLOW_GUIDANCE = Object.freeze({
   edit_profile: 'Type the new detail (name, country or language) — I will confirm before saving.',
   delete_vehicle: 'Reply with the plate you want removed, then confirm — history and passbook are preserved.',
   delete_account: 'Reply *delete account* and confirm with the emailed code — this cannot be undone.',
-  reactivate_account: 'Reply *reactivate* and I will restore your account — data is kept while deactivated.'
+  reactivate_account: 'Reply *reactivate* and I will restore your account — data is kept while deactivated.',
+  // v1.74.0 — the web dashboard trigger (Phase 13; rule 60).
+  dashboard: 'Reply *dashboard* and I will email you a private link plus a 6-digit code — the code only ever arrives by email.'
 });
 
 /** Deterministic one next step for a flow key, or null when unregistered. */
@@ -683,6 +685,18 @@ export const SAKA_WEB_ONBOARDING_PLAYBOOK = [
   '- Point of entry (v1.49.0, v1.51.5): vehicle registration happens on the website and an unverified number is hard-gated to https://sakafleet.com (Get Started Free) — no conversation, no intros, no product answers until the profile is email_verified.'
 ];
 
+/**
+ * v1.74.0 (Phase 13) — the web dashboard facts the model may state. The trigger
+ * itself is engine-owned (the `dashboard` read lane), so the model never mints
+ * links or codes; this block stops it from inventing either.
+ */
+export const SAKA_WEB_DASHBOARD_PLAYBOOK = [
+  'WEB DASHBOARD (v1.74.0 — Phase 13, flag-gated):',
+  '- "dashboard" (also "my dashboard" / "open my dashboard" / "web dashboard") emails a private link (15 minutes) AND a 6-digit code (10 minutes) to the account email address.',
+  '- The 6-digit code arrives by EMAIL ONLY: never repeat it in WhatsApp, never accept a dashboard code typed in chat, and never invent or guess a link.',
+  '- The dashboard needs a verified email plus a trial or paid plan; on Free, point the user to *pricing*. The dashboard currently shows the fleet overview card only — never promise pages that have not shipped.'
+];
+
 export function buildFlowPlaybook() {
   const quizLines = SAKA_QUIZ_FLOWS.map(
     (f) => `- ${f.key} (${f.label}): trigger ${f.trigger}. Order: ${f.fields}. Extracted keys: ${f.extracted.length ? f.extracted.join(', ') : 'none'}. Writes after confirm: ${f.writes}. Rules: ${f.rules}.`
@@ -695,6 +709,7 @@ export function buildFlowPlaybook() {
     'NON-QUIZ INTENTS:',
     ...intentLines,
     ...SAKA_WEB_ONBOARDING_PLAYBOOK,
+    ...SAKA_WEB_DASHBOARD_PLAYBOOK,
     'BOUNDARIES:',
     ...SAKA_BOUNDARY_RULES.map((r) => `- ${r}`),
     buildToneCompassBlock(),
@@ -718,6 +733,7 @@ export default {
   SAKA_TONE_COMPASS,
   SAKA_SALES_PLAYBOOK,
   SAKA_WEB_ONBOARDING_PLAYBOOK,
+  SAKA_WEB_DASHBOARD_PLAYBOOK,
   SAKA_WEB_SIGNUP_URL,
   buildToneCompassBlock,
   buildSalesPlaybookBlock,
