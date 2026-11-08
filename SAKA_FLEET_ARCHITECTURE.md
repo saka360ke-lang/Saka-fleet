@@ -6082,7 +6082,7 @@ Degrades: no tool → the existing clarify; tool failure → its deterministic r
 | `STT_MAX_DURATION_SECONDS` | Sync-API duration cap (Google caps at 60 s) | `55` (clamped 5–60) |
 | `STT_ESTIMATED_BITRATE` | Opus bitrate for the size→duration estimate | `16000` |
 
-**Operator prerequisite.** Enable **Cloud Speech-to-Text API** in the same GCP project as Vision and allow it on `GCP_VISION_API_KEY`'s API restrictions (or set `GCP_SPEECH_API_KEY`). Documented in `README.md` and `.env.example`. Until then every voice note degrades honestly to the fallback line — no crash, no dead turn.
+**Operator prerequisite.** Enable **Cloud Speech-to-Text API** in the same GCP project as Vision and allow it on `GCP_VISION_API_KEY`'s API restrictions (or set `GCP_SPEECH_API_KEY`). Documented in `README.md` and `.env.example`. **Live probe (2026-11-08, rule 54):** the current `GCP_VISION_API_KEY` answers `403 API_KEY_SERVICE_BLOCKED` (`PERMISSION_DENIED`, consumer `projects/377676898502`) for `speech.googleapis.com` — the key is restricted to Vision, so the feature is **dormant in production** until the operator unblocks the Speech API on that key or sets `GCP_SPEECH_API_KEY`. Meanwhile every voice note degrades honestly to the fallback line and logs a rolled-up reason — no crash, no dead turn.
 
 **Rule 13 statement.** No new intent and no new flow: the transcript reuses the LIVE grammar, so `flowKnowledge.js`, `sakaAi.js` and the `conversationEngine.js` composer are unchanged and `test_agent_training` stays green untouched.
 
