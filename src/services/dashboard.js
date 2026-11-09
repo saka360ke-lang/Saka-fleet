@@ -297,7 +297,7 @@ async function writeAudit(supabase, action, details = {}) {
 /* ------------------------------------------------------------------ */
 
 /** A live assignment is the driver's eligibility (D1). null = database error. */
-async function hasLiveDriverAssignment(supabase, driverId) {
+export async function hasLiveDriverAssignment(supabase, driverId) {
   if (!supabase || typeof supabase.from !== 'function' || !driverId) return false;
   try {
     const { data, error } = await supabase
@@ -2433,20 +2433,45 @@ export async function serializeAllDataCsv({ supabase, ownerId = null, currency =
 /* ------------------------------------------------------------------ */
 
 /** The caller's assigned live vehicle (or null). Driver lane only. */
-async function loadAssignedVehicle(supabase, driverId) {
+async function loadAssignedVehicle(supabase, driverId, vehicleId = null) {
   if (!supabase || !driverId) return null;
+  try {
+    let query = supabase
+      .from('vehicles')
+      .select('id, plate_number, make_model, status')
+      .eq('assigned_driver_id', driverId)
+      .is('deleted_at', null);
+    // v1.95.0 (Phase 32, Task 2) — an explicit vehicle pick is only ever
+    // honoured INSIDE the driver's own assignments (the eq above is the gate).
+    if (vehicleId) query = query.eq('id', vehicleId);
+    const { data, error } = await query.limit(1);
+    if (error) return null;
+    return (data || [])[0] || null;
+  } catch (err) {
+    logWriteFailure(supabase, 'dashboard.loadAssignedVehicle', err);
+    return null;
+  }
+}
+
+/**
+ * v1.95.0 (Phase 32, Task 2) — EVERY live vehicle assigned to this driver, so the
+ * header can offer a selector when there is more than one. Read-only, capped,
+ * always scoped by assigned_driver_id (a foreign id can never be listed).
+ */
+export async function loadAssignedVehicles(supabase, driverId) {
+  if (!supabase || !driverId) return [];
   try {
     const { data, error } = await supabase
       .from('vehicles')
       .select('id, plate_number, make_model, status')
       .eq('assigned_driver_id', driverId)
       .is('deleted_at', null)
-      .limit(1);
-    if (error) return null;
-    return (data || [])[0] || null;
+      .limit(50);
+    if (error) return [];
+    return Array.isArray(data) ? data : [];
   } catch (err) {
-    logWriteFailure(supabase, 'dashboard.loadAssignedVehicle', err);
-    return null;
+    logWriteFailure(supabase, 'dashboard.loadAssignedVehicles', err);
+    return [];
   }
 }
 
@@ -2460,15 +2485,17 @@ export async function buildDriverHome({
   driverId = null,
   countryInfo = null,
   profile = null,
+  // v1.95.0 (Phase 32, Task 2) — an explicit pick from the vehicle selector.
+  vehicleId = null,
   now = new Date()
 } = {}) {
   if (!supabase || !driverId) return { ok: false };
   try {
     const ctx = buildGlobalContext(countryInfo, profile);
     const [vehicle, card, daybook] = await Promise.all([
-      loadAssignedVehicle(supabase, driverId),
+      loadAssignedVehicle(supabase, driverId, vehicleId),
       buildDriverComplianceCard({ supabase, driverId, countryInfo, now, mask: false }),
-      buildDriverDaybook({ supabase, driverId, days: 7, countryInfo, profile, now })
+      buildDriverDaybook({ supabase, driverId, vehicleId, days: 7, countryInfo, profile, now })
     ]);
     return {
       ok: true,
@@ -2504,10 +2531,12 @@ export async function buildDriverDaybookPageData({
   days = 14,
   countryInfo = null,
   profile = null,
+  // v1.95.0 (Phase 32, Task 2) — the selector's pick (validated by the route).
+  vehicleId = null,
   now = new Date()
 } = {}) {
   if (!supabase || !driverId) return { ok: false };
-  const report = await buildDriverDaybook({ supabase, driverId, days, countryInfo, profile, now });
+  const report = await buildDriverDaybook({ supabase, driverId, vehicleId, days, countryInfo, profile, now });
   if (!report?.ok) return { ok: false, error: report?.error || 'That daybook could not be loaded.' };
   const ctx = buildGlobalContext(countryInfo, profile);
   return {
@@ -2525,13 +2554,15 @@ export async function buildDriverSelfCompliancePage({
   driverId = null,
   countryInfo = null,
   profile = null,
+  // v1.95.0 (Phase 32, Task 2) — mirror the selector's pick in the heading.
+  vehicleId = null,
   now = new Date()
 } = {}) {
   if (!supabase || !driverId) return { ok: false };
   const card = await buildDriverComplianceCard({ supabase, driverId, countryInfo, now, mask: false });
   if (!card?.ok) return { ok: false, error: card?.error || 'Your documents could not be loaded.' };
   const ctx = buildGlobalContext(countryInfo, profile);
-  const vehicle = await loadAssignedVehicle(supabase, driverId);
+  const vehicle = await loadAssignedVehicle(supabase, driverId, vehicleId);
   return {
     ok: true,
     generatedAt: now.toISOString(),
@@ -2966,8 +2997,51 @@ ol.steps li::before { counter-increment:step; content:counter(step); position:ab
   .filters button, .row-actions button, .inline-form button { min-height:44px; }
   .filters input, .filters select, .inline-form label input, .inline-form label select { font-size:16px; }
 }
+/* v1.95.0 (Phase 32, Task 2) — the dual-role lane strip + the driver's vehicle
+   picker. The strip appears only for a profile that is BOTH owner and driver;
+   the picker only when more than one vehicle is assigned. */
+.lane-switch { display:flex; align-items:center; justify-content:center; gap:10px; flex-wrap:wrap;
+  padding:8px 16px; background:rgba(184,239,92,.06); border-bottom:1px solid var(--line); }
+.lane-switch form { display:inline-flex; gap:6px; margin:0; }
+.lane-switch .lane-chip { width:auto; cursor:pointer; background:transparent; border:1px solid var(--line);
+  color:var(--muted); min-height:36px; padding:4px 14px; margin:0; }
+.lane-switch .lane-chip.active { color:#0A0A0C; background:var(--accent); border-color:var(--accent); font-weight:700; }
+.vehicle-switch { display:flex; align-items:center; justify-content:center; gap:8px; flex-wrap:wrap; margin:10px 0 0; }
+.vehicle-switch .chip { text-decoration:none; padding:6px 12px; }
+.vehicle-switch .chip.ok { color:#0A0A0C; background:var(--accent); border-color:var(--accent); font-weight:700; }
+/* v1.95.0 (Phase 32, Task 1) — the dashboard drawer: ONE menu pattern on every
+   page. Above 1024px the 11-link strip stays (it has the width); below it the
+   burger opens a full-screen drawer built from the SAME .nav anchors, so no
+   markup is duplicated and every page (owner, driver, admin) behaves alike.
+   D2: the impersonation banner lives OUTSIDE the drawer — it is injected after
+   the header with z-index 60, above this drawer's 50. */
+.nav-burger { display:none; width:44px; height:44px; padding:0; border:1px solid var(--line);
+  border-radius:10px; background:transparent; align-items:center; justify-content:center;
+  flex-direction:column; gap:4px; cursor:pointer; }
+.nav-burger span { display:block; width:18px; height:2px; border-radius:2px; background:var(--ink);
+  transition:transform .18s ease, opacity .18s ease; }
+body.nav-open .nav-burger span:nth-child(1) { transform:translateY(6px) rotate(45deg); }
+body.nav-open .nav-burger span:nth-child(2) { opacity:0; }
+body.nav-open .nav-burger span:nth-child(3) { transform:translateY(-6px) rotate(-45deg); }
+.nav-menu { display:none; }
+.nav-menu-inner { display:flex; flex-direction:column; gap:2px; }
+.nav-menu-inner a { display:flex; align-items:center; min-height:48px; padding:0 4px; font-size:16px;
+  color:var(--ink); text-decoration:none; border-bottom:1px solid var(--line);
+  opacity:0; transform:translateY(6px); animation:menu-rise .22s ease forwards;
+  animation-delay:calc(var(--i, 0) * 30ms); }
+@keyframes menu-rise { to { opacity:1; transform:translateY(0); } }
+@media (max-width: 1024px) {
+  header.bar .nav { display:none; }
+  .nav-burger { display:inline-flex; }
+  .nav-menu { position:fixed; left:0; right:0; bottom:0; top:var(--bar-h, 56px); z-index:50;
+    background:#0A0A0C; padding:12px 20px 32px; overflow-y:auto; }
+  body.nav-open .nav-menu { display:block; }
+}
 @media (prefers-reduced-motion: reduce) {
   * { transition:none !important; animation:none !important; scroll-behavior:auto !important; }
+  /* v1.95.0 — the drawer's rise animation is the only way its links become
+     visible, so reduced-motion users get the finished state directly. */
+  .nav-menu-inner a { opacity:1; transform:none; }
 }
 `;
 
@@ -3000,10 +3074,61 @@ export function renderPageShell(title, body, { headerRight = '', headerLeft = 'S
 <style>${DASHBOARD_CSS}</style>
 </head>
 <body>
-<header class="bar"><div class="bar-inner"><a class="brand" href="${escapeHtml(brandHref)}"><img src="${asset('logo-lockup.png')}" alt="${escapeHtml(headerLeft)}" width="177" height="18" decoding="async"></a><span class="nav">${headerRight}</span></div></header>
+<header class="bar"><div class="bar-inner"><a class="brand" href="${escapeHtml(brandHref)}"><img src="${asset('logo-lockup.png')}" alt="${escapeHtml(headerLeft)}" width="177" height="18" decoding="async"></a><span class="nav">${headerRight}</span><button class="nav-burger" id="navBurger" type="button" aria-label="Open menu" aria-expanded="false" aria-controls="navMenu"><span></span><span></span><span></span></button></div></header>
 <main>
 ${body}
 </main>
+<div class="nav-menu" id="navMenu" role="dialog" aria-modal="true" aria-label="Menu"><nav class="nav-menu-inner" aria-label="Menu links"></nav></div>
+<script>
+/* v1.95.0 (Phase 32, Task 1) — the dashboard drawer. Vanilla, dependency-free,
+   built from the SAME .nav anchors (no duplicated markup), and inert on pages
+   without navigation (the login doors) where the burger is removed outright.
+   D2: the impersonation banner is injected after the header by the onSend hook,
+   so it always renders ABOVE this drawer (z-index 60 vs 50). */
+(function () {
+  var header = document.querySelector('header.bar');
+  if (!header) return;
+  var nav = header.querySelector('.nav');
+  var burger = header.querySelector('.nav-burger');
+  var menu = document.getElementById('navMenu');
+  var inner = menu ? menu.querySelector('.nav-menu-inner') : null;
+  if (!nav || !burger || !menu || !inner) return;
+  var anchors = nav.querySelectorAll('a');
+  if (!anchors.length) { burger.parentNode.removeChild(burger); return; }
+  function syncHeaderOffset() {
+    document.documentElement.style.setProperty('--bar-h', header.offsetHeight + 'px');
+  }
+  syncHeaderOffset();
+  window.addEventListener('resize', syncHeaderOffset);
+  for (var i = 0; i < anchors.length; i += 1) {
+    var source = anchors[i];
+    var link = document.createElement('a');
+    link.href = source.getAttribute('href') || '/d';
+    link.textContent = source.textContent;
+    link.style.setProperty('--i', String(i));
+    inner.appendChild(link);
+  }
+  function isOpen() { return document.body.classList.contains('nav-open'); }
+  function setOpen(open) {
+    document.body.classList.toggle('nav-open', open);
+    burger.setAttribute('aria-expanded', open ? 'true' : 'false');
+    burger.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+    if (open) {
+      var first = inner.querySelector('a');
+      if (first && first.focus) first.focus({ preventScroll: true });
+    }
+  }
+  burger.addEventListener('click', function () { setOpen(!isOpen()); });
+  menu.addEventListener('click', function (event) { if (event.target === menu) setOpen(false); });
+  inner.addEventListener('click', function (event) {
+    if (event.target && event.target.tagName === 'A') setOpen(false);
+  });
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape' && isOpen()) { setOpen(false); burger.focus(); }
+  });
+  window.addEventListener('resize', function () { if (window.innerWidth > 1024 && isOpen()) setOpen(false); });
+})();
+</script>
 </body>
 </html>`;
 }
@@ -3013,6 +3138,44 @@ export function renderMessagePage(title, message, { status = 400, brandHref = '/
     status,
     html: renderPageShell(title, `<h1>${escapeHtml(title)}</h1><p class="muted">${escapeHtml(message)}</p>`, { brandHref })
   };
+}
+
+/**
+ * v1.95.0 (Phase 32, Task 2) — the dual-role lane switcher (D3). Rendered only
+ * for a profile that is BOTH an owner and an assigned driver; the POST flips the
+ * session row's `session_role` through the existing gates, so the strict lane
+ * isolation (owner pages 403 driver sessions and vice versa) is never relaxed.
+ * Impersonation hides it outright — the yellow banner is the only strip then.
+ */
+export function renderLaneSwitcher(lane = {}) {
+  const active = lane?.role === 'driver' ? 'driver' : 'owner';
+  const chip = (value, label) => `<button type="submit" name="lane" value="${value}" class="chip lane-chip${active === value ? ' active' : ''}"${active === value ? ' aria-current="true"' : ''}>${label}</button>`;
+  return `<div class="lane-switch" role="navigation" aria-label="Dashboard lane"><span class="muted-small">View as</span><form method="POST" action="/d/lane/switch">${chip('owner', 'Owner')}${chip('driver', 'Driver')}</form></div>`;
+}
+
+/** Inject the lane strip right after the shared shell's header (D3). */
+export function withLaneSwitcher(html, lane = {}) {
+  const text = String(html ?? '');
+  const strip = renderLaneSwitcher(lane);
+  if (!text) return strip;
+  if (text.includes('</header>')) return text.replace('</header>', `</header>\n${strip}`);
+  return `${strip}\n${text}`;
+}
+
+/**
+ * v1.95.0 (Phase 32, Task 2) — the driver's vehicle picker. Only rendered when
+ * MORE THAN ONE vehicle is assigned; every link is a GET back to the same page
+ * with ?vehicle=<id>, validated again by the route (never a client-side trust).
+ */
+function driverVehicleSelector({ vehicles = [], activeVehicleId = null, basePath = '/d/driver' } = {}) {
+  const list = Array.isArray(vehicles) ? vehicles : [];
+  if (list.length < 2) return '';
+  const links = list.map((vehicle) => {
+    const id = String(vehicle?.id || '');
+    const active = activeVehicleId === id;
+    return `<a class="chip${active ? ' ok' : ''}" href="${basePath}?vehicle=${encodeURIComponent(id)}"${active ? ' aria-current="page"' : ''}>${escapeHtml(vehicle?.plate_number || 'Vehicle')}</a>`;
+  }).join(' ');
+  return `<div class="vehicle-switch" role="navigation" aria-label="Assigned vehicles"><span class="muted-small">Vehicle</span> ${links}</div>`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -4353,7 +4516,7 @@ function ledgerRowsHtml(ledger, locale, timeZone, limit = 12) {
 }
 
 /** `/d/driver` (Phase 15) — assigned vehicle, own compliance, last 7 days. */
-export function renderDriverHomePage({ data, emailMasked = '' }) {
+export function renderDriverHomePage({ data, emailMasked = '', vehicles = [], activeVehicleId = null }) {
   if (!data?.ok) {
     return renderErrorPage(503, 'Your driver dashboard could not be loaded just now. Please try again in a moment.').html;
   }
@@ -4377,6 +4540,7 @@ export function renderDriverHomePage({ data, emailMasked = '' }) {
   const body = `
 <h1>Your driver dashboard</h1>
 <p class="muted">Signed in as ${escapeHtml(emailMasked)} · your own records only</p>
+${driverVehicleSelector({ vehicles, activeVehicleId, basePath: '/d/driver' })}
 ${vehicleCard}
 <h2>My compliance</h2>
 ${kpiStripHtml(data.compliance.kpis)}
@@ -4392,7 +4556,7 @@ ${ledgerRowsHtml(data.week.ledger, data.locale, data.timeZone, 6)}
 }
 
 /** `/d/driver/daybook` (Phase 15) — own activity, ledger table. */
-export function renderDriverDaybookPage({ page }) {
+export function renderDriverDaybookPage({ page, vehicles = [], activeVehicleId = null }) {
   if (!page?.ok || !page.data) {
     return renderErrorPage(503, 'Your daybook could not be loaded just now. Please try again in a moment.').html;
   }
@@ -4400,6 +4564,7 @@ export function renderDriverDaybookPage({ page }) {
   const body = `
 <h1>${escapeHtml(report.title || 'My daybook')}</h1>
 <p class="muted">${escapeHtml(report.subtitle || '')}</p>
+${driverVehicleSelector({ vehicles, activeVehicleId, basePath: '/d/driver/daybook' })}
 ${kpiStripHtml(report.kpis)}
 <h2>Your activity ledger</h2>
 ${ledgerRowsHtml(report.ledgers?.[0], page.locale, page.timeZone, 40) || '<div class="card"><p class="muted">Nothing logged in this window yet — log fuel or an earning in WhatsApp and it appears here.</p></div>'}`;
@@ -4407,7 +4572,7 @@ ${ledgerRowsHtml(report.ledgers?.[0], page.locale, page.timeZone, 40) || '<div c
 }
 
 /** `/d/driver/compliance` (Phase 15) — own documents, numbers UNMASKED (D3). */
-export function renderDriverSelfCompliancePage({ page }) {
+export function renderDriverSelfCompliancePage({ page, vehicles = [], activeVehicleId = null }) {
   if (!page?.ok) {
     return renderErrorPage(503, 'Your documents could not be loaded just now. Please try again in a moment.').html;
   }
@@ -4428,6 +4593,7 @@ export function renderDriverSelfCompliancePage({ page }) {
 <p class="muted"><a href="/d/driver">← Overview</a></p>
 <h1>My compliance</h1>
 <p class="muted">${page.vehicle ? `Assigned vehicle: ${escapeHtml(page.vehicle.plate)}` : 'No vehicle assigned yet'} · your own documents</p>
+${driverVehicleSelector({ vehicles, activeVehicleId, basePath: '/d/driver/compliance' })}
 ${kpiStripHtml(page.kpis)}
 <h2>My documents</h2>
 ${table}
@@ -4861,6 +5027,11 @@ export default {
   isSecureRequest,
   renderPageShell,
   renderMessagePage,
+  // v1.95.0 (Phase 32, Task 2) — the dual-role lane strip + driver vehicle list.
+  renderLaneSwitcher,
+  withLaneSwitcher,
+  loadAssignedVehicles,
+  hasLiveDriverAssignment,
   escapeHtml,
   renderOtpPage,
   renderLoginPage,

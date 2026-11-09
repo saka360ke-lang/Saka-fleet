@@ -33,6 +33,18 @@ export const TRIAL_END_GRACE_SQL = `
 `;
 
 /**
+ * v1.95.0 (Phase 32, Task 3) — drip-feed feature-tip columns. Additive and
+ * idempotent; a missing column degrades to "no tip stamped yet" (rule 50), so an
+ * un-migrated schema can never break the trial sweep.
+ * Run: npm run migrate:trial-feature-nudge
+ */
+export const TRIAL_FEATURE_NUDGE_SQL = `
+  ALTER TABLE public.trial_sessions ADD COLUMN IF NOT EXISTS feature_nudge_sent_at timestamp with time zone;
+  ALTER TABLE public.trial_sessions ADD COLUMN IF NOT EXISTS feature_nudge_followup_sent_at timestamp with time zone;
+  ALTER TABLE public.trial_sessions ADD COLUMN IF NOT EXISTS feature_nudge_key text;
+`;
+
+/**
  * Fail-soft boot ensure. Cloud Run has no SQL transport by default (only the
  * service key), so this returns { ok:false } there and the migration is applied
  * out-of-band via `npm run migrate:trial-end-grace`. Never throws.
@@ -62,4 +74,4 @@ export async function ensureTrialSchemaDefaults() {
   }
 }
 
-export default { TRIAL_DEFAULTS_SQL, TRIAL_END_GRACE_SQL, ensureTrialSchemaDefaults, ensureTrialEndGraceSchema };
+export default { TRIAL_DEFAULTS_SQL, TRIAL_END_GRACE_SQL, TRIAL_FEATURE_NUDGE_SQL, ensureTrialSchemaDefaults, ensureTrialEndGraceSchema };

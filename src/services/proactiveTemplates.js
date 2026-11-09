@@ -140,6 +140,15 @@ export const PROACTIVE_TEMPLATE_KINDS = Object.freeze({
     audience: 'owner',
     buttons: [{ subType: 'quick_reply', index: 0 }],
     note: 'T+3 / T+7 consolidated overdue compliance digest (count, worst item, days past due). The approved Meta template carries the Quick Reply button "Reminders" (no parameters); the inbound button_reply routes to the deterministic reminders list.'
+  },
+  // v1.95.0 (Phase 32, Task 3) — the drip-feed feature tip (T+12h / T+48h).
+  // {{1}} = the feature label, {{2}} = its engine-owned link. Appended LAST so
+  // the historical kind order stays stable (the registry pin proves it).
+  feature_tip: {
+    env: 'META_TPL_FEATURE_TIP',
+    variables: ['feature', 'link'],
+    audience: 'owner',
+    note: 'One feature tip after trial activation (one feature per owner, one follow-up while unexplored).'
   }
 });
 

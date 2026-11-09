@@ -17,15 +17,14 @@ Variables are USER DATA ONLY (name, plate, days, tier, coupon). If a required
 variable is missing or empty, the sender falls back to the free-form text -
 a template can never fire with a broken body parameter.
 
-Variable note: **saka_re_engagement {{1}}=name**: profiles may have null
-full_name. If you cannot guarantee a name at send time, either reword the
-body to remove the name, or add a name fallback in resolveProactiveMode
-before submitting this template for Meta approval.
+Variable note: **re_engagement {{1}}=first name**: profiles may have null
+full_name. `processSilentReengagement` now always passes a guaranteed fallback
+("there"), so the template can never fire with an empty body parameter.
 
 Language: en (PROACTIVE_TEMPLATE_LANGUAGE).
 
 ------------------------------------------------------------
-1. The 16 templates
+1. The 18 templates
 ------------------------------------------------------------
 
 Each entry: kind | env knob | audience | recommended category | variables
@@ -72,13 +71,18 @@ Each entry: kind | env knob | audience | recommended category | variables
    body: Hi! Your {{1}} renewal did not go through. {{2}} day(s) left to update
          payment. Reply subscription to fix it.
 
-6. re_engagement
-   env: META_TPL_RE_ENGAGEMENT
+6. re_engagement  (v1.95.0 — Phase 32, Task 4: renamed saka_reengage, Utility)
+   env: META_TPL_RE_ENGAGEMENT   (the env var name is unchanged)
    audience: owner
-   category: Marketing
-   variables: {{1}} = owner first name (fallback: there)
-   body: Hi {{1}}! It's Saka. Log one expense today (for example: fuel 3000)
-         and I will keep your costs, reminders and compliance dates accurate.
+   category: Utility (D6 — the copy is service-flavoured, not promotional;
+             picked for approval odds over the previous Marketing suggestion)
+   variables: {{1}} = owner first name (fallback: there — guaranteed at send
+              time, so the template can never fire with an empty variable)
+   body: Hi {{1}}! It's Saka. I've been keeping your records safe. Anything
+         new to log today?
+   why: the 14-day silence nudge fires outside Meta's 24-hour window, where
+        free-form text is silently dropped. Gate: REENGAGE_TEMPLATE_ENABLED
+        (default off); knob-off keeps the v1.16.3 free-form copy verbatim.
 
 7. driver_unassigned
    env: META_TPL_DRIVER_UNASSIGNED
@@ -195,6 +199,27 @@ Each entry: kind | env knob | audience | recommended category | variables
           deterministic reminders list (title alias "Reminders"/"Remind me" ->
           "reminders"). No extra environment knob is needed.
 
+18. feature_tip  (v1.95.0 — Phase 32, Task 3)
+    env: META_TPL_FEATURE_TIP
+    audience: owner (an account whose trial activated; one feature per owner)
+    category: Utility
+    variables: {{1}} = the feature label (for example voice notes),
+               {{2}} = the engine-owned link (for example
+               https://app.sakafleet.com/d/login)
+    body: 🎯 Tip: try {{1}} — {{2}}
+
+          One minute and Saka does the rest.
+    why: the T+12h tip can fire outside Meta's 24-hour window, where free-form
+         text is silently dropped (section 87.3). The drip-feed sends ONE tip
+         per owner (first unexplored feature), then ONE follow-up at T+48h and
+         only while that feature is still unexplored (max 2 sends per feature).
+         Gate: FEATURE_NUDGE_ENABLED (default off).
+    approval note: this is the ONLY template in this file that deliberately
+         carries a URL inside a body variable (operator decision D7, Phase 32).
+         Submit it as Utility; if Meta's review rejects the URL variable, keep
+         the knob UNSET — the free-form tip still delivers inside the 24-hour
+         window and nothing else changes (the fallback contract below).
+
 ------------------------------------------------------------
 2. Submission workflow (Meta Business Manager)
 ------------------------------------------------------------
@@ -217,7 +242,7 @@ Suggested template names:
     saka_trial_ending
     saka_trial_grace
     saka_dunning
-    saka_re_engagement
+    saka_reengage
     saka_driver_unassigned
     saka_winback
     saka_deploy_live
@@ -229,6 +254,7 @@ Suggested template names:
     saka_driver_invite
     saka_transfer_invite
     saka_overdue_digest
+    saka_feature_tip
 
 ------------------------------------------------------------
 3. Setting the knobs in Cloud Run

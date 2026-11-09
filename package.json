@@ -1,7 +1,7 @@
 {
   "name": "sakafleet-backend",
   "type": "module",
-  "version": "1.94.0",
+  "version": "1.95.0",
   "description": "Saka Fleet Backend",
   "main": "index.js",
   "scripts": {
@@ -81,6 +81,7 @@
     "migrate:country-learnings": "node scripts/run_country_learnings_migration.js",
     "migrate:trial-defaults": "node scripts/run_trial_default_migration.js",
     "migrate:trial-end-grace": "node scripts/run_trial_end_grace_migration.js",
+    "migrate:trial-feature-nudge": "node scripts/run_trial_feature_nudge_migration.js",
     "migrate:asset-type-check": "node scripts/run_asset_type_check_migration.js",
     "remediate:phantom-trials": "node scripts/remediate_phantom_trials.js",
     "landing:stamp": "node scripts/stamp_landing_assets.cjs",

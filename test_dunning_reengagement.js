@@ -9,7 +9,7 @@
 
 import assert from 'assert';
 import { createMockSupabase } from './scripts/mockSupabase.js';
-import { processPastDueDunning, processSilentReengagement } from './src/services/trialEngine.js';
+import { processPastDueDunning, processSilentReengagement, reengageTemplateEnabled, REENGAGE_QUIET_DAYS } from './src/services/trialEngine.js';
 
 let passed = 0;
 function check(condition, label) {
@@ -84,28 +84,64 @@ async function run() {
   await processPastDueDunning({ supabase: healedMock.client, sendWhatsAppFn: sendFn, now: NOW, stats: makeStats(), checkoutFn: checkoutStub });
   check(healedMock.db.profiles[0].past_due_notice_count === 0, 'Renewed account counter resets to 0');
 
-  console.log('\n--- Test 4: 14-day silence nudge fires exactly once ---');
+  console.log('\n--- Test 4: 14-day silence nudge fires exactly once (D5, chat_history) ---');
+  check(REENGAGE_QUIET_DAYS === 14, 'the silence threshold is pinned at 14 days');
+  check(reengageTemplateEnabled({}) === false && reengageTemplateEnabled({ REENGAGE_TEMPLATE_ENABLED: 'on' }) === true, 'the template gate defaults OFF and is read per call (D8)');
   const quietMock = createMockSupabase({
     profiles: [ownerProfile({ id: 'owner-2', subscription_status: 'ACTIVE', phone_number: '+254700000002', reengage_nudged_at: null })],
     vehicles: [{ id: 'v1', owner_id: 'owner-2', plate_number: 'KDA 123A', deleted_at: null }],
-    chat_transcripts: [{ phone_number: '+254700000002', created_at: daysAgo(14), sender: 'user', message_text: 'hi' }]
+    chat_history: [{ user_phone: '+254700000002', created_at: daysAgo(14) }]
   });
   const quietSent = [];
   const quietStats = makeStats();
-  await processSilentReengagement({ supabase: quietMock.client, sendWhatsAppFn: async (phone, text) => { quietSent.push({ phone, text }); }, now: NOW, stats: quietStats });
+  await processSilentReengagement({ supabase: quietMock.client, sendWhatsAppFn: async (phone, text, kind, vars) => { quietSent.push({ phone, text, kind, vars }); }, now: NOW, stats: quietStats });
   check(quietStats.reengaged === 1, 'One re-engagement nudge is sent');
   check(/quick win/i.test(quietSent[0].text), 'Nudge copy is deterministic and warm');
+  check(quietSent[0].kind === null && quietSent[0].vars === null, 'knob OFF sends NO template kind — byte-identical to v1.16.3 (D8)');
+  check(quietSent[0].text.includes('Test Owner'), 'knob OFF keeps the full name in the copy');
   check(Boolean(quietMock.db.profiles[0].reengage_nudged_at), 'Dedupe stamp is written');
 
   const quietStats2 = makeStats();
   await processSilentReengagement({ supabase: quietMock.client, sendWhatsAppFn: async () => { throw new Error('should not send'); }, now: NOW, stats: quietStats2 });
   check(quietStats2.reengaged === 0, 'Second run never re-nudges the same owner');
 
-  console.log('\n--- Test 5: recent activity and vehicle-less owners are ignored ---');
+  const thirteenMock = createMockSupabase({
+    profiles: [ownerProfile({ id: 'owner-13', subscription_status: 'ACTIVE', phone_number: '+254700000013', reengage_nudged_at: null })],
+    vehicles: [{ id: 'v13', owner_id: 'owner-13', deleted_at: null }],
+    chat_history: [{ user_phone: '+254700000013', created_at: daysAgo(13) }]
+  });
+  let thirteenSends = 0;
+  await processSilentReengagement({ supabase: thirteenMock.client, sendWhatsAppFn: async () => { thirteenSends += 1; }, now: NOW, stats: makeStats() });
+  check(thirteenSends === 0, '13 days of quiet does NOT qualify (the 13-15 band is retired)');
+
+  console.log('\n--- Test 4b: the re-engage template gate (D6) ---');
+  process.env.REENGAGE_TEMPLATE_ENABLED = 'on';
+  const templateMock = createMockSupabase({
+    profiles: [ownerProfile({ id: 'owner-5', subscription_status: 'ACTIVE', phone_number: '+254700000005', full_name: 'Amina Wanjiku', reengage_nudged_at: null })],
+    vehicles: [{ id: 'v5', owner_id: 'owner-5', deleted_at: null }],
+    chat_history: [{ user_phone: '+254700000005', created_at: daysAgo(20) }]
+  });
+  const templateSent = [];
+  await processSilentReengagement({ supabase: templateMock.client, sendWhatsAppFn: async (phone, text, kind, vars) => { templateSent.push({ phone, text, kind, vars }); }, now: NOW, stats: makeStats() });
+  check(templateSent.length === 1 && templateSent[0].kind === 're_engagement', 'knob ON passes the re_engagement kind (template routing)');
+  check(Boolean(templateSent[0].vars) && templateSent[0].vars.name === 'Amina', 'the template variable is the FIRST name');
+  check(templateSent[0].text.includes('Amina') && !templateSent[0].text.includes('Amina Wanjiku'), 'the copy addresses the first name while the template is active');
+
+  const noNameMock = createMockSupabase({
+    profiles: [ownerProfile({ id: 'owner-6', subscription_status: 'ACTIVE', phone_number: '+254700000006', full_name: null, reengage_nudged_at: null })],
+    vehicles: [{ id: 'v6', owner_id: 'owner-6', deleted_at: null }],
+    chat_history: [{ user_phone: '+254700000006', created_at: daysAgo(21) }]
+  });
+  const noNameSent = [];
+  await processSilentReengagement({ supabase: noNameMock.client, sendWhatsAppFn: async (phone, text, kind, vars) => { noNameSent.push({ text, kind, vars }); }, now: NOW, stats: makeStats() });
+  check(noNameSent.length === 1 && noNameSent[0].vars.name === 'there', 'a null name always sends the guaranteed "there" fallback');
+  delete process.env.REENGAGE_TEMPLATE_ENABLED;
+
+  console.log('\n--- Test 5: recent activity, vehicle-less owners and the superadmin are ignored ---');
   const recentMock = createMockSupabase({
     profiles: [ownerProfile({ id: 'owner-3', subscription_status: 'ACTIVE', phone_number: '+254700000003' })],
     vehicles: [{ id: 'v2', owner_id: 'owner-3', deleted_at: null }],
-    chat_transcripts: [{ phone_number: '+254700000003', created_at: daysAgo(2) }]
+    chat_history: [{ user_phone: '+254700000003', created_at: daysAgo(2) }]
   });
   let recentSends = 0;
   await processSilentReengagement({ supabase: recentMock.client, sendWhatsAppFn: async () => { recentSends += 1; }, now: NOW, stats: makeStats() });
@@ -114,11 +150,24 @@ async function run() {
   const noVehicleMock = createMockSupabase({
     profiles: [ownerProfile({ id: 'owner-4', subscription_status: 'ACTIVE', phone_number: '+254700000004' })],
     vehicles: [],
-    chat_transcripts: [{ phone_number: '+254700000004', created_at: daysAgo(14) }]
+    chat_history: [{ user_phone: '+254700000004', created_at: daysAgo(14) }]
   });
   let noVehicleSends = 0;
   await processSilentReengagement({ supabase: noVehicleMock.client, sendWhatsAppFn: async () => { noVehicleSends += 1; }, now: NOW, stats: makeStats() });
   check(noVehicleSends === 0, 'Owner without an active vehicle is ignored');
+
+  const previousSuperadminPhone = process.env.SUPERADMIN_PHONE;
+  process.env.SUPERADMIN_PHONE = '+254700000007';
+  const adminMock = createMockSupabase({
+    profiles: [ownerProfile({ id: 'owner-7', subscription_status: 'ACTIVE', phone_number: '+254700000007' })],
+    vehicles: [{ id: 'v7', owner_id: 'owner-7', deleted_at: null }],
+    chat_history: [{ user_phone: '+254700000007', created_at: daysAgo(30) }]
+  });
+  let adminSends = 0;
+  await processSilentReengagement({ supabase: adminMock.client, sendWhatsAppFn: async () => { adminSends += 1; }, now: NOW, stats: makeStats() });
+  check(adminSends === 0, 'the superadmin phone is never nudged');
+  if (previousSuperadminPhone === undefined) delete process.env.SUPERADMIN_PHONE;
+  else process.env.SUPERADMIN_PHONE = previousSuperadminPhone;
 
   console.log(`\n🎉 ${passed} dunning/re-engagement assertions passed.`);
 }

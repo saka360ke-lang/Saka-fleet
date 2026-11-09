@@ -84,6 +84,12 @@ import {
   // v1.81.0 (Phase 20) — CSV bulk import page.
   renderImportPage,
   DASHBOARD_ROLES,
+  DASHBOARD_SESSIONS_TABLE,
+  // v1.95.0 (Phase 32, Task 2) — the dual-role lane switch (D3).
+  resolveDashboardRole,
+  hasLiveDriverAssignment,
+  loadAssignedVehicles,
+  withLaneSwitcher,
   buildDriverHome,
   buildDriverDaybookPageData,
   buildDriverSelfCompliancePage,
@@ -348,7 +354,17 @@ async function requireRoleSession(request, reply, supabase, role = 'owner') {
     }
   }
 
-  if (actualRole === role) return { ...session, role: actualRole };
+  if (actualRole === role) {
+    // v1.95.0 (Phase 32, Task 2) — a dual-role profile gets the lane strip. The
+    // resolution is read-only and never widens the gate: it only tells the
+    // renderer whether BOTH lanes exist (admin pages skip it entirely).
+    if (actualRole !== 'admin') {
+      try {
+        request.sakaLane = await resolveDashboardRole({ supabase, profile: { id: session.ownerId } });
+      } catch { request.sakaLane = null; }
+    }
+    return { ...session, role: actualRole };
+  }
 
   if (role === 'admin') {
     const page = renderErrorPage(404, 'That page does not exist.');
@@ -415,6 +431,19 @@ export async function registerDashboardRoutes(fastify, {
       const contentType = String(reply.getHeader('content-type') || '');
       if (!contentType.includes('text/html')) return payload;
       return withImpersonationBanner(payload, ctx);
+    });
+
+    // v1.95.0 (Phase 32, Task 2) — a dual-role profile sees the Owner · Driver
+    // toggle on every lane page. Impersonation wins outright: the strip is never
+    // injected while the yellow banner is active (D3 — the toggle cannot switch
+    // lanes for someone else's account).
+    scope.addHook('onSend', async (request, reply, payload) => {
+      const lane = request.sakaLane;
+      if (!lane || !lane.isOwner || !lane.isDriver) return payload;
+      if (request.sakaImpersonation || typeof payload !== 'string') return payload;
+      const contentType = String(reply.getHeader('content-type') || '');
+      if (!contentType.includes('text/html')) return payload;
+      return withLaneSwitcher(payload, lane);
     });
 
     /* -------------------------------------------------------------- */
@@ -1282,15 +1311,27 @@ export async function registerDashboardRoutes(fastify, {
         const session = await requireRoleSession(request, reply, supabase, 'driver');
         if (!session) return reply;
         const profile = await loadDashboardProfile(supabase, session.ownerId);
+        // v1.95.0 (Phase 32, Task 2) — the vehicle picker: an id outside the
+        // driver's own assignments is a 403, never a silent fallback.
+        const assignedVehicles = await loadAssignedVehicles(supabase, session.ownerId);
+        const requestedVehicle = String(request.query?.vehicle || '').slice(0, 80);
+        if (requestedVehicle && !assignedVehicles.some((vehicle) => vehicle.id === requestedVehicle)) {
+          const page = renderErrorPage(403, 'That vehicle is not assigned to you.');
+          return sendHtml(reply, 403, page.html);
+        }
+        const activeVehicleId = requestedVehicle || null;
         const data = await buildDriverHome({
           supabase,
           driverId: session.ownerId,
+          vehicleId: activeVehicleId,
           profile,
           countryInfo: countryForProfile(profile)
         });
         return sendHtml(reply, data.ok ? 200 : 503, renderDriverHomePage({
           data,
-          emailMasked: accountLabel(profile, session)
+          emailMasked: accountLabel(profile, session),
+          vehicles: assignedVehicles,
+          activeVehicleId
         }));
       } catch (err) {
         await logSystemError(supabase, err, '/d/driver');
@@ -1308,13 +1349,26 @@ export async function registerDashboardRoutes(fastify, {
         const session = await requireRoleSession(request, reply, supabase, 'driver');
         if (!session) return reply;
         const profile = await loadDashboardProfile(supabase, session.ownerId);
+        // v1.95.0 (Phase 32, Task 2) — same validated picker as the home page.
+        const assignedVehicles = await loadAssignedVehicles(supabase, session.ownerId);
+        const requestedVehicle = String(request.query?.vehicle || '').slice(0, 80);
+        if (requestedVehicle && !assignedVehicles.some((vehicle) => vehicle.id === requestedVehicle)) {
+          const page = renderErrorPage(403, 'That vehicle is not assigned to you.');
+          return sendHtml(reply, 403, page.html);
+        }
+        const activeVehicleId = requestedVehicle || null;
         const pageData = await buildDriverDaybookPageData({
           supabase,
           driverId: session.ownerId,
+          vehicleId: activeVehicleId,
           profile,
           countryInfo: countryForProfile(profile)
         });
-        return sendHtml(reply, pageData.ok ? 200 : 503, renderDriverDaybookPage({ page: pageData }));
+        return sendHtml(reply, pageData.ok ? 200 : 503, renderDriverDaybookPage({
+          page: pageData,
+          vehicles: assignedVehicles,
+          activeVehicleId
+        }));
       } catch (err) {
         await logSystemError(supabase, err, '/d/driver/daybook');
         const page = renderErrorPage(500, 'Please try again in a moment.');
@@ -1331,15 +1385,110 @@ export async function registerDashboardRoutes(fastify, {
         const session = await requireRoleSession(request, reply, supabase, 'driver');
         if (!session) return reply;
         const profile = await loadDashboardProfile(supabase, session.ownerId);
+        // v1.95.0 (Phase 32, Task 2) — same validated picker as the home page.
+        const assignedVehicles = await loadAssignedVehicles(supabase, session.ownerId);
+        const requestedVehicle = String(request.query?.vehicle || '').slice(0, 80);
+        if (requestedVehicle && !assignedVehicles.some((vehicle) => vehicle.id === requestedVehicle)) {
+          const page = renderErrorPage(403, 'That vehicle is not assigned to you.');
+          return sendHtml(reply, 403, page.html);
+        }
+        const activeVehicleId = requestedVehicle || null;
         const pageData = await buildDriverSelfCompliancePage({
           supabase,
           driverId: session.ownerId,
+          vehicleId: activeVehicleId,
           profile,
           countryInfo: countryForProfile(profile)
         });
-        return sendHtml(reply, pageData.ok ? 200 : 503, renderDriverSelfCompliancePage({ page: pageData }));
+        return sendHtml(reply, pageData.ok ? 200 : 503, renderDriverSelfCompliancePage({
+          page: pageData,
+          vehicles: assignedVehicles,
+          activeVehicleId
+        }));
       } catch (err) {
         await logSystemError(supabase, err, '/d/driver/compliance');
+        const page = renderErrorPage(500, 'Please try again in a moment.');
+        return sendHtml(reply, page.status, page.html);
+      }
+    });
+
+    /* -------------------------------------------------------------- */
+    /* POST /d/lane/switch — the dual-role toggle (v1.95.0, Task 2)    */
+    /* D3: the SESSION row's role flips; the 403 matrix is untouched.  */
+    /* -------------------------------------------------------------- */
+    scope.post('/d/lane/switch', { config: { rateLimit: { max: 5, timeWindow: '5 minutes' } } }, async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      if (isCrossOriginWrite(request)) {
+        const page = renderErrorPage(403, 'That request came from another site — nothing was changed. Switch lanes from your dashboard.');
+        return sendHtml(reply, 403, page.html);
+      }
+      try {
+        const sessionToken = readDashboardCookie(request.headers);
+        if (!sessionToken) {
+          const page = renderErrorPage(401, 'Reply *dashboard* in the WhatsApp chat and open the sign-in link.', { brandHref: 'https://sakafleet.com' });
+          return sendHtml(reply, page.status, page.html);
+        }
+        const session = await getSessionByToken({ supabase, sessionToken });
+        if (!session.ok) {
+          reply.header('set-cookie', dashboardClearCookieHeader({ secure: isSecureRequest(request) }));
+          const page = renderErrorPage(401, 'Your session has ended. Reply *dashboard* in the WhatsApp chat and sign in again.', { brandHref: 'https://sakafleet.com' });
+          return sendHtml(reply, page.status, page.html);
+        }
+        // Impersonation is read-only and NEVER a lane switch (D3).
+        if (readImpersonationCookie(request.headers)) {
+          const page = renderErrorPage(403, 'Exit impersonation to switch lanes — this session is read-only.');
+          return sendHtml(reply, 403, page.html);
+        }
+        if (session.role === 'admin') {
+          const page = renderErrorPage(403, 'The admin console has no owner or driver lane.');
+          return sendHtml(reply, 403, page.html);
+        }
+        const lane = String(request.body?.lane || '').toLowerCase();
+        if (lane !== 'owner' && lane !== 'driver') {
+          const page = renderErrorPage(400, 'Choose either the owner or the driver dashboard.');
+          return sendHtml(reply, 400, page.html);
+        }
+        if (lane === session.role) return reply.code(303).header('location', dashboardHomeFor(lane)).send();
+        // The SAME role truth the OTP mint uses: both lanes must exist.
+        const roles = await resolveDashboardRole({ supabase, profile: { id: session.ownerId } });
+        if (lane === 'owner' && !roles.isOwner) {
+          const page = renderErrorPage(403, 'This account does not own a vehicle, so there is no owner dashboard to open.');
+          return sendHtml(reply, 403, page.html);
+        }
+        if (lane === 'driver' && !roles.isDriver) {
+          const page = renderErrorPage(403, 'You need to be assigned to a vehicle to open the driver dashboard. Ask your fleet owner to assign you.');
+          return sendHtml(reply, 403, page.html);
+        }
+        // The same gates as sign-in: an owner needs a live trial/paid plan, a
+        // driver a live assignment (re-checked here, never trusted from a form).
+        if (lane === 'owner') {
+          const ent = await getEntitlements({ supabase, ownerId: session.ownerId });
+          if (!ent || (!ent.isTrial && !ent.isPaid)) {
+            const page = renderErrorPage(403, 'The owner dashboard needs a live trial or paid plan. Reply *subscription* in WhatsApp to see your options.');
+            return sendHtml(reply, 403, page.html);
+          }
+        } else {
+          const assigned = await hasLiveDriverAssignment(supabase, session.ownerId);
+          if (assigned === null) {
+            const page = renderErrorPage(503, 'Please try again in a moment.');
+            return sendHtml(reply, 503, page.html);
+          }
+          if (!assigned) {
+            const page = renderErrorPage(403, 'You need to be assigned to a vehicle to open the driver dashboard. Ask your fleet owner to assign you.');
+            return sendHtml(reply, 403, page.html);
+          }
+        }
+        const { error } = await supabase
+          .from(DASHBOARD_SESSIONS_TABLE)
+          .update({ session_role: lane })
+          .eq('id', session.session.id);
+        if (error) {
+          const page = renderErrorPage(503, 'The lane could not be switched just now. Please try again in a moment.');
+          return sendHtml(reply, 503, page.html);
+        }
+        return reply.code(303).header('location', dashboardHomeFor(lane)).send();
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/lane/switch');
         const page = renderErrorPage(500, 'Please try again in a moment.');
         return sendHtml(reply, page.status, page.html);
       }

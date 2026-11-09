@@ -34,13 +34,15 @@ const EXPECTED = [
   // v1.87.1 (Phase 26B) — the codes/invites that must beat the 24h window.
   'auth_otp', 'driver_invite', 'transfer_invite',
   // v1.92.0 (Phase 29) — the T+3 / T+7 consolidated overdue digest.
-  'overdue_digest'
+  'overdue_digest',
+  // v1.95.0 (Phase 32, Task 3) — the drip-feed feature tip.
+  'feature_tip'
 ];
 
 console.log('--- 1. registry completeness ---');
-check(KINDS.length === 17, '17 proactive kinds are registered');
+check(KINDS.length === 18, '18 proactive kinds are registered');
 check(KINDS.join(',') === EXPECTED.join(','), 'the canonical kind list is stable');
-check(PROACTIVE_TEMPLATE_ENV_KEYS.length === 17 && new Set(PROACTIVE_TEMPLATE_ENV_KEYS).size === 17, 'every kind has a unique META_TPL_ env knob');
+check(PROACTIVE_TEMPLATE_ENV_KEYS.length === 18 && new Set(PROACTIVE_TEMPLATE_ENV_KEYS).size === 18, 'every kind has a unique META_TPL_ env knob');
 check(PROACTIVE_TEMPLATE_ENV_KEYS.every((key) => key.startsWith('META_TPL_') && key.length > 9), 'every env knob follows META_TPL_<KIND>');
 check(Object.isFrozen(PROACTIVE_TEMPLATE_KINDS), 'the registry is frozen (no runtime drift)');
 check(KINDS.every((kind) => Array.isArray(PROACTIVE_TEMPLATE_KINDS[kind].variables)), 'every kind declares a variables array');
@@ -207,6 +209,16 @@ process.env.META_TPL_FLEET_AUTO_AUDIT = 'saka_fleet_auto_audit';
 const auditRouted = resolveProactiveMode({ kind: 'fleet_auto_audit', templateVars: { net: 'KES 4,250' } });
 check(auditRouted.mode === 'template' && auditRouted.templateName === 'saka_fleet_auto_audit' && auditRouted.variables[0].text === 'KES 4,250', 'a configured fleet_auto_audit knob routes to the template sender with its variable');
 delete process.env.META_TPL_FLEET_AUTO_AUDIT;
+// v1.95.0 (Phase 32, Task 3) — the feature_tip contract: two user-data variables,
+// and a missing one can never fire a broken template.
+check(PROACTIVE_TEMPLATE_KINDS.feature_tip.variables.join(',') === 'feature,link', 'feature_tip takes the feature label + its link');
+check(PROACTIVE_TEMPLATE_KINDS.feature_tip.env === 'META_TPL_FEATURE_TIP' && PROACTIVE_TEMPLATE_KINDS.feature_tip.audience === 'owner', 'feature_tip reads its own knob and targets owners');
+check(resolveProactiveMode({ kind: 'feature_tip', templateVars: { feature: 'voice notes', link: 'https://wa.me/1' } }).mode === 'text', 'feature_tip with the knob unset falls back to the free-form tip');
+process.env.META_TPL_FEATURE_TIP = 'saka_feature_tip';
+const featureTipRouted = resolveProactiveMode({ kind: 'feature_tip', templateVars: { feature: 'voice notes', link: 'https://wa.me/19404407252?text=Hi%20Saka' } });
+check(featureTipRouted.mode === 'template' && featureTipRouted.templateName === 'saka_feature_tip' && featureTipRouted.variables.length === 2, 'a configured feature_tip knob routes to the template sender with both variables');
+check(resolveProactiveMode({ kind: 'feature_tip', templateVars: { feature: 'voice notes' } }).mode === 'text', 'a missing link degrades to text (never a broken Meta parameter)');
+delete process.env.META_TPL_FEATURE_TIP;
 const indexFallbackSrc = fs.readFileSync('./index.js', 'utf8');
 check(indexFallbackSrc.includes("'driver_activity', { plate, driver: driverName }") && indexFallbackSrc.includes('🔔 *Driver Activity Summary (${plate})*'), 'the driver_activity fallback text is byte-identical to the pre-v1.63.1 message');
 check(indexFallbackSrc.includes("'fleet_auto_audit', { net: formatMoney(fleetTotalEarnings - fleetTotalExpenses, cur, loc) }") && indexFallbackSrc.includes('📊 Your Fleet Auto-Audit Report is ready.'), 'the fleet_auto_audit fallback text is byte-identical to the pre-v1.63.1 message');

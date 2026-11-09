@@ -99,6 +99,21 @@ function run() {
     'the boot DDL adds the role idempotently to a table created before v1.76.0'
   );
 
+  console.log('--- Test 7b: the drip-feed feature-tip columns are schema carriers (v1.95.0) ---');
+  const subscriptionSchemaSource = fs.readFileSync(path.join(here, 'src', 'db', 'subscriptionSchema.js'), 'utf8');
+  const trialSchemaSource = fs.readFileSync(path.join(here, 'src', 'services', 'trialSchema.js'), 'utf8');
+  const featureMigrationSource = fs.readFileSync(path.join(here, 'scripts', 'run_trial_feature_nudge_migration.js'), 'utf8');
+  for (const [name, source] of [['boot subscription schema', subscriptionSchemaSource], ['trial schema', trialSchemaSource]]) {
+    assert(
+      source.includes('ADD COLUMN IF NOT EXISTS feature_nudge_sent_at')
+      && source.includes('ADD COLUMN IF NOT EXISTS feature_nudge_followup_sent_at')
+      && source.includes('ADD COLUMN IF NOT EXISTS feature_nudge_key'),
+      `${name} carries all three drip-feed columns idempotently`
+    );
+  }
+  assert(featureMigrationSource.includes('TRIAL_FEATURE_NUDGE_SQL'), 'the migration script applies the shared TRIAL_FEATURE_NUDGE_SQL (one source of truth)');
+  assert(JSON.parse(fs.readFileSync(path.join(here, 'package.json'), 'utf8')).scripts['migrate:trial-feature-nudge'], 'npm run migrate:trial-feature-nudge is registered');
+
   console.log('--- Test 8: the monthly report opt-in is a schema carrier (v1.77.0) ---');
   const monthlyMigrationSource = fs.readFileSync(path.join(here, 'scripts', 'run_monthly_reports_migration.js'), 'utf8');
   assert(

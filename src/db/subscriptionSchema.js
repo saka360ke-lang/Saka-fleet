@@ -135,6 +135,16 @@ CREATE INDEX IF NOT EXISTS idx_trial_sessions_status_ends
   ON public.trial_sessions(status, ends_at);
 
 -- ============================================================
+-- 5b. v1.95.0 (Phase 32, Task 3) — drip-feed feature tips.
+--     One feature per owner: T+12h after activation, a single follow-up at
+--     T+48h only when that feature is still unexplored (max 2 sends).
+--     Idempotent; a pre-1.95.0 table is upgraded by the boot ensure.
+-- ============================================================
+ALTER TABLE public.trial_sessions ADD COLUMN IF NOT EXISTS feature_nudge_sent_at timestamptz;
+ALTER TABLE public.trial_sessions ADD COLUMN IF NOT EXISTS feature_nudge_followup_sent_at timestamptz;
+ALTER TABLE public.trial_sessions ADD COLUMN IF NOT EXISTS feature_nudge_key text;
+
+-- ============================================================
 -- 6. coupons — checkout discount scoping
 -- ============================================================
 ALTER TABLE public.coupons ADD COLUMN IF NOT EXISTS discount_amount numeric DEFAULT 0;

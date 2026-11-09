@@ -1,6 +1,13 @@
 {
-  "latest": "1.94.0",
+  "latest": "1.95.0",
   "entries": [
+    {
+      "version": "1.95.0",
+      "date": "2026-11-09",
+      "title": "A menu on every screen, your own lanes, and gentle tips",
+      "preview": "A clean dashboard menu, owner/driver lane switching, and one gentle feature tip after activation.",
+      "summary": "This is the final release of the program, and it polishes three everyday things. The dashboard now has one tidy menu: on wide screens the same row of links stays, and on phones and tablets a menu button opens a full-screen list built from exactly the same links - nothing hidden, nothing duplicated - while the yellow impersonation banner always stays visible above it. Second: if you both own a vehicle and drive one, the dashboard now shows an Owner / Driver switch at the top. It moves between your two dashboards through the same checks as signing in (an owner needs a live trial or paid plan, a driver needs a live vehicle assignment), and if you drive more than one vehicle you also get a small vehicle picker. While a superadmin is viewing an account read-only the switch is hidden. Third: after your trial activates, Saka can send one short tip about a feature you have not tried yet - your web dashboard, one-line expense logging, voice notes, reports or compliance photos - and at most one friendly follow-up two days later, only if you still have not tried it. Silence re-engagement can now also reach you through an approved template if you have been away for two weeks. Both of these message families ship switched off: nothing new is sent until the team turns them on, and until then nothing changes at all."
+    },
     {
       "version": "1.94.0",
       "date": "2026-11-09",

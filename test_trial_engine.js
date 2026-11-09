@@ -29,7 +29,12 @@ import {
   fittedPlanKey,
   skipsTrialEndNudge,
   getTrialFunnelStats,
-  formatTrialStatsReply
+  formatTrialStatsReply,
+  FEATURE_TIPS,
+  featureTipText,
+  resolveFeatureTipState,
+  featureNudgeEnabled,
+  FEATURE_NUDGE_SWEEP_CAP
 } from './src/services/trialEngine.js';
 import { invalidateEntitlements } from './src/services/subscriptions.js';
 
@@ -73,6 +78,10 @@ function trialRow(overrides = {}) {
     nudge_midpoint_sent_at: null,
     nudge_t3_sent_at: null,
     nudge_t24_sent_at: null,
+    // v1.95.0 (Phase 32, Task 3) — the drip-feed stamp columns.
+    feature_nudge_sent_at: null,
+    feature_nudge_followup_sent_at: null,
+    feature_nudge_key: null,
     expiry_processed_at: null,
     ...overrides
   };
@@ -394,6 +403,120 @@ async function run() {
   check(rewardStats.activationRewards === 1 && /unlocked the full Saka experience/i.test(reward.sent[0]), 'Activated trial receives the reward message once');
   const rewardAgain = await runTrialLifecycleSweep({ supabase: reward.mock.client, sendWhatsAppFn: reward.send });
   check(rewardAgain.activationRewards === undefined || rewardAgain.activationRewards === 0, 'Activation reward never repeats');
+
+  console.log('\n--- Test 6b: Phase 32 — drip-feed feature tips (v1.95.0) ---');
+  const previousFeatureKnob = process.env.FEATURE_NUDGE_ENABLED;
+  const featureTrial = (overrides = {}) => trialRow({
+    activated: true,
+    activated_at: past(0.55),
+    started_at: past(6),
+    ends_at: future(24),
+    nudge_activation_sent_at: past(6),
+    ...overrides
+  });
+  const featureMock = (extra = {}) => createMockSupabase({
+    profiles: [ownerProfile({ subscription_tier: 'free', subscription_status: 'ACTIVE' })],
+    trial_sessions: [featureTrial()],
+    usage_counters: [],
+    vehicles: [{ id: 'v-1', owner_id: 'p-1', plate_number: 'KDA 1A', status: 'ACTIVE', deleted_at: null }],
+    dashboard_sessions: [],
+    chat_history: [],
+    expense_logs: [],
+    vehicle_documents: [],
+    coupons: [],
+    ...extra
+  });
+
+  delete process.env.FEATURE_NUDGE_ENABLED;
+  const featureOffMock = featureMock();
+  const featureOffSent = [];
+  const featureOffStats = await runTrialLifecycleSweep({ supabase: featureOffMock.client, sendWhatsAppFn: async (_to, message, kind) => { featureOffSent.push({ message, kind }); } });
+  check(featureOffStats.featureTips === 0 && featureOffSent.length === 0, 'knob OFF sends nothing (D8 — byte-identical to pre-v1.95.0)');
+  check(!featureOffMock.db.trial_sessions[0].feature_nudge_sent_at, 'knob OFF stamps nothing');
+
+  process.env.FEATURE_NUDGE_ENABLED = 'on';
+  const featureOnMock = featureMock();
+  const featureOnSent = [];
+  const featureOnStats = await runTrialLifecycleSweep({ supabase: featureOnMock.client, sendWhatsAppFn: async (_to, message, kind, vars) => { featureOnSent.push({ message, kind, vars }); } });
+  check(featureOnStats.featureTips === 1 && featureOnSent.length === 1, 'T+12h sends exactly ONE feature tip');
+  check(featureOnSent[0].kind === 'feature_tip' && featureOnSent[0].vars && featureOnSent[0].vars.feature && featureOnSent[0].vars.link, 'the tip carries the feature_tip kind and both template variables');
+  check(/Tip: try your web dashboard/.test(featureOnSent[0].message) && /app\.sakafleet\.com\/d\/login/.test(featureOnSent[0].message), 'the FIRST unexplored feature wins with an engine-owned link');
+  check(featureOnMock.db.trial_sessions[0].feature_nudge_key === 'dashboard' && Boolean(featureOnMock.db.trial_sessions[0].feature_nudge_sent_at), 'the pick + stamp land on the trial row');
+  const featureOnAgain = await runTrialLifecycleSweep({ supabase: featureOnMock.client, sendWhatsAppFn: async (_to, message) => { featureOnSent.push({ message }); } });
+  check(featureOnAgain.featureTips === 0 && featureOnSent.length === 1, 'the first tip never repeats');
+
+  const exploredMock = featureMock({ dashboard_sessions: [{ id: 's-1', owner_id: 'p-1', verified: true }] });
+  const exploredSent = [];
+  const exploredStats = await runTrialLifecycleSweep({ supabase: exploredMock.client, sendWhatsAppFn: async (_to, message, kind, vars) => { exploredSent.push({ message, kind, vars }); } });
+  check(exploredStats.featureTips === 1 && exploredSent[0].vars.feature === 'one-line expense logging', 'an explored dashboard is skipped — the next unexplored feature is picked');
+
+  const engagedMock = featureMock({
+    dashboard_sessions: [{ id: 's-1', owner_id: 'p-1', verified: true }],
+    trial_sessions: [featureTrial({ activated_at: past(2.1), feature_nudge_sent_at: past(1.5), feature_nudge_key: 'dashboard' })]
+  });
+  const engagedSent = [];
+  const engagedStats = await runTrialLifecycleSweep({ supabase: engagedMock.client, sendWhatsAppFn: async (_to, message) => { engagedSent.push(message); } });
+  check(engagedStats.featureTipFollowups === 0 && engagedSent.length === 0, 'engagement stops the ladder — no follow-up for a used feature');
+  check(Boolean(engagedMock.db.trial_sessions[0].feature_nudge_followup_sent_at), 'the follow-up is stamped WITHOUT sending');
+
+  const unengagedMock = featureMock({
+    trial_sessions: [featureTrial({ activated_at: past(2.1), feature_nudge_sent_at: past(1.5), feature_nudge_key: 'dashboard' })]
+  });
+  const unengagedSent = [];
+  const unengagedStats = await runTrialLifecycleSweep({ supabase: unengagedMock.client, sendWhatsAppFn: async (_to, message) => { unengagedSent.push(message); } });
+  check(unengagedStats.featureTipFollowups === 1 && unengagedSent.length === 1 && /Still worth a try/.test(unengagedSent[0]), 'one follow-up at +48h while the feature stays unexplored');
+  const unengagedAgain = await runTrialLifecycleSweep({ supabase: unengagedMock.client, sendWhatsAppFn: async (_to, message) => { unengagedSent.push(message); } });
+  check(unengagedAgain.featureTipFollowups === 0 && unengagedSent.length === 1, 'max 2 sends per feature — the ladder is closed');
+
+  const notActivatedMock = featureMock({ trial_sessions: [featureTrial({ activated: false, activated_at: null, started_at: past(1) })] });
+  const notActivatedSent = [];
+  const notActivatedStats = await runTrialLifecycleSweep({ supabase: notActivatedMock.client, sendWhatsAppFn: async (_to, message) => { notActivatedSent.push(message); } });
+  check(notActivatedStats.featureTips === 0, 'an un-activated trial never gets a feature tip');
+
+  const paidFeatureMock = featureMock({ profiles: [ownerProfile({ subscription_tier: 'solo_pro', subscription_status: 'ACTIVE', subscription_period_end: future(20) })] });
+  const paidFeatureSent = [];
+  const paidFeatureStats = await runTrialLifecycleSweep({ supabase: paidFeatureMock.client, sendWhatsAppFn: async (_to, message) => { paidFeatureSent.push(message); } });
+  check(paidFeatureStats.featureTips === 0 && paidFeatureSent.length === 0, 'paid-live accounts are never drip-fed (D9)');
+
+  const driftFeatureRow = trialRow({ activated: true, activated_at: past(0.55), started_at: past(6), ends_at: future(24), nudge_activation_sent_at: past(6) });
+  delete driftFeatureRow.feature_nudge_sent_at;
+  delete driftFeatureRow.feature_nudge_followup_sent_at;
+  delete driftFeatureRow.feature_nudge_key;
+  const columnDriftMock = featureMock({ trial_sessions: [driftFeatureRow] });
+  const driftFeatureSent = [];
+  const driftFeatureStats = await runTrialLifecycleSweep({ supabase: columnDriftMock.client, sendWhatsAppFn: async (_to, message) => { driftFeatureSent.push(message); } });
+  check(driftFeatureStats.featureTips === 0 && driftFeatureSent.length === 0, 'un-migrated columns send nothing (rule 50 degrade, never a message loop)');
+
+  const capProfiles = [];
+  const capTrials = [];
+  for (let n = 0; n < 12; n += 1) {
+    capProfiles.push(ownerProfile({ id: `p-cap-${n}`, phone_number: `+25470001${String(1000 + n)}` }));
+    capTrials.push(featureTrial({ id: `t-cap-${n}`, owner_id: `p-cap-${n}` }));
+  }
+  const capMock = createMockSupabase({
+    profiles: capProfiles, trial_sessions: capTrials,
+    usage_counters: [], vehicles: [], dashboard_sessions: [], chat_history: [],
+    expense_logs: [], vehicle_documents: [], coupons: []
+  });
+  const capStats = await runTrialLifecycleSweep({ supabase: capMock.client, sendWhatsAppFn: async () => {} });
+  check(capStats.featureTips === FEATURE_NUDGE_SWEEP_CAP, `one sweep is capped at ${FEATURE_NUDGE_SWEEP_CAP} feature tips`);
+
+  check(featureNudgeEnabled({ FEATURE_NUDGE_ENABLED: 'on' }) === true && featureNudgeEnabled({}) === false, 'the gate is read per call and defaults OFF (D8)');
+  check(FEATURE_TIPS.map((tip) => tip.key).join(',') === 'dashboard,expense,voice_note,report,compliance', 'the checklist order is pinned (deterministic pick)');
+  const tipCopy = featureTipText(FEATURE_TIPS[0], { followup: true });
+  check(/^🎯 Still worth a try/.test(tipCopy) && tipCopy.includes('One minute and Saka does the rest.'), 'follow-up copy stays warm and deterministic (rule 31)');
+  const stateMock = createMockSupabase({
+    dashboard_sessions: [{ id: 's1', owner_id: 'p-1' }],
+    chat_history: [{ id: 'c1', user_phone: '+254700000001', message: '[voice note]' }],
+    usage_counters: [{ owner_id: 'p-1', period_key: '2026-11', report_count: 2 }],
+    vehicles: [{ id: 'v1', owner_id: 'p-1', deleted_at: null }],
+    expense_logs: [{ id: 'e1', vehicle_id: 'v1' }],
+    vehicle_documents: [{ id: 'd1', vehicle_id: 'v1' }]
+  });
+  const exploredState = await resolveFeatureTipState(stateMock.client, { owner_id: 'p-1' }, { phone_number: '+254700000001' });
+  check(exploredState.dashboard && exploredState.voice_note && exploredState.report && exploredState.expense && exploredState.compliance, 'all five feature sources resolve from their canonical ledgers');
+  if (previousFeatureKnob === undefined) delete process.env.FEATURE_NUDGE_ENABLED;
+  else process.env.FEATURE_NUDGE_ENABLED = previousFeatureKnob;
 
   console.log('\n--- Test 7: expiry -> bounded decision window -> Free (data preserved) ---');
   const expiry = createMockSupabase({

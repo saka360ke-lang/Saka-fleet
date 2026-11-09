@@ -393,6 +393,8 @@ check(/Narrative pre-fills are engine-determined facts/.test(await import('./src
   // v1.91.0 (Phase 28A) — the superadmin write tools are stated in both places.
   check(SAKA_FLOW_PLAYBOOK.includes('SUPERADMIN WEB TOOLS (v1.91.0'), 'the playbook names the superadmin web tools (v1.91.0)');
   check(SAKA_FLOW_PLAYBOOK.includes('release PIN is emailed ONLY to the owner'), 'the playbook pins the transfer PIN to the owner (v1.91.0)');
+  // v1.95.0 (Phase 32, Task 2) — the dual-role lane toggle is stated in the playbook.
+  check(SAKA_FLOW_PLAYBOOK.includes('Owner · Driver toggle'), 'the playbook names the dual-role lane toggle (v1.95.0)');
   check(SAKA_FLOW_PLAYBOOK.includes('have NOT shipped for OWNERS'), 'the playbook keeps owner-side editing off-limits (v1.91.0)');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('six superadmin WEB TOOLS'), 'the core prompt names the superadmin web tools (v1.91.0)');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('impersonate an owner READ-ONLY'), 'the core prompt pins read-only impersonation (v1.91.0)');

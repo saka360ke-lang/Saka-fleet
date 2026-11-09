@@ -128,6 +128,8 @@ import { dateRangeBounds, CUSTOM_METRICS } from './src/services/reportMetrics.js
 import { detectCountryFromPhone } from './src/services/globalization.js';
 import { extractPdfText } from './src/services/pdfTextExtractor.js';
 import { registerDashboardRoutes } from './src/routes/dashboard.js';
+// v1.95.0 (Phase 32) — the impersonation banner ordering pin (D2).
+import { withImpersonationBanner } from './src/services/dashboardAdmin.js';
 
 let passed = 0;
 function check(condition, label) {
@@ -207,6 +209,8 @@ async function run() {
     { method: 'GET', url: '/d/driver' },
     { method: 'GET', url: '/d/driver/daybook' },
     { method: 'GET', url: '/d/driver/compliance' },
+    // v1.95.0 (Phase 32) — the dual-role toggle is flag-gated like every route.
+    { method: 'POST', url: '/d/lane/switch', payload: 'lane=driver', headers: { 'content-type': 'application/x-www-form-urlencoded' } },
     { method: 'GET', url: '/d/admin' },
     { method: 'GET', url: '/d/admin/command' },
     { method: 'GET', url: '/d/admin/owners/some-owner-id' },
@@ -2298,6 +2302,17 @@ async function run() {
   check(renderPageShell('X', '<p>hi</p>', { brandHref: 'https://sakafleet.com' }).includes('class="brand" href="https://sakafleet.com"'), 'a caller can point the brand at the public site (v1.94.0)');
   check(shellHtml.includes(`/d/assets/logo-lockup.png?v=${DASHBOARD_ASSET_VERSION}`) && shellHtml.includes('width="177" height="18"'), 'the header renders the real brand lockup at its intrinsic ratio');
   check(shellHtml.includes('alt="Saka Fleet"') && shellHtml.includes('class="nav"'), 'the logo is labelled and the nav slot is preserved');
+  // v1.95.0 (Phase 32, Task 1) — the drawer: burger + overlay built from the
+  // SAME anchors, inert on pages without navigation, banner above it (D2).
+  check(shellHtml.includes('class="nav-burger"') && shellHtml.includes('aria-expanded="false"') && shellHtml.includes('aria-controls="navMenu"'), 'the shell renders the burger with its ARIA contract (v1.95.0)');
+  check(shellHtml.includes('class="nav-menu"') && shellHtml.includes('role="dialog"') && shellHtml.includes('aria-modal="true"'), 'the drawer is a labelled modal dialog (v1.95.0)');
+  check(shellHtml.includes(".querySelectorAll('a')") && shellHtml.includes("event.key === 'Escape'") && shellHtml.includes('window.innerWidth > 1024'), 'the inline script clones .nav anchors, closes on Escape and above 1024px (v1.95.0)');
+  check(shellHtml.includes('burger.parentNode.removeChild(burger)'), 'login doors (no nav anchors) never show a dead burger (v1.95.0)');
+  check(DASHBOARD_CSS.includes('@media (max-width: 1024px)') && DASHBOARD_CSS.includes('.nav-menu { position:fixed'), 'below 1024px the drawer owns the screen and the strip hides (D1)');
+  check(DASHBOARD_CSS.includes('.nav-burger { display:none;') && DASHBOARD_CSS.includes('body.nav-open .nav-menu { display:block; }'), 'the strip stays above 1024px; the drawer opens via body.nav-open (v1.95.0)');
+  const impersonatedShell = withImpersonationBanner(shellHtml, { targetName: 'Amina', expiresAt: new Date(Date.now() + 600000).toISOString() });
+  check(impersonatedShell.indexOf('as-banner') < impersonatedShell.indexOf('class="nav-menu"'), 'the impersonation banner renders BEFORE the drawer markup (D2, z-index 60 > 50)');
+  check(impersonatedShell.includes('🟡 Impersonating') && impersonatedShell.includes('Exit'), 'the banner copy and Exit link are unchanged (v1.91.0)');
   check(shellHtml.includes('theme-color" content="#0A0A0C"') && shellHtml.includes('/d/assets/favicon.svg'), 'the shell carries the brand theme colour and favicon');
   check(shellHtml.includes('noindex'), 'dashboard pages stay noindex');
   check(SAKA_PDF_THEME.brand === '#65A30D' && SAKA_PDF_THEME.lime === '#B8EF5C', 'PDF brand is the text-safe lime; the decorative lime stays separate');
@@ -2797,6 +2812,94 @@ async function run() {
   check(quotaBanner.includes('Resend quota exhausted today') && quotaBanner.includes('#ef4444'), 'an active quota warning renders the red banner (v1.87.2)');
   const staleBanner = renderAdminCommandPage({ data: { ...baseCommandData, email: { quotaWarnedAt: '2026-11-08', quotaWarnedToday: false } } });
   check(!staleBanner.includes('Resend quota exhausted today'), 'a stale (previous-day) marker renders no banner (v1.87.2)');
+
+  console.log('\n--- Test 71: Phase 32 — dual-role lane toggle + vehicle picker (v1.95.0) ---');
+  const p32Dual = { id: 'p-dual', phone_number: '+254700111222', email: 'dual@example.com', email_verified: true, full_name: 'Dual Owner', country_code: 'KE', subscription_tier: 'solo_pro', subscription_status: 'ACTIVE' };
+  const p32FreeDual = { ...p32Dual, id: 'p-dual-free', email: 'freedual@example.com', phone_number: '+254700111333', subscription_tier: 'free', subscription_status: 'ACTIVE' };
+  const p32OwnerOnly = { ...p32Dual, id: 'p-owner-only', email: 'owneronly@example.com', phone_number: '+254700111444' };
+  const p32DriverOnly = { ...p32Dual, id: 'p-driver-only', email: 'driveronly@example.com', phone_number: '+254700111555', subscription_tier: 'free', subscription_status: 'ACTIVE' };
+  const p32Vehicles = [
+    { id: 'v-dual-own', owner_id: 'p-dual', assigned_driver_id: 'someone-else', plate_number: 'KDA 111A', status: 'ACTIVE', deleted_at: null },
+    { id: 'v-dual-assigned', owner_id: 'other-owner', assigned_driver_id: 'p-dual', plate_number: 'KDB 222B', status: 'ACTIVE', deleted_at: null },
+    { id: 'v-dual-assigned2', owner_id: 'other-owner', assigned_driver_id: 'p-dual', plate_number: 'KDC 333C', status: 'ACTIVE', deleted_at: null },
+    { id: 'v-owner-only', owner_id: 'p-owner-only', plate_number: 'KDE 444D', status: 'ACTIVE', deleted_at: null },
+    { id: 'v-free-dual', owner_id: 'p-dual-free', plate_number: 'KDF 555E', status: 'ACTIVE', deleted_at: null },
+    { id: 'v-free-assigned', owner_id: 'other-owner', assigned_driver_id: 'p-dual-free', plate_number: 'KDG 666F', status: 'ACTIVE', deleted_at: null },
+    { id: 'v-driver-only', owner_id: 'other-owner', assigned_driver_id: 'p-driver-only', plate_number: 'KDH 777G', status: 'ACTIVE', deleted_at: null }
+  ];
+  const p32Session = (id, ownerId, token, role) => seedRow({ id, owner_id: ownerId, session_token_hash: hashToken(token), verified: true, session_expires_at: new Date(Date.now() + 86400000).toISOString(), session_role: role });
+  const p32Mock = createMockSupabase({
+    profiles: [p32Dual, p32FreeDual, p32OwnerOnly, p32DriverOnly],
+    vehicles: p32Vehicles,
+    [DASHBOARD_SESSIONS_TABLE]: [
+      p32Session('sess-dual-owner', 'p-dual', 'dual-owner-session', 'owner'),
+      p32Session('sess-dual-driver', 'p-dual', 'dual-driver-session', 'driver'),
+      p32Session('sess-dual-page', 'p-dual', 'dual-page-session', 'driver'),
+      p32Session('sess-owner-only', 'p-owner-only', 'owner-only-session', 'owner'),
+      p32Session('sess-free-dual', 'p-dual-free', 'free-dual-session', 'owner'),
+      p32Session('sess-driver-only', 'p-driver-only', 'driver-only-session', 'driver')
+    ],
+    trial_sessions: [], usage_counters: [], subscriptions: [], passbook_transfers: [],
+    admin_audit_logs: [], admin_impersonations: [], receipts: [], expense_logs: [], private_earnings: [],
+    vehicle_compliances: [], driver_compliances: [], vehicle_documents: [], reminders: [], error_logs: [], user_context_cache: []
+  });
+  const p32App = Fastify({ logger: false });
+  await registerDashboardRoutes(p32App, { supabase: p32Mock.client });
+  await p32App.ready();
+  const p32DualOwnerCookie = { cookie: 'saka_dash=dual-owner-session' };
+  const p32DualDriverCookie = { cookie: 'saka_dash=dual-driver-session' };
+  const p32DualPageCookie = { cookie: 'saka_dash=dual-page-session' };
+  const p32Form = { 'content-type': 'application/x-www-form-urlencoded', host: 'app.sakafleet.test', origin: 'https://app.sakafleet.test' };
+
+  const p32Roles = await resolveDashboardRole({ supabase: p32Mock.client, profile: { id: 'p-dual' } });
+  check(p32Roles.role === 'owner' && p32Roles.isOwner === true && p32Roles.isDriver === true, 'a dual-role profile resolves BOTH flags, owner lane first (v1.95.0)');
+
+  const p32Overview = await p32App.inject({ method: 'GET', url: '/d', headers: p32DualOwnerCookie });
+  check(p32Overview.body.includes('class="lane-switch"') && p32Overview.body.includes('value="owner"') && p32Overview.body.includes('value="driver"'), 'a dual-role session sees the Owner · Driver strip (v1.95.0)');
+  check(p32Overview.body.includes('class="chip lane-chip active"') && p32Overview.body.includes('aria-current="true"'), 'the active lane is highlighted from the session role (v1.95.0)');
+  const p32OwnerOnlyOverview = await p32App.inject({ method: 'GET', url: '/d', headers: { cookie: 'saka_dash=owner-only-session' } });
+  check(!p32OwnerOnlyOverview.body.includes('class="lane-switch"'), 'an owner-only profile gets no toggle (v1.95.0)');
+  const p32DriverOnlyDriver = await p32App.inject({ method: 'GET', url: '/d/driver', headers: { cookie: 'saka_dash=driver-only-session' } });
+  check(!p32DriverOnlyDriver.body.includes('class="lane-switch"'), 'a driver-only profile gets no toggle either (v1.95.0)');
+
+  const p32ToDriver = await p32App.inject({ method: 'POST', url: '/d/lane/switch', headers: { ...p32DualOwnerCookie, ...p32Form }, payload: 'lane=driver' });
+  check(p32ToDriver.statusCode === 303 && String(p32ToDriver.headers.location) === '/d/driver', 'switching to the driver lane 303s to /d/driver');
+  check(p32Mock.db[DASHBOARD_SESSIONS_TABLE].find((row) => row.id === 'sess-dual-owner').session_role === 'driver', 'the session ROW itself carries the new lane (D3 — no new cookie)');
+  const p32BackToOwner = await p32App.inject({ method: 'POST', url: '/d/lane/switch', headers: { ...p32DualDriverCookie, ...p32Form }, payload: 'lane=owner' });
+  check(p32BackToOwner.statusCode === 303 && String(p32BackToOwner.headers.location) === '/d', 'switching back to the owner lane 303s to /d');
+  check(p32Mock.db[DASHBOARD_SESSIONS_TABLE].find((row) => row.id === 'sess-dual-driver').session_role === 'owner', 'the driver session row flips to owner');
+
+  const p32OwnerToDriver = await p32App.inject({ method: 'POST', url: '/d/lane/switch', headers: { cookie: 'saka_dash=owner-only-session', ...p32Form }, payload: 'lane=driver' });
+  check(p32OwnerToDriver.statusCode === 403, 'an owner-only profile cannot switch into the driver lane');
+  const p32DriverToOwner = await p32App.inject({ method: 'POST', url: '/d/lane/switch', headers: { cookie: 'saka_dash=driver-only-session', ...p32Form }, payload: 'lane=owner' });
+  check(p32DriverToOwner.statusCode === 403, 'a driver-only profile cannot switch into the owner lane');
+  const p32FreeToDriver = await p32App.inject({ method: 'POST', url: '/d/lane/switch', headers: { cookie: 'saka_dash=free-dual-session', ...p32Form }, payload: 'lane=driver' });
+  check(p32FreeToDriver.statusCode === 303, 'a Free dual-role driver may open the driver lane (a driver is not a payer)');
+  const p32FreeToOwner = await p32App.inject({ method: 'POST', url: '/d/lane/switch', headers: { cookie: 'saka_dash=free-dual-session', ...p32Form }, payload: 'lane=owner' });
+  check(p32FreeToOwner.statusCode === 403 && /live trial or paid plan/.test(p32FreeToOwner.body), 'the owner lane keeps its plan gate on every switch (v1.95.0)');
+  const p32BadLane = await p32App.inject({ method: 'POST', url: '/d/lane/switch', headers: { ...p32DualOwnerCookie, ...p32Form }, payload: 'lane=admin' });
+  check(p32BadLane.statusCode === 400, 'an unknown lane is refused');
+  const p32CrossOriginLane = await p32App.inject({ method: 'POST', url: '/d/lane/switch', headers: { ...p32DualOwnerCookie, ...p32Form, origin: 'https://evil.example' }, payload: 'lane=driver' });
+  check(p32CrossOriginLane.statusCode === 403 && /another site/.test(p32CrossOriginLane.body), 'a cross-origin lane switch is refused (D2)');
+  const p32ImpersonatedLane = await p32App.inject({ method: 'POST', url: '/d/lane/switch', headers: { ...p32DualOwnerCookie, ...p32Form, cookie: 'saka_dash=dual-owner-session; saka_dash_as=deadbeef' }, payload: 'lane=driver' });
+  check(p32ImpersonatedLane.statusCode === 403 && /Exit impersonation to switch lanes/.test(p32ImpersonatedLane.body), 'impersonation overrides the toggle — switching is refused (D3)');
+  const p32NoCookieLane = await p32App.inject({ method: 'POST', url: '/d/lane/switch', headers: p32Form, payload: 'lane=driver' });
+  check(p32NoCookieLane.statusCode === 401, 'the lane switch never runs without a session');
+
+  const p32PageWithPicker = await p32App.inject({ method: 'GET', url: '/d/driver', headers: p32DualPageCookie });
+  check(p32PageWithPicker.body.includes('class="vehicle-switch"') && p32PageWithPicker.body.includes('KDB 222B') && p32PageWithPicker.body.includes('KDC 333C'), 'a driver with TWO assignments gets the vehicle picker (v1.95.0)');
+  check(!p32PageWithPicker.body.includes('KDA 111A'), 'the picker never lists a vehicle the driver does not drive');
+  const p32ForeignPick = await p32App.inject({ method: 'GET', url: '/d/driver?vehicle=v-dual-own', headers: p32DualPageCookie });
+  check(p32ForeignPick.statusCode === 403 && /not assigned to you/.test(p32ForeignPick.body), '?vehicle with an unassigned id is a 403, never a fallback');
+  const p32OwnPick = await p32App.inject({ method: 'GET', url: '/d/driver?vehicle=v-dual-assigned', headers: p32DualPageCookie });
+  check(p32OwnPick.statusCode !== 403 && /KDB 222B/.test(p32OwnPick.body), '?vehicle with an assigned id renders that vehicle');
+  const p32SinglePickHtml = renderDriverHomePage({
+    data: { ok: true, vehicle: null, compliance: { kpis: [], documents: [] }, week: { kpis: [], ledger: null }, currency: 'KES', locale: 'en-KE', timeZone: 'Africa/Nairobi' },
+    vehicles: [{ id: 'v-one', plate_number: 'KDA 999Z' }],
+    activeVehicleId: null
+  });
+  check(!p32SinglePickHtml.includes('class="vehicle-switch"'), 'one assignment renders no picker at all');
+  await p32App.close();
 
   process.env.DASHBOARD_ENABLED = previousFlag;
   if (previousBase === undefined) delete process.env.PUBLIC_APP_URL;

@@ -24,7 +24,7 @@ const ADMIN = { id: 'p-admin', phone_number: '+254700000900', email: 'admin@exam
 const TARGET = { id: 'p-target', phone_number: '+254712345678', email: 'target@example.com', full_name: 'Target Owner', country: 'Kenya', country_code: 'KE' };
 const OTHER = { id: 'p-other', phone_number: '+254799000111', email: null, full_name: 'Other Owner', country_code: 'KE' };
 const VEHICLE = { id: 'v-1', owner_id: TARGET.id, plate_number: 'KDA 123A', vin: '1HGCM82633A004352', qr_passbook_token: 'SK-PASSBOOK-ABCDEF12', make_model: 'Nissan Note', status: 'ACTIVE', deleted_at: null };
-const FOREIGN = { id: 'v-2', owner_id: OTHER.id, plate_number: 'KDK 607B', vin: 'JTE777A1234567890', qr_passbook_token: 'SK-PASSBOOK-99999999', status: 'ACTIVE', deleted_at: null };
+const FOREIGN = { id: 'v-2', owner_id: OTHER.id, assigned_driver_id: TARGET.id, plate_number: 'KDK 607B', vin: 'JTE777A1234567890', qr_passbook_token: 'SK-PASSBOOK-99999999', status: 'ACTIVE', deleted_at: null };
 
 const futureIso = (ms = DAY) => new Date(Date.now() + ms).toISOString();
 const sessionRow = (id, ownerId, token, role) => ({
@@ -182,6 +182,9 @@ async function run() {
   // never the admin lane; Exit is the only way out.
   check(ownerView.body.includes('class="brand" href="/d"'), 'the impersonated brand stays /d — the target overview, never the admin lane (v1.94.0)');
   check(ownerView.body.includes('/d/admin/exit-as') && !ownerView.body.includes('/d/admin/command'), 'the page shows Exit and the OWNER nav (no admin command link)');
+  // v1.95.0 (Phase 32, Task 2) — the target IS dual-role here (owns v-1, drives
+  // v-2): the yellow banner renders and the lane toggle must NOT (D3).
+  check(ownerView.body.includes('class="as-banner"') && !ownerView.body.includes('class="lane-switch"'), 'impersonation overrides the lane toggle — banner only, never a switch strip (v1.95.0)');
   const targetFleet = await impApp.inject({ method: 'GET', url: '/d/vehicles', headers: both });
   check(targetFleet.statusCode === 200 && targetFleet.body.includes('KDA 123A'), 'the impersonated fleet page renders the TARGET vehicles');
   const asOnly = await impApp.inject({ method: 'GET', url: '/d', headers: { cookie: `${IMPERSONATION_COOKIE_NAME}=${asToken}` } });

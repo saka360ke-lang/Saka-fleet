@@ -63,7 +63,12 @@ function countSilentCatches() {
 // telemetry, notify and cache paths. A NEW silent catch fails this ratchet.
 // v1.63.1 — +1: src/services/afterWrite.js (the sanctioned cache-invalidation
 // hook; a failed invalidation must never break the user's write, rule 50).
-const SILENT_CATCH_BUDGET = 104;
+// v1.95.0 (Phase 32) — +5: trialEngine.resolveFeatureTipState's per-source
+// probes (dashboard sessions, chat_history, usage_counters, expense_logs,
+// vehicle_documents). Each answers "unexplored" on a missing table/column; the
+// sweep runs every 15 minutes, so logging five probes per activated trial would
+// flood error_logs. The stage itself never throws (rule 50).
+const SILENT_CATCH_BUDGET = 109;
 const silentNow = countSilentCatches();
 check(`silent catches stay within the pinned budget (${silentNow}/${SILENT_CATCH_BUDGET})`, silentNow <= SILENT_CATCH_BUDGET);
 console.log('\n=== 4. logger behaviour ===');

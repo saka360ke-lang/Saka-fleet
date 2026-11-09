@@ -49,6 +49,23 @@ export const TRIAL_MAX_TOTAL_DAYS = clampNumber(process.env.TRIAL_MAX_TOTAL_DAYS
 export const TRIAL_ACTIVATION_COUPON_PCT = clampNumber(process.env.TRIAL_ACTIVATION_COUPON_PCT, 0, 100, 20);
 export const TRIAL_ACTIVATION_COUPON_TTL_DAYS = clampNumber(process.env.TRIAL_ACTIVATION_COUPON_TTL_DAYS, 1, 30, 7);
 export const TRIAL_ACTIVATION_NUDGE_HOURS = clampNumber(process.env.TRIAL_ACTIVATION_NUDGE_HOURS, 24, 24 * 14, 24 * 7);
+// v1.95.0 (Phase 32, Task 3) — the drip-feed feature tips. OFF by default (D8):
+// knob-off behaviour is byte-identical to the pre-1.95.0 sweep (zero sends).
+// Read per call (not at import) so a rolling deploy can flip it without a build.
+export function featureNudgeEnabled(env = process.env) {
+  return /^(on|true|1)$/i.test(String(env.FEATURE_NUDGE_ENABLED || 'off'));
+}
+export const FEATURE_NUDGE_T1_HOURS = clampNumber(process.env.FEATURE_NUDGE_T1_HOURS, 1, 72, 12);
+export const FEATURE_NUDGE_T2_HOURS = clampNumber(process.env.FEATURE_NUDGE_T2_HOURS, 2, 168, 48);
+export const FEATURE_NUDGE_SWEEP_CAP = 10;
+// v1.95.0 (Phase 32, Task 4) — the 14-day silence nudge may ride the approved
+// saka_reengage template (META_TPL_RE_ENGAGEMENT stays the env var name). OFF by
+// default (D8): knob-off is byte-identical free-form text.
+export function reengageTemplateEnabled(env = process.env) {
+  return /^(on|true|1)$/i.test(String(env.REENGAGE_TEMPLATE_ENABLED || 'off'));
+}
+// D5 — the silence threshold: 14+ days since the LAST chat_history row.
+export const REENGAGE_QUIET_DAYS = 14;
 export const TRIAL_CONVERSION_LADDER = /^(on|true|1)$/i.test(String(process.env.TRIAL_CONVERSION_LADDER || 'off'));
 export const TRIAL_MIDPOINT_COUPON_PCT = clampNumber(process.env.TRIAL_MIDPOINT_COUPON_PCT, 0, 100, 15);
 /**
@@ -1299,31 +1316,39 @@ function reengagementText({ ownerName }) {
 }
 
 /**
- * 14-day silence nudge: owners with an active vehicle and no chat for 13-15
- * days get ONE deterministic tip. Deduped by profiles.reengage_nudged_at and
- * capped at 10 sends per sweep.
+ * 14-day silence nudge: owners whose LAST chat_history row is 14+ days old, who
+ * own an active vehicle, are not the Superadmin phone and have not been nudged
+ * (`profiles.reengage_nudged_at`). One deterministic tip per owner, capped at 10
+ * sends per sweep.
+ *
+ * v1.95.0 (Phase 32, Task 4, D5/D6) — the source moved from the 13-15 day
+ * chat_transcripts band to chat_history (the durable per-turn ledger) with a
+ * single 14+ day threshold (the one-ever stamp keeps it from repeating). When
+ * REENGAGE_TEMPLATE_ENABLED is on, the send rides the approved `re_engagement`
+ * template ({ name } = first name, fallback "there") so it delivers outside the
+ * 24-hour window; when off, kind/vars are null and the copy is byte-identical
+ * to v1.16.3.
  */
 export async function processSilentReengagement({ supabase, sendWhatsAppFn, now = new Date(), stats }) {
   if (!supabase || !sendWhatsAppFn) return;
   try {
-    const { data: transcripts } = await supabase
-      .from('chat_transcripts')
-      .select('phone_number,created_at')
+    const { data: history } = await supabase
+      .from('chat_history')
+      .select('user_phone,created_at')
       .order('created_at', { ascending: false })
       .limit(400);
 
     const lastSeen = new Map();
-    for (const row of transcripts || []) {
-      const digits = String(row.phone_number || '').replace(/[^0-9]/g, '');
+    for (const row of history || []) {
+      const digits = String(row.user_phone || '').replace(/[^0-9]/g, '');
       if (!digits || lastSeen.has(digits)) continue;
       lastSeen.set(digits, new Date(row.created_at).getTime());
     }
 
-    const quietSince = now.getTime() - 15 * DAY_MS;
-    const quietUntil = now.getTime() - 13 * DAY_MS;
+    const quietBefore = now.getTime() - REENGAGE_QUIET_DAYS * DAY_MS;
     let sent = 0;
     for (const [digits, timestamp] of lastSeen) {
-      if (!Number.isFinite(timestamp) || timestamp > quietUntil || timestamp < quietSince) continue;
+      if (!Number.isFinite(timestamp) || timestamp > quietBefore) continue;
       const phone = `+${digits}`;
       if (process.env.SUPERADMIN_PHONE && phone === process.env.SUPERADMIN_PHONE) continue;
 
@@ -1338,7 +1363,16 @@ export async function processSilentReengagement({ supabase, sendWhatsAppFn, now 
         .limit(1);
       if (!Array.isArray(vehicles) || vehicles.length === 0) continue;
 
-      await sendWhatsAppFn(phone, reengagementText({ ownerName: owner.full_name }), 're_engagement', { name: owner.full_name }).catch(() => {});
+      const useTemplate = reengageTemplateEnabled();
+      const firstName = String(owner.full_name || '').trim().split(/\s+/)[0] || 'there';
+      // Knob-off keeps the historical copy verbatim (full name, free-form text).
+      const nameForCopy = useTemplate ? firstName : owner.full_name;
+      await sendWhatsAppFn(
+        phone,
+        reengagementText({ ownerName: nameForCopy }),
+        useTemplate ? 're_engagement' : null,
+        useTemplate ? { name: firstName } : null
+      ).catch(() => {});
       await supabase.from('profiles').update({
         reengage_nudged_at: new Date(now).toISOString(),
         updated_at: new Date(now).toISOString()
@@ -1556,12 +1590,91 @@ export async function processExpiredRenewalNudges({ supabase, sendWhatsAppFn, no
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* v1.95.0 (Phase 32, Task 3) — drip-feed feature tips                */
+/* ------------------------------------------------------------------ */
+
+const HOUR_MS = 60 * 60 * 1000;
+// The verified Saka business number (identical to every landing wa.me link).
+const FEATURE_WA_NUMBER = '19404407252';
+const waLink = (text) => `https://wa.me/${FEATURE_WA_NUMBER}?text=${encodeURIComponent(text)}`;
+
+/**
+ * The checklist, in priority order. The FIRST unexplored feature wins — one
+ * feature per owner, never a menu. Links are engine-owned (dashboard for the web
+ * lane, wa.me deep links for the WhatsApp lanes), never invented at send time.
+ */
+export const FEATURE_TIPS = Object.freeze([
+  { key: 'dashboard', label: 'your web dashboard', hint: 'open it in a browser and sign in with your WhatsApp number', link: 'https://app.sakafleet.com/d/login' },
+  { key: 'expense', label: 'one-line expense logging', hint: 'send “fuel 3000” and it saves instantly', link: waLink('fuel 3000') },
+  { key: 'voice_note', label: 'voice notes', hint: 'send a voice note instead of typing', link: waLink('Hi Saka') },
+  { key: 'report', label: 'instant reports', hint: 'ask “report” and get a PDF in the chat', link: waLink('report') },
+  { key: 'compliance', label: 'compliance documents', hint: 'send a photo of your insurance or logbook', link: waLink('Hi Saka') }
+]);
+
+/** Deterministic tip copy (zero tokens, warm, never guilt — rule 31). */
+export function featureTipText(tip, { followup = false } = {}) {
+  if (!tip) return '';
+  const lead = followup ? '🎯 Still worth a try' : '🎯 Tip: try';
+  return `${lead} ${tip.label} — ${tip.link}\n\n${tip.hint}. One minute and Saka does the rest.`;
+}
+
+/**
+ * Which features has this owner actually used? Read-only, fail-soft per source
+ * (rule 50): a missing table or column answers "unexplored", never a crash.
+ * Sources are the canonical ledgers: dashboard sessions, chat_history (voice
+ * notes log the literal [voice note] turn), usage_counters (report quota),
+ * expense_logs and vehicle_documents (via the owner's live vehicles).
+ */
+export async function resolveFeatureTipState(supabase, trial, owner) {
+  const state = { dashboard: false, expense: false, voice_note: false, report: false, compliance: false };
+  const ownerId = trial?.owner_id;
+  const phone = owner?.phone_number || null;
+  if (!supabase || !ownerId) return state;
+
+  try {
+    const { data } = await supabase.from('dashboard_sessions').select('id').eq('owner_id', ownerId).limit(1);
+    state.dashboard = Boolean(data && data.length);
+  } catch { /* unexplored */ }
+  if (phone) {
+    try {
+      const { data } = await supabase.from('chat_history').select('id').eq('user_phone', phone).ilike('message', '%[voice note]%').limit(1);
+      state.voice_note = Boolean(data && data.length);
+    } catch { /* unexplored */ }
+  }
+  try {
+    const { data } = await supabase.from('usage_counters').select('report_count').eq('owner_id', ownerId);
+    state.report = (data || []).some((row) => Number(row.report_count || 0) > 0);
+  } catch { /* unexplored */ }
+
+  let vehicleIds = [];
+  try {
+    const { data } = await supabase.from('vehicles').select('id').eq('owner_id', ownerId).is('deleted_at', null).limit(100);
+    vehicleIds = (data || []).map((vehicle) => vehicle.id);
+  } catch { vehicleIds = []; }
+  try {
+    const query = vehicleIds.length
+      ? supabase.from('expense_logs').select('id').in('vehicle_id', vehicleIds).limit(1)
+      : supabase.from('expense_logs').select('id').eq('driver_id', ownerId).limit(1);
+    const { data } = await query;
+    state.expense = Boolean(data && data.length);
+  } catch { /* unexplored */ }
+  if (vehicleIds.length) {
+    try {
+      const { data } = await supabase.from('vehicle_documents').select('id').in('vehicle_id', vehicleIds).limit(1);
+      state.compliance = Boolean(data && data.length);
+    } catch { /* unexplored */ }
+  }
+  return state;
+}
+
+
 /**
  * Trial lifecycle sweep (15-minute tick in index.js).
  * Each stage fires exactly once per trial, guarded by one-shot timestamps.
  */
 export async function runTrialLifecycleSweep({ supabase, sendWhatsAppFn = null, now = new Date(), limit = 100, checkoutFn = null, addonCheckoutFn = null } = {}) {
-  const stats = { scanned: 0, sent: 0, activationNudges: 0, midpoint: 0, t3: 0, t3Skipped: 0, t24: 0, t24Skipped: 0, expired: 0, extensionOffers: 0, winbacks: 0, dunning: 0, reengaged: 0, abandonedRecoveries: 0, renewalNudges: 0, graceStarted: 0, graceT3: 0, graceT24: 0, graceEnded: 0, graceNudge: 0 };
+  const stats = { scanned: 0, sent: 0, activationNudges: 0, midpoint: 0, t3: 0, t3Skipped: 0, t24: 0, t24Skipped: 0, expired: 0, extensionOffers: 0, winbacks: 0, dunning: 0, reengaged: 0, abandonedRecoveries: 0, renewalNudges: 0, graceStarted: 0, graceT3: 0, graceT24: 0, graceEnded: 0, graceNudge: 0, featureTips: 0, featureTipFollowups: 0 };
   if (!supabase) return stats;
 
   const { data: trials, error } = await supabase
@@ -1640,6 +1753,51 @@ export async function runTrialLifecycleSweep({ supabase, sendWhatsAppFn = null, 
         stats.activationRewards = (stats.activationRewards || 0) + 1;
       }
       continue;
+    }
+
+    // ---- v1.95.0 (Phase 32, Task 3) — drip-feed feature tips ----
+    // ONE feature per owner, T+12h after activation; ONE follow-up at T+48h and
+    // only while that feature is still unexplored (never re-nudge a used
+    // feature). Never for paid-live accounts; capped per sweep (D9). The stage
+    // only runs when the row actually CARRIES the stamp columns — an un-migrated
+    // schema sends nothing instead of messaging every tick (rule 50).
+    const hasFeatureNudgeColumns = Object.prototype.hasOwnProperty.call(trial, 'feature_nudge_sent_at');
+    if (featureNudgeEnabled() && hasFeatureNudgeColumns && trial.activated && trial.activated_at
+      && phone && sendWhatsAppFn
+      && ['ACTIVE', 'EXTENDED'].includes(String(trial.status || '').toUpperCase())
+      && !isPaidLiveNow(owner, nowMs)
+      && (stats.featureTips || 0) < FEATURE_NUDGE_SWEEP_CAP) {
+      const activatedMs = new Date(trial.activated_at).getTime();
+      const elapsedMs = Number.isFinite(activatedMs) ? nowMs - activatedMs : -1;
+      if (elapsedMs >= FEATURE_NUDGE_T1_HOURS * HOUR_MS) {
+        if (!trial.feature_nudge_sent_at) {
+          const state = await resolveFeatureTipState(supabase, trial, owner);
+          const pick = FEATURE_TIPS.find((tip) => !state[tip.key]) || null;
+          await setTrialFields(supabase, trial.id, {
+            feature_nudge_sent_at: nowIso,
+            ...(pick ? { feature_nudge_key: pick.key } : {})
+          });
+          if (pick) {
+            await sendWhatsAppFn(phone, featureTipText(pick), 'feature_tip', { feature: pick.label, link: pick.link }).catch(() => {});
+            stats.sent += 1;
+            stats.featureTips = (stats.featureTips || 0) + 1;
+          }
+          continue;
+        }
+        if (!trial.feature_nudge_followup_sent_at && elapsedMs >= FEATURE_NUDGE_T2_HOURS * HOUR_MS) {
+          await setTrialFields(supabase, trial.id, { feature_nudge_followup_sent_at: nowIso });
+          const tip = FEATURE_TIPS.find((entry) => entry.key === trial.feature_nudge_key) || null;
+          if (tip) {
+            const state = await resolveFeatureTipState(supabase, trial, owner);
+            if (!state[tip.key]) {
+              await sendWhatsAppFn(phone, featureTipText(tip, { followup: true }), 'feature_tip', { feature: tip.label, link: tip.link }).catch(() => {});
+              stats.sent += 1;
+              stats.featureTipFollowups = (stats.featureTipFollowups || 0) + 1;
+            }
+          }
+          continue;
+        }
+      }
     }
 
     // ---- T+7d activation nudge (not activated only) ----
@@ -1970,6 +2128,8 @@ export default {
   scheduleAccountTrialExtensionCoupon,
   processPastDueDunning,
   processSilentReengagement,
+  reengageTemplateEnabled,
+  REENGAGE_QUIET_DAYS,
   extendAccountTrial,
   applyAccountTrialExtensionCoupon,
   formatActivationReward,
@@ -1984,6 +2144,14 @@ export default {
   runTrialEndStage,
   runTrialLifecycleSweep,
   getTrialFunnelStats,
-  formatTrialStatsReply
+  formatTrialStatsReply,
+  // v1.95.0 (Phase 32, Task 3) — the drip-feed feature tips.
+  FEATURE_TIPS,
+  featureTipText,
+  resolveFeatureTipState,
+  featureNudgeEnabled,
+  FEATURE_NUDGE_T1_HOURS,
+  FEATURE_NUDGE_T2_HOURS,
+  FEATURE_NUDGE_SWEEP_CAP
 };
 
