@@ -110,22 +110,33 @@ export function buildDocs() {
   };
 }
 
+/**
+ * v1.89.1 — line endings are a CHECKOUT artifact, never content drift.
+ * A Windows clone with `core.autocrlf=true` hands us CRLF for the very same
+ * generated text, so a byte-exact compare turned `npm run docs:check` (and the
+ * `test_kb_docs` gate inside `npm run health`) red on every fresh checkout
+ * (1.89.0 release evening). Normalise before comparing and always write LF.
+ */
+export function normalizeDocNewlines(text) {
+  return String(text ?? '').replace(/\r\n/g, '\n');
+}
+
 function writeDocs(docs) {
   fs.mkdirSync(DOCS_DIR, { recursive: true });
   for (const [file, content] of Object.entries(docs)) {
-    fs.writeFileSync(file, content, 'utf8');
+    fs.writeFileSync(file, normalizeDocNewlines(content), 'utf8');
   }
 }
 
-function checkDocs(docs) {
+export function checkDocs(docs) {
   const drift = [];
   for (const [file, content] of Object.entries(docs)) {
     if (!fs.existsSync(file)) {
       drift.push(`${path.relative(ROOT, file)} is missing`);
       continue;
     }
-    const onDisk = fs.readFileSync(file, 'utf8');
-    if (onDisk !== content) drift.push(`${path.relative(ROOT, file)} is out of date`);
+    const onDisk = normalizeDocNewlines(fs.readFileSync(file, 'utf8'));
+    if (onDisk !== normalizeDocNewlines(content)) drift.push(`${path.relative(ROOT, file)} is out of date`);
   }
   return drift;
 }

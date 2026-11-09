@@ -1,6 +1,13 @@
 {
-  "latest": "1.89.0",
+  "latest": "1.89.1",
   "entries": [
+    {
+      "version": "1.89.1",
+      "date": "2026-11-09",
+      "title": "A release gate that stays honest",
+      "preview": "One check compared bytes, not words - so a Windows checkout looked like a change that never happened.",
+      "summary": "Housekeeping with a purpose: one of Saka's own quality checks compared text files byte-for-byte, and a Windows checkout hands the very same text back with slightly different invisible line endings. The check called that 'drift' even though nothing had changed, and it made the pre-deploy health gate fail on a clean machine. It now compares the actual words, so identical content always reads as identical, while a real change still fails the gate. Nothing you see in WhatsApp, reports or the dashboard changes."
+    },
     {
       "version": "1.89.0",
       "date": "2026-11-09",

@@ -1,6 +1,6 @@
 import assert from 'assert';
 import fs from 'node:fs';
-import { buildDocs } from './scripts/gen_kb_docs.js';
+import { buildDocs, checkDocs, normalizeDocNewlines } from './scripts/gen_kb_docs.js';
 import { PRODUCT_QA } from './src/services/productQa.js';
 import { SAKA_PROMPT_SCHEMA_VERSION } from './sakaAi.js';
 
@@ -39,8 +39,25 @@ for (const [file, expected] of Object.entries(docs)) {
   const name = file.split(/[\\/]/).pop();
   check(fs.existsSync(file), `${name} exists on disk`);
   const onDisk = fs.readFileSync(file, 'utf8');
-  check(onDisk === expected, `${name} matches the live registries (run npm run docs:gen on drift)`);
+  check(
+    normalizeDocNewlines(onDisk) === normalizeDocNewlines(expected),
+    `${name} matches the live registries (run npm run docs:gen on drift)`
+  );
 }
+check(checkDocs(docs).length === 0, 'the docs:check gate agrees with this suite (one source of truth)');
+
+console.log('\n--- Test 2b: a Windows CRLF checkout is never reported as drift (v1.89.1) ---');
+for (const [file, expected] of Object.entries(docs)) {
+  const name = file.split(/[\\/]/).pop();
+  const crlfCopy = expected.replace(/\n/g, '\r\n');
+  check(crlfCopy !== expected, `${name}: the CRLF fixture really differs byte-for-byte`);
+  check(
+    normalizeDocNewlines(crlfCopy) === expected,
+    `${name}: CRLF line endings normalise back to the generated text`
+  );
+}
+check(normalizeDocNewlines('a\r\nb\r\nc') === 'a\nb\nc', 'every CRLF pair collapses to a single LF');
+check(normalizeDocNewlines('a\nb') === 'a\nb', 'LF text is returned untouched');
 
 console.log('\n--- Test 3: product knowledge is complete ---');
 const productDoc = docs[productDocPath];
