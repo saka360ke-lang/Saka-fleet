@@ -55,18 +55,22 @@ async function postWhatsAppMessage(body, env = process.env) {
  * outside the 24-hour customer-service window). `variables` are the ordered body
  * parameters ({ type: 'text', text }) built by `resolveProactiveMode`.
  */
-export async function sendWhatsAppTemplate(toPhone, templateName, { languageCode = 'en', variables = [], env = process.env } = {}) {
+export async function sendWhatsAppTemplate(toPhone, templateName, { languageCode = 'en', variables = [], buttons = [], env = process.env } = {}) {
   if (!toPhone || !templateName) return false;
   const cleanPhone = cleanWhatsAppRecipient(toPhone);
   if (!cleanPhone) return false;
   if (isDeliveryBlocked(cleanPhone)) return false;
+  // v1.87.3 — the body component comes first; decorative/functional buttons
+  // (e.g. the Authentication template's URL button) follow in their index order.
+  const components = [{ type: 'body', parameters: variables }];
+  for (const button of Array.isArray(buttons) ? buttons : []) components.push(button);
   return postWhatsAppMessage({
     to: cleanPhone,
     type: 'template',
     template: {
       name: templateName,
       language: { code: languageCode },
-      components: [{ type: 'body', parameters: variables }]
+      components
     }
   }, env);
 }
@@ -85,6 +89,7 @@ export async function sendWhatsAppText(toPhone, text, { env = process.env, kind 
     if (mode.mode === 'template') {
       const templateSent = await sendWhatsAppTemplate(toPhone, mode.templateName, {
         variables: mode.variables || [],
+        buttons: mode.buttons || [],
         env
       });
       if (templateSent) return true;

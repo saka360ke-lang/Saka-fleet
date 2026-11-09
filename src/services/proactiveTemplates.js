@@ -109,7 +109,11 @@ export const PROACTIVE_TEMPLATE_KINDS = Object.freeze({
     env: 'META_TPL_AUTH_OTP',
     variables: ['code'],
     audience: 'any',
-    note: 'Six-digit verification codes delivered over WhatsApp (dashboard sign-in). Meta Authentication category; variable {{1}} is the code.'
+    // v1.87.3 — the approved Meta Authentication template carries a URL button
+    // whose parameter is the code (live proof 2026-11-09: a body-only payload is
+    // rejected with 131008 "Button at index 0 of type Url requires a parameter").
+    buttons: [{ subType: 'url', index: 0, variable: 'code' }],
+    note: 'Six-digit verification codes delivered over WhatsApp (dashboard sign-in). Meta Authentication category; variable {{1}} is the code and the URL button takes the same code.'
   },
   driver_invite: {
     env: 'META_TPL_DRIVER_INVITE',
@@ -160,9 +164,33 @@ export function templateVariablesForKind(kind, values = null) {
 }
 
 /**
- * The single routing decision: template (name + ordered variables) or text.
- * Pure - never sends anything. templateVars keys must cover the kind's
- * declared variables, else the call degrades to { mode: 'text' }.
+ * Ordered BUTTON components for a kind, or null when a required button variable
+ * is missing (the caller must fall back to text). Kinds without buttons return
+ * [] (a plain body-only template, the pre-v1.87.3 shape).
+ */
+export function templateButtonsForKind(kind, values = null) {
+  const def = PROACTIVE_TEMPLATE_KINDS[kind];
+  if (!def || !Array.isArray(def.buttons) || def.buttons.length === 0) return [];
+  const source = values && typeof values === 'object' ? values : {};
+  const out = [];
+  for (const button of def.buttons) {
+    const key = String(button?.variable || '');
+    const clean = String(source[key] ?? '').trim();
+    if (!clean) return null;
+    out.push({
+      type: 'button',
+      sub_type: button.subType || 'url',
+      index: String(button.index ?? 0),
+      parameters: [{ type: 'text', text: clean }]
+    });
+  }
+  return out;
+}
+
+/**
+ * The single routing decision: template (name + ordered variables + buttons) or
+ * text. Pure - never sends anything. templateVars keys must cover the kind's
+ * declared variables and buttons, else the call degrades to { mode: 'text' }.
  */
 export function resolveProactiveMode({ kind = null, templateVars = null } = {}) {
   if (!kind) return { mode: 'text' };
@@ -172,7 +200,9 @@ export function resolveProactiveMode({ kind = null, templateVars = null } = {}) 
   if (!name) return { mode: 'text' };
   const variables = templateVariablesForKind(kind, templateVars);
   if (variables === null) return { mode: 'text' };
-  return { mode: 'template', templateName: name, variables };
+  const buttons = templateButtonsForKind(kind, templateVars);
+  if (buttons === null) return { mode: 'text' };
+  return { mode: 'template', templateName: name, variables, buttons };
 }
 
 export default {
@@ -181,5 +211,6 @@ export default {
   PROACTIVE_TEMPLATE_LANGUAGE,
   templateNameForKind,
   templateVariablesForKind,
+  templateButtonsForKind,
   resolveProactiveMode
 };

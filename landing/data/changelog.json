@@ -1,6 +1,13 @@
 {
-  "latest": "1.87.2",
+  "latest": "1.87.3",
   "entries": [
+    {
+      "version": "1.87.3",
+      "date": "2026-11-09",
+      "title": "The verification code button, fixed",
+      "preview": "A live test caught a missing button parameter in the new sign-in code template. Fixed and re-proven.",
+      "summary": "A small hotfix with a good story: after switching the WhatsApp sign-in code onto an approved verification template, a real send to the test number was rejected by WhatsApp because the approved template includes a button that also needs the code. Our message carried the code in the text but not in the button, so WhatsApp refused it. The fix teaches Saka's template registry that a template can have buttons and passes the code to them as well; if a code were ever missing, the message now falls back to the plain text version instead of failing. The other two templates - the driver invitation and the passbook buyer invitation - sent correctly on the first live attempt, and the code delivery is now proven end to end against WhatsApp itself. Nothing else changed."
+    },
     {
       "version": "1.87.2",
       "date": "2026-11-09",

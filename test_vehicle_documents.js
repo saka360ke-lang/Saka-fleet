@@ -252,7 +252,7 @@ check(cleanupSource.includes("'vehicle_documents', 'vehicle_id'") && cleanupSour
 const indexSource = fs.readFileSync('index.js', 'utf8');
 check(indexSource.includes('ensureVehicleDocumentsTable'), 'the boot ensure is wired in index.js');
 const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-check(pkg.version === '1.87.2', 'package.json is 1.87.2');
+check(pkg.version === '1.87.3', 'package.json is 1.87.3');
 check(Boolean(pkg.scripts['migrate:vehicle-documents']), 'npm run migrate:vehicle-documents exists');
 const migrationSource = fs.readFileSync('scripts/run_vehicle_documents_migration.js', 'utf8');
 check(migrationSource.includes('VEHICLE_DOCUMENTS_SQL'), 'the migration applies the shared DDL');

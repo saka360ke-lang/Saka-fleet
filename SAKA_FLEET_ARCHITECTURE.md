@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.87.2  
+**Version:** 1.87.3  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.87.3** | Phase 26B hotfix — **Authentication-template button**: the approved `saka_otp` carries a URL button whose parameter is the code; a body-only payload was rejected live with `131008`. Kinds can now declare `buttons`, the resolver parameterises them, the transport sends them after the body, and the live send succeeds (the other two templates already send cleanly) | 219 |
 | **1.87.2** | Phase 26C — **Resend quota alert**: every email send now detects a 429/quota failure, records `system_config.resend_quota_warned_at` once per UTC day, audits `RESEND_QUOTA_ALERT`, pings the superadmin on WhatsApp once and shows a red banner on `/d/admin/command` — email outages can no longer be silent | 218 |
 | **1.87.1** | Phase 26B — **OTP + invite template routing**: the dashboard sign-in code, the driver invite and the buyer passbook invite now ride approved Meta templates when their knobs are set (unset = byte-identical free-form), through ONE shared transport (`metaMessenger`), so a returning user can sign in after the 24-hour window closes | 217 |
 | **1.87.0** | Phase 26A — **launch award copy fix (the live "30-day trial" bug)**: the registration completion card now speaks POST-award facts (a fresh 183-day award prints its real end date, never the pre-award 30-day date), the confirm card states the ACCOUNT-bound welcome trial (rule 29), the activation nudge names the trial's real length, and every stale per-VIN "30-day trial" mirror (docs, care KB, schema comments, core prompt) is corrected | 216 |
@@ -6518,4 +6519,21 @@ Phase 25 was the last feature phase: nine items from the operator's brief, execu
 **Recurrence autopsy (rule 51).** Defect class *"a provider failure that never reaches a human"* → siblings audited: all 14 Resend senders (fixed: one wrapper, zero per-function drift), Meta text/template sends (the delivery guard plus failed status receipts already write `error_logs` via `/webhook/whatsapp/status`), Paystack webhook failures (`handlePaystackEvent` writes its own audit/error rows), AI provider failures (`ai_usage_logs.attempts` + per-provider breakers), Supabase write failures (`logWriteFailure`). The AI and Paystack paths are deliberately left to their own telemetry (documented here, not silently skipped).
 
 **Rules shaped this work (rule 58).** 1/39/45 (rules + architecture first), 2 (this section), 3/4 (targeted reads, batched), 10/11 (new stateless suite, registered in the health gate), 12/33 (one commit: version + history + CHANGELOG + stamp), 13 (no flow/intent change — the dashboards, docs and KB stay in sync), 21 (the config key is registered under the `domain.namespaced` law, with the documented legacy alias), 28 (no billing math touched), 31 (the banner says the cause, the window and nothing else), 42/63 (proposals checked — none open), 44 (audit before coding: the 14 call sites were enumerated, not sampled), 50 (an unset marker, a failed read or a refused write never breaks a send — `readConfig` degrades and the wrapper still returns the provider result), 51/52 (sibling sweep + before/after assertions), 54 (the 429 family is the one observed live), 55 (ONE wrapper, ONE recorder, ONE helper), 56 (existing rows: no migration, no backfill — the marker is created on first hit), 58 (this report). No rule was edited.
+
+### 219. v1.87.3 (Phase 26B hotfix) — the Authentication-template button (2026-11-09)
+
+**Found by a live send (rule 54).** After the operator approved the three templates and the knobs were set on Cloud Run (`saka-fleet-00375-tfs`), a real `saka_otp` send to the test number returned Meta **`131008` — "buttons: Button at index 0 of type Url requires a parameter"**: the approved Authentication template carries a URL button whose parameter is the code, and our body-only payload omitted it. The same run proved `saka_driver_invite` and `saka_transfer_invite` send cleanly (wamids captured), so the defect was the component shape, not the transport.
+
+**The fix (data-driven — rule 55).** `PROACTIVE_TEMPLATE_KINDS.auth_otp` now declares `buttons: [{ subType: 'url', index: 0, variable: 'code' }]`. New pure `templateButtonsForKind(kind, values)` builds the ordered button components and returns `null` when a declared button variable is missing (so a missing code degrades the whole send to text — a template can never fire with a broken button). `resolveProactiveMode` returns `{ mode: 'template', templateName, variables, buttons }`; `sendWhatsAppTemplate` emits the body component first and the buttons after it; `sendWhatsAppText` and `sentinel.sendWhatsAppTemplateMessage` pass `buttons` through. Button-less kinds keep the body-only payload exactly as before (pinned).
+
+**Proof.** `test_proactive_templates` pins the button contract and the exact wire payload — body `654321` plus `{ type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: '654321' }] }` — now 64 assertions (+6), including "button-less kinds keep the body-only payload" and "a missing code degrades to text". The live re-send after deploy is the operator-visible confirmation.
+
+**Frames touched.** `src/services/proactiveTemplates.js` (`buttons` contract, `templateButtonsForKind`, resolver, export), `src/services/metaMessenger.js` (components build + `buttons` passthrough), `src/workers/sentinel.js` (wrapper passthrough), `docs/TEMPLATES.md` (template 14 button spec + the live 131008 evidence), `docs/` (regenerated), `SAKA_FLEET_ARCHITECTURE.md` (§219 + history + version), `CHANGELOG.md`, `landing/data/changelog.json` + stamped assets, `package.json` (1.87.3), `test_proactive_templates.js` (+6), `test_vehicle_documents.js` (version pin).
+
+**Suites run.** `test_proactive_templates` (64, +6), `test_sentinel_policy` (30), `test_error_logging` (22 — ratchet holds), `test_dashboard`, `test_env_audit`, `test_doc_sync`, `npm run health` — green.
+
+**Recurrence autopsy (rule 51).** Defect class *"a template's full component shape is not modelled in the registry"* → siblings audited: the other 15 kinds (all body-only, now pinned to `templateButtonsForKind() === []`), the pre-existing `saka_deploy_live` (no buttons — the boot alert fired on the new revision), `web_signup_welcome` (separate sender, no buttons), and every FUTURE Authentication template (the button contract is now a declared field, so a missing parameter degrades to text instead of a Meta 400). Fixed: registry + resolver + transport. Left with reasons: the legacy welcome template's own sender.
+
+**Rules shaped this work (rule 58).** 1/39/45, 2 (this section), 3/4 (targeted reads), 10/11 (targeted stateless suite), 12/33 (one commit: version + history + CHANGELOG + stamp), 13 (TEMPLATES.md + regenerated docs), 31 (the user never sees template mechanics), 42/63 (proposals checked — none open), 44 (the live send was the audit; the hypothesis "templates are approved and the body is enough" was disproven with evidence), 50 (a missing button variable degrades to text), 51/52 (sibling sweep + payload assertions), 54 (real Graph API send + captured wamid/error), 55 (declared registry field, one resolver, one transport), 58 (this report). No rule was edited.
+
 

@@ -139,7 +139,7 @@ Each entry: kind | env knob | audience | recommended category | variables
     body: Hi! It's Saka. Your Fleet Auto-Audit report is ready. Net earnings
           today: {{1}}. Open Saka to view the full report.
 
-14. auth_otp  (v1.87.1 — Phase 26B; the FIRST Authentication template)
+14. auth_otp  (v1.87.1 — Phase 26B; the FIRST Authentication template; v1.87.3 button)
     env: META_TPL_AUTH_OTP
     audience: any (dashboard sign-in code; the only WhatsApp OTP today)
     category: Authentication
@@ -147,6 +147,11 @@ Each entry: kind | env knob | audience | recommended category | variables
                free variable in an Authentication template)
     body: {{1}} is your Saka Fleet verification code. It expires in 10 minutes.
           Do not share it with anyone.
+    button: the approved template carries a URL button at index 0; the code is
+            ALSO sent as that button's parameter
+            ({ type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: <code> }] }).
+            v1.87.3 live proof: a body-only payload is rejected with
+            131008 "Button at index 0 of type Url requires a parameter".
     why: the dashboard login minted a FREE-FORM text; Meta silently drops it
          after 24h of user silence, so returning users could not sign in.
 

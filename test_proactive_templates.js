@@ -10,8 +10,10 @@ import {
   PROACTIVE_TEMPLATE_LANGUAGE,
   templateNameForKind,
   templateVariablesForKind,
+  templateButtonsForKind,
   resolveProactiveMode
 } from './src/services/proactiveTemplates.js';
+import { sendWhatsAppText } from './src/services/metaMessenger.js';
 
 let passed = 0;
 function check(condition, message) {
@@ -59,6 +61,32 @@ const transfersSrc = fs.readFileSync('./src/services/transfers.js', 'utf8');
 check(dashboardSrc.includes("kind: 'auth_otp'") && dashboardSrc.includes('templateVars: { code: otp }'), 'the dashboard OTP passes auth_otp + the code (v1.87.1)');
 check(driverSrc.includes("kind: 'driver_invite'") && driverSrc.includes('templateVars: { plate }'), 'the driver invite passes driver_invite + the plate (v1.87.1)');
 check(transfersSrc.includes("kind: 'transfer_invite'") && transfersSrc.includes('templateVars: { plate }'), 'the buyer invite passes transfer_invite + the plate (v1.87.1)');
+
+// v1.87.3 — the approved Authentication template carries a URL button that must
+// receive the code (live proof 2026-11-09: body-only payload -> 131008).
+console.log('--- 2b. auth_otp button contract (v1.87.3) ---');
+const authButtons = templateButtonsForKind('auth_otp', { code: '123456' });
+check(Array.isArray(authButtons) && authButtons.length === 1 && authButtons[0].sub_type === 'url' && authButtons[0].index === '0' && authButtons[0].parameters[0].text === '123456', 'auth_otp carries the approved URL button, parameterised with the code (v1.87.3)');
+check(templateButtonsForKind('auth_otp', {}) === null, 'a missing code degrades the whole template to text (never a broken button) (v1.87.3)');
+check(templateButtonsForKind('service_reminder', { plate: 'KDA 123A' }).length === 0, 'button-less kinds keep the body-only payload (v1.87.3)');
+
+const otpPayloads = [];
+const originalFetch = global.fetch;
+process.env.META_TPL_AUTH_OTP = 'saka_otp';
+global.fetch = async (_url, options) => { otpPayloads.push(JSON.parse(options.body)); return { ok: true }; };
+try {
+  const otpSent = await sendWhatsAppText('+254700000099', 'fallback text', {
+    kind: 'auth_otp',
+    templateVars: { code: '654321' },
+    env: { META_PHONE_NUMBER_ID: 'phone-id', META_WHATSAPP_TOKEN: 'token' }
+  });
+  check(otpSent === true && otpPayloads.length === 1 && otpPayloads[0].type === 'template' && otpPayloads[0].template.name === 'saka_otp', 'the OTP send rides the approved template (v1.87.3)');
+  check(otpPayloads[0].template.components[0]?.type === 'body' && otpPayloads[0].template.components[0]?.parameters[0]?.text === '654321', 'the body carries the code (v1.87.3)');
+  check(otpPayloads[0].template.components[1]?.type === 'button' && otpPayloads[0].template.components[1]?.sub_type === 'url' && otpPayloads[0].template.components[1]?.parameters[0]?.text === '654321', 'the URL button carries the code — the live 131008 fix (v1.87.3)');
+} finally {
+  delete process.env.META_TPL_AUTH_OTP;
+  global.fetch = originalFetch;
+}
 
 console.log('--- 3. template name resolution ---');
 check(templateNameForKind('service_reminder') === null, 'unset knob resolves to no template');

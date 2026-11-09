@@ -1177,8 +1177,8 @@ ${rawCorpus.slice(0, 15000)}`;
  * `metaMessenger.sendWhatsAppTemplate` so every sender shares one transport
  * (rule 55); this wrapper keeps the historical signature for existing callers.
  */
-export async function sendWhatsAppTemplateMessage(toPhone, templateName, { languageCode = 'en', variables = [] } = {}) {
-  return sendWhatsAppTemplate(toPhone, templateName, { languageCode, variables });
+export async function sendWhatsAppTemplateMessage(toPhone, templateName, { languageCode = 'en', variables = [], buttons = [] } = {}) {
+  return sendWhatsAppTemplate(toPhone, templateName, { languageCode, variables, buttons });
 }
 
 /**
