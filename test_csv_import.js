@@ -153,7 +153,6 @@ const openFail = await loadRecentExpensesForImport(failingClient, { vehicleIds: 
 check(openFail.ok && openFail.rows.length === 0, 'a failed dedupe read fails OPEN — the import still proceeds (rule 50)');
 
 console.log('\n--- Test 9: chunked insert shape (parity with the quiz write) ---');
-process.env.LEGACY_EXPENSES_WRITE_ENABLED = 'true';
 const insertMock = createMockSupabase({ vehicles: [{ ...vehicles[0], status: 'ACTIVE' }, { ...vehicles[1], status: 'ACTIVE' }], admin_audit_logs: [] });
 const insertRows = [
   { line: 2, plate: 'KDA 123A', vehicleId: 'v-a', expenseType: 'Fuel', amount: 5000, odometer: 100500, notes: 'Shell', dateKey: '2026-11-01', createdAt: asIso('2026-11-01') },
@@ -169,7 +168,7 @@ check(row0.fuel_liters === 0 && row0.fill_type === null, 'no invented litres or 
 check(row0.created_at === asIso('2026-11-01'), 'the stated date lands in created_at');
 check(row0.receipt_id === undefined, 'an imported row never invents a receipt link');
 const mirror = insertMock.state.inserts.filter((entry) => entry.table === 'expenses');
-check(mirror.length === 1 && mirror[0].rows[0].plate === 'KDA 123A', 'the legacy mirror writes while its flag is on');
+check(mirror.length === 0, 'v1.88.2: the import never writes the archival expenses table');
 const vehicleUpdate = insertMock.state.updates.find((entry) => entry.table === 'vehicles');
 check(Boolean(vehicleUpdate) && vehicleUpdate.patch.current_mileage === 100500, 'the odometer advances to the highest imported reading only');
 const audit = insertMock.state.inserts.find((entry) => entry.table === 'admin_audit_logs');
@@ -189,12 +188,11 @@ check(genRow.odometer_reading === null && /Engine hours: 1300 h/.test(genRow.not
 const genUpdate = genMock.state.updates.find((entry) => entry.table === 'vehicles');
 check(Boolean(genUpdate) && genUpdate.patch.operating_hours === 1300 && genUpdate.patch.current_mileage === undefined, 'the asset advances its hour meter, never mileage');
 
-console.log('\n--- Test 10: kill switch + honest failures ---');
-process.env.LEGACY_EXPENSES_WRITE_ENABLED = 'false';
+console.log('\n--- Test 10: retired mirror + honest failures ---');
 const offMock = createMockSupabase({ vehicles: [{ ...vehicles[0], status: 'ACTIVE' }], admin_audit_logs: [] });
 await bulkInsertImportRows({ supabase: offMock.client, ownerId: 'owner-1', validRows: [insertRows[0]], vehicles, now: NOW });
-check(!offMock.state.inserts.some((entry) => entry.table === 'expenses'), 'LEGACY_EXPENSES_WRITE_ENABLED=false stops the mirror and never blocks the ledger');
-process.env.LEGACY_EXPENSES_WRITE_ENABLED = 'true';
+check(!offMock.state.inserts.some((entry) => entry.table === 'expenses'), 'the import never touches the archival expenses table (v1.88.2)');
+check(offMock.state.inserts.some((entry) => entry.table === 'expense_logs'), 'the canonical ledger still receives the imported row');
 const refuseMock = createMockSupabase({}, { beforeInsert: (table) => (table === 'expense_logs' ? { error: { message: 'permission denied for table expense_logs' } } : null) });
 const refused = await bulkInsertImportRows({ supabase: refuseMock.client, ownerId: 'owner-1', validRows: insertRows, vehicles });
 check(!refused.ok && refused.inserted === 0 && /refused/.test(refused.error), 'a refused insert claims nothing saved (honest failure)');

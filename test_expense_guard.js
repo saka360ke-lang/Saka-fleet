@@ -3,17 +3,20 @@
  * ----------------------------------------------------------
  * Offline: mocked Supabase only (no DB, no cleanup needed). Proves the
  * write-time duplicate guard reads the canonical `expense_logs` ledger by
- * vehicle_id (never the legacy `expenses` mirror) and that the
- * LEGACY_EXPENSES_WRITE_ENABLED kill switch parses safely.
+ * vehicle_id (never the legacy `expenses` mirror).
+ *
+ * v1.88.2 — the LEGACY_EXPENSES_WRITE_ENABLED kill switch and the mirror it
+ * guarded were REMOVED (the mirror named a non-existent column and failed
+ * silently). This suite now pins the absence so the dead code can never return.
  *
  * Run: node test_expense_guard.js
  */
 import assert from 'assert';
+import fs from 'node:fs';
 import {
   isDuplicateExpense,
   isSameExpenseCandidate,
-  nairobiDateKey,
-  legacyExpensesWriteEnabled
+  nairobiDateKey
 } from './src/services/expenseGuard.js';
 
 let passed = 0;
@@ -59,19 +62,17 @@ const recentLog = { vehicle_id: 'v-1', amount: 3000, expense_type: 'Fuel', odome
 
 console.log('=== SAKA FLEET - EXPENSE GUARD (P2-3) ===');
 
-console.log('--- Test 1: legacy mirror kill-switch parsing ---');
+console.log('--- Test 1: the retired mirror can never return (v1.88.2) ---');
 {
-  const original = process.env.LEGACY_EXPENSES_WRITE_ENABLED;
-  const cases = [[undefined, true], ['true', true], ['1', true], ['on', true], ['false', false], ['OFF', false], ['0', false], ['no', false]];
-  try {
-    for (const [raw, expected] of cases) {
-      if (raw === undefined) delete process.env.LEGACY_EXPENSES_WRITE_ENABLED;
-      else process.env.LEGACY_EXPENSES_WRITE_ENABLED = raw;
-      check(legacyExpensesWriteEnabled() === expected, `LEGACY_EXPENSES_WRITE_ENABLED=${raw === undefined ? '(unset)' : raw} -> mirror ${expected ? 'ON' : 'OFF'}`);
-    }
-  } finally {
-    if (original !== undefined) process.env.LEGACY_EXPENSES_WRITE_ENABLED = original;
-    else delete process.env.LEGACY_EXPENSES_WRITE_ENABLED;
+  // The kill switch + the mirror inserts were deleted; pin the absence so a
+  // future edit cannot silently resurrect a write to the archival table.
+  const guardSource = fs.readFileSync('src/services/expenseGuard.js', 'utf8');
+  check(!guardSource.includes('legacyExpensesWriteEnabled'), 'the kill switch is gone from expenseGuard.js');
+  check(!guardSource.includes('LEGACY_EXPENSES_WRITE_ENABLED'), 'no code reads the retired flag');
+  for (const file of ['src/services/quizEngine.js', 'src/routes/whatsapp/commands.js', 'src/services/csvImport.js']) {
+    const source = fs.readFileSync(file, 'utf8');
+    check(!source.includes("from('expenses').insert"), `${file} carries no INSERT into the archival expenses table`);
+    check(!source.includes('legacyExpensesWriteEnabled'), `${file} imports no retired kill switch`);
   }
 }
 

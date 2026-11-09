@@ -10,7 +10,7 @@ function makeMock({ pending = null } = {}) {
   const deleted = [];
   const deleteCalls = [];
   const cfg = {};
-  if (pending) cfg.admin_wipe_pending = JSON.stringify(pending);
+  if (pending) cfg['admin.wipe_pending'] = JSON.stringify(pending); // v1.88.2 — new mode reads the namespaced key only
   const builder = (table) => {
     const state = { filters: [] };
     const chain = {

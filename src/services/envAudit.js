@@ -283,7 +283,6 @@ export const ENV_SECTIONS = Object.freeze([
       'COMPLIANCE_CATALOG_CACHE_MS',
       'AUDIT_LIMIT',
       'LEGACY_VIN_TRIALS',
-      'LEGACY_EXPENSES_WRITE_ENABLED',
       'SYSTEM_CONFIG_KEY_MODE'
     ]
   },

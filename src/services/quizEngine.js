@@ -19,7 +19,7 @@ import {
 } from './conversationEngine.js';
 import { chatCompletion, parseJsonSafely } from './aiClient.js';
 import { normalizeFillType } from './fuelEconomy.js';
-import { isDuplicateExpense, legacyExpensesWriteEnabled } from './expenseGuard.js';
+import { isDuplicateExpense } from './expenseGuard.js';
 // v1.59.0 — optional per-record label (pure helper, no cycles).
 import { sanitizeEntryLabel } from './entryLabels.js';
 // v1.59.7 — labels on every entry: standalone odometer readings get a ledger row.
@@ -3448,18 +3448,10 @@ async function executeFlow(state, ctx) {
         // v1.77.0 (audit override) — logging an expense no longer activates a
         // trial; vehicle registration is the ONLY activation event.
 
-        // v1.72.0 (P2-3) — the legacy `expenses` mirror retires behind
-        // LEGACY_EXPENSES_WRITE_ENABLED (default on = today's behaviour).
-        if (legacyExpensesWriteEnabled()) {
-          await ctx.supabase.from('expenses').insert([{
-            plate: vehicle.plate_number,
-            expense_type: canonicalExpenseType,
-            amount: a.amount,
-            liters: a.fuel_liters || 0,
-            odometer_reading: a.odometer_reading,
-            ...(retroIso ? { created_at: retroIso } : {})
-          }]);
-        }
+        // v1.88.2 (Phase 8B completion) — the legacy `expenses` mirror is GONE.
+        // It wrote a non-existent `odometer_reading` column and failed silently
+        // (PostgREST refusal in the result object, never read). `expense_logs`
+        // is the only ledger; `expenses` stays as a read-only archival table.
 
         if (a.odometer_reading > Number(vehicle.current_mileage || 0)) {
           await ctx.supabase.from('vehicles').update({

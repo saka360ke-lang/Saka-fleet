@@ -29,7 +29,7 @@ import { findVehicleByCandidate, setActiveVehicle, updateVehicleDetails, unassig
 import { normalizeExpenseType, resolveExpenseType, hasExpenseTypeMarker } from '../../services/expenseCatalog.js';
 import { normalizeEarningType, resolveEarningType, hasEarningTypeMarker } from '../../services/earningCatalog.js';
 import { sanitizeEntryLabel, extractEntryLabel } from '../../services/entryLabels.js';
-import { isDuplicateExpense, legacyExpensesWriteEnabled } from '../../services/expenseGuard.js';
+import { isDuplicateExpense } from '../../services/expenseGuard.js';
 import { normalizeFillType } from '../../services/fuelEconomy.js';
 import { applyOdometerReading, applyOperatingHours } from '../../services/maintenanceReminders.js';
 import { markUserDataChanged } from '../../services/afterWrite.js';
@@ -793,17 +793,9 @@ export async function handleLogExpenseTurn({ mergedExt, messageText, targetVeh, 
       if (quickLogErr) {
         reply = `⚠️ I could not save that expense just now — *nothing was written*. Please try again in a moment, or send it as *"amount type"* (e.g. *"1000 fuel"*).`;
       } else {
-        // v1.72.0 (P2-3) — the legacy `expenses` mirror retires behind
-        // LEGACY_EXPENSES_WRITE_ENABLED (default on = today's behaviour).
-        if (legacyExpensesWriteEnabled()) {
-          await supabaseClient.from('expenses').insert([{
-            plate: targetVeh.plate_number,
-            expense_type: expType,
-            amount: extAmount || 0,
-            liters: extLiters || 0,
-            odometer_reading: extOdo || null
-          }]).select().maybeSingle();
-        }
+        // v1.88.2 (Phase 8B completion) — the legacy `expenses` mirror is gone
+        // (it named a non-existent column and failed silently). `expense_logs`
+        // above is the only ledger write; `expenses` is read-only archival.
 
         if (extOdo && extOdo > (targetVeh.current_mileage || 0)) {
           await supabaseClient.from('vehicles').update({

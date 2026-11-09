@@ -89,10 +89,10 @@ export const BUDGET_ALERT_FAMILY = Object.freeze({
   kind: 'dynamic'
 });
 
-/** The active key mode: `dual` (default, one-release window) or `new`. */
+/** The active key mode: `new` (default since v1.88.2) or `dual` (explicit rolling-window opt-in). */
 export function systemConfigKeyMode() {
-  const raw = String(process.env.SYSTEM_CONFIG_KEY_MODE ?? 'dual').trim().toLowerCase();
-  return SYSTEM_CONFIG_KEY_MODES.includes(raw) ? raw : 'dual';
+  const raw = String(process.env.SYSTEM_CONFIG_KEY_MODE ?? 'new').trim().toLowerCase();
+  return SYSTEM_CONFIG_KEY_MODES.includes(raw) ? raw : 'new';
 }
 
 export function isDualKeyMode() {

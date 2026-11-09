@@ -144,7 +144,7 @@ await withMode('new', async () => {
 });
 await withMode(null, async () => {
   const { client } = makeConfigMock([{ key: 'admin_wipe_pending', value: 'LEGACY-VALUE' }]);
-  check((await readConfig(client, CONFIG_KEY_ADMIN_WIPE_PENDING)) === 'LEGACY-VALUE', 'an unset mode defaults to dual (legacy fallback works)');
+  check((await readConfig(client, CONFIG_KEY_ADMIN_WIPE_PENDING)) === null, 'an unset mode now defaults to new — no legacy traffic (v1.88.2 flip)');
 });
 
 console.log('--- Test 4: dual-write upserts both keys (one write in new mode) ---');

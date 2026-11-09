@@ -21,7 +21,7 @@
 
 import { parseFlexibleDate, getNairobiParts } from './dateParser.js';
 import { resolveExpenseType, isHoursLedKind } from './expenseCatalog.js';
-import { isSameExpenseCandidate, legacyExpensesWriteEnabled } from './expenseGuard.js';
+import { isSameExpenseCandidate } from './expenseGuard.js';
 import { markUserDataChanged } from './afterWrite.js';
 import { logWriteFailure } from './systemErrors.js';
 
@@ -373,25 +373,9 @@ export async function bulkInsertImportRows({
     inserted += chunk.length;
   }
 
-  // Legacy mirror parity with quizEngine.logExpense (kill switch honoured).
-  if (legacyExpensesWriteEnabled()) {
-    const legacy = rows.map((row) => ({
-      plate: row.plate,
-      expense_type: row.expenseType,
-      amount: row.amount,
-      liters: 0,
-      odometer_reading: isHoursLedRow(row) ? null : (row.odometer ?? null),
-      ...(row.createdAt ? { created_at: row.createdAt } : {})
-    }));
-    try {
-      for (let index = 0; index < legacy.length; index += CSV_IMPORT_CHUNK) {
-        await supabase.from('expenses').insert(legacy.slice(index, index + CSV_IMPORT_CHUNK));
-      }
-    } catch (mirrorErr) {
-      // The mirror is archival only (P2-3) — but a failure is still worth knowing.
-      logWriteFailure(supabase, 'csvImport.legacyMirror', mirrorErr, { owner_id: ownerId });
-    }
-  }
+  // v1.88.2 (Phase 8B completion) — the legacy `expenses` mirror was removed.
+  // `expense_logs` chunks above are the only ledger write; `expenses` stays a
+  // read-only archival table (cleanup scripts still delete from it).
 
   // Advance each vehicle to the highest imported reading (never backwards).
   const highest = new Map();

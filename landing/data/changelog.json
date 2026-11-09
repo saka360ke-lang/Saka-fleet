@@ -1,6 +1,13 @@
 {
-  "latest": "1.88.1",
+  "latest": "1.88.2",
   "entries": [
+    {
+      "version": "1.88.2",
+      "date": "2026-11-09",
+      "title": "One ledger, one place for settings",
+      "preview": "The old duplicate expense write is gone, and Saka's internal settings now live under one naming scheme.",
+      "summary": "Housekeeping with a real payoff. Since 2026 Saka has written every expense twice: once to the real ledger, and once to an old table kept for compatibility. That old write had been failing silently for months - it named a column the table never had, the database politely refused every row, and nobody read the refusal. The old write is now deleted, so an expense is written exactly once, to the ledger your reports and dashboards read. The compatibility table is kept untouched as an archive. Separately, Saka's internal settings keys were mid-migration between an old naming style and the new namespaced one; that migration is complete, the old keys are removed, and a missing setting can no longer fall back to a stale duplicate. Nothing you see changes: reports, records, PDFs and totals read the same ledger as before - there is just one write path instead of two, and no silent failures."
+    },
     {
       "version": "1.88.1",
       "date": "2026-11-09",

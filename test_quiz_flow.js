@@ -630,7 +630,7 @@ async function run() {
   // v1.81.0 — no receipt context means an explicit null link, never a guess.
   assert(expenseRow.receipt_id === null, 'an expense without a receipt writes receipt_id = null');
   // v1.72.0 (P2-3) — the legacy mirror still writes by default.
-  assert(cardInserted.some((entry) => entry.table === 'expenses'), 'the legacy expenses mirror is written while the flag is on (default)');
+  assert(!cardInserted.some((entry) => entry.table === 'expenses'), 'v1.88.2: no INSERT into the archival expenses table (mirror retired)');
 
   // v1.81.0 (Phase 20, PROP-2026-11-08-01) — the durable receipt link rides the
   // engine-only prefill seam. It is verified against the receipts table before
@@ -674,8 +674,9 @@ async function run() {
   await handleQuizTurn({ session: receiptRestartSession, messageText: 'restart', ctx: linked.ctx });
   assert(receiptRestartSession.quiz && receiptRestartSession.quiz.answers.receipt_id === undefined, 'a restart drops the stale link (a fresh draft never reuses it)');
 
-  // v1.72.0 (P2-3) — LEGACY_EXPENSES_WRITE_ENABLED=false stops the mirror and
-  // never blocks the canonical expense_logs write.
+  // v1.88.2 (Phase 8B completion) — the legacy `expenses` mirror is GONE. The
+  // canonical expense_logs write is the ONLY ledger write, on every path, every
+  // time — pinned with the same mock the old flag-off block used.
   const flagOffInserted = [];
   const flagOffMockSupabase = {
     from(table) {
@@ -697,9 +698,7 @@ async function run() {
       return builder;
     }
   };
-  const previousLegacyFlag = process.env.LEGACY_EXPENSES_WRITE_ENABLED;
-  process.env.LEGACY_EXPENSES_WRITE_ENABLED = 'false';
-  try {
+  {
     const offSession = {};
     await handleQuizTurn({
       session: offSession,
@@ -709,12 +708,9 @@ async function run() {
       ctx: { ...cardCtx, supabase: flagOffMockSupabase }
     });
     const offTurn = await handleQuizTurn({ session: offSession, messageText: '1', ctx: { ...cardCtx, supabase: flagOffMockSupabase } });
-    assert(offTurn.completed === true, 'the flag-off save still completes');
-    assert(flagOffInserted.some((entry) => entry.table === 'expense_logs'), 'the canonical expense_logs row is still written with the flag off');
-    assert(!flagOffInserted.some((entry) => entry.table === 'expenses'), 'P2-3: no INSERT into expenses when LEGACY_EXPENSES_WRITE_ENABLED=false');
-  } finally {
-    if (previousLegacyFlag !== undefined) process.env.LEGACY_EXPENSES_WRITE_ENABLED = previousLegacyFlag;
-    else delete process.env.LEGACY_EXPENSES_WRITE_ENABLED;
+    assert(offTurn.completed === true, 'the save completes with only the canonical ledger');
+    assert(flagOffInserted.some((entry) => entry.table === 'expense_logs'), 'the canonical expense_logs row is written');
+    assert(!flagOffInserted.some((entry) => entry.table === 'expenses'), 'v1.88.2: no INSERT into the archival expenses table (mirror retired)');
   }
 
   console.log('--- Test 11: engine-owned patience ladder (v1.54.4) ---');

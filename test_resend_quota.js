@@ -85,7 +85,21 @@ const first = makeConfigClient();
 const firstResult = await recordResendQuotaWarning({ supabase: first.client, now: NOW, notify: false });
 check(firstResult.warned === true && firstResult.alreadyWarned === false && firstResult.persisted === true, 'the first hit records the warning');
 check(first.state.config[CONFIG_KEY_RESEND_QUOTA_WARNED] === TODAY_KEY, 'the namespaced marker holds the UTC day');
-check(first.state.config.resend_quota_warned_at === TODAY_KEY, 'the legacy marker is dual-written (documented name)');
+// v1.88.2 (the flip) — `new` is the default mode, so the marker is namespaced
+// ONLY; the legacy row is written only in an explicit `dual` rolling window.
+check(first.state.config.resend_quota_warned_at === undefined, 'the legacy marker is NOT written in the default new mode (v1.88.2)');
+{
+  const previousMode = process.env.SYSTEM_CONFIG_KEY_MODE;
+  process.env.SYSTEM_CONFIG_KEY_MODE = 'dual';
+  try {
+    const dualClient = makeConfigClient();
+    await recordResendQuotaWarning({ supabase: dualClient.client, now: NOW, notify: false });
+    check(dualClient.state.config.resend_quota_warned_at === TODAY_KEY, 'an explicit dual window still dual-writes the documented legacy name');
+  } finally {
+    if (previousMode === undefined) delete process.env.SYSTEM_CONFIG_KEY_MODE;
+    else process.env.SYSTEM_CONFIG_KEY_MODE = previousMode;
+  }
+}
 check(first.state.audits.length === 1 && first.state.audits[0].action === 'RESEND_QUOTA_ALERT' && first.state.audits[0].details?.date === TODAY_KEY, 'the hit is audited once (RESEND_QUOTA_ALERT)');
 
 const secondResult = await recordResendQuotaWarning({ supabase: first.client, now: new Date('2026-11-09T23:59:00Z'), notify: false });

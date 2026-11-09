@@ -56,16 +56,6 @@ export function isSameExpenseCandidate(existing = {}, candidate = {}) {
   return existingDay === candidateDay;
 }
 
-/**
- * v1.72.0 — legacy `expenses` mirror kill switch (P2-3).
- * Default ON keeps today's dual-write behaviour; `false` stops the mirror so
- * `expenses` can become a read-only archival table (flip scheduled v1.73.0).
- */
-export function legacyExpensesWriteEnabled() {
-  const raw = String(process.env.LEGACY_EXPENSES_WRITE_ENABLED ?? 'true').trim().toLowerCase();
-  return !['false', 'off', '0', 'no'].includes(raw);
-}
-
 /** Resolve the canonical vehicle id (callers hold it; plate is a fallback). */
 async function resolveGuardVehicleId(providedSupabase, { vehicleId = null, plate = null } = {}) {
   if (vehicleId) return vehicleId;
@@ -129,4 +119,4 @@ export async function isDuplicateExpense(providedSupabase, {
   }
 }
 
-export default { isDuplicateExpense, isSameExpenseCandidate, nairobiDateKey, legacyExpensesWriteEnabled };
+export default { isDuplicateExpense, isSameExpenseCandidate, nairobiDateKey };
