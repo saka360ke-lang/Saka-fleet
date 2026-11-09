@@ -142,6 +142,21 @@ async function run() {
     overrides: [{ country_code: 'KE', asset_kind: 'bus', rule_key: 'generator_only', title: 'Bus only', is_active: true }]
   });
   check(!scoped.rules.some((r) => r.key === 'generator_only'), 'asset-scoped overrides never leak across kinds');
+  // v1.89.0 (Phase 27C) — LEAK GUARD: an stt_locale row must never surface as a
+  // compliance rule (it lives in its own lookup).
+  const withStt = getCountryBucket({
+    countryCode: 'KE',
+    assetKind: 'vehicle',
+    overrides: [{ country_code: 'KE', category: 'stt_locale', rule_key: 'stt_locale', title: 'Speech-to-Text language', stt_locale: 'sw-KE', is_active: true }]
+  });
+  check(!withStt.rules.some((r) => r.key === 'stt_locale'), 'an stt_locale override never becomes a compliance rule (v1.89.0 leak guard)');
+  check(withStt.rules.every((r) => r.category !== 'stt_locale'), 'no merged rule carries the stt_locale category');
+  const legacyCategoryless = getCountryBucket({
+    countryCode: 'KE',
+    assetKind: 'vehicle',
+    overrides: [{ country_code: 'KE', rule_key: 'legacy_rule', title: 'Legacy override', summary: 'No category', is_active: true }]
+  });
+  check(legacyCategoryless.rules.some((r) => r.key === 'legacy_rule'), 'a category-less legacy override still merges (back-compat)');
   const dbless = await loadCountryBucket(null, { countryCode: 'KE', assetKind: 'generator' });
   check(dbless.country === 'Kenya', 'the DB-less loader still returns the bundled bucket');
 

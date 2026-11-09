@@ -151,6 +151,30 @@ const dbVehicles = [
 check('plate_number routes (live DB field)', matchNarrativeVehicle('car wash 500 kcb 456b', dbVehicles, dbVehicles[0]).vehicle?.id === 'v2');
 check('make_model label routes', matchNarrativeVehicle('wash the probox', dbVehicles, dbVehicles[0]).vehicle?.id === 'v2');
 
+// v1.89.0 (Phase 27C) — NICKNAME-FIRST resolution (D3).
+const nickVehicles = [
+  { id: 'v1', plate_number: 'KDA 123A', make_model: 'Toyota Fielder', nickname: 'The Workhorse' },
+  { id: 'v2', plate_number: 'KCB 456B', make_model: 'Toyota Probox', nickname: 'The Sprinter' }
+];
+const nickPick = matchNarrativeVehicle('log fuel 3000 for the workhorse', nickVehicles, nickVehicles[1]);
+check('a nickname resolves its vehicle before the active default', nickPick.vehicle?.id === 'v1' && nickPick.reason === 'nickname', nickPick);
+const nickCasePick = matchNarrativeVehicle('THE WORKHORSE needed diesel', nickVehicles, null);
+check('nickname matching is case-insensitive', nickCasePick.vehicle?.id === 'v1' && nickCasePick.reason === 'nickname', nickCasePick);
+const nickPlatePick = matchNarrativeVehicle('fuel 2000 for kcb 456b', nickVehicles, nickVehicles[0]);
+check('a plate still resolves when the nickname is not mentioned', nickPlatePick.vehicle?.id === 'v2' && nickPlatePick.reason === 'plate', nickPlatePick);
+const nickWordBoundary = matchNarrativeVehicle('the workhorses harness', nickVehicles, null);
+check('a nickname never matches inside another word (whole-token boundaries)', nickWordBoundary.vehicle === null && nickWordBoundary.reason === 'ambiguous', nickWordBoundary.reason);
+const sharedNick = matchNarrativeVehicle('fuel 2000 for the workhorse', [
+  { id: 'v1', plate_number: 'KDA 123A', nickname: 'The Workhorse' },
+  { id: 'v2', plate_number: 'KCB 456B', nickname: 'The Workhorse' }
+], null);
+check('two assets sharing a nickname ask instead of guessing', sharedNick.vehicle === null && sharedNick.reason === 'ambiguous-nickname' && sharedNick.candidates.length === 2, sharedNick.reason);
+const shortNick = matchNarrativeVehicle('fuel 2000', [
+  { id: 'v1', plate_number: 'KDA 123A', nickname: 'AB' },
+  { id: 'v2', plate_number: 'KCB 456B' }
+], null);
+check('a nickname under 3 characters never matches', shortNick.vehicle === null && shortNick.reason === 'ambiguous', shortNick.reason);
+
 const plateStory = draftFor('car wash 500 kcb 456b last friday');
 check('a mentioned plate is never read as money', plateStory.money.amount === 500, plateStory.money);
 check('plate story picks the right vehicle', plateStory.fields.vehicle_id === 'v2', plateStory.fields.vehicle_id);

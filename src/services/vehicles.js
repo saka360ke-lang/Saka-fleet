@@ -12,6 +12,26 @@ import { notifyDriverUnassigned } from './followups.js';
 import { logWriteFailure } from './systemErrors.js';
 import { markUserDataChanged } from './afterWrite.js';
 import { getEntitlements } from './subscriptions.js';
+import { sanitizeEntryLabel } from './entryLabels.js';
+
+/** v1.89.0 (Phase 27C) — asset nicknames (D2: max 40 chars, label-sanitised). */
+export const NICKNAME_MAX_CHARS = 40;
+
+export function sanitizeVehicleNickname(value) {
+  return sanitizeEntryLabel(value);
+}
+
+/**
+ * v1.89.0 — the ONE display label for a vehicle: "The Workhorse (KAS 628T)".
+ * Nickname first (D3), plate/serial in parentheses, honest fallback. Pure.
+ */
+export function vehicleDisplayLabel(vehicle = {}) {
+  const nickname = String(vehicle?.nickname || '').trim();
+  const plate = String(vehicle?.plate_number || vehicle?.serial_number || '').trim();
+  if (nickname && plate) return `${nickname} (${plate})`;
+  if (nickname) return nickname;
+  return plate || 'Fleet vehicle';
+}
 
 /**
  * Resolve the driver phone BEFORE the vehicle row changes (v1.16.4). Metadata
@@ -64,6 +84,7 @@ export async function ensureVehicleTableColumns(providedSupabase = null) {
         ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS opt_in_earnings boolean DEFAULT false;
         ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS audit_report_frequency text DEFAULT 'on_demand';
         ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS custom_attributes jsonb DEFAULT '{}'::jsonb;
+        ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS nickname text;
         CREATE INDEX IF NOT EXISTS idx_vehicles_plate_status ON public.vehicles(plate_number, status);
         CREATE TABLE IF NOT EXISTS public.chat_history (
           id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -693,6 +714,20 @@ export function findVehicleByCandidate(vehicles = [], candidate = '') {
   if (!vehicles || vehicles.length === 0) return null;
   if (!candidate) return null;
 
+  // v1.89.0 (Phase 27C, D3) — a NICKNAME resolves first (exact, then a phrase
+  // inside the command), so "edit The Workhorse" / "delete The Workhorse" work.
+  const nicknameLower = String(candidate).trim().toLowerCase();
+  const nickExact = vehicles.find((v) => {
+    const nickname = String(v.nickname || '').trim().toLowerCase();
+    return nickname.length >= 3 && nickname === nicknameLower;
+  });
+  if (nickExact) return nickExact;
+  const nickPartial = vehicles.find((v) => {
+    const nickname = String(v.nickname || '').trim().toLowerCase();
+    return nickname.length >= 3 && nicknameLower.includes(nickname);
+  });
+  if (nickPartial) return nickPartial;
+
   const clean = candidate.trim().toUpperCase();
   const cleanNoSpaces = clean.replace(/\s+/g, '');
 
@@ -725,6 +760,7 @@ export function findVehicleByCandidate(vehicles = [], candidate = '') {
  */
 export const EDITABLE_VEHICLE_FIELDS = [
   'plate_number',
+  'nickname',
   'make_model',
   'yom',
   'year_of_manufacture',

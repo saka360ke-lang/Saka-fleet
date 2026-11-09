@@ -9,6 +9,7 @@ import { processSakaMessage } from './sakaAi.js';
 import { runHealthCheck, runConversationRefinement, evaluateConversationalFriction, monitorActiveConversations, logSystemError, logChatTranscript, ensureSentinelTables, scanCloudRunAnomalies, sendProactiveWhatsApp, sendWhatsAppTemplateMessage } from './src/workers/sentinel.js';
 import { ensureSuperadminTables, isSuperadminPhone, sendMorningExecutiveBriefing, maybeSendAiBudgetAlert } from './src/services/superadmin.js';
 import { ensureVehicleTableColumns } from './src/services/vehicles.js';
+import { ensureCountrySttLocaleColumn } from './src/services/countryBucket.js';
 import { ensureTrialSchemaDefaults } from './src/services/trialSchema.js';
 import { handleWhatsAppWebhook as handleWhatsAppWebhookRoute, handleWhatsAppWebhookVerification } from './src/routes/whatsapp/webhook.js';
 import { verifyPaystackSignature } from './src/services/paystack.js';
@@ -1374,6 +1375,10 @@ const start = async () => {
     installAiBudgetGuard(supabase);
     await installModelRuntime(supabase);
     await ensureVehicleTableColumns(supabase);
+    // v1.89.0 (Phase 27C) — country_kb.stt_locale boot mirror (idempotent).
+    await ensureCountrySttLocaleColumn().catch((err) => {
+      console.warn('[boot] country_kb.stt_locale ensure failed:', err?.message || err);
+    });
     await ensureFuelEconomySchema(supabase);
     await ensureEarningTypeSchema(supabase);
     await ensureShortLinksTable(supabase);

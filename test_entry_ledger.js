@@ -7,6 +7,7 @@ import {
   parseEntrySelection,
   parseEntryEditRequest,
   resolveLedgerTurn,
+  resolveLedgerVehicleScope,
   ledgerEntryKey,
   formatLedgerList,
   formatEditPreview,
@@ -60,6 +61,25 @@ const SAMPLE = {
 
 async function runTests() {
   console.log('=== EDITABLE LEDGER TESTS (v1.33.0) ===\n');
+
+// v1.89.0 (Phase 27C) — nickname-first ledger scoping (D3). Pure: no DB.
+console.log('--- Test 0: ledger scoping by asset nickname ---');
+{
+  const nickFleet = [
+    { id: 'v1', plate_number: 'KDA 123A', nickname: 'The Workhorse' },
+    { id: 'v2', plate_number: 'KCB 456B', nickname: 'The Sprinter' }
+  ];
+  const scopedNick = resolveLedgerVehicleScope({ text: 'edit entry for the workhorse', vehicles: nickFleet, activeVehicle: nickFleet[1] });
+  assert(scopedNick.reason === 'nickname' && scopedNick.vehicleIds[0] === 'v1', 'a nickname scopes the ledger to that vehicle, before the active default');
+  const scopedShared = resolveLedgerVehicleScope({
+    text: 'my entries for the workhorse',
+    vehicles: [{ id: 'v1', plate_number: 'KDA 123A', nickname: 'The Workhorse' }, { id: 'v2', plate_number: 'KCB 456B', nickname: 'The Workhorse' }],
+    activeVehicle: null
+  });
+  assert(scopedShared.ambiguous === true && scopedShared.vehicleIds.length === 0, 'two assets sharing a nickname ask which vehicle (never a guess)');
+  const scopedPlateStill = resolveLedgerVehicleScope({ text: 'my entries for kcb 456b', vehicles: nickFleet, activeVehicle: nickFleet[0] });
+  assert(scopedPlateStill.reason === 'plate' && scopedPlateStill.vehicleIds[0] === 'v2', 'a plate still scopes when no nickname is named');
+}
 
   // 1. Command detection
   console.log('--- Test 1: ledger command detection ---');

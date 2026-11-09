@@ -71,7 +71,9 @@ import {
   sanitizeVehicleUpdates,
   deleteVehicle,
   ensureVinRegistryEntry,
-  checkOwnerVehicleTierLimit
+  checkOwnerVehicleTierLimit,
+  sanitizeVehicleNickname,
+  vehicleDisplayLabel
 } from './vehicles.js';
 import { applyTrialExtensionCoupon } from './coupons.js';
 import {
@@ -330,7 +332,7 @@ function vehicleField(ctx) {
   const vehicles = ctx.vehicles || [];
   const summarize = (value) => {
     const v = vehicles.find((x) => x.id === value);
-    return v ? `${v.plate_number}${v.make_model ? ` (${v.make_model})` : ''}` : '—';
+    return v ? `${vehicleDisplayLabel(v)}${v.make_model ? ` (${v.make_model})` : ''}` : '—';
   };
 
   if (vehicles.length <= 1) {
@@ -345,12 +347,18 @@ function vehicleField(ctx) {
     });
   }
 
-  return field('vehicle_id', 'Vehicle', `Which vehicle? (${vehicles.map((v) => v.plate_number).join(', ')})`, {
+  return field('vehicle_id', 'Vehicle', `Which vehicle? (${vehicles.map((v) => vehicleDisplayLabel(v)).join(', ')})`, {
     kind: 'vehicle',
     parse: (text) => {
       const clean = String(text).trim().toLowerCase();
       const byIndex = clean.match(/^\d+$/) ? vehicles[Number(clean) - 1] : null;
       if (byIndex) return byIndex.id;
+      // v1.89.0 (D3) — a nickname resolves this picker too.
+      const byNickname = vehicles.find((v) => {
+        const nickname = String(v.nickname || '').trim().toLowerCase();
+        return nickname.length >= 3 && (clean === nickname || clean.includes(nickname));
+      });
+      if (byNickname) return byNickname.id;
       const found = vehicles.find((v) =>
         v.plate_number?.toLowerCase() === clean ||
         v.plate_number?.toLowerCase().replace(/\s+/g, '') === clean.replace(/\s+/g, '') ||
@@ -411,6 +419,16 @@ function registrationFields() {
       validate: (value) => (value && value.length >= 2 && value.length <= 80
         ? { ok: true }
         : { ok: false, message: 'Please share the make and model (at least 2 characters).' })
+    }),
+    // v1.89.0 (Phase 27C) — an optional human nickname (D2/D3): one turn, skip-able,
+    // ≤40 sanitised characters. It becomes the primary display label everywhere.
+    field('nickname', 'Got a nickname for it? (optional — e.g. \'The Workhorse\'; reply skip)', 'e.g. The Workhorse (optional)', {
+      optional: true,
+      aliases: ['nickname'],
+      parse: (text) => sanitizeVehicleNickname(text),
+      validate: (value) => (!value || String(value).length <= 40
+        ? { ok: true }
+        : { ok: false, message: 'Keep the nickname under 40 characters, or reply skip.' })
     }),
     field('yom', 'Which year was it made? 📅 (e.g. 2016)', `e.g. 1991 or ${CURRENT_YEAR - 5}`, {
       aliases: ['yom', 'year', 'year_of_manufacture'],
@@ -902,6 +920,13 @@ export function getFlowDefinition(flowKey, ctx) {
               const list = c.vehicles || [];
               const byPlate = list.find((v) => String(v.plate_number || '').toUpperCase() === raw);
               if (byPlate) return byPlate.id;
+              // v1.89.0 (D3) — a nickname keeps that asset active too.
+              const lower = String(text).trim().toLowerCase();
+              const byNickname = list.find((v) => {
+                const nickname = String(v.nickname || '').trim().toLowerCase();
+                return nickname.length >= 3 && (lower === nickname || lower.includes(nickname));
+              });
+              if (byNickname) return byNickname.id;
               const index = Number(raw);
               if (Number.isInteger(index) && index >= 1 && index <= list.length) return list[index - 1].id;
               return null;
@@ -3462,7 +3487,7 @@ async function executeFlow(state, ctx) {
         }
 
         const reply = await ok({
-          vehicle: vehicle.plate_number,
+          vehicle: vehicleDisplayLabel(vehicle),
           category: a.expense_type,
           amount: formatMoney(a.amount, buildGlobalContext(ctx.countryInfo, ctx.profile).currency),
           volume: a.fuel_liters ? `${a.fuel_liters} L` : undefined,
@@ -3526,7 +3551,7 @@ async function executeFlow(state, ctx) {
         markUserDataChanged({ supabase: ctx.supabase, phone: ctx.formattedPhone || ctx.profile?.phone_number, ownerId: ctx.profile?.id, reason: 'quizEngine.logEarnings' });
 
         const reply = await ok({
-          vehicle: vehicle.plate_number,
+          vehicle: vehicleDisplayLabel(vehicle),
           revenue: formatMoney(a.amount, buildGlobalContext(ctx.countryInfo, ctx.profile).currency),
           odometer: a.odometer_reading,
           period: a.period || undefined,
@@ -3570,7 +3595,7 @@ async function executeFlow(state, ctx) {
           console.warn('[quizEngine] Reminder evaluation skipped:', remErr.message);
         }
 
-        const reply = await ok({ vehicle: vehicle.plate_number, odometer: a.odometer_reading, label: readingLabel ? `#${readingLabel}` : undefined });
+        const reply = await ok({ vehicle: vehicleDisplayLabel(vehicle), odometer: a.odometer_reading, label: readingLabel ? `#${readingLabel}` : undefined });
         return { handled: true, reply, flow: state.flow, completed: true };
       }
 
@@ -3596,7 +3621,7 @@ async function executeFlow(state, ctx) {
           console.warn('[quizEngine] Hours reminder evaluation skipped:', remErr.message);
         }
 
-        const reply = await ok({ vehicle: vehicle.plate_number, operatingHours: `${formatNumber(a.hours)} operating hours` });
+        const reply = await ok({ vehicle: vehicleDisplayLabel(vehicle), operatingHours: `${formatNumber(a.hours)} operating hours` });
         return { handled: true, reply, flow: state.flow, completed: true };
       }
 
@@ -3652,7 +3677,7 @@ async function executeFlow(state, ctx) {
           }
         }
 
-        const reply = await ok({ vehicle: vehicle.plate_number, field: a.edit_field, newValue: a.new_value });
+        const reply = await ok({ vehicle: vehicleDisplayLabel(vehicle), field: a.edit_field, newValue: a.new_value });
         return { handled: true, reply, flow: state.flow, completed: true };
       }
 
@@ -3683,7 +3708,7 @@ async function executeFlow(state, ctx) {
         if (!res.success) return { handled: true, reply: await fail(res.error), flow: state.flow, active: true };
 
         const reply = await ok({
-          vehicle: vehicle.plate_number,
+          vehicle: vehicleDisplayLabel(vehicle),
           driverUnassigned: res.cleanup?.driverUnassigned ? 'yes' : 'none',
           transfersCancelled: res.cleanup?.transfersCancelled || 0,
           auditNote: 'Historical logs preserved; VIN trial ledger retained.'
@@ -3809,7 +3834,7 @@ async function executeFlow(state, ctx) {
           }
 
           const reply = await ok({
-            vehicle: vehicle.plate_number,
+            vehicle: vehicleDisplayLabel(vehicle),
             reminder: normalizedReminderType,
             due: describeExpirySpec(spec, { locale: ctx.countryInfo?.locale || 'en-US' }),
             label: reminderLabel ? `#${reminderLabel}` : undefined
@@ -3830,7 +3855,7 @@ async function executeFlow(state, ctx) {
           label: reminderLabel
         });
         if (!created.ok) return { handled: true, reply: await fail(created.error), flow: state.flow, active: true };
-        const reply = await ok({ vehicle: vehicle.plate_number, reminder: normalizedReminderType, due: describeThresholdSpec(due), label: reminderLabel ? `#${reminderLabel}` : undefined });
+        const reply = await ok({ vehicle: vehicleDisplayLabel(vehicle), reminder: normalizedReminderType, due: describeThresholdSpec(due), label: reminderLabel ? `#${reminderLabel}` : undefined });
         return { handled: true, reply, flow: state.flow, completed: true };
       }
 
@@ -4068,6 +4093,7 @@ async function persistVehicleRegistration(state, ctx) {
     serial_number: serialNumber,
     unit_system: unitSystem,
     qr_passbook_token: token,
+    nickname: sanitizeVehicleNickname(a.nickname) || null,
     custom_attributes: a.custom_attributes || {},
     metadata: {
       role: 'Owner',
@@ -4106,13 +4132,14 @@ async function persistVehicleRegistration(state, ctx) {
   const issuedAt = new Date().toISOString();
   let insertRes = await ctx.supabase.from('vehicles').insert([record]).select('id').maybeSingle();
   let insertErr = insertRes.error || null;
-  // Pre-migration safety: if asset_kind/serial_number/operating_hours columns do
-  // not exist yet, retry without them so onboarding never blocks.
-  if (insertErr && /asset_kind|serial_number|operating_hours|column .* does not exist/i.test(insertErr.message || '')) {
+  // Pre-migration safety: if asset_kind/serial_number/operating_hours/nickname
+  // columns do not exist yet, retry without them so onboarding never blocks.
+  if (insertErr && /asset_kind|serial_number|operating_hours|nickname|column .* does not exist/i.test(insertErr.message || '')) {
     const legacyRecord = { ...record };
     delete legacyRecord.asset_kind;
     delete legacyRecord.serial_number;
     delete legacyRecord.operating_hours;
+    delete legacyRecord.nickname;
     insertRes = await ctx.supabase.from('vehicles').insert([legacyRecord]).select('id').maybeSingle();
     insertErr = insertRes.error || null;
   }

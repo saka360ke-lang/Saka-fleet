@@ -146,6 +146,11 @@ function labelOf(vehicle = {}) {
   return [make, model, nickname].filter(Boolean).join(' ').trim();
 }
 
+/** v1.89.0 — the nickname alone (fallback aliases keep older rows working). */
+function nicknameOf(vehicle = {}) {
+  return String(vehicle.nickname || vehicle.nick_name || vehicle.name || '').trim();
+}
+
 function compactAlnum(value) {
   return String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
@@ -162,6 +167,25 @@ export function matchNarrativeVehicle(text = '', vehicles = [], activeVehicle = 
 
   const source = String(text || '');
   const compact = compactAlnum(source);
+
+  // 0) v1.89.0 (Phase 27C, D3) — an explicit NICKNAME phrase wins over every
+  // other reference ("log fuel for The Workhorse"). Whole-token boundaries,
+  // ≥3 chars; two ambiguous nicknames ask instead of guessing.
+  if (list.some((vehicle) => nicknameOf(vehicle).length >= 3)) {
+    const normalized = source.toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+    const padded = ` ${normalized} `;
+    const nicknameMatches = list.filter((vehicle) => {
+      const nickname = nicknameOf(vehicle).toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+      if (nickname.length < 3) return false;
+      return padded.includes(` ${nickname} `);
+    });
+    if (nicknameMatches.length === 1) {
+      return { vehicle: nicknameMatches[0], reason: 'nickname', defaulted: false, candidates: nicknameMatches };
+    }
+    if (nicknameMatches.length > 1) {
+      return { vehicle: null, reason: 'ambiguous-nickname', defaulted: false, candidates: nicknameMatches };
+    }
+  }
 
   // 1) Explicit plate mention (with or without spaces/dashes).
   const plateMatches = list.filter((vehicle) => {

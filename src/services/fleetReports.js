@@ -26,6 +26,7 @@ import { detectExpiryCategory, reminderDueDate, daysUntilDue } from './maintenan
 import { buildLedgerGroups, expenseToLedgerRow, earningToLedgerRow } from './reportLedger.js';
 import { EXPENSE_CATEGORY_KEYS, expenseCategoryLabel, expenseCategoryOf } from './expenseCatalog.js';
 import { primaryMeterForAssetKind } from './assetMetrics.js';
+import { vehicleDisplayLabel } from './vehicles.js';
 
 export const REPORT_TYPES = Object.freeze({
   fleet: { label: 'Fleet Status Report', aliases: ['fleet', 'status', 'overview', 'executive', 'rollup', 'summary'] },
@@ -1021,6 +1022,8 @@ function vehicleSummary(vehicle, dataset, ctx, now) {
   return {
     id: vehicle.id,
     plate: vehicle.plate_number || 'Fleet vehicle',
+    nickname: vehicle.nickname || null,
+    displayLabel: vehicleDisplayLabel(vehicle),
     makeModel: vehicle.make_model || null,
     assetKind: vehicle.asset_kind || null,
     status: isActiveVehicle(vehicle) ? 'active' : String(vehicle.status || 'inactive').toLowerCase(),

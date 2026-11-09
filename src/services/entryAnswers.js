@@ -305,6 +305,11 @@ export function resolveLedgerVehicleScope({
   }
   if (list.length === 0) return { vehicleIds: [], vehicle: null, reason: 'no-vehicles', ambiguous: true };
   const match = matchNarrativeVehicle(text, list, activeVehicle);
+  // v1.89.0 — an ambiguous NICKNAME is a named reference: never fall through to
+  // the active vehicle or a plate-prefix guess (ask which vehicle instead).
+  if (match.reason === 'ambiguous-nickname') {
+    return { vehicleIds: [], vehicle: null, reason: 'ambiguous', ambiguous: true, candidates: match.candidates || list };
+  }
   if (match.vehicle && match.reason !== 'ambiguous') {
     return { vehicleIds: [match.vehicle.id], vehicle: match.vehicle, reason: match.reason, ambiguous: false };
   }

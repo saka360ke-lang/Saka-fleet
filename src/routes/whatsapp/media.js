@@ -32,6 +32,7 @@ import {
   STT_MAX_DURATION_SECONDS
 } from '../../services/sttService.js';
 import { parseDocumentFields } from '../../services/documentLens.js';
+import { loadCountrySttLocale } from '../../services/countryBucket.js';
 import { semanticOcrTopUp } from '../../services/ocrSemantic.js';
 import {
   findReceiptByMediaId,
@@ -211,7 +212,11 @@ export async function startAudioTranscription({
       return { text: null, error: tooLong, status: 'too_long', mimeType, durationSeconds, countryCode, latencyMs: Date.now() - startedAt };
     }
 
-    const stt = await transcribeAudioBuffer({ buffer: download.buffer, countryCode, mimeType });
+    // v1.89.0 (Phase 27C) — the country's primary STT language can be overridden
+    // by a `country_kb.stt_locale` row (5-minute cache); the bundled map is the
+    // fallback, so a missing column/row never blocks transcription (rule 50).
+    const dbLocale = await loadCountrySttLocale(supabaseClient, countryCode);
+    const stt = await transcribeAudioBuffer({ buffer: download.buffer, countryCode, mimeType, dbLocale });
     const text = String(stt?.text || '').trim();
     const confidence = Number.isFinite(Number(stt?.confidence)) ? Number(stt.confidence) : null;
     const status = text

@@ -123,6 +123,7 @@ import {
 } from './src/services/dashboard.js';
 import { SAKA_PDF_THEME } from './src/services/pdfEngine.js';
 import { upcomingExpiryItems, buildVehicleDirectory, buildVehicleDetail } from './src/services/fleetReports.js';
+import { vehicleDisplayLabel } from './src/services/vehicles.js';
 import { dateRangeBounds, CUSTOM_METRICS } from './src/services/reportMetrics.js';
 import { detectCountryFromPhone } from './src/services/globalization.js';
 import { extractPdfText } from './src/services/pdfTextExtractor.js';
@@ -798,11 +799,30 @@ async function run() {
   check(detailHtml.includes('href="/d/vehicles"'), 'the vehicle page links back to the fleet list');
   const quietHtml = renderVehiclePage({ data: quietDetail, emailMasked: 'a***a@example.com' });
   check(quietHtml.includes('No documents on file yet') && quietHtml.includes('No records in this vehicle yet'), 'a quiet vehicle renders two warm empty states');
-  const hostile = { ...detail, vehicle: { ...detail.vehicle, plate: '<script>alert(1)</script>', makeModel: '<b>x</b>' } };
+  const hostile = { ...detail, vehicle: { ...detail.vehicle, plate: '<script>alert(1)</script>', displayLabel: undefined, makeModel: '<b>x</b>' } };
   const hostileHtml = renderVehiclePage({ data: hostile, emailMasked: 'a***a@example.com' });
   check(!hostileHtml.includes('<script>alert(1)</script>') && hostileHtml.includes('&lt;script&gt;'), 'plate and model are escaped (no HTML injection)');
+  const hostileNick = { ...detail, vehicle: { ...detail.vehicle, displayLabel: '<script>alert(2)</script>', nickname: '<b>nick</b>' } };
+  const hostileNickHtml = renderVehiclePage({ data: hostileNick, emailMasked: 'a***a@example.com' });
+  check(!hostileNickHtml.includes('<script>alert(2)</script>'), 'a hostile display label is escaped too (v1.89.0)');
   const hostileIndex = renderVehiclesPage({ data: { ...directory, vehicles: [{ ...rowB, plate: '<img src=x onerror=1>' }] }, emailMasked: 'a***a@example.com' });
   check(!hostileIndex.includes('<img src=x') && hostileIndex.includes('&lt;img'), 'the list escapes a hostile plate too');
+
+  // v1.89.0 (Phase 27C) — nicknames are the primary dashboard label.
+  const nickIndexHtml = renderVehiclesPage({
+    data: { ...directory, vehicles: [{ ...rowB, plate: 'KAS 628T', nickname: 'The Workhorse' }] },
+    emailMasked: 'a***a@example.com'
+  });
+  check(nickIndexHtml.includes('The Workhorse') && nickIndexHtml.includes('KAS 628T'), 'the fleet list shows the nickname with the plate beside it (v1.89.0)');
+  const nickDetailHtml = renderVehiclePage({
+    data: { ...detail, vehicle: { ...detail.vehicle, plate: 'KAS 628T', nickname: 'The Workhorse', displayLabel: 'The Workhorse (KAS 628T)' } },
+    emailMasked: 'a***a@example.com'
+  });
+  check(nickDetailHtml.includes('The Workhorse (KAS 628T)'), 'the vehicle page heading prefers the display label');
+  check(vehicleDisplayLabel({ nickname: 'The Workhorse', plate_number: 'KAS 628T' }) === 'The Workhorse (KAS 628T)'
+    && vehicleDisplayLabel({ plate_number: 'KAS 628T' }) === 'KAS 628T'
+    && vehicleDisplayLabel({ nickname: 'The Workhorse' }) === 'The Workhorse'
+    && vehicleDisplayLabel({}) === 'Fleet vehicle', 'one display label: nickname (plate), honest fallbacks');
   const failedDetail = renderVehiclePage({ data: { ok: false }, emailMasked: 'a***a@example.com' });
   check(failedDetail.includes('could not be loaded') && !failedDetail.includes('undefined'), 'a failed vehicle page renders one honest explanation');
   const overviewHtml = renderOverviewPage({ data: synthetic, emailMasked: 'a***a@example.com' });

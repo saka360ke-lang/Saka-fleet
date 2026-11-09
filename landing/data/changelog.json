@@ -1,6 +1,13 @@
 {
-  "latest": "1.88.2",
+  "latest": "1.89.0",
   "entries": [
+    {
+      "version": "1.89.0",
+      "date": "2026-11-09",
+      "title": "Saka learns your fleet's names",
+      "preview": "Give any vehicle a nickname — 'The Workhorse' — and every log, report and dashboard speaks it.",
+      "summary": "Two additions that make Saka feel like part of your garage. First: every asset can now carry a nickname - up to 40 characters, set during registration (just reply skip if you do not want one) or later when editing the vehicle. From then on the nickname is the name that shows everywhere: confirmations read 'Logged for The Workhorse (KAS 628T)', the fleet list and vehicle pages lead with it, and you can simply say 'log fuel for The Workhorse' - the engine looks for a nickname first, then the plate, then the serial, then the make and model. If two vehicles were given the same nickname Saka asks which one, and it never guesses one from a sentence. Second: voice notes now understand each country's own language from a knowledge base row - Kenya's Swahili + English pair stays the default, Tanzania, Uganda, Rwanda, France, Germany, Spain and Belgium each lead with their own language, and every other country leads with its regional language, English first. An operator can retune any country's voice language without a new release. Both changes are live: the columns exist, 21 countries were backfilled and audited, and nothing you already have changes."
+    },
     {
       "version": "1.88.2",
       "date": "2026-11-09",

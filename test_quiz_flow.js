@@ -94,6 +94,12 @@ async function run() {
   assert(keys[1] === 'plate_number', 'Road assets are then asked for the plate');
   assert(keys.includes('vin') && !keys.includes('owner_email') && !keys.includes('otp'), 'Registration includes VIN but never email/OTP (website-only)');
   assert(regFlow.fields.filter((f) => f.group === 'optional').length >= 8, 'Optional spec group is present');
+  // v1.89.0 (Phase 27C) — the optional nickname is asked right after make/model (D3).
+  const nickField = regFlow.fields.find((f) => f.key === 'nickname');
+  assert(keys.indexOf('nickname') === keys.indexOf('make_model') + 1, 'Nickname is asked right after make/model (v1.89.0)');
+  assert(nickField?.optional === true, 'Nickname is optional (skip-able, never blocking)');
+  assert(nickField.parse('The Workhorse') === 'The Workhorse' && nickField.parse('!!!') === null, 'Nickname is sanitised like a record label (≤40 chars, letters/numbers)');
+  assert(nickField.parse('The Workhorse ' + 'x'.repeat(40)).length === 40, 'A long nickname is sliced to 40 characters (D2)');
 
   assert(detectQuizStart({ intent: 'REGISTER_VEHICLE', messageText: 'register', hasVehicleRegistered: false }) === 'vehicle_registration', 'Registration intent starts registration quiz');
   assert(detectQuizStart({ intent: 'GENERAL_CHAT', messageText: 'I have another car', hasVehicleRegistered: true, isRegisterCommand: true }) === 'vehicle_registration', 'an existing owner adding another car starts registration (v1.56.0)');
@@ -176,6 +182,22 @@ async function run() {
   });
   assert(session.quiz.answers.make_model === 'Toyota Land Cruiser 80 series', 'Make/model captured on the next turn');
   assert(session.quiz.answers.vin === undefined && session.quiz.answers.owner_email === undefined, 'VIN and email are NOT requested in the same turn');
+
+  // v1.89.0 (Phase 27C) — the nickname question follows make/model and "skip"
+  // moves on without blocking; a typed nickname is banked (<=40, sanitised).
+  const nickSkip = await handleQuizTurn({ session, messageText: 'skip', ctx });
+  assert(nickSkip.handled === true && session.quiz.answers.nickname === null, 'Nickname can be skipped (stored as null, never blocking)');
+  const nickSession = {};
+  const nickCtx = baseCtx();
+  await handleQuizTurn({ session: nickSession, messageText: 'Car', aiExtracted: { asset_kind: 'vehicle' }, startFlow: 'vehicle_registration', ctx: nickCtx });
+  await handleQuizTurn({ session: nickSession, messageText: 'KDA 123A', aiExtracted: { plate_number: 'KDA 123A' }, ctx: nickCtx });
+  await handleQuizTurn({ session: nickSession, messageText: 'Toyota Hilux', aiExtracted: { make_model: 'Toyota Hilux' }, ctx: nickCtx });
+  const nickTurn = await handleQuizTurn({ session: nickSession, messageText: 'The Workhorse', ctx: nickCtx });
+  assert(nickTurn.handled === true && nickSession.quiz.answers.nickname === 'The Workhorse', 'A typed nickname is banked on its own turn');
+  // The save path maps the answer onto the record (source pin: persistVehicleRegistration).
+  const quizSourceForNickname = fs.readFileSync('src/services/quizEngine.js', 'utf8');
+  assert(quizSourceForNickname.includes('nickname: sanitizeVehicleNickname(a.nickname) || null'), 'the registration save writes the sanitised nickname (v1.89.0)');
+  assert(/delete legacyRecord\.nickname/.test(quizSourceForNickname), 'an un-migrated schema retries without nickname (rule 50)');
 
   console.log('\n--- Test 3: multi-field fast-forward ---');
   await handleQuizTurn({

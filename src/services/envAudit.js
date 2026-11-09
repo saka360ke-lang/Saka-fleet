@@ -129,7 +129,9 @@ export const ENV_SECTIONS = Object.freeze([
       'STT_MAX_DURATION_SECONDS',
       'STT_ESTIMATED_BITRATE',
       // v1.88.0 — the explicit OGG_OPUS sample rate (Google rejects a 0 rate).
-      'STT_SAMPLE_RATE_HZ'
+      'STT_SAMPLE_RATE_HZ',
+      // v1.89.0 — the country_kb.stt_locale cache window.
+      'STT_LOCALE_CACHE_MS'
     ]
   },
   { section: 'KNOWLEDGEBASE', keys: ['KB_MAX_SOURCE_BYTES', 'KB_FETCH_TIMEOUT_MS', 'FEATURE_NOTICE_VERSION'] },

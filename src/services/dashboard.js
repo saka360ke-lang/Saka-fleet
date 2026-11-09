@@ -959,7 +959,7 @@ export async function loadOwnerVehicles(supabase, ownerId) {
   try {
     const { data, error } = await supabase
       .from('vehicles')
-      .select('id, plate_number, make_model, status, deleted_at, assigned_driver_id')
+      .select('id, plate_number, nickname, make_model, status, deleted_at, assigned_driver_id')
       .eq('owner_id', ownerId)
       .is('deleted_at', null)
       .limit(500);
@@ -2918,7 +2918,7 @@ export function renderVehiclesPage({ data, emailMasked }) {
         ];
         return `
       <li>
-        <a href="/d/vehicles/${encodeURIComponent(vehicle.id)}"><strong>${escapeHtml(vehicle.plate)}</strong></a>${vehicle.makeModel ? `<span class="muted"> · ${escapeHtml(vehicle.makeModel)}</span>` : ''}
+        <a href="/d/vehicles/${encodeURIComponent(vehicle.id)}"><strong>${escapeHtml(vehicle.nickname || vehicle.plate)}</strong></a>${vehicle.nickname ? `<span class="muted"> · ${escapeHtml(vehicle.plate)}</span>` : ''}${vehicle.makeModel ? `<span class="muted"> · ${escapeHtml(vehicle.makeModel)}</span>` : ''}
         <div class="muted" style="font-size:13px;margin-top:4px;">
           ${vehicleStatusChip(vehicle)}
           ${escapeHtml(facts.join(' • '))}
@@ -3033,7 +3033,7 @@ export function renderVehiclePage({ data, emailMasked }) {
 
   const body = `
 <p class="muted"><a href="/d/vehicles">← All vehicles</a></p>
-<h1>${escapeHtml(vehicle.plate)} ${vehicleStatusChip(vehicle)}</h1>
+<h1>${escapeHtml(vehicle.displayLabel || vehicle.plate)} ${vehicleStatusChip(vehicle)}</h1>
 <p class="muted">${subtitle}</p>
 ${identity}
 <h2>Documents</h2>
@@ -3044,7 +3044,7 @@ ${replacedList}
 <h2>Recent records</h2>
 <div class="card">${recordList}</div>
 <p class="muted" style="font-size:13px;">Your PDF reports are still one message away in WhatsApp.</p>`;
-  return renderPageShell(`${vehicle.plate} — your vehicle`, body, { headerRight: dashboardNav() });
+  return renderPageShell(`${vehicle.displayLabel || vehicle.plate} — your vehicle`, body, { headerRight: dashboardNav() });
 }
 
 /** Serialise the filter spec back into a shareable query string. */
@@ -3083,7 +3083,7 @@ export function renderRecordsPage({ data, filters = {}, vehicles = [], emailMask
     .map((value) => `<option value="${escapeHtml(value)}"${filters.types?.includes(value) ? ' selected' : ''}>${escapeHtml(value)}</option>`)
     .join('');
   const vehicleOptions = (vehicles || [])
-    .map((vehicle) => `<option value="${escapeHtml(vehicle.id)}"${filters.vehicleId === vehicle.id ? ' selected' : ''}>${escapeHtml(vehicle.plate_number || 'Fleet vehicle')}</option>`)
+    .map((vehicle) => `<option value="${escapeHtml(vehicle.id)}"${filters.vehicleId === vehicle.id ? ' selected' : ''}>${escapeHtml(vehicle.nickname ? `${vehicle.nickname} (${vehicle.plate_number || 'Fleet vehicle'})` : (vehicle.plate_number || 'Fleet vehicle'))}</option>`)
     .join('');
 
   const form = `
@@ -3622,7 +3622,7 @@ export function renderTransferPage({ data, emailMasked = '', error = null, notic
   const recent = (data.transfers || []).filter((transfer) => !transfer.open).slice(0, 6);
 
   const vehicleOptions = vehicles.length
-    ? vehicles.map((vehicle) => `<option value="${escapeHtml(vehicle.id)}">${escapeHtml(vehicle.plate)}${vehicle.makeModel ? ` — ${escapeHtml(vehicle.makeModel)}` : ''}</option>`).join('')
+    ? vehicles.map((vehicle) => `<option value="${escapeHtml(vehicle.id)}">${escapeHtml(vehicle.nickname ? `${vehicle.nickname} (${vehicle.plate})` : vehicle.plate)}${vehicle.makeModel ? ` — ${escapeHtml(vehicle.makeModel)}` : ''}</option>`).join('')
     : '';
 
   // v1.86.0 (Phase 25) — the handover reading is named after the ASSET (a

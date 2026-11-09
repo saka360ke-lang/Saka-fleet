@@ -19,6 +19,8 @@
 
 const DEFAULT_STT_ENDPOINT = 'https://speech.googleapis.com/v1/speech:recognize';
 
+import { COUNTRY_STT_LOCALES } from './globalization.js';
+
 function clampNumber(raw, fallback, { min = 1, max = Number.MAX_SAFE_INTEGER } = {}) {
   const value = Number(raw);
   if (!Number.isFinite(value)) return fallback;
@@ -84,16 +86,25 @@ export function isSttEnabled() {
 }
 
 /**
- * Country-resolved recognition languages (rule 7). Kenya speaks Swahili + English
- * (and Sheng), so sw-KE leads with en-KE/en-US as alternatives; every other
- * country leads with English and keeps Swahili available.
+ * Country-resolved recognition languages (rule 7). v1.89.0 — the primary can be
+ * overridden per country by a `country_kb.stt_locale` row (dbLocale), then the
+ * bundled COUNTRY_STT_LOCALES map, then GLOBAL (en-US + sw-KE). Kenya speaks
+ * Swahili + English (and Sheng), so sw-KE leads with en-KE/en-US alternates.
  */
-export function resolveSpeechLanguage(countryCode = 'GLOBAL') {
+export function resolveSpeechLanguage(countryCode = 'GLOBAL', dbLocale = null) {
   const code = String(countryCode || 'GLOBAL').trim().toUpperCase();
-  if (code === 'KE') {
-    return { languageCode: 'sw-KE', alternativeLanguageCodes: ['en-KE', 'en-US'] };
+  const bundled = COUNTRY_STT_LOCALES[code] || COUNTRY_STT_LOCALES.GLOBAL;
+  const override = typeof dbLocale === 'string' ? dbLocale.trim() : '';
+  if (override && /^[a-z]{2,3}(?:-[A-Za-z]{2,4})?$/.test(override)) {
+    return {
+      languageCode: override,
+      alternativeLanguageCodes: bundled.alternates.filter((alt) => alt !== override)
+    };
   }
-  return { languageCode: 'en-US', alternativeLanguageCodes: ['sw-KE'] };
+  return {
+    languageCode: bundled.primary,
+    alternativeLanguageCodes: [...bundled.alternates]
+  };
 }
 
 /**
@@ -150,6 +161,7 @@ export async function transcribeAudioBuffer({
   buffer,
   countryCode = 'GLOBAL',
   mimeType = 'audio/ogg',
+  dbLocale = null,
   apiKey = process.env.GCP_SPEECH_API_KEY || process.env.GCP_VISION_API_KEY
 } = {}) {
   if (!buffer || !buffer.length) {
@@ -172,7 +184,7 @@ export async function transcribeAudioBuffer({
   }
 
   const endpoint = process.env.GCP_SPEECH_ENDPOINT || DEFAULT_STT_ENDPOINT;
-  const language = resolveSpeechLanguage(countryCode);
+  const language = resolveSpeechLanguage(countryCode, dbLocale);
   const encoding = resolveSpeechEncoding(mimeType);
 
   const config = {

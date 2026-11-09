@@ -107,6 +107,12 @@ const captureFlow = SAKA_QUIZ_FLOWS.find((flow) => flow.key === 'driver_onboardi
 check(Boolean(captureFlow && /add\/refresh ANY compliance document/.test(captureFlow.rules)), 'driver_onboarding knowledge carries the any-time capture rules');
 const permitFlow = SAKA_QUIZ_FLOWS.find((flow) => flow.key === 'vehicle_registration');
 check(Boolean(permitFlow && /vehicle permits .*captured at any time/.test(permitFlow.rules)), 'vehicle_registration carries the sibling vehicle-permit capture rule');
+// v1.89.0 (Phase 27C) — the registration flow + core prompt teach nicknames.
+check(Boolean(permitFlow && /nickname \(v1\.89\.0, optional/.test(permitFlow.fields)), 'vehicle_registration asks for the optional nickname after make/model');
+check(Boolean(permitFlow && permitFlow.extracted.includes('nickname')), 'vehicle_registration declares the nickname extraction key');
+check(Boolean(permitFlow && /resolves nickname FIRST, then plate/.test(permitFlow.rules)), 'the flow rules pin nickname-first resolution');
+check(DEFAULT_SAKA_CORE_PROMPT.includes('ASSET NICKNAMES (v1.89.0)'), 'the core prompt carries the nickname contract (v1.89.0)');
+check(DEFAULT_SAKA_CORE_PROMPT.includes('Never invent a nickname'), 'the core prompt forbids inventing a nickname');
 const narrativeFlow = SAKA_QUIZ_FLOWS.find((flow) => flow.key === 'log_expense');
 check(Boolean(narrativeFlow && /narrative intake/.test(narrativeFlow.rules)), 'log_expense flow knowledge carries the narrative intake rules');
 check(/Narrative pre-fills are engine-determined facts/.test(await import('./src/services/conversationEngine.js').then((m) => m.QUIZ_INSTRUCTION_NATURAL)), 'Quiz composer honours narrative pre-fills');

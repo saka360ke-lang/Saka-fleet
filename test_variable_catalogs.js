@@ -160,6 +160,13 @@ check(/dashcam/i.test(hilux.custom_attributes?.modifications || ''), 'Accessorie
 const scania = extractVehicleAttributes('Scania R500 truck with trailer');
 check(/scania r500/i.test(scania.make_model || ''), 'Truck brands are captured (Scania R500)');
 check(/trailer/i.test(scania.custom_attributes?.modifications || ''), 'Accessories: trailer');
+// v1.89.0 (Phase 27C) — explicit nickname capture (never guessed from prose).
+const nickStory = extractVehicleAttributes('Toyota Hilux, nickname: The Workhorse, registration KDA 123A');
+check(nickStory.nickname === 'The Workhorse', 'An explicit nickname marker is captured for paragraph intake');
+const akaStory = extractVehicleAttributes('My Fielder aka The Sprinter does 15 km/l');
+check(akaStory.nickname === 'The Sprinter', '"aka <name>" captures a nickname too');
+const noNickStory = extractVehicleAttributes('I bought a Toyota Fielder 2016 diesel at 120,000 km');
+check(noNickStory.nickname === undefined, 'No nickname is invented from ordinary prose');
 
 console.log('\n--- Test 8: quiz + ledger integration ---');
 const reminderDef = getFlowDefinition('set_reminder', CTX);

@@ -125,6 +125,72 @@ export const EXTRA_REGIONS = Object.freeze([
 ]);
 
 /**
+ * v1.89.0 (Phase 27C) — Speech-to-Text languages per country (rule 7).
+ * The primary language leads the recognizer and the alternates let Google
+ * switch when the speaker code-switches (Kenya: Swahili + English + Sheng-ish).
+ * A superadmin row in `country_kb.stt_locale` overrides the primary without a
+ * deploy; everything else falls back to this map, then GLOBAL (en-US).
+ */
+const STT_LOCALE_OVERRIDES = Object.freeze({
+  KE: { primary: 'sw-KE', alternates: ['en-KE', 'en-US'] },
+  TZ: { primary: 'sw-TZ', alternates: ['en-US'] },
+  UG: { primary: 'sw-UG', alternates: ['en-US'] },
+  RW: { primary: 'rw-RW', alternates: ['fr-FR', 'en-US'] },
+  FR: { primary: 'fr-FR', alternates: ['en-US'] },
+  DE: { primary: 'de-DE', alternates: ['en-US'] },
+  ES: { primary: 'es-ES', alternates: ['en-US'] },
+  BE: { primary: 'nl-BE', alternates: ['fr-BE', 'en-US'] },
+  GLOBAL: { primary: 'en-US', alternates: ['sw-KE'] }
+});
+
+function buildCountrySttLocales() {
+  const map = {};
+  for (const region of [...REGIONS, ...EXTRA_REGIONS]) {
+    if (STT_LOCALE_OVERRIDES[region.country_code]) continue;
+    // A country not explicitly mapped leads with its own locale (REGIONS is the
+    // single source of regional locale data) and keeps English as the alternate.
+    const primary = region.locale || 'en-US';
+    map[region.country_code] = { primary, alternates: primary === 'en-US' ? ['en-GB'] : ['en-US'] };
+  }
+  for (const [code, locale] of Object.entries(STT_LOCALE_OVERRIDES)) map[code] = locale;
+  return Object.freeze(Object.fromEntries(Object.entries(map).map(([code, locale]) => [
+    code,
+    Object.freeze({ primary: locale.primary, alternates: Object.freeze([...locale.alternates]) })
+  ])));
+}
+
+export const COUNTRY_STT_LOCALES = buildCountrySttLocales();
+
+/**
+ * Pure, idempotent backfill plan for `country_kb.stt_locale` (v1.89.0).
+ * One row per country that has NO active stt_locale row yet — existing rows
+ * (superadmin edits included) always win and are never overwritten.
+ */
+export function planSttLocaleBackfill(existingRows = []) {
+  const present = new Set(
+    (Array.isArray(existingRows) ? existingRows : [])
+      .filter((row) => row && row.category === 'stt_locale' && row.is_active !== false)
+      .map((row) => String(row.country_code || '').toUpperCase())
+  );
+  const plan = [];
+  for (const [countryCode, locale] of Object.entries(COUNTRY_STT_LOCALES)) {
+    if (present.has(countryCode)) continue;
+    plan.push({
+      country_code: countryCode,
+      category: 'stt_locale',
+      rule_key: 'stt_locale',
+      title: 'Speech-to-Text language',
+      summary: [locale.primary, ...locale.alternates].join(' + '),
+      stt_locale: locale.primary,
+      required: false,
+      curated_by: 'bundled',
+      is_active: true
+    });
+  }
+  return plan;
+}
+
+/**
  * Region facts for a country code — REGIONS first, then the prefix-less extras,
  * then GLOBAL. Used wherever a stored `profiles.country_code` must win over
  * phone detection (an explicit country choice).

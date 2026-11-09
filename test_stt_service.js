@@ -44,8 +44,14 @@ async function run() {
   const ke = resolveSpeechLanguage('KE');
   check(ke.languageCode === 'sw-KE' && ke.alternativeLanguageCodes.join(',') === 'en-KE,en-US', 'Kenya leads with Swahili + English alternatives');
   const ug = resolveSpeechLanguage('UG');
-  check(ug.languageCode === 'en-US' && ug.alternativeLanguageCodes.join(',') === 'sw-KE', 'every other country leads with English and keeps Swahili available');
+  check(ug.languageCode === 'sw-UG' && ug.alternativeLanguageCodes.join(',') === 'en-US', 'Uganda leads with Swahili (COUNTRY_STT_LOCALES, v1.89.0)');
   check(resolveSpeechLanguage(undefined).languageCode === 'en-US', 'GLOBAL stays neutral (en-US primary)');
+  check(resolveSpeechLanguage('DE').languageCode === 'de-DE' && resolveSpeechLanguage('FR').languageCode === 'fr-FR', 'major non-English markets lead with their own locale');
+  check(resolveSpeechLanguage('ZZ').languageCode === 'en-US' && resolveSpeechLanguage('ZZ').alternativeLanguageCodes.join(',') === 'sw-KE', 'an unmapped country falls back to GLOBAL');
+  // v1.89.0 — a country_kb.stt_locale row wins over the bundled map.
+  const dbLocale = resolveSpeechLanguage('KE', 'en-US');
+  check(dbLocale.languageCode === 'en-US' && dbLocale.alternativeLanguageCodes.join(',') === 'en-KE', 'a DB locale override wins and is dropped from the alternates');
+  check(resolveSpeechLanguage('KE', 'nonsense!!').languageCode === 'sw-KE', 'an invalid DB value falls back to the bundled locale');
 
   console.log('\n--- Test 2: encodings & duration guards ---');
   check(resolveSpeechEncoding('audio/ogg; codecs=opus') === 'OGG_OPUS', 'WhatsApp voice notes map to OGG_OPUS');
@@ -105,6 +111,12 @@ async function run() {
   };
   await transcribeAudioBuffer({ buffer: oggWithRate(48000), countryCode: 'KE', mimeType: 'audio/ogg' });
   check(captured.body.config.sampleRateHertz === 48000, 'with no override the real container rate reaches the request (the live fix)');
+  global.fetch = async (url, options) => {
+    captured = { url, body: JSON.parse(options.body) };
+    return jsonResponse({ results: [{ alternatives: [{ transcript: 'hello' }] }] });
+  };
+  await transcribeAudioBuffer({ buffer: AUDIO, countryCode: 'KE', mimeType: 'audio/ogg', dbLocale: 'en-GB' });
+  check(captured.body.config.languageCode === 'en-GB', 'a country_kb stt_locale override reaches the request (v1.89.0)');
   check(resolveSpeechSampleRate(undefined, oggWithRate(24000)) === 24000, 'a 24k container resolves to 24000');
   check(resolveSpeechSampleRate('6000') === 8000 && resolveSpeechSampleRate('96000') === 48000, 'out-of-range overrides snap to the nearest Google-supported rate');
   check(resolveSpeechSampleRate('nope') === 48000, 'a non-numeric override falls back to the 48000 default');

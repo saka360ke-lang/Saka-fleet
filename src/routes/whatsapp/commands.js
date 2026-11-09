@@ -25,7 +25,7 @@ import { resolveMetricIds, customMetricMenu } from '../../services/reportMetrics
 import { resolveReportAccess } from '../../services/reportAccess.js';
 import { buildFleetReport } from '../../services/fleetReports.js';
 import { calculateFuelConsumption } from '../../services/analytics.js';
-import { findVehicleByCandidate, setActiveVehicle, updateVehicleDetails, unassignDriverFromVehicle } from '../../services/vehicles.js';
+import { findVehicleByCandidate, setActiveVehicle, updateVehicleDetails, unassignDriverFromVehicle, vehicleDisplayLabel } from '../../services/vehicles.js';
 import { normalizeExpenseType, resolveExpenseType, hasExpenseTypeMarker } from '../../services/expenseCatalog.js';
 import { normalizeEarningType, resolveEarningType, hasEarningTypeMarker } from '../../services/earningCatalog.js';
 import { sanitizeEntryLabel, extractEntryLabel } from '../../services/entryLabels.js';
@@ -640,7 +640,7 @@ export async function handleEditVehicleTurn({ mergedExt, messageText, existingVe
           .filter(([k]) => k !== 'updated_at')
           .map(([k, v]) => `• *${k}:* ${v}`)
           .join('\n');
-        reply = `✅ *Vehicle Details Updated!* 🚗\n\n• *Vehicle:* *${editRes.vehicle?.plate_number || editTarget.plate_number}*\n${appliedLines ? appliedLines + '\n' : ''}${editRes.rejected?.length ? '\n🔒 VIN / passbook token remain permanently locked and unchanged.' : ''}`;
+        reply = `✅ *Vehicle Details Updated!* 🚗\n\n• *Vehicle:* *${vehicleDisplayLabel(editRes.vehicle || editTarget)}*\n${appliedLines ? appliedLines + '\n' : ''}${editRes.rejected?.length ? '\n🔒 VIN / passbook token remain permanently locked and unchanged.' : ''}`;
       }
     }
   }
@@ -765,7 +765,7 @@ export async function handleLogExpenseTurn({ mergedExt, messageText, targetVeh, 
       })
       : { duplicate: false };
     if (duplicateExpense.duplicate) {
-      reply = `⚠️ *Already logged* — I found *${countryInfo.currency} ${Number(extAmount).toLocaleString()}* (${expType}) for *${targetVeh.plate_number}* in the last few hours, so I did *not* save a duplicate. ✅\n\nIf this is a genuinely separate fill, send the new odometer reading (e.g. *"Logged ${extLiters || ''}L at 367,500 km"*) and I will log it.`;
+      reply = `⚠️ *Already logged* — I found *${countryInfo.currency} ${Number(extAmount).toLocaleString()}* (${expType}) for *${vehicleDisplayLabel(targetVeh)}* in the last few hours, so I did *not* save a duplicate. ✅\n\nIf this is a genuinely separate fill, send the new odometer reading (e.g. *"Logged ${extLiters || ''}L at 367,500 km"*) and I will log it.`;
     } else if (supabaseClient && targetVeh) {
       // v1.58.6 — never claim "Saved" without a VERIFIED write (live
       // 2026-11-04: a one-line fuel log rendered "Saved ✅" while the
@@ -808,13 +808,13 @@ export async function handleLogExpenseTurn({ mergedExt, messageText, targetVeh, 
         // v1.63.1 — the quick-log expense changed the ledger facts.
         markUserDataChanged({ supabase: supabaseClient, phone: senderPhone, ownerId: profileData?.id, reason: 'whatsapp.quickLogExpense' });
         const expenseCardText = `⛽ *Expense Logged Successfully!* 📝\n\n` +
-          `• *Vehicle:* *${targetVeh.plate_number}* (${targetVeh.make_model || 'Vehicle'})\n` +
+          `• *Vehicle:* *${vehicleDisplayLabel(targetVeh)}* (${targetVeh.make_model || 'Vehicle'})\n` +
           `• *Category:* ${expType}\n` +
           (extAmount ? `• *Amount:* ${countryInfo.currency} ${Number(extAmount).toLocaleString()}\n` : '') +
           (extLiters ? `• *Volume:* ${extLiters} Liters\n` : '') +
           (extFillType ? `• *Fill:* ${extFillType === 'full' ? 'Full tank' : 'Top-up'}\n` : '') +
           (extOdo ? `• *Odometer:* ${Number(extOdo).toLocaleString()} km\n` : '') +
-          `\n✅ Saved to database under *${targetVeh.plate_number}*.` +
+          `\n✅ Saved to database under *${vehicleDisplayLabel(targetVeh)}*.` +
           (expType.toLowerCase().includes('fuel') && !extFillType
             ? `\n\n💡 *Tip:* say *"full tank"* or *"top-up"* with your next fuel log so I can measure exact fuel economy.`
             : '');
@@ -862,17 +862,17 @@ export async function handleUpdateMileageTurn({ mergedExt, messageText, targetVe
                     markUserDataChanged({ supabase: supabaseClient, phone: senderPhone, ownerId: profileData?.id, reason: 'whatsapp.quickLogMileage' });
                   }
                   if (odometerSaveError) {
-                    reply = `⚠️ Could not update the odometer for *${targetVeh.plate_number}*: ${odometerSaveError}`;
+                    reply = `⚠️ Could not update the odometer for *${vehicleDisplayLabel(targetVeh)}*: ${odometerSaveError}`;
                   } else {
                     reply = `📈 *Odometer Updated!* 🚗
 
   ` +
-                      `• *Vehicle:* *${targetVeh.plate_number}* (${targetVeh.make_model || 'Vehicle'})
+                      `• *Vehicle:* *${vehicleDisplayLabel(targetVeh)}* (${targetVeh.make_model || 'Vehicle'})
   ` +
                       `• *New Odometer:* ${Number(extOdometer).toLocaleString()} ${inputUnit}
 
   ` +
-                      `✅ Saved to database under *${targetVeh.plate_number}*!`;
+                      `✅ Saved to database under *${vehicleDisplayLabel(targetVeh)}*!`;
                     if (existingVehicles.length > 1) {
                       reply += `
   *(Active vehicle: ${targetVeh.plate_number})*`;
@@ -904,18 +904,18 @@ export async function handleOperatingHoursTurn({ mergedExt, messageText, targetV
                     markUserDataChanged({ supabase: supabaseClient, phone: senderPhone, ownerId: profileData?.id, reason: 'whatsapp.quickLogHours' });
                   }
                   if (!recorded.ok) {
-                    reply = `⚠️ Could not update operating hours for *${targetVeh.plate_number}*: ${recorded.error}`;
+                    reply = `⚠️ Could not update operating hours for *${vehicleDisplayLabel(targetVeh)}*: ${recorded.error}`;
                   } else {
                     targetVeh.operating_hours = extHours;
                     reply = `⏱️ *Operating Hours Updated!*
 
   ` +
-                      `• *Vehicle:* *${targetVeh.plate_number}* (${targetVeh.make_model || 'Vehicle'})
+                      `• *Vehicle:* *${vehicleDisplayLabel(targetVeh)}* (${targetVeh.make_model || 'Vehicle'})
   ` +
                       `• *New Hour Meter:* ${Number(extHours).toLocaleString()} operating hours
 
   ` +
-                      `✅ Saved to database under *${targetVeh.plate_number}*!`;
+                      `✅ Saved to database under *${vehicleDisplayLabel(targetVeh)}*!`;
                     if (existingVehicles.length > 1) {
                       reply += `
   *(Active vehicle: ${targetVeh.plate_number})*`;
@@ -966,7 +966,7 @@ export async function handleLogEarningsTurn({ mergedExt, messageText, targetVeh,
     if (earningSaveError) {
       reply = `⚠️ I could not save that earning just now — *nothing was written*. Please try again in a moment.`;
     } else {
-      reply = `💰 *Earnings Logged!* 🎉\n\n• *Vehicle:* *${targetVeh.plate_number}*\n• *Revenue:* ${countryInfo.currency} ${Number(extAmount).toLocaleString()}${earnType ? `\n• *Type:* ${earnType}` : ''}${quickEarningLabel ? `\n• *Label:* #${quickEarningLabel}` : ''}\n\n✅ Recorded under *${targetVeh.plate_number}*!`;
+      reply = `💰 *Earnings Logged!* 🎉\n\n• *Vehicle:* *${vehicleDisplayLabel(targetVeh)}*\n• *Revenue:* ${countryInfo.currency} ${Number(extAmount).toLocaleString()}${earnType ? `\n• *Type:* ${earnType}` : ''}${quickEarningLabel ? `\n• *Label:* #${quickEarningLabel}` : ''}\n\n✅ Recorded under *${vehicleDisplayLabel(targetVeh)}*!`;
       if (existingVehicles.length > 1) {
         reply += `\n*(Active vehicle: ${targetVeh.plate_number})*`;
       }

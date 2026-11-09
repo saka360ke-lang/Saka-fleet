@@ -12,6 +12,7 @@ import { prepareRoutingText } from './src/services/textNormalizer.js';
 // v1.72.1 (P2-6) — system_config access rides the dual-window service.
 import { readConfig } from './src/services/systemConfigService.js';
 import { CONFIG_KEY_SAKA_CORE_PROMPT } from './src/services/systemConfigKeys.js';
+import { sanitizeEntryLabel } from './src/services/entryLabels.js';
 
 // v1.28.9 — re-exported for training tests and admin audits; the glossary is
 // authored once in flowKnowledge/assetMetrics.
@@ -327,6 +328,7 @@ OCR & PHOTOS (RECEIPT INTELLIGENCE & DOCUMENT LENS):
 - STORED DOCUMENTS (v1.84.0): a logbook, insurance, inspection or road licence photo/PDF is parsed AND — on paid plans and the welcome trial — the ORIGINAL file is kept in a private vault (Free keeps the parsed figures only). *documents* lists the stored files (📄, newest first) and *delete document N* (1 = newest; add DELETE to confirm) removes one file and its stored image — the compliance dates and reminders stay saved. Dashboard files open through a short-lived private link. Never claim a file was kept or deleted unless the engine confirmed it, and never promise a stored file on the Free plan.
 - Compliance dates are ledger facts (v1.32.2): "when does insurance expire", "my compliance", "my reminders"/"alerts" are answered deterministically from the vehicle ledger. A typed correction ("you read it wrong, expiry is …") updates the ledger and its reminder — confirm the corrected date once and never repeat the old one.
 
+- ASSET NICKNAMES (v1.89.0): an owner may name an asset ("The Workhorse", ≤40 chars) at registration or later via *edit vehicle*. The nickname is the PRIMARY label everywhere — confirmations read "Logged for The Workhorse (KAS 628T)" and a reference like "log fuel for The Workhorse" resolves to that asset by the ENGINE (nickname first, then plate, then serial, then make/model). Never invent a nickname, never assign one yourself, and never claim a nickname was saved unless the engine confirmed it. Two assets can never share a nickname.
 EDITABLE LEDGER (v1.33.0 — engine-owned, zero AI tokens):
 - "my entries" / "my ledger" prints the last 6 logged rows numbered; "edit 2" opens that row, "delete 2" asks for the word DELETE first, "restore" brings back the last deletion inside 30 minutes.
 - Only these fields may change: amount, expense type, fuel litres, fill type (full tank / top up), odometer reading and notes. VIN, plate, user, vehicle and the entry date are locked — refuse plainly and never offer them.
@@ -468,6 +470,19 @@ export function extractVehicleAttributes(messageText = '') {
   const emailMatch = clean.match(/\b([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})\b/);
   if (emailMatch) {
     data.owner_email = emailMatch[1].toLowerCase();
+  }
+
+  // 1b. v1.89.0 (Phase 27C) — an optional asset NICKNAME must be explicit
+  // ("nickname: The Workhorse", "aka Workhorse", "called The Workhorse").
+  // Conservative: never guesses a nickname from ordinary prose, and a trailing
+  // sentence word ("... does 15 km/l", "... yesterday") is trimmed off.
+  const nicknameMatch = clean.match(/\b(?:nickname|aka|a\.k\.a\.?|called|named)\s*[:=]?\s*["']?([A-Za-z][A-Za-z0-9'’.-]*(?:\s+[A-Za-z][A-Za-z0-9'’.-]*){0,2})/i);
+  if (nicknameMatch) {
+    const tailStopwords = /^(?:does|do|is|was|were|has|had|needs?|needed|took|takes|got|gets|will|would|can|could|should|and|for|at|on|in|to|with|from|yesterday|today|tomorrow|last|this|next|that|which|who)$/i;
+    const words = String(nicknameMatch[1]).trim().split(/\s+/);
+    while (words.length > 1 && tailStopwords.test(words[words.length - 1])) words.pop();
+    const nickname = sanitizeEntryLabel(words.join(' '));
+    if (nickname) data.nickname = nickname;
   }
 
   // 2. Year of Manufacture (YOM): 1950 - 2030

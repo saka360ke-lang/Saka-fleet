@@ -12,6 +12,7 @@
  */
 
 import { REGIONS, EXTRA_REGIONS, detectCountryFromPhone, regionForCountryCode } from './globalization.js';
+import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
 
 export const COUNTRY_KB_VERSION = '2026.10.1';
 export const KB_VERIFIED_AT = '2026-10-30';
@@ -503,6 +504,10 @@ export function getCountryBucket({ countryCode = 'GLOBAL', assetKind = 'vehicle'
   const ruleMap = new Map(base.rules.map((entry) => [entry.key, entry]));
   for (const override of Array.isArray(overrides) ? overrides : []) {
     if (!override || override.is_active === false) continue;
+    // v1.89.0 (Phase 27C) — LEAK GUARD: only compliance categories may merge
+    // into the rules. An `stt_locale` row (or any future non-legal category)
+    // must never surface as a compliance rule.
+    if (override.category && !['vehicle_compliance', 'driver_compliance'].includes(override.category)) continue;
     const overrideCode = String(override.country_code || '').toUpperCase();
     if (overrideCode && overrideCode !== code && overrideCode !== 'DEFAULT') continue;
     if (override.asset_kind && normalizeAssetKind(override.asset_kind) !== kind) continue;
@@ -561,6 +566,62 @@ export async function loadCountryBucket(providedSupabase, { countryCode = 'GLOBA
   }
 }
 
+
+/**
+ * v1.89.0 (Phase 27C) — the country's Speech-to-Text primary language, read
+ * from `country_kb.stt_locale` (superadmin-editable, no deploy needed).
+ * 5-minute in-process cache; never throws; a missing column/row answers null so
+ * the caller falls back to the bundled COUNTRY_STT_LOCALES map.
+ */
+const STT_LOCALE_CACHE_TTL_MS = (() => {
+  const raw = Number(process.env.STT_LOCALE_CACHE_MS);
+  if (!Number.isFinite(raw)) return 300000;
+  return Math.min(3600000, Math.max(1000, raw));
+})();
+const sttLocaleCache = new Map();
+
+export function clearSttLocaleCache() {
+  sttLocaleCache.clear();
+}
+
+export async function loadCountrySttLocale(providedSupabase, countryCode = 'GLOBAL') {
+  const code = String(countryCode || 'GLOBAL').toUpperCase();
+  const cached = sttLocaleCache.get(code);
+  if (cached && Date.now() - cached.at < STT_LOCALE_CACHE_TTL_MS) return cached.value;
+  if (!providedSupabase) return null;
+  try {
+    const { data, error } = await providedSupabase
+      .from('country_kb')
+      .select('stt_locale')
+      .eq('country_code', code)
+      .eq('is_active', true)
+      .not('stt_locale', 'is', null)
+      .limit(1);
+    const value = !error && Array.isArray(data) && data[0] ? (String(data[0].stt_locale || '').trim() || null) : null;
+    sttLocaleCache.set(code, { at: Date.now(), value });
+    return value;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Boot DDL mirror for the country_kb.stt_locale column (idempotent). Uses the
+ * same SQL transport as ensureVehicleTableColumns; a failure is returned, never
+ * thrown, so boot is never blocked (rule 50).
+ */
+export async function ensureCountrySttLocaleColumn() {
+  if (!hasSqlAccess()) return { ok: false, reason: 'no_sql_transport' };
+  try {
+    const result = await runSql(
+      'ALTER TABLE public.country_kb ADD COLUMN IF NOT EXISTS stt_locale text;',
+      { label: 'ensureCountrySttLocaleColumn' }
+    );
+    return result?.ok ? { ok: true } : { ok: false, error: result?.error || result?.status };
+  } catch (err) {
+    return { ok: false, error: err?.message || 'sql_failed' };
+  }
+}
 
 /** Prompt block: engine-owned jurisdiction context (no invented law). */
 export function buildJurisdictionContext(bucket) {
