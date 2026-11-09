@@ -363,6 +363,56 @@ export async function grantLaunchAwardForTrial({ supabase, ownerId, trial = null
   };
 }
 
+/**
+ * v1.87.0 — the completion card's trial facts, resolved from POST-award state.
+ *
+ * The launch award extends the trial INSIDE `grantLaunchAwardForTrial`, so the
+ * welcome-trial `endsAt` captured before the grant is already stale when the
+ * registration reply composes (live 2026-11-09: the card read "183 days, until
+ * 9 Dec 2026" for a trial that actually ends 2027-05-11). This pure helper picks
+ * the truthful pair:
+ *   - extended now        -> the grant's own end date + day count;
+ *   - granted earlier     -> the live trial end when the caller could re-read it;
+ *   - granted, no live end-> the grant's day count, NO date (never a stale one);
+ *   - not granted         -> the welcome-trial facts (standard 30-day flow).
+ * Never throws; a missing shape degrades to the welcome-trial facts (rule 50).
+ */
+export function resolveTrialCompletionFacts({ welcomeTrial = null, award = null, liveTrialEndsAt = null } = {}) {
+  const baseDays = Number(welcomeTrial?.days) > 0 ? Number(welcomeTrial.days) : null;
+  const baseEndsAt = welcomeTrial?.endsAt || null;
+  if (!award || award.granted !== true) {
+    return { days: baseDays, endsAt: baseEndsAt, awardConfirmed: false, degraded: false };
+  }
+  if (award.extended && award.endsAt) {
+    return {
+      days: Number(award.days) > 0 ? Number(award.days) : baseDays,
+      endsAt: award.endsAt,
+      awardConfirmed: true,
+      degraded: false
+    };
+  }
+  if (award.already) {
+    const endMs = liveTrialEndsAt ? new Date(liveTrialEndsAt).getTime() : NaN;
+    const startMs = welcomeTrial?.startedAt ? new Date(welcomeTrial.startedAt).getTime() : NaN;
+    if (Number.isFinite(endMs) && Number.isFinite(startMs) && endMs > startMs) {
+      return {
+        days: Math.max(1, Math.round((endMs - startMs) / 86400000)),
+        endsAt: liveTrialEndsAt,
+        awardConfirmed: true,
+        degraded: false
+      };
+    }
+    return {
+      days: Number(award.days) > 0 ? Number(award.days) : baseDays,
+      endsAt: null,
+      awardConfirmed: true,
+      degraded: true
+    };
+  }
+  // Granted, but the extension itself did not land: nothing was extended.
+  return { days: baseDays, endsAt: baseEndsAt, awardConfirmed: false, degraded: true };
+}
+
 /** Deterministic award copy (WhatsApp-ready, zero AI tokens). */
 export function formatLaunchAwardLine({ days = 183, slot = null, slotsTotal = 50 } = {}) {
   return [
@@ -436,6 +486,7 @@ export default {
   getLaunchAwardStatus,
   tryGrantLaunchAward,
   grantLaunchAwardForTrial,
+  resolveTrialCompletionFacts,
   formatLaunchAwardLine,
   getLaunchAwardStats,
   formatLaunchStatsReply,

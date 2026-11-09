@@ -61,6 +61,7 @@ function pricingFacts() {
     ...tierFactLines(),
     `Annual billing saves up to ${maxDiscount}% versus 12 monthly payments.`,
     `Every new account starts with a ${TRIAL_DAYS}-day free trial of the full product — no card, no auto-charge.`,
+    'The first 50 launch sign-ups get a 6-month welcome trial instead — the engine owns the exact days.',
     `Billed in ${PLAN_CURRENCIES.join(', ')} at checkout; local taxes may apply.`
   ];
 }

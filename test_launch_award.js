@@ -16,6 +16,7 @@ import {
   getLaunchAwardStatus,
   tryGrantLaunchAward,
   grantLaunchAwardForTrial,
+  resolveTrialCompletionFacts,
   formatLaunchAwardLine,
   getLaunchAwardStats,
   formatLaunchStatsReply,
@@ -188,6 +189,35 @@ check(/Slots taken: 1 \/ 50/.test(statsReply) && /183 days/.test(statsReply), 'T
 check(/unavailable/.test(formatLaunchStatsReply({ ok: false })), 'A failed stats read says so (never invents numbers)');
 const line = formatLaunchAwardLine({ days: 183, slot: 7, slotsTotal: 50 });
 check(/183 days/.test(line) && /#7/.test(line) && /first 50/.test(line), 'The award copy names the days, the slot and the cohort');
+
+// 7b. v1.87.0 — the completion card's trial facts come from POST-award state.
+// Live 2026-11-09: the card read "183 days, until 9 Dec 2026" for a trial that
+// actually ends 2027-05-11 (the 30-day welcome end captured before the award).
+{
+  const welcomeOnly = { days: 30, endsAt: '2026-12-09T03:14:36.627Z', startedAt: '2026-11-09T03:14:36.627Z' };
+  const plainFacts = resolveTrialCompletionFacts({ welcomeTrial: welcomeOnly });
+  check(plainFacts.days === 30 && plainFacts.endsAt === welcomeOnly.endsAt && plainFacts.awardConfirmed === false,
+    'No award: the standard 30-day facts are unchanged (v1.87.0)');
+  const extendedFacts = resolveTrialCompletionFacts({
+    welcomeTrial: welcomeOnly,
+    award: { granted: true, extended: true, days: 183, endsAt: '2027-05-11T03:14:36.627Z', slot: 1 }
+  });
+  check(extendedFacts.days === 183 && extendedFacts.endsAt === '2027-05-11T03:14:36.627Z' && extendedFacts.awardConfirmed === true,
+    'A fresh 183-day award prints the POST-award end date — the live 2027-05-11 case (v1.87.0)');
+  const alreadyFacts = resolveTrialCompletionFacts({
+    welcomeTrial: welcomeOnly,
+    award: { granted: true, already: true, days: 183 },
+    liveTrialEndsAt: '2027-05-11T03:14:36.627Z'
+  });
+  check(alreadyFacts.days === 183 && alreadyFacts.endsAt === '2027-05-11T03:14:36.627Z',
+    'A repeat grant uses the live trial end it re-read (v1.87.0)');
+  const blindFacts = resolveTrialCompletionFacts({ welcomeTrial: welcomeOnly, award: { granted: true, already: true, days: 183 } });
+  check(blindFacts.days === 183 && blindFacts.endsAt === null && blindFacts.degraded === true,
+    'No live read: the day count stays truthful and NO stale date is printed (v1.87.0)');
+  const failedExtension = resolveTrialCompletionFacts({ welcomeTrial: welcomeOnly, award: { granted: true, extended: false } });
+  check(failedExtension.awardConfirmed === false && failedExtension.endsAt === welcomeOnly.endsAt,
+    'A grant whose extension failed never claims the award (v1.87.0)');
+}
 
 // 8. Superadmin wiring: `admin launch-stats` is parsed, registered and rendered.
 check((await parseSuperadminCommand('admin launch-stats'))?.intent === 'ADMIN_LAUNCH_STATS', 'admin launch-stats is a deterministic command');

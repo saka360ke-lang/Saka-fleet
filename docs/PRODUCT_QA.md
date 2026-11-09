@@ -1,6 +1,6 @@
 # Saka Fleet — Product QA (generated)
 
-Generated from code at version **1.86.0** — do not edit by hand. Run `npm run docs:gen`.
+Generated from code at version **1.87.0** — do not edit by hand. Run `npm run docs:gen`.
 
 Registry: `src/services/productQa.js` · 19 topics · prices from `src/services/subscriptionTiers.js`
 
@@ -37,6 +37,7 @@ Growth Fleet — $27.99/month or $235.12/year, 5 vehicles.
 Fleet Command — $27.99/month or $235.12/year, 5 vehicles included, + $3.99/month per extra vehicle.
 Annual billing saves up to 30% versus 12 monthly payments.
 Every new account starts with a 30-day free trial of the full product — no card, no auto-charge.
+The first 50 launch sign-ups get a 6-month welcome trial instead — the engine owns the exact days.
 Billed in USD, KES, NGN, ZAR at checkout; local taxes may apply.
 
 ## trial

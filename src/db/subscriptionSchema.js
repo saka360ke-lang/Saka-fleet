@@ -9,7 +9,7 @@
  *   subscriptions            — event-sourced subscription ledger (one row per Paystack subscription code)
  *   paystack_webhook_events  — webhook idempotency ledger (keyed on Paystack event.id)
  *   usage_counters           — per-owner monthly counters (Free = 1 report/month)
- *   trial_sessions           — owner-bound 30-day trial state machine + funnel timestamps
+ *   trial_sessions           — owner-bound trial state machine (30 days default; 183-day launch award) + funnel timestamps
  *
  * Profiles gains trial/add-on/cancel/period columns; coupons gains discount
  * scoping columns; passbook_transfers gains `blocked_reason`.
@@ -101,7 +101,7 @@ CREATE TABLE IF NOT EXISTS public.usage_counters (
 );
 
 -- ============================================================
--- 5. trial_sessions — owner-bound 30-day trial state machine
+-- 5. trial_sessions — owner-bound trial state machine (30 days; 183-day launch award)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS public.trial_sessions (
   id uuid DEFAULT gen_random_uuid() PRIMARY KEY,

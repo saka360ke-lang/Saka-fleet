@@ -87,7 +87,7 @@ import {
   selectVehiclesToKeep,
   getEntitlements
 } from './subscriptions.js';
-import { grantLaunchAwardForTrial, formatLaunchAwardLine, getLaunchAwardConfig } from './launchAwards.js';
+import { grantLaunchAwardForTrial, formatLaunchAwardLine, getLaunchAwardConfig, resolveTrialCompletionFacts } from './launchAwards.js';
 import { normalizeTierKey, getTierLabel } from './subscriptionTiers.js';
 import { parseFlexibleDate } from './dateParser.js';
 import { normalizeAssetKind, requiresPlate, requiresVin, meterForAssetKind, assetTypeForKind, legacyAssetType, assetDisplayName, assetRolePossessive, assetRoleLabel } from './countryBucket.js';
@@ -1749,7 +1749,7 @@ function confirmationNotesBase(state, ctx) {
     return [
       'The driver will be unassigned, pending passbook transfers cancelled, and active reminders retired.',
       'Historical expense, earnings and reminder logs are preserved for audit.',
-      'The VIN trial ledger entry is permanent and cannot be removed.'
+      'The VIN ledger entry is permanent and cannot be removed.'
     ];
   }
   if (state.flow === 'delete_account') {
@@ -1763,7 +1763,7 @@ function confirmationNotesBase(state, ctx) {
   if (state.flow === 'vehicle_registration') {
     return [
       'The VIN will be permanently locked to your digital passbook.',
-      'A 30-day trial ledger entry is created once per VIN for life.'
+      'Your account gets one welcome trial — it starts with your first vehicle.'
     ];
   }
   return [];
@@ -3076,7 +3076,29 @@ async function executeFlow(state, ctx) {
             console.warn('[launch-award] skipped:', awardErr.message);
           }
         }
-        const effectiveTrialDays = launchAward?.extended ? launchAward.days : welcomeTrial?.days;
+        // v1.87.0 — the completion card must speak POST-award facts: the award
+        // extends the trial inside grantLaunchAwardForTrial, so welcomeTrial.endsAt
+        // is already stale by the time this reply composes (live 2026-11-09:
+        // "183 days, until 9 Dec 2026" for a trial that actually ends 2027-05-11).
+        let liveTrialEndsAt = null;
+        if (launchAward?.already && welcomeTrial?.trial?.id) {
+          try {
+            const { data: liveTrial } = await ctx.supabase
+              .from('trial_sessions')
+              .select('ends_at')
+              .eq('id', welcomeTrial.trial.id)
+              .maybeSingle();
+            liveTrialEndsAt = liveTrial?.ends_at || null;
+          } catch (trialReadErr) {
+            // Rule 50: a degraded live read is visible, never silent.
+            logWriteFailure(ctx.supabase, 'quizEngine.trialCompletionFacts', trialReadErr);
+          }
+        }
+        const trialFacts = resolveTrialCompletionFacts({
+          welcomeTrial,
+          award: launchAward,
+          liveTrialEndsAt
+        });
         const composedReply = await ok({
           vehicle: saved.plate,
           vin: saved.vin,
@@ -3085,14 +3107,18 @@ async function executeFlow(state, ctx) {
           odometer: saved.mileage,
           email: saved.email,
           passbookToken: saved.token,
-          ...(welcomeTrial?.started
+          ...(welcomeTrial?.started && trialFacts.days
             ? {
-              trialDays: effectiveTrialDays,
-              trialEndsAt: formatDate(welcomeTrial.endsAt, buildGlobalContext(ctx.countryInfo, ctx.profile).locale)
+              trialDays: trialFacts.days,
+              ...(trialFacts.endsAt
+                ? { trialEndsAt: formatDate(trialFacts.endsAt, buildGlobalContext(ctx.countryInfo, ctx.profile).locale) }
+                : {})
             }
             : {})
         });
-        const reply = launchAward
+        // The award line is a promise: only append it when the extension (or an
+        // earlier grant) actually holds — never claim days that were not written.
+        const reply = trialFacts.awardConfirmed
           ? `${composedReply}\n\n${formatLaunchAwardLine({ days: launchAward.days, slot: launchAward.slot, slotsTotal: getLaunchAwardConfig().slots })}`
           : composedReply;
         return { handled: true, reply, flow: state.flow, completed: true };

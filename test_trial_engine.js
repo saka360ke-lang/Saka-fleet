@@ -286,6 +286,15 @@ async function run() {
   const t3again = await runTrialLifecycleSweep({ supabase: t3.mock.client, sendWhatsAppFn: t3.send });
   check(t3again.t3 === 0 && t3.sent.length === 1, 'T-3 digest never repeats');
 
+  // ---- v1.87.0: the activation nudge speaks the TRIAL's real length ----
+  // Live bug: a 183-day launch-award winner was told "Your 30-day trial is running".
+  const nudge183 = makeSweep({ started_at: past(8), ends_at: future(175), nudge_activation_sent_at: null });
+  await runTrialLifecycleSweep({ supabase: nudge183.mock.client, sendWhatsAppFn: nudge183.send });
+  check(nudge183.sent.some((m) => /183-day trial is running/.test(m)), 'the activation nudge names the 183-day award (v1.87.0)');
+  const nudge30 = makeSweep({ started_at: past(8), ends_at: future(22), nudge_activation_sent_at: null });
+  await runTrialLifecycleSweep({ supabase: nudge30.mock.client, sendWhatsAppFn: nudge30.send });
+  check(nudge30.sent.some((m) => /30-day trial is running/.test(m)), 'a standard trial still reads 30-day (v1.87.0)');
+
   // ---- v1.71.0 (Phase 7): the fitted-plan card rides the T-3 digest ----
   const fitVehicles = (n) => Array.from({ length: n }, (_, i) => ({
     id: `fv-${i + 1}`,

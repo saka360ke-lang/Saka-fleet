@@ -821,6 +821,17 @@ console.log('\n--- v1.63.1: quiz completion invalidation spies ---');
   assert(await runCompletion('email_update', { new_email: 'new@example.com' }), 'email_update invalidates the cached facts (v1.63.1)');
 }
 
+// v1.87.0 — registration copy: the account-bound welcome trial (rule 29) and the
+// post-award completion facts (the live 2026-11-09 bug told a 183-day winner
+// "until 9 Dec 2026").
+{
+  const registrationSource = fs.readFileSync('./src/services/quizEngine.js', 'utf8');
+  assert(registrationSource.includes('Your account gets one welcome trial'), 'the confirm card states the account-bound welcome trial (v1.87.0)');
+  assert(!registrationSource.includes('30-day trial ledger entry'), 'the stale per-VIN 30-day trial sentence is gone (v1.87.0)');
+  assert(registrationSource.includes('resolveTrialCompletionFacts'), 'the completion card resolves POST-award trial facts (v1.87.0)');
+  assert(registrationSource.includes('trialFacts.awardConfirmed'), 'the award line is only appended when the grant holds (v1.87.0)');
+}
+
 run().catch((err) => {
   console.error(err.message);
   process.exit(1);

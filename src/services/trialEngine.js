@@ -541,8 +541,17 @@ export async function buildTrialMetrics({ supabase, ownerId, trial } = {}) {
   return metrics;
 }
 
-function activationNudgeText(ownerName, tierLabel) {
-  return `👋 *Getting the most from your Saka ${tierLabel} trial*\n\nYour 30-day trial is running, ${ownerName || 'there'}. The fastest way to see Saka's value:\n\n1️⃣ Reply *"log expense"* — track your first fuel/service cost\n2️⃣ Reply *"register car"* — add a vehicle + passbook\n3️⃣ Reply *"report"* — get a fleet report\n\nEverything is unlocked: full AI, unlimited reports, compliance tracking.`;
+function activationNudgeText(ownerName, tierLabel, trial = null) {
+  // v1.87.0 — the day count belongs to the TRIAL, never a hardcoded 30: a
+  // 183-day launch-award winner was told "Your 30-day trial is running".
+  let dayLabel = `${TRIAL_DAYS}-day`;
+  const startMs = trial?.started_at ? new Date(trial.started_at).getTime() : NaN;
+  const endMs = trial?.ends_at ? new Date(trial.ends_at).getTime() : NaN;
+  if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs) {
+    const days = Math.round((endMs - startMs) / DAY_MS);
+    if (days > 0) dayLabel = `${days}-day`;
+  }
+  return `👋 *Getting the most from your Saka ${tierLabel} trial*\n\nYour ${dayLabel} trial is running, ${ownerName || 'there'}. The fastest way to see Saka's value:\n\n1️⃣ Reply *"log expense"* — track your first fuel/service cost\n2️⃣ Reply *"register car"* — add a vehicle + passbook\n3️⃣ Reply *"report"* — get a fleet report\n\nEverything is unlocked: full AI, unlimited reports, compliance tracking.`;
 }
 
 function activationRewardText({
@@ -1638,7 +1647,7 @@ export async function runTrialLifecycleSweep({ supabase, sendWhatsAppFn = null, 
       && nowMs >= startedMs + TRIAL_ACTIVATION_NUDGE_HOURS * 60 * 60 * 1000) {
       await stampTrial(supabase, trial.id, { nudge_activation_sent_at: nowIso });
       if (phone && sendWhatsAppFn) {
-        await sendWhatsAppFn(phone, activationNudgeText(owner?.full_name, tierLabel)).catch(() => {});
+        await sendWhatsAppFn(phone, activationNudgeText(owner?.full_name, tierLabel, trial)).catch(() => {});
         stats.sent += 1;
         stats.activationNudges += 1;
       }

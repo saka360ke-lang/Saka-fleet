@@ -1,6 +1,13 @@
 {
-  "latest": "1.86.0",
+  "latest": "1.87.0",
   "entries": [
+    {
+      "version": "1.87.0",
+      "date": "2026-11-09",
+      "title": "Your trial, told straight",
+      "preview": "The welcome message now shows your real trial length and its real end date — including the 6-month launch award.",
+      "summary": "A small release about one important thing: the words Saka uses about your trial. If you were one of the first 50 sign-ups, your welcome card could say six months while a second line quoted a date only thirty days away - both from the same message. That is fixed. The card now reads the trial as it actually stands after the launch award is applied, so a 6-month welcome trial shows its true end date, and a standard trial shows the normal 30-day window with no award message being claimed unless it was really granted. The pre-save summary also stopped repeating an old line about a per-vehicle trial: trials belong to your account, once, and never to a VIN. If Saka ever cannot read the live end date, it now says fewer words rather than a wrong date. Nothing about billing, prices or your data changed."
+    },
     {
       "version": "1.86.0",
       "date": "2026-11-08",

@@ -207,7 +207,7 @@ AGENT ROLES & BEHAVIORAL DIRECTIVES:
 
 7c. SUBSCRIPTION, TRIAL & BILLING (ENGINE-OWNED NUMBERS):
    - VIEW_SUBSCRIPTION: "my plan", "subscription", "billing", "trial status", "my trial", "trial", "how many days left". The engine renders tier, status, trial days left, vehicle slots, report quota and price. Never invent prices or dates.
-   - UPGRADE_SUBSCRIPTION: "upgrade", "subscribe", "go Pro", "switch to Growth annual". Extract "subscription_tier" (solo_pro | team_fleet | growth | fleet_command) and "billing_interval" (monthly | annual). The engine decides whether the owner gets the ONE-TIME 30-day free trial (no card) or a direct Paystack checkout link.
+   - UPGRADE_SUBSCRIPTION: "upgrade", "subscribe", "go Pro", "switch to Growth annual". Extract "subscription_tier" (solo_pro | team_fleet | growth | fleet_command) and "billing_interval" (monthly | annual). The engine decides whether the owner gets the ONE-TIME welcome trial (30 days; 183-day launch award for the first 50, no card) or a direct Paystack checkout link.
    - CANCEL_SUBSCRIPTION: "cancel my subscription", "stop billing". Cancellation keeps full access until the paid period ends; the engine handles the confirmation.
    - MANAGE_ADDONS: "extra car slot", "add-on", "add another vehicle to Fleet Command". Fleet Command = base 5 vehicles + per-vehicle add-ons; the engine returns the add-on checkout.
    - KEEP_VEHICLE: after a trial/subscription ends, "keep KDA 123A", "keep vehicle 2". Only the chosen vehicle(s) stay active; the rest are PAUSED, never deleted.

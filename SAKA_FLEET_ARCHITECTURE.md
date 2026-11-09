@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.86.0  
+**Version:** 1.87.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.87.0** | Phase 26A — **launch award copy fix (the live "30-day trial" bug)**: the registration completion card now speaks POST-award facts (a fresh 183-day award prints its real end date, never the pre-award 30-day date), the confirm card states the ACCOUNT-bound welcome trial (rule 29), the activation nudge names the trial's real length, and every stale per-VIN "30-day trial" mirror (docs, care KB, schema comments, core prompt) is corrected | 216 |
 | **1.86.0** | Phase 25 (FINAL feature phase): **PSV fix + meter-aware PDFs + smart login + command center + document replacement + creative handover labels + landing polish** — compliance now resolves by asset KIND (a Kenya truck/bus, stored `asset_type='ICE'`, gets the PSV badge; the KE PSV badge scopes TRUCK/HGV per Traffic Act Cap 403); PDF ledgers, the PDF vehicle snapshot/KPI and the admin fleet table speak the asset's meter (Odometer / Engine hours / Reading); the sign-in page pre-fills the visitor's calling code from their browser timezone (REGIONS registry, never a hardcoded +254), a live session is redirected to its role home, and logout 303s to `/d/login?logged_out=1` with a banner; a renewed document SUPERSEDES the previous file (`superseded_at`/`superseded_by`, kept as evidence, "Show replaced (N)" on the vehicle page); handovers name the person after the machine (Driver / Rider / Operator / Captain) while the key stays `driver_phone`; NEW `/d/admin/command` business command center + deterministic `admin command` digest (revenue/churn, user health, support, AI cost) that also rides the 08:00 briefing (full on Mondays); the superadmin digest no longer prints a hardcoded KES; landing gains a header **Log In** button and a quiet footer **King** door | 215 |
 | **1.84.0** | Phase 23: **document storage** — logbooks, insurance policies, inspection certificates and road licences were parsed then DISCARDED; now `src/services/vehicleDocuments.js` keeps the ORIGINAL file in a new PRIVATE `documents` bucket (`documents/<vehicle_id>/<uuid>.<ext>`) plus a `vehicle_documents` row (`media_id UNIQUE` dedupe, `parsed_data jsonb`, nullable `compliance_id` FK `ON DELETE SET NULL`). Paid tiers and the welcome trial store the file; Free keeps the parsed row only (D2). `resolveReceiptVault` vaults the four vehicle families (never driver licences, never receipts) and returns `documentPrefill = { document_id }` through the same engine-only prefill seam as `receipt_id`; the four `submitVehicleCompliance` sites link the stored file to the row it proved. The dashboard gains a **Stored files** section on `/d/vehicles/:id` (View + Delete), a **Files** column on `/d/compliance`, `GET /d/documents/:id` (300-second signed redirect, 404-for-foreign) and an Origin-guarded `POST /d/documents/:id/delete`; WhatsApp gains **`documents`** and **`delete document N`** (literal DELETE, audited `VEHICLE_DOCUMENT_DELETED`) | 213 |
 | **1.83.0** | Phase 22: **premium dashboard branding + passbook transfer + subscription** — self-hosted Sora/Manrope via an allowlisted `GET /d/assets/:file` (immutable cache), lime `#B8EF5C` accent with glow rings, the real logo lockup in the header, phone-first CSS (48 px buttons, 16 px controls, wrapping header); `/d/transfer` runs the SAME `transfers.js` machine for steps 1-3 on the web (owner enters the emailed release PIN; the buyer's ACCEPT + buyer OTP stay on WhatsApp; phone-only owners are gated honestly; an optional handover odometer writes `odometer_readings`); `/d/subscription` shows plan/trial/capacity/add-ons/owner-scoped billing history, engine checkouts (`checkoutForTier` / `checkoutForAddon`) through a new optional `callbackUrl` returning to `/d/subscription`, and Add Vehicle is a `wa.me` "add car" deep link; PDFs wear the lime brand (`#65A30D` text-safe + `#B8EF5C` decorative) with Sora only from a vendored TTF (WOFF2 is fontkit-unsafe) | 212 |
@@ -342,8 +343,10 @@ Vehicle asset records tied to owners or assigned drivers.
 - `deleted_at`: `timestamptz` (Soft deletion)
 - `created_at` / `updated_at`: `timestamptz`
 
-### 2.3 `vin_registry` (Asset-Bound Trial Ledger)
-System-wide ledger ensuring every unique VIN receives exactly one 30-day free trial on initial registration.
+### 2.3 `vin_registry` (VIN Provenance Ledger — the asset-bound trial was RETIRED in v1.16.0)
+Provenance ledger: one immutable identity row per VIN. Trials are ACCOUNT-bound
+(`profiles.id` + `trial_sessions`); a VIN row never mints or extends a trial, and
+`trial_granted` is written `false` for new rows (legacy columns are frozen history).
 - `vin`: `text` (Primary Key, uppercase alphanumeric logbook chassis number)
 - `first_registered_at`: `timestamptz` (Default `now()`)
 - `first_owner_id`: `uuid` (Foreign Key -> `profiles.id`)
@@ -901,7 +904,7 @@ Owners exceeding capacity are prompted with the next-tier upgrade checkout (or t
   - Cancels in-flight `passbook_transfers` (`status = 'CANCELLED'`).
   - Retires active `reminders` (`status = 'cancelled'`).
   - **Preserves** historical `expense_logs`, `expenses`, `private_earnings`, and `chat_history` for audit.
-  - **Preserves** the `vin_registry` ledger entry (one 30-day trial per VIN forever).
+  - **Preserves** the `vin_registry` provenance entry (account-bound trials; the row never grants a trial clock).
 - **Account deletion (`DELETE_ACCOUNT`)**: OTP via `sendMfaEmail`, then soft-deletes all owned vehicles + the profile and clears `chat_history` / `chat_transcripts` / `processed_webhooks`.
 
 ### 18.4 WhatsApp Command Examples
@@ -6449,5 +6452,26 @@ Phase 25 was the last feature phase: nine items from the operator's brief, execu
 #### 215.9 Rules shaped this work (rule 58)
 
 1/39/45 (rules + architecture first), 2 (this section), 3/4/5 (targeted reads, batched calls), 7 (phone-primary country; the login prefix comes from the registry, never a hardcoded +254; global PSV scoping), 8/9 (VIN + owner-only deletes untouched), 10/11 (targeted suites, cleanup-safe), 12/33 (one commit, version + docs + CHANGELOG), 13 (flowKnowledge playbooks + docs regenerated), 18 (no protected paths), 21 (zero-token deterministic digests; AI cost = list-price estimate), 23/24 (tier matrix is the only price source; no entitlement change), 26/28 (no trial/billing math; "list prices", never an invoice), 31 (warm, plain, one next step; ≤20-line digest), 32/42/63 (synced first; proposals checked: none open), 44 (each fix audited before coding — the PDF/briefing siblings were found this way), 48 (documents supersede, never destroyed), 50 (every new read/write degrades: supersede columns, compliance_catalog row, AI telemetry), 51/52 (sibling sweeps + before/after assertions, e.g. the logout 303), 54 (live schema probes: profiles/trial_sessions/ai_usage_logs columns, 3 open tickets), 55 (evolved every existing surface — one new service + one new page), 56 (existing rows inherit: kinds, meters, documents all resolve from stored data), 58 (this report), 60 (stuck guidance untouched), 61 (no heavy DeepSeek work in this phase). No rule was added or edited.
+
+
+### 216. v1.87.0 (Phase 26A) — launch award copy: the live "30-day trial" bug (2026-11-09)
+
+**The report.** A new sign-up said the product showed "a 30-day trial" while the launch campaign promises six months. The audit reproduced the flow against the live tree and the live database before changing anything (rule 44).
+
+**Live evidence (rule 54).** `launch_awards` slot 1 = owner `9cfb5f77…` (+254734852529, david.njonjo@gmail.com), coupon `LAUNCH183-1`, days 183; its `trial_sessions` row is `EXTENDED` with `ends_at = 2027-05-11T03:14:36Z` — **the engine was correct**. The `chat_transcripts` rows showed the actual defect: the pre-confirm card said *"a 30-day trial ledger entry is created once per VIN for life"* and the post-save card read *"🎁 Free trial: 183 days, until 9 Dec 2026"* — a 183-day label with the **pre-award 30-day end date**. Hypotheses (a)-(f) from the brief were all disproven: `LAUNCH_AWARD_ENABLED` is unset (default on), 49 of 50 slots were free, `TRIAL_MAX_TOTAL_DAYS` never clamped the award (`extendAccountTrial({ maxTotalDays })` is the only path past 45 and it worked), and no `profiles.trial_ends_at` column exists (the UI reads `trial_sessions`).
+
+**Root causes.** (1) `quizEngine.confirmationNotesBase('vehicle_registration')` carried a pre-v1.16.0 sentence that contradicts rule 29 — `vin_registry` has been a provenance ledger (`trial_granted=false`) since v1.16.0. (2) The completion reply passed `welcomeTrial.endsAt` (captured BEFORE `grantLaunchAwardForTrial` extends the trial) as `trialEndsAt` while `trialDays` already reflected the award — two contradictory facts in one card. (3) The T+7 activation nudge hardcoded "Your 30-day trial is running" for every account.
+
+**The fix.** New pure helper `resolveTrialCompletionFacts({ welcomeTrial, award, liveTrialEndsAt })` in `launchAwards.js` is the ONE decision: an extension that just landed → the grant's end date + day count; a repeat grant → the live `trial_sessions.ends_at` the caller re-read; a grant with no readable live end → the grant's day count and **no date** (never a stale one); no grant, or a grant whose extension failed → the welcome-trial facts and **no award line**. `quizEngine` uses it, appends `formatLaunchAwardLine` only when the fact holds (`trialFacts.awardConfirmed`), and degrades per rule 50. `activationNudgeText(ownerName, tierLabel, trial)` computes the day label from `started_at`/`ends_at`. The confirm card now reads *"Your account gets one welcome trial — it starts with your first vehicle."* and the delete-confirm bullet drops the stale "trial ledger" wording.
+
+**Rule 13 sync (same commit).** `productQa` pricing facts gain the launch line (the generated `docs/PRODUCT_QA.md` was regenerated), `careKnowledge` subscription KB names the 6-month launch award, `flowKnowledge` `subscription_upgrade.writes` and the `sakaAi` UPGRADE_SUBSCRIPTION rule speak the engine-owned welcome trial, `subscriptionSchema` comments corrected, and architecture §2.3 + §18.3 now describe `vin_registry` as a VIN provenance ledger (the asset-bound trial retired in v1.16.0).
+
+**Frames touched.** `src/services/launchAwards.js` (`resolveTrialCompletionFacts` + export), `src/services/quizEngine.js` (import, confirm card, delete-confirm bullet, completion block), `src/services/trialEngine.js` (`activationNudgeText` + call site), `src/routes/whatsapp/messages.js` (delete-confirm copy), `src/services/productQa.js`, `src/services/careKnowledge.js`, `src/services/flowKnowledge.js`, `src/db/subscriptionSchema.js`, `sakaAi.js`, `docs/` (regenerated), `SAKA_FLEET_ARCHITECTURE.md` (§2.3, §18.3, this section, history, version), `CHANGELOG.md`, `landing/data/changelog.json` + stamped assets, `package.json` (1.87.0), `test_launch_award.js` (+6), `test_quiz_flow.js` (+4), `test_trial_engine.js` (+2).
+
+**Suites run.** `test_launch_award` (34), `test_quiz_flow` (180, +4), `test_trial_engine` (118, +2), `test_agent_training` (219), `test_kb_docs` (36), `test_product_qa` (152), `test_doc_sync` (30), `npm run health` — green.
+
+**Recurrence autopsy (rule 51).** Defect class *"copy composed from pre-write state while the write already changed it"* → siblings audited: legacy `onboarding.saveVehicleAssetRecord` reply (renders `saved.launchAward` only when granted — already correct), the T-3/T-24/grace cards (read the live trial row — correct), `formatSubscriptionSummary` (reads entitlements — correct), the activation reward (no day count — correct), the delete-confirm copy in both paths (fixed here). Defect class *"stale per-VIN trial wording"* → siblings: architecture §2.3/§18.3 (fixed), PRODUCT_QA source (fixed + regenerated), careKnowledge (fixed), schema comments (fixed), flowKnowledge + core prompt (fixed). One targeted assertion per sibling.
+
+**Rules shaped this work (rule 58).** 1/39/45 (rules + architecture first), 2 (this section), 3/4 (targeted reads, batched), 8 (VIN untouched), 10/11 (targeted suites, stateless), 12/33 (one commit: version + history + CHANGELOG + stamp), 13/60 (KB, playbook and core-prompt sync + regeneration), 26/28 (trial math stays engine-owned; the card now proves it), 29 (account-bound trials), 31 (warm plain copy), 42/63 (proposals checked live: none open), 44 (audit before acting — the live transcripts found the real cause), 50 (degrade without a live read), 51/52 (sibling sweep + before/after assertions), 54 (live DB + chat-transcript verification), 55 (one helper, no duplicate logic), 56 (existing accounts unaffected: no backfill needed — the copy is computed per reply), 58 (this report). No rule was edited.
 
 

@@ -103,7 +103,7 @@ export const CARE_FAQ_BLOCKS = Object.freeze([
     topic: 'subscription',
     text: [
       'TRIAL & SUBSCRIPTION',
-      '- The welcome trial starts automatically at the first registered vehicle: 30 days, no card.',
+      '- The welcome trial starts automatically at the first registered vehicle: 30 days (6 months for the first 50 launch sign-ups), no card.',
       '- Reply "subscription" in WhatsApp for plans, upgrades or billing — checkout happens in chat.',
       '- The engine owns every price, coupon and date. Amina never quotes a price, discounts or refunds.',
       '- When a plan lapses, excess vehicles are PAUSED, never deleted.'

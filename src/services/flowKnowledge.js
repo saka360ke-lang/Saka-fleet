@@ -240,7 +240,7 @@ export const SAKA_QUIZ_FLOWS = [
     trigger: 'upgrade, subscribe, go Pro, switch to Growth annual',
     fields: 'tier (solo_pro | team_fleet | growth | fleet_command) → interval (monthly | annual) → optional coupon → confirm',
     extracted: ['subscription_tier', 'billing_interval', 'notes'],
-    writes: 'first upgrade: trial_sessions (30-day free trial, no card) + profiles TRIALING; otherwise Paystack checkout link (subscriptions.checkoutForTier)',
+    writes: 'first upgrade: trial_sessions (engine-owned welcome trial; 183-day launch award for the first 50) + profiles TRIALING; otherwise Paystack checkout link (subscriptions.checkoutForTier)',
     rules: 'one trial per owner lifetime (profiles.trial_used_at); never invent prices, discounts or trial dates; annual-first checkout; coupons are validated by the engine'
   },
   {
