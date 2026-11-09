@@ -1,7 +1,7 @@
 {
   "name": "sakafleet-backend",
   "type": "module",
-  "version": "1.91.0",
+  "version": "1.92.0",
   "description": "Saka Fleet Backend",
   "main": "index.js",
   "scripts": {
@@ -91,6 +91,8 @@
     "migrate:dashboard": "node scripts/run_dashboard_migration.js",
     "migrate:dashboard-role": "node scripts/run_dashboard_role_migration.js",
     "migrate:admin-impersonations": "node scripts/run_admin_impersonations_migration.js",
+    "migrate:earnings-archive": "node scripts/run_earnings_archive_migration.js",
+    "migrate:overdue-digest": "node scripts/run_overdue_digest_migration.js",
     "migrate:monthly-reports": "node scripts/run_monthly_reports_migration.js",
     "migrate:vehicle-nickname": "node scripts/run_vehicle_nickname_migration.js",
     "migrate:stt-locale": "node scripts/run_stt_locale_migration.js",

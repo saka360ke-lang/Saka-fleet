@@ -34,6 +34,64 @@ import {
   diffCalendarDays,
   SYSTEM_TIMEZONE
 } from './dateParser.js';
+import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
+
+/* ------------------------------------------------------------------ */
+/* v1.92.0 (Phase 29) — overdue compliance digest                      */
+/* ------------------------------------------------------------------ */
+/*
+ * D1 (HYBRID): the FIRST overdue item of an episode still fires its immediate
+ * one-shot alert; every subsequent item in that episode is stamped but NOT
+ * sent, and the owner receives ONE digest at T+3 and ONE at T+7 — three
+ * messages maximum per episode regardless of N items. The episode anchor is
+ * the FIRST item's due date and never moves while anything stays overdue; when
+ * the owner has zero overdue items the row resets, so a genuinely new episode
+ * starts a fresh clock.
+ */
+
+export const OVERDUE_DIGEST_TABLE = 'overdue_digest_log';
+export const OVERDUE_DIGEST_T3_DAYS = 3;
+export const OVERDUE_DIGEST_T7_DAYS = 7;
+
+export const OVERDUE_DIGEST_SQL = `
+CREATE TABLE IF NOT EXISTS public.overdue_digest_log (
+    owner_id uuid PRIMARY KEY,
+    first_overdue_at timestamp with time zone,
+    sent_t3_at timestamp with time zone,
+    sent_t7_at timestamp with time zone,
+    created_at timestamp with time zone NOT NULL DEFAULT now(),
+    updated_at timestamp with time zone NOT NULL DEFAULT now()
+);
+ALTER TABLE public.overdue_digest_log ENABLE ROW LEVEL SECURITY;
+`;
+
+let overdueDigestTableReady = false;
+
+/** Idempotent DDL probe (rule 50): a missing table simply disables the digest. */
+export async function ensureOverdueDigestTable(providedSupabase) {
+  if (!providedSupabase) return { status: 'no_client' };
+  try {
+    const { error } = await providedSupabase.from(OVERDUE_DIGEST_TABLE).select('owner_id').limit(1);
+    if (!error) {
+      overdueDigestTableReady = true;
+      return { status: 'exists' };
+    }
+  } catch (err) {
+    console.warn('[maintenanceReminders] overdue digest probe failed (falling through to DDL):', err.message);
+  }
+  if (hasSqlAccess()) {
+    const result = await runSql(OVERDUE_DIGEST_SQL, { label: 'ensureOverdueDigestTable' });
+    if (result.ok) {
+      overdueDigestTableReady = true;
+      return { status: 'created' };
+    }
+  }
+  return { status: 'missing' };
+}
+
+export function isOverdueDigestTableReady() {
+  return overdueDigestTableReady;
+}
 
 const round1 = (n) => Math.round(Number(n) * 10) / 10;
 
@@ -675,6 +733,34 @@ export async function evaluateExpiryReminders({ supabase, sendFn = null, canDeli
     phoneById = new Map((profiles || []).map((p) => [p.id, p.phone_number]));
   }
 
+  // v1.92.0 (Phase 29, D1 HYBRID) — load every live overdue episode for the
+  // owners this sweep touches. An owner WITH an episode receives only the
+  // digest for later items; the FIRST item of an episode still sends normally.
+  const digestEpisodes = new Set();
+  const firstOverdueSent = new Set();
+  const hasOverdueReminder = reminders.some((rem) => (daysUntilDue(reminderDueDate(rem), now) ?? 0) < 0);
+  if (hasOverdueReminder) {
+    const episodeOwners = [...new Set([
+      ...vehicles.map((v) => v.owner_id),
+      ...driverVehicles.map((v) => v.owner_id)
+    ].filter(Boolean))];
+    if (episodeOwners.length > 0) {
+      try {
+        const { data: digestRows, error: digestErr } = await supabase
+          .from(OVERDUE_DIGEST_TABLE)
+          .select('owner_id, first_overdue_at')
+          .in('owner_id', episodeOwners);
+        if (!digestErr) {
+          for (const row of digestRows || []) {
+            if (row?.owner_id && row.first_overdue_at) digestEpisodes.add(row.owner_id);
+          }
+        }
+      } catch (episodeErr) {
+        console.warn('[maintenanceReminders] Overdue digest episodes unavailable (suppression off):', episodeErr.message);
+      }
+    }
+  }
+
   const nowIso = new Date().toISOString();
   const alerts = [];
   let dispatched = 0;
@@ -697,6 +783,26 @@ export async function evaluateExpiryReminders({ supabase, sendFn = null, canDeli
         .filter((v) => v.assigned_driver_id === rem.subject_id)
         .map((v) => v.plate_number)
         .filter(Boolean);
+      const ownerIdsForReminder = isDriver
+        ? [...new Set(driverVehicles.filter((v) => v.assigned_driver_id === rem.subject_id).map((v) => v.owner_id).filter(Boolean))]
+        : [...new Set([vehicle?.owner_id, rem.profile_id].filter(Boolean))];
+
+      // D1 HYBRID (v1.92.0) — once an episode is live (or its first alert went
+      // out earlier THIS sweep), only the first overdue item sends an immediate
+      // WhatsApp; every later item is stamped but rides the T+3 / T+7 digest.
+      if (tier.key === 'notified_overdue'
+        && ownerIdsForReminder.some((id) => digestEpisodes.has(id) || firstOverdueSent.has(id))) {
+        await supabase.from('reminders').update({
+          ...expiryTierFlags(tier),
+          remaining_value: daysLeft,
+          remaining_updated_at: nowIso,
+          expiry_tier_at: nowIso,
+          updated_at: nowIso
+        }).eq('id', rem.id);
+        alerts.push({ reminderId: rem.id, tier: tier.key, daysLeft, text: '', phones: 0, suppressed: true });
+        continue;
+      }
+
       const text = buildExpiryAlertText({
         plate: isDriver ? (driverPlates.join(', ') || 'Assigned driver') : (vehicle?.plate_number || 'Fleet vehicle'),
         reminder: rem,
@@ -746,6 +852,12 @@ export async function evaluateExpiryReminders({ supabase, sendFn = null, canDeli
         } catch (sendErr) {
           console.warn('[maintenanceReminders] Expiry dispatch failed:', sendErr.message);
         }
+      }
+
+      // The first alert of an episode opens the window: any later overdue item
+      // in this same sweep is suppressed above (owner cap = 1 immediate + 2 digests).
+      if (tier.key === 'notified_overdue') {
+        for (const id of ownerIdsForReminder) firstOverdueSent.add(id);
       }
 
       await supabase.from('reminders').update({
@@ -938,6 +1050,228 @@ export async function applyOperatingHours({ supabase, vehicle, hours, sendFn = n
 }
 
 /**
+ * v1.92.0 (Phase 29) — ONE consolidated overdue digest per owner per milestone.
+ *
+ * Runs as the fourth pass of `runReminderSweep` (after the expiry ladder). The
+ * overdue set is recomputed from LIVE active reminders on every sweep, so a
+ * renewal (due date moved, reminder completed/cancelled) leaves the episode
+ * automatically: nothing overdue → the row resets and no further digest fires.
+ * Milestones are per-episode and at-most-once: T+3 (`sent_t3_at`) and T+7
+ * (`sent_t7_at`); an owner who clears everything resets, and a genuinely new
+ * overdue item later starts a fresh clock. Never throws.
+ */
+export async function evaluateOverdueDigest({ supabase, sendFn = null, canDeliver = null, now = new Date() }) {
+  const empty = {
+    ok: true, evaluated: 0, owners: 0, overdueItems: 0,
+    sentT3: 0, sentT7: 0, dispatched: 0, reset: 0, profileIds: []
+  };
+  if (!supabase) return { ...empty, ok: false, error: 'Database unavailable.' };
+
+  let allReminders = [];
+  try {
+    const { data, error } = await supabase
+      .from('reminders')
+      .select('*')
+      .eq('status', 'active')
+      .limit(1000);
+    if (error) return { ...empty, ok: false, error: error.message };
+    allReminders = data || [];
+  } catch (err) {
+    return { ...empty, ok: false, error: err.message };
+  }
+
+  const reminders = allReminders.filter((rem) => {
+    if (!rem || !reminderDueDate(rem)) return false;
+    const unit = String(rem.threshold_unit || '').toLowerCase();
+    return unit !== 'distance' && unit !== 'hours';
+  });
+  if (reminders.length === 0) {
+    // No active date reminder exists anywhere ⇒ no overdue item can exist, so
+    // every episode row is stale. Clear them (bounded table, rule 50 safe).
+    let reset = 0;
+    try {
+      const { data: rows } = await supabase.from(OVERDUE_DIGEST_TABLE).select('owner_id').limit(500);
+      for (const row of rows || []) {
+        if (!row?.owner_id) continue;
+        const { error } = await supabase.from(OVERDUE_DIGEST_TABLE).delete().eq('owner_id', row.owner_id);
+        if (!error) reset += 1;
+      }
+    } catch (clearErr) {
+      console.warn('[maintenanceReminders] Overdue digest reset skipped:', clearErr.message);
+    }
+    return { ...empty, reset };
+  }
+
+  // Vehicles: the reminder's own vehicle + every vehicle a driver-subject
+  // reminder rides on (mirrors evaluateExpiryReminders).
+  const vehicleIds = [...new Set(reminders.filter((r) => r.vehicle_id).map((r) => r.vehicle_id))];
+  let vehicles = [];
+  if (vehicleIds.length > 0) {
+    try {
+      const { data } = await supabase.from('vehicles').select('*').in('id', vehicleIds);
+      vehicles = data || [];
+    } catch { vehicles = []; }
+  }
+  const vehicleById = new Map(vehicles.map((v) => [v.id, v]));
+
+  const driverSubjectIds = [...new Set(
+    reminders
+      .filter((r) => String(r.subject_type || '').toLowerCase() === 'driver' && r.subject_id)
+      .map((r) => r.subject_id)
+  )];
+  let driverVehicles = [];
+  if (driverSubjectIds.length > 0) {
+    try {
+      const { data } = await supabase.from('vehicles').select('*').in('assigned_driver_id', driverSubjectIds);
+      driverVehicles = data || [];
+    } catch { driverVehicles = []; }
+  }
+
+  /** Every owner this pass truly evaluated (used for the safe episode reset). */
+  const evaluatedOwners = new Set();
+  for (const vehicle of [...vehicles, ...driverVehicles]) {
+    if (vehicle.owner_id) evaluatedOwners.add(vehicle.owner_id);
+  }
+
+  /** owner_id → overdue items (label, daysLeft, dueDate). */
+  const groups = new Map();
+  let overdueItems = 0;
+  for (const rem of reminders) {
+    const dueDate = reminderDueDate(rem);
+    const daysLeft = daysUntilDue(dueDate, now);
+    if (daysLeft === null || daysLeft >= 0) continue;
+    const isDriver = String(rem.subject_type || '').toLowerCase() === 'driver';
+    const vehicle = rem.vehicle_id ? vehicleById.get(rem.vehicle_id) : null;
+    let owners = [];
+    let plate = vehicle?.plate_number || null;
+    if (isDriver) {
+      const assigned = driverVehicles.filter((v) => v.assigned_driver_id === rem.subject_id);
+      owners = assigned.map((v) => v.owner_id).filter(Boolean);
+      const plates = assigned.map((v) => v.plate_number).filter(Boolean);
+      plate = plates.length ? plates.join(', ') : null;
+    } else if (vehicle?.owner_id) {
+      owners = [vehicle.owner_id];
+    } else if (rem.profile_id) {
+      owners = [rem.profile_id];
+    }
+    const baseLabel = rem.label || rem.reminder_type || EXPIRY_CATEGORIES[rem.category]?.label || 'Compliance item';
+    for (const ownerId of new Set(owners)) {
+      evaluatedOwners.add(ownerId);
+      const items = groups.get(ownerId) || [];
+      items.push({ label: plate ? `${baseLabel} (${plate})` : baseLabel, daysLeft, dueDate });
+      groups.set(ownerId, items);
+      overdueItems += 1;
+    }
+  }
+
+  // Episode rows for every evaluated owner + the phone of each digest recipient.
+  let digestRows = [];
+  try {
+    const { data, error } = await supabase.from(OVERDUE_DIGEST_TABLE).select('*').limit(500);
+    if (!error) digestRows = data || [];
+  } catch { digestRows = []; }
+  const rowByOwner = new Map(digestRows.map((row) => [row.owner_id, row]));
+
+  let phoneById = new Map();
+  if (evaluatedOwners.size > 0) {
+    try {
+      const { data } = await supabase.from('profiles').select('id, phone_number').in('id', [...evaluatedOwners]);
+      phoneById = new Map((data || []).map((p) => [p.id, p.phone_number]));
+    } catch { phoneById = new Map(); }
+  }
+
+  const nowIso = new Date(now).toISOString();
+  let sentT3 = 0;
+  let sentT7 = 0;
+  let dispatched = 0;
+  const profileIds = [];
+  for (const [ownerId, items] of groups.entries()) {
+    try {
+      const anchorDue = items.map((item) => item.dueDate).sort()[0];
+      const existing = rowByOwner.get(ownerId);
+      const anchorIso = existing?.first_overdue_at
+        ? String(existing.first_overdue_at)
+        : `${anchorDue}T00:00:00.000Z`;
+      if (!existing) {
+        await supabase.from(OVERDUE_DIGEST_TABLE).insert([{
+          owner_id: ownerId,
+          first_overdue_at: anchorIso,
+          created_at: nowIso,
+          updated_at: nowIso
+        }]);
+      }
+      // Calendar days since the episode's FIRST overdue item went due.
+      const daysSinceFirst = -(daysUntilDue(anchorIso, now) ?? 0);
+      const worst = items.reduce((a, b) => (a.daysLeft <= b.daysLeft ? a : b), items[0]);
+      const count = items.length;
+      const worstDays = Math.abs(worst.daysLeft);
+      const milestone = (!existing?.sent_t7_at && daysSinceFirst >= OVERDUE_DIGEST_T7_DAYS)
+        ? 't7'
+        : (!existing?.sent_t3_at && daysSinceFirst >= OVERDUE_DIGEST_T3_DAYS)
+          ? 't3'
+          : null;
+      if (!milestone) continue;
+
+      const text = `\u{1F6A8} *Overdue compliance digest*\n\nYou have *${count}* overdue compliance item${count === 1 ? '' : 's'}. The oldest is *${worst.label}* — *${worstDays}* day${worstDays === 1 ? '' : 's'} past due.\n\nReply *reminders* to see them all, and "Renewed <item>" once sorted.`;
+      const phone = phoneById.get(ownerId);
+      if (sendFn && phone && (!canDeliver || canDeliver(phone, null))) {
+        try {
+          await sendFn(phone, text, null, 'overdue_digest', {
+            count: String(count),
+            worst_item: String(worst.label),
+            worst_days: String(worstDays)
+          });
+          dispatched += 1;
+        } catch (sendErr) {
+          console.warn('[maintenanceReminders] Overdue digest dispatch failed:', sendErr.message);
+        }
+      }
+
+      // A single send can satisfy both milestones when the sweep missed T+3 —
+      // stamping both keeps two digests from landing back-to-back.
+      const patch = { updated_at: nowIso };
+      if (milestone === 't7') {
+        patch.sent_t7_at = nowIso;
+        if (!existing?.sent_t3_at) patch.sent_t3_at = nowIso;
+        sentT7 += 1;
+      } else {
+        patch.sent_t3_at = nowIso;
+        sentT3 += 1;
+      }
+      await supabase.from(OVERDUE_DIGEST_TABLE).update(patch).eq('owner_id', ownerId);
+      profileIds.push(ownerId);
+    } catch (ownerErr) {
+      console.warn('[maintenanceReminders] Overdue digest evaluation failed:', ownerErr.message);
+    }
+  }
+
+  // Safe episode reset: an owner this pass evaluated who has ZERO overdue items
+  // has closed their episode. Owners outside the bounded read are never touched.
+  let reset = 0;
+  for (const row of digestRows) {
+    if (!evaluatedOwners.has(row.owner_id) || groups.has(row.owner_id)) continue;
+    try {
+      const { error } = await supabase.from(OVERDUE_DIGEST_TABLE).delete().eq('owner_id', row.owner_id);
+      if (!error) reset += 1;
+    } catch (delErr) {
+      console.warn('[maintenanceReminders] Overdue digest reset failed:', delErr.message);
+    }
+  }
+
+  return {
+    ok: true,
+    evaluated: reminders.length,
+    owners: groups.size,
+    overdueItems,
+    sentT3,
+    sentT7,
+    dispatched,
+    reset,
+    profileIds
+  };
+}
+
+/**
  * Background sweep (single entry point).
  *
  * 1. Threshold reminders: evaluate every active distance / operating-hours
@@ -1018,7 +1352,18 @@ export async function runReminderSweep({ supabase, sendFn = null, canDeliver = n
     console.warn('[maintenanceReminders] Expiry sweep failed:', expiryErr.message);
   }
 
+  // v1.92.0 (Phase 29) — pass 4: ONE consolidated overdue digest per owner at
+  // T+3 / T+7 of an episode (runs after expiry so the episode's first item has
+  // already sent its immediate alert).
+  let digest = { evaluated: 0, owners: 0, overdueItems: 0, sentT3: 0, sentT7: 0, dispatched: 0, reset: 0, profileIds: [] };
+  try {
+    digest = await evaluateOverdueDigest({ supabase, sendFn, canDeliver, now });
+  } catch (digestErr) {
+    console.warn('[maintenanceReminders] Overdue digest sweep failed:', digestErr.message);
+  }
+
   for (const id of (expiry.profileIds || [])) sweptProfileIds.add(id);
+  for (const id of (digest.profileIds || [])) sweptProfileIds.add(id);
   // v1.63.1 — the sweep mutated reminder facts (remaining values, tier stamps,
   // newly promoted driver reminders): drop each affected user's cached context.
   for (const id of sweptProfileIds) {
@@ -1046,7 +1391,18 @@ export async function runReminderSweep({ supabase, sendFn = null, canDeliver = n
     },
     driverRemindersSynced: driverSync.synced || 0,
     driverRemindersRetired: driverSync.deactivated || 0,
-    driverRemindersSkipped: driverSync.skipped || 0
+    driverRemindersSkipped: driverSync.skipped || 0,
+    // v1.92.0 (Phase 29) — the overdue digest pass (kept out of the top-level
+    // ladder counters so an existing alert count can never change meaning).
+    digest: {
+      evaluated: digest.evaluated || 0,
+      owners: digest.owners || 0,
+      overdueItems: digest.overdueItems || 0,
+      sentT3: digest.sentT3 || 0,
+      sentT7: digest.sentT7 || 0,
+      dispatched: digest.dispatched || 0,
+      reset: digest.reset || 0
+    }
   };
 }
 
@@ -1067,6 +1423,11 @@ export default {
   categoryForReminderType,
   createExpiryReminder,
   evaluateExpiryReminders,
+  // v1.92.0 (Phase 29) — the overdue compliance digest (T+3 / T+7 per episode).
+  evaluateOverdueDigest,
+  ensureOverdueDigestTable,
+  OVERDUE_DIGEST_TABLE,
+  OVERDUE_DIGEST_SQL,
   syncAllDriverComplianceReminders,
   retireLegacyDriverLicenceReminder,
   reminderDueDate,

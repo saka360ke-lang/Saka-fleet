@@ -3,6 +3,8 @@ import { daysUntilDue, reminderDueDate } from './maintenanceReminders.js';
 import { buildLedgerGroups, expenseKind } from './reportLedger.js';
 import { EXPENSE_CATEGORIES, EXPENSE_CATEGORY_KEYS } from './expenseCatalog.js';
 import { driverComplianceLabel } from './driverComplianceCatalog.js';
+// v1.92.0 (Phase 29) — LIVE earnings only (archived = the seller's history).
+import { selectLiveEarnings } from './earningsScope.js';
 
 /**
  * Saka Fleet — Driver-first reports (v1.29.0)
@@ -82,7 +84,10 @@ export async function buildDriverDaybook({
     expenses = (data || []).filter((row) => !scopedIds.length || scopedIds.includes(row.vehicle_id));
   } catch { expenses = []; }
   try {
-    const { data } = await supabase.from('private_earnings').select('*').eq('driver_id', driverId).gte('created_at', since).limit(300);
+    // v1.92.0 (Phase 29) — archived earnings belong to the seller's history.
+    const { data } = await selectLiveEarnings(supabase, {
+      apply: (query) => query.eq('driver_id', driverId).gte('created_at', since).limit(300)
+    });
     earnings = (data || []).filter((row) => !scopedIds.length || scopedIds.includes(row.vehicle_id));
   } catch { earnings = []; }
 
@@ -421,7 +426,10 @@ export async function buildDriverPerformance({
   } catch { expenses = []; }
   let earnings = [];
   try {
-    const { data } = await supabase.from('private_earnings').select('*').eq('driver_id', driverId).gte('created_at', since).limit(2000);
+    // v1.92.0 (Phase 29) — archived earnings belong to the seller's history.
+    const { data } = await selectLiveEarnings(supabase, {
+      apply: (query) => query.eq('driver_id', driverId).gte('created_at', since).limit(2000)
+    });
     earnings = (data || []).filter((row) => !scopeIds.length || scopeIds.includes(row.vehicle_id));
   } catch { earnings = []; }
   let compliances = [];

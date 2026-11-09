@@ -56,6 +56,10 @@ export const RESET_TABLES = [
   'chat_sessions',
   'saka_dynamic_rules',
   'pending_owner_notifications',
+  // v1.92.0 (Phase 29) — the seller's Final Earnings Report queue + the
+  // overdue-digest episode ledger.
+  'earnings_report_queue',
+  'overdue_digest_log',
   'passbook_transfers',
   'private_earnings',
   'expenses',
@@ -202,6 +206,9 @@ export async function executeDatabaseReset({ targetPhone = null, verbose = true,
         DELETE FROM public.private_earnings WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_phone IN ('${cleanPhone}', '${altPhone}'));
         DELETE FROM public.passbook_transfers WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_phone IN ('${cleanPhone}', '${altPhone}'));
         DELETE FROM public.pending_owner_notifications WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_phone IN ('${cleanPhone}', '${altPhone}'));
+        -- v1.92.0 (Phase 29) — the earnings-report queue and digest episodes for this phone.
+        DELETE FROM public.earnings_report_queue WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}'));
+        DELETE FROM public.overdue_digest_log WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}'));
         DELETE FROM public.driver_assignments WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_phone IN ('${cleanPhone}', '${altPhone}')) OR driver_phone IN ('${cleanPhone}', '${altPhone}');
         DELETE FROM public.driver_compliances WHERE driver_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}'));
         DELETE FROM public.reminders WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}')));
@@ -241,6 +248,8 @@ export async function executeDatabaseReset({ targetPhone = null, verbose = true,
           public.chat_sessions,
           public.saka_dynamic_rules,
           public.pending_owner_notifications,
+          public.earnings_report_queue,
+          public.overdue_digest_log,
           public.passbook_transfers,
           public.private_earnings,
           public.expenses,

@@ -27,6 +27,8 @@ import { buildLedgerGroups, expenseToLedgerRow, earningToLedgerRow } from './rep
 import { EXPENSE_CATEGORY_KEYS, expenseCategoryLabel, expenseCategoryOf } from './expenseCatalog.js';
 import { primaryMeterForAssetKind } from './assetMetrics.js';
 import { vehicleDisplayLabel } from './vehicles.js';
+// v1.92.0 (Phase 29) — LIVE earnings only (archived = the seller's history).
+import { selectLiveEarnings } from './earningsScope.js';
 
 export const REPORT_TYPES = Object.freeze({
   fleet: { label: 'Fleet Status Report', aliases: ['fleet', 'status', 'overview', 'executive', 'rollup', 'summary'] },
@@ -215,7 +217,11 @@ async function loadFleetData({ supabase, ownerId = null, driverId = null, vehicl
 
   let earnings = [];
   try {
-    const { data } = await supabase.from('private_earnings').select('*').in('vehicle_id', vehicleIds).limit(2000);
+    // v1.92.0 (Phase 29) — archived earnings belong to the seller's history;
+    // the buyer's fleet reports must never inherit them.
+    const { data } = await selectLiveEarnings(supabase, {
+      apply: (query) => query.in('vehicle_id', vehicleIds).limit(2000)
+    });
     earnings = data || [];
   } catch { earnings = []; }
 

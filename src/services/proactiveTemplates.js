@@ -126,6 +126,15 @@ export const PROACTIVE_TEMPLATE_KINDS = Object.freeze({
     variables: ['plate'],
     audience: 'buyer',
     note: 'A passbook buyer is invited to ACCEPT/DECLINE a transfer (the buyer OTP itself is emailed).'
+  },
+  // v1.92.0 (Phase 29) — the consolidated overdue compliance digest (D1 hybrid:
+  // the episode's first overdue item keeps its immediate alert; later items ride
+  // ONE digest at T+3 and ONE at T+7).
+  overdue_digest: {
+    env: 'META_TPL_OVERDUE_DIGEST',
+    variables: ['count', 'worst_item', 'worst_days'],
+    audience: 'owner',
+    note: 'T+3 / T+7 consolidated overdue compliance digest (count, worst item, days past due).'
   }
 });
 

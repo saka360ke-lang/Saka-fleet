@@ -31,13 +31,15 @@ const EXPECTED = [
   'deploy_live', 'eval_digest_ping', 'care_escalation',
   'driver_activity', 'fleet_auto_audit',
   // v1.87.1 (Phase 26B) — the codes/invites that must beat the 24h window.
-  'auth_otp', 'driver_invite', 'transfer_invite'
+  'auth_otp', 'driver_invite', 'transfer_invite',
+  // v1.92.0 (Phase 29) — the T+3 / T+7 consolidated overdue digest.
+  'overdue_digest'
 ];
 
 console.log('--- 1. registry completeness ---');
-check(KINDS.length === 16, '16 proactive kinds are registered');
+check(KINDS.length === 17, '17 proactive kinds are registered');
 check(KINDS.join(',') === EXPECTED.join(','), 'the canonical kind list is stable');
-check(PROACTIVE_TEMPLATE_ENV_KEYS.length === 16 && new Set(PROACTIVE_TEMPLATE_ENV_KEYS).size === 16, 'every kind has a unique META_TPL_ env knob');
+check(PROACTIVE_TEMPLATE_ENV_KEYS.length === 17 && new Set(PROACTIVE_TEMPLATE_ENV_KEYS).size === 17, 'every kind has a unique META_TPL_ env knob');
 check(PROACTIVE_TEMPLATE_ENV_KEYS.every((key) => key.startsWith('META_TPL_') && key.length > 9), 'every env knob follows META_TPL_<KIND>');
 check(Object.isFrozen(PROACTIVE_TEMPLATE_KINDS), 'the registry is frozen (no runtime drift)');
 check(KINDS.every((kind) => Array.isArray(PROACTIVE_TEMPLATE_KINDS[kind].variables)), 'every kind declares a variables array');
@@ -53,6 +55,7 @@ check(PROACTIVE_TEMPLATE_KINDS.eval_digest_ping.variables.length === 0 && PROACT
 // v1.87.1 (Phase 26B) — the OTP/invite contracts.
 check(PROACTIVE_TEMPLATE_KINDS.auth_otp.variables.join(',') === 'code', 'auth_otp takes the 6-digit code (v1.87.1)');
 check(PROACTIVE_TEMPLATE_KINDS.driver_invite.variables.join(',') === 'plate' && PROACTIVE_TEMPLATE_KINDS.transfer_invite.variables.join(',') === 'plate', 'the driver and buyer invites take the plate (v1.87.1)');
+check(PROACTIVE_TEMPLATE_KINDS.overdue_digest.variables.join(',') === 'count,worst_item,worst_days' && PROACTIVE_TEMPLATE_KINDS.overdue_digest.env === 'META_TPL_OVERDUE_DIGEST', 'overdue_digest takes count + worst item + worst days (v1.92.0)');
 check(String(PROACTIVE_TEMPLATE_KINDS.auth_otp.note).includes('Authentication'), 'auth_otp is an Authentication-category template (v1.87.1)');
 // The three senders really pass their kind + variable (source pins, v1.87.1).
 const dashboardSrc = fs.readFileSync('./src/services/dashboard.js', 'utf8');

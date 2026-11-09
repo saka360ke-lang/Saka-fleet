@@ -31,6 +31,9 @@ import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
 import { shortLinkBase } from './linkShortener.js';
 import { logWriteFailure } from './systemErrors.js';
 import { isSuperadminPhone } from './superadminIdentity.js';
+// v1.92.0 (Phase 29) — LIVE earnings only (archived rows belong to the seller's
+// history view), with the rule-50 un-migrated-schema degrade.
+import { selectLiveEarnings } from './earningsScope.js';
 // v1.82.0 (Phase 21) — WhatsApp-native sign-in: the 6-digit code travels over
 // WhatsApp (the email magic link is retired and kept only as deprecated code).
 import { sendWhatsAppText } from './metaMessenger.js';
@@ -1139,6 +1142,11 @@ export function parseRecordsFilters(query = {}, { vehicleIds = [], now = new Dat
     return { ok: false, reason: 'page_too_far', error: 'That page is too far back — narrow the dates or search instead.' };
   }
 
+  // v1.92.0 (Phase 29) — `?history=1` shows the earnings archived by YOUR
+  // completed passbook sales (the buyer never sees them; the seller always can).
+  const historyRaw = String(pick(raw.history) || '').trim().toLowerCase();
+  const history = ['1', 'true', 'on', 'yes'].includes(historyRaw);
+
   return {
     ok: true,
     filters: {
@@ -1149,7 +1157,8 @@ export function parseRecordsFilters(query = {}, { vehicleIds = [], now = new Dat
       label: cleanRecordsTerm(rawLabel),
       keyword: cleanRecordsTerm(rawKeyword),
       page,
-      pageSize: RECORDS_PAGE_SIZE
+      pageSize: RECORDS_PAGE_SIZE,
+      history
     }
   };
 }
@@ -1244,10 +1253,11 @@ export async function queryOwnerRecords({
     ).order('created_at', { ascending: false }).range(0, perTable - 1);
 
     const earningQuery = includeEarnings
-      ? applyRecordFilters(
-          supabase.from('private_earnings').select('*'),
-          { table: 'private_earnings', filters, vehicleIds: ids }
-        ).order('logged_at', { ascending: false }).range(0, perTable - 1)
+      ? selectLiveEarnings(supabase, {
+          apply: (query) => applyRecordFilters(query, { table: 'private_earnings', filters, vehicleIds: ids })
+            .order('logged_at', { ascending: false })
+            .range(0, perTable - 1)
+        })
       : null;
 
     const [expenseResult, earningResult] = await Promise.all([
@@ -1265,10 +1275,11 @@ export async function queryOwnerRecords({
         { table: 'expense_logs', filters, vehicleIds: ids }
       ),
       includeEarnings
-        ? applyRecordFilters(
-            supabase.from('private_earnings').select('id', { count: 'exact', head: true }),
-            { table: 'private_earnings', filters, vehicleIds: ids }
-          )
+        ? selectLiveEarnings(supabase, {
+            columns: 'id',
+            selectOptions: { count: 'exact', head: true },
+            apply: (query) => applyRecordFilters(query, { table: 'private_earnings', filters, vehicleIds: ids })
+          })
         : Promise.resolve({ count: 0 })
     ]);
     const total = Number(counts[0]?.count || 0) + Number(counts[1]?.count || 0);
@@ -1308,6 +1319,118 @@ export async function queryOwnerRecords({
   } catch (err) {
     logWriteFailure(supabase, 'dashboard.queryOwnerRecords', err);
     return { ...empty, page: Math.floor(start / RECORDS_PAGE_SIZE), pageSize: size };
+  }
+}
+
+/**
+ * v1.92.0 (Phase 29) — the seller's HISTORY view: earnings archived by THIS
+ * owner's completed passbook transfers.
+ *
+ * Scoped through `passbook_transfers.from_owner_id` (never through live vehicle
+ * ownership — the vehicle belongs to the buyer now), so a seller always keeps
+ * their own money history while the buyer sees none of it. Same date/label/
+ * keyword filter family as the live records table; expenses are deliberately
+ * absent (the passbook's expense history travels with the asset by design).
+ */
+export async function queryArchivedEarnings({
+  supabase,
+  ownerId = null,
+  filters = {},
+  countryInfo = null,
+  profile = null,
+  pageSize = RECORDS_PAGE_SIZE,
+  offset = null
+} = {}) {
+  const empty = { ok: false, rows: [], total: 0, hasMore: false, page: 0, pageSize: RECORDS_PAGE_SIZE, truncated: false, history: true };
+  if (!supabase || !ownerId) return empty;
+  const size = Math.max(1, Math.min(RECORDS_EXPORT_MAX_ROWS, Number(pageSize) || RECORDS_PAGE_SIZE));
+  const hasOffset = offset !== null && offset !== undefined && Number.isFinite(Number(offset));
+  const start = hasOffset ? Math.max(0, Number(offset)) : Math.max(0, Number(filters.page) || 0) * RECORDS_PAGE_SIZE;
+  const ctx = buildGlobalContext(countryInfo, profile);
+  try {
+    const { data: transfers, error: transferErr } = await supabase
+      .from('passbook_transfers')
+      .select('id, vehicle_id, completed_at')
+      .eq('from_owner_id', ownerId)
+      .eq('status', 'COMPLETED')
+      .limit(200);
+    if (transferErr) {
+      logWriteFailure(supabase, 'dashboard.queryArchivedEarnings', transferErr);
+      return empty;
+    }
+    const transferIds = (transfers || []).map((row) => row.id).filter(Boolean);
+    if (transferIds.length === 0) return { ...empty, ok: true };
+
+    const applyFilters = (query) => {
+      let scoped = query
+        .gte('logged_at', nairobiDayStartIso(filters.from))
+        .lt('logged_at', nairobiNextDayStartIso(filters.to))
+        .in('archived_by_transfer_id', transferIds);
+      if (filters.label) scoped = scoped.ilike('label', `%${filters.label}%`);
+      if (filters.keyword) scoped = scoped.or(`label.ilike.%${filters.keyword}%,notes.ilike.%${filters.keyword}%`);
+      return scoped;
+    };
+
+    const [rowsResult, countResult] = await Promise.all([
+      applyFilters(supabase.from('private_earnings').select('*'))
+        .order('logged_at', { ascending: false })
+        .range(0, start + size),
+      applyFilters(supabase.from('private_earnings').select('id', { count: 'exact', head: true }))
+    ]);
+    if (rowsResult.error) {
+      logWriteFailure(supabase, 'dashboard.queryArchivedEarnings', rowsResult.error);
+      return empty;
+    }
+    const raw = rowsResult.data || [];
+
+    // Plates: the vehicles now belong to the buyer, so they are fetched by id
+    // purely for the seller's own label (the seller already knows the plate).
+    const vehicleIds = [...new Set(raw.map((row) => row.vehicle_id).filter(Boolean))];
+    let plateById = new Map();
+    if (vehicleIds.length) {
+      try {
+        const { data } = await supabase.from('vehicles').select('id, plate_number').in('id', vehicleIds);
+        plateById = new Map((data || []).map((vehicle) => [vehicle.id, vehicle.plate_number]));
+      } catch { plateById = new Map(); }
+    }
+    const transferById = new Map((transfers || []).map((row) => [row.id, row]));
+
+    const normalized = raw.map((row) => {
+      const base = earningToLedgerRow(row, { ctx, vehiclePlate: plateById.get(row.vehicle_id) || null });
+      return {
+        ...base,
+        id: row.id,
+        sourceId: row.id,
+        kind: 'earning',
+        vehicleId: row.vehicle_id || null,
+        typeLabel: row.earning_type || 'Earning',
+        notes: row.notes || null,
+        label: row.label || null,
+        archived: true,
+        archivedAt: row.archived_at || null,
+        transferId: row.archived_by_transfer_id || null,
+        transferCompletedAt: transferById.get(row.archived_by_transfer_id)?.completed_at || null,
+        receiptStatus: 'none',
+        receiptId: null,
+        raw: row
+      };
+    }).filter((row) => row.at);
+
+    const total = Number(countResult?.count || 0);
+    const rows = normalized.slice(0, size);
+    return {
+      ok: true,
+      rows,
+      total,
+      hasMore: normalized.length > size,
+      page: Math.floor(start / RECORDS_PAGE_SIZE),
+      pageSize: size,
+      truncated: size >= RECORDS_EXPORT_MAX_ROWS && normalized.length > size,
+      history: true
+    };
+  } catch (err) {
+    logWriteFailure(supabase, 'dashboard.queryArchivedEarnings', err);
+    return empty;
   }
 }
 
@@ -1546,7 +1669,12 @@ export async function buildRecordsPdf(rows = [], filters = {}, {
   countryInfo = null,
   vehicles = [],
   truncated = false,
-  useStandardFonts = false
+  useStandardFonts = false,
+  // v1.92.0 (Phase 29) — the Final Earnings Report reuses this exact renderer,
+  // changing only its headings and note (one ledger engine, never a second).
+  heading = 'Records & Ledger',
+  ledgerTitle = 'Records',
+  note = 'Figures are engine-calculated from your own ledger — nothing is estimated.'
 } = {}) {
   const ctx = buildGlobalContext(countryInfo, profile);
   const list = rows || [];
@@ -1560,7 +1688,7 @@ export async function buildRecordsPdf(rows = [], filters = {}, {
     ctx,
     includeEarnings: true,
     includeVehicle: vehicles.length > 1,
-    title: 'Records',
+    title: ledgerTitle,
     subtitle: period || null,
     footnote: truncated
       ? `Showing the newest ${list.length} records — narrow the dates for a complete export.`
@@ -1571,7 +1699,7 @@ export async function buildRecordsPdf(rows = [], filters = {}, {
   const earned = ledger.totals.earningTotal;
   const net = ledger.totals.net;
   return buildProReportPdf({
-    title: 'Records & Ledger',
+    title: heading,
     subtitle: `${period} · ${list.length} record(s)`,
     reportType: 'financial',
     periodLabel: period || 'Selected period',
@@ -1596,7 +1724,7 @@ export async function buildRecordsPdf(rows = [], filters = {}, {
       { label: 'Records', value: String(list.length), hint: truncated ? 'newest shown' : 'all in this filter' }
     ],
     ledgers: [ledger],
-    notes: ['Figures are engine-calculated from your own ledger — nothing is estimated.']
+    notes: [note]
   });
 }
 
@@ -3273,6 +3401,9 @@ export function recordsQueryString(filters = {}, overrides = {}) {
   if (merged.label) params.set('label', merged.label);
   if (merged.keyword) params.set('keyword', merged.keyword);
   if (merged.page) params.set('page', String(merged.page));
+  // v1.92.0 (Phase 29) — the history toggle rides every link (table, pager,
+  // exports) so a history view can never silently flip back to live records.
+  if (merged.history) params.set('history', '1');
   return params.toString();
 }
 
@@ -3292,6 +3423,13 @@ export function renderRecordsPage({ data, filters = {}, vehicles = [], emailMask
   const pageSize = Number(data.pageSize || RECORDS_PAGE_SIZE);
   const firstRow = rows.length ? page * RECORDS_PAGE_SIZE + 1 : 0;
   const lastRow = rows.length ? page * RECORDS_PAGE_SIZE + rows.length : 0;
+  // v1.92.0 (Phase 29) — the seller's history view (archived earnings).
+  const historyMode = Boolean(filters.history);
+  const viewToggle = `
+<div class="filters-actions" style="margin-bottom:10px;">
+  <a href="/d/records" class="chip${historyMode ? '' : ' ok'}">All records</a>
+  <a href="/d/records?history=1" class="chip${historyMode ? ' ok' : ''}">Transferred (history)</a>
+</div>`;
 
   const typeOptions = EXPENSE_TYPES.map((type) => type.value)
     .filter((value, index, list) => value && list.indexOf(value) === index)
@@ -3304,15 +3442,16 @@ export function renderRecordsPage({ data, filters = {}, vehicles = [], emailMask
   const form = `
 <form method="GET" action="/d/records" class="filters card">
   ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
+  ${historyMode ? '<input type="hidden" name="history" value="1">' : ''}
   <label>From<input type="date" name="from" value="${escapeHtml(filters.from || '')}"></label>
   <label>To<input type="date" name="to" value="${escapeHtml(filters.to || '')}"></label>
-  <label>Type<select name="type"><option value="">All types</option>${typeOptions}</select></label>
-  <label>Vehicle<select name="vehicle"><option value="">All vehicles</option>${vehicleOptions}</select></label>
+  ${historyMode ? '' : `<label>Type<select name="type"><option value="">All types</option>${typeOptions}</select></label>
+  <label>Vehicle<select name="vehicle"><option value="">All vehicles</option>${vehicleOptions}</select></label>`}
   <label>Label<input type="text" name="label" maxlength="${RECORDS_MAX_QUERY_CHARS}" value="${escapeHtml(filters.label || '')}" placeholder="karen run"></label>
   <label>Search<input type="text" name="keyword" maxlength="${RECORDS_MAX_QUERY_CHARS}" value="${escapeHtml(filters.keyword || '')}" placeholder="notes or vendor"></label>
   <div class="filters-actions">
     <button type="submit">Apply filters</button>
-    <a href="/d/records">Clear</a>
+    <a href="${historyMode ? '/d/records?history=1' : '/d/records'}">Clear</a>
   </div>
 </form>`;
 
@@ -3325,11 +3464,11 @@ export function renderRecordsPage({ data, filters = {}, vehicles = [], emailMask
     return `
       <tr>
         <td>${escapeHtml(formatDate(row.at, data.locale, { timeZone: data.timeZone }))}</td>
-        <td><span class="chip">${escapeHtml(row.kindLabel || row.kind || '')}</span></td>
+        <td><span class="chip">${escapeHtml(row.kindLabel || row.kind || '')}</span>${row.archived ? ' <span class="chip bad">Archived</span>' : ''}</td>
         <td>${escapeHtml(row.vehicle || '—')}</td>
         <td>${escapeHtml(row.description || '')}</td>
         <td class="num">${escapeHtml(money(row.amount))}</td>
-        <td>${receipt}</td>
+        <td>${row.archived ? '<span class="muted">—</span>' : receipt}</td>
       </tr>`;
   }).join('');
 
@@ -3340,7 +3479,9 @@ export function renderRecordsPage({ data, filters = {}, vehicles = [], emailMask
           <tbody>${tableRows}</tbody>
         </table>
       </div>`
-    : '<div class="card"><p class="muted">Nothing in these filters — widen the dates or clear the search.</p></div>';
+    : `<div class="card"><p class="muted">${historyMode
+      ? 'No archived earnings in these filters — they appear here after a completed passbook transfer.'
+      : 'Nothing in these filters — widen the dates or clear the search.'}</p></div>`;
 
   const base = recordsQueryString(filters, { page: 0 });
   const exports = `
@@ -3355,14 +3496,16 @@ export function renderRecordsPage({ data, filters = {}, vehicles = [], emailMask
   if (data.hasMore) pager.push(`<a href="/d/records?${escapeHtml(recordsQueryString(filters, { page: page + 1 }))}">Older →</a>`);
 
   const body = `
-<h1>Records</h1>
+<h1>${historyMode ? 'Transferred assets (history)' : 'Records'}</h1>
+${viewToggle}
+${historyMode ? '<p class="muted">Earnings archived when you sold an asset — your money history stays yours, and the buyer never sees it.</p>' : ''}
 <p class="muted">${total} record${total === 1 ? '' : 's'} · signed in as ${escapeHtml(emailMasked)} · ${rows.length ? `showing ${firstRow}–${lastRow}` : 'nothing to show'}</p>
 ${form}
 ${table}
 ${rows.length ? `<p class="muted" style="font-size:13px;">Page ${page + 1}${data.hasMore ? '' : ' (last page)'} · ${pageSize} per page</p>` : ''}
 ${pager.length ? `<p class="muted">${pager.join(' · ')}</p>` : ''}
 ${exports}`;
-  return renderPageShell('Records', body, { headerRight: dashboardNav() });
+  return renderPageShell(historyMode ? 'Transferred earnings' : 'Records', body, { headerRight: dashboardNav() });
 }
 
 /**
@@ -4741,6 +4884,8 @@ export default {
   nairobiDateOf,
   loadOwnerVehicles,
   queryOwnerRecords,
+  // v1.92.0 (Phase 29) — the seller's archived-earnings history view.
+  queryArchivedEarnings,
   matchReceiptForExpense,
   attachReceiptMatches,
   signReceiptUrl,

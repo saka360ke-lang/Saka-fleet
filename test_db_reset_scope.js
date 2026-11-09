@@ -135,6 +135,28 @@ function run() {
     'both carriers index target_profile_id'
   );
 
+  console.log('--- Test 10: Phase 29 carriers (earnings archive + overdue digest) ---');
+  const transfersSource = fs.readFileSync(path.join(here, 'src', 'services', 'transfers.js'), 'utf8');
+  const remindersSource = fs.readFileSync(path.join(here, 'src', 'services', 'maintenanceReminders.js'), 'utf8');
+  const earningsMigrationSource = fs.readFileSync(path.join(here, 'scripts', 'run_earnings_archive_migration.js'), 'utf8');
+  const digestMigrationSource = fs.readFileSync(path.join(here, 'scripts', 'run_overdue_digest_migration.js'), 'utf8');
+  for (const table of ['earnings_report_queue', 'overdue_digest_log']) {
+    assert(RESET_TABLES.includes(table), `${table} is in the wipe scope (v1.92.0)`);
+    assert(truncateBlock().includes(`public.${table}`), `TRUNCATE covers public.${table} (v1.92.0)`);
+    assert(provisionSource.includes(`public.${table}`), `the staging schema carries ${table} (v1.92.0)`);
+  }
+  for (const [name, source] of [['the transfers engine', transfersSource], ['the earnings migration', earningsMigrationSource]]) {
+    assert((source.includes('EARNINGS_ARCHIVE_SQL') || source.includes('ALTER TABLE public.private_earnings')) && source.includes('archived_by_transfer_id'), `${name} carries the archive columns (v1.92.0)`);
+  }
+  assert(/ADD COLUMN IF NOT EXISTS archived_at timestamp with time zone/.test(transfersSource), 'the archive DDL is additive and idempotent');
+  assert(transfersSource.includes("EARNINGS_REPORT_QUEUE_TABLE = 'earnings_report_queue'"), 'the earnings-report queue has one table constant');
+  for (const [name, source] of [['the reminder engine', remindersSource], ['the digest migration', digestMigrationSource]]) {
+    assert(source.includes('overdue_digest_log') && (source.includes('OVERDUE_DIGEST_SQL') || source.includes('CREATE TABLE IF NOT EXISTS public.overdue_digest_log')), `${name} carries the digest table (v1.92.0)`);
+  }
+  assert(/CREATE TABLE IF NOT EXISTS public\.overdue_digest_log/.test(remindersSource), 'the digest DDL creates the table idempotently');
+  assert(scriptSource.includes('DELETE FROM public.earnings_report_queue WHERE owner_id IN'), 'targeted cascade clears the report queue by owner (v1.92.0)');
+  assert(scriptSource.includes('DELETE FROM public.overdue_digest_log WHERE owner_id IN'), 'targeted cascade clears digest episodes by owner (v1.92.0)');
+
   console.log(`\n🎉 ${passed} reset-scope assertions passed.`);
 }
 

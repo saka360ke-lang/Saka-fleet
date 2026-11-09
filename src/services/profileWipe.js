@@ -140,6 +140,11 @@ export async function wipeProfileForSignup(supabase, rawPhone) {
   await del('admin_impersonations', 'target_profile_id', profileIds);
   await del('admin_impersonations', 'admin_profile_id', profileIds);
 
+  // v1.92.0 (Phase 29) — the seller's Final Earnings Report queue and any
+  // overdue-digest episode are account data and must not outlive the profile.
+  await del('earnings_report_queue', 'owner_id', profileIds);
+  await del('overdue_digest_log', 'owner_id', profileIds);
+
   // The VIN provenance ledger is erased ONLY here (an explicit admin full wipe),
   // so a fresh sign-up can re-register the same vehicle cleanly.
   await del('vin_registry', 'vin', vins);

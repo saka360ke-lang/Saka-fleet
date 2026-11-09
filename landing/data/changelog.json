@@ -1,6 +1,13 @@
 {
-  "latest": "1.91.0",
+  "latest": "1.92.0",
   "entries": [
+    {
+      "version": "1.92.0",
+      "date": "2026-11-09",
+      "title": "Your earnings stay yours",
+      "preview": "Hand a vehicle to a buyer without losing your earnings - and overdue documents now arrive as one clear digest.",
+      "summary": "Two real fixes. First: when you hand a vehicle to a buyer through a passbook transfer, your earnings history for that vehicle now stays yours. Before, the moment the handover completed, your own earnings vanished from your records while the new owner could see figures they never earned. Now that history is archived at the handover, the buyer never sees it, and you can open it any time under Records - Transferred (history) on your dashboard. About ten minutes after the handover you also receive a final earnings report by email, with the same report attached as a PDF and a link back to the history view. If anything goes wrong while finalizing the handover, the transfer stops cleanly and nothing changes. Second: overdue compliance documents no longer arrive as a burst of one message per item. The first overdue item still tells you immediately; after that you get one clear digest three days later and one a week later, naming how many items are overdue, the oldest one and how long it has been past due - at most three messages per episode, no matter how many documents are late. Renew everything and the countdown stops. As always, reply reminders any time for the full list."
+    },
     {
       "version": "1.91.0",
       "date": "2026-11-09",

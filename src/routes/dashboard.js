@@ -58,6 +58,8 @@ import {
   buildVehiclePage,
   parseRecordsFilters,
   queryOwnerRecords,
+  // v1.92.0 (Phase 29) — the seller's archived-earnings history (?history=1).
+  queryArchivedEarnings,
   loadOwnerVehicles,
   attachReceiptMatches,
   signReceiptUrl,
@@ -596,7 +598,9 @@ export async function registerDashboardRoutes(fastify, {
         const parsed = parseRecordsFilters(request.query || {}, { vehicleIds });
         const filters = parsed.ok ? parsed.filters : parseRecordsFilters({}, { vehicleIds }).filters;
         const result = parsed.ok
-          ? await queryOwnerRecords({ supabase, ownerId: session.ownerId, vehicleIds, vehicles, filters, countryInfo, profile })
+          ? (parsed.filters.history
+            ? await queryArchivedEarnings({ supabase, ownerId: session.ownerId, filters, countryInfo, profile })
+            : await queryOwnerRecords({ supabase, ownerId: session.ownerId, vehicleIds, vehicles, filters, countryInfo, profile }))
           : { ok: true, rows: [], total: 0, hasMore: false, page: 0, pageSize: RECORDS_PAGE_SIZE };
         const rows = parsed.ok ? await attachReceiptMatches({ supabase, rows: result.rows }) : [];
         const data = { ...result, rows, currency: ctx.currency, locale: ctx.locale, timeZone: ctx.timeZone };
@@ -639,17 +643,27 @@ export async function registerDashboardRoutes(fastify, {
           });
           return sendHtml(reply, 400, page);
         }
-        const result = await queryOwnerRecords({
-          supabase,
-          ownerId: session.ownerId,
-          vehicleIds,
-          vehicles,
-          filters: parsed.filters,
-          countryInfo,
-          profile,
-          pageSize: RECORDS_EXPORT_MAX_ROWS,
-          offset: 0
-        });
+        const result = await (parsed.filters.history
+          ? queryArchivedEarnings({
+            supabase,
+            ownerId: session.ownerId,
+            filters: parsed.filters,
+            countryInfo,
+            profile,
+            pageSize: RECORDS_EXPORT_MAX_ROWS,
+            offset: 0
+          })
+          : queryOwnerRecords({
+            supabase,
+            ownerId: session.ownerId,
+            vehicleIds,
+            vehicles,
+            filters: parsed.filters,
+            countryInfo,
+            profile,
+            pageSize: RECORDS_EXPORT_MAX_ROWS,
+            offset: 0
+          }));
         if (!result.ok) {
           // A failed query must never look like an empty export (rule 50 honesty).
           await logSystemError(supabase, new Error('records query failed'), '/d/records/csv');
@@ -693,17 +707,27 @@ export async function registerDashboardRoutes(fastify, {
           });
           return sendHtml(reply, 400, page);
         }
-        const result = await queryOwnerRecords({
-          supabase,
-          ownerId: session.ownerId,
-          vehicleIds,
-          vehicles,
-          filters: parsed.filters,
-          countryInfo,
-          profile,
-          pageSize: RECORDS_EXPORT_MAX_ROWS,
-          offset: 0
-        });
+        const result = await (parsed.filters.history
+          ? queryArchivedEarnings({
+            supabase,
+            ownerId: session.ownerId,
+            filters: parsed.filters,
+            countryInfo,
+            profile,
+            pageSize: RECORDS_EXPORT_MAX_ROWS,
+            offset: 0
+          })
+          : queryOwnerRecords({
+            supabase,
+            ownerId: session.ownerId,
+            vehicleIds,
+            vehicles,
+            filters: parsed.filters,
+            countryInfo,
+            profile,
+            pageSize: RECORDS_EXPORT_MAX_ROWS,
+            offset: 0
+          }));
         if (!result.ok) {
           await logSystemError(supabase, new Error('records query failed'), '/d/records/pdf');
           const page = renderErrorPage(500, 'That export could not be built — please try again in a moment.');

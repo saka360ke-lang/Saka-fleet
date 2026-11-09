@@ -3,6 +3,8 @@ import { analyzeFuelEconomy } from './fuelEconomy.js';
 import { getAssetMetricProfile } from './assetMetrics.js';
 import { buildLedgerGroups } from './reportLedger.js';
 import { EXPENSE_CATEGORIES, expenseCategoryOf } from './expenseCatalog.js';
+// v1.92.0 (Phase 29) — LIVE earnings only (archived = the seller's history).
+import { selectLiveEarnings } from './earningsScope.js';
 
 /**
  * Saka Fleet — Bespoke Report Metric Registry (v1.18.0)
@@ -160,7 +162,10 @@ export async function buildCustomReport({
   let earnings = [];
   if (access?.lane !== 'driver') {
     try {
-      const { data } = await supabase.from('private_earnings').select('*').gte('created_at', bounds.from).lte('created_at', bounds.to).limit(1000);
+      // v1.92.0 (Phase 29) — archived earnings belong to the seller's history.
+      const { data } = await selectLiveEarnings(supabase, {
+        apply: (query) => query.gte('created_at', bounds.from).lte('created_at', bounds.to).limit(1000)
+      });
       earnings = (data || []).filter((row) => !scopedIds.length || scopedIds.includes(row.vehicle_id));
     } catch { earnings = []; }
   }

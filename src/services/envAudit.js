@@ -90,7 +90,9 @@ export const ENV_SECTIONS = Object.freeze([
       // outside the 24-hour window (Authentication template + two Utility ones).
       'META_TPL_AUTH_OTP',
       'META_TPL_DRIVER_INVITE',
-      'META_TPL_TRANSFER_INVITE'
+      'META_TPL_TRANSFER_INVITE',
+      // v1.92.0 (Phase 29) — the T+3 / T+7 overdue compliance digest.
+      'META_TPL_OVERDUE_DIGEST'
     ]
   },
   { section: 'EMAIL', keys: ['RESEND_API_KEY', 'EMAIL_INBOUND_SECRET', 'EMAIL_INBOUND_SIGNING_SECRET', 'CUSTOMER_CARE_PHONE', 'CUSTOMER_CARE_NAME', 'CARE_THREAD_WINDOW_HOURS', 'CARE_TICKET_MAX_OPEN',

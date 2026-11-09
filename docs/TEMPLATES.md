@@ -173,6 +173,19 @@ Each entry: kind | env knob | audience | recommended category | variables
     note: the buyer's 6-digit verification code is EMAILED (never WhatsApp), so
           only the invitation needs a template.
 
+17. overdue_digest  (v1.92.0 — Phase 29)
+    env: META_TPL_OVERDUE_DIGEST
+    audience: owner
+    category: Utility
+    variables: {{1}} = count (for example 3), {{2}} = worst item (for example
+               Insurance (KDA 123A)), {{3}} = worst days past due (for example 5)
+    body: Hi! It's Saka. You have {{1}} overdue compliance item(s). The oldest
+          is {{2}} — {{3}} day(s) past due. Reply reminders to see them all.
+    note: D1 hybrid — the FIRST overdue item of an episode still fires its
+          immediate one-shot alert; every later item is stamped but not sent,
+          and this digest fires once at T+3 and once at T+7 of the episode
+          (three messages maximum per episode regardless of item count).
+
 ------------------------------------------------------------
 2. Submission workflow (Meta Business Manager)
 ------------------------------------------------------------
@@ -206,6 +219,7 @@ Suggested template names:
     saka_otp                (category Authentication)
     saka_driver_invite
     saka_transfer_invite
+    saka_overdue_digest
 
 ------------------------------------------------------------
 3. Setting the knobs in Cloud Run
@@ -227,7 +241,7 @@ Verify parity afterwards:
     npm run env:audit
     npm run health
 
-The env registry registers all 13 knobs under META WHATSAPP, so a typo in a
+The env registry registers every META template knob under META WHATSAPP, so a typo in a
 knob name is reported (names only, never values).
 
 ------------------------------------------------------------

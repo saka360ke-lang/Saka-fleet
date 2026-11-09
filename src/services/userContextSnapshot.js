@@ -1,4 +1,6 @@
 import { getTierLabel } from './subscriptionTiers.js';
+// v1.92.0 (Phase 29) — LIVE earnings only (archived = the seller's history).
+import { selectLiveEarnings } from './earningsScope.js';
 
 /**
  * Saka Fleet — User Context Snapshot (v1.27.0).
@@ -246,12 +248,11 @@ export async function buildUserContextSnapshot({ supabase, profile = null, vehic
           .in('vehicle_id', vehicleIds)
           .order('created_at', { ascending: false })
           .limit(3);
-        const { data: recentEarnings } = await supabase
-          .from('private_earnings')
-          .select('revenue_amount,earning_type,created_at,vehicle_id')
-          .in('vehicle_id', vehicleIds)
-          .order('created_at', { ascending: false })
-          .limit(3);
+        const { data: recentEarnings } = await selectLiveEarnings(supabase, {
+          // v1.92.0 (Phase 29) — LIVE earnings only (archived = seller history).
+          columns: 'revenue_amount,earning_type,created_at,vehicle_id',
+          apply: (query) => query.in('vehicle_id', vehicleIds).order('created_at', { ascending: false }).limit(3)
+        });
         const plateFor = (vehicleId) => data.vehicles.find((v) => v.id === vehicleId)?.plate || null;
         for (const row of (Array.isArray(recentExpenses) ? recentExpenses : [])) {
           const plate = plateFor(row.vehicle_id);

@@ -201,6 +201,62 @@ export async function sendMonthlyReportEmail({
     }
 }
 
+/**
+ * Saka Fleet — Final Earnings Report email (v1.92.0, Phase 29).
+ * Sent to the SELLER ~10 minutes after a passbook transfer completed: their
+ * earnings history has been archived (and stays theirs — the buyer never sees
+ * it). The PDF rides the same records renderer (D2: attachment + dashboard
+ * link in the body). Never throws: `false` = honest failure the queue retries.
+ */
+export async function sendFinalEarningsReportEmail({
+    to,
+    firstName = '',
+    plateLabel = 'Asset',
+    transferDate = '',
+    entryCount = 0,
+    totalAmountLabel = '',
+    dashboardUrl = 'https://app.sakafleet.com/d/records?history=1',
+    pdfBuffer = null
+} = {}) {
+    if (!to || !pdfBuffer) return false;
+    const name = String(firstName || '').trim();
+    const plate = String(plateLabel || 'Asset').trim();
+    const safePlate = plate.replace(/[^\w\s-]/g, '').replace(/\s+/g, '_') || 'asset';
+    const when = String(transferDate || '').trim();
+    try {
+        const { data, error } = await sendResendEmail({
+            from: 'Saka Assistant <reports@reports.sakafleet.com>',
+            to: [to],
+            subject: `Your final earnings report — ${plate}`,
+            html: `
+                <div style="font-family: Arial, sans-serif; color: #333; max-width: 560px; margin: auto;">
+                    <h2 style="color: #0f172a;">Your final earnings report — ${plate}</h2>
+                    <p>${name ? `Hello ${name},` : 'Hello,'}</p>
+                    <p>Your passbook transfer for <strong>${plate}</strong>${when ? ` on ${when}` : ''} is complete. Your earnings history for this asset — ${Number(entryCount) || 0} entr${Number(entryCount) === 1 ? 'y' : 'ies'}${totalAmountLabel ? ` totalling ${totalAmountLabel}` : ''} — has been archived and it stays yours. The new owner never sees it.</p>
+                    <p>Your copy is attached as a PDF. You can also open it any time on your dashboard → Records → <strong>Transferred (history)</strong>: <a href="${dashboardUrl}">${dashboardUrl}</a></p>
+                    <p style="font-size: 12px; color: #64748b;">This is a one-time report for a completed passbook transfer. Your live records continue exactly as before.</p>
+                    <p>Best regards,<br><strong>Saka Assistant</strong></p>
+                </div>
+            `,
+            attachments: [
+                {
+                    filename: `saka-earnings-${safePlate}.pdf`,
+                    content: pdfBuffer
+                }
+            ]
+        });
+        if (error) {
+            console.error('[Resend final earnings] API error:', error.message || error);
+            return false;
+        }
+        console.log(`[Resend final earnings] Report dispatched to ${to}. ID: ${data?.id || 'n/a'}`);
+        return true;
+    } catch (err) {
+        console.error('[Resend final earnings] Exception:', err.message);
+        return false;
+    }
+}
+
 export async function sendMfaEmail(targetEmail, code) {
     try {
         const { data, error } = await sendResendEmail({

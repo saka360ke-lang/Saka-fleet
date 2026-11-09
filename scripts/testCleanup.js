@@ -142,6 +142,9 @@ export async function cleanupTestData({
         summary.admin_impersonations_target = await deleteIn(client, 'admin_impersonations', 'target_profile_id', profileIds, verbose);
         summary.admin_impersonations_admin = await deleteIn(client, 'admin_impersonations', 'admin_profile_id', profileIds, verbose);
         summary.dashboard_sessions = await deleteIn(client, 'dashboard_sessions', 'owner_id', profileIds, verbose);
+        // v1.92.0 (Phase 29) — the Final Earnings Report queue + digest episodes.
+        summary.earnings_report_queue = await deleteIn(client, 'earnings_report_queue', 'owner_id', profileIds, verbose);
+        summary.overdue_digest_log = await deleteIn(client, 'overdue_digest_log', 'owner_id', profileIds, verbose);
       }
     }
   } catch {}

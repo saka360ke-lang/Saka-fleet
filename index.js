@@ -17,7 +17,12 @@ import { ensureCountrySttLocaleColumn } from './src/services/countryBucket.js';
 import { ensureTrialSchemaDefaults } from './src/services/trialSchema.js';
 import { handleWhatsAppWebhook as handleWhatsAppWebhookRoute, handleWhatsAppWebhookVerification } from './src/routes/whatsapp/webhook.js';
 import { verifyPaystackSignature } from './src/services/paystack.js';
-import { runReminderSweep } from './src/services/maintenanceReminders.js';
+import { runReminderSweep, ensureOverdueDigestTable } from './src/services/maintenanceReminders.js';
+import { ensureEarningsArchiveSchema } from './src/services/transfers.js';
+// v1.92.0 (Phase 29) — the seller's Final Earnings Report queue (30s worker).
+import { runEarningsReportQueue, pruneEarningsReportQueue } from './src/workers/earningsReports.js';
+// v1.92.0 (Phase 29) — LIVE earnings only (archived = the seller's history).
+import { selectLiveEarnings } from './src/services/earningsScope.js';
 import { runWeeklyReportsSweep } from './src/workers/weeklyReports.js';
 import { runMonthlyReportsSweep } from './src/workers/monthlyReports.js';
 import { ensureComplianceCatalog, reviewComplianceCatalog, COMPLIANCE_CATALOG_VERSION } from './src/services/complianceCatalog.js';
@@ -270,6 +275,13 @@ async function processPendingOwnerNotifications() {
 }
 
 setInterval(processPendingOwnerNotifications, 30000); // Check every 30s
+
+// Worker (v1.92.0, Phase 29): the seller's Final Earnings Report queue — one
+// 10-minute-delayed PDF email per completed passbook transfer. The archive
+// itself is synchronous inside completePassbookTransfer; only the email waits.
+setInterval(() => {
+  runEarningsReportQueue({ supabase }).catch((err) => console.warn('[Worker] Earnings report queue failed:', err.message));
+}, 30000);
 
 // Worker: background follow-up lane (v1.16.0). Slow jobs (fleet reports, deep
 // audits) finish here and arrive as a follow-up message while the user keeps
@@ -835,12 +847,11 @@ async function processAutoAudits() {
       let recentOps = [];
 
       for (const v of ownerData.vehicles) {
-        // Earnings
-        const { data: earnings } = await supabase
-          .from('private_earnings')
-          .select('revenue_amount')
-          .eq('vehicle_id', v.id)
-          .gte('logged_at', `${todayStr}T00:00:00+03:00`);
+        // Earnings (v1.92.0 — LIVE rows only; archived = the seller's history)
+        const { data: earnings } = await selectLiveEarnings(supabase, {
+          columns: 'revenue_amount',
+          apply: (query) => query.eq('vehicle_id', v.id).gte('logged_at', `${todayStr}T00:00:00+03:00`)
+        });
 
         const vEarn = earnings ? earnings.reduce((sum, e) => sum + Number(e.revenue_amount), 0) : 0;
         fleetTotalEarnings += vEarn;
@@ -1413,6 +1424,12 @@ const start = async () => {
     await ensureDashboardTable(supabase);
     // v1.91.0 (Phase 28A) — the admin impersonation store (30-minute read-only).
     await ensureAdminImpersonationsTable(supabase);
+    // v1.92.0 (Phase 29) — earnings archive columns + the Final Earnings Report
+    // queue, and the overdue-digest episode table. Fail-soft (rule 50): an
+    // un-migrated schema degrades, it never stops the boot.
+    await ensureEarningsArchiveSchema(supabase);
+    await ensureOverdueDigestTable(supabase);
+    pruneEarningsReportQueue({ supabase }).catch(() => {});
     await ensureLaunchAwardTable(supabase);
     pruneExpiredWebOnboardOtps(supabase).catch(() => {});
     pruneExpiredDashboardSessions(supabase).catch(() => {});

@@ -1,6 +1,8 @@
 import { buildGlobalContext, formatDate, formatMoney, formatNumber, kmToUserDistance } from './globalization.js';
 import { buildLedgerGroups, expenseKind } from './reportLedger.js';
 import { EXPENSE_CATEGORIES, EXPENSE_CATEGORY_KEYS } from './expenseCatalog.js';
+// v1.92.0 (Phase 29) — LIVE earnings only (archived = the seller's history).
+import { selectLiveEarnings } from './earningsScope.js';
 
 /**
  * Saka Fleet — Owner Profile & Asset Portfolio Report (v1.29.0)
@@ -75,7 +77,10 @@ export async function buildOwnerPortfolio({
   } catch { expenses = []; }
   let earnings = [];
   try {
-    const { data } = await supabase.from('private_earnings').select('*').in('vehicle_id', vehicleIds).limit(3000);
+    // v1.92.0 (Phase 29) — archived earnings stay with the seller's history.
+    const { data } = await selectLiveEarnings(supabase, {
+      apply: (query) => query.in('vehicle_id', vehicleIds).limit(3000)
+    });
     earnings = data || [];
   } catch { earnings = []; }
   let reminders = [];

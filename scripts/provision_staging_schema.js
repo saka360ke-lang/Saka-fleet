@@ -311,6 +311,33 @@ CREATE TABLE IF NOT EXISTS public.admin_impersonations (
 );
 CREATE INDEX IF NOT EXISTS idx_admin_impersonations_target ON public.admin_impersonations (target_profile_id);
 CREATE INDEX IF NOT EXISTS idx_admin_impersonations_admin ON public.admin_impersonations (admin_profile_id);
+-- v1.92.0 (Phase 29) — passbook earnings archive: the seller's private earnings
+-- are stamped at handover (the buyer never sees them; the seller keeps them in
+-- /d/records?history=1) and the Final Earnings Report rides a 10-minute queue.
+ALTER TABLE public.private_earnings ADD COLUMN IF NOT EXISTS archived_at timestamp with time zone;
+ALTER TABLE public.private_earnings ADD COLUMN IF NOT EXISTS archived_by_transfer_id uuid REFERENCES public.passbook_transfers(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_private_earnings_archived ON public.private_earnings (archived_by_transfer_id) WHERE archived_at IS NOT NULL;
+CREATE TABLE IF NOT EXISTS public.earnings_report_queue (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  transfer_id uuid NOT NULL UNIQUE REFERENCES public.passbook_transfers(id) ON DELETE CASCADE,
+  owner_id uuid,
+  email text,
+  due_at timestamp with time zone NOT NULL,
+  sent_at timestamp with time zone,
+  attempts integer NOT NULL DEFAULT 0,
+  last_error text,
+  created_at timestamp with time zone NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_earnings_report_queue_due ON public.earnings_report_queue (due_at) WHERE sent_at IS NULL;
+-- v1.92.0 (Phase 29) — ONE row per owner overdue episode (T+3 / T+7 digests).
+CREATE TABLE IF NOT EXISTS public.overdue_digest_log (
+  owner_id uuid PRIMARY KEY,
+  first_overdue_at timestamp with time zone,
+  sent_t3_at timestamp with time zone,
+  sent_t7_at timestamp with time zone,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now()
+);
 -- v1.77.0 (Phase 16) — the monthly PDF summary opt-in. A profiles table created
 -- before this release has no column yet; the ALTER upgrades it in place.
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS monthly_report_opt_in boolean NOT NULL DEFAULT false;

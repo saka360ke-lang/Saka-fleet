@@ -392,6 +392,14 @@ check(/Narrative pre-fills are engine-determined facts/.test(await import('./src
   check(DEFAULT_SAKA_CORE_PROMPT.includes('six superadmin WEB TOOLS'), 'the core prompt names the superadmin web tools (v1.91.0)');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('impersonate an owner READ-ONLY'), 'the core prompt pins read-only impersonation (v1.91.0)');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('reason-stamped and audited'), 'the core prompt states the typed-confirm + audit law (v1.91.0)');
+  // v1.92.0 (Phase 29) — the earnings archive + the overdue digest are stated in
+  // both places (rule 13: prompt and behaviour can never drift).
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('PASSBOOK EARNINGS & OVERDUE DIGEST (v1.92.0'), 'the core prompt names the Phase 29 laws (v1.92.0)');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('Records → *Transferred (history)*'), 'the core prompt names the seller history view (v1.92.0)');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('at most three messages per episode'), 'the core prompt states the digest cap (v1.92.0)');
+  check(SAKA_FLOW_PLAYBOOK.includes('EARNINGS ARCHIVE (v1.92.0)'), 'the dashboard playbook names the transfer earnings archive (v1.92.0)');
+  check(SAKA_FLOW_PLAYBOOK.includes('Transferred (history)'), 'the dashboard playbook points at the history view (v1.92.0)');
+  check(SAKA_FLOW_PLAYBOOK.includes('archived_at + archived_by_transfer_id'), 'the transfer playbook documents the archive columns (v1.92.0)');
 
   console.log(`\n\u2705 ALL AGENT TRAINING TESTS PASSED (${passed} assertions).`);
   console.log('Stateless suite: no real database rows were created, so no cleanup is required.');

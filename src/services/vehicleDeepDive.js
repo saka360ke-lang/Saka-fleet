@@ -4,6 +4,8 @@ import { analyzeFuelEconomy } from './fuelEconomy.js';
 import { getVehicleComplianceStatus } from './vehicleCompliance.js';
 import { buildLedgerGroups, expenseKind } from './reportLedger.js';
 import { EXPENSE_CATEGORIES, EXPENSE_CATEGORY_KEYS } from './expenseCatalog.js';
+// v1.92.0 (Phase 29) — LIVE earnings only (archived = the seller's history).
+import { selectLiveEarnings } from './earningsScope.js';
 
 /**
  * Saka Fleet — Individual Vehicle Deep-Dive (v1.29.0)
@@ -109,7 +111,10 @@ export async function buildVehicleDeepDive({
   const includeEarnings = access?.lane !== 'driver';
   if (includeEarnings) {
     try {
-      const { data } = await supabase.from('private_earnings').select('*').eq('vehicle_id', vehicle.id).limit(2000);
+      // v1.92.0 (Phase 29) — archived earnings belong to the seller's history.
+      const { data } = await selectLiveEarnings(supabase, {
+        apply: (query) => query.eq('vehicle_id', vehicle.id).limit(2000)
+      });
       earnings = data || [];
     } catch { earnings = []; }
   }
