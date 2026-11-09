@@ -1,6 +1,13 @@
 {
-  "latest": "1.87.5",
+  "latest": "1.88.0",
   "entries": [
+    {
+      "version": "1.88.0",
+      "date": "2026-11-09",
+      "title": "Voice notes actually reach Saka, and Free sees a warm door",
+      "preview": "Voice notes now transcribe, and the Free dashboard answer is a warm plan card instead of a cold refusal.",
+      "summary": "Three things. First: a voice note sent today was answered with 'I can't listen to voice notes yet' even though voice transcription shipped in v1.79.0. The live log showed why: the speech service now answers, but it rejected every WhatsApp voice note because the audio configuration declared the Opus format without its sample rate, and Google refuses a rate of zero. Voice notes now declare their rate explicitly (16000, adjustable), and if one still cannot be heard the fallback line is honest about it - 'I couldn't catch that voice note - please type it or send a shorter one' - instead of pretending listening was never built. Second: typing 'dashboard' on the Free plan gave a cold 'that's a paid feature' line. The engine now answers with a warm card: the live dashboard is a paid feature, the same data is available right now as a PDF (*report*), and *subscription* shows the plans (from $9.99/month) - always a next step, never a dead end. Paid and trial accounts keep the sign-in link exactly as before, and the superadmin keeps the admin door. Third: we proved in the suite that an owner's records never disappear when a vehicle is handed to a driver - the records view is scoped to the owner's vehicles, not to who typed the entry."
+    },
     {
       "version": "1.87.5",
       "date": "2026-11-09",

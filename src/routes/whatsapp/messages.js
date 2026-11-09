@@ -827,7 +827,10 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           messageText,
           commandText,
           bucketCountryCode,
-          bucketAssetKind
+          bucketAssetKind,
+          // v1.88.0 — the dashboard lane speaks the caller's plan (free → warm
+          // upsell, trial/paid → sign-in link). Resolved once per turn above.
+          entitlements
         };
         readCtx.recordSpec = inspectRecordQuestion(commandText, readCtx);
 

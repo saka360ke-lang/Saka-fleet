@@ -114,6 +114,12 @@ const DASHBOARD_RE = /^(?:(?:open|show|see|view)\s+(?:me\s+)?(?:my\s+|the\s+)?|(
 // generic A2-style line, so the admin surface is never revealed).
 const DASHBOARD_ADMIN_RE = /^(?:(?:open|show|see|view)\s+(?:me\s+)?(?:my\s+|the\s+)?|(?:my\s+|the\s+)?)(?:web\s+|online\s+)?dashboard\s+admin[.!?]*$/i;
 
+// v1.88.0 — the FREE-plan dashboard answer: a warm upsell, never a cold refusal
+// (D6). Free accounts keep every fact via PDF; the live dashboard unlocks on a
+// trial or a paid plan. Deterministic, zero tokens, no link on Free (the
+// sign-in gate would refuse the number anyway).
+export const DASHBOARD_FREE_UPSELL = '🔒 The live dashboard is a paid feature — plan, vehicles, records, compliance, and reports all in one place, refreshed live.\n\nFree users get the same data via PDF: type *report* to generate one now.\n\nWant to unlock the live dashboard? Type *subscription* — plans start at $9.99/mo.';
+
 function result(reply, intent = 'GENERAL_CHAT') {
   return { intent, extracted_data: {}, reply_message: reply };
 }
@@ -305,8 +311,9 @@ export const READ_COMMANDS = Object.freeze([
       }
       // The superadmin door is exact-phrase + env identity (D2/D4). A stranger
       // gets the generic A2 line, so the admin surface is never revealed.
+      const callerIsSuperadmin = isSuperadminPhone(ctx.senderPhone || ctx.profile?.phone_number);
       if (hit === 'admin') {
-        if (!isSuperadminPhone(ctx.senderPhone || ctx.profile?.phone_number)) {
+        if (!callerIsSuperadmin) {
           return result("That's not something I can do yet — reply *help* to see what I can do.");
         }
         return result(
@@ -316,6 +323,17 @@ export const READ_COMMANDS = Object.freeze([
           '2. I send a 6-digit code to that WhatsApp.\n' +
           '3. Type the code on the page — you are in for 15 minutes.'
         );
+      }
+      // v1.88.0 (Phase 27) — a FREE account gets the warm upsell instead of a
+      // link the sign-in gate would refuse. A missing entitlements snapshot
+      // (older callers/tests) keeps the historical sign-in answer — the page
+      // itself remains the gate. The superadmin always keeps the sign-in door.
+      const entitlements = ctx.entitlements;
+      const freeAccount = Boolean(entitlements)
+        && entitlements.isPaid !== true
+        && entitlements.isTrial !== true;
+      if (freeAccount && !callerIsSuperadmin) {
+        return result(DASHBOARD_FREE_UPSELL);
       }
       return result(
         '🖥️ *Your dashboard*\n\n' +

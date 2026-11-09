@@ -575,6 +575,20 @@ check(!/email/i.test(okText), 'the reply never promises an email');
 const recordsRender = await renderDashboard('records');
 check(recordsRender.rendered.reply_message.includes('https://app.sakafleet.com/d/login'), 'the records alias ships the same door');
 
+// ── v1.88.0 (Phase 27) — the Free-plan warm upsell (never a cold refusal) ───
+const freeRender = await renderDashboard('dashboard', { entitlements: { isTrial: false, isPaid: false } });
+const freeText = freeRender.rendered.reply_message;
+check(freeText.includes('🔒') && /paid feature/.test(freeText), 'a Free account gets the warm upsell, not a cold refusal');
+check(freeText.includes('*report*'), 'the upsell offers the same data as a PDF (*report*)');
+check(freeText.includes('*subscription*') && freeText.includes('$9.99/mo'), 'the upsell points to *subscription* with the engine price');
+check(!freeText.includes('https://app.sakafleet.com/d/login'), 'a Free account is never handed a link the sign-in gate would refuse');
+const trialRender = await renderDashboard('dashboard', { entitlements: { isTrial: true, isPaid: false } });
+check(trialRender.rendered.reply_message.includes('https://app.sakafleet.com/d/login'), 'a live trial gets the sign-in link');
+const paidRender = await renderDashboard('dashboard', { entitlements: { isTrial: false, isPaid: true } });
+check(paidRender.rendered.reply_message.includes('https://app.sakafleet.com/d/login'), 'a paid account gets the sign-in link');
+const noPlanRender = await renderDashboard('records', { entitlements: { isTrial: false, isPaid: false } });
+check(noPlanRender.rendered.reply_message.includes('*report*'), 'the records alias answers the same warm upsell on Free');
+
 // ── v1.82.0 (Phase 21, D4) — the admin door is exact-phrase + env identity ──
 const previousSuperadmin = process.env.SUPERADMIN_PHONE;
 process.env.SUPERADMIN_PHONE = DASH_PROFILE.phone_number;

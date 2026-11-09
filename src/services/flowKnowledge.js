@@ -446,8 +446,9 @@ export const FLOW_GUIDANCE = Object.freeze({
   delete_vehicle: 'Reply with the plate you want removed, then confirm — history and passbook are preserved.',
   delete_account: 'Reply *delete account* and confirm with the emailed code — this cannot be undone.',
   reactivate_account: 'Reply *reactivate* and I will restore your account — data is kept while deactivated.',
-  // v1.74.0 — the web dashboard trigger (Phase 13; rule 60).
-  dashboard: 'Reply *dashboard* and I will send the sign-in link — open it, enter your number, then type the 6-digit code I send here. Drivers and the superadmin ("dashboard admin") get their own door.',
+  // v1.74.0 — the web dashboard trigger (Phase 13; rule 60). v1.88.0 — on Free
+  // the engine answers with the warm upsell (PDF now, *subscription* to unlock).
+  dashboard: 'Reply *dashboard* and I will send the sign-in link — open it, enter your number, then type the 6-digit code I send here. Drivers and the superadmin ("dashboard admin") get their own door; on the Free plan the live dashboard is a paid feature — type *report* for the same data as a PDF, or *subscription* to unlock it.',
   // v1.83.0 (Phase 22) — the two new owner pages (rule 60).
   dashboard_transfer: 'On your dashboard open Transfer, enter the buyer\'s number and email, then type the 6-digit release PIN I email you — the buyer accepts on WhatsApp.',
   dashboard_subscription: 'On your dashboard open Subscription to see your plan, slots and billing history — reply *subscription* here to change plans in chat.',
@@ -696,8 +697,9 @@ export const SAKA_WEB_ONBOARDING_PLAYBOOK = [
  * links or codes; this block stops it from inventing either.
  */
 export const SAKA_WEB_DASHBOARD_PLAYBOOK = [
-  'WEB DASHBOARD (v1.83.0 — Phase 22: branding, passbook transfer + subscription, flag-gated):',
+  'WEB DASHBOARD (v1.88.0 — Phase 27: the Free-plan warm upsell + the v1.83.0 owner pages, flag-gated):',
   '- "dashboard" / "records" (also "my dashboard" / "open my dashboard" / "web dashboard") replies with the STATIC sign-in link https://app.sakafleet.com/d/login plus a 3-line tutorial: open the link, enter the WhatsApp number, then type the 6-digit code I send here.',
+  '- FREE accounts get a WARM UPSELL instead of the link (the live dashboard needs a live trial or a paid plan): one short card that says the dashboard is a paid feature, offers the same data as a PDF (*report*), and points to *subscription* for plans. Never a cold refusal, never a dead end — always a next step. A DRIVER on an assigned vehicle still signs in to their own lane.',
   '- The 6-digit code arrives in WhatsApp (10 minutes) and the session lasts 15 minutes. The EMAIL magic link is retired; never mention an emailed dashboard link or code, never repeat a code in chat, never accept a dashboard code typed in chat, and never invent or guess a link.',
   '- The code is delivered as an approved WhatsApp Authentication template, so it still arrives after a long silence (outside the 24-hour window). Never mention templates, Meta or delivery rules — the user simply receives the code.',
   '- An OWNER needs a live trial or paid plan (on Free, point the user to *pricing*); a DRIVER needs a live vehicle assignment; the SUPERADMIN signs in at https://app.sakafleet.com/d/admin/login only ("dashboard admin", exact phrase). The sign-in page is the gate — a number with no account is told to sign up first.',

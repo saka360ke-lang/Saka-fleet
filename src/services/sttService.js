@@ -34,6 +34,20 @@ export const STT_MAX_DURATION_SECONDS = clampNumber(process.env.STT_MAX_DURATION
 /** WhatsApp voice notes are OGG/OPUS at ~16 kbps; used only for the duration estimate. */
 export const STT_ESTIMATED_BITRATE = clampNumber(process.env.STT_ESTIMATED_BITRATE, 16000, { min: 1000 });
 
+/**
+ * v1.88.0 — the explicit sample rate sent with OGG_OPUS (default 16000, the
+ * WhatsApp opus rate). Google's sync `speech:recognize` REQUIRES
+ * `sampleRateHertz` for OGG_OPUS; without it the API reads rate 0 from the
+ * container and rejects the request live:
+ *   `Invalid recognition 'config': Opus sample rate (0) not in supported rates …`
+ * (live proof 2026-11-09, ocr_requests provider='google_speech' + error_logs
+ * /webhook/whatsapp/voice). Resolved per call so an operator can change the
+ * knob without a module reload; clamped to Google's supported 8000-48000.
+ */
+export function resolveSpeechSampleRate(raw = process.env.STT_SAMPLE_RATE_HZ) {
+  return clampNumber(raw, 16000, { min: 8000, max: 48000 });
+}
+
 /** STT is ON by default (testing phase); STT_ENABLED=off|false|0 pauses it. */
 export function isSttEnabled() {
   return !/^(?:off|false|0)$/i.test(String(process.env.STT_ENABLED || 'on'));
@@ -136,8 +150,11 @@ export async function transcribeAudioBuffer({
     alternativeLanguageCodes: language.alternativeLanguageCodes,
     enableAutomaticPunctuation: true
   };
-  // OGG_OPUS carries its own sample rate; sending a wrong one is a hard 400.
   if (encoding) config.encoding = encoding;
+  // v1.88.0 — OGG_OPUS REQUIRES an explicit sampleRateHertz (Google reads 0
+  // from WhatsApp's container and rejects the config); other encodings keep
+  // auto-detection.
+  if (encoding === 'OGG_OPUS') config.sampleRateHertz = resolveSpeechSampleRate();
 
   const requestBody = {
     config,
@@ -197,6 +214,7 @@ export default {
   transcribeAudioBuffer,
   resolveSpeechLanguage,
   resolveSpeechEncoding,
+  resolveSpeechSampleRate,
   estimateAudioDurationSeconds,
   isAudioWithinDurationLimit,
   isSttEnabled,

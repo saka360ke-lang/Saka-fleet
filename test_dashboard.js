@@ -894,7 +894,10 @@ async function run() {
   const recordsSeed = () => ({
     vehicles: [
       { id: 'v-a', owner_id: PROFILE.id, plate_number: 'KDA 123A', make_model: 'Nissan Note', status: 'ACTIVE' },
-      { id: 'v-b', owner_id: PROFILE.id, plate_number: 'KDB 456B', make_model: 'Toyota Hiace', status: 'ACTIVE' },
+      // v1.88.0 — v-b is ASSIGNED to a driver ('d-1') so the scope proof covers
+      // the assigned-vehicle case too: assignment is a separate FK and must
+      // never remove the owner's visibility of the vehicle's records.
+      { id: 'v-b', owner_id: PROFILE.id, plate_number: 'KDB 456B', make_model: 'Toyota Hiace', status: 'ACTIVE', assigned_driver_id: 'd-1' },
       { id: 'v-x', owner_id: 'someone-else', plate_number: 'KDX 999X', status: 'ACTIVE' }
     ],
     expense_logs: [
@@ -915,6 +918,13 @@ async function run() {
   check(allRecords.ok && allRecords.total === 4, 'the owner record set merges expenses + earnings (4 rows, other owners excluded)');
   check(allRecords.rows.map((r) => r.id).join(',') === 'n1,e1,e2,e3', 'rows are newest-first across both tables');
   check(allRecords.rows.some((r) => r.id === 'e2' && r.raw.driver_id === 'd-1'), 'FIX-1: a driver-logged row is visible to the owner (vehicle scope, not driver_id scope)');
+  // v1.88.0 (Phase 27) — the ASSIGNED case: v-b carries assigned_driver_id='d-1'
+  // and e2 was logged by that driver. Assignment is a separate FK, so the
+  // owner-scoped query (vehicle_id IN owner's vehicles) must keep returning it.
+  check(ownerVehicles.find((v) => v.id === 'v-b')?.assigned_driver_id === 'd-1', 'the owner vehicle list carries the live assignment FK');
+  check(allRecords.rows.find((r) => r.id === 'e2')?.vehicle === 'KDB 456B', 'a record on an ASSIGNED vehicle still maps its plate for the owner');
+  const assignedOnly = await queryOwnerRecords({ ...recCtx, filters: { from: '2026-10-10', to: '2026-11-08', vehicleId: 'v-b' } });
+  check(assignedOnly.ok && assignedOnly.rows.length === 1 && assignedOnly.rows[0].id === 'e2' && assignedOnly.rows[0].raw.driver_id === 'd-1', 'the owner can filter an assigned vehicle and sees the driver-logged row (v1.88.0)');
   check(allRecords.rows.find((r) => r.id === 'e1')?.vehicle === 'KDA 123A', 'the plate is mapped from the owner vehicle list');
   check(!allRecords.rows.some((r) => r.id === 'e4'), "another owner's vehicle never contributes a row");
   const fuelOnly = await queryOwnerRecords({ ...recCtx, filters: { from: '2026-10-10', to: '2026-11-08', types: ['Fuel'] } });

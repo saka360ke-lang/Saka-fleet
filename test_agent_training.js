@@ -345,11 +345,15 @@ check(/Narrative pre-fills are engine-determined facts/.test(await import('./src
   check(SAKA_FLOW_PLAYBOOK.includes('Point of entry'), 'the playbook documents the website point of entry');
   // v1.74.0 (Phase 13) — every known flow key stays embedded in the prompt, and
   // the dashboard's two-channel split is stated where the model reads it.
-  check(SAKA_FLOW_PLAYBOOK.includes('WEB DASHBOARD (v1.83.0'), 'the playbook documents the WhatsApp-native dashboard sign-in (v1.82.0, refreshed v1.83.0)');
+  check(SAKA_FLOW_PLAYBOOK.includes('WEB DASHBOARD (v1.88.0'), 'the playbook documents the WhatsApp-native dashboard sign-in (v1.82.0, refreshed v1.88.0)');
   check(/STATIC sign-in link https:\/\/app\.sakafleet\.com\/d\/login/.test(SAKA_FLOW_PLAYBOOK), 'the playbook names the static sign-in link');
   check(/EMAIL magic link is retired/.test(SAKA_FLOW_PLAYBOOK), 'the playbook retires the email magic link');
   check(SAKA_FLOW_PLAYBOOK.includes('dashboard: Reply *dashboard*'), 'the dashboard guidance line renders into the prompt (rule 60)');
-  check(DEFAULT_SAKA_CORE_PROMPT.includes('WEB DASHBOARD (v1.83.0)'), 'the core prompt carries the dashboard feature line (v1.83.0)');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('WEB DASHBOARD (v1.88.0)'), 'the core prompt carries the dashboard feature line (v1.88.0)');
+  // v1.88.0 (Phase 27) — the Free-plan warm upsell is stated in BOTH places the
+  // model reads, so a cold "paid feature" refusal can never come back.
+  check(SAKA_FLOW_PLAYBOOK.includes('FREE accounts get a WARM UPSELL'), 'the playbook states the Free-plan warm upsell (v1.88.0)');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('A FREE account gets the engine') && DEFAULT_SAKA_CORE_PROMPT.includes('never a cold refusal'), 'the core prompt forbids a cold dashboard refusal (v1.88.0)');
   // v1.83.0 (Phase 22) — the transfer + subscription pages are stated where the model reads it.
   check(SAKA_FLOW_PLAYBOOK.includes('PASSBOOK TRANSFER page (v1.83.0') && SAKA_FLOW_PLAYBOOK.includes('SUBSCRIPTION page (v1.83.0'), 'the playbook documents the new owner pages (v1.83.0)');
   check(SAKA_FLOW_PLAYBOOK.includes('The BUYER still replies ACCEPT on WhatsApp'), 'the playbook pins the buyer handshake to WhatsApp');

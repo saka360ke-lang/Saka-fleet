@@ -4,6 +4,7 @@ import {
   transcribeAudioBuffer,
   resolveSpeechLanguage,
   resolveSpeechEncoding,
+  resolveSpeechSampleRate,
   estimateAudioDurationSeconds,
   isAudioWithinDurationLimit,
   isSttEnabled,
@@ -73,6 +74,30 @@ async function run() {
   check(captured.url.includes('speech:recognize?key=test-speech-key'), 'the REST endpoint carries the key as a query param');
   check(captured.body.config.encoding === 'OGG_OPUS' && captured.body.config.languageCode === 'sw-KE' && captured.body.config.alternativeLanguageCodes.includes('en-KE') && captured.body.config.enableAutomaticPunctuation === true, 'config carries encoding, languages and punctuation');
   check(captured.body.audio.content === AUDIO.toString('base64'), 'the audio rides as base64 in audio.content');
+
+  console.log('\n--- Test 3b: OGG_OPUS sample rate (v1.88.0 live fix) ---');
+  // Live proof 2026-11-09: Google rejected the config with "Opus sample rate (0)
+  // not in supported rates" because OGG_OPUS carried no sampleRateHertz.
+  check(captured.body.config.sampleRateHertz === 16000, 'OGG_OPUS carries the default sampleRateHertz 16000 (the live 400 fix)');
+  check(resolveSpeechSampleRate() === 16000, 'the resolver defaults to 16000');
+  process.env.STT_SAMPLE_RATE_HZ = '8000';
+  global.fetch = async (url, options) => {
+    captured = { url, body: JSON.parse(options.body) };
+    return jsonResponse({ results: [{ alternatives: [{ transcript: 'hello', confidence: 0.9 }] }] });
+  };
+  await transcribeAudioBuffer({ buffer: AUDIO, countryCode: 'KE', mimeType: 'audio/ogg' });
+  check(captured.body.config.sampleRateHertz === 8000, 'a custom STT_SAMPLE_RATE_HZ=8000 reaches the request');
+  check(resolveSpeechSampleRate('6000') === 8000 && resolveSpeechSampleRate('96000') === 48000, 'out-of-range values clamp to Google\'s 8000-48000 band');
+  check(resolveSpeechSampleRate('nope') === 16000, 'a non-numeric value falls back to 16000');
+  process.env.STT_SAMPLE_RATE_HZ = '48000';
+  global.fetch = async (url, options) => {
+    captured = { url, body: JSON.parse(options.body) };
+    return jsonResponse({ results: [{ alternatives: [{ transcript: 'hello' }] }] });
+  };
+  await transcribeAudioBuffer({ buffer: AUDIO, countryCode: 'GLOBAL', mimeType: 'audio/x-unknown' });
+  check(captured.body.config.encoding === undefined && captured.body.config.sampleRateHertz === undefined, 'an unknown encoding omits BOTH encoding and sampleRateHertz (auto-detect stays untouched)');
+  delete process.env.STT_SAMPLE_RATE_HZ;
+  check(resolveSpeechSampleRate() === 16000, 'unsetting the knob returns the 16000 default');
 
   console.log('\n--- Test 4: empty read + non-retryable HTTP error ---');
   global.fetch = async () => jsonResponse({ results: [] });

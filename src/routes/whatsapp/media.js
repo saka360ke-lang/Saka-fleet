@@ -50,7 +50,10 @@ import {
 
 // M2 (verbatim from messages.js v1.66.0) - the deterministic voice-note line and the
 // durable transcript marker. The processor sends the reply and owns the status literal.
-export const VOICE_NOTE_REPLY = '🎙️ I can\'t listen to voice notes yet — type it in and I\'ll take it from there.';
+// v1.88.0 — the honest transient fallback (STT shipped in v1.79.0, so "can't
+// listen yet" no longer tells the truth). Same deterministic degradation: a
+// failed/oversize/silent note asks for typed words or a shorter note.
+export const VOICE_NOTE_REPLY = '🎙️ I couldn\'t catch that voice note — please type it or send a shorter one.';
 export const VOICE_NOTE_USER_TEXT = '[voice note]';
 
 // v1.79.0 — Phase 18: voice notes are transcribed, not turned away. The listening
