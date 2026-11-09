@@ -1,6 +1,13 @@
 {
-  "latest": "1.88.0",
+  "latest": "1.88.1",
   "entries": [
+    {
+      "version": "1.88.1",
+      "date": "2026-11-09",
+      "title": "Voice notes, heard properly this time",
+      "preview": "A live probe of your real notes found the true cause: the rate was 48000, not 16000. All three now transcribe.",
+      "summary": "The first voice-note fix made Google accept the request, but it declared the wrong sample rate, so notes came back as the single word 'ah' or as silence. We downloaded the three notes you sent and replayed them against the speech service with every plausible setting. The containers themselves say 48000, and at that rate all three transcribed real words - including 'will it cost 300 Kenya shillings' and 'puncture repair'. Saka now reads the rate from each note's own audio container instead of assuming one, so WhatsApp notes on any phone transcribe correctly, and an operator can still force a rate if a future client changes format. Language coverage for mixed Swahili and English is the next improvement."
+    },
     {
       "version": "1.88.0",
       "date": "2026-11-09",

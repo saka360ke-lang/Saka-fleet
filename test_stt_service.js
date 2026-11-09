@@ -5,6 +5,7 @@ import {
   resolveSpeechLanguage,
   resolveSpeechEncoding,
   resolveSpeechSampleRate,
+  readOggOpusSampleRate,
   estimateAudioDurationSeconds,
   isAudioWithinDurationLimit,
   isSttEnabled,
@@ -75,20 +76,39 @@ async function run() {
   check(captured.body.config.encoding === 'OGG_OPUS' && captured.body.config.languageCode === 'sw-KE' && captured.body.config.alternativeLanguageCodes.includes('en-KE') && captured.body.config.enableAutomaticPunctuation === true, 'config carries encoding, languages and punctuation');
   check(captured.body.audio.content === AUDIO.toString('base64'), 'the audio rides as base64 in audio.content');
 
-  console.log('\n--- Test 3b: OGG_OPUS sample rate (v1.88.0 live fix) ---');
-  // Live proof 2026-11-09: Google rejected the config with "Opus sample rate (0)
-  // not in supported rates" because OGG_OPUS carried no sampleRateHertz.
-  check(captured.body.config.sampleRateHertz === 16000, 'OGG_OPUS carries the default sampleRateHertz 16000 (the live 400 fix)');
-  check(resolveSpeechSampleRate() === 16000, 'the resolver defaults to 16000');
-  process.env.STT_SAMPLE_RATE_HZ = '8000';
+  console.log('\n--- Test 3b: OGG_OPUS sample rate read from the container (v1.88.1) ---');
+  // Live proof 2026-11-09 (scripts/probe_audio.js): all three WhatsApp notes carry
+  // OpusHead input_sample_rate=48000; declaring 16000 decoded them to "ah" or
+  // silence, while 48000 transcribed real speech. The rate now comes from the
+  // buffer's OpusHead; 48000 is the headerless fallback.
+  const oggWithRate = (rate) => Buffer.concat([
+    Buffer.from('OggS'), Buffer.from('OpusHead'), Buffer.from([1, 1, 0, 0]),
+    (() => { const b = Buffer.alloc(4); b.writeUInt32LE(rate, 0); return b; })(),
+    Buffer.from('voice-note-payload')
+  ]);
+  check(readOggOpusSampleRate(oggWithRate(48000)) === 48000, 'the OpusHead 48000 rate is read from a real-shaped container');
+  check(readOggOpusSampleRate(oggWithRate(16000)) === 16000, 'a 16k OpusHead is honoured too');
+  check(readOggOpusSampleRate(oggWithRate(44100)) === null, 'an unsupported header rate (44100) is never sent to Google');
+  check(readOggOpusSampleRate(Buffer.from('OggS headerless')) === null && readOggOpusSampleRate(null) === null, 'a headerless/empty buffer has no readable rate');
+  check(captured.body.config.sampleRateHertz === 48000, 'OGG_OPUS carries the 48000 fallback when the buffer has no OpusHead');
+  process.env.STT_SAMPLE_RATE_HZ = '16000';
   global.fetch = async (url, options) => {
     captured = { url, body: JSON.parse(options.body) };
     return jsonResponse({ results: [{ alternatives: [{ transcript: 'hello', confidence: 0.9 }] }] });
   };
-  await transcribeAudioBuffer({ buffer: AUDIO, countryCode: 'KE', mimeType: 'audio/ogg' });
-  check(captured.body.config.sampleRateHertz === 8000, 'a custom STT_SAMPLE_RATE_HZ=8000 reaches the request');
-  check(resolveSpeechSampleRate('6000') === 8000 && resolveSpeechSampleRate('96000') === 48000, 'out-of-range values clamp to Google\'s 8000-48000 band');
-  check(resolveSpeechSampleRate('nope') === 16000, 'a non-numeric value falls back to 16000');
+  await transcribeAudioBuffer({ buffer: oggWithRate(48000), countryCode: 'KE', mimeType: 'audio/ogg' });
+  check(captured.body.config.sampleRateHertz === 16000, 'an explicit STT_SAMPLE_RATE_HZ override wins over the header');
+  delete process.env.STT_SAMPLE_RATE_HZ;
+  global.fetch = async (url, options) => {
+    captured = { url, body: JSON.parse(options.body) };
+    return jsonResponse({ results: [{ alternatives: [{ transcript: 'hello' }] }] });
+  };
+  await transcribeAudioBuffer({ buffer: oggWithRate(48000), countryCode: 'KE', mimeType: 'audio/ogg' });
+  check(captured.body.config.sampleRateHertz === 48000, 'with no override the real container rate reaches the request (the live fix)');
+  check(resolveSpeechSampleRate(undefined, oggWithRate(24000)) === 24000, 'a 24k container resolves to 24000');
+  check(resolveSpeechSampleRate('6000') === 8000 && resolveSpeechSampleRate('96000') === 48000, 'out-of-range overrides snap to the nearest Google-supported rate');
+  check(resolveSpeechSampleRate('nope') === 48000, 'a non-numeric override falls back to the 48000 default');
+  check(resolveSpeechSampleRate('auto', oggWithRate(16000)) === 16000, 'auto/header reads the container');
   process.env.STT_SAMPLE_RATE_HZ = '48000';
   global.fetch = async (url, options) => {
     captured = { url, body: JSON.parse(options.body) };
@@ -97,7 +117,7 @@ async function run() {
   await transcribeAudioBuffer({ buffer: AUDIO, countryCode: 'GLOBAL', mimeType: 'audio/x-unknown' });
   check(captured.body.config.encoding === undefined && captured.body.config.sampleRateHertz === undefined, 'an unknown encoding omits BOTH encoding and sampleRateHertz (auto-detect stays untouched)');
   delete process.env.STT_SAMPLE_RATE_HZ;
-  check(resolveSpeechSampleRate() === 16000, 'unsetting the knob returns the 16000 default');
+  check(resolveSpeechSampleRate() === 48000, 'unsetting the knob returns the 48000 default');
 
   console.log('\n--- Test 4: empty read + non-retryable HTTP error ---');
   global.fetch = async () => jsonResponse({ results: [] });

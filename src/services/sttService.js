@@ -35,17 +35,47 @@ export const STT_MAX_DURATION_SECONDS = clampNumber(process.env.STT_MAX_DURATION
 export const STT_ESTIMATED_BITRATE = clampNumber(process.env.STT_ESTIMATED_BITRATE, 16000, { min: 1000 });
 
 /**
- * v1.88.0 — the explicit sample rate sent with OGG_OPUS (default 16000, the
- * WhatsApp opus rate). Google's sync `speech:recognize` REQUIRES
- * `sampleRateHertz` for OGG_OPUS; without it the API reads rate 0 from the
- * container and rejects the request live:
- *   `Invalid recognition 'config': Opus sample rate (0) not in supported rates …`
- * (live proof 2026-11-09, ocr_requests provider='google_speech' + error_logs
- * /webhook/whatsapp/voice). Resolved per call so an operator can change the
- * knob without a module reload; clamped to Google's supported 8000-48000.
+ * v1.88.1 — the sample rate Google must be told for OGG_OPUS. The live probe
+ * (scripts/probe_audio.js, 2026-11-09) proved every WhatsApp note carries
+ * `OpusHead.input_sample_rate = 48000`; declaring 16000 made the decoder play
+ * the note 3x too slow, so Google returned "ah" (0.31) or "No speech detected"
+ * for real speech. Rate 48000 transcribed all three live notes.
+ *
+ * Google's v1 recognizes OGG_OPUS only at these rates; anything else is a 400,
+ * so an explicit override snaps to the nearest supported rate. With no
+ * override, the rate is READ FROM THE CONTAINER (`OpusHead`), then 48000.
  */
-export function resolveSpeechSampleRate(raw = process.env.STT_SAMPLE_RATE_HZ) {
-  return clampNumber(raw, 16000, { min: 8000, max: 48000 });
+export const SUPPORTED_OPUS_RATES = Object.freeze([8000, 12000, 16000, 24000, 48000]);
+
+/** The OpusHead input sample rate of an OGG/Opus buffer, or null. Pure. */
+export function readOggOpusSampleRate(buffer) {
+  if (!buffer || !buffer.length) return null;
+  const head = Buffer.from(buffer).indexOf(Buffer.from('OpusHead'));
+  if (head < 0 || buffer.length < head + 16) return null;
+  const rate = Buffer.from(buffer).readUInt32LE(head + 12);
+  return SUPPORTED_OPUS_RATES.includes(rate) ? rate : null;
+}
+
+function nearestSupportedOpusRate(value) {
+  const numeric = clampNumber(value, 48000, { min: 8000, max: 48000 });
+  return SUPPORTED_OPUS_RATES.reduce(
+    (best, rate) => (Math.abs(rate - numeric) < Math.abs(best - numeric) ? rate : best),
+    48000
+  );
+}
+
+/**
+ * Resolve the OGG_OPUS rate: an explicit STT_SAMPLE_RATE_HZ override wins
+ * (snapped to a Google-supported rate); otherwise the container's OpusHead
+ * rate; otherwise 48000 (the WhatsApp default proven live).
+ */
+export function resolveSpeechSampleRate(raw = process.env.STT_SAMPLE_RATE_HZ, buffer = null) {
+  const explicit = String(raw ?? '').trim();
+  if (explicit && !/^(?:auto|header|0)$/i.test(explicit)) {
+    const numeric = Number(explicit);
+    if (Number.isFinite(numeric)) return nearestSupportedOpusRate(numeric);
+  }
+  return readOggOpusSampleRate(buffer) || 48000;
 }
 
 /** STT is ON by default (testing phase); STT_ENABLED=off|false|0 pauses it. */
@@ -151,10 +181,10 @@ export async function transcribeAudioBuffer({
     enableAutomaticPunctuation: true
   };
   if (encoding) config.encoding = encoding;
-  // v1.88.0 — OGG_OPUS REQUIRES an explicit sampleRateHertz (Google reads 0
-  // from WhatsApp's container and rejects the config); other encodings keep
-  // auto-detection.
-  if (encoding === 'OGG_OPUS') config.sampleRateHertz = resolveSpeechSampleRate();
+  // v1.88.1 — OGG_OPUS REQUIRES an explicit sampleRateHertz, and it must match
+  // the container: WhatsApp notes carry OpusHead 48000, so a hardcoded 16000
+  // decoded to "ah"/silence (live proof). The rate is read from the buffer.
+  if (encoding === 'OGG_OPUS') config.sampleRateHertz = resolveSpeechSampleRate(process.env.STT_SAMPLE_RATE_HZ, buffer);
 
   const requestBody = {
     config,
@@ -215,11 +245,13 @@ export default {
   resolveSpeechLanguage,
   resolveSpeechEncoding,
   resolveSpeechSampleRate,
+  readOggOpusSampleRate,
   estimateAudioDurationSeconds,
   isAudioWithinDurationLimit,
   isSttEnabled,
   STT_TIMEOUT_MS,
   STT_MAX_ATTEMPTS,
   STT_MAX_DURATION_SECONDS,
-  STT_ESTIMATED_BITRATE
+  STT_ESTIMATED_BITRATE,
+  SUPPORTED_OPUS_RATES
 };
