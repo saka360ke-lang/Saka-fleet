@@ -55,6 +55,9 @@ const STATLESS_SUITES = [
   'test_compliance_capture.js',
   // v1.58.8 - OTP-gated profile wipe (clean sign-up).
   'test_profile_wipe.js',
+  // v1.91.0 — Phase 28A: superadmin write actions (impersonate, reset,
+  // extend-trial, passbook, facilitate-transfer, email) — all stateless.
+  'test_dashboard_admin.js',
   // v1.58.10 - autonomous customer care (tickets + inbound-email relay).
   'test_customer_care.js',
   // v1.58.5 - bi-weekly Sentinel deep audit (checks + proposal minting + idempotency).

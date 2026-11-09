@@ -116,15 +116,46 @@ ALTER TABLE public.${DASHBOARD_SESSIONS_TABLE} ENABLE ROW LEVEL SECURITY;
 /** The three dashboard lanes (Phase 15). One session belongs to exactly one. */
 export const DASHBOARD_ROLES = Object.freeze(['owner', 'driver', 'admin']);
 
-let tableReady = false;
+/* ------------------------------------------------------------------ */
+/* v1.91.0 (Phase 28A) — the admin impersonation store                 */
+/* ------------------------------------------------------------------ */
+/*
+ * A superadmin may open an owner's dashboard READ-ONLY for 30 minutes. The
+ * impersonation lives in its OWN cookie (`saka_dash_as`) and its own table, so
+ * exiting never touches the admin's own `saka_dash` session (D1). Only the
+ * sha256 of the cookie token is stored — the raw value exists in the cookie
+ * alone. Expiry is enforced three ways: the cookie Max-Age, the `expires_at`
+ * check on every resolution, and the 15-minute prune sweep.
+ */
 
-/** Ensure the table exists (fail-soft; DDL needs a SQL transport). */
+export const ADMIN_IMPERSONATIONS_TABLE = 'admin_impersonations';
+export const IMPERSONATION_COOKIE_NAME = 'saka_dash_as';
+export const IMPERSONATION_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
+export const ADMIN_IMPERSONATIONS_SQL = `
+CREATE TABLE IF NOT EXISTS public.${ADMIN_IMPERSONATIONS_TABLE} (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    token_hash text UNIQUE NOT NULL,
+    admin_profile_id uuid NOT NULL,
+    target_profile_id uuid NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_admin_impersonations_target ON public.${ADMIN_IMPERSONATIONS_TABLE} (target_profile_id);
+CREATE INDEX IF NOT EXISTS idx_admin_impersonations_admin ON public.${ADMIN_IMPERSONATIONS_TABLE} (admin_profile_id);
+ALTER TABLE public.${ADMIN_IMPERSONATIONS_TABLE} ENABLE ROW LEVEL SECURITY;
+`;
+
+let impersonationTableReady = false;
+let dashboardTableReady = false;
+
+/** Ensure the dashboard_sessions table exists (fail-soft; DDL needs a SQL transport). */
 export async function ensureDashboardTable(providedSupabase) {
   if (!providedSupabase) return { status: 'no_client' };
   try {
     const { error } = await providedSupabase.from(DASHBOARD_SESSIONS_TABLE).select('id').limit(1);
     if (!error) {
-      tableReady = true;
+      dashboardTableReady = true;
       return { status: 'exists' };
     }
   } catch (err) {
@@ -133,7 +164,7 @@ export async function ensureDashboardTable(providedSupabase) {
   if (hasSqlAccess()) {
     const result = await runSql(DASHBOARD_SQL, { label: 'ensureDashboardTable' });
     if (result.ok) {
-      tableReady = true;
+      dashboardTableReady = true;
       return { status: 'created' };
     }
   }
@@ -141,7 +172,33 @@ export async function ensureDashboardTable(providedSupabase) {
 }
 
 export function isDashboardTableReady() {
-  return tableReady;
+  return dashboardTableReady;
+}
+
+/** v1.91.0 (Phase 28A) — idempotent DDL for the impersonation store (rule 50). */
+export async function ensureAdminImpersonationsTable(providedSupabase) {
+  if (!providedSupabase) return { status: 'no_client' };
+  try {
+    const { error } = await providedSupabase.from(ADMIN_IMPERSONATIONS_TABLE).select('id').limit(1);
+    if (!error) {
+      impersonationTableReady = true;
+      return { status: 'exists' };
+    }
+  } catch (err) {
+    console.warn('[Dashboard] impersonation table probe failed (falling through to DDL):', err.message);
+  }
+  if (hasSqlAccess()) {
+    const result = await runSql(ADMIN_IMPERSONATIONS_SQL, { label: 'ensureAdminImpersonationsTable' });
+    if (result.ok) {
+      impersonationTableReady = true;
+      return { status: 'created' };
+    }
+  }
+  return { status: 'missing' };
+}
+
+export function isAdminImpersonationsTableReady() {
+  return impersonationTableReady;
 }
 
 /* ------------------------------------------------------------------ */
@@ -608,6 +665,111 @@ export async function clearDashboardSession({ supabase, sessionToken } = {}) {
 }
 
 /* ------------------------------------------------------------------ */
+/* v1.91.0 (Phase 28A) — impersonation mint / resolve / clear / prune  */
+/* ------------------------------------------------------------------ */
+
+/** Mint a 30-minute read-only impersonation row. Raw token lives in the cookie only. */
+export async function mintImpersonation({ supabase, adminProfileId, targetProfileId, now = new Date() } = {}) {
+  if (!supabase || !adminProfileId || !targetProfileId) return { ok: false, reason: 'missing' };
+  const token = mintToken(32);
+  const expiresAt = new Date(now.getTime() + IMPERSONATION_TTL_MS).toISOString();
+  try {
+    const { error } = await supabase.from(ADMIN_IMPERSONATIONS_TABLE).insert([{
+      token_hash: hashToken(token),
+      admin_profile_id: adminProfileId,
+      target_profile_id: targetProfileId,
+      expires_at: expiresAt,
+      created_at: new Date(now).toISOString()
+    }]);
+    if (error) {
+      logWriteFailure(supabase, 'dashboard.mintImpersonation', error);
+      return { ok: false, reason: 'db_error' };
+    }
+    return { ok: true, token, expiresAt };
+  } catch (err) {
+    logWriteFailure(supabase, 'dashboard.mintImpersonation', err);
+    return { ok: false, reason: 'db_error' };
+  }
+}
+
+/**
+ * Resolve an impersonation cookie: valid only while the row is unexpired AND
+ * (when supplied) the row belongs to THIS admin. Expired/invalid rows answer a
+ * reason — the caller clears the cookie and continues as a plain admin.
+ */
+export async function resolveImpersonation({ supabase, token, adminOwnerId = null, now = new Date() } = {}) {
+  if (!supabase || !token) return { ok: false, reason: 'no_token' };
+  try {
+    const { data: row, error } = await supabase
+      .from(ADMIN_IMPERSONATIONS_TABLE)
+      .select('*')
+      .eq('token_hash', hashToken(token))
+      .maybeSingle();
+    if (error || !row) return { ok: false, reason: 'invalid' };
+    if (adminOwnerId && String(row.admin_profile_id) !== String(adminOwnerId)) return { ok: false, reason: 'wrong_admin' };
+    if (!row.expires_at || new Date(row.expires_at).getTime() <= now.getTime()) return { ok: false, reason: 'expired' };
+    let targetName = null;
+    try {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('full_name, phone_number')
+        .eq('id', row.target_profile_id)
+        .maybeSingle();
+      targetName = profile?.full_name || profile?.phone_number || null;
+    } catch { targetName = null; }
+    return {
+      ok: true,
+      adminProfileId: row.admin_profile_id,
+      targetProfileId: row.target_profile_id,
+      targetName,
+      expiresAt: row.expires_at
+    };
+  } catch (err) {
+    logWriteFailure(supabase, 'dashboard.resolveImpersonation', err);
+    return { ok: false, reason: 'db_error' };
+  }
+}
+
+/** Delete the row behind a cookie (exit). Returns the target it pointed at. */
+export async function clearImpersonationByToken({ supabase, token } = {}) {
+  if (!supabase || !token) return { ok: false, reason: 'no_token' };
+  try {
+    const { data: row } = await supabase
+      .from(ADMIN_IMPERSONATIONS_TABLE)
+      .select('*')
+      .eq('token_hash', hashToken(token))
+      .maybeSingle();
+    const { error } = await supabase
+      .from(ADMIN_IMPERSONATIONS_TABLE)
+      .delete()
+      .eq('token_hash', hashToken(token));
+    if (error) {
+      logWriteFailure(supabase, 'dashboard.clearImpersonationByToken', error);
+      return { ok: false, reason: 'db_error' };
+    }
+    return { ok: true, targetProfileId: row?.target_profile_id || null, adminProfileId: row?.admin_profile_id || null };
+  } catch (err) {
+    logWriteFailure(supabase, 'dashboard.clearImpersonationByToken', err);
+    return { ok: false, reason: 'db_error' };
+  }
+}
+
+/** The 15-minute sweep (index.js) — an expired cookie can never be honoured. */
+export async function pruneExpiredImpersonations(supabase, now = new Date()) {
+  if (!supabase) return { ok: false, removed: 0 };
+  try {
+    const { error, count } = await supabase
+      .from(ADMIN_IMPERSONATIONS_TABLE)
+      .delete({ count: 'exact' })
+      .lt('expires_at', new Date(now).toISOString());
+    if (error) return { ok: false, removed: 0 };
+    return { ok: true, removed: Number(count || 0) };
+  } catch {
+    return { ok: false, removed: 0 };
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* Housekeeping (boot + every 15 minutes)                              */
 /* ------------------------------------------------------------------ */
 
@@ -674,6 +836,45 @@ export function readDashboardCookie(headers = {}) {
   for (const part of raw.split(';')) {
     const [name, ...rest] = part.trim().split('=');
     if (name === DASHBOARD_COOKIE_NAME) return rest.join('=') || null;
+  }
+  return null;
+}
+
+/* v1.91.0 (Phase 28A) — the SEPARATE impersonation cookie (D1). */
+
+export function impersonationSessionMaxAgeSeconds() {
+  return Math.floor(IMPERSONATION_TTL_MS / 1000);
+}
+
+export function impersonationCookieHeader(rawToken, { secure = true, maxAgeSeconds = impersonationSessionMaxAgeSeconds() } = {}) {
+  const parts = [
+    `${IMPERSONATION_COOKIE_NAME}=${rawToken}`,
+    'Path=/d',
+    'HttpOnly',
+    'SameSite=Strict',
+    `Max-Age=${maxAgeSeconds}`
+  ];
+  if (secure) parts.push('Secure');
+  return parts.join('; ');
+}
+
+export function impersonationClearCookieHeader({ secure = true } = {}) {
+  const parts = [
+    `${IMPERSONATION_COOKIE_NAME}=`,
+    'Path=/d',
+    'HttpOnly',
+    'SameSite=Strict',
+    'Max-Age=0'
+  ];
+  if (secure) parts.push('Secure');
+  return parts.join('; ');
+}
+
+export function readImpersonationCookie(headers = {}) {
+  const raw = String(headers?.cookie || '');
+  for (const part of raw.split(';')) {
+    const [name, ...rest] = part.trim().split('=');
+    if (name === IMPERSONATION_COOKIE_NAME) return rest.join('=') || null;
   }
   return null;
 }
@@ -3967,7 +4168,7 @@ function driverNav() {
   return '<a href="/d/driver">Overview</a> · <a href="/d/driver/daybook">Daybook</a> · <a href="/d/driver/compliance">Compliance</a> · <a href="/d/logout">Log out</a>';
 }
 
-function adminNav() {
+export function adminNav() {
   return '<a href="/d/admin/command">Command</a> · <a href="/d/admin">Owners</a> · <a href="/d/care">Care</a> · <a href="/d/logout">Log out</a>';
 }
 
@@ -4079,7 +4280,7 @@ ${table}
 }
 
 /** `/d/admin` (Phase 15) — the cross-tenant owner list, read-only. */
-export function renderAdminOwnersPage({ data, search = '' }) {
+export function renderAdminOwnersPage({ data, search = '', notice = null }) {
   if (!data?.ok) {
     return renderErrorPage(503, 'The owner list could not be loaded just now. Please try again in a moment.').html;
   }
@@ -4091,15 +4292,17 @@ export function renderAdminOwnersPage({ data, search = '' }) {
           <td>${escapeHtml(owner.country)}</td>
           <td class="num">${Number(owner.vehicleCount)}</td>
           <td class="num">${Number(owner.activeCount)}</td>
+          <td class="admin-actions"><a href="/d/admin/as-user/${encodeURIComponent(owner.id)}">Impersonate</a> · <a href="/d/admin/extend-trial/${encodeURIComponent(owner.id)}">Extend trial</a> · <a href="/d/admin/email/${encodeURIComponent(owner.id)}">Email</a> · <a href="/d/admin/reset/${encodeURIComponent(owner.id)}">Reset</a></td>
         </tr>`).join('');
   const table = owners.length
     ? `<div class="card table-wrap"><table class="rec">
-        <thead><tr><th>Owner</th><th>Phone</th><th>Country</th><th class="num">Vehicles</th><th class="num">Active</th></tr></thead>
+        <thead><tr><th>Owner</th><th>Phone</th><th>Country</th><th class="num">Vehicles</th><th class="num">Active</th><th>Actions</th></tr></thead>
         <tbody>${rows}</tbody></table></div>`
     : `<div class="card"><p class="muted">${search ? 'No owner matches that search.' : 'No owner has a vehicle on file yet.'}</p></div>`;
   const body = `
 <h1>Owners</h1>
-<p class="muted">${Number(data.totalOwners || 0)} owner${Number(data.totalOwners || 0) === 1 ? '' : 's'} with a fleet · read-only · every visit is audited</p>
+<p class="muted">${Number(data.totalOwners || 0)} owner${Number(data.totalOwners || 0) === 1 ? '' : 's'} with a fleet · every action is typed-confirmed, reason-stamped and audited</p>
+${notice ? `<div class="card" style="border-color:#B8EF5C;"><p>${escapeHtml(notice)}</p></div>` : ''}
 <form method="GET" action="/d/admin" class="filters card">
   <label>Search by name or visible digits<input type="text" name="q" maxlength="40" value="${escapeHtml(search)}"></label>
   <div class="filters-actions"><button type="submit">Search</button><a href="/d/admin">Clear</a></div>
@@ -4245,18 +4448,21 @@ export function renderAdminFleetPage({ fleet }) {
           <td>${escapeHtml(vehicle.driverName || 'No driver')}</td>
           <td class="num">${meterValue === null || meterValue === undefined ? '—' : escapeHtml(`${formatNumber(meterValue, locale)} ${meterUnit}`.trim())}</td>
           <td>${vehicle.soonest ? `${escapeHtml(vehicle.soonest.label)} ${complianceChipHtml(vehicle.soonest)}` : '<span class="muted">—</span>'}</td>
+          <td class="admin-actions"><a href="/d/admin/passbook/${encodeURIComponent(vehicle.id)}">Passbook</a> · <a href="/d/admin/transfer/${encodeURIComponent(vehicle.id)}">Facilitate transfer</a></td>
         </tr>`;
   }).join('');
   const vehicleTable = vehicles.length
     ? `<div class="card table-wrap"><table class="rec">
-        <thead><tr><th>Vehicle</th><th>Status</th><th>Driver</th><th class="num">${escapeHtml(meterHeading)}</th><th>Soonest</th></tr></thead>
+        <thead><tr><th>Vehicle</th><th>Status</th><th>Driver</th><th class="num">${escapeHtml(meterHeading)}</th><th>Soonest</th><th>Actions</th></tr></thead>
         <tbody>${vehicleRows}</tbody></table></div>`
     : '<div class="card"><p class="muted">This owner has no live vehicles.</p></div>';
   const totals = fleet.compliance?.totals || null;
+  const ownerId = owner.id ? encodeURIComponent(owner.id) : null;
   const body = `
 <p class="muted"><a href="/d/admin">← Owners</a></p>
 <h1>${escapeHtml(owner.name || 'Owner')}</h1>
 <p class="muted">${escapeHtml(owner.phoneMasked || '—')} · ${escapeHtml(owner.emailMasked || '—')} · ${escapeHtml(owner.country || '—')} · read-only</p>
+${ownerId ? `<p class="muted"><a href="/d/admin/as-user/${ownerId}">Impersonate</a> · <a href="/d/admin/extend-trial/${ownerId}">Extend trial</a> · <a href="/d/admin/email/${ownerId}">Email</a> · <a href="/d/admin/reset/${ownerId}">Reset</a></p>` : ''}
 ${fleet.card ? kpiStripHtml([
     { label: 'Spend', value: fleet.card.kpis?.spend ?? 0, hint: 'all time' },
     { label: 'Earnings', value: fleet.card.kpis?.earnings ?? 0, hint: 'all time' },
@@ -4458,6 +4664,20 @@ export default {
   DASHBOARD_SESSIONS_TABLE,
   DASHBOARD_SQL,
   DASHBOARD_COOKIE_NAME,
+  ADMIN_IMPERSONATIONS_TABLE,
+  ADMIN_IMPERSONATIONS_SQL,
+  IMPERSONATION_COOKIE_NAME,
+  IMPERSONATION_TTL_MS,
+  ensureAdminImpersonationsTable,
+  isAdminImpersonationsTableReady,
+  mintImpersonation,
+  resolveImpersonation,
+  clearImpersonationByToken,
+  pruneExpiredImpersonations,
+  impersonationSessionMaxAgeSeconds,
+  impersonationCookieHeader,
+  impersonationClearCookieHeader,
+  readImpersonationCookie,
   ensureDashboardTable,
   isDashboardTableReady,
   isDashboardEnabled,

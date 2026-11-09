@@ -133,6 +133,13 @@ export async function wipeProfileForSignup(supabase, rawPhone) {
   await del('subscriptions', 'owner_id', profileIds);
   await del('trial_sessions', 'owner_id', profileIds);
 
+  // v1.91.0 (Phase 28A) — a reset also ends live dashboard sessions for the
+  // account and any admin impersonation pointing at (or driven by) it, so no
+  // cookie outlives the profile it belonged to.
+  await del('dashboard_sessions', 'owner_id', profileIds);
+  await del('admin_impersonations', 'target_profile_id', profileIds);
+  await del('admin_impersonations', 'admin_profile_id', profileIds);
+
   // The VIN provenance ledger is erased ONLY here (an explicit admin full wipe),
   // so a fresh sign-up can re-register the same vehicle cleanly.
   await del('vin_registry', 'vin', vins);

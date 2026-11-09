@@ -38,7 +38,7 @@ function run() {
     'profiles', 'vehicles', 'vin_registry', 'chat_sessions', 'superadmin_sessions',
     'ai_usage_logs', 'support_tickets', 'exchange_rates_cache', 'admin_audit_logs',
     'trial_sessions', 'subscriptions', 'usage_counters', 'paystack_webhook_events',
-    'receipts', 'dashboard_sessions', 'vehicle_documents'
+    'receipts', 'dashboard_sessions', 'vehicle_documents', 'admin_impersonations'
   ]) {
     assert(RESET_TABLES.includes(table), `${table} is in the wipe scope`);
   }
@@ -112,6 +112,27 @@ function run() {
   assert(
     /ADD COLUMN IF NOT EXISTS monthly_report_opt_in boolean NOT NULL DEFAULT false/.test(monthlyMigrationSource),
     'npm run migrate:monthly-reports is additive and idempotent'
+  );
+
+  console.log('--- Test 9: the impersonation store is part of every schema carrier (v1.91.0) ---');
+  const impersonationMigrationSource = fs.readFileSync(path.join(here, 'scripts', 'run_admin_impersonations_migration.js'), 'utf8');
+  for (const [name, source] of [['provisioning', provisionSource], ['boot DDL', dashboardSource], ['migration', impersonationMigrationSource]]) {
+    assert(
+      source.includes('admin_impersonations'),
+      `${name} carries the admin_impersonations carrier (v1.91.0)`
+    );
+  }
+  assert(
+    dashboardSource.includes('ADMIN_IMPERSONATIONS_SQL') && /CREATE TABLE IF NOT EXISTS public\.\$\{ADMIN_IMPERSONATIONS_TABLE\}/.test(dashboardSource),
+    'the boot DDL creates the table idempotently'
+  );
+  assert(
+    scriptSource.includes('DELETE FROM public.admin_impersonations WHERE target_profile_id IN'),
+    'the targeted-phone cascade clears impersonations by target profile (v1.91.0)'
+  );
+  assert(
+    /idx_admin_impersonations_target/.test(provisionSource) && /idx_admin_impersonations_target/.test(dashboardSource),
+    'both carriers index target_profile_id'
   );
 
   console.log(`\n🎉 ${passed} reset-scope assertions passed.`);

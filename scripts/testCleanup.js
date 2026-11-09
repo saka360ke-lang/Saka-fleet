@@ -138,6 +138,10 @@ export async function cleanupTestData({
         summary.receipts_driver = await deleteIn(client, 'receipts', 'driver_id', profileIds, verbose);
         // v1.84.0 (Phase 23) — vaulted compliance documents keyed by uploader.
         summary.vehicle_documents_uploader = await deleteIn(client, 'vehicle_documents', 'uploaded_by', profileIds, verbose);
+        // v1.91.0 (Phase 28A) — impersonation sessions are keyed by profile id.
+        summary.admin_impersonations_target = await deleteIn(client, 'admin_impersonations', 'target_profile_id', profileIds, verbose);
+        summary.admin_impersonations_admin = await deleteIn(client, 'admin_impersonations', 'admin_profile_id', profileIds, verbose);
+        summary.dashboard_sessions = await deleteIn(client, 'dashboard_sessions', 'owner_id', profileIds, verbose);
       }
     }
   } catch {}

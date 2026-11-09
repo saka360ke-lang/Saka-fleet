@@ -75,7 +75,7 @@ import { ensureVehicleDocumentsTable } from './src/services/vehicleDocuments.js'
 import { ensureOcrRequestsTable, pruneOcrTelemetry } from './src/services/ocrTelemetry.js';
 import { ensureChatSessionsTable } from './src/services/sessionStore.js';
 import { registerDashboardRoutes } from './src/routes/dashboard.js';
-import { ensureDashboardTable, pruneExpiredDashboardSessions } from './src/services/dashboard.js';
+import { ensureDashboardTable, pruneExpiredDashboardSessions, ensureAdminImpersonationsTable, pruneExpiredImpersonations } from './src/services/dashboard.js';
 import {
   sanitizeOnboardPayload,
   createWebOnboardSession,
@@ -758,6 +758,7 @@ setInterval(() => {
 await registerDashboardRoutes(fastify, { supabase });
 setInterval(() => {
   pruneExpiredDashboardSessions(supabase).catch((err) => console.warn('[Dashboard] prune sweep failed:', err.message));
+  pruneExpiredImpersonations(supabase).catch((err) => console.warn('[Dashboard] impersonation prune failed:', err.message));
 }, 15 * 60 * 1000);
 
 // v1.58.15 - daily document + telemetry retention sweeps.
@@ -1410,9 +1411,12 @@ const start = async () => {
     await ensureContactNudgeSchema(supabase);
     await ensureWebOnboardOtpTable(supabase);
     await ensureDashboardTable(supabase);
+    // v1.91.0 (Phase 28A) — the admin impersonation store (30-minute read-only).
+    await ensureAdminImpersonationsTable(supabase);
     await ensureLaunchAwardTable(supabase);
     pruneExpiredWebOnboardOtps(supabase).catch(() => {});
     pruneExpiredDashboardSessions(supabase).catch(() => {});
+    pruneExpiredImpersonations(supabase).catch(() => {});
 
     logWebhookEnvParity();
 

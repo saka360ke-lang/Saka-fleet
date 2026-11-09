@@ -299,6 +299,18 @@ CREATE TABLE IF NOT EXISTS public.dashboard_sessions (
 );
 
 ALTER TABLE public.dashboard_sessions ADD COLUMN IF NOT EXISTS session_role text NOT NULL DEFAULT 'owner';
+-- v1.91.0 (Phase 28A) — superadmin impersonation sessions (30-minute, read-only;
+-- sha256 of the saka_dash_as cookie token only, never the raw value).
+CREATE TABLE IF NOT EXISTS public.admin_impersonations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  token_hash text UNIQUE NOT NULL,
+  admin_profile_id uuid NOT NULL,
+  target_profile_id uuid NOT NULL,
+  expires_at timestamp with time zone NOT NULL,
+  created_at timestamp with time zone NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_admin_impersonations_target ON public.admin_impersonations (target_profile_id);
+CREATE INDEX IF NOT EXISTS idx_admin_impersonations_admin ON public.admin_impersonations (admin_profile_id);
 -- v1.77.0 (Phase 16) — the monthly PDF summary opt-in. A profiles table created
 -- before this release has no column yet; the ALTER upgrades it in place.
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS monthly_report_opt_in boolean NOT NULL DEFAULT false;

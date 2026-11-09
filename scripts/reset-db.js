@@ -45,6 +45,8 @@ export const RESET_TABLES = [
   'ocr_requests',
   'web_onboard_otps',
   'dashboard_sessions',
+  // v1.91.0 (Phase 28A) — admin impersonation sessions (30-minute read-only).
+  'admin_impersonations',
 
   'turn_latency_logs',
   'chat_history',
@@ -190,6 +192,8 @@ export async function executeDatabaseReset({ targetPhone = null, verbose = true,
         DELETE FROM public.superadmin_sessions WHERE phone_number IN ('${cleanPhone}', '${altPhone}');
         DELETE FROM public.web_onboard_otps WHERE phone IN ('${cleanPhone}', '${altPhone}');
         DELETE FROM public.dashboard_sessions WHERE owner_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}'));
+        DELETE FROM public.admin_impersonations WHERE target_profile_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}'));
+        DELETE FROM public.admin_impersonations WHERE admin_profile_id IN (SELECT id FROM public.profiles WHERE phone_number IN ('${cleanPhone}', '${altPhone}'));
         DELETE FROM public.coupons WHERE assigned_to_phone IN ('${cleanPhone}', '${altPhone}');
         DELETE FROM public.expiry_notification_log WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_phone IN ('${cleanPhone}', '${altPhone}'));
         DELETE FROM public.reminders WHERE vehicle_id IN (SELECT id FROM public.vehicles WHERE owner_phone IN ('${cleanPhone}', '${altPhone}'));
@@ -229,6 +233,7 @@ export async function executeDatabaseReset({ targetPhone = null, verbose = true,
           public.ocr_requests,
           public.web_onboard_otps,
           public.dashboard_sessions,
+          public.admin_impersonations,
           public.chat_history,
           public.chat_transcripts,
           public.chat_friction_logs,

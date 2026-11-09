@@ -1,6 +1,13 @@
 {
-  "latest": "1.90.0",
+  "latest": "1.91.0",
   "entries": [
+    {
+      "version": "1.91.0",
+      "date": "2026-11-09",
+      "title": "A stronger superadmin console",
+      "preview": "Six carefully guarded admin tools: view a passbook, extend a trial, help a handover, email as Saka and more.",
+      "summary": "This release gives the superadmin real tools on the web console, each behind a typed confirmation, a written reason and an audit trail. You can now open a passbook to check the plate, VIN and handover history (identifiers stay masked until revealed); extend an account trial, always within the engine's own limit; reset a profile for a clean sign-up, which also ends every live session that profile owned; and facilitate a passbook handover through its first three steps, with the release PIN going only to the owner. Support messages can be sent as Saka Fleet from the console, with a preview first and a typed confirmation before anything leaves. There is also a read-only impersonation: the superadmin can look at an owner's dashboard for 30 minutes behind a yellow banner, cannot change anything while there, and exiting never signs them out. Every action lands in the audit log with who, what, why and the before/after values."
+    },
     {
       "version": "1.90.0",
       "date": "2026-11-09",

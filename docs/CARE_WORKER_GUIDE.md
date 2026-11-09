@@ -32,6 +32,10 @@ This guide is the whole job. If a command is not in here, it is not yours to run
 - **Never** claim something was saved or sent unless the console confirms it.
 - **Never** run or imitate `admin` commands - they are superadmin-only and the system blocks them.
 
+## 2b. Superadmin web tools (v1.91.0) - not yours
+
+The superadmin's `/d/admin` console now carries six write actions: impersonate an owner (**READ-ONLY, 30 minutes**, yellow banner, Exit never signs the admin out), reset a profile (typed `RESET` + reason), extend an account trial (engine-owned 45-day cap), view a passbook (VIN + passbook token masked, reveal on demand), facilitate a passbook transfer (steps 1-3 on the web; the release PIN is emailed **ONLY** to the owner and relayed in WhatsApp; the buyer ACCEPT and email code stay on WhatsApp) and email-as-Saka. Every action is typed-confirmed, reason-stamped and written to `admin_audit_logs`. Care workers never use, request or promise these tools - escalate to the superadmin (section 5).
+
 ## 3. How a ticket reaches you
 
 - **WhatsApp:** the customer asks for support -> the engine opens a ticket, emails the support inbox and pings the superadmin when it is high priority.

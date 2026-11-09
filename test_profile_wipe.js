@@ -60,6 +60,10 @@ async function run() {
   check(m1.deleted.includes('vin_registry'), 'wipe deletes vin_registry (clean slate)');
   // v1.84.0 (Phase 23) — stored compliance documents are wiped with the account.
   check(m1.deleted.includes('vehicle_documents'), 'wipe deletes vehicle_documents (stored certificates)');
+  // v1.91.0 (Phase 28A) — no live dashboard session or admin impersonation may
+  // outlive the profile it belonged to.
+  check(m1.deleted.includes('dashboard_sessions'), 'wipe deletes dashboard_sessions (no cookie outlives the profile)');
+  check(m1.deleted.includes('admin_impersonations'), 'wipe deletes admin_impersonations (v1.91.0)');
   const ctCall = m1.deleteCalls.find((c) => c.table === 'chat_transcripts');
   check(ctCall && ctCall.vals.includes('254734852529'), 'wipe matches the bare 254... phone form');
   check((await wipeProfileForSignup(m1.client, '123')).ok === false, 'short phone is rejected');
