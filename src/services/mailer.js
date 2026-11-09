@@ -1,4 +1,9 @@
 import { Resend } from 'resend';
+import { createResilientClient } from './supabaseClient.js';
+import { logWriteFailure } from './systemErrors.js';
+import { sendWhatsAppText } from './metaMessenger.js';
+import { readConfig, writeConfig } from './systemConfigService.js';
+import { CONFIG_KEY_RESEND_QUOTA_WARNED } from './systemConfigKeys.js';
 
 function getResendClient() {
     const key = process.env.RESEND_API_KEY;
@@ -6,9 +11,112 @@ function getResendClient() {
     return new Resend(key);
 }
 
+/**
+ * Saka Fleet — Resend quota guard (v1.87.2, Phase 26C)
+ * ---------------------------------------------------
+ * Resend answers a daily-quota exhaustion with HTTP 429 (observed live in the
+ * v1.85.0 release run). Until now every send failed invisibly: OTP emails,
+ * trial reminders and Amina replies simply stopped. This wrapper detects the
+ * quota failure on EVERY send, records the UTC day once, audits the hit and
+ * pings the superadmin on WhatsApp once per UTC day.
+ *
+ * Honest limits: there is no email fallback — the email channel is exactly
+ * what is exhausted; and the marker is a DATE key, so "active" means the
+ * warning was recorded on the current UTC day (the quota resets at midnight
+ * UTC, so an older marker is never shown as today's outage).
+ */
+
+export const RESEND_QUOTA_WARNING_TEXT = '⚠️ Resend daily quota exhausted. Emails (OTPs, trial reminders, Amina replies) are paused until midnight UTC.';
+
+/** True when a Resend error/message names a quota or rate limit (429 family). */
+export function isResendQuotaError(error) {
+    if (!error) return false;
+    const status = Number(error.statusCode ?? error.status ?? 0);
+    if (status === 429) return true;
+    const text = `${error.name || ''} ${error.message || ''} ${typeof error === 'string' ? error : ''}`;
+    return /quota|rate[\s_-]?limit|too many requests/i.test(text);
+}
+
+/** True when the stored marker is the CURRENT UTC day (never throws). */
+export function isResendQuotaWarnedAt(dateStr, now = new Date()) {
+    const match = String(dateStr || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return false;
+    const warnedAt = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+    const today = new Date(now);
+    const todayUtc = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+    return Number.isFinite(warnedAt) && warnedAt === todayUtc;
+}
+
+let mailerSupabase = null;
+function mailerDb() {
+    if (mailerSupabase) return mailerSupabase;
+    mailerSupabase = createResilientClient();
+    return mailerSupabase;
+}
+
+/**
+ * Record one quota hit: system_config marker (once per UTC day), an
+ * `admin_audit_logs` row and ONE superadmin WhatsApp ping. Never throws.
+ */
+export async function recordResendQuotaWarning({ supabase = null, now = new Date(), notify = true } = {}) {
+    const db = supabase || mailerDb();
+    const dateKey = new Date(now).toISOString().slice(0, 10);
+    let alreadyWarned = false;
+    if (db) {
+        try {
+            const current = await readConfig(db, CONFIG_KEY_RESEND_QUOTA_WARNED);
+            alreadyWarned = isResendQuotaWarnedAt(current, now);
+            if (!alreadyWarned) {
+                const write = await writeConfig(db, CONFIG_KEY_RESEND_QUOTA_WARNED, dateKey, {
+                    updatedBy: 'MAILER',
+                    updatedAt: new Date(now).toISOString()
+                });
+                if (!write?.ok) {
+                    logWriteFailure(db, 'mailer.recordResendQuotaWarning', new Error(write?.error || 'write refused'), {
+                        key: CONFIG_KEY_RESEND_QUOTA_WARNED
+                    });
+                }
+                await db.from('admin_audit_logs').insert([{
+                    admin_phone: 'SYSTEM',
+                    action: 'RESEND_QUOTA_ALERT',
+                    details: { key: CONFIG_KEY_RESEND_QUOTA_WARNED, date: dateKey },
+                    created_at: new Date(now).toISOString()
+                }]);
+            }
+        } catch (err) {
+            logWriteFailure(db, 'mailer.recordResendQuotaWarning', err);
+        }
+    }
+    if (!alreadyWarned && notify) {
+        const phone = process.env.SUPERADMIN_PHONE;
+        if (phone) await sendWhatsAppText(phone, RESEND_QUOTA_WARNING_TEXT);
+    }
+    return { warned: true, alreadyWarned, date: dateKey, persisted: Boolean(db) };
+}
+
+/**
+ * The ONE Resend send. Detects quota failures on every path, then returns the
+ * same `{ data, error }` shape every existing sender already handles.
+ * The optional second argument is a TEST seam (`client`, `supabase`, `notify`,
+ * `now`) — production callers pass only the payload.
+ */
+export async function sendResendEmail(payload = {}, { client = null, supabase = null, notify = true, now = new Date() } = {}) {
+    const resend = client || getResendClient();
+    try {
+        const result = await resend.emails.send(payload);
+        if (result?.error && isResendQuotaError(result.error)) {
+            await recordResendQuotaWarning({ supabase, notify, now });
+        }
+        return result;
+    } catch (err) {
+        if (isResendQuotaError(err)) await recordResendQuotaWarning({ supabase, notify, now });
+        throw err;
+    }
+}
+
 export async function sendReportByEmail(targetEmail, plateNumber, pdfBuffer) {
     try {
-        const { data, error } = await getResendClient().emails.send({
+        const { data, error } = await sendResendEmail({
             from: 'Saka Assistant <reports@reports.sakafleet.com>', 
             to: [targetEmail],
             subject: `Vehicle Audit Report - ${plateNumber}`,
@@ -60,7 +168,7 @@ export async function sendMonthlyReportEmail({
     const label = String(monthLabel || '').trim();
     const safeLabel = label.replace(/[^\w\s-]/g, '').replace(/\s+/g, '_') || 'summary';
     try {
-        const { data, error } = await getResendClient().emails.send({
+        const { data, error } = await sendResendEmail({
             from: 'Saka Assistant <reports@reports.sakafleet.com>',
             to: [to],
             subject: label ? `Your Saka monthly summary — ${label}` : 'Your Saka monthly summary',
@@ -95,7 +203,7 @@ export async function sendMonthlyReportEmail({
 
 export async function sendMfaEmail(targetEmail, code) {
     try {
-        const { data, error } = await getResendClient().emails.send({
+        const { data, error } = await sendResendEmail({
             from: 'Saka Security <security@reports.sakafleet.com>',
             to: [targetEmail],
             subject: 'Saka Security Alert: Account Deactivation Verification Code',
@@ -130,7 +238,7 @@ export async function sendAdminNotificationEmail(subject, htmlContent) {
     if (!targetEmail || !process.env.RESEND_API_KEY) return false;
 
     try {
-        const { data, error } = await getResendClient().emails.send({
+        const { data, error } = await sendResendEmail({
             from: 'Saka Admin Alert <security@reports.sakafleet.com>',
             to: [targetEmail],
             subject: subject,
@@ -185,7 +293,7 @@ export async function sendRemediationProposalEmail({
         </tr>`).join('');
 
     try {
-        const { data, error } = await getResendClient().emails.send({
+        const { data, error } = await sendResendEmail({
             from: 'Saka Remediation <security@reports.sakafleet.com>',
             to: [targetEmail],
             subject: `Approval required: ${proposalCode} (${riskLevel} risk)`,
@@ -260,7 +368,7 @@ export async function sendRemediationDigestEmail({
         </tr>`).join('');
 
     try {
-        const { data, error } = await getResendClient().emails.send({
+        const { data, error } = await sendResendEmail({
             from: 'Saka Remediation <security@reports.sakafleet.com>',
             to: [targetEmail],
             subject: `Saka Remediation ${slotLabel} Digest — ${dateLabel}`,
@@ -311,7 +419,7 @@ export async function sendRemediationDigestEmail({
 
 export async function sendEmailOtp(targetEmail, code) {
     try {
-        const { data, error } = await getResendClient().emails.send({
+        const { data, error } = await sendResendEmail({
             from: 'Saka Security <security@reports.sakafleet.com>',
             to: [targetEmail],
             subject: 'Saka Fleet: Your Verification Code',
@@ -380,7 +488,7 @@ export async function sendDashboardMagicLinkEmail({
             '<hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;">' +
             '<p style="font-size: 12px; color: #94a3b8; margin: 0;">Saka Fleet Security Verification Service</p>' +
             '</div>';
-        const { error } = await getResendClient().emails.send({
+        const { error } = await sendResendEmail({
             from: 'Saka Security <security@reports.sakafleet.com>',
             to: [to],
             subject: 'Your Saka Fleet dashboard link',
@@ -403,7 +511,7 @@ export async function sendDashboardMagicLinkEmail({
  */
 export async function sendDriverAssignmentOtp(targetEmail, code, { plate = 'your vehicle', driverPhone = '' } = {}) {
     try {
-        const { data, error } = await getResendClient().emails.send({
+        const { data, error } = await sendResendEmail({
             from: 'Saka Security <security@reports.sakafleet.com>',
             to: [targetEmail],
             subject: `Saka Fleet: Driver assignment verification — ${plate}`,
@@ -447,7 +555,7 @@ export async function sendPassbookWelcomeEmail({
     try {
         const identity = identityValue || vin || null;
         const subjectIdentity = identity ? ` (${identity})` : '';
-        const { data, error } = await getResendClient().emails.send({
+        const { data, error } = await sendResendEmail({
             from: 'Saka Fleet <reports@reports.sakafleet.com>',
             to: [targetEmail],
             subject: `Asset Passbook Issued - ${plateNumber}${subjectIdentity}`,
@@ -502,7 +610,7 @@ export async function sendSupportEscalationEmail({ userPhone, userEmail, userNam
             ? vehiclesList.map(v => `${v.plate_number} (${v.make_model || 'Vehicle'}, VIN: ${v.vin || 'N/A'})`).join(', ')
             : 'None';
 
-        const { data, error } = await getResendClient().emails.send({
+        const { data, error } = await sendResendEmail({
             from: 'Saka Support <support@reports.sakafleet.com>',
             to: [targetEmail],
             reply_to: userEmail || undefined,
@@ -546,7 +654,7 @@ export async function sendSuperadminEscalationEmail({ userPhone, category, prior
     const targetEmail = process.env.SUPERADMIN_EMAIL;
     if (!targetEmail) return false;
     try {
-        const { data, error } = await getResendClient().emails.send({
+        const { data, error } = await sendResendEmail({
             from: 'Saka Support <support@reports.sakafleet.com>',
             to: [targetEmail],
             subject: `Saka escalation (${priority || 'high'} ${category || 'support'}) - ${userPhone || 'unknown'}`,
@@ -570,7 +678,7 @@ export async function sendSuperadminEscalationEmail({ userPhone, category, prior
 export async function sendCareReplyEmail({ to, subject, text } = {}) {
     if (!to) return false;
     try {
-        const { data, error } = await getResendClient().emails.send({
+        const { data, error } = await sendResendEmail({
             from: 'Saka Support <support@reports.sakafleet.com>',
             to: [to],
             reply_to: 'support@reports.sakafleet.com',
@@ -596,7 +704,7 @@ export async function sendCareReplyEmail({ to, subject, text } = {}) {
 export async function sendCareEscalationEmail({ to, subject, text } = {}) {
     const target = String(to || process.env.CARE_ESCALATION_EMAIL || 'support@sakafleet.com').trim();
     try {
-        const { data, error } = await getResendClient().emails.send({
+        const { data, error } = await sendResendEmail({
             from: 'Saka Care <support@reports.sakafleet.com>',
             to: [target],
             reply_to: 'support@reports.sakafleet.com',
@@ -616,7 +724,7 @@ export async function sendCareEscalationEmail({ to, subject, text } = {}) {
 
 export async function sendTrialExtensionReminderEmail({ targetEmail, ownerName, plateNumber, vin, couponCode, trialEndDate }) {
     try {
-        const { data, error } = await getResendClient().emails.send({
+        const { data, error } = await sendResendEmail({
             from: 'Saka Fleet <reports@reports.sakafleet.com>',
             to: [targetEmail],
             subject: `Action Required: Your Saka Fleet Trial for ${plateNumber} Ends in 3 Days!`,
@@ -655,7 +763,7 @@ export async function sendTrialExtensionReminderEmail({ targetEmail, ownerName, 
 
 export async function sendTransferReleasePinEmail({ targetEmail, ownerName, plateNumber, vin, releasePin }) {
     try {
-        const { data, error } = await getResendClient().emails.send({
+        const { data, error } = await sendResendEmail({
             from: 'Saka Security <security@reports.sakafleet.com>',
             to: [targetEmail],
             subject: `Security Verification: Authorize Passbook Transfer for ${plateNumber}`,
@@ -709,7 +817,7 @@ export async function sendExistingAccountNoticeEmail(targetEmail, { maskedPhone 
             '<hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;">' +
             '<p style="font-size: 12px; color: #94a3b8; margin: 0;">Saka Fleet - your machine memory.</p>' +
             '</div>';
-        const { error } = await getResendClient().emails.send({
+        const { error } = await sendResendEmail({
             from: 'Saka Fleet <reports@reports.sakafleet.com>',
             to: [targetEmail],
             subject: 'You already have a Saka Fleet account',

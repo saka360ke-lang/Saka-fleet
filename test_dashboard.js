@@ -41,6 +41,7 @@ import {
   buildVehiclePage,
   renderRecordsPage,
   renderImportPage,
+  renderAdminCommandPage,
   renderReceiptPage,
   parseRecordsFilters,
   cleanRecordsTerm,
@@ -2654,6 +2655,22 @@ async function run() {
   check(DASHBOARD_CSS.includes('flex-wrap:nowrap; overflow-x:auto'), 'the mobile nav is one horizontal swipe strip');
   check(DASHBOARD_CSS.includes('img, svg { max-width:100%; height:auto; }'), 'no image can overflow a phone width');
   check(!/#0EA5E9/i.test(DASHBOARD_CSS), 'no stray teal brand colour survived the standardization');
+
+  console.log('\n--- v1.87.2: the Resend quota banner ---');
+  const baseCommandData = {
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    windowDays: 30,
+    revenue: null,
+    userHealth: null,
+    support: null,
+    ai: null,
+    alerts: []
+  };
+  const quotaBanner = renderAdminCommandPage({ data: { ...baseCommandData, email: { quotaWarnedAt: '2026-11-09', quotaWarnedToday: true } } });
+  check(quotaBanner.includes('Resend quota exhausted today') && quotaBanner.includes('#ef4444'), 'an active quota warning renders the red banner (v1.87.2)');
+  const staleBanner = renderAdminCommandPage({ data: { ...baseCommandData, email: { quotaWarnedAt: '2026-11-08', quotaWarnedToday: false } } });
+  check(!staleBanner.includes('Resend quota exhausted today'), 'a stale (previous-day) marker renders no banner (v1.87.2)');
 
   process.env.DASHBOARD_ENABLED = previousFlag;
   if (previousBase === undefined) delete process.env.PUBLIC_APP_URL;

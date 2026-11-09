@@ -58,6 +58,12 @@ export const SYSTEM_CONFIG_KEYS = Object.freeze({
     // v1.77.0 (Phase 16) — Nairobi calendar-day marker for the monthly PDF
     // summary sweep (1st of the month, 08:00 EAT). Brand-new key.
     legacyKey: null, owner: 'monthlyReports', default: null, bootCritical: false, kind: 'fixed'
+  }),
+  'mailer.resend_quota_warned_at': Object.freeze({
+    // v1.87.2 (Phase 26C) — UTC calendar day of the last Resend quota (429)
+    // detection. Dual-written to the legacy `resend_quota_warned_at` row so the
+    // operator can find it under the documented name.
+    legacyKey: 'resend_quota_warned_at', owner: 'mailer', default: null, bootCritical: false, kind: 'fixed'
   })
 });
 
@@ -73,6 +79,7 @@ export const CONFIG_KEY_EVAL_CALL_ALERT_DATE = 'eval.call_alert_date';
 export const CONFIG_KEY_ADMIN_WIPE_PENDING = 'admin.wipe_pending';
 export const CONFIG_KEY_WEEKLY_REPORTS_LAST_SENT = 'weeklyreports.last_sent_date';
 export const CONFIG_KEY_MONTHLY_REPORTS_LAST_SENT = 'monthlyreports.last_sent_date';
+export const CONFIG_KEY_RESEND_QUOTA_WARNED = 'mailer.resend_quota_warned_at';
 
 /** Dynamic per-day family: `budget.alert.<pct>_<YYYY-MM-DD>`. */
 export const BUDGET_ALERT_FAMILY = Object.freeze({

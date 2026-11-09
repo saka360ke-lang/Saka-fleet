@@ -1,6 +1,13 @@
 {
-  "latest": "1.87.1",
+  "latest": "1.87.2",
   "entries": [
+    {
+      "version": "1.87.2",
+      "date": "2026-11-09",
+      "title": "When email stops, you will know",
+      "preview": "If the email service runs out of quota, Saka now tells you on WhatsApp and on the command center.",
+      "summary": "Email is how Saka sends verification codes, transfer release PINs, trial reminders and Amina's replies - and the email provider has a daily limit. When that limit is hit, the provider refuses politely and everything downstream simply stops, quietly. This release makes that failure loud. Every single email Saka sends now goes through one guard: the moment it sees the provider's quota or rate-limit response, it records the day once, writes an audit entry, and sends the operator one WhatsApp message saying the quota is exhausted and email resumes at midnight UTC. The operator's command center shows a red banner for the rest of that UTC day, and it disappears on its own when the quota resets - an old warning is never shown as today's outage. Nothing about your emails, codes or data changed; the point is that a silent outage becomes a five-second read."
+    },
     {
       "version": "1.87.1",
       "date": "2026-11-09",

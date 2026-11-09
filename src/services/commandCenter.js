@@ -19,6 +19,10 @@
 import { normalizeTierKey, getTierDefinition, isPaidTierKey } from './subscriptionTiers.js';
 import { getAiUsageSummary, getAiUsageByOwner } from './aiUsageLog.js';
 import { maskPhone } from './webOnboarding.js';
+// v1.87.2 (Phase 26C) — the email-channel state (Resend quota marker).
+import { readConfig } from './systemConfigService.js';
+import { CONFIG_KEY_RESEND_QUOTA_WARNED } from './systemConfigKeys.js';
+import { isResendQuotaWarnedAt } from './mailer.js';
 
 export const COMMAND_WINDOW_DAYS = 30;
 export const TRIAL_WARNING_DAYS = 3;
@@ -151,7 +155,7 @@ export async function buildCommandCenterMetrics({
 } = {}) {
   const generatedAt = new Date(now).toISOString();
   if (!supabase) {
-    return { ok: false, generatedAt, reason: 'db_error', revenue: null, userHealth: null, support: null, ai: null, alerts: [] };
+    return { ok: false, generatedAt, reason: 'db_error', revenue: null, userHealth: null, support: null, ai: null, email: null, alerts: [] };
   }
 
   const profiles = await readProfiles(supabase);
@@ -257,8 +261,17 @@ export async function buildCommandCenterMetrics({
     };
   }
 
+  /* ---------------- Email channel (v1.87.2, Phase 26C) ---------------- */
+  // readConfig never throws and returns null when the marker is unset (rule 50).
+  const quotaWarnedAt = await readConfig(supabase, CONFIG_KEY_RESEND_QUOTA_WARNED);
+  const email = {
+    quotaWarnedAt: quotaWarnedAt || null,
+    quotaWarnedToday: isResendQuotaWarnedAt(quotaWarnedAt, now)
+  };
+
   /* ---------------- Deterministic alerts ---------------- */
   const alerts = [];
+  if (email.quotaWarnedToday) alerts.push({ code: 'EMAIL_QUOTA', severity: 'bad', text: 'Resend quota exhausted today — emails paused until midnight UTC' });
   if (revenue?.pastDue) alerts.push({ code: 'PAST_DUE', severity: 'warn', text: `${revenue.pastDue} account${revenue.pastDue === 1 ? '' : 's'} past due` });
   if (revenue?.trialsExpiring3d) alerts.push({ code: 'TRIAL_ENDING', severity: 'warn', text: `${revenue.trialsExpiring3d} trial${revenue.trialsExpiring3d === 1 ? '' : 's'} end within 3 days` });
   if (support?.escalated) alerts.push({ code: 'ESCALATED_TICKETS', severity: 'bad', text: `${support.escalated} escalated support ticket${support.escalated === 1 ? '' : 's'}` });
@@ -274,6 +287,7 @@ export async function buildCommandCenterMetrics({
     userHealth,
     support,
     ai,
+    email,
     alerts
   };
 }

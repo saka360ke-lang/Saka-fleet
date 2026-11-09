@@ -4176,9 +4176,17 @@ export function renderAdminCommandPage({ data } = {}) {
     : '<div class="notice">Nothing urgent right now — no past-due accounts, no trial ending within 3 days and no escalated ticket.</div>';
 
   const generated = formatDate(data.generatedAt, 'en-GB', { timeZone: 'Africa/Nairobi' });
+  // v1.87.2 (Phase 26C) — a red banner while today's Resend quota is exhausted.
+  const emailBanner = data.email?.quotaWarnedToday
+    ? `<div class="notice warn" style="border-color:#ef4444;background:#fef2f2;color:#991b1b;">
+        <strong>⚠️ Resend quota exhausted today</strong><br>
+        Emails (OTPs, trial reminders, Amina replies) are paused until midnight UTC.${data.email.quotaWarnedAt ? ` Recorded ${escapeHtml(data.email.quotaWarnedAt)}.` : ''}
+      </div>`
+    : '';
   const body = `
 <h1>Command center</h1>
 <p class="muted">Revenue, user health, support and AI spend · ${escapeHtml(generated)} EAT · read-only · every visit is audited</p>
+${emailBanner}
 ${alertsCard}
 ${revenueKpis}
 <div class="page-grid">

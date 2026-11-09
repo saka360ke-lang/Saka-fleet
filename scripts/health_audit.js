@@ -123,6 +123,8 @@ const STATLESS_SUITES = [
   'test_driver_compliance_answers.js',
   // v1.61.12 — every incident reaches error_logs; silent-catch ratchet.
   'test_error_logging.js',
+  // v1.87.2 — Resend quota detection, one-per-UTC-day marker + superadmin alert.
+  'test_resend_quota.js',
   // v1.61.14 — per-user context cache (built at chat initiation, TTL + invalidation).
   'test_user_context_cache.js',
   // v1.61.15 — trial capacity (15-asset walk, lapse-on-read) + eval spend controls.
