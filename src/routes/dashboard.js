@@ -297,14 +297,15 @@ function isCrossOriginWrite(request) {
 async function requireRoleSession(request, reply, supabase, role = 'owner') {
   const sessionToken = readDashboardCookie(request.headers);
   if (!sessionToken) {
-    const page = renderErrorPage(401, 'Reply *dashboard* in the WhatsApp chat and open the sign-in link.');
+    // v1.94.0 (Phase 31) — a signed-out visitor's brand click goes to the site.
+    const page = renderErrorPage(401, 'Reply *dashboard* in the WhatsApp chat and open the sign-in link.', { brandHref: 'https://sakafleet.com' });
     sendHtml(reply, page.status, page.html);
     return null;
   }
   const session = await getSessionByToken({ supabase, sessionToken });
   if (!session.ok) {
     reply.header('set-cookie', dashboardClearCookieHeader({ secure: isSecureRequest(request) }));
-    const page = renderErrorPage(401, 'Your session has ended. Reply *dashboard* in the WhatsApp chat and sign in again.');
+    const page = renderErrorPage(401, 'Your session has ended. Reply *dashboard* in the WhatsApp chat and sign in again.', { brandHref: 'https://sakafleet.com' });
     sendHtml(reply, page.status, page.html);
     return null;
   }

@@ -178,6 +178,9 @@ async function run() {
   const ownerView = await impApp.inject({ method: 'GET', url: '/d', headers: both });
   check(ownerView.statusCode === 200, 'the admin sees the target owner dashboard');
   check(/Impersonating Target Owner/.test(ownerView.body) && /expires \d{2}:\d{2}/.test(ownerView.body), 'the sticky banner names the owner and the expiry');
+  // v1.94.0 (Phase 31, D6) — the brand stays on the TARGET owner's overview,
+  // never the admin lane; Exit is the only way out.
+  check(ownerView.body.includes('class="brand" href="/d"'), 'the impersonated brand stays /d — the target overview, never the admin lane (v1.94.0)');
   check(ownerView.body.includes('/d/admin/exit-as') && !ownerView.body.includes('/d/admin/command'), 'the page shows Exit and the OWNER nav (no admin command link)');
   const targetFleet = await impApp.inject({ method: 'GET', url: '/d/vehicles', headers: both });
   check(targetFleet.statusCode === 200 && targetFleet.body.includes('KDA 123A'), 'the impersonated fleet page renders the TARGET vehicles');

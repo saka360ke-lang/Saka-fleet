@@ -14,6 +14,17 @@
   if (!anchorItems.length) return;
 
   var ctaWrap = header.querySelector('.nav-cta');
+  // v1.94.0 (Phase 31) — the sticky header grows when the launch banner appears.
+  // Publish its real height so the drawer starts BELOW the header instead of
+  // hiding its first item behind it. main.js dispatches 'saka:nav-sync' when
+  // the banner is revealed or dismissed.
+  function syncHeaderOffset() {
+    document.documentElement.style.setProperty('--nav-h', header.offsetHeight + 'px');
+  }
+  syncHeaderOffset();
+  window.addEventListener('resize', syncHeaderOffset);
+  window.addEventListener('saka:nav-sync', syncHeaderOffset);
+
   var burger = document.createElement('button');
   burger.className = 'nav-burger';
   burger.id = 'navBurger';
@@ -92,7 +103,7 @@
     }
   });
   window.addEventListener('resize', function () {
-    if (window.innerWidth > 960 && isOpen()) setOpen(false);
+    if (window.innerWidth > 1280 && isOpen()) setOpen(false);
   });
 
   // v1.59.7 — smooth scrolling ONLY for nav anchor clicks. The old CSS-wide

@@ -332,8 +332,10 @@ console.log('\n--- Test 17: launch banner + opt-in (v1.59.1) ---');
 check(indexHtml.includes('id="launchBanner"') && indexHtml.includes('id="launchSlots"') && indexHtml.includes('id="launchDismiss"'), 'the site carries a dismissible launch banner with a live slot counter');
 check(/id="launchBanner"[^>]*hidden/.test(indexHtml), 'the banner starts hidden (fail-closed until the status says it can award)');
 check(/id="launchOptInWrap"[^>]*hidden/.test(indexHtml) && /id="launchOptIn"[^>]*checked/.test(indexHtml), 'the opt-in tick box is hidden by default and CHECKED by default');
-check(indexHtml.includes('help us polish Saka for production') || indexHtml.includes('help Saka reach production'), 'the banner tells users their use helps reach production');
-check(mainJs.includes('renderLaunchBanner') && mainJs.includes('launchSlots') && mainJs.includes('launchAwardDays'), 'main.js renders the counter from the campaign status');
+// v1.94.0 (Phase 31) — the operator-approved launch copy (D5).
+check(indexHtml.includes('Sign up and activate trial to get an extended 6-month trial, zero payment'), 'the banner carries the approved launch copy (v1.94.0)');
+check(!/help us polish Saka for production/.test(indexHtml), 'the retired "help us polish" line is gone');
+check(mainJs.includes('renderLaunchBanner') && mainJs.includes('launchSlots') && mainJs.includes('awardDays'), 'main.js renders the live slot counter (award-day analytics retained)');
 check(mainJs.includes('launch_opt_in: readLaunchOptIn()'), 'the signup payload carries the launch opt-in');
 check(mainJs.includes('readLaunchOptIn') && mainJs.includes('wrap.hidden = false'), 'the opt-in box only appears while the campaign is open');
 check(mainJs.includes('launch_offer_dismiss') && mainJs.includes('saka_launch_banner_dismissed'), 'banner dismissal is remembered and tracked');
@@ -343,7 +345,8 @@ check(css.includes('.launch-banner') && css.includes('.launch-optin'), 'the bann
 console.log('\n--- Test 18: sticky glowing banner + live signup guard (v1.59.2) ---');
 const headerSlice = indexHtml.slice(indexHtml.indexOf('<header class="nav">'), indexHtml.indexOf('</header>'));
 check(headerSlice.includes('id="launchBanner"'), 'the banner lives INSIDE the sticky header (visible while scrolling)');
-check(indexHtml.includes('signups get a full') && !indexHtml.includes('fleets get a full'), 'the banner copy says "signups", not "fleets"');
+check(indexHtml.includes('Sign up and activate trial') && !indexHtml.includes('signups get a full'), 'the banner speaks the approved copy (no legacy "signups get a full")');
+check(indexHtml.includes('id="launchSlots"') && !indexHtml.includes('launchSlotsTotal') && !indexHtml.includes('launchAwardDays'), 'only the live slot counter remains (D8)');
 check(css.includes('@keyframes launch-glow') && css.includes('prefers-reduced-motion') && css.includes('animation: launch-glow'), 'the banner carries a slow glow pulse with a reduced-motion fallback');
 check(css.includes('the launch banner stacks and centres on small screens') && /\.launch-banner\s*\{[^}]*flex-direction: column/.test(css), 'the banner stacks and centres on mobile');
 check(indexHtml.includes('id="detailsContinue"') && /id="detailsContinue"[^>]*disabled/.test(indexHtml), 'the Continue button starts disabled (gated by the live check)');
@@ -379,7 +382,7 @@ const unversionedImages = [...indexHtml.matchAll(/(?:src|href)="([^"]*\/assets\/
   .filter((ref) => !/\?v=\d/.test(ref));
 check(unversionedImages.length === 0, `every image reference is cache-busted${unversionedImages.length ? ` (missing: ${unversionedImages.join(', ')})` : ''}`);
 check(css.includes('prefers-reduced-motion') && css.includes('@keyframes menu-rise'), 'the drawer animation honours reduced motion');
-check(css.includes('.nav-burger') && css.includes('.nav-menu') && css.includes('max-width: 960px'), 'burger + full-screen drawer appear at tablet/mobile widths');
+check(css.includes('.nav-burger') && css.includes('.nav-menu') && css.includes('max-width: 1280px'), 'burger + full-screen drawer appear below 1280px (v1.94.0)');
 const navJsSource = fs.readFileSync(path.join(LANDING, 'assets/js/nav.js'), 'utf8');
 check(navJsSource.includes('aria-expanded') && navJsSource.includes('aria-controls') && navJsSource.includes("event.key === 'Escape'"), 'the drawer is keyboard and ARIA accessible');
 check(navJsSource.includes(".nav-links") && navJsSource.includes('nav-open'), 'the drawer builds from the existing nav links (no duplicated markup)');
@@ -393,6 +396,56 @@ const navJsScroll = fs.readFileSync(path.join(LANDING, 'assets/js/nav.js'), 'utf
 check(navJsScroll.includes('scrollIntoView') && navJsScroll.includes("behavior: reduced ? 'auto' : 'smooth'"), 'nav anchors smooth-scroll in JS (reduced-motion aware)');
 check(!indexHtml.includes('rel="manifest"') && !fs.existsSync(path.join(LANDING, 'manifest.webmanifest')) && !fs.existsSync(path.join(LANDING, 'assets/img/icon-192.png')), 'the PWA manifest and install surface are gone (no install prompt)');
 check(!indexHtml.includes('apple-mobile-web-app-capable'), 'no iOS standalone install meta');
+
+console.log('\n--- Test 22: Phase 31 website overhaul (v1.94.0) ---');
+const overhaulHeaderSlice = indexHtml.slice(indexHtml.indexOf('<header class="nav">'), indexHtml.indexOf('</header>'));
+const overhaulNavJs = fs.readFileSync(path.join(LANDING, 'assets/js/nav.js'), 'utf8');
+check(indexHtml.includes('extended 6-month trial, zero payment') && indexHtml.includes('launchOptIn'), 'the opt-in speaks the same offer as the banner');
+check(mainJs.includes('award_days') && mainJs.includes("event: 'launch_offer_view'"), 'award-day analytics survive the copy change');
+// Task 2 — the drawer starts below the real sticky header height.
+check(css.includes('padding: calc(var(--nav-h, 68px) + 36px) 24px 32px'), 'the drawer starts below the real sticky header height');
+check(overhaulNavJs.includes('syncHeaderOffset') && overhaulNavJs.includes("'--nav-h'") && overhaulNavJs.includes("'saka:nav-sync'"), 'nav.js publishes --nav-h and re-syncs when the banner appears');
+check(mainJs.includes("new Event('saka:nav-sync')"), 'main.js tells the drawer after the banner is revealed/dismissed');
+check(css.includes('overflow-wrap: anywhere') && /\.launch-banner\s*\{[^}]*flex-direction: column/.test(css), 'the banner wraps on phones and keeps its stacking rule');
+// Task 3 — one menu pattern, one logo height.
+check(css.includes('@media (max-width: 1280px)') && overhaulNavJs.includes('window.innerWidth > 1280'), 'the drawer owns every screen below 1280px (D1)');
+check(css.includes('.nav-logo .mark { width: auto; height: 30px; }'), 'one 30px logo height on every screen (D2)');
+check(css.includes('@media (max-width: 480px)') && css.includes('.nav-logo .mark-square { display: inline-block; }'), 'the square mark takes over at 480px (D2)');
+check(indexHtml.includes('class="mark-square"') && fs.readFileSync(path.join(LANDING, 'privacy.html'), 'utf8').includes('mark-square'), 'the square mark ships on the homepage and legal pages');
+check(overhaulHeaderSlice.includes('class="btn btn-primary"') && !overhaulHeaderSlice.includes('btn-ghost" href="#pricing"'), 'the duplicate ghost Pricing CTA is gone (D4)');
+check(css.includes('.nav-cta .btn-primary { display: none; }') && css.includes('.nav-cta .btn-ghost.nav-login { display: inline-flex; }'), 'the header CTA moves into the drawer on tablets/phones, Log In stays (D3)');
+check(indexHtml.includes('mailto:support@reports.sakafleet.com">Support</a>'), 'the footer carries a Support link (never the nav)');
+// Task 4 — the billing switch.
+check(indexHtml.includes('class="billing-toggle"') && indexHtml.includes('id="billingMonthly"') && indexHtml.includes('id="billingAnnual"'), 'the pricing section ships the billing switch');
+check(indexHtml.includes('class="save-chip">save 30%</span>'), 'the annual pill advertises the 30% saving');
+check(indexHtml.includes('name="billing" value="monthly" checked'), 'monthly is the default (D7)');
+check(indexHtml.includes('<div class="pricing" aria-live="polite">'), 'price changes are announced politely');
+check(mainJs.includes("PRICING_KEY = 'saka_pricing_interval'") && mainJs.includes('function renderPricing') && mainJs.includes('savePricingInterval'), 'main.js persists and re-renders the billing interval');
+check(mainJs.includes("perEl.getAttribute('data-usd-annual')"), 'the annual figure still rides its data attribute (Test 14 contract)');
+const OVERHAUL_ANNUAL = { '9.99': 83.92, '17.99': 151.12, '27.99': 235.12 };
+for (const overhaulMonthly of Object.keys(OVERHAUL_ANNUAL)) {
+  check(Math.round(Number(overhaulMonthly) * 12 * 0.7 * 100) / 100 === OVERHAUL_ANNUAL[overhaulMonthly], `annual for $${overhaulMonthly} is exactly 30% off 12 months`);
+}
+check(mainJs.includes("priceEl.textContent = '$0'") && mainJs.includes("perEl.textContent = 'forever'"), 'the Free card stays $0 / forever in both modes');
+check(mainJs.includes('(add-ons are monthly)'), 'the annual add-on caveat is stated');
+// Task 5 — the sweep (privacy's factual "card number" line never matches these patterns).
+const OVERHAUL_COPY_FILES = ['index.html', 'privacy.html', 'terms.html', 'status.html', 'data-deletion.html', '404.html', 'llms.txt', 'humans.txt', 'assets/js/main.js', 'assets/js/nav.js', 'assets/js/locale.js', 'assets/js/status.js', 'assets/js/cookieConsent.js'];
+const overhaulNoCardHits = [];
+for (const overhaulFile of OVERHAUL_COPY_FILES) {
+  const overhaulText = fs.readFileSync(path.join(LANDING, overhaulFile), 'utf8');
+  const overhaulHits = overhaulText.match(/no card|no-card|credit card/ig) || [];
+  if (overhaulHits.length) overhaulNoCardHits.push(`${overhaulFile}: ${overhaulHits.slice(0, 3).join(', ')}`);
+}
+check(overhaulNoCardHits.length === 0, `no "no card" wording remains${overhaulNoCardHits.length ? ` (${overhaulNoCardHits.join('; ')})` : ''}`);
+check(indexHtml.includes('class="nav-logo" href="/"'), 'the landing logo always leads home');
+// Task 6 — the dashboard shell brand target (the dashboard suite owns the rest).
+{
+  const dashboardSource = fs.readFileSync('src/services/dashboard.js', 'utf8');
+  check(dashboardSource.includes("brandHref = '/d'") && dashboardSource.includes('escapeHtml(brandHref)'), 'the dashboard shell accepts a brand target (default /d)');
+  check(dashboardSource.includes("brandHref: 'https://sakafleet.com'"), 'the signed-out login door points at the public site');
+}
+
+console.log(`\n🎉 ${passed} landing assertions passed (Phase 31 included).`);
 
 console.log('Stateless suite: file reads only — no database, no cleanup needed.');
 

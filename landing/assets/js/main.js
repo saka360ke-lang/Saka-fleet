@@ -237,6 +237,8 @@
     try { localStorage.setItem(LAUNCH_DISMISS_KEY, '1'); } catch (err) { /* storage may be blocked */ }
     var banner = $('launchBanner');
     if (banner) banner.hidden = true;
+    // The sticky header just shrank — tell the drawer where it now starts.
+    window.dispatchEvent(new Event('saka:nav-sync'));
     window.dataLayer = window.dataLayer || [];
     window.dataLayer.push({
       event: 'launch_offer_dismiss',
@@ -265,11 +267,7 @@
       slotsTotal: body.slots_total,
       awardDays: body.award_days
     };
-    var total = $('launchSlotsTotal');
-    var days = $('launchAwardDays');
     var slots = $('launchSlots');
-    if (total) total.textContent = String(body.slots_total);
-    if (days) days.textContent = String(body.award_days);
     if (slots) slots.textContent = String(body.slots_left);
     var wrap = $('launchOptInWrap');
     if (wrap) wrap.hidden = false;
@@ -278,11 +276,14 @@
       banner.hidden = false;
       var close = $('launchDismiss');
       if (close) close.addEventListener('click', dismissLaunchBanner);
+      // The sticky header just grew — tell the drawer where it now starts.
+      window.dispatchEvent(new Event('saka:nav-sync'));
     }
     var note = document.querySelector('.hero-note');
     if (note) {
-      note.textContent = '🎉 Launch offer — the first ' + body.slots_total + ' signups get a full ' +
-        body.award_days + '-day trial · No card needed';
+      // v1.94.0 (Phase 31) — the note speaks the same length as the banner.
+      var spell = Number(body.award_days) >= 180 ? '6-month' : body.award_days + '-day';
+      note.textContent = '🎉 Launch offer — extended ' + spell + ' trial when you sign up and activate · zero payment';
     }
     window.dataLayer = window.dataLayer || [];
     window.dataLayer.push({
@@ -494,6 +495,82 @@
         else probeHealth(index + 1);
       });
   }
+  /* ---------- pricing interval + local-currency pricing (v1.46.0; toggle v1.94.0) ---------- */
+  var PRICING_KEY = 'saka_pricing_interval';
+  var PRICING_RATES = null;
+
+  function readPricingInterval() {
+    try { return localStorage.getItem(PRICING_KEY) === 'annual' ? 'annual' : 'monthly'; } catch (err) { return 'monthly'; }
+  }
+
+  function savePricingInterval(interval) {
+    try { localStorage.setItem(PRICING_KEY, interval === 'annual' ? 'annual' : 'monthly'); } catch (err) { /* storage may be blocked */ }
+  }
+
+  function pricingMoney(usd) {
+    if (!PRICING_RATES) return null;
+    try {
+      return new Intl.NumberFormat(PRICING_RATES.locale, { style: 'currency', currency: PRICING_RATES.currency, maximumFractionDigits: 0 }).format(Math.round(Number(usd) * PRICING_RATES.rate));
+    } catch (err) { return null; }
+  }
+
+  function usdHint(usd) {
+    return ' <span class="usd-hint">$' + usd + '</span>';
+  }
+
+  // ONE renderer for both the billing switch and the local-currency pass.
+  // Free keeps $0 / forever in both modes; paid cards swap the big figure and
+  // the per-line together, so a card can never show mixed billing.
+  function renderPricing(interval) {
+    var mode = interval === 'annual' ? 'annual' : 'monthly';
+    var cards = document.querySelectorAll('.price-card');
+    for (var i = 0; i < cards.length; i += 1) {
+      var priceEl = cards[i].querySelector('.price');
+      var perEl = cards[i].querySelector('.per');
+      if (!priceEl || !perEl) continue;
+      var monthly = priceEl.getAttribute('data-usd-monthly');
+      if (!monthly || Number(monthly) <= 0) {
+        priceEl.textContent = '$0';
+        perEl.textContent = 'forever';
+        continue;
+      }
+      var annual = perEl.getAttribute('data-usd-annual');
+      if (mode === 'annual' && annual && Number(annual) > 0) {
+        var la = pricingMoney(annual);
+        priceEl.innerHTML = (la || ('$' + annual)) + (la ? usdHint(annual) : '');
+        perEl.innerHTML = 'per year &middot; <span class="save-inline">save 30%</span>';
+      } else {
+        var lm = pricingMoney(monthly);
+        priceEl.innerHTML = (lm || ('$' + monthly)) + (lm ? usdHint(monthly) : '');
+        perEl.textContent = 'per month';
+      }
+    }
+    var addon = document.getElementById('addonNote');
+    if (addon) {
+      var base = addon.getAttribute('data-base-html');
+      if (!base) { base = addon.innerHTML; addon.setAttribute('data-base-html', base); }
+      addon.innerHTML = base + (mode === 'annual' ? ' <span class="usd-hint">(add-ons are monthly)</span>' : '');
+    }
+    var toggle = document.querySelector('.billing-toggle');
+    if (toggle) toggle.setAttribute('data-interval', mode);
+  }
+
+  (function wirePricingToggle() {
+    var monthly = document.getElementById('billingMonthly');
+    var annual = document.getElementById('billingAnnual');
+    var current = readPricingInterval();
+    if (monthly) monthly.checked = current !== 'annual';
+    if (annual) annual.checked = current === 'annual';
+    function apply() {
+      var next = annual && annual.checked ? 'annual' : 'monthly';
+      savePricingInterval(next);
+      renderPricing(next);
+    }
+    if (monthly) monthly.addEventListener('change', apply);
+    if (annual) annual.addEventListener('change', apply);
+    renderPricing(current);
+  })();
+
   /* ---------- local-currency pricing (v1.46.0) ---------- */
   (function localizePricing() {
     var code = document.documentElement.getAttribute('data-country');
@@ -505,41 +582,18 @@
         var currency = entry && entry.currency ? entry.currency : null;
         var rate = currency ? Number(data.exchangeRates && data.exchangeRates[currency]) : NaN;
         if (!currency || currency === 'USD' || !isFinite(rate) || rate <= 0) return;
-        var locale = (entry && entry.locale) || 'en-US';
-        function local(usd) {
-          try {
-            return new Intl.NumberFormat(locale, { style: 'currency', currency: currency, maximumFractionDigits: 0 }).format(Math.round(Number(usd) * rate));
-          } catch (e) { return ''; }
-        }
-        var cards = document.querySelectorAll('.price-card');
-        for (var i = 0; i < cards.length; i += 1) {
-          var priceEl = cards[i].querySelector('.price');
-          var perEl = cards[i].querySelector('.per');
-          if (priceEl) {
-            var monthly = priceEl.getAttribute('data-usd-monthly');
-            if (monthly && Number(monthly) > 0) {
-              var lm = local(monthly);
-              if (lm) priceEl.innerHTML = lm + ' <span class="usd-hint">$' + monthly + '</span>';
-            }
-          }
-          if (perEl) {
-            var annual = perEl.getAttribute('data-usd-annual');
-            if (annual && Number(annual) > 0) {
-              var la = local(annual);
-              if (la) perEl.innerHTML = 'per month &middot; ' + la + '/year <span class="usd-hint">$' + annual + '/year</span>';
-            }
-          }
-        }
+        PRICING_RATES = { currency: currency, rate: rate, locale: (entry && entry.locale) || 'en-US' };
         var addon = document.getElementById('addonNote');
         if (addon) {
           var addonUsd = addon.getAttribute('data-addon-usd');
-          if (addonUsd && Number(addonUsd) > 0) {
-            var aa = local(addonUsd);
-            if (aa) addon.innerHTML = 'Need more than 5 assets? Fleet Command grows with you &mdash; add assets for ' + aa + ' <span class="usd-hint">$' + addonUsd + '</span>/month each.';
+          var aa = addonUsd ? pricingMoney(addonUsd) : null;
+          if (aa) {
+            addon.setAttribute('data-base-html', 'Need more than 5 assets? Fleet Command grows with you &mdash; add assets for ' + aa + usdHint(addonUsd) + '/month each.');
           }
         }
         var note = document.getElementById('pricingNote');
         if (note) { note.textContent = 'Prices are set in USD; local figures are estimates.'; note.style.display = 'block'; }
+        renderPricing(readPricingInterval());
       })
       .catch(function () { /* keep the USD defaults */ });
   })();

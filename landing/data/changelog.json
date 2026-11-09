@@ -1,6 +1,13 @@
 {
-  "latest": "1.93.0",
+  "latest": "1.94.0",
   "entries": [
+    {
+      "version": "1.94.0",
+      "date": "2026-11-09",
+      "title": "A sharper website, one switch for monthly or annual",
+      "preview": "A calmer header on every screen, one billing switch for monthly or annual, and a clearer launch offer.",
+      "summary": "This release polishes the website from top to bottom. The header now has one pattern instead of two: below wide desktop it becomes a tidy menu button, and the logo is the same size everywhere - on the smallest phones it switches to the square mark so nothing is ever squeezed. The launch banner keeps its live slot count with the approved copy, stays stuck to the top while you scroll, and the menu now opens below it instead of hiding behind it. Pricing gains one simple switch: monthly or annual, with annual showing the full yearly figure and the 30 percent saving. Your choice is remembered on your next visit, and local currencies still work exactly as before. Every mention of paying by card has been rewritten to the plainer no payment, and the footer now carries a Support link. On the dashboard, the logo now takes you where it should: the public site when you are signed out, your own overview when you are signed in, and the same owner overview while a superadmin is impersonating (only Exit leaves it)."
+    },
     {
       "version": "1.93.0",
       "date": "2026-11-09",

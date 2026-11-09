@@ -4,7 +4,7 @@
 
 Key facts:
 - Support: support@reports.sakafleet.com
-- Pricing: free tier (1 car, 1 report/month) up to Fleet Command (5 vehicles + add-ons); every new account starts a 30-day, no-card welcome trial with everything unlocked.
+- Pricing: free tier (1 car, 1 report/month) up to Fleet Command (5 vehicles + add-ons); every new account starts a 30-day, no-payment welcome trial with everything unlocked.
 - WhatsApp is the primary interface: message the Saka assistant to register your car, log records, set reminders and generate reports.
 - Reports are branded PDF documents delivered over WhatsApp and email.
 - Canonical data units: kilometres, litres, engine hours and kWh (EVs), ISO-8601 dates.

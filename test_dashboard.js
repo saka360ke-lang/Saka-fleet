@@ -544,6 +544,10 @@ async function run() {
 
   const loginPage = await app.inject({ method: 'GET', url: '/d/login' });
   check(loginPage.statusCode === 200 && /Your dashboard/.test(loginPage.body), 'GET /d/login renders the static sign-in page');
+  // v1.94.0 (Phase 31) — the signed-out brand click goes to the public site.
+  check(loginPage.body.includes('class="brand" href="https://sakafleet.com"'), 'the signed-out login brand points at the public site (v1.94.0)');
+  const anonHome = await app.inject({ method: 'GET', url: '/d' });
+  check(anonHome.statusCode === 401 && anonHome.body.includes('class="brand" href="https://sakafleet.com"'), 'a signed-out 401 page points its brand at the public site (v1.94.0)');
   check(loginPage.body.includes('name="phone"') && /Send me a code/.test(loginPage.body), 'the page asks for the WhatsApp number');
   check(!/email/i.test(loginPage.body.replace(/<style>[\s\S]*?<\/style>/g, '')), 'the sign-in page never mentions email');
 
@@ -2289,6 +2293,9 @@ async function run() {
   check(DASHBOARD_CSS.includes('prefers-reduced-motion'), 'reduced-motion users get no animation');
   check(DASHBOARD_CSS.includes('font-family:var(--font-body)') && DASHBOARD_CSS.includes('font-family:var(--font-display)'), 'body = Manrope, headings = Sora');
   const shellHtml = renderPageShell('Overview', '<p>hi</p>', { headerRight: '<a href="/d/x">X</a>' });
+  // v1.94.0 (Phase 31) — the brand target is a shell option (default /d).
+  check(shellHtml.includes('class="brand" href="/d"'), 'the shared shell brand defaults to /d (v1.94.0)');
+  check(renderPageShell('X', '<p>hi</p>', { brandHref: 'https://sakafleet.com' }).includes('class="brand" href="https://sakafleet.com"'), 'a caller can point the brand at the public site (v1.94.0)');
   check(shellHtml.includes(`/d/assets/logo-lockup.png?v=${DASHBOARD_ASSET_VERSION}`) && shellHtml.includes('width="177" height="18"'), 'the header renders the real brand lockup at its intrinsic ratio');
   check(shellHtml.includes('alt="Saka Fleet"') && shellHtml.includes('class="nav"'), 'the logo is labelled and the nav slot is preserved');
   check(shellHtml.includes('theme-color" content="#0A0A0C"') && shellHtml.includes('/d/assets/favicon.svg'), 'the shell carries the brand theme colour and favicon');

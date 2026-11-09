@@ -2981,9 +2981,11 @@ export function escapeHtml(value) {
 }
 
 /** One shell for every dashboard page (D1 — Phase 14 reuses the CSS). */
-export function renderPageShell(title, body, { headerRight = '', headerLeft = 'Saka Fleet' } = {}) {
+export function renderPageShell(title, body, { headerRight = '', headerLeft = 'Saka Fleet', brandHref = '/d' } = {}) {
   // v1.83.0 (Phase 22) — the brand lockup + self-hosted fonts ride the same
   // allowlisted asset route (immutable cache, version-stamped).
+  // v1.94.0 (Phase 31) — brandHref: the logo click target. Signed-in pages keep
+  // /d; the signed-out doors point at the public site (Task 6).
   const asset = (name) => `/d/assets/${name}?v=${DASHBOARD_ASSET_VERSION}`;
   return `<!doctype html>
 <html lang="en">
@@ -2998,7 +3000,7 @@ export function renderPageShell(title, body, { headerRight = '', headerLeft = 'S
 <style>${DASHBOARD_CSS}</style>
 </head>
 <body>
-<header class="bar"><div class="bar-inner"><a class="brand" href="/d"><img src="${asset('logo-lockup.png')}" alt="${escapeHtml(headerLeft)}" width="177" height="18" decoding="async"></a><span class="nav">${headerRight}</span></div></header>
+<header class="bar"><div class="bar-inner"><a class="brand" href="${escapeHtml(brandHref)}"><img src="${asset('logo-lockup.png')}" alt="${escapeHtml(headerLeft)}" width="177" height="18" decoding="async"></a><span class="nav">${headerRight}</span></div></header>
 <main>
 ${body}
 </main>
@@ -3006,10 +3008,10 @@ ${body}
 </html>`;
 }
 
-export function renderMessagePage(title, message, { status = 400 } = {}) {
+export function renderMessagePage(title, message, { status = 400, brandHref = '/d' } = {}) {
   return {
     status,
-    html: renderPageShell(title, `<h1>${escapeHtml(title)}</h1><p class="muted">${escapeHtml(message)}</p>`)
+    html: renderPageShell(title, `<h1>${escapeHtml(title)}</h1><p class="muted">${escapeHtml(message)}</p>`, { brandHref })
   };
 }
 
@@ -3134,7 +3136,7 @@ ${notice ? `<div class="notice" role="status">${escapeHtml(notice)}</div>` : ''}
   if (input.setSelectionRange) input.setSelectionRange(input.value.length, input.value.length);
 })();
 </script>`;
-  return renderPageShell(admin ? 'Admin sign-in' : 'Sign in', body);
+  return renderPageShell(admin ? 'Admin sign-in' : 'Sign in', body, { brandHref: 'https://sakafleet.com' });
 }
 
 /**
@@ -4806,11 +4808,11 @@ const ERROR_TITLES = {
   503: 'Please try again shortly'
 };
 
-export function renderErrorPage(status = 400, message = 'Please try again.') {
+export function renderErrorPage(status = 400, message = 'Please try again.', { brandHref = '/d' } = {}) {
   const title = ERROR_TITLES[status] || 'Link not available';
   return {
     status,
-    html: renderPageShell(title, `<h1>${escapeHtml(title)}</h1><p class="muted">${escapeHtml(message)}</p>`)
+    html: renderPageShell(title, `<h1>${escapeHtml(title)}</h1><p class="muted">${escapeHtml(message)}</p>`, { brandHref })
   };
 }
 
