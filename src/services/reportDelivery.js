@@ -675,10 +675,11 @@ export function resolveInlineReportBudgetMs(env = process.env) {
  * explicit asks), the inline WhatsApp path and the monthly email sweep (rule
  * 55: extract, never duplicate). Returns null when there is nothing to render.
  */
-export async function renderReportPdfBuffer(report, people = {}) {
+export async function renderReportPdfBuffer(report, people = {}, { variant = 'a4' } = {}) {
   if (!report?.data) return null;
   return await buildProReportPdf({
     ...report.data,
+    variant,
     reportType: report.type,
     owner: people.owner || null,
     drivers: people.drivers || []
@@ -701,6 +702,9 @@ export async function buildInlineReportLink({
   metricIds = [],
   range = 'this_month',
   plateLabel = 'Fleet',
+  // v1.93.0 (Phase 30, D4) — a link shipped inside WhatsApp is read on a phone,
+  // so the inline PDF defaults to the A5 mobile layout.
+  variant = 'mobile',
   budgetMs = resolveInlineReportBudgetMs()
 } = {}) {
   if (!supabase || !(Number(budgetMs) > 0)) return { ok: false, reason: 'budget-off' };
@@ -723,7 +727,7 @@ export async function buildInlineReportLink({
       driverId,
       vehicleIds: report.access?.vehicleIds || []
     });
-    const pdfBuffer = await renderReportPdfBuffer(report, people);
+    const pdfBuffer = await renderReportPdfBuffer(report, people, { variant });
     if (!pdfBuffer) return { ok: false, reason: 'render-failed' };
     let url = null;
     try {
@@ -745,10 +749,10 @@ export async function buildInlineReportLink({
 }
 
 /** Render, upload and email the branded PDF (best effort, never throws). */
-export async function deliverReportPdf({ supabase, report, people = {}, ownerEmail = null, plateLabel = 'Fleet' } = {}) {
+export async function deliverReportPdf({ supabase, report, people = {}, ownerEmail = null, plateLabel = 'Fleet', variant = 'a4' } = {}) {
   if (!supabase || !report?.data) return { ok: false, error: 'No report data' };
   try {
-    const pdfBuffer = await renderReportPdfBuffer(report, people);
+    const pdfBuffer = await renderReportPdfBuffer(report, people, { variant });
     let url = null;
     let uploadError = null;
     try {

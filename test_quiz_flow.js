@@ -22,6 +22,10 @@ import {
 // v1.87.4 — the receipt auto-quiz decision is a pure, intent-independent helper.
 import { receiptQuizStartFor } from './src/routes/whatsapp/quiz.js';
 import { getRecentChatHistory, CHAT_HISTORY_MAX_AGE_MINUTES, CHAT_HISTORY_MAX_MESSAGES } from './src/services/chatHistory.js';
+// v1.93.0 (Phase 30, Tasks 2-3) — the logbook invitation + pre-vehicle stash.
+import { buildDocumentStash, replayDocumentStash } from './src/services/documentStash.js';
+import { LOGBOOK_UPLOAD_COPY, resolveLogbookUploadCopy } from './src/services/flowKnowledge.js';
+import { stripTransientSessionFields } from './src/services/sessionStore.js';
 
 /**
  * Targeted suite: one-piece-at-a-time quiz engine + confirmation gate.
@@ -976,6 +980,108 @@ console.log('\n--- v1.89.2: asset nickname editing (edit -> resolve -> display) 
   const quizRouteSource = fs.readFileSync('./src/routes/whatsapp/quiz.js', 'utf8');
   assert(quizRouteSource.includes('prefill: editPrefillFor(') && quizRouteSource.includes('parseVehicleEditRequest'),
     'the route wires the deterministic edit prefill on both start paths (v1.89.2)');
+}
+
+console.log('\n--- v1.93.0: expense kind guard (P2-11) ---');
+{
+  // One generator + one class-C mock: inserts are captured, reads answer empty.
+  const generator = {
+    id: '22222222-2222-2222-2222-222222222222',
+    owner_id: '00000000-0000-0000-0000-000000000001',
+    plate_number: 'GEN 001',
+    make_model: 'Cummins 60kVA',
+    asset_kind: 'generator',
+    asset_type: 'GENERATOR',
+    operating_hours: 1240,
+    unit_system: 'metric',
+    metadata: {}
+  };
+  const inserted = [];
+  const guardMock = {
+    from(table) {
+      const api = {
+        select: () => api,
+        eq: () => api,
+        neq: () => api,
+        in: () => api,
+        is: () => api,
+        gte: () => api,
+        lte: () => api,
+        lt: () => api,
+        gt: () => api,
+        order: () => api,
+        limit: () => api,
+        update: () => api,
+        delete: () => api,
+        insert: async (rows) => {
+          const data = Array.isArray(rows) ? rows : [rows];
+          inserted.push({ table, rows: data });
+          return { error: null, data };
+        },
+        maybeSingle: async () => ({ data: null, error: null }),
+        single: async () => ({ data: null, error: null }),
+        then: (a, b) => Promise.resolve({ data: [], error: null }).then(a, b)
+      };
+      return api;
+    }
+  };
+  const genCtx = baseCtx({ vehicles: [generator], activeVehicle: generator, supabase: guardMock });
+  const confirmDraft = (expense_type, amount = 500) => ({
+    quiz: {
+      flow: 'log_expense',
+      phase: 'confirm',
+      startedAt: Date.now(),
+      answers: { vehicle_id: generator.id, expense_type, amount },
+      extraNotes: []
+    }
+  });
+
+  const refusedSession = confirmDraft('Tyres');
+  const refused = await handleQuizTurn({ session: refusedSession, messageText: 'yes', ctx: genCtx });
+  assert(refused.active === true && /Generators don't have tyres/.test(String(refused.reply)),
+    'tyres on a generator are refused with warm copy (v1.93.0)');
+  assert(/Consumables/.test(String(refused.reply)), 'the refusal names the valid alternative');
+  assert(!inserted.some((entry) => entry.table === 'expense_logs'), 'nothing is written for an impossible type');
+  assert(refusedSession.quiz?.phase === 'question' && refusedSession.quiz?.answers?.expense_type === undefined,
+    'the draft stays alive and re-collects the type');
+  assert(refusedSession.quiz?.answers?.amount === 500, 'the amount and the other answers are kept');
+
+  const validSession = confirmDraft('Fuel');
+  const saved = await handleQuizTurn({ session: validSession, messageText: 'yes', ctx: genCtx });
+  const savedRow = inserted.find((entry) => entry.table === 'expense_logs')?.rows?.[0] || null;
+  assert(saved.completed === true && savedRow?.expense_type === 'Fuel',
+    'a kind-valid expense still saves exactly as before (generator + Fuel)');
+}
+
+console.log('\n--- v1.93.0: logbook invitation + pre-vehicle stash (Tasks 2-3) ---');
+{
+  assert(resolveLogbookUploadCopy({ vaultStoresFiles: true }) === LOGBOOK_UPLOAD_COPY.storage,
+    'a fresh registration invites the logbook with the storage promise (Task 2)');
+  assert(resolveLogbookUploadCopy({ hasPrefilledDocument: true }) === null,
+    'a logbook already captured is never re-requested (Task 2)');
+  assert(resolveLogbookUploadCopy({ vaultStoresFiles: false }) === LOGBOOK_UPLOAD_COPY.parsed
+    && /paid feature/.test(LOGBOOK_UPLOAD_COPY.parsed),
+    'Free is told photo storage is a paid feature, never a false promise (Task 2)');
+
+  const expiredStash = buildDocumentStash({ mediaId: 'm-expired', family: 'logbook', buffer: Buffer.from('x'), now: Date.now() - 48 * 60 * 60 * 1000 });
+  const expiredReplay = await replayDocumentStash({ vehicleId: 'v1', stash: expiredStash });
+  assert(expiredReplay.ok === false && expiredReplay.line === LOGBOOK_UPLOAD_COPY.expired,
+    'an expired stash produces the re-send copy at completion (Task 3)');
+
+  const rawSnapshot = {
+    session: { pendingDocumentStash: { mediaId: 'm1', family: 'logbook', buffer: Buffer.from('big-image') } },
+    onboarding: null
+  };
+  const cleanSnapshot = stripTransientSessionFields(rawSnapshot);
+  assert(cleanSnapshot.session.pendingDocumentStash.buffer === undefined
+    && cleanSnapshot.session.pendingDocumentStash.mediaId === 'm1',
+    'the persisted snapshot strips media bytes but keeps the stash metadata (Task 3)');
+  assert(Buffer.isBuffer(rawSnapshot.session.pendingDocumentStash.buffer),
+    'the in-process session keeps its buffer for the replay (Task 3)');
+
+  const quizSource = fs.readFileSync('./src/services/quizEngine.js', 'utf8');
+  assert(quizSource.includes('replayDocumentStash({') && quizSource.includes('resolveLogbookUploadCopy({'),
+    'the registration completion replays the stash and appends the engine-owned copy (Tasks 2-3)');
 }
 
 run().catch((err) => {

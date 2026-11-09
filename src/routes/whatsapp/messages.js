@@ -692,7 +692,7 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         const countryLearningsLine = await getCountryLearningsLine({ supabase: supabaseClient, countryCode: bucketCountryCode }).catch(() => "");
         if (countryLearningsLine) jurisdictionContext = jurisdictionContext + "\n" + countryLearningsLine;
 
-        const { duplicateReceipt, logbookPrefill, receiptPrefill, documentPrefill } = await resolveReceiptVault({
+        const { duplicateReceipt, logbookPrefill, receiptPrefill, documentPrefill, documentStash } = await resolveReceiptVault({
           supabaseClient,
           mediaObj,
           ocrPaused,
@@ -723,6 +723,13 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
             vehicle_id: currentActiveVehicle?.id || existingVehicles[0]?.id || null,
             at: new Date().toISOString()
           };
+        }
+        // v1.93.0 (Phase 30, Task 3) — a vaultable document sent BEFORE the asset
+        // exists (the logbook photo during registration) is stashed for the
+        // completion: metadata is durable on chat_sessions, the bytes stay
+        // in-process and are stripped from every persisted snapshot.
+        if (documentStash?.mediaId) {
+          session.pendingDocumentStash = documentStash;
         }
 
         // Pass message through DeepSeek Intent Classifier (sakaAi.js) with Active Fleet Context
@@ -1374,6 +1381,8 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           messageText,
           fastQuiz: fastQuizTurn,
           driverGate,
+          session,
+          entitlements,
           sendWhatsApp: sendWhatsAppReply
         };
 

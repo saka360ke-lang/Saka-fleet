@@ -112,6 +112,19 @@ const odoRow = { ...dupRow, odometer: '102,000' };
 check(validateImportRows({ rows: [odoRow], vehicles, recentExpenses, now: NOW }).counts.valid === 1,
   'a different odometer reading is a separate fill (the guard precedent)');
 
+console.log('\n--- Test 6b: the asset-kind gate (v1.93.0, P2-11) ---');
+const generatorVehicles = [{ id: 'v-gen', plate_number: 'GEN 001', asset_kind: 'generator', asset_type: 'GENERATOR' }];
+const generatorRows = [
+  { line: 2, date: '2026-11-02', plate: 'GEN 001', type: 'Tyres', amount: '500', odometer: '', notes: '' },
+  { line: 3, date: '2026-11-02', plate: 'GEN 001', type: 'Fuel', amount: '500', odometer: '', notes: '' }
+];
+const generatorValidation = validateImportRows({ rows: generatorRows, vehicles: generatorVehicles, countryCode: 'KE', now: NOW });
+check(generatorValidation.invalid.some((row) => row.line === 2 && row.errors.includes('kind_mismatch')),
+  'tyres on a generator are refused at preview time (the sibling lane)');
+check(generatorValidation.valid.length === 1 && generatorValidation.valid[0].line === 3,
+  'a kind-valid row still imports');
+check(/does not fit/.test(CSV_IMPORT_ERROR_COPY.kind_mismatch), 'the refusal copy is plain and honest');
+
 console.log('\n--- Test 7: preview summary ---');
 const summary = summarizeImport(validation);
 check(summary.rows.length === 9 && summary.rows[0].line === 2 && summary.rows.at(-1).line === 10, 'the preview lists every row in file order');
@@ -210,7 +223,7 @@ const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
 check(!Object.keys(pkg.dependencies).some((name) => /multipart|csv-parse|papaparse|fast-csv/i.test(name)), 'no CSV/multipart package was added');
 
 console.log('\n--- Test 12: every error code has engine copy ---');
-for (const code of ['missing_plate', 'unknown_plate', 'unknown_type', 'bad_amount', 'bad_odometer', 'bad_date', 'future_date', 'notes_too_long', 'duplicate_row', 'duplicate_existing']) {
+for (const code of ['missing_plate', 'unknown_plate', 'unknown_type', 'kind_mismatch', 'bad_amount', 'bad_odometer', 'bad_date', 'future_date', 'notes_too_long', 'duplicate_row', 'duplicate_existing']) {
   check(Boolean(CSV_IMPORT_ERROR_COPY[code]), `copy exists for ${code}`);
 }
 

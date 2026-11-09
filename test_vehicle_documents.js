@@ -22,6 +22,8 @@ import {
 } from './src/services/vehicleDocuments.js';
 import { createMockSupabase } from './scripts/mockSupabase.js';
 import { wipeProfileForSignup } from './src/services/profileWipe.js';
+// v1.93.0 (Phase 30, Task 3) — the pre-vehicle document stash.
+import { buildDocumentStash, isDocumentStashExpired, replayDocumentStash } from './src/services/documentStash.js';
 
 let passed = 0;
 function check(cond, label) { assert.ok(cond, label); passed += 1; console.log('  ok ' + label); }
@@ -257,10 +259,39 @@ check(cleanupSource.includes("'vehicle_documents', 'vehicle_id'") && cleanupSour
 const indexSource = fs.readFileSync('index.js', 'utf8');
 check(indexSource.includes('ensureVehicleDocumentsTable'), 'the boot ensure is wired in index.js');
 const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-check(pkg.version === '1.92.1', 'package.json is 1.92.1');
+check(pkg.version === '1.93.0', 'package.json is 1.93.0');
 check(Boolean(pkg.scripts['migrate:vehicle-documents']), 'npm run migrate:vehicle-documents exists');
 const migrationSource = fs.readFileSync('scripts/run_vehicle_documents_migration.js', 'utf8');
 check(migrationSource.includes('VEHICLE_DOCUMENTS_SQL'), 'the migration applies the shared DDL');
+
+console.log('--- Test 21: pre-vehicle stash replay (v1.93.0, Task 3) ---');
+const replayMock = createMockSupabase({ vehicle_documents: [] });
+const stash = buildDocumentStash({
+  mediaId: 'm-stash-1',
+  mimeType: 'image/jpeg',
+  family: 'logbook',
+  filename: 'logbook.jpg',
+  buffer: Buffer.from('logbook'),
+  now: Date.now()
+});
+check(stash.mediaId === 'm-stash-1' && stash.family === 'logbook' && stash.buffer.length === 7, 'the stash carries the media metadata plus the transient buffer');
+check(stash.expiresAt && isDocumentStashExpired(stash, Date.now()) === false, 'a fresh stash is valid for the session window');
+const replayed = await replayDocumentStash({ supabase: replayMock.client, vehicleId: 'v1', profileId: 'p1', stash, label: 'KDA 123A' });
+check(replayed.ok === true && /kept your logbook photo/.test(replayed.line) && /KDA 123A/.test(replayed.line), 'completion files the stashed logbook under the new asset with warm copy');
+check(replayMock.db.vehicle_documents.length === 1 && replayMock.db.vehicle_documents[0].document_type === 'logbook', 'the stored row is a logbook on the new vehicle');
+const replayedAgain = await replayDocumentStash({ supabase: replayMock.client, vehicleId: 'v1', profileId: 'p1', stash, label: 'KDA 123A' });
+check(replayedAgain.ok === true && replayedAgain.reason === 'already-filed' && replayMock.db.vehicle_documents.length === 1, 'the media-id dedupe keeps ONE copy (idempotent replay)');
+const expiredStash = buildDocumentStash({ mediaId: 'm-stash-2', family: 'logbook', buffer: Buffer.from('x'), now: Date.now() - 48 * 60 * 60 * 1000 });
+check(isDocumentStashExpired(expiredStash, Date.now()) === true, 'a stash past its expiry is detected');
+const expiredReplay = await replayDocumentStash({ supabase: replayMock.client, vehicleId: 'v1', stash: expiredStash });
+check(expiredReplay.ok === false && /send your logbook photo again/.test(expiredReplay.line), 'an expired stash asks for a re-send (never a silent loss)');
+const noBytesReplay = await replayDocumentStash({
+  supabase: replayMock.client,
+  vehicleId: 'v1',
+  stash: buildDocumentStash({ mediaId: 'm-stash-3', family: 'logbook' }),
+  downloadMedia: async () => ({ buffer: null, error: 'gone' })
+});
+check(noBytesReplay.ok === false && noBytesReplay.reason === 'download-failed', 'a cold instance that cannot re-download invites the re-send (D3)');
 
 console.log('');
 console.log(passed + ' vehicle-document assertions passed.');

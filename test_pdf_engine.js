@@ -13,7 +13,7 @@
 import assert from 'assert';
 import fs from 'node:fs';
 import PDFDocument from 'pdfkit';
-import { buildProReportPdf, pdfSafeText, getReportAccent, SAKA_PDF_THEME, SAKA_PDF_GEOMETRY, registerReportFonts, computeKpiGrid, buildLedgerColumns } from './src/services/pdfEngine.js';
+import { buildProReportPdf, pdfSafeText, getReportAccent, SAKA_PDF_THEME, SAKA_PDF_GEOMETRY, SAKA_PDF_GEOMETRY_MOBILE, resolvePdfGeometry, normalizePdfVariant, registerReportFonts, computeKpiGrid, buildLedgerColumns } from './src/services/pdfEngine.js';
 import { extractPdfText, analyzeAlphaUsage, readExtGStates } from './src/services/pdfTextExtractor.js';
 import { complianceReportToPdf, fleetReportToPdf } from './src/services/reportDelivery.js';
 
@@ -406,12 +406,13 @@ async function run() {
   const floorCells = hoursTextCalls.filter((call) => Number(call.options?.height) > 0);
   check(floorCells.length > 0, 'ledger cells carry explicit heights (no overlap)');
 
-  // The 8 pt type floor is a contract: no ledger cell may shrink below it.
+  // The type floor is a contract: no ledger cell may shrink below 7 pt on A4;
+  // the phone variant raises the same cells to the 10 pt floor.
   const pdfSource = fs.readFileSync('src/services/pdfEngine.js', 'utf8');
-  const ledgerBodySizes = [...pdfSource.matchAll(/fontSize\((7\.\d+|8(?:\.\d+)?)\)/g)].map((match) => Number(match[1]));
-  check(ledgerBodySizes.every((size) => size >= 7), 'no ledger type size is below 7 pt anywhere');
-  check(pdfSource.includes('fontSize(8.2)') && pdfSource.includes('const rowH = 23'), 'ledger body is 8.2 pt with 23 pt rows (phone-legible)');
-  check(pdfSource.includes('const valueSize = valueText.length > 12 ? 13.5 : 15'), 'long KPI figures shrink one step instead of clipping');
+  const ledgerBodySizes = [...pdfSource.matchAll(/fontSizeFor\((7\.\d+|8(?:\.\d+)?), G\)/g)].map((match) => Number(match[1]));
+  check(ledgerBodySizes.length > 0 && ledgerBodySizes.every((size) => size >= 7), 'no ledger type size is below 7 pt anywhere');
+  check(pdfSource.includes('fontSizeFor(8.2, G)') && pdfSource.includes('const rowH = mobile ? 32 : 23'), 'ledger body keeps 8.2 pt on A4 (23 pt rows) and the 10 pt floor on the phone layout');
+  check(pdfSource.includes('const valueSize = fontSizeFor(valueText.length > 12 ? 13.5 : 15, G)'), 'long KPI figures shrink one step instead of clipping');
 
   const registeredFonts = [];
   const fontStub = { registerFont(name, file) { registeredFonts.push({ name, file }); } };
@@ -420,6 +421,38 @@ async function run() {
   check(!registeredFonts.some((font) => /\.woff2$/i.test(font.file)), 'no WOFF2 is ever registered (fontkit subsetting is unsafe mid-build)');
   check(['saka-display', 'saka-display-premium'].includes(resolvedFonts.display), 'display resolves to the vendored face (Sora TTF when present, otherwise Barlow)');
   check(resolvedFonts.bold === resolvedFonts.display, 'bold follows the display face');
+
+  console.log('\n--- v1.93.0: the phone (A5) PDF variant ---');
+  check(SAKA_PDF_GEOMETRY_MOBILE.pageWidth === 419 && SAKA_PDF_GEOMETRY_MOBILE.pageHeight === 595, 'the phone variant is A5 portrait (419 x 595 pt)');
+  check(SAKA_PDF_GEOMETRY_MOBILE.margin === 36 && Math.round(SAKA_PDF_GEOMETRY_MOBILE.contentWidth) === 347, 'the phone variant keeps 36 pt margins (347 pt of content)');
+  check(Math.abs(SAKA_PDF_GEOMETRY_MOBILE.margin * 2 + SAKA_PDF_GEOMETRY_MOBILE.contentWidth - SAKA_PDF_GEOMETRY_MOBILE.pageWidth) < 0.001, 'the phone content column is perfectly centered');
+  check(SAKA_PDF_GEOMETRY_MOBILE.minFontFloor === 10, 'the phone variant carries the 10 pt font floor');
+  check(resolvePdfGeometry('mobile') === SAKA_PDF_GEOMETRY_MOBILE && resolvePdfGeometry(undefined) === SAKA_PDF_GEOMETRY, 'variant resolution returns the frozen A4/mobile sets');
+  check(normalizePdfVariant('MOBILE') === 'mobile' && normalizePdfVariant('tablet') === 'a4', 'the variant whitelist normalises case and falls back to A4');
+  const mobileReport = {
+    title: 'Phone report',
+    subtitle: 'A5 layout',
+    reportType: 'fleet',
+    variant: 'mobile',
+    useStandardFonts: true,
+    kpis: [{ label: 'Total spend', value: 'Ksh 5,000' }, { label: 'Records', value: '2' }],
+    ledgers: [{
+      title: 'Records',
+      currency: 'KES',
+      rows: [{ at: '2026-11-01', date: '1 Nov 2026', kind: 'fuel', kindLabel: 'FUEL', description: 'Diesel', odometer: 50350, unitCost: 120, amount: 5000 }]
+    }]
+  };
+  const mobileBuffer = await buildProReportPdf(mobileReport);
+  check(Buffer.isBuffer(mobileBuffer) && mobileBuffer.subarray(0, 5).toString() === '%PDF-', 'the phone variant renders a real PDF');
+  check(/\b419(\.0+)?\s+595(\.0+)?\b/.test(mobileBuffer.toString('latin1')), 'the rendered page MediaBox is A5 (419 x 595)');
+  const mobileText = extractPdfText(mobileBuffer).text || '';
+  check(/Phone report/.test(mobileText) && /records/i.test(mobileText), 'the phone PDF carries its title and ledger');
+  const compactColumns = buildLedgerColumns({ compact: true });
+  check(compactColumns.length === 4 && compactColumns.every((column) => column.key !== 'odometer' && column.key !== 'unitCost'), 'the phone ledger drops reading/unit-cost columns (every row still prints)');
+  const mobileGrid = computeKpiGrid({ count: 4, columns: 2, contentWidth: SAKA_PDF_GEOMETRY_MOBILE.contentWidth, margin: SAKA_PDF_GEOMETRY_MOBILE.margin });
+  check(mobileGrid.rows === 2 && mobileGrid.cards.every((card) => card.x + card.w <= SAKA_PDF_GEOMETRY_MOBILE.pageWidth - SAKA_PDF_GEOMETRY_MOBILE.margin + 0.001), 'the phone KPI grid is two columns wide and stays inside the page');
+  const invalidBuffer = await buildProReportPdf({ title: 'Invalid variant', variant: 'tablet', useStandardFonts: true, kpis: [{ label: 'X', value: '1' }] });
+  check(invalidBuffer.subarray(0, 5).toString() === '%PDF-', 'an unknown variant still renders the safe A4 layout (never a 500)');
 
   console.log(`\n🎉 ${passed} PDF engine assertions passed.`);
 }

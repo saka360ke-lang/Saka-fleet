@@ -20,7 +20,7 @@
  */
 
 import { parseFlexibleDate, getNairobiParts } from './dateParser.js';
-import { resolveExpenseType, isHoursLedKind } from './expenseCatalog.js';
+import { resolveExpenseType, isHoursLedKind, validateExpenseTypeForAssetKind } from './expenseCatalog.js';
 import { isSameExpenseCandidate } from './expenseGuard.js';
 import { markUserDataChanged } from './afterWrite.js';
 import { logWriteFailure } from './systemErrors.js';
@@ -49,6 +49,7 @@ export const CSV_IMPORT_ERROR_COPY = Object.freeze({
   missing_plate: 'Add the vehicle plate.',
   unknown_plate: 'That plate is not in your fleet.',
   unknown_type: 'Unknown expense type.',
+  kind_mismatch: 'That expense type does not fit this asset (e.g. tyres on a generator).',
   bad_amount: 'Amount must be a positive number.',
   bad_odometer: 'Odometer must be a whole number.',
   bad_date: 'Date could not be read.',
@@ -216,6 +217,15 @@ export function validateImportRows({
 
     const expenseType = resolveExpenseType(row.type);
     if (!expenseType) errors.push('unknown_type');
+    // v1.93.0 (Phase 30, P2-11) — the same kind gate the chat lanes use: a row
+    // whose type cannot exist on the asset is refused at preview time.
+    if (vehicle && expenseType) {
+      const kindGuard = validateExpenseTypeForAssetKind(
+        expenseType,
+        vehicle.asset_kind || vehicle.asset_type || 'vehicle'
+      );
+      if (!kindGuard.ok) errors.push('kind_mismatch');
+    }
 
     const amount = parseImportAmount(row.amount);
     if (!amount) errors.push('bad_amount');

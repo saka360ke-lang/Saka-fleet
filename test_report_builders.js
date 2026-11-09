@@ -18,7 +18,7 @@ import { buildVehicleDeepDive } from './src/services/vehicleDeepDive.js';
 import { buildOwnerPortfolio } from './src/services/ownerPortfolio.js';
 import { buildDriverPerformance } from './src/services/driverReports.js';
 import { buildLedgerGroups, expenseToLedgerRow } from './src/services/reportLedger.js';
-import { resolveAnyReportType, buildReportForLane, deliverReportPdf, fleetReportToPdf } from './src/services/reportDelivery.js';
+import { resolveAnyReportType, buildReportForLane, deliverReportPdf, renderReportPdfBuffer, fleetReportToPdf } from './src/services/reportDelivery.js';
 import { REPORT_ACCESS_MATRIX } from './src/services/reportAccess.js';
 import { buildProReportPdf } from './src/services/pdfEngine.js';
 import { extractPdfText } from './src/services/pdfTextExtractor.js';
@@ -344,6 +344,14 @@ async function run() {
     plateLabel: 'Fleet'
   });
   check(fleetDelivery.ok && fleetDelivery.bytes > 5000, 'Fleet executive PDF renders with its financial block + ledger');
+
+  // v1.93.0 (Phase 30, Task 1) — the variant rides the one shared renderer:
+  // WhatsApp-shipped reports pass 'mobile'; the default stays the A4 email.
+  const mobileVariantBuffer = await renderReportPdfBuffer(laneFleet, { owner: OWNER, drivers: [] }, { variant: 'mobile' });
+  check(Buffer.isBuffer(mobileVariantBuffer) && mobileVariantBuffer.subarray(0, 5).toString() === '%PDF-', 'the shared renderer builds the mobile variant');
+  check(/\b419(\.0+)?\s+595(\.0+)?\b/.test(mobileVariantBuffer.toString('latin1')), 'the report renderer threads variant=mobile (A5 page)');
+  const defaultVariantBuffer = await renderReportPdfBuffer(laneFleet, { owner: OWNER, drivers: [] });
+  check(/\b595(\.\d+)?\s+841(\.\d+)?\b/.test(defaultVariantBuffer.toString('latin1')), 'the report renderer defaults to A4 (email sweeps unchanged)');
 
   console.log('\n--- Test 5c: financial PDF presentation (v1.32.0) ---');
   const singleVehicleFinancial = {

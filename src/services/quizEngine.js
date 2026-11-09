@@ -25,7 +25,12 @@ import { sanitizeEntryLabel } from './entryLabels.js';
 // v1.59.7 — labels on every entry: standalone odometer readings get a ledger row.
 import { recordLabeledReading } from './labelsEverywhere.js';
 // v1.84.0 (Phase 23) — registration seeds link the vaulted certificate they used.
+// v1.93.0 (Phase 30, Task 3) — registration completion also files a stashed
+// pre-vehicle document under the new asset.
 import { linkSavedComplianceDocument } from './vehicleDocuments.js';
+import { LOGBOOK_UPLOAD_COPY, resolveLogbookUploadCopy } from './flowKnowledge.js';
+// v1.93.0 (Phase 30, Task 3) — the pre-vehicle document stash (single engine).
+import { replayDocumentStash } from './documentStash.js';
 import { logSystemError, logWriteFailure } from './systemErrors.js';
 import { markUserDataChanged } from './afterWrite.js';
 import { shortenUrl } from './linkShortener.js';
@@ -37,7 +42,8 @@ import {
   hasExpenseTypeMarker,
   odometerModeForType,
   isHoursLedKind,
-  isFullFillAnswer
+  isFullFillAnswer,
+  validateExpenseTypeForAssetKind
 } from './expenseCatalog.js';
 import {
   REMINDER_TYPES,
@@ -3121,6 +3127,23 @@ async function handleTransferPin(state, clean, ctx) {
 /* Flow execution (all writes happen only after user confirmation)     */
 /* ------------------------------------------------------------------ */
 
+/**
+ * v1.93.0 (Phase 30) — entitlements for completion copy and the stash replay.
+ * messages.js already resolves them once per turn (ctx.entitlements); a direct
+ * engine call (tests, internal flows) resolves through the cached engine.
+ * Never throws; `null` means "unknown" and the copy assumes files are stored
+ * (never a false paid-feature claim).
+ */
+async function resolveCompletionEntitlements(ctx = {}) {
+  if (ctx.entitlements) return ctx.entitlements;
+  if (!ctx.supabase || !ctx.profile?.id) return null;
+  try {
+    return await getEntitlements({ supabase: ctx.supabase, ownerId: ctx.profile.id, profile: ctx.profile });
+  } catch {
+    return null;
+  }
+}
+
 async function executeFlow(state, ctx) {
   const a = state.answers;
   const def = getFlowDefinition(state.flow, ctx);
@@ -3177,6 +3200,27 @@ async function executeFlow(state, ctx) {
         }
         // v1.63.1 — a new asset changes the cached facts immediately.
         markUserDataChanged({ supabase: ctx.supabase, phone: ctx.formattedPhone || ctx.profile?.phone_number, ownerId: ctx.profile?.id, reason: 'quizEngine.vehicle_registration' });
+        // v1.93.0 (Phase 30, Tasks 3-2) — file a document stashed BEFORE this
+        // asset existed (the logbook photo sent during registration), then
+        // invite the upload with honest, engine-owned copy. Best-effort: a
+        // vault problem never fails the registration.
+        const completionSession = ctx.session || null;
+        const completionEntitlements = await resolveCompletionEntitlements(ctx);
+        const stash = completionSession?.pendingDocumentStash || null;
+        let logbookLine = null;
+        if (stash && saved.vehicleId) {
+          const replayed = await replayDocumentStash({
+            supabase: ctx.supabase,
+            vehicleId: saved.vehicleId,
+            profileId: ctx.profile?.id || null,
+            stash,
+            entitlements: completionEntitlements,
+            label: saved.plate
+          });
+          logbookLine = replayed.line || null;
+          // The stash is single-use: success files it, failure invited a re-send.
+          delete completionSession.pendingDocumentStash;
+        }
         // v1.16.4 — every NEW owner starts the full-featured welcome trial
         // (one per account lifetime; lapse returns the account to Free).
         let welcomeTrial = null;
@@ -3257,9 +3301,21 @@ async function executeFlow(state, ctx) {
         });
         // The award line is a promise: only append it when the extension (or an
         // earlier grant) actually holds — never claim days that were not written.
-        const reply = trialFacts.awardConfirmed
+        // v1.93.0 (Phase 30, Task 2) — invite the logbook upload with honest
+        // copy: a document already captured (prefill or a replayed stash) is
+        // never re-requested; Free is told the photo itself is a paid feature.
+        const vaultStoresFiles = completionEntitlements
+          ? completionEntitlements.receiptVaultStorage !== false
+          : true;
+        const logbookNudge = resolveLogbookUploadCopy({
+          logbookLine,
+          hasPrefilledDocument: Boolean(a.document_id),
+          vaultStoresFiles
+        });
+        const awardReply = trialFacts.awardConfirmed
           ? `${composedReply}\n\n${formatLaunchAwardLine({ days: launchAward.days, slot: launchAward.slot, slotsTotal: getLaunchAwardConfig().slots })}`
           : composedReply;
+        const reply = [awardReply, logbookNudge].filter(Boolean).join('\n\n');
         return { handled: true, reply, flow: state.flow, completed: true };
       }
 
@@ -3512,6 +3568,25 @@ async function executeFlow(state, ctx) {
           return {
             handled: true,
             reply: 'I did not log anything — an expense needs a type and an amount. What did you spend, and how much? 🙏',
+            flow: state.flow,
+            active: true
+          };
+        }
+        // v1.93.0 (Phase 30, P2-11) — an expense type that cannot exist on this
+        // asset (tyres on a generator) is refused BEFORE any write. The draft
+        // stays alive: only the impossible type is dropped, so the next turn
+        // re-collects it while the amount and the other answers are kept.
+        const kindGuard = validateExpenseTypeForAssetKind(
+          canonicalExpenseType,
+          vehicle.asset_kind || vehicle.asset_type || vehicle.vehicle_type || 'vehicle'
+        );
+        if (!kindGuard.ok) {
+          delete state.answers.expense_type;
+          state.lastAcceptedAnswer = null;
+          state.phase = 'question';
+          return {
+            handled: true,
+            reply: kindGuard.message,
             flow: state.flow,
             active: true
           };
@@ -4356,6 +4431,7 @@ async function persistVehicleRegistration(state, ctx) {
 
   return {
     success: true,
+    vehicleId: savedVehicle?.id || insertedVehicleId || null,
     plate: displayName,
     assetKind,
     vin: a.vin || null,

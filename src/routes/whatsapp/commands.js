@@ -26,7 +26,7 @@ import { resolveReportAccess } from '../../services/reportAccess.js';
 import { buildFleetReport } from '../../services/fleetReports.js';
 import { calculateFuelConsumption } from '../../services/analytics.js';
 import { findVehicleByCandidate, setActiveVehicle, updateVehicleDetails, unassignDriverFromVehicle, vehicleDisplayLabel, sanitizeVehicleNickname } from '../../services/vehicles.js';
-import { normalizeExpenseType, resolveExpenseType, hasExpenseTypeMarker } from '../../services/expenseCatalog.js';
+import { normalizeExpenseType, resolveExpenseType, hasExpenseTypeMarker, validateExpenseTypeForAssetKind } from '../../services/expenseCatalog.js';
 import { normalizeEarningType, resolveEarningType, hasEarningTypeMarker } from '../../services/earningCatalog.js';
 import { sanitizeEntryLabel, extractEntryLabel } from '../../services/entryLabels.js';
 import { isDuplicateExpense } from '../../services/expenseGuard.js';
@@ -763,6 +763,16 @@ export async function handleLogExpenseTurn({ mergedExt, messageText, targetVeh, 
   const extFillType = normalizeFillType(mergedExt.fill_type) || normalizeFillType(messageText);
 
   if ((extAmount && extAmount > 0) || (extLiters && extLiters > 0)) {
+    // v1.93.0 (Phase 30, P2-11) — free text may not invent a type that cannot
+    // exist on this asset (e.g. tyres on a generator): refuse before any write,
+    // with engine copy that names a valid alternative.
+    const kindGuard = validateExpenseTypeForAssetKind(
+      expType,
+      targetVeh?.asset_kind || targetVeh?.asset_type || 'vehicle'
+    );
+    if (!kindGuard.ok) {
+      return { handled: true, reply: kindGuard.message };
+    }
     // v1.32.1 — write-time duplicate guard: the same expense (plate +
     // amount + type + Nairobi day, within 3 h) is never written twice,
     // even when a receipt is uploaded repeatedly. A different odometer

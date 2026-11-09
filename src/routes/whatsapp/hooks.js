@@ -18,7 +18,7 @@
 import { logChatTranscript } from '../../workers/sentinel.js';
 import { saveChatMessage, getReengagementContext } from '../../services/chatHistory.js';
 import { getUserContextCache, formatUserFactsBlock } from '../../services/userContextCache.js';
-import { loadSessionSnapshot, persistSessionSnapshot } from '../../services/sessionStore.js';
+import { loadSessionSnapshot, persistSessionSnapshot, stripTransientSessionFields } from '../../services/sessionStore.js';
 import { hydrateSessionPending } from '../../services/pendingState.js';
 import { logTurnLatency } from '../../services/turnLatency.js';
 
@@ -29,10 +29,10 @@ import { logTurnLatency } from '../../services/turnLatency.js';
 export async function persistTurnSnapshot({ supabaseClient, sessionPhone, formattedPhoneForSession, session, onboarding }) {
   if (!supabaseClient || !sessionPhone) return;
   try {
-    await persistSessionSnapshot(supabaseClient, formattedPhoneForSession, {
+    await persistSessionSnapshot(supabaseClient, formattedPhoneForSession, stripTransientSessionFields({
       session: session || null,
       onboarding: onboarding || null
-    });
+    }));
   } catch {}
 }
 

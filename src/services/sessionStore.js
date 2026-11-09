@@ -81,6 +81,26 @@ export async function persistSessionSnapshot(supabase, phone, snapshot = {}) {
   }
 }
 
+/**
+ * v1.93.0 (Phase 30, Task 3) — snapshots persist JSON-safe state only.
+ * A pending document stash keeps its metadata (mediaId/mimeType/family/…), but
+ * the raw media buffer is transient: a multi-MB image would bloat the jsonb
+ * row. The buffer stays in-process and registration completion re-downloads it
+ * from Meta on a cold instance (or asks the user to re-send). Pure, never throws.
+ */
+export function stripTransientSessionFields(snapshot = {}) {
+  const clean = { ...(snapshot || {}) };
+  if (clean.session && typeof clean.session === 'object') {
+    const session = { ...clean.session };
+    if (session.pendingDocumentStash && typeof session.pendingDocumentStash === 'object') {
+      const { buffer: _buffer, ...meta } = session.pendingDocumentStash;
+      session.pendingDocumentStash = meta;
+    }
+    clean.session = session;
+  }
+  return clean;
+}
+
 export async function pruneSessionSnapshots(supabase, days = 7) {
   if (!supabase) return 0;
   try {
@@ -96,5 +116,6 @@ export default {
   ensureChatSessionsTable,
   loadSessionSnapshot,
   persistSessionSnapshot,
+  stripTransientSessionFields,
   pruneSessionSnapshots
 };

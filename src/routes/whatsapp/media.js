@@ -48,6 +48,8 @@ import {
   documentTypeForFamily,
   isVaultableDocumentFamily
 } from '../../services/vehicleDocuments.js';
+// v1.93.0 (Phase 30, Task 3) — a document that arrives before its asset exists.
+import { buildDocumentStash } from '../../services/documentStash.js';
 
 // M2 (verbatim from messages.js v1.66.0) - the deterministic voice-note line and the
 // durable transcript marker. The processor sends the reply and owns the status literal.
@@ -483,11 +485,12 @@ export async function resolveReceiptVault({
   // driver licences stay out of scope (vehicle-only ledger, §40.2). Best-effort
   // by design: the vault can never fail the turn.
   let documentPrefill = null;
-  // TODO(v1.87.5 — decision D2): a compliance document uploaded BEFORE the
-  // vehicle exists (e.g. the insurance certificate sent during registration) is
-  // discarded here — targetVehicle is null, so nothing is vaulted and the file
-  // can never be linked later. Stash the bytes in session memory and replay
-  // them after vehicle_registration completes (live 2026-11-09 walkthrough).
+  // v1.93.0 (Phase 30, Task 3) — a compliance document uploaded BEFORE the
+  // vehicle exists (e.g. the logbook photo sent during registration) is no
+  // longer discarded: its metadata is stashed on the session (JSON-safe, rides
+  // chat_sessions) and the bytes stay in-process; registration completion files
+  // it under the new asset and re-downloads from Meta on a cold instance.
+  let documentStash = null;
   if (mediaObj?.id && supabaseClient && !ocrPaused && ocrResult?.buffer && isVaultableDocumentFamily(ocrKind)) {
     try {
       const targetVehicle = currentActiveVehicle
@@ -519,6 +522,16 @@ export async function resolveReceiptVault({
             document_type: vaulted.document.document_type || documentTypeForFamily(ocrKind) || 'other'
           };
         }
+      } else {
+        // v1.93.0 (Phase 30, Task 3) — no vehicle yet: stash for the
+        // registration completion. `buffer` is transient (never persisted).
+        documentStash = buildDocumentStash({
+          mediaId: mediaObj.id,
+          mimeType: ocrResult.mimeType,
+          family: ocrKind,
+          filename: mediaObj?.filename,
+          buffer: ocrResult.buffer
+        });
       }
     } catch (vaultErr) {
       console.warn('[OCR] document vault skipped:', vaultErr?.message || vaultErr);
@@ -540,6 +553,6 @@ export async function resolveReceiptVault({
     } catch { /* best-effort */ }
   }
 
-  return { duplicateReceipt, logbookPrefill, receiptPrefill, documentPrefill };
+  return { duplicateReceipt, logbookPrefill, receiptPrefill, documentPrefill, documentStash };
 }
 

@@ -80,6 +80,11 @@ check(DEFAULT_SAKA_CORE_PROMPT.includes('driver_compliances'), 'Core prompt name
 check(DEFAULT_SAKA_CORE_PROMPT.includes('DETERMINISTIC COMMANDS (v1.73.0'), 'Core prompt teaches the v1.73.0 deterministic commands');
 check(DEFAULT_SAKA_CORE_PROMPT.includes('"my ticket"') && DEFAULT_SAKA_CORE_PROMPT.includes('Read-only'), 'Core prompt teaches the own-ticket status read (read-only)');
 check(DEFAULT_SAKA_CORE_PROMPT.includes('"weekly report on"') && DEFAULT_SAKA_CORE_PROMPT.includes('never uses the report quota'), 'Core prompt teaches the weekly-report toggle (no quota)');
+// v1.93.0 (Phase 30, Task 2) — the engine-owned logbook invitation copy is part
+// of the playbook, so the prompt and the completion card can never drift.
+check(DEFAULT_SAKA_CORE_PROMPT.includes('Now send a photo of your logbook') && DEFAULT_SAKA_CORE_PROMPT.includes('Photo storage is a paid feature'), 'Core prompt carries the logbook invitation copy (v1.93.0)');
+// v1.93.0 (Phase 30, Task 1) — the mobile PDF law is in the delivered prompt.
+check(/MOBILE PDF \(v1\.93\.0\)/.test(DEFAULT_SAKA_CORE_PROMPT) && /phone-shaped A5/.test(DEFAULT_SAKA_CORE_PROMPT), 'Core prompt teaches the phone (A5) PDF layout (v1.93.0)');
 check(DEFAULT_SAKA_CORE_PROMPT.includes('Pagination (v1.73.0)') && DEFAULT_SAKA_CORE_PROMPT.includes('VIEW-ONLY'), 'Core prompt teaches view-only pagination');
 // v1.84.0 (Phase 23) — the stored document vault: prompt + playbook + guidance.
 check(DEFAULT_SAKA_CORE_PROMPT.includes('STORED DOCUMENTS (v1.84.0'), 'Core prompt teaches the stored document vault');

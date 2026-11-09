@@ -368,6 +368,20 @@ async function requireRoleSession(request, reply, supabase, role = 'owner') {
  * seams so suites stay offline: production uses the real email/WhatsApp senders
  * and the real billing engine; a test passes fakes with the same contract.
  */
+/**
+ * v1.93.0 (Phase 30, Task 1) — which PDF layout this request wants.
+ * The explicit `?variant=mobile|a4` wins (unknown values fall back to A4);
+ * otherwise a phone User-Agent defaults to the A5 mobile layout, and every
+ * other client keeps the unchanged A4 export.
+ */
+export function pdfVariantFor(request) {
+  const requested = String(request?.query?.variant || '').trim().toLowerCase();
+  if (requested === 'mobile') return 'mobile';
+  if (requested === 'a4' || requested === 'standard' || requested === 'desktop') return 'a4';
+  const userAgent = String(request?.headers?.['user-agent'] || '');
+  return /Android|iPhone|iPod|iPad|Mobile|Windows Phone/i.test(userAgent) ? 'mobile' : 'a4';
+}
+
 export async function registerDashboardRoutes(fastify, {
   supabase,
   requestOtp = requestDashboardOtp,
@@ -696,6 +710,7 @@ export async function registerDashboardRoutes(fastify, {
         const vehicles = await loadOwnerVehicles(supabase, session.ownerId);
         const vehicleIds = vehicles.map((vehicle) => vehicle.id);
         const parsed = parseRecordsFilters(request.query || {}, { vehicleIds });
+        const variant = pdfVariantFor(request);
         if (!parsed.ok) {
           const filters = parseRecordsFilters({}, { vehicleIds }).filters;
           const page = renderRecordsPage({
@@ -737,7 +752,8 @@ export async function registerDashboardRoutes(fastify, {
           profile,
           countryInfo,
           vehicles,
-          truncated: result.truncated
+          truncated: result.truncated,
+          variant
         });
         reply.header('content-disposition', `attachment; filename="saka-records-${parsed.filters.from}-to-${parsed.filters.to}.pdf"`);
         reply.header('cache-control', 'no-store');
@@ -1008,7 +1024,7 @@ export async function registerDashboardRoutes(fastify, {
           const page = renderErrorPage(500, 'That report could not be built — please try again in a moment.');
           return sendHtml(reply, page.status, page.html);
         }
-        const buffer = await buildProReportPdf(report.data);
+        const buffer = await buildProReportPdf({ ...report.data, variant: pdfVariantFor(request) });
         const day = new Date().toISOString().slice(0, 10);
         reply.header('content-disposition', `attachment; filename="saka-report-${parsed.spec.range}-${day}.pdf"`);
         reply.header('cache-control', 'no-store');

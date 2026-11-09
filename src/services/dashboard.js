@@ -1169,7 +1169,7 @@ export async function loadOwnerVehicles(supabase, ownerId) {
   try {
     const { data, error } = await supabase
       .from('vehicles')
-      .select('id, plate_number, nickname, make_model, status, deleted_at, assigned_driver_id')
+      .select('id, plate_number, nickname, make_model, status, deleted_at, assigned_driver_id, asset_kind, asset_type')
       .eq('owner_id', ownerId)
       .is('deleted_at', null)
       .limit(500);
@@ -1670,6 +1670,9 @@ export async function buildRecordsPdf(rows = [], filters = {}, {
   vehicles = [],
   truncated = false,
   useStandardFonts = false,
+  // v1.93.0 (Phase 30, Task 1) — 'mobile' renders the A5 phone layout; the
+  // default (undefined) is the unchanged A4 export.
+  variant = 'a4',
   // v1.92.0 (Phase 29) — the Final Earnings Report reuses this exact renderer,
   // changing only its headings and note (one ledger engine, never a second).
   heading = 'Records & Ledger',
@@ -1703,6 +1706,7 @@ export async function buildRecordsPdf(rows = [], filters = {}, {
     subtitle: `${period} · ${list.length} record(s)`,
     reportType: 'financial',
     periodLabel: period || 'Selected period',
+    variant,
     // Same fonts as every report (branded); suites opt into standard fonts to
     // read the drawn text back, exactly like test_pdf_engine.
     useStandardFonts,
@@ -3484,11 +3488,14 @@ export function renderRecordsPage({ data, filters = {}, vehicles = [], emailMask
       : 'Nothing in these filters — widen the dates or clear the search.'}</p></div>`;
 
   const base = recordsQueryString(filters, { page: 0 });
+  // v1.93.0 (Phase 30, Task 1) — both layouts are offered: the phone-shaped A5
+  // download and the unchanged A4 export. The current filters always travel.
   const exports = `
 <p class="muted" style="font-size:13px;">
   Export this filter:
   <a href="/d/records.csv?${escapeHtml(base)}">CSV</a> ·
-  <a href="/d/records.pdf?${escapeHtml(base)}">PDF</a>
+  <a href="/d/records.pdf?${escapeHtml(base)}&variant=a4">PDF (A4)</a> ·
+  <a href="/d/records.pdf?${escapeHtml(base)}&variant=mobile">PDF (phone)</a>
 </p>`;
 
   const pager = [];
@@ -3753,6 +3760,7 @@ export function renderReportsPage({ vehicles = [], metricsByCategory = null, spe
   const body = `
 <h1>Build a report</h1>
 <p class="muted">Pick a period, the vehicles and the numbers you want — the PDF downloads straight away. It never uses your monthly report quota.</p>
+<p class="muted" style="font-size:13px;">Two layouts: A4 for printing, or the phone layout (A5) that reads at 10 pt on a handset. WhatsApp report links use the phone layout by default.</p>
 ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
 <form method="GET" action="/d/reports.pdf">
   <h2>Period</h2>
@@ -3774,7 +3782,10 @@ ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
   </div>
   <h2>Metrics</h2>
   <div class="card metrics">${metricBoxes}</div>
-  <p><button type="submit">Build my PDF</button></p>
+  <p>
+    <button type="submit">Build my PDF (A4)</button>
+    <button type="submit" formaction="/d/reports.pdf?variant=mobile">Build for phone (A5)</button>
+  </p>
 </form>`;
   return renderPageShell('Build a report', body, { headerRight: dashboardNav() });
 }

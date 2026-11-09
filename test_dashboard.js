@@ -1129,6 +1129,8 @@ async function run() {
   check(recordsHtml.includes('Multiple match') && recordsHtml.includes('—'), 'ambiguous and empty matches render honestly');
   check(recordsHtml.includes('← Newer') && recordsHtml.includes('Older →'), 'pagination offers both directions when both exist');
   check(recordsHtml.includes('/d/records.csv?') && recordsHtml.includes('/d/records.pdf?'), 'the page links both exports');
+  // v1.93.0 (Phase 30, Task 1) — both PDF layouts are offered on the page.
+  check(recordsHtml.includes('variant=mobile') && recordsHtml.includes('PDF (phone)') && recordsHtml.includes('variant=a4') && recordsHtml.includes('PDF (A4)'), 'the page offers the phone (A5) and A4 PDF links (v1.93.0)');
   const exportQuery = recordsQueryString(renderFilters, { page: 0 });
   check(exportQuery.includes('type=Fuel') && exportQuery.includes('vehicle=v-a') && !exportQuery.includes('page='), 'export links carry the filter and never a page');
   const emptyRecordsHtml = renderRecordsPage({ data: { ...pageData, rows: [], total: 0, hasMore: false, page: 0 }, filters: defaults.filters, vehicles: ownerVehicles, emailMasked: 'a***a@example.com' });
@@ -1226,6 +1228,29 @@ async function run() {
   check(pdfRes.statusCode === 200 && String(pdfRes.headers['content-type']).includes('application/pdf'), 'GET /d/records.pdf answers application/pdf');
   check(pdfRes.rawPayload.subarray(0, 5).toString() === '%PDF-', 'the PDF export streams a real PDF (no Storage upload)');
   check(/attachment; filename="saka-records-2026-10-10-to-2026-11-08.pdf"/.test(String(pdfRes.headers['content-disposition'])), 'the PDF carries a dated download filename');
+  // v1.93.0 (Phase 30, Task 1) — the phone variant and the UA default.
+  const mobilePdf = await recApp.inject({ method: 'GET', url: '/d/records.pdf?from=2026-10-10&to=2026-11-08&variant=mobile', headers: recCookie });
+  check(mobilePdf.statusCode === 200 && mobilePdf.rawPayload.subarray(0, 5).toString() === '%PDF-', 'GET /d/records.pdf?variant=mobile streams a real PDF (v1.93.0)');
+  check(/\b419(\.0+)?\s+595(\.0+)?\b/.test(mobilePdf.rawPayload.toString('latin1')), 'the phone variant page is A5 (419 x 595)');
+  check(/\b595(\.\d+)?\s+841(\.\d+)?\b/.test(pdfRes.rawPayload.toString('latin1')), 'the default records export stays A4');
+  const uaMobilePdf = await recApp.inject({
+    method: 'GET',
+    url: '/d/records.pdf?from=2026-10-10&to=2026-11-08',
+    headers: { ...recCookie, 'user-agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Mobile/15E148' }
+  });
+  check(/\b419(\.0+)?\s+595(\.0+)?\b/.test(uaMobilePdf.rawPayload.toString('latin1')), 'an iPhone User-Agent defaults to the phone layout (v1.93.0)');
+  const uaDesktopPdf = await recApp.inject({
+    method: 'GET',
+    url: '/d/records.pdf?from=2026-10-10&to=2026-11-08',
+    headers: { ...recCookie, 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+  });
+  check(/\b595(\.\d+)?\s+841(\.\d+)?\b/.test(uaDesktopPdf.rawPayload.toString('latin1')), 'a desktop User-Agent keeps the A4 layout');
+  const explicitA4 = await recApp.inject({
+    method: 'GET',
+    url: '/d/records.pdf?from=2026-10-10&to=2026-11-08&variant=a4',
+    headers: { ...recCookie, 'user-agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Mobile/15E148' }
+  });
+  check(/\b595(\.\d+)?\s+841(\.\d+)?\b/.test(explicitA4.rawPayload.toString('latin1')), 'an explicit ?variant=a4 beats the mobile User-Agent');
   const pdfFuel = await recApp.inject({ method: 'GET', url: '/d/records.pdf?from=2026-10-10&to=2026-11-08&type=Fuel', headers: recCookie });
   check(pdfFuel.statusCode === 200 && pdfFuel.rawPayload.subarray(0, 5).toString() === '%PDF-', 'the PDF route accepts the same filter spec');
   const pdfBad = await recApp.inject({ method: 'GET', url: '/d/records.pdf?from=nope', headers: recCookie });
@@ -1811,6 +1836,8 @@ async function run() {
   const reportsRes = await setApp.inject({ method: 'GET', url: '/d/reports', headers: setCookie });
   check(reportsRes.statusCode === 200 && reportsRes.body.includes('Build a report'), 'GET /d/reports renders the builder');
   check(reportsRes.body.includes('action="/d/reports.pdf"') && reportsRes.body.includes('Total spend'), 'the form targets the PDF route and lists the metrics');
+  // v1.93.0 (Phase 30, Task 1) — the builder offers both layouts.
+  check(reportsRes.body.includes('formaction="/d/reports.pdf?variant=mobile"') && reportsRes.body.includes('Build for phone (A5)'), 'the builder offers the phone (A5) download (v1.93.0)');
   const badReportsRes = await setApp.inject({ method: 'GET', url: '/d/reports?range=weird', headers: setCookie });
   check(badReportsRes.statusCode === 400 && /not one I know/.test(badReportsRes.body), 'an invalid range is a 400 on the form');
   const anonReports = await setApp.inject({ method: 'GET', url: '/d/reports' });
@@ -1820,6 +1847,9 @@ async function run() {
   check(reportPdfRes.statusCode === 200 && String(reportPdfRes.headers['content-type']).includes('application/pdf'), 'GET /d/reports.pdf answers application/pdf');
   check(reportPdfRes.rawPayload.subarray(0, 5).toString() === '%PDF-', 'the built report is a real PDF');
   check(/attachment; filename="saka-report-this_month-\d{4}-\d{2}-\d{2}\.pdf"/.test(String(reportPdfRes.headers['content-disposition'])), 'the PDF carries a dated filename naming the range');
+  const phoneReportPdf = await setApp.inject({ method: 'GET', url: '/d/reports.pdf?range=this_month&metrics=total_spend&variant=mobile', headers: setCookie });
+  check(phoneReportPdf.statusCode === 200 && phoneReportPdf.rawPayload.subarray(0, 5).toString() === '%PDF-', 'GET /d/reports.pdf?variant=mobile answers a real PDF');
+  check(/\b419(\.0+)?\s+595(\.0+)?\b/.test(phoneReportPdf.rawPayload.toString('latin1')), 'the reports phone variant is A5 (419 x 595)');
   const foreignVehicleReport = await setApp.inject({ method: 'GET', url: '/d/reports.pdf?vehicles=v-x', headers: setCookie });
   check(foreignVehicleReport.statusCode === 400 && /not on your fleet/.test(foreignVehicleReport.body), "another owner's vehicle id is refused (rule 51 i)");
   const customReportRes = await setApp.inject({ method: 'GET', url: '/d/reports.pdf?range=custom&from=2026-11-01&to=2026-11-07&metrics=total_spend', headers: setCookie });

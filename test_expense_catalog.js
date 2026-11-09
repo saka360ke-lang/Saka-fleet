@@ -23,6 +23,9 @@ import {
   expenseCategoryBadge,
   expenseCategoryLabel,
   expenseTypesForAssetKind,
+  expenseKindNoun,
+  nearestKindType,
+  validateExpenseTypeForAssetKind,
   ODOMETER_MODES,
   odometerModeForType,
   isHoursLedKind,
@@ -172,6 +175,29 @@ const ledger = buildLedgerGroups({
 check(ledger.groups[0].rows[0].kind === 'tyres', 'A puncture expense becomes a tyres ledger row');
 check(ledger.groups[0].rows[0].kindLabel === 'TYRES', 'The ledger badge reads TYRES');
 check(ledger.totals.expenseTotal === 300, 'Ledger totals still reconcile');
+
+console.log('\n--- Test 8: asset-kind guard (v1.93.0, P2-11) ---');
+const tyresOnGenerator = validateExpenseTypeForAssetKind('Tyres', 'generator');
+check(tyresOnGenerator.ok === false && tyresOnGenerator.suggestion === 'Consumables',
+  'tyres on a generator are refused with Consumables suggested');
+check(/Generators don't have tyres/.test(tyresOnGenerator.message) && /Consumables/.test(tyresOnGenerator.message),
+  'the refusal copy is warm and names the valid alternative');
+const mooringOnCar = validateExpenseTypeForAssetKind('Mooring & Berthing', 'vehicle');
+check(mooringOnCar.ok === false && mooringOnCar.suggestion === 'Parking' && /Cars don't have mooring/.test(mooringOnCar.message),
+  'mooring fees on a car suggest Parking');
+check(validateExpenseTypeForAssetKind('Fuel', 'generator').ok === true
+  && validateExpenseTypeForAssetKind('Consumables', 'generator').ok === true,
+  'kind-valid types pass untouched (fuel and consumables on a generator)');
+check(validateExpenseTypeForAssetKind('Other', 'generator').ok === true
+  && validateExpenseTypeForAssetKind('banana', 'generator').ok === true,
+  'Other and unknown free text stay allowed (the caller owns unknown text)');
+check(expenseKindNoun('watercraft') === 'Boats' && expenseKindNoun('vehicle') === 'Cars',
+  'the refusal noun follows the asset kind');
+const guardMenu = expenseTypeChoices('generator').map((choice) => choice.value);
+check(guardMenu.includes(nearestKindType('Weighbridge', 'vehicle'))
+  && nearestKindType('Tyres', 'generator') === 'Consumables'
+  && nearestKindType('Tyres', 'generator') === nearestKindType('tyres', 'generator'),
+  'suggestions are deterministic and always valid on the kind menu');
 
 console.log(`\n🎉 ${passed} expense-catalog assertions passed.`);
 console.log('Stateless suite: no real database rows were created, so no cleanup is required.');

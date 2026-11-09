@@ -461,6 +461,37 @@ export function guidanceForFlow(key) {
   return FLOW_GUIDANCE[String(key || '').trim()] || null;
 }
 
+/**
+ * v1.93.0 (Phase 30, Task 2) — the deterministic logbook-upload invitation that
+ * rides the registration completion card. DATA ONLY: the engine appends these
+ * lines verbatim (zero AI tokens) and the playbook carries the same law, so the
+ * prompt can never promise storage the vault would refuse (Free keeps parsed
+ * details, not the photo). `filed` is the Task 3 stash-replay success line.
+ */
+export const LOGBOOK_UPLOAD_COPY = Object.freeze({
+  storage: "📸 Now send a photo of your logbook and I'll store it in your dashboard for safekeeping. You'll always have it handy.",
+  parsed: "📸 Send a photo of your logbook and I'll read the details and keep them on your dashboard. (Photo storage is a paid feature.)",
+  filed: (label) => `📸 I've kept your logbook photo — filing it under your new ${label} now.`,
+  replayFailed: "📸 Almost done — I couldn't file your logbook photo. Please send it again now and I'll store it for safekeeping.",
+  expired: '📸 Please send your logbook photo again — it needs to arrive while your session is active.'
+});
+
+/**
+ * The ONE decision for the completion-card logbook line (v1.93.0, Task 2).
+ * A stash line always wins (it reports a real engine outcome), a document
+ * already captured is never re-requested, and the storage promise is only made
+ * when the vault stores files. Pure; returns null when there is nothing to say.
+ */
+export function resolveLogbookUploadCopy({
+  logbookLine = null,
+  hasPrefilledDocument = false,
+  vaultStoresFiles = true
+} = {}) {
+  if (logbookLine) return logbookLine;
+  if (hasPrefilledDocument) return null;
+  return vaultStoresFiles ? LOGBOOK_UPLOAD_COPY.storage : LOGBOOK_UPLOAD_COPY.parsed;
+}
+
 export const SAKA_TONE_COMPASS = {
   voice: [
     'You are Saka — the machine memory, money-saver and paperwork wizard. Never "a support assistant".',
@@ -739,6 +770,9 @@ export function buildFlowPlaybook() {
     ...SAKA_WEB_ONBOARDING_PLAYBOOK,
     ...SAKA_WEB_DASHBOARD_PLAYBOOK,
     ...SAKA_REPORT_DELIVERY_PLAYBOOK,
+    'EXPENSE KIND GUARD (v1.93.0): an expense type that cannot exist on the asset kind is REFUSED before any write — never saved, never silently re-typed. The refusal names the nearest valid type from that asset\'s own menu (tyres on a generator → Consumables; mooring on a car → Parking); *Other* is always allowed as the honest escape.',
+    'LOGBOOK UPLOAD (v1.93.0): the registration completion card invites the logbook photo with this engine copy: "📸 Now send a photo of your logbook and I\'ll store it in your dashboard for safekeeping. You\'ll always have it handy." Promise storage ONLY when the engine says files are stored; on Free the copy reads "I\'ll read the details and keep them on your dashboard. (Photo storage is a paid feature.)". A logbook sent BEFORE the asset existed is stashed and filed at completion — if it cannot be filed, ask the user to send it again while the session is active. Never invent a stored file.',
+    'MOBILE PDF (v1.93.0): WhatsApp-shipped report links are phone-shaped (A5) by default; the dashboard offers BOTH PDF (A4) and PDF (phone). Never claim a layout the engine did not build.',
     'BOUNDARIES:',
     ...SAKA_BOUNDARY_RULES.map((r) => `- ${r}`),
     buildToneCompassBlock(),

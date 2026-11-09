@@ -286,6 +286,89 @@ export function expenseTypesForAssetKind(assetKind = 'vehicle') {
 }
 
 /* ============================================================
+ * v1.93.0 (Phase 30, P2-11) — asset-kind guard
+ * ------------------------------------------------------------
+ * The quiz menu already filters by `kinds`, but free text (and the CSV
+ * import) could still name an expense that cannot exist on the asset
+ * ("tyres" on a generator). This is the ONE write-time gate used by the
+ * quiz, the quick-log lane and the CSV import: it refuses the write with
+ * warm copy that always names a valid alternative, and `Other` stays the
+ * honest escape hatch.
+ * ============================================================ */
+
+/** Human plural for warm refusal copy (never shame, rule 31). */
+const KIND_PLURALS = Object.freeze({
+  vehicle: 'Cars',
+  motorcycle: 'Motorcycles',
+  truck: 'Trucks',
+  bus: 'Buses',
+  heavy_equipment: 'Heavy equipment',
+  machinery: 'Machines',
+  generator: 'Generators',
+  watercraft: 'Boats'
+});
+
+/**
+ * Curated, deterministic nearest alternative per type x kind. A curated pair
+ * is only a preference — the validator always answers with a type that is on
+ * the kind's own menu.
+ */
+const KIND_TYPE_ALTERNATIVES = Object.freeze({
+  Tyres: { heavy_equipment: 'Parts', machinery: 'Parts', generator: 'Consumables', watercraft: 'Parts' },
+  Charging: { heavy_equipment: 'Fuel', machinery: 'Fuel', generator: 'Fuel', watercraft: 'Fuel' },
+  'Mooring & Berthing': { vehicle: 'Parking', motorcycle: 'Parking', truck: 'Parking', bus: 'Parking', heavy_equipment: 'Hire & Rental', machinery: 'Hire & Rental', generator: 'Hire & Rental' },
+  Weighbridge: { vehicle: 'Other', motorcycle: 'Other', bus: 'Other', heavy_equipment: 'Other', machinery: 'Other', generator: 'Other', watercraft: 'Other' },
+  'Route & Stage Fees': { vehicle: 'Parking', heavy_equipment: 'Loading & Offloading', machinery: 'Loading & Offloading', generator: 'Other', watercraft: 'Loading & Offloading' },
+  'Loading & Offloading': { vehicle: 'Other', motorcycle: 'Other' },
+  'Crew Wages': { vehicle: 'Other', motorcycle: 'Other', truck: 'Other', bus: 'Other' },
+  Consumables: { vehicle: 'Parts', motorcycle: 'Parts', truck: 'Parts', bus: 'Parts' }
+});
+
+/** Plural noun for an asset kind, used in warm copy. Never empty. */
+export function expenseKindNoun(assetKind = 'vehicle') {
+  return KIND_PLURALS[normalizeKind(assetKind)] || KIND_PLURALS.vehicle;
+}
+
+/**
+ * A valid replacement type for a refused one: curated pair first, then a
+ * same-category sibling on the kind's menu, then the kind's first menu type.
+ * Never null — every asset kind has a menu with at least `Other`.
+ */
+export function nearestKindType(expenseType, assetKind = 'vehicle') {
+  const kind = normalizeKind(assetKind);
+  const resolved = resolveExpenseType(expenseType) || String(expenseType || '').trim();
+  const type = EXPENSE_TYPES.find((entry) => entry.value === resolved) || null;
+  const curated = type ? KIND_TYPE_ALTERNATIVES[type.value]?.[kind] : null;
+  if (curated) return curated;
+  const sameCategory = type
+    ? EXPENSE_TYPES.find((entry) => entry.kinds.includes(kind)
+      && entry.category === type.category
+      && entry.value !== type.value
+      && entry.value !== 'Other')
+    : null;
+  if (sameCategory) return sameCategory.value;
+  return expenseTypeChoices(kind)[0]?.value || 'Other';
+}
+
+/**
+ * Does this expense type exist for this asset kind?
+ * `Other` and unknown free text are always allowed (the caller decides what
+ * unknown text means); a mismatch returns the warm engine-owned copy plus the
+ * suggested valid type. Pure, never throws.
+ */
+export function validateExpenseTypeForAssetKind(expenseType, assetKind = 'vehicle') {
+  const kind = normalizeKind(assetKind);
+  const resolved = resolveExpenseType(expenseType);
+  if (!resolved || resolved === 'Other') return { ok: true, type: resolved || 'Other', kind };
+  const type = EXPENSE_TYPES.find((entry) => entry.value === resolved) || null;
+  if (!type) return { ok: true, type: resolved, kind };
+  if (type.kinds.includes(kind)) return { ok: true, type: resolved, kind };
+  const suggestion = nearestKindType(resolved, kind);
+  const message = `${expenseKindNoun(kind)} don't have ${resolved.toLowerCase()} — did you mean ${suggestion}? Reply *${suggestion}* or pick another type.`;
+  return { ok: false, type: resolved, kind, suggestion, message };
+}
+
+/* ============================================================
  * Odometer / hour-meter policy (v1.39.0)
  * ------------------------------------------------------------
  * Research-backed reading tiers (see SAKA_FLEET_ARCHITECTURE.md §85):
@@ -335,5 +418,8 @@ export default {
   expenseCategoryLabel,
   expenseCategoryBadge,
   expenseCategoryTone,
-  expenseTypesForAssetKind
+  expenseTypesForAssetKind,
+  expenseKindNoun,
+  nearestKindType,
+  validateExpenseTypeForAssetKind
 };

@@ -1,6 +1,13 @@
 {
-  "latest": "1.92.1",
+  "latest": "1.93.0",
   "entries": [
+    {
+      "version": "1.93.0",
+      "date": "2026-11-09",
+      "title": "Phone-friendly PDFs and smarter expense checks",
+      "preview": "Reports now arrive phone-shaped, logbook photos are kept, and impossible expenses are gently refused.",
+      "summary": "Four polish fixes in one release. First: every report link Saka sends on WhatsApp now opens a phone-shaped PDF (A5, nothing smaller than 10 point type), while your dashboard offers both the phone layout and the classic A4 download - and the reports page has a button for each. Second: during registration Saka now invites you to send your logbook photo and keeps it with the vehicle for safekeeping; on the Free plan the details are kept and Saka says so honestly. Third: if you send a logbook before the vehicle is registered, the photo is no longer lost - it is held and filed under the new vehicle the moment registration completes. Fourth: an expense that cannot exist on an asset is now refused with a helpful suggestion - tyres on a generator, or mooring fees on a car - instead of being saved where it would quietly spoil your reports. \"Other\" is always available for the genuinely unusual spend."
+    },
     {
       "version": "1.92.1",
       "date": "2026-11-09",

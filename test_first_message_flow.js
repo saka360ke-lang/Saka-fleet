@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 import crypto from 'crypto';
 import { handleWhatsAppWebhook, chatSessions, onboardingStore } from './src/routes/whatsapp.js';
+import { handleLogExpenseTurn } from './src/routes/whatsapp/commands.js';
 import { createClient } from '@supabase/supabase-js';
 import fs from 'node:fs';
 import { runWithCleanup } from './scripts/testCleanup.js';
@@ -182,6 +183,46 @@ async function run() {
     const restart = await say("Hello. Let's start again 😊");
     check(/machine's memory|REGISTER/i.test(restart), 'a restart gets the warm sales welcome');
     check(!/intelligent WhatsApp vehicle|asset management assistant|your fleet assistant/i.test(restart), 'the legacy identity copy never ships');
+
+    console.log('\n--- Test 4h: quick-log kind guard (v1.93.0, P2-11) ---');
+    {
+      const quickInserted = [];
+      const quickMock = {
+        from(table) {
+          const api = {
+            select: () => api, eq: () => api, neq: () => api, in: () => api, is: () => api,
+            gte: () => api, lte: () => api, lt: () => api, gt: () => api, order: () => api, limit: () => api,
+            update: () => api, delete: () => api,
+            insert: async (rows) => {
+              const data = Array.isArray(rows) ? rows : [rows];
+              quickInserted.push({ table, rows: data });
+              return { error: null, data };
+            },
+            maybeSingle: async () => ({ data: null, error: null }),
+            single: async () => ({ data: null, error: null }),
+            then: (a, b) => Promise.resolve({ data: [], error: null }).then(a, b)
+          };
+          return api;
+        }
+      };
+      const generator = { id: 'gen-quick-1', plate_number: 'GEN 001', make_model: 'Cummins 60kVA', asset_kind: 'generator', asset_type: 'GENERATOR' };
+      const refusal = await handleLogExpenseTurn({
+        mergedExt: { expense_type: 'Tyres', amount: 500 },
+        messageText: 'tyres 500',
+        targetVeh: generator,
+        supabaseClient: quickMock,
+        profileData: { id: 'owner-quick-1' },
+        senderPhone: phone,
+        countryInfo: { currency: 'KES', country_code: 'KE' },
+        targetLang: 'English',
+        existingVehicles: [generator],
+        sendWhatsApp: async () => {}
+      });
+      check(/Generators don't have tyres/.test(refusal.reply) && /Consumables/.test(refusal.reply),
+        'the quick-log lane refuses tyres on a generator with warm copy (v1.93.0)');
+      check(!quickInserted.some((entry) => entry.table === 'expense_logs'),
+        'the quick-log refusal writes nothing');
+    }
 
     console.log('\n--- Test 5: quick lanes invalidate the user-context cache (v1.63.1) ---');
     if (supabase) {
