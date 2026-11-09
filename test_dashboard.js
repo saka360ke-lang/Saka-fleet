@@ -571,6 +571,23 @@ async function run() {
   check(legacyOtpPage.statusCode === 200 && /Check your WhatsApp/.test(legacyOtpPage.body), 'GET /d/<token> still renders the OTP page for pre-1.82.0 links');
   check(legacyOtpPage.body.includes(maskPhone(PROFILE.phone_number)), 'the legacy page names the masked WhatsApp number');
 
+  // v1.90.0 (Phase 28B) — /d/verify was the ONE /d POST without the Origin
+  // guard. A cross-site post must be refused BEFORE any OTP work: no attempt
+  // burned, no session minted, no cookie set (CHECK 4 / rule 51).
+  const crossOriginVerify = await app.inject({
+    method: 'POST',
+    url: '/d/verify',
+    payload: `token=${pageToken}&otp=${pageOtp}`,
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      origin: 'https://evil.example',
+      host: 'app.sakafleet.test'
+    }
+  });
+  check(crossOriginVerify.statusCode === 400 && /Please open the sign-in page again/.test(crossOriginVerify.body), 'a cross-origin POST /d/verify is refused with 400 (v1.90.0)');
+  check(pageMock.db[DASHBOARD_SESSIONS_TABLE][0].attempts === 0 && pageMock.db[DASHBOARD_SESSIONS_TABLE][0].verified === false, 'the refused cross-origin verify burned no attempt and minted no session');
+  check(!/Max-Age=900/.test(String(crossOriginVerify.headers['set-cookie'] || '')), 'the refused cross-origin verify sets no session cookie');
+
   const badOtp = await app.inject({
     method: 'POST',
     url: '/d/verify',

@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.89.2  
+**Version:** 1.90.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.90.0** | Phase 28B — **transport &amp; error hardening (security P0)**: `csvCell` now apostrophe-prefixes `= + - @ TAB CR` cells (numeric-shaped values untouched — `-500` keeps Excel arithmetic); the global error handler returns ONE generic line while `fastify.log` + `error_logs` keep full detail (status + name preserved); HSTS `max-age=31536000; includeSubDomains` on HTTPS responses (live check: sakafleet.com, www, app and reports ALL 301/302 HTTP→HTTPS) plus a **308** for explicit plain HTTP with the three status probes exempt (Google's edge intercepts `/healthz`); `POST /d/verify` gains the Origin guard it alone lacked (CHECK 4: 11 of 12 `/d` POSTs already had it); and the rate limiter keys on the **RIGHTMOST `x-forwarded-for` hop** with `trustProxy` so Cloud Run buckets are per real client instead of per shared GFE address | 228 |
 | **1.89.2** | Phase 27D — **the nickname is actually editable now**: v1.89.0 shipped `vehicles.nickname` + the display but never taught the `edit_vehicle` field registry (quiz) or the deterministic edit lane (`commands.js`), so every "Nickname" reply was rejected as an unknown field and KAS628T stayed NULL (live, five attempts); both lanes now offer and accept it (sanitised ≤40 chars, `remove` clears), one-line "edit &lt;plate&gt; nickname to &lt;name&gt;" / "rename &lt;plate&gt; to &lt;name&gt;" prefills the whole flow, and the confirm/success cards carry the new label | 227 |
 | **1.89.1** | Release-gate hygiene — **the docs gate stops failing on Windows checkouts**: `gen_kb_docs` compared raw bytes, so `core.autocrlf=true` handed CRLF for the identical generated text and `test_kb_docs` (inside `npm run health`, the mandatory pre-push gate) went red on every fresh checkout; `normalizeDocNewlines()` now normalises before compare/write, `test_kb_docs` pins the CRLF case, and the generator writes LF | 226 |
 | **1.89.0** | Phase 27C — **country-resolved STT locales + asset nicknames**: `COUNTRY_STT_LOCALES` (21 countries, KE sw-KE + en-KE/en-US) with a `country_kb.stt_locale` override (5-min cache, boot DDL mirror, idempotent backfill — live: 21 rows + 21 `STT_LOCALE_RECONCILED` audits) and a category leak guard so an STT row can never surface as a compliance rule; optional `vehicles.nickname` (≤40, label-sanitised) asked right after make/model, resolving FIRST everywhere (narrative, ledger scope, quiz picker, `findVehicleByCandidate` for edit/delete, keep-vehicle) with one `vehicleDisplayLabel()` used in confirmations ("Logged for The Workhorse (KAS 628T)") and the dashboard | 225 |
@@ -6741,4 +6742,34 @@ Live evidence (Supabase + Storage + Cloud Run, all read-only): David's profile `
 **Recurrence autopsy (rule 51).** Defect class *"a field ships in the data + display layers but not in the edit surfaces that decide what a user may ask for"* → every edit surface swept: quiz `EDITABLE_VEHICLE_FIELDS` (fixed), `commands.handleEditVehicleTurn` alias/attrs/regex/card (fixed), `interactiveReply.QUICK_EDIT_ACTIONS` (fixed), `vehicles.sanitizeVehicleUpdates` + `updateVehicleDetails` (already correct), dashboard `loadOwnerVehicles`/renderers (already correct). Each lane now carries an assertion, so the next field cannot ship half-wired.
 
 **Rules shaped this work (rule 58).** 1/39/42/45/63 (rules + architecture first; proposals checked — none open; the two PENDING friction rows from this walkthrough were found, fixed and closed), 2 (this section), 3/4 (targeted reads, batched edits), 7 (no country parsing touched), 8 (VIN/passbook locked — asserted in both lanes), 10 (new suites stateless; the DB suite ran under `runWithCleanup`), 12/13/33 (one commit: version + history + CHANGELOG + landing + regenerated docs), 31/60 (plain language, one next step, no blame; the flow never re-asks what was just said), 50 (a missing `nickname` column still degrades through the existing pre-migration retry), 51/52 (class sweep + before/after assertions), 54 (live row, live transcript, live revision), 55 (evolved both existing edit surfaces — zero new tables), 58 (this report). No rule edited. **Decision impact:** `edit_vehicle` now accepts a one-line command and `remove` clears a nickname — user-facing behaviour changes stated here and in the CHANGELOG.
+
+
+---
+
+### 228. v1.90.0 (Phase 28B) — transport & error hardening, and the Phase 28 split (2026-11-09)
+
+**Why this release exists.** Phase 28 was split into **28B (this release)** and **28A** (the six superadmin write actions, still to ship). The security fixes ship FIRST so every new admin write endpoint in 28A is born behind per-client rate limits, an Origin guard, HSTS and a non-leaking error handler — shipping them the other way round would mean writing and testing those endpoints twice.
+
+**CHECK 1 — error.message consumers (audit before the change).** Swept `src/` and the suites for raw message consumers: the only client-facing echo was the global handler itself (`index.js:141`); the `/api/sentinel` catch is secret-gated, `entryLedger`/service `message:` fields are internal result objects, and no suite asserted the old handler copy. Safe to genericize.
+
+**CHECK 2 — subdomains before choosing includeSubDomains.** Live plain-HTTP probes: `sakafleet.com` 301 → HTTPS, `www.sakafleet.com` 301, `app.sakafleet.com` 302, `reports.sakafleet.com` 301. Every subdomain redirects, so `includeSubDomains` ships.
+
+**CHECK 3 — the keyGenerator contract (four cases, all pinned).** Same rightmost hop + different forged leftmost → SAME bucket; different rightmost → DIFFERENT buckets; single-entry XFF → that entry; no XFF → `request.ip`; addressless → `'unknown'`. An end-to-end `@fastify/rate-limit` run proves one real client exhausts exactly one shared bucket regardless of forged left hops while a distinct client keeps a fresh one.
+
+**CHECK 4 — the CSRF map.** All 12 `/d` POSTs enumerated: `/d/login`, `/d/admin/login`, `/d/settings`, `/d/documents/:id/delete`, `/d/import`, `/d/import/confirm`, `/d/transfer/start|verify|cancel`, `/d/subscription/checkout|addon` already carried `isCrossOriginWrite`; `/d/verify` was the only gap (fixed, refused BEFORE any OTP work — no attempt burned, no session minted, no cookie set).
+
+**The five fixes.**
+1. **CSV formula injection.** `csvCell` (the ONLY cell serializer; both `serializeRecordsCsv` and `serializeAllDataCsv` route through it) now prefixes `'` when the raw cell starts with `= + - @ TAB CR` and is not numeric-shaped (`/^-?\d[\d.,]*$/`). `+254…` labels ARE prefixed (a leading `+` is a formula trigger), while `-500` stays numeric so Excel arithmetic survives; `csvNumber` output is unsigned and never touched.
+2. **Error handler.** New `src/services/errorHandler.js` — `buildErrorHandler({ supabase, log, logSystemError })` keeps `fastify.log.error` + `logSystemError` unchanged, preserves `error.statusCode` and `error.name`, and returns exactly one generic line (`GENERIC_ERROR_MESSAGE`). `index.js` installs it right after the Supabase client (the old block sat above the client's `const` and could not take it as an argument).
+3. **HSTS + 308.** New `src/services/securityHeaders.js` — an `onRequest` hook: `x-forwarded-proto: http` → 308 to `https://<host><path?query>` except `/healthz`, `/api/health`, `/internal/status`; `x-forwarded-proto: https` → `Strict-Transport-Security: max-age=31536000; includeSubDomains`. Platform health checks carry no proto header, so they are neither redirected nor stamped; `/healthz` stays GFE-intercepted (v1.24.4) and is exempt anyway.
+4. **`/d/verify` CSRF.** One guard, the same 400 page as `/d/login`.
+5. **Rate-limit identity.** `Fastify({ trustProxy: true })` + `keyGenerator: rateLimitKeyGenerator` on the root registration. `src/services/rateLimitIdentity.js` returns the RIGHTMOST `x-forwarded-for` hop (the address the GFE appends — the only entry a caller cannot forge), falling back to `request.ip`, then `'unknown'`. Per-route configs inherit the key, so `/d/login`, `/d/admin/*`, `/d/import` and every other bucket are per real client.
+
+**Recurrence autopsy (rule 51).** *(i) "a serializer quotes but never neutralises executable prefixes"* → `csvCell` fixed once for both exporters; PDF/text paths emit no formulas. *(ii) "an error path echoes internal text"* → global handler fixed; `/api/sentinel` deliberately left (secret-gated); dashboard routes render their own copy. *(iii) "a transport guarantee assumed at the edge"* → HSTS was absent; probes explicitly exempted. *(iv) "a POST lane added after the CSRF pattern shipped"* → all 12 re-enumerated. *(v) "a limiter keyed on a shared address"* → the single root registration fixed; every per-route config re-checked.
+
+**Frames touched.** `src/services/dashboard.js` (`csvCell` exported + formula guard, default export), `src/services/errorHandler.js` (new), `src/services/securityHeaders.js` (new), `src/services/rateLimitIdentity.js` (new), `index.js` (trustProxy, keyGenerator, `registerSecurityHeaders`, handler install), `src/routes/dashboard.js` (`/d/verify` guard), `test_security.js` (Tests 6–9), `test_dashboard.js` (+3), `test_vehicle_documents.js` (version pin), `package.json` (1.90.0), `landing/data/changelog.json` + stamped assets, `docs/` (regenerated), this section + history + version, `CHANGELOG.md`.
+
+**Suites run.** test_security, test_dashboard, test_doc_sync, test_kb_docs, test_landing_static, test_vehicle_documents, test_env_audit, `npm run health` — green.
+
+**Rules shaped this work (rule 58).** 1/39/42/45/63 (rules + architecture first; 0 open proposals), 2 (this section), 3/4, 10/11, 12/33, 13, 18, 21, 31, 43/54, 50, 51/52, 55, 58. No rule edited. **Decision impact:** generic client error copy, plain-HTTP 308 (probes exempt), per-real-client rate-limit buckets.
 

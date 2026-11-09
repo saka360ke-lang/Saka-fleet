@@ -1794,6 +1794,13 @@ export async function registerDashboardRoutes(fastify, {
     /* -------------------------------------------------------------- */
     scope.post('/d/verify', { config: { rateLimit: { max: 10, timeWindow: '5 minutes' } } }, async (request, reply) => {
       if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      // v1.90.0 (Phase 28B) — the ONE /d POST that lacked the Origin guard
+      // (CHECK 4: every other write already carries it). Refuse BEFORE any OTP
+      // work, so a cross-site attempt can never burn an attempt or mint a session.
+      if (isCrossOriginWrite(request)) {
+        const page = renderErrorPage(400, 'Please open the sign-in page again.');
+        return sendHtml(reply, page.status, page.html);
+      }
       const token = String(request.body?.token || '');
       const otp = String(request.body?.otp || '').trim();
       try {

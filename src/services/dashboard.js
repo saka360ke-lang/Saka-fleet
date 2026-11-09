@@ -1283,9 +1283,23 @@ export function attachMeterReadings(rows = [], vehicles = []) {
   return { rows: out, meterLabel };
 }
 
-function csvCell(value) {
+/**
+ * v1.90.0 (Phase 28B) — spreadsheet formula-injection guard. Excel and
+ * LibreOffice execute a cell that starts with = + - @ TAB or CR, so an expense
+ * note reading "=HYPERLINK(...)" would become a live formula on the owner's
+ * machine. Such a cell is prefixed with an apostrophe (the spreadsheet's
+ * "treat as text" mark) AFTER RFC-4180 quoting. Numeric-shaped cells (e.g.
+ * -500) are deliberately exempt so real arithmetic survives, and csvNumber
+ * output is unsigned so no legitimate figure is ever touched.
+ */
+const CSV_FORMULA_PREFIX = /^[=+\-@\t\r]/;
+const CSV_NUMERIC_SHAPE = /^-?\d[\d.,]*$/;
+
+export function csvCell(value) {
   const text = value === null || value === undefined ? '' : String(value);
-  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  const quoted = /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  if (CSV_FORMULA_PREFIX.test(text) && !CSV_NUMERIC_SHAPE.test(text)) return `'${quoted}`;
+  return quoted;
 }
 
 function csvNumber(value) {
@@ -4512,6 +4526,7 @@ export default {
   signReceiptUrl,
   signDocumentUrl,
   serializeRecordsCsv,
+  csvCell,
   buildRecordsPdf,
   recordsQueryString,
   COMPLIANCE_VIEWS,

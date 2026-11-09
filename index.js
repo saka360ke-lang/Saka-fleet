@@ -2,6 +2,10 @@ import 'dotenv/config';
 import Fastify from 'fastify';
 import rateLimit from '@fastify/rate-limit';
 import crypto from 'crypto';
+// v1.90.0 (Phase 28B) — security hardening seams (each pinned by test_security).
+import { buildErrorHandler } from './src/services/errorHandler.js';
+import { registerSecurityHeaders } from './src/services/securityHeaders.js';
+import { rateLimitKeyGenerator } from './src/services/rateLimitIdentity.js';
 
 import { generateFleetReport, uploadReportToSupabase } from './reports.js';
 import { sendReportByEmail, sendMfaEmail, sendEmailOtp } from './src/services/mailer.js';
@@ -96,13 +100,18 @@ import { ensureSubscriptionSchema } from './src/db/subscriptionSchema.js';
 import { runTrialLifecycleSweep } from './src/services/trialEngine.js';
 
 // 1. Initialize Fastify Server
-const fastify = Fastify({ logger: true });
+// v1.90.0 (Phase 28B) — trustProxy lets request.ip resolve through the Google
+// Frontend; the rate limiter below nevertheless keys on the RIGHTMOST
+// x-forwarded-for hop explicitly (rateLimitIdentity.js), which is the one
+// address the GFE appends and a caller can never forge.
+const fastify = Fastify({ logger: true, trustProxy: true });
 
 // Register Fastify Rate Limiter for Abuse Prevention
 await fastify.register(rateLimit, {
   max: 100,
   timeWindow: '1 minute',
   allowList: ['127.0.0.1', '::1'],
+  keyGenerator: rateLimitKeyGenerator,
   errorResponseBuilder: (request, context) => {
     return {
       statusCode: 429,
@@ -112,6 +121,11 @@ await fastify.register(rateLimit, {
     };
   }
 });
+
+// v1.90.0 (Phase 28B) — HSTS on HTTPS responses + a 308 for explicit plain
+// HTTP, with the status probes exempt (Google's edge intercepts /healthz and
+// platform health checks must never be redirected).
+registerSecurityHeaders(fastify);
 
 // v1.39.0 — CORS for the marketing site only: the web onboarding surface and
 // the public health probe. Every other route stays closed to browsers.
@@ -132,15 +146,9 @@ fastify.addHook('onRequest', async (request, reply) => {
   if (request.method === 'OPTIONS') reply.code(204).send();
 });
 
-// Attach Sentinel Error Handler
-fastify.setErrorHandler(async (error, request, reply) => {
-  fastify.log.error(error);
-  await logSystemError(supabase, error, request.raw.url || request.routerPath || 'unknown');
-  reply.status(error.statusCode || 500).send({
-    error: error.name || 'InternalServerError',
-    message: error.message || 'An unexpected error occurred.'
-  });
-});
+// v1.90.0 (Phase 28B) — the Sentinel error handler is installed right after the
+// Supabase client below (it needs the client; the client needs the module body
+// to finish). Behaviour: full detail to logs, ONE generic line to the caller.
 
 // Enable raw body string retention for HMAC webhooks
 fastify.addContentTypeParser('application/json', { parseAs: 'buffer' }, (req, body, done) => {
@@ -158,6 +166,10 @@ fastify.addContentTypeParser('application/json', { parseAs: 'buffer' }, (req, bo
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
 const supabase = createResilientClient(supabaseUrl, supabaseServiceKey);
+
+// Attach Sentinel Error Handler (v1.90.0 — generic client copy, full detail in
+// fastify.log + error_logs; statusCode/name preserved for callers that branch).
+fastify.setErrorHandler(buildErrorHandler({ supabase, log: fastify.log, logSystemError }));
 
 // Memory Stores with 24-hour expiry cleanup
 const onboardingStore = new Map(); 

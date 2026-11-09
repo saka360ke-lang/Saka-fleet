@@ -1,6 +1,13 @@
 {
-  "latest": "1.89.2",
+  "latest": "1.90.0",
   "entries": [
+    {
+      "version": "1.90.0",
+      "date": "2026-11-09",
+      "title": "Hardened at the edge",
+      "preview": "Safer spreadsheets, no internal errors on screen, HTTPS everywhere and fair rate limits for every account.",
+      "summary": "Behind-the-scenes hardening with four things you can feel. First: exported spreadsheets can no longer run a hidden formula - an expense note or label that starts with =, +, - or @ is exported as plain text, while real numbers stay numbers and still add up. Second: if something goes wrong on our side, the screen now shows one calm line instead of a technical message, and the full detail goes straight to the engineering log where it belongs. Third: the dashboard and API now require HTTPS end to end and tell browsers to remember it, so nobody can be silently downgraded to plain HTTP. Fourth: sign-in codes now reuse the same cross-site protection every other dashboard action already had. And behind all of it, rate limits are now counted per person instead of per shared network address, so one busy account can never lock the sign-in page for everyone else. Nothing you type changes - every flow, report and dashboard page behaves exactly as before."
+    },
     {
       "version": "1.89.2",
       "date": "2026-11-09",
