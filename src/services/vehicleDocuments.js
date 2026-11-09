@@ -303,8 +303,20 @@ export async function vaultVehicleDocument({
  * missing, so the query retries WITHOUT the filter (rule 50) instead of
  * returning nothing.
  */
-export async function listVehicleDocuments(providedSupabase, { vehicleId = null, vehicleIds = [], limit = 20, currentOnly = true } = {}) {
-  const supabase = getClient(providedSupabase);
+export async function listVehicleDocuments(providedSupabase, options = {}) {
+  // v1.87.4 — tolerate the ONE-OBJECT call shape `{ supabase, vehicleId, … }`.
+  // A caller once passed the whole bag as the client, so no scope reached the
+  // query and the list answered [] silently (the vehicle page then rendered an
+  // empty "Stored files" section). A real client always exposes `.from`; an
+  // options bag never does, so this unwrap can never misfire.
+  const isOptionsBag = providedSupabase
+    && typeof providedSupabase === 'object'
+    && providedSupabase.supabase
+    && typeof providedSupabase.from !== 'function';
+  const client = isOptionsBag ? providedSupabase.supabase : providedSupabase;
+  const opts = isOptionsBag ? providedSupabase : (options || {});
+  const { vehicleId = null, vehicleIds = [], limit = 20, currentOnly = true } = opts;
+  const supabase = getClient(client);
   if (!supabase) return [];
   const ids = (vehicleIds || []).filter(Boolean);
   if (!vehicleId && !ids.length) return [];

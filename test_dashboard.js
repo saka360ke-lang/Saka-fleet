@@ -2500,6 +2500,19 @@ async function run() {
     loadDocuments: async () => p23Docs.filter((doc) => doc.vehicle_id === 'v-a')
   });
   check(docPageData.ok === true && docPageData.storedDocuments.length === 2, 'buildVehiclePage attaches the stored documents (additive, never hides the page)');
+  // v1.87.4 — the DEFAULT loader must be called with the real
+  // `listVehicleDocuments(client, options)` convention. No loadDocuments is
+  // injected here, so the convention itself is under test (live 2026-11-09: the
+  // one-object call shipped an empty "Stored files" section on every vehicle page).
+  const docPageReal = await buildVehiclePage({
+    supabase: createMockSupabase({ ...recordsSeed(), vehicle_documents: p23Docs.map((doc) => ({ ...doc })) }).client,
+    ownerId: PROFILE.id,
+    vehicleId: 'v-a',
+    countryInfo: KE_INFO,
+    loadDetail: async () => detail
+  });
+  check(docPageReal.ok === true && docPageReal.storedDocuments.length === 2, 'the default loader runs the real listVehicleDocuments(supabase, options) query (v1.87.4)');
+  check(docPageReal.replacedCount === 0 && Array.isArray(docPageReal.replacedDocuments), 'the replaced-file history fields ride the page (v1.87.4)');
   const docPageHtml = renderVehiclePage({ data: { ...detail, vehicle: { ...detail.vehicle, plate: 'KDA 123A' }, storedDocuments: p23Docs }, emailMasked: 'a***a@example.com' });
   check(docPageHtml.includes('Stored files') && docPageHtml.includes('Insurance certificate'), 'the vehicle page renders the Stored files section');
   check(docPageHtml.includes('href="/d/documents/doc-own"') && docPageHtml.includes('action="/d/documents/doc-own/delete"'), 'each file links to its signed view and a delete form');

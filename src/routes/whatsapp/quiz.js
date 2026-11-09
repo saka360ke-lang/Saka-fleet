@@ -114,6 +114,37 @@ async function buildPausedQuizReply(quizState, { messageText, intent, quizCtx, t
 
 
 /**
+ * v1.87.4 — WHICH quiz a receipt photo starts. Pure so the rule is provable offline.
+ *
+ * Live 2026-11-09 walkthrough: the old condition required the AI classifier to
+ * return `LOG_EXPENSE` for a bare receipt photo. It did not, so the vaulted
+ * receipt id (`receiptPrefill`) never rode the draft; Saka answered narratively
+ * ("type fuel 3,000 KES at [litres] L"), the user's typed reply opened a FRESH
+ * expense quiz, and the confirmed expense saved with `receipt_id = NULL` — the
+ * records page could not link the receipt image.
+ *
+ * Contract:
+ *  - A freshly VAULTED receipt (`hasReceiptPrefill`) ALWAYS opens the expense
+ *    quiz, whatever intent the classifier chose — receipts confirm before any
+ *    write (v1.49.3) and the prefill is the only carrier of the durable link.
+ *  - No prefill (duplicate / unreadable / Free-tier dedupe) keeps the legacy
+ *    rule: an explicit expense intent still starts the quiz, anything else does
+ *    not — a duplicate receipt must never silently open a second draft.
+ *  - Non-receipt media keeps whatever the normal detector decided.
+ */
+export function receiptQuizStartFor({
+  hasMedia = false,
+  isReceiptDocument = false,
+  intent = null,
+  quizStartFlow = null,
+  hasReceiptPrefill = false
+} = {}) {
+  if (!hasMedia || !isReceiptDocument) return quizStartFlow || null;
+  if (hasReceiptPrefill) return 'log_expense';
+  return intent === 'LOG_EXPENSE' ? 'log_expense' : (quizStartFlow || null);
+}
+
+/**
  * Quiz <-> Conversation arbitration + the quiz turn (moved verbatim from messages.js
  * L1856-2002). Returns `{ quizTurn, earlyHandled, earlyReply, activeQuiz }`:
  *   - earlyHandled:true  the turn was answered without handing it to the engine

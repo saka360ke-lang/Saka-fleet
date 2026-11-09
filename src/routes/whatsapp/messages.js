@@ -133,7 +133,7 @@ import {
   handleEmailUpdateStartTurn,
   persistCapturedCompliance
 } from './pending.js';
-import { arbitrateQuizTurn, finalizeQuizOutcome, renderRoleActions } from './quiz.js';
+import { arbitrateQuizTurn, finalizeQuizOutcome, renderRoleActions, receiptQuizStartFor } from './quiz.js';
 // v1.84.0 (Phase 23) — a vaulted compliance document links to the row it proved.
 import { linkSavedComplianceDocument } from '../../services/vehicleDocuments.js';
 // v1.69.0 — Phase 5B-4: the final leaf modules (commands + admin + conversation + support).
@@ -1285,9 +1285,17 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         // Receipt photos always confirm before any write — a paper trail is
         // never silently auto-logged, even when every number is readable.
         const isReceiptDocument = ocrKind === 'receipt_fuel' || ocrKind === 'receipt_general';
-        const receiptQuizStart = (mediaObj && isReceiptDocument && intent === 'LOG_EXPENSE')
-          ? 'log_expense'
-          : quizStartFlow;
+        // v1.87.4 — a FRESHLY VAULTED receipt always opens its confirmation quiz
+        // (whatever the classifier called the photo turn), so the vaulted id
+        // rides the engine-only prefill and the saved expense carries the
+        // durable receipt link. Duplicates/unreadable keep the legacy rule.
+        const receiptQuizStart = receiptQuizStartFor({
+          hasMedia: Boolean(mediaObj),
+          isReceiptDocument,
+          intent,
+          quizStartFlow,
+          hasReceiptPrefill: Boolean(receiptPrefill?.receipt_id)
+        });
 
         // --- NARRATIVE INTAKE (v1.34.0) ---
         // One free-text sentence ("spent 5500 on diesel yesterday at Shell,

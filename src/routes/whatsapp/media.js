@@ -475,6 +475,11 @@ export async function resolveReceiptVault({
   // driver licences stay out of scope (vehicle-only ledger, §40.2). Best-effort
   // by design: the vault can never fail the turn.
   let documentPrefill = null;
+  // TODO(v1.87.5 — decision D2): a compliance document uploaded BEFORE the
+  // vehicle exists (e.g. the insurance certificate sent during registration) is
+  // discarded here — targetVehicle is null, so nothing is vaulted and the file
+  // can never be linked later. Stash the bytes in session memory and replay
+  // them after vehicle_registration completes (live 2026-11-09 walkthrough).
   if (mediaObj?.id && supabaseClient && !ocrPaused && ocrResult?.buffer && isVaultableDocumentFamily(ocrKind)) {
     try {
       const targetVehicle = currentActiveVehicle

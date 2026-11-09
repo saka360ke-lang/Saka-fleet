@@ -1,5 +1,6 @@
 import { parseFlexibleDate } from './dateParser.js';
 import { classifyOcrDocument } from './ocrService.js';
+import { LEGAL_RECEIPT_MARKER_RE, getOcrCountryProfile } from '../data/ocrCountryProfiles.js';
 import {
   parseOcrAmount,
   detectCurrencyFromText,
@@ -90,12 +91,22 @@ function detectCurrency(text) {
 
 function amountFrom(text, countryCode = 'GLOBAL') {
   const rows = lines(text);
+  // v1.87.4 — a country profile may resolve a fiscal grouping the universal
+  // parser refuses by design (KE e-TIMS prints "3.000.00" for 3000.00). The
+  // profile is resolved from the caller's country only (rule 36): GLOBAL
+  // documents keep the exact behaviour they had.
+  const profile = getOcrCountryProfile(String(countryCode || 'GLOBAL').toUpperCase());
+  const parseToken = (token) => {
+    const universal = parseOcrAmount(token, { countryCode });
+    if (universal !== null && universal > 0) return universal;
+    return profile?.amount?.parse ? profile.amount.parse(token) : null;
+  };
   const totalLine = rows.find((row) => /\b(grand\s*total|total|amount\s*due|balance\s*due|amount)\b/i.test(row));
   if (totalLine) {
     // v1.54.1 — grouped money tokens in EITHER convention (1,234.56 | 1.234,56).
     const match = totalLine.match(/([A-Z]{3})?\s*(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)/);
     if (match) {
-      const value = parseOcrAmount(match[2], { countryCode });
+      const value = parseToken(match[2]);
       if (value !== null && value > 0) return value;
     }
     // v1.32.1 — bare "TOTAL" label with the figure on the next line.
@@ -104,17 +115,27 @@ function amountFrom(text, countryCode = 'GLOBAL') {
       const row = rows[idx + k];
       if (/%|\bTAX\b|\bNET\b/i.test(row)) continue;
       const next = row.match(/^(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)$/);
-      const value = next ? parseOcrAmount(next[1], { countryCode }) : null;
+      const value = next ? parseToken(next[1]) : null;
       if (value !== null && value > 0) return value;
     }
   }
   // v1.32.1 — address / PIN / phone / serial numbers are never money.
-  const all = [...String(text || '').matchAll(/([A-Z]{3})?\s*([\d][\d.,]{3,}(?:[.,]\d{1,2})?)/g)]
+  // v1.87.4 — the exclusion inspects the WHOLE line the token sits on (the old
+  // 24-char window missed a P.O. Box split across an OCR line break and filed a
+  // KES 3,000 fuel receipt as 11,823 — the box number). A bare 4–6 digit
+  // integer is also never an amount when the document carries a labelled TOTAL
+  // (it is a reference/invoice number).
+  const raw = String(text || '');
+  const all = [...raw.matchAll(/([A-Z]{3})?\s*([\d][\d.,]{3,}(?:[.,]\d{1,2})?)/g)]
     .filter((match) => {
-      const context = String(text || '').slice(Math.max(0, match.index - 24), match.index);
-      return !/(p\.?\s*o\.?\s*box|pin\b|phone|serial|invoice\s*(?:no|number)|receipt\s*(?:no|number)|h\.?\s*p\.?)/i.test(context);
+      const lineStart = raw.lastIndexOf('\n', match.index - 1) + 1;
+      const lineEndIdx = raw.indexOf('\n', match.index);
+      const context = raw.slice(lineStart, lineEndIdx === -1 ? raw.length : lineEndIdx);
+      if (/(p\.?\s*o\.?\s*box|\bbox\b|pin\b|phone|serial|invoice\s*(?:no|number)|receipt\s*(?:no|number)|h\.?\s*p\.?)/i.test(context)) return false;
+      if (totalLine && /^\d{4,6}$/.test(match[2])) return false;
+      return true;
     })
-    .map((match) => parseOcrAmount(match[2], { countryCode })).filter((value) => value !== null && value > 0);
+    .map((match) => parseToken(match[2])).filter((value) => value !== null && value > 0);
   return all.length ? Math.max(...all) : null;
 }
 
@@ -201,7 +222,10 @@ function parseRoadLicence(text, countryCode) {
 function parseReceipt(text, family, countryCode) {
   const fields = {};
   const rows = lines(text);
-  const vendorLine = rows.find((row) => row.length >= 3 && row.length <= 60 && !/^\d+$/.test(row));
+  // v1.87.4 — a legal-receipt marker line ("***START OF LEGAL RECEIPT***",
+  // "FISCAL RECEIPT") is never the merchant name (live 2026-11-09: the vendor
+  // field read "KE ***START OF LEGAL RECEIPT →").
+  const vendorLine = rows.find((row) => row.length >= 3 && row.length <= 60 && !/^\d+$/.test(row) && !LEGAL_RECEIPT_MARKER_RE.test(row));
   pushField(fields, 'vendor', vendorLine || null, 0.7);
   pushField(fields, 'amount', amountFrom(text, countryCode), 0.88);
   pushField(fields, 'currency', detectCurrency(text), 0.85);

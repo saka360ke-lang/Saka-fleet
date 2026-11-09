@@ -593,6 +593,63 @@ async function run() {
   check(interactiveCallAt > 0 && mediaEnvelopeAt > interactiveCallAt, 'a template button tap resolves before the media envelope (v1.73.4)');
   check(whatsappSource.includes("'/webhook/whatsapp/interactive'"), 'an unrecognised interactive shape is logged to error_logs (v1.73.4)');
 
+  // v1.87.4 — Kenya e-TIMS money: a KES 3,000 diesel receipt was stored with the
+  // P.O. Box number (11,823) as its amount and the lens named the legal-receipt
+  // marker as the vendor (live 2026-11-09 walkthrough). The KE profile resolves
+  // the fiscal "3.000.00" grouping; the GLOBAL path must never leak it (rule 36).
+  {
+    const astrol = [
+      'KE ***START OF LEGAL RECEIPT \u2192',
+      'ASTROL PETROLEUM CO.LTD',
+      'P.O. BOX 11823-00400',
+      'NAIROBI',
+      'RIDGEWAYS BRANCH',
+      'PIN:P051141264M',
+      'Buyer PIN:P052358408G',
+      'KRA/ETI/181021/MINI/017',
+      'FISCAL RECEIPT',
+      'DIESEL',
+      '3.000.00x 1.00',
+      '3.000.00B',
+      'TOTAL',
+      '3.000.00',
+      'TOTAL B- 8.00%',
+      '3.000.00',
+      'NET B',
+      '2.777.78',
+      'TOTAL TAX B',
+      '222.22',
+      'CASH',
+      '3.000.00',
+      'ITEMS NUMBER',
+      '1',
+      'Control Unit Info',
+      'Date: 07/11/2026',
+      'Time:12:04:44',
+      'CU Serial No:',
+      'KRAMW043202308218505',
+      'CU Invoice Number:',
+      '0432185050000120307',
+      'RECEIPT NUMBER:',
+      'DATE:07/11/2026',
+      '0978/00083',
+      'TIME:12:04:44',
+      '\u2190 END OF LEGAL RECEIPT***'
+    ].join('\n');
+    const { parseKeFiscalAmount } = await import('./src/data/ocrCountryProfiles.js');
+    check(parseKeFiscalAmount('3.000.00') === 3000 && parseKeFiscalAmount('2.777.78') === 2777.78, 'the KE fiscal grouping resolves dot-thousands + dot-decimals (v1.87.4)');
+    check(parseKeFiscalAmount('3.000.00.00') === null && parseKeFiscalAmount('') === null, 'a malformed fiscal token is never guessed (v1.87.4)');
+    const keHints = extractDocumentHints(astrol, 'receipt_fuel', { countryCode: 'KE' });
+    check(keHints.amount === 3000, 'the labelled TOTAL reads KES 3,000 — never the P.O. Box 11,823 (v1.87.4)');
+    const keLens = parseDocumentFields(astrol, { countryCode: 'KE' });
+    check(keLens.fields.amount?.value === 3000, 'the Document Lens amount is 3,000 for the live receipt (v1.87.4)');
+    check(keLens.fields.vendor?.value === 'ASTROL PETROLEUM CO.LTD', 'the vendor is the merchant, never the legal-receipt marker (v1.87.4)');
+    const globalMixed = parseDocumentFields('DIESEL\nTOTAL\n3.000.00', { countryCode: 'GLOBAL' });
+    check(globalMixed.fields.amount === undefined, 'the fiscal grouping never leaks into the GLOBAL path (rule 36)');
+    const globalPlain = parseDocumentFields('DIESEL\nTOTAL\n1250.50', { countryCode: 'GLOBAL' });
+    check(globalPlain.fields.amount?.value === 1250.5, 'a plain GLOBAL total is unchanged (1250.50)');
+  }
+
   global.fetch = realFetch;
   delete process.env.GCP_VISION_API_KEY;
   console.log(`\n🎉 ALL OCR FLOW TESTS PASSED (${passed} assertions).`);

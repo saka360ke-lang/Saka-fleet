@@ -117,6 +117,11 @@ check(listed.length === 2 && listed[0].id === 'd-new', 'only this vehicle, newes
 const fleetWide = await listVehicleDocuments(listMock.client, { vehicleIds: ['v1', 'v2'], limit: 10 });
 check(fleetWide.length === 3, 'the owner list spans the whole fleet');
 check((await listVehicleDocuments(listMock.client, {})).length === 0, 'no scope never leaks rows');
+// v1.87.4 — the ONE-OBJECT call shape is tolerated: a caller once passed the
+// whole options bag as the client, so the list answered [] and the vehicle page
+// silently showed no stored files (live 2026-11-09 walkthrough).
+const bagListed = await listVehicleDocuments({ supabase: listMock.client, vehicleId: 'v1', limit: 10 });
+check(bagListed.length === 2 && bagListed[0].id === 'd-new', 'an options bag { supabase, vehicleId } is unwrapped, never silently empty (v1.87.4)');
 
 console.log('--- Test 7: delete is owner-scoped, removes the object and audits ---');
 const delMock = createMockSupabase({
@@ -252,7 +257,7 @@ check(cleanupSource.includes("'vehicle_documents', 'vehicle_id'") && cleanupSour
 const indexSource = fs.readFileSync('index.js', 'utf8');
 check(indexSource.includes('ensureVehicleDocumentsTable'), 'the boot ensure is wired in index.js');
 const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-check(pkg.version === '1.87.3', 'package.json is 1.87.3');
+check(pkg.version === '1.87.4', 'package.json is 1.87.4');
 check(Boolean(pkg.scripts['migrate:vehicle-documents']), 'npm run migrate:vehicle-documents exists');
 const migrationSource = fs.readFileSync('scripts/run_vehicle_documents_migration.js', 'utf8');
 check(migrationSource.includes('VEHICLE_DOCUMENTS_SQL'), 'the migration applies the shared DDL');

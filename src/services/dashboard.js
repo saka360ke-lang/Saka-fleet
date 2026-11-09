@@ -786,10 +786,14 @@ export async function buildVehiclePage({
       let storedDocuments = [];
       let supersededDocuments = [];
       try {
-        storedDocuments = await loadDocuments({ supabase, vehicleId, limit: 24 });
+        // v1.87.4 — `listVehicleDocuments(client, options)` takes the CLIENT as
+        // its first argument. The one-object call passed the options bag as the
+        // client, so the query answered [] on every vehicle page (live 2026-11-09
+        // walkthrough: a stored logbook never appeared under "Stored files").
+        storedDocuments = await loadDocuments(supabase, { vehicleId, limit: 24 });
         // The history count always rides the page (the toggle names it); the
         // replaced rows themselves are only listed when asked.
-        const all = await loadDocuments({ supabase, vehicleId, limit: 40, currentOnly: false });
+        const all = await loadDocuments(supabase, { vehicleId, limit: 40, currentOnly: false });
         supersededDocuments = all.filter((row) => Boolean(row.superseded_at));
       } catch { storedDocuments = []; }
       // The count is always computed (the toggle names it); the list only
@@ -3514,9 +3518,12 @@ export async function loadOwnerTransfers({ supabase, vehicles = [], limit = 12 }
   const vehicleIds = (vehicles || []).map((vehicle) => vehicle.id).filter(Boolean);
   if (!supabase || !vehicleIds.length) return [];
   try {
+    // v1.87.4 — `created_at` does not exist on passbook_transfers (live schema:
+    // initiated_at / completed_at). Selecting it made the whole read fail and
+    // the transfer page silently list nothing (error_logs 2026-11-09).
     const { data, error } = await supabase
       .from('passbook_transfers')
-      .select('id, vehicle_id, status, to_owner_phone, to_owner_email, is_free_transfer, fee_amount, fee_currency, initiated_at, completed_at, created_at')
+      .select('id, vehicle_id, status, to_owner_phone, to_owner_email, is_free_transfer, fee_amount, fee_currency, initiated_at, completed_at')
       .in('vehicle_id', vehicleIds)
       .order('initiated_at', { ascending: false })
       .limit(limit);
@@ -3537,7 +3544,7 @@ export async function loadOwnerTransfers({ supabase, vehicles = [], limit = 12 }
       isFreeTransfer: row.is_free_transfer !== false,
       feeAmount: row.fee_amount === null || row.fee_amount === undefined ? null : Number(row.fee_amount),
       feeCurrency: row.fee_currency || 'USD',
-      initiatedAt: row.initiated_at || row.created_at || null,
+      initiatedAt: row.initiated_at || null,
       completedAt: row.completed_at || null
     }));
   } catch (err) {

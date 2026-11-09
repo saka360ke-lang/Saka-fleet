@@ -23,6 +23,27 @@ function normalizeKeNumber(raw) {
 }
 
 /**
+ * v1.87.4 — Kenya e-TIMS money is printed as `3.000.00` (dot thousands + dot
+ * decimal) and the universal `parseOcrAmount` deliberately refuses mixed
+ * separators ("never guesses noise"). A labelled TOTAL/CASH line therefore
+ * parsed to null, and the Document Lens fallback filed the merchant's P.O. BOX
+ * number as the amount (live 2026-11-09: a KES 3,000 diesel receipt stored as
+ * KES 11,823). This KE-only reader resolves the fiscal grouping: every dot
+ * except the LAST one is a thousands separator when the last group is exactly
+ * two digits. It is registered on the KE profile; the GLOBAL path never sees it
+ * (rule 36).
+ */
+export function parseKeFiscalAmount(raw) {
+  const token = String(raw ?? '').replace(/\s+/g, '');
+  if (!token) return null;
+  const universal = parseOcrAmount(token, { countryCode: 'KE' });
+  if (universal !== null && universal > 0) return universal;
+  if (!/^\d{1,3}(?:\.\d{3})+(?:\.\d{2})$/.test(token)) return null;
+  const value = Number(token.replace(/\.(?=\d{3}(?:\.|$))/g, ''));
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/**
  * Kenya e-TIMS profile: merchant line after the legal marker, TOTAL/CASH
  * amount (the figure often sits on the FOLLOWING line), and litres from a
  * product + "qty x unit-price" pair. VAT breakdown lines are never amounts.
@@ -44,12 +65,16 @@ function extractKenyaEtimesHints(raw, rows) {
     const line = lines[i];
     if (!/\b(?:total|cash|amount)\b/i.test(line)) continue;
     if (/%|\bTAX\b|\bNET\b|\bBALANCE\b/i.test(line)) continue;
-    const sameLine = parseOcrAmount((line.match(/(\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|\d+[.,]\d{1,2})/) || [])[1], { countryCode: 'KE' });
+    // v1.87.4 — the fiscal "3.000.00" grouping resolves through the KE reader;
+    // an address/PIN/reference line never matches the TOTAL label above, so a
+    // P.O. Box number can no longer become the amount.
+    const sameLine = parseKeFiscalAmount((line.match(/(\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|\d+[.,]\d{1,2})/) || [])[1]);
     if (sameLine !== null && sameLine > 0) { hints.amount = sameLine; break; }
     for (let k = 1; k <= 2 && i + k < lines.length; k += 1) {
       const next = lines[i + k];
       if (!next || /%|\bTAX\b|\bNET\b/i.test(next)) continue;
-      const value = normalizeKeNumber((next.match(/^(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+\.\d{1,2})$/) || [])[1]);
+      const nextToken = (next.match(/^(\d{1,3}(?:\.\d{3})+(?:\.\d{2})?|\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+\.\d{1,2})$/) || [])[1];
+      const value = parseKeFiscalAmount(nextToken);
       if (value !== null && value > 0) { hints.amount = value; break; }
     }
     if (hints.amount) break;
@@ -127,6 +152,8 @@ export const KE_OCR_PROFILE = Object.freeze({
   id: 'KE',
   label: 'Kenya',
   etimes: { isText: isKenyaEtimesText, extractHints: extractKenyaEtimesHints },
+  // v1.87.4 — the fiscal money reader any parser may delegate to (lens included).
+  amount: { parse: parseKeFiscalAmount },
   logbook: { extractHints: extractNtsaParticularsHints }
 });
 

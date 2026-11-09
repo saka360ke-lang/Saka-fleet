@@ -16,6 +16,8 @@ import {
   startQuiz,
   QUIZ_MAX_AGE_MINUTES
 } from './src/services/quizEngine.js';
+// v1.87.4 — the receipt auto-quiz decision is a pure, intent-independent helper.
+import { receiptQuizStartFor } from './src/routes/whatsapp/quiz.js';
 import { getRecentChatHistory, CHAT_HISTORY_MAX_AGE_MINUTES, CHAT_HISTORY_MAX_MESSAGES } from './src/services/chatHistory.js';
 
 /**
@@ -750,6 +752,22 @@ async function run() {
     if (originalKeys.OPENAI_API_KEY !== undefined) process.env.OPENAI_API_KEY = originalKeys.OPENAI_API_KEY;
     else delete process.env.OPENAI_API_KEY;
   }
+
+  // v1.87.4 — the receipt auto-quiz decision (live 2026-11-09 walkthrough):
+  // the old intent-gated condition never fired for a bare receipt photo, so the
+  // vaulted receipt id never rode the draft and the expense saved unlinked.
+  // BEFORE: a receipt with prefill + any non-LOG_EXPENSE intent → no quiz.
+  // AFTER: a freshly vaulted receipt ALWAYS opens the expense quiz; duplicates
+  // (no prefill) keep the legacy rule so a re-send can never open a second draft.
+  assert(receiptQuizStartFor({ hasMedia: true, isReceiptDocument: true, intent: 'GENERAL_CHAT', quizStartFlow: null, hasReceiptPrefill: true }) === 'log_expense', 'a vaulted receipt opens the expense quiz whatever the classifier said (v1.87.4)');
+  assert(receiptQuizStartFor({ hasMedia: true, isReceiptDocument: true, intent: 'LOG_EXPENSE', quizStartFlow: 'log_expense', hasReceiptPrefill: false }) === 'log_expense', 'an explicit expense intent still starts the quiz without a prefill (v1.87.4)');
+  assert(receiptQuizStartFor({ hasMedia: true, isReceiptDocument: true, intent: 'GENERAL_CHAT', quizStartFlow: null, hasReceiptPrefill: false }) === null, 'a duplicate/unvaulted receipt never opens a second draft (v1.87.4)');
+  assert(receiptQuizStartFor({ hasMedia: true, isReceiptDocument: false, intent: 'LOG_EXPENSE', quizStartFlow: null, hasReceiptPrefill: true }) === null, 'a non-receipt document keeps the normal detector (v1.87.4)');
+  assert(receiptQuizStartFor({ hasMedia: false, isReceiptDocument: false, intent: 'SET_REMINDER', quizStartFlow: 'set_reminder' }) === 'set_reminder', 'text turns keep their detected flow untouched (v1.87.4)');
+  const quizRouteSource = fs.readFileSync('./src/routes/whatsapp/quiz.js', 'utf8');
+  assert(quizRouteSource.includes("startFlow: receiptQuizStart") && quizRouteSource.includes('prefill: receiptPrefill'), 'the receipt prefill still rides the quiz start (v1.87.4)');
+  const messagesSource = fs.readFileSync('./src/routes/whatsapp/messages.js', 'utf8');
+  assert(messagesSource.includes('receiptQuizStartFor({') && messagesSource.includes('hasReceiptPrefill: Boolean(receiptPrefill?.receipt_id)'), 'messages.js resolves the receipt quiz through the pure helper with the prefill fact (v1.87.4)');
 
   console.log(`\n🎉 ALL QUIZ ENGINE TESTS PASSED (${passed} assertions).`);
 }

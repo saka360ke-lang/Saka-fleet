@@ -1,6 +1,13 @@
 {
-  "latest": "1.87.3",
+  "latest": "1.87.4",
   "entries": [
+    {
+      "version": "1.87.4",
+      "date": "2026-11-09",
+      "title": "Your stored files and receipts, where you can see them",
+      "preview": "Vehicle pages now list every stored logbook, insurance and inspection file — and receipts stay linked to expenses.",
+      "summary": "Two real bugs from a live walkthrough, both fixed at the root. First: send Saka a logbook or insurance photo and the file was safely stored — but your vehicle page never showed it, because the page asked for the list in a shape the storage service did not recognise and quietly got nothing back. The page now asks correctly, and a new safety net means that mistake can never be silent again: every vehicle page lists its current files with View and Delete. Second: send a fuel receipt photo and, once you confirmed the expense, the record could not show you the receipt picture. Two things had gone wrong: the confirmation quiz never started from the photo itself (Saka asked you to type the details instead), so the saved expense lost its link to the receipt; and a Kenyan fiscal receipt's money format was misread, so the receipt's amount was recorded as the shop's P.O. Box number instead of the total. Now a receipt photo always opens the confirmation card itself, the saved expense carries its receipt link, and Kenyan fiscal amounts read correctly (a plain GLOBAL receipt behaves exactly as before). The passbook transfer page also stopped silently listing nothing. We repaired the two walkthrough records too: the fuel expense now shows its receipt, and the insurance certificate was re-fetched and stored with its dates. One known gap, next release: a document sent before your first vehicle exists is still not kept."
+    },
     {
       "version": "1.87.3",
       "date": "2026-11-09",
