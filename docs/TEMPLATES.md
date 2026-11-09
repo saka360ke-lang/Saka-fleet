@@ -185,6 +185,15 @@ Each entry: kind | env knob | audience | recommended category | variables
           immediate one-shot alert; every later item is stamped but not sent,
           and this digest fires once at T+3 and once at T+7 of the episode
           (three messages maximum per episode regardless of item count).
+    button (v1.92.1): the approved template carries a Quick Reply button
+          (text "Reminders", Custom type), confirmed in Business Manager
+          2026-11-09. Quick Reply buttons take NO parameters, so the send emits
+          { type: 'button', sub_type: 'quick_reply', index: '0' } with no
+          parameters — the v1.87.3 131008 rejection ("button requires a
+          parameter") can never fire here. A tap returns the button text as a
+          user message; the inbound `button_reply` path routes it to the
+          deterministic reminders list (title alias "Reminders"/"Remind me" ->
+          "reminders"). No extra environment knob is needed.
 
 ------------------------------------------------------------
 2. Submission workflow (Meta Business Manager)

@@ -11,6 +11,7 @@ import {
   templateNameForKind,
   templateVariablesForKind,
   templateButtonsForKind,
+  templateButtonState,
   resolveProactiveMode
 } from './src/services/proactiveTemplates.js';
 import { sendWhatsAppText } from './src/services/metaMessenger.js';
@@ -89,6 +90,51 @@ try {
 } finally {
   delete process.env.META_TPL_AUTH_OTP;
   global.fetch = originalFetch;
+}
+
+// v1.92.1 — the overdue_digest template carries a CONFIRMED Quick Reply button
+// (text "Reminders", Custom type, verified in Business Manager 2026-11-09). A
+// Quick Reply takes NO parameters; emitting the parameter-free component is
+// exactly what prevents the v1.87.3 131008 rejection.
+console.log('--- 2c. overdue_digest Quick Reply button (v1.92.1) ---');
+const DIGEST_VARS = { count: '3', worst_item: 'Insurance (KDA 123A)', worst_days: '5' };
+const digestButtonState = templateButtonState('overdue_digest', DIGEST_VARS);
+check(digestButtonState.status === 'ready' && digestButtonState.buttons.length === 1, 'the digest declares exactly one button component (v1.92.1)');
+check(digestButtonState.buttons[0].sub_type === 'quick_reply' && digestButtonState.buttons[0].index === '0', 'the button is the confirmed Quick Reply at index 0 (v1.92.1)');
+check(!('parameters' in digestButtonState.buttons[0]), 'the Quick Reply button carries NO parameters (no 131008) (v1.92.1)');
+check(PROACTIVE_TEMPLATE_KINDS.overdue_digest.buttons.length === 1 && PROACTIVE_TEMPLATE_KINDS.overdue_digest.buttons[0].subType === 'quick_reply', "the registry pins the operator's confirmed button type (v1.92.1)");
+
+process.env.META_TPL_OVERDUE_DIGEST = 'saka_overdue_digest';
+const digestMode = resolveProactiveMode({ kind: 'overdue_digest', templateVars: DIGEST_VARS });
+check(digestMode.mode === 'template' && digestMode.templateName === 'saka_overdue_digest' && digestMode.variables.length === 3, 'the digest routes to the approved template with its three body variables (v1.92.1)');
+
+const digestPayloads = [];
+const originalFetchDigest = global.fetch;
+global.fetch = async (_url, options) => { digestPayloads.push(JSON.parse(options.body)); return { ok: true }; };
+try {
+  const digestSent = await sendWhatsAppText('+254700000098', 'fallback digest text', {
+    kind: 'overdue_digest',
+    templateVars: DIGEST_VARS,
+    env: { META_PHONE_NUMBER_ID: 'phone-id', META_WHATSAPP_TOKEN: 'token' }
+  });
+  const digestComponents = digestPayloads[0]?.template?.components || [];
+  check(digestSent === true && digestPayloads[0]?.type === 'template' && digestPayloads[0].template.name === 'saka_overdue_digest', 'the digest send rides the approved template (v1.92.1)');
+  check(digestComponents[0]?.type === 'body' && digestComponents[0].parameters.map((p) => p.text).join('|') === '3|Insurance (KDA 123A)|5', 'the body carries count + worst item + worst days in order (v1.92.1)');
+  check(digestComponents.length === 2 && digestComponents[1]?.sub_type === 'quick_reply' && !('parameters' in digestComponents[1]), 'the wire payload carries the Quick Reply button WITHOUT parameters (v1.92.1)');
+
+  // Body-only kinds must stay byte-identical (one body component, no buttons).
+  process.env.META_TPL_DEPLOY_LIVE = 'saka_deploy_live';
+  digestPayloads.length = 0;
+  await sendWhatsAppText('+254700000097', 'fallback live text', {
+    kind: 'deploy_live',
+    templateVars: { version: 'v1.92.1', commit: 'saka-fleet-00389-abc' },
+    env: { META_PHONE_NUMBER_ID: 'phone-id', META_WHATSAPP_TOKEN: 'token' }
+  });
+  check(digestPayloads[0]?.template?.components?.length === 1 && digestPayloads[0].template.components[0].type === 'body', 'a body-only kind (deploy_live) keeps the unchanged one-component payload (v1.92.1)');
+  delete process.env.META_TPL_DEPLOY_LIVE;
+} finally {
+  delete process.env.META_TPL_OVERDUE_DIGEST;
+  global.fetch = originalFetchDigest;
 }
 
 console.log('--- 3. template name resolution ---');

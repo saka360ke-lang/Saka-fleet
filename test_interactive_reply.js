@@ -1,6 +1,6 @@
 import assert from 'node:assert';
 import fs from 'node:fs';
-import { parseInteractiveReply, BUTTON_PAYLOAD_PHRASES } from './src/routes/whatsapp/interactive.js';
+import { parseInteractiveReply, BUTTON_PAYLOAD_PHRASES, BUTTON_TITLE_PHRASES } from './src/routes/whatsapp/interactive.js';
 
 /**
  * Saka Fleet — inbound interactive replies (v1.73.4, Phase 12B, section 198B).
@@ -46,6 +46,15 @@ check(parseInteractiveReply(msg({ type: 'button_reply', button_reply: { id: 'mys
 const spaced = parseInteractiveReply(msg({ type: 'button_reply', button_reply: { id: '  remind_me  ', title: 'Remind me' } }));
 check(spaced?.text === 'reminders' && spaced?.payload === 'remind_me', 'the payload id is trimmed before lookup');
 check(parseInteractiveReply(msg({ type: 'button_reply' })) === null, 'button_reply without its reply object -> null');
+
+// v1.92.1 — the saka_overdue_digest Quick Reply ("Reminders", Custom type): Meta
+// may hand back a generated id, so the button's own TITLE must reach the
+// deterministic reminders LIST (never the remind-me quiz).
+check(JSON.stringify(BUTTON_TITLE_PHRASES) === JSON.stringify({ reminders: 'reminders', reminder: 'reminders', 'remind me': 'reminders' }) && Object.isFrozen(BUTTON_TITLE_PHRASES), 'the title alias registry pins the Reminders mapping (v1.92.1)');
+const digestButton = parseInteractiveReply(msg({ type: 'button_reply', button_reply: { id: 'generated_9f3a', title: 'Reminders' } }));
+check(digestButton?.text === 'reminders' && digestButton?.payload === 'generated_9f3a', 'an unregistered id with the title "Reminders" routes to the reminders list (v1.92.1)');
+check(parseInteractiveReply(msg({ type: 'button_reply', button_reply: { id: 'btn_1', title: 'REMINDERS' } }))?.text === 'reminders', 'the title alias is case-insensitive (v1.92.1)');
+check(parseInteractiveReply(msg({ type: 'button_reply', button_reply: { id: 'btn_2', title: 'Remind me' } }))?.text === 'reminders', 'the title "Remind me" reaches the LIST, never the remind-me quiz (v1.92.1)');
 
 console.log('\n--- Test 3: list_reply (list selection) ---');
 const list = parseInteractiveReply(msg({ type: 'list_reply', list_reply: { id: 'row_history', title: 'History', description: 'Past logs' } }));

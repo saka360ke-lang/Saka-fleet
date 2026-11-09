@@ -1,6 +1,13 @@
 {
-  "latest": "1.92.0",
+  "latest": "1.92.1",
   "entries": [
+    {
+      "version": "1.92.1",
+      "date": "2026-11-09",
+      "title": "The Reminders button works",
+      "preview": "The overdue digest's new Reminders button now opens your reminder list with one tap.",
+      "summary": "A small follow-up before the overdue digest template goes live. The approved template carries a Reminders button, and we confirmed it is a Quick Reply - the kind that simply sends its own text back when tapped, with no link and no parameters. The send now includes it in exactly that form, so it can never be rejected for a missing button parameter. Tapping Reminders opens your reminder list straight away - the same answer you get by typing reminders - so the digest always has one clear next step. Nobody sees anything different until the template is switched on."
+    },
     {
       "version": "1.92.0",
       "date": "2026-11-09",

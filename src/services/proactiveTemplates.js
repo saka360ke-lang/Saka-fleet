@@ -130,11 +130,16 @@ export const PROACTIVE_TEMPLATE_KINDS = Object.freeze({
   // v1.92.0 (Phase 29) — the consolidated overdue compliance digest (D1 hybrid:
   // the episode's first overdue item keeps its immediate alert; later items ride
   // ONE digest at T+3 and ONE at T+7).
+  // v1.92.1 — the operator's approved Meta template carries a Quick Reply button
+  // (text "Reminders", Custom type), confirmed in Business Manager on 2026-11-09.
+  // A Quick Reply needs NO parameters — emitting the parameter-free button
+  // component is exactly what avoids the v1.87.3 131008 rejection.
   overdue_digest: {
     env: 'META_TPL_OVERDUE_DIGEST',
     variables: ['count', 'worst_item', 'worst_days'],
     audience: 'owner',
-    note: 'T+3 / T+7 consolidated overdue compliance digest (count, worst item, days past due).'
+    buttons: [{ subType: 'quick_reply', index: 0 }],
+    note: 'T+3 / T+7 consolidated overdue compliance digest (count, worst item, days past due). The approved Meta template carries the Quick Reply button "Reminders" (no parameters); the inbound button_reply routes to the deterministic reminders list.'
   }
 });
 
@@ -173,33 +178,58 @@ export function templateVariablesForKind(kind, values = null) {
 }
 
 /**
- * Ordered BUTTON components for a kind, or null when a required button variable
- * is missing (the caller must fall back to text). Kinds without buttons return
- * [] (a plain body-only template, the pre-v1.87.3 shape).
+ * The full BUTTON state for a kind (v1.92.1):
+ *   { status: 'none', buttons: [] }            — no buttons declared
+ *   { status: 'ready', buttons: [...] }        — components to send
+ *   { status: 'unconfirmed', buttons: null }   — runtime button type not confirmed yet
+ *   { status: 'missing_parameter', buttons: null } — a URL button's parameter is absent
+ * A `null` buttons list means the caller MUST fall back to free-form text.
  */
-export function templateButtonsForKind(kind, values = null) {
+export function templateButtonState(kind, values = null) {
   const def = PROACTIVE_TEMPLATE_KINDS[kind];
-  if (!def || !Array.isArray(def.buttons) || def.buttons.length === 0) return [];
+  if (!def) return { status: 'none', buttons: [] };
   const source = values && typeof values === 'object' ? values : {};
+
+  if (!Array.isArray(def.buttons) || def.buttons.length === 0) return { status: 'none', buttons: [] };
   const out = [];
   for (const button of def.buttons) {
+    const subType = String(button?.subType || 'url').toLowerCase();
+    const index = String(button.index ?? 0);
+    if (subType === 'quick_reply') {
+      // v1.92.1 — a Quick Reply returns the button text as a user message and
+      // carries NO parameters (a parameter here is what Meta rejects).
+      out.push({ type: 'button', sub_type: 'quick_reply', index });
+      continue;
+    }
     const key = String(button?.variable || '');
     const clean = String(source[key] ?? '').trim();
-    if (!clean) return null;
+    if (!clean) return { status: 'missing_parameter', buttons: null };
     out.push({
       type: 'button',
-      sub_type: button.subType || 'url',
-      index: String(button.index ?? 0),
+      sub_type: subType,
+      index,
       parameters: [{ type: 'text', text: clean }]
     });
   }
-  return out;
+  return { status: 'ready', buttons: out };
+}
+
+/**
+ * Ordered BUTTON components for a kind, or null when the send must degrade to
+ * text (a required button variable is missing OR the template's button type is
+ * still unconfirmed). Kinds without buttons return [] (a plain body-only
+ * template, the pre-v1.87.3 shape).
+ */
+export function templateButtonsForKind(kind, values = null) {
+  return templateButtonState(kind, values).buttons;
 }
 
 /**
  * The single routing decision: template (name + ordered variables + buttons) or
  * text. Pure - never sends anything. templateVars keys must cover the kind's
  * declared variables and buttons, else the call degrades to { mode: 'text' }.
+ * `reason` names WHY a text fallback happened ('buttons_unconfirmed' /
+ * 'button_parameter_missing') so the sender can log it honestly.
  */
 export function resolveProactiveMode({ kind = null, templateVars = null } = {}) {
   if (!kind) return { mode: 'text' };
@@ -209,9 +239,13 @@ export function resolveProactiveMode({ kind = null, templateVars = null } = {}) 
   if (!name) return { mode: 'text' };
   const variables = templateVariablesForKind(kind, templateVars);
   if (variables === null) return { mode: 'text' };
-  const buttons = templateButtonsForKind(kind, templateVars);
-  if (buttons === null) return { mode: 'text' };
-  return { mode: 'template', templateName: name, variables, buttons };
+  const buttonState = templateButtonState(kind, templateVars);
+  if (buttonState.buttons === null) {
+    // A URL button's declared parameter is missing — degrade to text (never a
+    // Meta 131008 rejection). Quick Reply buttons never reach this branch.
+    return { mode: 'text', reason: 'button_parameter_missing' };
+  }
+  return { mode: 'template', templateName: name, variables, buttons: buttonState.buttons };
 }
 
 export default {
@@ -221,5 +255,6 @@ export default {
   templateNameForKind,
   templateVariablesForKind,
   templateButtonsForKind,
+  templateButtonState,
   resolveProactiveMode
 };

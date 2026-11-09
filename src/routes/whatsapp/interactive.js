@@ -39,6 +39,18 @@ export const BUTTON_PAYLOAD_PHRASES = Object.freeze({
   help: 'help'
 });
 
+/**
+ * v1.92.1 — TITLE aliases for an UNREGISTERED payload id. Meta's template quick
+ * replies can carry a generated id, so the button's own text is the reliable
+ * signal. "Reminders" / "Remind me" must reach the deterministic reminders LIST
+ * (never the remind-me quiz — the D1 law), exactly like the registered ids.
+ */
+export const BUTTON_TITLE_PHRASES = Object.freeze({
+  reminders: 'reminders',
+  reminder: 'reminders',
+  'remind me': 'reminders'
+});
+
 // Defensive caps: a Cloud API payload id is <= 256 chars and a title is short.
 // Nothing downstream expects more, and a malformed blob can never flood a turn.
 const MAX_TEXT = 200;
@@ -118,6 +130,13 @@ export function parseInteractiveReply(messageObj) {
       }
     }
 
+    // v1.92.1 — an UNREGISTERED payload still resolves through the button's own
+    // title ("Reminders" / "Remind me" -> the reminders LIST, never the quiz).
+    if (text && text === cleanTitle) {
+      const titlePhrase = BUTTON_TITLE_PHRASES[text.toLowerCase()];
+      if (titlePhrase) text = titlePhrase;
+    }
+
     if (!text) return null;
     return { text, payload: cleanPayload || null, intent };
   } catch {
@@ -127,5 +146,6 @@ export function parseInteractiveReply(messageObj) {
 
 export default {
   BUTTON_PAYLOAD_PHRASES,
+  BUTTON_TITLE_PHRASES,
   parseInteractiveReply
 };
