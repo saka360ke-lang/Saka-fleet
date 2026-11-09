@@ -25,7 +25,7 @@ import { resolveMetricIds, customMetricMenu } from '../../services/reportMetrics
 import { resolveReportAccess } from '../../services/reportAccess.js';
 import { buildFleetReport } from '../../services/fleetReports.js';
 import { calculateFuelConsumption } from '../../services/analytics.js';
-import { findVehicleByCandidate, setActiveVehicle, updateVehicleDetails, unassignDriverFromVehicle, vehicleDisplayLabel } from '../../services/vehicles.js';
+import { findVehicleByCandidate, setActiveVehicle, updateVehicleDetails, unassignDriverFromVehicle, vehicleDisplayLabel, sanitizeVehicleNickname } from '../../services/vehicles.js';
 import { normalizeExpenseType, resolveExpenseType, hasExpenseTypeMarker } from '../../services/expenseCatalog.js';
 import { normalizeEarningType, resolveEarningType, hasEarningTypeMarker } from '../../services/earningCatalog.js';
 import { sanitizeEntryLabel, extractEntryLabel } from '../../services/entryLabels.js';
@@ -565,6 +565,7 @@ export async function handleEditVehicleTurn({ mergedExt, messageText, existingVe
     });
   } else {
     const fieldAliasMap = {
+      nickname: 'nickname', nick: 'nickname', nick_name: 'nickname', aka: 'nickname', asset_name: 'nickname',
       make: 'make_model', model: 'make_model', make_model: 'make_model', make_and_model: 'make_model',
       year: 'yom', yom: 'yom',
       fuel: 'fuel_type', fuel_type: 'fuel_type',
@@ -584,14 +585,14 @@ export async function handleEditVehicleTurn({ mergedExt, messageText, existingVe
     const candidateUpdates = {};
     // Note: plate_number is excluded from auto-merge so that mentioning
     // the target plate never accidentally renames the vehicle.
-    const attrKeys = ['make_model', 'yom', 'year_of_manufacture', 'fuel_type', 'current_mileage', 'color', 'transmission', 'engine_number', 'tire_size', 'insurance_expiry', 'insurance_policy', 'inspection_expiry', 'purchase_cost', 'custom_attributes', 'owner_email', 'owner_phone'];
+    const attrKeys = ['nickname', 'make_model', 'yom', 'year_of_manufacture', 'fuel_type', 'current_mileage', 'color', 'transmission', 'engine_number', 'tire_size', 'insurance_expiry', 'insurance_policy', 'inspection_expiry', 'purchase_cost', 'custom_attributes', 'owner_email', 'owner_phone'];
     for (const key of attrKeys) {
       const value = mergedExt[key];
       if (value !== undefined && value !== null && value !== '') candidateUpdates[key] = value;
     }
 
     // Flexible "<field> to <value>" parser (tolerates plates/digits in the middle).
-    const explicitFieldMatch = messageText.match(/\b(make(?:\s*(?:&|and|\/)\s*model)?|model|year|yom|fuel(?:\s*type)?|mileage|odometer|color|colour|transmission|engine(?:\s*number)?|tire|tyre|insurance(?:\s*expiry)?|inspection(?:\s*expiry)?|plate(?:\s*number)?|email|owner\s*email|phone|owner\s*phone)\b\s*(?:to|as|=)\s*(.+)$/i);
+    const explicitFieldMatch = messageText.match(/\b(nickname|nick\s*name|aka|a\.k\.a\.?|make(?:\s*(?:&|and|\/)\s*model)?|model|year|yom|fuel(?:\s*type)?|mileage|odometer|color|colour|transmission|engine(?:\s*number)?|tire|tyre|insurance(?:\s*expiry)?|inspection(?:\s*expiry)?|plate(?:\s*number)?|email|owner\s*email|phone|owner\s*phone)\b\s*(?:to|as|=)\s*(.+)$/i);
     if (explicitFieldMatch) {
       const rawFieldName = explicitFieldMatch[1].trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
       const rawFieldValue = explicitFieldMatch[2].trim().replace(/^["']|["']$/g, '');
@@ -611,6 +612,19 @@ export async function handleEditVehicleTurn({ mergedExt, messageText, existingVe
       candidateUpdates[fieldAliasMap[aiField] || aiField] = mergedExt.edit_value;
     }
 
+    // v1.89.2 — a nickname is sanitised like a record label, and an explicit
+    // "remove / clear / none" clears it (NULL), never the literal word.
+    if ('nickname' in candidateUpdates) {
+      const rawNickname = String(candidateUpdates.nickname ?? '').trim();
+      if (/^(?:remove|clear|none|no\s+nickname|reset|skip|delete)$/i.test(rawNickname)) {
+        candidateUpdates.nickname = null;
+      } else {
+        const cleanNickname = sanitizeVehicleNickname(rawNickname);
+        if (cleanNickname) candidateUpdates.nickname = cleanNickname;
+        else delete candidateUpdates.nickname;
+      }
+    }
+
     // VIN is immutable — always reject an attempted VIN change.
     if (mergedExt.vin || candidateUpdates.vin) {
       delete candidateUpdates.vin;
@@ -623,8 +637,8 @@ export async function handleEditVehicleTurn({ mergedExt, messageText, existingVe
         fallbackText: `🔒 *VIN Is Permanently Locked*\n\nYour VIN / chassis number is permanently tied to your passbook and can never be edited. All other vehicle details can still be updated.`
       });
     } else if (Object.keys(candidateUpdates).length === 0) {
-      const currentList = `• Plate: ${editTarget.plate_number}\n• Make/Model: ${editTarget.make_model || '-'}\n• Year: ${editTarget.yom || editTarget.year_of_manufacture || '-'}\n• Fuel: ${editTarget.fuel_type || '-'}\n• Odometer: ${(editTarget.current_mileage || editTarget.odometer_reading || 0).toLocaleString()} km\n• VIN: ${editTarget.vin || '-'} 🔒`;
-      reply = `🛠️ *Edit Vehicle — ${editTarget.plate_number}*\n\n${currentList}\n\nReply with the change, e.g. *"update vehicle ${editTarget.plate_number} color to White"* or *"change fuel for ${editTarget.plate_number} to Diesel"*.\n\n🔒 *Note:* The VIN is permanently immutable.`;
+      const currentList = `• Plate: ${editTarget.plate_number}\n• Nickname: ${editTarget.nickname || '-'}\n• Make/Model: ${editTarget.make_model || '-'}\n• Year: ${editTarget.yom || editTarget.year_of_manufacture || '-'}\n• Fuel: ${editTarget.fuel_type || '-'}\n• Odometer: ${(editTarget.current_mileage || editTarget.odometer_reading || 0).toLocaleString()} km\n• VIN: ${editTarget.vin || '-'} 🔒`;
+      reply = `🛠️ *Edit Vehicle — ${vehicleDisplayLabel(editTarget)}*\n\n${currentList}\n\nReply with the change, e.g. *"update vehicle ${editTarget.plate_number} color to White"*, *"change fuel for ${editTarget.plate_number} to Diesel"* or *"rename ${editTarget.plate_number} to The Workhorse"*.\n\n🔒 *Note:* The VIN is permanently immutable.`;
     } else {
       const editRes = await updateVehicleDetails({
         vehicleId: editTarget.id,

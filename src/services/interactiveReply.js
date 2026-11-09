@@ -38,7 +38,7 @@ export const INTERACTIVE_LIMITS = Object.freeze({
  * deliberately excludes the immutable identifiers.
  */
 export const QUICK_EDIT_ACTIONS = Object.freeze({
-  EDIT_VEHICLE: { label: 'Edit vehicle', operator: 'edit vehicle', fields: ['plate_number', 'make_model', 'yom', 'fuel_type'] },
+  EDIT_VEHICLE: { label: 'Edit vehicle', operator: 'edit vehicle', fields: ['plate_number', 'nickname', 'make_model', 'yom', 'fuel_type'] },
   EDIT_ENTRY: { label: 'Edit entries', operator: 'my entries', fields: ['expense_type', 'amount', 'fuel_liters', 'fill_type', 'odometer_reading', 'notes'] },
   CORRECT_DOC: { label: 'Correct upload', operator: 'you read it wrong', fields: ['compliance_expiry', 'insurance_expiry', 'inspection_expiry', 'insurance_policy', 'compliance_number'] },
   REGISTER: { label: 'Register vehicle', operator: 'REGISTER', fields: ['plate_number', 'make_model', 'yom', 'vin'] }

@@ -1,6 +1,13 @@
 {
-  "latest": "1.89.1",
+  "latest": "1.89.2",
   "entries": [
+    {
+      "version": "1.89.2",
+      "date": "2026-11-09",
+      "title": "Nicknames you can actually change",
+      "preview": "Say \"edit KAS 628T nickname to The Workhorse\" and it is done in one message.",
+      "summary": "Last release gave every vehicle a nickname, but the edit screen never learned about it - asking to change a nickname was politely refused again and again, and the name was never saved. That is fixed. Nickname is now a real field when you edit a vehicle: say \"edit KAS 628T nickname\" and Saka asks only for the new name, or say the whole thing at once - \"edit KAS 628T nickname to The Workhorse\" or \"rename KAS 628T to The Workhorse\" - and it is done in one message. Changed your mind about a name? Reply remove and the vehicle goes back to showing its plate. Everything else stays exactly where it was: the nickname still leads every confirmation, log and dashboard line, and the VIN and passbook token remain locked forever."
+    },
     {
       "version": "1.89.1",
       "date": "2026-11-09",

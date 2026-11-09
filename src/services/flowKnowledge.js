@@ -165,11 +165,11 @@ export const SAKA_QUIZ_FLOWS = [
   {
     key: 'edit_vehicle',
     label: 'Edit vehicle',
-    trigger: 'edit vehicle, change colour/insurance/transmission, update car details',
+    trigger: 'edit vehicle, rename/nickname, change colour/insurance/transmission, update car details',
     fields: 'vehicle → field → new value → confirm',
-    extracted: ['plate_number', 'edit_field', 'edit_value', 'make_model', 'yom', 'color', 'insurance_policy', 'insurance_expiry', 'inspection_expiry', 'transmission', 'engine_number', 'tire_size', 'purchase_cost'],
+    extracted: ['plate_number', 'edit_field', 'edit_value', 'nickname', 'make_model', 'yom', 'color', 'insurance_policy', 'insurance_expiry', 'inspection_expiry', 'transmission', 'engine_number', 'tire_size', 'purchase_cost'],
     writes: 'updateVehicleDetails (sanitized)',
-    rules: 'VIN and passbook token are permanently immutable'
+    rules: 'VIN and passbook token are permanently immutable; the nickname is editable (reply remove to clear it)'
   },
   {
     key: 'edit_profile',
@@ -441,7 +441,7 @@ export const FLOW_GUIDANCE = Object.freeze({
   unassign_driver: 'Reply *remove driver* and I will detach them; their history stays with the vehicle.',
   log_mileage: 'Type the odometer reading (e.g. 367410) — one number is all I need.',
   log_operating_hours: 'Type the engine hours (e.g. 1240) — one number is all I need.',
-  edit_vehicle: 'Say which detail to change (e.g. *make and model: Toyota Hiace*) — VIN and plate stay locked.',
+  edit_vehicle: 'Say which detail to change (e.g. *nickname to The Workhorse* or *make and model: Toyota Hiace*) — VIN and passbook token stay locked.',
   edit_profile: 'Type the new detail (name, country or language) — I will confirm before saving.',
   delete_vehicle: 'Reply with the plate you want removed, then confirm — history and passbook are preserved.',
   delete_account: 'Reply *delete account* and confirm with the emailed code — this cannot be undone.',

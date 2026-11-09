@@ -67,6 +67,9 @@ const editEntry = parseInteractiveReply(msg({ type: 'button_reply', button_reply
 check(editEntry?.text === 'my entries' && editEntry?.intent === 'quick_edit', 'edit_entry resolves to the live operator (my entries) with intent quick_edit');
 const editField = parseInteractiveReply(msg({ type: 'button_reply', button_reply: { id: 'edit_vehicle:fuel_type', title: 'Fuel type' } }));
 check(editField?.text === 'edit vehicle' && editField?.intent === 'quick_edit', 'a fielded quick-edit id resolves to its operator');
+// v1.89.2 — the nickname is an editable field, and VIN stays locked.
+const editNickname = parseInteractiveReply(msg({ type: 'button_reply', button_reply: { id: 'edit_vehicle:nickname', title: 'Nickname' } }));
+check(editNickname?.text === 'edit vehicle' && editNickname?.intent === 'quick_edit', 'v1.89.2: a nickname quick-edit id resolves to the edit operator');
 const correctDoc = parseInteractiveReply(msg({ type: 'button_reply', button_reply: { id: 'correct_doc', title: 'Correct upload' } }));
 check(correctDoc?.text === 'you read it wrong' && correctDoc?.intent === 'quick_edit', 'correct_doc resolves the correction detector phrase');
 const lockedVin = parseInteractiveReply(msg({ type: 'button_reply', button_reply: { id: 'edit_vehicle:vin', title: 'VIN' } }));

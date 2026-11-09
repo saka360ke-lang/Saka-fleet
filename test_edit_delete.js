@@ -12,6 +12,8 @@ import {
   IMMUTABLE_VEHICLE_FIELDS
 } from './src/services/vehicles.js';
 import { runWithCleanup } from './scripts/testCleanup.js';
+// v1.89.2 — the deterministic edit lane (commands.js) shares the same edit surface.
+import { handleEditVehicleTurn } from './src/routes/whatsapp/commands.js';
 
 const OWNER_PHONE = '+254799123456';
 const DRIVER_PHONE = '+254799123457';
@@ -35,6 +37,57 @@ async function runTests() {
   assert(editAttrs.plate_number === 'KDA 123A', 'Edit target plate not extracted');
   assert(editAttrs.color === 'White', 'Edit color value not extracted');
   console.log('✅ New edit/delete intents classified correctly and edit attributes extracted.');
+
+  // 1c. v1.89.2 — the nickname works in the deterministic edit lane too (rule 51 sibling).
+  console.log('\n--- Test 1c: nickname edit lane (v1.89.2) ---');
+  {
+    const ownerProfileId = '00000000-0000-0000-0000-000000000001';
+    const nickVehicle = {
+      id: 'nick-1', owner_id: ownerProfileId, plate_number: 'KAS 628T', nickname: null,
+      make_model: 'Toyota Land Cruiser 80 Series', status: 'ACTIVE'
+    };
+    const makeEditMock = () => {
+      const updates = [];
+      let updated = false;
+      const api = {
+        select: () => api, eq: () => api, neq: () => api, in: () => api, is: () => api, order: () => api, limit: () => api,
+        maybeSingle: async () => ({ data: updated ? { ...nickVehicle, ...(updates.at(-1)?.payload || {}) } : nickVehicle, error: null }),
+        update: (payload) => { updates.push({ payload }); updated = true; return api; },
+        delete: () => ({ eq: () => Promise.resolve({ error: null }), in: () => Promise.resolve({ error: null }) }),
+        insert: () => ({ select: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) })
+      };
+      return { client: { from: () => api }, updates };
+    };
+    const runLane = async (messageText, mergedExt = {}) => {
+      const mock = makeEditMock();
+      const turn = await handleEditVehicleTurn({
+        mergedExt,
+        messageText,
+        existingVehicles: [nickVehicle],
+        targetVeh: nickVehicle,
+        profileData: { id: ownerProfileId },
+        supabaseClient: mock.client,
+        targetLang: 'English',
+        countryInfo: {}
+      });
+      return { turn, mock };
+    };
+
+    const setLane = await runLane('nickname to The Workhorse');
+    assert(setLane.mock.updates.length === 1 && setLane.mock.updates[0].payload.nickname === 'The Workhorse',
+      'the deterministic edit lane writes the nickname (v1.89.2)');
+
+    const clearLane = await runLane('nickname to remove');
+    assert(clearLane.mock.updates[0]?.payload?.nickname === null, 'remove clears the nickname in the edit lane too');
+
+    const aiLane = await runLane('edit vehicle', { edit_field: 'nickname', edit_value: 'Big Blue' });
+    assert(aiLane.mock.updates[0]?.payload?.nickname === 'Big Blue', 'an AI-supplied nickname field is accepted (alias map)');
+
+    const vinLane = await runLane('change vin to 1HGCM82633A004352', { vin: '1HGCM82633A004352' });
+    assert(vinLane.mock.updates.length === 0 && /VIN/i.test(vinLane.turn.reply || ''),
+      'the VIN stays permanently locked (no update, a lock notice)');
+    console.log('✅ Nickname edit lane: set, clear, AI field and VIN lock all correct.');
+  }
 
   // 1b. delete_account clears the durable session snapshot (v1.85.0 source-pin)
   console.log('\n--- Test 1b: delete_account clears chat_sessions (v1.85.0) ---');

@@ -14,7 +14,10 @@ import {
   markQuizTurn,
   abandonQuiz,
   startQuiz,
-  QUIZ_MAX_AGE_MINUTES
+  QUIZ_MAX_AGE_MINUTES,
+  // v1.89.2 — nickname editing: the one-line edit prefill + the clear sentinel.
+  parseVehicleEditRequest,
+  EDIT_VEHICLE_CLEAR_NICKNAME
 } from './src/services/quizEngine.js';
 // v1.87.4 — the receipt auto-quiz decision is a pure, intent-independent helper.
 import { receiptQuizStartFor } from './src/routes/whatsapp/quiz.js';
@@ -866,6 +869,113 @@ console.log('\n--- v1.63.1: quiz completion invalidation spies ---');
   assert(!registrationSource.includes('30-day trial ledger entry'), 'the stale per-VIN 30-day trial sentence is gone (v1.87.0)');
   assert(registrationSource.includes('resolveTrialCompletionFacts'), 'the completion card resolves POST-award trial facts (v1.87.0)');
   assert(registrationSource.includes('trialFacts.awardConfirmed'), 'the award line is only appended when the grant holds (v1.87.0)');
+}
+
+// v1.89.2 — the nickname edit flow. Live 2026-11-09 (KAS628T): the user typed
+// "Edit KAS 628t nickname" five times and every "Nickname" reply was rejected as
+// an unknown field, so the column stayed NULL. These assertions pin the fix.
+console.log('\n--- v1.89.2: asset nickname editing (edit -> resolve -> display) ---');
+{
+  const nickVehicle = {
+    id: '11111111-1111-1111-1111-111111119999',
+    owner_id: '00000000-0000-0000-0000-000000000001',
+    plate_number: 'KAS628T',
+    nickname: null,
+    make_model: 'Toyota Land Cruiser 80 Series',
+    current_mileage: 360000,
+    unit_system: 'metric',
+    metadata: {}
+  };
+  const nickCtx = (supabase = null) => baseCtx({ vehicles: [nickVehicle], activeVehicle: nickVehicle, supabase });
+  const editDef = getFlowDefinition('edit_vehicle', nickCtx());
+  const fieldChoice = editDef.fields.find((f) => f.key === 'edit_field');
+  const valueField = editDef.fields.find((f) => f.key === 'new_value');
+
+  assert(fieldChoice.choices.includes('Nickname'), 'edit_vehicle offers Nickname as an editable field (v1.89.2)');
+  assert(fieldChoice.parse('Nickname') === 'Nickname' && fieldChoice.parse('nick name') === 'Nickname' && fieldChoice.parse('aka') === 'Nickname',
+    'the nickname field answers to its everyday synonyms');
+  assert(fieldChoice.parse('nickname') === 'Nickname', 'a lowercase "nickname" is accepted (the live reply that failed)');
+  assert(fieldChoice.parse('vin') !== 'Nickname', 'VIN is never selectable as an edit field (rule 8)');
+
+  assert(valueField.parse('The Workhorse', nickCtx(), { edit_field: 'Nickname' }) === 'The Workhorse',
+    'a nickname value is sanitised like a record label');
+  assert(valueField.parse('remove', nickCtx(), { edit_field: 'Nickname' }) === EDIT_VEHICLE_CLEAR_NICKNAME,
+    'reply remove clears the nickname (engine sentinel, never the literal word)');
+  assert(valueField.validate('x'.repeat(41), nickCtx(), { edit_field: 'Nickname' }).ok === false,
+    'a nickname over 40 characters is refused with guidance');
+
+  const vehicles = [{ plate_number: 'KAS628T', nickname: null }];
+  const full = parseVehicleEditRequest('Edit KAS 628t nickname to Teddy', { vehicles });
+  assert(full.edit_field === 'Nickname' && full.new_value === 'Teddy', 'one-line "edit <plate> nickname to <value>" prefills both answers');
+  assert(parseVehicleEditRequest('Edit KAS 628t nickname', { vehicles }).edit_field === 'Nickname',
+    '"edit <plate> nickname" prefills the field only (asks just the value)');
+  assert(parseVehicleEditRequest('rename KAS 628T to The Workhorse', { vehicles }).edit_field === 'Nickname',
+    '"rename <plate> to <name>" means the nickname');
+  assert(parseVehicleEditRequest('edit vehicle', { vehicles }).edit_field === undefined,
+    'a bare "edit vehicle" still asks instead of guessing');
+  assert(parseVehicleEditRequest('change fuel type to Diesel', { vehicles }).edit_field === 'Fuel type',
+    'other fields still prefill (the nickname lane never hijacks them)');
+  const masked = parseVehicleEditRequest('edit The Workhorse nickname to Big Blue', {
+    vehicles: [{ plate_number: 'KAS628T', nickname: 'The Workhorse' }]
+  });
+  assert(masked.edit_field === 'Nickname' && masked.new_value === 'Big Blue',
+    'the fleet nickname is masked so it can never be read as a field name');
+}
+
+// v1.89.2 — end-to-end: prefill -> one answer -> confirm -> the WRITE carries it.
+{
+  const nickVehicle = {
+    id: '11111111-1111-1111-1111-111111119999',
+    owner_id: '00000000-0000-0000-0000-000000000001',
+    plate_number: 'KAS628T',
+    nickname: null,
+    make_model: 'Toyota Land Cruiser 80 Series',
+    current_mileage: 360000,
+    unit_system: 'metric',
+    metadata: {}
+  };
+  const nickCtx = (supabase = null) => baseCtx({ vehicles: [nickVehicle], activeVehicle: nickVehicle, supabase });
+  const vehicles = [{ plate_number: 'KAS628T', nickname: null }];
+  const makeNickMock = () => {
+    const updates = [];
+    let updated = false;
+    const api = {
+      select: () => api, eq: () => api, neq: () => api, in: () => api, is: () => api, order: () => api, limit: () => api,
+      maybeSingle: async () => ({ data: updated ? { ...nickVehicle, ...(updates.at(-1)?.payload || {}) } : nickVehicle, error: null }),
+      update: (payload) => { updates.push({ payload }); updated = true; return api; },
+      delete: () => ({ eq: () => Promise.resolve({ error: null }), in: () => Promise.resolve({ error: null }) }),
+      insert: () => ({ select: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) })
+    };
+    return { client: { from: () => api }, updates };
+  };
+
+  const setMock = makeNickMock();
+  const setSession = {};
+  const setCtx = nickCtx(setMock.client);
+  assert(startQuiz({ session: setSession, flowKey: 'edit_vehicle', ctx: setCtx, prefill: parseVehicleEditRequest('edit KAS628T nickname', { vehicles }) }),
+    'the edit quiz starts with the nickname field prefilled (no re-ask)');
+  const answered = await handleQuizTurn({ session: setSession, messageText: 'The Workhorse', ctx: setCtx });
+  assert(answered.active && /Nickname/.test(answered.reply || '') && /The Workhorse/.test(answered.reply || ''),
+    'the confirm card shows the nickname change');
+  assert(setSession.quiz.answers.edit_field === 'Nickname' && setSession.quiz.answers.new_value === 'The Workhorse',
+    'the nickname rides new_value (no unknown answer key)');
+  const confirmed = await handleQuizTurn({ session: setSession, messageText: 'yes', ctx: setCtx });
+  assert(confirmed.completed === true, 'confirming the nickname edit completes the flow');
+  assert(setMock.updates.length === 1 && setMock.updates[0].payload.nickname === 'The Workhorse',
+    'the engine actually writes vehicles.nickname (the v1.89.0 gap)');
+
+  const clearMock = makeNickMock();
+  const clearSession = {};
+  const clearCtx = nickCtx(clearMock.client);
+  startQuiz({ session: clearSession, flowKey: 'edit_vehicle', ctx: clearCtx, prefill: { edit_field: 'Nickname' } });
+  await handleQuizTurn({ session: clearSession, messageText: 'remove', ctx: clearCtx });
+  const cleared = await handleQuizTurn({ session: clearSession, messageText: 'yes', ctx: clearCtx });
+  assert(cleared.completed === true && clearMock.updates[0]?.payload?.nickname === null,
+    'reply remove writes NULL (a cleared nickname, never the word "remove")');
+
+  const quizRouteSource = fs.readFileSync('./src/routes/whatsapp/quiz.js', 'utf8');
+  assert(quizRouteSource.includes('prefill: editPrefillFor(') && quizRouteSource.includes('parseVehicleEditRequest'),
+    'the route wires the deterministic edit prefill on both start paths (v1.89.2)');
 }
 
 run().catch((err) => {

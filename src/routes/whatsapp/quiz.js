@@ -28,7 +28,10 @@ import {
   detectFlowSwitch,
   getFlowDefinition,
   markQuizTurn,
-  abandonQuiz
+  abandonQuiz,
+  // v1.89.2 — a one-line edit command ("edit KAS 628T nickname to Teddy")
+  // prefills the edit_vehicle flow instead of re-asking what is already said.
+  parseVehicleEditRequest
 } from '../../services/quizEngine.js';
 import { renderActionDiscovery, composeMessage } from '../../services/conversationEngine.js';
 import { buildConversationMemory } from '../../services/conversationMemory.js';
@@ -178,6 +181,14 @@ export async function arbitrateQuizTurn({
 }) {
   const replyCtx = { messageText, intent, quizCtx, targetLang, countryInfo, profileData, existingVehicles, senderPhone };
 
+  // v1.89.2 — a deterministic edit prefill. When the edit_vehicle flow starts,
+  // the sentence itself supplies the field (and the value when it is stated):
+  // "edit KAS 628T nickname to Teddy" runs the whole flow in one turn instead of
+  // re-asking what the user just said.
+  const editPrefillFor = (flow) => (flow === 'edit_vehicle'
+    ? parseVehicleEditRequest(messageText, { vehicles: existingVehicles })
+    : {});
+
   // Quiz ↔ Conversation arbitration — a greeting/question mid-quiz is
   // answered conversationally and the quiz resumes where it paused.
   // v1.58.6 — an explicit "switch to <plate/number>" is navigation, not a
@@ -219,6 +230,7 @@ export async function arbitrateQuizTurn({
       messageText,
       aiExtracted: mergedExt,
       startFlow: switchQuizFlow,
+      prefill: editPrefillFor(switchQuizFlow),
       ctx: quizCtx
     });
 
@@ -271,6 +283,7 @@ export async function arbitrateQuizTurn({
           messageText,
           aiExtracted: narrativeExt,
           startFlow: forcedNarrativeFlow || receiptQuizStart,
+          prefill: editPrefillFor(forcedNarrativeFlow || receiptQuizStart),
           ctx: quizCtx
         });
   }

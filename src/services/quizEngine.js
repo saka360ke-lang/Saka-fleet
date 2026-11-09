@@ -516,8 +516,20 @@ function registrationOptionalFields() {
   ];
 }
 
+// v1.89.2 — extra ways a user names a field (the column name + label are added
+// automatically below). A nickname answers to its everyday synonyms too.
+const EDIT_FIELD_EXTRA_ALIASES = {
+  nickname: ['nickname', 'nick name', 'aka', 'a.k.a.', 'a.k.a', 'asset name', 'pet name'],
+  plate_number: ['plate number', 'number plate'],
+  make_model: ['make and model', 'make & model', 'make/model']
+};
+
 const EDITABLE_VEHICLE_FIELDS = {
   'Plate number': 'plate_number',
+  // v1.89.2 (rule 51 sibling sweep) — v1.89.0 shipped nicknames without adding
+  // them HERE, so "edit vehicle → field" could never offer or accept a nickname
+  // (live 2026-11-09: five "Nickname" replies were rejected as unknown fields).
+  'Nickname': 'nickname',
   'Make / model': 'make_model',
   'Year of manufacture': 'yom',
   'Fuel type': 'fuel_type',
@@ -540,6 +552,95 @@ function editVehicleNewValueParser(editField) {
     return (text, ctx) => parseDateValue(text, ctx);
   }
   return (text) => String(text).trim();
+}
+
+/* ------------------------------------------------------------------ */
+/* v1.89.2 — nickname editing (the v1.89.0 field was write-only)        */
+/* ------------------------------------------------------------------ */
+
+export const NICKNAME_EDIT_MAX_CHARS = 40;
+// The engine treats `null` from a parser as "not an answer", so clearing an
+// existing nickname rides an explicit sentinel that the executor maps to NULL.
+export const EDIT_VEHICLE_CLEAR_NICKNAME = '__CLEAR_NICKNAME__';
+export const EDIT_VEHICLE_NICKNAME_CLEAR_RE = /^(?:remove|clear|none|no\s+nickname|reset|skip|delete)$/i;
+
+export function parseVehicleNicknameEdit(text) {
+  const clean = String(text ?? '').trim();
+  if (EDIT_VEHICLE_NICKNAME_CLEAR_RE.test(clean)) return EDIT_VEHICLE_CLEAR_NICKNAME;
+  return sanitizeVehicleNickname(clean);
+}
+
+const editFieldAliasesFor = (column) => [...new Set([
+  column.replace(/_/g, ' '),
+  ...(EDIT_FIELD_EXTRA_ALIASES[column] || [])
+])];
+
+function editFieldChoices() {
+  return Object.keys(EDITABLE_VEHICLE_FIELDS).map((labelName) => {
+    const column = EDITABLE_VEHICLE_FIELDS[labelName];
+    return {
+      value: labelName,
+      aliases: [...new Set([column, labelName.toLowerCase(), ...editFieldAliasesFor(column)])]
+    };
+  });
+}
+
+/**
+ * v1.89.2 — one edit sentence answers the whole flow.
+ *   "Edit KAS 628T nickname to Teddy" -> { edit_field: 'Nickname', new_value: 'Teddy' }
+ *   "change car fuel type to Diesel"  -> { edit_field: 'Fuel type', new_value: 'Diesel' }
+ *   "edit vehicle"                    -> {}
+ * Conservative by design: an explicit edit verb is required, the fleet's own
+ * plate/nickname words are masked first, and an unrecognised field returns {}
+ * so the flow still asks instead of guessing.
+ */
+export function parseVehicleEditRequest(text = '', { vehicles = [] } = {}) {
+  const raw = String(text || '').trim();
+  if (!raw) return {};
+  if (!/^(?:please\s+)?(?:can\s+you\s+)?(?:edit|update|change|modify|rename)\b/i.test(raw)) return {};
+
+  // Mask plates + nicknames so their own words can never be read as a field.
+  let probe = raw.toLowerCase();
+  for (const vehicle of Array.isArray(vehicles) ? vehicles : []) {
+    for (const label of [vehicle?.plate_number, vehicle?.nickname]) {
+      const value = String(label || '').trim().toLowerCase();
+      if (value.length < 3) continue;
+      const pattern = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s*');
+      probe = probe.replace(new RegExp(pattern, 'gi'), (match) => ' '.repeat(match.length));
+    }
+  }
+
+  const candidates = [];
+  for (const labelName of Object.keys(EDITABLE_VEHICLE_FIELDS)) {
+    const column = EDITABLE_VEHICLE_FIELDS[labelName];
+    for (const alias of [labelName.toLowerCase(), ...editFieldAliasesFor(column)]) {
+      const norm = alias.toLowerCase().trim();
+      if (!norm) continue;
+      const escaped = norm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+      const match = new RegExp(`(?:^|[^a-z0-9])(${escaped})(?=$|[^a-z0-9])`, 'i').exec(probe);
+      if (match) candidates.push({ labelName, index: match.index + match[0].indexOf(match[1]), length: match[1].length });
+    }
+  }
+  candidates.sort((a, b) => (a.index - b.index) || (b.length - a.length));
+  let hit = candidates[0] || null;
+  // "rename <vehicle> to <name>" can only mean the nickname.
+  const renameAt = /\brename\b/i.exec(probe);
+  if (!hit && renameAt) hit = { labelName: 'Nickname', index: renameAt.index, length: 'rename'.length };
+  if (!hit) return {};
+
+  const column = EDITABLE_VEHICLE_FIELDS[hit.labelName];
+  const prefill = { edit_field: hit.labelName };
+  // Only a value that follows the field ("... nickname to Teddy") is captured.
+  const after = raw.slice(hit.index + Math.max(hit.length, 1));
+  const valueMatch = /\b(?:to|as)\b\s*[:=]?\s*(.+)$/i.exec(after) || /^\s*[:=]\s*(.+)$/.exec(after);
+  if (valueMatch) {
+    const valueText = valueMatch[1].trim().replace(/^["'\u201c\u201d]|["'\u201c\u201d]$/g, '').trim();
+    if (valueText) {
+      const parsed = column === 'nickname' ? parseVehicleNicknameEdit(valueText) : valueText;
+      if (parsed !== null && parsed !== undefined && String(parsed).trim() !== '') prefill.new_value = parsed;
+    }
+  }
+  return prefill;
 }
 
 /** Asset kind of the vehicle in scope (first vehicle until one is chosen). */
@@ -1028,16 +1129,29 @@ export function getFlowDefinition(flowKey, ctx) {
         fields: [
           vehicleField(ctx),
           choiceField('edit_field', 'Field to edit', 'VIN and passbook token can never be edited',
-            Object.keys(EDITABLE_VEHICLE_FIELDS).map((labelName) => ({
-              value: labelName,
-              aliases: [EDITABLE_VEHICLE_FIELDS[labelName], labelName.toLowerCase()]
-            }))),
+            editFieldChoices()),
           field('new_value', 'New value', 'the replacement value for the selected field', {
             aliases: ['new_value', 'edit_value', 'value'],
-            parse: (text, c, answers) => editVehicleNewValueParser(EDITABLE_VEHICLE_FIELDS[answers.edit_field])(text, c),
-            validate: (value) => (value !== null && value !== undefined && String(value).trim() !== ''
-              ? { ok: true }
-              : { ok: false, message: 'Please send the new value.' })
+            parse: (text, c, answers) => {
+              const column = EDITABLE_VEHICLE_FIELDS[answers?.edit_field];
+              if (column === 'nickname') return parseVehicleNicknameEdit(text);
+              return editVehicleNewValueParser(column)(text, c);
+            },
+            validate: (value, c, answers) => {
+              if (EDITABLE_VEHICLE_FIELDS[answers?.edit_field] === 'nickname') {
+                if (value === EDIT_VEHICLE_CLEAR_NICKNAME) return { ok: true };
+                const clean = String(value ?? '').trim();
+                if (!clean) return { ok: false, message: 'Send the nickname, or reply remove to clear it.' };
+                if (clean.length > NICKNAME_EDIT_MAX_CHARS) {
+                  return { ok: false, message: `Keep the nickname under ${NICKNAME_EDIT_MAX_CHARS} characters.` };
+                }
+                return { ok: true };
+              }
+              return value !== null && value !== undefined && String(value).trim() !== ''
+                ? { ok: true }
+                : { ok: false, message: 'Please send the new value.' };
+            },
+            summary: (value) => (value === EDIT_VEHICLE_CLEAR_NICKNAME ? 'Remove nickname' : String(value ?? ''))
           })
         ]
       };
@@ -3630,7 +3744,7 @@ async function executeFlow(state, ctx) {
         const column = EDITABLE_VEHICLE_FIELDS[a.edit_field];
         if (!column) return { handled: true, reply: await fail('That field cannot be edited.'), flow: state.flow, active: true };
 
-        const updates = { [column]: a.new_value };
+        const updates = { [column]: column === 'nickname' && a.new_value === EDIT_VEHICLE_CLEAR_NICKNAME ? null : a.new_value };
         if (column === 'current_mileage') updates.odometer_reading = a.new_value;
         if (column === 'yom') updates.year_of_manufacture = a.new_value;
 
@@ -3677,7 +3791,11 @@ async function executeFlow(state, ctx) {
           }
         }
 
-        const reply = await ok({ vehicle: vehicleDisplayLabel(vehicle), field: a.edit_field, newValue: a.new_value });
+        const savedVehicle = res.vehicle || { ...vehicle, [column]: updates[column] };
+        const displayValue = column === 'nickname'
+          ? (savedVehicle.nickname || 'no nickname')
+          : String(a.new_value ?? '');
+        const reply = await ok({ vehicle: vehicleDisplayLabel(savedVehicle), field: a.edit_field, newValue: displayValue });
         return { handled: true, reply, flow: state.flow, completed: true };
       }
 

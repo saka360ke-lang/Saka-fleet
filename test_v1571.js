@@ -51,5 +51,8 @@ check(isPollutedFieldValue("Toyota Hiace Van") === false, "a real make/model is 
 const editDef = getFlowDefinition("edit_vehicle", { vehicles: [{ id: "v1", plate_number: "KBJ 819C" }], countryInfo: {}, profile: {} });
 const editField = editDef.fields.find((f) => f.key === "edit_field");
 check(editField.parse("MAKE AND MODEL") === "Make / model", "make and model maps to the Make / model edit field");
+// v1.89.2 — the nickname is a real editable field (the live 2026-11-09 gap).
+check(editField.choices.includes("Nickname"), "nickname is an editable vehicle field (v1.89.2)");
+check(editField.parse("NICKNAME") === "Nickname" && editField.parse("aka") === "Nickname", "NICKNAME / aka map to the Nickname edit field (v1.89.2)");
 
 console.log("ALL v1.57.1 TESTS PASSED (" + passed + " assertions).");
