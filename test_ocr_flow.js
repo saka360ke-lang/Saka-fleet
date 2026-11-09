@@ -650,6 +650,37 @@ async function run() {
     check(globalPlain.fields.amount?.value === 1250.5, 'a plain GLOBAL total is unchanged (1250.50)');
   }
 
+  // v1.87.5 — a driver's licence is NEVER a logbook. The NTSA licence prints a
+  // long serial number that the old VIN heuristic accepted; the logbook branch
+  // ran before the licence branch, so the DL was filed as a vehicle logbook and
+  // vaulted vehicle-scoped (walkthrough report). Precedence + the letter/digit
+  // VIN rule now keep it driver-side.
+  {
+    const dl = [
+      'REPUBLIC OF KENYA',
+      'NATIONAL TRANSPORT AND SAFETY AUTHORITY',
+      'DRIVING LICENCE',
+      'LICENCE NO: 23942494',
+      'NAME: DAVID NJONJO',
+      'ID NO: 12345678',
+      'DATE OF ISSUE: 28/11/2023',
+      'EXPIRY: 28/11/2028',
+      'CLASS: B',
+      'SERIAL NO: 043202308218505'
+    ].join('\n');
+    check(classifyOcrDocument(dl) === 'drivers_licence', 'a licence with a long serial classifies as drivers_licence, never logbook (v1.87.5)');
+    check(classifyDocumentFamily(dl) === 'drivers_licence', 'the Document Lens never files a licence as a logbook (v1.87.5)');
+    const dlLens = parseDocumentFields(dl, { countryCode: 'KE' });
+    check(dlLens.family === 'drivers_licence' && dlLens.fields.compliance_number?.value === '23942494', 'the licence number is read for the driver ledger (v1.87.5)');
+    check(dlLens.fields.compliance_expiry?.value === '2028-11-28' && dlLens.fields.compliance_type?.value === 'Driver Licence', 'the licence expiry + type are read (v1.87.5)');
+    check(classifyOcrDocument('SERIAL NO: 043202308218505') === 'unknown', 'a pure-digit serial is never VIN-shaped (v1.87.5)');
+    check(classifyOcrDocument('CERTIFICATE OF INSURANCE\nDRIVING LICENCE COPY') === 'insurance', 'insurance keeps first place over licence markers (v1.32.1 law)');
+    const realLogbook = parseDocumentFields('VEHICLE PARTICULARS\nCHASSIS NO: JT111ABC123456789', { countryCode: 'KE' });
+    check(realLogbook.family === 'logbook' && realLogbook.fields.vin?.value === 'JT111ABC123456789', 'a real logbook still classifies + parses its VIN (v1.87.5)');
+    const bareVin = parseDocumentFields('XTA21093056789012', { countryCode: 'GLOBAL' });
+    check(bareVin.family === 'logbook' && bareVin.fields.vin?.value === 'XTA21093056789012', 'the bare-VIN fallback parses without throwing (the parseLogbook crash fix) (v1.87.5)');
+  }
+
   global.fetch = realFetch;
   delete process.env.GCP_VISION_API_KEY;
   console.log(`\n🎉 ALL OCR FLOW TESTS PASSED (${passed} assertions).`);

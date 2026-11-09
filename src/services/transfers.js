@@ -68,11 +68,14 @@ export async function initiatePassbookTransfer({ fromPhone, vehicleCandidate, su
     }
 
     // Check if there's already a pending transfer in flight
+    // v1.87.5 — EVERY pending status blocks a second handover; PENDING_BUYER_UPGRADE
+    // (the buyer-capacity pause) was missing, so a paused transfer allowed a
+    // duplicate to start for the same vehicle.
     const { data: activeTransfer } = await supabase
       .from('passbook_transfers')
       .select('*')
       .eq('vehicle_id', targetVeh.id)
-      .in('status', ['PENDING_TARGET_DETAILS', 'PENDING_OWNER_RELEASE_OTP', 'PENDING_BUYER_ACCEPTANCE', 'PENDING_BUYER_OTP'])
+      .in('status', ['PENDING_TARGET_DETAILS', 'PENDING_OWNER_RELEASE_OTP', 'PENDING_BUYER_ACCEPTANCE', 'PENDING_BUYER_OTP', 'PENDING_BUYER_UPGRADE'])
       .maybeSingle();
 
     if (activeTransfer) {

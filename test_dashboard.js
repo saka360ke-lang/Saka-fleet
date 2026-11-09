@@ -2384,6 +2384,35 @@ async function run() {
   check(cancelOk.statusCode === 303 && String(cancelOk.headers.location).includes('cancelled=1'), 'cancel redirects with the notice');
   check((p22Mock.db.passbook_transfers || []).find((row) => row.id === 'tr-open').status === 'CANCELLED', 'the cancel is a status transition, never a delete');
   check((p22Mock.db.passbook_transfers || []).find((row) => row.id === 'tr-done').status === 'COMPLETED', 'a completed handover is never touched');
+  // v1.87.5 — the cancel write must name ONLY real columns. The old payload set
+  // `updated_at` (never a passbook_transfers column), PostgREST refused it and
+  // the route still redirected ?cancelled=1 — the handover stayed in-flight and
+  // blocked every new transfer (live 2026-11-09).
+  const cancelPatches = (p22Mock.state.updates || []).filter((entry) => entry.table === 'passbook_transfers' && entry.patch?.status === 'CANCELLED');
+  check(cancelPatches.length === 1 && !('updated_at' in cancelPatches[0].patch), 'the cancel write carries no phantom updated_at column (v1.87.5)');
+  // A refused write answers honestly — never a fake success.
+  const p22CancelFailMock = createMockSupabase(p22Seed(), { beforeUpdate: (table) => (table === 'passbook_transfers' ? { error: { message: "Could not find the column 'nope'" } } : null) });
+  const p22CancelFailApp = Fastify({ logger: false });
+  await registerDashboardRoutes(p22CancelFailApp, { supabase: p22CancelFailMock.client, transferNotifier: p22Notifier, checkoutEngine: p22Checkout });
+  await p22CancelFailApp.ready();
+  const cancelFailed = await p22CancelFailApp.inject({ method: 'POST', url: '/d/transfer/cancel', headers: { ...p22OwnerCookie, ...p22Form }, payload: 'transfer_id=tr-open' });
+  check(cancelFailed.statusCode === 500 && /could not be cancelled just now/.test(cancelFailed.body), 'a refused cancel answers honestly, never a fake ?cancelled=1 (v1.87.5)');
+  check((p22CancelFailMock.db.passbook_transfers || []).find((row) => row.id === 'tr-open').status === 'PENDING_BUYER_ACCEPTANCE', 'a refused cancel leaves the transfer status untouched (v1.87.5)');
+  await p22CancelFailApp.close();
+  // v1.87.5 — every PENDING status blocks a second handover; the buyer-upgrade
+  // pause was missing from the machine's guard.
+  const upgradeMock = createMockSupabase({
+    ...p22Seed(),
+    passbook_transfers: [
+      { id: 'tr-upgrade', vehicle_id: 'v-p22-1', vin: 'VINP220001', from_owner_id: 'p22-owner', status: 'PENDING_BUYER_UPGRADE', to_owner_phone: '+254799000222', to_owner_email: 'buyer@example.com', is_free_transfer: true, fee_amount: 0, fee_currency: 'USD', initiated_at: new Date().toISOString() }
+    ]
+  });
+  const upgradeApp = Fastify({ logger: false });
+  await registerDashboardRoutes(upgradeApp, { supabase: upgradeMock.client, transferNotifier: p22Notifier, checkoutEngine: p22Checkout });
+  await upgradeApp.ready();
+  const upgradeStart = await upgradeApp.inject({ method: 'POST', url: '/d/transfer/start', headers: { ...p22OwnerCookie, ...p22Form }, payload: 'vehicle_id=v-p22-1&buyer_phone=%2B254799000222&buyer_email=buyer%40example.com' });
+  check(upgradeStart.statusCode === 409 && /already an active transfer/.test(upgradeStart.body), 'a buyer-upgrade-paused handover still blocks a second one (v1.87.5)');
+  await upgradeApp.close();
 
   // Phone-only owner (no email anywhere): the release PIN cannot be delivered.
   const noEmailMock = createMockSupabase({

@@ -284,9 +284,13 @@ export function classifyOcrDocument(text = '') {
   if (!t.trim()) return 'unknown';
   if (/\b(CERTIFICATE\s+OF\s+INSURANCE|POLICY\s+HOLDER|POLICY\s+(?:NO|NUMBER)|COMMENCING\s+DATE|COVER\s+NOTE|SUM\s+INSURED|UNDERWRITER|ISSUED\s+BY)\b/.test(t)
     || /\bEXPIR(?:Y|ING|ES)\b/.test(t) && /\bPOLICY\b/.test(t)) return 'insurance';
+  // v1.87.5 — LICENCE markers win over LOGBOOK markers. An NTSA driver's licence
+  // prints serial/control numbers that `looksLikeVin` used to accept, so the
+  // logbook branch claimed the photo before the licence branch was ever reached
+  // (walkthrough: a DL was filed as a vehicle logbook and vaulted vehicle-scoped).
+  if (/\b(DRIVING\s+LICEN[CS]E|DRIVER'?S\s+LICEN[CS]E|PSV|PDP|DL\s*(?:NO|NUMBER)|BADGE)\b/.test(t)) return 'drivers_licence';
   if (/\b(VIN|CHASSIS|LOG\s?BOOK|REGISTRATION\s+CERT|MOTOR\s+VEHICLE\s+REG)/.test(t) || looksLikeVin(raw)) return 'logbook';
   if (/\b(POLICY|INSURANCE|COVER\s+NOTE|SUM\s+INSURED|UNDERWRITER)\b/.test(t)) return 'insurance';
-  if (/\b(DRIVING\s+LICEN[CS]E|DRIVER'?S\s+LICEN[CS]E|PSV|PDP|DL\s*(?:NO|NUMBER)|BADGE)\b/.test(t)) return 'drivers_licence';
   if (/\b(FUEL|DIESEL|PETROL|GASOLINE|PUMP|NOZZLE|LITRE|LITER)\b/.test(t)) return 'receipt_fuel';
   if (/\b(ODOMETER|MILEAGE|KM\s*READING)\b/.test(t) && !/\b(TOTAL|CASH|AMOUNT|INVOICE)\b/.test(t)) return 'odometer_photo';
   if (/\b(RECEIPT|INVOICE|TOTAL|AMOUNT|CASH|BALANCE)\b/.test(t)) return 'receipt_general';
@@ -302,7 +306,11 @@ function looksLikeVin(text) {
   const cleaned = String(text || '').toUpperCase()
     .replace(/\b(?:BUYER\s+)?PIN\s*[:#]?\s*[A-Z0-9]+/g, ' ')
     .replace(/\bP\d{9}[A-Z]\b/g, ' ');
-  return /\b(?=[A-HJ-NPR-Z0-9]{11,17}\b)(?=[A-Z0-9]*\d)[A-HJ-NPR-Z0-9]{11,17}\b/.test(cleaned);
+  // v1.87.5 — a VIN contains BOTH letters and digits. The old rule accepted any
+  // 11–17 character digit run, so a licence/serial control number
+  // ("SERIAL NO: 043202308218505") tripped the logbook branch. Pure-digit
+  // tokens are serials, never VINs.
+  return /\b(?=[A-HJ-NPR-Z0-9]{11,17}\b)(?=[A-Z0-9]*\d)(?=\d*[A-HJ-NPR-Z])[A-HJ-NPR-Z0-9]{11,17}\b/.test(cleaned);
 }
 
 // v1.54.1 — extended CLDR symbol/code tables live in ocrNormalizer.js.

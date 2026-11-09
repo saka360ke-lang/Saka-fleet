@@ -153,7 +153,10 @@ function parseLogbook(text, countryCode) {
 
   const vinMatch = String(text).match(/(?:VIN|chassis(?:\s*(?:no|number))?)\s*[:\-#]?\s*([A-HJ-NPR-Z0-9]{11,17})\b/i)
     || String(text).match(/\b(?=[A-HJ-NPR-Z0-9]{11,17}\b)(?=[A-Z0-9]*\d)[A-HJ-NPR-Z0-9]{11,17}\b/);
-  const rawVin = vinMatch ? vinMatch[1].toUpperCase() : null;
+  // v1.87.5 — the FALLBACK regex above has no capture group, so vinMatch[1] was
+  // undefined and `.toUpperCase()` threw (the lens silently degraded and every
+  // logbook hint was lost). The whole token is the VIN when the fallback fires.
+  const rawVin = vinMatch ? (vinMatch[1] ?? vinMatch[0]).toUpperCase() : null;
   pushField(fields, 'vin', rawVin ? validateVinCandidate(rawVin) : null, 0.9);
   pushField(fields, 'engine_number', labeled(text, 'engine\\s*(?:no|number)?'), 0.88);
 
@@ -270,6 +273,11 @@ function parseOdometerPhoto(text) {
 export function classifyDocumentFamily(text = '') {
   const base = classifyOcrDocument(text);
   const raw = String(text || '');
+  // v1.87.5 — defence in depth: STRONG licence markers beat a logbook base. The
+  // NTSA licence's long serial once tripped the VIN heuristic inside
+  // classifyOcrDocument; even if another base path regresses, a licence can
+  // never be filed as a vehicle logbook again (rule 51 sibling guard).
+  if (base === 'logbook' && /(driving\s*licen[cs]e|driver'?s\s*licen[cs]e|psv|pdp|badge|dl\s*(?:no|number))/i.test(raw)) return 'drivers_licence';
   if (/\b(inspection|roadworthy|road\s*worthiness|mot\s*(?:test|cert)|nct)\b/i.test(raw)) return 'inspection';
   if (/\b(road\s*service\s*licen[cs]e|transport\s*licen[cs]e|operating\s*permit|road\s*tax)\b/i.test(raw)) return 'road_licence';
   if (base === 'receipt_general' && SERVICE_WORDS.test(raw) && !FUEL_WORDS.test(raw)) return 'service_receipt';

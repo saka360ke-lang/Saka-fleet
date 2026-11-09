@@ -1583,10 +1583,23 @@ export async function registerDashboardRoutes(fastify, {
           return sendHtml(reply, page.status, page.html);
         }
         if (TRANSFER_OPEN_STATUSES.includes(transferRow.status)) {
-          await supabase
+          // v1.87.5 — the write names ONLY columns that exist. The old payload set
+          // `updated_at`, which passbook_transfers never had, so PostgREST refused
+          // the update while the route still redirected with ?cancelled=1 — a fake
+          // success: the handover stayed in-flight and blocked every new transfer.
+          const { error: cancelError } = await supabase
             .from('passbook_transfers')
-            .update({ status: 'CANCELLED', updated_at: new Date().toISOString() })
+            .update({ status: 'CANCELLED' })
             .eq('id', transferId);
+          if (cancelError) {
+            await logSystemError(supabase, new Error(`transfer cancel refused: ${cancelError.message}`), '/d/transfer/cancel');
+            return renderTransferReply(reply, {
+              session,
+              profile: await loadDashboardProfile(supabase, session.ownerId),
+              status: 500,
+              error: 'That handover could not be cancelled just now — please try again.'
+            });
+          }
         }
         return reply.code(303).header('location', '/d/transfer?cancelled=1').send();
       } catch (err) {

@@ -1,6 +1,13 @@
 {
-  "latest": "1.87.4",
+  "latest": "1.87.5",
   "entries": [
+    {
+      "version": "1.87.5",
+      "date": "2026-11-09",
+      "title": "A licence stays a licence, and cancel really cancels",
+      "preview": "Driver's licences are no longer mistaken for logbooks — and cancelling a handover now genuinely clears it.",
+      "summary": "Two walkthrough fixes. First: sending your driver's licence could be mistaken for a vehicle logbook. A Kenyan licence prints a long serial number, and Saka's reader treated any long number as a vehicle identification number, so the licence was filed as a vehicle document instead of a driver document. Licence wording now wins over logbook wording, a vehicle identification number must contain both letters and digits (a plain serial is not one), and the dashboard reader was hardened so a licence can never be filed as a logbook again. The licence number and expiry are read correctly for your driver record, and real logbooks still parse exactly as before — including one crash in the logbook reader that could quietly drop every hint, now fixed. Second: cancelling a pending passbook handover said 'cancelled' but left it in flight, blocking a new handover. The cancel was writing a database field that does not exist, the failure was silent, and the page still said success. Cancel now writes exactly what the database holds, a failure is reported honestly, and a paused handover (buyer needs more garage space) now also blocks a duplicate. Your stuck walkthrough handover was cleaned up so you can start a fresh one. Nothing else moved: no new tables, no data model change."
+    },
     {
       "version": "1.87.4",
       "date": "2026-11-09",
