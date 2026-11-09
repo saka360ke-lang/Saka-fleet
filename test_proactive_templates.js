@@ -27,13 +27,15 @@ const EXPECTED = [
   'service_reminder', 'expiry_reminder', 'trial_ending', 'trial_grace',
   'dunning', 're_engagement', 'driver_unassigned', 'winback',
   'deploy_live', 'eval_digest_ping', 'care_escalation',
-  'driver_activity', 'fleet_auto_audit'
+  'driver_activity', 'fleet_auto_audit',
+  // v1.87.1 (Phase 26B) — the codes/invites that must beat the 24h window.
+  'auth_otp', 'driver_invite', 'transfer_invite'
 ];
 
 console.log('--- 1. registry completeness ---');
-check(KINDS.length === 13, '13 proactive kinds are registered');
+check(KINDS.length === 16, '16 proactive kinds are registered');
 check(KINDS.join(',') === EXPECTED.join(','), 'the canonical kind list is stable');
-check(PROACTIVE_TEMPLATE_ENV_KEYS.length === 13 && new Set(PROACTIVE_TEMPLATE_ENV_KEYS).size === 13, 'every kind has a unique META_TPL_ env knob');
+check(PROACTIVE_TEMPLATE_ENV_KEYS.length === 16 && new Set(PROACTIVE_TEMPLATE_ENV_KEYS).size === 16, 'every kind has a unique META_TPL_ env knob');
 check(PROACTIVE_TEMPLATE_ENV_KEYS.every((key) => key.startsWith('META_TPL_') && key.length > 9), 'every env knob follows META_TPL_<KIND>');
 check(Object.isFrozen(PROACTIVE_TEMPLATE_KINDS), 'the registry is frozen (no runtime drift)');
 check(KINDS.every((kind) => Array.isArray(PROACTIVE_TEMPLATE_KINDS[kind].variables)), 'every kind declares a variables array');
@@ -46,6 +48,17 @@ check(PROACTIVE_TEMPLATE_KINDS.expiry_reminder.variables.join(',') === 'item,due
 check(PROACTIVE_TEMPLATE_KINDS.dunning.variables.join(',') === 'tier,days', 'dunning takes tier + days');
 check(PROACTIVE_TEMPLATE_KINDS.deploy_live.variables.join(',') === 'version,commit', 'deploy_live takes the version + commit/revision (v1.78.1)');
 check(PROACTIVE_TEMPLATE_KINDS.eval_digest_ping.variables.length === 0 && PROACTIVE_TEMPLATE_KINDS.care_escalation.variables.length === 0, 'eval digest and care pings keep static bodies');
+// v1.87.1 (Phase 26B) — the OTP/invite contracts.
+check(PROACTIVE_TEMPLATE_KINDS.auth_otp.variables.join(',') === 'code', 'auth_otp takes the 6-digit code (v1.87.1)');
+check(PROACTIVE_TEMPLATE_KINDS.driver_invite.variables.join(',') === 'plate' && PROACTIVE_TEMPLATE_KINDS.transfer_invite.variables.join(',') === 'plate', 'the driver and buyer invites take the plate (v1.87.1)');
+check(String(PROACTIVE_TEMPLATE_KINDS.auth_otp.note).includes('Authentication'), 'auth_otp is an Authentication-category template (v1.87.1)');
+// The three senders really pass their kind + variable (source pins, v1.87.1).
+const dashboardSrc = fs.readFileSync('./src/services/dashboard.js', 'utf8');
+const driverSrc = fs.readFileSync('./src/services/driverAssignments.js', 'utf8');
+const transfersSrc = fs.readFileSync('./src/services/transfers.js', 'utf8');
+check(dashboardSrc.includes("kind: 'auth_otp'") && dashboardSrc.includes('templateVars: { code: otp }'), 'the dashboard OTP passes auth_otp + the code (v1.87.1)');
+check(driverSrc.includes("kind: 'driver_invite'") && driverSrc.includes('templateVars: { plate }'), 'the driver invite passes driver_invite + the plate (v1.87.1)');
+check(transfersSrc.includes("kind: 'transfer_invite'") && transfersSrc.includes('templateVars: { plate }'), 'the buyer invite passes transfer_invite + the plate (v1.87.1)');
 
 console.log('--- 3. template name resolution ---');
 check(templateNameForKind('service_reminder') === null, 'unset knob resolves to no template');

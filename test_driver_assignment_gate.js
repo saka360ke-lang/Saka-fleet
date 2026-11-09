@@ -239,14 +239,18 @@ async function run() {
     sendOtpFn: async () => true,
     sendWhatsApp: async () => {}
   });
+  const driverInvites = [];
   const verified = await verifyOwnerAssignmentOtp({
     supabase: otpMock.client,
     assignmentId: good.assignment.id,
     ownerId: OWNER.id,
     code: good.otp,
-    sendWhatsApp: async () => {}
+    sendWhatsApp: async (...args) => { driverInvites.push(args); }
   });
   check(verified.ok && verified.assignment.status === 'PENDING_DRIVER_ACCEPTANCE', 'Correct OTP moves the request to driver acceptance');
+  // v1.87.1 — a driver who never messaged Saka gets the approved invite template.
+  check(driverInvites.length === 1 && driverInvites[0][2]?.kind === 'driver_invite' && Boolean(driverInvites[0][2]?.templateVars?.plate),
+    'the driver invite carries the driver_invite kind + the plate (v1.87.1)');
   check(!otpMock.tables.vehicles.find((v) => v.id === 'v1').assigned_driver_id, 'Vehicle is not assigned before the driver accepts');
   const conflict = await createDriverAssignment({
     supabase: otpMock.client,

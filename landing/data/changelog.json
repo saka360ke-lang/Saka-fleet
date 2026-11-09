@@ -1,6 +1,13 @@
 {
-  "latest": "1.87.0",
+  "latest": "1.87.1",
   "entries": [
+    {
+      "version": "1.87.1",
+      "date": "2026-11-09",
+      "title": "Sign in even after a day away",
+      "preview": "Your sign-in code now arrives even after a day away - and so do driver and buyer invitations.",
+      "summary": "WhatsApp only lets a business send a free message to someone who has messaged it in the last 24 hours. Outside that window the message is dropped without an error - which meant a returning user could ask for their dashboard sign-in code, see 'code sent', and never receive it. This release moves the sign-in code onto an approved WhatsApp verification template, so it arrives whenever you ask, however long you have been away. The same treatment goes to the two invitations Saka sends on someone else's behalf: a newly assigned driver is invited to accept the vehicle, and a passbook buyer is invited to accept a handover - both previously free-form, both easy for WhatsApp to drop because those people had often never messaged Saka at all. Nothing changes until the operator approves the templates in Meta; until then every message is exactly what it was before. The words Saka uses did not change either: your code, your invitations, your transfer flow."
+    },
     {
       "version": "1.87.0",
       "date": "2026-11-09",

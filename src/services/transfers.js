@@ -242,7 +242,9 @@ export async function verifyOwnerReleaseOtpAndNotifyBuyer({ transferId, provided
 
     if (buyerPhone && sendWhatsAppFn) {
       const buyerMsg = `🚗 *Saka Fleet Passbook Transfer Request*\n\nHello! *${sellerName}* (${sellerPhone}) has initiated a passbook transfer for *${makeModel}* (${plate}${identityLine}).\n\nReply *"ACCEPT"* to claim ownership of this vehicle passbook.\n_(Or reply "DECLINE" to reject)_`;
-      await sendWhatsAppFn(buyerPhone, buyerMsg);
+      // v1.87.1 — a buyer may never have messaged Saka; the invite rides the
+      // approved Utility template when META_TPL_TRANSFER_INVITE is set.
+      await sendWhatsAppFn(buyerPhone, buyerMsg, { kind: 'transfer_invite', templateVars: { plate } });
     }
 
     return {

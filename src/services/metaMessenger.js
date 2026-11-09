@@ -12,6 +12,7 @@
  */
 
 import { isDeliveryBlocked } from './deliveryGuard.js';
+import { resolveProactiveMode } from './proactiveTemplates.js';
 
 /** Read the Meta credentials once, without throwing on a missing env. */
 export function whatsappTextConfig(env = process.env) {
@@ -27,18 +28,13 @@ export function cleanWhatsAppRecipient(toPhone) {
 }
 
 /**
- * Send ONE free-form WhatsApp text. Never throws; `false` means "not delivered"
- * and every caller degrades honestly (rule 50).
+ * ONE Meta POST (text or template) behind ONE guard + ONE catch, so the
+ * transport, the blocklist and the never-throws contract can never drift
+ * between the two message shapes (rule 55). True only on 2xx.
  */
-export async function sendWhatsAppText(toPhone, text, { env = process.env } = {}) {
+async function postWhatsAppMessage(body, env = process.env) {
   const { phoneNumberId, token } = whatsappTextConfig(env);
-  if (!phoneNumberId || !token || !toPhone || !text) return false;
-
-  const cleanPhone = cleanWhatsAppRecipient(toPhone);
-  if (!cleanPhone) return false;
-  // v1.58.23 — respect the delivery blocklist (permanent 131026-style failures).
-  if (isDeliveryBlocked(cleanPhone)) return false;
-
+  if (!phoneNumberId || !token) return false;
   try {
     const res = await fetch(`https://graph.facebook.com/v21.0/${phoneNumberId}/messages`, {
       method: 'POST',
@@ -46,12 +42,7 @@ export async function sendWhatsAppText(toPhone, text, { env = process.env } = {}
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({
-        messaging_product: 'whatsapp',
-        to: cleanPhone,
-        type: 'text',
-        text: { body: text }
-      })
+      body: JSON.stringify({ messaging_product: 'whatsapp', ...body })
     });
     return res.ok;
   } catch {
@@ -59,4 +50,59 @@ export async function sendWhatsAppText(toPhone, text, { env = process.env } = {}
   }
 }
 
-export default { sendWhatsAppText, cleanWhatsAppRecipient, whatsappTextConfig };
+/**
+ * v1.87.1 (Phase 26B) — an approved-template send (business-initiated; delivers
+ * outside the 24-hour customer-service window). `variables` are the ordered body
+ * parameters ({ type: 'text', text }) built by `resolveProactiveMode`.
+ */
+export async function sendWhatsAppTemplate(toPhone, templateName, { languageCode = 'en', variables = [], env = process.env } = {}) {
+  if (!toPhone || !templateName) return false;
+  const cleanPhone = cleanWhatsAppRecipient(toPhone);
+  if (!cleanPhone) return false;
+  if (isDeliveryBlocked(cleanPhone)) return false;
+  return postWhatsAppMessage({
+    to: cleanPhone,
+    type: 'template',
+    template: {
+      name: templateName,
+      language: { code: languageCode },
+      components: [{ type: 'body', parameters: variables }]
+    }
+  }, env);
+}
+
+/**
+ * Send ONE WhatsApp message. v1.87.1: when `kind` names a registered proactive
+ * kind AND its META_TPL_<KIND> template is configured, the message rides the
+ * approved template (delivers outside the 24-hour window); otherwise — or when
+ * Meta rejects the template — the free-form text path is byte-identical to the
+ * pre-v1.87.1 behaviour. Never throws; `false` means "not delivered" and every
+ * caller degrades honestly (rule 50).
+ */
+export async function sendWhatsAppText(toPhone, text, { env = process.env, kind = null, templateVars = null } = {}) {
+  if (kind) {
+    const mode = resolveProactiveMode({ kind, templateVars });
+    if (mode.mode === 'template') {
+      const templateSent = await sendWhatsAppTemplate(toPhone, mode.templateName, {
+        variables: mode.variables || [],
+        env
+      });
+      if (templateSent) return true;
+      // Fall through: the text path still delivers inside the 24-hour window.
+    }
+  }
+
+  if (!toPhone || !text) return false;
+  const cleanPhone = cleanWhatsAppRecipient(toPhone);
+  if (!cleanPhone) return false;
+  // v1.58.23 — respect the delivery blocklist (permanent 131026-style failures).
+  if (isDeliveryBlocked(cleanPhone)) return false;
+
+  return postWhatsAppMessage({
+    to: cleanPhone,
+    type: 'text',
+    text: { body: text }
+  }, env);
+}
+
+export default { sendWhatsAppText, sendWhatsAppTemplate, cleanWhatsAppRecipient, whatsappTextConfig };

@@ -85,7 +85,12 @@ export const ENV_SECTIONS = Object.freeze([
       'META_TPL_EVAL_DIGEST_PING',
       'META_TPL_CARE_ESCALATION',
       'META_TPL_DRIVER_ACTIVITY',
-      'META_TPL_FLEET_AUTO_AUDIT'
+      'META_TPL_FLEET_AUTO_AUDIT',
+      // v1.87.1 (Phase 26B) — business-initiated codes/invites that must deliver
+      // outside the 24-hour window (Authentication template + two Utility ones).
+      'META_TPL_AUTH_OTP',
+      'META_TPL_DRIVER_INVITE',
+      'META_TPL_TRANSFER_INVITE'
     ]
   },
   { section: 'EMAIL', keys: ['RESEND_API_KEY', 'EMAIL_INBOUND_SECRET', 'EMAIL_INBOUND_SIGNING_SECRET', 'CUSTOMER_CARE_PHONE', 'CUSTOMER_CARE_NAME', 'CARE_THREAD_WINDOW_HOURS', 'CARE_TICKET_MAX_OPEN',

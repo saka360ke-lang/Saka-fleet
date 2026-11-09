@@ -16,7 +16,8 @@ import { normalizeFrictionPhone, markFrictionDeployed } from '../services/fricti
 import { isSentinelProposalsEnabled } from '../services/sentinelPolicy.js';
 import { isDeliveryBlocked } from '../services/deliveryGuard.js';
 // v1.82.0 (Phase 21) — the free-form text path is ONE shared transport now.
-import { sendWhatsAppText } from '../services/metaMessenger.js';
+// v1.87.1 (Phase 26B) — the template transport lives there too.
+import { sendWhatsAppText, sendWhatsAppTemplate } from '../services/metaMessenger.js';
 import { resolveProactiveMode } from '../services/proactiveTemplates.js';
 import { logSystemError as logSystemErrorImpl } from '../services/systemErrors.js';
 // v1.72.1 (P2-6) — system_config access rides the dual-window service.
@@ -1172,40 +1173,12 @@ ${rawCorpus.slice(0, 15000)}`;
 /**
  * Dispatch an approved Meta template message (business-initiated; delivers
  * outside the 24-hour customer-service window). 'variables' are the ordered
- * body parameters ({ type: 'text', text }). Never throws; true only on 2xx.
+ * body parameters ({ type: 'text', text }). v1.87.1 — the POST lives in
+ * `metaMessenger.sendWhatsAppTemplate` so every sender shares one transport
+ * (rule 55); this wrapper keeps the historical signature for existing callers.
  */
 export async function sendWhatsAppTemplateMessage(toPhone, templateName, { languageCode = 'en', variables = [] } = {}) {
-  const phoneNumberId = process.env.META_PHONE_NUMBER_ID;
-  const token = process.env.META_WHATSAPP_TOKEN;
-  if (!phoneNumberId || !token || !toPhone || !templateName) return false;
-
-  const cleanPhone = String(toPhone).replace(/[^\d]/g, '');
-  if (!cleanPhone) return false;
-  // v1.58.23 - respect the delivery blocklist (permanent 131026-style failures).
-  if (isDeliveryBlocked(cleanPhone)) return false;
-
-  try {
-    const res = await fetch(`https://graph.facebook.com/v21.0/${phoneNumberId}/messages`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        messaging_product: 'whatsapp',
-        to: cleanPhone,
-        type: 'template',
-        template: {
-          name: templateName,
-          language: { code: languageCode },
-          components: [{ type: 'body', parameters: variables }]
-        }
-      })
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
+  return sendWhatsAppTemplate(toPhone, templateName, { languageCode, variables });
 }
 
 /**

@@ -1,4 +1,4 @@
-# Saka Fleet - Meta template approval contract (v1.63.1, section 182)
+# Saka Fleet - Meta template approval contract (v1.87.1, sections 182 + 217)
 
 This file is the approval contract between the code and Meta Business Manager.
 WhatsApp only allows free-form business-initiated messages inside the 24-hour
@@ -25,7 +25,7 @@ before submitting this template for Meta approval.
 Language: en (PROACTIVE_TEMPLATE_LANGUAGE).
 
 ------------------------------------------------------------
-1. The 13 templates
+1. The 16 templates
 ------------------------------------------------------------
 
 Each entry: kind | env knob | audience | recommended category | variables
@@ -139,6 +139,35 @@ Each entry: kind | env knob | audience | recommended category | variables
     body: Hi! It's Saka. Your Fleet Auto-Audit report is ready. Net earnings
           today: {{1}}. Open Saka to view the full report.
 
+14. auth_otp  (v1.87.1 — Phase 26B; the FIRST Authentication template)
+    env: META_TPL_AUTH_OTP
+    audience: any (dashboard sign-in code; the only WhatsApp OTP today)
+    category: Authentication
+    variables: {{1}} = the 6-digit numeric code (Meta allows ONLY this one
+               free variable in an Authentication template)
+    body: {{1}} is your Saka Fleet verification code. It expires in 10 minutes.
+          Do not share it with anyone.
+    why: the dashboard login minted a FREE-FORM text; Meta silently drops it
+         after 24h of user silence, so returning users could not sign in.
+
+15. driver_invite  (v1.87.1 — Phase 26B)
+    env: META_TPL_DRIVER_INVITE
+    audience: driver (a newly assigned driver who has never messaged Saka)
+    category: Utility
+    variables: {{1}} = plate (for example KAS 628T)
+    body: Hi! A Saka Fleet owner invited you to take over {{1}}. Reply ACCEPT
+          on WhatsApp to accept the assignment.
+
+16. transfer_invite  (v1.87.1 — Phase 26B)
+    env: META_TPL_TRANSFER_INVITE
+    audience: buyer (a passbook buyer who has never messaged Saka)
+    category: Utility
+    variables: {{1}} = plate
+    body: Hi! A Saka Fleet owner has started a passbook transfer for {{1}}.
+          Reply ACCEPT to claim it, or DECLINE to reject.
+    note: the buyer's 6-digit verification code is EMAILED (never WhatsApp), so
+          only the invitation needs a template.
+
 ------------------------------------------------------------
 2. Submission workflow (Meta Business Manager)
 ------------------------------------------------------------
@@ -169,6 +198,9 @@ Suggested template names:
     saka_care_escalation
     saka_driver_activity
     saka_fleet_auto_audit
+    saka_otp                (category Authentication)
+    saka_driver_invite
+    saka_transfer_invite
 
 ------------------------------------------------------------
 3. Setting the knobs in Cloud Run

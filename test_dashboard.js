@@ -270,7 +270,7 @@ async function run() {
     phone: PROFILE.phone_number,
     profile: PROFILE,
     entitlements: { isTrial: true, isPaid: false },
-    sendOtp: async (to, text) => { otpPayload = { to, text }; return true; }
+    sendOtp: async (to, text, options) => { otpPayload = { to, text, options }; return true; }
   });
   check(access.ok === true && access.role === 'owner', 'a trial owner receives a code');
   const rawToken = access.token;
@@ -280,6 +280,9 @@ async function run() {
   const otpMatch = String(otpPayload.text).match(/\b\d{6}\b/);
   check(Boolean(otpMatch), 'the WhatsApp message carries a 6-digit code');
   const loginOtp = otpMatch ? otpMatch[0] : '000000';
+  // v1.87.1 — the sender is told this is the Authentication-template OTP.
+  check(otpPayload.options?.kind === 'auth_otp' && otpPayload.options?.templateVars?.code === loginOtp,
+    'the OTP send carries the auth_otp kind + the code (v1.87.1)');
   check(!otpPayload.text.includes(rawToken), 'the flow token never travels over WhatsApp');
   check(access.link === undefined, 'no emailed magic link is minted any more');
   const row = mock.db[DASHBOARD_SESSIONS_TABLE][0];

@@ -391,7 +391,12 @@ export async function requestDashboardOtp({
       + 'If you did not ask to sign in, ignore this message — never share the code with anyone.';
     let sent = false;
     try {
-      sent = (await sendOtp(resolved.phone_number || normalized, text)) !== false;
+      // v1.87.1 — the code rides the approved Authentication template when
+      // META_TPL_AUTH_OTP is set; unset (default) = today's free-form text.
+      sent = (await sendOtp(resolved.phone_number || normalized, text, {
+        kind: 'auth_otp',
+        templateVars: { code: otp }
+      })) !== false;
     } catch { sent = false; }
 
     if (!sent) {

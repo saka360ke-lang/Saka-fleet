@@ -332,9 +332,11 @@ export async function verifyOwnerAssignmentOtp({
   const vehicle = await loadVehicle(supabase, row.vehicle_id);
   const plate = vehicleLabel(vehicle);
   if (sendWhatsApp) {
-    const text = `🚗 *Saka Fleet Driver Assignment*\n\nThe vehicle owner has assigned you to *${plate}*.\n\nReply *ACCEPT* to take over the vehicle, or *DECLINE* to reject.\n\n_You will be asked to verify your email and a valid compliance item before you can manage the vehicle._`;
+    const text = `🚗 *Saka Fleet Driver Assignment*\n\nA Saka Fleet owner has assigned you to *${plate}*.\n\nReply *ACCEPT* to take over the vehicle, or *DECLINE* to reject.\n\n_You will be asked to verify your email and a valid compliance item before you can manage the vehicle._`;
     try {
-      await sendWhatsApp(row.driver_phone, text);
+      // v1.87.1 — a new driver has usually never messaged Saka, so the invite
+      // rides the approved Utility template when META_TPL_DRIVER_INVITE is set.
+      await sendWhatsApp(row.driver_phone, text, { kind: 'driver_invite', templateVars: { plate } });
     } catch (sendErr) {
       console.warn('[driverAssignments] Driver notification failed:', sendErr.message);
     }

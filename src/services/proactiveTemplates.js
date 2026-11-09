@@ -100,6 +100,28 @@ export const PROACTIVE_TEMPLATE_KINDS = Object.freeze({
     variables: ['net'],
     audience: 'owner',
     note: 'Daily fleet auto-audit report announcement (index.js cron).'
+  },
+  // v1.87.1 (Phase 26B) — codes and invites that MUST deliver outside the
+  // 24-hour window: a returning user's sign-in code, a new driver's invite and
+  // a buyer's passbook invitation. All three were free-form and silently
+  // dropped by Meta after a day of silence (bug: dashboard login failed).
+  auth_otp: {
+    env: 'META_TPL_AUTH_OTP',
+    variables: ['code'],
+    audience: 'any',
+    note: 'Six-digit verification codes delivered over WhatsApp (dashboard sign-in). Meta Authentication category; variable {{1}} is the code.'
+  },
+  driver_invite: {
+    env: 'META_TPL_DRIVER_INVITE',
+    variables: ['plate'],
+    audience: 'driver',
+    note: 'A newly assigned driver is invited to accept the vehicle (reply ACCEPT).'
+  },
+  transfer_invite: {
+    env: 'META_TPL_TRANSFER_INVITE',
+    variables: ['plate'],
+    audience: 'buyer',
+    note: 'A passbook buyer is invited to ACCEPT/DECLINE a transfer (the buyer OTP itself is emailed).'
   }
 });
 
