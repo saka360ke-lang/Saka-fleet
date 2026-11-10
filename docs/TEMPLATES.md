@@ -83,6 +83,16 @@ Each entry: kind | env knob | audience | recommended category | variables
    why: the 14-day silence nudge fires outside Meta's 24-hour window, where
         free-form text is silently dropped. Gate: REENGAGE_TEMPLATE_ENABLED
         (default off); knob-off keeps the v1.16.3 free-form copy verbatim.
+   buttons (v1.95.1 — APPROVED): FOUR Quick Reply buttons — "Log Fuel",
+        "Set Reminder", "Log Expense", "Dashboard". The send emits four
+        parameter-free quick_reply components at explicit indexes 0-3 (a
+        parameter on a quick reply is what Meta rejects with 131008). A tap
+        returns its own TITLE; BUTTON_TITLE_PHRASES maps "Log Fuel" -> fuel,
+        "Set Reminder" -> set reminder, "Log Expense" -> log expense and
+        "Dashboard" -> dashboard — the exact typed phrases the live grammar
+        already owns (fuel/expense quiz, reminder quiz, dashboard sign-in).
+        Titles are the reliable signal because Meta may hand back a generated
+        payload id; registered ids and quick-edit ids still win first.
 
 7. driver_unassigned
    env: META_TPL_DRIVER_UNASSIGNED

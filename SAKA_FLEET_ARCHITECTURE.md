@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.95.0  
+**Version:** 1.95.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.95.1** | Phase 32 patch — **the approved `saka_reengage` Quick Reply buttons are live-wired**: the `re_engagement` kind declares FOUR `quick_reply` components at explicit indexes 0-3 (parameter-free — the 131008-safe shape), and `BUTTON_TITLE_PHRASES` maps the four approved titles ("Log Fuel" → `fuel`, "Set Reminder" → `set reminder`, "Log Expense" → `log expense`, "Dashboard" → `dashboard`) so a tap rides the exact same grammar as typing; `saka_feature_tip` stays body-only | 233.6 |
 | **1.95.0** | Phase 32 (**FINAL**) — **dashboard menu, dual-role toggle, drip-feed feature tips, re-engage template**: a burger + full-screen drawer at ≤1024px (built from the SAME `.nav` anchors, inert on the login doors, impersonation banner stays above it at z-index 60); `POST /d/lane/switch` flips the SESSION's `session_role` for a genuinely dual-role profile through the same gates as sign-in (owner: live trial/paid; driver: live assignment), rendered by an `onSend` strip only when both lanes exist and never while impersonating, plus a validated `?vehicle=` picker when a driver has >1 assignment; the trial sweep gains an OFF-by-default drip-feed (ONE feature tip at T+12h after activation, ONE follow-up at T+48h while that feature stays unexplored, per-sweep cap 10, never paid-live) using the new `feature_tip` template kind; `processSilentReengagement` moves to `chat_history` with a 14+ day threshold and gains the OFF-by-default `saka_reengage` template path (first name, guaranteed "there" fallback) while knob-off stays byte-identical | 233 |
 | **1.94.0** | Phase 31 — **website overhaul (landing + dashboard brand door)**: ONE menu pattern (drawer below 1280px, inline above), one 30px logo height with a square-mark swap at ≤480px, the duplicate ghost Pricing CTA removed and the header CTA folded into the drawer; the sticky header publishes its real height (`--nav-h`) so the drawer opens BELOW the launch banner; the approved launch copy ships with only the live slot counter (award-day analytics kept); a monthly/annual radio-pill switch (default monthly, `saka_pricing_interval`, local-currency aware, Free stays $0) drives every paid card; "no card" is rewritten to "no payment" across the landing copy with guardrails for `twitter:card` and historical release notes; the dashboard brand is a `brandHref` option — public site when signed out, `/d` when signed in and while impersonating (D6) | 232 |
 | **1.92.1** | Phase 29 patch — **the digest template's Quick Reply button**: the operator-confirmed `saka_overdue_digest` carries a Quick Reply ("Reminders", Custom); the kind now declares `buttons: [{ subType: 'quick_reply' }]` and the payload emits `{ type: 'button', sub_type: 'quick_reply', index: '0' }` with **no parameters** (the v1.87.3 131008 class can never fire), while the inbound `button_reply` resolves an unregistered id through the button TITLE ("Reminders"/"Remind me") to the deterministic reminders LIST — never the remind-me quiz | 230b |
@@ -6966,6 +6967,21 @@ E `GET /d/admin/passbook/:vehicleId` (read-only; VIN/token masked with `<details
 **Operator actions (exact, once each).** 1) Submit `saka_feature_tip` (Utility, en; body `🎯 Tip: try {{1}} — {{2}}` + `One minute and Saka does the rest.`; {{1}} = feature label, {{2}} = link). 2) Submit `saka_reengage` (Utility, en; `Hi {{1}}! It's Saka. I've been keeping your records safe. Anything new to log today?`; {{1}} = first name, fallback `there`). 3) After APPROVED: `gcloud run services update saka-fleet --region=europe-west1 --update-env-vars="META_TPL_FEATURE_TIP=saka_feature_tip,META_TPL_RE_ENGAGEMENT=saka_reengage"`. 4) After a staging walkthrough: enable `FEATURE_NUDGE_ENABLED=on` and `REENGAGE_TEMPLATE_ENABLED=on`. Rollback = unset the knobs (no schema, no migration). Defaults stay OFF otherwise.
 
 **Closure.** With Phase 32 shipped, the original 30-item program is complete: no deferred items remain, and this is the final phase of the programme. The two template knobs and the two feature knobs are the only operator-side activations outstanding — every code path ships tested and OFF, so the program is functionally complete the moment this commit deploys.
+
+#### 233.6 v1.95.1 (Phase 32 patch) — the approved `saka_reengage` Quick Reply buttons
+
+**Live state.** The operator submitted both templates: `saka_feature_tip` was APPROVED body-only; `saka_reengage` was APPROVED carrying FOUR Quick Reply buttons — "Log Fuel", "Set Reminder", "Log Expense", "Dashboard".
+
+**Outbound.** `PROACTIVE_TEMPLATE_KINDS.re_engagement` now declares four `{ subType: 'quick_reply', index: 0..3 }` entries. Explicit indexes matter: `templateButtonState` defaults a missing index to 0, so an index-less declaration would have emitted four buttons all at index 0 (the delivered registry states them). Each component is parameter-free — the 131008-safe shape confirmed in v1.92.1 — and a body-only template (`saka_feature_tip`) keeps the unchanged one-component payload.
+
+**Inbound.** `BUTTON_TITLE_PHRASES` maps the four approved titles to the exact phrases the live grammar already owns: `log fuel → fuel` (the expense/fuel quiz), `set reminder → set reminder` (the reminder-creation quiz — explicitly intended here, unlike the overdue digest's "Remind me → reminders LIST" law), `log expense → log expense` (the expense quiz), `dashboard → dashboard` (the deterministic dashboard sign-in lane). The alias only applies to an UNREGISTERED payload id (registered payload ids and quick-edit ids still win), and Meta's generated ids still resolve because the tap carries the title.
+
+**Proof.** `test_proactive_templates` **84** (+5: four components, indexes 0-3, no parameters, the registry pin, the full re-engage wire routing). `test_interactive_reply` **59** (+6: the frozen title registry incl. the four new keys, four title→phrase resolutions with generated ids, case-insensitivity, an id/title collision still resolving through the title).
+
+**Frames touched.** `src/services/proactiveTemplates.js`, `src/routes/whatsapp/interactive.js`, `docs/TEMPLATES.md` (entry 6 button contract), `.env.example` (note only — no new knob), `test_proactive_templates.js`, `test_interactive_reply.js`, `package.json` (1.95.1), `test_vehicle_documents.js` (version pin), `landing/data/changelog.json` + stamped assets, this section + history, `CHANGELOG.md`.
+
+**Operator activation.** After this deploy: `META_TPL_FEATURE_TIP=saka_feature_tip`, `META_TPL_RE_ENGAGEMENT=saka_reengage`, then `FEATURE_NUDGE_ENABLED=on`, `REENGAGE_TEMPLATE_ENABLED=on`. Rollback = unset the knobs (no schema, no migration).
+
 
 
 

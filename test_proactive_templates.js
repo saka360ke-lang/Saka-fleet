@@ -105,6 +105,16 @@ check(digestButtonState.status === 'ready' && digestButtonState.buttons.length =
 check(digestButtonState.buttons[0].sub_type === 'quick_reply' && digestButtonState.buttons[0].index === '0', 'the button is the confirmed Quick Reply at index 0 (v1.92.1)');
 check(!('parameters' in digestButtonState.buttons[0]), 'the Quick Reply button carries NO parameters (no 131008) (v1.92.1)');
 check(PROACTIVE_TEMPLATE_KINDS.overdue_digest.buttons.length === 1 && PROACTIVE_TEMPLATE_KINDS.overdue_digest.buttons[0].subType === 'quick_reply', "the registry pins the operator's confirmed button type (v1.92.1)");
+// v1.95.1 (Phase 32 patch) — saka_reengage's FOUR approved Quick Reply buttons.
+const reengageButtonState = templateButtonState('re_engagement', { name: 'Amina' });
+check(reengageButtonState.status === 'ready' && reengageButtonState.buttons.length === 4, 'saka_reengage declares FOUR button components (v1.95.1)');
+check(reengageButtonState.buttons.every((button, index) => button.sub_type === 'quick_reply' && button.index === String(index)), 'the four Quick Replies keep indexes 0-3 in order (v1.95.1)');
+check(reengageButtonState.buttons.every((button) => !('parameters' in button)), 'every saka_reengage Quick Reply is parameter-free (no 131008) (v1.95.1)');
+check(PROACTIVE_TEMPLATE_KINDS.re_engagement.buttons.length === 4 && PROACTIVE_TEMPLATE_KINDS.re_engagement.buttons.every((button) => button.subType === 'quick_reply'), "the registry pins the operator's four approved buttons (v1.95.1)");
+process.env.META_TPL_RE_ENGAGEMENT = 'saka_reengage';
+const reengageRouted = resolveProactiveMode({ kind: 're_engagement', templateVars: { name: 'Amina' } });
+check(reengageRouted.mode === 'template' && reengageRouted.templateName === 'saka_reengage' && reengageRouted.variables.length === 1 && reengageRouted.buttons.length === 4, 'the re-engage wire payload is body + four parameter-free buttons (v1.95.1)');
+delete process.env.META_TPL_RE_ENGAGEMENT;
 
 process.env.META_TPL_OVERDUE_DIGEST = 'saka_overdue_digest';
 const digestMode = resolveProactiveMode({ kind: 'overdue_digest', templateVars: DIGEST_VARS });

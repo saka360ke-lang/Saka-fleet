@@ -53,7 +53,19 @@ export const PROACTIVE_TEMPLATE_KINDS = Object.freeze({
     env: 'META_TPL_RE_ENGAGEMENT',
     variables: ['name'],
     audience: 'owner',
-    note: '14-day silence nudge (one per owner, capped per sweep).'
+    // v1.95.1 (Phase 32 patch) — the operator's approved saka_reengage carries
+    // FOUR Quick Reply buttons: "Log Fuel", "Set Reminder", "Log Expense",
+    // "Dashboard". Quick Replies take NO parameters, so each component is
+    // declared with its EXPLICIT index (0-3 — templateButtonState defaults a
+    // missing index to 0, hence they must be stated) and the sender emits the
+    // parameter-free shape that avoids Meta's 131008 rejection.
+    buttons: [
+      { subType: 'quick_reply', index: 0 },
+      { subType: 'quick_reply', index: 1 },
+      { subType: 'quick_reply', index: 2 },
+      { subType: 'quick_reply', index: 3 }
+    ],
+    note: '14-day silence nudge (one per owner, capped per sweep; 4 approved quick replies).'
   },
   driver_unassigned: {
     env: 'META_TPL_DRIVER_UNASSIGNED',

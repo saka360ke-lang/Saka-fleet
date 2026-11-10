@@ -50,11 +50,21 @@ check(parseInteractiveReply(msg({ type: 'button_reply' })) === null, 'button_rep
 // v1.92.1 — the saka_overdue_digest Quick Reply ("Reminders", Custom type): Meta
 // may hand back a generated id, so the button's own TITLE must reach the
 // deterministic reminders LIST (never the remind-me quiz).
-check(JSON.stringify(BUTTON_TITLE_PHRASES) === JSON.stringify({ reminders: 'reminders', reminder: 'reminders', 'remind me': 'reminders' }) && Object.isFrozen(BUTTON_TITLE_PHRASES), 'the title alias registry pins the Reminders mapping (v1.92.1)');
+check(JSON.stringify(BUTTON_TITLE_PHRASES) === JSON.stringify({ reminders: 'reminders', reminder: 'reminders', 'remind me': 'reminders', 'log fuel': 'fuel', 'set reminder': 'set reminder', 'log expense': 'log expense', dashboard: 'dashboard' }) && Object.isFrozen(BUTTON_TITLE_PHRASES), 'the title alias registry pins every button title (v1.95.1)');
 const digestButton = parseInteractiveReply(msg({ type: 'button_reply', button_reply: { id: 'generated_9f3a', title: 'Reminders' } }));
 check(digestButton?.text === 'reminders' && digestButton?.payload === 'generated_9f3a', 'an unregistered id with the title "Reminders" routes to the reminders list (v1.92.1)');
 check(parseInteractiveReply(msg({ type: 'button_reply', button_reply: { id: 'btn_1', title: 'REMINDERS' } }))?.text === 'reminders', 'the title alias is case-insensitive (v1.92.1)');
 check(parseInteractiveReply(msg({ type: 'button_reply', button_reply: { id: 'btn_2', title: 'Remind me' } }))?.text === 'reminders', 'the title "Remind me" reaches the LIST, never the remind-me quiz (v1.92.1)');
+
+// v1.95.1 (Phase 32 patch) — saka_reengage's FOUR approved Quick Reply buttons.
+// Meta hands back a generated id, so each TITLE must resolve to the exact typed
+// phrase the live grammar owns.
+for (const [title, phrase] of [['Log Fuel', 'fuel'], ['Set Reminder', 'set reminder'], ['Log Expense', 'log expense'], ['Dashboard', 'dashboard']]) {
+  const tapped = parseInteractiveReply(msg({ type: 'button_reply', button_reply: { id: `generated_${title.toLowerCase().replace(/\s+/g, '_')}`, title } }));
+  check(tapped?.text === phrase && tapped?.payload === `generated_${title.toLowerCase().replace(/\s+/g, '_')}`, `the "${title}" Quick Reply routes to "${phrase}" (v1.95.1)`);
+}
+check(parseInteractiveReply(msg({ type: 'button_reply', button_reply: { id: 'btn_lf', title: 'LOG FUEL' } }))?.text === 'fuel', 'the re-engage title aliases are case-insensitive (v1.95.1)');
+check(parseInteractiveReply(msg({ type: 'button_reply', button_reply: { id: 'log_fuel', title: 'Log Fuel' } }))?.text === 'fuel', 'a payload id that collides with the title still resolves through the title (v1.95.1)');
 
 console.log('\n--- Test 3: list_reply (list selection) ---');
 const list = parseInteractiveReply(msg({ type: 'list_reply', list_reply: { id: 'row_history', title: 'History', description: 'Past logs' } }));

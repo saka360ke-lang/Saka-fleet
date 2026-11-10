@@ -48,7 +48,17 @@ export const BUTTON_PAYLOAD_PHRASES = Object.freeze({
 export const BUTTON_TITLE_PHRASES = Object.freeze({
   reminders: 'reminders',
   reminder: 'reminders',
-  'remind me': 'reminders'
+  'remind me': 'reminders',
+  // v1.95.1 (Phase 32 patch) — saka_reengage's four approved Quick Reply
+  // buttons ("Log Fuel", "Set Reminder", "Log Expense", "Dashboard"). A tap
+  // returns its own TITLE; each resolves to the exact typed phrase the live
+  // grammar already owns (fuel -> the expense/fuel quiz, set reminder -> the
+  // reminder quiz, log expense -> the expense quiz, dashboard -> the
+  // deterministic dashboard sign-in lane).
+  'log fuel': 'fuel',
+  'set reminder': 'set reminder',
+  'log expense': 'log expense',
+  dashboard: 'dashboard'
 });
 
 // Defensive caps: a Cloud API payload id is <= 256 chars and a title is short.

@@ -1,6 +1,13 @@
 {
-  "latest": "1.95.0",
+  "latest": "1.95.1",
   "entries": [
+    {
+      "version": "1.95.1",
+      "date": "2026-11-09",
+      "title": "One tap from the re-engage message",
+      "preview": "Four one-tap buttons on the re-engage message: log fuel, set a reminder, log an expense, or open your dashboard.",
+      "summary": "A small follow-up to the final release. When Saka reaches out after two quiet weeks, the approved message now carries four buttons - Log Fuel, Set Reminder, Log Expense and Dashboard - so replying takes one tap instead of typing. Each tap goes through the exact same path as the typed phrase: it opens the fuel or expense quiz, starts a reminder, or hands over your dashboard sign-in link. The feature tip template stays as a plain message. Both message families remain switched off until the team enables them, and nothing changes for anyone before then."
+    },
     {
       "version": "1.95.0",
       "date": "2026-11-09",
