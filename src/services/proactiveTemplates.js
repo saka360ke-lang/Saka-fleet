@@ -164,6 +164,73 @@ export const PROACTIVE_TEMPLATE_KINDS = Object.freeze({
   }
 });
 
+/**
+ * v1.96.0 — operator test-fire fixtures. ONE sample `templateVars` object per
+ * kind, satisfying the kind's declared body variables AND button variables
+ * (auth_otp's URL button takes the same `code`). Used ONLY by the superadmin
+ * `admin tpl test` probe; production senders never read these. A test pins
+ * 18/18 coverage so a future kind can never ship without a probe fixture.
+ */
+export const TEMPLATE_TEST_FIXTURES = Object.freeze({
+  service_reminder: Object.freeze({ plate: 'KDA 123A' }),
+  expiry_reminder: Object.freeze({ item: 'Insurance', due: 'in 7 days' }),
+  trial_ending: Object.freeze({ days: '3' }),
+  trial_grace: Object.freeze({ tier: 'Growth' }),
+  dunning: Object.freeze({ tier: 'Solo Pro', days: '2' }),
+  re_engagement: Object.freeze({ name: 'Operator' }),
+  driver_unassigned: Object.freeze({ plate: 'KDA 123A' }),
+  winback: Object.freeze({ coupon: 'WINBACK40-TEST1' }),
+  deploy_live: Object.freeze({ version: 'v1.96.0', commit: 'template-test-fire' }),
+  eval_digest_ping: Object.freeze({}),
+  care_escalation: Object.freeze({}),
+  driver_activity: Object.freeze({ driver: 'Jane', plate: 'KDA 123A' }),
+  fleet_auto_audit: Object.freeze({ net: 'KES 4,250' }),
+  auth_otp: Object.freeze({ code: '123456' }),
+  driver_invite: Object.freeze({ plate: 'KDA 123A' }),
+  transfer_invite: Object.freeze({ plate: 'KDA 123A' }),
+  overdue_digest: Object.freeze({ count: '3', worst_item: 'Insurance (KDA 123A)', worst_days: '5' }),
+  feature_tip: Object.freeze({ feature: 'voice notes', link: 'https://app.sakafleet.com/d/login' })
+});
+
+/**
+ * v1.96.0 — the SUGGESTED Meta template name per kind (docs/TEMPLATES.md §2),
+ * used ONLY to name the expected template when a knob is unset. The code never
+ * invents a name: the operator's approved name may differ, and `META_TPL_<KIND>`
+ * remains the single source of truth at send time.
+ */
+export const TEMPLATE_SUGGESTED_NAMES = Object.freeze({
+  service_reminder: 'saka_service_reminder',
+  expiry_reminder: 'saka_expiry_reminder',
+  trial_ending: 'saka_trial_ending',
+  trial_grace: 'saka_trial_grace',
+  dunning: 'saka_dunning',
+  re_engagement: 'saka_reengage',
+  driver_unassigned: 'saka_driver_unassigned',
+  winback: 'saka_winback',
+  deploy_live: 'saka_deploy_live',
+  eval_digest_ping: 'saka_eval_digest_ping',
+  care_escalation: 'saka_care_escalation',
+  driver_activity: 'saka_driver_activity',
+  fleet_auto_audit: 'saka_fleet_auto_audit',
+  auth_otp: 'saka_otp',
+  driver_invite: 'saka_driver_invite',
+  transfer_invite: 'saka_transfer_invite',
+  overdue_digest: 'saka_overdue_digest',
+  feature_tip: 'saka_feature_tip'
+});
+
+/**
+ * v1.96.0 — the operator-approved TITLE of each declared button (the registry
+ * stores only `subType`/`index`; Meta carries the visible title). Drives the
+ * `admin tpl buttons` digest's "declared" column. A URL button (auth_otp) opens
+ * a link and is never an inbound tap, so it declares no title.
+ */
+export const TEMPLATE_BUTTON_TITLES = Object.freeze({
+  re_engagement: Object.freeze(['Log Fuel', 'Set Reminder', 'Log Expense', 'Dashboard']),
+  overdue_digest: Object.freeze(['Reminders']),
+  auth_otp: Object.freeze([])
+});
+
 export const PROACTIVE_TEMPLATE_ENV_KEYS = Object.freeze(
   Object.values(PROACTIVE_TEMPLATE_KINDS).map((def) => def.env)
 );
@@ -273,6 +340,9 @@ export default {
   PROACTIVE_TEMPLATE_KINDS,
   PROACTIVE_TEMPLATE_ENV_KEYS,
   PROACTIVE_TEMPLATE_LANGUAGE,
+  TEMPLATE_TEST_FIXTURES,
+  TEMPLATE_SUGGESTED_NAMES,
+  TEMPLATE_BUTTON_TITLES,
   templateNameForKind,
   templateVariablesForKind,
   templateButtonsForKind,

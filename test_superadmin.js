@@ -71,6 +71,21 @@ const normalUserPhone = '+254799000111';
   const help = formatAdminHelpReply();
   assert.ok(help.includes('admin command'), 'the help list advertises the command center');
   console.log('✅ v1.86.0: command center intent + help listing verified');
+
+  // v1.96.0 — Meta template operator surfaces (pure parse + auto-generated help).
+  const tplTestAll = await parseSuperadminCommand('admin tpl test all');
+  assert.strictEqual(tplTestAll.intent, 'ADMIN_TEMPLATE_TEST', 'admin tpl test all parses');
+  assert.strictEqual(tplTestAll.kind, 'all', 'admin tpl test all carries the all scope');
+  const tplTestKind = await parseSuperadminCommand('admin tpl test re_engagement');
+  assert.strictEqual(tplTestKind.intent, 'ADMIN_TEMPLATE_TEST');
+  assert.strictEqual(tplTestKind.kind, 're_engagement', 'admin tpl test <kind> carries the kind');
+  const tplTestBare = await parseSuperadminCommand('admin tpl test');
+  assert.strictEqual(tplTestBare.intent, 'ADMIN_TEMPLATE_TEST');
+  assert.strictEqual(tplTestBare.kind, null, 'bare admin tpl test never auto-fires (usage only)');
+  const tplButtons = await parseSuperadminCommand('admin tpl buttons');
+  assert.strictEqual(tplButtons.intent, 'ADMIN_TEMPLATE_BUTTONS', 'admin tpl buttons parses');
+  assert.ok(help.includes('admin tpl test') && help.includes('admin tpl buttons'), 'the help list advertises both template commands');
+  console.log('✅ v1.96.0: template test-fire + button audit intents verified');
 }
 
 // v1.82.0 (Phase 21) — the profiles report must count REGISTERED accounts and

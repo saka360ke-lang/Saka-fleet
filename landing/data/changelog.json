@@ -1,6 +1,13 @@
 {
-  "latest": "1.95.1",
+  "latest": "1.96.0",
   "entries": [
+    {
+      "version": "1.96.0",
+      "date": "2026-11-10",
+      "title": "Test the messages, prove the buttons",
+      "preview": "Fire a real approved template to the operator's phone, and prove every reply button reaches a live flow.",
+      "summary": "A behind-the-scenes release for the team. The superadmin can now send any approved WhatsApp message template to their own number with one command, so they can see exactly what customers receive before it matters - one message at a time or the whole list in a paced run, capped at five sends every ten minutes. Each send reports honestly what happened: accepted with a message id, rejected by Meta, blocked, or not configured yet (naming the template the operator still needs to approve). A second command audits every reply button on every template: it lists what the templates declare, what each button title maps to, and any recent taps, and it flags a tap that has nowhere to go. The audit also records one known gap - the 'Log Fuel' button still relies on Saka's language understanding rather than a fixed shortcut - so it can never be forgotten. Nothing changes for customers: no new messages are sent to them."
+    },
     {
       "version": "1.95.1",
       "date": "2026-11-09",

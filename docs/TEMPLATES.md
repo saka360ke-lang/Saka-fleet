@@ -373,3 +373,35 @@ Rules:
   typed phrase (for example a title of "Reminders" for remind_me) so the
   tap and the typed message read the same.
 
+------------------------------------------------------------
+6. Operator test-fire & button audit (v1.96.0)
+------------------------------------------------------------
+
+Two superadmin-only WhatsApp commands (30-minute admin session required):
+
+    admin tpl test <kind>     fire ONE approved template to SUPERADMIN_PHONE
+    admin tpl test all        pace the whole registry (5 sends / 10 minutes)
+    admin tpl buttons         audit every reply button (captured -> declared -> mapped)
+
+Rules:
+- The recipient is ALWAYS SUPERADMIN_PHONE (the operator's own number). If the
+  knob `META_TPL_<KIND>` is unset, the command refuses that kind and names the
+  expected template from the suggested-name list above - it never invents one.
+- At most 5 sends per 10 minutes. `all` walks the registry in order, reports
+  each kind, and stops at the window: "cooling down - run again in N minutes".
+- The reply distinguishes outcomes honestly: sent (wamid printed), rejected by
+  Meta (no wamid), delivery blocked (no wamid, no network call), credentials
+  missing (no wamid), knob unset (expected template named).
+- Delivery status lives in Cloud Logging / the Meta console under the printed
+  wamid; failed receipts also land in `error_logs` (`/webhook/whatsapp/status`).
+  There is no database delivery trail by design.
+- After tapping buttons: the quiz-starting taps ("Log Fuel", "Set Reminder",
+  "Log Expense") open REAL flows - reply `cancel` after each before running
+  `admin tpl buttons`. "Dashboard" and "Reminders" are read lanes.
+- `admin tpl buttons` reads captured taps from two live sources: `error_logs`
+  on route `/webhook/whatsapp/interactive` (unrecognized shapes, superadmin
+  number) and `chat_history` rows whose message EXACTLY equals a mapped target
+  phrase (recognized taps arrive as the typed phrase). Any captured tap with no
+  named claimant is flagged.
+
+

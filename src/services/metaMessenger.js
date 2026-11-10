@@ -31,8 +31,13 @@ export function cleanWhatsAppRecipient(toPhone) {
  * ONE Meta POST (text or template) behind ONE guard + ONE catch, so the
  * transport, the blocklist and the never-throws contract can never drift
  * between the two message shapes (rule 55). True only on 2xx.
+ *
+ * v1.96.0 — optional `capture` sink: when provided, a 2xx body is parsed once
+ * and its wamid exposed as `capture.wamid` / `capture.body`. Existing callers
+ * pass no capture, so their boolean contract and wire behaviour are unchanged
+ * (the response body is never read on the plain path).
  */
-async function postWhatsAppMessage(body, env = process.env) {
+async function postWhatsAppMessage(body, env = process.env, capture = null) {
   const { phoneNumberId, token } = whatsappTextConfig(env);
   if (!phoneNumberId || !token) return false;
   try {
@@ -44,7 +49,13 @@ async function postWhatsAppMessage(body, env = process.env) {
       },
       body: JSON.stringify({ messaging_product: 'whatsapp', ...body })
     });
-    return res.ok;
+    if (!res.ok) return false;
+    if (capture && typeof capture === 'object') {
+      const parsed = await res.json().catch(() => null);
+      capture.body = parsed;
+      capture.wamid = parsed?.messages?.[0]?.id || null;
+    }
+    return true;
   } catch {
     return false;
   }
@@ -73,6 +84,38 @@ export async function sendWhatsAppTemplate(toPhone, templateName, { languageCode
       components
     }
   }, env);
+}
+
+/**
+ * v1.96.0 — superadmin template PROBE. Wraps the SAME internal
+ * `postWhatsAppMessage` as `sendWhatsAppTemplate` (one transport, one guard,
+ * one never-throws contract), but returns a structured outcome so the operator
+ * sees exactly what happened:
+ *   { ok: true,  wamid: 'wamid.…', status: 'sent' }
+ *   { ok: false, wamid: null, status: 'rejected' | 'delivery_blocked' | 'no_credentials' }
+ * The blocklist is checked BEFORE any network call. Nothing else is touched —
+ * no nudge stamps, no markers, no queue rows (the caller owns the audit row).
+ */
+export async function sendWhatsAppTemplateProbe(toPhone, templateName, { languageCode = 'en', variables = [], buttons = [], env = process.env, capture = null } = {}) {
+  const { phoneNumberId, token } = whatsappTextConfig(env);
+  if (!phoneNumberId || !token) return { ok: false, wamid: null, status: 'no_credentials' };
+  if (!toPhone || !templateName) return { ok: false, wamid: null, status: 'rejected' };
+  const cleanPhone = cleanWhatsAppRecipient(toPhone);
+  if (!cleanPhone) return { ok: false, wamid: null, status: 'rejected' };
+  if (isDeliveryBlocked(cleanPhone)) return { ok: false, wamid: null, status: 'delivery_blocked' };
+  const components = [{ type: 'body', parameters: variables }];
+  for (const button of Array.isArray(buttons) ? buttons : []) components.push(button);
+  const sink = capture && typeof capture === 'object' ? capture : {};
+  const ok = await postWhatsAppMessage({
+    to: cleanPhone,
+    type: 'template',
+    template: {
+      name: templateName,
+      language: { code: languageCode },
+      components
+    }
+  }, env, sink);
+  return { ok, wamid: ok ? (sink.wamid || null) : null, status: ok ? 'sent' : 'rejected' };
 }
 
 /**
@@ -110,4 +153,4 @@ export async function sendWhatsAppText(toPhone, text, { env = process.env, kind 
   }, env);
 }
 
-export default { sendWhatsAppText, sendWhatsAppTemplate, cleanWhatsAppRecipient, whatsappTextConfig };
+export default { sendWhatsAppText, sendWhatsAppTemplate, sendWhatsAppTemplateProbe, cleanWhatsAppRecipient, whatsappTextConfig };

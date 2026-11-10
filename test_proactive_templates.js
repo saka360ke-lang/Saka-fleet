@@ -8,6 +8,9 @@ import {
   PROACTIVE_TEMPLATE_KINDS,
   PROACTIVE_TEMPLATE_ENV_KEYS,
   PROACTIVE_TEMPLATE_LANGUAGE,
+  TEMPLATE_TEST_FIXTURES,
+  TEMPLATE_SUGGESTED_NAMES,
+  TEMPLATE_BUTTON_TITLES,
   templateNameForKind,
   templateVariablesForKind,
   templateButtonsForKind,
@@ -232,6 +235,25 @@ delete process.env.META_TPL_FEATURE_TIP;
 const indexFallbackSrc = fs.readFileSync('./index.js', 'utf8');
 check(indexFallbackSrc.includes("'driver_activity', { plate, driver: driverName }") && indexFallbackSrc.includes('🔔 *Driver Activity Summary (${plate})*'), 'the driver_activity fallback text is byte-identical to the pre-v1.63.1 message');
 check(indexFallbackSrc.includes("'fleet_auto_audit', { net: formatMoney(fleetTotalEarnings - fleetTotalExpenses, cur, loc) }") && indexFallbackSrc.includes('📊 Your Fleet Auto-Audit Report is ready.'), 'the fleet_auto_audit fallback text is byte-identical to the pre-v1.63.1 message');
+
+console.log('--- 9. operator test-fire fixtures + suggested names (v1.96.0) ---');
+check(KINDS.every((kind) => TEMPLATE_TEST_FIXTURES[kind] && typeof TEMPLATE_TEST_FIXTURES[kind] === 'object'), 'every kind has a probe fixture (18/18)');
+check(KINDS.every((kind) => templateVariablesForKind(kind, TEMPLATE_TEST_FIXTURES[kind]) !== null), 'every fixture satisfies its kind body variables');
+check(KINDS.every((kind) => templateButtonState(kind, TEMPLATE_TEST_FIXTURES[kind]).buttons !== null), 'every fixture satisfies its kind buttons');
+for (const kind of KINDS) {
+  process.env[PROACTIVE_TEMPLATE_KINDS[kind].env] = TEMPLATE_SUGGESTED_NAMES[kind];
+}
+const fixturesRoute = KINDS.every((kind) => resolveProactiveMode({ kind, templateVars: TEMPLATE_TEST_FIXTURES[kind] }).mode === 'template');
+check(fixturesRoute, 'with a knob set, every fixture routes to the template sender (18/18)');
+for (const kind of KINDS) delete process.env[PROACTIVE_TEMPLATE_KINDS[kind].env];
+check(KINDS.every((kind) => typeof TEMPLATE_SUGGESTED_NAMES[kind] === 'string' && TEMPLATE_SUGGESTED_NAMES[kind].startsWith('saka_')), 'every kind has a suggested Meta name');
+check(TEMPLATE_SUGGESTED_NAMES.auth_otp === 'saka_otp' && TEMPLATE_SUGGESTED_NAMES.re_engagement === 'saka_reengage', 'the two documented name exceptions are pinned');
+check(KINDS.every((kind) => kind === 'auth_otp' || kind === 're_engagement' || TEMPLATE_SUGGESTED_NAMES[kind] === `saka_${kind}`), 'every other suggested name follows saka_<kind>');
+check(Object.keys(TEMPLATE_BUTTON_TITLES).length === 3 && TEMPLATE_BUTTON_TITLES.re_engagement.length === 4 && TEMPLATE_BUTTON_TITLES.overdue_digest[0] === 'Reminders' && TEMPLATE_BUTTON_TITLES.auth_otp.length === 0, 'the declared button titles pin the 3 button-bearing kinds');
+check(KINDS.filter((kind) => Array.isArray(PROACTIVE_TEMPLATE_KINDS[kind].buttons) && PROACTIVE_TEMPLATE_KINDS[kind].buttons.length).every((kind) => {
+  const inbound = PROACTIVE_TEMPLATE_KINDS[kind].buttons.filter((button) => String(button?.subType || 'url').toLowerCase() === 'quick_reply').length;
+  return (TEMPLATE_BUTTON_TITLES[kind] || []).length === inbound;
+}), 'every inbound (quick-reply) button carries exactly one approved title (URL buttons carry none)');
 
 console.log('');
 console.log('ALL PROACTIVE TEMPLATE TESTS PASSED (' + passed + ' assertions).');

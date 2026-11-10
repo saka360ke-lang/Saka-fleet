@@ -17,6 +17,8 @@ const STATLESS_SUITES = [
   'test_trial_unbind.js',
   // v1.63.0 - proactive template registry (11 kinds, env-gated, byte-identical fallback).
   'test_proactive_templates.js',
+  // v1.96.0 - superadmin template test-fire probe + reply-button audit (stateless).
+  'test_template_testfire.js',
   'test_vehicle_compliance.js',
   // v1.84.0 — Phase 23: the private vehicle-document vault (upload, dedupe,
   // Free file-less rows, list, delete, signed links, wipe carriers).

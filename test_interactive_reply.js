@@ -1,6 +1,9 @@
 import assert from 'node:assert';
 import fs from 'node:fs';
 import { parseInteractiveReply, BUTTON_PAYLOAD_PHRASES, BUTTON_TITLE_PHRASES } from './src/routes/whatsapp/interactive.js';
+import { BUTTON_PAYLOAD_PHRASES as SERVICE_PAYLOAD_PHRASES, BUTTON_TITLE_PHRASES as SERVICE_TITLE_PHRASES } from './src/services/interactiveReply.js';
+import { READ_COMMANDS } from './src/services/readCommands.js';
+import { detectQuizStart } from './src/services/quizEngine.js';
 
 /**
  * Saka Fleet — inbound interactive replies (v1.73.4, Phase 12B, section 198B).
@@ -125,5 +128,23 @@ check(Boolean(diagBlock), 'messages.js builds the diagnostic stack from a bounde
 check(diagBlock.includes('interactive: messageObj?.interactive') && diagBlock.includes('button: messageObj?.button'), 'A1: the stack captures ONLY the interactive and button sub-objects');
 check(!/\b(?:from|text|image|audio|document|sticker|id|timestamp)\s*:\s*messageObj/.test(diagBlock), 'A1: no message body, media id, phone number or timestamp enters the stack');
 check(messagesSource.includes("'/webhook/whatsapp/interactive'"), 'A1: the incident is written to error_logs under its own route');
+
+console.log('\n--- Test 10: phrase-reachability law (v1.96.0) ---');
+const remindersLane = READ_COMMANDS.find((lane) => lane.id === 'reminders_list');
+const dashboardLane = READ_COMMANDS.find((lane) => lane.id === 'dashboard');
+const helpLane = READ_COMMANDS.find((lane) => lane.id === 'help_menu');
+const titleTap = (title) => parseInteractiveReply(msg({ type: 'button_reply', button_reply: { id: 'generated_reach', title } }));
+check(titleTap('Reminders')?.text === 'reminders' && Boolean(remindersLane?.detect('reminders')), "'reminders' is claimed by the readCommands reminders_list lane");
+check(titleTap('Reminder')?.text === 'reminders' && Boolean(remindersLane?.detect('reminders')), "'reminder' resolves to the same reminders_list lane");
+check(titleTap('Remind me')?.text === 'reminders' && Boolean(remindersLane?.detect('reminders')), "'remind me' resolves to the LIST (never the quiz) and the lane claims it");
+check(titleTap('Log Fuel')?.text === 'fuel' && detectQuizStart({ intent: '', messageText: 'fuel', hasVehicleRegistered: true }) === null, "the 'log fuel' phrase has NO deterministic claimant yet (documented design gap — rides the AI intent path)");
+check(titleTap('Set Reminder')?.text === 'set reminder' && detectQuizStart({ intent: '', messageText: 'set reminder', hasVehicleRegistered: true }) === 'set_reminder', "'set reminder' is claimed by the quizEngine set_reminder flow trigger");
+check(titleTap('Log Expense')?.text === 'log expense' && detectQuizStart({ intent: '', messageText: 'log expense', hasVehicleRegistered: true }) === 'log_expense', "'log expense' is claimed by the quizEngine log_expense flow trigger");
+check(titleTap('Dashboard')?.text === 'dashboard' && Boolean(dashboardLane?.detect('dashboard')), "'dashboard' is claimed by the deterministic dashboard sign-in lane");
+check(BUTTON_TITLE_PHRASES === SERVICE_TITLE_PHRASES && BUTTON_PAYLOAD_PHRASES === SERVICE_PAYLOAD_PHRASES && Object.isFrozen(SERVICE_TITLE_PHRASES), 'the route leaf re-exports the service registries byte-identically (same frozen objects)');
+check(Boolean(helpLane?.detect('help')), "payload 'help' is claimed by the help_menu lane");
+check(detectQuizStart({ intent: 'KEEP_VEHICLE', messageText: 'keep these', hasVehicleRegistered: true }) === 'keep_vehicles', "payload 'keep all' reaches the keep-vehicles flow");
+const pendingSource = fs.readFileSync('./src/routes/whatsapp/pending.js', 'utf8');
+check(pendingSource.includes('maybeHandleSubscriptionTurn') && BUTTON_PAYLOAD_PHRASES.subscription === 'subscription', "payload 'subscription' is claimed by the deterministic billing turn");
 
 console.log(`\n🎉 ${passed} interactive-reply assertions passed.`);

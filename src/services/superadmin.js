@@ -22,7 +22,14 @@ import { formatNairobiDate } from './dateParser.js';
 // v1.72.1 (P2-6) — system_config access rides the dual-window service.
 import { readConfig, writeConfig } from './systemConfigService.js';
 import { CONFIG_KEY_ADMIN_WIPE_PENDING, dynamicConfigKey } from './systemConfigKeys.js';
-import { formatQuickEditPreview } from './interactiveReply.js';
+import { formatQuickEditPreview, BUTTON_TITLE_PHRASES } from './interactiveReply.js';
+// v1.96.0 — superadmin Meta template test-fire + reply-button audit (zero tokens).
+import {
+  runTemplateTestFire,
+  formatTemplateTestReply,
+  runTemplateButtonAudit,
+  formatTemplateButtonDigest
+} from './templateTestFire.js';
 import {
   listIncidents,
   resolveIncident,
@@ -149,6 +156,7 @@ const ADMIN_INTENTS = new Set([
   'ADMIN_FRICTION', 'ADMIN_FRICTION_DONE',
   'ADMIN_UPDATE_SUGGEST', 'ADMIN_FEATURE_ADOPT',
   'ADMIN_QUICK_EDIT_PREVIEW',
+  'ADMIN_TEMPLATE_TEST', 'ADMIN_TEMPLATE_BUTTONS',
   'ADMIN_AI_STATS',
   'ADMIN_CONV_EVAL',
   'ADMIN_ENV_AUDIT',
@@ -437,6 +445,18 @@ export async function parseSuperadminCommand(messageText) {
   // Deterministic, zero tokens; superadmin-gated like every branch above.
   if (/^\s*admin\s+quick[- ]?edit(?:\s+preview)?\s*$/i.test(text)) {
     return { intent: 'ADMIN_QUICK_EDIT_PREVIEW' };
+  }
+
+  // v1.96.0 — Meta template operator surfaces (deterministic, zero tokens).
+  // `admin tpl buttons` audits every reply button (declared ↔ mapped ↔
+  // captured); `admin tpl test [kind|all]` fires a REAL approved template to
+  // SUPERADMIN_PHONE. Bare `admin tpl test` prints usage (never auto-fires).
+  if (/^\s*admin\s+tpl\s+buttons\s*$/i.test(text)) {
+    return { intent: 'ADMIN_TEMPLATE_BUTTONS' };
+  }
+  const tplTestMatch = text.match(/^\s*admin\s+tpl\s+test(?:\s+([a-zA-Z0-9_]+))?\s*$/i);
+  if (tplTestMatch) {
+    return { intent: 'ADMIN_TEMPLATE_TEST', kind: String(tplTestMatch[1] || '').trim().toLowerCase() || null };
   }
 
   const prompt = `Classify user's admin request into JSON:
@@ -2371,6 +2391,10 @@ export const ADMIN_COMMAND_REGISTRY = Object.freeze([
     { cmd: 'UPDATE-SUGGEST> <text>', desc: 'file a free-text update suggestion', ex: ['UPDATE-SUGGEST> redirect chat signups to the site'] },
     { cmd: 'admin quick-edit', desc: 'interactive quick-edit preview', ex: ['admin quick-edit'] }
   ] },
+  { group: 'Templates', items: [
+    { cmd: 'admin tpl test [kind|all]', desc: 'fire a real Meta template to the superadmin phone (5 per 10 min)', ex: ['admin tpl test re_engagement', 'admin tpl test all'] },
+    { cmd: 'admin tpl buttons', desc: 'audit every template reply button (declared/mapped/captured)', ex: ['admin tpl buttons'] }
+  ] },
   { group: 'Growth', items: [
     { cmd: 'generate coupon <pct>', desc: 'create a discount coupon', ex: ['generate coupon 20%'] },
     { cmd: 'admin horizon', desc: 'synthesize the weekly feature blueprint', ex: ['admin horizon'] },
@@ -2871,6 +2895,39 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText, o
     return {
       isSuperadmin: true,
       reply: preview.reply
+    };
+  }
+
+  // v1.96.0 — Meta template operator surfaces. Both are deterministic, zero
+  // tokens, superadmin-only (this hub) and session-gated above. The test-fire
+  // sends only to SUPERADMIN_PHONE; every attempt writes one audit row.
+  if (parsedCommand.intent === 'ADMIN_TEMPLATE_TEST') {
+    const outcome = await runTemplateTestFire({
+      adminPhone: formattedPhone,
+      kind: parsedCommand.kind ?? null,
+      audit: (details) => logAdminAudit(supabase, formattedPhone, 'ADMIN_TEMPLATE_TEST', details)
+    });
+    return {
+      isSuperadmin: true,
+      reply: formatTemplateTestReply(outcome)
+    };
+  }
+
+  if (parsedCommand.intent === 'ADMIN_TEMPLATE_BUTTONS') {
+    const auditData = await runTemplateButtonAudit({
+      supabase,
+      adminPhone: formattedPhone,
+      titlePhrases: BUTTON_TITLE_PHRASES
+    });
+    await logAdminAudit(supabase, formattedPhone, 'ADMIN_TEMPLATE_BUTTONS', {
+      declared_kinds: (auditData.declared || []).map((entry) => entry.kind),
+      mapped_titles: (auditData.mapped || []).length,
+      captured: (auditData.captured || []).length,
+      unclaimed: (auditData.unclaimed || []).length
+    });
+    return {
+      isSuperadmin: true,
+      reply: formatTemplateButtonDigest(auditData)
     };
   }
 

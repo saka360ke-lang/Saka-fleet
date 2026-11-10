@@ -23,43 +23,19 @@
  * for when they are. An unregistered payload falls back to the button's own
  * title, so Saka can always answer what the user just tapped.
  */
-import { resolveQuickEditButtonId } from '../../services/interactiveReply.js';
+import {
+  resolveQuickEditButtonId,
+  BUTTON_PAYLOAD_PHRASES,
+  BUTTON_TITLE_PHRASES
+} from '../../services/interactiveReply.js';
 
-/**
- * Registered payload id -> the exact typed operator Saka already understands.
- * D1: `remind_me` maps to `reminders` (the due LIST the template body promises:
- * "Reply reminders to see what is coming up") — never `remind me`, which starts
- * the set_reminder quiz instead.
- */
-export const BUTTON_PAYLOAD_PHRASES = Object.freeze({
-  remind_me: 'reminders',
-  reminders: 'reminders',
-  subscription: 'subscription',
-  keep_all: 'keep all',
-  help: 'help'
-});
-
-/**
- * v1.92.1 — TITLE aliases for an UNREGISTERED payload id. Meta's template quick
- * replies can carry a generated id, so the button's own text is the reliable
- * signal. "Reminders" / "Remind me" must reach the deterministic reminders LIST
- * (never the remind-me quiz — the D1 law), exactly like the registered ids.
- */
-export const BUTTON_TITLE_PHRASES = Object.freeze({
-  reminders: 'reminders',
-  reminder: 'reminders',
-  'remind me': 'reminders',
-  // v1.95.1 (Phase 32 patch) — saka_reengage's four approved Quick Reply
-  // buttons ("Log Fuel", "Set Reminder", "Log Expense", "Dashboard"). A tap
-  // returns its own TITLE; each resolves to the exact typed phrase the live
-  // grammar already owns (fuel -> the expense/fuel quiz, set reminder -> the
-  // reminder quiz, log expense -> the expense quiz, dashboard -> the
-  // deterministic dashboard sign-in lane).
-  'log fuel': 'fuel',
-  'set reminder': 'set reminder',
-  'log expense': 'log expense',
-  dashboard: 'dashboard'
-});
+// v1.96.0 — the two button registries now live in the pure service module
+// `src/services/interactiveReply.js` (the §190 boundary forbids services
+// importing route leaves, and the superadmin template-button audit is a
+// service consumer). They are re-exported here byte-identically — same frozen
+// objects, same contents, same resolution order — so every existing importer
+// and test keeps its path and its pins.
+export { BUTTON_PAYLOAD_PHRASES, BUTTON_TITLE_PHRASES };
 
 // Defensive caps: a Cloud API payload id is <= 256 chars and a title is short.
 // Nothing downstream expects more, and a malformed blob can never flood a turn.

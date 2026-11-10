@@ -47,6 +47,46 @@ export const QUICK_EDIT_ACTIONS = Object.freeze({
 /** Identifiers that may NEVER be offered as a quick edit (rule 8). */
 export const INTERACTIVE_LOCKED_FIELDS = Object.freeze(['vin', 'qr_passbook_token', 'vehicle_id', 'driver_id', 'user_id', 'entry_date']);
 
+/**
+ * Registered payload ID -> the exact typed operator Saka already understands
+ * (docs/TEMPLATES.md §5; D1 locked).
+ * `remind_me` maps to `reminders` (the due LIST the template body promises:
+ * "Reply reminders to see what is coming up") — never `remind me`, which starts
+ * the set_reminder quiz instead.
+ *
+ * v1.96.0 — these two registries MOVED here from the route leaf
+ * (`src/routes/whatsapp/interactive.js`) so service-side consumers (the
+ * superadmin `admin tpl buttons` audit) can read them without a service
+ * importing a route module (the §190 boundary). The leaf re-exports them
+ * byte-identically; every existing importer keeps working unchanged.
+ */
+export const BUTTON_PAYLOAD_PHRASES = Object.freeze({
+  remind_me: 'reminders',
+  reminders: 'reminders',
+  subscription: 'subscription',
+  keep_all: 'keep all',
+  help: 'help'
+});
+
+/**
+ * TITLE aliases for an UNREGISTERED payload id (v1.92.1; extended v1.95.1).
+ * Meta's template quick replies can carry a generated id, so the button's own
+ * text is the reliable signal. "Reminders" / "Reminder" / "Remind me" must
+ * reach the deterministic reminders LIST (never the remind-me quiz — the D1
+ * law). The four v1.95.1 entries map `saka_reengage`'s approved Quick Replies
+ * ("Log Fuel", "Set Reminder", "Log Expense", "Dashboard") to the exact typed
+ * phrases the live grammar already owns.
+ */
+export const BUTTON_TITLE_PHRASES = Object.freeze({
+  reminders: 'reminders',
+  reminder: 'reminders',
+  'remind me': 'reminders',
+  'log fuel': 'fuel',
+  'set reminder': 'set reminder',
+  'log expense': 'log expense',
+  dashboard: 'dashboard'
+});
+
 function trim(value, max) {
   const text = String(value ?? '').replace(/\s+/g, ' ').trim();
   return text.length > max ? `${text.slice(0, Math.max(0, max - 1))}…` : text;
@@ -180,6 +220,8 @@ export default {
   INTERACTIVE_LIMITS,
   QUICK_EDIT_ACTIONS,
   INTERACTIVE_LOCKED_FIELDS,
+  BUTTON_PAYLOAD_PHRASES,
+  BUTTON_TITLE_PHRASES,
   isLockedInteractiveField,
   buildReplyButton,
   resolveQuickEditButtonId,
