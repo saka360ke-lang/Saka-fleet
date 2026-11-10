@@ -64,6 +64,13 @@ export async function applyPostAiIntentFixes({ aiResult, duplicateReceipt, messa
   if (readCtx.recordSpec.question.reason === 'looks-like-log' && !['LOG_EXPENSE', 'LOG_EARNINGS'].includes(intent)) {
     intent = 'LOG_EXPENSE';
   }
+  // v1.96.2 — "Add fuel record" / "record fuel" are log COMMANDS: route the
+  // write lane explicitly (an earnings word keeps its own lane).
+  if (readCtx.recordSpec.question.reason === 'log-command' && !['LOG_EXPENSE', 'LOG_EARNINGS'].includes(intent)) {
+    intent = /\b(?:earn(?:ing|ings)?|income|revenue|takings?|fares?)\b/i.test(messageText)
+      ? 'LOG_EARNINGS'
+      : 'LOG_EXPENSE';
+  }
   let reply = aiResult.reply_message;
 
   // v1.36.0 — a QUERY_RECORDS message the engine could not parse gets a
@@ -85,6 +92,14 @@ export async function applyPostAiIntentFixes({ aiResult, duplicateReceipt, messa
   // A receipt photo that was already processed never re-enters the
   // expense flow — the duplicate reply below is deterministic.
   if (duplicateReceipt) {
+    intent = 'GENERAL_CHAT';
+    aiResult = { ...aiResult, intent, extracted_data: {}, reply_message: null };
+  }
+
+  // v1.96.2 — a complaint about what just happened is never a fresh expense
+  // draft. Live 2026-11-10: "Kindly ensure this never happens again. Never miss
+  // to link a receipt" started an expense quiz instead of acknowledging it.
+  if (/(?:ensure|make\s+sure)\s+(?:this|that|it)\s+never\s+happens\s+again|\bnever\s+miss\s+(?:to\s+)?(?:link|attach|send)|\byou\s+(?:saved|logged|did)\s+(?:it|that|this)\s+wrong\b|\byou\s+keep\s+(?:making|doing)\b/i.test(String(messageText || ''))) {
     intent = 'GENERAL_CHAT';
     aiResult = { ...aiResult, intent, extracted_data: {}, reply_message: null };
   }

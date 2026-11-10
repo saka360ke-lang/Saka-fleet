@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.96.1  
+**Version:** 1.96.2  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.96.2** | Live chat audit fix release (+254734852529): receipt evidence can never be answered as a ledger query (document guard + every fresh receipt opens the confirmation quiz; duplicates stay out), "Add fuel record" opens the log flow, a non-ledger delete can never execute a stale ledger delete (compliance card → wrong-row delete fixed), the money lexicon masks ordinals and a unit price can never become the spend, a document dump's nozzle number is never the fuel volume, mid-draft replies never claim a save, complaints never start an expense, "cancel transfer" never starts a handover; receipt amount reconciled 11,823 → 3,000 (audited) + 9 friction rows closed | 235 |
 | **1.96.1** | Operator template tools patch — **`admin tpl test [kind|all] [target_phone]`**: an optional target sends the REAL template to a regular device (default stays `SUPERADMIN_PHONE`); a local 10-digit `07…` number resolves to `+254…` via the new pure `normalizeWhatsAppTargetPhone` (any other shape must carry its country code), an invalid target is a deterministic `invalid_target` refusal with zero sends, the 5/10-min window is keyed to the OPERATOR (never the target), and every audit row stores the target masked to its last 4 digits (`+2547****2529`). The parser is now a deterministic two-token match so a malformed test command never falls to the AI classifier (bare `admin tpl test` still prints usage) | 234.1 |
 | **1.96.0** | Operator template tools — **`admin tpl test [kind|all]`** fires a REAL Meta template to `SUPERADMIN_PHONE` through the SAME single transport (`sendWhatsAppTemplateProbe` wraps `postWhatsAppMessage` with an optional capture that returns the parsed wamid; the boolean senders stay byte-identical), respects the delivery blocklist BEFORE posting, refuses unset knobs naming the registry's suggested template, refuses gracefully when `SUPERADMIN_PHONE` is unset, and is capped at 5 sends / 10 minutes per phone (module-level sliding window; `all` paces the registry and says when to rerun) with one `ADMIN_TEMPLATE_TEST` audit row per attempt; **`admin tpl buttons`** renders a deterministic zero-token `captured → declared → mapped` digest (declared from the registry + the approved titles, mapped from `BUTTON_TITLE_PHRASES`, captured from `error_logs` diagnostics and EXACT-match `chat_history` taps) and flags every tap without a named claimant. The two button registries moved to `services/interactiveReply.js` (service-side read; the route leaf re-exports them byte-identically); the phrase-reachability law pins all 7 title phrases to named lanes and records that bare `fuel` still has no deterministic claimant (design gap, deliberately unfixed) | 234 |
 | **1.95.1** | Phase 32 patch — **the approved `saka_reengage` Quick Reply buttons are live-wired**: the `re_engagement` kind declares FOUR `quick_reply` components at explicit indexes 0-3 (parameter-free — the 131008-safe shape), and `BUTTON_TITLE_PHRASES` maps the four approved titles ("Log Fuel" → `fuel`, "Set Reminder" → `set reminder`, "Log Expense" → `log expense`, "Dashboard" → `dashboard`) so a tap rides the exact same grammar as typing; `saka_feature_tip` stays body-only | 233.6 |
@@ -7029,6 +7030,30 @@ E `GET /d/admin/passbook/:vehicleId` (read-only; VIN/token masked with `<details
 **Suites run.** test_template_testfire (70), test_superadmin, test_proactive_templates (93), test_interactive_reply (70), test_vehicle_documents (83), test_doc_sync (30), test_env_audit (59), test_landing_static (429), `npm run docs:check`, `npm run health` — green.
 
 **Operator actions.** `adminstart` → `admin tpl test re_engagement 0734852529` (target device) or `admin tpl test re_engagement` (superadmin default) → tap the arrived button (quiz-starting taps: reply `cancel`) → `admin tpl buttons`. Rollback = revert the commit / redeploy the previous revision; no schema, env or data to undo.
+
+---
+
+### 235. v1.96.2 — the live chat audit (+254734852529): evidence never becomes a query, and money stays law-abiding (2026-11-10)
+
+**The audit (rules 42/44/54).** A full read of the conversation (322 `chat_history` rows + 324 transcripts), the ledger (5 expenses), receipts (1), transfers (2, both cancelled), reminders (2), compliances (1 vehicle + 2 driver) and **12 friction rows** with **0 open remediation proposals**. It found five live defects. Four older ones were verified already fixed at HEAD and deliberately **not** re-fixed: launch-award completion copy (v1.87.0 — this exact account was that fix's live evidence: slot 1, `LAUNCH183-1`, ends 2027-05-11), nickname editing (v1.89.2), the KE fiscal amount + receipt link (v1.87.4) and the dashboard transfer cancel (v1.87.5). The driver compliance card was proved correct with a live call — it lists **both** the licence and the PSV badge, so the 06:24 miss was a stale surface, not a current defect.
+
+**D1 — evidence is never a ledger question.** A photo-only receipt re-send produced an OCR dump with no vault row, so `receiptQuizStartFor` returned null and the **records lane** claimed the dump ("Nothing under fuel + repairs expenses … yet", five times). Two laws now hold: (1) `parseRecordQuestion` returns `document-evidence` for a legal-receipt/fiscal-receipt/tax-invoice/registration-certificate body (rule 36/37) and `log-command` for a leading add/log/save verb that names what to log; (2) `receiptQuizStartFor` takes an explicit `isDuplicateReceipt` fact — **every fresh receipt opens the confirmation quiz**, vaulted or not, and only a duplicate stays out (the v1.87.4 no-second-draft law). `applyPostAiIntentFixes` routes `log-command` to `LOG_EXPENSE` (earnings → `LOG_EARNINGS`).
+
+**D2 — a confirmation's executor is the thing it names.** "Delete last entry" (fuel preview) → "No. Delete last compliance" left the fuel-delete pending alive; the model invented a compliance-delete card and the next "Delete" **deleted the fuel row**. New pure `detectNonLedgerTarget()` in `entryAnswers.js`: a delete/remove request naming a compliance/reminder target returns `{type:'none', dropPending:true, blockedTarget}`; the `ledger_turn` lane claims it and answers deterministically (compliance dates are facts — correct with the right date; reminders are not ledger rows). Receipt/document/vehicle targets drop the stale prompt and let their own lanes run. Bare `DELETE` and numbered `delete 2` are unchanged (pinned).
+
+**D3 — money is engine-owned.** Two live amount errors: "300 parking … 7th, 8th and 9th of November" → **315** (bare ordinals survived the date mask; "and" was additive) and "Price of diesel 222.7kes/liter" → the **amount**, with "NOZZLE: 1" as the volume. `moneyLexicon` now masks bare ordinals and skips `st|nd|rd|th` tails; `isUnitPriceOnly()` is the shared law; the quick-log lane takes `parseMoneyStory().amount` before any AI value and rejects a unit-price-only AI amount; `extractVehicleAttributes` stores `unit_price` instead of `amount`; the quiz drops AI litres on a document dump unless the text carries real litre evidence (`13.47 X 222.70`, not `NOZZLE: 1`).
+
+**D4 — words that should not be said.** `stripPrematureSaveClaim()` removes a "Saved/Logged/Recorded …" line from every **non-completed** quiz reply (the confirmation gate owns the claim); a complaint family ("never happens again", "never miss to link", "you saved it wrong") now reaches the complaint lane and resets the intent so no expense quiz starts.
+
+**D5 — cancel transfer never starts a transfer.** New `transfer_cancel_hint` read lane: "cancel/stop/abort … transfer" is answered deterministically (names the vehicle and the dashboard cancel, or says nothing is pending) and yields to a live `transfer_seller` flow, `transferFlow` or buyer-OTP sink.
+
+**Live reconciliation.** `receipts.f4d9b896…amount` 11,823 → 3,000 through `scripts/reconcile_receipt_amounts.js` (`--scan` reports linked mismatches; one explicit `--receipt/--amount/--reason --apply` write; audit `RECEIPT_AMOUNT_CORRECTED`), scan now 0 mismatches. All 9 PENDING friction rows closed via `markFrictionDeployed` with per-row resolutions.
+
+**Decisions.** D1 fresh receipts always confirm (only duplicates stay out); D2 compliance/reminder deletes are refused with correction guidance; D3 a unit price is never the spend; D4 a typed volume without a unit ("filled 40") keeps working — the litre-evidence guard applies to document dumps only.
+
+**Frames touched.** `src/services/{moneyLexicon,recordAnswers,entryAnswers,readCommands,quizEngine}.js`, `src/routes/whatsapp/{quiz,messages,commands,conversation,helpers}.js`, `sakaAi.js`, `scripts/reconcile_receipt_amounts.js` (new), `package.json`, `test_record_answers`, `test_natural_intake`, `test_entry_ledger`, `test_read_registry`, `test_quiz_flow`, this file, `CHANGELOG.md`, `docs/`, `landing/data/changelog.json` + stamped assets.
+
+**Suites run.** test_read_registry (238), test_record_answers (88), test_natural_intake (22), test_entry_ledger, test_quiz_flow (235), test_pending_state (434), test_no_canned_replies (15), test_edit_delete, test_first_message_flow (59), test_ocr_flow (153), `npm run docs:check`, `npm run health` — green.
 
 
 

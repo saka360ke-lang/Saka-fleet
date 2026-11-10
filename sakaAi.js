@@ -13,6 +13,8 @@ import { prepareRoutingText } from './src/services/textNormalizer.js';
 import { readConfig } from './src/services/systemConfigService.js';
 import { CONFIG_KEY_SAKA_CORE_PROMPT } from './src/services/systemConfigKeys.js';
 import { sanitizeEntryLabel } from './src/services/entryLabels.js';
+// v1.96.2 — a per-litre price is never the spend (money lexicon law 2).
+import { isUnitPriceOnly } from './src/services/moneyLexicon.js';
 
 // v1.28.9 — re-exported for training tests and admin audits; the glossary is
 // authored once in flowKnowledge/assetMetrics.
@@ -688,7 +690,14 @@ export function extractVehicleAttributes(messageText = '') {
   if (amtMatch) {
     const aVal = parseFloat(amtMatch[1].replace(/,/g, ''));
     if (!isNaN(aVal) && aVal > 0) {
-      data.amount = aVal;
+      // v1.96.2 — "Price of diesel 222.7kes/liter" is a UNIT PRICE, never the
+      // spend (live 2026-11-10: it was captured as the amount and the user had
+      // to correct it). The money lexicon decides; only a total may be `amount`.
+      if (isUnitPriceOnly(clean, aVal)) {
+        data.unit_price = aVal;
+      } else {
+        data.amount = aVal;
+      }
     }
   }
 

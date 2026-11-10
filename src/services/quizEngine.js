@@ -1496,6 +1496,17 @@ export function isPollutedFieldValue(text) {
 }
 function applyExtraction(state, def, ext, ctx) {
   if (!ext) return;
+  // v1.96.2 — a scanned document dump ("PUMP: 13 NOZZLE: 1") must never supply
+  // the fuel volume. Live 2026-11-10: a 13.47 L fill was drafted as "1 L"
+  // (the nozzle number) because the AI read the whole receipt dump. On a
+  // document dump the value needs real litre evidence in the text.
+  if (looksLikeDocumentDump(ctx?.messageText)) {
+    for (const key of ['fuel_liters', 'liters', 'litres', 'volume']) {
+      const raw = ext[key];
+      if (raw === null || raw === undefined || raw === '') continue;
+      if (!hasLitreEvidence(ctx?.messageText, raw)) delete ext[key];
+    }
+  }
   // Two passes: conditional fields (e.g. fuel volume when expense_type = Fuel)
   // only become active after earlier fields in the same payload are captured.
   for (let pass = 0; pass < 2; pass += 1) {
@@ -1516,6 +1527,21 @@ function applyExtraction(state, def, ext, ctx) {
       }
     }
   }
+}
+
+/** A scanned receipt/invoice dump (not a typed sentence). v1.96.2 */
+export function looksLikeDocumentDump(text) {
+  return /\b(?:RECEIPT|INVOICE|PUMP|NOZZLE|FISCAL|TAX\s+INVOICE)\s*[:#]/i.test(String(text || ''));
+}
+
+/** True when `value` appears with a real litre marker (or as "<litres> X <price>"). v1.96.2 */
+export function hasLitreEvidence(text, value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return false;
+  const source = String(text || '');
+  const escaped = String(n).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?:^|\\D)${escaped}\\s*(?:l\\b|lt\\b|ltr\\b|litres?|liters?)`, 'i').test(source)
+    || new RegExp(`(?:^|\\D)${escaped}\\s*[x×]\\s*\\d`, 'i').test(source);
 }
 
 function isSkipInput(text) {

@@ -40,6 +40,7 @@ import { isVehicleSummaryCommand } from '../../services/readCommands.js';
 import { getDriverComplianceStatus } from '../../services/driverAssignments.js';
 import { isLegacyWelcomeCopy } from '../../services/greetings.js';
 import { buildRoleContext, extractNumberFromText, extractOdometerFromText } from './helpers.js';
+import { parseMoneyStory, isUnitPriceOnly } from '../../services/moneyLexicon.js';
 
 /* ------------------------------------------------------------------ */
 /* 1. country bucket command (a profile write - zero tokens)           */
@@ -751,7 +752,18 @@ export async function handleGreetingTurn({ aiResult, targetVeh, existingVehicles
 
 export async function handleLogExpenseTurn({ mergedExt, messageText, targetVeh, supabaseClient, profileData, senderPhone, countryInfo, targetLang, existingVehicles, sendWhatsApp }) {
   let reply;
-  const extAmount = mergedExt.amount || extractNumberFromText(messageText);
+  // v1.96.2 — money is engine-owned. The money lexicon masks dates/ordinals,
+  // never sums unrelated numbers and never treats a per-litre price as the
+  // spend (live 2026-11-10: "Paid 300 parking ... 7th, 8th and 9th of November"
+  // became KES 315 = 300 + 7 + 8, and "Price of diesel 222.7kes/liter" became
+  // the amount). A deterministic, unambiguous amount always outranks the AI;
+  // an AI amount is rejected when it is only a unit price in the text.
+  const moneyStory = parseMoneyStory(messageText, { currency: countryInfo?.currency || null });
+  const fallbackNumber = extractNumberFromText(messageText);
+  const aiAmount = Number(mergedExt.amount) > 0 ? Number(mergedExt.amount) : null;
+  const extAmount = moneyStory.amount
+    ?? (aiAmount && !isUnitPriceOnly(messageText, aiAmount) ? aiAmount : null)
+    ?? (fallbackNumber && !isUnitPriceOnly(messageText, fallbackNumber) ? fallbackNumber : null);
   const extLiters = mergedExt.fuel_liters || mergedExt.liters || null;
   const extOdo = mergedExt.odometer || mergedExt.current_mileage || extractOdometerFromText(messageText);
   // v1.30.0 — canonicalise the expense type from the catalog so a

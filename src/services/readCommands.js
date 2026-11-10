@@ -624,13 +624,63 @@ export const READ_COMMANDS = Object.freeze([
     }
   },
   {
+    id: 'transfer_cancel_hint',
+    parksQuiz: true,
+    skipWhenLocked: true,
+    // v1.96.2 — "Cancel passbook transfer" must never START a handover. Live
+    // 2026-11-09 (+254734852529): the phrase opened the buyer-number question;
+    // the confirm then hit "a transfer is already running" and the real pending
+    // transfer stayed in flight. A live transfer flow / buyer-OTP sink keeps
+    // its own turn untouched; otherwise the engine answers honestly and points
+    // at the dashboard cancel (the only cancel path, fixed in v1.87.5).
+    detect: (text, ctx = {}) => {
+      const t = String(text || '').trim();
+      if (!/^(?:cancel|abort|stop|call\s+off|end)\b[^\n]{0,30}\btransfer\b/i.test(t)
+          && !/^(?:cancel|abort|stop)\s+(?:the\s+)?(?:passbook|handover)\b/i.test(t)) return null;
+      const session = ctx?.session || null;
+      if (session?.transferFlow
+          || session?.pendingTransferBuyerOtp
+          || session?.quiz?.flow === 'transfer_seller'
+          || session?.pending?.kind === 'transfer-release-otp') return null;
+      return { text: t };
+    },
+    render: async (hit, ctx = {}) => {
+      const vehicles = ctx.vehicles || [];
+      const vehicleIds = vehicles.map((vehicle) => vehicle.id).filter(Boolean);
+      let pending = null;
+      try {
+        if (vehicleIds.length && ctx.supabaseClient) {
+          const { data } = await ctx.supabaseClient
+            .from('passbook_transfers')
+            .select('id,vehicle_id,status')
+            .in('vehicle_id', vehicleIds)
+            .in('status', [
+              'PENDING_TARGET_DETAILS', 'PENDING_OWNER_RELEASE_OTP',
+              'PENDING_BUYER_ACCEPTANCE', 'PENDING_BUYER_OTP', 'PENDING_BUYER_UPGRADE'
+            ])
+            .order('initiated_at', { ascending: false })
+            .limit(1);
+          pending = (data || [])[0] || null;
+        }
+      } catch { pending = null; }
+      const plate = pending
+        ? (vehicles.find((vehicle) => vehicle.id === pending.vehicle_id)?.plate_number || 'your vehicle')
+        : null;
+      return result(pending
+        ? `🔁 There's a passbook transfer in progress for *${plate}*. I can't cancel it from the chat yet — open *Dashboard → Passbook Transfer* and tap *Cancel* (reply *dashboard* for the sign-in link). Nothing changed here.`
+        : '🔁 No passbook transfer is in progress, so there is nothing to cancel. To start one, say *transfer passbook*.');
+    }
+  },
+  {
     id: 'ledger_turn',
     parksQuiz: true,
     skipWhenLocked: true,
     detect: (text, ctx = {}) => {
       const turn = resolveLedgerTurn({ pending: ctx.session?.pendingEntryAction || null, text });
-      if (turn.dropPending && ctx.session) ctx.session.pendingEntryAction = null;
-      return turn.type !== 'none' ? turn : null;
+      if ((turn.dropPending || turn.blockedTarget) && ctx.session) ctx.session.pendingEntryAction = null;
+      // v1.96.2 — a blocked non-ledger target is answered deterministically so
+      // the model can never invent a delete capability that does not exist.
+      return (turn.type !== 'none' || turn.blockedTarget) ? turn : null;
     },
     render: async (ledgerTurn, ctx = {}) => {
       const supabaseClient = ctx.supabaseClient;
@@ -717,6 +767,14 @@ export const READ_COMMANDS = Object.freeze([
           plateLines.push((i + 1) + '. ' + v.plate_number + (v.make_model ? ' (' + v.make_model + ')' : ''));
         });
         reply = 'Which vehicle should I use?\n\n' + plateLines.join('\n') + '\n\nReply the number or the plate.';
+      } else if (ledgerTurn.blockedTarget) {
+        // v1.96.2 — compliance dates and reminders are not ledger rows and have
+        // no delete lane; answer honestly instead of letting the model invent
+        // one (live 2026-11-09: a fabricated compliance delete removed a fuel row).
+        ledgerIntent = 'GENERAL_CHAT';
+        reply = ledgerTurn.blockedTarget === 'compliance'
+          ? "📄 Compliance dates are facts on file — I can't delete one, and I won't touch your ledger for it. To correct a date, send the right one, e.g. *insurance expiry 2027-03-01*. Your expenses stay under *my entries*."
+          : '🔔 Reminders are not ledger entries, so nothing was deleted. Reply *my reminders* to see what is active.';
       } else if (ledgerTurn.type === 'cancel') {
         clearPending();
         reply = 'No changes made. Everything is still as you logged it.';

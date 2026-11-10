@@ -2,6 +2,7 @@
 // Proves paragraph parsing captures full vehicle stories and that the
 // prompts no longer encourage questionnaire-style interrogations.
 import { extractVehicleAttributes, DEFAULT_SAKA_CORE_PROMPT } from './sakaAi.js';
+import { parseMoneyStory } from './src/services/moneyLexicon.js';
 import { SAKA_BOUNDARY_RULES } from './src/services/flowKnowledge.js';
 import {
   QUIZ_INSTRUCTION_NATURAL,
@@ -50,6 +51,14 @@ check('litres derived from spend / price per litre', derivedFuel.fuel_liters ===
 check('derived volume is flagged', derivedFuel.derived_fuel_liters === true, derivedFuel.derived_fuel_liters);
 const explicitFuel = extractVehicleAttributes('Logged 40L at 50350 km for KES 5500');
 check('an explicit volume is never overwritten', explicitFuel.fuel_liters === 40, explicitFuel.fuel_liters);
+
+// v1.96.2 — money law: ordinal days are never summed, and a per-litre price is
+// never the spend (live 2026-11-10, +254734852529).
+const parkingStory = parseMoneyStory('Paid 300 parking to Joram. For parking on 7th, 8th and 9th of November 2026');
+check('ordinal days never inflate the amount (300, not 315)', parkingStory.amount === 300, parkingStory.amount);
+const priceOnly = extractVehicleAttributes('I topped up fuel. Price of diesel 222.7kes/liter. Odometer reading 367489km');
+check('a per-litre price never becomes the amount', priceOnly.amount === undefined, priceOnly.amount);
+check('the per-litre price is kept as unit_price', priceOnly.unit_price === 222.7, priceOnly.unit_price);
 
 console.log('=== Natural intake: prompt & boundary rules ===');
 

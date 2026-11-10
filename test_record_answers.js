@@ -9,6 +9,7 @@ import { runWithCleanup } from './scripts/testCleanup.js';
 import { parseRecordQuestion, formatRecordAnswer, RECORD_ANSWER_VERSION, looksLikeLogStatement, isRecordChallenge, extractPlate, buildRecordChallengeScopeLine } from './src/services/recordAnswers.js';
 import { queryRecordLedger } from './src/services/recordQuery.js';
 import { resolveDateRange, formatNairobiDate } from './src/services/dateParser.js';
+import { checkIsConversationalFeedback } from './src/routes/whatsapp/helpers.js';
 
 let pass = 0;
 let fail = 0;
@@ -66,6 +67,16 @@ check('"List KAS entries" is a records query', parseRecordQuestion('List KAS ent
 check('"how much did I spend on fuel" stays a query', parseRecordQuestion('how much did I spend on fuel last week', KE).ok === true);
 check('looksLikeLogStatement true for a repair+amount', looksLikeLogStatement('Repaired a puncture, cost me 300kes') === true);
 check('looksLikeLogStatement false for a question', looksLikeLogStatement('how much did I spend on repairs') === false);
+
+console.log('=== v1.96.2 - document evidence + log commands (live 2026-11-10) ===');
+check('"Add fuel record" is a LOG command, never a query', parseRecordQuestion('Add fuel record', KE).reason === 'log-command');
+check('"Record fuel" is a LOG command too (sibling phrasing)', parseRecordQuestion('Record fuel', KE).reason === 'log-command');
+check('"Fuel all time" stays a records query', parseRecordQuestion('Fuel all time', KE).ok === true);
+check('a legal-receipt body is evidence, never a records question', parseRecordQuestion('*** START OF LEGAL RECEIPT ASTROL PETROLEUM DIESEL: 13.47 X 222.70 3,000.00 TAX INVOICE', KE).reason === 'document-evidence');
+check('a registration certificate body is evidence too', parseRecordQuestion('REPUBLIC OF KENYA REGISTRATION CERTIFICATE N7200766H', KE).reason === 'document-evidence');
+check('"Pull fuel records for X" still answers', parseRecordQuestion('Pull fuel records for KBJ 819C', KE).ok === true);
+check('a complaint about the last action is feedback, not a fresh log', checkIsConversationalFeedback('Kindly ensure this never happens again. Never miss to link a receipt') === true);
+check('ordinary prose stays out of the complaint lane', checkIsConversationalFeedback('I bought 2 rear tyres for KAS 628T') === false);
 
 console.log('=== Record answers: date ranges (country-resolved) ===');
 check('last week trailing window', resolveDateRange('last week', KE).from === '2026-10-26');

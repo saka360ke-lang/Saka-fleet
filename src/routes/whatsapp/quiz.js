@@ -140,11 +140,36 @@ export function receiptQuizStartFor({
   isReceiptDocument = false,
   intent = null,
   quizStartFlow = null,
-  hasReceiptPrefill = false
+  hasReceiptPrefill = false,
+  isDuplicateReceipt = false
 } = {}) {
   if (!hasMedia || !isReceiptDocument) return quizStartFlow || null;
   if (hasReceiptPrefill) return 'log_expense';
-  return intent === 'LOG_EXPENSE' ? 'log_expense' : (quizStartFlow || null);
+  // v1.96.2 — a FRESH receipt with no vault row (storage unavailable, a bucket
+  // write failure, or a Free-tier read-only vault) is still a receipt: it opens
+  // the confirmation quiz so a photo-only turn can never be answered as a
+  // ledger query (live 2026-11-10: five re-sends answered "Nothing under fuel +
+  // repairs expenses ... yet"). Only a DUPLICATE stays out — a re-send must
+  // never open a second draft.
+  if (isDuplicateReceipt) return intent === 'LOG_EXPENSE' ? 'log_expense' : (quizStartFlow || null);
+  return 'log_expense';
+}
+
+/**
+ * v1.96.2 — a mid-quiz reply may never claim a save. Live 2026-11-10: the
+ * receipt turn answered "Saved the fuel expense. ✓ How many litres did you put
+ * in?" while nothing had been written (the confirmation card came later). The
+ * engine's own "Logged ✓" card is untouched: it only composes on a COMPLETED
+ * flow, and this filter only runs while the draft is still open.
+ */
+export function stripPrematureSaveClaim(text = '') {
+  return String(text || '')
+    // A claim sentence that ends the line ("Saved the fuel expense. ✓").
+    .replace(/^[^\S\n]*(?:✅\s*)?(?:saved|logged|recorded)\b[^\n]*[.!✓]\s*$/gim, '')
+    // A short standalone claim without punctuation ("Saved ✓").
+    .replace(/^[^\S\n]*(?:✅\s*)?(?:saved|logged|recorded)\b[^\n]{0,40}$/gim, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 /**
@@ -353,6 +378,9 @@ export async function finalizeQuizOutcome({
       ? `🔒 *Finish your driver profile first*\n\nSaka needs to verify your email and your ${driverGate?.status?.catalog?.minimal?.label || 'driving licence'} so it can remind you before it expires. This protects you and the vehicle owner.\n\n`
       : '';
     reply = `${gateNotice}${quizTurn.reply}`;
+    // v1.96.2 — an open draft never claims a save (the confirmation gate owns
+    // that sentence). Completed flows keep their verified "Logged ✓" card.
+    if (!quizTurn.completed) reply = stripPrematureSaveClaim(reply);
 
     if (quizTurn.flow === 'driver_onboarding' && quizTurn.completed) {
       session.driverOnboarding = false;

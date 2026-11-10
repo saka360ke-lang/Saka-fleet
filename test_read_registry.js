@@ -620,4 +620,27 @@ check(registry.resolveReadCommand('documents', baseCtx({ session: { pendingCompl
 const documentsLaneDef = registry.READ_COMMANDS.find((lane) => lane.id === 'documents_list');
 check(Boolean(documentsLaneDef) && documentsLaneDef.detect('documents') !== null, 'the documents_list lane is registered in the ordered registry');
 
+// ── v1.96.2 — cancel-transfer + non-ledger delete guards ─────────────────────
+console.log('\n--- Test 9: v1.96.2 cancel-transfer + non-ledger delete guards ---');
+for (const text of ['Cancel passbook transfer', 'cancel transfer', 'stop the handover']) {
+  check(registry.resolveReadCommand(text, baseCtx())?.id === 'transfer_cancel_hint',
+    `"${text}" -> transfer_cancel_hint (never starts a handover)`);
+}
+const liveTransferCtx = baseCtx({ session: { quiz: { flow: 'transfer_seller', phase: 'question' } } });
+check(registry.resolveReadCommand('cancel transfer', liveTransferCtx)?.id !== 'transfer_cancel_hint',
+  'a live transfer flow keeps its own cancel turn (no hijack)');
+const cancelCtx = baseCtx();
+const cancelLane = registry.resolveReadCommand('cancel transfer', cancelCtx);
+const cancelRender = await cancelLane.render(cancelCtx);
+check(/nothing to cancel|transfer in progress/i.test(cancelRender.reply_message),
+  'the guard answers honestly (nothing to cancel / dashboard cancel)');
+const deleteCtx = baseCtx({
+  session: { pendingEntryAction: { mode: 'delete', key: 'expense:1', vehicleId: 'v1', at: new Date().toISOString() } }
+});
+const guardLane = registry.resolveReadCommand('No. Delete last compliance', deleteCtx);
+check(guardLane?.id === 'ledger_turn', 'a compliance delete request is owned by the ledger guard (never the model)');
+const guardRender = await guardLane.render(deleteCtx);
+check(/Compliance dates are facts on file/.test(guardRender.reply_message) && deleteCtx.session.pendingEntryAction === null,
+  'the stale delete prompt is cleared and the compliance rule is spoken (v1.96.2)');
+
 console.log(`\n🎉 ${passed} read-registry equivalence assertions passed.`);

@@ -72,6 +72,11 @@ const DATE_MASK_PATTERNS = Object.freeze([
   /\b\d{4}[-/.]\d{1,2}[-/.]\d{1,2}\b/g,
   /\b\d{1,2}[-/.]\d{1,2}(?:[-/.]\d{2,4})?\b/g,
   /\b\d{1,2}:\d{2}(?::\d{2})?\b/g,
+  // v1.96.2 — bare ordinals are calendar words, never money. Live 2026-11-10:
+  // "Paid 300 parking ... on 7th, 8th and 9th of November 2026" was summed to
+  // KES 315 (300 + 7 + 8) because "7th"/"8th" survived the date mask and the
+  // "and" was read as additive.
+  /\b\d{1,2}(?:st|nd|rd|th)\b/gi,
   /\b\d{1,2}(?:st|nd|rd|th)?\s+(?:of\s+)?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s*\d{0,4}\b/gi,
   /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}(?:st|nd|rd|th)?(?:\s*,?\s*\d{4})?\b/gi,
   /\b(?:in|of|since|year)\s+(?:19|20)\d{2}\b/gi,
@@ -197,6 +202,10 @@ export function extractMoneyCandidates(text = '', { currency = null } = {}) {
       || CURRENCY_SYMBOLS[pre] || CURRENCY_SYMBOLS[post] || null;
     const tail = scanned.slice(index + raw.length);
 
+    // v1.96.2 — defence in depth for the ordinal mask above: a number that is
+    // immediately followed by st/nd/rd/th is a calendar day, never money.
+    if (/^(?:st|nd|rd|th)\b/i.test(tail)) continue;
+
     // "40l", "50350 km", "12 %" → a measurement, never money.
     if (UNIT_TAIL_RE.test(tail)) continue;
 
@@ -248,6 +257,24 @@ export function extractMoneyCandidates(text = '', { currency = null } = {}) {
 export function extractUnitPrice(text = '') {
   const unit = extractMoneyCandidates(text).find((candidate) => candidate.kind === 'unit_price');
   return unit ? unit.amount : null;
+}
+
+/**
+ * v1.96.2 — is `value` ONLY ever a per-unit price in this text?
+ *
+ * Live 2026-11-10 (+254734852529): "Price of diesel 222.7kes/liter" arrived
+ * with a receipt that carried no readable total, and 222.7 was saved as the
+ * SPEND. Law 2 of this module says a per-unit price is never the total — a
+ * caller holding an AI-extracted amount must be able to ask this question
+ * before it writes anything.
+ */
+export function isUnitPriceOnly(text = '', value = null) {
+  const target = Number(value);
+  if (!Number.isFinite(target) || target <= 0) return false;
+  const matching = extractMoneyCandidates(text)
+    .filter((candidate) => candidate.amount === roundMoney(target));
+  if (matching.length === 0) return false;
+  return matching.every((candidate) => candidate.kind === 'unit_price');
 }
 
 /**
@@ -349,5 +376,6 @@ export default {
   detectCurrencyMarker,
   extractMoneyCandidates,
   extractUnitPrice,
+  isUnitPriceOnly,
   parseMoneyStory
 };

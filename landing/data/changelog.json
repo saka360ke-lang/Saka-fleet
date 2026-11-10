@@ -1,6 +1,13 @@
 {
-  "latest": "1.96.1",
+  "latest": "1.96.2",
   "entries": [
+    {
+      "version": "1.96.2",
+      "date": "2026-11-10",
+      "title": "Receipts are read, not searched",
+      "preview": "Send a fuel receipt photo and Saka reads it — total, litres and odometer — instead of answering it like a search.",
+      "summary": "A follow-up from a real conversation. Sending a fuel receipt photo could come back with a line that looked like a search result instead of a reading, and a second copy of the same receipt could start nothing at all. Now a receipt photo always opens the confirmation card: Saka shows the total, the litres and the odometer it read, and nothing is saved until you say yes. A few smaller money fixes ride along: a parking amount can no longer be inflated by the dates in your sentence (300 for the 7th, 8th and 9th stays 300), and a fuel price per litre can never be saved as the amount you spent. Asking to delete a compliance date no longer risks touching your expenses — compliance dates are corrected, not deleted. And 'cancel transfer' now answers honestly instead of starting a new handover."
+    },
     {
       "version": "1.96.1",
       "date": "2026-11-10",

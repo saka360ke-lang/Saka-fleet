@@ -17,10 +17,13 @@ import {
   QUIZ_MAX_AGE_MINUTES,
   // v1.89.2 — nickname editing: the one-line edit prefill + the clear sentinel.
   parseVehicleEditRequest,
-  EDIT_VEHICLE_CLEAR_NICKNAME
+  EDIT_VEHICLE_CLEAR_NICKNAME,
+  // v1.96.2 — a document dump's nozzle number is never the fuel volume.
+  looksLikeDocumentDump,
+  hasLitreEvidence
 } from './src/services/quizEngine.js';
 // v1.87.4 — the receipt auto-quiz decision is a pure, intent-independent helper.
-import { receiptQuizStartFor } from './src/routes/whatsapp/quiz.js';
+import { receiptQuizStartFor, stripPrematureSaveClaim } from './src/routes/whatsapp/quiz.js';
 import { getRecentChatHistory, CHAT_HISTORY_MAX_AGE_MINUTES, CHAT_HISTORY_MAX_MESSAGES } from './src/services/chatHistory.js';
 // v1.93.0 (Phase 30, Tasks 2-3) — the logbook invitation + pre-vehicle stash.
 import { buildDocumentStash, replayDocumentStash } from './src/services/documentStash.js';
@@ -786,13 +789,30 @@ async function run() {
   // (no prefill) keep the legacy rule so a re-send can never open a second draft.
   assert(receiptQuizStartFor({ hasMedia: true, isReceiptDocument: true, intent: 'GENERAL_CHAT', quizStartFlow: null, hasReceiptPrefill: true }) === 'log_expense', 'a vaulted receipt opens the expense quiz whatever the classifier said (v1.87.4)');
   assert(receiptQuizStartFor({ hasMedia: true, isReceiptDocument: true, intent: 'LOG_EXPENSE', quizStartFlow: 'log_expense', hasReceiptPrefill: false }) === 'log_expense', 'an explicit expense intent still starts the quiz without a prefill (v1.87.4)');
-  assert(receiptQuizStartFor({ hasMedia: true, isReceiptDocument: true, intent: 'GENERAL_CHAT', quizStartFlow: null, hasReceiptPrefill: false }) === null, 'a duplicate/unvaulted receipt never opens a second draft (v1.87.4)');
+  // v1.96.2 — ONLY a duplicate stays out of the quiz. A fresh receipt with no
+  // vault row used to fall through to the records lane (live 2026-11-10: five
+  // re-sends answered "Nothing under fuel + repairs expenses ... yet").
+  assert(receiptQuizStartFor({ hasMedia: true, isReceiptDocument: true, intent: 'GENERAL_CHAT', quizStartFlow: null, hasReceiptPrefill: false, isDuplicateReceipt: true }) === null, 'a DUPLICATE receipt never opens a second draft (v1.87.4 / v1.96.2)');
+  assert(receiptQuizStartFor({ hasMedia: true, isReceiptDocument: true, intent: 'GENERAL_CHAT', quizStartFlow: null, hasReceiptPrefill: false, isDuplicateReceipt: false }) === 'log_expense', 'a FRESH unvaulted receipt still opens the confirmation quiz (v1.96.2)');
   assert(receiptQuizStartFor({ hasMedia: true, isReceiptDocument: false, intent: 'LOG_EXPENSE', quizStartFlow: null, hasReceiptPrefill: true }) === null, 'a non-receipt document keeps the normal detector (v1.87.4)');
   assert(receiptQuizStartFor({ hasMedia: false, isReceiptDocument: false, intent: 'SET_REMINDER', quizStartFlow: 'set_reminder' }) === 'set_reminder', 'text turns keep their detected flow untouched (v1.87.4)');
   const quizRouteSource = fs.readFileSync('./src/routes/whatsapp/quiz.js', 'utf8');
   assert(quizRouteSource.includes("startFlow: receiptQuizStart") && quizRouteSource.includes('prefill: receiptPrefill'), 'the receipt prefill still rides the quiz start (v1.87.4)');
   const messagesSource = fs.readFileSync('./src/routes/whatsapp/messages.js', 'utf8');
   assert(messagesSource.includes('receiptQuizStartFor({') && messagesSource.includes('hasReceiptPrefill: Boolean(receiptPrefill?.receipt_id)'), 'messages.js resolves the receipt quiz through the pure helper with the prefill fact (v1.87.4)');
+  // v1.96.2 — the duplicate fact rides the helper, so a re-send can never open
+  // a second draft while a fresh unvaulted receipt still gets its quiz.
+  assert(messagesSource.includes('isDuplicateReceipt: Boolean(duplicateReceipt)'), 'messages.js passes the duplicate fact into the receipt-quiz decision (v1.96.2)');
+
+  // v1.96.2 — an open draft never claims a save, and a receipt dump's nozzle
+  // number is never the volume (live 2026-11-10, +254734852529).
+  const stripped = stripPrematureSaveClaim('Saved the fuel expense. ✓\n\nHow many litres did you put in?');
+  assert(!/saved/i.test(stripped) && /How many litres/.test(stripped), 'a mid-quiz save claim is stripped, the pending question stays (v1.96.2)');
+  const receiptDump = 'ASTROL RUNDA PIN: P051141264M PUMP: 13 NOZZLE: 1 DIESEL: 13.47 X 222.70 3,000.00';
+  assert(looksLikeDocumentDump(receiptDump) === true, 'a scanned receipt dump is recognised (v1.96.2)');
+  assert(hasLitreEvidence(receiptDump, 13.47) === true, '13.47 in "13.47 X 222.70" is real litre evidence (v1.96.2)');
+  assert(hasLitreEvidence(receiptDump, 1) === false, 'the nozzle number 1 is NOT litre evidence (v1.96.2)');
+  assert(hasLitreEvidence('filled 40L at Shell', 40) === true && hasLitreEvidence('filled 40 at Shell', 40) === false, 'a typed litre marker still counts (v1.96.2)');
 
   console.log(`\n🎉 ALL QUIZ ENGINE TESTS PASSED (${passed} assertions).`);
 }

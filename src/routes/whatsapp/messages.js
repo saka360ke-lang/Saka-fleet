@@ -1304,7 +1304,10 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           isReceiptDocument,
           intent,
           quizStartFlow,
-          hasReceiptPrefill: Boolean(receiptPrefill?.receipt_id)
+          hasReceiptPrefill: Boolean(receiptPrefill?.receipt_id),
+          // v1.96.2 — a duplicate never opens a second draft; a FRESH unvaulted
+          // receipt always opens the confirmation quiz.
+          isDuplicateReceipt: Boolean(duplicateReceipt)
         });
 
         // --- NARRATIVE INTAKE (v1.34.0) ---

@@ -238,6 +238,29 @@ function pendingActive(pending, now = new Date()) {
   return pending;
 }
 
+// v1.96.2 — a delete/remove request aimed at a NON-ledger record must never
+// ride a stale ledger delete prompt. Live 2026-11-09 (+254734852529): the user
+// opened "Delete last entry" (a fuel preview), then typed "No. Delete last
+// compliance". The old prompt survived, the assistant invented a
+// "Delete the last compliance entry?" card, and the next "Delete" removed the
+// FUEL row instead (rule 37 violation). Compliance and reminders have no
+// delete lane — they are answered deterministically; receipts/documents/
+// vehicles own their lanes, so the stale pending is simply unblocked.
+const NON_LEDGER_ACTION_RE = /\b(?:delete|remove|erase|void|discard|drop)\b/i;
+const COMPLIANCE_TARGET_RE = /\b(?:compliance|permit|insurance|licen[cs]e|psv|inspection|road\s*licen[cs]e)\b/i;
+const REMINDER_TARGET_RE = /\breminder\b/i;
+const OTHER_LEDGERLESS_TARGET_RE = /\b(?:receipt|document|file|logbook|vehicle|car|truck|asset)\b/i;
+
+/** Which non-ledger record a delete/remove request names (null when none). */
+export function detectNonLedgerTarget(text = '') {
+  const t = String(text || '');
+  if (!NON_LEDGER_ACTION_RE.test(t)) return null;
+  if (COMPLIANCE_TARGET_RE.test(t)) return 'compliance';
+  if (REMINDER_TARGET_RE.test(t)) return 'reminder';
+  if (OTHER_LEDGERLESS_TARGET_RE.test(t)) return 'other';
+  return null;
+}
+
 /**
  * The single decision point for a ledger turn.
  *
@@ -254,6 +277,14 @@ export function resolveLedgerTurn({ pending = null, text = '', now = new Date() 
   const active = pendingActive(pending, now);
 
   if (active) {
+    // v1.96.2 — a delete/remove request naming a NON-ledger record drops the
+    // stale ledger prompt before it can act on the wrong row (rule 37).
+    const nonLedger = detectNonLedgerTarget(t);
+    if (nonLedger) {
+      return nonLedger === 'other'
+        ? { type: 'none', dropPending: true }
+        : { type: 'none', dropPending: true, blockedTarget: nonLedger };
+    }
     if (/^(?:cancel|stop|stop it|never ?mind|forget it|leave it|exit)\.?$/i.test(t)) {
       return { type: 'cancel' };
     }

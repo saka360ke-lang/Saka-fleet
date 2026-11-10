@@ -59,6 +59,20 @@ const EXPLICIT_LOG_RE = /^\s*(?:please\s+)?(?:log|save|record|add)\s+(?:this|it|
 const QUESTION_LEAD_RE = /^\s*(?:what|whats|what's|how|when|which|who|where|why|show|list|display|summari[sz]e|total|count|average|avg|pull|get|fetch|give|does|do|did|is|are|was|were|tell)\b/i;
 const AMOUNT_RE = /\b\d[\d,]*(?:\.\d+)?\s*(?:kes|ksh|usd|eur|gbp|shillings?|bob)\b|(?:kes|ksh|\$|€|£|₦|₹)\s?\d[\d,]*/i;
 
+// v1.96.2 — a scanned document is EVIDENCE, never a records question. Live
+// 2026-11-10 (+254734852529): a re-sent fuel receipt was answered "Nothing
+// under fuel + repairs expenses for 10 Nov 2026 yet — send the next one and
+// I'll keep it here." The records lane had swallowed the OCR dump before the
+// duplicate-receipt lane could speak; a receipt/invoice/legal-certificate
+// body must always reach the receipt intake instead.
+const DOCUMENT_EVIDENCE_RE = /\b(?:START|END)\s+OF\s+LEGAL\s+RECEIPT\b|\bFISCAL\s+RECEIPT\b|\bTAX\s+INVOICE\b|\bKRA\s*\/?\s*ETI\b|\bCERTIFICATE\s+OF\s+(?:INSURANCE|REGISTRATION)\b|\bREGISTRATION\s+CERTIFICATE\b|\bINVOICE\s+(?:NUMBER|NO)\b/i;
+
+// v1.96.2 — "Add fuel record" / "record fuel" are LOG commands, never reads.
+// Live 2026-11-10: "Add fuel record" was answered "Fuel all time: Ksh 3,000
+// (1 record) · 13.51 L" while the sibling "record fuel" correctly opened the
+// expense quiz. A leading add/log/save verb that names what to log is a WRITE.
+const LOG_COMMAND_RE = /^\s*(?:please\s+)?(?:add|log|save|record|enter|capture|create)\b(?=[\s\S]{0,60}\b(?:fuel|diesel|petrol|gasoline|refuel|service|repair|repairs|part|parts|tyre|tyres|tire|tires|parking|fine|wash|expense|expenses|earning|earnings|income|litres?|liters?|km|kms|odometer|mileage)\b)/i;
+
 // v1.61.5 — short type reads ("Fuel list", "Fuel all time", "fuel report").
 // Live 2026-11-05: "Fuel all time" carried no question word, so the expense
 // quiz swallowed the read and asked "which vehicle is this for?" instead of
@@ -146,6 +160,12 @@ function rangeLabel(range, locale = 'en-US') {
 export function parseRecordQuestion(text = '', { countryCode = 'GLOBAL', locale = 'en-US', now = new Date() } = {}) {
   const source = String(text || '').replace(/\s+/g, ' ').trim();
   if (!source) return { ok: false, reason: 'empty' };
+  // v1.96.2 — a receipt/invoice/legal certificate body is evidence, not a
+  // ledger question (rule 36/37). It must reach the receipt intake/duplicate
+  // lane, never the records answer.
+  if (DOCUMENT_EVIDENCE_RE.test(source)) return { ok: false, reason: 'document-evidence' };
+  // v1.96.2 — an add/log/save command that names what to log is a WRITE.
+  if (LOG_COMMAND_RE.test(source)) return { ok: false, reason: 'log-command' };
   // v1.58.6 — a past-tense expense statement is a LOG, never a records question.
   if (looksLikeLogStatement(source)) return { ok: false, reason: 'looks-like-log' };
   // v1.58.22 - a "why…" question is never a ledger total (live 2026-11-04:

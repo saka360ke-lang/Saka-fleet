@@ -66,6 +66,14 @@ export function checkIsConversationalFeedback(text = '', step = 1) {
     if (clean.includes(kw)) return true;
   }
 
+  // v1.96.2 — a complaint about what just happened is feedback, never a fresh
+  // log. Live 2026-11-10 (+254734852529): "Kindly ensure this never happens
+  // again. Never miss to link a receipt" was answered "What kind of expense are
+  // we logging — fuel, maintenance…?".
+  if (/(?:ensure|make\s+sure)\s+(?:this|that|it)\s+never\s+happens\s+again|\bnever\s+miss\s+(?:to\s+)?(?:link|attach|send)|\byou\s+(?:saved|logged|did)\s+(?:it|that|this)\s+wrong\b|\byou\s+keep\s+(?:making|doing)\b/i.test(clean)) {
+    return true;
+  }
+
   if (step === 2) {
     if (/\b(you are|i am|why is|what is|this is|can you|where is|how do|it is)\b/i.test(clean)) {
       const carBrands = ['toyota', 'nissan', 'honda', 'mazda', 'isuzu', 'subaru', 'mitsubishi', 'mercedes', 'bmw', 'vw', 'volkswagen', 'audi', 'ford', 'hyundai', 'kia', 'peugeot', 'suzuki', 'volvo', 'byd', 'land rover', 'rover', 'lexus', 'porsche'];

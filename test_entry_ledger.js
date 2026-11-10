@@ -159,6 +159,33 @@ console.log('--- Test 0: ledger scoping by asset nickname ---');
   });
   assert(expired.type === 'none', 'an expired edit prompt still captured the message');
   assert(resolveLedgerTurn({ text: 'my entries', now }).type === 'command', 'a plain list command was not resolved');
+
+  // v1.96.2 — a delete/remove request aimed at a NON-ledger record must never
+  // ride a stale ledger delete prompt. Live 2026-11-09 (+254734852529): the
+  // "No. Delete last compliance" turn left the fuel-delete prompt alive, the
+  // model invented a compliance-delete card, and the next "Delete" removed the
+  // FUEL row. Compliance/reminder targets are answered deterministically;
+  // receipt/document/vehicle targets own their lanes, so the prompt is cleared.
+  console.log('\n--- Test 4c: non-ledger delete targets (v1.96.2) ---');
+  const complianceTurn = resolveLedgerTurn({ pending: pendingDelete, text: 'No. Delete last compliance', now });
+  assert(complianceTurn.type === 'none' && complianceTurn.dropPending === true && complianceTurn.blockedTarget === 'compliance',
+    'a compliance delete request did not drop the stale ledger delete prompt');
+  const reminderTurn = resolveLedgerTurn({ pending: pendingDelete, text: 'delete reminder', now });
+  assert(reminderTurn.blockedTarget === 'reminder', 'a reminder delete request did not route to the reminder guard');
+  const receiptTurn = resolveLedgerTurn({ pending: pendingDelete, text: 'delete receipt 2', now });
+  assert(receiptTurn.type === 'none' && receiptTurn.dropPending === true && !receiptTurn.blockedTarget,
+    'a receipt delete did not unblock the stale prompt for its own lane');
+  const vehicleTurn = resolveLedgerTurn({ pending: pendingDelete, text: 'delete vehicle KAS 628T', now });
+  assert(vehicleTurn.type === 'none' && vehicleTurn.dropPending === true && !vehicleTurn.blockedTarget,
+    'a vehicle delete did not unblock the stale prompt for its own lane');
+  const lastEntryTurn = resolveLedgerTurn({ pending: pendingDelete, text: 'delete last entry', now });
+  assert(lastEntryTurn.type === 'select' && lastEntryTurn.index === 1 && lastEntryTurn.mode === 'delete',
+    'a real ledger delete request still re-targets the pending delete');
+  assert(resolveLedgerTurn({ pending: pendingDelete, text: 'delete 2', now }).type === 'select',
+    'a numbered ledger delete still re-targets the pending delete');
+  assert(resolveLedgerTurn({ pending: pendingDelete, text: 'DELETE', now }).type === 'delete-confirm',
+    'a bare DELETE still confirms the ledger delete (no regression)');
+  console.log('✅ A non-ledger delete can never execute a pending ledger delete.');
   console.log('✅ Pending edit/delete state, expiry and fresh-log protection all behave.');
 
   // v1.73.0 (Phase 10, P3-1) — pagination offset slices the merged list without
