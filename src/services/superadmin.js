@@ -449,14 +449,25 @@ export async function parseSuperadminCommand(messageText) {
 
   // v1.96.0 — Meta template operator surfaces (deterministic, zero tokens).
   // `admin tpl buttons` audits every reply button (declared ↔ mapped ↔
-  // captured); `admin tpl test [kind|all]` fires a REAL approved template to
-  // SUPERADMIN_PHONE. Bare `admin tpl test` prints usage (never auto-fires).
+  // captured); `admin tpl test [kind|all] [target_phone]` fires a REAL approved
+  // template to SUPERADMIN_PHONE (default) or the operator-typed target. Bare
+  // `admin tpl test` prints usage (never auto-fires).
   if (/^\s*admin\s+tpl\s+buttons\s*$/i.test(text)) {
     return { intent: 'ADMIN_TEMPLATE_BUTTONS' };
   }
-  const tplTestMatch = text.match(/^\s*admin\s+tpl\s+test(?:\s+([a-zA-Z0-9_]+))?\s*$/i);
+  // v1.96.1 — deterministic two-token parse so a malformed test command NEVER
+  // falls to the AI classifier (zero tokens, fail-closed). A phone without a
+  // kind is usage (nothing is sent); an invalid target is refused by the runner.
+  const tplTestMatch = text.match(/^\s*admin\s+tpl\s+test(?:\s+(\S+))?(?:\s+(\S+))?\s*$/i);
   if (tplTestMatch) {
-    return { intent: 'ADMIN_TEMPLATE_TEST', kind: String(tplTestMatch[1] || '').trim().toLowerCase() || null };
+    const arg1 = String(tplTestMatch[1] || '').toLowerCase();
+    const arg2 = String(tplTestMatch[2] || '');
+    const arg1IsKind = arg1 === 'all' || /^[a-z_]+$/.test(arg1);
+    return {
+      intent: 'ADMIN_TEMPLATE_TEST',
+      kind: arg1IsKind ? (arg1 || null) : null,
+      targetPhone: arg1IsKind ? (arg2 || null) : (arg1 || null)
+    };
   }
 
   const prompt = `Classify user's admin request into JSON:
@@ -2900,11 +2911,13 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText, o
 
   // v1.96.0 — Meta template operator surfaces. Both are deterministic, zero
   // tokens, superadmin-only (this hub) and session-gated above. The test-fire
-  // sends only to SUPERADMIN_PHONE; every attempt writes one audit row.
+  // sends to the operator-typed target (E.164-normalised) or SUPERADMIN_PHONE;
+  // every attempt writes one audit row with the target masked.
   if (parsedCommand.intent === 'ADMIN_TEMPLATE_TEST') {
     const outcome = await runTemplateTestFire({
       adminPhone: formattedPhone,
       kind: parsedCommand.kind ?? null,
+      targetPhone: parsedCommand.targetPhone ?? null,
       audit: (details) => logAdminAudit(supabase, formattedPhone, 'ADMIN_TEMPLATE_TEST', details)
     });
     return {

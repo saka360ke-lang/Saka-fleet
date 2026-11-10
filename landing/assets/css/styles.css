@@ -9,23 +9,23 @@
 
 @font-face {
   font-family: 'Sora'; font-style: normal; font-weight: 600; font-display: swap;
-  src: url('/assets/fonts/Sora-600.woff2?v=1.96.0') format('woff2');
+  src: url('/assets/fonts/Sora-600.woff2?v=1.96.1') format('woff2');
 }
 @font-face {
   font-family: 'Sora'; font-style: normal; font-weight: 700; font-display: swap;
-  src: url('/assets/fonts/Sora-700.woff2?v=1.96.0') format('woff2');
+  src: url('/assets/fonts/Sora-700.woff2?v=1.96.1') format('woff2');
 }
 @font-face {
   font-family: 'Manrope'; font-style: normal; font-weight: 400; font-display: swap;
-  src: url('/assets/fonts/Manrope-400.woff2?v=1.96.0') format('woff2');
+  src: url('/assets/fonts/Manrope-400.woff2?v=1.96.1') format('woff2');
 }
 @font-face {
   font-family: 'Manrope'; font-style: normal; font-weight: 500; font-display: swap;
-  src: url('/assets/fonts/Manrope-500.woff2?v=1.96.0') format('woff2');
+  src: url('/assets/fonts/Manrope-500.woff2?v=1.96.1') format('woff2');
 }
 @font-face {
   font-family: 'Manrope'; font-style: normal; font-weight: 700; font-display: swap;
-  src: url('/assets/fonts/Manrope-700.woff2?v=1.96.0') format('woff2');
+  src: url('/assets/fonts/Manrope-700.woff2?v=1.96.1') format('woff2');
 }
 
 :root {

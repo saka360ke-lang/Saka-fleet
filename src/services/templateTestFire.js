@@ -25,7 +25,7 @@ import {
   templateVariablesForKind,
   templateButtonState
 } from './proactiveTemplates.js';
-import { sendWhatsAppTemplateProbe, cleanWhatsAppRecipient } from './metaMessenger.js';
+import { sendWhatsAppTemplateProbe, cleanWhatsAppRecipient, normalizeWhatsAppTargetPhone, maskWhatsAppTargetPhone } from './metaMessenger.js';
 
 export const TEMPLATE_TEST_WINDOW_MS = 10 * 60 * 1000;
 export const TEMPLATE_TEST_MAX_SENDS = 5;
@@ -68,22 +68,33 @@ export function recordTemplateTestFire(phone, { now = Date.now() } = {}) {
 }
 
 /**
- * Fire the probe for one kind or for every kind. Recipient AND sender identity
- * are the superadmin: `SUPERADMIN_PHONE` is the only destination; unset means a
- * graceful refusal (nothing is sent).
+ * Fire the probe for one kind or for every kind. The destination is the
+ * operator-typed `targetPhone` (E.164-normalised) or, when omitted,
+ * `SUPERADMIN_PHONE`; neither means a graceful refusal (nothing is sent). The
+ * rate-limit window is keyed to the ADMIN phone (the operator), never the
+ * target, and every audit row carries the target masked.
  *
- * @returns {Promise<{ok:boolean,status:string,requested:string|null,results:Array,remaining:string[],retryMinutes:number,kinds?:string[]}>}
+ * @returns {Promise<{ok:boolean,status:string,requested:string|null,results:Array,remaining:string[],retryMinutes:number,kinds?:string[],targetPhone?:string|null}>}
  */
 export async function runTemplateTestFire({
   adminPhone = null,
   kind = 'all',
+  targetPhone = null,
   env = process.env,
   now = Date.now(),
   audit = null,
   send = sendWhatsAppTemplateProbe
 } = {}) {
   const notify = typeof audit === 'function' ? audit : null;
-  const recipient = String(env?.SUPERADMIN_PHONE || '').trim();
+  const rawTarget = targetPhone === null || targetPhone === undefined ? '' : String(targetPhone).trim();
+  const target = rawTarget ? normalizeWhatsAppTargetPhone(rawTarget) : null;
+  const adminRecipient = normalizeWhatsAppTargetPhone(env?.SUPERADMIN_PHONE)
+    || String(env?.SUPERADMIN_PHONE || '').trim()
+    || null;
+  const recipient = rawTarget ? target : adminRecipient;
+  const maskedTarget = maskWhatsAppTargetPhone(recipient);
+  // v1.96.1 — the 5/10-min window follows the OPERATOR, not the target.
+  const windowKey = adminPhone || recipient;
 
   if (kind === null || kind === undefined || String(kind).trim() === '') {
     if (notify) await notify({ status: 'usage', kind: null, adminPhone });
@@ -96,9 +107,15 @@ export async function runTemplateTestFire({
     return { ok: false, status: 'unknown_kind', requested, results: [], remaining: [], retryMinutes: 0, kinds: [...TEMPLATE_TEST_KINDS] };
   }
 
+  if (rawTarget && !target) {
+    // v1.96.1 — an invalid target is a deterministic refusal, never a send.
+    if (notify) await notify({ status: 'invalid_target', kind: requested, adminPhone, targetPhone: null, rawTarget });
+    return { ok: false, status: 'invalid_target', requested, rawTarget, targetPhone: null, results: [], remaining: [], retryMinutes: 0 };
+  }
+
   if (!recipient) {
-    if (notify) await notify({ status: 'no_recipient', kind: requested, adminPhone });
-    return { ok: false, status: 'no_recipient', requested, results: [], remaining: [], retryMinutes: 0 };
+    if (notify) await notify({ status: 'no_recipient', kind: requested, adminPhone, targetPhone: null });
+    return { ok: false, status: 'no_recipient', requested, targetPhone: null, results: [], remaining: [], retryMinutes: 0 };
   }
 
   const targets = requested === 'all' ? [...TEMPLATE_TEST_KINDS] : [requested];
@@ -123,7 +140,7 @@ export async function runTemplateTestFire({
         expectedName: TEMPLATE_SUGGESTED_NAMES[targetKind] || null
       };
       results.push(result);
-      if (notify) await notify({ ...result, fixtureVars, adminPhone });
+      if (notify) await notify({ ...result, fixtureVars, adminPhone, targetPhone: maskedTarget });
       continue;
     }
 
@@ -132,17 +149,17 @@ export async function runTemplateTestFire({
     if (variables === null || buttonState.buttons === null || buttonState.buttons === undefined) {
       const result = { kind: targetKind, templateName, status: 'fixture_invalid', wamid: null };
       results.push(result);
-      if (notify) await notify({ ...result, fixtureVars, adminPhone });
+      if (notify) await notify({ ...result, fixtureVars, adminPhone, targetPhone: maskedTarget });
       continue;
     }
 
-    const allowance = templateTestAllowance(recipient, { now });
+    const allowance = templateTestAllowance(windowKey, { now });
     if (!allowance.allowed) {
       retryMinutes = allowance.retryMinutes;
       remaining.push(...targets.slice(index));
       break;
     }
-    recordTemplateTestFire(recipient, { now });
+    recordTemplateTestFire(windowKey, { now });
 
     const capture = {};
     const sent = await send(recipient, templateName, {
@@ -159,7 +176,7 @@ export async function runTemplateTestFire({
       ok: Boolean(sent.ok)
     };
     results.push(result);
-    if (notify) await notify({ ...result, fixtureVars, adminPhone });
+    if (notify) await notify({ ...result, fixtureVars, adminPhone, targetPhone: maskedTarget });
   }
 
   const status = remaining.length ? 'cooling_down' : 'done';
@@ -169,7 +186,8 @@ export async function runTemplateTestFire({
     requested,
     results,
     remaining,
-    retryMinutes
+    retryMinutes,
+    targetPhone: maskedTarget
   };
 }
 
@@ -193,11 +211,20 @@ export function formatTemplateTestReply(outcome = {}) {
     return [
       '🧪 *Template test-fire*',
       '',
-      'Usage: *admin tpl test <kind>* or *admin tpl test all*',
+      'Usage: *admin tpl test <kind> [target_phone]* or *admin tpl test all [target_phone]*',
       '',
       `Kinds: ${(outcome.kinds || []).join(', ')}`,
       '',
-      '_Up to 5 sends per 10 minutes; `all` paces through the registry and says when to run it again._'
+      '_No target = SUPERADMIN_PHONE. Up to 5 sends per 10 minutes; `all` paces through the registry and says when to run it again._'
+    ].join('\n');
+  }
+
+  if (status === 'invalid_target') {
+    return [
+      '🧪 *Template test-fire*',
+      '',
+      `⚙️ ${outcome.rawTarget || 'That number'} is not a valid phone number — nothing was sent.`,
+      'Send the full number with its country code, or a local 07 number, e.g. *admin tpl test re_engagement 0734852529*.'
     ].join('\n');
   }
 
@@ -211,6 +238,7 @@ export function formatTemplateTestReply(outcome = {}) {
 
   const results = Array.isArray(outcome.results) ? outcome.results : [];
   const lines = ['🧪 *Template test-fire*', ''];
+  if (outcome.targetPhone) lines.push(`To: ${outcome.targetPhone}`, '');
   for (const result of results) {
     if (result.status === 'sent') {
       lines.push(`✅ ${result.kind} → ${result.templateName} sent — wamid ${result.wamid || 'not returned'}`);

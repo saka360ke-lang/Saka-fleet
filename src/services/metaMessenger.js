@@ -28,6 +28,35 @@ export function cleanWhatsAppRecipient(toPhone) {
 }
 
 /**
+ * v1.96.1 — normalise an operator-typed TEST TARGET to E.164. Digits only; a
+ * leading "00" is an international prefix; a leading "0" with exactly 10 digits
+ * is resolved to Kenya (+254 — the operator's home market; every other shape
+ * must carry its full country code). Returns null when the result is not a
+ * plausible number (9-15 digits) so the caller can refuse honestly.
+ * `0734852529` -> `+254734852529`; `+254 734 852 529` / `254734852529` keep
+ * their form; `0123` / `abc` -> null.
+ */
+export function normalizeWhatsAppTargetPhone(raw) {
+  let digits = String(raw || '').replace(/[^\d]/g, '');
+  if (!digits) return null;
+  if (digits.startsWith('00')) digits = digits.slice(2);
+  else if (digits.startsWith('0')) {
+    if (digits.length !== 10) return null;
+    digits = `254${digits.slice(1)}`;
+  }
+  if (digits.length < 9 || digits.length > 15) return null;
+  return `+${digits}`;
+}
+
+/** v1.96.1 — audit mask for a test target (+2547****2529: last 4 visible only). */
+export function maskWhatsAppTargetPhone(phone) {
+  const digits = String(phone || '').replace(/[^\d]/g, '');
+  if (!digits) return null;
+  if (digits.length < 8) return `+${'*'.repeat(digits.length)}`;
+  return `+${digits.slice(0, 4)}****${digits.slice(-4)}`;
+}
+
+/**
  * ONE Meta POST (text or template) behind ONE guard + ONE catch, so the
  * transport, the blocklist and the never-throws contract can never drift
  * between the two message shapes (rule 55). True only on 2xx.
@@ -153,4 +182,4 @@ export async function sendWhatsAppText(toPhone, text, { env = process.env, kind 
   }, env);
 }
 
-export default { sendWhatsAppText, sendWhatsAppTemplate, sendWhatsAppTemplateProbe, cleanWhatsAppRecipient, whatsappTextConfig };
+export default { sendWhatsAppText, sendWhatsAppTemplate, sendWhatsAppTemplateProbe, cleanWhatsAppRecipient, normalizeWhatsAppTargetPhone, maskWhatsAppTargetPhone, whatsappTextConfig };

@@ -84,6 +84,16 @@ const normalUserPhone = '+254799000111';
   assert.strictEqual(tplTestBare.kind, null, 'bare admin tpl test never auto-fires (usage only)');
   const tplButtons = await parseSuperadminCommand('admin tpl buttons');
   assert.strictEqual(tplButtons.intent, 'ADMIN_TEMPLATE_BUTTONS', 'admin tpl buttons parses');
+  // v1.96.1 — optional target phone (deterministic; never the AI path).
+  const tplWithTarget = await parseSuperadminCommand('admin tpl test re_engagement 0734852529');
+  assert.strictEqual(tplWithTarget.intent, 'ADMIN_TEMPLATE_TEST');
+  assert.strictEqual(tplWithTarget.kind, 're_engagement');
+  assert.strictEqual(tplWithTarget.targetPhone, '0734852529', 'admin tpl test carries the optional target phone');
+  const tplNoTarget = await parseSuperadminCommand('admin tpl test re_engagement');
+  assert.strictEqual(tplNoTarget.targetPhone, null, 'without a target the command defaults to SUPERADMIN_PHONE');
+  const tplJunkTarget = await parseSuperadminCommand('admin tpl test re_engagement abc');
+  assert.strictEqual(tplJunkTarget.intent, 'ADMIN_TEMPLATE_TEST');
+  assert.strictEqual(tplJunkTarget.targetPhone, 'abc', 'a malformed target is parsed deterministically and refused by the runner');
   assert.ok(help.includes('admin tpl test') && help.includes('admin tpl buttons'), 'the help list advertises both template commands');
   console.log('✅ v1.96.0: template test-fire + button audit intents verified');
 }

@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.96.0  
+**Version:** 1.96.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.96.1** | Operator template tools patch — **`admin tpl test [kind|all] [target_phone]`**: an optional target sends the REAL template to a regular device (default stays `SUPERADMIN_PHONE`); a local 10-digit `07…` number resolves to `+254…` via the new pure `normalizeWhatsAppTargetPhone` (any other shape must carry its country code), an invalid target is a deterministic `invalid_target` refusal with zero sends, the 5/10-min window is keyed to the OPERATOR (never the target), and every audit row stores the target masked to its last 4 digits (`+2547****2529`). The parser is now a deterministic two-token match so a malformed test command never falls to the AI classifier (bare `admin tpl test` still prints usage) | 234.1 |
 | **1.96.0** | Operator template tools — **`admin tpl test [kind|all]`** fires a REAL Meta template to `SUPERADMIN_PHONE` through the SAME single transport (`sendWhatsAppTemplateProbe` wraps `postWhatsAppMessage` with an optional capture that returns the parsed wamid; the boolean senders stay byte-identical), respects the delivery blocklist BEFORE posting, refuses unset knobs naming the registry's suggested template, refuses gracefully when `SUPERADMIN_PHONE` is unset, and is capped at 5 sends / 10 minutes per phone (module-level sliding window; `all` paces the registry and says when to rerun) with one `ADMIN_TEMPLATE_TEST` audit row per attempt; **`admin tpl buttons`** renders a deterministic zero-token `captured → declared → mapped` digest (declared from the registry + the approved titles, mapped from `BUTTON_TITLE_PHRASES`, captured from `error_logs` diagnostics and EXACT-match `chat_history` taps) and flags every tap without a named claimant. The two button registries moved to `services/interactiveReply.js` (service-side read; the route leaf re-exports them byte-identically); the phrase-reachability law pins all 7 title phrases to named lanes and records that bare `fuel` still has no deterministic claimant (design gap, deliberately unfixed) | 234 |
 | **1.95.1** | Phase 32 patch — **the approved `saka_reengage` Quick Reply buttons are live-wired**: the `re_engagement` kind declares FOUR `quick_reply` components at explicit indexes 0-3 (parameter-free — the 131008-safe shape), and `BUTTON_TITLE_PHRASES` maps the four approved titles ("Log Fuel" → `fuel`, "Set Reminder" → `set reminder`, "Log Expense" → `log expense`, "Dashboard" → `dashboard`) so a tap rides the exact same grammar as typing; `saka_feature_tip` stays body-only | 233.6 |
 | **1.95.0** | Phase 32 (**FINAL**) — **dashboard menu, dual-role toggle, drip-feed feature tips, re-engage template**: a burger + full-screen drawer at ≤1024px (built from the SAME `.nav` anchors, inert on the login doors, impersonation banner stays above it at z-index 60); `POST /d/lane/switch` flips the SESSION's `session_role` for a genuinely dual-role profile through the same gates as sign-in (owner: live trial/paid; driver: live assignment), rendered by an `onSend` strip only when both lanes exist and never while impersonating, plus a validated `?vehicle=` picker when a driver has >1 assignment; the trial sweep gains an OFF-by-default drip-feed (ONE feature tip at T+12h after activation, ONE follow-up at T+48h while that feature stays unexplored, per-sweep cap 10, never paid-live) using the new `feature_tip` template kind; `processSilentReengagement` moves to `chat_history` with a 14+ day threshold and gains the OFF-by-default `saka_reengage` template path (first name, guaranteed "there" fallback) while knob-off stays byte-identical | 233 |
@@ -7010,6 +7011,22 @@ E `GET /d/admin/passbook/:vehicleId` (read-only; VIN/token masked with `<details
 **Rules shaped this work (rule 58).** 1/39/42/45/63, 2, 3/4, 10/11, 12/13/33, 18, 31, 43, 44, 50, 51/52, 54, 55, 58. No rule edited. **Operator decision (a):** the `fuel` gap is documented and pinned, not fixed.
 
 **Operator actions.** `adminstart` → `admin tpl test all` (5 sends per window; the reply lists refused kinds with their expected template) → wait the window → `admin tpl test <remaining-kind>` → tap each arrived button (the quiz-starting taps open real flows — reply `cancel` after each) → `admin tpl buttons` (every captured tap must show a claimant) → delivery status under the printed wamid in Cloud Logging / the Meta console. Rollback = revert the commit / redeploy the previous revision; no schema, env or data to undo.
+
+### 234.1. v1.96.1 — the optional target phone for `admin tpl test`
+
+**Why.** The operator needs to see a template on a regular user's device, not just the superadmin's phone.
+
+**Parse (deterministic, zero tokens).** `parseSuperadminCommand` matches `admin tpl test(?:\s+(\S+))?(?:\s+(\S+))?` and classifies arg1: a kind (`all` or `[a-z_]+`) makes arg2 the target; otherwise arg1 is the target with `kind:null` (usage — nothing is sent). Bare `admin tpl test` keeps its pinned usage path, and a malformed target never reaches the AI classifier (the runner refuses it).
+
+**Execution.** `runTemplateTestFire` accepts `targetPhone`; the destination is `normalizeWhatsAppTargetPhone(targetPhone)` or, when omitted, `SUPERADMIN_PHONE`. Normalisation: digits only; a leading `00` is an international prefix; a leading `0` with exactly 10 digits resolves to Kenya `+254…`; the final number must be 9–15 digits or the command returns `invalid_target` (zero sends, one audit row, an example in the reply). The 5/10-min sliding window is keyed to the ADMIN phone (the operator), never the target; `maskWhatsAppTargetPhone` stores `+2547****2529` (last 4 only) on every `ADMIN_TEMPLATE_TEST` row, and the reply header names the masked target. The delivery blocklist still checks the actual recipient inside `sendWhatsAppTemplateProbe`.
+
+**Boundary + proof.** The two helpers live in `metaMessenger.js`, so `templateTestFire.js` still imports ONLY `proactiveTemplates.js` + `metaMessenger.js` (the side-effect-free pin holds). `webOnboarding.normalizePhoneE164` was audited and rejected for this use (it keeps the leading `0` — `0734852529` → `+0734852529`). `test_superadmin` +7 parse assertions (with/without/junk target); `test_template_testfire` 59 → 70 (helper pins, override send, operator-keyed window, masked audit, invalid-target refusal + copy).
+
+**Frames touched.** `src/services/metaMessenger.js`, `src/services/templateTestFire.js`, `src/services/superadmin.js`, `test_superadmin.js`, `test_template_testfire.js`, `test_vehicle_documents.js` (version pin), `docs/TEMPLATES.md` (§6), `package.json` (1.96.1), `landing/data/changelog.json` + stamped assets, this section + history + version, `CHANGELOG.md`.
+
+**Suites run.** test_template_testfire (70), test_superadmin, test_proactive_templates (93), test_interactive_reply (70), test_vehicle_documents (83), test_doc_sync (30), test_env_audit (59), test_landing_static (429), `npm run docs:check`, `npm run health` — green.
+
+**Operator actions.** `adminstart` → `admin tpl test re_engagement 0734852529` (target device) or `admin tpl test re_engagement` (superadmin default) → tap the arrived button (quiz-starting taps: reply `cancel`) → `admin tpl buttons`. Rollback = revert the commit / redeploy the previous revision; no schema, env or data to undo.
 
 
 

@@ -379,11 +379,17 @@ Rules:
 
 Two superadmin-only WhatsApp commands (30-minute admin session required):
 
-    admin tpl test <kind>     fire ONE approved template to SUPERADMIN_PHONE
-    admin tpl test all        pace the whole registry (5 sends / 10 minutes)
-    admin tpl buttons         audit every reply button (captured -> declared -> mapped)
+    admin tpl test <kind> [target_phone]   fire ONE approved template (default: SUPERADMIN_PHONE)
+    admin tpl test all [target_phone]      pace the whole registry (5 sends / 10 minutes)
+    admin tpl buttons                      audit every reply button (captured -> declared -> mapped)
 
 Rules:
+- The recipient defaults to SUPERADMIN_PHONE; pass a target phone to test on a
+  regular device (for example `admin tpl test re_engagement 0734852529`). A
+  local 07 number with exactly 10 digits resolves to +254; every other number
+  must carry its full country code (+49..., 254..., 00...). The 5/10-minute
+  window is keyed to the OPERATOR, and audit rows store the target masked to
+  its last 4 digits - never the full number.
 - The recipient is ALWAYS SUPERADMIN_PHONE (the operator's own number). If the
   knob `META_TPL_<KIND>` is unset, the command refuses that kind and names the
   expected template from the suggested-name list above - it never invents one.

@@ -1,6 +1,13 @@
 {
-  "latest": "1.96.0",
+  "latest": "1.96.1",
   "entries": [
+    {
+      "version": "1.96.1",
+      "date": "2026-11-10",
+      "title": "Test the messages on any phone",
+      "preview": "Send a test template to a chosen phone number, not just the operator's own, with the same safety caps.",
+      "summary": "A small operator-only patch. The template test command now accepts an optional phone number, so the team can check a message on a regular device instead of only the operator's own phone - for example a local number ending 52529 is understood automatically, while other countries are typed with their full code. Nothing is ever sent to a malformed number: the reply says so plainly. The five-sends-every-ten-minutes guard now counts against the operator rather than the receiving phone, so switching devices can never raise the limit, and the audit trail keeps only the last four digits of whoever received the test. Nothing changes for customers."
+    },
     {
       "version": "1.96.0",
       "date": "2026-11-10",

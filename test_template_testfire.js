@@ -26,7 +26,9 @@ import {
 import {
   sendWhatsAppText,
   sendWhatsAppTemplate,
-  sendWhatsAppTemplateProbe
+  sendWhatsAppTemplateProbe,
+  normalizeWhatsAppTargetPhone,
+  maskWhatsAppTargetPhone
 } from './src/services/metaMessenger.js';
 import { markDeliveryBlocked, clearDeliveryBlock } from './src/services/deliveryGuard.js';
 import { BUTTON_TITLE_PHRASES } from './src/services/interactiveReply.js';
@@ -134,6 +136,41 @@ try {
   check(sendCalls[0]?.to === probePhone && sendCalls[0]?.name === 'saka_reengage', 'the send targets SUPERADMIN_PHONE with the registry template name');
   check(sendCalls[0]?.options.buttons.length === 4, 'the probe forwards the registry button components');
   check(auditRows.length === 1 && auditRows[0].kind === 're_engagement' && auditRows[0].templateName === 'saka_reengage' && auditRows[0].wamid === 'wamid.stub.1', 'each send writes ONE ADMIN_TEMPLATE_TEST row (kind, template, wamid)');
+
+  console.log('\n--- 4b. optional target phone (v1.96.1) ---');
+  check(normalizeWhatsAppTargetPhone('0734852529') === '+254734852529', 'a local 07 number resolves to +254 E.164');
+  check(normalizeWhatsAppTargetPhone('+254 734 852 529') === '+254734852529' && normalizeWhatsAppTargetPhone('254734852529') === '+254734852529', 'international forms normalise to the same E.164');
+  check(normalizeWhatsAppTargetPhone('abc') === null && normalizeWhatsAppTargetPhone('0123') === null, 'junk and non-10-digit local numbers are refused');
+  check(maskWhatsAppTargetPhone('+254734852529') === '+2547****2529', 'the audit mask keeps the last 4 digits only');
+
+  const targetAudit = [];
+  const targetSends = [];
+  const targetRun = await runTemplateTestFire({
+    adminPhone: '+254700000105',
+    kind: 're_engagement',
+    targetPhone: '0734852529',
+    env: { SUPERADMIN_PHONE: '+254700000105', META_TPL_RE_ENGAGEMENT: 'saka_reengage' },
+    audit: async (row) => { targetAudit.push(row); },
+    send: async (to, name, options) => { targetSends.push({ to, name, options }); return { ok: true, wamid: 'wamid.target.1', status: 'sent' }; }
+  });
+  check(targetRun.status === 'done' && targetSends[0]?.to === '+254734852529', 'the override sends to the normalised target, not the superadmin');
+  check(templateTestAllowance('+254700000105').used === 1 && templateTestAllowance('+254734852529').used === 0, 'the 5/10-min window is keyed to the OPERATOR, not the target');
+  check(targetAudit[0]?.targetPhone === '+2547****2529' && !JSON.stringify(targetAudit[0]).includes('+254734852529'), 'the audit records the target masked (last 4 only)');
+  check(formatTemplateTestReply(targetRun).includes('+2547****2529'), 'the reply names the masked target');
+
+  const invalidAudit = [];
+  let invalidSendCalled = false;
+  const invalidRun = await runTemplateTestFire({
+    adminPhone: '+254700000106',
+    kind: 're_engagement',
+    targetPhone: 'abc',
+    env: { SUPERADMIN_PHONE: '+254700000106', META_TPL_RE_ENGAGEMENT: 'saka_reengage' },
+    audit: async (row) => { invalidAudit.push(row); },
+    send: async () => { invalidSendCalled = true; return { ok: true, wamid: 'x', status: 'sent' }; }
+  });
+  check(invalidRun.status === 'invalid_target' && invalidSendCalled === false, 'an invalid target refuses with no send');
+  check(formatTemplateTestReply(invalidRun).includes('not a valid phone number'), 'the refusal says the number is invalid');
+  check(invalidAudit.length === 1 && invalidAudit[0].status === 'invalid_target', 'the refusal is audited');
 
   console.log('\n--- 5. `all` pacing stops at the window and says when to rerun ---');
   const pacedPhone = '+254700000103';
