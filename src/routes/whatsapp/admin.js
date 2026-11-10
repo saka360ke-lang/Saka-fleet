@@ -21,7 +21,12 @@ import { generateRoleBasedActionDiscovery } from './helpers.js';
  * Returns `{ status, reply }` (status: care_handled | superadmin_handled) or null when the
  * turn belongs to the normal owner/driver flows.
  */
-export async function handleAdminIntercepts({ supabaseClient, senderPhone, messageText, sendWhatsApp }) {
+export async function handleAdminIntercepts({ supabaseClient, senderPhone, messageText, sendWhatsApp, isInteractiveTap = false }) {
+  // v1.96.3 — an explicit button/list tap bypasses BOTH gates (care console and
+  // superadmin hub). A tap can never be an admin directive or a care command;
+  // letting the hub answer it swallowed "Log Fuel"/"Accept" taps as "not sure
+  // which admin action that is" (live 2026-11-10). Taps keep normal routing.
+  if (isInteractiveTap) return null;
   if (!supabaseClient) return null;
 
   // v1.58.18 - Care console (worker role). CUSTOMER_CARE_PHONE is OFF by

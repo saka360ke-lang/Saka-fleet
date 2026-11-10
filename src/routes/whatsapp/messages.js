@@ -366,7 +366,10 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
     userLogPromise = logUserTurn(supabaseClient, senderPhone, messageText);
 
     // v1.69.0 — Phase 5B-4: the care-console + superadmin gates live in ./admin.js.
-    const adminIntercept = await handleAdminIntercepts({ supabaseClient, senderPhone, messageText, sendWhatsApp: sendWhatsAppReply });
+    // v1.96.3 — an explicit button/list tap bypasses both gates: a tap can never
+    // be an admin directive, and letting the hub answer it swallowed "Log Fuel"/
+    // "Accept" taps as "not sure which admin action that is" (live 2026-11-10).
+    const adminIntercept = await handleAdminIntercepts({ supabaseClient, senderPhone, messageText, sendWhatsApp: sendWhatsAppReply, isInteractiveTap: Boolean(messageObj?.interactive || messageObj?.button) });
     if (adminIntercept) {
       if (adminIntercept.reply) {
         await sendWhatsAppReply(senderPhone, adminIntercept.reply);

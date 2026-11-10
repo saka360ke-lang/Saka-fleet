@@ -448,12 +448,16 @@ export async function parseSuperadminCommand(messageText) {
   }
 
   // v1.96.0 — Meta template operator surfaces (deterministic, zero tokens).
-  // `admin tpl buttons` audits every reply button (declared ↔ mapped ↔
-  // captured); `admin tpl test [kind|all] [target_phone]` fires a REAL approved
-  // template to SUPERADMIN_PHONE (default) or the operator-typed target. Bare
+  // `admin tpl buttons [phone]` audits every reply button (declared ↔ mapped ↔
+  // captured) for that device, defaulting to the admin's own phone; `admin tpl
+  // test [kind|all] [target_phone]` fires a REAL approved template. Bare
   // `admin tpl test` prints usage (never auto-fires).
-  if (/^\s*admin\s+tpl\s+buttons\s*$/i.test(text)) {
-    return { intent: 'ADMIN_TEMPLATE_BUTTONS' };
+  // v1.96.3 — `admin tpl buttons` accepts an optional target phone so the audit
+  // can follow a test fired at a regular device. A junk token is still parsed
+  // deterministically (fail-closed, never the AI path) and refused by the runner.
+  const tplButtonsMatch = text.match(/^\s*admin\s+tpl\s+buttons(?:\s+(\S+))?\s*$/i);
+  if (tplButtonsMatch) {
+    return { intent: 'ADMIN_TEMPLATE_BUTTONS', targetPhone: tplButtonsMatch[1] || null };
   }
   // v1.96.1 — deterministic two-token parse so a malformed test command NEVER
   // falls to the AI classifier (zero tokens, fail-closed). A phone without a
@@ -2404,7 +2408,7 @@ export const ADMIN_COMMAND_REGISTRY = Object.freeze([
   ] },
   { group: 'Templates', items: [
     { cmd: 'admin tpl test [kind|all]', desc: 'fire a real Meta template to the superadmin phone (5 per 10 min)', ex: ['admin tpl test re_engagement', 'admin tpl test all'] },
-    { cmd: 'admin tpl buttons', desc: 'audit every template reply button (declared/mapped/captured)', ex: ['admin tpl buttons'] }
+    { cmd: 'admin tpl buttons [phone]', desc: 'audit every template reply button (declared/mapped/captured)', ex: ['admin tpl buttons', 'admin tpl buttons 0734852529'] }
   ] },
   { group: 'Growth', items: [
     { cmd: 'generate coupon <pct>', desc: 'create a discount coupon', ex: ['generate coupon 20%'] },
@@ -2927,12 +2931,17 @@ export async function handleSuperadminFlow(supabase, senderPhone, messageText, o
   }
 
   if (parsedCommand.intent === 'ADMIN_TEMPLATE_BUTTONS') {
+    // v1.96.3 — optional target phone: audit the device the test was fired at
+    // (default = the admin's own phone). Invalid targets refuse with zero reads.
     const auditData = await runTemplateButtonAudit({
       supabase,
       adminPhone: formattedPhone,
+      targetPhone: parsedCommand.targetPhone ?? null,
       titlePhrases: BUTTON_TITLE_PHRASES
     });
     await logAdminAudit(supabase, formattedPhone, 'ADMIN_TEMPLATE_BUTTONS', {
+      audited_phone: auditData.auditPhone || null,
+      status: auditData.status || 'done',
       declared_kinds: (auditData.declared || []).map((entry) => entry.kind),
       mapped_titles: (auditData.mapped || []).length,
       captured: (auditData.captured || []).length,

@@ -1,6 +1,13 @@
 {
-  "latest": "1.96.2",
+  "latest": "1.96.3",
   "entries": [
+    {
+      "version": "1.96.3",
+      "date": "2026-11-10",
+      "title": "The test tools finish the job",
+      "preview": "Testing all templates now continues where it stopped, and a tapped button behaves like a tap for everyone.",
+      "summary": "A quiet operator-only patch from the first live run of the template tools. Testing all messages used to stop after the first five and start over every time - it now remembers where it stopped for an hour, so simply repeating the command walks the whole list, retrying anything that was refused. A button tapped from the operator's own phone used to be answered as an unknown admin command; now it opens the same flow it would for a customer. And the button audit can look at the phone the test was sent to, not only the operator's own, naming that number with only its last four digits. Customers see no change."
+    },
     {
       "version": "1.96.2",
       "date": "2026-11-10",

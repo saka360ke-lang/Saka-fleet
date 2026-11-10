@@ -380,8 +380,8 @@ Rules:
 Two superadmin-only WhatsApp commands (30-minute admin session required):
 
     admin tpl test <kind> [target_phone]   fire ONE approved template (default: SUPERADMIN_PHONE)
-    admin tpl test all [target_phone]      pace the whole registry (5 sends / 10 minutes)
-    admin tpl buttons                      audit every reply button (captured -> declared -> mapped)
+    admin tpl test all [target_phone]      walk the registry, 5 sends / 10 minutes, resumes where it stopped
+    admin tpl buttons [target_phone]       audit every reply button for that phone (default: superadmin)
 
 Rules:
 - The recipient defaults to SUPERADMIN_PHONE; pass a target phone to test on a
@@ -390,11 +390,15 @@ Rules:
   must carry its full country code (+49..., 254..., 00...). The 5/10-minute
   window is keyed to the OPERATOR, and audit rows store the target masked to
   its last 4 digits - never the full number.
-- The recipient is ALWAYS SUPERADMIN_PHONE (the operator's own number). If the
-  knob `META_TPL_<KIND>` is unset, the command refuses that kind and names the
-  expected template from the suggested-name list above - it never invents one.
+- If the knob `META_TPL_<KIND>` is unset, the command refuses that kind and
+  names the expected template from the suggested-name list above - it never
+  invents one.
 - At most 5 sends per 10 minutes. `all` walks the registry in order, reports
   each kind, and stops at the window: "cooling down - run again in N minutes".
+  It remembers where it stopped for 1 hour (keyed to the operator), so simply
+  repeating `all` resumes at the first kind you have not seen yet - four runs
+  walk all 18. A kind that was refused (knob unset, blocked, rejected) is
+  retried first on the next run and never skipped silently.
 - The reply distinguishes outcomes honestly: sent (wamid printed), rejected by
   Meta (no wamid), delivery blocked (no wamid, no network call), credentials
   missing (no wamid), knob unset (expected template named).
@@ -403,11 +407,17 @@ Rules:
   There is no database delivery trail by design.
 - After tapping buttons: the quiz-starting taps ("Log Fuel", "Set Reminder",
   "Log Expense") open REAL flows - reply `cancel` after each before running
-  `admin tpl buttons`. "Dashboard" and "Reminders" are read lanes.
-- `admin tpl buttons` reads captured taps from two live sources: `error_logs`
-  on route `/webhook/whatsapp/interactive` (unrecognized shapes, superadmin
-  number) and `chat_history` rows whose message EXACTLY equals a mapped target
-  phrase (recognized taps arrive as the typed phrase). Any captured tap with no
-  named claimant is flagged.
+  `admin tpl buttons`. "Dashboard" and "Reminders" are read lanes. Since v1.96.3
+  a tap from the SUPERADMIN phone bypasses the admin gate entirely, so the flow
+  opens exactly as it does for a customer (previously the admin hub answered
+  "not sure which admin action that is").
+- `admin tpl buttons [target_phone]` reads captured taps from two live sources:
+  `error_logs` on route `/webhook/whatsapp/interactive` (unrecognized shapes)
+  and `chat_history` rows whose message EXACTLY equals a mapped target phrase
+  (recognized taps arrive as the typed phrase). Without a target it audits the
+  superadmin's own phone; pass the phone the test was fired at (for example
+  `admin tpl buttons 0734852529`) to audit that device. The reply header names
+  the audited number masked (`+2547****2529`). Any captured tap with no named
+  claimant is flagged, and a malformed target reads nothing and says so.
 
 

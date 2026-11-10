@@ -14,9 +14,13 @@ import {
 import {
   TEMPLATE_TEST_WINDOW_MS,
   TEMPLATE_TEST_MAX_SENDS,
+  TEMPLATE_TEST_CURSOR_TTL_MS,
   TEMPLATE_TEST_KINDS,
   templateTestAllowance,
   recordTemplateTestFire,
+  templateTestCursorKinds,
+  markTemplateTestKindSent,
+  clearTemplateTestCursor,
   runTemplateTestFire,
   formatTemplateTestReply,
   buildTemplateButtonAudit,
@@ -189,6 +193,58 @@ try {
   const pacedReply = formatTemplateTestReply(paced);
   check(pacedReply.includes('Cooling down') && pacedReply.includes('run again in 10 minute(s)') && pacedReply.includes('Remaining:'), 'the reply says cooling down and names the remaining kinds');
 
+  console.log('\n--- 5b. `all` resumes where it stopped (v1.96.3 cursor) ---');
+  const cursorPhone = '+254700000120';
+  const cursorEnv = { SUPERADMIN_PHONE: cursorPhone };
+  for (const [kind, def] of Object.entries(PROACTIVE_TEMPLATE_KINDS)) cursorEnv[def.env] = TEMPLATE_SUGGESTED_NAMES[kind];
+  const sendKinds = (bucket) => async (to, name) => { bucket.push(name); return { ok: true, wamid: `wamid.c.${bucket.length}`, status: 'sent' }; };
+  const cursorNow = 5_000_000;
+
+  const c1Sends = [];
+  const c1 = await runTemplateTestFire({ adminPhone: cursorPhone, kind: 'all', env: cursorEnv, now: cursorNow, send: sendKinds(c1Sends) });
+  check(c1.results.map((row) => row.kind).join(',') === TEMPLATE_TEST_KINDS.slice(0, TEMPLATE_TEST_MAX_SENDS).join(','), 'cursor run 1 starts at the registry top');
+  check(templateTestCursorKinds(cursorPhone, { now: cursorNow }).length === TEMPLATE_TEST_MAX_SENDS, 'the cursor remembers the 5 kinds that actually sent');
+  check(formatTemplateTestReply(c1).includes(`Session progress: ${TEMPLATE_TEST_MAX_SENDS}/${TEMPLATE_TEST_KINDS.length}`), 'the reply reports session progress out of 18');
+
+  const c2Sends = [];
+  const c2 = await runTemplateTestFire({ adminPhone: cursorPhone, kind: 'all', env: cursorEnv, now: cursorNow + TEMPLATE_TEST_WINDOW_MS + 1, send: sendKinds(c2Sends) });
+  check(c2.results.map((row) => row.kind).join(',') === TEMPLATE_TEST_KINDS.slice(TEMPLATE_TEST_MAX_SENDS, 2 * TEMPLATE_TEST_MAX_SENDS).join(','), 'cursor run 2 resumes at index 5 (re_engagement), never the first five');
+  check(c2.remaining[0] === TEMPLATE_TEST_KINDS[2 * TEMPLATE_TEST_MAX_SENDS], 'the remaining list starts after the resumed chunk');
+  check(formatTemplateTestReply(c2).includes('resumes at the first remaining kind'), 'the cooling reply explains the resume');
+  check(templateTestCursorKinds(cursorPhone, { now: cursorNow + TEMPLATE_TEST_CURSOR_TTL_MS + TEMPLATE_TEST_WINDOW_MS + 1 }).length === 0, 'the cursor expires after 1 hour (no cross-hour surprise)');
+
+  const otherSends = [];
+  const other = await runTemplateTestFire({ adminPhone: '+254700000121', kind: 'all', env: cursorEnv, now: cursorNow, send: sendKinds(otherSends) });
+  check(other.results[0].kind === TEMPLATE_TEST_KINDS[0], 'the cursor is per operator phone (a second operator starts at the top)');
+
+  const holdPhone = '+254700000122';
+  const holdEnv = { ...cursorEnv, SUPERADMIN_PHONE: holdPhone };
+  const holdNow = 6_000_000;
+  const holdKind5 = TEMPLATE_TEST_KINDS[5];
+  await runTemplateTestFire({ adminPhone: holdPhone, kind: 'all', env: holdEnv, now: holdNow, send: sendKinds([]) });
+  const holdEnv2 = { ...holdEnv };
+  delete holdEnv2[PROACTIVE_TEMPLATE_KINDS[holdKind5].env];
+  const hold2 = [];
+  const holdRun2 = await runTemplateTestFire({ adminPhone: holdPhone, kind: 'all', env: holdEnv2, now: holdNow + TEMPLATE_TEST_WINDOW_MS + 1, send: sendKinds(hold2) });
+  check(holdRun2.results[0].kind === holdKind5 && holdRun2.results[0].status === 'unset_knob', 'an unset knob is attempted at the cursor head and refused honestly');
+  check(hold2.length === TEMPLATE_TEST_MAX_SENDS && !templateTestCursorKinds(holdPhone, { now: holdNow + TEMPLATE_TEST_WINDOW_MS + 1 }).includes(holdKind5), 'an unset knob never advances the cursor (retryable next run)');
+  const holdRun3 = await runTemplateTestFire({ adminPhone: holdPhone, kind: 'all', env: holdEnv, now: holdNow + 2 * (TEMPLATE_TEST_WINDOW_MS + 1), send: sendKinds([]) });
+  check(holdRun3.results[0].kind === holdKind5 && holdRun3.results[0].status === 'sent', 'the next run retries the refused kind first');
+
+  const wrapPhone = '+254700000123';
+  const wrapNow = 7_000_000;
+  for (const kind of TEMPLATE_TEST_KINDS) markTemplateTestKindSent(wrapPhone, kind, { now: wrapNow });
+  const wrapRun = await runTemplateTestFire({ adminPhone: wrapPhone, kind: 'all', env: { ...cursorEnv, SUPERADMIN_PHONE: wrapPhone }, now: wrapNow, send: sendKinds([]) });
+  check(wrapRun.results[0].kind === TEMPLATE_TEST_KINDS[0], 'a completed 18/18 sweep wraps back to the registry top');
+
+  const soloPhone = '+254700000124';
+  const soloNow = 8_000_000;
+  markTemplateTestKindSent(soloPhone, TEMPLATE_TEST_KINDS[0], { now: soloNow });
+  await runTemplateTestFire({ adminPhone: soloPhone, kind: 're_engagement', env: { ...cursorEnv, SUPERADMIN_PHONE: soloPhone }, now: soloNow, send: async () => ({ ok: true, wamid: 'wamid.solo', status: 'sent' }) });
+  const soloRun = await runTemplateTestFire({ adminPhone: soloPhone, kind: 'all', env: { ...cursorEnv, SUPERADMIN_PHONE: soloPhone }, now: soloNow + TEMPLATE_TEST_WINDOW_MS + 1, send: sendKinds([]) });
+  check(soloRun.results[0].kind === TEMPLATE_TEST_KINDS[1], 'only `all` advances the cursor — a single fire does not');
+  for (const phone of [cursorPhone, holdPhone, wrapPhone, soloPhone, '+254700000121']) clearTemplateTestCursor(phone);
+
   console.log('\n--- 6. reply copy is honest about wamid outcomes (sent / rejected / blocked) ---');
   const sentCopy = formatTemplateTestReply({ status: 'done', results: [{ kind: 'deploy_live', templateName: 'saka_deploy_live', status: 'sent', wamid: 'wamid.x', ok: true }], remaining: [] });
   check(sentCopy.includes('sent — wamid wamid.x') && sentCopy.includes('1/1 sent'), 'sent copy names the wamid');
@@ -255,6 +311,41 @@ try {
   const phoneFilter = queryLog.find((entry) => Array.isArray(entry) && entry[0] === 'in' && entry[2] === 'user_phone');
   check(phoneFilter && phoneFilter[3].includes('254700000109') && phoneFilter[3].includes('+254700000109'), 'the chat_history read covers both stored phone forms');
   check(queried.unclaimed.length === 1, 'the live read path flags the unclaimed tap end-to-end');
+
+  console.log('\n--- 9. optional audit target phone (v1.96.3) ---');
+  const makeAuditMock = (log, rowsFor) => ({
+    from(table) {
+      log.push(table);
+      const api = {
+        select() { return api; },
+        eq(col, value) { log.push(['eq', table, col, value]); return api; },
+        in(col, values) { log.push(['in', table, col, values]); return api; },
+        order() { return api; },
+        limit: async () => ({ data: rowsFor(table), error: null })
+      };
+      return api;
+    }
+  });
+  const targetLog = [];
+  const targetAudited = await runTemplateButtonAudit({
+    supabase: makeAuditMock(targetLog, () => []),
+    adminPhone: '254700000109',
+    targetPhone: '0734852529',
+    titlePhrases: BUTTON_TITLE_PHRASES
+  });
+  const targetPhoneFilter = targetLog.find((entry) => Array.isArray(entry) && entry[0] === 'in' && entry[2] === 'user_phone');
+  check(targetPhoneFilter && targetPhoneFilter[3].includes('+254734852529') && targetPhoneFilter[3].includes('254734852529') && !targetPhoneFilter[3].includes('254700000109'), 'the audit reads the TARGET phone, not the admin phone');
+  check(targetAudited.auditPhone === '+2547****2529' && formatTemplateButtonDigest(targetAudited).includes('Auditing: +2547****2529'), 'the digest names the audited phone (masked)');
+  let invalidQueried = false;
+  const invalidTargetAudit = await runTemplateButtonAudit({
+    supabase: { from() { invalidQueried = true; return {}; } },
+    adminPhone: '254700000109',
+    targetPhone: 'abc',
+    titlePhrases: BUTTON_TITLE_PHRASES
+  });
+  check(invalidTargetAudit.status === 'invalid_target' && invalidQueried === false, 'an invalid buttons target refuses with zero DB reads');
+  check(formatTemplateButtonDigest(invalidTargetAudit).includes('not a valid phone number'), 'the refusal says the number is invalid');
+  check(String(invalidTargetAudit.rawTarget) === 'abc', 'the refusal names the rejected input');
 } finally {
   globalThis.fetch = realFetch;
 }

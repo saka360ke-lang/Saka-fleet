@@ -13,6 +13,9 @@
  *  - Sending is operator-triggered and capped at 5 sends / 10 minutes per phone
  *    (module-level sliding window, per Cloud Run instance — one operator fires
  *    one command at a time, and the per-phone serial queue serializes turns).
+ *  - `all` remembers which kinds it already fired for the OPERATOR (v1.96.3 —
+ *    module-level cursor, 1-hour TTL, per Cloud Run instance), so consecutive
+ *    runs walk the whole 18-kind registry instead of re-firing the first five.
  *  - Audit rows are the CALLER's job (injected `audit` callback) so this module
  *    stays transport + pure formatting.
  */
@@ -30,11 +33,33 @@ import { sendWhatsAppTemplateProbe, cleanWhatsAppRecipient, normalizeWhatsAppTar
 export const TEMPLATE_TEST_WINDOW_MS = 10 * 60 * 1000;
 export const TEMPLATE_TEST_MAX_SENDS = 5;
 export const TEMPLATE_BUTTON_CAPTURE_LIMIT = 20;
+// v1.96.3 — how long `all` remembers where it stopped. 18 kinds at 5 sends per
+// 10 minutes is a ~40-minute sweep, so one hour covers a full pass (in-memory,
+// per Cloud Run instance — same caveat as the rate window).
+export const TEMPLATE_TEST_CURSOR_TTL_MS = 60 * 60 * 1000;
 
 export const TEMPLATE_TEST_KINDS = Object.freeze(Object.keys(PROACTIVE_TEMPLATE_KINDS));
 
 // clean phone -> [send timestamps] inside the 10-minute window.
 const testFireWindow = new Map();
+
+// clean OPERATOR phone -> { kinds:Set<string>, startedAt } — v1.96.3. Lets
+// `admin tpl test all` resume where the last run stopped so every one of the
+// 18 kinds is reachable through `all` alone (live 2026-11-10: every run
+// restarted at service_reminder and re_engagement was never reached).
+const testFireCursor = new Map();
+
+function cursorEntry(phone, now) {
+  const key = cleanWhatsAppRecipient(phone);
+  if (!key) return null;
+  const entry = testFireCursor.get(key);
+  if (!entry) return null;
+  if (now - entry.startedAt > TEMPLATE_TEST_CURSOR_TTL_MS) {
+    testFireCursor.delete(key);
+    return null;
+  }
+  return entry;
+}
 
 function liveStamps(phone, now) {
   const key = cleanWhatsAppRecipient(phone);
@@ -65,6 +90,27 @@ export function recordTemplateTestFire(phone, { now = Date.now() } = {}) {
   stamps.push(now);
   testFireWindow.set(key, stamps);
   return stamps.length;
+}
+
+/** Read-only list of kinds `all` already fired for this operator (never mutates). */
+export function templateTestCursorKinds(phone, { now = Date.now() } = {}) {
+  const entry = cursorEntry(phone, now);
+  return entry ? [...entry.kinds] : [];
+}
+
+/** Mark one kind as fired for this operator (call ONLY on a real wamid). */
+export function markTemplateTestKindSent(phone, kind, { now = Date.now() } = {}) {
+  const key = cleanWhatsAppRecipient(phone);
+  if (!key || !kind) return;
+  const entry = cursorEntry(phone, now) || { kinds: new Set(), startedAt: now };
+  entry.kinds.add(kind);
+  testFireCursor.set(key, entry);
+}
+
+/** Forget the `all` cursor for one operator (full-sweep wrap / test hygiene). */
+export function clearTemplateTestCursor(phone) {
+  const key = cleanWhatsAppRecipient(phone);
+  if (key) testFireCursor.delete(key);
 }
 
 /**
@@ -118,7 +164,20 @@ export async function runTemplateTestFire({
     return { ok: false, status: 'no_recipient', requested, targetPhone: null, results: [], remaining: [], retryMinutes: 0 };
   }
 
-  const targets = requested === 'all' ? [...TEMPLATE_TEST_KINDS] : [requested];
+  // v1.96.3 — `all` resumes at the first kind this operator has not fired yet
+  // (1-hour cursor). A completed 18/18 sweep wraps back to the registry top.
+  let targets;
+  if (requested === 'all') {
+    const sentKinds = new Set(templateTestCursorKinds(windowKey, { now }));
+    let startIndex = TEMPLATE_TEST_KINDS.findIndex((targetKind) => !sentKinds.has(targetKind));
+    if (startIndex < 0) {
+      startIndex = 0;
+      clearTemplateTestCursor(windowKey);
+    }
+    targets = TEMPLATE_TEST_KINDS.slice(startIndex);
+  } else {
+    targets = [requested];
+  }
   const results = [];
   const remaining = [];
   let retryMinutes = 0;
@@ -176,6 +235,11 @@ export async function runTemplateTestFire({
       ok: Boolean(sent.ok)
     };
     results.push(result);
+    // v1.96.3 — advance the `all` cursor ONLY on a real send (wamid). Unset
+    // knobs, blocked numbers and Meta rejections stay retryable by later runs.
+    if (requested === 'all' && result.status === 'sent') {
+      markTemplateTestKindSent(windowKey, targetKind, { now });
+    }
     if (notify) await notify({ ...result, fixtureVars, adminPhone, targetPhone: maskedTarget });
   }
 
@@ -187,7 +251,8 @@ export async function runTemplateTestFire({
     results,
     remaining,
     retryMinutes,
-    targetPhone: maskedTarget
+    targetPhone: maskedTarget,
+    sentKinds: requested === 'all' ? templateTestCursorKinds(windowKey, { now }) : []
   };
 }
 
@@ -215,7 +280,7 @@ export function formatTemplateTestReply(outcome = {}) {
       '',
       `Kinds: ${(outcome.kinds || []).join(', ')}`,
       '',
-      '_No target = SUPERADMIN_PHONE. Up to 5 sends per 10 minutes; `all` paces through the registry and says when to run it again._'
+      '_No target = SUPERADMIN_PHONE. Up to 5 sends per 10 minutes; `all` walks the registry in order, remembers where it stopped for 1 hour and says when to run it again._'
     ].join('\n');
   }
 
@@ -256,8 +321,12 @@ export function formatTemplateTestReply(outcome = {}) {
   }
   const sentCount = results.filter((result) => result.status === 'sent').length;
   lines.push('', `${sentCount}/${results.length} sent.`);
+  if (outcome.requested === 'all' && Array.isArray(outcome.sentKinds) && outcome.sentKinds.length) {
+    lines.push(`Session progress: ${outcome.sentKinds.length}/${TEMPLATE_TEST_KINDS.length} kinds fired this hour.`);
+  }
   if ((outcome.remaining || []).length) {
     lines.push(`⏳ Cooling down — run again in ${outcome.retryMinutes || 1} minute(s). Remaining: ${outcome.remaining.join(', ')}`);
+    if (outcome.requested === 'all') lines.push('_`all` resumes at the first remaining kind — no need to repeat what you already received._');
   }
   lines.push('_Delivery status lives in Cloud Logging / the Meta console under the wamid above — there is no database delivery trail by design._');
   return lines.join('\n');
@@ -354,12 +423,29 @@ export function buildTemplateButtonAudit({ titlePhrases = {}, errorRows = [], hi
 }
 
 /**
- * Query the two live capture sources for the superadmin phone and build the
- * audit. Read-only: `error_logs` (unrecognized interactive diagnostics) and
+ * Query the two live capture sources for ONE phone and build the audit.
+ * Read-only: `error_logs` (unrecognized interactive diagnostics) and
  * `chat_history` (recognized taps land there as the typed phrase).
+ *
+ * v1.96.3 — `targetPhone` audits the device the test was fired at (live
+ * 2026-11-10: `admin tpl buttons` only saw the superadmin's own taps although
+ * the template went to 0734852529). Omitted → the admin's own phone, unchanged.
+ * An invalid target is a deterministic `invalid_target` refusal with zero reads.
  */
-export async function runTemplateButtonAudit({ supabase = null, adminPhone = null, titlePhrases = {}, limit = TEMPLATE_BUTTON_CAPTURE_LIMIT } = {}) {
-  const cleanPhone = cleanWhatsAppRecipient(adminPhone || '');
+export async function runTemplateButtonAudit({ supabase = null, adminPhone = null, targetPhone = null, titlePhrases = {}, limit = TEMPLATE_BUTTON_CAPTURE_LIMIT } = {}) {
+  const rawTarget = targetPhone === null || targetPhone === undefined ? '' : String(targetPhone).trim();
+  const target = rawTarget ? normalizeWhatsAppTargetPhone(rawTarget) : null;
+  if (rawTarget && !target) {
+    return {
+      ok: false,
+      status: 'invalid_target',
+      rawTarget,
+      ...buildTemplateButtonAudit({ titlePhrases, errorRows: [], historyRows: [], limit })
+    };
+  }
+
+  const admin = cleanWhatsAppRecipient(adminPhone || '');
+  const cleanPhone = cleanWhatsAppRecipient(target || adminPhone || '');
   const phraseValues = [...new Set(Object.values(titlePhrases || {}).map((phrase) => cleanPhrase(phrase)))];
   let errorRows = [];
   let historyRows = [];
@@ -397,13 +483,29 @@ export async function runTemplateButtonAudit({ supabase = null, adminPhone = nul
     }
   }
 
-  return { ...buildTemplateButtonAudit({ titlePhrases, errorRows, historyRows, limit }), adminPhone: cleanPhone || null };
+  return {
+    ok: true,
+    status: 'done',
+    ...buildTemplateButtonAudit({ titlePhrases, errorRows, historyRows, limit }),
+    auditPhone: maskWhatsAppTargetPhone(cleanPhone),
+    adminPhone: admin || null
+  };
 }
 
 /** Deterministic digest: declared → mapped → captured, with honest flags. */
 export function formatTemplateButtonDigest(audit = {}) {
   const limit = audit.limit || TEMPLATE_BUTTON_CAPTURE_LIMIT;
+  // v1.96.3 — an invalid target is a deterministic refusal, never a read.
+  if (audit.status === 'invalid_target') {
+    return [
+      '🔘 *Template button audit*',
+      '',
+      `⚙️ ${audit.rawTarget || 'That number'} is not a valid phone number — nothing was read.`,
+      'Use a full number with its country code, or a local 07 number, e.g. *admin tpl buttons 0734852529*.'
+    ].join('\n');
+  }
   const lines = ['🔘 *Template button audit*', ''];
+  if (audit.auditPhone) lines.push(`Auditing: ${audit.auditPhone}`, '');
 
   lines.push('*Declared (registry)*');
   const declared = Array.isArray(audit.declared) ? audit.declared : [];
@@ -447,9 +549,13 @@ export default {
   TEMPLATE_TEST_WINDOW_MS,
   TEMPLATE_TEST_MAX_SENDS,
   TEMPLATE_BUTTON_CAPTURE_LIMIT,
+  TEMPLATE_TEST_CURSOR_TTL_MS,
   TEMPLATE_TEST_KINDS,
   templateTestAllowance,
   recordTemplateTestFire,
+  templateTestCursorKinds,
+  markTemplateTestKindSent,
+  clearTemplateTestCursor,
   runTemplateTestFire,
   formatTemplateTestReply,
   buildTemplateButtonAudit,

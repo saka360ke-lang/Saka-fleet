@@ -4,6 +4,8 @@ import { parseInteractiveReply, BUTTON_PAYLOAD_PHRASES, BUTTON_TITLE_PHRASES } f
 import { BUTTON_PAYLOAD_PHRASES as SERVICE_PAYLOAD_PHRASES, BUTTON_TITLE_PHRASES as SERVICE_TITLE_PHRASES } from './src/services/interactiveReply.js';
 import { READ_COMMANDS } from './src/services/readCommands.js';
 import { detectQuizStart } from './src/services/quizEngine.js';
+import { isSuperadminPhone } from './src/services/superadmin.js';
+import { handleAdminIntercepts } from './src/routes/whatsapp/admin.js';
 
 /**
  * Saka Fleet — inbound interactive replies (v1.73.4, Phase 12B, section 198B).
@@ -146,5 +148,32 @@ check(Boolean(helpLane?.detect('help')), "payload 'help' is claimed by the help_
 check(detectQuizStart({ intent: 'KEEP_VEHICLE', messageText: 'keep these', hasVehicleRegistered: true }) === 'keep_vehicles', "payload 'keep all' reaches the keep-vehicles flow");
 const pendingSource = fs.readFileSync('./src/routes/whatsapp/pending.js', 'utf8');
 check(pendingSource.includes('maybeHandleSubscriptionTurn') && BUTTON_PAYLOAD_PHRASES.subscription === 'subscription', "payload 'subscription' is claimed by the deterministic billing turn");
+
+console.log('\n--- Test 11: a button tap bypasses the admin gate (v1.96.3) ---');
+const adminPhone = process.env.SUPERADMIN_PHONE || '';
+const tapBypass = await handleAdminIntercepts({
+  supabaseClient: { from() { throw new Error('admin gate touched'); } },
+  senderPhone: adminPhone || '+254700000000',
+  messageText: 'fuel',
+  sendWhatsApp: async () => {},
+  isInteractiveTap: true
+});
+check(tapBypass === null, 'isInteractiveTap=true returns before ANY gate (care console + superadmin hub untouched)');
+if (adminPhone && isSuperadminPhone(adminPhone)) {
+  let gateEntered = false;
+  try {
+    await handleAdminIntercepts({
+      supabaseClient: { from() { gateEntered = true; throw new Error('gate entered'); } },
+      senderPhone: adminPhone,
+      messageText: 'fuel',
+      sendWhatsApp: async () => {}
+    });
+  } catch { /* the poison client throws once the gate is actually entered */ }
+  check(gateEntered === true, 'typed text still enters the gate (the bypass is tap-only)');
+}
+check(messagesSource.includes('isInteractiveTap: Boolean(messageObj?.interactive || messageObj?.button)'), 'messages.js flags every tap shape (interactive or legacy button)');
+const adminRouteSource = fs.readFileSync('./src/routes/whatsapp/admin.js', 'utf8');
+check(adminRouteSource.includes('if (isInteractiveTap) return null;'), 'admin.js bypasses both gates for a tap');
+check(messagesSource.indexOf('parseInteractiveReply(messageObj)') < messagesSource.indexOf('await handleAdminIntercepts('), 'the tap resolves BEFORE the admin gate sees the turn');
 
 console.log(`\n🎉 ${passed} interactive-reply assertions passed.`);
