@@ -97,9 +97,11 @@ async function run() {
 
   console.log('\n--- Test 3: user health ---');
   const health = metrics.userHealth;
-  check(health.registered === 6 && health.shells === 1, 'registered = email on file; shells = no email');
+  check(health.registered === 6 && health.shells === 1, 'registered = email on file; shells = no name and no email');
   check(health.emailUnverified === 1, 'an unverified email is counted');
+  check(health.withVehicles === 2, 'registered profiles with a live vehicle are counted (p-free, p-growth)');
   check(health.activeWithZeroAssets === 4, 'registered profiles with no live asset are counted');
+  check(health.withVehicles + health.activeWithZeroAssets === health.registered, 'with vehicles + 0 assets always adds up to registered (v1.96.4)');
   check(health.expiredTrialsNotConverted30d === 1, 'an expired trial on a non-paying account is flagged');
 
   console.log('\n--- Test 4: support + AI + alerts ---');
@@ -123,6 +125,19 @@ async function run() {
   check(!digest.includes('12000444') && !digest.includes('712000111'), 'no phone number appears in the digest');
   check(digest.includes('Command Center') || digest.includes('Command center'), 'the digest names the surface');
   check(digest.includes('⚠️') && digest.includes('Needs you'), 'the alert block renders');
+  check(digest.includes('Registered 6 · 2 with vehicles · 4 with 0 assets'), 'the user-health block names the registered/vehicle gap on ONE line (v1.96.4)');
+  const vehiclesDown = formatCommandCenterDigest({
+    ok: true,
+    windowDays: 30,
+    revenue: null,
+    userHealth: { totalProfiles: 6, registered: 6, shells: 0, emailUnverified: 0, withVehicles: null, activeWithZeroAssets: null, expiredTrialsNotConverted30d: null },
+    support: null,
+    ai: null,
+    email: null,
+    alerts: []
+  });
+  check(vehiclesDown.includes('Registered 6 · — with vehicles · — with 0 assets'), 'a failed vehicles read prints a dash, never zero-as-fact (rule 50)');
+  check(!/\bnull\b|\bundefined\b/.test(vehiclesDown), 'the fail-soft digest never leaks null/undefined');
   const pulse = formatCommandCenterDigest(metrics, { full: false });
   check(pulse.split('\n').length <= 8 && pulse.includes('Pulse'), 'the non-Monday pulse is short');
   check(!/@example\.com/.test(digest), 'no email address leaks');
@@ -151,6 +166,7 @@ async function run() {
   });
   check(emptyDb.ok === true && emptyDb.revenue.activePaid === 0 && emptyDb.revenue.mrrUsd === 0, 'an empty deployment reports zeros, not invented figures');
   check(emptyDb.alerts.length === 0 && formatCommandCenterDigest(emptyDb).includes('Active paid: 0'), 'the empty digest is still coherent');
+  check(emptyDb.userHealth.withVehicles === 0 && emptyDb.userHealth.activeWithZeroAssets === 0, 'an empty deployment counts 0 with vehicles and 0 with assets — never null-as-zero confusion');
   const noDb = await buildCommandCenterMetrics({ supabase: null, now: NOW });
   check(noDb.ok === false && formatCommandCenterDigest(noDb).includes('could not be loaded'), 'no database answers one honest line');
   check(COMMAND_WINDOW_DAYS === 30 && TRIAL_WARNING_DAYS === 3, 'the documented windows are 30 days / 3 days');

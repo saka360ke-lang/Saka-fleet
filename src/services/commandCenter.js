@@ -19,6 +19,9 @@
 import { normalizeTierKey, getTierDefinition, isPaidTierKey } from './subscriptionTiers.js';
 import { getAiUsageSummary, getAiUsageByOwner } from './aiUsageLog.js';
 import { maskPhone } from './webOnboarding.js';
+// v1.96.4 — the superadmin's own row is a registered account (profiles report
+// definition, v1.82.0); the neutral identity module keeps this import cycle-free.
+import { isSuperadminPhone } from './superadminIdentity.js';
 // v1.87.2 (Phase 26C) — the email-channel state (Resend quota marker).
 import { readConfig } from './systemConfigService.js';
 import { CONFIG_KEY_RESEND_QUOTA_WARNED } from './systemConfigKeys.js';
@@ -67,9 +70,14 @@ export function monthlyListPriceUsd(profile = {}) {
 async function readProfiles(supabase) {
   const full = 'id, full_name, phone_number, email, email_verified, country_code, subscription_tier, subscription_status, subscription_period_end, subscription_expires_at, billing_interval, addon_quantity, downgraded_at, created_at';
   const slim = 'id, full_name, phone_number, subscription_tier, subscription_status, subscription_period_end, created_at';
-  let { data, error } = await supabase.from('profiles').select(full).is('deleted_at', null).limit(5000);
+  let { data, error } = await supabase.from('profiles').select(full).is('deleted_at', null)
+    // TODO(pagination): 5000-row cap — page through profiles once the base
+    // outgrows it; a truncated read would understate every registration count.
+    .limit(5000);
   if (error) {
-    ({ data, error } = await supabase.from('profiles').select(slim).is('deleted_at', null).limit(5000));
+    ({ data, error } = await supabase.from('profiles').select(slim).is('deleted_at', null)
+      // TODO(pagination): 5000-row cap — see above.
+      .limit(5000));
   }
   if (error) return null;
   return Array.isArray(data) ? data : [];
@@ -103,13 +111,20 @@ async function readTrials(supabase, now) {
   }
 }
 
-/** R5 — registered (email on file) profiles with ZERO live assets. */
-async function readZeroAssetOwners(supabase, profiles) {
+/**
+ * R5 — the live-vehicle owner set. ONE read feeds both the "with vehicles" and
+ * "0 assets" counts (v1.96.4), so the two numbers can never disagree.
+ * Returns null when the read fails — never an empty Set (rule 50).
+ */
+async function readLiveVehicleOwners(supabase) {
   try {
-    const { data, error } = await supabase.from('vehicles').select('owner_id').is('deleted_at', null).limit(5000);
+    const { data, error } = await supabase.from('vehicles').select('owner_id').is('deleted_at', null)
+      // TODO(pagination): 5000-row cap — page through vehicles (or aggregate
+      // server-side) once the fleet outgrows it; a truncated read would
+      // overstate "0 assets" and understate "with vehicles".
+      .limit(5000);
     if (error) return null;
-    const ownersWithAssets = new Set((data || []).map((row) => row.owner_id).filter(Boolean));
-    return (profiles || []).filter((profile) => profile.email && !ownersWithAssets.has(profile.id));
+    return new Set((data || []).map((row) => row.owner_id).filter(Boolean));
   } catch {
     return null;
   }
@@ -160,7 +175,7 @@ export async function buildCommandCenterMetrics({
 
   const profiles = await readProfiles(supabase);
   const trials = await readTrials(supabase, now);
-  const zeroAssetOwners = profiles ? await readZeroAssetOwners(supabase, profiles) : null;
+  const liveVehicleOwners = profiles ? await readLiveVehicleOwners(supabase) : null;
   const support = await readSupport(supabase, now);
   const ai24 = aiSummary ? await aiSummary(supabase, AI_COST_WINDOW_HOURS) : null;
   const ai7d = aiSummary ? await aiSummary(supabase, AI_COST_LONG_WINDOW_HOURS) : null;
@@ -226,12 +241,23 @@ export async function buildCommandCenterMetrics({
         .map((profile) => profile.id)
     );
     const expiredNotConverted = (trials?.expired || []).filter((row) => !paidIds.has(row.owner_id)).length;
+    // v1.96.4 — ONE registered definition across every surface (profiles
+    // report v1.82.0): email on file, or the superadmin's own row. Shells are
+    // the no-name / no-email rows, named separately and never double-counted.
+    const isRegisteredProfile = (profile) => Boolean(profile.email) || isSuperadminPhone(profile.phone_number);
+    const registeredProfiles = profiles.filter(isRegisteredProfile);
+    const registeredWithVehicles = liveVehicleOwners
+      ? registeredProfiles.filter((profile) => liveVehicleOwners.has(profile.id)).length
+      : null;
     userHealth = {
       totalProfiles: profiles.length,
-      registered: profiles.filter((profile) => Boolean(profile.email)).length,
-      shells: profiles.filter((profile) => !profile.email).length,
+      registered: registeredProfiles.length,
+      shells: profiles.filter((profile) => !isRegisteredProfile(profile) && !profile.full_name).length,
       emailUnverified: profiles.filter((profile) => profile.email && profile.email_verified === false).length,
-      activeWithZeroAssets: zeroAssetOwners ? zeroAssetOwners.length : null,
+      // The pair always adds up (never one without the other): when the
+      // vehicles read fails both are null and the digest prints "—".
+      withVehicles: registeredWithVehicles,
+      activeWithZeroAssets: registeredWithVehicles === null ? null : registeredProfiles.length - registeredWithVehicles,
       expiredTrialsNotConverted30d: trials ? expiredNotConverted : null
     };
   }
@@ -275,7 +301,7 @@ export async function buildCommandCenterMetrics({
   if (revenue?.pastDue) alerts.push({ code: 'PAST_DUE', severity: 'warn', text: `${revenue.pastDue} account${revenue.pastDue === 1 ? '' : 's'} past due` });
   if (revenue?.trialsExpiring3d) alerts.push({ code: 'TRIAL_ENDING', severity: 'warn', text: `${revenue.trialsExpiring3d} trial${revenue.trialsExpiring3d === 1 ? '' : 's'} end within 3 days` });
   if (support?.escalated) alerts.push({ code: 'ESCALATED_TICKETS', severity: 'bad', text: `${support.escalated} escalated support ticket${support.escalated === 1 ? '' : 's'}` });
-  if (userHealth?.shells) alerts.push({ code: 'SHELL_PROFILES', severity: 'info', text: `${userHealth.shells} shell profile${userHealth.shells === 1 ? '' : 's'} with no email` });
+  if (userHealth?.shells) alerts.push({ code: 'SHELL_PROFILES', severity: 'info', text: `${userHealth.shells} shell profile${userHealth.shells === 1 ? '' : 's'} with no name or email` });
   if (userHealth?.activeWithZeroAssets) alerts.push({ code: 'EMPTY_GARAGE', severity: 'info', text: `${userHealth.activeWithZeroAssets} registered account${userHealth.activeWithZeroAssets === 1 ? '' : 's'} with no assets` });
 
   return {
@@ -320,8 +346,12 @@ export function formatCommandCenterDigest(metrics = {}, { full = true } = {}) {
     }
     if (health) {
       lines.push('👥 *User health*');
-      lines.push(`• Registered ${health.registered} · shells ${health.shells} · email unverified ${health.emailUnverified}`);
-      if (health.activeWithZeroAssets !== null) lines.push(`• Registered with 0 assets: ${health.activeWithZeroAssets}`);
+      // v1.96.4 — the gap is named on ONE line: registered = with vehicles +
+      // with 0 assets. A failed vehicles read prints "—", never a zero.
+      const withVehicles = health.withVehicles ?? '—';
+      const zeroAssets = health.activeWithZeroAssets ?? '—';
+      lines.push(`• Registered ${health.registered} · ${withVehicles} with vehicles · ${zeroAssets} with 0 assets`);
+      lines.push(`• Shells ${health.shells} · email unverified ${health.emailUnverified}`);
       if (health.expiredTrialsNotConverted30d !== null) lines.push(`• Trials expired, not upgraded (30d): ${health.expiredTrialsNotConverted30d}`);
     }
     if (support) {

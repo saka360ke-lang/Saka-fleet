@@ -2812,6 +2812,15 @@ async function run() {
   check(quotaBanner.includes('Resend quota exhausted today') && quotaBanner.includes('#ef4444'), 'an active quota warning renders the red banner (v1.87.2)');
   const staleBanner = renderAdminCommandPage({ data: { ...baseCommandData, email: { quotaWarnedAt: '2026-11-08', quotaWarnedToday: false } } });
   check(!staleBanner.includes('Resend quota exhausted today'), 'a stale (previous-day) marker renders no banner (v1.87.2)');
+  // v1.96.4 — the command page names the registered/vehicle gap (mirrors the digest).
+  const healthPage = renderAdminCommandPage({
+    data: {
+      ...baseCommandData,
+      userHealth: { totalProfiles: 7, registered: 6, withVehicles: 2, activeWithZeroAssets: 4, shells: 1, emailUnverified: 1, expiredTrialsNotConverted30d: 1 }
+    }
+  });
+  check(healthPage.includes('With vehicles <span class="chip">2</span>'), 'the command page renders the with-vehicles count (v1.96.4)');
+  check(healthPage.includes('Registered with 0 assets <span class="chip">4</span>'), 'the command page renders the 0-asset gap beside it (v1.96.4)');
 
   console.log('\n--- Test 71: Phase 32 — dual-role lane toggle + vehicle picker (v1.95.0) ---');
   const p32Dual = { id: 'p-dual', phone_number: '+254700111222', email: 'dual@example.com', email_verified: true, full_name: 'Dual Owner', country_code: 'KE', subscription_tier: 'solo_pro', subscription_status: 'ACTIVE' };

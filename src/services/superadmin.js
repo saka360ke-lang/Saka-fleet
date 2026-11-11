@@ -754,6 +754,13 @@ export async function handleProfilesReportCommand(supabase) {
     .is('deleted_at', null);
   const uniqueOwners = new Set((ownersData || []).map(v => v.owner_id).filter(Boolean));
 
+  // v1.96.4 — name the gap instead of leaving it to subtraction: registered
+  // profiles split into "owns >=1 live vehicle" and "no vehicle yet". This is
+  // the SAME split the 08:00 briefing and the command center print, so the
+  // three surfaces can never drift.
+  const ownersWithVehicles = registered.filter((p) => uniqueOwners.has(p.id)).length;
+  const withoutVehicles = registered.length - ownersWithVehicles;
+
   const { data: driversData } = await supabase
     .from('vehicles')
     .select('assigned_driver_id')
@@ -773,15 +780,19 @@ export async function handleProfilesReportCommand(supabase) {
   if (recentList && recentList.length > 0) {
     recentFormatted = recentList.map((p, i) => {
       const dateStr = p.created_at ? p.created_at.split('T')[0] : 'N/A';
-      return `${i + 1}. *${p.full_name || 'WhatsApp User'}* (${p.phone_number}) - ${p.country || 'Global'} [${dateStr}]`;
+      // v1.96.4 — everyone stays listed; a profile with no live vehicle is
+      // labelled instead of being silently left to subtraction.
+      const assetTag = uniqueOwners.has(p.id) ? '' : ' [no vehicle yet]';
+      return `${i + 1}. *${p.full_name || 'WhatsApp User'}* (${p.phone_number}) - ${p.country || 'Global'} [${dateStr}]${assetTag}`;
     }).join('\n');
   }
 
   const reply = `📊 *Saka Fleet Profiles Report*\n\n` +
     `• *Total Registered Profiles*: ${totalProfiles}\n` +
-    `• *Unverified Shell Profiles*: ${shells.length}\n` +
-    `• *Active Vehicle Owners*: ${uniqueOwners.size}\n` +
+    `• *Owners with Vehicles*: ${ownersWithVehicles}\n` +
+    `• *Registered Without Vehicles*: ${withoutVehicles}\n` +
     `• *Assigned Active Drivers*: ${uniqueDrivers.size}\n` +
+    `• *Unverified Shell Profiles*: ${shells.length}\n` +
     `• *New Sign-ups (Last 24h)*: ${signups24h || 0}\n` +
     `• *New Sign-ups (Last 7d)*: ${signups7d || 0}\n\n` +
     `*Recent Sign-ups*:\n${recentFormatted}`;
@@ -790,6 +801,8 @@ export async function handleProfilesReportCommand(supabase) {
     reply,
     details: {
       total_profiles: totalProfiles,
+      owners_with_vehicles: ownersWithVehicles,
+      without_vehicles: withoutVehicles,
       unverified_shells: shells.length,
       named_no_email: namedNoEmail,
       active_vehicle_owners: uniqueOwners.size,
@@ -1293,23 +1306,45 @@ export async function handleAdminReportCommand(supabase) {
     ? vehList.reduce((sum, v) => sum + (Number(v.current_mileage || v.odometer_reading || 0)), 0)
     : 0;
 
-  // 2. Profiles counts
-  const { count: totalProfiles } = await supabase
+  // 2. Profiles + ownership counts.
+  // v1.96.4 — "Registered Profiles: 6 (2 owners, 0 drivers)" left 4 profiles
+  // unexplained: the total counted every live profile row (auto-provisioned
+  // shells included) while the parenthetical named only vehicle owners and
+  // assigned drivers. Registered now uses the v1.82.0 definition (email on
+  // file, or the superadmin's own row) and the gap is named explicitly.
+  let { data: profileRows, error: profileError } = await supabase
     .from('profiles')
-    .select('*', { count: 'exact', head: true })
-    .is('deleted_at', null);
+    .select('id, full_name, phone_number, email')
+    .is('deleted_at', null)
+    // TODO(pagination): 5000-row cap — page through profiles (or use a
+    // server-side count) once the base outgrows it; a truncated read would
+    // understate the registered total.
+    .limit(5000);
+  if (profileError) {
+    // Rule 50 — an un-migrated profiles table still yields the counts it can.
+    ({ data: profileRows } = await supabase
+      .from('profiles')
+      .select('id, phone_number')
+      .is('deleted_at', null)
+      // TODO(pagination): 5000-row cap — see above.
+      .limit(5000));
+  }
+  const allProfiles = Array.isArray(profileRows) ? profileRows : [];
+  const isRegistered = (p) => Boolean(p.email) || isSuperadminPhone(p.phone_number);
+  const registeredProfiles = allProfiles.filter(isRegistered);
+  const shells = allProfiles.filter((p) => !isRegistered(p) && !p.full_name).length;
 
-  const { data: ownersData } = await supabase
+  const { data: fleetRows } = await supabase
     .from('vehicles')
-    .select('owner_id')
-    .is('deleted_at', null);
-  const uniqueOwners = new Set((ownersData || []).map(v => v.owner_id).filter(Boolean)).size;
-
-  const { data: driversData } = await supabase
-    .from('vehicles')
-    .select('assigned_driver_id')
-    .is('deleted_at', null);
-  const uniqueDrivers = new Set((driversData || []).map(v => v.assigned_driver_id).filter(Boolean)).size;
+    .select('owner_id, assigned_driver_id')
+    .is('deleted_at', null)
+    // TODO(pagination): 5000-row cap — page through vehicles once the fleet
+    // outgrows it; a truncated read would understate owners with vehicles.
+    .limit(5000);
+  const liveOwnerIds = new Set((fleetRows || []).map((v) => v.owner_id).filter(Boolean));
+  const ownersWithVehicles = registeredProfiles.filter((p) => liveOwnerIds.has(p.id)).length;
+  const withoutVehicles = registeredProfiles.length - ownersWithVehicles;
+  const uniqueDrivers = new Set((fleetRows || []).map((v) => v.assigned_driver_id).filter(Boolean)).size;
 
   // 3. Financial aggregates
   // v1.72.0 (PRI-1, live bug) — the total previously summed BOTH `expenses`
@@ -1365,10 +1400,18 @@ export async function handleAdminReportCommand(supabase) {
     .select('*', { count: 'exact', head: true })
     .gte('detected_at', iso24h);
 
+  // v1.96.4 — the profile line answers its own arithmetic: registered =
+  // profiles with vehicles + profiles with no vehicle yet. Shells are named on
+  // their own line only when they exist, exactly like the profiles report.
+  const profileLines =
+    `• Registered Profiles: ${registeredProfiles.length} (${ownersWithVehicles} with vehicles · ${withoutVehicles} no vehicles yet)\n` +
+    (shells > 0 ? `• Unverified Shell Profiles: ${shells}\n` : '') +
+    `• Assigned Drivers: ${uniqueDrivers}\n`;
+
   const reply = `📊 *Saka Fleet Executive Digest & System Report*\n\n` +
     `🚗 *Fleet Overview:*\n` +
     `• Total Vehicles: ${totalVehicles} (${activeVehicles} active)\n` +
-    `• Registered Profiles: ${totalProfiles || 0} (${uniqueOwners} owners, ${uniqueDrivers} drivers)\n` +
+    profileLines +
     `• Total Fleet Mileage: ${totalMileage.toLocaleString()} km\n\n` +
     `💰 *Financial Telemetry (by currency):*\n` +
     `${currencyLines}\n\n` +
@@ -1384,7 +1427,13 @@ export async function handleAdminReportCommand(supabase) {
       total_vehicles: totalVehicles,
       active_vehicles: activeVehicles,
       total_mileage: totalMileage,
-      total_profiles: totalProfiles,
+      total_profiles: registeredProfiles.length,
+      profile_rows: allProfiles.length,
+      registered_profiles: registeredProfiles.length,
+      owners_with_vehicles: ownersWithVehicles,
+      without_vehicles: withoutVehicles,
+      unverified_shells: shells,
+      assigned_drivers: uniqueDrivers,
       total_earnings: totalEarnings,
       total_expenses: totalExpenses,
       currencies,

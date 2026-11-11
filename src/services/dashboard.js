@@ -4672,9 +4672,10 @@ export function renderAdminCommandPage({ data } = {}) {
     ? `<div class="card"><h2 style="margin-top:0;">User health</h2>
         <ul class="plain">
           <li>Registered <span class="chip">${health.registered}</span></li>
-          <li>Shell profiles (no email) <span class="chip${health.shells ? ' bad' : ''}">${health.shells}</span></li>
-          <li>Email unverified <span class="chip">${health.emailUnverified}</span></li>
+          <li>With vehicles <span class="chip">${health.withVehicles ?? '—'}</span></li>
           <li>Registered with 0 assets <span class="chip">${health.activeWithZeroAssets ?? '—'}</span></li>
+          <li>Shell profiles (no name, no email) <span class="chip${health.shells ? ' bad' : ''}">${health.shells}</span></li>
+          <li>Email unverified <span class="chip">${health.emailUnverified}</span></li>
           <li>Trials expired, not upgraded <span class="chip">${health.expiredTrialsNotConverted30d ?? '—'}</span></li>
         </ul>
         <p class="muted-small">${health.totalProfiles} profile row${health.totalProfiles === 1 ? '' : 's'} on file.</p></div>`

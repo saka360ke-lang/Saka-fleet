@@ -20,7 +20,14 @@ const normalUserPhone = '+254799000111';
 {
   const tables = {
     vehicles: { rows: [{ id: 'v1', plate_number: 'KDA 100A', current_mileage: 1000, odometer_reading: 1000, status: 'ACTIVE', owner_id: 'o1', assigned_driver_id: 'd1' }], count: 1 },
-    profiles: { rows: [{ id: 'o1' }], count: 1 },
+    // v1.96.4 — one owner with a live vehicle + one registered profile with none.
+    profiles: {
+      rows: [
+        { id: 'o1', full_name: 'Owner One', phone_number: '+254700000001', email: 'owner@example.com' },
+        { id: 'p2', full_name: 'Pending One', phone_number: '+254700000002', email: 'pending@example.com' }
+      ],
+      count: 2
+    },
     expenses: { rows: [{ amount: 999999 }], count: 1 },
     expense_logs: { rows: [{ amount: 100 }, { amount: 50 }], count: 2 },
     private_earnings: { rows: [{ revenue_amount: 2000 }], count: 1 },
@@ -37,6 +44,7 @@ const normalUserPhone = '+254799000111';
         is() { return api; },
         eq() { return api; },
         gte() { return api; },
+        limit() { return api; },
         then(resolve) {
           const entry = tables[table] || { rows: [] };
           resolve({ data: entry.rows || [], count: entry.count ?? (entry.rows || []).length, error: null });
@@ -48,6 +56,12 @@ const normalUserPhone = '+254799000111';
   const report = await handleAdminReportCommand(mockClient);
   assert.strictEqual(report.details.total_expenses, 150, 'PRI-1: the report total sums expense_logs only (150, never 999,999 + 150)');
   assert.ok(!queried.includes('expenses'), 'PRI-1: handleAdminReportCommand does not read the legacy expenses table — no double-count');
+  // v1.96.4 — the profile line explains its own arithmetic (registered = with vehicles + no vehicles yet).
+  assert.strictEqual(report.details.registered_profiles, 2, 'v1.96.4: registered profiles = email rows (2)');
+  assert.strictEqual(report.details.owners_with_vehicles, 1, 'v1.96.4: only the owner with a live vehicle counts (1)');
+  assert.strictEqual(report.details.without_vehicles, 1, 'v1.96.4: registered profiles with no vehicle are named (1)');
+  assert.ok(report.reply.includes('Registered Profiles: 2 (1 with vehicles · 1 no vehicles yet)'), 'v1.96.4: the digest line leaves no profile unexplained');
+  assert.ok(!report.reply.includes('owners,'), 'v1.96.4: the ambiguous "(N owners, N drivers)" copy is gone');
   // v1.86.0 (Phase 25) — the financial block is per currency, never a hardcoded KES.
   assert.ok(!/\bKES\b/.test(report.reply), 'money fix: the digest no longer prints KES over multi-currency ledgers');
   assert.ok(report.reply.includes('USD'), 'money fix: a row without a currency column reads as USD (honest default), not KES');
@@ -129,6 +143,8 @@ const normalUserPhone = '+254799000111';
         limit() { return api; },
         then(resolve) {
           if (table === 'profiles') resolve({ data: rows, error: null });
+          // v1.96.4 — Brenda owns the only live vehicle; the superadmin row has none.
+          else if (table === 'vehicles') resolve({ data: [{ owner_id: 'real' }], error: null });
           else resolve({ data: [], count: 0, error: null });
         }
       };
@@ -139,6 +155,11 @@ const normalUserPhone = '+254799000111';
   assert.strictEqual(report.details.total_profiles, 2, 'profiles report: registered = email rows + the superadmin row (2)');
   assert.strictEqual(report.details.unverified_shells, 1, 'profiles report: the email-less, name-less ghost is a shell (1)');
   assert.strictEqual(report.details.named_no_email, 1, 'profiles report: a named driver without email is counted separately (1)');
+  assert.strictEqual(report.details.owners_with_vehicles, 1, 'v1.96.4: only registered owners with a live vehicle count (1)');
+  assert.strictEqual(report.details.without_vehicles, 1, 'v1.96.4: registered profiles with no vehicle are named (1)');
+  assert.ok(report.reply.includes('Registered Without Vehicles'), 'v1.96.4: the gap is its own labelled line');
+  assert.ok(report.reply.includes('[no vehicle yet]'), 'v1.96.4: Recent sign-ups label a profile with no vehicle');
+  assert.ok(!report.reply.includes('*Brenda Wanjiku*') || !/Brenda Wanjiku.*\[no vehicle yet\]/.test(report.reply), 'v1.96.4: an owner with a vehicle carries no "no vehicle yet" tag');
   assert.ok(report.reply.includes('Unverified Shell Profiles'), 'profiles report: the shell counter is rendered');
   assert.ok(report.reply.includes('Brenda Wanjiku'), 'profiles report: a registered profile headlines Recent sign-ups');
   assert.ok(!report.reply.includes('+254734852529'), 'profiles report: the ghost never appears in Recent sign-ups');

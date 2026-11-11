@@ -1,6 +1,13 @@
 {
-  "latest": "1.96.3",
+  "latest": "1.96.4",
   "entries": [
+    {
+      "version": "1.96.4",
+      "date": "2026-11-11",
+      "title": "Every account is accounted for",
+      "preview": "The team's morning numbers now show how many accounts have a vehicle and how many are still finding their wheels.",
+      "summary": "A small clarity fix behind the scenes. The team's daily briefing used to say how many profiles were registered and then name only the ones with vehicles, which left the rest looking unexplained. It now says it plainly: how many accounts have a vehicle and how many do not yet - so support can spot someone who signed up but never added a car and reach out. Your own records, reports and reminders are untouched."
+    },
     {
       "version": "1.96.3",
       "date": "2026-11-10",
