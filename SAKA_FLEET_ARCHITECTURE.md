@@ -7099,9 +7099,11 @@ E `GET /d/admin/passbook/:vehicleId` (read-only; VIN/token masked with `<details
 
 **Live verification (rule 54).** `handleAdminReportCommand` against the live Supabase right after the change: `Registered Profiles: 5 (2 with vehicles · 3 no vehicles yet)` · `Unverified Shell Profiles: 1` · `Assigned Drivers: 0` · `details.profile_rows = 6` — every row is now explained on the page itself.
 
+**Recurrence autopsy (rule 51).** *Defect class: an aggregate line whose parenthetical does not explain its own total.* Siblings audited: `handleAdminReportCommand` (fixed — the reported line), `handleProfilesReportCommand` (fixed — split lines + `[no vehicle yet]` tags), `buildCommandCenterMetrics` / `formatCommandCenterDigest` (fixed — one line, sum invariant, dash-on-failure), `renderAdminCommandPage` health chips (fixed — `With vehicles` added), `buildAdminOwnersList` (deliberately left — the filtered reference list, not an aggregate), the non-Monday 4-line pulse (deliberately left — already honest `Registered · shells`, no owner/driver parenthetical to contradict), `admin ai-stats` / `admin trial-stats` (audited — no profile/owner mixing), the landing changelog feed (updated for version parity, pinned by `test_landing_static`).
+
 **Frames touched.** `src/services/superadmin.js` (`handleProfilesReportCommand`, `handleAdminReportCommand`), `src/services/commandCenter.js` (imports, `readProfiles`, `readLiveVehicleOwners`, `buildCommandCenterMetrics` user-health block, `formatCommandCenterDigest`, `SHELL_PROFILES` alert), `src/services/dashboard.js` (`renderAdminCommandPage`), `test_superadmin.js` (+9 mock assertions across the PRI-1 and profiles-report blocks, mock gains `limit()` + a `vehicles` answer), `test_command_center.js` (+5: withVehicles, the one-line gap, sum invariant, dash-on-failure, empty deployment), `test_dashboard.js` (+2 chip assertions), `package.json` (1.96.4), this file, `CHANGELOG.md`.
 
-**Suites run.** test_command_center (green), test_dashboard (934 assertions, +2), test_superadmin (mock proofs + live integration), `npm run health` — green.
+**Suites run.** test_command_center (51), test_dashboard (934), test_superadmin (mock proofs + live integration), test_vehicle_documents (83 — version pin), test_landing_static (429), test_doc_sync (30), test_kb_docs (43), `npm run health` — green.
 
 
 
