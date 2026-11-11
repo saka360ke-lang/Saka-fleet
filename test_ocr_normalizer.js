@@ -49,6 +49,10 @@ console.log('--- Test 2: extended currency detection ---');
 check(detectCurrencyFromText('TOTAL ฿ 1,250.00') === 'THB', 'the Thai baht symbol resolves');
 check(detectCurrencyFromText('R$ 1.234,56') === 'BRL', 'multi-char R$ wins over the bare dollar sign');
 check(detectCurrencyFromText('KSh 5,500') === 'KES', 'the Kenyan shilling shorthand resolves');
+// v1.96.5 — an ALPHABETIC symbol is its own word: "SCU INFORMATION" is not MYR
+// (live 2026-11-11: a KES e-TIMS fuel receipt would have stored currency MYR).
+check(detectCurrencyFromText('SCU INFORMATION') === null, 'an alphabetic symbol inside a word is never a currency (v1.96.5)');
+check(detectCurrencyFromText('RM 12.50') === 'MYR', 'a standalone RM still resolves to MYR (v1.96.5)');
 check(detectCurrencyFromText('TOTAL 3000') === null, 'no currency marker means no currency (never assumed)');
 check(OCR_CURRENCY_CODES.includes('NGN') && OCR_CURRENCY_CODES.length >= 30, 'the code table is the extended CLDR set');
 check(OCR_CURRENCY_SYMBOLS['₹'] === 'INR' && OCR_CURRENCY_SYMBOLS['₦'] === 'NGN', 'Unicode symbols map to ISO codes');

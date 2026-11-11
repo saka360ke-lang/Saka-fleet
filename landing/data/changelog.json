@@ -1,6 +1,13 @@
 {
-  "latest": "1.96.4",
+  "latest": "1.96.5",
   "entries": [
+    {
+      "version": "1.96.5",
+      "date": "2026-11-11",
+      "title": "Receipt photos are evidence, never paperwork",
+      "preview": "A fuel receipt photo now links to the exact expense it confirms - even when you send it halfway through logging.",
+      "summary": "A real-conversation fix. If you opened a fuel entry, then sent the receipt photo while Saka was still asking the amount, the photo was read correctly but filed as a vehicle registration certificate instead of a receipt: the expense saved without its receipt and the records page showed a dash where the photo should be. Now a receipt is always recognised as a receipt - the photo links to the exact entry it confirms, the total is read from the cash line (never from a tax-rate number), and a receipt can never replace the real logbook in your documents. The driver's vehicle files were repaired too."
+    },
     {
       "version": "1.96.4",
       "date": "2026-11-11",

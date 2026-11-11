@@ -111,7 +111,15 @@ export function detectCurrencyFromText(text = '') {
   // Longest symbol first: "R$" must beat the bare "$" it contains.
   const symbols = Object.entries(OCR_CURRENCY_SYMBOLS).sort((a, b) => b[0].length - a[0].length);
   for (const [symbol, code] of symbols) {
-    if (raw.includes(symbol)) return code;
+    // v1.96.5 — an ALPHABETIC symbol ("RM" = MYR) must be its own word. The bare
+    // substring match read "SCU INFORMATION" as MYR (live 2026-11-11: a KES
+    // e-TIMS fuel receipt would have stored currency MYR). Punctuation symbols
+    // keep the historical substring behaviour (R$ must still beat $).
+    if (/^[A-Za-z]+$/.test(symbol)) {
+      if (new RegExp(`(^|[^A-Za-z])${symbol}(?=$|[^A-Za-z])`, 'i').test(raw)) return code;
+    } else if (raw.includes(symbol)) {
+      return code;
+    }
   }
   return null;
 }

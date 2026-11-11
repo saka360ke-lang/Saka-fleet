@@ -1160,6 +1160,16 @@ async function run() {
     filters: defaults.filters
   });
   check(linkedHtml.includes('href="/d/receipt/r1"'), 'the records table renders View for a linked receipt');
+  // v1.96.5 — the exact live page (+254734852529 / KAS628T): a fuel row with NO
+  // linked receipt renders the honest "—" (the operator's screenshot), while the
+  // durable link renders View. The UI is never the bug — the missing row was.
+  const unlinkedRow = { ...linkedRow, id: 'e-unlinked', receiptStatus: 'none', receiptId: null };
+  const unlinkedHtml = renderRecordsPage({
+    data: { ok: true, total: 1, rows: [unlinkedRow], hasMore: false, page: 0, pageSize: RECORDS_PAGE_SIZE },
+    filters: defaults.filters
+  });
+  check(unlinkedHtml.includes('<span class="muted">—</span>') && !unlinkedHtml.includes('/d/receipt/e-unlinked'), 'an unlinked row renders "—" with no View link (v1.96.5)');
+  check(linkedHtml.includes('<a href="/d/receipt/r1">View</a>'), 'a linked row renders the View link (v1.96.5)');
   check(linkedHtml.includes('href="/d/import"'), 'the nav offers Import on every signed-in page');
   const importHtml = renderImportPage({ emailMasked: 'a***@x.com', currency: 'KES', locale: 'en-KE' });
   check(importHtml.includes('action="/d/import"') && importHtml.includes('type="file"') && importHtml.includes('FileReader'), 'the import page carries a file picker with the FileReader path');

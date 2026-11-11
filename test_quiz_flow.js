@@ -23,7 +23,7 @@ import {
   hasLitreEvidence
 } from './src/services/quizEngine.js';
 // v1.87.4 — the receipt auto-quiz decision is a pure, intent-independent helper.
-import { receiptQuizStartFor, stripPrematureSaveClaim } from './src/routes/whatsapp/quiz.js';
+import { receiptQuizStartFor, stripPrematureSaveClaim, injectReceiptLinkIntoDraft } from './src/routes/whatsapp/quiz.js';
 import { getRecentChatHistory, CHAT_HISTORY_MAX_AGE_MINUTES, CHAT_HISTORY_MAX_MESSAGES } from './src/services/chatHistory.js';
 // v1.93.0 (Phase 30, Tasks 2-3) — the logbook invitation + pre-vehicle stash.
 import { buildDocumentStash, replayDocumentStash } from './src/services/documentStash.js';
@@ -803,6 +803,17 @@ async function run() {
   // v1.96.2 — the duplicate fact rides the helper, so a re-send can never open
   // a second draft while a fresh unvaulted receipt still gets its quiz.
   assert(messagesSource.includes('isDuplicateReceipt: Boolean(duplicateReceipt)'), 'messages.js passes the duplicate fact into the receipt-quiz decision (v1.96.2)');
+
+  // v1.96.5 — a receipt vaulted while an expense draft is ALREADY OPEN lands its
+  // durable link in that draft (live 2026-11-11: the user sent the receipt photo
+  // mid-quiz, confirmed, and the expense saved with receipt_id NULL).
+  const openDraft = { quiz: { flow: 'log_expense', answers: { Amount: 3000 } } };
+  assert(injectReceiptLinkIntoDraft(openDraft, { receipt_id: 'r-1' }) === true && openDraft.quiz.answers.receipt_id === 'r-1', 'an open log_expense draft receives the receipt link (v1.96.5)');
+  assert(injectReceiptLinkIntoDraft(openDraft, { receipt_id: 'r-2' }) === false && openDraft.quiz.answers.receipt_id === 'r-1', 'an existing draft link is never overwritten (v1.96.5)');
+  const foreignDraft = { quiz: { flow: 'vehicle_registration', answers: { Plate: 'KAS628T' } } };
+  assert(injectReceiptLinkIntoDraft(foreignDraft, { receipt_id: 'r-3' }) === false && !foreignDraft.quiz.answers.receipt_id, 'a registration/compliance draft is never hijacked (decision D5, v1.96.5)');
+  assert(injectReceiptLinkIntoDraft({ quiz: null }, { receipt_id: 'r-4' }) === false, 'no draft means no injection — the new-quiz prefill seam owns it (v1.96.5)');
+  assert(injectReceiptLinkIntoDraft({ quiz: { flow: 'log_expense', answers: {} } }, {}) === false, 'no receipt id means no injection (v1.96.5)');
 
   // v1.96.2 — an open draft never claims a save, and a receipt dump's nozzle
   // number is never the volume (live 2026-11-10, +254734852529).

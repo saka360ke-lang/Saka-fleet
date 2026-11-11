@@ -289,6 +289,18 @@ export function classifyOcrDocument(text = '') {
   // logbook branch claimed the photo before the licence branch was ever reached
   // (walkthrough: a DL was filed as a vehicle logbook and vaulted vehicle-scoped).
   if (/\b(DRIVING\s+LICEN[CS]E|DRIVER'?S\s+LICEN[CS]E|PSV|PDP|DL\s*(?:NO|NUMBER)|BADGE)\b/.test(t)) return 'drivers_licence';
+  // v1.96.5 — a FISCAL RECEIPT is never a logbook, whatever VIN-shaped serials
+  // it prints. Live 2026-11-11: a KRA e-TIMS fuel receipt (Astrol, KAS628T) was
+  // filed as a logbook because its bare control-unit serial `KRACU0300578490`
+  // tripped `looksLikeVin` BEFORE the fuel branch below was reached — no
+  // `receipts` row was written, the confirmed expense saved with
+  // `receipt_id = NULL` (records page: "Receipt: —") and the photo even
+  // superseded the genuine logbook in the document vault. Strong fiscal markers
+  // + fuel/litre evidence win over the logbook heuristic (the v1.87.5 law:
+  // a weaker heuristic never outranks a stronger labelled marker).
+  const strongFiscal = /START\s+OF\s+LEGAL\s+RECEIPT|END\s+OF\s+LEGAL\s+RECEIPT|FISCAL\s+RECEIPT|\bTAX\s+INVOICE\b|\bTOTAL\s+TAX\b|\bTAXABLE\b|\bBUYER\s+PIN\b/i.test(raw);
+  if (strongFiscal && /\b(FUEL|DIESEL|PETROL|GASOLINE|PUMP|NOZZLE|LITRES?|LITERS?)\b/.test(t)) return 'receipt_fuel';
+  if (strongFiscal && /\b(RECEIPT|INVOICE|TOTAL|AMOUNT|CASH|BALANCE)\b/.test(t)) return 'receipt_general';
   if (/\b(VIN|CHASSIS|LOG\s?BOOK|REGISTRATION\s+CERT|MOTOR\s+VEHICLE\s+REG)/.test(t) || looksLikeVin(raw)) return 'logbook';
   if (/\b(POLICY|INSURANCE|COVER\s+NOTE|SUM\s+INSURED|UNDERWRITER)\b/.test(t)) return 'insurance';
   if (/\b(FUEL|DIESEL|PETROL|GASOLINE|PUMP|NOZZLE|LITRE|LITER)\b/.test(t)) return 'receipt_fuel';
@@ -298,14 +310,28 @@ export function classifyOcrDocument(text = '') {
 }
 
 /**
+ * v1.96.5 — fiscal serials are never VINs. Strips every labelled tax PIN
+ * (PIN / BUYER PIN / CLIENT PIN), the control-unit label (`CU:`), the KRA PIN
+ * shape and the bare fiscal invoice serials fiscal printers repeat on their own
+ * lines (live 2026-11-11: `KRACU0300578490` claimed a KRA e-TIMS fuel receipt as
+ * a logbook). Shared by `looksLikeVin` and the Document Lens logbook parser, so
+ * a fiscal receipt can never mint `vin: P051141264M` again.
+ */
+export function stripFiscalSerials(text = '') {
+  return String(text || '').toUpperCase()
+    .replace(/\b(?:(?:BUYER|CLIENT)\s+)?PIN\s*[:#]?\s*[A-Z0-9]+/g, ' ')
+    .replace(/\bP\d{9}[A-Z]\b/g, ' ')
+    .replace(/\bCU\s*[:#]\s*[A-Z0-9][A-Z0-9/-]*/g, ' ')
+    .replace(/\bKRACU[A-Z0-9]+\b/g, ' ');
+}
+
+/**
  * VIN-shaped tokens only. KRA tax PINs (e.g. P051141264M) and fiscal serials
  * are stripped first — an insurance/fuel certificate must never look like a
- * logbook (v1.32.1, live 2026-11-01).
+ * logbook (v1.32.1, live 2026-11-01; widened v1.96.5).
  */
 function looksLikeVin(text) {
-  const cleaned = String(text || '').toUpperCase()
-    .replace(/\b(?:BUYER\s+)?PIN\s*[:#]?\s*[A-Z0-9]+/g, ' ')
-    .replace(/\bP\d{9}[A-Z]\b/g, ' ');
+  const cleaned = stripFiscalSerials(text);
   // v1.87.5 — a VIN contains BOTH letters and digits. The old rule accepted any
   // 11–17 character digit run, so a licence/serial control number
   // ("SERIAL NO: 043202308218505") tripped the logbook branch. Pure-digit

@@ -303,6 +303,48 @@ async function run() {
   });
   check(driverLicenceVault.documentPrefill === null, 'driver licences stay out of the vehicle vault (§40.2)');
 
+  // v1.96.5 — a FISCAL RECEIPT is never vaulted as a compliance document.
+  // Live 2026-11-11: a KRA e-TIMS fuel receipt classified as `logbook` was
+  // vaulted as a vehicle logbook — and SUPERSEDED the genuine logbook file —
+  // while no receipts row was ever created. Whatever the classifier says, an
+  // intake guard keeps fiscal receipts out of the compliance vault.
+  const guardedInserts = [];
+  const guardedUploads = [];
+  const guardedClient = {
+    from(table) {
+      const builder = {
+        select: () => builder,
+        eq: () => builder,
+        gte: () => builder,
+        order: () => builder,
+        limit: async () => ({ data: [], error: null }),
+        maybeSingle: async () => ({ data: null, error: null }),
+        insert: (rows) => {
+          guardedInserts.push({ table, rows });
+          return { error: null, select: () => ({ maybeSingle: async () => ({ data: { id: 'doc-x', ...rows[0] }, error: null }) }) };
+        },
+        delete: () => builder
+      };
+      return builder;
+    },
+    storage: { from: (bucket) => ({ upload: async (path) => { guardedUploads.push({ bucket, path }); return { error: null }; } }) }
+  };
+  const fiscalText = '*** START OF LEGAL RECEIPT\nASTROL PETROLEUM COMPANY\nPIN: P051141264M\nTAX INVOICE ORIGINAL\nPUMP: 13 NOZZLE: 1\nDIESEL: 13.47 X 222.70\nCASH:\n3,000.00';
+  const guardedVault = await resolveReceiptVault({
+    ...vaultArgs,
+    supabaseClient: guardedClient,
+    entitlements: { receiptVaultStorage: true },
+    ocrResult: { buffer: Buffer.from('receipt'), mimeType: 'image/jpeg' },
+    mediaObj: { id: 'media-etims-1' },
+    ocrKind: 'logbook',
+    ocrText: fiscalText,
+    ocrTextSha: 'sha-etims',
+    messageText: 'Receipt',
+    ocrCountry: { country_code: 'KE' }
+  });
+  check(guardedVault.documentPrefill === null && guardedVault.logbookPrefill === null, 'a fiscal receipt mints no document/logbook prefill even when classified logbook (v1.96.5)');
+  check(!guardedInserts.some((entry) => entry.table === 'vehicle_documents') && guardedUploads.length === 0, 'a fiscal receipt is never vaulted — the genuine logbook can never be superseded (v1.96.5)');
+
   console.log('\n--- Test 7: document classification ---');
   check(classifyOcrDocument('SHELL KAREN\nPUMP 4\nDIESEL 40.5 L\nTOTAL KES 5,500') === 'receipt_fuel', 'Fuel receipts are classified');
   check(classifyOcrDocument('TOTAL KES 1,200\nCASH\n12/10/2026') === 'receipt_general', 'General receipts are classified');
@@ -679,6 +721,75 @@ async function run() {
     check(realLogbook.family === 'logbook' && realLogbook.fields.vin?.value === 'JT111ABC123456789', 'a real logbook still classifies + parses its VIN (v1.87.5)');
     const bareVin = parseDocumentFields('XTA21093056789012', { countryCode: 'GLOBAL' });
     check(bareVin.family === 'logbook' && bareVin.fields.vin?.value === 'XTA21093056789012', 'the bare-VIN fallback parses without throwing (the parseLogbook crash fix) (v1.87.5)');
+  }
+
+  // v1.96.5 — a KRA e-TIMS FUEL RECEIPT is never a logbook (live 2026-11-11,
+  // +254734852529 / KAS628T). The receipt's bare control-unit serial
+  // `KRACU0300578490` tripped the VIN heuristic, so the photo was filed as a
+  // logbook: no receipts row, the confirmed expense saved with receipt_id NULL
+  // ("Receipt: —" on /d/records) and the photo even superseded the genuine
+  // logbook in the document vault. The text below is the EXACT transcript OCR.
+  {
+    const etimsLensText = [
+      '*** START OF LEGAL RECEIPT',
+      'ASTROL PETROLEUM COMPANY',
+      'ASTROL RUNDA',
+      'PIN: P051141264M',
+      'CU: KRACU0300578490',
+      '***',
+      'TAX INVOICE ORIGINAL',
+      'CLIENT PIN:',
+      'P052358408G',
+      'CLIENT NAME:',
+      'HUGU ADVENTURES',
+      'PLATE NUMBER:',
+      'null',
+      'PUMP: 13 NOZZLE: 1',
+      'DIESEL: 13.47 X 222.70',
+      '3,000.00 E-8%',
+      'TAXABLE A-EX',
+      '0.00',
+      'TAXABLE E-8%',
+      '2,777.77',
+      'TOTAL TAX A-EX',
+      '0.00',
+      'TOTAL TAX E-8%',
+      '222.22',
+      'CASH:',
+      '3,000.00',
+      'ITEM NUMBER:',
+      'SCU INFORMATION',
+      'DATE: 10-11-2026',
+      'SCU ID:',
+      'CU INVOICE NO:',
+      'TIME: 12:19:31',
+      'KRACU0300578490',
+      'KRACU0300578490/6633',
+      'RECEIPT NUMBER:',
+      '6633',
+      'DATE:',
+      '10-11-2026 12:19:31',
+      '*** Powered by AdvaTech ***'
+    ].join('\n');
+    check(classifyOcrDocument(etimsLensText) === 'receipt_fuel', 'a KRA e-TIMS fuel receipt classifies as receipt_fuel, never logbook (v1.96.5)');
+    check(classifyDocumentFamily(etimsLensText) === 'receipt_fuel', 'the Document Lens demotes the logbook base to receipt_fuel (v1.96.5)');
+    const etimsLens = parseDocumentFields(etimsLensText, { countryCode: 'KE' });
+    check(etimsLens.family === 'receipt_fuel', 'the lens family is receipt_fuel (v1.96.5)');
+    check(etimsLens.fields.amount?.value === 3000, 'the fiscal total is 3,000 — never the "E-8%" tax token 8 (v1.96.5)');
+    check(!etimsLens.fields.vin, 'the station PIN / control-unit serial is never minted as a VIN (v1.96.5)');
+    check(etimsLens.fields.date?.value === '2026-11-10' && etimsLens.fields.vendor?.value === 'ASTROL PETROLEUM COMPANY', 'the receipt date + vendor are read (v1.96.5)');
+    check(classifyOcrDocument('SCU INFORMATION\nTAXABLE E-8%\nCASH:\n3,000.00') === 'receipt_general', 'a fiscal tail without fuel words stays a receipt, never a logbook (v1.96.5)');
+    const genuineLogbook = [
+      'VEHICLE PARTICULARS',
+      'REGISTRATION CERTIFICATE',
+      'KAS628T',
+      'CHASSIS NO: HDJ810007675',
+      'MAKE: TOYOTA',
+      'FUEL TYPE: DIESEL',
+      'YEAR OF MANUFACTURE: 1991'
+    ].join('\n');
+    check(classifyOcrDocument(genuineLogbook) === 'logbook', 'a genuine logbook (even printing FUEL TYPE) still classifies as logbook (v1.96.5)');
+    check(classifyDocumentFamily(genuineLogbook) === 'logbook' && parseDocumentFields(genuineLogbook, { countryCode: 'KE' }).fields.vin?.value === 'HDJ810007675', 'the genuine logbook keeps logbook + its real VIN (v1.96.5)');
   }
 
   global.fetch = realFetch;

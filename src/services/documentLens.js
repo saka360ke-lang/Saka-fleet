@@ -1,5 +1,5 @@
 import { parseFlexibleDate } from './dateParser.js';
-import { classifyOcrDocument } from './ocrService.js';
+import { classifyOcrDocument, stripFiscalSerials } from './ocrService.js';
 import { LEGAL_RECEIPT_MARKER_RE, getOcrCountryProfile } from '../data/ocrCountryProfiles.js';
 import {
   parseOcrAmount,
@@ -102,16 +102,27 @@ function amountFrom(text, countryCode = 'GLOBAL') {
     return profile?.amount?.parse ? profile.amount.parse(token) : null;
   };
   const totalLine = rows.find((row) => /\b(grand\s*total|total|amount\s*due|balance\s*due|amount)\b/i.test(row));
+  // v1.96.5 — a tax-rate token ("E-8%", "-16%") is never money, and a tax
+  // COMPONENT line's next value is never the grand total (live 2026-11-11: a
+  // KRA e-TIMS KES 3,000 fuel receipt read 8 from "E-8%"). Such lines fall
+  // through to the general scan, whose MAX on the same receipt is the real
+  // cash total.
+  const taxComponentLine = Boolean(totalLine && (/%|\bTAX\b/i.test(totalLine)));
+  const percentToken = (line, match) => {
+    const after = line.slice(match.index + match[0].length).trimStart();
+    const before = line.slice(0, match.index).trimEnd();
+    return after.startsWith('%') || /E\s*[-–]\s*$/i.test(before);
+  };
   if (totalLine) {
     // v1.54.1 — grouped money tokens in EITHER convention (1,234.56 | 1.234,56).
     const match = totalLine.match(/([A-Z]{3})?\s*(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)/);
-    if (match) {
+    if (match && !taxComponentLine && !percentToken(totalLine, match)) {
       const value = parseToken(match[2]);
       if (value !== null && value > 0) return value;
     }
     // v1.32.1 — bare "TOTAL" label with the figure on the next line.
     const idx = rows.indexOf(totalLine);
-    for (let k = 1; k <= 2 && idx >= 0 && idx + k < rows.length; k += 1) {
+    for (let k = 1; !taxComponentLine && k <= 2 && idx >= 0 && idx + k < rows.length; k += 1) {
       const row = rows[idx + k];
       if (/%|\bTAX\b|\bNET\b/i.test(row)) continue;
       const next = row.match(/^(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)$/);
@@ -126,12 +137,19 @@ function amountFrom(text, countryCode = 'GLOBAL') {
   // integer is also never an amount when the document carries a labelled TOTAL
   // (it is a reference/invoice number).
   const raw = String(text || '');
-  const all = [...raw.matchAll(/([A-Z]{3})?\s*([\d][\d.,]{3,}(?:[.,]\d{1,2})?)/g)]
+  // v1.96.5 — scan the fiscal-stripped text (a PIN/control-unit serial is never
+  // money) and never accept a percentage token or a date/time figure. Generates
+  // no country-specific parsing (rule 36): percentages and dates are universal.
+  const scanText = stripFiscalSerials(raw);
+  const all = [...scanText.matchAll(/([A-Z]{3})?\s*([\d][\d.,]{3,}(?:[.,]\d{1,2})?)/g)]
     .filter((match) => {
-      const lineStart = raw.lastIndexOf('\n', match.index - 1) + 1;
-      const lineEndIdx = raw.indexOf('\n', match.index);
-      const context = raw.slice(lineStart, lineEndIdx === -1 ? raw.length : lineEndIdx);
-      if (/(p\.?\s*o\.?\s*box|\bbox\b|pin\b|phone|serial|invoice\s*(?:no|number)|receipt\s*(?:no|number)|h\.?\s*p\.?)/i.test(context)) return false;
+      const lineStart = scanText.lastIndexOf('\n', match.index - 1) + 1;
+      const lineEndIdx = scanText.indexOf('\n', match.index);
+      const context = scanText.slice(lineStart, lineEndIdx === -1 ? scanText.length : lineEndIdx);
+      if (/(p\.?\s*o\.?\s*box|\bbox\b|pin\b|phone|serial|invoice\s*(?:no|number)|receipt\s*(?:no|number)|h\.?\s*p\.?|\bdate\b|\btime\b)/i.test(context)) return false;
+      const after = scanText.slice(match.index + match[0].length).trimStart();
+      const before = scanText.slice(0, match.index).trimEnd();
+      if (after.startsWith('%') || /E\s*[-–]\s*$/i.test(before)) return false;
       if (totalLine && /^\d{4,6}$/.test(match[2])) return false;
       return true;
     })
@@ -151,8 +169,12 @@ function parseLogbook(text, countryCode) {
   // (or the neutral GLOBAL shape) before it can prefill the quiz.
   pushField(fields, 'plate_number', rawPlate ? validatePlateCandidate(rawPlate, countryCode) : null, 0.92);
 
+  // v1.96.5 — the FALLBACK scan reads the fiscal-stripped text and requires
+  // letters AND digits (the v1.87.5 VIN law): a receipt's PIN/control-unit
+  // serial (live 2026-11-11: `vin: P051141264M`) is never a VIN. A LABELLED
+  // VIN/CHASSIS line stays authoritative on the raw text.
   const vinMatch = String(text).match(/(?:VIN|chassis(?:\s*(?:no|number))?)\s*[:\-#]?\s*([A-HJ-NPR-Z0-9]{11,17})\b/i)
-    || String(text).match(/\b(?=[A-HJ-NPR-Z0-9]{11,17}\b)(?=[A-Z0-9]*\d)[A-HJ-NPR-Z0-9]{11,17}\b/);
+    || stripFiscalSerials(text).match(/\b(?=[A-HJ-NPR-Z0-9]{11,17}\b)(?=[A-Z0-9]*\d)(?=\d*[A-HJ-NPR-Z])[A-HJ-NPR-Z0-9]{11,17}\b/);
   // v1.87.5 — the FALLBACK regex above has no capture group, so vinMatch[1] was
   // undefined and `.toUpperCase()` threw (the lens silently degraded and every
   // logbook hint was lost). The whole token is the VIN when the fallback fires.
@@ -278,6 +300,13 @@ export function classifyDocumentFamily(text = '') {
   // classifyOcrDocument; even if another base path regresses, a licence can
   // never be filed as a vehicle logbook again (rule 51 sibling guard).
   if (base === 'logbook' && /(driving\s*licen[cs]e|driver'?s\s*licen[cs]e|psv|pdp|badge|dl\s*(?:no|number))/i.test(raw)) return 'drivers_licence';
+  // v1.96.5 — the same defence for RECEIPTS: a logbook base whose text is a
+  // fiscal receipt is a receipt, never a vehicle document. Live 2026-11-11: a
+  // KRA e-TIMS fuel receipt was filed + vaulted as a logbook (and superseded the
+  // genuine logbook) because its control-unit serial tripped the VIN heuristic.
+  if (base === 'logbook' && /START\s+OF\s+LEGAL\s+RECEIPT|END\s+OF\s+LEGAL\s+RECEIPT|FISCAL\s+RECEIPT|\bTAX\s+INVOICE\b|\bTOTAL\s+TAX\b|\bTAXABLE\b|\bBUYER\s+PIN\b/i.test(raw)) {
+    return FUEL_WORDS.test(raw) ? 'receipt_fuel' : 'receipt_general';
+  }
   if (/\b(inspection|roadworthy|road\s*worthiness|mot\s*(?:test|cert)|nct)\b/i.test(raw)) return 'inspection';
   if (/\b(road\s*service\s*licen[cs]e|transport\s*licen[cs]e|operating\s*permit|road\s*tax)\b/i.test(raw)) return 'road_licence';
   if (base === 'receipt_general' && SERVICE_WORDS.test(raw) && !FUEL_WORDS.test(raw)) return 'service_receipt';

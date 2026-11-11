@@ -173,6 +173,29 @@ export function stripPrematureSaveClaim(text = '') {
 }
 
 /**
+ * v1.96.5 — a receipt vaulted THIS TURN must land its durable link in an
+ * ALREADY OPEN expense draft. Live 2026-11-11 (+254734852529, KAS628T): the
+ * user opened the fuel quiz ("How much did you spend?"), sent the receipt
+ * photo, answered the remaining questions and confirmed — the expense saved
+ * with `receipt_id = NULL` and `/d/records` showed "Receipt: —", because the
+ * v1.81.0 prefill seam only carried a link into a NEW quiz (`!session.quiz`).
+ *
+ * Narrow by decision (D5): ONLY an open `log_expense` draft is touched — a
+ * registration/compliance draft is never hijacked (that would destroy user
+ * progress). Engine-only: the id is never asked, never rendered and never
+ * AI-injectable; `restart` still drops it (fresh draft) and the write path
+ * re-verifies ownership through `resolveReceiptLink`.
+ */
+export function injectReceiptLinkIntoDraft(session, receiptPrefill) {
+  if (!session?.quiz || session.quiz.flow !== 'log_expense') return false;
+  const receiptId = String(receiptPrefill?.receipt_id || '').trim();
+  if (!receiptId) return false;
+  if (session.quiz.answers?.receipt_id) return false;
+  session.quiz.answers = { ...(session.quiz.answers || {}), receipt_id: receiptId };
+  return true;
+}
+
+/**
  * Quiz <-> Conversation arbitration + the quiz turn (moved verbatim from messages.js
  * L1856-2002). Returns `{ quizTurn, earlyHandled, earlyReply, activeQuiz }`:
  *   - earlyHandled:true  the turn was answered without handing it to the engine
@@ -223,6 +246,11 @@ export async function arbitrateQuizTurn({
   if (session.quiz && /^\s*(?:switch(?:\s+to)?|manage|select)\s+\S/i.test(String(messageText || ''))) {
     abandonQuiz(session, { reason: 'switch_command' });
   }
+  // v1.96.5 — a receipt vaulted this turn rides an ALREADY OPEN expense draft
+  // (the v1.81.0 seam only covered a NEW quiz start). Runs after the switch
+  // abandon so a discarded draft can never keep a stale link; a non-expense
+  // draft is deliberately left untouched (decision D5).
+  injectReceiptLinkIntoDraft(session, receiptPrefill);
   const activeQuiz = session.quiz || null;
   const pauseQuizForChat = activeQuiz && shouldPauseQuizForChat({ messageText, intent, quiz: activeQuiz });
   const switchQuizFlow = activeQuiz && !pauseQuizForChat

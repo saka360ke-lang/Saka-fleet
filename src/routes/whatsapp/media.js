@@ -22,7 +22,9 @@ import {
   isOcrEnabled,
   isOcrAckFirstEnabled,
   buildMediaAckText,
-  classifyOcrDocument
+  classifyOcrDocument,
+  // v1.96.5 — a fiscal receipt is never vaulted as a compliance document.
+  isKenyaEtimesText
 } from '../../services/ocrService.js';
 import {
   transcribeAudioBuffer,
@@ -485,13 +487,25 @@ export async function resolveReceiptVault({
   // driver licences stay out of scope (vehicle-only ledger, §40.2). Best-effort
   // by design: the vault can never fail the turn.
   let documentPrefill = null;
+  // v1.96.5 — a FISCAL RECEIPT is never a compliance document. Live 2026-11-11:
+  // a KRA e-TIMS fuel receipt classified as `logbook` was vaulted as a vehicle
+  // logbook — and SUPERSEDED the genuine logbook file — while no `receipts` row
+  // was ever created (the expense saved with receipt_id NULL; records showed
+  // "—"). This intake guard keeps the compliance vault clean whatever the
+  // classifier says (rule 51 sibling guard; receipts belong to the receipt
+  // ledger). Generic fiscal markers only — no country parsing profile leaks in
+  // (rule 36).
+  const fiscalReceiptLike = Boolean(ocrText && (
+    isKenyaEtimesText(ocrText)
+    || /\bTAX\s+INVOICE\b|\bTOTAL\s+TAX\b|\bTAXABLE\b/i.test(ocrText)
+  ));
   // v1.93.0 (Phase 30, Task 3) — a compliance document uploaded BEFORE the
   // vehicle exists (e.g. the logbook photo sent during registration) is no
   // longer discarded: its metadata is stashed on the session (JSON-safe, rides
   // chat_sessions) and the bytes stay in-process; registration completion files
   // it under the new asset and re-downloads from Meta on a cold instance.
   let documentStash = null;
-  if (mediaObj?.id && supabaseClient && !ocrPaused && ocrResult?.buffer && isVaultableDocumentFamily(ocrKind)) {
+  if (mediaObj?.id && supabaseClient && !ocrPaused && ocrResult?.buffer && isVaultableDocumentFamily(ocrKind) && !fiscalReceiptLike) {
     try {
       const targetVehicle = currentActiveVehicle
         || existingVehicles.find((vehicle) => vehicle.owner_id === profileData?.id)
@@ -542,7 +556,7 @@ export async function resolveReceiptVault({
   // document, never a receipt. Extract the vehicle fields so the
   // registration quiz can be prefilled and confirmed.
   let logbookPrefill = null;
-  if (mediaObj?.id && ocrKind === 'logbook' && ocrText) {
+  if (mediaObj?.id && ocrKind === 'logbook' && ocrText && !fiscalReceiptLike) {
     try {
       const lbHints = extractDocumentHints(ocrText, 'logbook', { countryCode: ocrCountry?.country_code || 'GLOBAL' });
       const picked = {};
