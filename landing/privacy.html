@@ -10,10 +10,10 @@
   <meta property="og:type" content="website">
   <meta property="og:title" content="Privacy Policy â€” Saka Fleet">
   <meta property="og:url" content="https://sakafleet.com/privacy">
-  <link rel="icon" type="image/svg+xml" href="/assets/img/favicon.svg?v=1.96.5">
-  <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png?v=1.96.5">
-  <link rel="apple-touch-icon" href="/assets/img/apple-touch-icon.png?v=1.96.5">
-  <link rel="stylesheet" href="/assets/css/styles.css?v=1.96.5">
+  <link rel="icon" type="image/svg+xml" href="/assets/img/favicon.svg?v=1.96.6">
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png?v=1.96.6">
+  <link rel="apple-touch-icon" href="/assets/img/apple-touch-icon.png?v=1.96.6">
+  <link rel="stylesheet" href="/assets/css/styles.css?v=1.96.6">
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
@@ -30,8 +30,8 @@
   <header class="nav">
     <div class="wrap nav-inner">
       <a class="nav-logo" href="/" aria-label="Saka Fleet home">
-        <img class="mark" src="/assets/img/logo.svg?v=1.96.5" alt="Saka Fleet wordmark" width="335" height="34">
-        <img class="mark-square" src="/assets/img/logo-mark.png?v=1.96.5" alt="" aria-hidden="true" width="30" height="30">
+        <img class="mark" src="/assets/img/logo.svg?v=1.96.6" alt="Saka Fleet wordmark" width="335" height="34">
+        <img class="mark-square" src="/assets/img/logo-mark.png?v=1.96.6" alt="" aria-hidden="true" width="30" height="30">
       </a>
       <div class="nav-cta">
         <span class="nav-flag" id="navFlag" style="display:none"></span>
@@ -153,8 +153,9 @@
       <ul>
         <li><strong>Strictly necessary</strong> â€” required for the site to function and stay secure (for example, load balancing while a page is served). Always on; consent not required.</li>
         <li><strong>Preferences</strong> â€” would remember choices like your country code. Currently unused, and stored only with your permission.</li>
-        <li><strong>Analytics &amp; marketing</strong> â€” measurement and marketing tags (Google Tag Manager, Meta Pixel) switch on only after you explicitly agree. Without consent, no analytics script is loaded.</li>
+        <li><strong>Analytics &amp; marketing</strong> â€” measurement and marketing tags (Google Tag Manager, Meta Pixel) switch on only after you explicitly agree — including Google Ads Enhanced Conversions, which can carry your hashed email and phone from a signup. Without consent, no analytics script is loaded.</li>
       </ul>
+      <p>If you opt in, the signup conversion (<em>sign_up</em>) can include your email address and phone number so Google can measure which ads lead to real signups (Google Ads Enhanced Conversions). Our page sends them in Google's documented formats — lowercased email and E.164 phone — and Google hashes both with SHA-256 in the browser before transmission. They are never shared when you decline analytics, and you can change your choice any time through Cookie settings.</p>
       <p>Besides the analytics you opt into, the only network calls the site makes are the ones you start: the signup and verification steps, and the live status check against Saka Fleet's secure servers. Fonts are served from our own site, so no third-party font requests are made.</p>
 
       <h2 id="changes">12. Changes to this policy</h2>
@@ -194,7 +195,7 @@
         <label class="cookie-toggle"><input type="checkbox" id="cookiePrefs"><span class="cookie-slider"></span></label>
       </div>
       <div class="cookie-group">
-        <div class="grow"><h4>Analytics &amp; marketing</h4><p>Google Tag Manager measures visits and sign-ups (including tags like Meta Pixel you configure there). It loads only with your permission.</p></div>
+        <div class="grow"><h4>Analytics &amp; marketing</h4><p>Google Tag Manager measures visits and sign-ups (Meta Pixel, Google Ads). With your permission, a signup may send your email and phone number to Google in hashed form for ad measurement. Nothing loads without your permission.</p></div>
         <label class="cookie-toggle"><input type="checkbox" id="cookieAnalytics"><span class="cookie-slider"></span></label>
       </div>
       <button class="btn btn-ghost" id="cookieRejectBtn" style="width:48%">Reject non-essential</button>
@@ -205,8 +206,8 @@
   <script>
 (function(){try{var s=localStorage.getItem('saka_country');if(s){var p=s.split('|');var f=String.fromCodePoint.apply(null,[].map.call(p[0],function(c){return 127397+c.charCodeAt(0);}));var nf=document.getElementById('navFlag');if(nf){nf.textContent=f;nf.title=p[1]||'';nf.style.display='inline-flex';}}}catch(e){}})();
 </script>
-  <script src="/assets/js/cookieConsent.js?v=1.96.5" defer></script>
-  <script src="/assets/js/nav.js?v=1.96.5" defer></script>
+  <script src="/assets/js/cookieConsent.js?v=1.96.6" defer></script>
+  <script src="/assets/js/nav.js?v=1.96.6" defer></script>
 </body>
 </html>
 

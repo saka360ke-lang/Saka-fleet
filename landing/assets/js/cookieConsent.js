@@ -1,13 +1,14 @@
-/* Saka Fleet — cookie consent (v1.49.0). Vanilla JS, no third-party CMP.
-   Google Tag Manager (and the tags you configure inside it, e.g. Meta Pixel)
-   load ONLY after an explicit analytics opt-in. Consent is stored in
-   localStorage (versioned) so a policy change must earn a fresh yes. Strictly
-   necessary stays always-on. */
+/* Saka Fleet — cookie consent (v1.49.0; scope bumped v1.96.6). Vanilla JS, no
+   third-party CMP. Google Tag Manager (and the tags you configure inside it,
+   e.g. Meta Pixel and Google Ads) load ONLY after an explicit analytics opt-in.
+   Consent is stored in localStorage (versioned) so a policy change must earn a
+   fresh yes — v3 covers signup Enhanced Conversions (hashed email/phone for ad
+   measurement). Strictly necessary stays always-on. */
 (function () {
   'use strict';
 
   var KEY = 'saka_cookie_consent';
-  var VERSION = 2;
+  var VERSION = 3;
   var GTM_ID = 'GTM-TGR68X2X';
 
   function $(id) { return document.getElementById(id); }
@@ -41,6 +42,10 @@
         j.src = 'https://www.googletagmanager.com/gtm.js?id=' + i + dl;
         f.parentNode.insertBefore(j, f);
       })(window, document, 'script', 'dataLayer', GTM_ID);
+      // v1.96.6 — the container only exists after an explicit opt-in, so the
+      // consent state is unambiguous: tell GTM (Consent Mode) that analytics
+      // and ad measurement are granted. Signup Enhanced Conversions keys off it.
+      window.dataLayer.push({ event: 'consent_analytics_granted', analytics: true });
     } catch (e) { /* analytics is best-effort and never blocks the page */ }
   }
   function applyConsent(data) {

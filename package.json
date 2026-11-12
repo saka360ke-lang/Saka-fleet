@@ -1,7 +1,7 @@
 {
   "name": "sakafleet-backend",
   "type": "module",
-  "version": "1.96.5",
+  "version": "1.96.6",
   "description": "Saka Fleet Backend",
   "main": "index.js",
   "scripts": {

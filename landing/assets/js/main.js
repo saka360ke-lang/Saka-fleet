@@ -21,6 +21,18 @@
     return /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(value);
   }
   function cleanDigits(value) { return String(value || '').replace(/[^\d]/g, ''); }
+  // v1.96.6 — Enhanced Conversions (Google Ads / GA4). Google's tag hashes the
+  // values with SHA-256 in the browser before transmission; this page only
+  // guarantees the documented formats: email lowercase + trimmed, phone in
+  // E.164 form (+[country code][number] — digits only, no spaces or dashes).
+  function enhancedEmail(value) {
+    var email = String(value || '').trim().toLowerCase();
+    return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) ? email : null;
+  }
+  function enhancedPhone(value) {
+    var compact = String(value || '').replace(/[\s().-]/g, '');
+    return /^\+[1-9]\d{7,14}$/.test(compact) ? compact : null;
+  }
   function detectLanguageName() {
     var lang = String(navigator.language || 'en').toLowerCase();
     var code = lang.split('-')[0];
@@ -196,10 +208,22 @@
 
   function trackSignup() {
     var optedIn = readLaunchOptIn();
+    // v1.96.6 — Enhanced Conversions: the signup push carries first-party data
+    // in the SAME event so GTM's GA4 sign_up / Google Ads tags can read a data
+    // layer variable named `user_data` (unhashed here; the Google tag hashes
+    // with SHA-256 before transmission). Formats are re-checked at push time:
+    // email lowercase + trimmed, phone E.164 (+[country code][number]).
+    var onboard = window.__onboard || {};
+    var userData = {};
+    var userEmail = enhancedEmail(onboard.email);
+    var userPhone = enhancedPhone(onboard.phone);
+    if (userEmail) userData.email = userEmail;
+    if (userPhone) userData.phone_number = userPhone;
     window.dataLayer = window.dataLayer || [];
     window.dataLayer.push({
       event: 'successful_signup',
       signup_method: 'website',
+      user_data: userData,
       launch_active: LAUNCH.active === true,
       launch_award_days: LAUNCH.active ? LAUNCH.awardDays : 0,
       launch_opt_in: typeof optedIn === 'boolean' ? optedIn : (LAUNCH.active ? true : null)

@@ -13,6 +13,7 @@
 import assert from 'assert';
 import fs from 'node:fs';
 import path from 'node:path';
+import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import { COUNTRY_COMPLIANCE_CATALOG } from './src/services/complianceCatalog.js';
 import { REGIONS, EXTRA_REGIONS } from './src/services/globalization.js';
@@ -443,6 +444,54 @@ check(indexHtml.includes('class="nav-logo" href="/"'), 'the landing logo always 
   const dashboardSource = fs.readFileSync('src/services/dashboard.js', 'utf8');
   check(dashboardSource.includes("brandHref = '/d'") && dashboardSource.includes('escapeHtml(brandHref)'), 'the dashboard shell accepts a brand target (default /d)');
   check(dashboardSource.includes("brandHref: 'https://sakafleet.com'"), 'the signed-out login door points at the public site');
+}
+
+console.log('\n--- Test 23: Enhanced Conversions user_data on signup (v1.96.6) ---');
+check(mainJs.includes("event: 'successful_signup'") && mainJs.includes('user_data: userData'), 'the signup push carries a user_data payload');
+check(mainJs.includes('userData.email = userEmail') && mainJs.includes('userData.phone_number = userPhone'), 'user_data carries email and phone_number');
+check(/function enhancedEmail\(value\) \{[\s\S]{0,220}\.trim\(\)\.toLowerCase\(\)/.test(mainJs), 'the email is trimmed and lowercased before the push');
+check(/function enhancedPhone\(value\) \{[\s\S]{0,220}\/\^\\\+\[1-9\]\\d\{7,14\}\$\//.test(mainJs), 'the phone normaliser enforces E.164 (+[country code][number])');
+{
+  // Behavioural proof: lift the two pure normalisers out of main.js and run them.
+  function extractNormaliser(name) {
+    const start = mainJs.indexOf('function ' + name + '(value) {');
+    check(start >= 0, `main.js defines ${name}()`);
+    const end = mainJs.indexOf('\n  }', start);
+    check(end > start, `${name}() has a readable body`);
+    return mainJs.slice(start, end + 4);
+  }
+  const sandbox = {};
+  vm.runInNewContext(
+    'var result = {};\n' +
+      extractNormaliser('enhancedEmail') + '\n' +
+      extractNormaliser('enhancedPhone') + '\n' +
+      'result.emailTrimmed = enhancedEmail("  Grace.W@Example.COM  ");\n' +
+      'result.emailAlready = enhancedEmail("driver@example.com");\n' +
+      'result.emailBad = enhancedEmail("not-an-email");\n' +
+      'result.phoneSpaced = enhancedPhone("+254 712-345-678");\n' +
+      'result.phoneAlready = enhancedPhone("+254712345678");\n' +
+      'result.phoneLocal = enhancedPhone("0712345678");\n' +
+      'result.phoneNoPlus = enhancedPhone("254712345678");\n',
+    sandbox
+  );
+  check(Boolean(sandbox.result), 'the normalisers can be exercised in isolation');
+  check(sandbox.result.emailTrimmed === 'grace.w@example.com', 'the email is lowercased and trimmed before the push');
+  check(sandbox.result.emailAlready === 'driver@example.com' && sandbox.result.emailBad === null, 'only a real address survives normalisation');
+  check(sandbox.result.phoneSpaced === '+254712345678' && sandbox.result.phoneAlready === '+254712345678', 'the phone becomes exactly +[country code][number] (E.164, no spaces or dashes)');
+  check(/^\+254\d{9}$/.test(sandbox.result.phoneSpaced) && /^\+[1-9]\d{7,14}$/.test(sandbox.result.phoneSpaced), 'the pushed phone matches the E.164 shape +2547XXXXXXXX');
+  check(sandbox.result.phoneLocal === null && sandbox.result.phoneNoPlus === null, 'a phone without its leading plus/country code is omitted, never guessed');
+}
+check(/VERSION\s*=\s*3/.test(cookieJs), 'the consent scope is bumped to v3 for ad measurement (fresh opt-in)');
+check(cookieJs.includes("event: 'consent_analytics_granted'") && cookieJs.includes('analytics: true'), 'an opted-in visitor signals granted consent to GTM');
+for (const ecPage of ['index.html', 'privacy.html', 'terms.html', 'status.html', 'data-deletion.html', '404.html']) {
+  const ecHtml = fs.readFileSync(path.join(LANDING, ecPage), 'utf8');
+  check(ecHtml.includes('hashed form for ad measurement'), `${ecPage} discloses the hashed email + phone ad measurement (v3 scope)`);
+}
+{
+  const ecPrivacy = fs.readFileSync(path.join(LANDING, 'privacy.html'), 'utf8');
+  check(/Enhanced Conversions/.test(ecPrivacy) && /SHA-256/.test(ecPrivacy) && /E\.164/.test(ecPrivacy), 'privacy section 11 names Enhanced Conversions, SHA-256 and E.164');
+  const ecLlms = fs.readFileSync(path.join(LANDING, 'llms.txt'), 'utf8');
+  check(ecLlms.includes('Enhanced Conversions') && ecLlms.includes('E.164'), 'llms.txt tells machines about the consented hashed user data');
 }
 
 console.log(`\n🎉 ${passed} landing assertions passed (Phase 31 included).`);

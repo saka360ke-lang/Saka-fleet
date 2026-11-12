@@ -1,6 +1,13 @@
 {
-  "latest": "1.96.5",
+  "latest": "1.96.6",
   "entries": [
+    {
+      "version": "1.96.6",
+      "date": "2026-11-12",
+      "title": "Signup measurement, with your consent",
+      "preview": "With your consent, signup now sends Google a hashed email and phone so we can see which ads bring people here.",
+      "summary": "A small website update about measurement. When someone signs up, the site can now tell Google Ads and Google Analytics that a signup happened - and, only if you opted in to analytics, include the email address and phone number you entered so the measurement is accurate. Those details are hashed with SHA-256 before they ever travel, are never shared when you choose \"Reject non-essential\", and nothing about your WhatsApp records, reports or reminders changes. Because what we measure has changed, the cookie banner asks everyone for a fresh choice."
+    },
     {
       "version": "1.96.5",
       "date": "2026-11-11",
