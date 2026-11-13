@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.97.6  
+**Version:** 1.97.7  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.97.7** | Amina actually parses her model now — `chatCompletion` returns `{ ok, text, … }` but `parseCareAiJson` returned the wrapper (object short-circuit), so `parsed.lesson`/`parsed.action` were always undefined: no lesson could ever be learned and every live investigation read "loop limit reached without a decision"; the parser unwraps `text` centrally (both Amina purposes), the retry message quotes model text, and the live replay produced the first `care_learnings` row + `CARE_TICKET_LEARNED` | 249 |
 | **1.97.6** | The Lesson loop actually learns — `fetchInboundEmailBody` called Resend's SENT-email API (`GET /emails/{id}` → live `404 "Email not found"`); it now uses `GET /emails/receiving/{id}` (live `200` with text+html), so `[SFC-]` human replies reach `extractCareLesson`; the recovered 10:57 reply is replayed live to seed the first `care_learnings` row | 248 |
 | **1.97.5** | Care dashboard UX + the honest lesson diagnosis — `/d/care` collapses Thread/Investigation into `<details>` (escalated thread open, the rest compact), titles lose the `[SFC-…]`/Re: chains (subjectless tickets titled from a 60-char body), status chips turn red/amber/blue and a grey `⚙️ Pre-gate escalation` badge replaces the paragraph; the live Lesson KPI=0 was proved to be an empty Resend body fetch (`CARE_TICKET_HUMAN_REPLY {learned:false}`), so every failed/empty body fetch now writes `error_logs` and the audit carries `bodyAvailable` | 247 |
 | **1.97.4** | Care reply status writes fixed — live `support_tickets_status_check` widened to the six canonical statuses (`IN_PROGRESS`/`RESOLVED` were silently rejected and swallowed), `updateCareTicket`/`resolveCareTicketId` log every refusal and retry once (the false "ticket not found" flake), `/d/care` lists every ticket with its full thread + internal note + status chips, `ai_draft` applied live, ticket `0fc5fb1e` repaired | 246 |
@@ -7392,3 +7393,22 @@ Only valid values are attached (`userData.email` / `userData.phone_number`); the
 **Suites run.** test_inbound_email (52), test_dashboard, test_care_learning, test_care_worker, test_doc_sync, test_kb_docs, test_vehicle_documents, test_landing_static, test_env_audit, `npm run health` — green.
 
 **Rules shaped this work (rule 58).** 1/39/42/45/63, 3/4, 10/11, 12/33, 44/54, 50/51/52, 55, 56, 2. No rule edited. **Impact:** every `[SFC-]` human reply now reaches `extractCareLesson` with its real body; a wrong-namespace 404 can no longer masquerade as "no body".
+
+
+### 249. v1.97.7 — Amina parses her model (the wrapper bug behind "no lesson")
+
+**Why (found during the live replay, rule 44/54).** With v1.97.6 deployed (revision `saka-fleet-00428-qvb`, build `f92bfedb`, `[deployLiveAlert] LIVE announcement sent`), the recovered 10:57 reply fetched correctly (`GET /emails/receiving/e5302c09-…` → `200`, 878-char `text`, `bodyAvailable:true`) — yet the replay still returned `{"learned":false,"lesson":null}` with `care_learnings` at 0. A direct live probe of the same prompt showed the model returning a **valid lesson**. The defect: `chatCompletion` returns `{ ok, text, model, error, stopReason }` (aiClient.js:1193/1239), while `parseCareAiJson` began with `if (raw && typeof raw === 'object') return raw;` — it returned the **wrapper**, so `parsed.lesson` was always `undefined` and `sanitizeCareLesson(undefined)` was `''`. The identical defect existed at `careAi.js:347` (`runCareInvestigation`), which is why the 2026-11-13 escalation audit read `"investigation loop limit (3) reached without a decision"` with `tools:[]` — Amina's action JSON was never parsed either. Every stateless test passed because each injected `aiCall` stub returned a **string**; the real provider shape never appeared in a suite (classic mock-vs-prod divergence, rule 52).
+
+**The change.** `parseCareAiJson` now unwraps first: an object carrying a string `text` recurses into it (feeding the real provider shape through the existing fence/prose/partial-JSON reader), while a pre-parsed object without `text` still returns as-is. `careAi.js`'s unparseable branch quotes the unwrapped model text in the retry message, never `[object Object]`. One central change repairs both Amina purposes (rule 55).
+
+**Tests (rule 52).** `test_care_learning` 37 → **40**: the `{ ok, text }` wrapper is unwrapped, a pre-parsed object still parses, and `extractCareLesson` is proven end-to-end with the REAL response shape (lesson stored + audited). `test_care_ai` 59 → **61**: `processCareEmail` resolves a ticket from a wrapper-shaped response, and the decision becomes a real customer reply — the mock-vs-prod pin that would have caught the original bug.
+
+**Live reconciliation (executed 2026-11-13 19:32 UTC).** The recovered reply replayed through `routeCareInternalReply` → `{ ok:true, ticketId:'0fc5fb1e-…', bodyAvailable:true, learned:true }`. **`care_learnings` now holds 1 row**: "When a user asks how to log fuel, skip investigation and reply directly with the WhatsApp command format: open WhatsApp and type 'Logged <amount>L <fuel type> at <odometer>km'." (`trigger_context: "Customer asks how to log fuel"`). `CARE_TICKET_HUMAN_REPLY {bodyAvailable:true, learned:true}` and `CARE_TICKET_LEARNED` are audited; the ticket thread carries the real 878-char reply. The `/d/care` Lessons KPI reads 1. (The 19:30 replay attempt — pre-fix parser — remains in the thread/audit as `learned:false`; it is the honest before/after record.)
+
+**Recurrence autopsy (rule 51).** Defect class *a provider wrapper object is fed to a JSON parser that treats any object as already-parsed, and every test stubs the unwrapped shape* → siblings swept: both `parseCareAiJson` call sites fixed centrally; the unparseable-retry message fixed; both suites now inject the real shape; a repo-wide scan of `chatCompletion(` consumers found no other JSON consumer of the raw response (other callers read `.text` or use `generateText`, which returns a string). Deliberately left: unrelated `typeof x === 'object'` normalisers (`complianceCatalog`, `conversationEngine`) do not touch provider responses.
+
+**Frames touched.** `src/services/careLearning.js` (`parseCareAiJson`), `src/services/careAi.js` (unparseable retry text), `test_care_learning.js`, `test_care_ai.js`, `test_vehicle_documents.js` (version pin), `package.json` (1.97.7), `landing/data/changelog.json` + stamped assets, `docs/` (regenerated), this file, `CHANGELOG.md`.
+
+**Suites run.** test_care_learning (40), test_care_ai (61), test_inbound_email (52), test_dashboard, test_care_worker, test_doc_sync, test_kb_docs, test_vehicle_documents, test_landing_static, test_env_audit, `npm run health` — green.
+
+**Rules shaped this work (rule 58).** 1/39/42/45/63, 3/4, 10/11, 12/33, 44/54, 50/51/52, 55, 56, 2. No rule edited. **Impact:** `[SFC-]` human replies genuinely teach Amina, and her investigation can finally parse a decision; the "loop limit reached without a decision" reason can no longer be produced by the response wrapper.

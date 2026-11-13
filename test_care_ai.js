@@ -181,6 +181,22 @@ check(resolveMock.db.support_ticket_messages.some((row) => row.direction === 'ou
 check(audits(resolveMock, 'CARE_TICKET_AI_RESOLVED').length === 1, 'the resolution is audited');
 check(resolveResult.tools.join(',') === 'get_recent_errors,get_profile_context', 'the result names the tools she used');
 
+console.log('\n--- Test 6b: the REAL aiClient shape drives a decision (v1.97.7) ---');
+// chatCompletion returns { ok, text, … }; feeding the wrapper to the parser made
+// every live investigation look like "no decision" (the 2026-11-13 escalation
+// read "investigation loop limit (3) reached without a decision"). This pin
+// proves the live response shape resolves a ticket end-to-end.
+const wrappedMock = createMockSupabase(seed());
+let wrappedSent = null;
+const wrappedResult = await processCareEmail(wrappedMock.client, ticket(), {
+  aiCall: async () => ({ ok: true, text: JSON.stringify({ action: 'reply', reply: 'Reply "log expense" once more and it will save.', confidence: 0.9, reason: 'known timeout' }), model: 'deepseek-chat', error: null, stopReason: 'stop' }),
+  sendEmail: async (payload) => { wrappedSent = payload; return true; },
+  sendEscalationEmail: async () => { throw new Error('no escalation expected'); },
+  notifySuperadmin: async () => ({ alerted: false })
+});
+check(wrappedResult.action === 'resolved' && wrappedResult.handled === true, 'the provider wrapper { ok, text } no longer breaks the investigation (mock-vs-prod pin)');
+check(wrappedSent && /log expense/.test(wrappedSent.text), 'the decision becomes a real customer reply');
+
 console.log('\n--- Test 7: low confidence escalates with the named investigation ---');
 const lowMock = createMockSupabase(seed());
 let lowForward = null;

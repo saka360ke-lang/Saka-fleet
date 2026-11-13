@@ -62,6 +62,8 @@ console.log('\n--- Test 2: the JSON reader + PII-safe lesson sanitizer ---');
 check(parseCareAiJson('```json\n{"lesson":"x"}\n```')?.lesson === 'x', 'fenced JSON is parsed');
 check(parseCareAiJson('Sure! {"lesson":"y"} hope that helps')?.lesson === 'y', 'prose around JSON is tolerated');
 check(parseCareAiJson('not json at all') === null, 'unparseable output returns null');
+check(parseCareAiJson({ ok: true, text: '{"lesson":"wrapped"}' })?.lesson === 'wrapped', 'the aiClient { ok, text } wrapper is unwrapped (v1.97.7)');
+check(parseCareAiJson({ lesson: 'plain object' })?.lesson === 'plain object', 'a pre-parsed object still parses as-is');
 const scrubbed = sanitizeCareLesson('Email jane@example.com or call +254700000001 and ref 123456789012 about it');
 check(!scrubbed.includes('jane@example.com') && scrubbed.includes('[email]'), 'emails are scrubbed from a lesson');
 check(!scrubbed.includes('+254700000001') && scrubbed.includes('[phone]'), 'phone numbers are scrubbed');
@@ -83,6 +85,20 @@ check(/Never include names, phone numbers, emails/.test(CARE_LEARNING_SYSTEM_PRO
 check(/never change code, schema, prices or permissions/.test(CARE_LEARNING_SYSTEM_PROMPT), 'the prompt states lessons are prompt-only hints');
 check(extractMock.db.care_learnings.some((row) => row.ticket_id === TICKET_ID && /re-upload/.test(row.lesson)), 'the lesson is stored against the ticket');
 check(extractMock.db.admin_audit_logs.some((row) => row.action === 'CARE_TICKET_LEARNED'), 'the lesson is audited');
+
+console.log('\n--- Test 3b: the REAL aiClient shape teaches a lesson (v1.97.7) ---');
+// Live 2026-11-13: chatCompletion returns { ok, text, model, error, stopReason }.
+// The old parser fed that wrapper straight in, so parsed.lesson was undefined
+// and every real human reply silently produced "no-reusable-lesson". This pin
+// fails if the string-returning test stub ever hides that again.
+const liveShapeMock = createMockSupabase(seed());
+const liveShape = await extractCareLesson(
+  liveShapeMock.client,
+  { ticket: seed().support_tickets[0], humanReply: 'For future reference: ask the customer to re-upload the receipt image.' },
+  { aiCall: async () => ({ ok: true, text: JSON.stringify({ lesson: 'Ask for a re-upload when a receipt image is missing.', trigger_context: 'missing receipt', confidence: 0.9 }), model: 'deepseek-chat', error: null, stopReason: 'stop' }) }
+);
+check(liveShape.ok === true && /re-upload/.test(liveShape.lesson), 'the provider wrapper { ok, text } no longer swallows the lesson (mock-vs-prod pin)');
+check(liveShapeMock.db.care_learnings.some((row) => /re-upload/.test(row.lesson)), 'the lesson is stored from the real response shape');
 
 console.log('\n--- Test 4: refusals are honest, never invented ---');
 const shortReply = await extractCareLesson(createMockSupabase(seed()).client, { ticket: seed().support_tickets[0], humanReply: 'ok' }, { aiCall: async () => '{}' });

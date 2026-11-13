@@ -77,7 +77,15 @@ export function extractCareTicketTag(subject) {
 
 /** Shared JSON reader for every Amina purpose (fences, prose, partial JSON). */
 export function parseCareAiJson(raw) {
-  if (raw && typeof raw === 'object') return raw;
+  if (raw && typeof raw === 'object') {
+    // v1.97.7 — chatCompletion returns { ok, text, model, error, stopReason }.
+    // Unwrap the model text before parsing; a pre-parsed object (tests, tools)
+    // still returns as-is. Live 2026-11-13: both Amina purposes fed the whole
+    // wrapper here, so parsed.lesson/parsed.action were always undefined and
+    // every real reply silently yielded "no reusable lesson".
+    if (typeof raw.text === 'string') return parseCareAiJson(raw.text);
+    return raw;
+  }
   const text = String(raw || '').trim();
   if (!text) return null;
   const fenced = text.replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();

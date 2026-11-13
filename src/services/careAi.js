@@ -346,7 +346,10 @@ export async function runCareInvestigation({ supabase, ticket = {}, deps = {} } 
     }
     const parsed = parseCareAiJson(raw);
     if (!parsed) {
-      messages.push({ role: 'assistant', content: String(raw || '').slice(0, 800) });
+      // v1.97.7 — the provider response is { ok, text, … }; quote the model text
+      // back, never the wrapper object ("[object Object]").
+      const rawText = raw && typeof raw === 'object' && typeof raw.text === 'string' ? raw.text : raw;
+      messages.push({ role: 'assistant', content: String(rawText || '').slice(0, 800) });
       messages.push({ role: 'user', content: 'That was not JSON. Reply with a tool call or a final JSON action.' });
       continue;
     }

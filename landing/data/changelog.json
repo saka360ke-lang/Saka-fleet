@@ -1,6 +1,13 @@
 {
-  "latest": "1.97.6",
+  "latest": "1.97.7",
   "entries": [
+    {
+      "version": "1.97.7",
+      "date": "2026-11-13",
+      "title": "The learning loop now really learns",
+      "preview": "Behind the scenes: support answers now reach the learning step in full, so the assistant learns from real replies.",
+      "summary": "A behind-the-scenes release about the support assistant's learning step. After fixing where it reads incoming replies, we replayed a real answer - and found a second, quieter bug: the assistant was reading its AI provider's envelope instead of the answer inside it, so every lesson silently came back empty. It is fixed at the root, and the same flaw explained why a past investigation gave up with no findings. We then replayed the original support answer: it now became the assistant's first stored lesson, word for word from a real human reply. Your own WhatsApp conversations, records, reports, reminders and billing are untouched."
+    },
     {
       "version": "1.97.6",
       "date": "2026-11-13",
