@@ -90,6 +90,8 @@ import {
   checkSignupAvailability,
   ensureWebOnboardOtpTable,
   inspectExistingSignup,
+  // v1.97.1 — resume an unverified email-matched signup (kiddymoms01 hotfix).
+  reissueWebOnboardCode,
   notifyExistingSignup,
   auditWebOnboardEvent,
   pruneExpiredWebOnboardOtps
@@ -613,14 +615,46 @@ fastify.post('/api/onboard', async (request, reply) => {
   try {
     // v1.40.0 — never re-onboard an already-verified account: the site shows
     // "you're all set" and points straight to WhatsApp.
+    // v1.97.1 — ONLY a genuinely verified account takes this branch; the old
+    // `email_exists` state swallowed unverified signups and told them "you are
+    // already registered" without ever sending a code (kiddymoms01 dead-end).
     const existing = await inspectExistingSignup(supabase, { email, phone });
-    if (existing.state === 'verified' || existing.state === 'email_exists') {
+    if (existing.state === 'verified') {
       await auditWebOnboardEvent(supabase, 'WEB_ONBOARD_EXISTING', { email, phone, profileId: existing.profile?.id, matchedBy: existing.matchedBy });
       await notifyExistingSignup(supabase, { profile: existing.profile, email, phone, sendWhatsApp: sendMetaWhatsAppMessage });
       return {
         success: true,
         already_verified: true,
         message: 'You are already registered. Continue on WhatsApp — Saka is waiting for you.'
+      };
+    }
+
+    // v1.97.1 — an UNVERIFIED email match RESUMES the signup: a fresh code is
+    // re-issued for the SAME account (the stored phone is kept, nothing is
+    // re-created) and the website advances to the OTP gate exactly as the live
+    // availability check promises.
+    if (existing.state === 'unverified' && existing.matchedBy === 'email') {
+      const resume = await reissueWebOnboardCode(supabase, {
+        email,
+        phone,
+        firstName,
+        lastName,
+        profile: existing.profile
+      });
+      if (!resume.ok) {
+        return reply.status(502).send({ success: false, error: 'We could not resend your verification code. Please try again.' });
+      }
+      try {
+        await sendEmailOtp(email, resume.code);
+      } catch (emailErr) {
+        await logWebOnboardFailure(emailErr, '/api/onboard', { email, phone, stage: 'email_dispatch_resume' });
+        return reply.status(502).send({ success: false, error: 'The verification email could not be sent. Please check the address and try again.' });
+      }
+      return {
+        success: true,
+        onboard_token: resume.token,
+        profile_created: false,
+        message: 'Verification code sent to your email.'
       };
     }
 

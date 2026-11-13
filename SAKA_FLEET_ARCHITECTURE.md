@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.97.0  
+**Version:** 1.97.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.97.1** | Unverified-signup dead-end fix (kiddymoms01@gmail.com) — `inspectExistingSignup` returns `'unverified'` for an unverified email match (the `'email_exists'` state is retired), the new engine-owned `reissueWebOnboardCode` resumes the SAME account (stored phone, profile untouched, `WEB_ONBOARD_RESUMED`) and `/api/onboard` returns `success:true + onboard_token`; the silent `detailsContinue` gate return is replaced by visible copy + a re-check; business refusals use the server message and malformed responses are logged | 243 |
 | **1.97.0** | Superadmin User Management CRM — `/d/admin/profiles` lists EVERY live profile (owners/drivers/shells) with plan/trial chips + search; one audited detail page (identity, engine-owned manual tier override with a `manual` ledger line, force-verify, notes, force logout, typed-WIPE danger zone) and six new POSTs on the v1.91.0 guard stack; a changed email defaults `email_verified=false` unless Force Verify is ticked; additive `subscriptions.source` migration; latent `logWriteFailure` import fixed | 242 |
 | **1.96.9** | GTM delivered first-party — `loadGtm()` now injects `https://gtm.sakafleet.com/gtm.js?id=GTM-TGR68X2X` (was `www.googletagmanager.com`), consent gate untouched; no GTM `<noscript>` iframe by design (it would bypass the consent gate); Test 25 sweeps landing for zero `googletagmanager.com`; live-verified `GET` 200 + `application/javascript` + the container id before the edit | 241 |
 | **1.96.8** | Mobile cookie banner fix — `.cookie-banner` z-index 90 → **9999** (the signup gate re-opened it UNDER the onboarding modal backdrop at 100, so it was a dimmed ghost and never clickable), `bottom: calc(14px + env(safe-area-inset-bottom, 0px))` (iOS home indicator), a ≤640px wrap layout with 44px tap targets, a lime `cookie-pulse` attention animation (reduced-motion off) and an inline `#cookieGateErr` pointer replacing the native alert; landing assets stamped `?v=1.96.8` | 240 |
@@ -7253,5 +7254,28 @@ Only valid values are attached (`userData.email` / `userData.phone_number`); the
 **Suites run.** test_dashboard_admin (162), test_dashboard (936), test_agent_training (247), test_subscription_billing (108), test_trial_engine (138), test_profile_wipe (17), test_db_reset_scope (128), test_user_context_cache (137 — 43-site ratchet), test_landing_static, test_doc_sync, test_kb_docs, test_vehicle_documents, `npm run docs:check`, `npm run health` — green.
 
 **Rules shaped this work (rule 58).** 1/39/42/45/63 (rules + architecture first; **0 open proposals** verified live — 8 unrelated PENDING friction rows left for their own review), 3/4, 8 (identity locks untouched), 10/11 (stateless suites), 13 (playbook + core prompt synced; docs regenerated), 18/28 (engine-owned overrides; no invented prices), 31, 33/43, 50 (per-block degrade + un-migrated ledger retry), 51/52 (autopsy + before/after assertions), 54 (live gate check), 55/56 (evolved the v1.91.0 console), 2 (architecture + CHANGELOG + landing feed in the same commit). No rule edited. **Impact:** support sees and manages every account from one audited console; a changed email is re-verified by default; manual plan changes leave a `manual` ledger line; the superadmin account remains untouchable.
+
+### 243. v1.97.1 — the unverified-signup dead-end (`kiddymoms01@gmail.com`, 2026-11-13)
+
+**Live evidence (rule 54, before any edit).** The profile existed — `kiddymoms01@gmail.com`, `email_verified:false`, phone `+254720641983`, created 05:01:41Z; the first attempt DID create a `web_onboard_otps` row (05:01:41Z) that was never verified. On the 07:14–07:28Z return visit the check endpoint answered correctly (`{verified:false, emailRegistered:true, …}`) and the UI promised a resend, but the final `POST /api/onboard` (07:28:16Z, same email, a retyped phone `+254721111111`) wrote `WEB_ONBOARD_EXISTING` + `WEB_ONBOARD_DUPLICATE_NOTIFIED` and returned `already_verified:true` — no code re-sent, the OTP gate unreachable. GTM's `formSubmit` with `formCanceled:true` also proved the details form could cancel silently on the disabled Continue gate.
+
+**Root cause A — two endpoints disagreed on one fact.** `inspectExistingSignup` returned `'email_exists'` for ANY email match without checking `email_verified` (the v1.40.0 duplicate rule), and `/api/onboard` treated `email_exists` as "already registered". The v1.96.7 fix had aligned the CHECK endpoint and the frontend gate only; the SUBMIT endpoint still lied to half-finished signups.
+
+**Root cause B — a gate that returned silently.** `main.js` did `if ($('detailsContinue') && $('detailsContinue').disabled) return;` after `preventDefault()` — an Enter-key submit during a pending/failed availability check produced zero DOM change.
+
+**The fix.**
+- `inspectExistingSignup`: an email match is `'verified'` ONLY when `email_verified === true`; otherwise `'unverified'` (the `'email_exists'` state is retired — no producer remains).
+- New `reissueWebOnboardCode({ supabase, email, phone, firstName, lastName, profile })`: reuses the open OTP row (same `onboard_token`, attempts reset) or creates one; carries the **STORED profile phone** so `verifyWebOnboardCode → completeWebOnboarding` flips the right profile (a retyped number can never mint a second row); never writes `profiles` (no phone overwrite, no tier/trial change); audits `WEB_ONBOARD_RESUMED`.
+- `/api/onboard`: only `'verified'` takes the already-registered/notify branch; `'unverified' && matchedBy === 'email'` re-issues the code, sends it and returns `{ success:true, onboard_token, profile_created:false }` — the site advances to `#stepOtp`. The same-phone unverified path keeps the normal flow.
+- `main.js`: the disabled gate now renders a visible outcome — "Still checking your details — one moment." + `runAvailabilityCheck()` while pending; the verified-match CTA; or "Please check your details — the Continue button is still locked." — plus a `console.warn`. `legalSubmit` prefers `out.body.message || out.body.error` for business refusals and logs malformed `/api/onboard` and `/api/onboard/check` bodies with `console.error('[onboard] …')`.
+**Tests (rule 52).** `test_web_onboarding` 64 → **72**: unverified email-match states, and Test 6b (code+token issued, stored-phone carrier, profile untouched, `WEB_ONBOARD_RESUMED`, retry reuses the row + resets attempts, verified accounts refused). `test_duplicate_signup` 21 → **25**: the email-match expectation corrected to `verified`, the kiddymoms01 resume state, route-source pins for `reissueWebOnboardCode` and the removed `email_exists` branch. `test_landing_static` 484 → **489** (Test 26): no silent gate return, visible checking copy + re-check, locked-gate copy, server-message preference, malformed-response logging.
+
+**Recurrence autopsy (rule 51).** *(i) "a gate that means to guide returns silently"* → the submit handler always renders an outcome; the legalSubmit refusal path uses honest copy; the availability malformed branch is logged. *(ii) "two endpoints disagree on one fact"* → check and submit now agree (resend); `email_exists` has no producer. *(iii) "a resume path rewrites identity"* → the OTP carries the stored phone and `profiles` is never written (pinned).
+
+**Frames touched.** `src/services/webOnboarding.js` (`inspectExistingSignup`, `reissueWebOnboardCode`), `index.js` (import + resume branch), `landing/assets/js/main.js` (gate, availability logging, refusal), `test_web_onboarding.js`, `test_duplicate_signup.js`, `test_landing_static.js`, `test_vehicle_documents.js` (pin), `package.json` (1.97.1), `landing/data/changelog.json` + stamped assets, `docs/` (regenerated), this file, `CHANGELOG.md`.
+
+**Suites run.** test_web_onboarding (72), test_duplicate_signup (25), test_landing_static (489), test_agent_training, test_doc_sync, test_kb_docs, test_vehicle_documents, `npm run health` — green.
+
+**Rules shaped this work (rule 58).** 1/39/42/45/63 (rules + architecture first; **0 open proposals** verified live — 8 unrelated PENDING friction rows left for their own review), 3/4, 10/11 (stateless suites), 26/29 (no trial/vehicle side effects; identity preserved), 31 (one next step, warm copy), 33/43, 47 (verified accounts never re-onboard), 50 (resume degrades honestly on a missing OTP row), 51/52 (autopsy + before/after assertions), 54 (live DB evidence), 55/56 (evolved the handshake), 2 (architecture + CHANGELOG + landing feed in the same commit). No rule edited. **Impact:** a returning unconfirmed signup resumes, receives a fresh code and reaches the OTP screen; a blocked submit always explains itself; verified accounts still never re-onboard.
 
 

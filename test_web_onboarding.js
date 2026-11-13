@@ -21,6 +21,8 @@ import {
   resendWebOnboardCode,
   completeWebOnboarding,
   inspectExistingSignup,
+  // v1.97.1 — resume an unverified email-matched signup.
+  reissueWebOnboardCode,
   pruneExpiredWebOnboardOtps,
   sanitizeUtmValue,
   WEB_ONBOARD_OTP_TABLE,
@@ -198,13 +200,37 @@ const inspectDb = createMockSupabase({
   profiles: [
     { id: 'p-none', phone_number: '+254700000020', email: 'none@example.com', email_verified: false },
     { id: 'p-verified', phone_number: '+254700000021', email: 'verified@example.com', email_verified: true },
-    { id: 'p-other', phone_number: '+254700000022', email: 'old@example.com', email_verified: true }
+    { id: 'p-other', phone_number: '+254700000022', email: 'old@example.com', email_verified: true },
+    // v1.97.1 — the kiddymoms01 shape: an email match that is NOT yet verified.
+    { id: 'p-unverified-email', phone_number: '+254700000026', email: 'pending@example.com', email_verified: false }
   ]
 });
 check((await inspectExistingSignup(inspectDb, { email: 'a@b.com', phone: '+254700000099' })).state === 'none', 'A brand-new phone is "none"');
 check((await inspectExistingSignup(inspectDb, { email: 'verified@example.com', phone: '+254700000021' })).state === 'verified', 'A verified account with the same email is "verified"');
 check((await inspectExistingSignup(inspectDb, { email: 'new@example.com', phone: '+254700000022' })).state === 'different_email', 'A different address on an existing account is "different_email"');
 check((await inspectExistingSignup(inspectDb, { email: 'none@example.com', phone: '+254700000020' })).state === 'unverified', 'An unverified account stays in the normal OTP flow');
+// v1.97.1 — the retired "email_exists" state lied to half-finished signups.
+const unverifiedEmailMatch = await inspectExistingSignup(inspectDb, { email: 'pending@example.com', phone: '+254721111111' });
+check(unverifiedEmailMatch.state === 'unverified' && unverifiedEmailMatch.matchedBy === 'email', 'an UNVERIFIED email match resumes the OTP flow (v1.97.1)');
+check((await inspectExistingSignup(inspectDb, { email: 'pending@example.com', phone: '+254700000026' })).state === 'unverified', 'an unverified email + same phone is also "unverified"');
+
+console.log('\n--- Test 6b: reissueWebOnboardCode resumes the SAME account (v1.97.1) ---');
+const resumeDb = createMockSupabase({
+  profiles: [{ id: 'p-resume', phone_number: '+254720641983', email: 'pending@example.com', email_verified: false, full_name: 'David N' }],
+  web_onboard_otps: [],
+  admin_audit_logs: []
+});
+const resumed = await reissueWebOnboardCode(resumeDb, { email: 'Pending@Example.com', phone: '+254721111111', firstName: 'David', lastName: 'N', profile: resumeDb.__db.profiles[0] });
+check(resumed.ok === true && /^\d{6}$/.test(String(resumed.code)) && Boolean(resumed.token), 'a fresh code + token are issued');
+check(resumeDb.__db.web_onboard_otps.length === 1 && resumeDb.__db.web_onboard_otps[0].phone === '+254720641983', 'the OTP carries the STORED phone, never the retyped one');
+check(resumeDb.__db.profiles[0].email_verified === false && resumeDb.__db.profiles[0].phone_number === '+254720641983', 'the profile itself is untouched (no phone overwrite, no new row)');
+check(resumeDb.__db.admin_audit_logs.some((a) => a.action === 'WEB_ONBOARD_RESUMED' && a.details?.profileId === 'p-resume'), 'the resume is audited as WEB_ONBOARD_RESUMED');
+resumeDb.__db.web_onboard_otps[0].attempts = 2;
+const resumedAgain = await reissueWebOnboardCode(resumeDb, { email: 'pending@example.com', profile: resumeDb.__db.profiles[0] });
+check(resumedAgain.ok === true && resumedAgain.token === resumed.token && resumeDb.__db.web_onboard_otps.length === 1 && resumeDb.__db.web_onboard_otps[0].attempts === 0,
+  'a retry reuses the same session row and resets the attempts');
+const refusedVerified = await reissueWebOnboardCode(resumeDb, { email: 'pending@example.com', profile: { ...resumeDb.__db.profiles[0], email_verified: true } });
+check(refusedVerified.ok === false && /already verified/i.test(refusedVerified.error), 'a VERIFIED account is never re-issued');
 
 console.log('\n--- Test 7: email-change audit + prune (v1.40.0) ---');
 const changeDb = createMockSupabase({

@@ -3,6 +3,7 @@
  * In-memory Supabase double only - no real rows, no cleanup needed.
  */
 import assert from 'assert';
+import fs from 'node:fs';
 import {
   phoneVariants, findProfileByPhone, findExistingProfile,
   inspectExistingSignup, completeWebOnboarding, notifyExistingSignup, maskPhone,
@@ -81,8 +82,23 @@ check(byEmail.matchedBy === 'email' && byEmail.profile.id === 'p-1', 'an email m
 
 console.log('--- Test 4: inspection states ---');
 check((await inspectExistingSignup(db, { email: 'david@example.com', phone: '0734852529' })).state === 'verified', 'same phone (local) + same email is verified');
-check((await inspectExistingSignup(db, { email: 'david@example.com', phone: '+254700000000' })).state === 'email_exists', 'an email owned by another number is email_exists');
+check((await inspectExistingSignup(db, { email: 'david@example.com', phone: '+254700000000' })).state === 'verified', 'an email owned by another number on a VERIFIED account is still verified (v1.97.1)');
 check((await inspectExistingSignup(db, { email: 'brand.new@example.com', phone: '+254700000000' })).state === 'none', 'a genuinely new visitor is none');
+
+console.log('--- Test 4b: unverified email matches resume the OTP flow (v1.97.1) ---');
+const unverifiedDb = createMock({
+  profiles: [{ id: 'p-unv', phone_number: '+254720641983', email: 'pending@example.com', email_verified: false }],
+  admin_audit_logs: []
+});
+const resumed = await inspectExistingSignup(unverifiedDb, { email: 'pending@example.com', phone: '+254721111111' });
+check(resumed.state === 'unverified' && resumed.matchedBy === 'email', 'an unverified email match is "unverified" (resume), never "already registered"');
+const routeSource = fs.readFileSync('index.js', 'utf8');
+check(/existing\.state === 'unverified' && existing\.matchedBy === 'email'[\s\S]{0,400}reissueWebOnboardCode/.test(routeSource),
+  'the submit endpoint routes unverified email matches through reissueWebOnboardCode');
+check(!routeSource.includes("existing.state === 'verified' || existing.state === 'email_exists'"),
+  'the already-registered branch no longer swallows unverified matches');
+check(/reissueWebOnboardCode[\s\S]{0,900}profile_created: false/.test(routeSource),
+  'the resume response advances the UI (success + onboard_token)');
 
 console.log('--- Test 5: completeWebOnboarding never duplicates ---');
 const res = await completeWebOnboarding(db, { email: 'david@example.com', phone: '0734852529', firstName: 'David', lastName: 'M', verified: true });

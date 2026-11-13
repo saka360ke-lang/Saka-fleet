@@ -1,6 +1,13 @@
 {
-  "latest": "1.97.0",
+  "latest": "1.97.1",
   "entries": [
+    {
+      "version": "1.97.1",
+      "date": "2026-11-13",
+      "title": "A signup that always finishes",
+      "preview": "Returning to finish an unverified signup now re-sends your code and opens the code screen - no more dead ends.",
+      "summary": "A fix from a real visitor. Someone who started a signup earlier - the account existed but the email was never confirmed - came back to finish it, and the form quietly stopped: the page said nothing, and the email that promised a new code never sent one. Now a returning, unconfirmed signup is recognised properly: the same account is kept (your number and plan are never changed), a fresh verification code is sent to your email, and the site opens the code screen straight away. If the Continue button is still busy checking your details when you hit Enter, the page now tells you it is checking instead of doing nothing - and any refusal now explains itself in plain words."
+    },
     {
       "version": "1.97.0",
       "date": "2026-11-13",

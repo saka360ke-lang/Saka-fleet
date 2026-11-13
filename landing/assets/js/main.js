@@ -64,7 +64,23 @@
     e.preventDefault();
     // v1.59.2 — the Continue button is gated by the live availability check:
     // a disabled button (unknown/taken number or email) can never advance.
-    if ($('detailsContinue') && $('detailsContinue').disabled) return;
+    if ($('detailsContinue') && $('detailsContinue').disabled) {
+      // v1.97.1 — a blocked submit must ALWAYS say why. v1.96.7 shipped a
+      // silent return here: an Enter-key submit was cancelled with zero
+      // feedback (the kiddymoms01 dead-end, 2026-11-13).
+      if (availability.pending > 0) {
+        setAvailabilityNote('email', 'Still checking your details — one moment.');
+        runAvailabilityCheck();
+      } else if (isVerifiedMatch()) {
+        setAvailabilityNote('email', signedUpMessage('email', true));
+        refreshRegisteredCta(true);
+      } else {
+        setAvailabilityNote('email', 'Please check your details — the Continue button is still locked.');
+      }
+      refreshContinueGate();
+      console.warn('[onboard] submit blocked by the availability gate', availability);
+      return;
+    }
     var firstName = $('firstName').value.trim();
     var lastName = $('lastName').value.trim();
     var email = $('email').value.trim().toLowerCase();
@@ -132,6 +148,11 @@
     cta.style.display = show ? 'inline-flex' : 'none';
   }
 
+  function isVerifiedMatch() {
+    return availability.verified === true
+      && (availability.email === 'registered' || availability.phone === 'registered');
+  }
+
   function refreshContinueGate() {
     var btn = $('detailsContinue');
     if (!btn) return;
@@ -144,8 +165,7 @@
     // WhatsApp CTA; an UNVERIFIED match MAY continue — the submit path re-sends
     // the verification code. A network failure still fails OPEN (the server-side
     // duplicate block stays the last line of defence).
-    var verifiedMatch = availability.verified === true
-      && (availability.email === 'registered' || availability.phone === 'registered');
+    var verifiedMatch = isVerifiedMatch();
     var emailOk = availability.email === 'available'
       || (availability.email === 'registered' && availability.verified !== true)
       || (availability.failed === true && isEmail(email));
@@ -175,6 +195,11 @@
         availability.pending = Math.max(0, availability.pending - 1);
         if (!out.ok || !out.body || out.body.success !== true) {
           availability.failed = true;
+          // v1.97.1 — a malformed answer is logged so the next GTM/console
+          // trace can diagnose it instead of guessing.
+          if (!out.body || typeof out.body !== 'object') {
+            console.error('[onboard] malformed availability response', out);
+          }
           refreshContinueGate();
           return;
         }
@@ -190,7 +215,8 @@
         }
         refreshContinueGate();
       })
-      .catch(function () {
+      .catch(function (err) {
+        console.error('[onboard] availability check failed', err);
         availability.pending = Math.max(0, availability.pending - 1);
         availability.failed = true;
         refreshContinueGate();
@@ -410,7 +436,13 @@
         } else {
           legalSubmit.disabled = false;
           legalSubmit.textContent = 'Create My Account';
-          alert('We could not reach Saka right now (' + ((out.body && out.body.error) || 'network error') + '). Please try again in a moment.');
+          // v1.97.1 — an honest refusal uses the server's own message; a
+          // malformed body is logged so the next GTM trace is diagnosable.
+          if (!out.body || typeof out.body !== 'object') {
+            console.error('[onboard] malformed /api/onboard response', out);
+          }
+          var refusal = out.body && (out.body.message || out.body.error);
+          alert(refusal ? String(refusal) : 'We could not reach Saka right now. Please try again in a moment.');
         }
       })
       .catch(function () {

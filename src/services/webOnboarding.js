@@ -381,15 +381,77 @@ export async function completeWebOnboarding(supabase, { email, phone, firstName,
  *                        never re-onboard; the site shows "you're all set"
  *   'different_email' -> profile exists but with another address: OTP verifies
  *                        the new address and the profile email is updated
+ * v1.97.1 — an EMAIL match is only 'verified' when the profile itself is
+ * verified. The retired 'email_exists' state used to tell a half-finished
+ * signup "you are all set" (kiddymoms01, 2026-11-13) and never re-sent a code;
+ * an unverified email match now RESUMES the OTP flow ('unverified'), exactly as
+ * the v1.96.7 check endpoint promises on the website.
  */
 export async function inspectExistingSignup(supabase, { email, phone }) {
   const { profile, matchedBy } = await findExistingProfile(supabase, { email, phone });
   if (!profile) return { state: 'none', matchedBy: null };
   const sameEmail = String(profile.email || '').toLowerCase() === String(email || '').toLowerCase();
-  if (matchedBy === 'email') return { state: 'email_exists', profile, matchedBy };
+  if (matchedBy === 'email') {
+    if (profile.email_verified === true && sameEmail) return { state: 'verified', profile, matchedBy };
+    if (sameEmail) return { state: 'unverified', profile, matchedBy };
+    return { state: 'different_email', profile, matchedBy };
+  }
   if (profile.email_verified === true && sameEmail) return { state: 'verified', profile, matchedBy };
   if (profile.email && !sameEmail) return { state: 'different_email', profile, matchedBy };
   return { state: 'unverified', profile, matchedBy };
+}
+
+/**
+ * v1.97.1 — resume an UNVERIFIED email-matched signup.
+ * Re-issues a fresh code for the SAME account without touching the profile:
+ * no phone overwrite (the OTP carries the STORED phone so verification flips
+ * the right row), no tier/trial change, no duplicate profile. An existing
+ * unexpired/expired OTP row for that email is reused (same onboard_token,
+ * attempts reset); otherwise a fresh session is created. Audited as
+ * WEB_ONBOARD_RESUMED. The route sends the code (sendEmailOtp).
+ */
+export async function reissueWebOnboardCode(supabase, { email, phone, firstName = null, lastName = null, profile = null } = {}) {
+  if (!supabase) return { ok: false, error: 'Database unavailable.' };
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  if (!normalizedEmail) return { ok: false, error: 'Email required.' };
+  if (profile && profile.email_verified === true) return { ok: false, error: 'This email is already verified.' };
+  // The verification flips the profile by PHONE, so the OTP MUST carry the
+  // stored number — never a freshly retyped one (that could mint a second row).
+  const otpPhone = profile?.phone_number || phone || null;
+  const code = mintOtp();
+  const nowIso = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + WEB_ONBOARD_OTP_TTL_MS).toISOString();
+  try {
+    const { data: rows } = await supabase
+      .from(WEB_ONBOARD_OTP_TABLE)
+      .select('*')
+      .ilike('email', normalizedEmail)
+      .limit(5);
+    const openRows = (rows || []).filter((row) => row && row.verified !== true);
+    openRows.sort((a, b) => new Date(b.created_at || b.last_sent_at || 0).getTime() - new Date(a.created_at || a.last_sent_at || 0).getTime());
+    const existingRow = openRows[0] || null;
+    if (existingRow) {
+      const { error } = await supabase.from(WEB_ONBOARD_OTP_TABLE).update({
+        otp_code: code,
+        phone: otpPhone,
+        first_name: firstName || existingRow.first_name || null,
+        last_name: lastName || existingRow.last_name || null,
+        attempts: 0,
+        verified: false,
+        last_sent_at: nowIso,
+        expires_at: expiresAt
+      }).eq('id', existingRow.id);
+      if (error) return { ok: false, error: error.message };
+      await writeAudit(supabase, 'WEB_ONBOARD_RESUMED', { email: normalizedEmail, phone: otpPhone, profileId: profile?.id || null, reused: true });
+      return { ok: true, token: existingRow.onboard_token, code, email: normalizedEmail, phone: otpPhone, reused: true };
+    }
+    const created = await createWebOnboardSession(supabase, { email: normalizedEmail, phone: otpPhone, firstName, lastName });
+    if (!created.ok) return created;
+    await writeAudit(supabase, 'WEB_ONBOARD_RESUMED', { email: normalizedEmail, phone: otpPhone, profileId: profile?.id || null, reused: false });
+    return { ok: true, token: created.token, code: created.code, email: normalizedEmail, phone: otpPhone, reused: false };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
 }
 
 /** Public audit helper so routes can stamp web-onboarding events. */

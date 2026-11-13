@@ -586,6 +586,18 @@ console.log('\n--- Test 25: GTM served first-party from gtm.sakafleet.com (v1.96
   check(noscriptOffenders.length === 0, `no GTM <noscript> iframe can bypass the consent gate${noscriptOffenders.length ? ` (found: ${noscriptOffenders.join(', ')})` : ''}`);
 }
 
+console.log('\n--- Test 26: signup dead-end guards (v1.97.1) ---');
+{
+  check(!mainJs.includes("if ($('detailsContinue') && $('detailsContinue').disabled) return;"), 'the silent disabled-gate return is gone');
+  check(mainJs.includes('Still checking your details') && /availability\.pending > 0[\s\S]{0,200}runAvailabilityCheck\(\)/.test(mainJs),
+    'a blocked submit while the check is pending is visible and re-runs the check');
+  check(mainJs.includes('the Continue button is still locked'), 'a blocked submit otherwise tells the user to check the details');
+  check(/refusal = out\.body && \(out\.body\.message \|\| out\.body\.error\)/.test(mainJs),
+    'a business refusal uses the server message instead of misleading network copy');
+  check(mainJs.includes("console.error('[onboard] malformed /api/onboard response'") && mainJs.includes("console.error('[onboard] malformed availability response'"),
+    'malformed responses are logged for GTM/console debugging');
+}
+
 console.log(`\n🎉 ${passed} landing assertions passed (Phase 31 included).`);
 
 console.log('Stateless suite: file reads only — no database, no cleanup needed.');
