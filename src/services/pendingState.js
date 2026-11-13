@@ -55,6 +55,7 @@ import { looksLikeFreshLogLine, isComplianceCaptureCancel } from './complianceCa
 
 const TTL_15M = 15 * 60 * 1000;
 const TTL_10M = 10 * 60 * 1000;
+const TTL_24H = 24 * 60 * 60 * 1000;
 
 /**
  * The ONE registry. `slot: false` rows are documented members of the pending
@@ -114,6 +115,14 @@ export const PENDING_KINDS = Object.freeze({
     ttlMs: TTL_15M, priority: 45, freshLog: 'yields', parksQuiz: false,
     blockedByQuizLock: false, otp: false, slot: true, boolean: false,
     legacyField: 'narrativeBatch'
+  }),
+  'registration-draft': Object.freeze({
+    // v1.96.7 — the plate escape hatch's parked registration draft. Ephemeral
+    // (24 h), yields to a fresh log line, and resumes only on a real plate
+    // (the quiz.js lane calls resumeRegistrationDraft). No schema change.
+    ttlMs: TTL_24H, priority: 42, freshLog: 'yields', parksQuiz: false,
+    blockedByQuizLock: true, blockedByQuiz: true, otp: false, slot: true, boolean: false,
+    legacyField: null
   }),
   'delete-vehicle': Object.freeze({
     ttlMs: null, priority: 40, freshLog: 'swallows', parksQuiz: false,
@@ -323,6 +332,15 @@ function resolveActiveKind({ session, pending, def, text, trimmed, now, hasQuiz 
       }
       if (turn.type === 'save-all') { clear(); return outcome(kind, true, 'save-all'); }
       if (turn.type === 'invalid-edit') return outcome(kind, true, 'reprompt');
+      return outcome(kind, false, 'yield');
+    }
+
+    case 'registration-draft': {
+      // v1.96.7 — the plate escape hatch's parked draft. A cancel/discard
+      // clears it; ANY other text yields (a fresh log line is never swallowed)
+      // and the draft survives. The plate itself is recognised by the quiz.js
+      // lane (isPlateLike) which resumes the flow via resumeRegistrationDraft.
+      if (/^(cancel|discard|forget|drop|drop draft|delete draft|stop)$/i.test(trimmed)) { clear(); return outcome(kind, true, 'cancel'); }
       return outcome(kind, false, 'yield');
     }
 

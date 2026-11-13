@@ -664,6 +664,18 @@ fastify.post('/api/onboard/check', { config: { rateLimit: { max: 20, timeWindow:
   try {
     const result = await checkSignupAvailability(supabase, { email: emailRaw, phone: phoneRaw });
     if (!result.ok) return reply.status(200).send({ success: false });
+    // v1.96.7 — PII-safe telemetry: a registered match is recorded WITHOUT the
+    // typed value (per-field result + verified only), so a ghost signup is
+    // diagnosable next time while the anti-enumeration contract is preserved.
+    if (result.email === 'registered' || result.phone === 'registered') {
+      try {
+        await auditWebOnboardEvent(supabase, 'WEB_ONBOARD_CHECK_REGISTERED', {
+          emailRegistered: result.email === 'registered',
+          phoneRegistered: result.phone === 'registered',
+          verified: result.verified === true
+        });
+      } catch { /* telemetry never blocks the check */ }
+    }
     return { success: true, email: result.email, phone: result.phone, verified: result.verified };
   } catch (err) {
     console.warn('[WebOnboard] availability check failed:', err.message);

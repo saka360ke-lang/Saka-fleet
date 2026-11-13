@@ -20,14 +20,18 @@ import {
   EDIT_VEHICLE_CLEAR_NICKNAME,
   // v1.96.2 — a document dump's nozzle number is never the fuel volume.
   looksLikeDocumentDump,
-  hasLitreEvidence
+  hasLitreEvidence,
+  // v1.96.7 — the plate escape hatch + parked registration draft resume.
+  isPlateSkipText,
+  resumeRegistrationDraft,
+  PLATE_DRAFT_PARKED_REPLY
 } from './src/services/quizEngine.js';
 // v1.87.4 — the receipt auto-quiz decision is a pure, intent-independent helper.
 import { receiptQuizStartFor, stripPrematureSaveClaim, injectReceiptLinkIntoDraft } from './src/routes/whatsapp/quiz.js';
 import { getRecentChatHistory, CHAT_HISTORY_MAX_AGE_MINUTES, CHAT_HISTORY_MAX_MESSAGES } from './src/services/chatHistory.js';
 // v1.93.0 (Phase 30, Tasks 2-3) — the logbook invitation + pre-vehicle stash.
 import { buildDocumentStash, replayDocumentStash } from './src/services/documentStash.js';
-import { LOGBOOK_UPLOAD_COPY, resolveLogbookUploadCopy } from './src/services/flowKnowledge.js';
+import { LOGBOOK_UPLOAD_COPY, resolveLogbookUploadCopy, guidanceForFlow } from './src/services/flowKnowledge.js';
 import { stripTransientSessionFields } from './src/services/sessionStore.js';
 
 /**
@@ -1113,6 +1117,36 @@ console.log('\n--- v1.93.0: logbook invitation + pre-vehicle stash (Tasks 2-3) -
   const quizSource = fs.readFileSync('./src/services/quizEngine.js', 'utf8');
   assert(quizSource.includes('replayDocumentStash({') && quizSource.includes('resolveLogbookUploadCopy({'),
     'the registration completion replays the stash and appends the engine-owned copy (Tasks 2-3)');
+
+  // v1.96.7 — the plate escape hatch + the parked registration draft (approved plan).
+  console.log('\n--- Test: plate escape hatch + draft resume (v1.96.7) ---');
+  assert(isPlateSkipText('no plate yet') && isPlateSkipText("don't have it") && isPlateSkipText('later') && isPlateSkipText('logbook not with me'),
+    'plate-skip phrases are recognised (no plate yet / don\'t have it / later / logbook not with me)');
+  assert(!isPlateSkipText('KDA 123A') && !isPlateSkipText('KDD 123D') && !isPlateSkipText('Nissan tiida') && !isPlateSkipText(''),
+    'a real plate (or a make/model) is never mistaken for a skip');
+  const draftSession = { history: [], lastActive: Date.now() };
+  const draftCtx = baseCtx();
+  startQuiz({ session: draftSession, flowKey: 'vehicle_registration', ctx: draftCtx });
+  let draftTurn = await handleQuizTurn({ session: draftSession, messageText: 'car', aiExtracted: {}, ctx: draftCtx });
+  assert(draftTurn.handled && draftSession.quiz?.answers?.asset_kind === 'vehicle',
+    'the registration quiz accepted the asset kind and asks the plate');
+  draftTurn = await handleQuizTurn({ session: draftSession, messageText: 'no plate yet', aiExtracted: {}, ctx: draftCtx });
+  assert(draftTurn.handled === true && draftTurn.reply === PLATE_DRAFT_PARKED_REPLY && draftTurn.active === false,
+    'the plate skip parks the draft with the ONE engine-owned next step');
+  assert(!draftSession.quiz && draftSession.pending?.kind === 'registration-draft',
+    'the draft rides the unified pending slot (no schema change)');
+  assert(draftSession.pending.data.answers.asset_kind === 'vehicle' && !draftSession.pending.data.answers.plate_number,
+    'the captured answers are parked and no plate/vehicle row is claimed');
+  const resumedTurn = await resumeRegistrationDraft({ session: draftSession, text: 'KDD 123D', ctx: draftCtx });
+  assert(resumedTurn.handled === true && draftSession.quiz?.answers?.plate_number === 'KDD 123D',
+    'the next real plate resumes the draft and answers the closed question');
+  assert(!draftSession.pending, 'the pending draft is consumed on resume');
+  const noResume = { history: [], lastActive: Date.now(), pending: { kind: 'registration-draft', at: new Date(), data: { flowKey: 'vehicle_registration', answers: {} } } };
+  const notPlate = await resumeRegistrationDraft({ session: noResume, text: 'logged 40L at 50350 km', ctx: draftCtx });
+  assert(notPlate.handled === false && noResume.pending?.kind === 'registration-draft',
+    'a fresh log line never resumes or swallows the parked draft');
+  assert(Boolean(guidanceForFlow('registration-draft')) && /plate/i.test(guidanceForFlow('registration-draft')),
+    'the parked draft carries its own stuck-guidance line (rule 60)');
 }
 
 run().catch((err) => {

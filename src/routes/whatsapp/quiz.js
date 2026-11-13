@@ -29,6 +29,10 @@ import {
   getFlowDefinition,
   markQuizTurn,
   abandonQuiz,
+  // v1.96.7 — the plate escape hatch: a parked registration draft resumes on
+  // the first real plate the user sends.
+  isPlateLike,
+  resumeRegistrationDraft,
   // v1.89.2 — a one-line edit command ("edit KAS 628T nickname to Teddy")
   // prefills the edit_vehicle flow instead of re-asking what is already said.
   parseVehicleEditRequest
@@ -228,6 +232,19 @@ export async function arbitrateQuizTurn({
   senderPhone = null
 }) {
   const replyCtx = { messageText, intent, quizCtx, targetLang, countryInfo, profileData, existingVehicles, senderPhone };
+
+  // v1.96.7 — a parked registration draft (the plate escape hatch) resumes the
+  // moment the plate arrives: the captured answers are restored and the plate
+  // answers the closed question exactly as if the flow never parked. Only a
+  // plate-like message resumes; every other turn stays with the normal pipeline.
+  if (!session.quiz && session.pending?.kind === 'registration-draft'
+      && isPlateLike(String(messageText || '').trim())) {
+    const resumed = await resumeRegistrationDraft({ session, text: messageText, ctx: quizCtx });
+    if (resumed?.handled) {
+      if (session.quiz) markQuizTurn(session);
+      return { quizTurn: resumed, earlyHandled: false, earlyReply: null, activeQuiz: null };
+    }
+  }
 
   // v1.89.2 — a deterministic edit prefill. When the edit_vehicle flow starts,
   // the sentence itself supplies the field (and the value when it is stated):

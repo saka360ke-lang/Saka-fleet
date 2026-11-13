@@ -353,8 +353,13 @@ check(css.includes('the launch banner stacks and centres on small screens') && /
 check(indexHtml.includes('id="detailsContinue"') && /id="detailsContinue"[^>]*disabled/.test(indexHtml), 'the Continue button starts disabled (gated by the live check)');
 check(indexHtml.includes('id="emailStatus"') && indexHtml.includes('id="phoneStatus"'), 'both fields carry an availability note');
 check(mainJs.includes('/api/onboard/check') && mainJs.includes('refreshContinueGate') && mainJs.includes('scheduleAvailabilityCheck'), 'main.js checks availability as the user types and gates Continue');
-check(mainJs.includes('availability.failed === true') && mainJs.includes("availability.email === 'registered'"), 'a failed check fails open; a known account never advances');
-check(mainJs.includes('signedUpMessage') && mainJs.includes('continue on WhatsApp'), 'the user is told when the number/email already has an account');
+check(mainJs.includes('availability.failed === true') && mainJs.includes("availability.email === 'registered'"), 'a failed check fails open and the registered verdict is tracked');
+check(mainJs.includes('availability.verified === true') && mainJs.includes("availability.email === 'registered' && availability.verified !== true"),
+  'a verified match never advances while an unverified match may continue (v1.96.7)');
+check(mainJs.includes('signedUpMessage') && mainJs.includes('resend your verification code'),
+  'an unverified signup is told the code will be re-sent (v1.96.7)');
+check(indexHtml.includes('id="registeredWhatsAppCta"') && indexHtml.includes('wa.me/19404407252') && mainJs.includes('refreshRegisteredCta'),
+  'a verified match is offered the WhatsApp CTA button instead of a dead end (v1.96.7)');
 check(css.includes('.avail-note'), 'the availability note is styled');
 
 console.log('\n--- Test 19: "Monolith" theme (logo-faithful black/white + one lime accent) + drawer menu (v1.59.5) ---');

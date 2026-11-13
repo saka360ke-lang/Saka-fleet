@@ -84,7 +84,9 @@
 
     // Belt and braces: a known account can never advance (the button gate
     // already blocks it; this covers Enter-key submits on a stale page).
-    if (availability.email === 'registered' || availability.phone === 'registered') return;
+    // v1.96.7 — a verified match can never advance (rule 47); an unverified
+    // match may continue: the submit path re-sends the verification code.
+    if ((availability.email === 'registered' || availability.phone === 'registered') && availability.verified === true) return;
 
     var fullPhone = cc + digits;
     window.__onboard = { firstName: firstName, lastName: lastName, email: email, phone: fullPhone };
@@ -97,7 +99,7 @@
   // backend confirms neither already has an account. A network problem fails
   // OPEN (the server-side duplicate block still protects).
   var AVAIL_CHECK_DEBOUNCE_MS = 500;
-  var availability = { email: null, phone: null, pending: 0, failed: false };
+  var availability = { email: null, phone: null, pending: 0, failed: false, verified: false };
   var availabilityTimers = { email: null, phone: null };
 
   function fullPhoneValue() {
@@ -119,8 +121,15 @@
   function signedUpMessage(field, verified) {
     var noun = field === 'email' ? 'email' : 'number';
     return verified
-      ? 'This ' + noun + ' already has a Saka account — you are all set, continue on WhatsApp.'
-      : 'This ' + noun + ' already has a Saka account.';
+      ? 'This ' + noun + ' already has a Saka account — you are all set. Chat with Saka on WhatsApp below.'
+      : 'This ' + noun + ' started a signup — continue and we will resend your verification code.';
+  }
+
+  // v1.96.7 — a verified account gets a real WhatsApp door instead of a dead end.
+  function refreshRegisteredCta(show) {
+    var cta = $('registeredWhatsAppCta');
+    if (!cta) return;
+    cta.style.display = show ? 'inline-flex' : 'none';
   }
 
   function refreshContinueGate() {
@@ -131,10 +140,20 @@
     var email = $('email') ? $('email').value.trim().toLowerCase() : '';
     var phone = fullPhoneValue();
     var waiting = availability.pending > 0;
-    // A failed check fails OPEN: the server-side duplicate block still guards.
-    var emailOk = availability.email === 'available' || (availability.failed === true && isEmail(email));
-    var phoneOk = availability.phone === 'available' || (availability.failed === true && Boolean(phone));
-    btn.disabled = !(Boolean(first) && Boolean(last) && isEmail(email) && Boolean(phone) && !waiting && emailOk && phoneOk);
+    // v1.96.7 — a VERIFIED match can never advance (rule 47) and gets the
+    // WhatsApp CTA; an UNVERIFIED match MAY continue — the submit path re-sends
+    // the verification code. A network failure still fails OPEN (the server-side
+    // duplicate block stays the last line of defence).
+    var verifiedMatch = availability.verified === true
+      && (availability.email === 'registered' || availability.phone === 'registered');
+    var emailOk = availability.email === 'available'
+      || (availability.email === 'registered' && availability.verified !== true)
+      || (availability.failed === true && isEmail(email));
+    var phoneOk = availability.phone === 'available'
+      || (availability.phone === 'registered' && availability.verified !== true)
+      || (availability.failed === true && Boolean(phone));
+    refreshRegisteredCta(verifiedMatch);
+    btn.disabled = !(Boolean(first) && Boolean(last) && isEmail(email) && Boolean(phone) && !waiting && !verifiedMatch && emailOk && phoneOk);
   }
 
   function runAvailabilityCheck() {
@@ -160,6 +179,7 @@
           return;
         }
         availability.failed = false;
+        availability.verified = out.body.verified === true;
         if (payload.email) {
           availability.email = out.body.email === 'registered' ? 'registered' : 'available';
           setAvailabilityNote('email', availability.email === 'registered' ? signedUpMessage('email', out.body.verified === true) : '');

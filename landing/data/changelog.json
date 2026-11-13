@@ -1,6 +1,13 @@
 {
-  "latest": "1.96.6",
+  "latest": "1.96.7",
   "entries": [
+    {
+      "version": "1.96.7",
+      "date": "2026-11-12",
+      "title": "Finished signups, and a plate you can send later",
+      "preview": "Already signed up? Jump straight to Saka on WhatsApp - and save your car registration even without the plate.",
+      "summary": "Two small fixes from real visitors. If someone tries to sign up with a number or email that already has a Saka account, the form used to leave them at a dead end with a greyed-out button. Now an account that still needs its email verified can simply continue and the code is re-sent, and an already-verified account sees a direct button to chat with Saka on WhatsApp. Separately, registering a car used to wait on the number plate: if the plate wasn't nearby, the conversation just stopped. Now reply 'no plate yet' (or 'later', or say the logbook isn't with you) and Saka saves your draft with everything already shared - send the plate, or a photo of the logbook, whenever you're ready and the registration finishes. Nothing is registered and no trial starts until the plate arrives, and nothing is ever deleted."
+    },
     {
       "version": "1.96.6",
       "date": "2026-11-12",

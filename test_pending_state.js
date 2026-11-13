@@ -67,6 +67,7 @@ const FIXTURES = {
   'cancel-subscription': { data: { requestedAt: NOW, trial: false } },
   'compliance-capture': { data: { scope: 'driver', type: 'psv_badge', number: null, expiry: null, at: at(0) } },
   'narrative-batch': { data: { drafts: [{ ok: true, kind: 'expense' }, { ok: true, kind: 'expense' }], at: at(0) } },
+  'registration-draft': { data: { flowKey: 'vehicle_registration', answers: { asset_kind: 'vehicle' } } },
   'delete-vehicle': { data: { vehicleId: 'veh-1', plateNumber: 'KDA 123A' } },
   'driver-assignment': { data: { vehicleId: 'veh-1', plateNumber: 'KDA 123A' } },
   'account-deletion-otp': { data: { code: '123456', expiresAt: NOW + 9 * MIN } },
@@ -77,7 +78,7 @@ const SLOT_KINDS = PENDING_KIND_KEYS.filter((kind) => PENDING_KINDS[kind].slot !
 
 console.log('=== SAKA FLEET — UNIFIED PENDING STATE (v1.64.0) ===\n');
 console.log('--- Registry invariants ---');
-check(SLOT_KINDS.length === 13, `13 slot-owning kinds are registered (${SLOT_KINDS.length})`);
+check(SLOT_KINDS.length === 14, `14 slot-owning kinds are registered (${SLOT_KINDS.length})`);
 check(PENDING_PRIORITY.every((kind, i) => i === 0 || PENDING_KINDS[PENDING_PRIORITY[i - 1]].priority > PENDING_KINDS[kind].priority),
   'PENDING_PRIORITY is strictly descending (a corrupt double-set resolves deterministically)');
 check(PENDING_KIND_KEYS.every((kind) => ['drops', 'yields', 'yields+clears', 'swallows', 'N/A'].includes(PENDING_KINDS[kind].freshLog)),
@@ -338,7 +339,10 @@ const TEXTS = [
 ];
 
 let differential = 0;
-for (const kind of SLOT_KINDS) {
+// v1.96.7 — registration-draft did not exist in the frozen v1.63.3 legacy chain,
+// so it has no differential counterpart; its behaviour is pinned directly in E2.
+const LEGACY_EXEMPT = new Set(['registration-draft']);
+for (const kind of SLOT_KINDS.filter((k) => !LEGACY_EXEMPT.has(k))) {
   for (const text of TEXTS) {
     const newSession = sessionWith(kind, clone(FIXTURES[kind].data));
     const newResult = resolvePendingTurn(newSession, text, { now: NOW });
@@ -372,6 +376,19 @@ for (const kind of [...QUIZ_GATED, ...QUIZ_TRANSPARENT]) {
   }
 }
 check(differential >= 220, `the differential matrix replays ${differential} turns (>= 220)`);
+
+// E2 — v1.96.7 registration-draft (the plate escape hatch's parked draft).
+const draftYield = resolvePendingTurn(sessionWith('registration-draft', FIXTURES['registration-draft'].data), freshLog, { now: NOW });
+check(draftYield?.kind === 'registration-draft' && draftYield.consumed === false,
+  'registration-draft yields to a fresh log line (the log is never swallowed)');
+const draftSurvive = sessionWith('registration-draft', FIXTURES['registration-draft'].data);
+resolvePendingTurn(draftSurvive, freshLog, { now: NOW });
+check(draftSurvive.pending !== null, 'the parked registration draft survives a fresh log turn');
+const draftCancel = resolvePendingTurn(sessionWith('registration-draft', FIXTURES['registration-draft'].data), 'cancel', { now: NOW });
+check(draftCancel?.consumed === true && draftCancel.nextAction === 'cancel', 'registration-draft is cleared by cancel/discard');
+const draftQuizGate = sessionWith('registration-draft', FIXTURES['registration-draft'].data, { quiz: { flow: 'log_expense', phase: 'question' } });
+check(resolvePendingTurn(draftQuizGate, 'KDA 123A', { now: NOW }) === null && draftQuizGate.pending !== null,
+  'an open quiz outranks the parked registration draft without destroying it');
 
 // Deliberate kept-inline lane pin (rule 51): a bare 6-digit message still falls
 // into the stateless buyer-OTP sink today, even while another pending is set.

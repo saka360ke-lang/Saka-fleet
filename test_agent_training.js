@@ -408,6 +408,13 @@ check(/Narrative pre-fills are engine-determined facts/.test(await import('./src
   check(SAKA_FLOW_PLAYBOOK.includes('Transferred (history)'), 'the dashboard playbook points at the history view (v1.92.0)');
   check(SAKA_FLOW_PLAYBOOK.includes('archived_at + archived_by_transfer_id'), 'the transfer playbook documents the archive columns (v1.92.0)');
 
+  // v1.96.7 — the plate escape hatch + single-question plate nudge (rules 13/31/60).
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('PLATE STEP LAW (v1.96.7)'), 'the core prompt carries the plate escape law (v1.96.7)');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('no plate yet'), 'the core prompt names the "no plate yet" escape');
+  check(/plate-step nudge asks ONLY for the plate/i.test(SAKA_FLOW_PLAYBOOK), 'the playbook states the single-question plate nudge law (v1.96.7)');
+  check(Boolean(guidanceForFlow('registration-draft')) && DEFAULT_SAKA_CORE_PROMPT.includes(guidanceForFlow('registration-draft')),
+    'the parked-draft guidance renders into the core prompt (rule 60)');
+
   console.log(`\n\u2705 ALL AGENT TRAINING TESTS PASSED (${passed} assertions).`);
   console.log('Stateless suite: no real database rows were created, so no cleanup is required.');
 }

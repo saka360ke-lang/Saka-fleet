@@ -215,6 +215,38 @@ export function isPlateLike(value = '') {
   return true;
 }
 
+/**
+ * v1.96.7 — the plate escape hatch (rules 31/60). A road asset REQUIRES a
+ * plate, but a user who does not have it handy must never be trapped at the
+ * question. These phrases park the registration draft instead of re-asking;
+ * a real plate always wins (isPlateLike is checked first), so "KDA 123A" can
+ * never be mistaken for a skip.
+ */
+const PLATE_SKIP_PHRASES = Object.freeze([
+  'no plate', 'no plate yet', 'no number plate', 'no number plate yet',
+  'dont have it', "don't have it", 'dont have a plate', "don't have a plate",
+  'dont have the plate', "don't have the plate", 'dont have my plate', "don't have my plate",
+  'i dont have it', "i don't have it", 'i dont have a plate', "i don't have a plate",
+  'i dont have the plate', "i don't have the plate", 'i dont have my plate', "i don't have my plate",
+  'dont know it', "don't know it", 'i dont know it', "i don't know it",
+  'dont know the plate', "don't know the plate", 'i dont know the plate', "i don't know the plate",
+  'not with me', 'the logbook is not with me', 'logbook not with me', 'no logbook',
+  'later', 'plate later', 'not now', 'not yet', 'skip', 'skip plate',
+  'ill send it later', "i'll send it later", 'will send it later',
+  'cant remember', "can't remember", 'forgot', 'i forgot', 'no idea', 'not sure'
+]);
+
+export function isPlateSkipText(text = '') {
+  const raw = String(text || '').trim();
+  if (!raw) return false;
+  if (isPlateLike(raw)) return false; // a real plate is never a skip
+  const clean = raw.toLowerCase().replace(/[\u2019']/g, "'").replace(/\s+/g, ' ').replace(/[.!]+$/g, '').trim();
+  return PLATE_SKIP_PHRASES.includes(clean);
+}
+
+/** v1.96.7 — the ONE next step after the plate escape hatch parks the draft. */
+export const PLATE_DRAFT_PARKED_REPLY = 'No problem — I\'ve saved your draft. 🚗 Send the plate whenever you\'re ready (or send a photo of your logbook) and I\'ll finish the registration. Your welcome trial starts once it\'s registered.';
+
 function parsePlate(text, ctx = {}) {
   const raw = String(text).trim().toUpperCase().replace(/\s+/g, ' ');
   if (ctx.vehicles?.length) {
@@ -398,11 +430,11 @@ function registrationFields() {
       { value: 'generator', aliases: ['generator', 'genset', 'power plant', 'standby power'] },
       { value: 'watercraft', aliases: ['boat', 'vessel', 'watercraft', 'ship', 'ferry'] }
     ]),
-    field('plate_number', 'Nice one 🎉 What is its number plate? (e.g. KDA 123A) — I only use it to keep *your* records, never shared 🔒', 'e.g. KDA 123A', {
+    field('plate_number', 'Nice one 🎉 What is its number plate? (e.g. KDA 123A or the newer KDD 123D) — don\'t have it handy? Just say *no plate yet* and I\'ll save your draft.', 'e.g. KDA 123A', {
       when: (answers) => requiresPlate(answers.asset_kind),
       parse: (text, c) => parsePlate(text, c),
       validate: (value, c) => {
-        if (!value) return { ok: false, message: 'That does not look like a registration plate. Please resend it.' };
+        if (!value) return { ok: false, message: 'That does not look like a registration plate. Please resend it — or say *no plate yet* and I\'ll save your draft.' };
         const duplicate = (c.vehicles || []).find((v) =>
           v.plate_number?.toUpperCase().replace(/\s+/g, '') === value.replace(/\s+/g, '') &&
           v.owner_id === c.profile?.id
@@ -1341,6 +1373,51 @@ export function abandonQuiz(session, { reason = 'abandoned', now = new Date() } 
 
 export function clearQuiz(session) {
   if (session) session.quiz = null;
+}
+
+/**
+ * v1.96.7 — park the registration draft (the plate escape hatch). The answers
+ * captured so far ride the ONE unified pending slot (`registration-draft`) and
+ * NOTHING is written to the database: no vehicle row exists until a real plate
+ * arrives. The draft is ephemeral (PENDING_KINDS TTL), per the approved plan —
+ * deliberately no schema change.
+ */
+function parkRegistrationDraft(session, state) {
+  const answers = {};
+  for (const [key, value] of Object.entries(state.answers || {})) {
+    if (value === undefined || value === null) continue;
+    answers[key] = value;
+  }
+  session.pending = {
+    kind: 'registration-draft',
+    at: new Date(),
+    data: { flowKey: state.flow || 'vehicle_registration', answers }
+  };
+  clearQuiz(session);
+}
+
+/**
+ * v1.96.7 — resume a parked registration draft the moment the plate arrives.
+ * The captured answers are restored and the plate answers the closed question
+ * exactly as if the flow never parked. Returns `{ handled:false }` when there
+ * is no draft or the text is not a plate, so the normal pipeline keeps the turn
+ * (a fresh log line is never swallowed by a stale draft).
+ */
+export async function resumeRegistrationDraft({ session, text = '', ctx = {} }) {
+  const pending = session?.pending;
+  if (!pending || pending.kind !== 'registration-draft') return { handled: false };
+  const clean = String(text || '').trim();
+  if (!isPlateLike(clean)) return { handled: false };
+  const answers = pending.data?.answers || {};
+  session.pending = null;
+  const started = startQuiz({
+    session,
+    flowKey: 'vehicle_registration',
+    ctx: { ...ctx, aiExtracted: {}, messageText: '' },
+    prefill: answers
+  });
+  if (!started) return { handled: false };
+  return handleQuizTurn({ session, messageText: clean, aiExtracted: {}, ctx });
 }
 
 function activeFields(def, answers) {
@@ -2709,6 +2786,14 @@ export async function handleQuizTurn({
     state.turnNote = 'Confirm the email step is skipped for now and ask only the next question.';
     const reply = await askCurrent(state, vctx);
     return { handled: true, reply, flow: state.flow, active: true };
+  }
+
+  // v1.96.7 — the plate escape hatch: never trap a user who does not have the
+  // plate handy. "no plate yet" parks the draft (unified pending slot) and the
+  // reply carries exactly ONE next step; the flow resumes on the next plate.
+  if (current.key === 'plate_number' && isPlateSkipText(clean)) {
+    parkRegistrationDraft(session, state);
+    return { handled: true, reply: PLATE_DRAFT_PARKED_REPLY, flow: state.flow, active: false };
   }
 
   // Skip an optional field (or the whole optional group)
