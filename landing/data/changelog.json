@@ -1,6 +1,13 @@
 {
-  "latest": "1.97.1",
+  "latest": "1.97.2",
   "entries": [
+    {
+      "version": "1.97.2",
+      "date": "2026-11-13",
+      "title": "A signup door right where you sign in",
+      "preview": "Landed on the login page without an account? A new 'Start your free trial' link takes you straight to sign up.",
+      "summary": "A small navigation fix. The dashboard sign-in page now ends with a friendly line - \"Don't have an account yet? Start your free trial\" - linking to the Saka Fleet website so a first-time visitor who landed there by mistake can begin signup in one click. The superadmin sign-in door is unchanged and never shows it. Nothing about signing in, sessions, trials or your data changes."
+    },
     {
       "version": "1.97.1",
       "date": "2026-11-13",

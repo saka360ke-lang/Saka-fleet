@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.97.1  
+**Version:** 1.97.2  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.97.2** | Signup door on `/d/login` — `renderLoginPage` adds a bottom-of-card "Don't have an account yet? Start your free trial →" link to `https://sakafleet.com/` (lime accent) on the OWNER door only; `admin: true` renders without it; tests cover both renderers and `GET /d/login` vs `GET /d/admin/login` | 244 |
 | **1.97.1** | Unverified-signup dead-end fix (kiddymoms01@gmail.com) — `inspectExistingSignup` returns `'unverified'` for an unverified email match (the `'email_exists'` state is retired), the new engine-owned `reissueWebOnboardCode` resumes the SAME account (stored phone, profile untouched, `WEB_ONBOARD_RESUMED`) and `/api/onboard` returns `success:true + onboard_token`; the silent `detailsContinue` gate return is replaced by visible copy + a re-check; business refusals use the server message and malformed responses are logged | 243 |
 | **1.97.0** | Superadmin User Management CRM — `/d/admin/profiles` lists EVERY live profile (owners/drivers/shells) with plan/trial chips + search; one audited detail page (identity, engine-owned manual tier override with a `manual` ledger line, force-verify, notes, force logout, typed-WIPE danger zone) and six new POSTs on the v1.91.0 guard stack; a changed email defaults `email_verified=false` unless Force Verify is ticked; additive `subscriptions.source` migration; latent `logWriteFailure` import fixed | 242 |
 | **1.96.9** | GTM delivered first-party — `loadGtm()` now injects `https://gtm.sakafleet.com/gtm.js?id=GTM-TGR68X2X` (was `www.googletagmanager.com`), consent gate untouched; no GTM `<noscript>` iframe by design (it would bypass the consent gate); Test 25 sweeps landing for zero `googletagmanager.com`; live-verified `GET` 200 + `application/javascript` + the container id before the edit | 241 |
@@ -7277,5 +7278,19 @@ Only valid values are attached (`userData.email` / `userData.phone_number`); the
 **Suites run.** test_web_onboarding (72), test_duplicate_signup (25), test_landing_static (489), test_agent_training, test_doc_sync, test_kb_docs, test_vehicle_documents, `npm run health` — green.
 
 **Rules shaped this work (rule 58).** 1/39/42/45/63 (rules + architecture first; **0 open proposals** verified live — 8 unrelated PENDING friction rows left for their own review), 3/4, 10/11 (stateless suites), 26/29 (no trial/vehicle side effects; identity preserved), 31 (one next step, warm copy), 33/43, 47 (verified accounts never re-onboard), 50 (resume degrades honestly on a missing OTP row), 51/52 (autopsy + before/after assertions), 54 (live DB evidence), 55/56 (evolved the handshake), 2 (architecture + CHANGELOG + landing feed in the same commit). No rule edited. **Impact:** a returning unconfirmed signup resumes, receives a fresh code and reaches the OTP screen; a blocked submit always explains itself; verified accounts still never re-onboard.
+
+### 244. v1.97.2 — the signup door on `/d/login` (owner door only)
+
+**Why.** `/d/login` only served existing accounts (phone → WhatsApp code). A brand-new visitor who landed there had no path into onboarding.
+
+**The change.** `renderLoginPage` gains a bottom-of-card line inside the login card, after the OTP TTL note: *"Don't have an account yet? Start your free trial →"* → `https://sakafleet.com/`, styled with the dashboard's lime accent token (`color:var(--accent);font-weight:700`) behind a hairline separator. The block is emitted only when `admin === false`, so the superadmin door (`/d/admin/login`, `admin: true`) is byte-for-byte unchanged. The landing page has **no** `#signup` hash handler (`[data-open-onboard]` buttons only), so the plain URL ships — no invented contract (rule 54).
+
+**Tests (rule 52).** `test_dashboard` 936 → **940**: `renderLoginPage({})` and `GET /d/login` carry the CTA; `renderLoginPage({ admin: true })` and `GET /d/admin/login` never do. The existing no-email pin still passes (the copy uses "account"/"trial").
+
+**Frames touched.** `src/services/dashboard.js` (`renderLoginPage`), `test_dashboard.js`, `test_vehicle_documents.js` (version pin), `package.json` (1.97.2), `landing/data/changelog.json` + stamped assets, `docs/` (regenerated), this file, `CHANGELOG.md`.
+
+**Suites run.** test_dashboard (940), test_agent_training, test_doc_sync, test_kb_docs, test_vehicle_documents, `npm run health` — green.
+
+**Rules shaped this work (rule 58).** 1/39/42/45/63 (rules first; **0 open proposals** verified live — 8 unrelated PENDING friction rows left for their own review), 3/4, 10/11 (stateless suite), 31 (one next step), 33/43, 50 (render-only; no schema/flow change), 54 (no invented `#signup` contract), 55 (evolved the existing renderer), 2 (architecture + CHANGELOG + landing feed in the same commit). No rule edited. **Impact:** a first-time visitor on the login page now has a one-click path to signup; the superadmin door is unchanged.
 
 

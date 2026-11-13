@@ -555,6 +555,18 @@ async function run() {
   check(loginPage.body.includes('name="phone"') && /Send me a code/.test(loginPage.body), 'the page asks for the WhatsApp number');
   check(!/email/i.test(loginPage.body.replace(/<style>[\s\S]*?<\/style>/g, '')), 'the sign-in page never mentions email');
 
+  // v1.97.2 — a visitor who landed on the login door by mistake gets a way out.
+  const loginCta = "Don't have an account yet?";
+  check(loginPage.body.includes(loginCta) && loginPage.body.includes('href="https://sakafleet.com/"') && loginPage.body.includes('Start your free trial →'),
+    'GET /d/login carries the signup CTA (v1.97.2)');
+  const adminDoorPage = await app.inject({ method: 'GET', url: '/d/admin/login' });
+  check(adminDoorPage.statusCode === 200 && /Admin dashboard/.test(adminDoorPage.body) && !adminDoorPage.body.includes(loginCta),
+    'GET /d/admin/login renders WITHOUT the signup CTA (v1.97.2)');
+  const ownerLoginRender = renderLoginPage({});
+  const adminLoginRender = renderLoginPage({ admin: true });
+  check(ownerLoginRender.includes(loginCta) && ownerLoginRender.includes('Start your free trial →'), 'renderLoginPage() emits the signup CTA (v1.97.2)');
+  check(!adminLoginRender.includes(loginCta), 'renderLoginPage({ admin: true }) never emits the signup CTA (v1.97.2)');
+
   console.log('\n--- v1.86.0: sign-in prefix comes from the registry, not +254 ---');
   const prefixMap = buildLoginPrefixMap();
   check(prefixMap['Africa/Nairobi'] === '+254' && prefixMap['Europe/London'] === '+44' && prefixMap['Europe/Brussels'] === '+32', 'the prefix map follows the REGIONS registry');

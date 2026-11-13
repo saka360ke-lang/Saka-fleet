@@ -3276,6 +3276,7 @@ ${notice ? `<div class="notice" role="status">${escapeHtml(notice)}</div>` : ''}
     <button type="submit">Send me a code</button>
   </form>
   <p class="muted" style="font-size:13px;margin-top:12px;">The code works for ${otpMinutes} minutes. Never share it — Saka will never ask for it in chat.</p>
+  ${admin ? '' : `<p class="muted" style="font-size:13px;margin-top:16px;border-top:1px solid var(--line);padding-top:14px;">Don't have an account yet? <a href="https://sakafleet.com/" rel="noopener" style="color:var(--accent);font-weight:700;">Start your free trial →</a></p>`}
 </div>
 <script>
 (function () {
