@@ -135,7 +135,7 @@ import {
   setBuyerDetailsAndSendReleaseOtp,
   verifyOwnerReleaseOtpAndNotifyBuyer
 } from '../services/transfers.js';
-import { checkoutForTier, checkoutForAddon, getEntitlements } from '../services/subscriptions.js';
+import { checkoutForTier, checkoutForAddon, getEntitlements, applyManualTierOverride } from '../services/subscriptions.js';
 import { recordLabeledReading } from '../services/labelsEverywhere.js';
 import { sendWhatsAppText } from '../services/metaMessenger.js';
 // v1.91.0 (Phase 28A) — superadmin write actions reuse the engines verbatim.
@@ -154,7 +154,14 @@ import {
   withImpersonationBanner,
   loadAdminPassbook,
   buildAdminTransferView,
-  emailHtmlFromText
+  emailHtmlFromText,
+  // v1.97.0 — the user-management CRM.
+  buildAdminProfilesList,
+  loadAdminProfileRow,
+  buildAdminProfileDetail,
+  applyAdminIdentityUpdate,
+  renderAdminProfilesPage,
+  renderAdminProfileDetailPage
 } from '../services/dashboardAdmin.js';
 // v1.81.0 (Phase 20) — CSV bulk import engine (parser + validator + writes).
 import {
@@ -2105,6 +2112,303 @@ export async function registerDashboardRoutes(fastify, {
         return reply.code(303).header('location', '/d/admin?done=email').send();
       } catch (err) {
         await logSystemError(supabase, err, '/d/admin/email/:profileId');
+        return adminErrorPage(reply, 500, 'Please try again in a moment.');
+      }
+    });
+
+    /* ============================================================== */
+    /* v1.97.0 — superadmin user management CRM (/d/admin/profiles)    */
+    /* Same guard stack as v1.91.0: flag → Origin → admin session →    */
+    /* 5/5-min limit → typed word → reason → audit → 303.              */
+    /* ============================================================== */
+    const profileListNotices = {
+      wiped: 'Profile wiped — the account, its fleet and sessions were erased; the person can sign up fresh.',
+      tier: 'Tier override applied and appended to the billing ledger.',
+      updated: 'Identity saved — the audit log carries the before/after values.',
+      verified: 'Email marked verified.',
+      logout: 'Every dashboard session for that account was ended.',
+      note: 'Internal note saved.'
+    };
+    const loadEntitlementsSafe = async (ownerId) => {
+      try { return await getEntitlements({ supabase, ownerId, useCache: false }); } catch { return null; }
+    };
+
+    /* CRM-1 — the master list: every live profile, owners/drivers/shells. */
+    scope.get('/d/admin/profiles', async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      try {
+        const session = await requireRoleSession(request, reply, supabase, 'admin');
+        if (!session) return reply;
+        const profile = await loadDashboardProfile(supabase, session.ownerId);
+        const search = String(request.query?.q || '').slice(0, 60);
+        const done = String(request.query?.done || '');
+        const data = await buildAdminProfilesList({ supabase, search });
+        await logAdminAudit(supabase, profile?.phone_number || session.email || 'DASHBOARD_ADMIN', 'ADMIN_DASHBOARD_VIEW', {
+          page: 'profiles',
+          params: { q: search || null },
+          done: done || null
+        });
+        return sendHtml(reply, data.ok ? 200 : 503, renderAdminProfilesPage({ data, search, notice: profileListNotices[done] || null }));
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/admin/profiles');
+        return adminErrorPage(reply, 500, 'Please try again in a moment.');
+      }
+    });
+
+    /* CRM-2 — the single-account detail page (identity, plan, fleet, support,
+       notes, security, danger zone). Every view is audited (rule 51(iii)). */
+    scope.get('/d/admin/profiles/:id', async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      try {
+        const session = await requireRoleSession(request, reply, supabase, 'admin');
+        if (!session) return reply;
+        const profile = await loadDashboardProfile(supabase, session.ownerId);
+        const targetId = String(request.params?.id || '');
+        const detail = await buildAdminProfileDetail({ supabase, id: targetId });
+        if (!detail.ok) return adminErrorPage(reply, 404, 'That account does not exist.');
+        detail.entitlements = await loadEntitlementsSafe(targetId);
+        await logAdminAudit(supabase, profile?.phone_number || session.email || 'DASHBOARD_ADMIN', 'ADMIN_DASHBOARD_VIEW', {
+          page: 'profile',
+          targetId,
+          found: true
+        });
+        return sendHtml(reply, 200, renderAdminProfileDetailPage({ data: detail, done: String(request.query?.done || '') || null }));
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/admin/profiles/:id');
+        return adminErrorPage(reply, 500, 'Please try again in a moment.');
+      }
+    });
+
+    /* CRM-3 — identity update (name/email/country/units ONLY; typed UPDATE).
+       A changed email defaults email_verified=false unless Force Verify is
+       ticked in the same submit (operator instruction v1.97.0). */
+    scope.post('/d/admin/profiles/:id/identity', { config: ADMIN_WRITE_RATE }, async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      if (isCrossOriginWrite(request)) return adminErrorPage(reply, 403, 'That request came from another site — nothing changed.');
+      try {
+        const session = await requireRoleSession(request, reply, supabase, 'admin');
+        if (!session) return reply;
+        const actor = await loadDashboardProfile(supabase, session.ownerId);
+        const targetId = String(request.params?.id || '');
+        const target = await loadAdminProfileRow(supabase, targetId);
+        if (!target) return adminErrorPage(reply, 404, 'That account does not exist.');
+        if (isSuperadminPhone(target.phone_number)) return adminErrorPage(reply, 400, 'The superadmin account cannot be edited from the CRM.');
+        const body = formBody(request);
+        const reason = adminReason(body);
+        if (!typedExactly(body, ADMIN_ACTION_WORDS.identity)) return adminErrorPage(reply, 400, 'Type UPDATE exactly to confirm — nothing changed.');
+        if (!adminReasonOk(reason)) return adminErrorPage(reply, 400, 'Add a short reason (at least 3 characters) — nothing changed.');
+        const patchResult = applyAdminIdentityUpdate({ profile: target, body });
+        if (!patchResult.ok) return adminErrorPage(reply, 400, `${patchResult.error} Nothing changed.`);
+        if (patchResult.patch.email) {
+          const dupe = await supabase
+            .from('profiles')
+            .select('id, email')
+            .ilike('email', patchResult.patch.email)
+            .neq('id', target.id)
+            .limit(3);
+          if (!dupe.error && (dupe.data || []).length) {
+            return adminErrorPage(reply, 400, 'That email already belongs to another account — nothing changed.');
+          }
+        }
+        const { error: updateError } = await supabase.from('profiles').update(patchResult.patch).eq('id', target.id);
+        if (updateError) {
+          const friendly = /duplicate|unique|23505/i.test(updateError.message || '')
+            ? 'That email already belongs to another account.'
+            : 'The update was refused by the database.';
+          return adminErrorPage(reply, 400, `${friendly} Nothing changed.`);
+        }
+        await logAdminAudit(supabase, adminActor(actor, session), 'ADMIN_ACTION_PROFILE_UPDATED', {
+          reason,
+          targetId: target.id,
+          before: patchResult.before,
+          after: patchResult.patch,
+          // Explicitly recorded when a changed email forces a fresh verification.
+          emailVerificationReset: patchResult.patch.email ? patchResult.patch.email_verified === false : undefined
+        });
+        return reply.code(303).header('location', `/d/admin/profiles/${encodeURIComponent(target.id)}?done=updated`).send();
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/admin/profiles/:id/identity');
+        return adminErrorPage(reply, 500, 'Please try again in a moment.');
+      }
+    });
+
+    /* CRM-4 — an internal note: the note itself is the reason; audited. */
+    scope.post('/d/admin/profiles/:id/note', { config: ADMIN_WRITE_RATE }, async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      if (isCrossOriginWrite(request)) return adminErrorPage(reply, 403, 'That request came from another site — nothing was saved.');
+      try {
+        const session = await requireRoleSession(request, reply, supabase, 'admin');
+        if (!session) return reply;
+        const actor = await loadDashboardProfile(supabase, session.ownerId);
+        const targetId = String(request.params?.id || '');
+        const target = await loadDashboardProfile(supabase, targetId);
+        if (!target) return adminErrorPage(reply, 404, 'That account does not exist.');
+        const body = formBody(request);
+        const note = String(body.note || '').trim().slice(0, 500);
+        if (note.length < 3) return adminErrorPage(reply, 400, 'Write at least 3 characters — nothing was saved.');
+        await logAdminAudit(supabase, adminActor(actor, session), 'ADMIN_PROFILE_NOTE', {
+          targetId: target.id,
+          note
+        });
+        return reply.code(303).header('location', `/d/admin/profiles/${encodeURIComponent(target.id)}?done=note`).send();
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/admin/profiles/:id/note');
+        return adminErrorPage(reply, 500, 'Please try again in a moment.');
+      }
+    });
+
+    /* CRM-5 — force-verify an email (typed VERIFY + reason). */
+    scope.post('/d/admin/profiles/:id/verify-email', { config: ADMIN_WRITE_RATE }, async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      if (isCrossOriginWrite(request)) return adminErrorPage(reply, 403, 'That request came from another site — nothing changed.');
+      try {
+        const session = await requireRoleSession(request, reply, supabase, 'admin');
+        if (!session) return reply;
+        const actor = await loadDashboardProfile(supabase, session.ownerId);
+        const targetId = String(request.params?.id || '');
+        const target = await loadAdminProfileRow(supabase, targetId);
+        if (!target) return adminErrorPage(reply, 404, 'That account does not exist.');
+        if (!target.email) return adminErrorPage(reply, 400, 'This account has no email on file — nothing changed.');
+        const body = formBody(request);
+        const reason = adminReason(body);
+        if (!typedExactly(body, ADMIN_ACTION_WORDS.verify)) return adminErrorPage(reply, 400, 'Type VERIFY exactly to confirm — nothing changed.');
+        if (!adminReasonOk(reason)) return adminErrorPage(reply, 400, 'Add a short reason (at least 3 characters) — nothing changed.');
+        // Capture BEFORE any write: the client may hand back a live row object
+        // (the offline mock does), so reading it after the update would lie.
+        const beforeVerified = target.email_verified === true;
+        if (beforeVerified !== true) {
+          const { error: verifyError } = await supabase.from('profiles').update({ email_verified: true }).eq('id', target.id);
+          if (verifyError) return adminErrorPage(reply, 400, 'The database refused the change — nothing changed.');
+        }
+        await logAdminAudit(supabase, adminActor(actor, session), 'ADMIN_ACTION_EMAIL_VERIFIED', {
+          reason,
+          targetId: target.id,
+          before: { emailVerified: beforeVerified },
+          after: { emailVerified: true }
+        });
+        return reply.code(303).header('location', `/d/admin/profiles/${encodeURIComponent(target.id)}?done=verified`).send();
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/admin/profiles/:id/verify-email');
+        return adminErrorPage(reply, 500, 'Please try again in a moment.');
+      }
+    });
+
+    /* CRM-6 — manual tier override (ENGINE-OWNED; typed TIER + reason). The
+       engine appends a `manual` ledger line, so the billing history is never
+       silently rewritten (rule 28 + no invisible edits). */
+    scope.post('/d/admin/profiles/:id/tier', { config: ADMIN_WRITE_RATE }, async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      if (isCrossOriginWrite(request)) return adminErrorPage(reply, 403, 'That request came from another site — nothing changed.');
+      try {
+        const session = await requireRoleSession(request, reply, supabase, 'admin');
+        if (!session) return reply;
+        const actor = await loadDashboardProfile(supabase, session.ownerId);
+        const targetId = String(request.params?.id || '');
+        const target = await loadAdminProfileRow(supabase, targetId);
+        if (!target) return adminErrorPage(reply, 404, 'That account does not exist.');
+        if (isSuperadminPhone(target.phone_number)) return adminErrorPage(reply, 400, 'The superadmin account is always Free — no override is possible.');
+        const body = formBody(request);
+        const reason = adminReason(body);
+        if (!typedExactly(body, ADMIN_ACTION_WORDS.tier)) return adminErrorPage(reply, 400, 'Type TIER exactly to confirm — nothing changed.');
+        if (!adminReasonOk(reason)) return adminErrorPage(reply, 400, 'Add a short reason (at least 3 characters) — nothing changed.');
+        const requestedTier = String(body.tier || '').trim().toLowerCase().slice(0, 40);
+        if (!requestedTier) return adminErrorPage(reply, 400, 'Choose a tier — nothing changed.');
+        // Capture BEFORE the engine writes (a live row reference lies afterwards).
+        const beforeStatus = target.subscription_status || null;
+        const result = await applyManualTierOverride({
+          supabase,
+          ownerId: target.id,
+          tierKey: requestedTier,
+          interval: String(body.interval || 'monthly'),
+          reason
+        });
+        if (!result.ok) return adminErrorPage(reply, 400, `${result.error || 'That tier could not be applied.'} Nothing changed.`);
+        await logAdminAudit(supabase, adminActor(actor, session), 'ADMIN_ACTION_TIER_CHANGED', {
+          reason,
+          targetId: target.id,
+          before: { tier: result.previousTier, status: beforeStatus },
+          after: { tier: result.tierKey, status: 'ACTIVE', interval: result.interval, ledger: 'manual' }
+        });
+        return reply.code(303).header('location', `/d/admin/profiles/${encodeURIComponent(target.id)}?done=tier`).send();
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/admin/profiles/:id/tier');
+        return adminErrorPage(reply, 500, 'Please try again in a moment.');
+      }
+    });
+
+    /* CRM-7 — force logout: ends every dashboard session and clears the
+       impersonation rows pointing at the account (typed LOGOUT + reason). */
+    scope.post('/d/admin/profiles/:id/force-logout', { config: ADMIN_WRITE_RATE }, async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      if (isCrossOriginWrite(request)) return adminErrorPage(reply, 403, 'That request came from another site — nothing changed.');
+      try {
+        const session = await requireRoleSession(request, reply, supabase, 'admin');
+        if (!session) return reply;
+        const actor = await loadDashboardProfile(supabase, session.ownerId);
+        const targetId = String(request.params?.id || '');
+        const target = await loadDashboardProfile(supabase, targetId);
+        if (!target) return adminErrorPage(reply, 404, 'That account does not exist.');
+        if (target.id === session.ownerId) return adminErrorPage(reply, 400, 'That is your own session — use Log out instead.');
+        const body = formBody(request);
+        const reason = adminReason(body);
+        if (!typedExactly(body, ADMIN_ACTION_WORDS.logout)) return adminErrorPage(reply, 400, 'Type LOGOUT exactly to confirm — nothing changed.');
+        if (!adminReasonOk(reason)) return adminErrorPage(reply, 400, 'Add a short reason (at least 3 characters) — nothing changed.');
+        const sessionsClear = await supabase.from('dashboard_sessions').delete({ count: 'exact' }).eq('owner_id', target.id);
+        const impersonations = await supabase.from('admin_impersonations').delete({ count: 'exact' }).eq('target_profile_id', target.id);
+        await logAdminAudit(supabase, adminActor(actor, session), 'ADMIN_ACTION_FORCE_LOGOUT', {
+          reason,
+          targetId: target.id,
+          after: {
+            sessions: sessionsClear?.error ? `error: ${sessionsClear.error.message}` : (sessionsClear?.count ?? 0),
+            impersonations: impersonations?.error ? `error: ${impersonations.error.message}` : (impersonations?.count ?? 0)
+          }
+        });
+        return reply.code(303).header('location', `/d/admin/profiles/${encodeURIComponent(target.id)}?done=logout`).send();
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/admin/profiles/:id/force-logout');
+        return adminErrorPage(reply, 500, 'Please try again in a moment.');
+      }
+    });
+
+    /* CRM-8 — the danger zone: WIPE (typed WIPE + reason) reuses the audited
+       `wipeProfileForSignup` engine and can never touch the superadmin. */
+    scope.post('/d/admin/profiles/:id/wipe', { config: ADMIN_WRITE_RATE }, async (request, reply) => {
+      if (!isDashboardEnabled()) return answerAsNotFound(request, reply);
+      if (isCrossOriginWrite(request)) return adminErrorPage(reply, 403, 'That request came from another site — nothing changed.');
+      try {
+        const session = await requireRoleSession(request, reply, supabase, 'admin');
+        if (!session) return reply;
+        const actor = await loadDashboardProfile(supabase, session.ownerId);
+        const targetId = String(request.params?.id || '');
+        const target = await loadAdminProfileRow(supabase, targetId);
+        if (!target) return adminErrorPage(reply, 404, 'That account does not exist.');
+        if (isSuperadminPhone(target.phone_number)) return adminErrorPage(reply, 400, 'The superadmin account can never be wiped.');
+        if (target.id === session.ownerId) return adminErrorPage(reply, 400, 'You cannot wipe your own account from the CRM.');
+        const body = formBody(request);
+        const reason = adminReason(body);
+        if (!typedExactly(body, ADMIN_ACTION_WORDS.wipe)) return adminErrorPage(reply, 400, 'Type WIPE exactly to confirm — nothing was erased.');
+        if (!adminReasonOk(reason)) return adminErrorPage(reply, 400, 'Add a short reason (at least 3 characters) — nothing was erased.');
+        const wipe = await wipeProfileForSignup(supabase, target.phone_number);
+        if (!wipe.ok) return adminErrorPage(reply, 400, `The wipe was refused: ${wipe.reason || 'unknown reason'}. Nothing was erased.`);
+        const sessionsClear = await supabase.from('dashboard_sessions').delete().eq('owner_id', target.id);
+        const impersonationsAsTarget = await supabase.from('admin_impersonations').delete().eq('target_profile_id', target.id);
+        const impersonationsAsAdmin = await supabase.from('admin_impersonations').delete().eq('admin_profile_id', target.id);
+        await logAdminAudit(supabase, adminActor(actor, session), 'ADMIN_ACTION_PROFILE_WIPED', {
+          reason,
+          targetId: target.id,
+          targetPhoneMasked: maskPhone(target.phone_number),
+          before: { profiles: 1, phoneMasked: maskPhone(target.phone_number) },
+          after: {
+            counts: wipe.counts,
+            profiles: wipe.profiles,
+            vehicles: wipe.vehicles,
+            dashboardSessions: sessionsClear?.error ? `error: ${sessionsClear.error.message}` : 'cleared',
+            impersonations: impersonationsAsTarget?.error || impersonationsAsAdmin?.error ? 'error' : 'cleared'
+          }
+        });
+        return reply.code(303).header('location', '/d/admin/profiles?done=wiped').send();
+      } catch (err) {
+        await logSystemError(supabase, err, '/d/admin/profiles/:id/wipe');
         return adminErrorPage(reply, 500, 'Please try again in a moment.');
       }
     });

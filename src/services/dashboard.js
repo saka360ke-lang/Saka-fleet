@@ -4488,7 +4488,7 @@ function driverNav() {
 }
 
 export function adminNav() {
-  return '<a href="/d/admin/command">Command</a> · <a href="/d/admin">Owners</a> · <a href="/d/care">Care</a> · <a href="/d/logout">Log out</a>';
+  return '<a href="/d/admin/command">Command</a> · <a href="/d/admin/profiles">Profiles</a> · <a href="/d/admin">Owners</a> · <a href="/d/care">Care</a> · <a href="/d/logout">Log out</a>';
 }
 
 function kpiStripHtml(kpis = []) {

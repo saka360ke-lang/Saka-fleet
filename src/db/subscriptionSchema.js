@@ -66,9 +66,14 @@ CREATE TABLE IF NOT EXISTS public.subscriptions (
   current_period_end timestamptz,
   trial_end_at timestamptz,
   canceled_at timestamptz,
+  -- v1.97.0 — where the state came from ('paystack' | 'manual'); a superadmin
+  -- override appends a ledger line instead of rewriting history silently.
+  source text,
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );
+-- v1.97.0 — additive column for pre-migration tables (idempotent, rule 50).
+ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS source text;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_subscriptions_paystack_code
   ON public.subscriptions(paystack_subscription_code)
   WHERE paystack_subscription_code IS NOT NULL;

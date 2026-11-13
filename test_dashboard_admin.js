@@ -11,6 +11,8 @@ import {
 import { createMockSupabase } from './scripts/mockSupabase.js';
 import { registerDashboardRoutes } from './src/routes/dashboard.js';
 import { adminActionKeyGenerator } from './src/services/rateLimitIdentity.js';
+// v1.97.0 — the CRM builders are exercised directly (list/detail/degrade).
+import { buildAdminProfilesList, buildAdminProfileDetail, renderAdminProfileDetailPage } from './src/services/dashboardAdmin.js';
 
 let passed = 0;
 function check(condition, label) {
@@ -23,6 +25,8 @@ const DAY = 86400000;
 const ADMIN = { id: 'p-admin', phone_number: '+254700000900', email: 'admin@example.com', full_name: 'Super Admin', country_code: 'KE' };
 const TARGET = { id: 'p-target', phone_number: '+254712345678', email: 'target@example.com', full_name: 'Target Owner', country: 'Kenya', country_code: 'KE' };
 const OTHER = { id: 'p-other', phone_number: '+254799000111', email: null, full_name: 'Other Owner', country_code: 'KE' };
+// v1.97.0 — a true shell (no name, no email) for the CRM master list.
+const SHELL = { id: 'p-shell', phone_number: '+254799000222', email: null, full_name: null, country_code: 'KE' };
 const VEHICLE = { id: 'v-1', owner_id: TARGET.id, plate_number: 'KDA 123A', vin: '1HGCM82633A004352', qr_passbook_token: 'SK-PASSBOOK-ABCDEF12', make_model: 'Nissan Note', status: 'ACTIVE', deleted_at: null };
 const FOREIGN = { id: 'v-2', owner_id: OTHER.id, assigned_driver_id: TARGET.id, plate_number: 'KDK 607B', vin: 'JTE777A1234567890', qr_passbook_token: 'SK-PASSBOOK-99999999', status: 'ACTIVE', deleted_at: null };
 
@@ -43,7 +47,7 @@ const sessionRow = (id, ownerId, token, role) => ({
 });
 
 const seed = () => ({
-  profiles: [{ ...ADMIN }, { ...TARGET }, { ...OTHER }],
+  profiles: [{ ...ADMIN }, { ...TARGET }, { ...OTHER }, { ...SHELL }],
   vehicles: [{ ...VEHICLE }, { ...FOREIGN }],
   [DASHBOARD_SESSIONS_TABLE]: [
     sessionRow('sess-admin', ADMIN.id, 'admin-sess', 'admin'),
@@ -82,6 +86,17 @@ const seed = () => ({
   pending_owner_notifications: [],
   driver_assignments: [],
   coupons: [],
+  // v1.97.0 — CRM: support tickets (detail page) + the billing ledger.
+  support_tickets: [{
+    id: 'ticket-1',
+    whatsapp_number: TARGET.phone_number,
+    status: 'OPEN',
+    priority: 'high',
+    issue_category: 'billing',
+    subject: 'Double charge',
+    created_at: new Date().toISOString()
+  }],
+  subscriptions: [],
   system_config: []
 });
 
@@ -113,7 +128,15 @@ async function run() {
     ['GET', '/d/admin/transfer/v-1'],
     ['POST', '/d/admin/transfer/v-1/step1'], ['POST', '/d/admin/transfer/v-1/step2'],
     ['POST', '/d/admin/transfer/v-1/step3'], ['POST', '/d/admin/transfer/v-1/cancel'],
-    ['GET', '/d/admin/email/p-target'], ['POST', '/d/admin/email/p-target']
+    ['GET', '/d/admin/email/p-target'], ['POST', '/d/admin/email/p-target'],
+    // v1.97.0 — the user-management CRM.
+    ['GET', '/d/admin/profiles'], ['GET', '/d/admin/profiles/p-target'],
+    ['POST', '/d/admin/profiles/p-target/identity'],
+    ['POST', '/d/admin/profiles/p-target/note'],
+    ['POST', '/d/admin/profiles/p-target/verify-email'],
+    ['POST', '/d/admin/profiles/p-target/tier'],
+    ['POST', '/d/admin/profiles/p-target/force-logout'],
+    ['POST', '/d/admin/profiles/p-target/wipe']
   ];
 
   console.log('\n--- Test 1: A1 — every new URL is a plain 404 while the flag is off ---');
@@ -143,7 +166,14 @@ async function run() {
     ['/d/admin/transfer/v-1/step2', 'x=1'],
     ['/d/admin/transfer/v-1/step3', 'x=1'],
     ['/d/admin/transfer/v-1/cancel', 'x=1'],
-    ['/d/admin/email/p-target', 'action=preview&subject=s&body=b']
+    ['/d/admin/email/p-target', 'action=preview&subject=s&body=b'],
+    // v1.97.0 — every CRM write refuses a cross-origin POST.
+    ['/d/admin/profiles/p-target/identity', 'full_name=Nope&confirm=UPDATE&reason=fix'],
+    ['/d/admin/profiles/p-target/note', 'note=hello'],
+    ['/d/admin/profiles/p-target/verify-email', 'confirm=VERIFY&reason=proof'],
+    ['/d/admin/profiles/p-target/tier', 'confirm=TIER&tier=growth&reason=offline'],
+    ['/d/admin/profiles/p-target/force-logout', 'confirm=LOGOUT&reason=lost'],
+    ['/d/admin/profiles/p-target/wipe', 'confirm=WIPE&reason=gdpr']
   ];
   for (const [url, payload] of crossPosts) {
     const res = await crossApp.inject({ method: 'POST', url, headers: crossHeaders, payload });
@@ -363,6 +393,184 @@ async function run() {
   }
   check(lastStatus === 429, 'the 6th admin POST inside 5 minutes is rate-limited');
   await rlApp.close();
+
+  console.log('\n--- Test 13: CRM master list — EVERY profile, search, degrade (v1.97.0) ---');
+  const listMock = createMockSupabase(seed());
+  const listData = await buildAdminProfilesList({ supabase: listMock.client });
+  check(listData.ok === true && listData.totalProfiles === 4, 'every live profile is listed (owners, drivers and shells)');
+  check(listData.profiles.some((row) => row.id === 'p-shell' && row.statusLabel === 'Shell'), 'a shell profile is labelled Shell');
+  check(listData.profiles.some((row) => row.id === 'p-shell' && row.vehicleCount === 0 && row.activeCount === 0), 'a profile with no vehicle is still listed');
+  check(String(listData.profiles.find((row) => row.id === TARGET.id)?.statusLabel || '').startsWith('Trial'), 'an active trial shows its days-left chip');
+  check(listData.profiles.every((row) => !String(row.phoneMasked).includes('12345678')), 'phones stay masked in the list');
+  const byEmail = await buildAdminProfilesList({ supabase: listMock.client, search: 'target@example.com' });
+  check(byEmail.matchedProfiles === 1 && byEmail.profiles[0].id === TARGET.id, 'search matches the email');
+  const byPhone = await buildAdminProfilesList({ supabase: listMock.client, search: '000222' });
+  check(byPhone.matchedProfiles === 1 && byPhone.profiles[0].id === 'p-shell', 'search matches the phone digits');
+  const failingTrials = {
+    from(table) {
+      if (table === 'trial_sessions') {
+        const chain = { select: () => chain, eq: () => chain, limit: async () => ({ data: null, error: { message: 'table missing' } }) };
+        return chain;
+      }
+      return listMock.client.from(table);
+    }
+  };
+  const degradedList = await buildAdminProfilesList({ supabase: failingTrials });
+  check(degradedList.ok === true && degradedList.degraded.includes('trials') && degradedList.profiles.length === 4,
+    'a failed trials read degrades the chip, never the list (rule 50)');
+  const listAppMock = createMockSupabase(seed());
+  const listApp = await makeApp(listAppMock);
+  const listRes = await listApp.inject({ method: 'GET', url: '/d/admin/profiles', headers: { cookie: 'saka_dash=admin-sess' } });
+  check(listRes.statusCode === 200 && listRes.body.includes('Profiles') && listRes.body.includes('Shell'), 'the master list page renders every status');
+  check(listRes.body.includes('target@example.com') === false, 'the list never prints a full email');
+  check(listAppMock.db.admin_audit_logs.some((row) => row.action === 'ADMIN_DASHBOARD_VIEW' && row.details?.page === 'profiles'),
+    'the profiles view is audited');
+  await listApp.close();
+
+  console.log('\n--- Test 14: CRM detail page — identity, fleet, support, degrade (v1.97.0) ---');
+  const detailMock = createMockSupabase(seed());
+  const detailApp = await makeApp(detailMock);
+  const detailRes = await detailApp.inject({ method: 'GET', url: '/d/admin/profiles/p-target', headers: { cookie: 'saka_dash=admin-sess' } });
+  check(detailRes.statusCode === 200 && detailRes.body.includes('Target Owner') && detailRes.body.includes('Identity'), 'the detail page renders the identity form');
+  check(detailRes.body.includes('Double charge'), 'the account recent support ticket renders');
+  check(detailRes.body.includes('Impersonate (read-only)') && detailRes.body.includes('/d/admin/extend-trial/p-target'), 'impersonate + extend-trial links render');
+  check(detailRes.body.includes('Danger zone') && detailRes.body.includes('data-typed="WIPE"'), 'the danger zone carries the typed WIPE form');
+  check(detailMock.db.admin_audit_logs.some((row) => row.action === 'ADMIN_DASHBOARD_VIEW' && row.details?.page === 'profile' && row.details?.targetId === TARGET.id),
+    'the profile view is audited with the target id');
+  const missingProfile = await detailApp.inject({ method: 'GET', url: '/d/admin/profiles/nobody-here', headers: { cookie: 'saka_dash=admin-sess' } });
+  check(missingProfile.statusCode === 404, 'a missing profile answers 404');
+  await detailApp.close();
+  const ticketFailing = {
+    from(table) {
+      if (table === 'support_tickets') {
+        const chain = { select: () => chain, or: () => chain, order: () => chain, limit: async () => ({ data: null, error: { message: 'missing' } }) };
+        return chain;
+      }
+      return createMockSupabase(seed()).client.from(table);
+    }
+  };
+  const degradedDetail = await buildAdminProfileDetail({ supabase: ticketFailing, id: TARGET.id });
+  check(degradedDetail.ok === true && degradedDetail.degraded.includes('tickets'), 'a failed ticket read degrades only the support block');
+  check(renderAdminProfileDetailPage({ data: degradedDetail }).includes('Support tickets could not be loaded'), 'the degraded support card is honest (rule 50)');
+
+  console.log('\n--- Test 15: identity edit — whitelist, email re-verify, Force Verify (v1.97.0) ---');
+  const idMock = createMockSupabase(seed());
+  const idApp = await makeApp(idMock);
+  const wrongIdentityWord = await idApp.inject({ method: 'POST', url: '/d/admin/profiles/p-target/identity', headers: adminHeaders, payload: 'full_name=Nope&reason=fix&confirm=update' });
+  check(wrongIdentityWord.statusCode === 400 && /Type UPDATE exactly/.test(wrongIdentityWord.body), 'a lowercase UPDATE is refused server-side');
+  const shortIdentityReason = await idApp.inject({ method: 'POST', url: '/d/admin/profiles/p-target/identity', headers: adminHeaders, payload: 'full_name=Nope&reason=x&confirm=UPDATE' });
+  check(shortIdentityReason.statusCode === 400 && /short reason/.test(shortIdentityReason.body), 'a short reason is refused');
+  const identity = await idApp.inject({
+    method: 'POST',
+    url: '/d/admin/profiles/p-target/identity',
+    headers: adminHeaders,
+    payload: 'full_name=Target+Updated&email=new%40example.com&country=Uganda&unit_system=imperial&reason=fix+typo&confirm=UPDATE'
+  });
+  check(identity.statusCode === 303 && String(identity.headers.location) === '/d/admin/profiles/p-target?done=updated', 'a valid identity change lands on the detail banner');
+  const identityRow = idMock.db.profiles.find((row) => row.id === TARGET.id);
+  check(identityRow.full_name === 'Target Updated' && identityRow.email === 'new@example.com', 'name and email are updated');
+  check(identityRow.email_verified === false, 'a CHANGED email defaults email_verified=false (the new address must be proven)');
+  check(identityRow.country === 'Uganda' && identityRow.country_source === 'user', 'a country change stamps country_source=user (reconcile never fights it)');
+  check(identityRow.unit_system === 'imperial', 'units are updated');
+  check(identityRow.subscription_tier === undefined && identityRow.subscription_status === undefined, 'tier/status can never be edited through identity (whitelist)');
+  const identityAudit = idMock.db.admin_audit_logs.find((row) => row.action === 'ADMIN_ACTION_PROFILE_UPDATED');
+  check(identityAudit && identityAudit.details?.targetId === TARGET.id
+    && identityAudit.details?.before?.email === TARGET.email
+    && identityAudit.details?.after?.email === 'new@example.com'
+    && identityAudit.details?.emailVerificationReset === true, 'the change is audited before/after with the verification reset');
+  await idApp.close();
+
+  const forceMock = createMockSupabase(seed());
+  const forceApp = await makeApp(forceMock);
+  const forced = await forceApp.inject({
+    method: 'POST',
+    url: '/d/admin/profiles/p-target/identity',
+    headers: adminHeaders,
+    payload: 'email=forced%40example.com&force_verify=on&reason=proven+by+call&confirm=UPDATE'
+  });
+  check(forced.statusCode === 303 && forceMock.db.profiles.find((row) => row.id === TARGET.id).email_verified === true,
+    'Force Verify keeps a changed address verified when the box is ticked');
+  await forceApp.close();
+
+  const dupeMock = createMockSupabase(seed());
+  const dupeApp = await makeApp(dupeMock);
+  const dupe = await dupeApp.inject({
+    method: 'POST',
+    url: '/d/admin/profiles/p-target/identity',
+    headers: adminHeaders,
+    payload: 'email=admin%40example.com&reason=fix+typo&confirm=UPDATE'
+  });
+  check(dupe.statusCode === 400 && /already belongs/.test(dupe.body) && dupeMock.db.profiles.find((row) => row.id === TARGET.id).email === TARGET.email,
+    'a duplicate email is refused and nothing changes');
+  await dupeApp.close();
+
+  console.log('\n--- Test 16: manual tier override — engine-owned + ledger line (v1.97.0) ---');
+  const tierMock = createMockSupabase(seed());
+  const tierApp = await makeApp(tierMock);
+  const bogusTier = await tierApp.inject({ method: 'POST', url: '/d/admin/profiles/p-target/tier', headers: adminHeaders, payload: 'tier=platinum&reason=offline&confirm=TIER' });
+  check(bogusTier.statusCode === 400 && /unknown tier/.test(bogusTier.body) && tierMock.db.subscriptions.length === 0, 'a bogus tier is refused by the engine');
+  const wrongTierWord = await tierApp.inject({ method: 'POST', url: '/d/admin/profiles/p-target/tier', headers: adminHeaders, payload: 'tier=growth&reason=offline&confirm=tier' });
+  check(wrongTierWord.statusCode === 400 && /Type TIER exactly/.test(wrongTierWord.body), 'a lowercase TIER is refused');
+  const tiered = await tierApp.inject({ method: 'POST', url: '/d/admin/profiles/p-target/tier', headers: adminHeaders, payload: 'tier=growth&interval=annual&reason=offline+payment&confirm=TIER' });
+  check(tiered.statusCode === 303 && String(tiered.headers.location) === '/d/admin/profiles/p-target?done=tier', 'a valid override lands on the detail banner');
+  const tieredRow = tierMock.db.profiles.find((row) => row.id === TARGET.id);
+  check(tieredRow.subscription_tier === 'growth' && tieredRow.subscription_status === 'ACTIVE' && tieredRow.billing_interval === 'annual',
+    'the profile flips to the chosen tier + ACTIVE (engine-owned)');
+  const ledger = tierMock.db.subscriptions.find((row) => row.owner_id === TARGET.id);
+  check(ledger && ledger.tier === 'growth' && ledger.status === 'ACTIVE' && ledger.source === 'manual', 'the billing ledger gains a line marked manual (no invisible edit)');
+  const tierAudit = tierMock.db.admin_audit_logs.find((row) => row.action === 'ADMIN_ACTION_TIER_CHANGED');
+  check(tierAudit && tierAudit.details?.before?.tier === 'free' && tierAudit.details?.after?.tier === 'growth' && tierAudit.details?.reason === 'offline payment',
+    'the override is audited with before/after + reason');
+  const superTier = await tierApp.inject({ method: 'POST', url: '/d/admin/profiles/p-admin/tier', headers: adminHeaders, payload: 'tier=growth&reason=test&confirm=TIER' });
+  check(superTier.statusCode === 400 && /superadmin/.test(superTier.body), 'the superadmin account can never be overridden');
+  await tierApp.close();
+
+  console.log('\n--- Test 17: force logout ends sessions + impersonations (v1.97.0) ---');
+  const logoutMock = createMockSupabase(seed());
+  const logoutApp = await makeApp(logoutMock);
+  check(logoutMock.db.dashboard_sessions.some((row) => row.owner_id === TARGET.id), 'precondition: the target has a live session');
+  const wrongLogoutWord = await logoutApp.inject({ method: 'POST', url: '/d/admin/profiles/p-target/force-logout', headers: adminHeaders, payload: 'confirm=logout&reason=lost+phone' });
+  check(wrongLogoutWord.statusCode === 400 && /Type LOGOUT exactly/.test(wrongLogoutWord.body), 'a lowercase LOGOUT is refused');
+  const logout = await logoutApp.inject({ method: 'POST', url: '/d/admin/profiles/p-target/force-logout', headers: adminHeaders, payload: 'confirm=LOGOUT&reason=lost+phone' });
+  check(logout.statusCode === 303 && String(logout.headers.location) === '/d/admin/profiles/p-target?done=logout', 'a valid force logout lands on the detail banner');
+  check(!logoutMock.db.dashboard_sessions.some((row) => row.owner_id === TARGET.id), 'every session for the account is deleted');
+  const logoutAudit = logoutMock.db.admin_audit_logs.find((row) => row.action === 'ADMIN_ACTION_FORCE_LOGOUT');
+  check(logoutAudit && logoutAudit.details?.targetId === TARGET.id && logoutAudit.details?.after?.sessions === 1, 'the logout audit records the cleared count');
+  const selfLogout = await logoutApp.inject({ method: 'POST', url: '/d/admin/profiles/p-admin/force-logout', headers: adminHeaders, payload: 'confirm=LOGOUT&reason=test' });
+  check(selfLogout.statusCode === 400 && /your own session/.test(selfLogout.body), 'the admin cannot force-logout their own session');
+  await logoutApp.close();
+
+  console.log('\n--- Test 18: the wipe danger zone (v1.97.0) ---');
+  const wipeMock = createMockSupabase(seed());
+  const wipeApp = await makeApp(wipeMock);
+  const wrongWipe = await wipeApp.inject({ method: 'POST', url: '/d/admin/profiles/p-target/wipe', headers: adminHeaders, payload: 'confirm=wipe&reason=gdpr' });
+  check(wrongWipe.statusCode === 400 && /Type WIPE exactly/.test(wrongWipe.body) && wipeMock.db.profiles.some((row) => row.id === TARGET.id),
+    'a wrong typed word erases nothing');
+  const wiped = await wipeApp.inject({ method: 'POST', url: '/d/admin/profiles/p-target/wipe', headers: adminHeaders, payload: 'confirm=WIPE&reason=gdpr+request' });
+  check(wiped.statusCode === 303 && String(wiped.headers.location) === '/d/admin/profiles?done=wiped', 'a valid wipe lands on the list banner');
+  check(!wipeMock.db.profiles.some((row) => row.id === TARGET.id), 'the profile row is gone');
+  const wipeAudit = wipeMock.db.admin_audit_logs.find((row) => row.action === 'ADMIN_ACTION_PROFILE_WIPED');
+  check(wipeAudit && wipeAudit.details?.targetId === TARGET.id && wipeAudit.details?.reason === 'gdpr request', 'the wipe is audited with reason + target');
+  const superWipe = await wipeApp.inject({ method: 'POST', url: '/d/admin/profiles/p-admin/wipe', headers: adminHeaders, payload: 'confirm=WIPE&reason=test' });
+  check(superWipe.statusCode === 400 && /superadmin/.test(superWipe.body), 'the superadmin account can never be wiped');
+  await wipeApp.close();
+
+  console.log('\n--- Test 19: internal notes + force-verify email (v1.97.0) ---');
+  const noteMock = createMockSupabase(seed());
+  const noteApp = await makeApp(noteMock);
+  const shortNote = await noteApp.inject({ method: 'POST', url: '/d/admin/profiles/p-target/note', headers: adminHeaders, payload: 'note=hi' });
+  check(shortNote.statusCode === 400 && /at least 3 characters/.test(shortNote.body), 'a too-short note is refused');
+  const note = await noteApp.inject({ method: 'POST', url: '/d/admin/profiles/p-target/note', headers: adminHeaders, payload: 'note=Called+David+-+pays+next+week' });
+  check(note.statusCode === 303 && String(note.headers.location) === '/d/admin/profiles/p-target?done=note', 'a valid note lands on the detail banner');
+  const noteRow = noteMock.db.admin_audit_logs.find((row) => row.action === 'ADMIN_PROFILE_NOTE');
+  check(noteRow && noteRow.details?.targetId === TARGET.id && noteRow.details?.note.includes('David'), 'the note is stored as an audit row');
+  const noteDetail = await noteApp.inject({ method: 'GET', url: '/d/admin/profiles/p-target', headers: { cookie: 'saka_dash=admin-sess' } });
+  check(noteDetail.statusCode === 200 && noteDetail.body.includes('pays next week'), 'the note renders back on the detail page');
+  const verify = await noteApp.inject({ method: 'POST', url: '/d/admin/profiles/p-target/verify-email', headers: adminHeaders, payload: 'confirm=VERIFY&reason=proven+by+call' });
+  check(verify.statusCode === 303 && noteMock.db.profiles.find((row) => row.id === TARGET.id).email_verified === true, 'force-verify marks the email verified');
+  check(noteMock.db.admin_audit_logs.some((row) => row.action === 'ADMIN_ACTION_EMAIL_VERIFIED' && row.details?.before?.emailVerified === false && row.details?.after?.emailVerified === true),
+    'the verification change is audited before/after');
+  await noteApp.close();
 
   console.log(`\n ${passed} admin-action assertions passed.`);
   console.log('Stateless suite: in-memory mock only; nothing was written to the database.');

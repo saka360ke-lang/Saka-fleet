@@ -31,10 +31,14 @@ import {
   getTierPriceUSD,
   getNextTierKey,
   getPlanCode,
+  isKnownTierKey,
   listPaidTierKeys,
   isPaidTierKey
 } from './subscriptionTiers.js';
 import { markUserDataChanged } from './afterWrite.js';
+// v1.97.0 — the ledger's catch paths called this helper without importing it
+// (latent ReferenceError); the import is part of the same fix.
+import { logWriteFailure } from './systemErrors.js';
 
 const ENTITLEMENT_CACHE_MS = Number(process.env.SUBSCRIPTION_CACHE_MS || 60000);
 const PAST_DUE_GRACE_DAYS = Math.max(0, Number(process.env.SUBSCRIPTION_GRACE_DAYS || 3));
@@ -1141,6 +1145,82 @@ export async function formatTierChoices({ supabase, currency = 'USD', includeFre
   return `🚀 *Saka Plans*\n\n${rows.join('\n')}\n\nReply *"upgrade to <plan>"* (e.g. \"upgrade to Growth monthly\"). First upgrade includes a 30-day free trial — no card needed.`;
 }
 
+/**
+ * v1.97.0 — superadmin manual tier override (ENGINE-OWNED; rule 28).
+ * ----------------------------------------------------------------
+ * The ONLY path that may set a plan without a Paystack event. It:
+ *  - resolves the tier through the canonical matrix (aliases included),
+ *  - flips the profile to that tier + ACTIVE (never invents a price or dates),
+ *  - APPENDS a subscriptions ledger line stamped `source='manual'` so the
+ *    billing history reflects reality (no invisible edits),
+ *  - invalidates the entitlement cache and marks user data changed.
+ * A schema without the additive `source` column degrades (retry without it,
+ * logged) instead of failing the override (rule 50).
+ */
+export async function applyManualTierOverride({ supabase, ownerId, tierKey, interval = 'monthly', reason = null } = {}) {
+  if (!supabase || !ownerId) return { ok: false, error: 'owner required' };
+  // v1.97.0 — normalizeTierKey maps unknown keys to 'free'; a manual override
+  // must REFUSE a typo instead of silently downgrading an account.
+  if (!isKnownTierKey(tierKey)) return { ok: false, error: 'unknown tier' };
+  const canonical = normalizeTierKey(tierKey);
+  const tier = canonical ? getTierDefinition(canonical) : null;
+  if (!tier) return { ok: false, error: 'unknown tier' };
+  const billingInterval = String(interval || '').toLowerCase() === 'annual' ? 'annual' : 'monthly';
+  const owner = await fetchProfile(supabase, ownerId);
+  if (!owner) return { ok: false, error: 'profile not found' };
+  const previousTier = normalizeTierKey(owner.subscription_tier) || 'free';
+  const nowIso = new Date().toISOString();
+  const updates = {
+    subscription_tier: canonical,
+    subscription_status: 'ACTIVE',
+    billing_interval: billingInterval,
+    cancel_at_period_end: false
+  };
+  try {
+    const { error } = await supabase.from('profiles').update(updates).eq('id', ownerId);
+    if (error) return { ok: false, error: error.message || 'profile update failed' };
+  } catch (err) {
+    return { ok: false, error: err.message || 'profile update failed' };
+  }
+
+  let planCode = null;
+  try { planCode = getPlanCode(canonical, billingInterval) || null; } catch { planCode = null; }
+  const ledgerRow = {
+    owner_id: ownerId,
+    plan_code: planCode,
+    tier: canonical,
+    interval: billingInterval,
+    status: 'ACTIVE',
+    paystack_subscription_code: null,
+    paystack_customer_code: owner.paystack_customer_code || null,
+    paystack_email_token: owner.paystack_email_token || null,
+    current_period_start: null,
+    current_period_end: null,
+    trial_end_at: null,
+    source: 'manual',
+    created_at: nowIso,
+    updated_at: nowIso
+  };
+  try {
+    const { error } = await supabase.from('subscriptions').insert([ledgerRow]);
+    if (error && /source/i.test(error.message || '')) {
+      // Un-migrated schema (rule 50): the override still lands; the audit row
+      // records that the ledger line carries no source marker.
+      const { source: _source, ...legacyRow } = ledgerRow;
+      const retry = await supabase.from('subscriptions').insert([legacyRow]);
+      if (retry.error) logWriteFailure(supabase, 'subscriptions.manualOverrideLedger', retry.error, { owner_id: ownerId });
+    } else if (error) {
+      logWriteFailure(supabase, 'subscriptions.manualOverrideLedger', error, { owner_id: ownerId });
+    }
+  } catch (ledgerErr) {
+    logWriteFailure(supabase, 'subscriptions.manualOverrideLedger', ledgerErr, { owner_id: ownerId });
+  }
+
+  invalidateEntitlements(ownerId);
+  markUserDataChanged({ supabase, ownerId, reason: 'subscriptions.manualOverride' });
+  return { ok: true, tierKey: canonical, tierLabel: tier.label, previousTier, interval: billingInterval, reason };
+}
+
 export default {
   invalidateEntitlements,
   nairobiMonthKey,
@@ -1155,6 +1235,7 @@ export default {
   checkoutForTier,
   checkoutForAddon,
   applySubscriptionState,
+  applyManualTierOverride,
   handlePaystackEvent,
   computePeriodEnd,
   cancelSubscription,

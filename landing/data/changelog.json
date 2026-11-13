@@ -1,6 +1,13 @@
 {
-  "latest": "1.96.9",
+  "latest": "1.97.0",
   "entries": [
+    {
+      "version": "1.97.0",
+      "date": "2026-11-13",
+      "title": "A single, careful place for the team to look after accounts",
+      "preview": "Behind the scenes: the Saka team now has one audited console for every account, with typed confirmations.",
+      "summary": "A behind-the-scenes release about how the Saka team looks after accounts. Support now works from one console that shows every profile - owners, drivers and brand-new sign-ups - with its plan or trial status and vehicle count. From there the team can correct a name, email, country or units, extend a trial, apply a plan after an offline payment (the billing history gains a clearly marked manual line), confirm an email when it has been proven another way, leave an internal note, end stray dashboard sessions, and - only with a typed WIPE and a recorded reason - erase an account. Every one of those actions requires the word typed exactly, records why it was done, and keeps an audit trail; the superadmin's own account can never be edited, impersonated or wiped. Your records, reports and reminders are untouched."
+    },
     {
       "version": "1.96.9",
       "date": "2026-11-13",

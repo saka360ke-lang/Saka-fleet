@@ -399,6 +399,9 @@ check(/Narrative pre-fills are engine-determined facts/.test(await import('./src
   check(DEFAULT_SAKA_CORE_PROMPT.includes('six superadmin WEB TOOLS'), 'the core prompt names the superadmin web tools (v1.91.0)');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('impersonate an owner READ-ONLY'), 'the core prompt pins read-only impersonation (v1.91.0)');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('reason-stamped and audited'), 'the core prompt states the typed-confirm + audit law (v1.91.0)');
+  // v1.97.0 — the user-management CRM is stated in both places.
+  check(SAKA_FLOW_PLAYBOOK.includes('SUPERADMIN USER MANAGEMENT (v1.97.0'), 'the playbook names the user-management CRM (v1.97.0)');
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('USER MANAGEMENT CRM') && DEFAULT_SAKA_CORE_PROMPT.includes('Force Verify'), 'the core prompt states the CRM and the Force Verify law (v1.97.0)');
   // v1.92.0 (Phase 29) — the earnings archive + the overdue digest are stated in
   // both places (rule 13: prompt and behaviour can never drift).
   check(DEFAULT_SAKA_CORE_PROMPT.includes('PASSBOOK EARNINGS & OVERDUE DIGEST (v1.92.0'), 'the core prompt names the Phase 29 laws (v1.92.0)');

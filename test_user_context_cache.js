@@ -174,11 +174,12 @@ for (const file of RATCHET_FILES) {
   check(`${file} carries its audited invalidation call(s) (${calls})`, calls >= 1, calls);
 }
 // Baseline pinned at v1.63.1: 42 call sites across 12 files (7 converted in 2A +
-// 35 added in 2B).
+// 35 added in 2B). v1.97.0 adds ONE (subscriptions.manualOverride — the
+// superadmin manual tier override must invalidate the owner cache) → 43.
 // The file count will change during structural refactors (e.g., Phase 6
 // whatsapp.js split). When it does, update the baseline AND confirm each new
 // file's site still invalidates - do not just bump the count.
-check('the rule-51 baseline is exactly 42 call sites in 12 files', totalCalls === 42, totalCalls);
+check('the rule-51 baseline is exactly 43 call sites in 12 files', totalCalls === 43, totalCalls);
 const REASONS = [
   ['src/services/entryLedger.js', ['ledger.relog', 'ledger.delete', 'ledger.restore']],
   ['src/services/quizEngine.js', ['quizEngine.vehicle_registration', 'quizEngine.logExpense', 'quizEngine.logEarnings', 'quizEngine.logMileage', 'quizEngine.logOperatingHours', 'quizEngine.editProfile', 'quizEngine.deleteAccount', 'quizEngine.emailUpdate']],
@@ -187,7 +188,7 @@ const REASONS = [
   ['src/services/driverAssignments.js', ['driverAssignments.complianceCancelled', 'driverAssignments.submitCompliance', 'driverAssignments.accept']],
   ['src/services/receipts.js', ['receipts.record', 'receipts.delete']],
   ['src/services/coupons.js', ['coupons.redeemed']],
-  ['src/services/subscriptions.js', ['subscriptions.applyState', 'subscriptions.addon', 'subscriptions.paymentFailed', 'subscriptions.cancelScheduled', 'subscriptions.notRenew', 'subscriptions.cancel', 'subscriptions.resume', 'subscriptions.downgradeToFree', 'subscriptions.keepVehicles']],
+  ['src/services/subscriptions.js', ['subscriptions.applyState', 'subscriptions.addon', 'subscriptions.paymentFailed', 'subscriptions.cancelScheduled', 'subscriptions.notRenew', 'subscriptions.cancel', 'subscriptions.resume', 'subscriptions.downgradeToFree', 'subscriptions.keepVehicles', 'subscriptions.manualOverride']],
   ['src/services/trialEngine.js', ['trialEngine.startAccountTrial', 'trialEngine.extendCoupon']],
   ['src/services/onboarding.js', ['onboarding.saveAssetRecord', 'onboarding.stage2Specs']],
   ['src/services/vehicleCompliance.js', ['vehicleCompliance.submit']],
@@ -201,7 +202,7 @@ for (const [file, reasons] of REASONS) {
     check(`${file} pins reason ${reason}`, src.includes(`reason: '${reason}'`));
   }
 }
-check('all 42 call-site reasons are pinned', reasonCount === 42, reasonCount);
+check('all 43 call-site reasons are pinned', reasonCount === 43, reasonCount);
 
 console.log('\n=== 7. deliberately-left registry (rule-51 sweep, v1.63.1) ===');
 // These tables are NOT in section 177's snapshot. A future snapshot expansion
