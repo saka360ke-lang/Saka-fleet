@@ -4799,7 +4799,7 @@ ${vehicleTable}
   return renderPageShell(`${owner.name || 'Owner'} — fleet`, body, { headerRight: adminNav() });
 }
 
-/** `/d/care` (Phase 19) — Amina's escalated queue + investigation + lessons. */
+/** `/d/care` (Phase 19; threads since v1.97.4) — Amina's queue + lessons. */
 export function renderCareQueuePage({ data } = {}) {
   if (!data?.ok) {
     return renderErrorPage(503, 'The care queue could not be loaded just now. Please try again in a moment.').html;
@@ -4811,7 +4811,26 @@ export function renderCareQueuePage({ data } = {}) {
     { label: 'In progress', value: Number(counts.inProgress || 0), hint: 'a human is on it' },
     { label: 'Lessons', value: (data.learnings || []).length, hint: 'learned from human replies' }
   ]);
-  const ticketCards = (data.escalated || []).map((ticket) => {
+  // v1.97.4 — every open ticket stays visible (the human's reply moves it to
+  // IN_PROGRESS, so an escalated-only list made the update look lost).
+  const statusChipHtml = (status) => {
+    const value = String(status || 'OPEN').toUpperCase();
+    if (value === 'ESCALATED') return '<span class="chip bad">ESCALATED</span>';
+    if (value === 'IN_PROGRESS') return '<span class="chip due">IN PROGRESS</span>';
+    if (value === 'RESOLVED') return '<span class="chip ok">RESOLVED</span>';
+    return `<span class="chip">${escapeHtml(value)}</span>`;
+  };
+  const threadHtml = (ticket) => {
+    const thread = (ticket.thread || []).slice(-20);
+    if (!thread.length) return '<p class="muted">No messages on this ticket yet.</p>';
+    const items = thread.map((message) => {
+      const who = message.direction === 'out' ? '📤 care' : (message.direction === 'internal' ? '📝 internal' : '👤 customer');
+      const when = escapeHtml(String(message.created_at || '').slice(0, 16).replace('T', ' '));
+      return `<li>${who} <span class="muted">(${escapeHtml(String(message.channel || 'email'))} · ${when})</span><br>${escapeHtml(String(message.message_body || '').slice(0, 500))}</li>`;
+    }).join('');
+    return `<ul class="plain thread">${items}</ul>`;
+  };
+  const ticketCards = (data.tickets || []).map((ticket) => {
     const investigation = (ticket.investigation || []).slice(-10);
     const steps = investigation.length
       ? `<ul class="plain invest">${investigation.map((message) => `<li>🔎 ${escapeHtml(String(message.message_body || '').slice(0, 300))}</li>`).join('')}</ul>`
@@ -4819,19 +4838,25 @@ export function renderCareQueuePage({ data } = {}) {
     const draft = ticket.ai_draft
       ? `<h3>🤖 Amina\'s draft (not sent)</h3><blockquote>${escapeHtml(String(ticket.ai_draft).slice(0, 1200))}</blockquote>`
       : '<p class="muted">No draft was prepared.</p>';
+    const note = ticket.internal_note
+      ? `<h3>📝 Internal note</h3><p>${escapeHtml(String(ticket.internal_note).slice(0, 600))}</p>`
+      : '';
     return `<div class="card">
       <p><strong>${escapeHtml(ticket.subject || ticket.message_body || 'Support ticket')}</strong>
-      <span class="chip bad">ESCALATED</span><span class="chip">${escapeHtml(ticket.issue_category || 'other')}</span></p>
+      ${statusChipHtml(ticket.status)}<span class="chip">${escapeHtml(ticket.issue_category || 'other')}</span></p>
       <p class="muted">${escapeHtml(ticket.sender_email || ticket.whatsapp_number || 'unknown sender')} · ticket ${escapeHtml(String(ticket.id || '').slice(0, 8))}</p>
+      <h3>💬 Thread</h3>
+      ${threadHtml(ticket)}
+      ${note}
       <h3>🔎 Investigation log</h3>
       ${steps}
       ${draft}
       <p class="muted" style="font-size:13px;">Reply from the console: <code>care reply ${escapeHtml(String(ticket.id || '').slice(0, 8))} &lt;text&gt;</code></p>
     </div>`;
   }).join('');
-  const escalations = (data.escalated || []).length
+  const tickets = (data.tickets || []).length
     ? ticketCards
-    : '<div class="card"><p class="muted">No escalated tickets — Amina is handling the inbox. 🎉</p></div>';
+    : '<div class="card"><p class="muted">No open care tickets — Amina is handling the inbox. 🎉</p></div>';
   const lessons = (data.learnings || []).length
     ? `<div class="card"><ul class="plain">${(data.learnings || []).slice(0, 10).map((row) => `<li>💡 ${escapeHtml(String(row.lesson || ''))}${row.trigger_context ? `<span class="muted"> · ${escapeHtml(String(row.trigger_context).slice(0, 120))}</span>` : ''}</li>`).join('')}</ul></div>`
     : '<div class="card"><p class="muted">No lessons learned yet — every human reply to an escalation teaches Amina one rule.</p></div>';
@@ -4839,8 +4864,8 @@ export function renderCareQueuePage({ data } = {}) {
 <h1>Care queue</h1>
 <p class="muted">Amina triages support email first; anything she cannot resolve lands here. Read-only · every visit is audited.</p>
 ${kpis}
-<h2>Escalated tickets</h2>
-${escalations}
+<h2>Tickets</h2>
+${tickets}
 <h2>Lessons learned</h2>
 ${lessons}`;
   return renderPageShell('Care queue', body, { headerRight: adminNav() });

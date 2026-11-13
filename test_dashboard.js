@@ -2162,11 +2162,13 @@ async function run() {
   const careSeed = () => ({
     support_tickets: [
       { id: 't-esc-1', subject: 'Fuel log stuck', sender_email: 'jane@example.com', issue_category: 'logging', status: 'ESCALATED', priority: 'high', ai_draft: 'We are checking this now.', internal_note: 'Amina investigated and escalated', created_at: careStamp, updated_at: careStamp },
-      { id: 't-open-1', subject: 'How do I add a driver?', sender_email: 'sam@example.com', issue_category: 'driver', status: 'OPEN', priority: 'medium', ai_draft: null, created_at: careStamp, updated_at: careStamp }
+      { id: 't-open-1', subject: 'How do I add a driver?', sender_email: 'sam@example.com', issue_category: 'driver', status: 'OPEN', priority: 'medium', ai_draft: null, created_at: careStamp, updated_at: careStamp },
+      { id: 't-prog-1', subject: 'How do I log fuel?', sender_email: 'hugu@example.com', issue_category: 'logging', status: 'IN_PROGRESS', priority: 'high', ai_draft: null, internal_note: 'Human is on it', created_at: careStamp, updated_at: careStamp }
     ],
     support_ticket_messages: [
       { id: 'cm1', ticket_id: 't-esc-1', direction: 'in', channel: 'email', message_body: 'Fuel log stuck', created_at: careStamp },
-      { id: 'cm2', ticket_id: 't-esc-1', direction: 'internal', channel: 'ai', message_body: 'Amina checked get_recent_errors → 2 matching errors', created_at: careStamp }
+      { id: 'cm2', ticket_id: 't-esc-1', direction: 'internal', channel: 'ai', message_body: 'Amina checked get_recent_errors → 2 matching errors', created_at: careStamp },
+      { id: 'cm3', ticket_id: 't-prog-1', direction: 'out', channel: 'email', message_body: 'Just type "Log 40L diesel" in your Saka WhatsApp chat.', created_at: careStamp }
     ],
     care_learnings: [{ id: 'cl1', trigger_context: 'missing receipt', lesson: 'Ask the customer to re-upload the receipt image.', created_at: careStamp }]
   });
@@ -2183,6 +2185,10 @@ async function run() {
   check(careHtml.includes('Investigation log') && careHtml.includes('get_recent_errors'), 'the investigation log is rendered');
   check(careHtml.includes('Amina&#39;s draft') || careHtml.includes("Amina's draft"), 'the draft section is rendered');
   check(careHtml.includes('Ask the customer to re-upload'), 'the learned lesson is visible');
+  check(careQueue.counts.inProgress === 1, 'the in-progress ticket is counted (KPI In progress = 1)');
+  check(careHtml.includes('IN PROGRESS'), 'the in-progress ticket keeps its card with a live status chip');
+  check(careHtml.includes('Thread') && careHtml.includes('Log 40L diesel'), 'the human outbound reply is rendered in the ticket thread');
+  check(careHtml.includes('Human is on it'), 'the internal note is rendered');
   check(careHtml.includes('href="/d/care"') && careHtml.includes('Owners'), 'the admin nav carries Care');
   check(renderCareQueuePage({ data: { ok: false } }).includes('could not be loaded'), 'a failed care load renders one honest explanation');
   const hostileCare = renderCareQueuePage({ data: { ...careQueue, escalated: [{ ...careQueue.escalated[0], subject: '<script>alert(1)</script>' }] } });

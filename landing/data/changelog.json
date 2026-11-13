@@ -1,6 +1,13 @@
 {
-  "latest": "1.97.3",
+  "latest": "1.97.4",
   "entries": [
+    {
+      "version": "1.97.4",
+      "date": "2026-11-13",
+      "title": "Support replies now update the ticket and show in the thread",
+      "preview": "When our team replies, the ticket now moves to In progress and the conversation appears in the dashboard thread.",
+      "summary": "A support-tool fix from a real test. When the Saka team replied to an escalated support ticket, the reply email reached the customer - but the ticket's status silently stayed Escalated, the dashboard's In progress counter stayed at zero, and the reply did not appear in the dashboard thread, so it looked like nothing had happened. Two hidden causes were fixed: a very old database rule was rejecting the In progress and Resolved statuses, and the ticket lookup could mistake a one-off network hiccup for 'ticket not found'. Now every reply moves the ticket to In progress, the dashboard shows the full conversation - your message, our reply and internal notes - and any future status problem is reported honestly instead of being silently swallowed. Nothing about your own WhatsApp conversations, records, reports, reminders or billing changes."
+    },
     {
       "version": "1.97.3",
       "date": "2026-11-13",

@@ -17,7 +17,7 @@ const T1 = '11111111-1111-1111-1111-111111111111';
 const T2 = '22222222-2222-2222-2222-222222222222';
 const iso = () => new Date().toISOString();
 
-function makeMock({ tickets = [], messages = [], audits = [] } = {}) {
+function makeMock({ tickets = [], messages = [], audits = [] } = {}, options = {}) {
   const db = {
     support_tickets: tickets.map((r) => ({ ...r })),
     support_ticket_messages: messages.map((r) => ({ ...r })),
@@ -42,7 +42,7 @@ function makeMock({ tickets = [], messages = [], audits = [] } = {}) {
       return state.limit ? out.slice(0, state.limit) : out;
     };
     const q = {
-      select: () => q,
+      select: () => { state.fail = typeof options.beforeSelect === 'function' ? options.beforeSelect(table) === true : false; return q; },
       eq: (c, v) => { state.filters.push([c, v, 'eq']); return q; },
       in: (c, v) => { state.filters.push([c, v, 'in']); return q; },
       gte: (c, v) => { state.filters.push([c, v, 'gte']); return q; },
@@ -50,8 +50,14 @@ function makeMock({ tickets = [], messages = [], audits = [] } = {}) {
       or: () => q,
       order: (c, opts) => { state.orderBy = [c, !(opts && opts.ascending === false)]; return q; },
       limit: (n) => { state.limit = n; return q; },
-      maybeSingle: async () => ({ data: result()[0] || null, error: null }),
-      then: (resolve) => resolve({ data: result(), error: null }),
+      maybeSingle: async () => {
+        if (state.fail) { state.fail = false; return { data: null, error: { message: 'simulated transient lookup failure' } }; }
+        return { data: result()[0] || null, error: null };
+      },
+      then: (resolve) => {
+        if (state.fail) { state.fail = false; return resolve({ data: null, error: { message: 'simulated transient lookup failure' } }); }
+        return resolve({ data: result(), error: null });
+      },
       insert: (payload) => {
         const items = Array.isArray(payload) ? payload : [payload];
         const saved = items.map((it) => ({ id: it.id || ('id-' + (seq += 1)), ...it }));
@@ -60,6 +66,10 @@ function makeMock({ tickets = [], messages = [], audits = [] } = {}) {
       },
       update: (patch) => ({
         eq: async (c, v) => {
+          if (typeof options.beforeUpdate === 'function') {
+            const rejection = options.beforeUpdate(table, patch);
+            if (rejection && rejection.error) return { error: rejection.error };
+          }
           for (const r of rows()) if (r[c] === v) Object.assign(r, patch);
           return { error: null };
         }
@@ -173,6 +183,38 @@ check(sentEmail.length === 1 && sentEmail[0].to === 'user@example.com', 'email r
 check(replyMock.__db.support_tickets[0].status === 'IN_PROGRESS', 'replying moves the ticket to in progress');
 const outMsg = replyMock.__db.support_ticket_messages.filter((m) => m.direction === 'out');
 check(outMsg.length === 1 && outMsg[0].channel === 'whatsapp+email', 'the outbound message is in the thread');
+
+console.log('--- reply on an ESCALATED ticket (v1.97.4) ---');
+const escalatedReplyMock = makeMock({
+  tickets: [{ id: T1, whatsapp_number: 'esc@example.com', sender_email: 'esc@example.com', issue_category: 'logging', message_body: 'Fuel log stuck', subject: 'Fuel log stuck', status: 'ESCALATED', priority: 'high', source: 'email', thread_key: 'k-esc', assigned_to: null, internal_note: 'Amina escalated', created_at: iso(), updated_at: iso() }]
+});
+const escalatedReply = await handleCareCommand(escalatedReplyMock, { phone: worker, text: 'care reply 11111111 Type Log 40L diesel', sendEmail: async () => true });
+check(escalatedReplyMock.__db.support_tickets[0].status === 'IN_PROGRESS', 'replying to an ESCALATED ticket moves it to IN_PROGRESS');
+check(escalatedReplyMock.__db.support_ticket_messages.some((m) => m.direction === 'out' && String(m.message_body).indexOf('Log 40L diesel') !== -1), 'the reply lands in the thread as an out message');
+check(escalatedReply.reply.indexOf('could not update') === -1, 'a clean status write carries no warning');
+
+console.log('--- the silent status swallow is dead (v1.97.4) ---');
+const blockedMock = makeMock(
+  { tickets: [{ id: T1, whatsapp_number: '+254700000000', sender_email: 'user@example.com', issue_category: 'logging', message_body: 'Help', subject: 'Help', status: 'OPEN', priority: 'medium', source: 'email', thread_key: 'k-block', assigned_to: null, internal_note: null, created_at: iso(), updated_at: iso() }] },
+  { beforeUpdate: (table) => (table === 'support_tickets' ? { error: { message: 'new row for relation "support_tickets" violates check constraint "support_tickets_status_check"' } } : null) }
+);
+const blocked = await handleCareCommand(blockedMock, { phone: worker, text: 'care reply 11111111 Try this now', sendEmail: async () => true });
+await new Promise((resolve) => setTimeout(resolve, 25));
+check(blocked.reply.indexOf('could not update the ticket status') !== -1, 'a refused status write is reported honestly (no false success)');
+check(blockedMock.__db.support_ticket_messages.some((m) => m.direction === 'out'), 'the customer reply is still sent and threaded');
+check((blockedMock.__db.error_logs || []).some((r) => String(r.route || '').indexOf('updateCareTicket') !== -1), 'the refusal is written to error_logs');
+
+console.log('--- the lookup flake is dead (v1.97.4) ---');
+let flakePulse = true;
+const flakeMock = makeMock(
+  { tickets: [{ id: T1, whatsapp_number: '+254700000000', sender_email: 'user@example.com', issue_category: 'logging', message_body: 'Help', subject: 'Help', status: 'OPEN', priority: 'medium', source: 'email', thread_key: 'k-flake', assigned_to: null, internal_note: null, created_at: iso(), updated_at: iso() }] },
+  { beforeSelect: (table) => { if (table === 'support_tickets' && flakePulse) { flakePulse = false; return true; } return false; } }
+);
+const flaked = await handleCareCommand(flakeMock, { phone: worker, text: 'care reply 11111111 Retry works', sendEmail: async () => true });
+await new Promise((resolve) => setTimeout(resolve, 25));
+check(flaked.reply.indexOf('not found') === -1, 'a transient lookup failure never masquerades as "ticket not found"');
+check(flakeMock.__db.support_tickets[0].status === 'IN_PROGRESS', 'the retried lookup completes the reply and the status write');
+check((flakeMock.__db.error_logs || []).some((r) => String(r.route || '').indexOf('resolveCareTicketId') !== -1), 'the transient lookup failure is logged');
 
 console.log('--- audit trail ---');
 const audit = await handleCareCommand(replyMock, { phone: worker, text: 'care audit' });

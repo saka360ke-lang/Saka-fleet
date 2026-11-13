@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.97.3  
+**Version:** 1.97.4  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.97.4** | Care reply status writes fixed — live `support_tickets_status_check` widened to the six canonical statuses (`IN_PROGRESS`/`RESOLVED` were silently rejected and swallowed), `updateCareTicket`/`resolveCareTicketId` log every refusal and retry once (the false "ticket not found" flake), `/d/care` lists every ticket with its full thread + internal note + status chips, `ai_draft` applied live, ticket `0fc5fb1e` repaired | 246 |
 | **1.97.3** | Stateless-suite isolation — `test_inbound_email` pins `CARE_AI_ENABLED` off (the runner's dotenv load leaked a local `on` into the disabled-path assertions and suppressed the care ping); 41 → 42 assertions; Amina's kill switch stays operator-owned; no app behaviour change | 245 |
 | **1.97.2** | Signup door on `/d/login` — `renderLoginPage` adds a bottom-of-card "Don't have an account yet? Start your free trial →" link to `https://sakafleet.com/` (lime accent) on the OWNER door only; `admin: true` renders without it; tests cover both renderers and `GET /d/login` vs `GET /d/admin/login` | 244 |
 | **1.97.1** | Unverified-signup dead-end fix (kiddymoms01@gmail.com) — `inspectExistingSignup` returns `'unverified'` for an unverified email match (the `'email_exists'` state is retired), the new engine-owned `reissueWebOnboardCode` resumes the SAME account (stored phone, profile untouched, `WEB_ONBOARD_RESUMED`) and `/api/onboard` returns `success:true + onboard_token`; the silent `detailsContinue` gate return is replaced by visible copy + a re-check; business refusals use the server message and malformed responses are logged | 243 |
@@ -7312,4 +7313,22 @@ Only valid values are attached (`userData.email` / `userData.phone_number`); the
 **Suites run.** test_inbound_email (42), test_env_audit (59), test_care_ai (59), test_doc_sync, test_kb_docs, test_vehicle_documents, test_landing_static, `npm run env:audit`, `npm run health` — green.
 
 **Rules shaped this work (rule 58).** 1/39/42/45/63 (rules first; **0 open proposals** verified live), 3/4, 10/11 (stateless suite + auto-cleanup), 12/33 (field-fix ship ritual), 21 (env registry parity), 44 (audited before acting — registry and template were already complete), 50/51/52 (isolation pin + sibling sweep + before/after proof), 54 (live gcloud + DB evidence, no guesses), 55 (evolved the existing suite; no new harness), 2 (architecture + CHANGELOG + landing feed in the same commit). No rule edited. **Impact:** local Amina testing can now coexist with the stateless suites; the production kill switch stays operator-owned (Cloud Run remains OFF until the gcloud update).
+
+### 246. v1.97.4 — care reply status writes, lookup flake and the `/d/care` thread
+
+**Why (live audit, 2026-11-13).** `care reply 0fc5fb1e …` emailed the customer and threaded the `out` message, yet the ticket stayed ESCALATED (`updated_at` frozen at escalation time) and the KPI read `In progress: 0`; the first rapid attempt had answered "That ticket was not found." for a live ticket. Root causes: (1) the live `support_tickets_status_check` — inherited from the pre-v1.58.14 table — allowed only `OPEN/BOT_HANDLED/ESCALATED/CLOSED`, so every `IN_PROGRESS` (console reply, `[SFC-]` router) and `RESOLVED` (Amina) write was rejected by PostgREST, and `updateCareTicket` swallowed the error with no log; (2) `resolveCareTicketId` ignored the PostgREST `error` and mapped any transient failure to "not found"; (3) `/d/care` rendered only ESCALATED cards and only `internal/ai` messages, so human replies could never be seen; (4) `support_tickets.ai_draft` was missing live (`migrate:care-ai` had never been applied).
+
+**The change.** `CARE_SQL` gains an idempotent constraint widening (`DROP CONSTRAINT IF EXISTS` + `ADD` with the six canonical statuses; `BOT_HANDLED` kept for legacy rows — no code writes it). `updateCareTicket` logs every refusal via `logWriteFailure`, the reply/email branch appends an honest warning to the confirmation when the status write fails, and `routeCareInternalReply` returns `ok:false` with the reason while the lesson + audit still run. `resolveCareTicketId` destructures `error`, retries once after 300 ms and logs every transient failure; "not found" is reserved for a clean empty result. `renderCareQueuePage` lists every ticket from `buildCareQueue` (OPEN/IN_PROGRESS/ESCALATED) with a live status chip, the full Thread (customer/care/internal + channel + time), the internal note, the investigation log and Amina's draft; the KPI strip reads the same counts (In progress now reflects the DB).
+
+**Live remediation (applied).** `npm run migrate:care-console` (constraint widened) and `npm run migrate:care-ai` (`ai_draft` + `care_learnings`) were applied to project `wnvbhpykboonygaznhhl`; ticket `0fc5fb1e-c8c1-492c-b4dd-eb4b64eeea19` was set to `IN_PROGRESS` after the constraint fix.
+
+**Tests (rule 52).** `test_care_worker`: reply on an ESCALATED ticket → `IN_PROGRESS` + `out` message; a refused status write → honest copy + `error_logs` row while the customer reply is still sent; a transient lookup failure → retried + logged, never "not found". `test_dashboard`: an IN_PROGRESS ticket renders its chip, its outbound thread message and its internal note, with `counts.inProgress = 1`.
+
+**Recurrence autopsy (rule 51).** Defect class *a legacy CHECK constraint silently rejects a status the engine writes; PostgREST refusals are swallowed* → siblings swept: `RESOLVED` (careAi resolve path) unblocked by the same constraint; every `updateCareTicket` caller (reply/email/note/take/release/close/reopen/escalate/deescalate/`[SFC-]` router/careAi) audited; `resolveCareTicketId` callers audited; dashboard render gap closed; the mock-vs-prod divergence is pinned by the `beforeUpdate` test. Deliberately left: `BOT_HANDLED` stays allowed for legacy rows (no code references it).
+
+**Frames touched.** `src/services/{careConsole,careLearning,dashboard}.js`, `test_care_worker.js`, `test_dashboard.js`, `test_vehicle_documents.js` (version pin), `package.json` (1.97.4), `landing/data/changelog.json` + stamped assets, `docs/` (regenerated), this file, `CHANGELOG.md`.
+
+**Suites run.** test_care_worker, test_dashboard, test_care_learning, test_inbound_email, test_doc_sync, test_kb_docs, test_vehicle_documents, test_landing_static, test_env_audit, `npm run env:audit`, `npm run health` — green.
+
+**Rules shaped this work (rule 58).** 1/39/42/45/63, 3/4, 10/11, 12/33, 21, 44, 50/51/52, 54, 55, 56, 2. No rule edited. **Impact:** `care reply`/`care email`, the `[SFC-]` human-reply router and Amina's resolve path persist their statuses; `/d/care` shows live threads and KPIs; refused writes can never be silent again.
 

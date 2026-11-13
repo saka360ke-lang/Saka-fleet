@@ -205,7 +205,9 @@ export async function routeCareInternalReply(supabase, { subject = '', text = ''
       channel: 'email',
       body: `👤 Human reply (${sender}): ${String(text || '').slice(0, 3500)}`
     });
-    await updateCareTicket(supabase, ticket.id, {
+    // v1.97.4 — never report a status write that was refused; updateCareTicket
+    // logs the reason (rule 50). The lesson + audit still run.
+    const updated = await updateCareTicket(supabase, ticket.id, {
       status: 'IN_PROGRESS',
       assigned_to: sender,
       updated_at: new Date().toISOString()
@@ -216,7 +218,13 @@ export async function routeCareInternalReply(supabase, { subject = '', text = ''
       action: 'CARE_TICKET_HUMAN_REPLY',
       details: { ticketId: ticket.id, learned: Boolean(learned.ok), lesson: learned.ok ? learned.lesson.slice(0, 200) : null }
     });
-    return { ok: true, ticketId: ticket.id, learned: Boolean(learned.ok), lesson: learned.ok ? learned.lesson : null };
+    return {
+      ok: Boolean(updated.ok),
+      ticketId: ticket.id,
+      learned: Boolean(learned.ok),
+      lesson: learned.ok ? learned.lesson : null,
+      reason: updated.ok ? null : (updated.error || 'status-write-failed')
+    };
   } catch (err) {
     logWriteFailure(supabase, 'careLearning.routeCareInternalReply', err);
     return { ok: false, reason: err.message, tag };

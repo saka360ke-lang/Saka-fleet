@@ -62,6 +62,13 @@ export const CARE_SQL = `
     );
     CREATE INDEX IF NOT EXISTS idx_support_ticket_messages_ticket
         ON public.support_ticket_messages(ticket_id, created_at ASC);
+    -- v1.97.4 — the original table only allowed OPEN/BOT_HANDLED/ESCALATED/CLOSED,
+    -- so every IN_PROGRESS (care reply / [SFC-] router) and RESOLVED (Amina)
+    -- write was rejected by PostgREST and swallowed. Widen it to the canonical
+    -- lifecycle (BOT_HANDLED stays for legacy rows; no code writes it).
+    ALTER TABLE public.support_tickets DROP CONSTRAINT IF EXISTS support_tickets_status_check;
+    ALTER TABLE public.support_tickets ADD CONSTRAINT support_tickets_status_check
+        CHECK (status IN ('OPEN', 'IN_PROGRESS', 'ESCALATED', 'RESOLVED', 'CLOSED', 'BOT_HANDLED'));
 `;
 
 /** Ensure the console columns/table exist (fail-soft; DDL needs a SQL transport). */
@@ -245,11 +252,25 @@ export async function resolveCareTicketId(supabase, id) {
   const raw = String(id || '').trim().replace(/`/g, '');
   if (!raw) return null;
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw)) return raw;
+  // v1.97.4 — a transient PostgREST failure must never masquerade as "not found"
+  // (the 2026-11-13 flake: one abort/timeout made a live ticket unreachable for a
+  // single rapid retry). One retry after a short pause; every failure is logged.
+  const scan = () => supabase.from(CARE_TICKETS_TABLE).select('id').order('created_at', { ascending: false }).limit(100);
   try {
-    const { data } = await supabase.from(CARE_TICKETS_TABLE).select('id').order('created_at', { ascending: false }).limit(100);
+    let { data, error } = await scan();
+    if (error) {
+      logWriteFailure(supabase, 'careConsole.resolveCareTicketId.retry', error, { id: raw });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      ({ data, error } = await scan());
+    }
+    if (error) {
+      logWriteFailure(supabase, 'careConsole.resolveCareTicketId', error, { id: raw });
+      return null;
+    }
     const hit = (data || []).find((r) => String(r.id).toLowerCase().startsWith(raw.toLowerCase()));
     return hit ? hit.id : null;
-  } catch {
+  } catch (err) {
+    logWriteFailure(supabase, 'careConsole.resolveCareTicketId', err, { id: raw });
     return null;
   }
 }
@@ -307,9 +328,14 @@ export async function updateCareTicket(supabase, id, patch = {}) {
     const realId = await resolveCareTicketId(supabase, id);
     if (!realId) return { ok: false, error: 'not-found' };
     const { error } = await supabase.from(CARE_TICKETS_TABLE).update(allowed).eq('id', realId);
-    if (error) return { ok: false, error: error.message };
+    if (error) {
+      // v1.97.4 — a refused write (e.g. a CHECK constraint) is never silent again.
+      logWriteFailure(supabase, 'careConsole.updateCareTicket', error, { ticketId: realId, fields: Object.keys(allowed).join(',') });
+      return { ok: false, error: error.message };
+    }
     return { ok: true, id: realId };
   } catch (err) {
+    logWriteFailure(supabase, 'careConsole.updateCareTicket', err, { ticketId: String(id || '') });
     return { ok: false, error: err.message };
   }
 }
@@ -564,9 +590,14 @@ async function handleCareReplyAction({ supabase, phone, sendWhatsApp, sendEmail 
       if (!whatsappSent && !emailSent) return { reply: 'I could not send that reply (no reachable channel). Use `care read ' + shortId(ticket.id) + '`.' };
       const channel = whatsappSent && emailSent ? 'whatsapp+email' : (whatsappSent ? 'whatsapp' : 'email');
       await appendTicketMessage(supabase, { ticketId: ticket.id, direction: 'out', channel, body });
-      await updateCareTicket(supabase, ticket.id, { status: CARE_STATUS.IN_PROGRESS, updated_at: nowIso() });
+      const updated = await updateCareTicket(supabase, ticket.id, { status: CARE_STATUS.IN_PROGRESS, updated_at: nowIso() });
       await auditCareAction(supabase, { phone, action: 'CARE_TICKET_REPLIED', details: { ticketId: ticket.id, channel } });
-      return { reply: '📤 Reply sent on ' + channel + ' for `' + shortId(ticket.id) + '`.' };
+      // v1.97.4 — the customer answer is the priority, but a refused status write
+      // is reported honestly (updateCareTicket logs the reason).
+      const warning = updated.ok
+        ? ''
+        : ' ⚠️ I could not update the ticket status (' + String(updated.error || 'unknown').slice(0, 120) + ') — the dashboard will lag until this is fixed.';
+      return { reply: '📤 Reply sent on ' + channel + ' for `' + shortId(ticket.id) + '`.' + warning };
     }
     default:
       return { reply: 'I did not recognise that care command.\n\n' + formatCareHelp() };
