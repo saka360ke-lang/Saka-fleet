@@ -204,7 +204,7 @@ check(/Strictly necessary/.test(fs.readFileSync(path.join(LANDING, 'privacy.html
 const cookieJs = fs.readFileSync(path.join(LANDING, 'assets/js/cookieConsent.js'), 'utf8');
 check(cookieJs.includes('localStorage') && cookieJs.includes('saka_cookie_consent'), 'consent is stored locally with a versioned key');
 check(cookieJs.includes('GTM-TGR68X2X'), 'the consent script carries the GTM container id');
-check(/analytics === true/.test(cookieJs) && /googletagmanager\.com/.test(cookieJs), 'analytics (Google Tag Manager) load only after an explicit opt-in');
+check(/analytics === true/.test(cookieJs) && /gtm\.sakafleet\.com/.test(cookieJs), 'analytics (Google Tag Manager) load only after an explicit opt-in, from gtm.sakafleet.com');
 check(cookieJs.includes('window.__sakaCookies') && /chosen\s*:\s*function/.test(cookieJs), 'the consent script exposes a cookie-choice gate for signup (v1.49.3)');
 check(mainJs.includes("event: 'successful_signup'") && mainJs.includes("signup_method: 'website'"), 'a successful signup pushes the successful_signup dataLayer event');
 check(mainJs.includes('window.__sakaCookies') && mainJs.includes('.chosen()'), 'the signup flow gates on a recorded cookie choice');
@@ -559,6 +559,31 @@ console.log('\n--- Test 24: cookie banner z-order + mobile safety (v1.96.8) ---'
     'the attention pulse is wired to the banner');
   check(/@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.cookie-banner\.attention\s*\{\s*animation:\s*none;\s*\}\s*\}/.test(css),
     'the pulse respects reduced motion');
+}
+
+console.log('\n--- Test 25: GTM served first-party from gtm.sakafleet.com (v1.96.9) ---');
+{
+  check(cookieJs.includes("j.src = 'https://gtm.sakafleet.com/gtm.js?id='"), 'the GTM loader points at the first-party domain');
+  check(cookieJs.includes("var GTM_ID = 'GTM-TGR68X2X'") && !cookieJs.includes('GTM-TGR682X'), 'the container id stays GTM-TGR68X2X (GTM-TGR682X is only a typo, never shipped)');
+  check(/if \(data && data\.analytics === true\) loadGtm\(\)/.test(cookieJs), 'GTM still loads only after an explicit analytics opt-in');
+  // Absence sweep: the third-party host must not survive anywhere under landing/.
+  const gtmBinary = /\.(woff2?|png|jpe?g|webp|ico|gif|pdf|zip)$/i;
+  const gtmOffenders = [];
+  for (const file of walk(LANDING)) {
+    if (gtmBinary.test(file)) continue;
+    if (/googletagmanager\.com/i.test(fs.readFileSync(file, 'utf8'))) gtmOffenders.push(path.relative(LANDING, file));
+  }
+  check(gtmOffenders.length === 0, `zero googletagmanager.com references remain under landing/${gtmOffenders.length ? ` (found: ${gtmOffenders.join(', ')})` : ''}`);
+  for (const gtmPage of ['index.html', 'privacy.html', 'terms.html', 'data-deletion.html', '404.html', 'status.html']) {
+    const gtmHtml = fs.readFileSync(path.join(LANDING, gtmPage), 'utf8');
+    check(!/googletagmanager\.com/i.test(gtmHtml), `${gtmPage} never hard-codes the GTM host (the consent loader owns delivery)`);
+  }
+  const noscriptOffenders = [];
+  for (const gtmPage of ['index.html', 'privacy.html', 'terms.html', 'data-deletion.html', '404.html', 'status.html']) {
+    const gtmHtml = fs.readFileSync(path.join(LANDING, gtmPage), 'utf8');
+    if (/<noscript[\s\S]{0,400}(gtm|googletagmanager|ns\.html)/i.test(gtmHtml)) noscriptOffenders.push(gtmPage);
+  }
+  check(noscriptOffenders.length === 0, `no GTM <noscript> iframe can bypass the consent gate${noscriptOffenders.length ? ` (found: ${noscriptOffenders.join(', ')})` : ''}`);
 }
 
 console.log(`\n🎉 ${passed} landing assertions passed (Phase 31 included).`);

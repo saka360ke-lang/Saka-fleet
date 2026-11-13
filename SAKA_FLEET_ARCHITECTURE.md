@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.96.8  
+**Version:** 1.96.9  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.96.9** | GTM delivered first-party — `loadGtm()` now injects `https://gtm.sakafleet.com/gtm.js?id=GTM-TGR68X2X` (was `www.googletagmanager.com`), consent gate untouched; no GTM `<noscript>` iframe by design (it would bypass the consent gate); Test 25 sweeps landing for zero `googletagmanager.com`; live-verified `GET` 200 + `application/javascript` + the container id before the edit | 241 |
 | **1.96.8** | Mobile cookie banner fix — `.cookie-banner` z-index 90 → **9999** (the signup gate re-opened it UNDER the onboarding modal backdrop at 100, so it was a dimmed ghost and never clickable), `bottom: calc(14px + env(safe-area-inset-bottom, 0px))` (iOS home indicator), a ≤640px wrap layout with 44px tap targets, a lime `cookie-pulse` attention animation (reduced-motion off) and an inline `#cookieGateErr` pointer replacing the native alert; landing assets stamped `?v=1.96.8` | 240 |
 | **1.96.7** | Web signup dead-end fix (ghost signup of 2026-11-12 08:57Z) + plate escape hatch (stalled user +254728134729, 11-10): unverified registered matches may continue (OTP re-sent), verified matches get a live WhatsApp CTA, `/api/onboard/check` audits a PII-safe `WEB_ONBOARD_CHECK_REGISTERED` result, `isPlateSkipText()` parks a `registration-draft` in the unified pending slot (24 h, ephemeral, NO schema change) and resumes on the next plate, and the single-question plate-nudge law is synced across `FLOW_GUIDANCE`, the flow playbook, the core prompt and the composer | 239 |
 | **1.96.6** | Enhanced Conversions on website signup — `successful_signup` now carries `user_data` (lowercased email + E.164 phone, unhashed; GTM hashes with SHA-256), consent scope bumped to v3 with disclosure on all six pages + privacy §11 + llms.txt | 238 |
@@ -7202,5 +7203,27 @@ Only valid values are attached (`userData.email` / `userData.phone_number`); the
 **Suites run.** test_landing_static (473), test_vehicle_documents (version pin), test_doc_sync, `npm run health` — green.
 
 **Rules shaped this work (rule 58).** 1/39/42/45/63 (rules + architecture first; **0 open proposals** verified live — 7 unrelated PENDING friction rows left for their own review), 3/4 (targeted reads, batched edits), 10/11 (stateless suites, no test rows created), 31 (warm, one next step, 44px tap targets), 33/43 (one version commit; deploy on push), 51/52 (sibling sweep + before/after assertions), 54 (live read-only operator check), 55/56 (evolved the existing banner/consent assets; every page re-stamped), 2/13 (architecture + CHANGELOG + landing feed in the same commit). No rule edited. **Impact:** a phone visitor can now see and tap the cookie choice above the signup form, safely above the iOS home indicator, and is told exactly where to look.
+
+### 241. v1.96.9 — GTM delivered first-party from gtm.sakafleet.com (2026-11-13)
+
+**Why.** Ad blockers filter the standard Google Tag Manager host, so consented analytics silently under-counted. The operator raised a first-party host (`gtm.sakafleet.com`) that proxies the same container.
+
+**Live verification (rule 54, before any edit).** The earlier session correctly stopped when `curl -I` returned **404** (`{"message":"Route GET:/gtm.js not found"}` from a Cloud Run/Fastify service) and shipped nothing. After the operator fixed the route: `GET https://gtm.sakafleet.com/gtm.js?id=GTM-TGR68X2X` → **200**, `content-type: application/javascript; charset=UTF-8`, **642,911-byte** payload containing `GTM-TGR68X2X`. HEAD returns 400 (proxy quirk; browsers load scripts with GET, so this is irrelevant).
+
+**The change (one line).** `landing/assets/js/cookieConsent.js` `loadGtm()`: `j.src = 'https://gtm.sakafleet.com/gtm.js?id=' + i + dl;` (was `https://www.googletagmanager.com/gtm.js`). Consent untouched: `applyConsent()` calls `loadGtm()` only when `data.analytics === true`; the `gtmLoaded` one-shot guard, `GTM_ID = 'GTM-TGR68X2X'`, the `consent_analytics_granted` dataLayer push and the never-blocking `try/catch` all stay.
+
+**No `<noscript>` iframe (deliberate).** The six HTML pages have never shipped the standard GTM noscript fallback, and this release explicitly does not add it: a `<noscript>` iframe cannot read the localStorage consent gate and would contact the GTM host for every no-JS visitor regardless of opt-in. Test 25 pins its absence.
+
+**Tests (rule 52).** `test_landing_static` Test 9's domain pin now asserts `gtm.sakafleet.com`; new Test 25 (+11: 473 → 484): exact loader URL, `GTM-TGR68X2X` preserved (and no `GTM-TGR682X`), the `analytics === true` gate, a case-insensitive `walk(LANDING)` sweep proving zero `googletagmanager.com` anywhere under `landing/` (binaries skipped), per-page absence on all six HTML files, and the no-noscript consent guarantee.
+
+**Recurrence autopsy (rule 51).** *Class "a hard-coded third-party host duplicated across delivery paths"* → loader (fixed), HTML script/noscript paths (absent by design — per-page + noscript assertions), `main.js` dataLayer pushes (no host — fine), dashboard pages (no GTM — deliberately left), prose/docs (no URLs — the directory sweep proves it). One targeted assertion per sibling.
+
+**Operator notes.** `gtm.sakafleet.com/gtm.js` must keep serving the GTM bootstrap as `application/javascript` (preserve path + `?id=` query); `GET https://gtm.sakafleet.com/healthy` is the readiness probe. If the proxy ever dies, `loadGtm()`'s `try/catch` means the page is unaffected and analytics simply stops — the browser network tab is the diagnosis point.
+
+**Frames touched.** `landing/assets/js/cookieConsent.js` (header + `loadGtm`), `test_landing_static.js` (Test 9 + Test 25), stamped landing assets (`?v=1.96.9`), `landing/data/changelog.json`, `test_vehicle_documents.js` (version pin), `package.json` (1.96.9), this file, `docs/` (regenerated), `CHANGELOG.md`.
+
+**Suites run.** test_landing_static (484), test_vehicle_documents (83), test_doc_sync (30), test_kb_docs (43), `npm run docs:check`, `npm run health` — green.
+
+**Rules shaped this work (rule 58).** 1/39/42/45/63 (rules + architecture first; **0 open proposals** verified live — 8 unrelated PENDING friction rows left for their own review), 3/4, 10/11, 13 (no intent/flow/field/prompt change), 31, 33/43, 51/52, 54 (live GET + payload verified before the edit; the earlier 404 stop was correct), 55/56, 2. No rule edited. **Impact:** consented analytics load from a first-party host; consent behaviour and the data collected are unchanged.
 
 

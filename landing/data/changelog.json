@@ -1,6 +1,13 @@
 {
-  "latest": "1.96.8",
+  "latest": "1.96.9",
   "entries": [
+    {
+      "version": "1.96.9",
+      "date": "2026-11-13",
+      "title": "Site analytics now arrive by a first-party address",
+      "preview": "Google Tag Manager now loads from our own gtm.sakafleet.com address, so consented measurement survives ad blockers.",
+      "summary": "A small, invisible privacy-respecting change to the website. If you choose \"Analytics & marketing\", the measurement script now loads from our own gtm.sakafleet.com address instead of the standard Google address - the same Google Tag Manager container, delivered first-party, so the measurement you consented to is far less likely to be blocked. Nothing changes about what we collect: the script still loads only after your explicit opt-in, rejecting non-essential cookies still loads nothing at all, and your WhatsApp records, reports and reminders are untouched."
+    },
     {
       "version": "1.96.8",
       "date": "2026-11-13",
