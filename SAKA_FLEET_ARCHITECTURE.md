@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.97.4  
+**Version:** 1.97.5  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.97.5** | Care dashboard UX + the honest lesson diagnosis — `/d/care` collapses Thread/Investigation into `<details>` (escalated thread open, the rest compact), titles lose the `[SFC-…]`/Re: chains (subjectless tickets titled from a 60-char body), status chips turn red/amber/blue and a grey `⚙️ Pre-gate escalation` badge replaces the paragraph; the live Lesson KPI=0 was proved to be an empty Resend body fetch (`CARE_TICKET_HUMAN_REPLY {learned:false}`), so every failed/empty body fetch now writes `error_logs` and the audit carries `bodyAvailable` | 247 |
 | **1.97.4** | Care reply status writes fixed — live `support_tickets_status_check` widened to the six canonical statuses (`IN_PROGRESS`/`RESOLVED` were silently rejected and swallowed), `updateCareTicket`/`resolveCareTicketId` log every refusal and retry once (the false "ticket not found" flake), `/d/care` lists every ticket with its full thread + internal note + status chips, `ai_draft` applied live, ticket `0fc5fb1e` repaired | 246 |
 | **1.97.3** | Stateless-suite isolation — `test_inbound_email` pins `CARE_AI_ENABLED` off (the runner's dotenv load leaked a local `on` into the disabled-path assertions and suppressed the care ping); 41 → 42 assertions; Amina's kill switch stays operator-owned; no app behaviour change | 245 |
 | **1.97.2** | Signup door on `/d/login` — `renderLoginPage` adds a bottom-of-card "Don't have an account yet? Start your free trial →" link to `https://sakafleet.com/` (lime accent) on the OWNER door only; `admin: true` renders without it; tests cover both renderers and `GET /d/login` vs `GET /d/admin/login` | 244 |
@@ -7332,3 +7333,36 @@ Only valid values are attached (`userData.email` / `userData.phone_number`); the
 
 **Rules shaped this work (rule 58).** 1/39/42/45/63, 3/4, 10/11, 12/33, 21, 44, 50/51/52, 54, 55, 56, 2. No rule edited. **Impact:** `care reply`/`care email`, the `[SFC-]` human-reply router and Amina's resolve path persist their statuses; `/d/care` shows live threads and KPIs; refused writes can never be silent again.
 
+
+
+### 247. v1.97.5 — compact care queue UX + the honest `[SFC-]` lesson diagnosis
+
+**Why (live audit, 2026-11-13).** The operator replied to an `[SFC-…]` escalation email from the Hostinger inbox yet `/d/care` still showed **Lessons: 0**. Rule-54 live read-only queries against project `wnvbhpykboonygaznhhl` (Supabase Management API) proved the chain end-to-end:
+- `public.care_learnings` → **0 rows** (`newest: null`); the KPI was factually correct, not a renderer bug.
+- `admin_audit_logs` → `CARE_TICKET_HUMAN_REPLY` at `2026-11-13 10:57:04 UTC` for ticket `0fc5fb1e-c8c1-492c-b4dd-eb4b64eeea19` with `{"learned":false,"lesson":null}` — **the router ran**; `EMAIL_INBOUND_SIGNING_SECRET` is valid (a bad signature returns 401 and writes nothing).
+- `support_ticket_messages` → the stored "human reply" is only `👤 Human reply (support@sakafleet.com): Re: [SFC-0fc5fb1e] Re: How do I log fuel?` — the reply **body** never arrived. `fetchInboundEmailBody()` returned no text (silently), `handleInboundEmail` fell back to `text: bodyText || email.subject`, and `extractCareLesson` correctly refused to invent a rule from a subject line (`no-reusable-lesson`).
+- The operator's real answer went out through the WhatsApp `care reply` console at `10:52` (`CARE_TICKET_REPLIED`, `channel: email`) — the console path never feeds the learning loop by design; only inbound `[SFC-]` replies do.
+- Zero care/lesson-related `error_logs` rows existed, so the failure was invisible. (Rule 42: proposals verified live — 4 `DECLINED`, 8 `DEPLOYED`, **0 open**.)
+
+**The change (renderer — `renderCareQueuePage`).**
+- New local helper `careTitleHtml(ticket)`: strips every `[SFC-…]` tag and any leading `Re:`/`Fwd:` chain, collapses whitespace, and titles a subjectless ticket from its `message_body` cut at **60 chars + `...`** (subjects are shown whole). Output stays `escapeHtml`-ed.
+- `statusChipHtml` emits dedicated classes: `chip care-escalated` (red `#F85149`, white), `chip care-progress` (amber `#F59E0B`, black `#0A0A0C`), `chip care-open` (blue `#2563EB`, white); `RESOLVED` keeps `chip ok`, unknown statuses keep the plain chip.
+- Each card now renders `<details class="care-details">` for **💬 Thread** and **🔎 Investigation log**. The thread is `open` only when the ticket is `ESCALATED`; the investigation log starts closed everywhere (OPEN/IN_PROGRESS are fully compact). The internal note, investigation steps and Amina's draft live inside the investigation details; the console-reply hint stays visible below them.
+- A ticket with no investigation steps shows one grey `chip care-pregate` badge — `⚙️ Pre-gate escalation` — replacing the old bulky paragraph.
+- The empty-lessons copy now names the real requirement: a human reply to an `[SFC-…]` email teaches a rule **when the reply body reaches the inbox**.
+
+**The change (pipeline — the silent fallback is dead, rule 50/51).**
+- `handleInboundEmail` gains a `fetchBody` test seam and treats a failed **or empty** Resend body as an incident: `logWriteFailure(supabase, 'inboundEmail.fetchInboundEmailBody', Error('Resend body unavailable: <reason|empty>'), { emailId })` — an `error_logs` row every time.
+- The internal-reply branch computes `bodyAvailable = Boolean(bodyText)`, passes it to the router, and returns it in the handler result.
+- `routeCareInternalReply` accepts `bodyAvailable` (default `true` so direct/console callers stay unchanged), records `bodyAvailable` in the `CARE_TICKET_HUMAN_REPLY` audit details and returns it — a subject-only fallback can never masquerade as a real reply again.
+
+
+**Tests (rule 52).** `test_dashboard` 944 → **958** (Test 51c): exactly 6 `<details>` blocks for 3 tickets, exactly one `open` and it wraps the escalated thread, the investigation log is never open by default, the three coloured chip classes, the pre-gate badge (and the paragraph gone), the 60-char subjectless-title truncation, tag/`Re:` stripping, and the four CSS rules. The previously vacuous hostile-subject check now injects into `data.tickets` (the renderer's real source since v1.97.4). `test_inbound_email` 42 → **48**: a failed `fetchBody` → `error_logs` row + `bodyAvailable:false` + subject-only honest fallback; an empty body is logged too; the real router's audit row carries `"bodyAvailable":false`.
+
+**Recurrence autopsy (rule 51).** Defect class *a verified webhook silently degrades to a subject-only "reply" when the provider body fetch fails, and the refusal is never logged* → siblings swept: the only `fetchInboundEmailBody` caller now logs both failure modes; every `routeCareInternalReply` caller carries `bodyAvailable`; the dashboard title path is the only place a ticket subject renders (escaped + stripped); the vacuous hostile-subject assertion was strengthened; and the new CSS comment leaked the words "care queue" into the inlined `DASHBOARD_CSS` of the owner-404 page (caught by the existing anti-leak assertion) — wording fixed to `/d/care`. Deliberately left: Amina's `processCareEmail` body degradation is unchanged (it records ticket message bodies, not lessons).
+
+**Frames touched.** `src/services/dashboard.js` (`renderCareQueuePage`, `careTitleHtml`, `statusChipHtml`, `DASHBOARD_CSS`), `src/services/inboundEmail.js` (`handleInboundEmail` fetch seam + failure log + `bodyAvailable`), `src/services/careLearning.js` (`routeCareInternalReply` payload/audit/return), `test_dashboard.js`, `test_inbound_email.js`, `test_vehicle_documents.js` (version pin), `package.json` (1.97.5), `landing/data/changelog.json` + stamped assets, `docs/` (regenerated), this file, `CHANGELOG.md`.
+
+**Suites run.** test_dashboard (958), test_inbound_email (48), test_care_learning, test_care_worker, test_doc_sync, test_kb_docs, test_vehicle_documents, test_landing_static, test_env_audit, `npm run health` — green.
+
+**Rules shaped this work (rule 58).** 1/39/42/45/63, 3/4, 10/11, 12/33, 13/31, 44/54, 50/51/52, 55, 56, 2. No rule edited. **Impact:** `/d/care` is compact, colour-coded and scannable; a missing Resend body can never again silently produce an unlearnable "human reply".

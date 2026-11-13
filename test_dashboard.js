@@ -2191,8 +2191,46 @@ async function run() {
   check(careHtml.includes('Human is on it'), 'the internal note is rendered');
   check(careHtml.includes('href="/d/care"') && careHtml.includes('Owners'), 'the admin nav carries Care');
   check(renderCareQueuePage({ data: { ok: false } }).includes('could not be loaded'), 'a failed care load renders one honest explanation');
-  const hostileCare = renderCareQueuePage({ data: { ...careQueue, escalated: [{ ...careQueue.escalated[0], subject: '<script>alert(1)</script>' }] } });
+  // v1.97.5 — the hostile fixture now lands on the REAL render source
+  // (`data.tickets`); before v1.97.4 the renderer read `data.escalated`, so the
+  // old assertion passed without exercising the title path at all.
+  const hostileCare = renderCareQueuePage({ data: { ...careQueue, tickets: careQueue.tickets.map((t) => (t.id === 't-esc-1' ? { ...t, subject: '<script>alert(1)</script>' } : t)) } });
   check(!hostileCare.includes('<script>alert(1)</script>'), 'care subject lines are escaped');
+
+  console.log('\n--- Test 51c: the compact care queue (v1.97.5) ---');
+  check((careHtml.match(/<details class="care-details"/g) || []).length === 6,
+    'every ticket renders two collapsible sections (thread + investigation log)');
+  check((careHtml.match(/<details class="care-details" open>/g) || []).length === 1,
+    'only the escalated ticket defaults its thread open');
+  check(/<details class="care-details" open><summary>💬 Thread<\/summary>/.test(careHtml),
+    'the open section is the escalated thread');
+  check(!/<details class="care-details" open><summary>🔎 Investigation log/.test(careHtml),
+    'the investigation log starts closed even for an escalated ticket');
+  check(careHtml.includes('chip care-escalated') && careHtml.includes('chip care-progress') && careHtml.includes('chip care-open'),
+    'the three status chips carry their own colour classes');
+  check(careHtml.includes('⚙️ Pre-gate escalation'),
+    'a ticket with no investigation steps shows the compact pre-gate badge');
+  check(!careHtml.includes('No investigation steps were recorded'),
+    'the bulky pre-gate paragraph is gone');
+  const longBody = 'My fuel log will not save no matter what I type and the receipt photo also fails to upload';
+  const compactCare = renderCareQueuePage({ data: { ...careQueue, tickets: [
+    { id: 't-nosub-1', subject: '', message_body: longBody, status: 'OPEN', issue_category: 'logging', sender_email: 'x@example.com', thread: [], investigation: [] },
+    { id: 't-tagged-1', subject: 'Re: [SFC-0fc5fb1e] Re: How do I log fuel?', status: 'IN_PROGRESS', issue_category: 'logging', sender_email: 'y@example.com', thread: [], investigation: [] }
+  ] } });
+  check(compactCare.includes(longBody.slice(0, 60).trimEnd() + '...'),
+    'a subjectless ticket is titled from its body, cut at 60 chars with an ellipsis');
+  check(!compactCare.includes(longBody.slice(60)),
+    'the rest of the long body is never dumped into the queue');
+  check(compactCare.includes('How do I log fuel?') && !compactCare.includes('[SFC-') && !compactCare.includes('Re: [SFC-'),
+    'the [SFC-] tag and Re: chains are stripped from displayed titles');
+  check(DASHBOARD_CSS.includes('.chip.care-escalated') && DASHBOARD_CSS.includes('background:#F85149'),
+    'the escalated chip is red with white text');
+  check(DASHBOARD_CSS.includes('.chip.care-progress') && DASHBOARD_CSS.includes('background:#F59E0B'),
+    'the in-progress chip is amber with black text');
+  check(DASHBOARD_CSS.includes('.chip.care-open') && DASHBOARD_CSS.includes('background:#2563EB'),
+    'the open chip is blue with white text');
+  check(DASHBOARD_CSS.includes('.chip.care-pregate') && DASHBOARD_CSS.includes('details.care-details[open]'),
+    'the pre-gate badge and the collapsible marker styling exist');
 
   console.log('\n--- Test 52: role-gated routes (D2 isolation + D1 scope) ---');
   process.env.DASHBOARD_ENABLED = 'on';

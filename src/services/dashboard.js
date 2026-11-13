@@ -2908,6 +2908,16 @@ h2 { font-size:16px; margin:22px 0 8px; }
 .chip.due { color:var(--accent); border-color:var(--accent); }
 .chip.ok { color:var(--accent); border-color:var(--accent-line); }
 .chip.bad { color:#F85149; border-color:#F85149; }
+/* v1.97.5 — /d/care status chips + collapsible card sections. */
+.chip.care-escalated { background:#F85149; border-color:#F85149; color:#fff; font-weight:700; }
+.chip.care-progress { background:#F59E0B; border-color:#F59E0B; color:#0A0A0C; font-weight:700; }
+.chip.care-open { background:#2563EB; border-color:#2563EB; color:#fff; font-weight:700; }
+.chip.care-pregate { background:#E5E7EB; border-color:#D1D5DB; color:#374151; }
+details.care-details { margin:10px 0; border-top:1px solid var(--line); padding-top:8px; }
+details.care-details summary { cursor:pointer; font-weight:700; font-size:14px; list-style:none; }
+details.care-details summary::before { content:'▸ '; }
+details.care-details[open] summary::before { content:'▾ '; }
+details.care-details summary::-webkit-details-marker { display:none; }
 input[type=text], input[type=tel], input[type=email], input[type=number], input[type=date], select, textarea { width:100%; padding:11px 12px; font-size:16px; font-family:var(--font-body); background:#0F0F11; color:var(--ink); border:1px solid var(--line); border-radius:10px; }
 input:focus, select:focus, textarea:focus { outline:none; border-color:var(--accent-line); box-shadow:var(--glow); }
 input[type=text] { width:100%; padding:14px; font-size:22px; letter-spacing:8px; text-align:center; background:#0F0F11; color:var(--ink); border:1px solid var(--line); border-radius:10px; }
@@ -4799,7 +4809,7 @@ ${vehicleTable}
   return renderPageShell(`${owner.name || 'Owner'} — fleet`, body, { headerRight: adminNav() });
 }
 
-/** `/d/care` (Phase 19; threads since v1.97.4) — Amina's queue + lessons. */
+/** `/d/care` (Phase 19; compact cards since v1.97.5) — Amina's queue + lessons. */
 export function renderCareQueuePage({ data } = {}) {
   if (!data?.ok) {
     return renderErrorPage(503, 'The care queue could not be loaded just now. Please try again in a moment.').html;
@@ -4813,10 +4823,27 @@ export function renderCareQueuePage({ data } = {}) {
   ]);
   // v1.97.4 — every open ticket stays visible (the human's reply moves it to
   // IN_PROGRESS, so an escalated-only list made the update look lost).
+  // v1.97.5 — compact card titles: the `[SFC-…]` routing tag and any Re:/Fwd:
+  // chain are stripped for display, and a subjectless ticket is titled from its
+  // message body, cut at 60 characters with an ellipsis.
+  const careTitleHtml = (ticket) => {
+    const hasSubject = Boolean(String(ticket.subject || '').trim());
+    const raw = (hasSubject ? String(ticket.subject) : String(ticket.message_body || '')).trim() || 'Support ticket';
+    const stripped = raw
+      .replace(/\[SFC-[a-z0-9]{4,40}\]/gi, ' ')
+      .replace(/^(\s*(re|fw|fwd)\s*:)+\s*/i, '')
+      .replace(/\s+/g, ' ')
+      .trim() || 'Support ticket';
+    const shown = hasSubject || stripped.length <= 60 ? stripped : `${stripped.slice(0, 60).trimEnd()}...`;
+    return escapeHtml(shown);
+  };
+  // v1.97.5 — status chips carry real colour: escalated red, in-progress amber,
+  // open blue (the workflow reading order at a glance).
   const statusChipHtml = (status) => {
     const value = String(status || 'OPEN').toUpperCase();
-    if (value === 'ESCALATED') return '<span class="chip bad">ESCALATED</span>';
-    if (value === 'IN_PROGRESS') return '<span class="chip due">IN PROGRESS</span>';
+    if (value === 'ESCALATED') return '<span class="chip care-escalated">ESCALATED</span>';
+    if (value === 'IN_PROGRESS') return '<span class="chip care-progress">IN PROGRESS</span>';
+    if (value === 'OPEN') return '<span class="chip care-open">OPEN</span>';
     if (value === 'RESOLVED') return '<span class="chip ok">RESOLVED</span>';
     return `<span class="chip">${escapeHtml(value)}</span>`;
   };
@@ -4831,26 +4858,32 @@ export function renderCareQueuePage({ data } = {}) {
     return `<ul class="plain thread">${items}</ul>`;
   };
   const ticketCards = (data.tickets || []).map((ticket) => {
+    const status = String(ticket.status || 'OPEN').toUpperCase();
     const investigation = (ticket.investigation || []).slice(-10);
+    // v1.97.5 — a pre-gated ticket shows ONE grey badge instead of a paragraph.
     const steps = investigation.length
       ? `<ul class="plain invest">${investigation.map((message) => `<li>🔎 ${escapeHtml(String(message.message_body || '').slice(0, 300))}</li>`).join('')}</ul>`
-      : '<p class="muted">No investigation steps were recorded (the engine pre-gate sent this straight to a human).</p>';
+      : '<p><span class="chip care-pregate">⚙️ Pre-gate escalation</span></p>';
     const draft = ticket.ai_draft
       ? `<h3>🤖 Amina\'s draft (not sent)</h3><blockquote>${escapeHtml(String(ticket.ai_draft).slice(0, 1200))}</blockquote>`
       : '<p class="muted">No draft was prepared.</p>';
     const note = ticket.internal_note
       ? `<h3>📝 Internal note</h3><p>${escapeHtml(String(ticket.internal_note).slice(0, 600))}</p>`
       : '';
+    // v1.97.5 — the thread and the investigation log are collapsible. An
+    // escalated ticket starts with its thread open; everything else stays
+    // compact (both sections closed) so the queue is scannable in one pass.
+    const threadOpen = status === 'ESCALATED' ? ' open' : '';
     return `<div class="card">
-      <p><strong>${escapeHtml(ticket.subject || ticket.message_body || 'Support ticket')}</strong>
+      <p><strong>${careTitleHtml(ticket)}</strong>
       ${statusChipHtml(ticket.status)}<span class="chip">${escapeHtml(ticket.issue_category || 'other')}</span></p>
       <p class="muted">${escapeHtml(ticket.sender_email || ticket.whatsapp_number || 'unknown sender')} · ticket ${escapeHtml(String(ticket.id || '').slice(0, 8))}</p>
-      <h3>💬 Thread</h3>
-      ${threadHtml(ticket)}
+      <details class="care-details"${threadOpen}><summary>💬 Thread</summary>
+      ${threadHtml(ticket)}</details>
+      <details class="care-details"><summary>🔎 Investigation log</summary>
       ${note}
-      <h3>🔎 Investigation log</h3>
       ${steps}
-      ${draft}
+      ${draft}</details>
       <p class="muted" style="font-size:13px;">Reply from the console: <code>care reply ${escapeHtml(String(ticket.id || '').slice(0, 8))} &lt;text&gt;</code></p>
     </div>`;
   }).join('');
@@ -4859,7 +4892,7 @@ export function renderCareQueuePage({ data } = {}) {
     : '<div class="card"><p class="muted">No open care tickets — Amina is handling the inbox. 🎉</p></div>';
   const lessons = (data.learnings || []).length
     ? `<div class="card"><ul class="plain">${(data.learnings || []).slice(0, 10).map((row) => `<li>💡 ${escapeHtml(String(row.lesson || ''))}${row.trigger_context ? `<span class="muted"> · ${escapeHtml(String(row.trigger_context).slice(0, 120))}</span>` : ''}</li>`).join('')}</ul></div>`
-    : '<div class="card"><p class="muted">No lessons learned yet — every human reply to an escalation teaches Amina one rule.</p></div>';
+    : '<div class="card"><p class="muted">No lessons learned yet — a human reply to an [SFC-…] escalation email teaches Amina one rule when the reply body reaches the inbox.</p></div>';
   const body = `
 <h1>Care queue</h1>
 <p class="muted">Amina triages support email first; anything she cannot resolve lands here. Read-only · every visit is audited.</p>

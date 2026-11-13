@@ -3,6 +3,7 @@ import assert from 'assert';
 import crypto from 'node:crypto';
 import { verifyResendSignature, parseInboundEmail, handleInboundEmail, htmlToPlainText, SUPPORT_INBOX } from './src/services/inboundEmail.js';
 import { normalizeThreadKey } from './src/services/careConsole.js';
+import { routeCareInternalReply } from './src/services/careLearning.js';
 import { createMockSupabase } from './scripts/mockSupabase.js';
 
 let passed = 0;
@@ -163,6 +164,55 @@ const reopened = await handleInboundEmail(reopenMock.client, {
 check(reopened.reopened === true && reopened.ticketId === 't-resolved', 'a follow-up on a RESOLVED ticket reopens the SAME ticket');
 check(reopenMock.db.support_tickets.length === 1, 'no duplicate ticket is created on the follow-up');
 check(String(reopenMock.db.support_tickets[0].status) === 'OPEN', 'the reopened ticket returns to OPEN for triage');
+
+console.log('--- body-fetch failures are logged (v1.97.5) ---');
+// Live 2026-11-13: a human [SFC-] reply reached the router with its body
+// missing, so the "human reply" was only the subject and no lesson could be
+// learned. A failed/empty Resend body fetch must always leave an error_logs row.
+const bodyFailMock = createMockSupabase({ support_tickets: [], support_ticket_messages: [], admin_audit_logs: [], error_logs: [] });
+const bodyFail = await handleInboundEmail(bodyFailMock.client, {
+  payload: { type: 'email.received', data: { email_id: 'e30', from: 'support@sakafleet.com', to: ['support@reports.sakafleet.com'], subject: '[SFC-abc12345] Re: Help with my truck' } },
+  headers: {}, rawBody: '{}', secret: null,
+  fetchBody: async () => ({ ok: false, reason: 'http-404' }),
+  routeInternalReply: async (_client, payload) => { routedPayload = payload; return { ok: true, ticketId: 't-sfc', learned: false, bodyAvailable: payload.bodyAvailable }; }
+});
+await new Promise((resolve) => setTimeout(resolve, 25));
+check(bodyFailMock.db.error_logs.some((row) => String(row.route || '').indexOf('inboundEmail.fetchInboundEmailBody') !== -1),
+  'a failed Resend body fetch is written to error_logs (never silent)');
+check(bodyFail.internalReply === true && bodyFail.bodyAvailable === false && routedPayload.bodyAvailable === false,
+  'the router is told the body never arrived (bodyAvailable:false)');
+check(routedPayload.text === '[SFC-abc12345] Re: Help with my truck',
+  'the subject is the honest fallback text, never an invented reply');
+const bodyEmptyMock = createMockSupabase({ support_tickets: [], support_ticket_messages: [], admin_audit_logs: [], error_logs: [] });
+await handleInboundEmail(bodyEmptyMock.client, {
+  payload: { type: 'email.received', data: { email_id: 'e31', from: 'support@sakafleet.com', to: ['support@reports.sakafleet.com'], subject: '[SFC-abc12345] Re: Help with my truck' } },
+  headers: {}, rawBody: '{}', secret: null,
+  fetchBody: async () => ({ ok: true, text: null, html: null }),
+  routeInternalReply: async () => ({ ok: true, ticketId: 't-sfc', learned: false })
+});
+await new Promise((resolve) => setTimeout(resolve, 25));
+check(bodyEmptyMock.db.error_logs.some((row) => String(row.route || '').indexOf('inboundEmail.fetchInboundEmailBody') !== -1),
+  'an empty Resend body is logged as an incident too');
+
+console.log('--- the human-reply audit records body availability (v1.97.5) ---');
+const TICKET_UUID = 'a1b2c3d4-0000-4000-8000-000000000000';
+const routeAuditMock = createMockSupabase({
+  support_tickets: [{
+    id: TICKET_UUID, subject: 'Fuel log stuck', sender_email: 'jane@example.com', issue_category: 'logging',
+    status: 'ESCALATED', priority: 'high', created_at: new Date().toISOString(), updated_at: new Date().toISOString()
+  }],
+  support_ticket_messages: [],
+  care_learnings: [],
+  admin_audit_logs: []
+});
+const routedReal = await routeCareInternalReply(
+  routeAuditMock.client,
+  { subject: '[SFC-a1b2c3d4] Re: Fuel log stuck', text: 'Re: [SFC-a1b2c3d4] Re: Fuel log stuck', fromEmail: 'support@sakafleet.com', bodyAvailable: false },
+  { aiCall: async () => JSON.stringify({ lesson: '' }) }
+);
+check(routedReal && routedReal.bodyAvailable === false, 'the router reports bodyAvailable:false back to the webhook');
+check(routeAuditMock.db.admin_audit_logs.some((row) => row.action === 'CARE_TICKET_HUMAN_REPLY' && /"bodyAvailable":false/.test(String(row.details))),
+  'the CARE_TICKET_HUMAN_REPLY audit carries bodyAvailable:false (no more guessing)');
 
 // Restore the caller's environment exactly as found (rule 50 hygiene).
 if (PREV_CARE_AI_ENABLED === undefined) delete process.env.CARE_AI_ENABLED; else process.env.CARE_AI_ENABLED = PREV_CARE_AI_ENABLED;

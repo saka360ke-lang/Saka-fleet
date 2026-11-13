@@ -1,6 +1,13 @@
 {
-  "latest": "1.97.4",
+  "latest": "1.97.5",
   "entries": [
+    {
+      "version": "1.97.5",
+      "date": "2026-11-13",
+      "title": "A cleaner support dashboard, and replies that actually teach",
+      "preview": "Behind the scenes: a compact, colour-coded support queue, and missing email bodies can no longer hide a lesson.",
+      "summary": "A behind-the-scenes release about the Saka team's support tools. The support queue is now easier to scan: each ticket keeps its conversation and investigation notes folded away until needed, urgent tickets stand out in red, in-progress ones in amber and new ones in blue, and forwarded subject lines are cleaned up. We also traced a real case where a support answer arrived without its body - the reply reached us but the text was missing, so nothing could be learned from it. That can no longer happen silently: any missing or empty email body is now recorded for the team, and every human answer is tagged with whether its text arrived. Nothing about your own WhatsApp conversations, records, reports, reminders or billing changes."
+    },
     {
       "version": "1.97.4",
       "date": "2026-11-13",

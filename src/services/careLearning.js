@@ -191,7 +191,7 @@ export async function extractCareLesson(supabase, { ticket = {}, humanReply = ''
  * Returns null when the mail carries no `[SFC-…]` tag (normal customer mail).
  * Never opens a ticket, never triggers Amina, never throws.
  */
-export async function routeCareInternalReply(supabase, { subject = '', text = '', fromEmail = '' } = {}, deps = {}) {
+export async function routeCareInternalReply(supabase, { subject = '', text = '', fromEmail = '', bodyAvailable = true } = {}, deps = {}) {
   const tag = extractCareTicketTag(subject);
   if (!tag) return null;
   if (!supabase) return { ok: false, reason: 'no-client', tag };
@@ -199,6 +199,7 @@ export async function routeCareInternalReply(supabase, { subject = '', text = ''
     const ticket = await getCareTicket(supabase, tag);
     if (!ticket) return { ok: false, reason: 'ticket-not-found', tag };
     const sender = String(fromEmail || '').toLowerCase() || 'human-agent';
+    const bodyArrived = bodyAvailable !== false;
     await appendTicketMessage(supabase, {
       ticketId: ticket.id,
       direction: 'internal',
@@ -216,11 +217,12 @@ export async function routeCareInternalReply(supabase, { subject = '', text = ''
     await auditCareAction(supabase, {
       phone: sender,
       action: 'CARE_TICKET_HUMAN_REPLY',
-      details: { ticketId: ticket.id, learned: Boolean(learned.ok), lesson: learned.ok ? learned.lesson.slice(0, 200) : null }
+      details: { ticketId: ticket.id, bodyAvailable: bodyArrived, learned: Boolean(learned.ok), lesson: learned.ok ? learned.lesson.slice(0, 200) : null }
     });
     return {
       ok: Boolean(updated.ok),
       ticketId: ticket.id,
+      bodyAvailable: bodyArrived,
       learned: Boolean(learned.ok),
       lesson: learned.ok ? learned.lesson : null,
       reason: updated.ok ? null : (updated.error || 'status-write-failed')

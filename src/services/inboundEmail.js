@@ -92,7 +92,7 @@ export function htmlToPlainText(html = '') {
     .slice(0, 4000);
 }
 
-export async function handleInboundEmail(supabase, { payload = {}, headers = {}, rawBody = '', secret = null, notify = null, notifyPhone = null, skipFetch = false, processEmail = null, routeInternalReply = null } = {}) {
+export async function handleInboundEmail(supabase, { payload = {}, headers = {}, rawBody = '', secret = null, notify = null, notifyPhone = null, skipFetch = false, fetchBody = null, processEmail = null, routeInternalReply = null } = {}) {
   const verify = verifyResendSignature({ headers, rawBody, secret });
   if (!verify.ok) return { ok: false, rejected: true, reason: verify.reason };
   const email = parseInboundEmail(payload);
@@ -110,8 +110,22 @@ export async function handleInboundEmail(supabase, { payload = {}, headers = {},
   }
   let body = null;
   if (!skipFetch && email.emailId) {
-    const fetched = await fetchInboundEmailBody(email.emailId);
-    if (fetched.ok) body = fetched;
+    // v1.97.5 — a failed or empty Resend body fetch is an INCIDENT, never a
+    // silent subject-only "reply" (rule 50). Live 2026-11-13: a human's
+    // `[SFC-]` reply reached the router with its body missing, so the lesson
+    // extractor only ever saw the subject and no lesson could be learned.
+    const fetchEmailBody = typeof fetchBody === 'function' ? fetchBody : fetchInboundEmailBody;
+    const fetched = await fetchEmailBody(email.emailId);
+    if (fetched.ok && (fetched.text || fetched.html)) {
+      body = fetched;
+    } else {
+      logWriteFailure(
+        supabase,
+        'inboundEmail.fetchInboundEmailBody',
+        new Error('Resend body unavailable: ' + (fetched.ok ? 'empty' : (fetched.reason || 'unknown'))),
+        { emailId: email.emailId }
+      );
+    }
   }
   // v1.59.7 — prefer the text part, fall back to the HTML part, and only use
   // the subject when neither exists (live audit: an HTML-only enquiry became a
@@ -127,13 +141,17 @@ export async function handleInboundEmail(supabase, { payload = {}, headers = {},
     const tag = extractCareTicketTag(email.subject);
     if (!tag) return { ok: true, ignored: 'internal-sender-no-tag', fromEmail: email.fromEmail };
     const router = typeof routeInternalReply === 'function' ? routeInternalReply : routeCareInternalReply;
-    const routed = await router(supabase, { subject: email.subject, text: bodyText || email.subject, fromEmail: email.fromEmail })
+    // v1.97.5 — the router is told whether the body actually arrived, so the
+    // audit can distinguish a real reply from the subject-line fallback.
+    const bodyAvailable = Boolean(bodyText);
+    const routed = await router(supabase, { subject: email.subject, text: bodyText || email.subject, fromEmail: email.fromEmail, bodyAvailable })
       .catch((err) => { logWriteFailure(supabase, 'inboundEmail.routeInternalReply', err); return null; });
     return {
       ok: Boolean(routed && routed.ok),
       internalReply: true,
       tag,
       ticketId: routed ? routed.ticketId : null,
+      bodyAvailable,
       learned: Boolean(routed && routed.learned),
       email,
       textBody: bodyText || null
