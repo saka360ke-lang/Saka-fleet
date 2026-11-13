@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.96.7  
+**Version:** 1.96.8  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.96.8** | Mobile cookie banner fix — `.cookie-banner` z-index 90 → **9999** (the signup gate re-opened it UNDER the onboarding modal backdrop at 100, so it was a dimmed ghost and never clickable), `bottom: calc(14px + env(safe-area-inset-bottom, 0px))` (iOS home indicator), a ≤640px wrap layout with 44px tap targets, a lime `cookie-pulse` attention animation (reduced-motion off) and an inline `#cookieGateErr` pointer replacing the native alert; landing assets stamped `?v=1.96.8` | 240 |
 | **1.96.7** | Web signup dead-end fix (ghost signup of 2026-11-12 08:57Z) + plate escape hatch (stalled user +254728134729, 11-10): unverified registered matches may continue (OTP re-sent), verified matches get a live WhatsApp CTA, `/api/onboard/check` audits a PII-safe `WEB_ONBOARD_CHECK_REGISTERED` result, `isPlateSkipText()` parks a `registration-draft` in the unified pending slot (24 h, ephemeral, NO schema change) and resumes on the next plate, and the single-question plate-nudge law is synced across `FLOW_GUIDANCE`, the flow playbook, the core prompt and the composer | 239 |
 | **1.96.6** | Enhanced Conversions on website signup — `successful_signup` now carries `user_data` (lowercased email + E.164 phone, unhashed; GTM hashes with SHA-256), consent scope bumped to v3 with disclosure on all six pages + privacy §11 + llms.txt | 238 |
 | **1.96.5** | Receipt/logbook OCR fix (+254734852529, KAS628T) — a KRA e-TIMS fuel receipt whose bare control-unit serial `KRACU0300578490` tripped `looksLikeVin` was classified as a **logbook**: no `receipts` row was written, the confirmed expense saved with `expense_logs.receipt_id` NULL ("Receipt: —" on `/d/records`) and the photo even SUPERSEDED the genuine logbook in `vehicle_documents`. Fixes: a strong-fiscal guard ABOVE the logbook branch (`classifyOcrDocument`) + a Lens demotion (`classifyDocumentFamily`), a shared `stripFiscalSerials` (a PIN/CU serial is never a VIN), an intake guard that never vaults a fiscal receipt as a compliance document, mid-quiz `injectReceiptLinkIntoDraft` (an ALREADY OPEN expense draft receives the durable link), the `E-8%` tax-token amount fix (3,000, never 8) and the alphabetic currency-symbol word rule ("INFORMATION" is not MYR). David's live rows reconciled | 237 |
@@ -3893,6 +3894,13 @@ quiz engine:
   (account creation) on a recorded choice. Both "Accept all" and "Reject
   non-essential" satisfy it, so analytics stays opt-in and signup is never
   blocked on tracking. `open()` re-surfaces the banner.
+  **v1.96.8 layering law:** because the gate fires from inside the onboarding
+  modal, the banner must sit ABOVE every overlay (`.cookie-banner`
+  `z-index: 9999` > `.cookie-settings-backdrop` 110 > `.modal-backdrop` 100 >
+  `.nav` 60 > `.nav-menu` 55 > `.launch-banner` 1) and clear the iOS safe area
+  (`bottom: calc(14px + env(safe-area-inset-bottom, 0px))`); the gate also
+  blurs the focused input (keyboard) and points at the bar inline. Pinned by
+  `test_landing_static` Test 24.
 - **GTM next steps (operator):** Custom Event trigger `successful_signup`,
   GA4 `sign_up` tag, Meta `CompleteRegistration` tag.
 
@@ -7173,5 +7181,26 @@ Only valid values are attached (`userData.email` / `userData.phone_number`); the
 **Suites run.** test_quiz_flow (250), test_pending_state (444), test_agent_training (245), test_landing_static (455), test_duplicate_signup (21), test_doc_sync, test_web_onboarding, test_first_message_flow, `npm run health` — green.
 
 **Rules shaped this work (rule 58).** 1/39/42/45/63 (consult + proposals first: 0 open), 3/4, 10/11, 13/31/60, 26/29, 33/43, 50 (no schema change), 51/52 (sibling sweep + before/after), 54 (live evidence), 55/56. No rule edited. **Impact:** verified visitors get a live WhatsApp door; unverified visitors can finish their signup; plate-less users can park and resume; plate nudges ask one question.
+
+### 240. v1.96.8 — the mobile cookie banner: visible, tappable, above every overlay (2026-11-13)
+
+**Why (mobile report).** A phone visitor could not submit the website signup. `legalSubmit` (`landing/assets/js/main.js`) correctly gates account creation on `window.__sakaCookies.chosen()` and re-opens the banner via `__sakaCookies.open()`. But the banner sat at `z-index: 90` while the onboarding modal backdrop (`.modal-backdrop`) is a fixed, full-viewport overlay at `z-index: 100`: the bar rendered UNDERNEATH the dimmed backdrop — visible only as a ghost and never clickable — so the form kept answering "accept or reject cookies" with nothing to tap. Two further mobile defects compounded it: `bottom: 14px` had no `env(safe-area-inset-bottom)` (the bar hid behind the iOS home indicator / collapsed Safari toolbar) and the one-row `flex-wrap: nowrap` layout squeezed the copy to nothing on 375px phones. The gate's native `alert()` also blocked interaction and pointed nowhere.
+
+**The fix (CSS + JS, no new dependency).**
+- `.cookie-banner`: `z-index: 9999` (above `.modal-backdrop` 100, `.cookie-settings-backdrop` 110, `.nav` 60, `.nav-menu` 55, `.launch-banner` 1) and `bottom: calc(14px + env(safe-area-inset-bottom, 0px))`.
+- `@media (max-width: 640px)`: the banner wraps, the copy unclamps onto its own row, `.cookie-actions` takes the full width and each button is ≥44px tall (rule 31).
+- `cookieConsent.js`: `showBanner()` adds an `attention` class (removed by `hideBanner()` on any choice); `@keyframes cookie-pulse` gives three gentle lime beats and is disabled under `prefers-reduced-motion`.
+- `main.js` gate: `__sakaCookies.open()` + `document.activeElement.blur()` (closes the mobile keyboard) + an inline `#cookieGateErr` line ("One more step — choose cookies in the bar at the bottom of the screen.") shown in the legal step; the native `alert()` is gone and the line clears on the next passing submit.
+- Sibling safe areas: `.modal-backdrop` and `.cookie-settings-backdrop` gain `padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px))` so the signup/OTP/settings panels clear the home indicator too.
+
+**Tests (rule 52).** `test_landing_static` Test 24 (+18: 455 → 473): the base banner rule is `position: fixed` with `z-index: 9999`; extracted z-indexes prove 9999 > nav 60, drawer 55, modal 100, settings 110, launch banner 1 (one assertion per sibling); the rule carries `env(safe-area-inset-bottom)` inside a `calc()`; exactly one `.cookie-banner` rule sets `display: none` (the base) and `.show` reveals it, so no media query can hide it; the 640px block wraps the banner, makes the action row full-width and keeps 44px targets; `main.js` carries `cookieGateErr` + the keyboard blur and no longer carries the dead-end alert; `cookieConsent.js` marks `attention`; `@keyframes cookie-pulse` is wired and the reduced-motion media turns it off.
+
+**Recurrence autopsy (rule 51).** *Defect class "consent UI layered beneath a full-viewport overlay"* → siblings audited: `.modal-backdrop` (safe-area padding added; deliberately stays below the banner — the consent layer is topmost), `.cookie-settings-backdrop` (safe-area padding added; the banner is hidden by JS while it opens), `.nav` / `.nav-menu` / `.launch-banner` (top-anchored — no safe-area need; z-order pinned), dashboard overlays (`src/services/dashboard.js` has no cookie banner — deliberately left). *Class "bottom-fixed UI without the iOS safe area"* → both backdrops fixed, banner fixed; one targeted assertion per sibling.
+
+**Frames touched.** `landing/assets/css/styles.css` (`.cookie-banner`, `.cookie-banner.attention`, `@keyframes cookie-pulse`, reduced-motion media, 640px block, `.modal-backdrop`, `.cookie-settings-backdrop`), `landing/assets/js/cookieConsent.js` (`showBanner` / `hideBanner`), `landing/assets/js/main.js` (legalSubmit gate), `landing/index.html` (`#cookieGateErr`), stamped landing assets (`?v=1.96.8`), `landing/data/changelog.json`, `test_landing_static.js` (Test 24), `test_vehicle_documents.js` (version pin), `package.json` (1.96.8), this file (`§91`, §240, history + version), `CHANGELOG.md`.
+
+**Suites run.** test_landing_static (473), test_vehicle_documents (version pin), test_doc_sync, `npm run health` — green.
+
+**Rules shaped this work (rule 58).** 1/39/42/45/63 (rules + architecture first; **0 open proposals** verified live — 7 unrelated PENDING friction rows left for their own review), 3/4 (targeted reads, batched edits), 10/11 (stateless suites, no test rows created), 31 (warm, one next step, 44px tap targets), 33/43 (one version commit; deploy on push), 51/52 (sibling sweep + before/after assertions), 54 (live read-only operator check), 55/56 (evolved the existing banner/consent assets; every page re-stamped), 2/13 (architecture + CHANGELOG + landing feed in the same commit). No rule edited. **Impact:** a phone visitor can now see and tap the cookie choice above the signup form, safely above the iOS home indicator, and is told exactly where to look.
 
 

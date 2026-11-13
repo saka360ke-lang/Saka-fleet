@@ -1,6 +1,13 @@
 {
-  "latest": "1.96.7",
+  "latest": "1.96.8",
   "entries": [
+    {
+      "version": "1.96.8",
+      "date": "2026-11-13",
+      "title": "The cookie bar you can always see and tap",
+      "preview": "On a phone, the cookie choice now sits above everything - clearly visible, above the home indicator, and easy to tap.",
+      "summary": "A mobile fix from a real visitor. The cookie bar was rendered underneath the signup window, so on some phones it looked invisible even though the form was asking for a cookie choice - and the very bottom of the screen can hide behind the iPhone home indicator. The bar now floats above every window the site opens, sits safely above the bottom edge of the screen, wraps its message and buttons onto their own rows on small phones with bigger tap targets, and gently pulses when the signup form needs your choice. The form now shows a short line pointing at the bar instead of a pop-up alert, so the next step is always obvious."
+    },
     {
       "version": "1.96.7",
       "date": "2026-11-12",

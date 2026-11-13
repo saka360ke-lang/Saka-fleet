@@ -499,6 +499,68 @@ for (const ecPage of ['index.html', 'privacy.html', 'terms.html', 'status.html',
   check(ecLlms.includes('Enhanced Conversions') && ecLlms.includes('E.164'), 'llms.txt tells machines about the consented hashed user data');
 }
 
+console.log('\n--- Test 24: cookie banner z-order + mobile safety (v1.96.8) ---');
+{
+  const bannerRule = (css.match(/\.cookie-banner\s*\{[^}]*\}/) || [''])[0];
+  check(bannerRule.includes('position: fixed'), 'the cookie banner stays fixed to the viewport');
+  const zIndexOf = (selector) => {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const m = css.match(new RegExp(escaped + '\\s*\\{[^}]*?z-index:\\s*(\\d+)'));
+    return m ? Number(m[1]) : null;
+  };
+  const bannerZ = zIndexOf('.cookie-banner');
+  check(bannerZ === 9999, 'the cookie banner z-index is 9999 (the consent layer is topmost)');
+  for (const [selector, label] of [
+    ['.nav', 'sticky header'],
+    ['.nav-menu', 'mobile drawer'],
+    ['.modal-backdrop', 'onboarding modal'],
+    ['.cookie-settings-backdrop', 'cookie settings panel'],
+    ['.launch-banner', 'launch banner']
+  ]) {
+    const z = zIndexOf(selector);
+    check(z !== null && bannerZ > z, `cookie banner ${bannerZ} sits above the ${label} (${z}) — v1.96.8`);
+  }
+  check(bannerRule.includes('env(safe-area-inset-bottom') && bannerRule.includes('calc('),
+    'the banner clears the iOS safe area (env(safe-area-inset-bottom))');
+  const bannerRules = [...css.matchAll(/[^{}]*\.cookie-banner[^{]*\{[^}]*\}/g)].map((m) => m[0]);
+  const hiddenRules = bannerRules.filter((rule) => /display:\s*none/.test(rule));
+  check(hiddenRules.length === 1 && hiddenRules[0].includes('position: fixed'),
+    'only the base rule hides the banner — no media query can (v1.96.8)');
+  check(/\.cookie-banner\.show\s*\{[^}]*display:\s*flex/.test(css), 'the .show class reveals the banner');
+  // Walk every `@media (max-width: 640px)` block and require the phone rules.
+  const mobileBlocks = [];
+  let mobileFrom = 0;
+  for (;;) {
+    const start = css.indexOf('@media (max-width: 640px)', mobileFrom);
+    if (start < 0) break;
+    const open = css.indexOf('{', start);
+    let depth = 0;
+    let end = open;
+    for (let i = open; i < css.length; i += 1) {
+      if (css[i] === '{') depth += 1;
+      else if (css[i] === '}') { depth -= 1; if (depth === 0) { end = i; break; } }
+    }
+    mobileBlocks.push(css.slice(start, end + 1));
+    mobileFrom = end + 1;
+  }
+  const mobileCookie = mobileBlocks.filter((block) => block.includes('.cookie-banner'));
+  check(mobileCookie.length === 1 && /\.cookie-banner\s*\{[^}]*flex-wrap:\s*wrap/.test(mobileCookie[0]),
+    'phones wrap the banner so the copy and buttons never fight for one row');
+  check(/\.cookie-actions\s*\{[^}]*width:\s*100%/.test(mobileCookie[0] || ''),
+    'the action row takes the full width on phones');
+  check(/\.cookie-actions \.btn\s*\{[^}]*min-height:\s*44px/.test(mobileCookie[0] || ''),
+    'phone tap targets are at least 44px (rule 31)');
+  check(mainJs.includes('cookieGateErr') && !mainJs.includes("alert('Please accept or reject cookies"),
+    'the signup gate points at the banner inline instead of a dead-end alert (v1.96.8)');
+  check(/document\.activeElement[^\n]*blur\(\)/.test(mainJs),
+    'the gate closes the mobile keyboard before pointing at the banner');
+  check(cookieJs.includes('attention'), 'the consent script marks the banner for attention');
+  check(css.includes('@keyframes cookie-pulse') && /\.cookie-banner\.attention\s*\{[^}]*animation:\s*cookie-pulse/.test(css),
+    'the attention pulse is wired to the banner');
+  check(/@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.cookie-banner\.attention\s*\{\s*animation:\s*none;\s*\}\s*\}/.test(css),
+    'the pulse respects reduced motion');
+}
+
 console.log(`\n🎉 ${passed} landing assertions passed (Phase 31 included).`);
 
 console.log('Stateless suite: file reads only — no database, no cleanup needed.');

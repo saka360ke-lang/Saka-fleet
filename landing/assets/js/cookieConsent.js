@@ -62,8 +62,11 @@
   var backdrop = $('cookieSettingsBackdrop');
   if (!banner || !backdrop) return;
 
-  function showBanner() { banner.classList.add('show'); }
-  function hideBanner() { banner.classList.remove('show'); }
+  // v1.96.8 — the banner rides above every overlay (CSS z-index 9999) and the
+  // `attention` pulse draws the eye to the bottom of the screen when the signup
+  // gate re-opens it. Any choice (accept / settings / save) ends the pulse.
+  function showBanner() { banner.classList.add('show'); banner.classList.add('attention'); }
+  function hideBanner() { banner.classList.remove('show'); banner.classList.remove('attention'); }
   function openSettings() {
     var saved = read();
     $('cookiePrefs').checked = Boolean(saved && saved.preferences);

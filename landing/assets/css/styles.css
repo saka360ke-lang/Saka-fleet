@@ -9,23 +9,23 @@
 
 @font-face {
   font-family: 'Sora'; font-style: normal; font-weight: 600; font-display: swap;
-  src: url('/assets/fonts/Sora-600.woff2?v=1.96.7') format('woff2');
+  src: url('/assets/fonts/Sora-600.woff2?v=1.96.8') format('woff2');
 }
 @font-face {
   font-family: 'Sora'; font-style: normal; font-weight: 700; font-display: swap;
-  src: url('/assets/fonts/Sora-700.woff2?v=1.96.7') format('woff2');
+  src: url('/assets/fonts/Sora-700.woff2?v=1.96.8') format('woff2');
 }
 @font-face {
   font-family: 'Manrope'; font-style: normal; font-weight: 400; font-display: swap;
-  src: url('/assets/fonts/Manrope-400.woff2?v=1.96.7') format('woff2');
+  src: url('/assets/fonts/Manrope-400.woff2?v=1.96.8') format('woff2');
 }
 @font-face {
   font-family: 'Manrope'; font-style: normal; font-weight: 500; font-display: swap;
-  src: url('/assets/fonts/Manrope-500.woff2?v=1.96.7') format('woff2');
+  src: url('/assets/fonts/Manrope-500.woff2?v=1.96.8') format('woff2');
 }
 @font-face {
   font-family: 'Manrope'; font-style: normal; font-weight: 700; font-display: swap;
-  src: url('/assets/fonts/Manrope-700.woff2?v=1.96.7') format('woff2');
+  src: url('/assets/fonts/Manrope-700.woff2?v=1.96.8') format('woff2');
 }
 
 :root {
@@ -463,7 +463,7 @@ footer { border-top: 1px solid var(--line); padding: 56px 0 40px; margin-top: 40
 .foot-king:hover, .foot-king:focus-visible { color: var(--accent); opacity: 1; text-decoration: underline; }
 
 /* Modal */
-.modal-backdrop { position: fixed; inset: 0; z-index: 100; background: rgba(5, 5, 6, .82); backdrop-filter: blur(6px); display: none; align-items: center; justify-content: center; padding: 20px; }
+.modal-backdrop { position: fixed; inset: 0; z-index: 100; background: rgba(5, 5, 6, .82); backdrop-filter: blur(6px); display: none; align-items: center; justify-content: center; padding: 20px; padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px)); }
 .modal-backdrop.open { display: flex; }
 .modal { background: var(--bg-soft); border: 1px solid var(--line); border-radius: 24px; width: min(560px, 100%); max-height: 92vh; overflow-y: auto; padding: 34px 30px; position: relative; }
 .modal-close { position: absolute; top: 16px; right: 18px; background: none; border: 0; color: var(--muted); font-size: 1.5rem; cursor: pointer; }
@@ -555,13 +555,44 @@ footer { border-top: 1px solid var(--line); padding: 56px 0 40px; margin-top: 40
   .phone-row { grid-template-columns: 112px 1fr; }
 }
 
-/* Cookie consent (v1.40.0, compact v1.41.0) */
-.cookie-banner { position: fixed; left: 50%; transform: translateX(-50%); bottom: 14px; z-index: 90; width: min(430px, calc(100% - 20px)); background: var(--bg-soft); border: 1px solid var(--line); border-radius: 14px; padding: 10px 14px; display: none; align-items: center; gap: 10px; box-shadow: 0 14px 44px rgba(0,0,0,.62); flex-wrap: nowrap; }
+/* Cookie consent (v1.40.0, compact v1.41.0; layering + iOS safe area v1.96.8) */
+/* v1.96.8 — the banner must sit ABOVE every overlay the site can open, because
+   the signup gate re-opens it while the onboarding modal (z-index 100) is on
+   screen. It also has to clear the iOS home indicator / collapsed Safari bar. */
+.cookie-banner { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(14px + env(safe-area-inset-bottom, 0px)); z-index: 9999; width: min(430px, calc(100% - 20px)); background: var(--bg-soft); border: 1px solid var(--line); border-radius: 14px; padding: 10px 14px; display: none; align-items: center; gap: 10px; box-shadow: 0 14px 44px rgba(0,0,0,.62); flex-wrap: nowrap; }
 .cookie-banner.show { display: flex; }
 .cookie-banner p { flex: 1 1 auto; color: var(--muted); font-size: .8rem; line-height: 1.35; margin: 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .cookie-actions { display: flex; gap: 8px; flex: none; }
 .cookie-actions .btn { padding: 8px 12px; font-size: .78rem; white-space: nowrap; }
-.cookie-settings-backdrop { position: fixed; inset: 0; z-index: 110; background: rgba(5, 5, 6, .84); backdrop-filter: blur(6px); display: none; align-items: center; justify-content: center; padding: 20px; }
+/* v1.96.8 — when the signup gate re-opens the banner, a short lime pulse draws
+   the eye to the bottom of the screen (three beats, never a strobe; off for
+   reduced motion). */
+.cookie-banner.attention { animation: cookie-pulse 1.1s ease-in-out 3; }
+@keyframes cookie-pulse {
+  0%, 100% { box-shadow: 0 14px 44px rgba(0, 0, 0, .62); }
+  50% { box-shadow: 0 14px 44px rgba(0, 0, 0, .62), 0 0 0 4px rgba(184, 239, 92, .45); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cookie-banner.attention { animation: none; }
+}
+/* v1.96.8 — phones: copy and buttons need their own rows, the action row is
+   thumb-sized (44px) and the banner floats above the safe area. */
+@media (max-width: 640px) {
+  .cookie-banner {
+    flex-wrap: wrap;
+    bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+    padding: 12px 14px;
+  }
+  .cookie-banner p {
+    display: block;
+    -webkit-line-clamp: unset;
+    -webkit-box-orient: unset;
+    overflow: visible;
+  }
+  .cookie-actions { width: 100%; }
+  .cookie-actions .btn { flex: 1; min-height: 44px; padding: 10px 12px; }
+}
+.cookie-settings-backdrop { position: fixed; inset: 0; z-index: 110; background: rgba(5, 5, 6, .84); backdrop-filter: blur(6px); display: none; align-items: center; justify-content: center; padding: 20px; padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px)); }
 .cookie-settings-backdrop.open { display: flex; }
 .cookie-settings { background: var(--bg-soft); border: 1px solid var(--line); border-radius: 20px; width: min(520px, 100%); padding: 28px; max-height: 92vh; overflow-y: auto; }
 .cookie-group { border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-bottom: 12px; display: flex; gap: 12px; align-items: flex-start; }

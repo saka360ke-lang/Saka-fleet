@@ -362,11 +362,17 @@
 
   legalSubmit.addEventListener('click', function () {
     if (!consent.checked || !window.__onboard) return;
+    var cookieGateErr = $('cookieGateErr');
     if (!(window.__sakaCookies && window.__sakaCookies.chosen())) {
+      // v1.96.8 — never a native alert: it used to hide the very banner the user
+      // must tap. Show the banner above the modal (CSS z-index 9999, pulsing),
+      // close the mobile keyboard, and point at the bottom of the screen inline.
       if (window.__sakaCookies) window.__sakaCookies.open();
-      alert('Please accept or reject cookies to continue.');
+      if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+      if (cookieGateErr) cookieGateErr.style.display = 'block';
       return;
     }
+    if (cookieGateErr) cookieGateErr.style.display = 'none';
     legalSubmit.disabled = true;
     legalSubmit.textContent = 'Creating your account…';
 
