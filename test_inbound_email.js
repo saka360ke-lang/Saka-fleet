@@ -1,7 +1,7 @@
 /** Saka Fleet - Resend inbound email tests (v1.58.14, stateless) */
 import assert from 'assert';
 import crypto from 'node:crypto';
-import { verifyResendSignature, parseInboundEmail, handleInboundEmail, htmlToPlainText, SUPPORT_INBOX } from './src/services/inboundEmail.js';
+import { verifyResendSignature, parseInboundEmail, handleInboundEmail, htmlToPlainText, fetchInboundEmailBody, SUPPORT_INBOX } from './src/services/inboundEmail.js';
 import { normalizeThreadKey } from './src/services/careConsole.js';
 import { routeCareInternalReply } from './src/services/careLearning.js';
 import { createMockSupabase } from './scripts/mockSupabase.js';
@@ -193,6 +193,38 @@ await handleInboundEmail(bodyEmptyMock.client, {
 await new Promise((resolve) => setTimeout(resolve, 25));
 check(bodyEmptyMock.db.error_logs.some((row) => String(row.route || '').indexOf('inboundEmail.fetchInboundEmailBody') !== -1),
   'an empty Resend body is logged as an incident too');
+
+console.log('--- the receiving endpoint (v1.97.6) ---');
+// Live 2026-11-13: GET /emails/{id} is Resend's SENT-email API and 404s for a
+// received email ("Email not found"), while /emails/receiving/{id} returns the
+// full text+html. The stub pins the URL so the wrong endpoint can never return.
+const originalFetch = globalThis.fetch;
+let fetchedUrl = null;
+globalThis.fetch = async (url) => {
+  fetchedUrl = String(url);
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({ object: 'email', id: 'e5302c09', text: 'For future reference: answer fuel-log questions with the WhatsApp line.', html: '<div>For future reference: answer fuel-log questions with the WhatsApp line.</div>' })
+  };
+};
+const bodyHit = await fetchInboundEmailBody('e5302c09-e6c4-417b-95dd-82dc644ddafb', 're_test_key');
+check(fetchedUrl === 'https://api.resend.com/emails/receiving/e5302c09-e6c4-417b-95dd-82dc644ddafb',
+  'the fetch uses the receiving endpoint, never the sent-email endpoint');
+check(bodyHit.ok === true && /For future reference/.test(bodyHit.text) && /<div>/.test(bodyHit.html),
+  'text and html are both read from the receiving response');
+globalThis.fetch = async (url) => {
+  fetchedUrl = String(url);
+  return { ok: true, status: 200, json: async () => ({ data: { text: null, html: '<div>HTML only reply</div>' } }) };
+};
+const htmlOnlyBody = await fetchInboundEmailBody('e31', 're_test_key');
+check(htmlOnlyBody.ok === true && htmlOnlyBody.text === null && /HTML only/.test(htmlOnlyBody.html),
+  'an HTML-only received email still returns its html for the plain-text fallback');
+globalThis.fetch = async () => ({ ok: false, status: 404, json: async () => ({ message: 'Email not found' }) });
+const notFoundBody = await fetchInboundEmailBody('e404', 're_test_key');
+check(notFoundBody.ok === false && notFoundBody.reason === 'http-404',
+  'a 404 is an honest refusal (fed to the v1.97.5 error_logs path)');
+globalThis.fetch = originalFetch;
 
 console.log('--- the human-reply audit records body availability (v1.97.5) ---');
 const TICKET_UUID = 'a1b2c3d4-0000-4000-8000-000000000000';

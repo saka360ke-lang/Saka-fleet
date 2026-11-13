@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.97.5  
+**Version:** 1.97.6  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.97.6** | The Lesson loop actually learns — `fetchInboundEmailBody` called Resend's SENT-email API (`GET /emails/{id}` → live `404 "Email not found"`); it now uses `GET /emails/receiving/{id}` (live `200` with text+html), so `[SFC-]` human replies reach `extractCareLesson`; the recovered 10:57 reply is replayed live to seed the first `care_learnings` row | 248 |
 | **1.97.5** | Care dashboard UX + the honest lesson diagnosis — `/d/care` collapses Thread/Investigation into `<details>` (escalated thread open, the rest compact), titles lose the `[SFC-…]`/Re: chains (subjectless tickets titled from a 60-char body), status chips turn red/amber/blue and a grey `⚙️ Pre-gate escalation` badge replaces the paragraph; the live Lesson KPI=0 was proved to be an empty Resend body fetch (`CARE_TICKET_HUMAN_REPLY {learned:false}`), so every failed/empty body fetch now writes `error_logs` and the audit carries `bodyAvailable` | 247 |
 | **1.97.4** | Care reply status writes fixed — live `support_tickets_status_check` widened to the six canonical statuses (`IN_PROGRESS`/`RESOLVED` were silently rejected and swallowed), `updateCareTicket`/`resolveCareTicketId` log every refusal and retry once (the false "ticket not found" flake), `/d/care` lists every ticket with its full thread + internal note + status chips, `ai_draft` applied live, ticket `0fc5fb1e` repaired | 246 |
 | **1.97.3** | Stateless-suite isolation — `test_inbound_email` pins `CARE_AI_ENABLED` off (the runner's dotenv load leaked a local `on` into the disabled-path assertions and suppressed the care ping); 41 → 42 assertions; Amina's kill switch stays operator-owned; no app behaviour change | 245 |
@@ -7366,3 +7367,28 @@ Only valid values are attached (`userData.email` / `userData.phone_number`); the
 **Suites run.** test_dashboard (958), test_inbound_email (48), test_care_learning, test_care_worker, test_doc_sync, test_kb_docs, test_vehicle_documents, test_landing_static, test_env_audit, `npm run health` — green.
 
 **Rules shaped this work (rule 58).** 1/39/42/45/63, 3/4, 10/11, 12/33, 13/31, 44/54, 50/51/52, 55, 56, 2. No rule edited. **Impact:** `/d/care` is compact, colour-coded and scannable; a missing Resend body can never again silently produce an unlearnable "human reply".
+
+
+### 248. v1.97.6 — the Resend receiving endpoint (why the Lesson was empty)
+
+**Why (live investigation, rules 44/54).** `/d/care` read `Lessons: 0` after a real `[SFC-]` reply. The v1.97.5 audit proved `CARE_TICKET_HUMAN_REPLY {learned:false}` and a subject-only "human reply"; v1.97.6 found the exact failure point:
+- `error_logs` (`route='inboundEmail.fetchInboundEmailBody'`) → **empty**. Correct: the 10:57 reply ran on `saka-fleet-00419/00420/00421` (v1.97.4 code, live 10:48→11:32); v1.97.5's logging deployed at ~19:04 (`saka-fleet-00426-264`), so the old silent path covered it.
+- Resend API, our endpoint: `GET https://api.resend.com/emails/e5302c09-e6c4-417b-95dd-82dc644ddafb` → **`404 {"statusCode":404,"message":"Email not found","name":"not_found"}`**.
+- Resend API, receiving endpoint: `GET https://api.resend.com/emails/receiving/e5302c09-…` → **`200`** with `html` **and** a clean `text` (`"For future reference: If a user asks how to log fuel, do not investigate. Just reply and tell them to open their WhatsApp and type 'Logged 40L diesel at 50,000km …"`). The body existed all along; the app was asking the SENT-email API.
+- Cloud Run logs (Logging API, 10:55–11:05Z): `POST /webhook/email/inbound` → `200` (1.9 ms metadata, then `req-1c` `200` after ~1.8 s of processing). The webhook fired; the fetch 404'd inside it.
+- Resend receiving list: the only `[SFC-]` reply received is `e5302c09-…` at 10:57:01Z. Nothing arrived ~11:30 (the 11:22/18:54 rows are outbound test escalations).
+- No auth/plan issue: the receiving endpoint answered `200` with the same `RESEND_API_KEY`.
+
+**The change.** `fetchInboundEmailBody` now retrieves `https://api.resend.com/emails/receiving/{id}` (was `/emails/{id}`). Extraction (`text`/`html`), the 8 s timeout, the v1.97.5 failure logging and the handler-level `htmlToPlainText` HTML-only fallback are unchanged — the existing HTML-only path (pinned since v1.59.7) now simply receives real `html` when `text` is absent.
+
+**Tests.** `test_inbound_email` 48 → **52**: stubbed `globalThis.fetch` pins the URL to the receiving endpoint (the sent endpoint can never return), the real response shape yields `{ok:true,text,html}`, an HTML-only received email returns its `html`, and a `404` stays `{ok:false,reason:'http-404'}` feeding the v1.97.5 `error_logs` path (stub saved/restored, rule 52 isolation).
+
+**Live reconciliation (rule 56, post-deploy).** The recovered 10:57 reply is replayed through `routeCareInternalReply` with its real body and `bodyAvailable:true`: the ticket thread gains the real answer, `CARE_TICKET_HUMAN_REPLY {bodyAvailable:true, learned:true}` + `CARE_TICKET_LEARNED` are audited and `care_learnings` gains its first row (Lessons KPI leaves 0). The outcome (lesson text + counts) is recorded in the release report.
+
+**Recurrence autopsy (rule 51).** Defect class *a provider integration is wired to the sibling API namespace (sent vs received) and the refusal is treated as "no body"* → siblings swept: the only Resend fetch in the repo is `fetchInboundEmailBody` (mailers only POST to `/emails`); the body path logs every failure/empty response (v1.97.5); the HTML-only fallback is pinned at both fetch and handler level. Deliberately left: no retry — the 404 was deterministic, not transient.
+
+**Frames touched.** `src/services/inboundEmail.js` (`fetchInboundEmailBody`), `test_inbound_email.js`, `test_vehicle_documents.js` (version pin), `package.json` (1.97.6), `landing/data/changelog.json` + stamped assets, `docs/` (regenerated), this file, `CHANGELOG.md`.
+
+**Suites run.** test_inbound_email (52), test_dashboard, test_care_learning, test_care_worker, test_doc_sync, test_kb_docs, test_vehicle_documents, test_landing_static, test_env_audit, `npm run health` — green.
+
+**Rules shaped this work (rule 58).** 1/39/42/45/63, 3/4, 10/11, 12/33, 44/54, 50/51/52, 55, 56, 2. No rule edited. **Impact:** every `[SFC-]` human reply now reaches `extractCareLesson` with its real body; a wrong-namespace 404 can no longer masquerade as "no body".

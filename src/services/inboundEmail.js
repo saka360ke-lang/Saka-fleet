@@ -58,7 +58,11 @@ export function parseInboundEmail(payload = {}) {
 export async function fetchInboundEmailBody(emailId, apiKey = process.env.RESEND_API_KEY) {
   if (!emailId || !apiKey) return { ok: false, reason: 'missing' };
   try {
-    const res = await fetch('https://api.resend.com/emails/' + encodeURIComponent(emailId), {
+    // v1.97.6 — inbound mail is NOT retrievable from GET /emails/{id}: that is
+    // Resend's "Retrieve Sent Email" API and answers 404 "Email not found" for
+    // a received email (live-proven 2026-11-13 on reply e5302c09-…). Received
+    // email lives on the dedicated receiving endpoint, which returns text+html.
+    const res = await fetch('https://api.resend.com/emails/receiving/' + encodeURIComponent(emailId), {
       headers: { Authorization: 'Bearer ' + apiKey },
       signal: typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(8000) : undefined
     });

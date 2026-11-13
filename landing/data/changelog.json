@@ -1,6 +1,13 @@
 {
-  "latest": "1.97.5",
+  "latest": "1.97.6",
   "entries": [
+    {
+      "version": "1.97.6",
+      "date": "2026-11-13",
+      "title": "Support answers now teach the assistant, every time",
+      "preview": "Behind the scenes: a support reply the app could not read is now read correctly, so answers improve the assistant.",
+      "summary": "A behind-the-scenes release about how the support assistant learns. When a support agent replied to an escalated case, the reply arrived but the assistant could not read its text - it was asking the wrong part of our email provider, which only serves messages we send, not messages we receive. We found the exact cause with live evidence: the message was there all along, with both a plain-text and an HTML version. The app now reads incoming replies from the correct place, so every human answer reaches the learning step with its real wording. We also replayed the original reply that first exposed this, so that answer is not lost. Nothing about your own WhatsApp conversations, records, reports, reminders or billing changes."
+    },
     {
       "version": "1.97.5",
       "date": "2026-11-13",
