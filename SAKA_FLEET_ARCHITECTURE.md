@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.97.2  
+**Version:** 1.97.3  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.97.3** | Stateless-suite isolation — `test_inbound_email` pins `CARE_AI_ENABLED` off (the runner's dotenv load leaked a local `on` into the disabled-path assertions and suppressed the care ping); 41 → 42 assertions; Amina's kill switch stays operator-owned; no app behaviour change | 245 |
 | **1.97.2** | Signup door on `/d/login` — `renderLoginPage` adds a bottom-of-card "Don't have an account yet? Start your free trial →" link to `https://sakafleet.com/` (lime accent) on the OWNER door only; `admin: true` renders without it; tests cover both renderers and `GET /d/login` vs `GET /d/admin/login` | 244 |
 | **1.97.1** | Unverified-signup dead-end fix (kiddymoms01@gmail.com) — `inspectExistingSignup` returns `'unverified'` for an unverified email match (the `'email_exists'` state is retired), the new engine-owned `reissueWebOnboardCode` resumes the SAME account (stored phone, profile untouched, `WEB_ONBOARD_RESUMED`) and `/api/onboard` returns `success:true + onboard_token`; the silent `detailsContinue` gate return is replaced by visible copy + a re-check; business refusals use the server message and malformed responses are logged | 243 |
 | **1.97.0** | Superadmin User Management CRM — `/d/admin/profiles` lists EVERY live profile (owners/drivers/shells) with plan/trial chips + search; one audited detail page (identity, engine-owned manual tier override with a `manual` ledger line, force-verify, notes, force logout, typed-WIPE danger zone) and six new POSTs on the v1.91.0 guard stack; a changed email defaults `email_verified=false` unless Force Verify is ticked; additive `subscriptions.source` migration; latent `logWriteFailure` import fixed | 242 |
@@ -7293,4 +7294,22 @@ Only valid values are attached (`userData.email` / `userData.phone_number`); the
 
 **Rules shaped this work (rule 58).** 1/39/42/45/63 (rules first; **0 open proposals** verified live — 8 unrelated PENDING friction rows left for their own review), 3/4, 10/11 (stateless suite), 31 (one next step), 33/43, 50 (render-only; no schema/flow change), 54 (no invented `#signup` contract), 55 (evolved the existing renderer), 2 (architecture + CHANGELOG + landing feed in the same commit). No rule edited. **Impact:** a first-time visitor on the login page now has a one-click path to signup; the superadmin door is unchanged.
 
+
+### 245. v1.97.3 — stateless-suite isolation for the Amina kill switch
+
+**Why.** Enabling Amina locally (`CARE_AI_ENABLED=on` in `.env`, required to test Phase 19) turned `test_inbound_email` red: `scripts/run_tests.js` loads dotenv for its children, so the disabled-path fixture ran the real `processCareEmail` with the kill switch ON, escalated the fixture ticket and suppressed the generic care ping (line 57 failed). The suite never pinned the env var it asserts on (rule 52 test isolation).
+
+**The change (test-only).** `test_inbound_email.js` captures `CARE_AI_ENABLED`, deletes it before any handler runs (mirroring `test_care_ai.js`'s save/delete/restore pattern), asserts the pin explicitly (`the suite pins CARE_AI_ENABLED off …`) and restores the caller's value at the end. Production behaviour, prompt, registry and template are unchanged.
+
+**Audit context (rules 21/44/54).** `envAudit.js` already registers every Amina knob (EMAIL section: `RESEND_API_KEY`, `EMAIL_INBOUND_SECRET`, `EMAIL_INBOUND_SIGNING_SECRET`, `CUSTOMER_CARE_PHONE`, `CUSTOMER_CARE_NAME`, `CARE_THREAD_WINDOW_HOURS`, `CARE_TICKET_MAX_OPEN`, `CARE_AI_ENABLED`, `CARE_ESCALATION_EMAIL`, `CARE_AI_CONFIDENCE_FLOOR`; META WHATSAPP: `META_TPL_CARE_ESCALATION`; SUPERADMIN: `SUPERADMIN_PHONE/EMAIL`) and `.env.example` documents all of them — no registry or template edit was needed. Live Cloud Run (`saka-fleet-00419-btm`) carries the superadmin keys, both inbound secret mounts and `META_TPL_CARE_ESCALATION=saka_care_escalation`; the `CARE_*` family is absent so production defaults to OFF. The operator flip is the documented `gcloud run services update … --update-env-vars=CARE_AI_ENABLED=on,CARE_ESCALATION_EMAIL=support@sakafleet.com,CARE_AI_CONFIDENCE_FLOOR=0.7` (never run silently by Cline).
+
+**Tests (rule 52).** `test_inbound_email` 41 → **42** assertions: the pin assertion plus the existing disabled-path ping/`action === 'disabled'` proofs now pass under a local `CARE_AI_ENABLED=on`; with the var unset the suite is byte-identical to before.
+
+**Recurrence autopsy (rule 51).** Defect class: *stateless suites assert ambient/default behaviour without pinning the env var that gates it*. Siblings audited: `test_care_ai` (already pins/restores), `test_care_worker` (deletes `CUSTOMER_CARE_PHONE` first), `test_care_learning` / `test_customer_care` (never import the Amina path) — no further patches needed; the pin assertion is the regression guard.
+
+**Frames touched.** `test_inbound_email.js`, `package.json` (1.97.3), `test_vehicle_documents.js` (version pin), `landing/data/changelog.json` + stamped assets, `docs/` (regenerated), this file, `CHANGELOG.md`.
+
+**Suites run.** test_inbound_email (42), test_env_audit (59), test_care_ai (59), test_doc_sync, test_kb_docs, test_vehicle_documents, test_landing_static, `npm run env:audit`, `npm run health` — green.
+
+**Rules shaped this work (rule 58).** 1/39/42/45/63 (rules first; **0 open proposals** verified live), 3/4, 10/11 (stateless suite + auto-cleanup), 12/33 (field-fix ship ritual), 21 (env registry parity), 44 (audited before acting — registry and template were already complete), 50/51/52 (isolation pin + sibling sweep + before/after proof), 54 (live gcloud + DB evidence, no guesses), 55 (evolved the existing suite; no new harness), 2 (architecture + CHANGELOG + landing feed in the same commit). No rule edited. **Impact:** local Amina testing can now coexist with the stateless suites; the production kill switch stays operator-owned (Cloud Run remains OFF until the gcloud update).
 

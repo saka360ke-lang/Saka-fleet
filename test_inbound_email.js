@@ -8,6 +8,14 @@ import { createMockSupabase } from './scripts/mockSupabase.js';
 let passed = 0;
 function check(cond, label) { assert.ok(cond, label); passed += 1; console.log('  ok ' + label); }
 
+// v1.97.3 — pin the Amina kill switch OFF for this stateless suite. The runner
+// (`scripts/run_tests.js`) loads dotenv for its children, so a developer's local
+// CARE_AI_ENABLED=on must never leak into the disabled-path assertions below
+// (rule 52 test isolation; mirrors test_care_ai.js's save/delete/restore).
+const PREV_CARE_AI_ENABLED = process.env.CARE_AI_ENABLED;
+delete process.env.CARE_AI_ENABLED;
+check(!process.env.CARE_AI_ENABLED, 'the suite pins CARE_AI_ENABLED off (a local .env cannot leak into the disabled-path assertions)');
+
 const SECRET = 'whsec_' + Buffer.from('saka-test-signing-key').toString('base64');
 const key = Buffer.from(SECRET.replace(/^whsec_/, ''), 'base64');
 const RAW = JSON.stringify({ type: 'email.received', data: { email_id: 'e1', from: 'customer@example.com', to: ['support@reports.sakafleet.com'], subject: 'Help with my truck' } });
@@ -155,6 +163,9 @@ const reopened = await handleInboundEmail(reopenMock.client, {
 check(reopened.reopened === true && reopened.ticketId === 't-resolved', 'a follow-up on a RESOLVED ticket reopens the SAME ticket');
 check(reopenMock.db.support_tickets.length === 1, 'no duplicate ticket is created on the follow-up');
 check(String(reopenMock.db.support_tickets[0].status) === 'OPEN', 'the reopened ticket returns to OPEN for triage');
+
+// Restore the caller's environment exactly as found (rule 50 hygiene).
+if (PREV_CARE_AI_ENABLED === undefined) delete process.env.CARE_AI_ENABLED; else process.env.CARE_AI_ENABLED = PREV_CARE_AI_ENABLED;
 
 console.log('');
 console.log(passed + ' inbound-email assertions passed.');

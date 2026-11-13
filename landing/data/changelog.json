@@ -1,6 +1,13 @@
 {
-  "latest": "1.97.2",
+  "latest": "1.97.3",
   "entries": [
+    {
+      "version": "1.97.3",
+      "date": "2026-11-13",
+      "title": "Behind the scenes: safer local testing for support",
+      "preview": "A behind-the-scenes reliability release for our support agent - nothing changes in your app.",
+      "summary": "A behind-the-scenes reliability release. While preparing the support agent that answers emails to support@reports.sakafleet.com, we found that a developer's local setting could quietly change how one of our automated checks behaved. It is fixed: the check now sets its own switch, proves it, and restores it afterwards, so a test run can never be influenced by a leftover local setting. Nothing about your conversations, records, reports, reminders or billing changes."
+    },
     {
       "version": "1.97.2",
       "date": "2026-11-13",
