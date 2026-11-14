@@ -27,6 +27,9 @@ import { complianceCategory } from './complianceCatalog.js';
 import { sanitizeEntryLabel } from './entryLabels.js';
 // v1.63.1 — reminder writes land through the shared after-write hook.
 import { markUserDataChanged } from './afterWrite.js';
+// v1.97.8 — a reminder whose vehicle row is gone reports `missingVehicle`
+// instead of surfacing a raw FK error (rule 51).
+import { isMissingVehicleError, MISSING_VEHICLE_NOTICE } from './vehicleWriteGuard.js';
 import {
   parseFlexibleDate,
   extractDatePhrase,
@@ -395,7 +398,12 @@ export async function createThresholdReminder({ supabase, vehicle, profileId = n
     const { label: _dropped, ...legacy } = row;
     ({ error } = await supabase.from('reminders').insert([legacy]));
   }
-  if (error) return { ok: false, error: error.message };
+  if (error) {
+    // v1.97.8 — the vehicle row is gone: report it so the engine can start
+    // registration instead of dead-ending on an FK message (rule 51).
+    if (isMissingVehicleError(error)) return { ok: false, missingVehicle: true, error: MISSING_VEHICLE_NOTICE };
+    return { ok: false, error: error.message };
+  }
   // v1.63.1 — a new reminder changes the user's upcoming-reminders facts.
   markUserDataChanged({ supabase, ownerId: vehicle?.owner_id || profileId || null, reason: 'reminders.createThreshold' });
   return { ok: true, reminder: row };
@@ -502,14 +510,20 @@ export async function createExpiryReminder({
       const { label: _dropped, ...legacy } = updateRow;
       ({ error } = await supabase.from('reminders').update(legacy).eq('id', existingId));
     }
-    if (error) return { ok: false, error: error.message };
+    if (error) {
+      if (isMissingVehicleError(error)) return { ok: false, missingVehicle: true, error: MISSING_VEHICLE_NOTICE };
+      return { ok: false, error: error.message };
+    }
   } else {
     let { data: inserted, error } = await supabase.from('reminders').insert([row]).select();
     if (error && /column|schema|does not exist/i.test(error.message || '')) {
       const { label: _dropped, ...legacy } = row;
       ({ data: inserted, error } = await supabase.from('reminders').insert([legacy]).select());
     }
-    if (error) return { ok: false, error: error.message };
+    if (error) {
+      if (isMissingVehicleError(error)) return { ok: false, missingVehicle: true, error: MISSING_VEHICLE_NOTICE };
+      return { ok: false, error: error.message };
+    }
     const stored = Array.isArray(inserted) ? inserted[0] : inserted;
     existingId = stored?.id || null;
   }
@@ -1016,12 +1030,17 @@ export async function applyOdometerReading({ supabase, vehicle, reading, inputUn
   if (!Number.isFinite(raw) || raw <= 0) return { ok: false, error: 'Invalid odometer reading.' };
   const canonical = userDistanceToKm(raw, inputUnit === 'mi' ? 'imperial' : 'metric');
   const nowIso = new Date().toISOString();
-  const { error } = await supabase.from('vehicles').update({
+  // v1.97.8 — a zero-row update means the vehicle row is gone: never report a
+  // saved odometer for an asset that no longer exists (rule 51).
+  const { data: updatedRows, error } = await supabase.from('vehicles').update({
     current_mileage: canonical,
     odometer_reading: canonical,
     updated_at: nowIso
-  }).eq('id', vehicle.id);
+  }).eq('id', vehicle.id).select('id');
   if (error) return { ok: false, error: error.message };
+  if (!Array.isArray(updatedRows) || updatedRows.length === 0) {
+    return { ok: false, missingVehicle: true, error: MISSING_VEHICLE_NOTICE };
+  }
 
   const fresh = { ...vehicle, current_mileage: canonical, odometer_reading: canonical };
   const evaluation = await evaluateVehicleReminders({ supabase, vehicle: fresh, sendFn, canDeliver });
@@ -1037,12 +1056,16 @@ export async function applyOperatingHours({ supabase, vehicle, hours, sendFn = n
   const raw = Number(hours);
   if (!Number.isFinite(raw) || raw < 0) return { ok: false, error: 'Invalid operating hours.' };
   const nowIso = new Date().toISOString();
-  const { error } = await supabase.from('vehicles').update({
+  // v1.97.8 — same zero-row vehicle-gone guard as the odometer lane (rule 51).
+  const { data: updatedRows, error } = await supabase.from('vehicles').update({
     operating_hours: raw,
     hours_updated_at: nowIso,
     updated_at: nowIso
-  }).eq('id', vehicle.id);
+  }).eq('id', vehicle.id).select('id');
   if (error) return { ok: false, error: error.message };
+  if (!Array.isArray(updatedRows) || updatedRows.length === 0) {
+    return { ok: false, missingVehicle: true, error: MISSING_VEHICLE_NOTICE };
+  }
 
   const fresh = { ...vehicle, operating_hours: raw };
   const evaluation = await evaluateVehicleReminders({ supabase, vehicle: fresh, sendFn, canDeliver });

@@ -167,6 +167,7 @@ export async function composeMessage({
     'After a photo that could not be read, apologise once and offer a typed or clearer-photo fallback — never repeat the same question verbatim and never claim the photo was saved.',
     'Documents (photos or PDFs) are read by the engine: reflect only the supplied fields, never ask for data the document already provides, and always confirm before saving.',
     'STORED DOCUMENTS (v1.84.0): the engine keeps the ORIGINAL logbook / insurance / inspection / road-licence file on paid plans and the welcome trial (Free keeps parsed figures only). Its *documents* list and *delete document N* lane are engine-owned: never narrate a vault write or deletion the engine did not confirm, and never promise a stored file on the Free plan.',
+    'VEHICLE-GONE LAW (v1.97.8): a write refused because the vehicle no longer exists is stated honestly ("nothing was written") with exactly ONE next step — register the vehicle. Never claim a save and never expose a database error.',
     'You write ONE concise WhatsApp message at a time. You never dump long menus.',
     'NEVER send a bare acknowledgement (no "Got it", "Noted", "Okay", "Got your vehicle details!"): every reply either answers the question from the facts or asks exactly one next question.',
     'You serve a GLOBAL audience: always localize units, currency, dates and plate examples to the user\'s region.',

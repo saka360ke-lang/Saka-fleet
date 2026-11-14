@@ -192,7 +192,16 @@ async function run() {
           const api = {
             select: () => api, eq: () => api, neq: () => api, in: () => api, is: () => api,
             gte: () => api, lte: () => api, lt: () => api, gt: () => api, order: () => api, limit: () => api,
-            update: () => api, delete: () => api,
+            update: () => {
+              // v1.97.8 — the vehicle update's .select('id') returns the row.
+              const chain = {
+                eq: () => chain, in: () => chain, is: () => chain, select: () => chain,
+                maybeSingle: async () => ({ data: { id: 'mock-updated' }, error: null }),
+                then: (a, b) => Promise.resolve({ data: [{ id: 'mock-updated' }], error: null }).then(a, b)
+              };
+              return chain;
+            },
+            delete: () => api,
             insert: async (rows) => {
               const data = Array.isArray(rows) ? rows : [rows];
               quickInserted.push({ table, rows: data });
@@ -222,6 +231,51 @@ async function run() {
         'the quick-log lane refuses tyres on a generator with warm copy (v1.93.0)');
       check(!quickInserted.some((entry) => entry.table === 'expense_logs'),
         'the quick-log refusal writes nothing');
+    }
+
+    console.log('\n--- Test 4i: quick-log vehicle-gone guard (v1.97.8) ---');
+    {
+      const goneInserted = [];
+      const goneMock = {
+        from(table) {
+          const api = {
+            select: () => api, eq: () => api, neq: () => api, in: () => api, is: () => api,
+            gte: () => api, lte: () => api, lt: () => api, gt: () => api, order: () => api, limit: () => api,
+            update: () => api, delete: () => api,
+            insert: async (rows) => {
+              const data = Array.isArray(rows) ? rows : [rows];
+              goneInserted.push({ table, rows: data });
+              if (table === 'expense_logs') {
+                return { error: { code: '23503', message: 'insert or update on table "expense_logs" violates foreign key constraint "expense_logs_vehicle_id_fkey"' }, data: null };
+              }
+              return { error: null, data };
+            },
+            maybeSingle: async () => ({ data: null, error: null }),
+            single: async () => ({ data: null, error: null }),
+            then: (a, b) => Promise.resolve({ data: [], error: null }).then(a, b)
+          };
+          return api;
+        }
+      };
+      const ghost = { id: 'veh-gone-quick-1', plate_number: 'KBX 000X', make_model: 'Ghost Car', asset_kind: 'vehicle', asset_type: 'ICE' };
+      const goneTurn = await handleLogExpenseTurn({
+        mergedExt: { expense_type: 'Fuel', amount: 250 },
+        messageText: '250 fuel',
+        targetVeh: ghost,
+        supabaseClient: goneMock,
+        profileData: { id: 'owner-gone-quick-1' },
+        senderPhone: phone,
+        countryInfo: { currency: 'KES', country_code: 'KE' },
+        targetLang: 'English',
+        existingVehicles: [ghost],
+        sendWhatsApp: async () => {}
+      });
+      check(/couldn't find that vehicle/i.test(goneTurn.reply) && /nothing was written/i.test(goneTurn.reply),
+        'a vehicle-gone quick log says plainly that nothing was written (v1.97.8)');
+      check(/add vehicle/i.test(goneTurn.reply), 'the quick-lane reply carries the ONE next step: add vehicle');
+      check(!/foreign key|expense_logs_vehicle_id_fkey|23503/i.test(goneTurn.reply),
+        'no raw database error leaks to the user');
+      check(!/Saved to database/i.test(goneTurn.reply), 'no false save claim on a vehicle-gone quick log');
     }
 
     console.log('\n--- Test 5: quick lanes invalidate the user-context cache (v1.63.1) ---');

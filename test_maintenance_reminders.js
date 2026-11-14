@@ -67,7 +67,9 @@ function createMockSupabase(initial = {}) {
               f.op === 'in' ? f.val.includes(row[f.col]) : row[f.col] === f.val));
             matched.forEach((row) => Object.assign(row, patch));
             updates.push({ table, patch, matched });
-            return resolve({ data: null, error: null });
+            // v1.97.8 — `.update(...).select('id')` returns the affected rows in
+            // production; [] means the vehicle row is gone (vehicle-gone guard).
+            return resolve({ data: matched.map((row) => ({ ...row })), error: null });
           }
           let rows = (tables[table] || []).slice();
           for (const f of filters) {

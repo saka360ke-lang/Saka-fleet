@@ -23,6 +23,8 @@ import { logSystemError as logSystemErrorImpl } from '../services/systemErrors.j
 // v1.72.1 (P2-6) — system_config access rides the dual-window service.
 import { readConfig, writeConfig } from '../services/systemConfigService.js';
 import { CONFIG_KEY_SAKA_CORE_PROMPT } from '../services/systemConfigKeys.js';
+// v1.97.8 — ONE pure dedupe for the append-only live learnings (rule 51).
+import { dedupeLearningBullets, SENTINEL_LEARNINGS_MAX } from '../services/promptLearnings.js';
 
 function getSupabase(providedSupabase) {
   if (providedSupabase) return providedSupabase;
@@ -424,7 +426,7 @@ Return strictly a single valid JSON object matching this schema (no markdown ast
   const cleanLearnings = rawLearnings
     .map((learning) => String(learning || '').replace(/\s+/g, ' ').trim())
     .filter((learning) => learning.length >= 8 && learning.length <= 200)
-    .slice(0, 5)
+    .slice(0, SENTINEL_LEARNINGS_MAX)
     .map((learning) => `- ${learning}`);
 
   if (cleanLearnings.length === 0) {
@@ -436,8 +438,12 @@ Return strictly a single valid JSON object matching this schema (no markdown ast
     };
   }
 
+  // v1.97.8 — dedupe BEFORE appending. The append-only loop used to repeat the
+  // same lesson on every synthesis (live prompt 2026-11-14: 5 lessons ×3-4).
+  // Case/whitespace-insensitive, newest occurrence wins, newest 5 survive.
+  const mergedLearnings = dedupeLearningBullets([...priorBullets, ...cleanLearnings]);
   const header = `SENTINEL LIVE LEARNINGS (append-only, ${nowIso.slice(0, 10)}):`;
-  const persistedPrompt = boundedRefinementBlock([header, ...priorBullets, ...cleanLearnings]);
+  const persistedPrompt = boundedRefinementBlock([header, ...mergedLearnings]);
 
   if (!refinementIsSafe(persistedPrompt)) {
     console.warn('[Sentinel ConversationRefinement] Refinement rejected by the content gate.');

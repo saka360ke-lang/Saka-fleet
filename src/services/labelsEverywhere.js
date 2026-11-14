@@ -11,6 +11,8 @@
  * missing).
  */
 import { sanitizeEntryLabel } from './entryLabels.js';
+// v1.97.8 — a gone vehicle reports `missingVehicle` instead of a raw FK error.
+import { isMissingVehicleError } from './vehicleWriteGuard.js';
 
 export const ODOMETER_READINGS_TABLE = 'odometer_readings';
 
@@ -55,6 +57,9 @@ export async function recordLabeledReading(supabase, {
     if (recordedAt) row.recorded_at = recordedAt;
     const { error } = await supabase.from(ODOMETER_READINGS_TABLE).insert([row]);
     if (!error) return { ok: true, label: clean };
+    // v1.97.8 — the vehicle row is gone: a reading cannot be kept, and the
+    // caller must never claim one was saved (rule 51).
+    if (isMissingVehicleError(error)) return { ok: false, missingVehicle: true, error: error.message };
     if (!isSchemaDriftError(error.message)) return { ok: false, error: error.message };
     const { error: retryError } = await supabase.from(ODOMETER_READINGS_TABLE).insert([{ vehicle_id: vehicleId, reading: numeric }]);
     return retryError ? { ok: false, error: retryError.message } : { ok: true, degraded: true };

@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.97.7  
+**Version:** 1.97.8  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.97.8** | Vehicle-gone writes never dead-end — the live 2026-11-13 FK refusal (`quizEngine.logExpense`, owner `9653d8e3…`, vehicle `ef35bbad…`, KES 250/2,000) is now caught by ONE pure guard: expense + earnings FK errors and mileage/hours zero-row updates say plainly \"nothing was written\" and start registration pre-filled with the known asset kind (first question = the plate); quick lanes point to *add vehicle*; receipts keep the evidence (stale link dropped); reminders/odometer-ledger creators/readers report `missingVehicle`; audited `VEHICLE_GONE_WRITE_REFUSED`. Sentinel live learnings are deduped (case/whitespace-insensitive, newest 5) before every append + an idempotent operator script (`npm run sentinel:dedupe-learnings`, live 19→5, audited `SENTINEL_LEARNINGS_DEDUPED`) — the v1.97.7 worker re-appended at 09:54Z, so the final rewrite runs after this deploy | 250 |
 | **1.97.7** | Amina actually parses her model now — `chatCompletion` returns `{ ok, text, … }` but `parseCareAiJson` returned the wrapper (object short-circuit), so `parsed.lesson`/`parsed.action` were always undefined: no lesson could ever be learned and every live investigation read "loop limit reached without a decision"; the parser unwraps `text` centrally (both Amina purposes), the retry message quotes model text, and the live replay produced the first `care_learnings` row + `CARE_TICKET_LEARNED` | 249 |
 | **1.97.6** | The Lesson loop actually learns — `fetchInboundEmailBody` called Resend's SENT-email API (`GET /emails/{id}` → live `404 "Email not found"`); it now uses `GET /emails/receiving/{id}` (live `200` with text+html), so `[SFC-]` human replies reach `extractCareLesson`; the recovered 10:57 reply is replayed live to seed the first `care_learnings` row | 248 |
 | **1.97.5** | Care dashboard UX + the honest lesson diagnosis — `/d/care` collapses Thread/Investigation into `<details>` (escalated thread open, the rest compact), titles lose the `[SFC-…]`/Re: chains (subjectless tickets titled from a 60-char body), status chips turn red/amber/blue and a grey `⚙️ Pre-gate escalation` badge replaces the paragraph; the live Lesson KPI=0 was proved to be an empty Resend body fetch (`CARE_TICKET_HUMAN_REPLY {learned:false}`), so every failed/empty body fetch now writes `error_logs` and the audit carries `bodyAvailable` | 247 |
@@ -7412,3 +7413,41 @@ Only valid values are attached (`userData.email` / `userData.phone_number`); the
 **Suites run.** test_care_learning (40), test_care_ai (61), test_inbound_email (52), test_dashboard, test_care_worker, test_doc_sync, test_kb_docs, test_vehicle_documents, test_landing_static, test_env_audit, `npm run health` — green.
 
 **Rules shaped this work (rule 58).** 1/39/42/45/63, 3/4, 10/11, 12/33, 44/54, 50/51/52, 55, 56, 2. No rule edited. **Impact:** `[SFC-]` human replies genuinely teach Amina, and her investigation can finally parse a decision; the "loop limit reached without a decision" reason can no longer be produced by the response wrapper.
+## 250. v1.97.8 — Vehicle-gone write guard + deduped Sentinel live learnings (2026-11-14)
+
+### 250.1 The live defect
+The full-spectrum audit found exactly one unresolved user-facing error class: **2026-11-13 02:53Z, `quizEngine.logExpense`**, owner `9653d8e3-3071-4734-aa40-b9130abd1884` tried to log **KES 250 and KES 2,000** against `vehicle_id ef35bbad-61a9-488b-9ad0-4c7df1bf046d` — a row that no longer existed. The insert returned `violates foreign key constraint "expense_logs_vehicle_id_fkey"`, the user met the raw database message, and the error sat `diagnosed` (never resolved). The same defect class also allowed a **false success**: `log_mileage` / `log_operating_hours` updated `vehicles` by id without checking the affected row, so a vanished vehicle produced "Odometer Updated! ✅" while `recordLabeledReading` failed its FK silently.
+
+### 250.2 The guard (one module, every write lane — rule 51)
+New **`src/services/vehicleWriteGuard.js`** (pure, never throws): `isMissingVehicleError(error)` (Postgres `23503` + a vehicle-keyed constraint/message only — schema drift and network errors keep their own handling), and the engine copy re-exported from **`flowKnowledge.VEHICLE_GONE_COPY`** (`notice` + `registerLead` + `nextStep`), so prompt and behaviour share one source.
+
+| Lane | Behaviour on a vanished vehicle |
+|---|---|
+| `quizEngine.log_expense` / `log_earnings` | FK caught → `missingVehicleTurn`: audited `VEHICLE_GONE_WRITE_REFUSED`, "*nothing was written*", registration **started immediately** with the known `asset_kind` pre-filled (first question = the plate), returns `active:true` so the new quiz survives the caller's `completed` cleanup |
+| `quizEngine.log_mileage` / `log_operating_hours` | update now `.select('id')`; an empty array = vanished → same turn (ends the false "Odometer Updated") |
+| `quizEngine.set_reminder` (expiry + threshold) | `created.missingVehicle` → same turn |
+| Quick lanes (`handleLogExpenseTurn`, `handleLogEarningsTurn`, mileage, hours) | `missingVehicleReply()`: the notice + ONE next step (*add vehicle*); no raw error, no false save |
+| `receipts.recordReceipt` | retries with `vehicle_id: null` — the receipt is evidence and is never lost (rule 48); returns `missingVehicle` |
+| `createThresholdReminder` / `createExpiryReminder` | return `{ ok:false, missingVehicle:true }` with engine copy |
+| `applyOdometerReading` / `applyOperatingHours` | zero-row update → `{ ok:false, missingVehicle:true }` |
+| `recordLabeledReading` | FK → `{ ok:false, missingVehicle:true }` (never a silent loss) |
+
+Prompt/composer sync (rule 13): `DEFAULT_SAKA_CORE_PROMPT` carries **`VEHICLE-GONE LAW (v1.97.8)`**, `conversationEngine` carries the same law, and `test_agent_training` asserts both. Copy is warm, plain and gender-neutral with exactly ONE next step (rules 31/60).
+
+### 250.3 Sentinel live learnings — dedupe before every append
+Live `system_config.prompt.saka_core_prompt` held **19 bullets / 5 unique** (each lesson repeated 3-4×) because `runConversationRefinement` appended `priorBullets + cleanLearnings` every 15-minute synthesis. New pure **`src/services/promptLearnings.js`**: `parseLearningBullets()` + `dedupeLearningBullets()` (case/whitespace-insensitive; a later repeat refreshes an older lesson; **newest 5 unique** survive; `SENTINEL_LEARNINGS_MAX = 5`). The worker merges prior + new and dedupes before `boundedRefinementBlock`. New operator script **`npm run sentinel:dedupe-learnings`** (`scripts/dedupe_sentinel_learnings.js`) is idempotent, `--dry-run`-able, content-gated (`refinementIsSafe`) and audited **`SENTINEL_LEARNINGS_DEDUPED`** (`bullets_before/after/dropped`). Live run: **19 → 5**. Note: the still-v1.97.7 worker re-appended at 09:54Z (old code), so the script is re-run after this revision boots; the new worker can no longer re-accumulate duplicates.
+
+### 250.4 Tests (rule 52)
+`test_quiz_flow` 250 → **259** (ghost-vehicle save: notice, no raw FK, registration started, `asset_kind` pre-filled, first field = plate, audit row, only the refused insert attempted); `test_first_message_flow` 59 → **63** (quick-lane notice, ONE next step, no raw error, no false save); `test_sentinel_policy` 30 → **36** (dedupe collapse/newest/cap/parse/empty); `test_agent_training` +2 (core prompt law + copy shape). The `.update().select('id')` → affected-rows contract is mirrored in the harness mocks (`test_quiz_flow`, `test_first_message_flow`, `test_maintenance_reminders`). Version pin `test_vehicle_documents` = 1.97.8.
+
+### 250.5 Recurrence autopsy (rule 51)
+Defect class *a write references a vehicle row that no longer exists, surfacing raw or as a false success* → siblings swept and fixed: expense insert · earnings insert · mileage update · hours update · reminder creators (threshold + expiry) · odometer ledger · receipts · all four quick lanes. Deliberately left (with reason): `updateVehicleDetails` (ownership-checked), CSV import (vehicle ids validated first), dashboard writes (session + ownership gated) — none can reach a vanished row without an ownership failure that already answers honestly.
+
+### 250.6 Frames touched
+`src/services/{vehicleWriteGuard,promptLearnings}.js` (new), `src/services/quizEngine.js`, `src/routes/whatsapp/commands.js`, `src/services/receipts.js`, `src/services/maintenanceReminders.js`, `src/services/labelsEverywhere.js`, `src/services/flowKnowledge.js`, `src/services/conversationEngine.js`, `src/workers/sentinel.js`, `sakaAi.js`, `scripts/dedupe_sentinel_learnings.js` (new), `package.json` (1.97.8), `test_quiz_flow.js`, `test_first_message_flow.js`, `test_sentinel_policy.js`, `test_agent_training.js`, `test_maintenance_reminders.js`, `test_vehicle_documents.js`, `landing/data/changelog.json` + stamped assets, `docs/` (regenerated), this file, `CHANGELOG.md`.
+
+### 250.7 Suites run
+test_quiz_flow (259), test_first_message_flow (63), test_error_logging (22), test_labels_everywhere (22), test_maintenance_reminders (50), test_expiry_reminders (62), test_sentinel_policy (36), test_agent_training, test_user_context_cache (137), test_narrative_draft (128), test_record_answers (88), test_vehicle_documents, test_doc_sync, test_kb_docs, test_landing_static, test_env_audit, `npm run health` — green.
+
+### 250.8 Rules shaped this work (rule 58)
+1/39/42/45/63 (rules + architecture first; **0 open proposals** live-checked), 3/4, 10/11, 12/33 (one commit: version + history + CHANGELOG + landing feed + regenerated docs), 13 (flowKnowledge + core prompt + composer + training tests), 31/60 (warm copy, ONE next step), 48 (receipt evidence preserved), 50/51/52 (visible failures, sibling sweep, deep audit + extensive tests), 54 (live FK evidence + live dedupe verification), 55 (evolved existing lanes), 56 (live prompt reconciled). No rule edited. **Impact:** every vehicle-referencing write now either succeeds or says plainly that nothing was written and starts registration; the stored live-learnings block can no longer grow with duplicates.

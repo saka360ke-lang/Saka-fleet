@@ -11,6 +11,8 @@ import { mintFindingLog, mintFindingProposal } from './src/services/deepAudit.js
 import { recordFriction } from './src/services/frictionTracker.js';
 import { markDeliveryBlocked, isDeliveryBlocked, clearDeliveryBlock, PERMANENT_FAILURE_CODES } from './src/services/deliveryGuard.js';
 import { sendProactiveWhatsApp } from './src/workers/sentinel.js';
+// v1.97.8 — the append-only live learnings are deduped before every store.
+import { dedupeLearningBullets, parseLearningBullets, SENTINEL_LEARNINGS_MAX } from './src/services/promptLearnings.js';
 
 let passed = 0;
 function check(cond, label) { assert.ok(cond, label); passed += 1; console.log('  ok ' + label); }
@@ -116,6 +118,30 @@ global.fetch = originalFetch;
 if (savedPhoneId === undefined) delete process.env.META_PHONE_NUMBER_ID; else process.env.META_PHONE_NUMBER_ID = savedPhoneId;
 if (savedWaToken === undefined) delete process.env.META_WHATSAPP_TOKEN; else process.env.META_WHATSAPP_TOKEN = savedWaToken;
 if (savedTpl === undefined) delete process.env.META_TPL_SERVICE_REMINDER; else process.env.META_TPL_SERVICE_REMINDER = savedTpl;
+
+console.log('');
+console.log('--- live learnings dedupe (v1.97.8) ---');
+{
+  const prior = [
+    '- When receipt text is pasted, pre-fill amount, litres, merchant, date and plate before asking anything.',
+    '- Bind bare Accept/Decline/Cancel/No to the last shown card and restate its vehicle, type and amount.',
+    '-   bind BARE accept/decline/cancel/no   to the last shown card and restate its vehicle, type and amount.  ',
+    "- Answer simple how-to questions like 'How do I log fuel?' from the help lane before escalating."
+  ];
+  const merged = dedupeLearningBullets(prior);
+  check(merged.length === 3, 'case/whitespace duplicates collapse to one bullet');
+  check(merged[merged.length - 1].toLowerCase().includes('answer simple how-to'), 'the newest unique learning stays last');
+  const capped = dedupeLearningBullets([
+    '- one alpha lesson', '- two beta lesson', '- three gamma lesson',
+    '- four delta lesson', '- five epsilon lesson', '- six zeta lesson'
+  ]);
+  check(capped.length === SENTINEL_LEARNINGS_MAX, 'only the newest five unique lessons survive');
+  check(capped[0].includes('two beta') && !capped.some((line) => line.includes('one alpha')), 'the OLDEST unique lesson drops first');
+  const parsed = parseLearningBullets('SAKA-PROMPT-SCHEMA:2026.13.0\nSENTINEL LIVE LEARNINGS (append-only, 2026-11-14):\n- a lesson\n- b lesson');
+  check(parsed.length === 2 && parsed[0] === 'a lesson', 'only bullet lines are parsed (marker + header ignored)');
+  const empty = dedupeLearningBullets([]);
+  check(Array.isArray(empty) && empty.length === 0, 'an empty block stays empty (never invents a lesson)');
+}
 
 console.log('');
 console.log(passed + ' sentinel-policy assertions passed.');

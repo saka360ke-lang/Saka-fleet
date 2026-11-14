@@ -478,6 +478,20 @@ export const LOGBOOK_UPLOAD_COPY = Object.freeze({
 });
 
 /**
+ * v1.97.8 — the VEHICLE-GONE LAW (rule 51). A ledger / reminder / receipt /
+ * odometer write whose vehicle row no longer exists (FK violation or a
+ * zero-row update) writes NOTHING and says so honestly; the engine then
+ * starts (or points to) registration with exactly ONE next step. DATA ONLY:
+ * the write guard uses these strings verbatim and the core prompt carries the
+ * same law, so copy and behaviour can never drift.
+ */
+export const VEHICLE_GONE_COPY = Object.freeze({
+  notice: "⚠️ I couldn't find that vehicle in your fleet anymore — *nothing was written*.",
+  registerLead: "Let's register it first.",
+  nextStep: "Reply *add vehicle* and send the plate when you're ready."
+});
+
+/**
  * The ONE decision for the completion-card logbook line (v1.93.0, Task 2).
  * A stash line always wins (it reports a real engine outcome), a document
  * already captured is never re-requested, and the storage promise is only made

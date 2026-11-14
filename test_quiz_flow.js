@@ -399,6 +399,57 @@ async function run() {
   assert(expenseSession.quiz.answers.amount === 6000, 'Correction updates the collected value');
   assert(amountBefore === 5000 && expenseSession.quiz.phase === 'confirm', 'Correction returns to the confirmation summary');
 
+  console.log('\n--- Test 4a: vehicle-gone at save starts registration (v1.97.8) ---');
+  {
+    const goneInserts = [];
+    const goneClient = {
+      from(table) {
+        const api = {
+          select: () => api, eq: () => api, neq: () => api, in: () => api, is: () => api,
+          gte: () => api, lte: () => api, lt: () => api, gt: () => api, order: () => api, limit: () => api,
+          update: () => api, delete: () => api,
+          insert: async (rows) => {
+            const data = Array.isArray(rows) ? rows : [rows];
+            goneInserts.push({ table, rows: data });
+            if (table === 'expense_logs') {
+              return { error: { code: '23503', message: 'insert or update on table "expense_logs" violates foreign key constraint "expense_logs_vehicle_id_fkey"' }, data: null };
+            }
+            return { error: null, data };
+          },
+          maybeSingle: async () => ({ data: null, error: null }),
+          single: async () => ({ data: null, error: null }),
+          then: (a, b) => Promise.resolve({ data: [], error: null }).then(a, b)
+        };
+        return api;
+      }
+    };
+    const ghostVehicle = { ...vehicle, id: 'ghost-vehicle-1', plate_number: 'KBX 000X' };
+    const ghostSession = {};
+    const ghostCtx = { ...baseCtx({ vehicles: [ghostVehicle], supabase: goneClient }), session: ghostSession };
+    await handleQuizTurn({ session: ghostSession, messageText: 'log expense', startFlow: 'log_expense', ctx: ghostCtx });
+    await handleQuizTurn({ session: ghostSession, messageText: 'KBX 000X', aiExtracted: { vehicle_id: ghostVehicle.id }, ctx: ghostCtx });
+    await handleQuizTurn({ session: ghostSession, messageText: 'Fuel', aiExtracted: { expense_type: 'Fuel' }, ctx: ghostCtx });
+    await handleQuizTurn({ session: ghostSession, messageText: '250', aiExtracted: { amount: 250 }, ctx: ghostCtx });
+    await handleQuizTurn({ session: ghostSession, messageText: '20', aiExtracted: { fuel_liters: 20 }, ctx: ghostCtx });
+    await handleQuizTurn({ session: ghostSession, messageText: 'full tank', aiExtracted: { fill_type: 'full' }, ctx: ghostCtx });
+    await handleQuizTurn({ session: ghostSession, messageText: '366900', aiExtracted: { odometer: 366900 }, ctx: ghostCtx });
+    await handleQuizTurn({ session: ghostSession, messageText: 'skip', ctx: ghostCtx });
+    assert(ghostSession.quiz?.phase === 'confirm', 'the ghost-vehicle draft reaches the confirmation card');
+    const goneTurn = await handleQuizTurn({ session: ghostSession, messageText: 'yes', ctx: ghostCtx });
+    assert(goneTurn.handled === true, 'the save turn is handled');
+    assert(/couldn't find that vehicle/i.test(goneTurn.reply) && /nothing was written/i.test(goneTurn.reply),
+      'it says plainly that nothing was written');
+    assert(!/foreign key|expense_logs_vehicle_id_fkey|23503/i.test(goneTurn.reply), 'no raw FK error leaks to the user');
+    assert(ghostSession.quiz?.flow === 'vehicle_registration', 'registration starts immediately (the dead draft is replaced)');
+    assert(ghostSession.quiz?.answers?.asset_kind === 'vehicle', 'the known asset kind is pre-filled');
+    const nextGhostField = getCurrentQuizField(ghostSession.quiz, ghostCtx);
+    assert(nextGhostField?.key === 'plate_number', 'the FIRST registration question is the plate (one question only)');
+    assert(goneInserts.some((entry) => entry.table === 'admin_audit_logs' && entry.rows[0]?.action === 'VEHICLE_GONE_WRITE_REFUSED'),
+      'the refused write is audited as VEHICLE_GONE_WRITE_REFUSED');
+    assert(goneInserts.filter((entry) => entry.table === 'expense_logs').length === 1,
+      'only the refused insert was attempted — nothing else was written');
+  }
+
   console.log('\n--- Test 4b: multi-part banking in one message (v1.28.0) ---');
   const bankCtx = baseCtx({ vehicles: [vehicle] });
   const bankSession = {};
@@ -866,9 +917,11 @@ console.log('\n--- v1.63.1: quiz completion invalidation spies ---');
             in: () => chain,
             is: () => chain,
             select: () => chain,
-            maybeSingle: async () => ({ data: null, error: null }),
-            single: async () => ({ data: null, error: null }),
-            then: (a, b) => Promise.resolve({ data: null, error: null }).then(a, b)
+            maybeSingle: async () => ({ data: { id: 'mock-updated' }, error: null }),
+            single: async () => ({ data: { id: 'mock-updated' }, error: null }),
+            // v1.97.8 — a vehicle update with .select('id') returns the affected
+            // row in production; the mock mirrors that contract ([] = gone).
+            then: (a, b) => Promise.resolve({ data: [{ id: 'mock-updated' }], error: null }).then(a, b)
           };
           return chain;
         },

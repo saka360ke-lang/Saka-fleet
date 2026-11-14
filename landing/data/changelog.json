@@ -1,6 +1,13 @@
 {
-  "latest": "1.97.7",
+  "latest": "1.97.8",
   "entries": [
+    {
+      "version": "1.97.8",
+      "date": "2026-11-14",
+      "title": "A missing vehicle no longer strands your record",
+      "preview": "Logging for a vehicle that left your fleet now says plainly that nothing was saved — and starts registering it.",
+      "summary": "A small release about honesty at the exact moment something goes wrong. We found a real case where someone tried to log an expense for a vehicle that was no longer in their fleet: the save failed, and they were shown a technical database message instead of a way forward. Now Saka tells you plainly that nothing was written and starts registering the vehicle right away - it asks for the plate first, and your earlier answers are never half-saved. The same care now covers fuel, earnings, odometer readings, engine hours, reminders and receipt photos: a vanished vehicle can never produce a false 'Saved' message or a confusing error, and a receipt photo is still kept as evidence even if its vehicle link is gone. Behind the scenes, we also cleaned up the assistant's stored improvement notes, which had quietly repeated the same few lessons many times; they are now kept unique so replies stay sharp. Your own records, reports, reminders and billing are untouched."
+    },
     {
       "version": "1.97.7",
       "date": "2026-11-13",

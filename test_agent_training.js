@@ -21,7 +21,8 @@ import {
   SAKA_TONE_COMPASS,
   buildFlowPlaybook,
   guidanceForFlow,
-  getKnownFlowKeys
+  getKnownFlowKeys,
+  VEHICLE_GONE_COPY
 } from './src/services/flowKnowledge.js';
 import { getFlowDefinition, startQuiz } from './src/services/quizEngine.js';
 import { isContentlessReply } from './src/services/conversationEngine.js';
@@ -333,6 +334,10 @@ check(/Narrative pre-fills are engine-determined facts/.test(await import('./src
   check(DEFAULT_SAKA_CORE_PROMPT.includes('change approach and PERFORM the action'), 'the folded Sentinel live learnings ride the core prompt');
   check(DEFAULT_SAKA_CORE_PROMPT.includes('carry free-text expense detail into the draft note/label'), 'the label-echo learning is trained');
   check(PROMPT_REFINEMENT_MARKER === 'SAKA-PROMPT-SCHEMA:2026.13.0', 'the prompt schema version is bumped for v5 (retires stale refinements)');
+  // v1.97.8 — the vehicle-gone law rides the delivered prompt + the flow data.
+  check(DEFAULT_SAKA_CORE_PROMPT.includes('VEHICLE-GONE LAW (v1.97.8)'), 'the core prompt teaches the vehicle-gone law');
+  check(VEHICLE_GONE_COPY.notice.includes('nothing was written') && /add vehicle/.test(VEHICLE_GONE_COPY.nextStep),
+    'the engine copy states nothing was written and names ONE next step');
 
   // The composer enforces the same rule at runtime (not just in the prompt).
   check(isContentlessReply('Got your vehicle details!') === true, 'an empty acknowledgement is rejected by the composer');

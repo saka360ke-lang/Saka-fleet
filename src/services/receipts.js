@@ -1,6 +1,9 @@
 import { runSql, hasSqlAccess } from '../db/sqlRunner.js';
 // v1.59.7 — receipts can carry the same optional label as any other entry.
 import { sanitizeEntryLabel } from './entryLabels.js';
+// v1.97.8 — a write whose vehicle row is gone reports `missingVehicle`
+// instead of losing evidence or dead-ending (rule 51).
+import { isMissingVehicleError, MISSING_VEHICLE_NOTICE } from './vehicleWriteGuard.js';
 // v1.63.1 — receipt writes land through the shared after-write hook.
 import { markUserDataChanged } from './afterWrite.js';
 
@@ -149,10 +152,21 @@ export async function recordReceipt(providedSupabase, {
       const { label: _dropped, ...legacy } = row;
       ({ data, error: insertError } = await supabase.from(RECEIPTS_TABLE).insert([legacy]).select('*').maybeSingle());
     }
+    // v1.97.8 — a receipt is evidence (rule 48): when its vehicle row is gone,
+    // keep the receipt and drop ONLY the stale link — never lose the document.
+    let missingVehicle = false;
+    if (insertError && isMissingVehicleError(insertError)) {
+      missingVehicle = true;
+      ({ data, error: insertError } = await supabase
+        .from(RECEIPTS_TABLE)
+        .insert([{ ...row, vehicle_id: null }])
+        .select('*')
+        .maybeSingle());
+    }
     if (insertError) return { ok: false, error: insertError.message };
     // v1.63.1 — a new receipt is user data (uniform invalidation contract).
     markUserDataChanged({ supabase, ownerId: ownerId || driverId || null, reason: 'receipts.record' });
-    return { ok: true, receipt: data };
+    return { ok: true, receipt: data, ...(missingVehicle ? { missingVehicle: true } : {}) };
   } catch (err) {
     return { ok: false, error: err.message };
   }

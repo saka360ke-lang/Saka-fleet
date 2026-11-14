@@ -1,7 +1,7 @@
 {
   "name": "sakafleet-backend",
   "type": "module",
-  "version": "1.97.7",
+  "version": "1.97.8",
   "description": "Saka Fleet Backend",
   "main": "index.js",
   "scripts": {
@@ -99,7 +99,8 @@
     "migrate:monthly-reports": "node scripts/run_monthly_reports_migration.js",
     "migrate:vehicle-nickname": "node scripts/run_vehicle_nickname_migration.js",
     "migrate:stt-locale": "node scripts/run_stt_locale_migration.js",
-    "reconcile:stt-locales": "node scripts/reconcile_stt_locales.js"
+    "reconcile:stt-locales": "node scripts/reconcile_stt_locales.js",
+    "sentinel:dedupe-learnings": "node scripts/dedupe_sentinel_learnings.js"
   },
   "dependencies": {
     "@fastify/formbody": "^9.0.1",

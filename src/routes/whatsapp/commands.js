@@ -33,6 +33,9 @@ import { isDuplicateExpense } from '../../services/expenseGuard.js';
 import { normalizeFillType } from '../../services/fuelEconomy.js';
 import { applyOdometerReading, applyOperatingHours } from '../../services/maintenanceReminders.js';
 import { markUserDataChanged } from '../../services/afterWrite.js';
+// v1.97.8 — the vehicle-gone guard (rule 51): a quick log whose vehicle row is
+// gone writes nothing and points to registration instead of a raw FK error.
+import { isMissingVehicleError, missingVehicleReply } from '../../services/vehicleWriteGuard.js';
 import { getTierLabel, getAnnualDiscountPercent } from '../../services/subscriptionTiers.js';
 import { shortenUrl } from '../../services/linkShortener.js';
 import { composeMessage } from '../../services/conversationEngine.js';
@@ -826,7 +829,11 @@ export async function handleLogExpenseTurn({ mergedExt, messageText, targetVeh, 
         const { label, ...legacyQuickRow } = quickExpenseRow;
         ({ error: quickLogErr } = await supabaseClient.from('expense_logs').insert([legacyQuickRow]));
       }
-      if (quickLogErr) {
+      if (isMissingVehicleError(quickLogErr)) {
+        // v1.97.8 — the vehicle row no longer exists: nothing was written and
+        // the ONE next step is registration (never a raw database error).
+        reply = missingVehicleReply();
+      } else if (quickLogErr) {
         reply = `⚠️ I could not save that expense just now — *nothing was written*. Please try again in a moment, or send it as *"amount type"* (e.g. *"1000 fuel"*).`;
       } else {
         // v1.88.2 (Phase 8B completion) — the legacy `expenses` mirror is gone
@@ -881,6 +888,8 @@ export async function handleUpdateMileageTurn({ mergedExt, messageText, targetVe
                 if (extOdometer && extOdometer > 0) {
                   const inputUnit = targetVeh?.unit_system === 'imperial' ? 'mi' : 'km';
                   let odometerSaveError = null;
+                  // v1.97.8 — a gone vehicle reports through the shared guard.
+                  let odometerMissingVehicle = false;
                   if (supabaseClient && targetVeh) {
                     const recorded = await applyOdometerReading({
                       supabase: supabaseClient,
@@ -891,13 +900,16 @@ export async function handleUpdateMileageTurn({ mergedExt, messageText, targetVe
                       canDeliver: (phone) => String(phone || '').replace(/[^\d]/g, '') !== String(senderPhone || '').replace(/[^\d]/g, '')
                     });
                     if (recorded?.ok === false) odometerSaveError = recorded.error;
+                    if (recorded?.missingVehicle) odometerMissingVehicle = true;
                     if (recorded?.canonicalKm) targetVeh.current_mileage = recorded.canonicalKm;
                   }
                   if (supabaseClient && targetVeh && !odometerSaveError) {
                     // v1.63.1 — the odometer update changed the asset facts.
                     markUserDataChanged({ supabase: supabaseClient, phone: senderPhone, ownerId: profileData?.id, reason: 'whatsapp.quickLogMileage' });
                   }
-                  if (odometerSaveError) {
+                  if (odometerMissingVehicle) {
+                    reply = missingVehicleReply();
+                  } else if (odometerSaveError) {
                     reply = `⚠️ Could not update the odometer for *${vehicleDisplayLabel(targetVeh)}*: ${odometerSaveError}`;
                   } else {
                     reply = `📈 *Odometer Updated!* 🚗
@@ -939,7 +951,10 @@ export async function handleOperatingHoursTurn({ mergedExt, messageText, targetV
                     // v1.63.1 — the hour-meter update changed the asset facts.
                     markUserDataChanged({ supabase: supabaseClient, phone: senderPhone, ownerId: profileData?.id, reason: 'whatsapp.quickLogHours' });
                   }
-                  if (!recorded.ok) {
+                  if (!recorded.ok && recorded.missingVehicle) {
+                    // v1.97.8 — the vehicle row is gone: nothing was written.
+                    reply = missingVehicleReply();
+                  } else if (!recorded.ok) {
                     reply = `⚠️ Could not update operating hours for *${vehicleDisplayLabel(targetVeh)}*: ${recorded.error}`;
                   } else {
                     targetVeh.operating_hours = extHours;
@@ -973,6 +988,8 @@ export async function handleLogEarningsTurn({ mergedExt, messageText, targetVeh,
     : (hasEarningTypeMarker(messageText) ? resolveEarningType(messageText) : null);
   if (extAmount && extAmount > 0) {
     let earningSaveError = null;
+    // v1.97.8 — a vehicle-gone FK error gets the registration next step.
+    let earningMissingVehicle = false;
     const quickEarningLabel = sanitizeEntryLabel(mergedExt.label || extractEntryLabel(messageText));
     if (supabaseClient && targetVeh) {
       // v1.58.8 — verify the write before claiming "Recorded" (same
@@ -991,7 +1008,10 @@ export async function handleLogEarningsTurn({ mergedExt, messageText, targetVeh,
         const { label, ...legacyEarningRow } = quickEarningRow;
         ({ error: earnErr } = await supabaseClient.from('private_earnings').insert([legacyEarningRow]));
       }
-      if (earnErr) earningSaveError = earnErr.message;
+      if (earnErr) {
+        earningSaveError = earnErr.message;
+        earningMissingVehicle = isMissingVehicleError(earnErr);
+      }
     } else {
       earningSaveError = 'no vehicle or database';
     }
@@ -1000,7 +1020,9 @@ export async function handleLogEarningsTurn({ mergedExt, messageText, targetVeh,
       markUserDataChanged({ supabase: supabaseClient, phone: senderPhone, ownerId: profileData?.id, reason: 'whatsapp.quickLogEarning' });
     }
     if (earningSaveError) {
-      reply = `⚠️ I could not save that earning just now — *nothing was written*. Please try again in a moment.`;
+      reply = earningMissingVehicle
+        ? missingVehicleReply()
+        : `⚠️ I could not save that earning just now — *nothing was written*. Please try again in a moment.`;
     } else {
       reply = `💰 *Earnings Logged!* 🎉\n\n• *Vehicle:* *${vehicleDisplayLabel(targetVeh)}*\n• *Revenue:* ${countryInfo.currency} ${Number(extAmount).toLocaleString()}${earnType ? `\n• *Type:* ${earnType}` : ''}${quickEarningLabel ? `\n• *Label:* #${quickEarningLabel}` : ''}\n\n✅ Recorded under *${vehicleDisplayLabel(targetVeh)}*!`;
       if (existingVehicles.length > 1) {

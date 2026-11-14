@@ -29,6 +29,13 @@ import { recordLabeledReading } from './labelsEverywhere.js';
 // pre-vehicle document under the new asset.
 import { linkSavedComplianceDocument } from './vehicleDocuments.js';
 import { LOGBOOK_UPLOAD_COPY, resolveLogbookUploadCopy } from './flowKnowledge.js';
+// v1.97.8 — ONE guard for writes whose vehicle row no longer exists (rule 51).
+import {
+  isMissingVehicleError,
+  MISSING_VEHICLE_NOTICE,
+  MISSING_VEHICLE_REGISTER_LEAD,
+  MISSING_VEHICLE_NEXT_STEP
+} from './vehicleWriteGuard.js';
 // v1.93.0 (Phase 30, Task 3) — the pre-vehicle document stash (single engine).
 import { replayDocumentStash } from './documentStash.js';
 import { logSystemError, logWriteFailure } from './systemErrors.js';
@@ -3255,6 +3262,59 @@ async function resolveCompletionEntitlements(ctx = {}) {
   }
 }
 
+/**
+ * v1.97.8 — the vehicle-gone turn (rules 51 + 60). A write refused because its
+ * vehicle row no longer exists never dead-ends and never claims a save: the
+ * user is told plainly that nothing was written and registration starts right
+ * away, pre-filled with the known asset kind so the FIRST question is the
+ * plate. Without a session the reply carries the single explicit next step.
+ * Returns active:true when a quiz was started (completed:true would clear it).
+ */
+async function missingVehicleTurn({ ctx, state, staleVehicle = null, lane = 'quizEngine' }) {
+  const notice = `${MISSING_VEHICLE_NOTICE}\n${MISSING_VEHICLE_REGISTER_LEAD}`;
+  try {
+    if (ctx.supabase && ctx.profile?.id) {
+      await ctx.supabase.from('admin_audit_logs').insert([{
+        admin_phone: ctx.formattedPhone || ctx.profile?.phone_number || null,
+        action: 'VEHICLE_GONE_WRITE_REFUSED',
+        details: {
+          lane,
+          owner_id: ctx.profile.id,
+          vehicle_id: staleVehicle?.id || null,
+          plate: staleVehicle?.plate_number || null
+        }
+      }]);
+    }
+  } catch (auditErr) {
+    // Rule 50 — a refused audit is visible, never swallowed.
+    console.warn('[quizEngine] vehicle-gone audit skipped:', auditErr?.message || auditErr);
+  }
+
+  const session = ctx.session || null;
+  if (session) {
+    const kind = staleVehicle?.asset_kind
+      || (String(staleVehicle?.asset_type || '').toUpperCase() === 'GENERATOR' ? 'generator' : 'vehicle');
+    const started = startQuiz({ session, flowKey: 'vehicle_registration', ctx, prefill: { asset_kind: kind } });
+    if (started) {
+      const question = await askCurrent(session.quiz, ctx);
+      return {
+        handled: true,
+        reply: question ? `${notice}\n\n${question}` : `${notice}\n\n${MISSING_VEHICLE_NEXT_STEP}`,
+        flow: 'vehicle_registration',
+        active: true,
+        missingVehicle: true
+      };
+    }
+  }
+  return {
+    handled: true,
+    reply: `${MISSING_VEHICLE_NOTICE}\n\n${MISSING_VEHICLE_NEXT_STEP}`,
+    flow: state?.flow,
+    completed: true,
+    missingVehicle: true
+  };
+}
+
 async function executeFlow(state, ctx) {
   const a = state.answers;
   const def = getFlowDefinition(state.flow, ctx);
@@ -3765,6 +3825,11 @@ async function executeFlow(state, ctx) {
             vehicle_id: vehicle.id,
             amount: a.amount ?? null
           });
+          // v1.97.8 — a vehicle row that no longer exists writes nothing and
+          // starts registration instead of surfacing a raw FK error.
+          if (isMissingVehicleError(logErr)) {
+            return missingVehicleTurn({ ctx, state, staleVehicle: vehicle, lane: 'quizEngine.logExpense' });
+          }
           return { handled: true, reply: await fail(logErr.message), flow: state.flow, active: true };
         }
         // v1.63.1 — the month-spend / relationship facts just changed.
@@ -3836,6 +3901,10 @@ async function executeFlow(state, ctx) {
             amount: a.amount ?? null,
             earning_type: earningType || null
           });
+          // v1.97.8 — same vehicle-gone guard as the expense lane (rule 51).
+          if (isMissingVehicleError(error)) {
+            return missingVehicleTurn({ ctx, state, staleVehicle: vehicle, lane: 'quizEngine.logEarnings' });
+          }
           return { handled: true, reply: await fail(error.message), flow: state.flow, active: true };
         }
 
@@ -3863,12 +3932,17 @@ async function executeFlow(state, ctx) {
 
       case 'log_mileage': {
         if (!vehicle) return { handled: true, reply: await fail('Vehicle not found.'), flow: state.flow, active: true };
-        const { error } = await ctx.supabase.from('vehicles').update({
+        // v1.97.8 — a zero-row update means the vehicle row is gone: never
+        // claim an odometer save for a vehicle that no longer exists (rule 51).
+        const { data: mileageRows, error } = await ctx.supabase.from('vehicles').update({
           current_mileage: a.odometer_reading,
           odometer_reading: a.odometer_reading,
           updated_at: new Date().toISOString()
-        }).eq('id', vehicle.id);
+        }).eq('id', vehicle.id).select('id');
         if (error) return { handled: true, reply: await fail(error.message), flow: state.flow, active: true };
+        if (!Array.isArray(mileageRows) || mileageRows.length === 0) {
+          return missingVehicleTurn({ ctx, state, staleVehicle: vehicle, lane: 'quizEngine.logMileage' });
+        }
         // v1.63.1 — the odometer/vehicle facts just changed.
         markUserDataChanged({ supabase: ctx.supabase, phone: ctx.formattedPhone || ctx.profile?.phone_number, ownerId: ctx.profile?.id, reason: 'quizEngine.logMileage' });
 
@@ -3902,12 +3976,16 @@ async function executeFlow(state, ctx) {
       case 'log_operating_hours': {
         if (!vehicle) return { handled: true, reply: await fail('Vehicle not found.'), flow: state.flow, active: true };
         const nowIso = new Date().toISOString();
-        const { error } = await ctx.supabase.from('vehicles').update({
+        // v1.97.8 — same zero-row guard as the odometer lane (rule 51).
+        const { data: hoursRows, error } = await ctx.supabase.from('vehicles').update({
           operating_hours: a.hours,
           hours_updated_at: nowIso,
           updated_at: nowIso
-        }).eq('id', vehicle.id);
+        }).eq('id', vehicle.id).select('id');
         if (error) return { handled: true, reply: await fail(error.message), flow: state.flow, active: true };
+        if (!Array.isArray(hoursRows) || hoursRows.length === 0) {
+          return missingVehicleTurn({ ctx, state, staleVehicle: vehicle, lane: 'quizEngine.logOperatingHours' });
+        }
         // v1.63.1 — the hour-meter/vehicle facts just changed.
         markUserDataChanged({ supabase: ctx.supabase, phone: ctx.formattedPhone || ctx.profile?.phone_number, ownerId: ctx.profile?.id, reason: 'quizEngine.logOperatingHours' });
 
@@ -4122,8 +4200,12 @@ async function executeFlow(state, ctx) {
             timeZone,
             linkedColumn: expiryLinkedColumn(category)
           });
-          if (!created.ok) return { handled: true, reply: await fail(created.error), flow: state.flow, active: true };
-
+          if (!created.ok) {
+            if (created.missingVehicle) {
+              return missingVehicleTurn({ ctx, state, staleVehicle: vehicle, lane: 'quizEngine.setExpiryReminder' });
+            }
+            return { handled: true, reply: await fail(created.error), flow: state.flow, active: true };
+          }
           // The confirmation summary showed this timezone; persist it once the
           // user confirms so later dates resolve consistently.
           if (ctx.profile?.id && ctx.profile.timezone !== timeZone) {
@@ -4158,7 +4240,12 @@ async function executeFlow(state, ctx) {
           notes: extraNotes,
           label: reminderLabel
         });
-        if (!created.ok) return { handled: true, reply: await fail(created.error), flow: state.flow, active: true };
+        if (!created.ok) {
+          if (created.missingVehicle) {
+            return missingVehicleTurn({ ctx, state, staleVehicle: vehicle, lane: 'quizEngine.setThresholdReminder' });
+          }
+          return { handled: true, reply: await fail(created.error), flow: state.flow, active: true };
+        }
         const reply = await ok({ vehicle: vehicleDisplayLabel(vehicle), reminder: normalizedReminderType, due: describeThresholdSpec(due), label: reminderLabel ? `#${reminderLabel}` : undefined });
         return { handled: true, reply, flow: state.flow, completed: true };
       }
