@@ -41,6 +41,21 @@ check(markDeliveryBlocked('+254700000000', '131000') === false, 'transient codes
 check(clearDeliveryBlock('254799000512') === true && isDeliveryBlocked('+254799000512') === false, 'a block can be cleared');
 check(PERMANENT_FAILURE_CODES.has('131026'), '131026 is a permanent-failure code');
 
+// v1.97.9 — the superadmin is never delivery-blocked (live 2026-11-16: the
+// 20:00 EAT remediation digest failed 131047 and the guard locked the admin
+// door out of /d/admin/login for 24h — a self-inflicted daily lockout).
+console.log('--- superadmin exemption (v1.97.9) ---');
+const savedSuperadmin = process.env.SUPERADMIN_PHONE;
+process.env.SUPERADMIN_PHONE = '+254720641985';
+check(markDeliveryBlocked('+254720641985', '131047') === false, 'the superadmin is exempt from markDeliveryBlocked');
+check(isDeliveryBlocked('+254720641985') === false, 'the superadmin is never delivery-blocked');
+check(markDeliveryBlocked('254799000777', '131047') === true, 'an ordinary recipient still blocks');
+process.env.SUPERADMIN_PHONE = '+254799000777';
+check(isDeliveryBlocked('+254799000777') === false, 'a number promoted to superadmin is exempt even with a live block entry');
+if (savedSuperadmin === undefined) delete process.env.SUPERADMIN_PHONE; else process.env.SUPERADMIN_PHONE = savedSuperadmin;
+check(isDeliveryBlocked('+254799000777') === true, 'the same entry blocks again once it is not the superadmin');
+check(clearDeliveryBlock('+254799000777') === true, 'the test block is cleared (rule 10)');
+
 console.log('--- policy switch ---');
 check(SENTINEL_PROPOSALS_DEFAULT === 'off', 'the default is off');
 check(isSentinelProposalsEnabled({}) === false, 'unset is off');

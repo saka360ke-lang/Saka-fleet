@@ -14,6 +14,13 @@
 import { isDeliveryBlocked } from './deliveryGuard.js';
 import { resolveProactiveMode } from './proactiveTemplates.js';
 
+// v1.97.9 — user-initiated sends are never refused by the delivery guard: a
+// live sign-in attempt IS the re-engagement the guard waits for, and refusing
+// it locked the superadmin out of /d/admin/login (live 2026-11-16: the 20:00
+// EAT digest failed 131047, the guard blocked the number for 24h, and the
+// sign-in code — template AND text path — was refused until the TTL passed).
+const USER_INITIATED_KINDS = new Set(['auth_otp']);
+
 /** Read the Meta credentials once, without throwing on a missing env. */
 export function whatsappTextConfig(env = process.env) {
   return {
@@ -95,11 +102,12 @@ async function postWhatsAppMessage(body, env = process.env, capture = null) {
  * outside the 24-hour customer-service window). `variables` are the ordered body
  * parameters ({ type: 'text', text }) built by `resolveProactiveMode`.
  */
-export async function sendWhatsAppTemplate(toPhone, templateName, { languageCode = 'en', variables = [], buttons = [], env = process.env } = {}) {
+export async function sendWhatsAppTemplate(toPhone, templateName, { languageCode = 'en', variables = [], buttons = [], env = process.env, bypassGuard = false } = {}) {
   if (!toPhone || !templateName) return false;
   const cleanPhone = cleanWhatsAppRecipient(toPhone);
   if (!cleanPhone) return false;
-  if (isDeliveryBlocked(cleanPhone)) return false;
+  // v1.97.9 — user-initiated sends (auth codes) may bypass the blocklist.
+  if (!bypassGuard && isDeliveryBlocked(cleanPhone)) return false;
   // v1.87.3 — the body component comes first; decorative/functional buttons
   // (e.g. the Authentication template's URL button) follow in their index order.
   const components = [{ type: 'body', parameters: variables }];
@@ -156,13 +164,16 @@ export async function sendWhatsAppTemplateProbe(toPhone, templateName, { languag
  * caller degrades honestly (rule 50).
  */
 export async function sendWhatsAppText(toPhone, text, { env = process.env, kind = null, templateVars = null } = {}) {
+  // v1.97.9 — a user-initiated sign-in code is never delivery-blocked.
+  const userInitiated = Boolean(kind) && USER_INITIATED_KINDS.has(String(kind));
   if (kind) {
     const mode = resolveProactiveMode({ kind, templateVars });
     if (mode.mode === 'template') {
       const templateSent = await sendWhatsAppTemplate(toPhone, mode.templateName, {
         variables: mode.variables || [],
         buttons: mode.buttons || [],
-        env
+        env,
+        bypassGuard: userInitiated
       });
       if (templateSent) return true;
       // Fall through: the text path still delivers inside the 24-hour window.
@@ -173,7 +184,8 @@ export async function sendWhatsAppText(toPhone, text, { env = process.env, kind 
   const cleanPhone = cleanWhatsAppRecipient(toPhone);
   if (!cleanPhone) return false;
   // v1.58.23 — respect the delivery blocklist (permanent 131026-style failures).
-  if (isDeliveryBlocked(cleanPhone)) return false;
+  // v1.97.9 — except for user-initiated auth codes (see USER_INITIATED_KINDS).
+  if (!userInitiated && isDeliveryBlocked(cleanPhone)) return false;
 
   return postWhatsAppMessage({
     to: cleanPhone,

@@ -37,6 +37,9 @@ import { selectLiveEarnings } from './earningsScope.js';
 // v1.82.0 (Phase 21) — WhatsApp-native sign-in: the 6-digit code travels over
 // WhatsApp (the email magic link is retired and kept only as deprecated code).
 import { sendWhatsAppText } from './metaMessenger.js';
+// v1.97.9 — a delivery-guard refusal is audited, never silent (the live
+// superadmin lockout left no trail in admin_audit_logs or error_logs).
+import { deliveryBlockInfo } from './deliveryGuard.js';
 import { findProfileByPhone, normalizePhoneE164 } from './webOnboarding.js';
 import { getEntitlements, evaluateVehicleCapacity } from './subscriptions.js';
 
@@ -462,6 +465,18 @@ export async function requestDashboardOtp({
     if (!sent) {
       // No orphaned live token: a code the user never received cannot be used.
       await supabase.from(DASHBOARD_SESSIONS_TABLE).delete().eq('token_hash', hashToken(rawToken));
+      // v1.97.9 — never refuse silently: the live superadmin lockout
+      // (2026-11-16) left no trail anywhere. If this number carries a
+      // delivery-guard entry, record it with the failed send (an arbitrary
+      // `sendOtp` seam or a future kind can never reproduce the blind spot).
+      const blockInfo = deliveryBlockInfo(resolved.phone_number || normalized);
+      if (blockInfo) {
+        await writeAudit(supabase, 'DASHBOARD_OTP_REFUSED_BLOCKED', {
+          ownerId: resolved.id,
+          role: resolvedRole,
+          blockCode: blockInfo.code || null
+        });
+      }
       return { ok: false, reason: 'otp_send_failed' };
     }
 

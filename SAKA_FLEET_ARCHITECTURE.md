@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.97.8  
+**Version:** 1.97.9  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.97.9** | Superadmin OTP lockout fixed — live 2026-11-16: regular users signed in fine while `/d/admin/login` answered "I could not send the code just now"; the 20:00 EAT remediation digest (free-form) was refused by Meta with **131047**, the status webhook's `markDeliveryBlocked` armed a 24h block on `SUPERADMIN_PHONE`, and the sign-in code was refused by the delivery guard on **both** the `saka_otp` template path (`metaMessenger.js` template check) and the free-form text path — every evening re-armed the same block. Fixes: the superadmin is exempt from `markDeliveryBlocked`/`isDeliveryBlocked` (`deliveryGuard.js` → `superadminIdentity.js`), every `kind:'auth_otp'` send bypasses the blocklist on both transports (a live sign-in IS the re-engagement), and a blocked refusal now writes `DASHBOARD_OTP_REFUSED_BLOCKED` instead of disappearing | 251 |
 | **1.97.8** | Vehicle-gone writes never dead-end — the live 2026-11-13 FK refusal (`quizEngine.logExpense`, owner `9653d8e3…`, vehicle `ef35bbad…`, KES 250/2,000) is now caught by ONE pure guard: expense + earnings FK errors and mileage/hours zero-row updates say plainly \"nothing was written\" and start registration pre-filled with the known asset kind (first question = the plate); quick lanes point to *add vehicle*; receipts keep the evidence (stale link dropped); reminders/odometer-ledger creators/readers report `missingVehicle`; audited `VEHICLE_GONE_WRITE_REFUSED`. Sentinel live learnings are deduped (case/whitespace-insensitive, newest 5) before every append + an idempotent operator script (`npm run sentinel:dedupe-learnings`, live 19→5, audited `SENTINEL_LEARNINGS_DEDUPED`) — the v1.97.7 worker re-appended at 09:54Z, so the final rewrite runs after this deploy | 250 |
 | **1.97.7** | Amina actually parses her model now — `chatCompletion` returns `{ ok, text, … }` but `parseCareAiJson` returned the wrapper (object short-circuit), so `parsed.lesson`/`parsed.action` were always undefined: no lesson could ever be learned and every live investigation read "loop limit reached without a decision"; the parser unwraps `text` centrally (both Amina purposes), the retry message quotes model text, and the live replay produced the first `care_learnings` row + `CARE_TICKET_LEARNED` | 249 |
 | **1.97.6** | The Lesson loop actually learns — `fetchInboundEmailBody` called Resend's SENT-email API (`GET /emails/{id}` → live `404 "Email not found"`); it now uses `GET /emails/receiving/{id}` (live `200` with text+html), so `[SFC-]` human replies reach `extractCareLesson`; the recovered 10:57 reply is replayed live to seed the first `care_learnings` row | 248 |
@@ -7451,3 +7452,45 @@ test_quiz_flow (259), test_first_message_flow (63), test_error_logging (22), tes
 
 ### 250.8 Rules shaped this work (rule 58)
 1/39/42/45/63 (rules + architecture first; **0 open proposals** live-checked), 3/4, 10/11, 12/33 (one commit: version + history + CHANGELOG + landing feed + regenerated docs), 13 (flowKnowledge + core prompt + composer + training tests), 31/60 (warm copy, ONE next step), 48 (receipt evidence preserved), 50/51/52 (visible failures, sibling sweep, deep audit + extensive tests), 54 (live FK evidence + live dedupe verification), 55 (evolved existing lanes), 56 (live prompt reconciled). No rule edited. **Impact:** every vehicle-referencing write now either succeeds or says plainly that nothing was written and starts registration; the stored live-learnings block can no longer grow with duplicates.
+
+---
+
+### 251. v1.97.9 — The superadmin OTP lockout (the delivery guard vs. the admin door)
+
+#### 251.1 The live defect (rule 44/54 audit)
+
+Live report (2026-11-16): after the Supabase pool recovered, **regular users could request OTPs on `/d/login`** — but `+254720641985` (the superadmin) got *"I could not send the code just now — give it a minute and try again."* on `/d/admin/login`.
+
+The audit (code + live `error_logs` + `admin_audit_logs` + `gcloud` logs) found this exact chain:
+
+1. **17:00:54Z daily** the digest scheduler fires `sendRemediationDigest` (`index.js` minute-checker; `REMEDIATION_DIGEST_HOURS_CSV=8,20` EAT) → `sendProactiveWhatsApp(SUPERADMIN_PHONE, lines)` — a **free-form** WhatsApp message (`src/workers/remediation.js`).
+2. Meta refuses it with **131047** (re-engagement required / outside the 24h window). Live `error_logs`: `WhatsApp delivery failed (131047) to …1985: Re-engagement message` at **2026-11-15 17:00:54Z** and **2026-11-14 17:00:48Z** ("Re-engagement message" is Meta's error *title*).
+3. The status webhook (`src/routes/whatsapp/webhook.js` `markDeliveryBlocked(recipient, errCode)`) blocks the number for **24h** (`src/services/deliveryGuard.js`, in-memory, per Cloud Run instance).
+4. `requestDashboardOtp` (`src/services/dashboard.js`) sends the sign-in code via `sendWhatsAppText(..., { kind: 'auth_otp' })`. With `META_TPL_AUTH_OTP=saka_otp` set, the **template** path ran first — and `sendWhatsAppTemplate` also checked `isDeliveryBlocked` (`src/services/metaMessenger.js`) → refused → fell through to the free-form path → refused again → `sent=false` → the row is deleted and `{ ok:false, reason:'otp_send_failed' }` renders `dashboardOtpReasonCopy('otp_send_failed')` — the exact copy the operator saw.
+5. **Self-perpetuating:** at 17:00Z the block expired; the digest fired; 131047 re-armed the block. A daily admin lockout, invisible everywhere: the `!sent` branch wrote **no audit row and no error row**.
+6. Regular users were unaffected — no permanent-failure callback had ever touched their numbers. Live proof: `DASHBOARD_OTP_SENT` for an owner at 03:35:36Z vs the last admin row at **2026-11-14 09:09Z** (before the Nov 14 17:00Z block).
+
+#### 251.2 The fix (three layers, one transport — rule 55)
+
+- **`src/services/deliveryGuard.js`** — `markDeliveryBlocked()` and `isDeliveryBlocked()` both return `false` for `SUPERADMIN_PHONE` (`isSuperadminPhone` from the dependency-free `superadminIdentity.js`; no import cycle). The admin door can never depend on a background send's delivery outcome.
+- **`src/services/metaMessenger.js`** — new `USER_INITIATED_KINDS = new Set(['auth_otp'])`: `sendWhatsAppText` computes `userInitiated` and (a) passes `bypassGuard` to `sendWhatsAppTemplate` (whose signature gained the option) and (b) skips the text-path blocklist check. A live login attempt IS the re-engagement the guard waits for. Background sends (`sendProactiveWhatsApp`), the operator probe (`sendWhatsAppTemplateProbe` → still reports `delivery_blocked`) and every other kind keep the guard.
+- **`src/services/dashboard.js`** — the `!sent` branch now consults `deliveryBlockInfo(phone)` and writes `DASHBOARD_OTP_REFUSED_BLOCKED { ownerId, role, blockCode }` when a guard entry exists, so a blocked refusal can never be silent again.
+
+#### 251.3 Tests (rule 52)
+
+`test_sentinel_policy` 36 → **42**: superadmin exempt from `markDeliveryBlocked`; `isDeliveryBlocked` exempt even for a live entry; ordinary recipients still block; a number promoted to superadmin is exempt mid-block and blocks again after demotion; the test entry is cleared (rule 10).
+`test_dashboard` 958 → **965**: a blocked number still refuses a non-auth send; `auth_otp` bypasses the blocklist on the **text** path and (with `META_TPL_AUTH_OTP` set) the **template** path; `service_reminder` stays blocked; a refused send still answers `otp_send_failed` with no orphaned row and now audits `DASHBOARD_OTP_REFUSED_BLOCKED` with `blockCode:'131047'` + role.
+`test_template_testfire` / `test_proactive_templates` / `test_remediation_pipeline` green with zero edits (probe + background paths unchanged).
+
+#### 251.4 Recurrence autopsy (rule 51)
+
+Defect class *a background delivery failure arms a recipient-level block that then refuses user-initiated authentication sends to the same number, silently* → siblings swept: both blocklist checks in `metaMessenger.js` (template + text) now honour `bypassGuard`/`userInitiated` together; `sendProactiveWhatsApp` intentionally keeps the guard (retry-storm protection); `sendWhatsAppTemplateProbe` intentionally keeps reporting `delivery_blocked` (operator diagnostics); the `!sent` branch of `requestDashboardOtp` is the only dashboard refusal site and now audits. Deliberately left (operator decision, Fix 4 deferred): the 17:00Z digest WhatsApp leg still sends free-form and will keep failing 131047 — harmless now (it can no longer block the admin), to be routed over an approved `META_TPL_REMEDIATION_DIGEST` template once Meta approves it.
+
+#### 251.5 Frames touched
+`src/services/deliveryGuard.js`, `src/services/metaMessenger.js`, `src/services/dashboard.js`, `test_sentinel_policy.js`, `test_dashboard.js`, `test_vehicle_documents.js` (version pin), `package.json` (1.97.9), `landing/data/changelog.json` + stamped assets, `docs/` (regenerated), this file, `CHANGELOG.md`.
+
+#### 251.6 Suites run
+test_sentinel_policy (42), test_dashboard (965), test_template_testfire, test_proactive_templates, test_remediation_pipeline, test_vehicle_documents, test_doc_sync, test_kb_docs, test_env_audit, test_agent_training, `npm run health` — green.
+
+#### 251.7 Rules shaped this work (rule 58)
+1/39/45 (consult-first), 42/44/63 (0 open proposals verified live twice; audited the live code before prescribing), 3/4, 10/11 (targeted suites, stateless, cleanup), 12/33 (one commit, version + history + feed + docs), 13 (no flow/intent/prompt change — pure transport + auth path; stated), 31 (warm copy untouched), 50/51/52 (visible refusals, sibling sweep, before/after assertions), 54 (every link verified against live rows and code; deploy-clears-the-block confirmed), 55 (evolved the shared transport). No rule edited. **Impact:** the superadmin (and any user mid-login) can never be locked out of the dashboard by a failed background message; a guard refusal is audited; the new revision deploying this fix clears the in-memory block on boot.

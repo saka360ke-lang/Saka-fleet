@@ -1,6 +1,13 @@
 {
-  "latest": "1.97.8",
+  "latest": "1.97.9",
   "entries": [
+    {
+      "version": "1.97.9",
+      "date": "2026-11-16",
+      "title": "A failed background notice can never block dashboard sign-in",
+      "preview": "A small reliability fix: a failed background message can no longer stop the admin from signing in.",
+      "summary": "A small reliability release about our own admin door. Our system sends the team a routine summary on WhatsApp twice a day; WhatsApp occasionally refuses that kind of message when the number has been quiet for a while, and our safety rule then pauses sending to that number for a day. That pause was meant for background notices only - but it also covered the sign-in code, so the admin could not get a dashboard code until the pause expired. It is fixed in three ways: the admin number is never paused, a sign-in code you just asked for is always allowed through, and any such refusal is now recorded for the team instead of happening silently. Your own WhatsApp conversations, records, reports, reminders and billing are untouched."
+    },
     {
       "version": "1.97.8",
       "date": "2026-11-14",

@@ -11,6 +11,9 @@
 import assert from 'assert';
 import Fastify from 'fastify';
 import { createMockSupabase } from './scripts/mockSupabase.js';
+// v1.97.9 — the delivery guard + the real WhatsApp transport (auth-code bypass).
+import { markDeliveryBlocked, clearDeliveryBlock } from './src/services/deliveryGuard.js';
+import { sendWhatsAppText } from './src/services/metaMessenger.js';
 import {
   DASHBOARD_SESSIONS_TABLE,
   DASHBOARD_LINK_TTL_MS,
@@ -325,6 +328,62 @@ async function run() {
   });
   check(failed.ok === false && failed.reason === 'otp_send_failed', 'a failed WhatsApp send is reported, never thrown');
   check(failMock.db[DASHBOARD_SESSIONS_TABLE].length === 0, 'the auth row is removed when the code cannot be sent');
+
+  // v1.97.9 — the live superadmin lockout (2026-11-16): a 131047 digest failure
+  // armed a 24h delivery block, and the sign-in code was refused on BOTH the
+  // template and text paths. Auth codes are user-initiated and now bypass it.
+  console.log('\n--- v1.97.9: auth codes bypass the delivery guard (text + template) ---');
+  const savedMetaEnv = {
+    id: process.env.META_PHONE_NUMBER_ID,
+    token: process.env.META_WHATSAPP_TOKEN,
+    tpl: process.env.META_TPL_AUTH_OTP,
+    reminder: process.env.META_TPL_SERVICE_REMINDER
+  };
+  process.env.META_PHONE_NUMBER_ID = 'pn-suite';
+  process.env.META_WHATSAPP_TOKEN = 'tok-suite';
+  delete process.env.META_TPL_SERVICE_REMINDER;
+  const guardBodies = [];
+  const guardFetch = global.fetch;
+  global.fetch = async (_url, options) => { guardBodies.push(JSON.parse(options.body)); return { ok: true }; };
+  try {
+    markDeliveryBlocked(PROFILE.phone_number, '131047');
+    const plainBlocked = await sendWhatsAppText(PROFILE.phone_number, 'plain hello');
+    check(plainBlocked === false && guardBodies.length === 0, 'a blocked number still refuses a non-auth send (guard intact)');
+    const authText = await sendWhatsAppText(PROFILE.phone_number, 'code 123456', { kind: 'auth_otp' });
+    check(authText === true && guardBodies.length === 1 && guardBodies[0].type === 'text', 'auth_otp bypasses the blocklist on the text path (v1.97.9)');
+    process.env.META_TPL_AUTH_OTP = 'saka_otp';
+    const authTemplate = await sendWhatsAppText(PROFILE.phone_number, 'code 123456', { kind: 'auth_otp', templateVars: { code: '123456' } });
+    check(authTemplate === true && guardBodies.length === 2 && guardBodies[1].type === 'template' && guardBodies[1].template?.name === 'saka_otp',
+      'auth_otp bypasses the blocklist on the template path (v1.97.9)');
+    const reminderBlocked = await sendWhatsAppText(PROFILE.phone_number, 'reminder', { kind: 'service_reminder', templateVars: { plate: 'KDA 001A' } });
+    check(reminderBlocked === false && guardBodies.length === 2, 'other kinds stay behind the blocklist (v1.97.9)');
+  } finally {
+    global.fetch = guardFetch;
+    clearDeliveryBlock(PROFILE.phone_number);
+    if (savedMetaEnv.id === undefined) delete process.env.META_PHONE_NUMBER_ID; else process.env.META_PHONE_NUMBER_ID = savedMetaEnv.id;
+    if (savedMetaEnv.token === undefined) delete process.env.META_WHATSAPP_TOKEN; else process.env.META_WHATSAPP_TOKEN = savedMetaEnv.token;
+    if (savedMetaEnv.tpl === undefined) delete process.env.META_TPL_AUTH_OTP; else process.env.META_TPL_AUTH_OTP = savedMetaEnv.tpl;
+    if (savedMetaEnv.reminder === undefined) delete process.env.META_TPL_SERVICE_REMINDER; else process.env.META_TPL_SERVICE_REMINDER = savedMetaEnv.reminder;
+  }
+
+  console.log('\n--- v1.97.9: a delivery-guard refusal is audited, never silent ---');
+  const blockedMock = createMockSupabase({ [DASHBOARD_SESSIONS_TABLE]: [], admin_audit_logs: [], vehicles: [] });
+  markDeliveryBlocked(PROFILE.phone_number, '131047');
+  try {
+    const blockedRefusal = await requestDashboardOtp({
+      supabase: blockedMock.client,
+      phone: PROFILE.phone_number,
+      profile: PROFILE,
+      entitlements: { isTrial: true, isPaid: false },
+      sendOtp: async () => false
+    });
+    check(blockedRefusal.ok === false && blockedRefusal.reason === 'otp_send_failed', 'a refused send still answers otp_send_failed');
+    check(blockedMock.db[DASHBOARD_SESSIONS_TABLE].length === 0, 'the blocked refusal leaves no orphaned auth row');
+    check(blockedMock.db.admin_audit_logs.some((a) => a.action === 'DASHBOARD_OTP_REFUSED_BLOCKED' && a.details?.blockCode === '131047' && a.details?.role === 'owner'),
+      'the blocked refusal is audited with its code and role (v1.97.9)');
+  } finally {
+    clearDeliveryBlock(PROFILE.phone_number);
+  }
 
   console.log('\n--- Test 7: OTP verify -> single-use flow -> 15-minute session ---');
   const verified = await verifyDashboardOtp({ supabase: mock.client, rawToken, otp: loginOtp });
