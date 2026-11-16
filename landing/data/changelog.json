@@ -1,6 +1,13 @@
 {
-  "latest": "1.98.1",
+  "latest": "1.98.2",
   "entries": [
+    {
+      "version": "1.98.2",
+      "date": "2026-11-16",
+      "title": "A sharper front door for Saka",
+      "preview": "The website has a new look: one clear Start Free Trial button, local examples and a calmer, faster funnel.",
+      "summary": "The public website has been rebuilt around one clear path: Start Free Trial on the web. The hero leads with the product's promise - your vehicle's co-pilot on WhatsApp - over a photo, with a single primary button that opens the signup form (a WhatsApp button there sent new numbers straight back to the form, so it is gone). A new pain-point section names the three money leaks Saka closes: lost receipts, lapsed insurance and guessing fuel costs. A phone mock shows the real chat, and the How it works examples now adapt to the visitor's country - litres and kilometres in metric countries, gallons and miles in imperial ones, with money in the local currency as an estimate from the same rates the pricing section uses. The launch offer now appears in exactly one place at a time: the slim header banner first, then the mid-page card only after the banner is dismissed. Privacy is unchanged: nothing loads until you choose, analytics stay opt-in, and session replay remains fully masked."
+    },
     {
       "version": "1.98.1",
       "date": "2026-11-16",

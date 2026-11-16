@@ -274,6 +274,14 @@
       launch_award_days: LAUNCH.active ? LAUNCH.awardDays : 0,
       launch_opt_in: typeof optedIn === 'boolean' ? optedIn : (LAUNCH.active ? true : null)
     });
+    // v1.98.2 — PostHog receives the funnel's final step too (consent-gated:
+    // window.posthog exists only after an analytics opt-in). No PII is sent —
+    // Enhanced Conversions user_data above stays a GTM-only concern.
+    capturePosthog('successful_signup', {
+      signup_method: 'website',
+      launch_active: LAUNCH.active === true,
+      launch_opt_in: typeof optedIn === 'boolean' ? optedIn : null
+    });
   }
 
   /* ---------- v1.58.26: campaign attribution (UTM) + launch banner ---------- */
@@ -303,12 +311,25 @@
     try { return localStorage.getItem(LAUNCH_DISMISS_KEY) === '1'; } catch (err) { return false; }
   }
 
+  // v1.98.2 — one offer, one place. The mid-page launch section is revealed
+  // ONLY when the live campaign can award AND the header banner is not on
+  // screen (dismissed). When the header banner is visible, the section stays
+  // hidden — the visitor never sees the same offer twice at once.
+  function revealLaunchSection() {
+    var section = $('launch');
+    if (!section) return;
+    var banner = $('launchBanner');
+    var bannerShowing = Boolean(banner && !banner.hidden);
+    section.hidden = !(LAUNCH.active === true && !bannerShowing);
+  }
+
   function dismissLaunchBanner() {
     try { localStorage.setItem(LAUNCH_DISMISS_KEY, '1'); } catch (err) { /* storage may be blocked */ }
     var banner = $('launchBanner');
     if (banner) banner.hidden = true;
     // The sticky header just shrank — tell the drawer where it now starts.
     window.dispatchEvent(new Event('saka:nav-sync'));
+    revealLaunchSection();
     window.dataLayer = window.dataLayer || [];
     window.dataLayer.push({
       event: 'launch_offer_dismiss',
@@ -355,6 +376,13 @@
       var spell = Number(body.award_days) >= 180 ? '6-month' : body.award_days + '-day';
       note.textContent = '🎉 Launch offer — extended ' + spell + ' trial when you sign up and activate · zero payment';
     }
+    // v1.98.2 — the mid-page launch section mirrors the same live numbers and
+    // appears only if the header banner is not showing (revealLaunchSection).
+    var offerSlots = $('launchOfferSlots');
+    if (offerSlots) offerSlots.textContent = String(body.slots_left);
+    var offerDays = $('launchOfferDays');
+    if (offerDays) offerDays.textContent = Number(body.award_days) >= 180 ? '6-month' : body.award_days + '-day';
+    revealLaunchSection();
     window.dataLayer = window.dataLayer || [];
     window.dataLayer.push({
       event: 'launch_offer_view',
@@ -376,6 +404,51 @@
 
   captureUtm();
   fetchLaunchStatus();
+
+  /* ---------- v1.98.2: CTA funnel telemetry (GTM dataLayer + PostHog) ---------- */
+  // One delegated listener covers every start CTA (they all carry
+  // data-open-onboard). GTM gets a named dataLayer event; PostHog gets the same
+  // event only once the visitor has opted in to analytics (window.posthog is
+  // defined by cookieConsent.js loadPosthog). Fire-and-forget: a blocked
+  // tracker or a refused push can never stop the modal from opening.
+  function capturePosthog(eventName, props) {
+    try {
+      if (window.posthog && typeof window.posthog.capture === 'function') {
+        window.posthog.capture(eventName, props || {});
+      }
+    } catch (err) { /* analytics is best-effort and never blocks the page */ }
+  }
+
+  var CTA_EVENTS = {
+    hero_cta: 'hero_cta_click',
+    nav_cta: 'nav_cta_click',
+    pricing_cta: 'pricing_cta_click',
+    launch_cta: 'launch_cta_click',
+    final_cta: 'final_cta_click'
+  };
+
+  function trackCta(kind, label) {
+    var eventName = CTA_EVENTS[kind] || 'cta_click';
+    var payload = { event: eventName, cta: label || kind || 'cta' };
+    if (eventName === 'hero_cta_click' || eventName === 'launch_cta_click') {
+      payload.launch_active = LAUNCH.active === true;
+    }
+    try {
+      window.dataLayer = window.dataLayer || [];
+      window.dataLayer.push(payload);
+    } catch (err) { /* never block the CTA */ }
+    var phProps = { cta: payload.cta };
+    if (typeof payload.launch_active === 'boolean') phProps.launch_active = payload.launch_active;
+    capturePosthog(eventName, phProps);
+  }
+
+  document.addEventListener('click', function (e) {
+    var trigger = e.target && e.target.closest ? e.target.closest('[data-open-onboard]') : null;
+    if (!trigger) return;
+    var kind = trigger.getAttribute('data-gtm') || '';
+    var label = String(trigger.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+    trackCta(kind, label);
+  }, true);
 
   function showDone(already) {
     if (already) {
@@ -679,6 +752,26 @@
       })
       .catch(function () { /* keep the USD defaults */ });
   })();
+  /* ---------- v1.98.2: scroll reveal (progressive enhancement) ----------
+     Content is visible by default. Only when motion is allowed AND the browser
+     supports IntersectionObserver do we add `js-anim` (which arms the hidden
+     state in CSS), then reveal each `.reveal` node once as it enters. */
+  (function wireReveal() {
+    var nodes = document.querySelectorAll('.reveal');
+    if (!nodes.length) return;
+    var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduced || !('IntersectionObserver' in window)) return;
+    document.documentElement.classList.add('js-anim');
+    var observer = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (!entry.isIntersecting) return;
+        entry.target.classList.add('in');
+        observer.unobserve(entry.target);
+      });
+    }, { threshold: 0.12, rootMargin: '0px 0px -8% 0px' });
+    Array.prototype.forEach.call(nodes, function (node) { observer.observe(node); });
+  })();
+
   probeHealth(0);
 })();
 

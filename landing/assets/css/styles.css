@@ -9,23 +9,23 @@
 
 @font-face {
   font-family: 'Sora'; font-style: normal; font-weight: 600; font-display: swap;
-  src: url('/assets/fonts/Sora-600.woff2?v=1.98.1') format('woff2');
+  src: url('/assets/fonts/Sora-600.woff2?v=1.98.2') format('woff2');
 }
 @font-face {
   font-family: 'Sora'; font-style: normal; font-weight: 700; font-display: swap;
-  src: url('/assets/fonts/Sora-700.woff2?v=1.98.1') format('woff2');
+  src: url('/assets/fonts/Sora-700.woff2?v=1.98.2') format('woff2');
 }
 @font-face {
   font-family: 'Manrope'; font-style: normal; font-weight: 400; font-display: swap;
-  src: url('/assets/fonts/Manrope-400.woff2?v=1.98.1') format('woff2');
+  src: url('/assets/fonts/Manrope-400.woff2?v=1.98.2') format('woff2');
 }
 @font-face {
   font-family: 'Manrope'; font-style: normal; font-weight: 500; font-display: swap;
-  src: url('/assets/fonts/Manrope-500.woff2?v=1.98.1') format('woff2');
+  src: url('/assets/fonts/Manrope-500.woff2?v=1.98.2') format('woff2');
 }
 @font-face {
   font-family: 'Manrope'; font-style: normal; font-weight: 700; font-display: swap;
-  src: url('/assets/fonts/Manrope-700.woff2?v=1.98.1') format('woff2');
+  src: url('/assets/fonts/Manrope-700.woff2?v=1.98.2') format('woff2');
 }
 
 :root {
@@ -633,6 +633,148 @@ footer { border-top: 1px solid var(--line); padding: 56px 0 40px; margin-top: 40
   * { animation: none !important; transition: none !important; }
   html { scroll-behavior: auto; }
 }
+
+/* ============================================================
+   v1.98.2 — Ultra-modern mobile-first funnel (375px first)
+   Photo-led hero, glassmorphism, one lime glow. Base rules ARE
+   the phone layout; min-width blocks scale the same components
+   up. Every pinned legacy block above is untouched.
+   ============================================================ */
+:root {
+  --glass: rgba(255, 255, 255, 0.05);
+  --glass-strong: rgba(255, 255, 255, 0.08);
+  --glass-blur: blur(10px);
+  --glow-lime: radial-gradient(520px 340px at 78% -10%, rgba(184, 239, 92, 0.16), transparent 65%);
+  --radius-lg: 24px;
+}
+
+.glass {
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 18px 50px rgba(0, 0, 0, 0.35);
+}
+
+/* Hero — the photo sits BEHIND the copy under a dark scrim. */
+.hero { padding: 72px 0 48px; }
+.hero-media { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.hero-photo { width: 100%; height: 100%; object-fit: cover; object-position: center 42%; opacity: .55; }
+.hero-scrim {
+  position: absolute; inset: 0;
+  background:
+    radial-gradient(640px 420px at 74% -6%, rgba(184, 239, 92, .18), transparent 62%),
+    linear-gradient(180deg, rgba(10, 10, 12, .88) 0%, rgba(10, 10, 12, .72) 42%, rgba(10, 10, 12, .97) 100%);
+}
+.hero-grid { grid-template-columns: 1fr; text-align: center; gap: 0; }
+.hero-copy { max-width: 780px; margin: 0 auto; position: relative; }
+.hero h1 { font-size: clamp(2.15rem, 8.6vw, 4.1rem); margin-bottom: 18px; }
+.hero p.lead { margin: 0 auto 28px; font-size: 1.06rem; max-width: 560px; }
+.hero-actions-single { justify-content: center; }
+.btn-hero { width: 100%; padding: 16px 28px; font-size: 1.05rem; }
+.hero .hero-badge { margin-bottom: 18px; }
+@media (min-width: 640px) {
+  .hero { padding: 104px 0 72px; }
+  .hero p.lead { font-size: 1.18rem; }
+  .btn-hero { width: auto; min-width: 300px; }
+}
+
+/* Section photo backdrops (pain + solution) — decorative, never interactive. */
+#pain, #solution { position: relative; overflow: hidden; }
+.section-photo { position: absolute; inset: 0; pointer-events: none; }
+.section-photo img { width: 100%; height: 100%; object-fit: cover; opacity: .13; filter: saturate(.75); }
+.section-photo::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(180deg, rgba(10, 10, 12, .92), rgba(10, 10, 12, .72) 45%, rgba(10, 10, 12, .97));
+}
+#pain .wrap, #solution .wrap { position: relative; }
+
+/* Pain cards. */
+.pain-grid { display: grid; gap: 16px; grid-template-columns: 1fr; }
+.pain-card { padding: 26px 22px; display: flex; flex-direction: column; gap: 10px; }
+.pain-icon {
+  width: 46px; height: 46px; border-radius: 13px; display: flex; align-items: center; justify-content: center;
+  font-size: 1.35rem; background: var(--glass); border: 1px solid var(--line);
+}
+.pain-card h3 { font-size: 1.18rem; }
+.pain-card p { color: var(--muted); font-size: .95rem; }
+.pain-card .pain-flip { color: var(--lime); font-weight: 700; font-size: .9rem; margin-top: auto; }
+@media (min-width: 960px) { .pain-grid { grid-template-columns: repeat(3, 1fr); gap: 18px; } }
+/* Solution — copy beside a phone frame. */
+.solution-grid { display: grid; grid-template-columns: 1fr; gap: 40px; align-items: center; }
+.solution-copy .section-title { text-align: left; font-size: clamp(1.6rem, 4.6vw, 2.4rem); }
+.solution-copy .section-sub { text-align: left; margin: 0 0 26px; max-width: none; }
+.benefit-list { list-style: none; display: flex; flex-direction: column; gap: 16px; margin: 0 0 20px; padding: 0; }
+.benefit-list li { display: flex; gap: 14px; align-items: flex-start; }
+.benefit-list li > span {
+  width: 40px; height: 40px; flex: none; display: flex; align-items: center; justify-content: center;
+  border-radius: 12px; background: var(--glass); border: 1px solid var(--line); font-size: 1.05rem;
+}
+.benefit-list div { color: var(--muted); font-size: .95rem; }
+.benefit-list strong { color: var(--text); }
+.mock-note { color: var(--muted); font-size: .82rem; }
+.phone {
+  position: relative; width: min(360px, 100%); margin: 0 auto; padding: 12px; border-radius: 40px;
+  background: linear-gradient(160deg, rgba(255, 255, 255, .12), rgba(255, 255, 255, .03));
+  border: 1px solid var(--line); box-shadow: 0 30px 80px rgba(0, 0, 0, .55);
+}
+.phone-notch {
+  position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+  width: 110px; height: 22px; border-radius: 999px; background: #050506;
+  border: 1px solid rgba(255, 255, 255, .06);
+}
+.phone-screen { border-radius: 30px; overflow: hidden; background: var(--bg-soft); }
+.phone .chat-mock { border: 0; border-radius: 0; box-shadow: none; padding: 46px 14px 16px; }
+.phone .chat-body { min-height: 0; }
+@media (min-width: 960px) { .solution-grid { grid-template-columns: 1.05fr .95fr; gap: 56px; } }
+
+/* How-it-works photo + localized example chips. */
+.how-photo {
+  max-width: 880px; margin: 0 auto 30px; border-radius: 22px; overflow: hidden;
+  border: 1px solid var(--line); background: var(--bg-soft);
+}
+.how-photo img { display: block; width: 100%; height: 220px; object-fit: cover; opacity: .85; }
+@media (min-width: 640px) { .how-photo img { height: 320px; } }
+.example-chip {
+  display: inline-block; margin-top: 14px; padding: 9px 12px; border-radius: 10px;
+  border: 1px dashed var(--lime-line); background: var(--lime-soft); color: var(--text);
+  font-size: .84rem; line-height: 1.4; overflow-wrap: anywhere;
+}
+
+/* Launch band — hidden until main.js proves the campaign can award AND the
+   header banner is gone (never both). */
+.launch-section[hidden] { display: none; }
+.launch-band {
+  display: flex; flex-direction: column; align-items: center; gap: 14px; text-align: center;
+  padding: 40px 22px; background: linear-gradient(120deg, rgba(184, 239, 92, .12), rgba(255, 255, 255, .03));
+  border-color: var(--lime-line);
+}
+.launch-kicker { font-weight: 800; letter-spacing: .08em; text-transform: uppercase; font-size: .76rem; color: var(--lime); }
+.launch-band h2 { font-size: clamp(1.5rem, 4.6vw, 2.2rem); }
+.launch-band p { color: var(--muted); max-width: 560px; }
+.launch-band .btn { width: 100%; }
+#launchOfferSlots { color: var(--lime); }
+@media (min-width: 640px) {
+  .launch-band { padding: 48px 40px; }
+  .launch-band .btn { width: auto; min-width: 240px; }
+}
+
+/* Footer locale badge (set from countries.json by locale.js). */
+.foot-grid p.locale-badge {
+  display: inline-flex; align-items: center; gap: 8px; margin-top: 6px;
+  padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--card); color: var(--text); font-size: .82rem;
+}
+.foot-grid p.locale-badge[hidden] { display: none; }
+
+/* Scroll reveal — armed only when main.js adds .js-anim (motion allowed). */
+.js-anim .reveal { opacity: 0; transform: translateY(14px); transition: opacity .55s ease, transform .55s ease; }
+.js-anim .reveal.in { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  .js-anim .reveal { opacity: 1; transform: none; transition: none; }
+}
+
 
 
 

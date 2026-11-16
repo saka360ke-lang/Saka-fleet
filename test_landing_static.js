@@ -33,6 +33,7 @@ const REQUIRED_FILES = [
   'assets/css/styles.css', 'assets/js/main.js', 'assets/js/cookieConsent.js', 'assets/js/status.js', 'assets/js/locale.js', 'assets/js/nav.js',
   'assets/img/logo.svg', 'assets/img/logo-mark.png', 'assets/img/logo-lockup.png', 'assets/img/favicon.svg', 'assets/img/og-cover.svg',
   'assets/img/og-cover.png', 'assets/img/favicon-32.png', 'assets/img/apple-touch-icon.png',
+  'assets/img/hero-car.jpg', 'assets/img/interior.jpg', 'assets/img/phone-hand.jpg', 'assets/img/dashboard.jpg',
   'assets/fonts/Sora-600.woff2', 'assets/fonts/Sora-700.woff2',
   'assets/fonts/Manrope-400.woff2', 'assets/fonts/Manrope-500.woff2', 'assets/fonts/Manrope-700.woff2',
   'data/changelog.json', 'data/countries.json', 'robots.txt', 'sitemap.xml', 'llms.txt', '.htaccess'
@@ -619,6 +620,62 @@ console.log('\n--- Test 27: PostHog replay + errors, consent-gated (v1.98.0) ---
     'index.html supplies the PostHog project key (phc_…) to the consent loader (v1.98.1)');
   check(phIndexHtml.indexOf('__sakaPosthogKey') > -1 && phIndexHtml.indexOf('__sakaPosthogKey') < phIndexHtml.indexOf('assets/js/cookieConsent.js'),
     'the key is defined BEFORE the consent script loads (v1.98.1)');
+}
+
+console.log('\n--- Test 28: v1.98.2 mobile-first funnel (contracts preserved) ---');
+{
+  // The hero: new promise and ONE primary CTA. The mandatory website signup
+  // (v1.49.5) makes a wa.me hero button circular — Saka redirects a new number
+  // straight back to this form — so the funnel has a single door.
+  check(indexHtml.includes("Your vehicle's") && indexHtml.includes('co-pilot') && indexHtml.includes('On WhatsApp.</span>'), 'the hero carries the co-pilot headline');
+  check(indexHtml.includes('No apps. No logbooks. Just chat to log fuel, track costs, and never miss a service.'), 'the hero carries the new subtext');
+  check(indexHtml.includes('data-open-onboard data-gtm="hero_cta">🚀 Start Free Trial'), 'the hero CTA is Start Free Trial and opens the onboarding modal');
+  const heroSlice = indexHtml.slice(indexHtml.indexOf('<section class="hero"'), indexHtml.indexOf('<!-- Stats -->'));
+  check(heroSlice.length > 500 && !heroSlice.includes('wa.me'), 'the hero has no WhatsApp button (one funnel door: website signup)');
+  check(!mainJs.includes('whatsapp_cta_click'), 'no whatsapp_cta_click event exists (the hero WhatsApp CTA is retired)');
+
+  // GTM dataLayer + explicit PostHog funnel events (guarded, never blocking).
+  for (const evt of ['hero_cta_click', 'nav_cta_click', 'pricing_cta_click', 'launch_cta_click', 'final_cta_click']) {
+    check(mainJs.includes(evt), `main.js defines the ${evt} event`);
+  }
+  check(/function capturePosthog\(eventName, props\)/.test(mainJs) && /if \(window\.posthog && typeof window\.posthog\.capture === 'function'\)/.test(mainJs), 'PostHog captures are guarded by a real window.posthog check');
+  check(mainJs.includes("closest('[data-open-onboard]')") && mainJs.includes('trackCta(kind, label)'), 'one delegated listener tracks every start CTA');
+  check(/capturePosthog\('successful_signup'/.test(mainJs), 'the signup pushes successful_signup to PostHog too');
+  check(mainJs.includes("event: 'successful_signup'") && mainJs.includes('user_data: userData'), 'the GTM successful_signup push (Enhanced Conversions) is intact');
+
+  // The launch offer: exactly one appearance at a time, fail-closed.
+  check(indexHtml.includes('class="section launch-section" id="launch" hidden'), 'the mid-page launch section is hidden by default');
+  check(indexHtml.includes('id="launchOfferSlots"') && indexHtml.includes('id="launchOfferDays"'), 'the launch band carries live slot/day targets');
+  check(mainJs.includes('function revealLaunchSection()') && /LAUNCH\.active === true && !bannerShowing/.test(mainJs), 'the launch section is revealed only when the campaign is active AND the header banner is gone');
+  check(mainJs.includes('revealLaunchSection();') && mainJs.includes('section.hidden = !('), 'banner dismissal reveals the section; the two can never co-exist');
+  check(stylesCss.includes('.launch-section[hidden] { display: none; }'), 'the launch section stays hidden in CSS as well');
+
+  // Pain copy (adjustment 4) + glassmorphism.
+  check(indexHtml.includes('Lost receipts?') && indexHtml.includes('Insurance lapsed — no warning?') && indexHtml.includes('Guessing fuel costs?'), 'the three pain cards carry the agreed copy');
+  check(indexHtml.includes('class="pain-card glass') && stylesCss.includes('-webkit-backdrop-filter: var(--glass-blur)') && stylesCss.includes('backdrop-filter: var(--glass-blur)'), 'pain cards are glassmorphic (blur(10px))');
+
+  // Localized examples: ID slots only, metric defaults on first paint.
+  for (const slot of ['mockMe1', 'mockDetail1', 'mockOdo', 'mockEconomy', 'mockMe2', 'howExample2', 'howExample3', 'footerLocaleBadge', 'mockNote']) {
+    check(indexHtml.includes(`id="${slot}"`), `the page carries the ${slot} localization slot`);
+  }
+  check(!/data-mock-odo/.test(indexHtml), 'locale.js writes by ID slot, never a data-mock attribute');
+  check(indexHtml.includes('50,350 km') && indexHtml.includes('Logged 40L'), 'the static mock ships metric + USD defaults (no-JS and GLOBAL)');
+  check(localeJs.includes('function renderLocalExamples(profile, db)') && localeJs.includes('UNIT_EXAMPLES') && /gal|30,000 mi/.test(localeJs) && localeJs.includes('Intl.NumberFormat'), 'locale.js renders metric/imperial examples with local-currency estimates');
+  check(localeJs.includes('renderLocalExamples(profile, db)'), 'apply() wires the localized examples');
+
+  // Imagery (downloaded from Unsplash, stamped like every asset).
+  for (const img of ['hero-car.jpg', 'interior.jpg', 'phone-hand.jpg', 'dashboard.jpg']) {
+    check(fs.existsSync(path.join(LANDING, 'assets/img', img)), `landing/assets/img/${img} exists`);
+    check(indexHtml.includes(`/assets/img/${img}`), `the page references ${img}`);
+  }
+  check(/<img class="hero-photo"[^>]*fetchpriority="high"/.test(indexHtml) && /<img class="hero-photo"[^>]*width="1600"/.test(indexHtml), 'the hero photo is eager, LCP-prioritised and CLS-safe');
+  check((indexHtml.match(/loading="lazy"/g) || []).length >= 3, 'the supporting photos are lazy-loaded');
+
+  // Mobile-first CTA + scroll reveal.
+  check(stylesCss.includes('.btn-hero { width: 100%'), 'the primary CTA is full-width on phones (375px base)');
+  check(stylesCss.includes('.btn-hero { width: auto; min-width: 300px; }') && stylesCss.includes('@media (min-width: 640px)'), 'the primary CTA is auto-width and prominent on desktop');
+  check(mainJs.includes('new IntersectionObserver') && mainJs.includes('prefers-reduced-motion: reduce') && stylesCss.includes('.js-anim .reveal.in'), 'scroll reveal uses IntersectionObserver and respects reduced motion');
+  check(indexHtml.includes('id="pain"') && indexHtml.includes('id="solution"') && indexHtml.includes('id="how"') && indexHtml.includes('id="compliance"') && indexHtml.includes('id="pricing"') && indexHtml.includes('id="faq"'), 'every nav anchor target exists on the page');
 }
 
 console.log(`\n🎉 ${passed} landing assertions passed (Phase 31 included).`);
