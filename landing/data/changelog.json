@@ -1,6 +1,13 @@
 {
-  "latest": "1.98.0",
+  "latest": "1.98.1",
   "entries": [
+    {
+      "version": "1.98.1",
+      "date": "2026-11-16",
+      "title": "Sign-in trouble now leaves a visible trail",
+      "preview": "Small follow-up: the team's masked page recorder is now switched on across the website and dashboard.",
+      "summary": "A small follow-up to yesterday's behind-the-scenes release. The masked page recorder that helps the team see where a sign-in or page step fails is now fully switched on: the dashboard records it on every page, and the public website loads it only after you explicitly opt in to analytics. Masking stays fully on - every piece of text and every input is hidden, so phone numbers, sign-in codes, amounts and vehicle details are never captured. Nothing about your own WhatsApp conversations, records, reports, reminders or billing changes."
+    },
     {
       "version": "1.98.0",
       "date": "2026-11-16",

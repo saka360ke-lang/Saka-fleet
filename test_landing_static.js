@@ -612,6 +612,13 @@ console.log('\n--- Test 27: PostHog replay + errors, consent-gated (v1.98.0) ---
     const phHtml = fs.readFileSync(path.join(LANDING, phPage), 'utf8');
     check(!/posthog\.com/i.test(phHtml), `${phPage} never hard-codes a PostHog host (the consent loader owns delivery)`);
   }
+  // v1.98.1 — the operator activated the landing project key (still consent-gated).
+  const phIndexHtml = fs.readFileSync(path.join(LANDING, 'index.html'), 'utf8');
+  const phKeyMatch = phIndexHtml.match(/window\.__sakaPosthogKey\s*=\s*'([^']+)'/);
+  check(Boolean(phKeyMatch) && /^phc_/.test(phKeyMatch[1]) && phKeyMatch[1].length > 20,
+    'index.html supplies the PostHog project key (phc_…) to the consent loader (v1.98.1)');
+  check(phIndexHtml.indexOf('__sakaPosthogKey') > -1 && phIndexHtml.indexOf('__sakaPosthogKey') < phIndexHtml.indexOf('assets/js/cookieConsent.js'),
+    'the key is defined BEFORE the consent script loads (v1.98.1)');
 }
 
 console.log(`\n🎉 ${passed} landing assertions passed (Phase 31 included).`);

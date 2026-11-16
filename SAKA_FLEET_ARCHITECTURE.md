@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.98.0  
+**Version:** 1.98.1  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.98.1** | PostHog key activated on the landing + **Rule 64** — `window.__sakaPosthogKey` (the operator-supplied `phc_…` project key) is defined in `landing/index.html` BEFORE `cookieConsent.js`, so the landing replay runs strictly after the analytics opt-in (masking unchanged: all text + every input); `test_landing_static` now pins the key (phc_ prefix, >20 chars) and that it precedes the consent loader; NEW RULE 64 (`.clinerules`): the AI Architect never executes commands in the user's environment — every command prompt, variable injection, Supabase query or gcloud operation is written as a prompt for Cline, the sole executor of terminal and infrastructure commands | 253 |
 | **1.98.0** | PostHog observability (session replay + error tracking), fail-closed and masked — `POSTHOG_KEY` unset = no snippet anywhere (byte-identical), `POSTHOG_HOST` (EU default), `POSTHOG_MASK_ALL` (on; masks ALL text + element attributes, so phone numbers and sign-in codes never leave the browser). `renderPageShell` emits the masked snippet with `$exception` + `unhandledrejection` capture; `renderLoginPage`/`renderOtpPage` capture `login_attempt`/`login_error`/`otp_submitted` (door + server refusal copy only, never the phone or code); the landing site loads the same replay through `cookieConsent.js loadPosthog()` strictly after an analytics opt-in and stays a silent no-op without `window.__sakaPosthogKey`. Closes the blind spot behind the 2026-11-16 OTP incidents | 252 |
 | **1.97.9** | Superadmin OTP lockout fixed — live 2026-11-16: regular users signed in fine while `/d/admin/login` answered "I could not send the code just now"; the 20:00 EAT remediation digest (free-form) was refused by Meta with **131047**, the status webhook's `markDeliveryBlocked` armed a 24h block on `SUPERADMIN_PHONE`, and the sign-in code was refused by the delivery guard on **both** the `saka_otp` template path (`metaMessenger.js` template check) and the free-form text path — every evening re-armed the same block. Fixes: the superadmin is exempt from `markDeliveryBlocked`/`isDeliveryBlocked` (`deliveryGuard.js` → `superadminIdentity.js`), every `kind:'auth_otp'` send bypasses the blocklist on both transports (a live sign-in IS the re-engagement), and a blocked refusal now writes `DASHBOARD_OTP_REFUSED_BLOCKED` instead of disappearing | 251 |
 | **1.97.8** | Vehicle-gone writes never dead-end — the live 2026-11-13 FK refusal (`quizEngine.logExpense`, owner `9653d8e3…`, vehicle `ef35bbad…`, KES 250/2,000) is now caught by ONE pure guard: expense + earnings FK errors and mileage/hours zero-row updates say plainly \"nothing was written\" and start registration pre-filled with the known asset kind (first question = the plate); quick lanes point to *add vehicle*; receipts keep the evidence (stale link dropped); reminders/odometer-ledger creators/readers report `missingVehicle`; audited `VEHICLE_GONE_WRITE_REFUSED`. Sentinel live learnings are deduped (case/whitespace-insensitive, newest 5) before every append + an idempotent operator script (`npm run sentinel:dedupe-learnings`, live 19→5, audited `SENTINEL_LEARNINGS_DEDUPED`) — the v1.97.7 worker re-appended at 09:54Z, so the final rewrite runs after this deploy | 250 |
@@ -7544,3 +7545,22 @@ test_env_audit (63), test_landing_static (503), test_dashboard (979), test_vehic
 
 #### 252.9 Rules shaped this work (rule 58)
 1/39/45 (consult-first), 42/63 (0 open proposals live-verified), 3/4, 10/11 (targeted stateless suites), 12/33 (one commit: version + history + CHANGELOG + landing feed + docs), 13 (no flow/intent/prompt change — frontend telemetry only; stated), 21 (canonical env order + documented defaults), 31/56 (plain, honest disclosure copy), 50/51/52 (safe degradation, sibling sweep, before/after assertions), 54 (no invented contracts), 55 (evolved the consent loader + shell), 59 (fail-closed gate). No rule edited. **Impact:** the next login or page failure arrives with a watchable, masked replay and an `$exception` record; with the key unset, every page renders exactly as v1.97.9 did. **Operator step to activate:** create the PostHog EU project, set `POSTHOG_KEY` on Cloud Run, and (optionally) add `window.__sakaPosthogKey` to `landing/index.html` or a GTM tag.
+
+---
+
+### 253. v1.98.1 — The landing key is live + Rule 64 (Architect execution boundaries)
+
+#### 253.1 The change
+
+- **Landing activation.** The operator supplied the EU project key and set `POSTHOG_KEY` on Cloud Run (new revision live). `landing/index.html` now defines `window.__sakaPosthogKey='phc_…'` **immediately BEFORE** the deferred `cookieConsent.js` tag, so `loadPosthog()` finds it at consent time. The loader contract is unchanged: analytics opt-in only, one-shot, silent no-op on a blocked tracker, and `mask_all_text` + `mask_all_element_attributes` stay `true` (phone numbers, sign-in codes, amounts and vehicle details never leave the browser). No page hard-codes a tracker host — the consent loader still owns delivery.
+- **`test_landing_static`** Test 27 gains two pins: the key matches `^phc_` and is longer than 20 chars, and it is declared **before** `assets/js/cookieConsent.js` in the page source. 503 → **505**.
+- **Rule 64 (`.clinerules`, additive — rule 58 policy).** *The Architect's Execution Boundaries (PERMANENT — v1.98.1):* the AI Architect (the chat interface) does not execute commands directly in the user's environment. For any command prompt, variable injection, Supabase query, or `gcloud` operation, the Architect must write a detailed prompt for Cline to execute. **Cline is the sole executor of terminal and infrastructure commands.** No existing rule edited.
+
+#### 253.2 Frames touched
+`landing/index.html`, `landing/data/changelog.json` + stamped assets, `test_landing_static.js`, `test_vehicle_documents.js` (version pin), `.clinerules` (rule 64, additive), `package.json` (1.98.1), `docs/` (regenerated), this file, `CHANGELOG.md`.
+
+#### 253.3 Suites run
+test_landing_static (505), test_vehicle_documents, test_env_audit, test_dashboard, test_doc_sync, test_kb_docs, test_agent_training, `npm run health` — green.
+
+#### 253.4 Rules shaped this work (rule 58)
+1/39/45 (consult-first), 42/63 (0 open proposals), 3/4, 10/11 (targeted stateless suites), 12/33 (one commit: version + history + CHANGELOG + landing feed + stamped assets + docs), 13 (no flow/intent/prompt change — landing config + rules only; stated), 21 (env unchanged — the Cloud Run key already existed), 31/56 (plain customer copy in the feed), 54 (operator-supplied key used verbatim; no invented value), 55 (evolved the v1.98.0 loader — no fresh build), 58 (rule additions are additive and reported), 59 (consent gate unchanged). **Rule 64 added; no rule edited.** **Impact:** the landing replay is live for consented visitors (masked); every operator command now flows Architect → Cline by policy.

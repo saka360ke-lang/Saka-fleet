@@ -148,3 +148,6 @@
 62. **Default to full operator capability (PERMANENT - v1.82.0).** Always default to using all available connections, tools, and integrations (gcloud, supabase CLI, etc.) to plan and execute all possible operator actions. If an operator action is pending, execute it autonomously.
 63. **Pending remediations and proposals are checked before every operation (PERMANENT - v1.82.0).** Always check pending remediations and proposals (via database query) before any operation. Carefully audit the proposed changes and offer/execute the solution.
 
+## ARCHITECT EXECUTION BOUNDARIES (PERMANENT — v1.98.1, additive)
+64. **The Architect's Execution Boundaries (PERMANENT - v1.98.1).** The AI Architect (the chat interface) does not execute commands directly in the user's environment. For any command prompt, variable injection, Supabase query, or `gcloud` operation, the Architect must write a detailed prompt for Cline to execute. Cline is the sole executor of terminal and infrastructure commands.
+
