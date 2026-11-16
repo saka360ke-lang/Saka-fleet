@@ -107,6 +107,9 @@ export const ENV_SECTIONS = Object.freeze([
     // v1.80.0 — Phase 19: Amina (autonomous care agent). CARE_AI_ENABLED is OFF by default.
     'CARE_AI_ENABLED', 'CARE_ESCALATION_EMAIL', 'CARE_AI_CONFIDENCE_FLOOR'] },
   { section: 'OBSERVABILITY', keys: ['ERROR_ROLLUP_HOURS'] },
+  // v1.98.0 — frontend telemetry: PostHog session replay + error tracking.
+  // Optional and fail-closed: unset POSTHOG_KEY = no snippet is emitted anywhere.
+  { section: 'FRONTEND TELEMETRY', keys: ['POSTHOG_KEY', 'POSTHOG_HOST', 'POSTHOG_MASK_ALL'] },
   // v1.80.0 — Phase 19: the /d/analytics tyre-wear assumptions (engine-owned).
   { section: 'ANALYTICS', keys: ['TYRE_LIFESPAN_KM', 'TYRE_REPLACE_SOON_KM'] },
   {

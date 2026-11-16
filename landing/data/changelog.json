@@ -1,6 +1,13 @@
 {
-  "latest": "1.97.9",
+  "latest": "1.98.0",
   "entries": [
+    {
+      "version": "1.98.0",
+      "date": "2026-11-16",
+      "title": "We can now see exactly where a page or sign-in step fails",
+      "preview": "A behind-the-scenes change: the team can watch (fully masked) how a page behaves when something goes wrong.",
+      "summary": "A behind-the-scenes release about seeing problems before you have to report them. Twice this week a sign-in problem left no trace for the team: the page showed an error, but nothing recorded what the user saw or clicked. The dashboard now records what happens on a page - clicks, submits and unhandled errors - and can play back a fully masked session so the team can see exactly where a step failed. Masking is on by default and covers every piece of text and every input, so phone numbers, sign-in codes, amounts and vehicle details are never captured. Everything stays off unless the team's tracking key is configured, and on the public website it only ever runs after you explicitly opt in to analytics. Your own WhatsApp conversations, records, reports, reminders and billing are untouched."
+    },
     {
       "version": "1.97.9",
       "date": "2026-11-16",

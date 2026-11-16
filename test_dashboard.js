@@ -2427,6 +2427,43 @@ async function run() {
   check(renderPageShell('X', '<p>hi</p>', { brandHref: 'https://sakafleet.com' }).includes('class="brand" href="https://sakafleet.com"'), 'a caller can point the brand at the public site (v1.94.0)');
   check(shellHtml.includes(`/d/assets/logo-lockup.png?v=${DASHBOARD_ASSET_VERSION}`) && shellHtml.includes('width="177" height="18"'), 'the header renders the real brand lockup at its intrinsic ratio');
   check(shellHtml.includes('alt="Saka Fleet"') && shellHtml.includes('class="nav"'), 'the logo is labelled and the nav slot is preserved');
+  // v1.98.0 — PostHog: fail-closed, EU default, masked replay, $exception wiring.
+  const savedPh = { key: process.env.POSTHOG_KEY, host: process.env.POSTHOG_HOST, mask: process.env.POSTHOG_MASK_ALL };
+  delete process.env.POSTHOG_KEY;
+  delete process.env.POSTHOG_HOST;
+  delete process.env.POSTHOG_MASK_ALL;
+  try {
+    const phOffShell = renderPageShell('X', '<p>hi</p>');
+    check(!phOffShell.includes('posthog'), 'no POSTHOG_KEY = no snippet at all (fail-closed, v1.98.0)');
+    process.env.POSTHOG_KEY = 'phc_test_suite';
+    const phOnShell = renderPageShell('X', '<p>hi</p>');
+    check(phOnShell.includes('window.posthog.init(KEY') && phOnShell.includes('phc_test_suite'), 'POSTHOG_KEY emits the snippet with the key (v1.98.0)');
+    check(phOnShell.includes('"mask_all_text":true') && phOnShell.includes('"mask_all_element_attributes":true'),
+      'replay masks all text and element attributes by default (v1.98.0)');
+    check(phOnShell.includes('https://eu.i.posthog.com'), 'EU cloud is the default host (v1.98.0)');
+    check(phOnShell.includes("addEventListener('error'") && phOnShell.includes("addEventListener('unhandledrejection'") && phOnShell.includes("capture('$exception'"),
+      'unhandled errors and rejections are captured as $exception (v1.98.0)');
+    process.env.POSTHOG_MASK_ALL = 'off';
+    check(renderPageShell('X', '<p>hi</p>').includes('"mask_all_text":false'), 'POSTHOG_MASK_ALL=off disables masking explicitly (v1.98.0)');
+    process.env.POSTHOG_HOST = 'https://us.i.posthog.com';
+    check(renderPageShell('X', '<p>hi</p>').includes('https://us.i.posthog.com'), 'POSTHOG_HOST overrides the EU default (v1.98.0)');
+    delete process.env.POSTHOG_MASK_ALL;
+    delete process.env.POSTHOG_HOST;
+    const phLogin = renderLoginPage({});
+    check(phLogin.includes('data-ph-door="owner"'), 'the owner door tags its form (v1.98.0)');
+    check(phLogin.includes("capture('login_attempt'") && phLogin.includes("capture('login_error'"), 'the owner door captures login_attempt + login_error (v1.98.0)');
+    check(renderLoginPage({ admin: true }).includes('data-ph-door="admin"'), 'the admin door tags its form (v1.98.0)');
+    const phOtp = renderOtpPage({ token: 'tok-123456' });
+    check(phOtp.includes('data-ph-door="otp"') && phOtp.includes("capture('otp_submitted'"), 'the OTP step captures otp_submitted (v1.98.0)');
+    check(phOtp.includes("capture('login_error'") && /capture\('login_error'[\s\S]{0,160}door: 'otp'/.test(phOtp), 'the OTP refusal is captured with its door (v1.98.0)');
+    check(!/capture\([^)]*(loginPhone|\.value)/.test(phLogin + phOtp), 'no capture call ever reads the phone or code input values (v1.98.0)');
+    const phErr = renderLoginPage({ error: 'That number does not look right.' });
+    check(phErr.includes("capture('login_error'") && phErr.includes("door: 'owner'"), 'the refusal copy is captured with the door, never the input (v1.98.0)');
+  } finally {
+    if (savedPh.key === undefined) delete process.env.POSTHOG_KEY; else process.env.POSTHOG_KEY = savedPh.key;
+    if (savedPh.host === undefined) delete process.env.POSTHOG_HOST; else process.env.POSTHOG_HOST = savedPh.host;
+    if (savedPh.mask === undefined) delete process.env.POSTHOG_MASK_ALL; else process.env.POSTHOG_MASK_ALL = savedPh.mask;
+  }
   // v1.95.0 (Phase 32, Task 1) — the drawer: burger + overlay built from the
   // SAME anchors, inert on pages without navigation, banner above it (D2).
   check(shellHtml.includes('class="nav-burger"') && shellHtml.includes('aria-expanded="false"') && shellHtml.includes('aria-controls="navMenu"'), 'the shell renders the burger with its ARIA contract (v1.95.0)');

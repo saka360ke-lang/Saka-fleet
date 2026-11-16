@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.97.9  
+**Version:** 1.98.0  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.98.0** | PostHog observability (session replay + error tracking), fail-closed and masked — `POSTHOG_KEY` unset = no snippet anywhere (byte-identical), `POSTHOG_HOST` (EU default), `POSTHOG_MASK_ALL` (on; masks ALL text + element attributes, so phone numbers and sign-in codes never leave the browser). `renderPageShell` emits the masked snippet with `$exception` + `unhandledrejection` capture; `renderLoginPage`/`renderOtpPage` capture `login_attempt`/`login_error`/`otp_submitted` (door + server refusal copy only, never the phone or code); the landing site loads the same replay through `cookieConsent.js loadPosthog()` strictly after an analytics opt-in and stays a silent no-op without `window.__sakaPosthogKey`. Closes the blind spot behind the 2026-11-16 OTP incidents | 252 |
 | **1.97.9** | Superadmin OTP lockout fixed — live 2026-11-16: regular users signed in fine while `/d/admin/login` answered "I could not send the code just now"; the 20:00 EAT remediation digest (free-form) was refused by Meta with **131047**, the status webhook's `markDeliveryBlocked` armed a 24h block on `SUPERADMIN_PHONE`, and the sign-in code was refused by the delivery guard on **both** the `saka_otp` template path (`metaMessenger.js` template check) and the free-form text path — every evening re-armed the same block. Fixes: the superadmin is exempt from `markDeliveryBlocked`/`isDeliveryBlocked` (`deliveryGuard.js` → `superadminIdentity.js`), every `kind:'auth_otp'` send bypasses the blocklist on both transports (a live sign-in IS the re-engagement), and a blocked refusal now writes `DASHBOARD_OTP_REFUSED_BLOCKED` instead of disappearing | 251 |
 | **1.97.8** | Vehicle-gone writes never dead-end — the live 2026-11-13 FK refusal (`quizEngine.logExpense`, owner `9653d8e3…`, vehicle `ef35bbad…`, KES 250/2,000) is now caught by ONE pure guard: expense + earnings FK errors and mileage/hours zero-row updates say plainly \"nothing was written\" and start registration pre-filled with the known asset kind (first question = the plate); quick lanes point to *add vehicle*; receipts keep the evidence (stale link dropped); reminders/odometer-ledger creators/readers report `missingVehicle`; audited `VEHICLE_GONE_WRITE_REFUSED`. Sentinel live learnings are deduped (case/whitespace-insensitive, newest 5) before every append + an idempotent operator script (`npm run sentinel:dedupe-learnings`, live 19→5, audited `SENTINEL_LEARNINGS_DEDUPED`) — the v1.97.7 worker re-appended at 09:54Z, so the final rewrite runs after this deploy | 250 |
 | **1.97.7** | Amina actually parses her model now — `chatCompletion` returns `{ ok, text, … }` but `parseCareAiJson` returned the wrapper (object short-circuit), so `parsed.lesson`/`parsed.action` were always undefined: no lesson could ever be learned and every live investigation read "loop limit reached without a decision"; the parser unwraps `text` centrally (both Amina purposes), the retry message quotes model text, and the live replay produced the first `care_learnings` row + `CARE_TICKET_LEARNED` | 249 |
@@ -7494,3 +7495,52 @@ test_sentinel_policy (42), test_dashboard (965), test_template_testfire, test_pr
 
 #### 251.7 Rules shaped this work (rule 58)
 1/39/45 (consult-first), 42/44/63 (0 open proposals verified live twice; audited the live code before prescribing), 3/4, 10/11 (targeted suites, stateless, cleanup), 12/33 (one commit, version + history + feed + docs), 13 (no flow/intent/prompt change — pure transport + auth path; stated), 31 (warm copy untouched), 50/51/52 (visible refusals, sibling sweep, before/after assertions), 54 (every link verified against live rows and code; deploy-clears-the-block confirmed), 55 (evolved the shared transport). No rule edited. **Impact:** the superadmin (and any user mid-login) can never be locked out of the dashboard by a failed background message; a guard refusal is audited; the new revision deploying this fix clears the in-memory block on boot.
+
+---
+
+### 252. v1.98.0 — PostHog observability (session replay + error tracking), fail-closed and masked
+
+#### 252.1 Why (the paused Phase 2 of the 2026-11-16 audit)
+
+Both live incidents of 2026-11-16 were **invisible from the frontend**: the Supabase pool outage left users on "Something went wrong on our side" while every server-side logger (`logSystemError`, `logWriteFailure`) wrote through the same dead PostgREST — zero trail anywhere; and the superadmin lockout produced no audit row at all (the `!sent` branch was silent until v1.97.9). The operator asked for a watchable trail: session replay plus error capture on the dashboard and the landing site.
+
+#### 252.2 The gate (fail-closed, rule 59 discipline)
+
+Three knobs, registered in `envAudit.js` under the new **`FRONTEND TELEMETRY`** section and documented in `.env.example`:
+
+| Knob | Default | Behaviour |
+|---|---|---|
+| `POSTHOG_KEY` | **unset** | Unset = **no snippet is emitted anywhere** (dashboard byte-identical to v1.97.9; the landing loader is a silent no-op). It is a public write key — deliberately **not** in `SECRET_ENV`. |
+| `POSTHOG_HOST` | `https://eu.i.posthog.com` | EU cloud by default; the SDK reads from the matching `-assets` host (`eu-assets.i.posthog.com`). |
+| `POSTHOG_MASK_ALL` | `on` | `mask_all_text: true` **and** `mask_all_element_attributes: true`. Only an explicit `off` disables masking. |
+
+#### 252.3 Dashboard (`src/services/dashboard.js`)
+
+- **`posthogHeadSnippet(env)`** (exported, pure): returns `''` without a key; otherwise the masked loader snippet with `posthog.init(KEY, { api_host, mask_all_text, mask_all_element_attributes, capture_pageview: true })`, plus `window.addEventListener('error', …)` and `('unhandledrejection', …)` capturing **`$exception`** (message/source/line/col; reason message) inside `try/catch` — analytics can never break a page. JSON literals are `<`-escaped against template injection.
+- **`renderPageShell`** injects `posthogHeadSnippet()` before `</head>` — ONE injection point for every dashboard page (owner, driver, admin, error pages).
+- **`loginTelemetryScript(door)`** + `data-ph-door` on the forms: `renderLoginPage` (owner/admin doors) captures `login_attempt` on submit and `login_error { door, reason }` (the server-rendered refusal copy, ≤140 chars) on render; `renderOtpPage` captures `otp_submitted` and the same `login_error`. Every capture is guarded by a `ph()` helper (exact no-op without the snippet) and **never reads an input value** — the phone number and the 6-digit code are structurally excluded.
+
+#### 252.4 Landing (`landing/assets/js/cookieConsent.js`)
+
+`loadPosthog()` sits beside `loadGtm()`: one-shot `posthogLoaded` guard, never-blocks-the-page `try/catch`, and `applyConsent()` calls it **only** when `data.analytics === true` (the pinned `loadGtm()` gate line is left untouched, so the v1.96.9 Test 25 pin still holds). The project key is supplied by the page (`window.__sakaPosthogKey` — inline config or a GTM tag); without it the loader returns silently. Privacy §11 and `llms.txt` disclose the EU-hosted, masked replay inside the existing analytics opt-in (no new consent category; no `<noscript>`; no tracker host hard-coded on any of the six pages).
+
+#### 252.5 Tests (rule 52)
+
+`test_env_audit` 59 → **63**: the three knobs are registered; a `FRONTEND TELEMETRY` section groups them; `.env.example` documents all three; `POSTHOG_KEY` is not a secret.
+`test_error_logging` silent-catch budget **109 → 114**: the +5 are the browser-side never-break-the-page catches inside the PostHog snippets (loader init guard, `error` listener, `unhandledrejection` listener, outer guard, `ph()`), justified in the pin comment (analytics is best-effort; a client-side catch cannot write `error_logs` by design).
+`test_landing_static` 489 → **503**: the consent script owns `loadPosthog()`; one-shot guard; analytics-gated (`applyConsent`); fail-closed without `window.__sakaPosthogKey`; EU default host; masking on; the `-assets` host swap; the blocked-tracker `catch`; and zero PostHog hosts hard-coded on all six HTML pages.
+`test_dashboard` 965 → **979**: no key = no snippet (off-state); key emits the snippet; `mask_all_text` + `mask_all_element_attributes` default `true`; `POSTHOG_MASK_ALL=off` honoured; `POSTHOG_HOST` override; `$exception` wired to `error` + `unhandledrejection`; `data-ph-door` on owner/admin/otp forms; `login_attempt`/`login_error`/`otp_submitted` present; no capture call reads an input value.
+`test_vehicle_documents` version pin 1.98.0.
+
+#### 252.6 Recurrence autopsy (rule 51)
+
+Defect class *a user-visible frontend failure leaves no client-side trail (the back-end loggers write through the very DB that is down)* → siblings swept: every dashboard page renders through ONE shell (`renderPageShell`), so the snippet can never be missed on a page; the only two interactive forms (login door, OTP step) are the only instrumented ones and both are value-blind; the landing has ONE consent loader and all six pages are swept for hard-coded tracker hosts. Deliberately left: console-log piping (a PostHog UI toggle, not code); form-value autocapture (never); GTM/Meta/GA behaviour (untouched).
+
+#### 252.7 Frames touched
+`src/services/dashboard.js`, `src/services/envAudit.js`, `.env.example`, `landing/assets/js/cookieConsent.js`, `landing/privacy.html`, `landing/llms.txt`, `landing/data/changelog.json` + stamped assets, `test_env_audit.js`, `test_landing_static.js`, `test_dashboard.js`, `test_error_logging.js` (silent-catch pin +5, justified), `test_vehicle_documents.js` (version pin), `package.json` (1.98.0), `docs/` (regenerated), this file, `CHANGELOG.md`.
+
+#### 252.8 Suites run
+test_env_audit (63), test_landing_static (503), test_dashboard (979), test_vehicle_documents, test_sentinel_policy, test_template_testfire, test_proactive_templates, test_remediation_pipeline, test_doc_sync, test_kb_docs, test_agent_training, `npm run health` — green.
+
+#### 252.9 Rules shaped this work (rule 58)
+1/39/45 (consult-first), 42/63 (0 open proposals live-verified), 3/4, 10/11 (targeted stateless suites), 12/33 (one commit: version + history + CHANGELOG + landing feed + docs), 13 (no flow/intent/prompt change — frontend telemetry only; stated), 21 (canonical env order + documented defaults), 31/56 (plain, honest disclosure copy), 50/51/52 (safe degradation, sibling sweep, before/after assertions), 54 (no invented contracts), 55 (evolved the consent loader + shell), 59 (fail-closed gate). No rule edited. **Impact:** the next login or page failure arrives with a watchable, masked replay and an `$exception` record; with the key unset, every page renders exactly as v1.97.9 did. **Operator step to activate:** create the PostHog EU project, set `POSTHOG_KEY` on Cloud Run, and (optionally) add `window.__sakaPosthogKey` to `landing/index.html` or a GTM tag.

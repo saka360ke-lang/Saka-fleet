@@ -68,7 +68,13 @@ function countSilentCatches() {
 // vehicle_documents). Each answers "unexplored" on a missing table/column; the
 // sweep runs every 15 minutes, so logging five probes per activated trial would
 // flood error_logs. The stage itself never throws (rule 50).
-const SILENT_CATCH_BUDGET = 109;
+// v1.98.0 — +5: the PostHog client snippets rendered by dashboard.js
+// (posthogHeadSnippet: the loader init guard, the window 'error' listener, the
+// 'unhandledrejection' listener and the outer init guard; loginTelemetryScript:
+// the ph() helper). These run IN THE BROWSER — a blocked tracker or a missing
+// posthog global must never break a dashboard page, and a client-side catch
+// cannot write error_logs by design (rule 50, analytics is best-effort).
+const SILENT_CATCH_BUDGET = 114;
 const silentNow = countSilentCatches();
 check(`silent catches stay within the pinned budget (${silentNow}/${SILENT_CATCH_BUDGET})`, silentNow <= SILENT_CATCH_BUDGET);
 console.log('\n=== 4. logger behaviour ===');

@@ -1,11 +1,13 @@
 /* Saka Fleet — cookie consent (v1.49.0; scope bumped v1.96.6; first-party GTM
-   delivery v1.96.9). Vanilla JS, no third-party CMP. Google Tag Manager (and
-   the tags you configure inside it, e.g. Meta Pixel and Google Ads) load ONLY
-   after an explicit analytics opt-in — now from the first-party proxy
-   https://gtm.sakafleet.com (same container, no blocker-host lookup; a dead
-   proxy is swallowed below and can never block the page). Consent is stored in
-   localStorage (versioned) so a policy change must earn a fresh yes — v3 covers
-   signup Enhanced Conversions (hashed email/phone for ad measurement).
+   delivery v1.96.9; PostHog replay v1.98.0). Vanilla JS, no third-party CMP.
+   Google Tag Manager (and the tags you configure inside it, e.g. Meta Pixel and
+   Google Ads) load ONLY after an explicit analytics opt-in — now from the
+   first-party proxy https://gtm.sakafleet.com (same container, no blocker-host
+   lookup; a dead proxy is swallowed below and can never block the page). The
+   same opt-in loads PostHog (session replay + error tracking, masked) when the
+   page provides window.__sakaPosthogKey. Consent is stored in localStorage
+   (versioned) so a policy change must earn a fresh yes — v3 covers signup
+   Enhanced Conversions (hashed email/phone for ad measurement).
    Strictly necessary stays always-on. */
 (function () {
   'use strict';
@@ -53,6 +55,47 @@
   }
   function applyConsent(data) {
     if (data && data.analytics === true) loadGtm();
+    if (data && data.analytics === true) loadPosthog();
+  }
+
+  // v1.98.0 — PostHog (session replay + error tracking). Same consent gate and
+  // one-shot guard as GTM; a blocked or absent tracker is swallowed below and
+  // can never block the page. The project key is supplied by the page
+  // (window.__sakaPosthogKey — an inline config or a GTM tag); without it the
+  // loader is a silent no-op. Replay masks ALL text and element attributes, so
+  // phone numbers and sign-in codes never leave the browser.
+  var posthogLoaded = false;
+  function loadPosthog() {
+    if (posthogLoaded) return;
+    posthogLoaded = true;
+    try {
+      var key = window.__sakaPosthogKey;
+      if (!key) return;
+      var host = window.__sakaPosthogHost || 'https://eu.i.posthog.com';
+      (function (t, e) {
+        var o, n, p, r;
+        e.__SV__ || (window.posthog = e, e._i = [], e.init = function (i, s, a) {
+          function g(t, i) { var o = i.split('.'); if (o.length === 2) { t = t[o[0]]; i = o[1]; } t[i] = function () { t.push([i].concat(Array.prototype.slice.call(arguments, 0))); }; }
+          (p = t.createElement('script')).type = 'text/javascript';
+          p.async = true;
+          p.src = s.api_host.replace('.i.posthog.com', '-assets.i.posthog.com') + '/static/array.js';
+          (r = t.getElementsByTagName('script')[0]).parentNode.insertBefore(p, r);
+          var u = a ? e[a] = [] : e;
+          u.people = u.people || [];
+          u.toString = function (x) { return 'posthog' + (a ? '.' + a : '') + (x ? '' : ' (stub)'); };
+          u.people.toString = function () { return u.toString(1) + '.people (stub)'; };
+          o = 'capture identify alias people.set people.set_once set_config register register_once unregister opt_out_capturing has_opted_out_capturing reset'.split(' ');
+          for (n = 0; n < o.length; n += 1) g(u, o[n]);
+          e._i.push([i, s, a]);
+        }, e.__SV__ = 1);
+      })(document, window.posthog || []);
+      window.posthog.init(key, {
+        api_host: host,
+        mask_all_text: true,
+        mask_all_element_attributes: true,
+        capture_pageview: true
+      });
+    } catch (e) { /* analytics is best-effort and never blocks the page */ }
   }
 
   // v1.49.3 — expose consent state so the signup flow can gate on a recorded choice.

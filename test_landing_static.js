@@ -598,6 +598,22 @@ console.log('\n--- Test 26: signup dead-end guards (v1.97.1) ---');
     'malformed responses are logged for GTM/console debugging');
 }
 
+console.log('\n--- Test 27: PostHog replay + errors, consent-gated (v1.98.0) ---');
+{
+  check(cookieJs.includes('function loadPosthog()'), 'the consent script owns the PostHog loader');
+  check(cookieJs.includes('var posthogLoaded = false') && cookieJs.includes('if (posthogLoaded) return;'), 'the PostHog loader is one-shot');
+  check(/if \(data && data\.analytics === true\) loadPosthog\(\)/.test(cookieJs), 'PostHog loads only after an explicit analytics opt-in');
+  check(cookieJs.includes('var key = window.__sakaPosthogKey;') && cookieJs.includes('if (!key) return;'), 'no project key = a silent no-op (fail-closed)');
+  check(cookieJs.includes("window.__sakaPosthogHost || 'https://eu.i.posthog.com'"), 'EU cloud is the default host');
+  check(cookieJs.includes('mask_all_text: true') && cookieJs.includes('mask_all_element_attributes: true'), 'replay masks all text and element attributes');
+  check(cookieJs.includes("s.api_host.replace('.i.posthog.com', '-assets.i.posthog.com')"), 'the SDK loads from the matching assets host');
+  check(/catch \(e\) \{ \/\* analytics is best-effort and never blocks the page \*\/ \}/.test(cookieJs), 'a blocked tracker can never break the page');
+  for (const phPage of ['index.html', 'privacy.html', 'terms.html', 'data-deletion.html', '404.html', 'status.html']) {
+    const phHtml = fs.readFileSync(path.join(LANDING, phPage), 'utf8');
+    check(!/posthog\.com/i.test(phHtml), `${phPage} never hard-codes a PostHog host (the consent loader owns delivery)`);
+  }
+}
+
 console.log(`\n🎉 ${passed} landing assertions passed (Phase 31 included).`);
 
 console.log('Stateless suite: file reads only — no database, no cleanup needed.');

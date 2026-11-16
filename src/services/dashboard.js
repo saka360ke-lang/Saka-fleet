@@ -3079,6 +3079,97 @@ export function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
+/**
+ * v1.98.0 — PostHog (session replay + error tracking) for the dashboard.
+ * Fail-closed: no POSTHOG_KEY = no snippet at all (byte-identical to v1.97.9).
+ * `mask_all_text` + `mask_all_element_attributes` stay ON unless
+ * POSTHOG_MASK_ALL is explicitly off, so fleet data, phone numbers and
+ * sign-in codes never leave the browser. Unhandled errors and rejections are
+ * captured as `$exception` and linked to the same session replay.
+ */
+export function posthogHeadSnippet(env = process.env) {
+  const key = String(env.POSTHOG_KEY || '').trim();
+  if (!key) return '';
+  const host = String(env.POSTHOG_HOST || 'https://eu.i.posthog.com').trim() || 'https://eu.i.posthog.com';
+  const mask = !/^(off|false|0)$/i.test(String(env.POSTHOG_MASK_ALL || 'on'));
+  const keyJson = JSON.stringify(key).replace(/</g, '\\u003c');
+  const cfg = JSON.stringify({
+    api_host: host,
+    mask_all_text: mask,
+    mask_all_element_attributes: mask,
+    capture_pageview: true
+  }).replace(/</g, '\\u003c');
+  return `<script>
+(function () {
+  try {
+    var KEY = ${keyJson};
+    if (!KEY) return;
+    (function (t, e) {
+      var o, n, p, r;
+      e.__SV__ || (window.posthog = e, e._i = [], e.init = function (i, s, a) {
+        function g(t, i) { var o = i.split('.'); if (o.length === 2) { t = t[o[0]]; i = o[1]; } t[i] = function () { t.push([i].concat(Array.prototype.slice.call(arguments, 0))); }; }
+        (p = t.createElement('script')).type = 'text/javascript';
+        p.async = true;
+        p.src = s.api_host.replace('.i.posthog.com', '-assets.i.posthog.com') + '/static/array.js';
+        (r = t.getElementsByTagName('script')[0]).parentNode.insertBefore(p, r);
+        var u = a ? e[a] = [] : e;
+        u.people = u.people || [];
+        u.toString = function (x) { return 'posthog' + (a ? '.' + a : '') + (x ? '' : ' (stub)'); };
+        u.people.toString = function () { return u.toString(1) + '.people (stub)'; };
+        o = 'capture identify alias people.set people.set_once set_config register register_once unregister opt_out_capturing has_opted_out_capturing reset'.split(' ');
+        for (n = 0; n < o.length; n += 1) g(u, o[n]);
+        e._i.push([i, s, a]);
+      }, e.__SV__ = 1);
+    })(document, window.posthog || []);
+    window.posthog.init(KEY, ${cfg});
+    window.addEventListener('error', function (ev) {
+      try {
+        window.posthog.capture('$exception', {
+          message: String(ev.message || (ev.error && ev.error.message) || ''),
+          source: String(ev.filename || ''),
+          lineno: ev.lineno || 0,
+          colno: ev.colno || 0
+        });
+      } catch (e) { /* never break the page */ }
+    });
+    window.addEventListener('unhandledrejection', function (ev) {
+      try {
+        var r = ev && ev.reason;
+        window.posthog.capture('$exception', { message: String((r && r.message) || r || 'unhandledrejection') });
+      } catch (e) { /* never break the page */ }
+    });
+  } catch (e) { /* analytics is best-effort */ }
+})();
+</script>`;
+}
+
+/**
+ * v1.98.0 — login-door telemetry (PostHog; a silent no-op without the snippet).
+ * Captures submits, the OTP verify step and the server-rendered refusal copy.
+ * NEVER the phone number and NEVER the 6-digit code (masking + this script).
+ */
+function loginTelemetryScript(door) {
+  return `<script>
+(function () {
+  function ph() { try { return (window.posthog && typeof window.posthog.capture === 'function') ? window.posthog : null; } catch (e) { return null; } }
+  var form = document.querySelector('form[data-ph-door="${door}"]');
+  if (form) {
+    form.addEventListener('submit', function () {
+      var p = ph();
+      if (!p) return;
+      try { p.capture('${door === 'otp' ? 'otp_submitted' : 'login_attempt'}', { door: '${door}' }); } catch (e) { /* best-effort */ }
+    });
+  }
+  var err = document.querySelector('p.error');
+  if (err) {
+    var p = ph();
+    if (!p) return;
+    try { p.capture('login_error', { door: '${door}', reason: String(err.textContent || '').slice(0, 140) }); } catch (e) { /* best-effort */ }
+  }
+})();
+</script>`;
+}
+
 /** One shell for every dashboard page (D1 — Phase 14 reuses the CSS). */
 export function renderPageShell(title, body, { headerRight = '', headerLeft = 'Saka Fleet', brandHref = '/d' } = {}) {
   // v1.83.0 (Phase 22) — the brand lockup + self-hosted fonts ride the same
@@ -3097,6 +3188,7 @@ export function renderPageShell(title, body, { headerRight = '', headerLeft = 'S
 <link rel="icon" type="image/svg+xml" href="${asset('favicon.svg')}">
 <link rel="icon" type="image/png" sizes="32x32" href="${asset('favicon-32.png')}">
 <style>${DASHBOARD_CSS}</style>
+${posthogHeadSnippet()}
 </head>
 <body>
 <header class="bar"><div class="bar-inner"><a class="brand" href="${escapeHtml(brandHref)}"><img src="${asset('logo-lockup.png')}" alt="${escapeHtml(headerLeft)}" width="177" height="18" decoding="async"></a><span class="nav">${headerRight}</span><button class="nav-burger" id="navBurger" type="button" aria-label="Open menu" aria-expanded="false" aria-controls="navMenu"><span></span><span></span><span></span></button></div></header>
@@ -3294,7 +3386,7 @@ export function renderLoginPage({ error = null, admin = false, notice = null } =
 <p class="muted">${intro}</p>
 ${notice ? `<div class="notice" role="status">${escapeHtml(notice)}</div>` : ''}
 <div class="card">
-  <form method="POST" action="${action}" autocomplete="off">
+  <form method="POST" action="${action}" autocomplete="off" data-ph-door="${admin ? 'admin' : 'owner'}">
     <input id="loginPhone" type="tel" name="phone" inputmode="tel" autocomplete="tel" placeholder="+254 712 345 678" aria-label="WhatsApp number" aria-describedby="loginPhoneHint" required>
     <p class="muted-small" id="loginPhoneHint">I filled your country code — change it if it is not yours.</p>
     ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
@@ -3324,7 +3416,8 @@ ${notice ? `<div class="notice" role="status">${escapeHtml(notice)}</div>` : ''}
   input.value = prefix + ' ';
   if (input.setSelectionRange) input.setSelectionRange(input.value.length, input.value.length);
 })();
-</script>`;
+</script>
+${loginTelemetryScript(admin ? 'admin' : 'owner')}`;
   return renderPageShell(admin ? 'Admin sign-in' : 'Sign in', body, { brandHref: 'https://sakafleet.com' });
 }
 
@@ -3339,14 +3432,15 @@ export function renderOtpPage({ token, destinationMasked = null, emailMasked = n
 <h1>Check your WhatsApp</h1>
 <p class="muted">I sent a 6-digit code to <strong>${escapeHtml(destination)}</strong> on WhatsApp. Enter it below to open your dashboard.</p>
 <div class="card">
-  <form method="POST" action="/d/verify" autocomplete="off">
+  <form method="POST" action="/d/verify" autocomplete="off" data-ph-door="otp">
     <input type="hidden" name="token" value="${escapeHtml(token)}">
     <input type="text" name="otp" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="000000" aria-label="6-digit code" required>
     ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
     <button type="submit">Open my dashboard</button>
   </form>
   <p class="muted" style="font-size:13px;margin-top:12px;">The code works for ${otpMinutes} minutes. Never share it with anyone — Saka will never ask you for it in chat.</p>
-</div>`;
+</div>
+${loginTelemetryScript('otp')}`;
   return renderPageShell('Verify your WhatsApp', body);
 }
 

@@ -156,6 +156,18 @@ function run() {
   check(!plaintext.includes('PUBLIC_APP_URL'), 'Non-secret keys are never flagged');
   check(plaintextSecretWarnings(healthyEnv, { plaintextKeys: [] }).length === 0, 'When every secret is mounted, nothing is flagged');
 
+  console.log('\n--- Test 8: frontend telemetry knobs (v1.98.0) ---');
+  check(REGISTERED_ENV_KEYS.includes('POSTHOG_KEY') && REGISTERED_ENV_KEYS.includes('POSTHOG_HOST') && REGISTERED_ENV_KEYS.includes('POSTHOG_MASK_ALL'),
+    'The PostHog knobs are registered (POSTHOG_KEY/HOST/MASK_ALL)');
+  const phSection = ENV_SECTIONS.find((s) => s.section === 'FRONTEND TELEMETRY');
+  check(Boolean(phSection) && phSection.keys.length === 3 && phSection.keys.includes('POSTHOG_KEY'),
+    'A FRONTEND TELEMETRY section groups the PostHog knobs');
+  const phTemplateKeys = envTemplateKeys();
+  check(phTemplateKeys.includes('POSTHOG_KEY') && phTemplateKeys.includes('POSTHOG_HOST') && phTemplateKeys.includes('POSTHOG_MASK_ALL'),
+    '.env.example documents all three PostHog knobs');
+  const phIsSecret = SECRET_ENV && typeof SECRET_ENV.has === 'function' ? SECRET_ENV.has('POSTHOG_KEY') : Array.isArray(SECRET_ENV) && SECRET_ENV.includes('POSTHOG_KEY');
+  check(phIsSecret === false, 'POSTHOG_KEY is not a secret (a public write key, like the GTM container id)');
+
   console.log(`\n🎉 ${passed} env parity assertions passed.`);
   console.log('Stateless suite: process.env was read only; nothing was written.');
 }
