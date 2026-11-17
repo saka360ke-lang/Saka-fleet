@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.98.2  
+**Version:** 1.98.3  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.98.3** | GTM/GA4 chain audited live + head dataLayer init restored + llms.txt hidden from humans — repo **and** live checks proved the page→consent→proxy→container chain intact (`gtm.sakafleet.com/healthy` → `ok`; `gtm.js?id=GTM-TGR68X2X` → 200 `application/javascript`, 650,844 bytes carrying GA4 `G-H4L317B2FC` + the Meta tag; deployed `cookieConsent.js`/`main.js` byte-match the repo; **no HTML dataLayer init ever existed**, so "removed" was disproven). Hardening: the canonical `window.dataLayer = window.dataLayer || [];` now lives in `<head>` before `saka-boot`, so a push can never race the array, while `cookieConsent.js` remains the ONLY gtm.js delivery point (consent gate untouched, Tests 25/27 green). The footer `<a href="/llms.txt">AI summary (llms.txt)</a>` is gone; the file and the machine-facing `<link rel="alternate">` remain. `test_landing_static` 557 → **563** (init-before-boot, zero `<a>` to llms.txt, the link remains, the file remains) | 255 |
 | **1.98.2** | Ultra-modern mobile-first landing funnel (locale-aware, glass dark theme) — the page is rebuilt around ONE funnel door: **Start Free Trial** opens the onboarding modal, and the hero's wa.me button is gone (v1.49.5 makes it circular — Saka redirects a new number straight back to the form). Photo-led hero (verified Unsplash `hero-car.jpg`), three glassmorphism pain cards (Lost receipts? / Insurance lapsed — no warning? / Guessing fuel costs?), a phone-framed WhatsApp mock and How-it-works chips rendered from the SAME `countries.json` country (metric litres/km vs imperial gal/mi, money from the pricing `exchangeRates` estimates; ID slots only), and the launch offer in exactly one place at a time (`#launch` hidden by default; `revealLaunchSection()` allows it only when `launch_active:true` AND the header banner is dismissed). New delegated CTA telemetry (`hero_cta_click` / `nav_cta_click` / `pricing_cta_click` / `launch_cta_click` / `final_cta_click` → dataLayer + guarded `posthog.capture`), `successful_signup` now reaches PostHog too (no PII — `user_data` stays GTM-only), IntersectionObserver reveal with a reduced-motion opt-out, and every consent/PostHog/GTM pin byte-preserved; `test_landing_static` 505 → **557** | 254 |
 | **1.98.1** | PostHog key activated on the landing + **Rule 64** — `window.__sakaPosthogKey` (the operator-supplied `phc_…` project key) is defined in `landing/index.html` BEFORE `cookieConsent.js`, so the landing replay runs strictly after the analytics opt-in (masking unchanged: all text + every input); `test_landing_static` now pins the key (phc_ prefix, >20 chars) and that it precedes the consent loader; NEW RULE 64 (`.clinerules`): the AI Architect never executes commands in the user's environment — every command prompt, variable injection, Supabase query or gcloud operation is written as a prompt for Cline, the sole executor of terminal and infrastructure commands | 253 |
 | **1.98.0** | PostHog observability (session replay + error tracking), fail-closed and masked — `POSTHOG_KEY` unset = no snippet anywhere (byte-identical), `POSTHOG_HOST` (EU default), `POSTHOG_MASK_ALL` (on; masks ALL text + element attributes, so phone numbers and sign-in codes never leave the browser). `renderPageShell` emits the masked snippet with `$exception` + `unhandledrejection` capture; `renderLoginPage`/`renderOtpPage` capture `login_attempt`/`login_error`/`otp_submitted` (door + server refusal copy only, never the phone or code); the landing site loads the same replay through `cookieConsent.js loadPosthog()` strictly after an analytics opt-in and stays a silent no-op without `window.__sakaPosthogKey`. Closes the blind spot behind the 2026-11-16 OTP incidents | 252 |
@@ -7592,4 +7593,42 @@ Defect class *"a landing reskin silently drops a phrase or contract another surf
 
 #### 254.5 Rules shaped this work (rule 58)
 1/39/45, 42/63 (0 open proposals), 3/4, 10/11/52 (targeted stateless suite + deep audit), 12/33 (one commit: version + history + CHANGELOG + feed + stamped assets + docs), 13 (no flow/intent/prompt change — landing only; stated), 18 (no protected path), 21 (env unchanged), 31/56 (plain, warm, gender-neutral copy; imagery diverse and neutral), 36 (country-resolved copy, metric storage), 50 (GLOBAL fallback + no-JS defaults), 51 (autopsy above), 54 (image URLs live-verified 200), 55 (evolved the Monolith theme), 59 (launch fail-closed; opt-in untouched). No rule edited. **Impact:** one clear signup path on every screen; the proof copy follows the visitor's country; the launch offer can never appear twice; consented analytics now see CTA intent and signup completion (masked, no PII).
+
+---
+
+### 255. v1.98.3 — The analytics chain proven live, the head dataLayer restored, llms.txt made machine-only (2026-11-16)
+
+#### 255.1 The audit (rule 44/54 — evidence, not guesses)
+
+- **`landing/index.html`:** the script block is byte-equivalent to v1.98.1 — inline PostHog key → `cookieConsent.js` (**defer**) → `nav.js` → `locale.js` → `main.js`. **No `window.dataLayer` init ever existed in the HTML head** (proved with `git show HEAD~1`), so "the init was removed by the redesign" is disproven; `loadGtm()` creates the array itself (`w[l] = w[l] || []`).
+- **`landing/assets/js/cookieConsent.js`:** `loadGtm()` intact (one-shot guard, `gtm.start`/`gtm.js` push before injection, `GTM-TGR68X2X`, first-party `https://gtm.sakafleet.com/gtm.js?id=…`, `consent_analytics_granted` push, silent catch). `applyConsent()` calls `loadGtm()` only when `data.analytics === true`. The **deployed** file fetched from `sakafleet.com/assets/js/cookieConsent.js?v=1.98.2` matches the repo exactly.
+- **`landing/assets/js/main.js`:** deployed copy byte-matches the repo; all five CTA events, `successful_signup` and the IntersectionObserver block are present; `node --check` green.
+- **Live proxy (rule 54):** `GET https://gtm.sakafleet.com/healthy` → `ok` (`text/plain`). `GET https://gtm.sakafleet.com/gtm.js?id=GTM-TGR68X2X` → **200**, `application/javascript; charset=UTF-8`, **650,844 bytes** of real container payload carrying the GA4 tag (`G-H4L317B2FC`), the Meta pixel, Enhanced Conversions macros and the `sign_up → CompleteRegistration` map. **The container is published and served.** The page layer cannot be the reason GA4 is empty; the remaining suspects are container-side Consent Mode wiring (the custom `consent_analytics_granted` event must be mapped to a consent grant in the GTM UI), the GA4 tag trigger config, or a browser console error at consent time — none of which live in this repo.
+
+#### 255.2 The change
+
+- **Canonical GTM snippet part 1 restored.** `landing/index.html` `<head>` now declares `window.dataLayer = window.dataLayer || [];` immediately before `#saka-boot`. It is belt-and-braces (the loader already guards the array), guarantees no push can ever precede the array, and matches the official snippet so **GTM Preview** connects without a race. `cookieConsent.js` remains the ONLY delivery point for `gtm.js` — the consent gate, first-party host and one-shot guard are untouched (Tests 25/27 stay green).
+- **`llms.txt` hidden from humans.** The footer `<a href="/llms.txt">AI summary (llms.txt)</a>` is deleted. `landing/llms.txt` stays published, and the head `<link rel="alternate" type="text/plain" href="/llms.txt">` stays (crawler discovery; it is a `<link>`, never an `<a>`). Test 8's ban on the visible "llms.txt (AI summary)" string remains satisfied.
+
+#### 255.3 Frames touched
+`landing/index.html`, `landing/data/changelog.json` + stamped assets, `test_landing_static.js` (Test 29), `test_vehicle_documents.js` (version pin), `package.json` (1.98.3), `docs/` (regenerated), this file, `CHANGELOG.md`.
+
+#### 255.4 Suites run
+test_landing_static (563), test_vehicle_documents, test_doc_sync, test_kb_docs, test_env_audit, `npm run health` — green.
+
+#### 255.5 Recurrence autopsy (rule 51)
+- Defect class *"a marketing surface re-introduces a machine-facing artifact to humans"* → siblings: the privacy/terms prose (audited — no `<a>` to llms.txt), the head `<link rel="alternate">` (kept deliberately), `robots.txt`/`sitemap.xml` (not anchors). One targeted assertion per sibling state (Test 29).
+- Defect class *"best-effort analytics fails silently"* → siblings: `loadGtm()` catch (kept and documented; the page must never break), the proxy health probe (re-verified live), the container consent wiring (**operator-side**, documented in 255.6), the dataLayer init (fixed here so Preview/measurement cannot race).
+- Deliberately left: no duplicate `page_view` push in `main.js` (GA4 owns it inside the container); no `<noscript>` GTM iframe (consent gate).
+
+#### 255.6 Operator verification checklist (beyond the repo)
+1. GTM **Preview** on `https://sakafleet.com/`, accept cookies → `gtm.js` loads; `gtm.start` and `consent_analytics_granted` appear in the event stream.
+2. In GTM: confirm the consent model consumes `consent_analytics_granted` (or add an `analytics_storage:'granted'` update); confirm the GA4 tag `G-H4L317B2FC` trigger is not blocked.
+3. GA4 → **Real-time** / DebugView while clicking **Start Free Trial**.
+4. PostHog (EU) differential: if PostHog also has zero events, consent never fires (page-side); if PostHog has events and GA4 does not, the fix is container config.
+5. Browser console after accepting cookies — report any red error.
+
+#### 255.7 Rules shaped this work (rule 58)
+1/39/45, 42/63 (0 open proposals), 3/4, 10/11/52, 12/33 (one commit), 13 (no flow/intent/prompt change — landing only), 18, 21 (env unchanged), 31/56, 44 (audit before acting — the "removed init" premise was disproven and the fix scoped accordingly), 50/51 (autopsy above), 54 (proxy + deployed-asset live checks), 55 (evolved, no rebuild), 59 (consent gate untouched). No rule edited. **Impact:** Preview/measurement can no longer race a missing dataLayer; the AI summary stays available to crawlers but invisible to visitors; the remaining GA4 gap is now clearly bounded to container-side configuration.
+
 

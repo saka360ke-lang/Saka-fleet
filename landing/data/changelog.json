@@ -1,6 +1,13 @@
 {
-  "latest": "1.98.2",
+  "latest": "1.98.3",
   "entries": [
+    {
+      "version": "1.98.3",
+      "date": "2026-11-16",
+      "title": "Analytics made reliable, AI summary kept quiet",
+      "preview": "The page now initialises the analytics data layer up front, and the AI summary link is no longer shown to visitors.",
+      "summary": "A small reliability release. The public website now declares the analytics data layer at the very top of the page, before any script can push to it, so Google Tag Manager connects cleanly and measurement starts the moment you accept analytics cookies. The consent gate is unchanged: nothing loads until you choose, and rejecting keeps everything off. Separately, the footer no longer shows a link to the AI-readable site summary - the file itself stays published for search and AI crawlers, but human visitors no longer see it. Nothing about your WhatsApp records, reports, reminders or billing changes."
+    },
     {
       "version": "1.98.2",
       "date": "2026-11-16",

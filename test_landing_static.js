@@ -678,6 +678,21 @@ console.log('\n--- Test 28: v1.98.2 mobile-first funnel (contracts preserved) --
   check(indexHtml.includes('id="pain"') && indexHtml.includes('id="solution"') && indexHtml.includes('id="how"') && indexHtml.includes('id="compliance"') && indexHtml.includes('id="pricing"') && indexHtml.includes('id="faq"'), 'every nav anchor target exists on the page');
 }
 
+console.log('\n--- Test 29: v1.98.3 head dataLayer init + llms.txt stays machine-only ---');
+{
+  // Canonical GTM snippet part 1: the dataLayer must exist before any push.
+  // cookieConsent.js stays the ONLY delivery point for gtm.js (consent gate).
+  check(indexHtml.includes('window.dataLayer = window.dataLayer || [];'), 'the head initialises window.dataLayer (canonical GTM snippet part 1)');
+  const dataLayerAt = indexHtml.indexOf('window.dataLayer = window.dataLayer || [];');
+  const bootAt = indexHtml.indexOf('id="saka-boot"');
+  check(dataLayerAt > -1 && bootAt > -1 && dataLayerAt < bootAt, 'the dataLayer init precedes the locale bootstrap in the head');
+  // llms.txt is machine-facing only: the file and the <link> stay, no <a>.
+  check(!/<a[^>]*href=["']\/llms\.txt["']/.test(indexHtml), 'no <a> tag points at llms.txt (hidden from human visitors)');
+  check(!indexHtml.includes('AI summary (llms.txt)'), 'the visible "AI summary (llms.txt)" footer link is gone');
+  check(/<link rel="alternate" type="text\/plain" href="\/llms\.txt"/.test(indexHtml), 'the machine-facing <link rel="alternate"> for llms.txt remains');
+  check(fs.existsSync(path.join(LANDING, 'llms.txt')), 'landing/llms.txt still ships for AI crawlers');
+}
+
 console.log(`\n🎉 ${passed} landing assertions passed (Phase 31 included).`);
 
 console.log('Stateless suite: file reads only — no database, no cleanup needed.');
