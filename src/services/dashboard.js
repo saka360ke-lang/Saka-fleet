@@ -3122,6 +3122,10 @@ export function posthogHeadSnippet(env = process.env) {
       }, e.__SV__ = 1);
     })(document, window.posthog || []);
     window.posthog.init(KEY, ${cfg});
+    // v1.98.4 — the SDK initialises after the page has loaded, so the automatic
+    // pageview never fires for the initial load: capture it explicitly (the
+    // stub queue flushes it when array.js arrives; still best-effort).
+    window.posthog.capture('$pageview');
     window.addEventListener('error', function (ev) {
       try {
         window.posthog.capture('$exception', {

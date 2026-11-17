@@ -1,7 +1,7 @@
 # SAKA FLEET - Master Architecture & System Audit
 
 **Status:** Production Ready / Active  
-**Version:** 1.98.3  
+**Version:** 1.98.4  
 **Efficiency Policy:** Consult this document and `.clinerules` first before inspecting codebase files.
 ## Release History (single source of truth)
 
@@ -9,6 +9,7 @@ Every shipped release is tracked HERE and nowhere else. Newest first.
 
 | Version | Headline | Detail |
 |---|---|---|
+| **1.98.4** | Explicit initial `$pageview` on BOTH PostHog surfaces — the SDK initialises after page load (landing: consent time; dashboard: head snippet with async `array.js`), so the automatic first-page capture was missed and Installation Health failed on `$pageview`. `posthogHeadSnippet()` (`src/services/dashboard.js`) and `loadPosthog()` (`landing/assets/js/cookieConsent.js`) now call `window.posthog.capture('$pageview')` immediately after `posthog.init(...)`, inside the existing best-effort `try/catch` (**no new catch statements** — the silent-catch budget is unchanged). `capture_pageview: true` kept deliberately (a future duplicate is a one-line flip to false). Privacy unchanged: opt-in/key-gated, masking on, one-shot loader untouched. `test_landing_static` 563 → **565**, `test_dashboard` → **981** (both pin the capture + its ordering after init) | 256 |
 | **1.98.3** | GTM/GA4 chain audited live + head dataLayer init restored + llms.txt hidden from humans — repo **and** live checks proved the page→consent→proxy→container chain intact (`gtm.sakafleet.com/healthy` → `ok`; `gtm.js?id=GTM-TGR68X2X` → 200 `application/javascript`, 650,844 bytes carrying GA4 `G-H4L317B2FC` + the Meta tag; deployed `cookieConsent.js`/`main.js` byte-match the repo; **no HTML dataLayer init ever existed**, so "removed" was disproven). Hardening: the canonical `window.dataLayer = window.dataLayer || [];` now lives in `<head>` before `saka-boot`, so a push can never race the array, while `cookieConsent.js` remains the ONLY gtm.js delivery point (consent gate untouched, Tests 25/27 green). The footer `<a href="/llms.txt">AI summary (llms.txt)</a>` is gone; the file and the machine-facing `<link rel="alternate">` remain. `test_landing_static` 557 → **563** (init-before-boot, zero `<a>` to llms.txt, the link remains, the file remains) | 255 |
 | **1.98.2** | Ultra-modern mobile-first landing funnel (locale-aware, glass dark theme) — the page is rebuilt around ONE funnel door: **Start Free Trial** opens the onboarding modal, and the hero's wa.me button is gone (v1.49.5 makes it circular — Saka redirects a new number straight back to the form). Photo-led hero (verified Unsplash `hero-car.jpg`), three glassmorphism pain cards (Lost receipts? / Insurance lapsed — no warning? / Guessing fuel costs?), a phone-framed WhatsApp mock and How-it-works chips rendered from the SAME `countries.json` country (metric litres/km vs imperial gal/mi, money from the pricing `exchangeRates` estimates; ID slots only), and the launch offer in exactly one place at a time (`#launch` hidden by default; `revealLaunchSection()` allows it only when `launch_active:true` AND the header banner is dismissed). New delegated CTA telemetry (`hero_cta_click` / `nav_cta_click` / `pricing_cta_click` / `launch_cta_click` / `final_cta_click` → dataLayer + guarded `posthog.capture`), `successful_signup` now reaches PostHog too (no PII — `user_data` stays GTM-only), IntersectionObserver reveal with a reduced-motion opt-out, and every consent/PostHog/GTM pin byte-preserved; `test_landing_static` 505 → **557** | 254 |
 | **1.98.1** | PostHog key activated on the landing + **Rule 64** — `window.__sakaPosthogKey` (the operator-supplied `phc_…` project key) is defined in `landing/index.html` BEFORE `cookieConsent.js`, so the landing replay runs strictly after the analytics opt-in (masking unchanged: all text + every input); `test_landing_static` now pins the key (phc_ prefix, >20 chars) and that it precedes the consent loader; NEW RULE 64 (`.clinerules`): the AI Architect never executes commands in the user's environment — every command prompt, variable injection, Supabase query or gcloud operation is written as a prompt for Cline, the sole executor of terminal and infrastructure commands | 253 |
@@ -7630,5 +7631,33 @@ test_landing_static (563), test_vehicle_documents, test_doc_sync, test_kb_docs, 
 
 #### 255.7 Rules shaped this work (rule 58)
 1/39/45, 42/63 (0 open proposals), 3/4, 10/11/52, 12/33 (one commit), 13 (no flow/intent/prompt change — landing only), 18, 21 (env unchanged), 31/56, 44 (audit before acting — the "removed init" premise was disproven and the fix scoped accordingly), 50/51 (autopsy above), 54 (proxy + deployed-asset live checks), 55 (evolved, no rebuild), 59 (consent gate untouched). No rule edited. **Impact:** Preview/measurement can no longer race a missing dataLayer; the AI summary stays available to crawlers but invisible to visitors; the remaining GA4 gap is now clearly bounded to container-side configuration.
+
+---
+
+### 256. v1.98.4 — Explicit initial `$pageview` for PostHog on both surfaces (2026-11-16)
+
+#### 256.1 Why
+
+PostHog's SDK is initialised **after** the page has loaded on both surfaces: the landing loader runs at consent time (`cookieConsent.js loadPosthog()`), and the dashboard snippet injects `array.js` asynchronously from `posthogHeadSnippet()`. The SDK's automatic first-page capture (`capture_pageview: true`) therefore did not fire for the initial load — Installation Health failed its `$pageview` check while `$pageleave`, scroll depth and session ids arrived normally.
+
+#### 256.2 The change
+
+- **`posthogHeadSnippet()` (`src/services/dashboard.js`):** `window.posthog.capture('$pageview');` immediately after `window.posthog.init(KEY, ${cfg});`, inside the snippet's existing outer `try` (line 3104 → 3146). `window.posthog` is the stub queue at that moment; the capture queues as `['capture','$pageview']` and flushes when `array.js` arrives.
+- **`loadPosthog()` (`landing/assets/js/cookieConsent.js`):** the same call immediately after `window.posthog.init(key, {…})`, inside the loader's existing `try/catch`.
+- **No new `catch` statements** on either path — the never-throws contract and the `test_error_logging` silent-catch budget are untouched.
+- **`capture_pageview: true` stays** (deliberate, instruction-compliant). If PostHog ever records two initial pageviews, flipping it to `false` is the documented one-line follow-up.
+
+#### 256.3 Frames touched
+`src/services/dashboard.js`, `landing/assets/js/cookieConsent.js` + stamped assets, `test_dashboard.js`, `test_landing_static.js`, `test_vehicle_documents.js` (version pin), `package.json` (1.98.4), `landing/data/changelog.json`, `docs/` (regenerated), this file, `CHANGELOG.md`.
+
+#### 256.4 Suites run
+test_landing_static (565), test_dashboard (981), test_error_logging, test_vehicle_documents, test_doc_sync, test_kb_docs, test_env_audit, `npm run health` — green.
+
+#### 256.5 Recurrence autopsy (rule 51)
+Defect class *"an SDK initialised after page load loses its automatic pageview"* → siblings: the dashboard snippet (fixed), the landing loader (fixed), `loginTelemetryScript` (no pageview needed — deliberate), GTM/GA4 `page_view` (owned inside the container — deliberately NOT duplicated), the `capture_pageview` flag (kept; duplicate-risk documented). One targeted assertion per fixed sibling (snippet content + ordering after init).
+
+#### 256.6 Rules shaped this work (rule 58)
+1/39/45, 13 (telemetry only — no flow/intent/prompt change; stated), 20 (never-throws), 21 (env unchanged), 50/51/52, 54 (post-push deployed-byte checks), 55 (evolved the existing snippets), 59 (consent gate untouched). No rule edited. **Impact:** consented landing visits and every keyed dashboard page now record their first `$pageview`, so sessions, replays and funnels start at the real entry point; masking and consent remain exactly as shipped in v1.98.0.
+
 
 

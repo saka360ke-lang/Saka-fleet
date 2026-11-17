@@ -95,6 +95,10 @@
         mask_all_element_attributes: true,
         capture_pageview: true
       });
+      // v1.98.4 — the SDK initialises after consent (long after page load), so
+      // the automatic pageview no longer fires for the initial load: capture it
+      // explicitly. window.posthog is the stub queue here; it flushes on load.
+      window.posthog.capture('$pageview');
     } catch (e) { /* analytics is best-effort and never blocks the page */ }
   }
 

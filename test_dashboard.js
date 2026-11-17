@@ -2443,6 +2443,8 @@ async function run() {
     check(phOnShell.includes('https://eu.i.posthog.com'), 'EU cloud is the default host (v1.98.0)');
     check(phOnShell.includes("addEventListener('error'") && phOnShell.includes("addEventListener('unhandledrejection'") && phOnShell.includes("capture('$exception'"),
       'unhandled errors and rejections are captured as $exception (v1.98.0)');
+    check(phOnShell.includes("window.posthog.capture('$pageview')"), 'the snippet captures the initial $pageview explicitly (v1.98.4)');
+    check(phOnShell.indexOf('window.posthog.init(KEY') < phOnShell.indexOf("capture('$pageview'"), 'the $pageview capture runs after init (v1.98.4)');
     process.env.POSTHOG_MASK_ALL = 'off';
     check(renderPageShell('X', '<p>hi</p>').includes('"mask_all_text":false'), 'POSTHOG_MASK_ALL=off disables masking explicitly (v1.98.0)');
     process.env.POSTHOG_HOST = 'https://us.i.posthog.com';

@@ -1,6 +1,13 @@
 {
-  "latest": "1.98.3",
+  "latest": "1.98.4",
   "entries": [
+    {
+      "version": "1.98.4",
+      "date": "2026-11-16",
+      "title": "Analytics page visits now recorded reliably",
+      "preview": "Page visits are now recorded explicitly when analytics loads, so the dashboard and site report complete.",
+      "summary": "A small analytics reliability release. Because the privacy-friendly analytics library starts only after you accept analytics cookies, its automatic first-page record could be missed. The website and the dashboard now record that first page visit explicitly, so visit counts and session replays line up from the very first page. Masking is unchanged: all text and inputs stay hidden, nothing loads before you choose, and rejecting keeps everything off. Nothing about your records, reports, reminders or billing changes."
+    },
     {
       "version": "1.98.3",
       "date": "2026-11-16",
