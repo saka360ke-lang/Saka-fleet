@@ -920,6 +920,9 @@ async function processFrictionPatches(supabase, detectedFrictions) {
         session_id: `session_${friction.phone.replace(/[^\d]/g, '')}`,
         friction_type: friction.type,
         transcript_snippet: friction.snippet,
+        // v1.98.5 — every Sentinel finding names its source (the tracker has
+        // carried the column since v1.56.4; raw inserts left it null).
+        source: 'sentinel',
         detected_at: new Date().toISOString()
       }]);
       // v1.58.14 - Sentinel is log-only by default: link the unresolved error
@@ -1351,13 +1354,27 @@ export async function monitorActiveConversations(providedSupabase) {
       const extractionFailures = Number(quiz.extractionFailures || 0);
       const frictionType = extractionFailures >= 2 ? 'EXTRACTION_ERROR' : 'CONVERSATION_STALL';
       try {
-        await supabase.from('chat_friction_logs').insert([{
-          user_phone: normalizeFrictionPhone(phone),
-          session_id: `session_${String(phone).replace(/[^\d]/g, '')}`,
-          friction_type: frictionType,
-          transcript_snippet: `Stalled ${stallMinutes}m in ${quiz.flow}/${quiz.phase}. Pending: ${field?.label || 'confirm draft'}. Nudge #${newState.recovery.nudges}. Extraction failures: ${extractionFailures}.`,
-          detected_at: new Date().toISOString()
-        }]);
+        // v1.98.5 — nudge #1 and nudge #2 are ONE stall, not two findings: a
+        // 2 h (phone + type) dedupe keeps the friction list honest (live
+        // 2026-11-22 inserted both rows for the same stalled confirm draft).
+        const dedupeSince = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+        const { data: recentStall } = await supabase
+          .from('chat_friction_logs')
+          .select('id')
+          .eq('user_phone', normalizeFrictionPhone(phone))
+          .eq('friction_type', frictionType)
+          .gte('detected_at', dedupeSince)
+          .limit(1);
+        if (!recentStall || recentStall.length === 0) {
+          await supabase.from('chat_friction_logs').insert([{
+            user_phone: normalizeFrictionPhone(phone),
+            session_id: `session_${String(phone).replace(/[^\d]/g, '')}`,
+            friction_type: frictionType,
+            transcript_snippet: `Stalled ${stallMinutes}m in ${quiz.flow}/${quiz.phase}. Pending: ${field?.label || 'confirm draft'}. Nudge #${newState.recovery.nudges}. Extraction failures: ${extractionFailures}.`,
+            source: 'sentinel',
+            detected_at: new Date().toISOString()
+          }]);
+        }
       } catch {}
 
       nudged += 1;

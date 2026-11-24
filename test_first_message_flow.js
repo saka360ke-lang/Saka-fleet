@@ -233,6 +233,63 @@ async function run() {
         'the quick-log refusal writes nothing');
     }
 
+    console.log('\n--- Test 4h2: quick-log fuel-volume law (v1.98.5) ---');
+    {
+      const volumeInserted = [];
+      const volumeMock = {
+        from(table) {
+          const api = {
+            select: () => api, eq: () => api, neq: () => api, in: () => api, is: () => api,
+            gte: () => api, lte: () => api, lt: () => api, gt: () => api, order: () => api, limit: () => api,
+            update: () => api, delete: () => api,
+            insert: async (rows) => {
+              const data = Array.isArray(rows) ? rows : [rows];
+              volumeInserted.push({ table, rows: data });
+              return { error: null, data };
+            },
+            maybeSingle: async () => ({ data: null, error: null }),
+            single: async () => ({ data: null, error: null }),
+            then: (a, b) => Promise.resolve({ data: [], error: null }).then(a, b)
+          };
+          return api;
+        }
+      };
+      const car = { id: 'veh-volume-1', plate_number: 'KDV 001V', make_model: 'Toyota Axio', asset_kind: 'vehicle', asset_type: 'ICE', current_mileage: 100000 };
+      // The AI extracted the unit price into fuel_liters (live 2026-11-24 shape):
+      // the spend is real, the "volume" is only the price — never written.
+      const typedPrice = await handleLogExpenseTurn({
+        mergedExt: { expense_type: 'Fuel', amount: 2000, fuel_liters: 227.7 },
+        messageText: '2,000 at 227.7 per litre',
+        targetVeh: car,
+        supabaseClient: volumeMock,
+        profileData: { id: 'owner-volume-1' },
+        senderPhone: phone,
+        countryInfo: { currency: 'KES', country_code: 'KE' },
+        targetLang: 'English',
+        existingVehicles: [car],
+        sendWhatsApp: async () => {}
+      });
+      const loggedRow = volumeInserted.find((entry) => entry.table === 'expense_logs')?.rows?.[0] || null;
+      check(Boolean(loggedRow) && loggedRow.amount === 2000, 'the real spend is still logged');
+      check(Boolean(loggedRow) && loggedRow.fuel_liters === 0, 'a price per litre is never saved as the volume (v1.98.5)');
+      check(!/Volume:\s*227\.7/.test(String(typedPrice.reply)), 'the card never shows the price as litres');
+      // A price-only message has no spend and no volume: nothing may be written.
+      const priceOnly = await handleLogExpenseTurn({
+        mergedExt: { expense_type: 'Fuel', fuel_liters: 227.7 },
+        messageText: 'price per liter was 227.7kes per liter',
+        targetVeh: car,
+        supabaseClient: volumeMock,
+        profileData: { id: 'owner-volume-1' },
+        senderPhone: phone,
+        countryInfo: { currency: 'KES', country_code: 'KE' },
+        targetLang: 'English',
+        existingVehicles: [car],
+        sendWhatsApp: async () => {}
+      });
+      check(!volumeInserted.some((entry) => entry.table === 'expense_logs' && entry.rows[0]?.amount === 227.7), 'a price-only message writes no expense (v1.98.5)');
+      check(/expense details|Log Expense|Saved to database/i.test(String(priceOnly.reply)) && !/Saved to database/i.test(String(priceOnly.reply)), 'the price-only turn asks for real details, never claims a save');
+    }
+
     console.log('\n--- Test 4i: quick-log vehicle-gone guard (v1.97.8) ---');
     {
       const goneInserted = [];

@@ -64,6 +64,12 @@ export const SYSTEM_CONFIG_KEYS = Object.freeze({
     // detection. Dual-written to the legacy `resend_quota_warned_at` row so the
     // operator can find it under the documented name.
     legacyKey: 'resend_quota_warned_at', owner: 'mailer', default: null, bootCritical: false, kind: 'fixed'
+  }),
+  'briefing.delivery_state': Object.freeze({
+    // v1.98.5 — the last refused 08:00 briefing delivery (Meta 131047 outside
+    // the 24h window). The sweep reads it through the choke point so an
+    // unreachable superadmin is skipped for 36h instead of failing nightly.
+    legacyKey: null, owner: 'superadmin', default: null, bootCritical: false, kind: 'fixed'
   })
 });
 
@@ -80,6 +86,7 @@ export const CONFIG_KEY_ADMIN_WIPE_PENDING = 'admin.wipe_pending';
 export const CONFIG_KEY_WEEKLY_REPORTS_LAST_SENT = 'weeklyreports.last_sent_date';
 export const CONFIG_KEY_MONTHLY_REPORTS_LAST_SENT = 'monthlyreports.last_sent_date';
 export const CONFIG_KEY_RESEND_QUOTA_WARNED = 'mailer.resend_quota_warned_at';
+export const CONFIG_KEY_BRIEFING_DELIVERY_STATE = 'briefing.delivery_state';
 
 /** Dynamic per-day family: `budget.alert.<pct>_<YYYY-MM-DD>`. */
 export const BUDGET_ALERT_FAMILY = Object.freeze({

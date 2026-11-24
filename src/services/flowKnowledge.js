@@ -404,7 +404,7 @@ export const SAKA_METRIC_GLOSSARY = buildMetricGlossaryBlock();
  */
 export const FLOW_GUIDANCE = Object.freeze({
   vehicle_registration: 'Type the plate (e.g. KDA 123A or KDD 123D), or say *no plate yet* and I\'ll save your draft — nothing is saved until you confirm the card.',
-  log_expense: 'Type the amount (e.g. 5,000) — I already have the rest, and nothing saves until you confirm.',
+  log_expense: 'Type the amount (e.g. 5,000) — the price per litre is enough to work out the volume, and nothing saves until you confirm.',
   log_earnings: 'Type the amount you earned — reply *Skip* on any optional step.',
   set_reminder: 'Pick a number from the list (e.g. 1) or say the type in your own words; reply *Skip* for anything optional.',
   assign_driver: 'Type the driver phone (e.g. +254712345678) — the owner email code comes next.',
@@ -417,7 +417,7 @@ export const FLOW_GUIDANCE = Object.freeze({
   subscription_upgrade: 'Reply with the plan name (e.g. *growth monthly*) — I will send the engine payment link.',
   subscription_trial_end: 'The plan card that fits your assets arrived 3 days before the end — reply *keep all*, or *keep <plate>* for a smaller plan. Nothing is deleted either way.',
   cancel_subscription: 'Reply *YES* to cancel or *NO* to keep your plan — access runs to the paid period end.',
-  contact_support: 'Type what happened in one line — I will send it to the care team and confirm.',
+  contact_support: 'Type what happened in one line — I will open the support ticket and confirm it only after the row exists.',
   // v1.64.0 — one deterministic line per unified pending kind (Phase 4, rule 60).
   'clear-chat': 'Reply *CLEAR* if you want a fresh chat, or *cancel* to keep everything — your fleet data is never touched.',
   'support-intake': 'Type what happened in one message — I will forward it to support and confirm the ticket.',

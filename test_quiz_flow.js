@@ -24,7 +24,10 @@ import {
   // v1.96.7 — the plate escape hatch + parked registration draft resume.
   isPlateSkipText,
   resumeRegistrationDraft,
-  PLATE_DRAFT_PARKED_REPLY
+  PLATE_DRAFT_PARKED_REPLY,
+  // v1.98.5 — a price per litre is never a volume; the engine derives litres.
+  parseFuelVolumeAnswer,
+  isOpenDraftCorrection
 } from './src/services/quizEngine.js';
 // v1.87.4 — the receipt auto-quiz decision is a pure, intent-independent helper.
 import { receiptQuizStartFor, stripPrematureSaveClaim, injectReceiptLinkIntoDraft } from './src/routes/whatsapp/quiz.js';
@@ -450,6 +453,85 @@ async function run() {
       'only the refused insert was attempted — nothing else was written');
   }
 
+  console.log('\n--- Test 4a2: contact_support claims a hand-off only with a real ticket (v1.98.5) ---');
+  {
+    const savedEnv = {
+      RESEND_API_KEY: process.env.RESEND_API_KEY,
+      SUPERADMIN_PHONE: process.env.SUPERADMIN_PHONE,
+      SUPERADMIN_EMAIL: process.env.SUPERADMIN_EMAIL
+    };
+    // Hermetic: no real email / WhatsApp can leave the process.
+    delete process.env.RESEND_API_KEY;
+    delete process.env.SUPERADMIN_PHONE;
+    delete process.env.SUPERADMIN_EMAIL;
+    try {
+      // Healthy insert: the reply MAY claim the hand-off, and the row is real.
+      const careInserts = [];
+      const careClient = {
+        from(table) {
+          const api = {
+            insert(rows) {
+              const data = Array.isArray(rows) ? rows : [rows];
+              careInserts.push({ table, rows: data });
+              return {
+                select: async () => ({
+                  data: table === 'support_tickets' ? [{ id: 'ticket-1', ...data[0] }] : data,
+                  error: null
+                })
+              };
+            },
+            select: () => api, eq: () => api, limit: async () => ({ data: [], error: null }),
+            then: (a, b) => Promise.resolve({ data: [], error: null }).then(a, b)
+          };
+          return api;
+        }
+      };
+      const careSession = {
+        quiz: {
+          flow: 'contact_support',
+          phase: 'confirm',
+          startedAt: Date.now(),
+          answers: { description: 'The fuel quiz keeps asking me for litres after a receipt photo.' },
+          extraNotes: []
+        }
+      };
+      const careCtx = baseCtx({ vehicles: [vehicle], supabase: careClient });
+      const careTurn = await handleQuizTurn({ session: careSession, messageText: 'yes', ctx: careCtx });
+      const ticketRow = careInserts.find((entry) => entry.table === 'support_tickets')?.rows?.[0] || null;
+      assert(Boolean(ticketRow) && ticketRow.whatsapp_number === '+254700000001', 'contact_support inserts a real support_tickets row');
+      assert(/Forwarded to support@/.test(String(careTurn.reply)), 'the hand-off is claimed only after the row exists (v1.98.5)');
+
+      // Refused insert: honest reply, no hand-off claim, flow stays open.
+      const brokenCareClient = {
+        from() {
+          return {
+            insert() { return { select: async () => ({ data: null, error: { message: 'permission denied for table support_tickets' } }) }; },
+            select() { return this; },
+            limit: async () => ({ data: [], error: null })
+          };
+        }
+      };
+      const failedSession = {
+        quiz: {
+          flow: 'contact_support',
+          phase: 'confirm',
+          startedAt: Date.now(),
+          answers: { description: 'My fuel entries are not saving even after I confirm the card.' },
+          extraNotes: []
+        }
+      };
+      const failedCtx = baseCtx({ vehicles: [vehicle], supabase: brokenCareClient });
+      const failedTurn = await handleQuizTurn({ session: failedSession, messageText: 'yes', ctx: failedCtx });
+      assert(/could not open the support ticket/i.test(String(failedTurn.reply)), 'a refused insert replies honestly (v1.98.5)');
+      assert(!/Forwarded to support@/.test(String(failedTurn.reply)), 'a refused insert never claims the hand-off');
+      assert(Boolean(failedSession.quiz), 'the flow stays open so the user can retry');
+    } finally {
+      if (savedEnv.RESEND_API_KEY !== undefined) process.env.RESEND_API_KEY = savedEnv.RESEND_API_KEY;
+      if (savedEnv.SUPERADMIN_PHONE !== undefined) process.env.SUPERADMIN_PHONE = savedEnv.SUPERADMIN_PHONE;
+      if (savedEnv.SUPERADMIN_EMAIL !== undefined) process.env.SUPERADMIN_EMAIL = savedEnv.SUPERADMIN_EMAIL;
+    }
+  }
+
   console.log('\n--- Test 4b: multi-part banking in one message (v1.28.0) ---');
   const bankCtx = baseCtx({ vehicles: [vehicle] });
   const bankSession = {};
@@ -667,6 +749,31 @@ async function run() {
   assert(cardSession.quiz.answers.expense_type === 'Parts', 'a "Type:" line canonicalises through the expense catalog');
   assert(/Updated: Expense type/.test(String(typeTurn.reply)), 'the card acknowledges the type update');
 
+  // v1.98.5 — a field correction at the card belongs to THIS draft: the live
+  // 2026-11-24 turns ("Amount spent 2000", "Edit amount. 2000kes") must update
+  // the card, never the saved ledger or the expenses summary lane.
+  const liveCorrection = await handleQuizTurn({ session: cardSession, messageText: 'Amount spent 2000', ctx: cardCtx });
+  assert(cardSession.quiz.answers.amount === 2000, 'a free "Amount spent 2000" updates the DRAFT amount (v1.98.5)');
+  assert(/Updated: Amount spent/.test(String(liveCorrection.reply)), 'the narrative card acknowledges the live correction in its own wording');
+  const editCorrection = await handleQuizTurn({ session: cardSession, messageText: 'Edit amount. 2000kes', ctx: cardCtx });
+  assert(cardSession.quiz.answers.amount === 2000, '"Edit amount. 2000kes" stays in the draft (never opens ledger entry #1)');
+  assert(Boolean(isOpenDraftCorrection(cardSession, 'Edit amount. 2000kes')), 'the hijack guard recognises a draft correction');
+  assert(!isOpenDraftCorrection(cardSession, 'my entries'), 'a ledger list command is not a draft correction');
+  assert(!isOpenDraftCorrection({}, 'amount 2000'), 'no open draft means no draft correction');
+  // A STANDARD card gets the deterministic patch + the summary-card wording.
+  const standardDraft = {
+    quiz: {
+      flow: 'log_expense',
+      phase: 'confirm',
+      startedAt: Date.now(),
+      answers: { vehicle_id: vehicle.id, expense_type: 'Fuel', amount: 1000, fuel_liters: 8, fill_type: 'Full tank', odometer_reading: 366900 },
+      extraNotes: []
+    }
+  };
+  const standardTurn = await handleQuizTurn({ session: standardDraft, messageText: 'Amount spent 2000', ctx: cardCtx });
+  assert(standardDraft.quiz.answers.amount === 2000 && /Updated from your correction: amount/.test(String(standardTurn.reply)),
+    'a standard card applies the deterministic patch and acknowledges it (v1.98.5)');
+
   // Quick action 3: cancel, nothing written.
   const cancelSession = {};
   await handleQuizTurn({
@@ -879,6 +986,32 @@ async function run() {
   assert(hasLitreEvidence(receiptDump, 13.47) === true, '13.47 in "13.47 X 222.70" is real litre evidence (v1.96.2)');
   assert(hasLitreEvidence(receiptDump, 1) === false, 'the nozzle number 1 is NOT litre evidence (v1.96.2)');
   assert(hasLitreEvidence('filled 40L at Shell', 40) === true && hasLitreEvidence('filled 40 at Shell', 40) === false, 'a typed litre marker still counts (v1.96.2)');
+
+  // v1.98.5 — a price per litre is never a fuel volume; the engine derives it.
+  const priceAnswer = parseFuelVolumeAnswer("I don't recall. But the price per liter was 227.7kes per liter", { amount: 2000 });
+  assert(priceAnswer.derived === true && priceAnswer.liters === 8.78, '2,000 ÷ 227.7 derives 8.78 L (v1.98.5)');
+  const priceOnly = parseFuelVolumeAnswer('price per litre is 227.7', {});
+  assert(priceOnly.priceOnly === true && priceOnly.liters === null, 'a price-only answer without an amount never becomes the volume');
+  assert(parseFuelVolumeAnswer('40 litres', { amount: 2000 }).liters === 40, 'a real litre answer is unchanged');
+  assert(parseFuelVolumeAnswer('227.7 L', { amount: 2000 }).liters === 227.7, 'an explicit litre answer with a marker is honoured');
+
+  // v1.98.5 — the litres QUESTION derives from a typed price (live 2026-11-24).
+  const deriveSession = {};
+  const deriveCtx = baseCtx({ vehicles: [vehicle], activeVehicle: vehicle });
+  await handleQuizTurn({
+    session: deriveSession,
+    messageText: 'fuel 2000',
+    startFlow: 'log_expense',
+    aiExtracted: { expense_type: 'Fuel', amount: 2000 },
+    ctx: deriveCtx
+  });
+  const deriveTurn = await handleQuizTurn({
+    session: deriveSession,
+    messageText: "I don't recall. But the price per liter was 227.7kes per liter",
+    ctx: deriveCtx
+  });
+  assert(deriveSession.quiz.answers.fuel_liters === 8.78, 'the litres question derives 8.78 L from 2,000 ÷ 227.7 (v1.98.5)');
+  assert(!/not understood/i.test(String(deriveTurn.reply)), 'the price answer is never rejected as an invalid volume');
 
   console.log(`\n🎉 ALL QUIZ ENGINE TESTS PASSED (${passed} assertions).`);
 }

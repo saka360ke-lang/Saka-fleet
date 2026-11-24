@@ -63,8 +63,27 @@ function nairobiDayKey(now = new Date()) {
   }).format(now);
 }
 
+/**
+ * v1.98.5 — judge-error backoff. Live 2026-11-24: `CONV_EVAL_JUDGE_ERROR` +
+ * `CONV_EVAL_ERROR` + `CONV_EVAL_HEAL_SKIPPED_COOLDOWN` rows were landing every
+ * couple of minutes (14k+ audit rows and growing), burning judge calls on a
+ * provider that kept failing. Two consecutive error-bearing ticks now pause the
+ * worker for 30 minutes; a clean tick resets the streak. A forced run (`force`)
+ * always ignores the backoff (CLI/operator path).
+ */
+const JUDGE_ERROR_BACKOFF_MS = 30 * 60 * 1000;
+let judgeErrorStreak = 0;
+let judgeBackoffUntil = 0;
+
+export function convEvalBackoffState() {
+  return { streak: judgeErrorStreak, until: judgeBackoffUntil };
+}
+
 export async function runConvEvalTick(supabase, { force = false, persist = true } = {}) {
   if (!force && !isConvEvalEnabled()) return { skipped: 'disabled' };
+  if (!force && Date.now() < judgeBackoffUntil) {
+    return { skipped: 'judge_error_backoff', retry_at: new Date(judgeBackoffUntil).toISOString() };
+  }
   if (!supabase) return { skipped: 'no_client' };
   const cfg = getConvEvalConfig();
 
@@ -216,6 +235,17 @@ export async function runConvEvalTick(supabase, { force = false, persist = true 
     } catch (auditErr) {
       console.warn('[ConversationEval] judge-error audit skipped:', auditErr?.message || 'unknown');
     }
+  }
+  // v1.98.5 — two error-bearing ticks in a row pause the worker (above); a
+  // clean tick clears the streak so a recovered provider resumes normally.
+  if (summary.errored > 0) {
+    judgeErrorStreak += 1;
+    if (judgeErrorStreak >= 2) {
+      judgeBackoffUntil = Date.now() + JUDGE_ERROR_BACKOFF_MS;
+      judgeErrorStreak = 0;
+    }
+  } else {
+    judgeErrorStreak = 0;
   }
 
   // 5. v1.61.15 — soft daily call alert (alert-only; evals NEVER hard-stop —

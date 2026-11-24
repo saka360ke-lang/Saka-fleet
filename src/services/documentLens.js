@@ -124,7 +124,10 @@ function amountFrom(text, countryCode = 'GLOBAL') {
     const idx = rows.indexOf(totalLine);
     for (let k = 1; !taxComponentLine && k <= 2 && idx >= 0 && idx + k < rows.length; k += 1) {
       const row = rows[idx + k];
-      if (/%|\bTAX\b|\bNET\b/i.test(row)) continue;
+      // v1.98.5 — the sibling of the ocrService fix: TAXABLE / VAT / WITHOUT
+      // TAX / NET / EXCL rows are tax components, never the grand total (live
+      // 2026-11-21 MOFCO e-TIMS: the taxable line 1,851.85 was filed as spend).
+      if (/%|\bTAX\w*\b|\bVAT\b|\bNET\b|\bWITHOUT\b|\bEXCL/i.test(row)) continue;
       const next = row.match(/^(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)$/);
       const value = next ? parseToken(next[1]) : null;
       if (value !== null && value > 0) return value;

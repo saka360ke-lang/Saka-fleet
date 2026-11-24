@@ -60,6 +60,16 @@ const priceOnly = extractVehicleAttributes('I topped up fuel. Price of diesel 22
 check('a per-litre price never becomes the amount', priceOnly.amount === undefined, priceOnly.amount);
 check('the per-litre price is kept as unit_price', priceOnly.unit_price === 222.7, priceOnly.unit_price);
 
+// v1.98.5 — the fuel-volume law on the one-line intake (rule 51 sibling of the
+// quiz question lane): a typed price per litre is never a VOLUME either, while
+// the 4.41 L derivation above stays untouched.
+const typedPriceVolume = extractVehicleAttributes("I don't recall. But the price per liter was 227.7kes per liter");
+check('a typed price per litre never becomes a volume', typedPriceVolume.fuel_liters === undefined, typedPriceVolume.fuel_liters);
+check('the typed price stays unit_price, never the spend', typedPriceVolume.unit_price === 227.7 && typedPriceVolume.amount === undefined, `${typedPriceVolume.unit_price}/${typedPriceVolume.amount}`);
+check('the one-line derivation sibling is unchanged (spend 1000 / 227 = 4.41 L)', derivedFuel.fuel_liters === 4.41 && derivedFuel.derived_fuel_liters === true && derivedFuel.amount === 1000, `${derivedFuel.fuel_liters} L from ${derivedFuel.amount}`);
+const explicitVolumeWithPrice = extractVehicleAttributes('Topped up 40 litres at 227.7 per litre');
+check('an explicit litre answer with a price present is honoured', explicitVolumeWithPrice.fuel_liters === 40, explicitVolumeWithPrice.fuel_liters);
+
 console.log('=== Natural intake: prompt & boundary rules ===');
 
 check(

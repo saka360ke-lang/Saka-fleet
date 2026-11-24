@@ -76,6 +76,7 @@ import {
 } from '../../services/countryBucket.js';
 import {
   formatDuplicateReceiptReply,
+  findLinkedExpenseForReceipt,
   OCR_LOW_CONFIDENCE_NOTE,
   OCR_UNREADABLE_NOTE
 } from '../../services/receipts.js';
@@ -1419,6 +1420,22 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           }
         }
 
+        // v1.98.5 — a duplicate receipt with NO ledger row can be attached to
+        // the NEXT expense draft ("reply log fuel"), 2 h TTL. Engine-owned id
+        // only (never user text, never AI output); the write path re-verifies
+        // ownership through resolveReceiptLink.
+        let duplicateAttachmentPrefill = null;
+        if (session.duplicateReceiptAttachment?.receipt_id) {
+          const attachedAt = Date.parse(session.duplicateReceiptAttachment.at || '');
+          const fresh = Number.isFinite(attachedAt) && Date.now() - attachedAt <= 2 * 60 * 60 * 1000;
+          if (fresh) {
+            duplicateAttachmentPrefill = { receipt_id: session.duplicateReceiptAttachment.receipt_id };
+          } else {
+            delete session.duplicateReceiptAttachment;
+          }
+        }
+        const effectiveReceiptPrefill = receiptPrefill?.receipt_id ? receiptPrefill : duplicateAttachmentPrefill;
+
         // Quiz ↔ Conversation arbitration + turn (v1.68.0 — Phase 5B-3: ./quiz.js).
         // The GLOBAL circuit breaker (loop detection + SOFT/HARD trip) deliberately
         // stays here: it is a quiz-agnostic, final-reply-stage guard.
@@ -1432,7 +1449,9 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           logbookPrefill,
           // v1.81.0 — the vaulted receipt id rides the engine-only prefill seam
           // into the log_expense quiz (durable receipt→expense link).
-          receiptPrefill,
+          // v1.98.5 — a stashed duplicate receipt (nothing saved yet) rides the
+          // same seam for the next draft.
+          receiptPrefill: effectiveReceiptPrefill,
           // v1.84.0 (Phase 23) — the vaulted DOCUMENT id rides the same seam so
           // the compliance save can link the stored file to its ledger row.
           documentPrefill,
@@ -1446,6 +1465,11 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
           existingVehicles,
           senderPhone
         });
+        // v1.98.5 — the stashed duplicate attachment is consumed the moment a
+        // draft actually carries it, so a later unrelated log never inherits it.
+        if (duplicateAttachmentPrefill && session.quiz?.answers?.receipt_id === duplicateAttachmentPrefill.receipt_id) {
+          delete session.duplicateReceiptAttachment;
+        }
         if (quizArbitration.earlyHandled) {
           isSpecialFlowHandled = true;
           customReply = quizArbitration.earlyReply;
@@ -1851,18 +1875,28 @@ export async function processIncomingWhatsAppMessage({ messageObj, fastify, supa
         // and a low-confidence read asks the user to double-check first.
         if (duplicateReceipt) {
           session.quiz = null;
-          finalReply = await composeMessage({
-            purpose: 'receipt_duplicate',
-            facts: {
-              alreadyRead: true,
-              vendor: duplicateReceipt?.vendor || null,
-              amount: duplicateReceipt?.amount || null,
-              currency: duplicateReceipt?.currency || countryInfo?.currency || null
-            },
-            language: targetLang,
-            countryInfo,
-            profile: profileData,
-            fallbackText: formatDuplicateReceiptReply(duplicateReceipt, { fallbackCurrency: countryInfo?.currency || null })
+          // v1.98.5 — NEVER claim "logged" without a ledger row. Live
+          // 2026-11-22..24 (+254734852529): the duplicate reply said "already
+          // been logged — KES 1,851.85" while expense_logs held no row for the
+          // receipt at all, so every re-log path was blocked. The reply is now
+          // deterministic (zero tokens) and names the real state; when nothing
+          // is saved yet the receipt id is stashed so the next "log fuel"
+          // attaches it through the engine-only prefill seam.
+          const linkedExpense = await findLinkedExpenseForReceipt(supabaseClient, duplicateReceipt?.id);
+          if (!linkedExpense && duplicateReceipt?.id) {
+            session.duplicateReceiptAttachment = {
+              receipt_id: duplicateReceipt.id,
+              amount: duplicateReceipt.amount ?? null,
+              fuel_liters: duplicateReceipt.fuel_liters ?? null,
+              odometer: duplicateReceipt.odometer ?? null,
+              vendor: duplicateReceipt.vendor || null,
+              currency: duplicateReceipt.currency || countryInfo?.currency || null,
+              at: new Date().toISOString()
+            };
+          }
+          finalReply = formatDuplicateReceiptReply(duplicateReceipt, {
+            fallbackCurrency: countryInfo?.currency || null,
+            linkedExpense
           });
         } else if (ocrLowConfidence && session.quiz) {
           finalReply = `${finalReply}\n\n${OCR_LOW_CONFIDENCE_NOTE}`;

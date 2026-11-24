@@ -15,6 +15,7 @@ import { listReceipts, formatReceiptsReply, pageReceipts, RECEIPT_PAGE_SIZE, REC
 import { listVehicleDocuments, countSupersededDocuments, formatVehicleDocumentsReply } from './vehicleDocuments.js';
 import {
   resolveLedgerTurn,
+  parseEntryEditRequest,
   resolveLedgerVehicleScope,
   ledgerEntryKey,
   formatLedgerList,
@@ -165,6 +166,18 @@ export function inspectRecordQuestion(text, ctx = {}) {
 export function computeParking(text, ctx = {}) {
   const t = String(text || '').trim();
   if (!t || ctx.quizPhaseLocked || !ctx.quizForFastPath) return null;
+  // v1.98.5 — an OPEN log_expense draft owns its field corrections. Without
+  // this, "Edit amount. 2000kes" parked the draft and opened the saved-ledger
+  // editor on entry #1, and "Amount spent 2000" was answered as a summary
+  // (live 2026-11-24, +254734852529). The quiz turn applies the correction.
+  if (ctx.session?.quiz?.flow === 'log_expense') {
+    const clean = t;
+    if (!/^(?:confirm|yes|no|cancel|skip|restart|reset|help|stop)$/i.test(clean)) {
+      let patchKeys = 0;
+      try { patchKeys = Object.keys(parseEntryEditRequest(clean)).length; } catch { patchKeys = 0; }
+      if (patchKeys > 0) return null;
+    }
+  }
   const family = detectRemindersListCommand(t)
     || detectComplianceStatusCommand(t)
     || detectComplianceExpiryQuestion(t)

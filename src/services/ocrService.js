@@ -398,14 +398,21 @@ export function extractDocumentHints(text = '', kind = null, { receiptOnly = fal
   };
 
   const totalLine = lines.find((line) => /\b(total|amount due|grand total|balance due)\b/i.test(line));
-  let amount = totalLine ? amountFrom(totalLine) : null;
+  // v1.98.5 — a country profile that read the fiscal TOTAL is authoritative
+  // for its own country (rule 36). Live 2026-11-21 (+254734852529, MOFCO
+  // e-TIMS): "TOTAL 2,000.00" carried no currency, the next-line fallback
+  // walked past "TAXABLE VAT B" (the old skip only knew the word TAX) and
+  // filed the taxable line 1,851.85 as the spend.
+  let amount = etimesHints?.amount ?? (totalLine ? amountFrom(totalLine) : null);
   // v1.32.1 — a bare "TOTAL" label with the figure on the next line is common
   // in every market (e-TIMS included). VAT breakdown rows are never amounts.
   if (amount === null && totalLine) {
     const idx = lines.indexOf(totalLine);
     for (let k = 1; k <= 2 && idx >= 0 && idx + k < lines.length; k += 1) {
       const row = lines[idx + k];
-      if (/%|\bTAX\b|\bNET\b/i.test(row)) continue;
+      // v1.98.5 — every tax-component header is skipped: TAXABLE / VAT /
+      // TAX (any form) / WITHOUT / NET / EXCL rows are never the grand total.
+      if (/%|\bTAX\w*\b|\bVAT\b|\bNET\b|\bWITHOUT\b|\bEXCL/i.test(row)) continue;
       const bare = parseOcrAmount((row.match(/(\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|\d+[.,]\d{1,2})/) || [])[1], { countryCode });
       if (bare !== null && bare > 0) { amount = bare; break; }
     }

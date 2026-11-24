@@ -22,6 +22,10 @@ import { normalizeFillType } from './fuelEconomy.js';
 import { isDuplicateExpense } from './expenseGuard.js';
 // v1.59.0 — optional per-record label (pure helper, no cycles).
 import { sanitizeEntryLabel } from './entryLabels.js';
+// v1.98.5 — money lexicon: a price-per-litre is never the spend, and a typed
+// correction at the card is applied with the same grammar as the ledger editor.
+import { extractUnitPrice, isUnitPriceOnly } from './moneyLexicon.js';
+import { parseEntryEditRequest } from './entryAnswers.js';
 // v1.59.7 — labels on every entry: standalone odometer readings get a ledger row.
 import { recordLabeledReading } from './labelsEverywhere.js';
 // v1.84.0 (Phase 23) — registration seeds link the vaulted certificate they used.
@@ -76,7 +80,7 @@ import {
   formatNumber,
   resolveUserTimezone
 } from './globalization.js';
-import { sendEmailOtp, sendMfaEmail, sendSupportEscalationEmail, sendPassbookWelcomeEmail } from './mailer.js';
+import { sendEmailOtp, sendMfaEmail, sendPassbookWelcomeEmail } from './mailer.js';
 import {
   assignDriverToVehicle,
   unassignDriverFromVehicle,
@@ -273,6 +277,59 @@ function parseVin(text) {
 function parseNumber(text) {
   const match = String(text).replace(/,/g, '').match(/-?\d+(?:\.\d+)?/);
   return match ? Number(match[0]) : null;
+}
+
+/**
+ * v1.98.5 — the fuel-volume answer, parsed honestly.
+ * Live 2026-11-21..24 (+254734852529, KAS628T): the litres question was
+ * answered "I don't recall. But the price per liter was 227.7kes per liter"
+ * and the card showed *Fuel volume: 227.7 L*. A per-litre PRICE is never a
+ * volume: when the message names a price and the draft already holds the
+ * amount, the engine derives litres = amount ÷ price (the one-line intake
+ * already does this, §71.13); a price-only answer without an amount asks
+ * again instead of storing the price.
+ */
+export function parseFuelVolumeAnswer(text, answers = {}) {
+  const clean = String(text || '').trim();
+  if (!clean) return { liters: null };
+  const unitPrice = extractUnitPrice(clean);
+  const hasVolumeMarker = /\d\s*(?:l\b|lt\b|ltr\b|litres?|liters?|gal(?:lon)?s?\b)/i.test(clean);
+  // A leading price phrase ("the price per litre is 227.7") carries no trailing
+  // marker; recognisable by name so the number is never read as a volume.
+  const namesPerLitrePrice = (unitPrice !== null && unitPrice > 0)
+    || /\bprice\b[^.\n]{0,24}\b(?:per|\/|a)\s*(?:l\b|lt\b|ltr\b|litres?|liters?)/i.test(clean);
+  if (!hasVolumeMarker && namesPerLitrePrice) {
+    const numeric = parseNumber(clean);
+    const price = (unitPrice !== null && unitPrice > 0) ? unitPrice : numeric;
+    const amount = Number(answers?.amount);
+    if (Number.isFinite(amount) && amount > 0 && Number.isFinite(price) && price > 0) {
+      const liters = Math.round((amount / price) * 100) / 100;
+      if (liters > 0 && liters <= 500) return { liters, derived: true, unitPrice: price, amount };
+    }
+    return { liters: null, priceOnly: true, unitPrice: price };
+  }
+  const parsed = parseNumber(clean);
+  if (parsed !== null && isUnitPriceOnly(clean, parsed)) return { liters: null, priceOnly: true, unitPrice: parsed };
+  return { liters: parsed };
+}
+
+/**
+ * v1.98.5 — true when an OPEN log_expense draft owns this message: a field
+ * correction must update the draft, never be stolen by the saved-ledger editor
+ * or the expenses-summary read lane (live 2026-11-24, +254734852529:
+ * "Amount spent 2000" was answered with the all-time summary and
+ * "Edit amount. 2000kes" opened entry #1 of the saved ledger).
+ */
+export function isOpenDraftCorrection(session, text) {
+  if (!session?.quiz || session.quiz.flow !== 'log_expense') return false;
+  const clean = String(text || '').trim();
+  if (!clean) return false;
+  if (/^(?:confirm|yes|no|cancel|skip|restart|reset|help|stop)$/i.test(clean)) return false;
+  try {
+    return Object.keys(parseEntryEditRequest(clean)).length > 0;
+  } catch {
+    return false;
+  }
 }
 
 function parseOdometer(text, ctx) {
@@ -1591,6 +1648,17 @@ function applyExtraction(state, def, ext, ctx) {
       if (!hasLitreEvidence(ctx?.messageText, raw)) delete ext[key];
     }
   }
+  // v1.98.5 — a price-per-litre the user TYPED is never a volume either (the
+  // v1.96.2 guard above only covered document dumps). Live 2026-11-24:
+  // "price per liter was 227.7kes" reached the draft as 227.7 L.
+  for (const key of ['fuel_liters', 'liters', 'litres', 'volume']) {
+    const raw = ext[key];
+    if (raw === null || raw === undefined || raw === '') continue;
+    const numeric = Number(raw);
+    if (Number.isFinite(numeric) && numeric > 0 && isUnitPriceOnly(String(ctx?.messageText || ''), numeric)) {
+      delete ext[key];
+    }
+  }
   // Two passes: conditional fields (e.g. fuel volume when expense_type = Fuel)
   // only become active after earlier fields in the same payload are captured.
   for (let pass = 0; pass < 2; pass += 1) {
@@ -2803,6 +2871,31 @@ export async function handleQuizTurn({
     return { handled: true, reply: PLATE_DRAFT_PARKED_REPLY, flow: state.flow, active: false };
   }
 
+  // v1.98.5 — the fuel-volume question understands a price answer: derive
+  // litres from spend ÷ price (the one-line intake already does, §71.13) and
+  // NEVER store a price as a volume (live 2026-11-24, +254734852529:
+  // 2,000 ÷ 227.7 = 8.78 L was drafted as "Fuel volume: 227.7 L").
+  if (state.phase === 'question' && current.key === 'fuel_liters') {
+    const volumeAnswer = parseFuelVolumeAnswer(clean, state.answers);
+    if (volumeAnswer.derived) {
+      state.answers.fuel_liters = volumeAnswer.liters;
+      state.extractionFailures = 0;
+      state.lastAcceptedAnswer = `Fuel volume: ${volumeAnswer.liters} L (calculated)`;
+      state.extraNotes = mergeExtraNotes(state.extraNotes || [], [
+        `Fuel volume calculated from ${volumeAnswer.amount} ÷ ${volumeAnswer.unitPrice} per litre.`
+      ]);
+      state.turnNote = 'Say the volume was calculated from the amount and the price per litre. Do not claim a save.';
+      const derivedReply = await askCurrent(state, vctx);
+      return { handled: true, reply: derivedReply, flow: state.flow, active: true };
+    }
+    if (volumeAnswer.priceOnly) {
+      state.lastAcceptedAnswer = null;
+      state.turnNote = 'The message named a price per litre, not a volume. Ask for the litres, or offer Skip.';
+      const priceReply = await askCurrent(state, vctx, 'That looks like a price per litre, not the volume. Send the litres, or reply Skip.');
+      return { handled: true, reply: priceReply, flow: state.flow, active: true };
+    }
+  }
+
   // Skip an optional field (or the whole optional group)
   if (isSkipInput(clean) && current.optional) {
     if (current.group) {
@@ -3070,6 +3163,53 @@ async function handleConfirmation(state, def, clean, ctx, aiExtracted) {
         const detail = raw.match(/\(([^)]+)\)/);
         if (detail && detail[1] && !state.answers.notes) state.answers.notes = detail[1].trim().slice(0, 300);
         return { handled: true, reply: `✅ Updated: Expense type.\n\n${renderNarrativeCard(state, ctx)}`, flow: state.flow, active: true };
+      }
+    }
+  }
+
+  // v1.98.5 — a deterministic field correction at the card is applied to THIS
+  // draft before any other lane can see it. Live 2026-11-24 (+254734852529):
+  // "Amount spent 2000" was answered with the expenses summary and
+  // "Edit amount. 2000kes" opened the saved-ledger editor on entry #1 while
+  // the fuel card was waiting. Same grammar as the editable ledger, applied
+  // in place — nothing here writes to the database.
+  if (def && (state.flow === 'log_expense' || state.flow === 'log_earnings')) {
+    const draftPatch = parseEntryEditRequest(clean);
+    const patchKeys = Object.keys(draftPatch || {});
+    if (patchKeys.length) {
+      const applied = [];
+      const appliedLabels = [];
+      const labelFor = (key) => (def.fields.find((f) => f.key === key) || {}).label || key;
+      for (const key of patchKeys) {
+        if (key === 'label') { state.answers.label = draftPatch.label; applied.push('label'); appliedLabels.push('Label'); continue; }
+        if (key === 'notes') { state.answers.notes = draftPatch.notes; applied.push('note'); appliedLabels.push('Note'); continue; }
+        if (key === 'fill_type') { state.answers.fill_type = draftPatch.fill_type; applied.push('fill type'); appliedLabels.push(labelFor('fill_type')); continue; }
+        if (key === 'expense_type') { state.answers.expense_type = draftPatch.expense_type; applied.push('type'); appliedLabels.push(labelFor('expense_type')); continue; }
+        if (key === 'amount' || key === 'fuel_liters' || key === 'odometer_reading') {
+          state.answers[key] = draftPatch[key];
+          applied.push(key === 'fuel_liters' ? 'volume' : key.replace('_reading', ''));
+          appliedLabels.push(labelFor(key));
+        }
+      }
+      if (applied.length) {
+        // A narrative card keeps its own renderer and wording (v1.35.0).
+        if (state.narrativeCard) {
+          return {
+            handled: true,
+            reply: `✅ Updated: ${[...new Set(appliedLabels)].join(', ')}.\n\n${renderNarrativeCard(state, ctx)}`,
+            flow: state.flow,
+            active: true
+          };
+        }
+        const correctedReply = await renderConfirmationSummary({
+          flowLabel: def.label,
+          summaryRows: buildSummaryRows(def, state.answers, ctx),
+          notes: [`Updated from your correction: ${applied.join(', ')}.`],
+          language: ctx.language,
+          countryInfo: ctx.countryInfo,
+          profile: ctx.profile
+        });
+        return { handled: true, reply: correctedReply, flow: state.flow, active: true };
       }
     }
   }
@@ -4353,16 +4493,42 @@ async function executeFlow(state, ctx) {
       }
 
       case 'contact_support': {
-        await sendSupportEscalationEmail({
-          userPhone: ctx.formattedPhone,
-          userEmail: ctx.profile?.email,
-          userName: ctx.profile?.full_name,
-          subscriptionTier: ctx.profile?.subscription_tier,
-          issueParagraph: a.description,
-          vehiclesList: ctx.vehicles || []
-        });
-        const reply = await ok({ status: 'Forwarded to support@reports.sakafleet.com.', description: a.description });
-        return { handled: true, reply, flow: state.flow, completed: true };
+        const issue = String(a.description || '').slice(0, 2000);
+        // v1.98.5 — a support promise needs a REAL ticket row. Live 2026-11-22
+        // (+254734852529): two "Forwarded to support@ ✓" replies were sent
+        // while support_tickets stayed empty. The canonical care writer opens
+        // the ticket, emails support@ and escalates high-priority issues; the
+        // reply may only claim a hand-off after the row exists (v1.58.22).
+        let care = null;
+        try {
+          const { handleCareRequest } = await import('./customerCare.js');
+          // The care writer takes `(supabase, options)` — passing one merged
+          // object called `.from` on a plain object and made every ticket fail.
+          care = await handleCareRequest(ctx.supabase, {
+            phone: ctx.formattedPhone,
+            text: issue,
+            profile: ctx.profile,
+            userEmail: ctx.profile?.email || null,
+            vehiclesList: ctx.vehicles || []
+          });
+        } catch (careErr) {
+          care = { ticketCreated: false, emailed: false, superadminPinged: false, error: careErr.message };
+        }
+        if (care?.ticketCreated) {
+          const reply = await ok({
+            status: care.superadminPinged
+              ? 'Forwarded to support@reports.sakafleet.com and flagged urgent.'
+              : 'Forwarded to support@reports.sakafleet.com.',
+            description: a.description
+          });
+          return { handled: true, reply, flow: state.flow, completed: true };
+        }
+        // No ticket row, no claim. The care writer may still have emailed
+        // support@, so the copy never says "nothing was sent". Deterministic
+        // (never AI-rendered): a paraphrasing composer once turned this into a
+        // fresh false claim ("nothing was submitted"), the exact v1.98.5 class.
+        const reply = '⚠️ I could not open the support ticket just now. Please try again in a minute, or email support@reports.sakafleet.com directly.';
+        return { handled: true, reply, flow: state.flow, active: true };
       }
 
       case 'reactivate_account': {

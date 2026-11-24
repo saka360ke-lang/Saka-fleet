@@ -343,6 +343,8 @@ const workerSource = fs.readFileSync('./src/workers/convEval.js', 'utf8');
 check(!workerSource.includes('lastErrorAlertAt') && !workerSource.includes('resetConvEvalAlertThrottle'), 'the in-memory judge-error alert throttle is gone');
 check(!workerSource.includes('*Conversation eval — judge errors*'), 'the immediate judge-error alert copy is gone');
 check(workerSource.includes('CONV_EVAL_JUDGE_ERROR') && workerSource.includes('buildJudgeErrorAuditRows(summary.results'), 'judge errors are audited for the digest instead of announced');
+check(workerSource.includes('judge_error_backoff') && workerSource.includes('JUDGE_ERROR_BACKOFF_MS'), 'two error-bearing ticks back the eval worker off (v1.98.5)');
+check(workerSource.includes('convEvalBackoffState'), 'the backoff state is inspectable for tests/ops');
 check((workerSource.match(/notifySuperadminConvEval\(/g) || []).length === 1, 'the worker keeps exactly one notify call (the daily call-budget heads-up)');
 check(!workerSource.includes('alertCooldownHours'), 'the retired alert cooldown has no consumer in the worker');
 const convEvalSource = fs.readFileSync('./src/services/convEval.js', 'utf8');

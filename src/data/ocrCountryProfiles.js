@@ -83,10 +83,20 @@ function extractKenyaEtimesHints(raw, rows) {
   const fuelProductRe = /^(?:DIESEL|PETROL|PREMIUM|SUPER|KEROSENE|FUEL)\b/i;
   for (let i = 0; i < lines.length && hints.fuel_liters == null; i += 1) {
     if (!fuelProductRe.test(lines[i])) continue;
-    for (let j = i + 1; j < Math.min(i + 4, lines.length); j += 1) {
+    // v1.98.5 — start at the product line ITSELF: fiscal receipts print
+    // "DIESEL: 13.47 X 222.70" on one line (the qty×price pair was only ever
+    // read from a following line, so a same-line pair never became litres).
+    for (let j = i; j < Math.min(i + 4, lines.length); j += 1) {
       const pair = lines[j].match(/([\d][\d,.]*)\s*[x×]\s*([\d][\d,.]*)/i);
       if (!pair) continue;
       const qty = normalizeKeNumber(pair[1]);
+      // v1.98.5 — a bare "1x 2,000.00" is an ITEM count, never litres (live
+      // 2026-11-21, MOFCO e-TIMS: a KES 2,000 fuel receipt stored "1 L").
+      // A qty×price pair proves volume only when the quantity is fractional
+      // ("13.47 X 222.70") or a litre marker sits on the same line ("40L x 222").
+      const litreEvidence = /\d\s*(?:l|lt|ltr|litres?|liters?)\b|\b(?:litres?|liters?)\b/i.test(lines[j]);
+      const fractional = /[.,]/.test(String(pair[1]));
+      if (!litreEvidence && !fractional) continue;
       if (qty !== null && qty > 0 && qty <= 500) { hints.fuel_liters = qty; break; }
     }
   }

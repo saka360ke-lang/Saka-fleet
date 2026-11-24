@@ -767,7 +767,12 @@ export async function handleLogExpenseTurn({ mergedExt, messageText, targetVeh, 
   const extAmount = moneyStory.amount
     ?? (aiAmount && !isUnitPriceOnly(messageText, aiAmount) ? aiAmount : null)
     ?? (fallbackNumber && !isUnitPriceOnly(messageText, fallbackNumber) ? fallbackNumber : null);
-  const extLiters = mergedExt.fuel_liters || mergedExt.liters || null;
+  // v1.98.5 — the fuel-volume law on the quick-log lane (rule 51 sibling of
+  // the quiz guard): an AI-extracted volume that is only a price per litre in
+  // the text is never a volume (live 2026-11-24: "price per liter was 227.7kes"
+  // reached drafts as 227.7 L). The spend keeps its own unit-price guard above.
+  const rawExtLiters = mergedExt.fuel_liters || mergedExt.liters || null;
+  const extLiters = rawExtLiters && isUnitPriceOnly(messageText, Number(rawExtLiters)) ? null : rawExtLiters;
   const extOdo = mergedExt.odometer || mergedExt.current_mileage || extractOdometerFromText(messageText);
   // v1.30.0 — canonicalise the expense type from the catalog so a
   // one-liner like "repaired a puncture... front tyre" lands in Tyres.

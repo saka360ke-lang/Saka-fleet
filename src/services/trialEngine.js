@@ -33,7 +33,7 @@ import {
   invalidateEntitlements
 } from './subscriptions.js';
 import { shortenUrl } from './linkShortener.js';
-import { logWriteFailure } from './systemErrors.js';
+import { logWriteFailure, logSystemError } from './systemErrors.js';
 import { markUserDataChanged } from './afterWrite.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -1367,12 +1367,25 @@ export async function processSilentReengagement({ supabase, sendWhatsAppFn, now 
       const firstName = String(owner.full_name || '').trim().split(/\s+/)[0] || 'there';
       // Knob-off keeps the historical copy verbatim (full name, free-form text).
       const nameForCopy = useTemplate ? firstName : owner.full_name;
-      await sendWhatsAppFn(
+      // v1.98.5 — a REFUSED send (Meta 131047 outside the 24 h window) must
+      // never retry nightly: the attempt is stamped once and the failure is
+      // recorded once, so the sweep stops instead of looping (live: one phone
+      // produced 23 identical 131047 errors in 16 days).
+      const delivered = await sendWhatsAppFn(
         phone,
         reengagementText({ ownerName: nameForCopy }),
         useTemplate ? 're_engagement' : null,
         useTemplate ? { name: firstName } : null
-      ).catch(() => {});
+      ).then((value) => value !== false).catch(() => false);
+      if (!delivered) {
+        stats.failed = (stats.failed || 0) + 1;
+        // logSystemError never throws (it degrades internally, rule 50).
+        await logSystemError(
+          supabase,
+          new Error(`Re-engagement send was refused for ${phone} — the sweep will not retry it nightly.`),
+          '/services/trialEngine.reengage'
+        );
+      }
       await supabase.from('profiles').update({
         reengage_nudged_at: new Date(now).toISOString(),
         updated_at: new Date(now).toISOString()

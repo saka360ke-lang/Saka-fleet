@@ -21,7 +21,7 @@ import {
 import { formatNairobiDate } from './dateParser.js';
 // v1.72.1 (P2-6) — system_config access rides the dual-window service.
 import { readConfig, writeConfig } from './systemConfigService.js';
-import { CONFIG_KEY_ADMIN_WIPE_PENDING, dynamicConfigKey } from './systemConfigKeys.js';
+import { CONFIG_KEY_ADMIN_WIPE_PENDING, CONFIG_KEY_BRIEFING_DELIVERY_STATE, dynamicConfigKey } from './systemConfigKeys.js';
 import { formatQuickEditPreview, BUTTON_TITLE_PHRASES } from './interactiveReply.js';
 // v1.96.0 — superadmin Meta template test-fire + reply-button audit (zero tokens).
 import {
@@ -2280,26 +2280,75 @@ export async function sendMorningExecutiveBriefing(supabase) {
 
     const phoneNumberId = process.env.META_PHONE_NUMBER_ID;
     const token = process.env.META_WHATSAPP_TOKEN;
-    if (phoneNumberId && token) {
-      const cleanPhone = superadminPhone.replace(/[^\d]/g, '');
-      await fetch(`https://graph.facebook.com/v21.0/${phoneNumberId}/messages`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          messaging_product: 'whatsapp',
-          to: cleanPhone,
-          type: 'text',
-          text: { body: briefingMsg }
-        })
-      });
+    // v1.98.5 — the 08:00 briefing is free-form, so Meta refuses it with
+    // 131047 whenever the superadmin has not messaged in 24 h (live: every
+    // night at 05:00Z, 23 identical errors in 16 days). Record the failure
+    // synchronously and never retry the same refused send on the next night.
+    let briefingDelivery = 'skipped';
+    try {
+      let deliveryState = null;
+      try {
+        // v1.98.5 — the read rides the system_config choke point (v1.72.1 P2-6):
+        // raw table access is forbidden outside systemConfigService.js.
+        const storedState = await readConfig(supabase, CONFIG_KEY_BRIEFING_DELIVERY_STATE);
+        deliveryState = storedState ? JSON.parse(storedState) : null;
+      } catch { deliveryState = null; }
+      const blockedBy131047 = deliveryState?.error === '131047'
+        && Number.isFinite(Number(deliveryState?.at))
+        && Date.now() - Number(deliveryState.at) < 36 * 60 * 60 * 1000;
+      if (blockedBy131047) {
+        briefingDelivery = 'skipped_131047';
+        await logAdminAudit(supabase, superadminPhone, 'MORNING_BRIEFING_SKIPPED_UNREACHABLE', {
+          reason: '131047 within 36h — the free-form briefing cannot deliver outside the 24h window'
+        });
+      } else if (phoneNumberId && token) {
+        const cleanPhone = superadminPhone.replace(/[^\d]/g, '');
+        const res = await fetch(`https://graph.facebook.com/v21.0/${phoneNumberId}/messages`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            messaging_product: 'whatsapp',
+            to: cleanPhone,
+            type: 'text',
+            text: { body: briefingMsg }
+          })
+        });
+        if (res.ok) {
+          briefingDelivery = 'sent';
+        } else {
+          const bodyText = await res.text().catch(() => '');
+          const code = (bodyText.match(/131047/) ? '131047' : null)
+            || (bodyText.match(/"(?:code|error_subcode)"\s*:\s*(\d+)/) || [])[1]
+            || 'unknown';
+          briefingDelivery = 'failed';
+          // v1.98.5 — the write rides the system_config choke point too;
+          // writeConfig never throws (it degrades and warns on failure).
+          await writeConfig(
+            supabase,
+            CONFIG_KEY_BRIEFING_DELIVERY_STATE,
+            JSON.stringify({ at: Date.now(), error: code, status: res.status }),
+            { updatedBy: 'superadmin_briefing' }
+          );
+          await logAdminAudit(supabase, superadminPhone, 'MORNING_BRIEFING_DELIVERY_FAILED', {
+            status: res.status,
+            code,
+            detail: String(bodyText).slice(0, 300)
+          });
+        }
+      }
+    } catch (sendErr) {
+      briefingDelivery = 'failed';
+      // logAdminAudit never throws (it degrades to console.error internally).
+      await logAdminAudit(supabase, superadminPhone, 'MORNING_BRIEFING_DELIVERY_FAILED', { error: sendErr.message });
     }
 
     await logAdminAudit(supabase, superadminPhone, 'SCHEDULED_MORNING_BRIEFING', {
       timestamp: new Date().toISOString(),
-      weekly: pulse?.isMonday === true
+      weekly: pulse?.isMonday === true,
+      delivery: briefingDelivery
     });
 
     return briefingMsg;

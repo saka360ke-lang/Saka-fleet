@@ -297,14 +297,45 @@ export function formatReceiptsReply({ receipts = [], vehicles = [], fallbackCurr
   return `${head}\n\n${lines.join('\n')}\n\n${footer}`;
 }
 
-/** Warm duplicate-receipt reply (never re-logs silently). */
-export function formatDuplicateReceiptReply(receipt = {}, { fallbackCurrency = null } = {}) {
+/**
+ * v1.98.5 — does this receipt already have a ledger row? A stored receipt is
+ * EVIDENCE, not a saved expense (live 2026-11-22..24, +254734852529: the
+ * duplicate reply claimed "already been logged — KES 1,851.85" while
+ * expense_logs held no row for the receipt at all).
+ */
+export async function findLinkedExpenseForReceipt(providedSupabase, receiptId) {
+  const supabase = getClient(providedSupabase);
+  if (!supabase || !receiptId) return null;
+  try {
+    const { data, error } = await supabase
+      .from('expense_logs')
+      .select('id,expense_type,amount,fuel_liters,created_at')
+      .eq('receipt_id', receiptId)
+      .limit(1);
+    if (error || !Array.isArray(data) || data.length === 0) return null;
+    return data[0];
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Warm duplicate-receipt reply. NEVER claims a save without a ledger row —
+ * with no linked expense it names the real state and offers the two honest
+ * paths (attach it to a new entry, or delete the stored photo).
+ */
+export function formatDuplicateReceiptReply(receipt = {}, { fallbackCurrency = null, linkedExpense = null } = {}) {
   const vendor = receipt.vendor ? String(receipt.vendor).split('|')[0].trim() : (receipt.document_kind || 'this receipt');
   const amount = formatAmount(receipt.amount, receipt.currency || fallbackCurrency);
   const when = formatWhen(receipt.created_at);
   const summary = [amount, when].filter(Boolean).join(' · ');
-  return `📸 I've already read this receipt ✅ — *${vendor}*${summary ? ` (${summary})` : ''}.\n\n` +
-    'Reply *"receipts"* to see your history, or type the details if you want to log it again.';
+  const head = `📸 I already have this receipt on file ✅ — *${vendor}*${summary ? ` (${summary})` : ''}.`;
+  if (linkedExpense) {
+    return `${head}\n\nIt's saved in your ledger as *${linkedExpense.expense_type || 'expense'}*. ` +
+      'Reply *my entries* to correct it, or *receipts* to see your history.';
+  }
+  return `${head}\n\n*Nothing was saved to your ledger yet* — the photo is stored, the expense is not.\n\n` +
+    'Reply *log fuel* and I will attach this receipt to the new entry. To remove it instead, reply *receipts*, then *delete receipt N*.';
 }
 
 

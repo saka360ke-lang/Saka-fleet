@@ -1,6 +1,13 @@
 {
-  "latest": "1.98.4",
+  "latest": "1.98.5",
   "entries": [
+    {
+      "version": "1.98.5",
+      "date": "2026-11-24",
+      "title": "Receipts, fuel litres and support are more honest now",
+      "preview": "A price per litre is understood, receipts show the real total, and a repeated photo can be attached to a new entry.",
+      "summary": "A reliability release on the WhatsApp side. When you send a fuel receipt, Saka now reads the real total - never the tax line - and never mistakes an item count for litres. If you send the same photo twice, Saka says plainly whether the expense is already saved: if it is, you can review or correct it; if it is not, reply 'log fuel' and the photo is attached to your new entry, or remove it with 'delete receipt N'. If you answer the litres question with a price per litre instead of a volume, Saka works the litres out for you - 2,000 at 227.7 a litre is 8.78 L - and never saves the price as litres. Corrections you type at the confirmation card now update that draft instead of opening an older saved entry. Support requests open a real ticket before Saka says it has been forwarded, and if the ticket cannot be created Saka tells you honestly. Nothing about your records, reports, reminders or billing changes."
+    },
     {
       "version": "1.98.4",
       "date": "2026-11-16",

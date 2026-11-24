@@ -6,6 +6,7 @@ import {
   activeFrictionOf,
   formatFrictionReply
 } from "./src/services/frictionTracker.js";
+import fs from "node:fs";
 
 let passed = 0;
 function check(cond, label) {
@@ -19,6 +20,12 @@ console.log("=== SAKA FLEET - FRICTION-POINT TRACKER TESTS (v1.56.4) ===");
 check(FRICTION_CLEARED_AFTER_HOURS === 4, "deployed points clear after 4 hours");
 check(normalizeFrictionPhone("254734852529") === "+254734852529", "bare phone is normalised to E.164");
 check(normalizeFrictionPhone("+254734852529") === "+254734852529", "already-E.164 phone is stable");
+
+// v1.98.5 — Sentinel rows name their source, and stall nudges are deduped.
+const sentinelSource = fs.readFileSync("./src/workers/sentinel.js", "utf8");
+check(sentinelSource.includes("source: 'sentinel'"), "Sentinel friction rows name their source");
+check(sentinelSource.includes("recentStall"), "stall nudges are deduped to one finding per window");
+check(sentinelSource.includes("2 * 60 * 60 * 1000"), "the stall dedupe window is 2 hours");
 
 const now = new Date("2026-11-03T20:00:00Z");
 check(isFrictionDeployedCleared({ status: "DEPLOYED", resolved_at: "2026-11-03T15:00:00Z" }, now) === true, "a 5-hour-old deployed point is cleared");

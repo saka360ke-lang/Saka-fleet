@@ -400,7 +400,26 @@ async function run() {
   const capReply = formatReceiptsReply({ receipts: fiveReceipts, vehicles: [], fallbackCurrency: 'KES', hasMore: true, paged: true, atCap: true });
   check(capReply.includes('report covers anything older') && !/Reply \*more\*/.test(capReply), 'the 5-page cap redirects to a report');
   const duplicateReply = formatDuplicateReceiptReply({ vendor: 'SHELL KAREN', amount: 5500, currency: 'KES', created_at: '2026-10-12T08:00:00Z' });
-  check(duplicateReply.includes('already read') && duplicateReply.includes('receipts'), 'Duplicate receipt reply is warm and offers history');
+  check(duplicateReply.includes('already have this receipt on file') && duplicateReply.includes('Nothing was saved'), 'an unlinked duplicate never claims a save (v1.98.5)');
+  check(duplicateReply.includes('log fuel') && duplicateReply.includes('delete receipt N'), 'the unlinked duplicate offers attach + delete paths');
+  const linkedReply = formatDuplicateReceiptReply({ vendor: 'SHELL KAREN', amount: 5500, currency: 'KES', created_at: '2026-10-12T08:00:00Z' }, { linkedExpense: { expense_type: 'Fuel' } });
+  check(linkedReply.includes('saved in your ledger') && linkedReply.includes('my entries'), 'a linked duplicate names the saved row and the edit path');
+
+  // v1.98.5 — a KE e-TIMS MOFCO receipt: TOTAL is the spend, "1x" is not litres.
+  const mofcoText = [
+    'MOFCO ENERGY SOLUTIONS LTD', 'P.O.BOX 23616-00100', 'NAIROBI', 'PIN: P051784214B', 'BUYER PIN: P052358408G',
+    'FISCAL RECEIPT', 'FUEL', '1x 2,000.00', '2,000.00 B', 'TOTAL 2,000.00', 'TAXABLE VAT B', '1,851.85',
+    'TOTAL VAT B 8.00%', '2,000.00', 'TAX VAT B 8.00%', '148.15', 'TOTAL WITHOUT TAX', '1,851.85', 'TOTAL TAX', '148.15', 'CASH', '2,000.00'
+  ].join('\n');
+  const mofcoHints = extractDocumentHints(mofcoText, 'receipt_fuel', { countryCode: 'KE' });
+  check(mofcoHints.amount === 2000, 'MOFCO e-TIMS reads TOTAL 2,000.00, never the taxable 1,851.85 (v1.98.5)');
+  check(mofcoHints.fuel_liters === undefined, 'MOFCO "FUEL 1x 2,000.00" never becomes 1 L (v1.98.5)');
+  const astrolHints = extractDocumentHints(
+    ['*** START OF LEGAL RECEIPT', 'ASTROL PETROLEUM COMPANY', 'DIESEL: 13.47 X 222.70', 'TOTAL', '3,000.00', 'CASH', '3,000.00'].join('\n'),
+    'receipt_fuel',
+    { countryCode: 'KE' }
+  );
+  check(astrolHints.amount === 3000 && astrolHints.fuel_liters === 13.47, 'the Astrol qty×price litres path still reads 13.47 L (rule 36 regression)');
 
   console.log('\n--- Test 10: OCR switch & ack-first (v1.28.8) ---');
   process.env.OCR_ENABLED = 'off';

@@ -105,6 +105,22 @@ async function run() {
   await processSilentReengagement({ supabase: quietMock.client, sendWhatsAppFn: async () => { throw new Error('should not send'); }, now: NOW, stats: quietStats2 });
   check(quietStats2.reengaged === 0, 'Second run never re-nudges the same owner');
 
+  console.log('\n--- Test 4b: a refused send is stamped once, never retried nightly (v1.98.5) ---');
+  const refusedMock = createMockSupabase({
+    profiles: [ownerProfile({ id: 'owner-3', subscription_status: 'ACTIVE', phone_number: '+254700000003', reengage_nudged_at: null })],
+    vehicles: [{ id: 'v2', owner_id: 'owner-3', plate_number: 'KDB 456B', deleted_at: null }],
+    chat_history: [{ user_phone: '+254700000003', created_at: daysAgo(15) }]
+  });
+  let refusedSends = 0;
+  const refusedStats = makeStats();
+  await processSilentReengagement({ supabase: refusedMock.client, sendWhatsAppFn: async () => { refusedSends += 1; return false; }, now: NOW, stats: refusedStats });
+  check(refusedSends === 1, 'the refused send is attempted once');
+  check(refusedStats.failed === 1, 'the refusal is counted, not swallowed');
+  check(Boolean(refusedMock.db.profiles[0].reengage_nudged_at), 'the attempt is stamped (no nightly retry)');
+  let secondAttempts = 0;
+  await processSilentReengagement({ supabase: refusedMock.client, sendWhatsAppFn: async () => { secondAttempts += 1; return false; }, now: NOW, stats: makeStats() });
+  check(secondAttempts === 0, 'the next sweep never retries the refused phone');
+
   const thirteenMock = createMockSupabase({
     profiles: [ownerProfile({ id: 'owner-13', subscription_status: 'ACTIVE', phone_number: '+254700000013', reengage_nudged_at: null })],
     vehicles: [{ id: 'v13', owner_id: 'owner-13', deleted_at: null }],

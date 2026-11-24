@@ -92,6 +92,11 @@ check(DEFAULT_SAKA_CORE_PROMPT.includes('STORED DOCUMENTS (v1.84.0'), 'Core prom
 check(DEFAULT_SAKA_CORE_PROMPT.includes('delete document N'), 'Core prompt names the document delete command');
 check(DEFAULT_SAKA_CORE_PROMPT.includes('document_vault:'), 'The document-vault stuck-guidance line renders into the core prompt (rule 60)');
 check(Boolean(guidanceForFlow('document_vault')), 'flowKnowledge registers a stuck-guidance line for the document vault');
+// v1.98.5 — the fuel-volume law and the honest duplicate-receipt law are in
+// the assembled core prompt AND the flow registry (rule 13 sync).
+check(DEFAULT_SAKA_CORE_PROMPT.includes('FUEL VOLUME LAW (v1.98.5'), 'the core prompt carries the fuel-volume law (a price is never a volume)');
+check(DEFAULT_SAKA_CORE_PROMPT.includes('A stored receipt is EVIDENCE, not a saved expense'), 'the core prompt forbids claiming "logged" without a ledger row');
+check(Boolean(guidanceForFlow('log_expense')) && /price per litre/.test(guidanceForFlow('log_expense')), 'the log_expense guidance names the price-per-litre derivation');
 const editEntryBehavior = SAKA_INTENT_PLAYBOOK.find((row) => row.intent === 'EDIT_ENTRY');
 check(Boolean(editEntryBehavior) && editEntryBehavior.behavior.includes('v1.73.0 pagination'), 'EDIT_ENTRY playbook documents pagination');
 const reportBehavior = SAKA_INTENT_PLAYBOOK.find((row) => row.intent === 'REQUEST_REPORT');

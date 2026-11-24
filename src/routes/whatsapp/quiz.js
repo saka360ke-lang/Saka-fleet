@@ -35,7 +35,9 @@ import {
   resumeRegistrationDraft,
   // v1.89.2 — a one-line edit command ("edit KAS 628T nickname to Teddy")
   // prefills the edit_vehicle flow instead of re-asking what is already said.
-  parseVehicleEditRequest
+  parseVehicleEditRequest,
+  // v1.98.5 — an open log_expense draft owns its field corrections.
+  isOpenDraftCorrection
 } from '../../services/quizEngine.js';
 import { renderActionDiscovery, composeMessage } from '../../services/conversationEngine.js';
 import { buildConversationMemory } from '../../services/conversationMemory.js';
@@ -269,8 +271,13 @@ export async function arbitrateQuizTurn({
   // draft is deliberately left untouched (decision D5).
   injectReceiptLinkIntoDraft(session, receiptPrefill);
   const activeQuiz = session.quiz || null;
-  const pauseQuizForChat = activeQuiz && shouldPauseQuizForChat({ messageText, intent, quiz: activeQuiz });
-  const switchQuizFlow = activeQuiz && !pauseQuizForChat
+  // v1.98.5 — a field correction belongs to the OPEN draft, never to a chat
+  // pause or a switch (live 2026-11-24, +254734852529: "Amount spent 2000" was
+  // answered with the expenses summary and "Edit amount. 2000kes" opened the
+  // saved-ledger editor on entry #1 while the fuel card waited).
+  const draftOwnsTurn = isOpenDraftCorrection(session, messageText);
+  const pauseQuizForChat = activeQuiz && !draftOwnsTurn && shouldPauseQuizForChat({ messageText, intent, quiz: activeQuiz });
+  const switchQuizFlow = activeQuiz && !pauseQuizForChat && !draftOwnsTurn
     ? detectFlowSwitch({ quiz: activeQuiz, messageText, intent })
     : null;
 
